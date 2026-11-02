@@ -287,7 +287,7 @@ pub(crate) mod teardown {
 
         fn guarded(step: &mut dyn FnMut()) -> bool {
             catch_unwind(AssertUnwindSafe(step))
-                .map_err(std::mem::forget)
+                .map_err(flui_foundation::panic::discard_payload)
                 .is_ok()
         }
 

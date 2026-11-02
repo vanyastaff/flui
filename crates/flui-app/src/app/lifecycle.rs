@@ -137,8 +137,9 @@ impl CancellationSignal {
 /// intentionally not carried — the lifecycle layer reports *that* work
 /// panicked ([`TaskOutcome::Panicked`]); the panic message itself reaches
 /// the log through the panic hook at the panic site.
-/// Opaque payloads and a future that failed while polling are retained before
-/// reporting, because their destruction can execute arbitrary user code.
+/// Opaque payloads and a future that failed while polling are destroyed under
+/// containment before reporting, because their destruction can execute
+/// arbitrary user code (ADR-0281 §3).
 ///
 /// `F: Unpin` keeps the pin projection safe-code-only; callers box the
 /// future first (they hand it to a boxed-future executor lane anyway).
@@ -160,9 +161,10 @@ impl<F: Future + Unpin> Future for CatchUnwind<F> {
             Ok(Poll::Pending) => Poll::Pending,
             Err(payload) => {
                 flui_foundation::panic::discard_payload(payload);
-                // A failed future may own hostile captures. Do not run its
-                // destruction after containing its poll failure.
-                std::mem::forget(self.inner.take());
+                // The failed future is destroyed under containment; a
+                // destructor that panics is discarded (ADR-0281 §3).
+                let failed = self.inner.take();
+                contain_lifecycle_diagnostic(|| drop(failed));
                 Poll::Ready(Err(()))
             }
         }
@@ -643,9 +645,11 @@ where
             });
         }
         if let Err(payload) = std::panic::catch_unwind(AssertUnwindSafe(|| drop(replaced))) {
-            // Once retirement failed, do not destroy another incoming generic
-            // value in competition with that original failure.
-            std::mem::forget(refused);
+            // The refused value is still destroyed, under containment; the
+            // retirement failure stays the one resumed (ADR-0281 §3).
+            if let Err(later) = std::panic::catch_unwind(AssertUnwindSafe(|| drop(refused))) {
+                flui_foundation::panic::discard_payload(later);
+            }
             std::panic::resume_unwind(payload);
         }
         drop(refused);
@@ -1833,8 +1837,8 @@ mod tests {
             "opaque payload dropped"
         );
         assert!(
-            !future_retired.load(Ordering::Acquire),
-            "a failed future's captures are forgotten with it"
+            future_retired.load(Ordering::Acquire),
+            "a failed future's captures are destroyed with it"
         );
 
         let healthy_retired = Arc::new(AtomicBool::new(false));

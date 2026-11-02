@@ -358,16 +358,10 @@ fn read_typed<T: 'static, R>(
     let (out, graph_outcome) = invoke_reader(graph, slot, &mut f);
     // Keep the reader outside its caught invocation. Consuming an owned
     // `FnOnce` there would destroy its captures while a reader panic is still
-    // unwinding, before `catch_unwind` can return. Once either the reader or
-    // the graph has panicked, the opaque capture bundle cannot be destroyed
-    // safely either: generated closure drop glue may drop a second hostile
-    // capture while the first capture's destructor is unwinding. Leak that
-    // exceptional-path envelope instead. On every non-panicking path it is
-    // still destroyed normally, and a destructor panic remains observable.
-    let disposed = dispose_reader(
-        f,
-        matches!(&out, Some(Ok(Err(_)))) || graph_outcome.is_err(),
-    );
+    // unwinding, before `catch_unwind` can return. It is destroyed here on
+    // every path; after a reader or graph panic its destructor's own panic is
+    // a competing failure and the first one propagates (ADR-0281).
+    let disposed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(f)));
     let outcome = finish_read(out, graph_outcome, disposed, slot)?;
     finish_subscription(outcome, sink, slot)
 }
@@ -495,15 +489,6 @@ fn finish_read<R>(
     Ok(outcome)
 }
 
-fn dispose_reader<F>(reader: F, has_primary_panic: bool) -> std::thread::Result<()> {
-    if has_primary_panic {
-        std::mem::forget(reader);
-        Ok(())
-    } else {
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(reader)))
-    }
-}
-
 fn finish_subscription<R>(
     outcome: std::thread::Result<R>,
     sink: Option<&dyn ReaderSink>,
@@ -534,12 +519,12 @@ fn finish_subscription<R>(
 
 /// Retire a value while another failure already has chronological priority.
 ///
-/// `T` is opaque. Its generated drop glue may destroy another field while a
-/// first field's destructor is unwinding, which aborts before `catch_unwind`
-/// can regain control. The only generic continuation-safe operation is to
-/// leak the exceptional-path value.
+/// Its destructor runs under containment, and a panic it raises is discarded:
+/// the earlier failure stays the one that propagates (ADR-0281 §3).
 fn discard_secondary<T>(value: T) {
-    std::mem::forget(value);
+    if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(value))) {
+        crate::panic::discard_payload(payload);
+    }
 }
 
 impl<T: 'static> Signal<T> {
@@ -578,9 +563,8 @@ impl<T: 'static> Signal<T> {
     /// from `f` resumes, so a recovered build can still be invalidated by a
     /// later write. A refused read subscribes nobody. The reader is accepted
     /// as [`FnMut`] even though it is invoked at most once: retaining it across
-    /// the protected invocation lets a successful read destroy its captures
-    /// normally and a panicking read retain the opaque bundle rather than run
-    /// aggregate drop glue during recovery.
+    /// the protected invocation lets its captures be destroyed outside the
+    /// unwind of a panicking read, under containment (ADR-0281).
     ///
     /// # Errors
     ///

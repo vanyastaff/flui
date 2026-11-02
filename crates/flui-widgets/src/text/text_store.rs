@@ -62,9 +62,9 @@ use flui_objects::{RenderEditable, SubtreeAnchor};
 use flui_painting::text_boundaries::graphemes;
 use flui_platform::text_store::{
     CommitGate, Composition, LockGrant, LockOutcome, LockTiming, OwnerCalls, PointMode, RangeRect,
-    RetainOnFailure, Selection, TextChange, TextInputPurpose, TextStore, TextStoreChange,
-    TextStoreEdit, TextStoreError, TextStoreObserver, TextStoreRead, TextStoreStatus, Utf16Offset,
-    Utf16Range, utf16,
+    Selection, TextChange, TextInputPurpose, TextStore, TextStoreChange, TextStoreEdit,
+    TextStoreError, TextStoreObserver, TextStoreRead, TextStoreStatus, Utf16Offset, Utf16Range,
+    utf16,
 };
 use flui_rendering::pipeline::PipelineCell;
 
@@ -254,8 +254,9 @@ impl Drop for EditableTextStore {
     /// The observer, `on_changed`, the controller and what a session not yet
     /// settled owes (when the store outlives its field, it may be their last
     /// owner) are other code:
-    /// retired inside a scope, retained after a failure or during an unwind
-    /// (ADR-0127). The arbiter retires its queued grants the same way.
+    /// retired inside a scope, each under containment, after a failure or
+    /// during an unwind too (ADR-0281). The arbiter retires its queued grants
+    /// the same way. A failure is not raised while the thread already unwinds.
     fn drop(&mut self) {
         let observer = self.observer.get_mut().take();
         let controller = std::mem::replace(
@@ -746,13 +747,6 @@ struct Owed {
     change: Option<(String, TextChanged)>,
 }
 
-impl RetainOnFailure for Owed {
-    fn retain(self) {
-        self.controller.retain();
-        self.change.map(|(_, on_changed)| on_changed).retain();
-    }
-}
-
 /// The smallest change turning `old` into `new`, as `TS_TEXTCHANGE` in
 /// UTF-16 units: the common prefix and suffix (whole scalars) are kept.
 fn text_change(old: &str, new: &str) -> TextChange {
@@ -809,12 +803,12 @@ impl TextStore for EditableTextStore {
         }
         // An app edit not yet reported is reported before the platform's
         // session can see (and write back over) it. A failure there refuses
-        // the request: the grant, not yet accepted, is retained unrun rather
-        // than destroyed during the unwind.
+        // the request: the grant, not yet accepted, is destroyed unrun under
+        // containment, and the flush failure is raised (ADR-0281).
         let mut before = OwnerCalls::new();
         self.flush_notifications(&mut before);
         if let Some(payload) = before.into_failure() {
-            RetainOnFailure::retain(grant);
+            crate::support::retirement::drop_contained(grant);
             resume_unwind(payload);
         }
         // The gate the last grant settled under, read by the arbiter before

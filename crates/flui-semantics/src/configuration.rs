@@ -196,11 +196,10 @@ impl SemanticsConfiguration {
     /// Retires action captures through an enclosing operation's failure custody.
     ///
     /// Each handler is retired independently; attributes and container buffers
-    /// are destroyed normally. After a prior failure, opaque handlers are
-    /// retained under ADR-0127 instead of invoking their destructors. On a
-    /// healthy path a destructor failure stays in `recovery`, which decides
-    /// when to propagate it. A single capture whose own fields double-panic
-    /// remains outside that containment boundary.
+    /// are destroyed normally. Each handler's destructor runs under the scope's
+    /// containment, after a prior failure too; a destructor failure stays in
+    /// `recovery`, which decides when to propagate it, and the first failure
+    /// wins (ADR-0281).
     pub fn retire(self, recovery: &mut flui_foundation::panic::RecoveryScope<'_>) {
         let Self {
             actions,

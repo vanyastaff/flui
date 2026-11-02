@@ -14,7 +14,7 @@ use std::{
 
 pub(super) fn contain(body: impl FnOnce()) {
     if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(body)) {
-        std::mem::forget(payload);
+        flui_foundation::panic::discard_payload(payload);
     }
 }
 

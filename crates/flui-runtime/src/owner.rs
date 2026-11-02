@@ -119,14 +119,14 @@ type Failure = Option<Box<dyn std::any::Any + Send>>;
 pub enum RecoveryState {
     /// No failure has occurred in this operation.
     Healthy,
-    /// Retire framework resources while retaining opaque user captures as required
-    /// by the exceptional-path policy; optional callbacks must not run.
+    /// A failure is already held: retire every withdrawn value under
+    /// containment (ADR-0281 §3); optional callbacks must not run.
     PreservingFailure,
 }
 
 impl RecoveryState {
     fn current(failure: &Failure) -> Self {
-        if failure.is_some() || std::thread::panicking() {
+        if failure.is_some() {
             Self::PreservingFailure
         } else {
             Self::Healthy
@@ -147,12 +147,8 @@ fn retire_queued(queued: VecDeque<OwnerWork>, first_failure: &mut Failure) {
 }
 
 fn retire_work(work: OwnerWork, first_failure: &mut Failure) {
-    if first_failure.is_some() || std::thread::panicking() {
-        std::mem::forget(work);
-    } else {
-        let failure = catch_unwind(AssertUnwindSafe(|| drop(work))).err();
-        preserve_first_lifecycle_panic(first_failure, failure, "queued owner work retirement");
-    }
+    let failure = catch_unwind(AssertUnwindSafe(|| drop(work))).err();
+    preserve_first_lifecycle_panic(first_failure, failure, "queued owner work retirement");
 }
 
 fn retire_value(retired: RetiredRuntime, first_failure: &mut Failure) {
@@ -176,12 +172,6 @@ fn retire_entry(
     if let Residence::Resident(runtime) = residence {
         retire_runtime(runtime, first_failure);
     }
-    if (first_failure.is_some() || std::thread::panicking()) && Rc::strong_count(&factory) == 1 {
-        // ADR-0127: the last factory owns opaque callback/capability captures.
-        // Other Rc owners are owner-local, so dropping a non-last clone is inert.
-        std::mem::forget(factory);
-        return;
-    }
     let failure = catch_unwind(AssertUnwindSafe(|| drop(factory))).err();
     preserve_first_lifecycle_panic(first_failure, failure, "assembly capability retirement");
 }
@@ -189,7 +179,7 @@ fn retire_entry(
 fn finish_retirement(first_failure: Failure) {
     if let Some(failure) = first_failure {
         if std::thread::panicking() {
-            std::mem::forget(failure);
+            flui_foundation::panic::discard_payload(failure);
         } else {
             resume_unwind(failure);
         }

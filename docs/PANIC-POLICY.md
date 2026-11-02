@@ -65,9 +65,6 @@ destroyed the same way, with `flui_foundation::panic::discard_payload`. A destru
 already unwinding aborts the process, as in std; FLUI does not leak values or
 panic payloads to prevent it
 ([ADR-0281](adr/ADR-0281-a-destructor-that-panics-during-an-unwind-aborts-as-in-std.md)).
-Not implemented everywhere yet: crates still retain such values on failed
-paths, as [ADR-0127](adr/ADR-0127-exceptional-path-retention.md) required,
-until ADR-0281's migration removes those sites.
 
 ## Callback panics and exit codes
 

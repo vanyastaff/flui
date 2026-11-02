@@ -111,10 +111,11 @@ equal-but-distinct views. Pinned by
 **Rule:** the build owner's reactive graph, tree observer and scheduled-build
 callback are independent ownership envelopes, and so are the boxed keys held by
 the registry, scope, reservation, displacement and verification maps. Healthy
-destruction keeps field and container order. Once a destructor failure has
-propagated, or while the thread is already unwinding, the remaining independent
-envelopes are retained instead of dropped
-([ADR-0127](../../docs/adr/ADR-0127-exceptional-path-retention.md)).
+destruction keeps field and container order. After a destructor failure has
+propagated, or during an incoming unwind, the remaining envelopes are still
+destroyed, each under containment where it can run user code, and the first
+failure is the one raised
+([ADR-0281](../../docs/adr/ADR-0281-a-destructor-that-panics-during-an-unwind-aborts-as-in-std.md)).
 
 **Rule:** key authority is withdrawn before the key is retired. Registration
 prepares the local key before claiming scope authority; scope hashing, equality
@@ -168,20 +169,19 @@ stale release cannot withdraw a later owner's claim.
 **Rule:** observer registries and each notification snapshot own separately
 guarded observer envelopes. Healthy destruction keeps container order; after
 the first propagating destructor failure, or during an incoming unwind, the
-remaining envelopes are retained (ADR-0127). Snapshot callbacks run after the
+remaining envelopes are still destroyed (ADR-0281). Snapshot callbacks run after the
 binding guard is released. A registry change affects the next notification;
 a running dispatch keeps its snapshot, and a callback panic stops that
 notification. A legacy lifecycle failure precedes the scoped lifecycle drain,
 and its payload stays the first failure.
 
-**Rule:** suspended pop, push and application-exit notifications guard the
-returned response future, the current observer and the remaining iterator
-separately, so cancelling a healthy future retires it normally while a later
-independent destructor never competes with an existing failure. Pop and push
-stop at the first handled response; exit consults every observer.
+**Rule:** suspended pop, push and application-exit notifications await each
+observer's response future in turn; cancelling the notification destroys the
+current future, its observer and the remaining snapshot normally (ADR-0281).
+Pop and push stop at the first handled response; exit consults every observer.
 
-**Limits:** competing destructors inside one opaque observer or future
-aggregate are not contained, and whole-binding destruction is not covered.
+**Limits:** a destructor that panics while a cancellation is already unwinding
+aborts, as in std, and whole-binding destruction is not covered.
 Predictive-back list clearing and replacement still retire entries under the
 write guard.
 
@@ -530,26 +530,23 @@ comparison's unwind boundary, so a panicking `PartialEq` remains the primary
 failure and commits nothing even when the proposed value's destructor panics.
 
 The updater is `FnMut`, although the graph calls it exactly once. Keeping the
-  closure owned outside the caught invocation lets the graph retain its opaque
-  capture bundle when the updater panics; consuming an `FnOnce` would instead run
-  capture destructors during the updater's unwind, where a second panic aborts the
-  process before the graph can finalize the loan or invalidate readers. The same
-  ownership boundary covers pre-invocation preparation: a panicking refusal
-  telemetry subscriber retains the still-uninvoked updater. This is an
-  exceptional-path leak: aggregate closure drop glue cannot be decomposed or made
-  safe by an outer `catch_unwind`; successful callbacks still destroy captures,
-  but only after loan restoration and reader invalidation are durable.
+closure owned outside the caught invocation lets the graph finalize the loan
+and invalidate readers before the captures go: when the updater panics, its
+captures are destroyed afterwards under containment and the updater's payload
+keeps priority (ADR-0281). The same ownership boundary covers pre-invocation
+preparation: a panicking refusal telemetry subscriber leaves the uninvoked
+updater to be destroyed the same way. Successful callbacks destroy captures
+only after loan restoration and reader invalidation are durable.
 
 A valid typed read releases the graph's value loan, then subscribes before a
 panic from its user closure resumes. A recovered first build that panics in
 `Signal::with` therefore retains the dependency needed for a later write to
 retry it without requiring a reentrant `ReadGraph`. Foreign, stale, unbound and
 type-mismatched reads still subscribe nobody. Before any caught panic resumes,
-  every still-owned opaque callback, generic result and cleanup payload is
-  deliberately retained, so generated aggregate drop glue cannot replace the
-  chronologically first panic or turn recovery into a double-panic abort.
-Typed reader closures follow the same `FnMut`-called-once rule so their captures
-remain available to that cleanup boundary.
+every still-owned callback, generic result and cleanup payload is destroyed
+under containment, so its destructor cannot replace the chronologically first
+panic (ADR-0281). Typed reader closures follow the same `FnMut`-called-once
+rule so their captures remain available to that cleanup boundary.
 
 **Not promised.** `update(&mut T)` is not a transaction and cannot roll back an
 arbitrary `T` or external effects. Code requiring atomic domain changes prepares
@@ -559,13 +556,12 @@ existing rebuild inbox and never invokes signal readers inline. An explicit
 `Reactive::release` of that same slot from inside its closure remains
 authoritative: the value and reader set are no longer live, so no commit
 survives to invalidate. Loan finalization returns a still-live value before any
-retirement. When a callback has already failed, a released loan's opaque value
-is retained instead of destroyed: aggregate drop glue can abort before an outer
-catch observes a secondary failure, and nested release obligations must not run
-while that first failure has priority. Successful callbacks still retire released
-values normally, outside the graph borrow. Restoration keeps the value owned by
-the loan until the slot check completes; a restoration failure likewise retains
-that value before resuming its payload.
+retirement. When a callback has already failed, a released loan's value is
+destroyed under containment before that failure resumes, and the release
+obligations its destructor runs still run (ADR-0281). Successful callbacks
+retire released values normally, outside the graph borrow. Restoration keeps
+the value owned by the loan until the slot check completes; a restoration
+failure likewise destroys that value before resuming its payload.
 
 Explicit release and element-owned release commit the slot's terminal state,
 reader removal and reusable index before retiring its value outside the graph
@@ -573,45 +569,46 @@ borrow. Element teardown commits every owned slot before running the first
 destructor. A destructor can reenter the graph and allocate a replacement; a
 stale release cannot remove that replacement. The departing element itself admits
 no new owned slot while its release runs: a destructor that creates one is refused
-(`signal_owned_by` panics holding the refused value, so the unwind retains it;
+(`signal_owned_by` destroys the refused value and then panics;
 `try_signal_owned_by` drops it after the graph borrow ends). A refusal made while
 another refused value's destructor runs retains its value instead of dropping it,
 so a value whose destructor recreates itself through the fallible call runs that
 destructor once rather than recursing until the stack overflows. Teardown is one
 pass even for a value that recreates itself from its destructor
-(`owner_release_refuses_signals_its_destructors_reintroduce`). Once a retirement fails, remaining
-opaque values are retained and the first payload resumes. Release during active
-unwind likewise retains its opaque value. The public
+(`owner_release_refuses_signals_its_destructors_reintroduce`). Once a retirement fails, the
+remaining values are still destroyed, each under containment, and the first
+payload resumes. Release during an active unwind destroys its value too. The
+public
 `explicit_release_allows_destructor_reentry_and_slot_reuse` and
 `owner_release_commits_the_batch_before_the_first_destructor_failure` rows pin
 these graph invariants through explicit release and production element removal;
 they do not promise recovery of the surrounding element-tree teardown.
-`release_during_unwind_preserves_the_primary_failure` exercises active-unwind
-retention in a subprocess, since its negative control double-panics.
+`release_during_unwind_preserves_the_primary_failure` pins release during an
+active unwind: the value is destroyed and the unwinding failure is the one
+observed.
 
-Rust also provides no generic way to recover from aggregate drop glue when two
-fields both panic: the second panic occurs while the first is unwinding and the
-process aborts before an outer `catch_unwind` can observe either payload. FLUI
-therefore completes its own loan/invalidation/wake protocol before destroying a
-successful callback or retired value, and retains opaque values once another
-panic already has priority. It does not promise process recovery from two
-simultaneously panicking destructors inside one user-owned aggregate.
+A destructor that panics while the thread is already unwinding aborts, as in
+std (ADR-0281). FLUI therefore completes its own loan/invalidation/wake protocol
+before destroying a successful callback or retired value, and destroys values
+under containment once another panic already has priority. It does not promise
+process recovery from two simultaneously panicking destructors inside one
+user-owned aggregate.
 
 Pinned by the reactive graph unit tests for replacement/equality/destructor and
 updater/wake/telemetry panics,
 `flui-foundation`'s subscribe-before-unwind test, and
 `tests/signal_reads.rs` for mounted partial-commit and first-build recovery.
-Its `released_update_retains_aggregate_before_resuming_failure`,
-`released_read_retains_aggregate_before_resuming_failure`,
-`released_update_retains_nested_release_obligations` and
-`released_read_retains_nested_release_obligations` rows join
+Its `released_update_destroys_its_value_before_resuming_failure`,
+`released_read_destroys_its_value_before_resuming_failure`,
+`released_update_runs_nested_release_obligations` and
+`released_read_runs_nested_release_obligations` rows join
 `signal_read_and_write_matrix` and run in child processes. They pin the primary
-payload, released-slot behavior, retained destructors and the next live update.
+payload, released-slot behavior, exact destruction and the next live update.
 The companion `released_update_reports_ordinary_retirement_failure` and
 `released_read_reports_ordinary_retirement_failure` rows preserve normal released
-value retirement: its first destructor failure propagates while callback captures
-are retained. The subprocess boundary makes an old-code aggregate abort a
-table-row failure.
+value retirement: its first destructor failure propagates and the callback
+captures are destroyed under containment. The subprocess boundary makes an
+abort a table-row failure.
 
 ### Reconciliation emits typed events on the live path
 
@@ -772,47 +769,50 @@ The public constructor doctest distinguishes shared and separate allocations.
 moves the original elements for equal-valued separate objects and keeps the
 source allocation alive after its original owner is dropped.
 
-### Observer containment retains exceptional ownership before reporting
+### Observer containment destroys failed ownership before reporting
 
 **Rule.** Tree emission and outgoing `detached()` callbacks borrow their owned
-observer envelopes inside the unwind boundary (ADR-0040). A caught failure
-retains its opaque payload and the failed observer Arc before any diagnostics
-run. Emission clears the slot without invoking `detached()`; replacement keeps
-its newly installed observer. Failure reporting has its own unwind boundary and
-retains a competing subscriber payload. No opaque destructor is attempted after
-an observer callback has already failed.
+observer envelopes inside the unwind boundary (ADR-0040). After a caught
+failure the failed observer Arc is destroyed under containment, and the
+payload is kept or discarded through `flui_foundation::panic` before any
+diagnostics run. Emission clears the slot without invoking `detached()`;
+replacement keeps its newly installed observer. Failure reporting has its own
+unwind boundary and discards a competing subscriber payload. A destructor that
+panics after an observer callback has already failed cannot replace that
+failure (ADR-0281).
 
-Successful `detached()` calls retain ordinary Arc retirement semantics. This
+Successful `detached()` calls keep ordinary Arc retirement semantics. This
 boundary does not recover from an abort inside callback code, or from several
-panicking capture destructors during otherwise successful retirement. It neither
-changes the observer's non-reentrancy rule nor covers `replay_mounts`, whose
-install failure policy remains ADR-0040's.
+panicking capture destructors inside one aggregate. It neither changes the
+observer's non-reentrancy rule nor covers `replay_mounts`, whose install
+failure policy remains ADR-0040's.
 
 The public `lifecycle_panic_containment_matrix` includes isolated observer
-children for aggregate payloads, final capture envelopes, competing failures,
-and a hostile scoped tracing subscriber. Each child verifies that the real tree
-mount completes, the failed observer is disarmed, and a healthy observer receives
-the following builds. Replacement also checks that its new observer survives an
-outgoing `detached()` failure.
+children for payloads, final capture envelopes, a competing payload and a
+hostile scoped tracing subscriber. Each child verifies that the real tree
+mount completes, the failed observer is disarmed and destroyed, and a healthy
+observer receives the following builds. Replacement also checks that its new
+observer survives an outgoing `detached()` failure.
 
-### Build recovery retains opaque failure ownership before substitution
+### Build recovery discards failure payloads under containment
 
-Build failure classification borrows the original payload, then retains that
-opaque payload before reactive build finalization, the recovery factory or
-diagnostics can fail. Its destructor is never invoked on this exceptional path.
-The recovery factory keeps its existing failure authority: a factory unwind
-publishes no successful build-recovery record.
+Build failure classification borrows the original payload before reactive
+build finalization, the recovery factory or diagnostics can fail; a payload
+that is not propagated is destroyed with `discard_payload`, so its destructor
+cannot unwind out of recovery (ADR-0281). The recovery factory keeps its
+existing failure authority: a factory unwind publishes no successful
+build-recovery record.
 
 Committed recovery records are stored before reporting. A subscriber failure
-has a separate unwind boundary and its opaque payload is retained, so it cannot
-erase attribution or unwind a returned recovery view. Staged lifecycle reporting
-is likewise contained, while its owned diagnostic token is committed only after
+has a separate unwind boundary and its payload is discarded, so it cannot erase
+attribution or unwind a returned recovery view. Staged lifecycle reporting is
+likewise contained, while its owned diagnostic token is committed only after
 the containing replacement succeeds. This does not make recovery factory code
-or simultaneous panicking destructors inside otherwise ordinary user-owned
-aggregates recoverable.
+or simultaneous panicking destructors inside one user-owned aggregate
+recoverable.
 
 Six isolated rows in `lifecycle_panic_containment_matrix`, defined in
-`tests/support/build_payload_recovery.rs`, exercise original aggregate payloads,
+`tests/support/build_payload_recovery.rs`, exercise original payloads,
 subscriber failure alone and in competition, recovery-view capture ownership,
 factory failure priority and staged init-state attribution. Each child checks
 actual ErrorView or configured-view substitution where recovery commits, the
@@ -822,45 +822,47 @@ original hook and element record exactly once, and following healthy builds.
 
 **Rule.** Lifecycle delivery keeps the first callback or retirement panic
 through cancellation and terminal cleanup (ADR-0035). A cancelled callback
-envelope is retained after a caught failure. Terminal release shares the active
-drain's failure accumulator and retains later envelopes once the first ordinary
-retirement fails. Subscription and source destruction during an independent
-unwind retain callbacks without entering their opaque drop glue. Cancellation
-and close still publish their state before retirement, and healthy eligible
-listeners receive queued FIFO events before the original panic resumes.
-The active drain publishes its caught-failure status before invoking another
-callback. Nested cancellation and source retirement consult that same status,
-so cancelling a pending callback cannot retire a hostile capture aggregate
-after an earlier callback failed. The status is cleared when drain ownership
-ends; later successful cancellation keeps ordinary capture destruction.
+envelope is destroyed under containment after a caught failure. Terminal
+release shares the active drain's failure accumulator and destroys every later
+envelope too, each under containment, once the first ordinary retirement
+fails. Subscription and source destruction during an independent unwind
+destroy their callbacks (ADR-0281). Cancellation and close still publish their
+state before retirement, and healthy eligible listeners receive queued FIFO
+events before the original panic resumes. The active drain publishes its
+caught-failure status before invoking another callback. Nested cancellation and
+source retirement consult that same status, so cancelling a pending callback
+after an earlier callback failed destroys its captures under containment and
+cannot replace that failure. The status is cleared when drain ownership ends.
 `caught_failure_protects_nested_pending_subscription_retirement` covers an
-earlier callback panic, a later callback cancelling a pending aggregate, queued
+earlier callback panic, a later callback cancelling a pending capture, queued
 FIFO delivery and the next healthy operation in a bounded child.
 
 Rejected lifecycle admission owns its incoming generic callback even though no
 listener was registered. Closing/closed-source rejection releases the state
-borrow before retirement. A caught failure in the active source drain, or an
-independent unwind including a dead weak source, retains that callback without
-calling its body or destructor. Ordinary rejection still destroys captures and
-allows their destructors to query the source without a borrow conflict.
-`caught_failure_retains_rejected_lifecycle_callback`,
-`live_source_rejection_during_unwind_retains_captures` and
-`dead_source_rejection_during_unwind_retains_captures` join the public containment
+borrow before retirement. After a caught failure in the active source drain the
+callback is destroyed under containment without calling its body; during an
+independent unwind, including a dead weak source, it is destroyed by that
+unwind. Ordinary rejection destroys captures and allows their destructors to
+query the source without a borrow conflict.
+`caught_failure_destroys_rejected_lifecycle_callback`,
+`live_source_rejection_during_unwind_destroys_captures` and
+`dead_source_rejection_during_unwind_destroys_captures` join the public containment
 family. They preserve the original string failure, prove queued FIFO tail/terminal
-delivery or independent unwind, then check ordinary rejected retirement and a
-fresh source's next operation.
+delivery or independent unwind, check exact destruction, then a fresh source's
+next operation.
 
 With no prior failure and no active unwind, callback retirement keeps ordinary
-Rust destruction semantics. A first envelope with two panicking fields can
-abort before `catch_unwind` returns; this boundary cannot recover it. Live
-callbacks that panic without cancelling remain registered, as before.
+Rust destruction semantics. A destructor that panics while the thread is
+already unwinding aborts, as in std. Live callbacks that panic without
+cancelling remain registered, as before.
 
 The public `lifecycle_panic_containment_matrix` exercises self-cancellation,
-competing payload/capture aggregates, terminal cleanup, first retirement failure,
-and subscription/source Drop during independent unwind in bounded children.
-Healthy FIFO delivery and the next source operation distinguish retention from
-lost work; `successful_lifecycle_cancellation_retires_captures_and_keeps_fifo`
-ensures ordinary successful cancellation still releases captures.
+competing payloads, terminal cleanup, first retirement failure, and
+subscription/source Drop during independent unwind in bounded children.
+Healthy FIFO delivery, exact destruction counts and the next source operation
+distinguish containment from lost work;
+`successful_lifecycle_cancellation_retires_captures_and_keeps_fifo` ensures
+ordinary successful cancellation still releases captures.
 
 ### Async snapshot publication precedes generic retirement
 
@@ -868,7 +870,7 @@ ensures ordinary successful cancellation still releases captures.
 publish it under the subscription-generation fence. Old snapshot retirement
 and the matching rebuild request run after the slot Mutex is released. If old
 retirement panics, rebuild scheduling is still attempted; the first panic then
-resumes, and a competing wake payload is retained. The new snapshot already
+resumes, and a competing wake payload is discarded (ADR-0281). The new snapshot already
 belongs to the slot, so unwinding the old value cannot destroy it. Inline future
 completion still suppresses a redundant rebuild and keeps its `Done` guard.
 Connection-state-only transitions preserve owned data/error without retirement.
@@ -887,18 +889,9 @@ value on a real build without test-induced dirtiness, then changes the key and
 observes a second completion.
 
 The borrowed caller Arc stays live through retirement and wake catches. After
-an accepted-update failure, one owning slot Arc is cloned and retained before
-resuming, so disposal of the failed producer or eagerly initialized element
-cannot retire the published incoming value in competition. Healthy updates
-perform no additional Arc clone/drop. The guarantee retains the slot's lifetime,
-not an immutable historical value across later writes.
-
-The accepted-update guard costs one Arc clone only on a caught failure path. The private
-`accepted_publication_guard_retains_incoming_after_caller_disposal` row joins
-`future_builder_matrix`: it calls the same production `apply_update` with no
-driver-owned Arc, catches old retirement, and disposes the final caller owner.
-The public eager-disposal row separately checks a real builder; retained failed
-task ownership can also pin its snapshot, so that row is not a guard-only oracle.
+an accepted-update failure the first failure resumes and the slot keeps no
+extra owner: disposal of the failed producer or element destroys the published
+incoming value normally (ADR-0281).
 
 ### GlobalKey identity exhaustion is permanent
 
@@ -926,8 +919,8 @@ owners are removed from their registries before they are dropped. A
 `LifecycleSource` drain runs every eligible callback before propagating its
 first failure; in preserving mode the host skips the optional rounds after it
 while the required terminal commits still happen. The value or closure a closed
-graph rejects is dropped normally unless the thread is already panicking
-([ADR-0127](../../docs/adr/ADR-0127-exceptional-path-retention.md)).
+graph rejects is dropped normally, during an unwind too
+([ADR-0281](../../docs/adr/ADR-0281-a-destructor-that-panics-during-an-unwind-aborts-as-in-std.md)).
 
 ### Dropping a build owner raises nothing
 
@@ -940,17 +933,19 @@ the tree's teardown is no source of the raised failure that #1165 is about.
 
 **Rule:** `StaticChildren` withdraws its independently owned views and its
 mapper before retiring any of them. The first failure propagates and the
-untouched tail is retained (ADR-0127); healthy destruction is ordinary, and
+remaining children and the mapper are still destroyed, each under containment
+(ADR-0281); healthy destruction is ordinary, and
 aliases keep their owners.
 
 **Rule:** a contained child create, mount or update failure, and a swallowed
 dispose, deactivate or render-unmount failure, take custody of the opaque
-payload before diagnostics or recovery run. The payload stays retained through
+payload before diagnostics or recovery run. The payload stays the first failure
+(a later one is discarded under containment) through
 competing factory or reporting failures, and healthy siblings and the next
 operation proceed.
 
-**Limits:** a user aggregate whose own destructors double-panic still aborts
-(ADR-0127, Consequences).
+**Limits:** a destructor that panics while the thread is already unwinding
+aborts, as in std (ADR-0281).
 
 **Pinned by:** the `static_children_retirement`, `child_payload_recovery` and
 `lifecycle_hook_payload_retirement` rows of

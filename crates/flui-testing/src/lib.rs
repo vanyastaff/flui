@@ -198,10 +198,9 @@ fn preserve_first_pointer_panic(
             phase,
             "pointer phase panicked after an earlier phase; only the first panic is resumed"
         );
-        // Panic payloads are arbitrary user values. A secondary payload with a
-        // panicking destructor must not replace the first failure or abort its
-        // unwind, so this exceptional value is deliberately leaked.
-        std::mem::forget(candidate);
+        // The first failure is resumed; a later payload is destroyed under
+        // containment (ADR-0281).
+        flui_foundation::panic::discard_payload(candidate);
     }
 }
 
@@ -408,7 +407,7 @@ impl HeadlessBinding {
         }));
         if let Err(payload) = notification {
             if let Err(secondary) = cleanup {
-                std::mem::forget(secondary);
+                flui_foundation::panic::discard_payload(secondary);
             }
             std::panic::resume_unwind(payload);
         }
@@ -682,7 +681,7 @@ impl HeadlessBinding {
         let retirement = catch_unwind(AssertUnwindSafe(|| drop(outgoing)));
         if let Err(first) = installation {
             if let Err(later) = retirement {
-                std::mem::forget(later);
+                flui_foundation::panic::discard_payload(later);
             }
             resume_unwind(first);
         }

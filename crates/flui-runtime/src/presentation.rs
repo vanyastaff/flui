@@ -2221,13 +2221,6 @@ impl PresentationState {
         }
     }
 
-    /// Healthy close retires input before widget disposal. Exceptional close
-    /// withdraws owner admission and key publication but retains the closed
-    /// tree, so a caught first failure cannot be displaced by opaque Drop.
-    pub(crate) fn preserving_close(&self) -> bool {
-        self.close_mode.get() == flui_interaction::__runtime::CloseMode::PreservingFailure
-    }
-
     pub(crate) fn interaction_dispatch(&self) -> Option<&InteractionDispatchHandle> {
         self.interaction_dispatch.as_ref()
     }
@@ -2310,7 +2303,7 @@ impl PresentationState {
         self.lifecycle.set(PresentationLifecycle::Closing);
         self.pipeline.withdraw_layout();
         let saved_text = std::mem::take(&mut *self.text_preparation.borrow_mut());
-        failure.release(saved_text);
+        failure.retire(saved_text);
         if let Some(scope) = &self.completion_scope {
             scope.withdraw();
         }
@@ -2359,7 +2352,7 @@ impl PresentationState {
         let mode = failure.mode();
         failure.invoke(|| close_mouse_tracker(self.gestures.mouse_tracker(), mode));
         failure.retire(agent);
-        failure.release(window_control);
+        failure.retire(window_control);
         let mode = failure.mode();
         failure.invoke(|| close_focus(&self.focus, mode));
         let mode = failure.mode();
@@ -2382,7 +2375,8 @@ impl PresentationState {
         failure.invoke(|| close_gestures(&self.gestures, mode));
         self.retire_completion_scope(&mut failure);
         // Every presentation authority is revoked: the withdrawn keys retire,
-        // one at a time, so a failing destructor retains the rest.
+        // one at a time, each under containment, so a failing destructor
+        // stops none of the rest (ADR-0281 §3).
         for key in withdrawn_keys {
             failure.retire(key);
         }
@@ -2431,9 +2425,9 @@ impl PresentationState {
             self.withdraw_retained_ownership(&mut failure, lane);
         }
         // The window and the accessibility bridge are framework-owned: they
-        // are released even after a failure (ADR-0127).
-        failure.release(bridge);
-        failure.release(window);
+        // are released even after a failure (ADR-0281 §3).
+        failure.retire(bridge);
+        failure.retire(window);
 
         self.lifecycle.set(PresentationLifecycle::Closed);
         failure.finish();
@@ -2551,9 +2545,7 @@ impl<'a> PresentationCloseRecovery<'a> {
         terminal: &'a Cell<flui_interaction::__runtime::CloseMode>,
         window: flui_interaction::__runtime::CloseWindow,
     ) -> Self {
-        if mode == flui_interaction::__runtime::CloseMode::PreservingFailure
-            || std::thread::panicking()
-        {
+        if mode == flui_interaction::__runtime::CloseMode::PreservingFailure {
             terminal.set(flui_interaction::__runtime::CloseMode::PreservingFailure);
         }
         if terminal.get() == flui_interaction::__runtime::CloseMode::PreservingFailure {
@@ -2599,22 +2591,10 @@ impl<'a> PresentationCloseRecovery<'a> {
             self.invoke(callback);
         }
     }
-    /// Drops a user-owned value, or retains it once the close is preserving.
+    /// Drops a withdrawn value under this close's containment, after a
+    /// failure too: the first failure stays the one resumed (ADR-0281 §3).
     fn retire<T>(&mut self, value: T) {
-        if self.preserving() {
-            std::mem::forget(value);
-        } else {
-            self.invoke(|| drop(value));
-        }
-    }
-    /// Drops a framework-owned handle even after a failure; only an unwind
-    /// already in progress retains it.
-    fn release<T>(&mut self, value: T) {
-        if std::thread::panicking() {
-            std::mem::forget(value);
-        } else {
-            self.invoke(|| drop(value));
-        }
+        self.invoke(|| drop(value));
     }
     fn finish(self) {
         if let Some(payload) = self.first {

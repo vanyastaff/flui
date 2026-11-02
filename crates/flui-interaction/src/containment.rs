@@ -3,12 +3,24 @@
 //! A pointer route, a recognizer and the binding each run user code in phases
 //! whose mandatory cleanup must finish before a failure propagates.
 //! [`RoutePanic`] holds the first such failure until that cleanup is done.
+//! A value withdrawn after a caught failure is still destroyed, with its
+//! destructor under containment ([`destroy_contained`], ADR-0281 §3).
 
 use std::any::Any;
 use std::fmt;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 
-use crate::retain::Retain;
+/// Destroy `value` after an earlier failure was caught or while one unwinds.
+///
+/// Its destructor can run user code, so it runs under containment: a panic it
+/// raises is a competing failure and is discarded, so the first failure stays
+/// the one propagated (ADR-0281 §3). A destructor that panics while the thread
+/// is already unwinding aborts, as in std (ADR-0281 §1).
+pub(crate) fn destroy_contained<T>(value: T) {
+    if let Err(payload) = catch_unwind(AssertUnwindSafe(move || drop(value))) {
+        flui_foundation::panic::discard_payload(payload);
+    }
+}
 
 /// The first panic captured while invoking a resolved pointer route, as
 /// [`InteractionDispatchHandle::invoke_pointer_route`](crate::pointer::InteractionDispatchHandle::invoke_pointer_route)
@@ -50,21 +62,21 @@ impl RoutePanic {
         if first.is_none() {
             *first = Some(candidate);
         } else {
-            // Panic payloads are arbitrary user values and may themselves
-            // panic in Drop. Discarding a secondary payload normally could
-            // therefore replace the first panic (or abort during unwind).
-            // Only a known inert payload is released.
-            candidate.retain();
-            // Diagnostics are user code too. Retire the superseded payload
+            // A later payload is a competing failure: it is destroyed under
+            // containment so its destructor cannot replace the first one
+            // (ADR-0281 §2).
+            candidate.discard();
+            // Diagnostics are user code too. Discard the superseded payload
             // before reporting it, and contain a failing subscriber without
             // recursively reporting that diagnostic's own failure.
-            Self::capture(|| {
+            if let Some(diagnostic) = Self::capture(|| {
                 tracing::error!(
                     phase,
                     "dispatch phase panicked after an earlier phase; only the first panic is resumed"
                 );
-            })
-            .retain();
+            }) {
+                diagnostic.discard();
+            }
         }
     }
 
@@ -72,11 +84,10 @@ impl RoutePanic {
     pub fn resume(self) -> ! {
         resume_unwind(self.payload)
     }
-}
 
-impl Retain for RoutePanic {
-    /// Retain a failure already superseded or reported (ADR-0119).
-    fn retain(self) {
+    /// Destroy a failure already superseded or reported, under containment
+    /// (ADR-0281 §2).
+    pub(crate) fn discard(self) {
         flui_foundation::panic::discard_payload(self.payload);
     }
 }

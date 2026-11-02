@@ -803,8 +803,9 @@ demand to the primary or wakes an unrelated sibling.
 
 The `SignalWrite` command callback is `FnMut`, although it is invoked at most
 once. Its envelope stays owned outside the caught invocation. Redraw demand is
-durable before a successful callback's captures are destroyed; a callback
-panic retains the opaque envelope. A stale command likewise rearms an existing
+durable before a successful callback's captures are destroyed; after a callback
+panic the envelope is destroyed under containment and the callback's panic is
+the one resumed (ADR-0281 §3). A stale command likewise rearms an existing
 FIFO tail before destroying its envelope. If a tail arrives concurrently while
 that destruction is blocked and its ingress wake fails, a caught destructor
 panic retries the shared delivery debt before it resumes. This prevents framework
@@ -1079,9 +1080,8 @@ is retained before recovery or diagnostics can run. The typed report owns only
 framework values and strings. Diagnostics and the registered handler run under
 separate boundaries: subscriber failure cannot suppress callback delivery, and
 neither can replace the presentation's original failure or stop sibling frames.
-A failed callback's owning envelope is retained before secondary payload handling;
-ordinary successful-envelope retirement still runs under its own boundary. Rust
-cannot contain two panicking fields in an aggregate's first ordinary destruction.
+A failed callback's owning envelope is destroyed under its own boundary, as a
+successful one is, and a panic from its destructor is discarded (ADR-0281 §3).
 
 `frame_failure_containment_matrix` isolates aggregate payload and callback-capture
 cases in subprocesses: producer alone, handler alone, diagnostics alone, competing
@@ -1170,16 +1170,16 @@ media-query field carries the period: nothing in animation reads it from there.
 
 ## Exceptional terminal presentation ownership
 
-A presentation close that holds a failure, or runs inside an unwind, is in
-preserving mode ([ADR-0123](../../docs/adr/ADR-0123-exceptional-presentation-close.md)).
-The close first withdraws the presentation's authority: its lane targets and
-cached routes, signal graph, writers, rebuild handles, local and UI runtime
-GlobalKeys and agent ports refuse further use, while siblings stay live. It then
-retains the values the presentation still owns (its trees and their callbacks)
-instead of dropping them, and skips optional disposal
-([ADR-0127](../../docs/adr/ADR-0127-exceptional-path-retention.md)). The platform
-window and the accessibility bridge are framework-owned and are released in
-either mode. A healthy close drops everything normally, and a lifecycle drain
+A presentation close that holds a failure is in preserving mode
+([ADR-0123](../../docs/adr/ADR-0123-exceptional-presentation-close.md)); an
+unwind alone is no reason for it (ADR-0281 §1). The close first withdraws the
+presentation's authority: its lane targets and cached routes, signal graph,
+writers, rebuild handles, local and UI runtime GlobalKeys and agent ports refuse
+further use, while siblings stay live. It then skips optional disposal, and the
+values it withdrew, the removed presentation included, are destroyed under the
+close's containment, the first failure kept
+([ADR-0281](../../docs/adr/ADR-0281-a-destructor-that-panics-during-an-unwind-aborts-as-in-std.md) §3).
+The platform window and the accessibility bridge are released in either mode. A healthy close drops everything normally, and a lifecycle drain
 still runs every eligible callback before propagating its first failure. Tested
 by `presentation_close_retirement_failures_preserve_focus_ime_and_siblings`.
 
@@ -1205,9 +1205,8 @@ lock, so a callback may add or remove listeners or toggle the state again. Both
 the storage (when the binding drops) and each snapshot retire their envelopes
 in registration order. A panic from a callback or a capture destructor
 propagates with the committed semantics state intact; while it unwinds, the
-retiring container retains every envelope clone it holds, since a thread-shared
-clone cannot be proven non-last (ADR-0127). Competing destructors inside one callback's capture, and the
-binding's other fields, are outside this contract.
+snapshot is dropped as a `Vec` is, and a capture destructor that panics there
+aborts, as in std (ADR-0281).
 
 ### A dropping UI runtime destroys its application values before it raises a failure
 
@@ -1220,15 +1219,15 @@ follows; a capture whose destructor panics there is a second panic in one unwind
 queued commands (a cross-thread signal write carries the application's closure) and the
 frame-failure handler, closes the command inbox, and only then destroys them under the same catch,
 first failure kept: a destructor that sends through a sender it kept is refused with `OwnerGone`
-rather than queueing a capture only the drop glue would reach. Once a failure
-is held, or the thread is already unwinding, it retains them instead (ADR-0127). Every other field
+rather than queueing a capture only the drop glue would reach. After a held failure, and while the
+thread unwinds, they are destroyed the same way, each under its own catch (ADR-0281 §3). Every other field
 holds framework values, or values already contained where they run: the input tap's calls and
 retirement, and the presentations' trees, whose `dispose` and pending futures are contained per
 element so the rest of the tree still disposes; the first of those is then the presentation's
 close failure, since no frame follows to report it (ADR-0258 §2). Tested by
 `a_queued_command_outliving_a_teardown_failure_does_not_abort`,
 `a_handler_capture_sending_on_drop_is_refused`, `a_failing_dispose_and_future_drop_do_not_abort`
-and `user_drop_panic_inside_an_unwind_is_retained`,
+and `a_runtime_dropped_inside_an_unwind_destroys_its_values`,
 each run in a child process because the broken shape aborts.
 
 ### A presentation's frame-rate demand is decided here and delivered as an owner effect

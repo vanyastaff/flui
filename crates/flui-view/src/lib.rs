@@ -322,3 +322,12 @@ pub mod prelude {
         },
     };
 }
+
+/// Destroy `value` after a caught failure. Its destructor can run user code,
+/// so it runs under containment and a panic it raises is discarded: the
+/// caller's first failure stays the one propagated (ADR-0281 §3).
+pub(crate) fn drop_contained<T>(value: T) {
+    if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(value))) {
+        flui_foundation::panic::discard_payload(payload);
+    }
+}

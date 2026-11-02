@@ -1,12 +1,13 @@
 //! Takeable terminal ownership for widget infrastructure.
 //! Owners withdraw every outgoing slot before retiring any; collection tails
-//! survive the first failure. User aggregates remain opaque.
+//! are still destroyed after the first failure, each under containment, and
+//! the first failure is the one raised (ADR-0281 §3).
 
-/// A takeable terminal ownership slot. Ordinary retirement preserves normal
-/// destruction; incoming unwind retains the opaque value instead of risking a
-/// second destructor failure. Owners withdraw all slots before retiring any.
-/// No panic is caught here: the first failure remains authoritative. A user
-/// aggregate with multiple internally panicking fields remains opaque.
+use flui_foundation::panic::FirstPanic;
+
+/// A takeable terminal ownership slot. Owners withdraw all slots before
+/// retiring any; a withdrawn value is destroyed normally. A destructor that
+/// panics while the thread unwinds aborts, as in std (ADR-0281).
 pub(crate) struct Terminal<T>(Option<T>);
 
 impl<T: std::fmt::Debug> std::fmt::Debug for Terminal<T> {
@@ -53,25 +54,14 @@ impl<T> std::ops::DerefMut for Terminal<T> {
     }
 }
 
-impl<T> Drop for Terminal<T> {
-    fn drop(&mut self) {
-        if let Some(value) = self.0.take() {
-            if std::thread::panicking() {
-                std::mem::forget(value);
-            } else {
-                drop(value);
-            }
-        }
-    }
-}
-
-/// The vector has left its owner/guard. Retain the iterator's entire tail if
-/// one member fails, rather than unwind-dropping the remaining members.
+/// The vector has left its owner/guard. Every member is destroyed under
+/// containment; the first failure is raised once all have run.
 pub(crate) fn retire_values<T>(values: Vec<T>) {
-    let mut remaining = Terminal::new(values.into_iter());
-    for value in remaining.by_ref() {
-        drop(Terminal::new(value));
+    let mut first = FirstPanic::new();
+    for value in values {
+        first.contain(|| drop(value));
     }
+    first.resume();
 }
 
 pub(crate) struct RetiredValues<T>(pub(crate) Vec<T>);
@@ -91,14 +81,19 @@ impl<K, V> Drop for RetiredMap<K, V> {
 }
 
 pub(crate) fn retire_map<K, V>(values: std::collections::HashMap<K, V>) {
-    let mut remaining = Terminal::new(values.into_iter());
-    for (key, value) in remaining.by_ref() {
+    let mut first = FirstPanic::new();
+    for (key, value) in values {
         // HeroTag keys can own user values. Secure both before retiring either.
-        let key = Terminal::new(key);
-        let value = Terminal::new(value);
-        drop(key);
-        drop(value);
+        first.contain(|| drop(key));
+        first.contain(|| drop(value));
     }
+    first.resume();
+}
+
+/// Destroy `value` after a caught failure: a panic its destructor raises is
+/// discarded, so the caller's first failure stays the one raised (ADR-0281 §3).
+pub(crate) fn drop_contained<T>(value: T) {
+    FirstPanic::new().contain(|| drop(value));
 }
 
 /// A shared map empties itself only at its physical last release, preserving

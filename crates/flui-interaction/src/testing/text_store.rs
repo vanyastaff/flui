@@ -23,9 +23,9 @@ use flui_foundation::geometry::{Bounds, Point, Size};
 
 use flui_platform::text_store::{
     CommitGate, Composition, LockGrant, LockOutcome, LockTiming, OwnerCalls, PointMode, RangeRect,
-    RetainOnFailure, Selection, TextChange, TextInputPurpose, TextStore, TextStoreChange,
-    TextStoreEdit, TextStoreError, TextStoreObserver, TextStoreRead, TextStoreStatus, Utf16Offset,
-    Utf16Range, utf16,
+    Selection, TextChange, TextInputPurpose, TextStore, TextStoreChange, TextStoreEdit,
+    TextStoreError, TextStoreObserver, TextStoreRead, TextStoreStatus, Utf16Offset, Utf16Range,
+    utf16,
 };
 
 use crate::text_input::{CompositionLedger, EditGeneration, LockArbiter, committed_text};
@@ -85,10 +85,9 @@ impl std::fmt::Debug for InMemoryTextStore {
 }
 
 impl Drop for InMemoryTextStore {
-    /// The observer and the owner listener are other code: retired inside a
-    /// scope, retained during an unwind (ADR-0127). The arbiter retires its
-    /// queued grants the same way, and a failure still parked in the gate is
-    /// retained with it.
+    /// The observer and the owner listener are other code: retired through
+    /// `OwnerCalls`, and the first failure is resumed only outside an unwind.
+    /// The arbiter retires its queued grants the same way.
     fn drop(&mut self) {
         let observer = self.observer.get_mut().take();
         let listener = self.owner_listener.get_mut().take();
@@ -435,11 +434,11 @@ impl TextStore for InMemoryTextStore {
         // An app edit still owed is reported before the platform's session
         // can see it, and one made from inside the grant once it ends. A
         // failure there refuses the request: the grant, not yet accepted, is
-        // retained unrun rather than destroyed during the unwind.
+        // destroyed unrun, under containment behind that failure.
         let mut before = OwnerCalls::new();
         self.flush_notifications(&mut before);
         if let Some(payload) = before.into_failure() {
-            RetainOnFailure::retain(grant);
+            crate::containment::destroy_contained(grant);
             resume_unwind(payload);
         }
         // The gate the last grant settled under, read by the arbiter before

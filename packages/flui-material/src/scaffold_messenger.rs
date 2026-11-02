@@ -443,10 +443,10 @@ impl Drop for Reconciling<'_> {
 
 impl MessengerCore {
     fn schedule_rebuild_on_scaffolds(&self) {
-        self.deliver_scaffold_rebuilds(false);
+        self.deliver_scaffold_rebuilds();
     }
 
-    fn deliver_scaffold_rebuilds(&self, retain_after_failure: bool) {
+    fn deliver_scaffold_rebuilds(&self) {
         // Host wake callbacks may synchronously register or dispose scaffolds.
         let handles: Vec<_> = self.scaffolds.borrow().values().cloned().collect();
         let mut first = None;
@@ -458,9 +458,12 @@ impl MessengerCore {
                 })),
             );
         }
-        if retain_after_failure || first.is_some() {
-            std::mem::forget(handles);
-        }
+        // The handles are destroyed under containment: the first wake failure
+        // stays the one raised (ADR-0281 §3).
+        remember_completion_failure(
+            &mut first,
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(handles))),
+        );
         if let Some(payload) = first {
             std::panic::resume_unwind(payload);
         }
@@ -596,17 +599,21 @@ impl MessengerCore {
                 })),
             );
         }
-        let retain_after_failure = first.is_some();
         remember_completion_failure(
             &mut first,
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                self.deliver_scaffold_rebuilds(retain_after_failure);
+                self.deliver_scaffold_rebuilds();
             })),
         );
         if let Some(payload) = first {
-            // The completed entry owns no remaining queue obligation, but its
-            // opaque value may have competing panicking destructors.
-            std::mem::forget(popped);
+            // The completed entry owns no remaining queue obligation; it is
+            // destroyed under containment so its destructor cannot replace
+            // the first failure (ADR-0281 §3).
+            if let Err(later) =
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(popped)))
+            {
+                flui_sdk::foundation::panic::discard_payload(later);
+            }
             drop(advancing_guard);
             std::panic::resume_unwind(payload);
         }

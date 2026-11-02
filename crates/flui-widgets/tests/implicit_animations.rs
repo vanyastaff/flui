@@ -2869,9 +2869,9 @@ pub(crate) fn an_invalid_first_placement_is_refused_as_a_whole() {
     );
 }
 
-/// An unmounted `AnimatedLerp` retires its two anchors one at a time: while
-/// the first anchor's destructor unwinds, the second is not dropped, where a
-/// second panicking destructor would abort the process.
+/// An unmounted `AnimatedLerp` destroys both anchors: the first anchor's
+/// destructor failure reaches the caller, and the second anchor is destroyed
+/// by that unwind (ADR-0281).
 pub(crate) fn animated_lerp_retires_each_anchor_on_unmount() {
     let Some(case) = crate::common::child_process::selected_case() else {
         crate::common::child_process::run_rows(
@@ -2961,8 +2961,8 @@ pub(crate) fn animated_lerp_retires_each_anchor_on_unmount() {
     );
     assert_eq!(
         *unwinding.borrow(),
-        Vec::<f64>::new(),
-        "dropped during unwind"
+        vec![80.0],
+        "the end anchor is destroyed by the start anchor's unwind"
     );
     crate::common::child_process::pass();
 }

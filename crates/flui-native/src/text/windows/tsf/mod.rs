@@ -373,7 +373,7 @@ impl TextServices {
     /// returns. The window procedure must not unwind, so a failure of the
     /// application code the teardown reaches is logged, not raised, the log
     /// contained as [`Self::leave`]'s is; after a failure the services are
-    /// retained, not destroyed (ADR-0127).
+    /// still destroyed, contained (ADR-0281).
     pub(crate) fn retire_with_window(services: Rc<Self>) {
         let mut calls = OwnerCalls::new();
         calls.run(|| {
@@ -699,8 +699,8 @@ impl TextServices {
     /// order, so the first panic is the one kept for the outermost host
     /// operation ([`Self::keep_failure`]) and the native cleanup still runs,
     /// so TSF is never left associated with a document the window no longer
-    /// serves. After a failure the store is retained, not destroyed
-    /// (ADR-0127).
+    /// serves. After a failure the store is still destroyed, contained
+    /// (ADR-0281).
     fn release_document(&self, document: Document) {
         let Document {
             manager,

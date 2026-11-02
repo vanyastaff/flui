@@ -1001,7 +1001,6 @@ pub(crate) mod terminal_tests {
             &[
                 "healthy",
                 "manifest_failure",
-                "competing",
                 "incoming_unwind",
                 "shared_manifest",
             ],
@@ -1009,9 +1008,9 @@ pub(crate) mod terminal_tests {
             return;
         };
         let incoming = case == "incoming_unwind";
-        let first_failure = matches!(case.as_str(), "manifest_failure" | "competing");
-        let (key, key_drops) = bomb("manifest retirement", first_failure || incoming);
-        let (capture, capture_drops) = bomb("factory retirement", case == "competing" || incoming);
+        let first_failure = case == "manifest_failure";
+        let (key, key_drops) = bomb("manifest retirement", first_failure);
+        let (capture, capture_drops) = bomb("factory retirement", false);
         let (tail, tail_drops) = bomb("healthy manifest tail", false);
         let mut controller = HeroController::default();
         controller.default_rect_factory = Terminal::new(Some(factory(capture)));
@@ -1053,21 +1052,16 @@ pub(crate) mod terminal_tests {
         }));
         if incoming {
             assert_failure(result.expect_err("incoming panic"), "incoming failure");
-            assert_eq!(key_drops.load(Ordering::SeqCst), 0);
-            assert_eq!(capture_drops.load(Ordering::SeqCst), 0);
         } else if first_failure {
             assert_failure(result.expect_err("manifest panic"), "manifest retirement");
-            assert_eq!(key_drops.load(Ordering::SeqCst), 1);
-            assert_eq!(capture_drops.load(Ordering::SeqCst), 0);
         } else {
             assert!(result.is_ok());
-            assert_eq!(key_drops.load(Ordering::SeqCst), 1);
-            assert_eq!(capture_drops.load(Ordering::SeqCst), 1);
         }
-        assert_eq!(
-            tail_drops.load(Ordering::SeqCst),
-            usize::from(!incoming && !first_failure)
-        );
+        // Every owned value is destroyed once, on an incoming unwind and after
+        // the first manifest failure too (ADR-0281).
+        assert_eq!(key_drops.load(Ordering::SeqCst), 1);
+        assert_eq!(capture_drops.load(Ordering::SeqCst), 1);
+        assert_eq!(tail_drops.load(Ordering::SeqCst), 1);
         // Independent healthy work still retires normally after containment.
         let (capture, drops) = bomb("recovery", false);
         let mut next = HeroController::default();

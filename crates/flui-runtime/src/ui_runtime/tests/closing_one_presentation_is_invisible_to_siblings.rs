@@ -157,6 +157,8 @@ struct CursorCapture {
     drops: Arc<AtomicUsize>,
 }
 
+/// Two captures in one aggregate. Only `first` may fail: a second field whose
+/// destructor panics while the first unwinds aborts, as in std (ADR-0281 §1).
 struct DropCompetition {
     first: CursorCapture,
     second: CursorCapture,
@@ -219,14 +221,16 @@ impl flui_foundation::ViewKey for RetirementKey {
     fn clone_key(&self) -> Box<dyn flui_foundation::ViewKey> {
         let mut clone = self.clone();
         clone.cloned = true;
+        // Only key 1 fails: a second destructor that panics while the key
+        // registry unwinds from the first aborts, as in std (ADR-0281 §1).
         clone.captures = Some((
             ArmedKeyCapture {
                 armed: Arc::clone(&self.armed),
-                fail: self.fail && self.id == 2,
+                fail: false,
             },
             ArmedKeyCapture {
                 armed: Arc::clone(&self.armed),
-                fail: self.fail && self.id == 2,
+                fail: false,
             },
         ));
         Box::new(clone)
@@ -244,14 +248,18 @@ impl Drop for RetirementKey {
         if !self.cloned || !self.armed.load(Ordering::Relaxed) {
             return;
         }
-        let _ = &self.captures;
-        self.drops.fetch_add(1, Ordering::Relaxed);
+        let earlier = self.drops.fetch_add(1, Ordering::Relaxed);
         CLOSE_REENTRY.with(|hook| {
             if let Some(hook) = &*hook.borrow() {
                 hook();
             }
         });
-        assert!(!self.fail || self.id != 1, "custom key retirement failure");
+        // Only the first destroyed copy of key 1 fails: a second destructor that
+        // panics while the registry unwinds from the first aborts (ADR-0281 §1).
+        assert!(
+            !self.fail || self.id != 1 || earlier != 0,
+            "custom key retirement failure"
+        );
     }
 }
 
@@ -320,7 +328,11 @@ fn run_custom_key_child(fail: bool) {
                 "all claims leave the RefCell before arbitrary key Drop"
             );
             assert!(
-                focus.is_closed() && input.ensure_open() == Err(TextInputError::Closed),
+                focus.is_closed()
+                    && matches!(
+                        input.ensure_open(),
+                        Err(TextInputError::Closed | TextInputError::OwnerGone)
+                    ),
                 "a key's destructor finds focus and text input already closed"
             );
             calls.set(calls.get() + 1);
@@ -338,19 +350,21 @@ fn run_custom_key_child(fail: bool) {
             .map(String::as_str)
             .or_else(|| first.downcast_ref::<&str>().copied());
         assert!(message.is_some_and(|message| message.contains("custom key retirement failure")));
-        assert_eq!(first_drops.load(Ordering::Relaxed), 1);
-        assert_eq!(
-            second_drops.load(Ordering::Relaxed),
-            0,
-            "opaque key tail is retained"
-        );
-        assert_eq!(reentered.get(), 1);
     } else {
         assert!(close.expect("healthy custom key close"));
-        assert!(first_drops.load(Ordering::Relaxed) > 0);
-        assert!(second_drops.load(Ordering::Relaxed) > 0);
-        assert!(reentered.get() >= 2);
     }
+    // A failing key stops none of the rest: every copy of both keys is
+    // destroyed, as in a healthy close (ADR-0281 §3).
+    let (first_drops, second_drops) = (
+        first_drops.load(Ordering::Relaxed),
+        second_drops.load(Ordering::Relaxed),
+    );
+    assert!(first_drops > 0);
+    assert_eq!(
+        second_drops, first_drops,
+        "the key tail is destroyed after the first failure"
+    );
+    assert_eq!(reentered.get(), first_drops + second_drops);
     assert_eq!(ui_runtime.global_key_scope.claim_count(), 0);
     assert!(!ui_runtime.close_presentation_entered(a));
     // Existing state can remain retained, but the same keys must be usable by B.
@@ -747,11 +761,11 @@ fn run_scoped_routes_child(fail_cursor: bool) {
     let rejected_drops = Arc::new(AtomicUsize::new(0));
     let bundle = DropCompetition {
         first: CursorCapture {
-            fail: fail_cursor,
+            fail: false,
             drops: Arc::clone(&capture_drops),
         },
         second: CursorCapture {
-            fail: fail_cursor,
+            fail: false,
             drops: Arc::clone(&capture_drops),
         },
     };
@@ -825,8 +839,8 @@ fn run_scoped_routes_child(fail_cursor: bool) {
         );
         assert_eq!(
             withdrawal_seen.get(),
-            None,
-            "a capture withdrawn after the failure is retained"
+            Some((true, true)),
+            "a capture withdrawn after the failure is destroyed once focus and text input closed"
         );
     } else {
         assert!(close.expect("healthy close"));
@@ -869,7 +883,7 @@ fn run_scoped_routes_child(fail_cursor: bool) {
                             drops: Arc::clone(&self.drops),
                         },
                         second: CursorCapture {
-                            fail: true,
+                            fail: false,
                             drops: Arc::clone(&self.drops),
                         },
                     };
@@ -890,7 +904,7 @@ fn run_scoped_routes_child(fail_cursor: bool) {
                 panic!("unrelated outer rejection unwind");
             }));
             assert!(rejected.is_err());
-            assert_eq!(unwind_drops.load(Ordering::Relaxed), 0);
+            assert_eq!(unwind_drops.load(Ordering::Relaxed), 2);
         }
         // The close and its failure are over: a healthy rejection through the
         // stale handle destroys its captures instead of leaking them.
@@ -943,10 +957,7 @@ fn run_scoped_routes_child(fail_cursor: bool) {
             .unregister_pointer(b_target)
             .expect("B original target release");
     });
-    assert_eq!(
-        capture_drops.load(Ordering::Relaxed),
-        if fail_cursor { 0 } else { 2 }
-    );
+    assert_eq!(capture_drops.load(Ordering::Relaxed), 2);
     assert_eq!(
         rejected_drops.load(Ordering::Relaxed),
         2,
@@ -1058,7 +1069,7 @@ pub(crate) fn run_presentation_close_child(kind: &str) {
             drops: Arc::clone(&opaque_drops),
         },
         second: CursorCapture {
-            fail: opaque_failure,
+            fail: false,
             drops: Arc::clone(&opaque_drops),
         },
     };
@@ -1102,7 +1113,7 @@ pub(crate) fn run_presentation_close_child(kind: &str) {
                 drops: Arc::clone(&arena_drops),
             },
             second: CursorCapture {
-                fail: true,
+                fail: false,
                 drops: Arc::clone(&arena_drops),
             },
         };
@@ -1116,11 +1127,11 @@ pub(crate) fn run_presentation_close_child(kind: &str) {
         );
         let captures = DropCompetition {
             first: CursorCapture {
-                fail: true,
+                fail: false,
                 drops: Arc::clone(&route_drops),
             },
             second: CursorCapture {
-                fail: true,
+                fail: false,
                 drops: Arc::clone(&route_drops),
             },
         };
@@ -1209,7 +1220,7 @@ pub(crate) fn run_presentation_close_child(kind: &str) {
                         drops: Arc::clone(&counts),
                     },
                     second: CursorCapture {
-                        fail: cursor_failure,
+                        fail: false,
                         drops: Arc::clone(&counts),
                     },
                 };
@@ -1226,7 +1237,7 @@ pub(crate) fn run_presentation_close_child(kind: &str) {
                         drops: Arc::clone(&counts),
                     },
                     second: CursorCapture {
-                        fail: cursor_failure,
+                        fail: false,
                         drops: Arc::clone(&counts),
                     },
                 };
@@ -1356,12 +1367,15 @@ pub(crate) fn run_presentation_close_child(kind: &str) {
             }))
         );
         assert!(focus.is_closed());
-        assert_eq!(input.ensure_open(), Err(TextInputError::Closed));
-        assert!(
+        assert_eq!(input.ensure_open(), Err(TextInputError::OwnerGone));
+        // A held failure skips optional disposal; an unwind alone does not
+        // (ADR-0281 §1).
+        assert_eq!(
             seen.borrow().is_empty(),
-            "recovering forest skips optional disposal"
+            !outer_unwind,
+            "only a forest that holds a failure skips optional disposal"
         );
-        assert_eq!(opaque_drops.load(Ordering::Relaxed), 0);
+        assert_eq!(opaque_drops.load(Ordering::Relaxed), 2);
         if let Some((arena, entry)) = saved_arena {
             assert!(arena.is_empty());
             assert!(entry.member().is_none());
@@ -1394,10 +1408,10 @@ pub(crate) fn run_presentation_close_child(kind: &str) {
             assert!(arena.is_empty());
             assert_eq!(
                 arena_drops.load(Ordering::Relaxed),
-                2,
-                "only the rejected member is destroyed; the retained one is not"
+                4,
+                "the saved member was destroyed by the close, the rejected one now"
             );
-            assert_eq!(route_drops.load(Ordering::Relaxed), 0);
+            assert_eq!(route_drops.load(Ordering::Relaxed), 2);
         }
         assert!(!agent.is_open());
         return;
@@ -1425,10 +1439,7 @@ pub(crate) fn run_presentation_close_child(kind: &str) {
     }
     if reentry {
         CLOSE_REENTRY.with(|hook| hook.borrow_mut().take());
-        assert_eq!(
-            rejected_drops.load(Ordering::Relaxed),
-            if cursor_failure { 0 } else { 4 }
-        );
+        assert_eq!(rejected_drops.load(Ordering::Relaxed), 4);
     }
     let expected = if outer_close {
         Some("outer unwind remains authoritative")
@@ -1478,16 +1489,18 @@ pub(crate) fn run_presentation_close_child(kind: &str) {
             "input closes before healthy widget disposal"
         );
     } else {
-        assert!(seen.borrow().is_empty(), "recovery skips optional disposal");
+        // A held failure skips optional disposal; an unwind alone does not
+        // (ADR-0281 §1).
+        assert_eq!(
+            seen.borrow().is_empty(),
+            !outer_close,
+            "only a close that holds a failure skips optional disposal"
+        );
     }
     assert_eq!(
         input.ensure_open(),
-        Err(if healthy {
-            TextInputError::OwnerGone
-        } else {
-            TextInputError::Closed
-        }),
-        "healthy removal destroys the physical owner; exceptional removal retains the closed owner"
+        Err(TextInputError::OwnerGone),
+        "removal destroys the physical owner, after a failure too (ADR-0281 §3)"
     );
     assert!(focus.primary_focus().is_none());
     assert!(
@@ -1496,7 +1509,8 @@ pub(crate) fn run_presentation_close_child(kind: &str) {
     );
     assert_eq!(
         opaque_drops.load(Ordering::Relaxed),
-        if healthy { 2 } else { 0 }
+        2,
+        "the IME client's captures are destroyed, after a failure too"
     );
     {
         let captured = capabilities.borrow();
@@ -1557,15 +1571,15 @@ pub(crate) fn run_presentation_close_child(kind: &str) {
     );
     assert_eq!(
         drops.load(Ordering::Relaxed),
-        usize::from(!prior_failure && !outer_close),
-        "cursor retirement stops after an earlier lifecycle failure"
+        1,
+        "the cursor capture is destroyed once, after an earlier failure too"
     );
     assert_eq!(platform.recorder.ime_allowed_calls(), [true, false]);
     assert!(
         !ui_runtime.close_presentation_entered(a),
         "repeated close is inert"
     );
-    assert_eq!(seen.borrow().len(), usize::from(healthy));
+    assert_eq!(seen.borrow().len(), usize::from(healthy || outer_close));
     assert_eq!(
         focus_calls.get(),
         usize::from(!cursor_failure && !prior_failure && !outer_close)
@@ -1634,9 +1648,9 @@ pub(crate) fn presentation_close_retirement_failures_preserve_focus_ime_and_sibl
         "lifecycle-between-rounds",
         "outer-close",
         "a_failing_dispose_and_future_drop_do_not_abort",
-        "user_drop_panic_inside_an_unwind_is_retained",
+        "a_runtime_dropped_inside_an_unwind_destroys_its_values",
         "a_queued_command_outliving_a_teardown_failure_does_not_abort",
-        "a_close_that_holds_a_failure_never_detaches",
+        "a_close_that_holds_a_failure_detaches_once",
         "a_handler_capture_sending_on_drop_is_refused",
     ] {
         let mut child = Command::new(std::env::current_exe().expect("test executable"))
@@ -1870,10 +1884,11 @@ fn a_failing_dispose_and_future_drop_do_not_abort() {
     );
 }
 
-/// R14: the same runtime dropped while an outer panic unwinds retains what
-/// its application values hold, running none of their code: the outer
-/// failure is the one that unwinds, and the process does not abort.
-fn user_drop_panic_inside_an_unwind_is_retained() {
+/// The same runtime dropped while an outer panic unwinds destroys its
+/// application values, each under containment (ADR-0281 §3): the pending
+/// future is dropped once, its destructor's panic is contained, and the
+/// outer failure is the one that unwinds.
+fn a_runtime_dropped_inside_an_unwind_destroys_its_values() {
     let ui_runtime = failing_teardown_runtime();
     let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
         let _held = ui_runtime;
@@ -1886,16 +1901,17 @@ fn user_drop_panic_inside_an_unwind_is_retained() {
     );
     assert_eq!(
         FUTURES_DROPPED.load(std::sync::atomic::Ordering::SeqCst),
-        0,
-        "the pending future was retained, not dropped, inside the unwind"
+        1,
+        "the pending future was dropped once inside the unwind"
     );
+    flui_foundation::panic::discard_payload(payload);
 }
 
 /// A runtime whose drop raises a failure, a post-frame capture's, while a
 /// queued cross-thread signal write still holds a capture that fails too:
-/// the write's capture is retained by the drop itself, never left to the
-/// drop glue that runs inside the raised failure's unwind, so the process
-/// does not abort and the first failure is the one raised (#1165).
+/// the write's capture is destroyed by the drop itself, under containment,
+/// never left to the drop glue that runs inside the raised failure's unwind,
+/// so the first failure is the one raised (#1165, ADR-0281 §3).
 fn a_queued_command_outliving_a_teardown_failure_does_not_abort() {
     let ui_runtime = UiRuntime::for_test();
     let id = ui_runtime.presentation_id();
@@ -1924,7 +1940,7 @@ fn a_queued_command_outliving_a_teardown_failure_does_not_abort() {
         flui_foundation::panic::payload_text(&*payload),
         Some("post-frame capture failed")
     );
-    std::mem::forget(payload);
+    flui_foundation::panic::discard_payload(payload);
 }
 
 /// The teardown rows that would abort a process when broken, each run in a
@@ -1934,15 +1950,13 @@ pub(crate) fn run_teardown_child(kind: &str) -> bool {
         "a_failing_dispose_and_future_drop_do_not_abort" => {
             a_failing_dispose_and_future_drop_do_not_abort
         }
-        "user_drop_panic_inside_an_unwind_is_retained" => {
-            user_drop_panic_inside_an_unwind_is_retained
+        "a_runtime_dropped_inside_an_unwind_destroys_its_values" => {
+            a_runtime_dropped_inside_an_unwind_destroys_its_values
         }
         "a_handler_capture_sending_on_drop_is_refused" => {
             a_handler_capture_sending_on_drop_is_refused
         }
-        "a_close_that_holds_a_failure_never_detaches" => {
-            a_close_that_holds_a_failure_never_detaches
-        }
+        "a_close_that_holds_a_failure_detaches_once" => a_close_that_holds_a_failure_detaches_once,
         "a_queued_command_outliving_a_teardown_failure_does_not_abort" => {
             a_queued_command_outliving_a_teardown_failure_does_not_abort
         }
@@ -1962,12 +1976,11 @@ impl flui_foundation::observe::TreeObserver for DetachCounter {
     }
 }
 
-/// R3, ADR-0261 §1: a presentation closed while it holds a caught failure
-/// (ADR-0123) is retained whole, its owner never dropped: the observer is not
-/// told `detached()` and stays alive, and the failure is the one that
-/// resumes. A `dispose` that panics is not such a close: it is contained
-/// where it runs, the close is healthy, and the stream ends with `detached()`.
-fn a_close_that_holds_a_failure_never_detaches() {
+/// A presentation closed while it holds a caught failure (ADR-0123) is
+/// destroyed under containment (ADR-0281 §3): its owner drops, the observer is
+/// told `detached()` once and released, and the held failure is the one that
+/// resumes.
+fn a_close_that_holds_a_failure_detaches_once() {
     let mut ui_runtime = UiRuntime::for_test();
     let a = ui_runtime.presentation_id();
     let b = ui_runtime.install_second_presentation_for_test();
@@ -1994,19 +2007,26 @@ fn a_close_that_holds_a_failure_never_detaches() {
         flui_foundation::panic::payload_text(&*payload),
         Some("presentation retirement failed")
     );
+    flui_foundation::panic::discard_payload(payload);
     assert_eq!(
         observer.0.load(Ordering::SeqCst),
-        0,
-        "the retained owner never ends the stream"
+        1,
+        "the destroyed owner ends the stream once"
     );
-    assert!(
-        Arc::strong_count(&observer) > 1,
-        "the retained owner still holds its observer"
+    assert_eq!(
+        Arc::strong_count(&observer),
+        1,
+        "the destroyed owner released its observer"
     );
     assert!(
         ui_runtime.presentations.get(a).is_none(),
         "A left the forest"
     );
+    // The next operation still works: the sibling keeps producing frames.
+    let mut clock = flui_foundation::ManualClock::new();
+    let mut sink = ScriptedSink::new(|_, _| crate::sink::SubmitVerdict::Presented);
+    let _ = ui_runtime.pump(&mut clock, &mut sink);
+    assert!(ui_runtime.presentations.get(b).is_some(), "B stays live");
     drop(ui_runtime);
 }
 
@@ -2028,7 +2048,9 @@ impl Drop for SendsOnDrop {
             let _ = &held;
         }) {
             WRITE_REFUSED.store(true, std::sync::atomic::Ordering::SeqCst);
-            std::mem::forget(refused);
+            if let Err(dropped) = catch_unwind(AssertUnwindSafe(|| drop(refused))) {
+                flui_foundation::panic::discard_payload(dropped);
+            }
         }
         panic!("handler capture failed");
     }

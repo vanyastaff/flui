@@ -48,8 +48,6 @@ use flui_platform::{
 
 use crate::gesture::arena::{DispatchedInput, DispatchedInputCell};
 
-use crate::retain::Retain;
-
 /// How many outcomes a presentation holds for its observers, counting the
 /// requests still queued for a frame (ADR-0210 §4).
 pub const MAILBOX_CAPACITY: usize = 64;
@@ -754,10 +752,11 @@ impl HapticsHost {
         }
     }
 
-    /// Close after a failure that preserves ownership: like
+    /// Close after a failure: like
     /// [`close`](Self::close), but runs no observer. Pending outcomes are
-    /// reported with their tickets, and the observers are retained, never
-    /// dropped, so none of their code runs on the failed path.
+    /// reported with their tickets, and each observer is destroyed under
+    /// containment: a panic of its destructor is discarded behind the failure
+    /// already owed (ADR-0281 §3).
     pub fn withdraw(&self) {
         let state = &*self.state;
         state.closed.set(true);
@@ -766,7 +765,7 @@ impl HapticsHost {
         state.report_after_the_play(WITHDRAWN_UNDELIVERED);
         let observers = std::mem::take(&mut *state.observers.borrow_mut());
         for slot in observers {
-            slot.observer.retain();
+            crate::containment::destroy_contained(slot.observer);
         }
     }
 }

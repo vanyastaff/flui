@@ -300,9 +300,9 @@ mod tests {
                 assert!(outcome.is_ok());
             }
             assert_eq!(invoked.load(Ordering::SeqCst), 1);
-            // `call` still forgets the displaced handler after a failed call
-            // (a crate-local retention, ADR-0127 §2).
-            assert_eq!(dropped.load(Ordering::SeqCst), 0);
+            // `call` drops the displaced handler after a failed call too,
+            // contained (ADR-0281).
+            assert_eq!(dropped.load(Ordering::SeqCst), 1);
         }
     }
 

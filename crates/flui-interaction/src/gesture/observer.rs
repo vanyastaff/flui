@@ -22,7 +22,6 @@ use crate::gesture::arena::{
     GestureDisposition,
 };
 use crate::ids::PointerId;
-use crate::retain::{Owned, Retain};
 
 #[cfg(doc)]
 use crate::gesture::arena::GestureArena;
@@ -419,7 +418,7 @@ impl ObserverHub {
     /// [`Self::take_clock_failure`] and the verdict is stamped as a hub
     /// without a clock stamps it. When the stamping operation has already
     /// failed (`after_failure`), that failure stays the first and the
-    /// clock's is retained instead.
+    /// clock's is discarded instead.
     pub(crate) fn now(&self, after_failure: bool) -> EventTime {
         let Some(clock) = self.clock.as_deref() else {
             return EventTime::from_nanos(0);
@@ -556,7 +555,7 @@ impl ObserverHub {
             match woke {
                 Ok(()) => drop(window),
                 Err(payload) => {
-                    Owned(window).retain();
+                    crate::containment::destroy_contained(window);
                     flui_foundation::panic::discard_payload(payload);
                 }
             }
@@ -614,8 +613,8 @@ impl Failures {
     }
 }
 
-/// Destroys outgoing observers under containment. After a failed destruction,
-/// or while the thread unwinds, the rest are retained instead.
+/// Destroys outgoing observers under containment, each one even after an
+/// earlier destruction failed, and counts the failures (ADR-0281 §3).
 struct Retire {
     failed: Cell<usize>,
 }
@@ -631,10 +630,6 @@ impl Retire {
         let Some(observer) = observer else {
             return;
         };
-        if self.failed.get() != 0 || std::thread::panicking() {
-            observer.retain();
-            return;
-        }
         if let Err(payload) = catch_unwind(AssertUnwindSafe(|| drop(observer))) {
             self.failed.set(self.failed.get() + 1);
             flui_foundation::panic::discard_payload(payload);

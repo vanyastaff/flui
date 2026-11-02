@@ -451,15 +451,15 @@ by the retiring result, is still delivered. `submit` schedules the pump before
 it drops the input it replaced; if scheduling is refused, the new input is
 removed and dropped, as `WorkerHandle::submit` documents. A panic in the
 replaced input's destructor propagates after scheduling, and a refused input in
-the same call is retained rather than dropped (ADR-0127).
+the same call is still dropped, under containment (ADR-0281 §3).
 
 Pending input and pump ownership share one inbox mutex, so installing work and
 reserving its pump is one transition, and so is finding the inbox empty and
 releasing ownership. A pump that released ownership returns without touching
 the inbox again. Host spawning and every user destructor run outside the mutex.
 
-Discarded lifecycle panic payloads are retained (ADR-0119), as is a future
-whose poll panicked (ADR-0127); healthy completion and cancellation drop the future
+Discarded lifecycle panic payloads are destroyed under containment, as is a future
+whose poll panicked (ADR-0281 §2, §3); healthy completion and cancellation drop the future
 normally. A compute panic is reported as complete before its diagnostics run.
 Pinned by `service_lifecycle_matrix`.
 

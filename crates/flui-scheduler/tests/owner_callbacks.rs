@@ -69,7 +69,7 @@ fn retired_owner_refuses_without_consuming_demand() {
     assert!(scheduler.is_frame_scheduled());
 }
 
-fn produced_result_is_retained_after_completion_failure() {
+fn produced_result_is_destroyed_after_completion_failure() {
     use flui_scheduler::{IdleDeadline, Instant, SchedulerPhase};
     struct ResultCapture(Rc<std::cell::Cell<usize>>);
     impl Drop for ResultCapture {
@@ -101,8 +101,8 @@ fn produced_result_is_retained_after_completion_failure() {
     );
     assert_eq!(
         drops.get(),
-        0,
-        "produced output must not retire during failure custody"
+        1,
+        "produced output is destroyed behind the first failure"
     );
     assert_eq!(scheduler.phase(), SchedulerPhase::Idle);
     owner
@@ -117,7 +117,7 @@ thread_local! {
     static EXECUTING_OWNER: RefCell<Option<Rc<OwnerFrame>>> = const { RefCell::new(None) };
 }
 
-fn handled_nested_failure_retains_completion_envelope() {
+fn handled_nested_failure_destroys_completion_envelope() {
     use flui_scheduler::{IdleDeadline, Instant};
     use std::future::Future;
     use std::sync::{
@@ -178,8 +178,8 @@ fn handled_nested_failure_retains_completion_envelope() {
     result.expect("caller handled the nested destructor failure");
     assert_eq!(
         drops.load(Ordering::Relaxed),
-        0,
-        "live failure custody retains the successful completion envelope"
+        1,
+        "the successful completion envelope is destroyed after its wake"
     );
     assert_eq!(owner.pump_background(|| {}), Ok(0));
 }
@@ -340,11 +340,11 @@ fn owner_callback_contract() {
             ),
             (
                 "produced result custody",
-                produced_result_is_retained_after_completion_failure,
+                produced_result_is_destroyed_after_completion_failure,
             ),
             (
                 "handled nested failure custody",
-                handled_nested_failure_retains_completion_envelope,
+                handled_nested_failure_destroys_completion_envelope,
             ),
             (
                 "frame reentry",

@@ -1129,13 +1129,6 @@ fn page_transition_builders_reach_their_navigator() {
     crate::page_transitions::an_adopted_builder_may_query_its_navigator();
 }
 
-/// Retiring an ambient hook whose builders panic in `Drop` keeps the first
-/// panic; the row runs in a child process because the failure mode is an abort.
-#[test]
-fn page_transition_hooks_retire_panicking_builders() {
-    crate::page_transitions::retiring_hooks_whose_builders_both_panic_does_not_abort();
-}
-
 /// Hero flights: state survival, curves, diversion by a pop, gesture release.
 #[test]
 fn hero_flights() {

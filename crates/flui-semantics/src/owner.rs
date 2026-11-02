@@ -9,6 +9,7 @@ use std::{
 };
 
 use flui_foundation::SemanticsId;
+use flui_foundation::panic::FirstPanic;
 use flui_protocol::TreeRevision;
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
@@ -132,33 +133,27 @@ enum ActionDelivery {
     },
 }
 
-fn retire_reveal_handler(
-    handler: SemanticsActionHandler,
-    first: &mut Option<Box<dyn std::any::Any + Send>>,
-    unwinding: bool,
-) {
-    // User-owned captures are an independent failure boundary, including when
-    // an intentionally dropped snapshot is their last owner.
-    if unwinding || first.is_some() {
-        std::mem::forget(handler);
-    } else if let Err(payload) =
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(handler)))
-    {
-        *first = Some(payload);
+/// Raise the first failure of a reveal delivery, or discard it while the
+/// thread is already unwinding: the incoming panic is the one that propagates.
+fn finish_reveal(first: FirstPanic, unwinding: bool) {
+    if unwinding {
+        drop(first);
+    } else {
+        first.resume();
     }
 }
 
 impl Drop for SemanticsActionInvocation {
     fn drop(&mut self) {
         if let Some(ActionDelivery::Reveal { steps, .. }) = self.delivery.take() {
-            let mut first = None;
-            let unwinding = std::thread::panicking();
+            let mut first = FirstPanic::new();
+            // User-owned captures are an independent failure boundary,
+            // including when this snapshot is their last owner: each is
+            // destroyed under containment (ADR-0281).
             for (handler, _) in steps {
-                retire_reveal_handler(handler, &mut first, unwinding);
+                first.contain(|| drop(handler));
             }
-            if let Some(payload) = first {
-                std::panic::resume_unwind(payload);
-            }
+            finish_reveal(first, std::thread::panicking());
         }
     }
 }
@@ -200,26 +195,15 @@ impl SemanticsActionInvocation {
         {
             ActionDelivery::Direct { call, handler } => handler(call),
             ActionDelivery::Reveal { path, steps } => {
-                let mut first = None;
+                let mut first = FirstPanic::new();
                 let unwinding = std::thread::panicking();
                 for (handler, reveal) in steps {
                     if !unwinding && path.iter().all(|member| member.strong_count() != 0) {
-                        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                            handler(ActionCall::ScrollIntoView(Some(reveal)));
-                        }));
-                        if let Err(payload) = result {
-                            if first.is_none() {
-                                first = Some(payload);
-                            } else {
-                                flui_foundation::panic::discard_payload(payload);
-                            }
-                        }
+                        first.contain(|| handler(ActionCall::ScrollIntoView(Some(reveal))));
                     }
-                    retire_reveal_handler(handler, &mut first, unwinding);
+                    first.contain(|| drop(handler));
                 }
-                if let Some(payload) = first {
-                    std::panic::resume_unwind(payload);
-                }
+                finish_reveal(first, unwinding);
             }
         }
     }

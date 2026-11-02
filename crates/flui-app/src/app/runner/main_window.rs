@@ -66,7 +66,7 @@ pub(in crate::app) struct MainController {
 }
 // Each field is dropped on its own, so one that panics does not keep the
 // rest; the first panic resumes once all are gone (ADR-0258 §5), and the
-// exit holds it as its terminal failure. Inside an unwind it is retained.
+// exit holds it as its terminal failure. Inside an unwind it is discarded.
 impl Drop for MainController {
     fn drop(&mut self) {
         self.cancel_pending();
@@ -362,7 +362,7 @@ impl MainController {
                     self.config.frame_failure_detail,
                     payload.as_ref(),
                 );
-                std::mem::forget(payload);
+                flui_foundation::panic::discard_payload(payload);
                 Err(AppWindowError::InstallerPanicked { message })
             }
         };
@@ -493,7 +493,7 @@ impl MainController {
             match observed {
                 Ok(()) => self.error = Some(observer),
                 Err(payload) => {
-                    std::mem::forget(payload);
+                    flui_foundation::panic::discard_payload(payload);
                     contain(|| drop(observer));
                 }
             }
@@ -559,7 +559,7 @@ pub(super) fn drive_main_window() {
             controller.config.frame_failure_detail,
             payload.as_ref(),
         );
-        std::mem::forget(payload);
+        flui_foundation::panic::discard_payload(payload);
         controller.fail(AppWindowError::InstallerPanicked { message });
     }
 }
@@ -884,7 +884,7 @@ where
                                 installer_config.frame_failure_detail,
                                 payload.as_ref(),
                             );
-                            std::mem::forget(payload);
+                            flui_foundation::panic::discard_payload(payload);
                             AppWindowError::FactoryPanicked { message }
                         })?;
                 if !handle.ingress.accepting()
@@ -935,7 +935,7 @@ where
                 && let Err(payload) =
                     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| ready(&handle)))
             {
-                std::mem::forget(payload);
+                flui_foundation::panic::discard_payload(payload);
                 APP_RUNTIME.with(|slot| {
                     if let Some(controller) = slot.borrow().main_controller.as_ref() {
                         controller

@@ -80,18 +80,14 @@ impl RuntimeLocals {
 
     /// End every slot: each is let go of with no borrow held, each drop
     /// contained, so one whose `Drop` panics leaves the others dropped too.
-    /// Returns the first failure. While the thread unwinds, the slots are
-    /// leaked rather than dropped into a second panic. Later acquisitions
+    /// Returns the first failure. A destructor that panics while the thread
+    /// is already unwinding aborts, as in std (ADR-0281). Later acquisitions
     /// keep nothing.
     pub fn retire(&self) -> Option<Box<dyn Any + Send>> {
         self.inner.retired.set(true);
         let slots = std::mem::take(&mut *self.inner.slots.borrow_mut());
         let mut first = None;
         for (_, slot) in slots {
-            if std::thread::panicking() {
-                std::mem::forget(slot);
-                continue;
-            }
             if let Err(payload) =
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(slot)))
             {

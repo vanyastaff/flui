@@ -167,7 +167,7 @@ fn delivered_wake_failure() {
         || {
             panic!("wake primary");
         },
-        vec![Bomb(Arc::clone(&drops)), Bomb(Arc::clone(&drops))],
+        vec![Bomb(Arc::clone(&drops))],
     );
     register(&mut handle, &waker);
     drop(waker);
@@ -176,7 +176,11 @@ fn delivered_wake_failure() {
     }));
     assert_failure(failure, "wake primary");
     assert_eq!(calls.load(Ordering::SeqCst), 1);
-    assert_eq!(drops.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        drops.load(Ordering::SeqCst),
+        1,
+        "the withdrawn waker is destroyed"
+    );
     assert_eq!(
         handle.try_take(),
         Some(53),
@@ -213,7 +217,7 @@ fn owner_disconnect(unwinding: bool, wake_fails: bool) {
         move || {
             assert!(!wake_fails, "disconnect wake");
         },
-        vec![Bomb(Arc::clone(&drops)), Bomb(Arc::clone(&drops))],
+        vec![Bomb(Arc::clone(&drops))],
     );
     register(&mut handle, &waker);
     drop(waker);
@@ -230,7 +234,11 @@ fn owner_disconnect(unwinding: bool, wake_fails: bool) {
         },
     );
     assert_eq!(calls.load(Ordering::SeqCst), 1);
-    assert_eq!(drops.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        drops.load(Ordering::SeqCst),
+        1,
+        "the withdrawn waker is destroyed"
+    );
     assert_eq!(
         Pin::new(&mut handle).poll(&mut Context::from_waker(Waker::noop())),
         Poll::Ready(ClaimOutcome::OwnerGone)
@@ -242,7 +250,7 @@ fn abandonment_competition(owner_fails: bool, task_fails: bool, unwinding: bool)
     let drops = Arc::new(AtomicUsize::new(0));
     let owner_calls = Arc::new(AtomicUsize::new(0));
     let owner_count = Arc::clone(&owner_calls);
-    let captures = (Bomb(Arc::clone(&drops)), Bomb(Arc::clone(&drops)));
+    let captures = Bomb(Arc::clone(&drops));
     let (slot, mut handle) = claim_slot::<u32>(Arc::new(move || {
         let _captures = &captures;
         owner_count.fetch_add(1, Ordering::SeqCst);
@@ -254,7 +262,7 @@ fn abandonment_competition(owner_fails: bool, task_fails: bool, unwinding: bool)
         move || {
             assert!(!task_fails, "task primary");
         },
-        vec![Bomb(Arc::clone(&drops)), Bomb(Arc::clone(&drops))],
+        vec![Bomb(Arc::clone(&drops))],
     );
     register(&mut handle, &waker);
     drop(waker);
@@ -283,18 +291,27 @@ fn abandonment_competition(owner_fails: bool, task_fails: bool, unwinding: bool)
         "cancelled request returns the owned result"
     );
     assert!(slot.is_settled());
-    drop(slot);
-    assert_eq!(drops.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        drops.load(Ordering::SeqCst),
+        1,
+        "the withdrawn waker is destroyed"
+    );
+    assert_failure(
+        catch_unwind(AssertUnwindSafe(|| drop(slot))),
+        "envelope retirement",
+    );
+    assert_eq!(
+        drops.load(Ordering::SeqCst),
+        2,
+        "the last owner destroys the owner callback's captures"
+    );
     next_request();
 }
 
-fn unwinding_retains_an_unclaimed_result() {
+fn unwinding_keeps_an_unclaimed_result_reclaimable() {
     let drops = Arc::new(AtomicUsize::new(0));
     let (slot, handle) = claim_slot(Arc::new(|| {}));
-    assert!(
-        slot.deliver((Bomb(Arc::clone(&drops)), Bomb(Arc::clone(&drops))))
-            .is_ok()
-    );
+    assert!(slot.deliver(Bomb(Arc::clone(&drops))).is_ok());
     assert_failure(
         catch_unwind(AssertUnwindSafe(|| {
             let _requester = handle;
@@ -306,14 +323,18 @@ fn unwinding_retains_an_unclaimed_result() {
     let result = slot
         .take_abandoned()
         .expect("the owner can still reclaim the result");
-    std::mem::forget(result);
+    assert_eq!(drops.load(Ordering::SeqCst), 0, "reclaimed, not destroyed");
+    assert_failure(
+        catch_unwind(AssertUnwindSafe(|| drop(result))),
+        "envelope retirement",
+    );
+    assert_eq!(drops.load(Ordering::SeqCst), 1);
     assert!(slot.is_settled());
     drop(slot);
-    assert_eq!(drops.load(Ordering::SeqCst), 0);
     next_request();
 }
 
-fn wake_failure_retains_captures() {
+fn wake_failure_destroys_captures() {
     delivered_wake_failure();
 }
 fn owner_disconnect_wake_failure() {
@@ -354,8 +375,8 @@ fn claim_slot_executor_and_owner_recovery() {
             replacement_retirement_keeps_the_new_registration,
         ),
         (
-            "wake failure retains captures",
-            wake_failure_retains_captures,
+            "wake failure destroys captures",
+            wake_failure_destroys_captures,
         ),
         (
             "successful wake retirement",
@@ -385,8 +406,8 @@ fn claim_slot_executor_and_owner_recovery() {
         ("abandonment during unwind", abandonment_during_unwind),
         ("abandonment all failures", abandonment_all_failures),
         (
-            "unwind retains delivered result",
-            unwinding_retains_an_unclaimed_result,
+            "unwind keeps delivered result reclaimable",
+            unwinding_keeps_an_unclaimed_result_reclaimable,
         ),
     ];
     const SELECTED: &str = "FLUI_CLAIM_SLOT_RECOVERY_CASE";

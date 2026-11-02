@@ -3,39 +3,21 @@
 use crate::{
     containment::RoutePanic,
     gesture::arena::{GestureArena, GestureArenaEntry, SweepModel},
-    retain::{Owned, Retain},
 };
 use std::rc::Rc;
 
+/// Destroy a withdrawn callback under containment: a panic of its destructor
+/// is the first failure, or is discarded behind one already caught
+/// (ADR-0281 §3).
 pub(crate) fn retire_callback<T: ?Sized>(callback: Option<Rc<T>>, first: &mut Option<RoutePanic>) {
-    if first.is_some() || std::thread::panicking() {
-        callback.retain();
-    } else {
-        let candidate = RoutePanic::capture(|| drop(callback));
-        RoutePanic::preserve_first(first, candidate, "recognizer callback retirement");
-    }
-}
-
-fn retire_delivery_snapshot<T: ?Sized>(
-    callback: Option<Rc<T>>,
-    first: &mut Option<RoutePanic>,
-    incoming_failure: bool,
-) {
-    if first.is_some() || incoming_failure {
-        // The immutable field still owns this callback. Keep the failed
-        // delivery's ownership too, so a later healthy owner Drop cannot
-        // destroy its opaque captures outside the failure that retired it.
-        Owned(callback).retain();
-    } else {
-        retire_callback(callback, first);
-    }
+    let candidate = RoutePanic::capture(|| drop(callback));
+    RoutePanic::preserve_first(first, candidate, "recognizer callback retirement");
 }
 
 /// Callbacks belonging to one committed transition.
 pub(crate) struct CallbackSequence {
     first: Option<RoutePanic>,
     incoming_failure: bool,
-    preserving: bool,
 }
 
 impl CallbackSequence {
@@ -43,48 +25,33 @@ impl CallbackSequence {
         Self {
             first: None,
             incoming_failure: std::thread::panicking(),
-            preserving: false,
         }
     }
-    pub(crate) fn preserving_failure(preserving: bool) -> Self {
-        Self {
-            preserving,
-            ..Self::new()
-        }
-    }
+    /// Run `invoke` on `callback` unless the thread is already unwinding, then
+    /// destroy this delivery's snapshot under containment.
     pub(crate) fn call<T: ?Sized>(&mut self, callback: Option<Rc<T>>, invoke: impl FnOnce(&T)) {
-        if self.incoming_failure {
-            Owned(callback).retain();
-            return;
-        }
-        if let Some(callback) = callback.as_ref() {
+        if !self.incoming_failure
+            && let Some(callback) = callback.as_ref()
+        {
             let candidate = RoutePanic::capture(|| invoke(callback.as_ref()));
             RoutePanic::preserve_first(&mut self.first, candidate, "recognizer callback");
         }
-        if self.preserving && self.first.is_none() {
-            // An earlier producer failure changes retirement policy, but a
-            // healthy callback's immutable owner still has sole capture custody.
-            callback.retain();
-        } else {
-            retire_delivery_snapshot(callback, &mut self.first, self.incoming_failure);
-        }
+        retire_callback(callback, &mut self.first);
     }
     pub(crate) fn retire<T: ?Sized>(&mut self, callback: Option<Rc<T>>) {
-        if self.incoming_failure || self.preserving {
-            callback.retain();
-        } else {
-            retire_callback(callback, &mut self.first);
-        }
+        retire_callback(callback, &mut self.first);
     }
     pub(crate) fn finish(self) {
         finish_containment(self.first, self.incoming_failure);
     }
 }
 
+/// Raise the first failure, or discard it when the thread is already
+/// unwinding: raising a second panic there would abort.
 pub(crate) fn finish_containment(first: Option<RoutePanic>, incoming_failure: bool) {
     if let Some(panic) = first {
         if incoming_failure {
-            panic.retain();
+            panic.discard();
         } else {
             panic.resume();
         }
@@ -122,11 +89,12 @@ pub(crate) fn invoke_callback<T: ?Sized>(
     {
         first = RoutePanic::capture(|| invoke(callback.as_ref()));
     }
-    retire_delivery_snapshot(callback, &mut first, incoming_failure);
+    retire_callback(callback, &mut first);
     finish_containment(first, incoming_failure);
 }
 
-/// Retire immutable callback fields individually, retaining the tail after failure.
+/// Retire immutable callback fields individually, destroying the tail after a
+/// failure under containment.
 macro_rules! retire_callbacks {
     ($owner:ident; $($field:ident),+ $(,)?) => {{
         let mut retirement = $crate::gesture::recognizers::callback_containment::CallbackSequence::new();

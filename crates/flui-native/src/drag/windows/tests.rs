@@ -1200,11 +1200,10 @@ fn releasing_request(
     request
 }
 
-/// A provider that panics serving a fetch is retained, not dropped, and is
-/// not called again: later fetches are refused and the data object's
-/// release leaves its captures alone (ADR-0127 §2). Red-check: put the
-/// panicked provider back in its slot.
-fn a_provider_that_panicked_is_retained_and_not_called_again() {
+/// A provider that panics serving a fetch is dropped at once, contained, and
+/// is not called again: later fetches are refused (ADR-0281). Red-check: put
+/// the panicked provider back in its slot.
+fn a_provider_that_panicked_is_dropped_and_not_called_again() {
     use crate::drag::windows::crossing::NativeFormat;
 
     let (ended, released) = (Rc::new(Cell::new(None)), Rc::new(Cell::new(false)));
@@ -1223,7 +1222,7 @@ fn a_provider_that_panicked_is_retained_and_not_called_again() {
     }
     assert_eq!(calls.get(), 1, "the panicked provider was called again");
     drop(data);
-    assert!(!released.get(), "the panicked provider was dropped");
+    assert!(released.get(), "the panicked provider is dropped");
 }
 
 /// A platform with a window whose drag source accepted `session`, its
@@ -1251,9 +1250,9 @@ fn pending(
 }
 
 /// A session accepted but never started is told `Cancelled` as its owner
-/// window goes, and its provider is released after; when that end hook
-/// panics, the provider is retained instead (ADR-0127 §2). Red-check:
-/// release the provider before telling the end, or after a panicking end.
+/// window goes, and its provider is released after, when that end hook
+/// panics too (ADR-0281). Red-check: release the provider before telling
+/// the end.
 fn a_pending_session_is_cancelled_with_its_platform() {
     for end_panics in [false, true] {
         let (ended, released) = (Rc::new(Cell::new(None)), Rc::new(Cell::new(false)));
@@ -1263,16 +1262,16 @@ fn a_pending_session_is_cancelled_with_its_platform() {
         // The transport outlives the platform here: the owner window's
         // destruction told the session, not the transport's last release.
         assert_eq!(ended.get(), Some(OsDragEnd::Cancelled), "{end_panics}");
-        assert_eq!(released.get(), !end_panics, "{end_panics}");
+        assert!(released.get(), "{end_panics}");
         drop(drag);
     }
 }
 
-/// A platform dropped by an unwind with a session pending runs none of the
-/// session's user code: its end hook and provider are retained, so a
-/// panicking one cannot abort the process. Red-check: drop `OwnerDrag`'s
-/// pending session without checking for an unwind.
-fn a_pending_session_is_retained_when_its_platform_unwinds() {
+/// A platform dropped by an unwind with a session pending still ends it: its
+/// end hook is told `Cancelled` and its provider released, each contained,
+/// and the unwind goes on (ADR-0281). Red-check: skip `OwnerDrag`'s pending
+/// session while the thread unwinds.
+fn a_pending_session_ends_when_its_platform_unwinds() {
     let (ended, released) = (Rc::new(Cell::new(None)), Rc::new(Cell::new(false)));
     let session = releasing_request(&ended, &released, false);
     let kept = Rc::new(RefCell::new(None));
@@ -1283,17 +1282,17 @@ fn a_pending_session_is_retained_when_its_platform_unwinds() {
         let _unwound_with = (source, platform);
         std::panic::panic_any("unwinding with a drag session pending");
     }));
-    assert!(unwound.is_err());
-    assert_eq!(ended.get(), None, "the end hook ran during the unwind");
-    assert!(
-        !released.get(),
-        "the provider was dropped during the unwind"
+    let payload = unwound.expect_err("the unwind goes on");
+    assert_eq!(
+        payload.downcast_ref::<&str>().copied(),
+        Some("unwinding with a drag session pending")
     );
-    // The transport outlives the unwind: the session the owner window
-    // retained as it went is not run by the transport's later release.
+    flui_foundation::panic::discard_payload(payload);
+    assert_eq!(ended.get(), Some(OsDragEnd::Cancelled));
+    assert!(released.get(), "the provider is released during the unwind");
+    // The transport outlives the unwind; its later release ends nothing twice.
     drop(kept.borrow_mut().take());
-    assert_eq!(ended.get(), None, "the end hook ran after the unwind");
-    assert!(!released.get(), "the provider was dropped after the unwind");
+    assert_eq!(ended.get(), Some(OsDragEnd::Cancelled));
 }
 
 /// A drag source reads the contacts of the window it was made for, never of
@@ -1554,16 +1553,16 @@ fn ole_drag_and_drop_on_real_windows() {
                 an_endless_format_enumerator_is_read_to_a_bound,
             ),
             (
-                "a_provider_that_panicked_is_retained_and_not_called_again",
-                a_provider_that_panicked_is_retained_and_not_called_again,
+                "a_provider_that_panicked_is_dropped_and_not_called_again",
+                a_provider_that_panicked_is_dropped_and_not_called_again,
             ),
             (
                 "a_pending_session_is_cancelled_with_its_platform",
                 a_pending_session_is_cancelled_with_its_platform,
             ),
             (
-                "a_pending_session_is_retained_when_its_platform_unwinds",
-                a_pending_session_is_retained_when_its_platform_unwinds,
+                "a_pending_session_ends_when_its_platform_unwinds",
+                a_pending_session_ends_when_its_platform_unwinds,
             ),
             (
                 "a_drag_source_reads_only_its_own_windows_contacts",

@@ -470,11 +470,19 @@ struct DropRoute {
     owns_retirement: bool,
 }
 
+/// The go-retirement child's switch and the parsed values it saw destroyed
+/// while armed.
+#[derive(Clone)]
+struct GoTargetDrops {
+    armed: Rc<Cell<bool>>,
+    destroyed: Rc<Cell<usize>>,
+}
+
 thread_local! {
     // Set only in the isolated go-retirement child. The parser constructs
     // opaque original values; their page-builder clones do not own retirement.
     #[cfg_attr(target_os = "android", allow(clippy::missing_const_for_thread_local, reason = "Const initializer; Android std macro false positive: https://github.com/rust-lang/rust-clippy/issues/13422"))]
-    static GO_TARGET_DROP: RefCell<Option<Rc<Cell<bool>>>> = const { RefCell::new(None) };
+    static GO_TARGET_DROP: RefCell<Option<GoTargetDrops>> = const { RefCell::new(None) };
 }
 
 impl DropRoute {
@@ -527,9 +535,11 @@ impl Routable for DropRoute {
             .ok_or_else(|| RouteParseError::NoMatch { path: path.clone() })?;
         let route = Self::new(value);
         GO_TARGET_DROP.with(|slot| {
-            if let Some(armed) = slot.borrow().clone() {
+            if let Some(GoTargetDrops { armed, destroyed }) = slot.borrow().clone() {
                 *route.on_drop.borrow_mut() = Some(Rc::new(move || {
-                    assert!(!armed.get(), "target route retirement");
+                    if armed.get() {
+                        destroyed.set(destroyed.get() + 1);
+                    }
                 }));
             }
         });
@@ -630,7 +640,7 @@ pub(crate) fn removing_a_router_value_retires_it_after_releasing_the_stack_borro
     assert_eq!(navigator.current(), Some(home_id));
 }
 
-fn an_observer_failure_retains_competing_router_value_retirement() {
+fn an_observer_failure_destroys_the_replaced_router_value() {
     let (mut laid, router, navigator) = drop_route_app();
     let home_id = navigator.current().expect("initial page");
     let removed = DropRoute::new(1);
@@ -641,7 +651,6 @@ fn an_observer_failure_retains_competing_router_value_retirement() {
     let retired_in_drop = retired.clone();
     *hook.borrow_mut() = Some(Rc::new(move || {
         retired_in_drop.set(true);
-        panic!("competing route retirement");
     }));
     observe_once(&navigator, || panic!("first observer failure"));
     let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -653,8 +662,8 @@ fn an_observer_failure_retains_competing_router_value_retirement() {
         Some("first observer failure")
     );
     assert!(
-        !retired.get(),
-        "opaque retirement cannot compete with the first failure"
+        retired.get(),
+        "the replaced value is destroyed after the first failure (ADR-0281)"
     );
     assert_eq!(router.current().value, 2);
     assert_eq!(router.pop(), Ok(true));
@@ -668,11 +677,17 @@ fn an_observer_failure_retains_competing_router_value_retirement() {
     assert_active_scene(&laid, "Drop page 3");
 }
 
-fn a_go_observer_failure_retains_competing_temporary_route_values() {
+fn a_go_observer_failure_destroys_temporary_route_values() {
     let (mut laid, router, navigator) = drop_route_app();
     let home_id = navigator.current().expect("initial page");
     let armed = Rc::new(Cell::new(false));
-    GO_TARGET_DROP.with(|slot| *slot.borrow_mut() = Some(armed.clone()));
+    let destroyed = Rc::new(Cell::new(0));
+    GO_TARGET_DROP.with(|slot| {
+        *slot.borrow_mut() = Some(GoTargetDrops {
+            armed: armed.clone(),
+            destroyed: destroyed.clone(),
+        });
+    });
     let arm_in_observer = armed.clone();
     observe_once(&navigator, move || {
         arm_in_observer.set(true);
@@ -687,6 +702,11 @@ fn a_go_observer_failure_retains_competing_temporary_route_values() {
         Some("first go observer failure")
     );
     armed.set(false);
+    assert_eq!(
+        destroyed.get(),
+        1,
+        "the temporary prefix value is destroyed during the observer unwind (ADR-0281)"
+    );
     GO_TARGET_DROP.with(|slot| *slot.borrow_mut() = None);
     assert_eq!(router.current().value, 1);
     assert_eq!(router.pop(), Ok(true));
@@ -699,22 +719,22 @@ fn a_go_observer_failure_retains_competing_temporary_route_values() {
     settle(&mut laid);
     assert_active_scene(&laid, "Drop page 3");
 }
-
-/// A broken retirement guard can abort or deadlock, so this failure competition
+/// A regression in terminal retirement can abort or deadlock, so these rows
+/// run in their own bounded processes rather than the ordinary contract table.
 /// runs in its own bounded process rather than the ordinary contract table.
 #[test]
-fn router_observer_failure_and_retirement_competition() {
+fn router_observer_failure_and_terminal_retirement() {
     if let Some(case) = child_process::selected_case() {
         match case.as_str() {
-            "replace" => an_observer_failure_retains_competing_router_value_retirement(),
-            "go" => a_go_observer_failure_retains_competing_temporary_route_values(),
+            "replace" => an_observer_failure_destroys_the_replaced_router_value(),
+            "go" => a_go_observer_failure_destroys_temporary_route_values(),
             "terminal-factories" => terminal_named_factory_competition(),
             "terminal-observers" => terminal_observer_competition(),
             "terminal-incoming" => terminal_navigator_during_incoming_unwind(),
             "terminal-aliases" => terminal_aliases_preserve_healthy_factories(),
-            "terminal-router" => terminal_router_config_retains_factory_after_route_failure(),
-            "terminal-route" => terminal_route_result_retains_later_observer(),
-            "terminal-record-waker" => terminal_route_record_retains_pending_waker(),
+            "terminal-router" => terminal_router_config_destroys_factories_after_route_failure(),
+            "terminal-route" => terminal_route_result_failure_destroys_later_observer(),
+            "terminal-record-waker" => terminal_route_record_destroys_pending_waker(),
             "terminal-overlay" => terminal_overlay_entries_compete(),
             "terminal-modal-cycle" => terminal_seeded_modal_releases_its_factories(),
             "terminal-modal-alias" => terminal_modal_aliases_remain_usable_until_last_release(),
@@ -722,7 +742,7 @@ fn router_observer_failure_and_retirement_competition() {
             "router-parser" | "router-clone" | "router-state-clone" => {
                 terminal_router_construction_matrix(&case);
             }
-            "page-healthy" | "page-result" | "page-factory" | "page-compete" | "page-incoming" => {
+            "page-healthy" | "page-result" | "page-factory" | "page-incoming" => {
                 terminal_page_route_matrix(&case);
             }
             _ => panic!("unknown child case"),
@@ -730,7 +750,7 @@ fn router_observer_failure_and_retirement_competition() {
         child_process::pass();
     }
     child_process::run_rows(
-        "router::router_observer_failure_and_retirement_competition",
+        "router::router_observer_failure_and_terminal_retirement",
         &[
             "replace",
             "go",
@@ -751,14 +771,14 @@ fn router_observer_failure_and_retirement_competition() {
             "page-healthy",
             "page-result",
             "page-factory",
-            "page-compete",
             "page-incoming",
         ],
     );
 }
 
-// Each callback owns exactly one bomb. These are independent framework fields,
-// not an opaque user aggregate with several internally panicking destructors.
+// Each row arms at most one destructor; every other capture only counts its
+// destruction, which happens after the first failure or during its unwind
+// (ADR-0281).
 #[derive(Clone)]
 struct TerminalBomb {
     name: &'static str,
@@ -773,6 +793,14 @@ impl TerminalBomb {
             calls: Rc::default(),
             armed: Rc::new(Cell::new(true)),
         }
+    }
+
+    /// A capture that only counts its destruction: the value a container
+    /// destroys after, or during the unwind of, another one's failure.
+    fn counting(name: &'static str) -> Self {
+        let bomb = Self::new(name);
+        bomb.armed.set(false);
+        bomb
     }
 }
 
@@ -806,7 +834,7 @@ fn terminal_named_factory_competition() {
     let navigator = NavigatorHandle::new();
     let first = TerminalBomb::new("first factory");
     let first_calls = Rc::clone(&first.calls);
-    let second = TerminalBomb::new("second factory");
+    let second = TerminalBomb::counting("second factory");
     let second_calls = Rc::clone(&second.calls);
     navigator.on_generate_route(move |_| {
         let _ = &first;
@@ -820,7 +848,7 @@ fn terminal_named_factory_competition() {
         .expect_err("the first terminal factory must fail");
     assert_terminal_failure(failure, "first factory");
     assert_eq!(first_calls.get(), 1);
-    assert_eq!(second_calls.get(), 0, "the competing factory is retained");
+    assert_eq!(second_calls.get(), 1, "the later factory is destroyed too");
 }
 
 struct TerminalObserver(
@@ -840,7 +868,7 @@ fn terminal_observer_competition() {
     let navigator = NavigatorHandle::new();
     let first = TerminalBomb::new("first observer");
     let first_calls = Rc::clone(&first.calls);
-    let second = TerminalBomb::new("second observer");
+    let second = TerminalBomb::counting("second observer");
     let second_calls = Rc::clone(&second.calls);
     navigator.add_observer(Arc::new(TerminalObserver(first)));
     navigator.add_observer(Arc::new(TerminalObserver(second)));
@@ -848,7 +876,7 @@ fn terminal_observer_competition() {
         .expect_err("the first terminal observer must fail");
     assert_terminal_failure(failure, "first observer");
     assert_eq!(first_calls.get(), 1);
-    assert_eq!(second_calls.get(), 0);
+    assert_eq!(second_calls.get(), 1);
 }
 
 #[expect(
@@ -857,9 +885,9 @@ fn terminal_observer_competition() {
 )]
 fn terminal_navigator_during_incoming_unwind() {
     let navigator = NavigatorHandle::new();
-    let factory = TerminalBomb::new("factory must be retained");
+    let factory = TerminalBomb::counting("factory");
     let factory_calls = Rc::clone(&factory.calls);
-    let observer = TerminalBomb::new("observer must be retained");
+    let observer = TerminalBomb::counting("observer");
     let observer_calls = Rc::clone(&observer.calls);
     navigator.on_generate_route(move |_| {
         let _ = &factory;
@@ -872,8 +900,8 @@ fn terminal_navigator_during_incoming_unwind() {
     }))
     .expect_err("the incoming failure reaches the caller");
     assert_terminal_failure(failure, "incoming failure");
-    assert_eq!(factory_calls.get(), 0);
-    assert_eq!(observer_calls.get(), 0);
+    assert_eq!(factory_calls.get(), 1);
+    assert_eq!(observer_calls.get(), 1);
 }
 
 fn terminal_aliases_preserve_healthy_factories() {
@@ -914,12 +942,12 @@ fn terminal_aliases_preserve_healthy_factories() {
     assert_eq!(second_calls.get(), 1);
 }
 
-fn terminal_router_config_retains_factory_after_route_failure() {
+fn terminal_router_config_destroys_factories_after_route_failure() {
     let route = DropRoute::new(0);
     *route.on_drop.borrow_mut() = Some(Rc::new(|| panic!("initial route")));
-    let page = TerminalBomb::new("page factory");
+    let page = TerminalBomb::counting("page factory");
     let page_calls = Rc::clone(&page.calls);
-    let transitions = TerminalBomb::new("transition factory");
+    let transitions = TerminalBomb::counting("transition factory");
     let transition_calls = Rc::clone(&transitions.calls);
     let router = Router::new(route, move |_, _| {
         let _ = &page;
@@ -932,28 +960,28 @@ fn terminal_router_config_retains_factory_after_route_failure() {
     let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(router)))
         .expect_err("the initial route must fail retirement");
     assert_terminal_failure(failure, "initial route");
-    assert_eq!(page_calls.get(), 0);
-    assert_eq!(transition_calls.get(), 0);
+    assert_eq!(page_calls.get(), 1);
+    assert_eq!(transition_calls.get(), 1);
 }
 
 #[expect(
     clippy::arc_with_non_send_sync,
     reason = "the navigator requires Arc observers; the retirement probe remains on its UI thread"
 )]
-fn terminal_route_result_retains_later_observer() {
+fn terminal_route_result_failure_destroys_later_observer() {
     let navigator = NavigatorHandle::new();
     let result = TerminalResult::new("route result", true);
     let result_calls = Arc::clone(&result.calls);
     navigator
         .seed_initial(SimpleRoute::new(|_| Text::new("route").boxed()).with_current_result(result));
-    let observer = TerminalBomb::new("later observer");
+    let observer = TerminalBomb::counting("later observer");
     let observer_calls = Rc::clone(&observer.calls);
     navigator.add_observer(Arc::new(TerminalObserver(observer)));
     let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(navigator)))
         .expect_err("the route's retained result must fail retirement");
     assert_terminal_failure(failure, "route result");
     assert_eq!(result_calls.load(std::sync::atomic::Ordering::Relaxed), 1);
-    assert_eq!(observer_calls.get(), 0);
+    assert_eq!(observer_calls.get(), 1);
 }
 
 #[derive(Clone)]
@@ -1012,7 +1040,7 @@ impl flui_widgets::NavigatorRoute for TerminalRoute {
     }
 }
 
-fn terminal_route_record_retains_pending_waker() {
+fn terminal_route_record_destroys_pending_waker() {
     use std::future::Future as _;
     use std::pin::Pin;
     use std::task::{Context, Poll, Waker};
@@ -1023,7 +1051,7 @@ fn terminal_route_record_retains_pending_waker() {
         settings: flui_widgets::RouteSettings::default(),
         _retirement: route,
     });
-    let wake = TerminalResult::new("pending waker", true);
+    let wake = TerminalResult::new("pending waker", false);
     let wake_calls = Arc::clone(&wake.calls);
     let waker = Waker::from(Arc::new(TerminalWake(wake)));
     assert_eq!(
@@ -1036,7 +1064,7 @@ fn terminal_route_record_retains_pending_waker() {
         .expect_err("the route owner must fail before its pending waiter");
     assert_terminal_failure(failure, "route owner");
     assert_eq!(route_calls.get(), 1);
-    assert_eq!(wake_calls.load(std::sync::atomic::Ordering::Relaxed), 0);
+    assert_eq!(wake_calls.load(std::sync::atomic::Ordering::Relaxed), 1);
 }
 
 fn terminal_overlay_entries_compete() {
@@ -1044,7 +1072,7 @@ fn terminal_overlay_entries_compete() {
     let overlay = OverlayHandle::new();
     let first = TerminalBomb::new("first overlay builder");
     let first_calls = Rc::clone(&first.calls);
-    let second = TerminalBomb::new("second overlay builder");
+    let second = TerminalBomb::counting("second overlay builder");
     let second_calls = Rc::clone(&second.calls);
     let first_entry = OverlayEntry::new(move |_| {
         let _ = &first;
@@ -1062,20 +1090,14 @@ fn terminal_overlay_entries_compete() {
         .expect_err("first overlay builder must fail terminal retirement");
     assert_terminal_failure(failure, "first overlay builder");
     assert_eq!(first_calls.get(), 1);
-    assert_eq!(second_calls.get(), 0);
+    assert_eq!(second_calls.get(), 1);
 }
 
 fn terminal_page_route_matrix(case: &str) {
     let page = TerminalBomb::new("page builder");
-    page.armed.set(matches!(
-        case,
-        "page-factory" | "page-compete" | "page-incoming"
-    ));
+    page.armed.set(case == "page-factory");
     let page_calls = Rc::clone(&page.calls);
-    let result = TerminalResult::new(
-        "page result",
-        matches!(case, "page-result" | "page-compete" | "page-incoming"),
-    );
+    let result = TerminalResult::new("page result", case == "page-result");
     let result_calls = Arc::clone(&result.calls);
     let route = PageRoute::new(move |_, _, _| {
         let _ = &page;
@@ -1099,14 +1121,10 @@ fn terminal_page_route_matrix(case: &str) {
         ),
         _ => assert_terminal_failure(outcome.expect_err("page result failure"), "page result"),
     }
-    assert_eq!(
-        result_calls.load(std::sync::atomic::Ordering::Relaxed),
-        usize::from(!incoming)
-    );
-    assert_eq!(
-        page_calls.get(),
-        usize::from(matches!(case, "page-healthy" | "page-factory"))
-    );
+    // The route's result and page builder are each destroyed once, on an
+    // incoming unwind and after the other's failure too (ADR-0281).
+    assert_eq!(result_calls.load(std::sync::atomic::Ordering::Relaxed), 1);
+    assert_eq!(page_calls.get(), 1);
 }
 
 fn terminal_router_construction_matrix(case: &str) {
@@ -1128,9 +1146,14 @@ fn terminal_router_construction_matrix(case: &str) {
             self.second == other.second
         }
     }
+    thread_local! {
+        static COPIES_DROPPED: Cell<usize> = const { Cell::new(0) };
+    }
     impl Drop for CloneRoute {
         fn drop(&mut self) {
-            assert!(!self.copied, "competing cloned route retirement");
+            if self.copied {
+                COPIES_DROPPED.set(COPIES_DROPPED.get() + 1);
+            }
         }
     }
     impl Routable for CloneRoute {
@@ -1158,7 +1181,7 @@ fn terminal_router_construction_matrix(case: &str) {
         }
     }
     if case == "router-parser" {
-        let page = TerminalBomb::new("competing parser page retirement");
+        let page = TerminalBomb::counting("parser page");
         let calls = Rc::clone(&page.calls);
         let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let _ = Router::<CloneRoute>::from_location("/panic", move |_, _| {
@@ -1173,8 +1196,8 @@ fn terminal_router_construction_matrix(case: &str) {
         );
         assert_eq!(
             calls.get(),
-            0,
-            "incoming page ownership survives parser unwind"
+            1,
+            "the page builder is destroyed by the parser unwind"
         );
     } else {
         let router =
@@ -1191,6 +1214,11 @@ fn terminal_router_construction_matrix(case: &str) {
         assert_eq!(
             flui_foundation::panic::payload_text(failure.as_ref()),
             Some("first route clone failure")
+        );
+        assert_eq!(
+            COPIES_DROPPED.get(),
+            1,
+            "the copy made before the failing clone is destroyed by its unwind"
         );
         drop(router);
     }
@@ -1327,7 +1355,6 @@ fn terminal_mounted_router_retires_accepted_values() {
     let page_probe = probe.clone();
     let page = TerminalBomb::new("router page");
     page.armed.set(false);
-    let page_armed = Rc::clone(&page.armed);
     let page_calls = Rc::clone(&page.calls);
     let vsync = Vsync::new();
     let mut laid = lay_out_animated(
@@ -1375,12 +1402,15 @@ fn terminal_mounted_router_retires_accepted_values() {
         "the retained router still owns its accepted stack"
     );
     route_armed.set(true);
-    page_armed.set(true);
     let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(router)))
         .expect_err("the accepted typed value must fail first");
     assert_terminal_failure(failure, "accepted router value");
     assert_eq!(retired.get(), 1);
-    assert_eq!(page_calls.get(), 0, "competing page factory is retained");
+    assert_eq!(
+        page_calls.get(),
+        1,
+        "the page factory is destroyed after the first failure"
+    );
 }
 
 /// Divergence (ARCHITECTURE.md mapping decision 23): a Router never pops its

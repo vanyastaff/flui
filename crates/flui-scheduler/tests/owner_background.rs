@@ -212,7 +212,7 @@ fn recovery_keeps_first_failure_through_nested_refusal_and_hook_retirement() {
             }
             let (owner, weak) =
                 RECOVERY_OWNER.with(|slot| slot.borrow().as_ref().expect("owner scope").clone());
-            let capture = HostileCapture(Arc::clone(&hook_rejected_drops));
+            let capture = HookCapture(Arc::clone(&hook_rejected_drops));
             assert_eq!(
                 owner.pump_background(move || {
                     let _ = &capture;
@@ -220,7 +220,7 @@ fn recovery_keeps_first_failure_through_nested_refusal_and_hook_retirement() {
                 }),
                 Err(ExecutionError::AlreadyExecuting)
             );
-            let capture = HostileCapture(Arc::clone(&hook_rejected_drops));
+            let capture = HookCapture(Arc::clone(&hook_rejected_drops));
             let now = Instant::now();
             assert_eq!(
                 owner.drive_frame(
@@ -261,13 +261,13 @@ fn recovery_keeps_first_failure_through_nested_refusal_and_hook_retirement() {
         );
         assert_eq!(
             rejected_drops.load(Ordering::SeqCst),
-            0,
-            "caught failure custody protects refused envelopes"
+            2,
+            "refused envelopes are destroyed after the caught failure"
         );
         assert_eq!(
             hook_drops.load(Ordering::SeqCst),
-            0,
-            "successful self-uninstallation still retains the hook envelope"
+            1,
+            "the self-uninstalled hook envelope is destroyed"
         );
         assert_eq!(polls.get(), 0);
         let replacement_calls = Arc::new(AtomicUsize::new(0));
@@ -325,8 +325,8 @@ fn healthy_wake_retirement_observes_newly_caught_failure() {
     assert_eq!(rejected_drops.load(Ordering::SeqCst), 1);
     assert_eq!(
         hook_drops.load(Ordering::SeqCst),
-        0,
-        "wake begun healthy retains its envelope after newly caught failure"
+        1,
+        "the uninstalled hook is destroyed after its wake despite the caught failure"
     );
     assert_eq!(owner.pump_background(|| {}), Ok(0));
 }
@@ -399,8 +399,8 @@ fn worker_wake_keeps_failed_receipt_across_next_healthy_turn() {
     assert_eq!(failure_drops.load(Ordering::SeqCst), 1);
     assert_eq!(
         hook_drops.load(Ordering::SeqCst),
-        0,
-        "old failed receipt survives a newer healthy admission"
+        1,
+        "the uninstalled hook is destroyed once its wake returns"
     );
     assert_eq!(
         healthy_drops.load(Ordering::SeqCst),

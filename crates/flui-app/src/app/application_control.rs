@@ -622,11 +622,11 @@ fn control_error(error: flui_native::ProxySendError<()>) -> AppControlError {
 }
 pub(crate) fn contain(body: impl FnOnce()) {
     if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(body)) {
-        std::mem::forget(payload);
+        flui_foundation::panic::discard_payload(payload);
         if let Err(payload) = std::panic::catch_unwind(|| {
             tracing::error!("contained application callback or capture cleanup panic");
         }) {
-            std::mem::forget(payload);
+            flui_foundation::panic::discard_payload(payload);
         }
     }
 }

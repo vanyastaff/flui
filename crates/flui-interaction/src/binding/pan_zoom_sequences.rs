@@ -267,19 +267,22 @@ pub(super) fn retire_tickets_capturing_panic(
     preserving_failure: bool,
 ) {
     for (_, ticket) in tickets {
+        // No ticket runs while the thread unwinds; its captures are still
+        // destroyed, under containment (ADR-0281 §3).
         if std::thread::panicking() {
-            crate::retain::Retain::retain(crate::retain::Owned(ticket.0));
+            crate::containment::destroy_contained(ticket.0);
             continue;
         }
-        // Required quiescence still runs after a caught earlier failure;
-        // its opaque captures inherit that failure's retirement policy.
+        // Required quiescence still runs after a caught earlier failure.
         RoutePanic::preserve_first(
             first,
             RoutePanic::capture(|| (ticket.0)()),
             "native admission retirement",
         );
-        if preserving_failure || first.is_some() {
-            crate::retain::Retain::retain(crate::retain::Owned(ticket.0));
+        if preserving_failure {
+            // The earlier failure stays the first; a panicking destructor
+            // here is discarded behind it.
+            crate::containment::destroy_contained(ticket.0);
         } else {
             RoutePanic::preserve_first(
                 first,

@@ -390,14 +390,9 @@ impl<T: 'static> Drop for OwnerSlot<T> {
             return;
         }
         let value = self.take();
-        if thread::panicking() {
-            // A slot destroyed by an unwind retains its value: its destructor
-            // is user code, and the failure unwinding stays the only one
-            // (ADR-0127 §2).
-            std::mem::forget(value);
-        } else {
-            super::panic_boundary::contain_owner_callback(|| drop(value));
-        }
+        // Its destructor is user code: contained, during an unwind too
+        // (ADR-0281).
+        super::panic_boundary::contain_owner_callback(|| drop(value));
     }
 }
 

@@ -589,9 +589,11 @@ impl UiRuntime {
                     }
                 },
                 Err(payload) => {
-                    // Aggregate capture destruction is unsafe while preserving
-                    // another failure; retain the opaque callback envelope.
-                    std::mem::forget(handler);
+                    // The envelope is destroyed under containment after the
+                    // callback failed too (ADR-0281 §3).
+                    if let Err(dropped) = catch_unwind(AssertUnwindSafe(|| drop(handler))) {
+                        flui_foundation::panic::discard_payload(dropped);
+                    }
                     flui_foundation::panic::discard_payload(payload);
                     true
                 }

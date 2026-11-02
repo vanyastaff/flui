@@ -527,7 +527,7 @@ fn directional_provider_failure_preserves_first_failure_and_recovery() {
                 })
             );
             flui_foundation::panic::discard_payload(payload);
-            assert_eq!(drops.get(), usize::from(!provider_fails));
+            assert_eq!(drops.get(), 1, "the provider capture is destroyed once");
             assert!(
                 nodes[0].has_primary_focus(),
                 "geometry failure cannot publish a focus change"
@@ -615,7 +615,7 @@ fn group_policy_replacement_preserves_failure_and_future_traversal() {
             })
         );
         flui_foundation::panic::discard_payload(payload);
-        assert_eq!(drops.get(), usize::from(!sorting_fails));
+        assert_eq!(drops.get(), 1, "the group policy capture is destroyed once");
         assert!(nodes[0].has_primary_focus());
         assert!(manager.focus_next());
         assert!(
@@ -770,7 +770,7 @@ fn subscription_failure_preserves_unwind_and_allows_recovery() {
             })
         );
         flui_foundation::panic::discard_payload(failure);
-        assert_eq!(drops.get(), usize::from(!already_unwinding));
+        assert_eq!(drops.get(), 1, "the subscription capture is destroyed once");
         let calls = Rc::new(Cell::new(0));
         let observed = Rc::clone(&calls);
         let healthy = node.subscribe(Rc::new(move || observed.set(observed.get() + 1)));
@@ -1178,7 +1178,7 @@ impl Drop for NestedCloseContext {
     }
 }
 
-fn nested_close_after_observer_failure_retains_healthy_captures() {
+fn nested_close_after_observer_failure_destroys_healthy_captures() {
     assert_nested_close_preserves_observer_failure(false);
 }
 
@@ -1218,12 +1218,11 @@ fn assert_nested_close_preserves_observer_failure(panicking_retirement: bool) {
     assert!(manager.is_closed());
     assert!(manager.primary_focus().is_none());
     assert!(
-        !dropped.get(),
-        "nested terminal cleanup retains opaque captures after first failure"
+        dropped.get(),
+        "nested terminal cleanup destroys opaque captures after first failure"
     );
     assert_eq!(node.request_focus(), FocusRequestOutcome::OwnerClosed);
     manager.close();
-    assert!(!dropped.get());
     drop(attachment);
 }
 
@@ -1347,7 +1346,7 @@ fn queued_retirement_failure_keeps_the_accepted_tail_deliverable() {
     assert_queued_retirement_recovery(false);
 }
 
-fn earlier_observer_failure_retains_the_retired_queued_last_owner() {
+fn earlier_observer_failure_destroys_the_retired_queued_last_owner() {
     assert_queued_retirement_recovery(true);
 }
 
@@ -1418,17 +1417,15 @@ fn assert_queued_retirement_recovery(earlier_failure: bool) {
             "queued node retirement failure"
         })
     );
-    assert_eq!(dropped.get(), !earlier_failure);
+    assert!(dropped.get(), "the queued last owner is destroyed once");
     let last_id = last.id();
-    let expected = if earlier_failure {
-        vec![(None, Some(first_id)), (Some(first_id), Some(last_id))]
-    } else {
-        vec![
-            (None, Some(first_id)),
-            (Some(first_id), None),
-            (None, Some(last_id)),
-        ]
-    };
+    // The destroyed queued owner's unfocus is delivered in turn, whichever
+    // failure came first.
+    let expected = vec![
+        (None, Some(first_id)),
+        (Some(first_id), None),
+        (None, Some(last_id)),
+    ];
     assert_eq!(
         *log.borrow(),
         expected,
@@ -1604,11 +1601,11 @@ fn caught_callback_failures_leave_captures_with_their_owner() {
             key_dispatch_preserves_propagation_outcomes,
         ),
         (
-            "nested close preserves healthy captures after observer failure",
-            nested_close_after_observer_failure_retains_healthy_captures,
+            "nested close destroys healthy captures after observer failure",
+            nested_close_after_observer_failure_destroys_healthy_captures,
         ),
         (
-            "nested close preserves competing captures after observer failure",
+            "nested close destroys competing captures after observer failure",
             nested_close_retirement_cannot_compete_with_the_earlier_observer_failure,
         ),
         (
@@ -1625,7 +1622,7 @@ fn caught_callback_failures_leave_captures_with_their_owner() {
         ),
         (
             "earlier observer failure and queued retirement",
-            earlier_observer_failure_retains_the_retired_queued_last_owner,
+            earlier_observer_failure_destroys_the_retired_queued_last_owner,
         ),
         (
             "accepted focus requests after node failure",
@@ -1773,8 +1770,8 @@ fn manager_withdrawal_after_failure(withdrawal: usize) {
     assert_eq!(failure.downcast_ref::<&str>(), Some(&"first observer"));
     assert_eq!(
         retired.get(),
-        0,
-        "withdrawal {withdrawal}: caught failure prevents hostile last-owner retirement"
+        1,
+        "withdrawal {withdrawal}: the hostile last owner is destroyed after the caught failure"
     );
     manager.remove_listener(first);
     manager.remove_listener(second);
@@ -2045,10 +2042,15 @@ fn scoped_keys_preserve_an_active_unwind() {
     }))
     .expect_err("earlier unwind propagates");
     assert_eq!(failure.downcast_ref::<&str>(), Some(&"earlier unwind"));
-    assert_eq!(drops.get(), 0);
+    assert_eq!(
+        drops.get(),
+        1,
+        "an active unwind still destroys the key capture"
+    );
     assert_eq!(
         manager.dispatch_key_event(&key_event()),
-        KeyEventResult::Ignored
+        KeyEventResult::Handled,
+        "the destroyed capture's destructor registered a healthy sibling"
     );
     let healthy = manager
         .register_global_key_handler(Rc::new(|_| KeyEventResult::Handled))
@@ -2082,10 +2084,15 @@ fn scoped_keys_preserve_a_caught_observer_failure() {
     let failure = catch_unwind(AssertUnwindSafe(|| node.request_focus()))
         .expect_err("first observer propagates");
     assert_eq!(failure.downcast_ref::<&str>(), Some(&"first observer"));
-    assert_eq!(drops.get(), 0);
+    assert_eq!(
+        drops.get(),
+        1,
+        "a caught observer failure still destroys the key capture"
+    );
     assert_eq!(
         manager.dispatch_key_event(&key_event()),
-        KeyEventResult::Ignored
+        KeyEventResult::Handled,
+        "the destroyed capture's destructor registered a healthy sibling"
     );
     manager.remove_listener(first);
     manager.remove_listener(second);
@@ -2125,12 +2132,13 @@ fn scoped_keys_can_withdraw_the_current_failing_callback() {
     assert_eq!(failure.downcast_ref::<&str>(), Some(&"first key callback"));
     assert_eq!(
         drops.get(),
-        0,
-        "protected callback retires after its failure is saved"
+        1,
+        "the protected callback is destroyed after its failure is saved"
     );
     assert_eq!(
         manager.dispatch_key_event(&key_event()),
-        KeyEventResult::Ignored
+        KeyEventResult::Handled,
+        "the destroyed capture's destructor registered a healthy sibling"
     );
     let healthy = manager
         .register_global_key_handler(Rc::new(|_| KeyEventResult::Handled))
@@ -2190,15 +2198,16 @@ fn nested_key_dispatch_after_focus_failure(key_panics: bool) {
     );
     assert_eq!(
         drops.get(),
-        0,
-        "nested key snapshot inherits the already-caught focus failure"
+        1,
+        "the nested key snapshot is destroyed after the caught focus failure"
     );
     manager.remove_listener(first);
     manager.remove_listener(second);
     manager.unfocus();
     assert_eq!(
         manager.dispatch_key_event(&key_event()),
-        KeyEventResult::Ignored
+        KeyEventResult::Handled,
+        "the destroyed capture's destructor registered a healthy sibling"
     );
     let healthy = manager
         .register_global_key_handler(Rc::new(|_| KeyEventResult::Handled))
