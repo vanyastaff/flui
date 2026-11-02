@@ -7,6 +7,8 @@ The owner requested that the research, proposed decisions and development plan b
 - [Research](research.ru.md): source-based comparison of Raven, Blinc, Rosin, WaterUI, Ply, Knots and Tessera.
 - [Development plan](development-plan.ru.md): existing FLUI capabilities, proposed priorities, dependencies and observable acceptance criteria.
 - [Decision status](decisions.ru.md): preserved constraints, recommendations and unresolved choices.
+- [Published benchmarks](benchmark-review.ru.md): upstream numbers, measurement conditions, source code and limits of the claims.
+- [FLUI comparison plan](benchmark-plan.ru.md): scenarios, peer cohorts, metrics, correctness, statistical policy and implementation order.
 
 ## Evidence boundary
 
@@ -15,6 +17,8 @@ The research describes FLUI at `bb618a7f7f1510ff11093109094ba02c937d1970`, inspe
 This draft branch starts at `9a5df98b49b25d267a1cf1d8db3c400bdd6492b7`. Three changes landed after the research baseline: headless storage isolation (#2157), validated backdrop magnification (#2164), and WindowFrame (#2140). The historical comparison has not been silently updated to claim validation of those changes. Reconcile affected proposals with current code before implementation.
 
 No framework behavior changed. Runtime tests, native runs and performance measurements are future acceptance work, not results of this PR.
+
+The benchmark supplement was researched on 2026-11-02. Its FLUI tooling inventory uses the branch base `9a5df98b49b25d267a1cf1d8db3c400bdd6492b7`; it does not retroactively update the earlier architecture review. Published peer results are attributed to their authors. New FLUI/peer comparisons are NOT_RUN; proposed thresholds are not accepted release gates.
 
 ## How this draft becomes implementation
 

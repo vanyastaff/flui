@@ -16,6 +16,7 @@
 | Inspector, preview и reload | Приоритет внутри существующего графа driver | Переиспользовать runtime/driver; явно различать совместимую правку и restart | Не обходить зависимости утверждённого flui-driver scope |
 | Media, native content, embedding | Условные кандидаты | Субстрат Texture/platform hooks не равен готовой возможности | Названный consumer, capability/failure/lifecycle contract |
 | Доставка и продвижение | Предложенный результат | Внешний проект, installable artifact и воспроизводимые примеры на точном SHA | Реальные платформенные прогоны; без неподтверждённых speed/platform claims |
+| Сравнительные benchmarks | Предложенная программа измерений | Общая сцена FLUI/Knots/egui/ImGui; отдельно Raven local-update, layout engines и GPU/effects cohorts; переиспользовать существующие perf/testing средства | [План сравнений](benchmark-plan.ru.md): correctness parity, A/A, source pins, реальные samples и per-target budgets до любых speed claims |
 
 ## Открытые выборы
 
@@ -24,5 +25,6 @@
 - Какой небольшой editor станет вторым сквозным потребителем.
 - Какие участки upstream-кода оправданно переносить после проверки лицензии и стоимости сопровождения.
 - Какие предложения становятся утверждённым feature scope после обсуждения.
+- Какие физические hosts доступны для Windows instrumentation, Linux Wayland comparison и macOS/Rosin; какие practical thresholds подтверждаются A/A до первого A/B.
 
 До разрешения этих вопросов таблица сохраняет кандидатов и критерии выбора, а не назначает сроки или объявляет завершённые возможности.

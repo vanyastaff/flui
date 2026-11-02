@@ -60,6 +60,8 @@ Roadmap других проектов — источник гипотез о б�
 
 ## Исходная точка и измерения
 
+Дополнение от 2 ноября: [опубликованные результаты соседних проектов](benchmark-review.ru.md) и [конкретный план сравнительных бенчмарков](benchmark-plan.ru.md). В них раздельно определены CPU/layout, GPU/completion, native input latency и developer iteration; цифры upstream не считаются измерениями FLUI.
+
 **Сделать:** сверить профильные `tasks.md`, текущий HEAD и тесты по направлениям этой таблицы. Общий [release/tasks.md](https://github.com/vanyastaff/flui/blob/bb618a7f7f1510ff11093109094ba02c937d1970/docs/plans/specs/release/tasks.md) содержит устаревшие сведения от 5 октября: например, текущие acceptance fixtures и части driver уже присутствуют. Исправление реестра должно ссылаться на профильные доказательства; статус PR или checkbox не заменяет прогон.
 
 Подготовить три фиксированных workload:
