@@ -393,8 +393,8 @@ trait depends on `flui-platform` instead.
   `NativeTextSize`) and the `Text` position's trait, `TextInput`: the handle
   a window holds its text input by answers one `WindowTextInput`, either
   `Ime` (the field tells the input method whether it may compose and where
-  its caret is: AppKit, winit, headless) or `Store` (the platform reads or
-  mirrors the field's store: TSF, Android, web, Wayland's
+  its caret is: winit, headless) or `Store` (the platform reads or
+  mirrors the field's store: AppKit, UIKit, TSF, Android, web, Wayland's
   `zwp_text_input_v3`), and `Absent<position::Text>` answers none; each
   window's accessor goes through it, as do its text sizing
   (`capture_sizing`, `invalidate_sizing`, `fence_sizing`) and its going
@@ -430,6 +430,39 @@ trait depends on `flui-platform` instead.
   `text::web::ime::tests`, `text::windows::geometry::tests`,
   `text::linux::text_input::tests`); `tests/wayland_text_input.rs` drives
   the Wayland client from a real input method on sway.
+  AppKit and UIKit use `text::apple::client` over that same store; neither
+  keeps a document of its own. UIKit's before and after notices bracket the
+  store's publication, with synchronous reads seeing the old and new
+  documents respectively (`application_notices_bracket_the_document_the_keyboard_reads`).
+  Focus requests wait until publication finishes; replacement or retirement
+  of the context invalidates its remaining notices, without retargeting a
+  later notice to the new context (`a_will_notice_keeps_its_recipient_until_publication_or_retirement`).
+  Callback failures preserve the first panic while draining accepted work;
+  retirement withdraws the store and context before callbacks and still
+  delivers an accepted completion in place
+  (`retirement_delivers_a_completion_accepted_inside_a_notice`).
+  The macOS context's `SecureHold` owns its release operation, a function
+  pointer in production. Its destructor makes one final attempt after a
+  refused release, without claiming the OS must accept it
+  (`dropping_a_hold_retries_one_refused_release`,
+  `rebinding_gives_the_previous_context_its_secure_hold_back`).
+  UIKit's character-range queries keep UTF-16 surrogate pairs whole, including
+  in protected fields: offset errors precede `Protected`, so bounded probes
+  need no plaintext (`uikit_ranges_keep_supplementary_scalars_whole`). A point
+  hit-test and its scalar range share one read session. Character ranges use
+  the containing box's start; an outside point has no range, while the
+  separate closest-position query keeps nearest-caret behavior
+  (`point_derived_ranges_stay_with_the_queried_field`); read failure drains
+  accepted focus requests before resuming the first panic
+  (`a_failing_point_read_delivers_reentrant_focus_and_keeps_its_first_failure`).
+  Status, edit and composition-completion calls release their queue guard
+  and drain accepted host operations before resuming a store failure
+  (`failing_store_calls_deliver_focus_before_the_next_edit`). Queued completion
+  reads and fallback commits keep newer focus requests behind earlier ones
+  (`a_queued_completion_keeps_newer_focus_after_older_requests`). An accepted
+  deferred completion still attempts its fallback when the platform's read
+  panics, before resuming that first failure
+  (`a_queued_completion_finishes_after_its_read_panics_without_moving_focus`).
 - **`fonts` answers which system faces fall back, for a locale (ADR-0271
   §3).** `fonts::system_fallback` is the one entry; the composition root hands
   it to the font feed, which calls it on its own thread, never the owner's

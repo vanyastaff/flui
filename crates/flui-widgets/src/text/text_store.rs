@@ -49,7 +49,7 @@
 
 use std::cell::{Cell, RefCell};
 use std::ops::Range;
-use std::panic::resume_unwind;
+use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::rc::Rc;
 
 use flui_foundation::geometry::{Bounds, Point};
@@ -62,9 +62,9 @@ use flui_objects::{RenderEditable, SubtreeAnchor};
 use flui_painting::text_boundaries::graphemes;
 use flui_platform::text_store::{
     CommitGate, Composition, LockGrant, LockOutcome, LockTiming, OwnerCalls, PointMode, RangeRect,
-    RetainOnFailure, Selection, TextChange, TextInputPurpose, TextStore, TextStoreEdit,
-    TextStoreError, TextStoreObserver, TextStoreRead, TextStoreStatus, Utf16Offset, Utf16Range,
-    utf16,
+    RetainOnFailure, Selection, TextChange, TextInputPurpose, TextStore, TextStoreChange,
+    TextStoreEdit, TextStoreError, TextStoreObserver, TextStoreRead, TextStoreStatus, Utf16Offset,
+    Utf16Range, utf16,
 };
 use flui_rendering::pipeline::PipelineCell;
 
@@ -113,7 +113,34 @@ struct Doc {
     origin: String,
 }
 
+enum Publication {
+    Idle,
+    Snapshot(Doc),
+    Settling,
+}
+
 impl Doc {
+    fn from_controller(controller: &TextEditingController) -> (Self, EditGeneration) {
+        controller.with_inner(|inner| {
+            (
+                Self {
+                    text: inner.text.clone(),
+                    anchor: inner.selection.anchor,
+                    caret: inner.selection.caret,
+                    composing: inner
+                        .composing
+                        .as_ref()
+                        .map(|state| (state.range.clone(), state.caret_hidden)),
+                    origin: inner
+                        .composing
+                        .as_ref()
+                        .map_or_default(|state| state.origin.clone()),
+                },
+                inner.generation,
+            )
+        })
+    }
+
     /// The text with the composing range replaced by its origin.
     fn committed(&self) -> String {
         committed_text(
@@ -192,7 +219,9 @@ pub(super) struct EditableTextStore {
     observer: RefCell<Option<Rc<dyn TextStoreObserver>>>,
     /// The text and selection last reported to the observer (or written by a
     /// platform session), which app-side edits are diffed against.
-    reported: RefCell<(String, Selection)>,
+    reported: RefCell<Doc>,
+    /// A frozen view while one observer publishes an application change.
+    publication: RefCell<Publication>,
     /// `false` once the field is disposed: every lock is then refused.
     alive: Cell<bool>,
     /// A layout or status change the observer has not heard of yet, because
@@ -259,11 +288,13 @@ pub(super) struct FieldParts {
 
 impl EditableTextStore {
     pub(super) fn new(parts: FieldParts) -> Rc<Self> {
-        let store = Self {
+        let reported = Doc::from_controller(&parts.controller.borrow()).0;
+        Rc::new(Self {
             controller: parts.controller,
             arbiter: LockArbiter::new(),
             observer: RefCell::new(None),
-            reported: RefCell::new((String::new(), Selection::collapsed(Utf16Offset::ZERO))),
+            reported: RefCell::new(reported),
+            publication: RefCell::new(Publication::Idle),
             alive: Cell::new(true),
             layout_dirty: Cell::new(false),
             layout_owed: Cell::new(false),
@@ -277,10 +308,7 @@ impl EditableTextStore {
             input_purpose: parts.input_purpose,
             obscuring_character: parts.obscuring_character,
             edits: parts.edits,
-        };
-        let doc = store.read_doc();
-        *store.reported.borrow_mut() = (doc.text.clone(), doc.selection());
-        Rc::new(store)
+        })
     }
 
     /// The controller may have changed. Report whatever the platform did not
@@ -288,10 +316,9 @@ impl EditableTextStore {
     ///
     /// Called where the field can reach the store on the owner thread: after
     /// a key edit, on a controller swap, before and after every lock, and
-    /// once per frame from the cursor-area loop. Not from a controller
-    /// listener: those are `Send + Sync` and this store is not, so an edit
-    /// made from elsewhere (`set_text`, a paste) is reported at the next of
-    /// those points.
+    /// once per frame from the cursor-area loop. Controller listeners may
+    /// run inside another edit or presentation phase; edits made elsewhere
+    /// (`set_text`, a paste) are published at the next owner anchor instead.
     pub(super) fn controller_changed(&self) {
         let controller = self.controller.borrow().clone();
         let revision = controller.revision();
@@ -344,6 +371,14 @@ impl EditableTextStore {
     fn flush_now(&self) {
         let mut calls = OwnerCalls::new();
         self.flush_notifications(&mut calls);
+        if matches!(*self.publication.borrow(), Publication::Idle) {
+            calls.run(|| {
+                self.arbiter
+                    .run_deferred(&mut |grant| self.open(grant), &mut |calls| {
+                        self.settle(calls);
+                    })
+            });
+        }
         calls.resume();
     }
 
@@ -351,7 +386,9 @@ impl EditableTextStore {
     /// commits are allowed, so a sink that answers a notification with a
     /// synchronous lock request (TSF's do) is granted it.
     fn may_notify(&self) -> bool {
-        !self.arbiter.is_locked() && self.may_commit().unwrap_or(false)
+        matches!(*self.publication.borrow(), Publication::Idle)
+            && !self.arbiter.is_locked()
+            && self.may_commit().unwrap_or(false)
     }
 
     /// Send every notification that waited for [`Self::may_notify`], inside
@@ -419,22 +456,7 @@ impl EditableTextStore {
     /// critical section.
     fn snapshot(&self) -> (TextEditingController, Doc, EditGeneration) {
         let controller = self.controller.borrow().clone();
-        let (doc, generation) = controller.with_inner(|inner| {
-            let doc = Doc {
-                text: inner.text.clone(),
-                anchor: inner.selection.anchor,
-                caret: inner.selection.caret,
-                composing: inner
-                    .composing
-                    .as_ref()
-                    .map(|state| (state.range.clone(), state.caret_hidden)),
-                origin: inner
-                    .composing
-                    .as_ref()
-                    .map_or_default(|state| state.origin.clone()),
-            };
-            (doc, inner.generation)
-        });
+        let (doc, generation) = Doc::from_controller(&controller);
         (controller, doc, generation)
     }
 
@@ -442,26 +464,83 @@ impl EditableTextStore {
     /// observer.
     fn report_app_changes(&self, calls: &mut OwnerCalls) {
         let doc = self.read_doc();
-        let selection = doc.selection();
-        let (change, moved) = {
-            let mut reported = self.reported.borrow_mut();
-            let change = (reported.0 != doc.text).then(|| text_change(&reported.0, &doc.text));
-            let moved = change.is_some() || reported.1 != selection;
-            *reported = (doc.text, selection);
-            (change, moved)
-        };
-        if let Some(change) = change {
-            self.notify(calls, |observer| observer.text_changed(change));
+        let old = self.reported.borrow().clone();
+        let changed = old.text != doc.text;
+        let moved = changed || old.selection() != doc.selection();
+        let composition_changed = old.composing != doc.composing || old.origin != doc.origin;
+        let observer = self.observer.borrow().clone();
+        if (moved || composition_changed)
+            && let Some(observer) = &observer
+        {
+            let change = if changed {
+                TextStoreChange::Text(text_change(&old.text, &doc.text))
+            } else if composition_changed {
+                TextStoreChange::Composition
+            } else {
+                TextStoreChange::Selection
+            };
+            *self.publication.borrow_mut() = Publication::Snapshot(old);
+            let mut published = false;
+            let mut publish = |calls: &mut OwnerCalls| {
+                if published {
+                    return;
+                }
+                published = true;
+                *self.reported.borrow_mut() = doc.clone();
+                *self.publication.borrow_mut() = Publication::Snapshot(doc.clone());
+                if let TextStoreChange::Text(change) = change {
+                    calls.run(|| observer.text_changed(change));
+                }
+                if matches!(change, TextStoreChange::Composition) {
+                    calls.run(|| observer.composition_changed());
+                }
+                calls.run(|| observer.selection_changed());
+                // App edits made by either notification precede platform
+                // writes queued by them. Publish those edits before a
+                // write can update the reported snapshot and hide them.
+                *self.publication.borrow_mut() = Publication::Idle;
+                if self.arbiter.pending() > 0 && self.may_notify() {
+                    self.report_app_changes(calls);
+                }
+                *self.publication.borrow_mut() = Publication::Settling;
+                self.arbiter.run_deferred_contained(
+                    calls,
+                    &mut |calls| {
+                        *self.publication.borrow_mut() = Publication::Idle;
+                        let prepared =
+                            catch_unwind(AssertUnwindSafe(|| self.flush_notifications(calls)));
+                        *self.publication.borrow_mut() = Publication::Settling;
+                        if let Err(payload) = prepared {
+                            calls.keep(payload);
+                        }
+                    },
+                    &mut |grant| self.open(grant),
+                    &mut |calls| {
+                        self.settle(calls);
+                    },
+                );
+            };
+            let result = catch_unwind(AssertUnwindSafe(|| {
+                observer.publish_change(change, &mut publish, calls);
+            }));
+            if let Err(payload) = result {
+                calls.keep(payload);
+            }
+            publish(calls);
+            *self.publication.borrow_mut() = Publication::Idle;
+        } else {
+            *self.reported.borrow_mut() = doc;
         }
-        if moved {
-            self.notify(calls, |observer| observer.selection_changed());
-        }
+        calls.run(|| drop(observer));
     }
 
     fn open(&self, grant: LockGrant) {
         match grant {
             LockGrant::Read(body) => {
-                let doc = self.read_doc();
+                let doc = match &*self.publication.borrow() {
+                    Publication::Snapshot(doc) => doc.clone(),
+                    Publication::Idle | Publication::Settling => self.read_doc(),
+                };
                 let ledger = doc.ledger();
                 body(&Session {
                     store: self,
@@ -509,7 +588,7 @@ impl EditableTextStore {
         if !current.is_same_controller(controller) {
             return;
         }
-        let reported = (doc.text.clone(), doc.selection());
+        let reported = doc.clone();
         // A session that moved only the selection leaves the committed text
         // as it was; building it twice is the cost of a long field.
         let committed_after = (doc.text != original.text
@@ -712,12 +791,21 @@ impl TextStore for EditableTextStore {
         grant: LockGrant,
         timing: LockTiming,
     ) -> Result<LockOutcome, TextStoreError> {
-        // A refused grant is the requester's code: retired inside a scope.
+        // Retirement refuses even a frozen publication read.
         if let Err(error) = self.may_commit() {
             let mut calls = OwnerCalls::new();
             calls.retire(grant);
             calls.resume();
             return Err(error);
+        }
+        if !matches!(*self.publication.borrow(), Publication::Idle) {
+            return match (grant, timing) {
+                (LockGrant::Read(body), LockTiming::Sync) => self
+                    .arbiter
+                    .read_snapshot(|| self.open(LockGrant::Read(body)))
+                    .map(|()| LockOutcome::Granted),
+                (grant, timing) => self.arbiter.defer(grant, timing),
+            };
         }
         // An app edit not yet reported is reported before the platform's
         // session can see (and write back over) it. A failure there refuses
@@ -752,17 +840,25 @@ impl TextStore for EditableTextStore {
     /// for the frame transaction to end is reported here, before and after
     /// the queued grants run.
     fn run_deferred_grants(&self) -> usize {
+        if !matches!(*self.publication.borrow(), Publication::Idle) {
+            return 0;
+        }
         if self.may_commit().is_err() {
             return 0;
         }
-        self.flush_now();
+        let mut before = OwnerCalls::new();
+        self.flush_notifications(&mut before);
         let mut settled_under = self.arbiter.owner_gate();
-        let ran = self
-            .arbiter
-            .run_deferred(&mut |grant| self.open(grant), &mut |calls| {
-                settled_under = calls.parking_gate().cloned();
-                self.settle(calls);
-            });
+        let mut ran = 0;
+        before.run(|| {
+            ran = self
+                .arbiter
+                .run_deferred(&mut |grant| self.open(grant), &mut |calls| {
+                    settled_under = calls.parking_gate().cloned();
+                    self.settle(calls);
+                });
+        });
+        before.resume();
         let mut calls = OwnerCalls::new();
         calls.run_behind_parked(settled_under.as_ref(), || self.flush_now());
         calls.resume();
