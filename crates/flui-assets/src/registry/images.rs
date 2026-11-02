@@ -29,6 +29,14 @@
 //! lanes. Only a subscriber whose own lanes are shutting down answers
 //! [`AssetError::LanesRefused`].
 //!
+//! # A load waits for its slot off the lanes
+//!
+//! A load bound for lanes is spawned on their IO lane only once it holds its
+//! load slot: queued, it is a start the slot queue calls on the thread that
+//! freed a slot, so loads waiting for one take no place in the lane's
+//! admission window. Lanes with no room by then hand the run to the earliest
+//! subscriber still waiting, which drives it where it is polled.
+//!
 //! # Decoding never runs on the IO lane
 //!
 //! Bytes are read first; the decode runs on the compute lane behind the
@@ -61,7 +69,7 @@ use flui_platform::http::{Http, HttpAuthority, HttpError, HttpRequest};
 use parking_lot::Mutex;
 use tokio::sync::oneshot;
 
-use super::ordered_slots::{AdmissionOrder, OrderedSlots, Reservation};
+use super::ordered_slots::{AdmissionOrder, OrderedSlots, Reservation, Slot, Start};
 use crate::Image;
 use crate::error::{AssetError, Result};
 
@@ -242,10 +250,26 @@ impl LoadTicket {
 struct Pending {
     ticket: Arc<LoadTicket>,
     subscribers: usize,
-    waiters: Vec<oneshot::Sender<Result<Image>>>,
+    /// The lead's first, as admitted; one handed the run to lead is taken
+    /// out and its subscriber registers again.
+    waiters: Vec<oneshot::Sender<Delivery>>,
     /// Dropping it cancels a load spawned on the IO lane; `None` while the
-    /// load runs inside its lead's [`ImageLoad`], or before its spawn returns.
+    /// load waits for its load slot, runs inside a subscriber's
+    /// [`ImageLoad`], or before its spawn returns.
     cancel: Option<oneshot::Sender<()>>,
+}
+
+/// What a subscriber's channel delivers. A channel closed with none means
+/// the load closed unsettled, and the subscriber takes it over.
+enum Delivery {
+    /// The load's outcome.
+    Settled(Result<Image>),
+    /// The run, for this subscriber to drive where it is polled: the lead's
+    /// lanes had no room for it when its load slot came free.
+    Lead(Run),
+    /// The lead's lanes are shutting down and took no run (to the lead
+    /// only; the other subscribers take the load over).
+    Refused(SpawnError),
 }
 
 struct State {
@@ -315,11 +339,17 @@ enum Admission {
     Cached(Image),
     /// The request joined a load already in flight.
     Joined(Subscription),
-    /// The request starts a load: run `run`, which settles `subscription`'s
-    /// waiters among the rest.
+    /// The request starts a load with no lanes: run `run` where it is
+    /// polled, which settles `subscription`'s waiters among the rest.
     Lead {
         subscription: Subscription,
         run: Run,
+    },
+    /// The request starts a load on its lanes: call `start` with the slot
+    /// granted now, or the queue calls it once one is freed for it.
+    Started {
+        subscription: Subscription,
+        start: Option<(Slot, Start)>,
     },
 }
 
@@ -396,23 +426,80 @@ impl DecodedImages {
                 cancel: None,
             },
         );
-        // Reserved under the lock that assigned `order`, so load slots follow
-        // admission order however late each load first runs. A load with no
-        // lanes is admitted only once polled, so it reserves no slot while
-        // its caller holds it unpolled. The slot queue's lock never takes
-        // this one, so the nesting cannot invert.
-        let load_slot = self.loads.reserve(order);
-        drop(state);
         let completion = Completion {
             images: Arc::clone(self),
             source: source.clone(),
             ticket: Arc::clone(&ticket),
             settled: false,
         };
+        let subscription = Subscription::new(rx, Arc::clone(self), source, ticket);
+        // Reserved under the lock that assigned `order`, so load slots follow
+        // admission order however late each load first runs. A load with no
+        // lanes is admitted only once polled, so it reserves no slot while
+        // its caller holds it unpolled. A load on lanes is spawned on them
+        // only once it holds its slot: queued, it holds no place in their
+        // admission window. The slot queue's lock never takes this one, so
+        // the nesting cannot invert.
+        if let Some(lanes) = &services.lanes {
+            let start = Self::start(completion, Arc::clone(lanes), services.clone());
+            let start = self.loads.reserve_start(order, start);
+            drop(state);
+            return Admission::Started {
+                subscription,
+                start,
+            };
+        }
+        let load_slot = self.loads.reserve(order);
+        drop(state);
         Admission::Lead {
-            subscription: Subscription::new(rx, Arc::clone(self), source, ticket),
+            subscription,
             run: Self::run(completion, load_slot, services.clone()),
         }
+    }
+
+    /// Spawns a load that holds its load slot on `lanes`' IO lane. Lanes
+    /// with no room for it hand the run to a subscriber to drive; lanes
+    /// shutting down refuse the lead, and the rest take the load over. A
+    /// load whose subscribers all left while it waited hands the slot back.
+    fn start(completion: Completion, lanes: Arc<dyn Executor>, services: LoadServices) -> Start {
+        Box::new(move |slot: Slot| {
+            if completion.ticket.is_cancelled() {
+                return Some(slot);
+            }
+            let images = Arc::clone(&completion.images);
+            let source = completion.source.clone();
+            let ticket = Arc::clone(&completion.ticket);
+            let run = Self::run(completion, Reservation::Granted(slot), services);
+            // Shared with the spawned task, so a refused spawn hands the run
+            // back instead of dropping it.
+            let shared = Arc::new(Mutex::new(Some(run)));
+            let (cancel, cancelled) = oneshot::channel();
+            let task: Run = {
+                let shared = Arc::clone(&shared);
+                Box::pin(async move {
+                    let run = shared.lock().take();
+                    if let Some(run) = run {
+                        until_cancelled(run, cancelled).await;
+                    }
+                })
+            };
+            match lanes.spawn_io(task) {
+                Ok(()) => images.attach(&source, &ticket, cancel),
+                Err(SpawnError::Saturated | SpawnError::Unavailable) => {
+                    let run = shared.lock().take();
+                    if let Some(run) = run {
+                        images.offer_run(&source, &ticket, run);
+                    }
+                }
+                Err(reason) => {
+                    images.refuse_lead(&source, &ticket, reason);
+                    // Dropped after the lead heard why: the rest take over.
+                    let run = shared.lock().take();
+                    drop(run);
+                }
+            }
+            None
+        })
     }
 
     /// Reads the source, decodes it and settles every waiter.
@@ -449,6 +536,67 @@ impl DecodedImages {
         }
         // Otherwise `cancel` drops after the lock, cancelling a load that
         // settled already or whose last subscriber left.
+    }
+
+    /// Hands the run of the load `ticket` names to its earliest waiter still
+    /// listening, to drive where it is polled. With none left the run drops
+    /// and closes the load.
+    fn offer_run(&self, source: &ImageSource, ticket: &Arc<LoadTicket>, mut run: Run) {
+        loop {
+            let waiter = {
+                let mut state = self.state.lock();
+                match state.pending.get_mut(source) {
+                    Some(pending)
+                        if Arc::ptr_eq(&pending.ticket, ticket) && !pending.waiters.is_empty() =>
+                    {
+                        pending.waiters.remove(0)
+                    }
+                    _ => break,
+                }
+            };
+            // Sent outside the lock: a refused send hands the run back.
+            match waiter.send(Delivery::Lead(run)) {
+                Ok(()) => return,
+                Err(Delivery::Lead(refused)) => run = refused,
+                Err(_) => unreachable!("BUG: a refused send returns what was sent"),
+            }
+        }
+        drop(run);
+    }
+
+    /// Tells the lead of the load `ticket` names that its lanes refused the
+    /// load; the caller then drops the run, and the rest take it over.
+    fn refuse_lead(&self, source: &ImageSource, ticket: &Arc<LoadTicket>, reason: SpawnError) {
+        let lead = {
+            let mut state = self.state.lock();
+            match state.pending.get_mut(source) {
+                Some(pending)
+                    if Arc::ptr_eq(&pending.ticket, ticket) && !pending.waiters.is_empty() =>
+                {
+                    Some(pending.waiters.remove(0))
+                }
+                _ => None,
+            }
+        };
+        if let Some(lead) = lead {
+            // A lead that left before hearing it changes nothing.
+            let _ = lead.send(Delivery::Refused(reason));
+        }
+    }
+
+    /// Registers `subscription`'s subscriber again as a waiter of its load,
+    /// after it was handed the run; a load gone by then leaves its channel
+    /// closed.
+    fn rewait(&self, subscription: &mut Subscription) {
+        let (tx, rx) = oneshot::channel();
+        let mut state = self.state.lock();
+        if let Some(pending) = state.pending.get_mut(&subscription.source)
+            && Arc::ptr_eq(&pending.ticket, &subscription.ticket)
+        {
+            pending.waiters.push(tx);
+        }
+        drop(state);
+        subscription.rx = rx;
     }
 
     /// Settles the load `ticket` names: removes its entry, keeps a decoded
@@ -491,7 +639,7 @@ impl DecodedImages {
         if let Some(outcome) = outcome {
             for waiter in waiters {
                 // A waiter whose subscriber left before completion is closed.
-                let _ = waiter.send(outcome.clone());
+                let _ = waiter.send(Delivery::Settled(outcome.clone()));
             }
         }
     }
@@ -810,7 +958,7 @@ enum LoadState {
 
 /// A subscriber's claim on a pending load; dropping it unsubscribes.
 struct Subscription {
-    rx: oneshot::Receiver<Result<Image>>,
+    rx: oneshot::Receiver<Delivery>,
     images: Arc<DecodedImages>,
     source: ImageSource,
     ticket: Arc<LoadTicket>,
@@ -818,7 +966,7 @@ struct Subscription {
 
 impl Subscription {
     fn new(
-        rx: oneshot::Receiver<Result<Image>>,
+        rx: oneshot::Receiver<Delivery>,
         images: Arc<DecodedImages>,
         source: &ImageSource,
         ticket: Arc<LoadTicket>,
@@ -831,8 +979,8 @@ impl Subscription {
         }
     }
 
-    /// The outcome once the load settles; `None` when it closed unsettled.
-    fn poll_outcome(&mut self, cx: &mut Context<'_>) -> Poll<Option<Result<Image>>> {
+    /// What the load delivers; `None` when it closed unsettled.
+    fn poll_outcome(&mut self, cx: &mut Context<'_>) -> Poll<Option<Delivery>> {
         Pin::new(&mut self.rx).poll(cx).map(std::result::Result::ok)
     }
 }
@@ -849,36 +997,50 @@ impl ImageLoad {
         self.state = match self.images.admit(&self.source, &self.services) {
             Admission::Cached(image) => LoadState::Ready(Some(Ok(image))),
             Admission::Joined(subscription) => LoadState::Waiting(subscription),
-            Admission::Lead { subscription, run } => {
-                let Some(lanes) = &self.services.lanes else {
-                    self.state = LoadState::Leading {
-                        run: Some(run),
-                        subscription,
-                    };
-                    return;
-                };
-                let (cancel, cancelled) = oneshot::channel();
-                match lanes.spawn_io(Box::pin(until_cancelled(run, cancelled))) {
-                    Ok(()) => {
-                        self.images
-                            .attach(&self.source, &subscription.ticket, cancel);
-                        LoadState::Waiting(subscription)
-                    }
-                    // The refused run closed the entry as it dropped. Lanes
-                    // with no room now still have a thread here: lead again,
-                    // on it, once polled.
-                    Err(SpawnError::Saturated | SpawnError::Unavailable) => {
-                        drop(subscription);
-                        self.services.lanes = None;
-                        LoadState::Unadmitted
-                    }
-                    Err(reason) => LoadState::Ready(Some(Err(AssetError::LanesRefused {
-                        path: self.source.label().to_string(),
-                        reason,
-                    }))),
+            Admission::Lead { subscription, run } => LoadState::Leading {
+                run: Some(run),
+                subscription,
+            },
+            Admission::Started {
+                subscription,
+                start,
+            } => {
+                // A slot free now: spawn here. Lanes with no room, or
+                // shutting down, answer through the subscription.
+                if let Some((slot, start)) = start {
+                    drop(start(slot));
                 }
+                LoadState::Waiting(subscription)
             }
         };
+    }
+
+    /// Acts on what the load delivered: its outcome, its run to drive here,
+    /// or the refusal of this subscriber's lanes. `None` once it drives the
+    /// run.
+    fn deliver(&mut self, delivery: Delivery) -> Option<Result<Image>> {
+        match delivery {
+            Delivery::Settled(outcome) => Some(outcome),
+            Delivery::Refused(reason) => Some(Err(AssetError::LanesRefused {
+                path: self.source.label().to_string(),
+                reason,
+            })),
+            Delivery::Lead(run) => {
+                let (LoadState::Waiting(mut subscription)
+                | LoadState::Leading {
+                    mut subscription, ..
+                }) = std::mem::replace(&mut self.state, LoadState::Unadmitted)
+                else {
+                    unreachable!("BUG: only a subscribed load is delivered to");
+                };
+                self.images.rewait(&mut subscription);
+                self.state = LoadState::Leading {
+                    run: Some(run),
+                    subscription,
+                };
+                None
+            }
+        }
     }
 
     /// Takes over a load closed unsettled, or answers once it has been
@@ -940,7 +1102,11 @@ impl Future for ImageLoad {
             };
             match settled {
                 Poll::Pending => return Poll::Pending,
-                Poll::Ready(Some(outcome)) => return Poll::Ready(outcome),
+                Poll::Ready(Some(delivery)) => {
+                    if let Some(outcome) = self.deliver(delivery) {
+                        return Poll::Ready(outcome);
+                    }
+                }
                 Poll::Ready(None) => self.hand_over(),
             }
         }
