@@ -108,7 +108,7 @@ mod driven {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
 pub(crate) use driven::DevAgentAttachments;
 
 #[cfg(test)]

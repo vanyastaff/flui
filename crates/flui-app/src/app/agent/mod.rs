@@ -3,13 +3,14 @@
 //! endpoint, with no code in the application.
 //!
 //! The runner installs it beside the application's own development hooks
-//! when the launch names an endpoint ([`Launch::from_env`]); with none,
+//! when the launch names an endpoint (`served::Launch::from_env`); with none,
 //! nothing is created: no thread, no socket. The agent is a
-//! [`DevAgentHook`]: the host attaches it when the loop starts and hands it
-//! each window with content, and the agent answers drivers from threads of
-//! its own. Every operation goes through the window's owner inbox, so
-//! nothing here touches a tree: the owner answers at its next drain, a frame
-//! boundary, and the agent only waits for the answer, a bounded time.
+//! [`DevAgentHook`](flui_view::dev_agent::DevAgentHook): the host attaches it
+//! when the loop starts and hands it each window with content, and the agent
+//! answers drivers from threads of its own. Every operation goes through the
+//! window's owner inbox, so nothing here touches a tree: the owner answers at
+//! its next drain, a frame boundary, and the agent only waits for the answer,
+//! a bounded time.
 //!
 //! # The endpoint
 //!
@@ -40,7 +41,7 @@
 //! A wrong token, a first line that is not a hello, or no hello within the
 //! handshake timeout closes the connection without a word; a hello in
 //! another protocol is answered `version` and closed. Requests run in order,
-//! one at a time; a connection holds at most [`Limits::queue`] of them, and
+//! one at a time; a connection holds at most `Limits::queue` of them, and
 //! one beyond that is answered `busy` at once. A reply the owner has not sent
 //! within the reply timeout answers `timeout`: with retry `soon` for a
 //! read-only method, and with the `may_have_run` effect for one that acts,
@@ -85,8 +86,8 @@ pub(crate) struct Disconnect {
 impl Disconnect {
     /// Ask the loop to quit with `quit` when the driver goes.
     #[cfg_attr(
-        target_arch = "wasm32",
-        expect(dead_code, reason = "the page's runner installs no agent yet")
+        any(target_arch = "wasm32", target_os = "android", target_os = "ios"),
+        expect(dead_code, reason = "only the desktop loop exits when its driver goes")
     )]
     pub(crate) fn arm(&self, quit: impl Fn() + Send + Sync + 'static) {
         *self.quit.lock() = Some(Box::new(quit));
@@ -132,8 +133,11 @@ impl fmt::Debug for Disconnect {
 /// otherwise `config` is left alone and nothing is created. `disconnect` is
 /// what the driver's going does under `EXIT_ON_DISCONNECT`.
 #[cfg_attr(
-    target_arch = "wasm32",
-    expect(dead_code, reason = "the page's runner installs no agent yet")
+    any(target_arch = "wasm32", target_os = "android"),
+    expect(
+        dead_code,
+        reason = "the page's and Android's runners install no agent yet"
+    )
 )]
 pub(crate) fn install_from_env(config: &mut crate::AppConfig, disconnect: &Arc<Disconnect>) {
     #[cfg(all(
