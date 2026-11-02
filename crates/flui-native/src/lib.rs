@@ -306,6 +306,8 @@ pub use task::{Task, TaskLabel};
 // Each has this one path (ADR-0151 §9).
 pub use host_window::HostWindow;
 pub use platform::{AppHandler, ExitAnswer, PathPromptOptions, Platform, PlatformExecutor};
+#[cfg(windows)]
+pub use process::current_user_sid;
 #[cfg(any(windows, unix))]
 pub use process::end_process;
 // The owner-thread capability (ADR-0039 §1): minted only by a backend,

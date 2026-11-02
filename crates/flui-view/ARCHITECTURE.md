@@ -665,7 +665,7 @@ callback so a scene built by a plugin image cannot outlive it. Pinned by
 ### The development-agent hook lives here too
 
 `dev_agent::DevAgentHook` (ADR-0095 §3) is the seam between a host and a tool that serves the
-application's semantics tree to an agent (`flui-devtools`' `agent` server). It sits here for the
+application's semantics tree to an agent (`flui-app`'s driver agent, ADR-0239). It sits here for the
 reason `DevReloadHook` does: the host and the tool each name it without naming each other, and a
 package reaches it through `flui-sdk`'s `view` glob. Its calls speak `flui-protocol`'s schema,
 which is why this crate depends on that contract crate. An `AgentWindow` is built only through

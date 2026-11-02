@@ -10,6 +10,7 @@
 //! Application lifecycle state is `flui_scheduler::AppLifecycleState`;
 //! the runner drives the scheduler directly.
 
+pub(crate) mod agent;
 pub(crate) mod capability;
 pub(crate) mod close_request;
 mod config;
@@ -44,7 +45,6 @@ pub use close_request::{
     CloseReason, CloseRequest, CloseRequestError, CloseRequestHandler, CloseResponse,
 };
 pub use config::{AppConfig, DiagnosticsProfile, MotionOverride, PointerResampling};
-pub use dev_agent::DevAgent;
 pub use direct::run_direct;
 pub use flui_runtime::frame_failure::{
     DeviceRecovery, FailureDisposition, FrameFailureDetail, FrameFailureHandler, FrameFailureKind,

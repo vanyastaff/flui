@@ -53,7 +53,12 @@ pub(crate) fn execute(
     let target = resolve_target(device.as_deref())?;
     ui::info(format!("Target device: {}", style(target.label()).cyan()))?;
     let agent = if agent {
-        Some(start_agent_session(&project, &target, profile.as_deref())?)
+        Some(start_agent_session(
+            &project,
+            &target,
+            release,
+            profile.as_deref(),
+        )?)
     } else {
         None
     };
@@ -168,12 +173,14 @@ fn run_session(
     Ok(())
 }
 
-/// What `--agent` needs before anything is built: a desktop target running a
-/// debug profile of an application that hosts the agent server. Then the
-/// session (endpoint, token, session file) it will launch the app with.
+/// What `--agent` needs before anything is built: a desktop target and an
+/// application. Then the session (endpoint, token, session file) it will
+/// launch the app with. A debug build serves the agent as it is; a profile
+/// without debug assertions builds with the `driver` feature.
 fn start_agent_session(
     project: &Project,
     target: &Target,
+    release: bool,
     profile: Option<&str>,
 ) -> CliResult<Session> {
     if !matches!(target, Target::Host) {
@@ -182,35 +189,38 @@ fn start_agent_session(
             reason: "the agent endpoint is a local socket or pipe; run it on this desktop".into(),
         });
     }
-    if matches!(profile, Some("release" | "bench")) {
-        return Err(CliError::Usage(
-            "the development agent serves debug builds only; drop `--profile release`".into(),
-        ));
-    }
-    match project {
+    let host = match project {
         Project::Worker(_) => {
             return Err(CliError::Unsupported {
                 what: "`flui run --agent` on a worker hot-reload project".into(),
                 reason: "run the application project instead".into(),
             });
         }
-        Project::Application { dev_agent: false } => {
+        Project::Application { host } => *host,
+    };
+    // Cargo's `dev` profile is the one known to keep debug assertions; any
+    // other may drop them, and the feature costs nothing where they stay.
+    let optimized = release || profile.is_some_and(|profile| profile != "dev");
+    let driver_feature = match (optimized, host) {
+        (false, _) => None,
+        (true, AgentHost::Facade) => Some(agent::FACADE_DRIVER_FEATURE),
+        (true, AgentHost::App) => Some(agent::APP_DRIVER_FEATURE),
+        (true, AgentHost::Neither) => {
             return Err(CliError::Unsupported {
-                what: "`flui run --agent` without the application's `dev-agent` feature".into(),
-                reason: format!(
-                    "declare it in Cargo.toml: `[features] {feature} = [\"flui/dev-agent\"]`, and \
-                     install `flui::devtools::agent::AgentServer::from_env()` with \
-                     `AppConfig::with_dev_agent` behind it; `flui create` projects have it",
-                    feature = agent::APP_FEATURE
-                ),
+                what: "`flui run --agent` on an optimized build of this package".into(),
+                reason: "it names neither `flui` nor `flui-app`, whose `driver` feature keeps \
+                         the agent in a build without debug assertions; run a debug build"
+                    .into(),
             });
         }
-        Project::Application { dev_agent: true } => {}
-    }
+    };
     let start = std::env::current_dir().context("could not read current directory")?;
     let workspace = find_workspace_root(&start);
     let target_dir = agent::target_dir_override();
-    let session = Session::create(&start, workspace.as_deref(), target_dir.as_deref())?;
+    let mut session = Session::create(&start, workspace.as_deref(), target_dir.as_deref())?;
+    if let Some(feature) = driver_feature {
+        session = session.with_driver_feature(feature);
+    }
     ui::success(format!(
         "Agent session: {} (connect with `flui mcp`)",
         style(session.file().display()).cyan()
@@ -228,7 +238,6 @@ fn start_agent_session(
 /// Adds the agent's feature and credentials to a `cargo` command.
 fn with_agent(cmd: &mut Command, agent: Option<&Session>) {
     if let Some(session) = agent {
-        cmd.args(["--features", agent::APP_FEATURE]);
         session.apply(cmd);
     }
 }
@@ -1100,7 +1109,8 @@ fn log_changed_paths(paths: &[PathBuf]) {
 struct ProcessRestart {
     profile: Option<String>,
     verbose: bool,
-    /// `--agent`: the app is built with its `dev-agent` feature and started
+    /// `--agent`: the app is built (with the `driver` feature for a profile
+    /// without debug assertions) and started
     /// with the session's endpoint and token.
     agent: Option<Session>,
 }
@@ -2149,8 +2159,6 @@ struct ProjectPackage {
     dependencies: Vec<ProjectDependency>,
     #[serde(default)]
     targets: Vec<ProjectTarget>,
-    #[serde(default)]
-    features: std::collections::BTreeMap<String, Vec<String>>,
 }
 
 #[derive(serde::Deserialize)]
@@ -2162,12 +2170,24 @@ struct ProjectTarget {
 enum Project {
     /// A single application package (`cargo run` is the entry point).
     Application {
-        /// Whether the package declares the `dev-agent` feature `--agent`
-        /// builds with.
-        dev_agent: bool,
+        /// The crate whose `driver` feature keeps the agent in an optimized
+        /// build.
+        host: AgentHost,
     },
     /// A host/worker workspace declared by `flui.toml`'s `[hot_reload]`.
     Worker(WorkerHotReloadProject),
+}
+
+/// Which crate of an application's normal dependencies carries the `driver`
+/// feature.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AgentHost {
+    /// The `flui` facade.
+    Facade,
+    /// `flui-app`, named without the facade.
+    App,
+    /// Neither (a legacy `flui-widgets`-only package).
+    Neither,
 }
 
 #[derive(serde::Deserialize)]
@@ -2188,9 +2208,27 @@ fn has_flui_dependency(dependencies: &[ProjectDependency]) -> bool {
     })
 }
 
-/// `Some(dev_agent)` for the application at `manifest` (whether it declares
-/// the `dev-agent` feature), `None` when the package is not a FLUI app.
-fn metadata_identifies_project(bytes: &[u8], manifest: &Path) -> CliResult<Option<bool>> {
+/// The crate among the normal dependencies whose `driver` feature an
+/// optimized `--agent` build turns on, the facade first.
+fn agent_host(dependencies: &[ProjectDependency]) -> AgentHost {
+    let named = |name: &str| {
+        dependencies
+            .iter()
+            .any(|dependency| dependency.kind.is_none() && dependency.name == name)
+    };
+    if named("flui") {
+        AgentHost::Facade
+    } else if named("flui-app") {
+        AgentHost::App
+    } else {
+        AgentHost::Neither
+    }
+}
+
+/// `Some(host)` for the application at `manifest` (the crate whose `driver`
+/// feature it builds an optimized agent with), `None` when the package is
+/// not a FLUI app.
+fn metadata_identifies_project(bytes: &[u8], manifest: &Path) -> CliResult<Option<AgentHost>> {
     let metadata: ProjectMetadata = serde_json::from_slice(bytes)
         .context("could not decode Cargo metadata; expected --format-version 1 JSON")?;
     let manifest = manifest
@@ -2214,7 +2252,7 @@ fn metadata_identifies_project(bytes: &[u8], manifest: &Path) -> CliResult<Optio
                     reason: "this package is a library (no binary target); `flui run` needs an application — run its tests with `flui test`, or use it from an app crate".into(),
                 });
             }
-            return Ok(Some(package.features.contains_key(agent::APP_FEATURE)));
+            return Ok(Some(agent_host(&package.dependencies)));
         }
     }
     Err(CliError::NotFluiProject {
@@ -2255,13 +2293,13 @@ fn ensure_flui_project() -> CliResult<Project> {
             ),
         });
     }
-    let Some(dev_agent) = metadata_identifies_project(&output.stdout, cargo_toml)? else {
+    let Some(host) = metadata_identifies_project(&output.stdout, cargo_toml)? else {
         return Err(CliError::NotFluiProject {
             reason: "normal dependency on flui (or legacy flui-app/flui-widgets) not found in this package".into(),
         });
     };
 
-    Ok(Project::Application { dev_agent })
+    Ok(Project::Application { host })
 }
 
 /// Execute scene-only hot-reload mode for Android.

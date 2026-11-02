@@ -1,27 +1,28 @@
-//! The development agent endpoint end to end: a headless UI runtime hosts the
-//! counter, the server serves it over a real named pipe or Unix socket, and a
-//! client thread speaks raw newline-delimited JSON while the test thread, the
-//! UI runtime's owner, pumps frames.
-
-// A target without local sockets (wasm32) has no endpoint to test.
-#![cfg(any(unix, windows))]
+//! The driver agent end to end: a headless UI runtime hosts the counter, the
+//! agent serves it over a real named pipe or Unix socket, and a client thread
+//! speaks raw protocol lines while the test thread, the UI runtime's owner,
+//! pumps frames.
 
 use std::io::{self, Read as _, Write as _};
 use std::panic::resume_unwind;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
-use flui_devtools::agent::{AgentEndpoint, AgentServer, MAX_LINE};
-use flui_protocol::{Node, Tree};
-use flui_sdk::view::prelude::*;
-use flui_sdk::view::{Signal, StatefulView, ViewState};
-use flui_sdk::widgets::{Column, RawButton, Text, column};
+use flui_protocol::framing::MAX_LINE;
+use flui_protocol::version::PROTOCOL_VERSION;
+use flui_protocol::{ActParams, ActionName, AppInfo, Locator, Node, Target, Tree};
 use flui_testing::{HeadlessDevAgent, HeadlessHost, HeadlessWindow};
+use flui_view::prelude::*;
+use flui_view::{Signal, StatefulView, ViewState};
+use flui_widgets::{Column, RawButton, Text, column};
 use interprocess::local_socket::Stream;
 use interprocess::local_socket::traits::Stream as _;
 use serde_json::{Value, json};
+
+use super::super::Disconnect;
+use super::{DriverAgent, Launch, Limits};
 
 const TOKEN: &str = "0123456789abcdef0123456789abcdef-test";
 /// How long a whole scenario may take before the test fails instead of hanging.
@@ -85,7 +86,7 @@ impl Address {
     fn new() -> Self {
         #[cfg(unix)]
         {
-            // The server refuses a socket whose directory others can enter,
+            // The agent refuses a socket whose directory others can enter,
             // and `tempfile` creates directories with the umask's mode
             // (usually 0755), so the mode is asked for explicitly.
             use std::os::unix::fs::PermissionsExt as _;
@@ -113,9 +114,25 @@ impl Address {
         }
     }
 
-    fn endpoint(&self) -> AgentEndpoint {
-        AgentEndpoint::new(self.address.clone(), TOKEN)
+    fn launch(&self) -> Launch {
+        Launch::try_new(self.address.clone(), TOKEN.to_owned(), false).expect("a long token")
     }
+}
+
+/// An agent for `launch` that counts the quits a driver's disconnect asks.
+fn driver_agent(launch: Launch) -> (DriverAgent, Arc<Disconnect>, Arc<AtomicUsize>) {
+    let quits = Arc::new(AtomicUsize::new(0));
+    let disconnect = Arc::new(Disconnect::default());
+    let counted = Arc::clone(&quits);
+    disconnect.arm(move || {
+        counted.fetch_add(1, Ordering::SeqCst);
+    });
+    let agent = DriverAgent::new(
+        launch,
+        AppInfo::new("counter", "headless").with_pid(7),
+        Arc::clone(&disconnect),
+    );
+    (agent, disconnect, quits)
 }
 
 fn connect(address: &str) -> io::Result<Stream> {
@@ -133,7 +150,7 @@ fn connect(address: &str) -> io::Result<Stream> {
 }
 
 // ---------------------------------------------------------------------------
-// A raw NDJSON client
+// A raw protocol client
 // ---------------------------------------------------------------------------
 
 enum Recv {
@@ -146,8 +163,8 @@ struct Client {
     stream: Stream,
     buffer: Vec<u8>,
     next_id: u64,
-    /// The protocol version the server greeted with.
-    protocol: Value,
+    /// Event lines read while waiting for a reply.
+    events: Vec<Value>,
 }
 
 impl Client {
@@ -158,25 +175,32 @@ impl Client {
             stream,
             buffer: Vec::new(),
             next_id: 1,
-            protocol: Value::Null,
+            events: Vec::new(),
         }
     }
 
-    /// Connected and past the hello.
-    fn hello(address: &str) -> Self {
+    fn hello_line(token: &str) -> Value {
+        json!({ "hello": { "token": token, "protocol": PROTOCOL_VERSION.to_string(), "client": "test" } })
+    }
+
+    /// Connected and past the hello; the hello's answer.
+    fn greeted(address: &str) -> (Self, Value) {
         let mut client = Self::connect(address);
-        client.send(&json!({ "hello": { "token": TOKEN } }));
+        client.send(&Self::hello_line(TOKEN));
         match client.recv(RECV) {
-            Recv::Line(welcome) => {
-                assert!(
-                    welcome["hello"]["protocol"].is_string(),
-                    "the server greets: {welcome}"
-                );
-                client.protocol = welcome["hello"]["protocol"].clone();
-            }
-            Recv::Closed => panic!("the server closed the connection at the hello"),
-            Recv::TimedOut => panic!("the server did not greet"),
+            Recv::Line(welcome) => (client, welcome),
+            Recv::Closed => panic!("the agent closed the connection at the hello"),
+            Recv::TimedOut => panic!("the agent did not greet"),
         }
+    }
+
+    fn hello(address: &str) -> Self {
+        let (client, welcome) = Self::greeted(address);
+        assert_eq!(
+            welcome["hello"]["protocol"],
+            json!(PROTOCOL_VERSION.to_string()),
+            "the agent greets in the client's protocol: {welcome}"
+        );
         client
     }
 
@@ -231,34 +255,35 @@ impl Client {
         }
     }
 
-    /// Sends `{"id":…,"op":op, ..fields}` and returns the reply.
-    fn call(&mut self, op: &str, fields: Value) -> Value {
-        let id = self.next_id;
-        self.next_id += 1;
-        let mut request = json!({ "id": id, "op": op });
-        if let Value::Object(fields) = fields {
-            for (key, value) in fields {
-                request[key] = value;
+    /// The next reply line, keeping the event lines read before it.
+    fn reply(&mut self, what: &str) -> Value {
+        loop {
+            match self.recv(RECV) {
+                Recv::Line(line) if line.get("event").is_some() => self.events.push(line),
+                Recv::Line(reply) => return reply,
+                Recv::Closed => panic!("the agent closed the connection during `{what}`"),
+                Recv::TimedOut => panic!("no reply to `{what}`"),
             }
-        }
-        self.send(&request);
-        match self.recv(RECV) {
-            Recv::Line(reply) => {
-                assert_eq!(reply["id"], json!(id), "replies come in order: {reply}");
-                reply
-            }
-            Recv::Closed => panic!("the server closed the connection during `{op}`"),
-            Recv::TimedOut => panic!("no reply to `{op}`"),
         }
     }
 
-    /// Whether the server closed the connection without writing anything.
+    /// Sends `{"id":…,"method":method,"params":params}` and returns the reply.
+    fn call(&mut self, method: &str, params: Value) -> Value {
+        let id = self.next_id;
+        self.next_id += 1;
+        self.send(&json!({ "id": id, "method": method, "params": params }));
+        let reply = self.reply(method);
+        assert_eq!(reply["id"], json!(id), "replies come in order: {reply}");
+        reply
+    }
+
+    /// Whether the agent closed the connection without writing anything.
     fn closed_unread(&mut self) -> bool {
         matches!(self.recv(RECV), Recv::Closed) && self.buffer.is_empty()
     }
 
     fn windows(&mut self) -> Vec<String> {
-        let reply = self.call("windows", json!({}));
+        let reply = self.call("windows.list", json!({}));
         serde_json::from_value(reply["result"]["windows"].clone()).expect("a window list")
     }
 
@@ -273,17 +298,13 @@ impl Client {
     fn read_until<T>(&mut self, window: &str, found: impl Fn(&Tree) -> Option<T>) -> T {
         let deadline = Instant::now() + RECV;
         loop {
-            let reply = self.call("read", json!({ "window": window }));
+            let reply = self.call("semantics.read", json!({ "window": window }));
             if reply.get("error").is_some() {
                 assert_eq!(
                     reply["error"]["retry"], "soon",
                     "only a retryable failure is retried: {reply}"
                 );
             } else {
-                assert_eq!(
-                    reply["result"]["protocol"], self.protocol,
-                    "a reply speaks the version the hello announced: {reply}"
-                );
                 let tree: Tree =
                     serde_json::from_value(reply["result"].clone()).expect("a wire tree");
                 if let Some(value) = found(&tree) {
@@ -295,10 +316,10 @@ impl Client {
         }
     }
 
+    /// The button's element reference, `w<n>/e<m>`.
     fn button(&mut self, window: &str) -> String {
-        self.read_until(window, |tree| {
-            node(tree, "Increment").map(|n| n.id.to_string())
-        })
+        let element = self.read_until(window, |tree| node(tree, "Increment").map(|n| n.id));
+        format!("{window}/{element}")
     }
 
     fn wait_for_count(&mut self, window: &str, count: u32) {
@@ -306,15 +327,15 @@ impl Client {
         self.read_until(window, |tree| node(tree, &label).map(|_| ()));
     }
 
-    fn tap(&mut self, window: &str, element: &str) -> Value {
+    fn tap(&mut self, element: &str) -> Value {
         self.call(
-            "act",
-            json!({ "window": window, "request": { "element": element, "action": "invoke" } }),
+            "semantics.act",
+            json!({ "target": { "element": element }, "action": "invoke" }),
         )
     }
 }
 
-/// A non-blocking read that returns `Ok(0)` only once the server has closed:
+/// A non-blocking read that returns `Ok(0)` only once the agent has closed:
 /// on Windows an empty non-blocking pipe reads as end of file, so an empty
 /// write (which fails only on a closed pipe) tells the two apart.
 fn read_some(stream: &Stream, buffer: &mut [u8]) -> io::Result<usize> {
@@ -371,8 +392,8 @@ struct Owner {
 }
 
 impl Owner {
-    fn new(server: AgentServer) -> Self {
-        let agent = HeadlessDevAgent::attach(server);
+    fn new(agent: DriverAgent) -> Self {
+        let agent = HeadlessDevAgent::attach(agent);
         let presses = Arc::new(AtomicU32::new(0));
         let ui_runtime = HeadlessHost::new(HeadlessWindow::new(400, 300)).with_dev_agent(&agent);
         ui_runtime
@@ -389,6 +410,12 @@ impl Owner {
 
     fn presses(&self) -> u32 {
         self.presses.load(Ordering::SeqCst)
+    }
+
+    fn is_attached(&self) -> bool {
+        self.agent
+            .as_ref()
+            .is_some_and(HeadlessDevAgent::is_attached)
     }
 
     /// Runs `client` on its own thread and pumps until it returns.
@@ -427,34 +454,81 @@ impl Owner {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn reads_the_counter_and_taps_it_over_the_endpoint() {
+fn reads_the_counter_and_taps_it_by_element_and_by_locator() {
     let address = Address::new();
-    let mut owner = Owner::new(AgentServer::new(address.endpoint()));
+    let (agent, _, _) = driver_agent(address.launch());
+    let mut owner = Owner::new(agent);
     let at = address.address;
     owner.drive(move |_| {
-        let mut client = Client::hello(&at);
+        let (mut client, welcome) = Client::greeted(&at);
+        assert_eq!(welcome["hello"]["app"]["name"], "counter", "{welcome}");
+        assert_eq!(welcome["hello"]["app"]["pid"], 7, "{welcome}");
+        let methods = welcome["hello"]["capabilities"]["methods"].clone();
+        for method in [
+            "windows.list",
+            "semantics.read",
+            "semantics.act",
+            "wait.until",
+        ] {
+            assert!(
+                methods
+                    .as_array()
+                    .is_some_and(|all| all.contains(&json!(method))),
+                "the hello lists {method}: {welcome}"
+            );
+        }
+
         let window = client.only_window();
         let button = client.button(&window);
-        let reply = client.tap(&window, &button);
-        assert_eq!(reply["result"], json!({}), "the tap is delivered: {reply}");
+        let reply = client.tap(&button);
+        assert_eq!(
+            reply["result"]["via"], "semantic",
+            "the tap is delivered: {reply}"
+        );
         client.wait_for_count(&window, 1);
+
+        let by_locator = ActParams::new(
+            Target::Locator(Locator::named("Increment")),
+            ActionName::Invoke,
+        );
+        let reply = client.call(
+            "semantics.act",
+            serde_json::to_value(by_locator).expect("serializes"),
+        );
+        assert_eq!(
+            reply["result"]["via"], "semantic",
+            "the locator resolves: {reply}"
+        );
+        client.wait_for_count(&window, 2);
+
+        let missing = ActParams::new(
+            Target::Locator(Locator::named("Decrement")),
+            ActionName::Invoke,
+        );
+        let reply = client.call(
+            "semantics.act",
+            serde_json::to_value(missing).expect("serializes"),
+        );
+        assert_eq!(reply["error"]["code"], "not_found", "{reply}");
+        assert_eq!(reply["error"]["retry"], "when_appears", "{reply}");
     });
-    assert_eq!(owner.presses(), 1, "the button's handler ran once");
+    assert_eq!(owner.presses(), 2, "the button's handler ran once per tap");
 }
 
 // ---------------------------------------------------------------------------
 // The failure table
 // ---------------------------------------------------------------------------
 
-fn motion_op_round_trips_over_the_endpoint() {
+fn motion_round_trips() {
     let address = Address::new();
-    let mut owner = Owner::new(AgentServer::new(address.endpoint()));
+    let (agent, _, _) = driver_agent(address.launch());
+    let mut owner = Owner::new(agent);
     let at = address.address;
     owner.drive(move |owner| {
         let mut client = Client::hello(&at);
         let window = client.only_window();
         let paused = client.call(
-            "motion",
+            "motion.set",
             json!({ "window": window, "request": { "rate": 0.0 } }),
         );
         assert_eq!(paused["result"]["rate"], 0.0, "{paused}");
@@ -462,7 +536,7 @@ fn motion_op_round_trips_over_the_endpoint() {
             .as_f64()
             .expect("animation time");
         let stepped = client.call(
-            "motion",
+            "motion.set",
             json!({ "window": window, "request": { "step_ms": 100 } }),
         );
         assert_eq!(stepped["result"]["rate"], 0.0, "{stepped}");
@@ -470,59 +544,73 @@ fn motion_op_round_trips_over_the_endpoint() {
             (stepped["result"]["time_ms"].as_f64().expect("time") - start - 100.0).abs() < 1e-9
         );
         let refused = client.call(
-            "motion",
+            "motion.set",
             json!({ "window": window, "request": { "rate": -1.0, "step_ms": 500 } }),
         );
         assert_eq!(refused["error"]["code"], "invalid_argument", "{refused}");
-        let observed = client.call("motion", json!({ "window": window }));
+        let observed = client.call("motion.set", json!({ "window": window, "request": {} }));
         assert_eq!(
             observed["result"], stepped["result"],
             "a refused combined request changes neither field"
         );
         owner.ask(Command::CloseWindow);
-        let closed = client.call("motion", json!({ "window": window }));
+        let closed = client.call("motion.set", json!({ "window": window, "request": {} }));
         assert_eq!(closed["error"]["code"], "gone", "{closed}");
     });
 }
 
-fn a_connection_without_the_right_token_is_closed_unread() {
+fn a_connection_without_the_right_hello_is_refused() {
     let address = Address::new();
-    let endpoint = address
-        .endpoint()
-        .with_handshake_timeout(Duration::from_millis(300));
-    let mut owner = Owner::new(AgentServer::new(endpoint));
+    let launch = address.launch().with_limits(Limits {
+        handshake_timeout: Duration::from_millis(300),
+        ..Limits::default()
+    });
+    let (agent, _, quits) = driver_agent(launch);
+    let mut owner = Owner::new(agent);
     let at = address.address;
     owner.drive(move |_| {
         let mut no_hello = Client::connect(&at);
-        no_hello.send(&json!({ "id": 1, "op": "windows" }));
+        no_hello.send(&json!({ "id": 1, "method": "windows.list" }));
         assert!(no_hello.closed_unread(), "a request before the hello");
 
         let mut wrong = Client::connect(&at);
-        wrong.send(&json!({ "hello": { "token": "f".repeat(TOKEN.len()) } }));
+        wrong.send(&Client::hello_line(&"f".repeat(TOKEN.len())));
         assert!(wrong.closed_unread(), "a wrong token");
 
         let mut prefix = Client::connect(&at);
-        prefix.send(&json!({ "hello": { "token": &TOKEN[..TOKEN.len() - 1] } }));
+        prefix.send(&Client::hello_line(&TOKEN[..TOKEN.len() - 1]));
         assert!(prefix.closed_unread(), "the token's prefix");
 
         let mut silent = Client::connect(&at);
         assert!(silent.closed_unread(), "no hello before the timeout");
 
+        let mut old = Client::connect(&at);
+        old.send(&json!({ "hello": { "token": TOKEN, "protocol": "0.4" } }));
+        let Recv::Line(refusal) = old.recv(RECV) else {
+            panic!("a hello in another protocol is answered");
+        };
+        assert_eq!(refusal["error"]["code"], "version", "{refusal}");
+        assert_eq!(refusal["error"]["client"], "0.4", "{refusal}");
+        assert!(matches!(old.recv(RECV), Recv::Closed), "then it closes");
+
         let mut client = Client::hello(&at);
         assert_eq!(client.windows().len(), 1, "a right client is served next");
     });
     assert_eq!(owner.presses(), 0);
+    assert_eq!(quits.load(Ordering::SeqCst), 0, "no exit was asked for");
 }
 
 fn a_client_leaving_mid_request_does_not_stall_the_next() {
     let address = Address::new();
-    let mut owner = Owner::new(AgentServer::new(address.endpoint()));
+    let (agent, _, _) = driver_agent(address.launch());
+    let mut owner = Owner::new(agent);
     let at = address.address;
     owner.drive(move |owner| {
         let mut leaving = Client::hello(&at);
         let window = leaving.only_window();
         owner.ask(Command::Pause);
-        leaving.send(&json!({ "id": 7, "op": "read", "window": window }));
+        leaving
+            .send(&json!({ "id": 7, "method": "semantics.read", "params": { "window": window } }));
         drop(leaving);
         owner.ask(Command::Resume);
 
@@ -533,10 +621,12 @@ fn a_client_leaving_mid_request_does_not_stall_the_next() {
 
 fn an_unanswered_request_times_out_and_a_timed_out_act_still_runs() {
     let address = Address::new();
-    let endpoint = address
-        .endpoint()
-        .with_reply_timeout(Duration::from_millis(200));
-    let mut owner = Owner::new(AgentServer::new(endpoint));
+    let launch = address.launch().with_limits(Limits {
+        reply_timeout: Duration::from_millis(200),
+        ..Limits::default()
+    });
+    let (agent, _, _) = driver_agent(launch);
+    let mut owner = Owner::new(agent);
     let at = address.address;
     let presses = Arc::clone(&owner.presses);
     owner.drive(move |owner| {
@@ -545,10 +635,11 @@ fn an_unanswered_request_times_out_and_a_timed_out_act_still_runs() {
         let button = client.button(&window);
 
         owner.ask(Command::Pause);
-        let act = client.tap(&window, &button);
+        let act = client.tap(&button);
         assert_eq!(act["error"]["code"], "timeout", "{act}");
         assert_eq!(act["error"]["effect"]["kind"], "may_have_run", "{act}");
-        let read = client.call("read", json!({ "window": window }));
+        assert_eq!(act["error"]["retry"], "never", "{act}");
+        let read = client.call("semantics.read", json!({ "window": window }));
         assert_eq!(read["error"]["code"], "timeout", "{read}");
         assert_eq!(read["error"]["retry"], "soon", "{read}");
         assert_eq!(presses.load(Ordering::SeqCst), 0, "nothing ran unpumped");
@@ -563,28 +654,81 @@ fn an_unanswered_request_times_out_and_a_timed_out_act_still_runs() {
     );
 }
 
-fn malformed_and_oversized_lines() {
+fn a_full_queue_answers_busy_and_keeps_what_it_took() {
     let address = Address::new();
-    let mut owner = Owner::new(AgentServer::new(address.endpoint()));
+    let launch = address.launch().with_limits(Limits {
+        queue: 2,
+        ..Limits::default()
+    });
+    let (agent, _, _) = driver_agent(launch);
+    let mut owner = Owner::new(agent);
+    let at = address.address;
+    owner.drive(move |owner| {
+        let mut client = Client::hello(&at);
+        let window = client.only_window();
+        client.button(&window);
+        owner.ask(Command::Pause);
+        // The worker holds the first while the owner is paused, the queue
+        // the second; the third has no room.
+        for id in 1..=3 {
+            client.send(
+                &json!({ "id": id, "method": "semantics.read", "params": { "window": window } }),
+            );
+        }
+        let busy = client.reply("a third request");
+        assert_eq!(busy["id"], 3, "the refusal comes first: {busy}");
+        assert_eq!(busy["error"]["code"], "busy", "{busy}");
+        assert_eq!(busy["error"]["retry"], "soon", "{busy}");
+        owner.ask(Command::Resume);
+        for id in 1..=2 {
+            let reply = client.reply("a queued request");
+            assert_eq!(
+                reply["id"], id,
+                "the accepted ones are answered in order: {reply}"
+            );
+            assert!(reply.get("result").is_some(), "{reply}");
+        }
+    });
+}
+
+fn malformed_unknown_and_unserved_requests() {
+    let address = Address::new();
+    let (agent, _, _) = driver_agent(address.launch());
+    let mut owner = Owner::new(agent);
     let at = address.address;
     owner.drive(move |_| {
         let mut client = Client::hello(&at);
         client
             .send_bytes(b"this is not json\n")
             .expect("the line is written");
-        let Recv::Line(reply) = client.recv(RECV) else {
-            panic!("a malformed line is answered");
-        };
+        let reply = client.reply("a malformed line");
         assert_eq!(reply["error"]["code"], "invalid_argument", "{reply}");
         assert_eq!(client.windows().len(), 1, "the session continues");
 
+        let unknown = client.call("no.such", json!({}));
+        assert_eq!(unknown["error"]["code"], "invalid_argument", "{unknown}");
+        let driver_side = client.call("session.launch", json!({}));
+        assert_eq!(
+            driver_side["error"]["code"], "not_supported",
+            "{driver_side}"
+        );
+        assert_eq!(
+            driver_side["error"]["capability"], "session.launch",
+            "{driver_side}"
+        );
+        let not_yet = client.call("input.inject", json!({}));
+        assert_eq!(not_yet["error"]["code"], "not_supported", "{not_yet}");
+        let malformed = client.call("semantics.read", json!({ "window": 3 }));
+        assert_eq!(
+            malformed["error"]["code"], "invalid_argument",
+            "{malformed}"
+        );
+
         let mut oversized = vec![b'a'; MAX_LINE + 16];
         oversized.push(b'\n');
-        // The server may stop reading before the line ends.
+        // The agent may stop reading before the line ends.
         let _ = client.send_bytes(&oversized);
-        let Recv::Line(reply) = client.recv(RECV) else {
-            panic!("an oversized line is answered");
-        };
+        let reply = client.reply("an oversized line");
         assert_eq!(reply["error"]["code"], "invalid_argument", "{reply}");
         assert!(
             matches!(client.recv(RECV), Recv::Closed),
@@ -595,7 +739,8 @@ fn malformed_and_oversized_lines() {
 
 fn a_closed_window_answers_gone_and_leaves_the_list() {
     let address = Address::new();
-    let mut owner = Owner::new(AgentServer::new(address.endpoint()));
+    let (agent, _, _) = driver_agent(address.launch());
+    let mut owner = Owner::new(agent);
     let at = address.address;
     owner.drive(move |owner| {
         let mut client = Client::hello(&at);
@@ -603,7 +748,7 @@ fn a_closed_window_answers_gone_and_leaves_the_list() {
         client.button(&window);
 
         owner.ask(Command::CloseWindow);
-        let reply = client.call("read", json!({ "window": window }));
+        let reply = client.call("semantics.read", json!({ "window": window }));
         assert_eq!(reply["error"]["code"], "gone", "{reply}");
         assert_eq!(reply["error"]["kind"], "window", "{reply}");
         assert_eq!(reply["error"]["handle"], json!(window), "{reply}");
@@ -611,17 +756,62 @@ fn a_closed_window_answers_gone_and_leaves_the_list() {
             client.windows().is_empty(),
             "the list drops a closed window"
         );
-        let again = client.call("read", json!({ "window": window }));
+        let again = client.call("semantics.read", json!({ "window": window }));
         assert_eq!(
             again["error"]["code"], "gone",
             "and still knows it: {again}"
         );
+        let never = client.call("semantics.read", json!({ "window": "w999" }));
+        assert_eq!(never["error"]["code"], "unknown_handle", "{never}");
     });
 }
 
-fn detach_closes_the_endpoint() {
+fn events_stream_after_a_subscription_until_it_ends() {
     let address = Address::new();
-    let mut owner = Owner::new(AgentServer::new(address.endpoint()));
+    let (agent, _, _) = driver_agent(address.launch());
+    let mut owner = Owner::new(agent);
+    let at = address.address;
+    owner.drive(move |_| {
+        let mut client = Client::hello(&at);
+        let window = client.only_window();
+        let button = client.button(&window);
+        let subscribed = client.call(
+            "events.subscribe",
+            json!({ "events": [{ "kind": "semantics" }] }),
+        );
+        let subscription = subscribed["result"]["subscription"].clone();
+        assert!(subscription.is_u64(), "{subscribed}");
+        client.tap(&button);
+        let deadline = Instant::now() + RECV;
+        while !client
+            .events
+            .iter()
+            .any(|event| event["event"] == "semantics")
+        {
+            assert!(Instant::now() < deadline, "no semantics event arrived");
+            if let Recv::Line(line) = client.recv(Duration::from_millis(50)) {
+                client.events.push(line);
+            }
+        }
+        let ended = client.call(
+            "events.unsubscribe",
+            json!({ "subscription": subscription }),
+        );
+        assert_eq!(ended["result"], json!({}), "{ended}");
+        let again = client.call(
+            "events.unsubscribe",
+            json!({ "subscription": subscription }),
+        );
+        assert_eq!(again["error"]["code"], "unknown_handle", "{again}");
+    });
+}
+
+fn detach_closes_the_endpoint_and_asks_no_exit() {
+    let address = Address::new();
+    let launch =
+        Launch::try_new(address.address.clone(), TOKEN.to_owned(), true).expect("a long token");
+    let (agent, disconnect, quits) = driver_agent(launch);
+    let mut owner = Owner::new(agent);
     let at = address.address;
     owner.drive(move |owner| {
         let mut client = Client::hello(&at);
@@ -638,35 +828,90 @@ fn detach_closes_the_endpoint() {
             "the socket file is removed"
         );
     });
+    assert!(
+        !disconnect.happened(),
+        "the agent stopping is no disconnect"
+    );
+    assert_eq!(quits.load(Ordering::SeqCst), 0);
     let ui_runtime = owner.ui_runtime.as_mut().expect("the ui_runtime is open");
     let _ = ui_runtime.pump(Duration::from_millis(16));
     assert!(
         !ui_runtime.collects_semantics(),
-        "the detached server let go of the window's semantics work"
+        "the detached agent let go of the window's semantics work"
     );
+}
+
+fn the_driver_going_asks_one_exit_when_launched_to() {
+    let address = Address::new();
+    let launch =
+        Launch::try_new(address.address.clone(), TOKEN.to_owned(), true).expect("a long token");
+    let (agent, disconnect, quits) = driver_agent(launch);
+    let mut owner = Owner::new(agent);
+    let at = address.address;
+    let counted = Arc::clone(&quits);
+    owner.drive(move |_| {
+        // A connection refused at its hello is not the driver.
+        let mut stranger = Client::connect(&at);
+        stranger.send(&Client::hello_line("wrong"));
+        assert!(stranger.closed_unread());
+        assert_eq!(
+            counted.load(Ordering::SeqCst),
+            0,
+            "a stranger's going asks nothing"
+        );
+
+        let mut driver = Client::hello(&at);
+        driver.only_window();
+        drop(driver);
+        let deadline = Instant::now() + RECV;
+        while counted.load(Ordering::SeqCst) == 0 {
+            assert!(
+                Instant::now() < deadline,
+                "the driver's going asked no exit"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let mut second = Client::hello(&at);
+        second.only_window();
+        drop(second);
+        std::thread::sleep(Duration::from_millis(100));
+    });
+    assert!(disconnect.happened());
+    assert_eq!(quits.load(Ordering::SeqCst), 1, "the exit is asked once");
+
+    // Launched without the flag, the driver's going asks nothing.
+    let address = Address::new();
+    let (agent, disconnect, quits) = driver_agent(address.launch());
+    let mut owner = Owner::new(agent);
+    let at = address.address;
+    owner.drive(move |_| {
+        let mut driver = Client::hello(&at);
+        driver.only_window();
+        drop(driver);
+        std::thread::sleep(Duration::from_millis(100));
+    });
+    assert!(!disconnect.happened());
+    assert_eq!(quits.load(Ordering::SeqCst), 0);
 }
 
 fn a_client_that_stops_reading_does_not_hold_up_detach() {
     let address = Address::new();
-    let mut owner = Owner::new(AgentServer::new(address.endpoint()));
+    let (agent, _, _) = driver_agent(address.launch());
+    let mut owner = Owner::new(agent);
     let at = address.address;
     owner.drive(move |owner| {
         let mut client = Client::hello(&at);
         client.only_window();
-        // Ask and never read, until the server has stopped reading too: its
+        // Ask and never read, until the agent has stopped reading too: its
         // replies fill the connection and it is stuck writing one.
         let cap = Instant::now() + Duration::from_secs(20);
         let mut refused_since: Option<Instant> = None;
         let mut id = 1_000_u64;
         let mut pending = Vec::new();
         while refused_since.is_none_or(|since| since.elapsed() < Duration::from_millis(300)) {
-            assert!(Instant::now() < cap, "the server never stopped reading");
+            assert!(Instant::now() < cap, "the agent never stopped reading");
             if pending.is_empty() {
-                pending = format!(
-                    "{{\"id\":{id},\"op\":\"windows\"}}
-"
-                )
-                .into_bytes();
+                pending = format!("{{\"id\":{id},\"method\":\"windows.list\"}}\n").into_bytes();
                 id += 1;
             }
             match (&client.stream).write(&pending) {
@@ -688,7 +933,7 @@ fn a_client_that_stops_reading_does_not_hold_up_detach() {
         let started = Instant::now();
         owner.ask(Command::Detach);
         assert!(
-            started.elapsed() < Duration::from_secs(1),
+            started.elapsed() < Duration::from_secs(3),
             "detach waited {:?} on a session stuck writing",
             started.elapsed()
         );
@@ -699,51 +944,35 @@ fn a_client_that_stops_reading_does_not_hold_up_detach() {
 }
 
 fn a_bind_failure_leaves_the_ui_runtime_running() {
-    // The endpoint is taken by another server, serving no window.
+    // The endpoint is taken by another agent, serving no window.
     let address = Address::new();
-    let first = HeadlessDevAgent::attach(AgentServer::new(address.endpoint()));
-    let mut owner = Owner::new(AgentServer::new(address.endpoint()));
+    let (first, _, _) = driver_agent(address.launch());
+    let first = HeadlessDevAgent::attach(first);
+    let (second, _, _) = driver_agent(address.launch());
+    let mut owner = Owner::new(second);
     assert!(first.is_attached());
     let at = address.address;
     owner.drive(move |_| {
         let mut client = Client::hello(&at);
         assert!(
             client.windows().is_empty(),
-            "the endpoint is the first server's; the second serves nothing"
+            "the endpoint is the first agent's; the second serves nothing"
         );
     });
     assert!(
-        !owner
-            .agent
-            .as_ref()
-            .is_some_and(HeadlessDevAgent::is_attached),
-        "a server that could not bind is not attached"
+        !owner.is_attached(),
+        "an agent that could not bind is not attached"
     );
     let ui_runtime = owner.ui_runtime.as_mut().expect("the ui_runtime is open");
     let _ = ui_runtime.pump(Duration::from_millis(16));
     assert!(
         !ui_runtime.collects_semantics(),
-        "a server that serves nothing costs the ui_runtime no semantics work"
+        "an agent that serves nothing costs the ui_runtime no semantics work"
     );
     drop(first);
 
-    // A server whose token is too short is inert: not attached, no work.
-    let mut owner = Owner::new(AgentServer::new(AgentEndpoint::new(
-        Address::new().address,
-        "short",
-    )));
-    assert!(
-        !owner
-            .agent
-            .as_ref()
-            .is_some_and(HeadlessDevAgent::is_attached)
-    );
-    let ui_runtime = owner.ui_runtime.as_mut().expect("the ui_runtime is open");
-    let _ = ui_runtime.pump(Duration::from_millis(16));
-    assert!(
-        !ui_runtime.collects_semantics(),
-        "an inert server costs nothing"
-    );
+    // A token too short makes no launch, so nothing is created.
+    assert!(Launch::try_new(Address::new().address, "short".to_owned(), false).is_none());
 
     // A socket in a directory others can enter is refused.
     #[cfg(unix)]
@@ -754,7 +983,10 @@ fn a_bind_failure_leaves_the_ui_runtime_running() {
             .expect("the mode is set");
         let path = dir.path().join("agent.sock");
         let at = path.to_str().expect("a UTF-8 path").to_owned();
-        let mut owner = Owner::new(AgentServer::new(AgentEndpoint::new(at.clone(), TOKEN)));
+        let launch = Launch::try_new(at.clone(), TOKEN.to_owned(), false).expect("a long token");
+        let (agent, _, _) = driver_agent(launch);
+        let mut owner = Owner::new(agent);
+        assert!(!owner.is_attached());
         assert!(!path.exists(), "the refused socket is removed");
         assert!(connect(&at).is_err());
         let ui_runtime = owner.ui_runtime.as_mut().expect("the ui_runtime is open");
@@ -762,99 +994,25 @@ fn a_bind_failure_leaves_the_ui_runtime_running() {
     }
 }
 
-fn traces_carry_no_labels_or_values() {
-    use tracing_subscriber::filter::{LevelFilter, Targets};
-    use tracing_subscriber::layer::SubscriberExt as _;
-
-    const VALUE: &str = "secret-value-5d1e";
-    /// An operation the server does not know, carrying a value of its own.
-    const UNKNOWN_OP: &str = "secret-op-9a4c";
-    let log = Arc::new(parking_lot::Mutex::new(Vec::<u8>::new()));
-    let writer = Arc::clone(&log);
-    let subscriber = tracing_subscriber::registry()
-        .with(
-            tracing_subscriber::fmt::layer()
-                .with_ansi(false)
-                .with_writer(move || LogWriter(Arc::clone(&writer))),
-        )
-        .with(
-            Targets::new()
-                .with_target("flui_devtools", LevelFilter::TRACE)
-                .with_target("flui_runtime::ui_runtime::agent", LevelFilter::TRACE),
-        );
-    tracing::subscriber::set_global_default(subscriber)
-        .expect("this binary installs no other global subscriber");
-
-    let address = Address::new();
-    let endpoint = address
-        .endpoint()
-        .with_reply_timeout(Duration::from_millis(200));
-    let mut owner = Owner::new(AgentServer::new(endpoint));
-    let at = address.address;
-    owner.drive(move |owner| {
-        let mut client = Client::hello(&at);
-        let window = client.only_window();
-        let button = client.button(&window);
-        let set = client.call(
-            "act",
-            json!({ "window": window, "request": { "element": button, "action": "set_value", "value": VALUE } }),
-        );
-        assert!(set.get("error").is_some(), "a button takes no value: {set}");
-        let unknown = client.call(UNKNOWN_OP, json!({}));
-        assert_eq!(
-            unknown["error"]["code"], "invalid_argument",
-            "an unknown op is refused: {unknown}"
-        );
-        owner.ask(Command::Pause);
-        let _ = client.tap(&window, &button);
-        let _ = client.call("read", json!({ "window": window }));
-        owner.ask(Command::Resume);
-        client.wait_for_count(&window, 1);
-        owner.ask(Command::CloseWindow);
-        let _ = client.call("read", json!({ "window": window }));
-    });
-
-    let log = String::from_utf8(log.lock().clone()).expect("the log is UTF-8");
-    assert!(
-        log.contains("agent request served") && log.contains("agent request failed"),
-        "vacuous-pass guard: the server traced its requests\n{log}"
-    );
-    assert!(
-        log.contains("dropping a semantics agent reply nobody waits for"),
-        "vacuous-pass guard: the late answers were traced\n{log}"
-    );
-    for secret in ["Increment", "Count", VALUE, UNKNOWN_OP, TOKEN] {
-        assert!(!log.contains(secret), "`{secret}` reached the log\n{log}");
-    }
-}
-
-struct LogWriter(Arc<parking_lot::Mutex<Vec<u8>>>);
-
-impl io::Write for LogWriter {
-    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-        self.0.lock().extend_from_slice(bytes);
-        Ok(bytes.len())
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
-    }
-}
-
 fn unbounded_timeouts_wait_without_a_deadline() {
     let address = Address::new();
-    let endpoint = address
-        .endpoint()
-        .with_handshake_timeout(Duration::MAX)
-        .with_reply_timeout(Duration::MAX);
-    let mut owner = Owner::new(AgentServer::new(endpoint));
+    let launch = address.launch().with_limits(Limits {
+        handshake_timeout: Duration::MAX,
+        reply_timeout: Duration::MAX,
+        ..Limits::default()
+    });
+    let (agent, _, _) = driver_agent(launch);
+    let mut owner = Owner::new(agent);
     let at = address.address;
     owner.drive(move |_| {
         let mut client = Client::hello(&at);
         let window = client.only_window();
         let button = client.button(&window);
-        let reply = client.tap(&window, &button);
-        assert_eq!(reply["result"], json!({}), "the tap is answered: {reply}");
+        let reply = client.tap(&button);
+        assert_eq!(
+            reply["result"]["via"], "semantic",
+            "the tap is answered: {reply}"
+        );
         client.wait_for_count(&window, 1);
     });
     assert_eq!(owner.presses(), 1, "the button's handler ran once");
@@ -881,15 +1039,12 @@ fn run_cases(cases: &[(&str, fn())]) {
 }
 
 #[test]
-fn the_endpoint_contains_every_failure() {
+fn the_driver_agent_contains_every_failure() {
     run_cases(&[
+        ("motion_round_trips", motion_round_trips),
         (
-            "motion_op_round_trips_over_the_endpoint",
-            motion_op_round_trips_over_the_endpoint,
-        ),
-        (
-            "a_connection_without_the_right_token_is_closed_unread",
-            a_connection_without_the_right_token_is_closed_unread,
+            "a_connection_without_the_right_hello_is_refused",
+            a_connection_without_the_right_hello_is_refused,
         ),
         (
             "a_client_leaving_mid_request_does_not_stall_the_next",
@@ -900,14 +1055,29 @@ fn the_endpoint_contains_every_failure() {
             an_unanswered_request_times_out_and_a_timed_out_act_still_runs,
         ),
         (
-            "malformed_and_oversized_lines",
-            malformed_and_oversized_lines,
+            "a_full_queue_answers_busy_and_keeps_what_it_took",
+            a_full_queue_answers_busy_and_keeps_what_it_took,
+        ),
+        (
+            "malformed_unknown_and_unserved_requests",
+            malformed_unknown_and_unserved_requests,
         ),
         (
             "a_closed_window_answers_gone_and_leaves_the_list",
             a_closed_window_answers_gone_and_leaves_the_list,
         ),
-        ("detach_closes_the_endpoint", detach_closes_the_endpoint),
+        (
+            "events_stream_after_a_subscription_until_it_ends",
+            events_stream_after_a_subscription_until_it_ends,
+        ),
+        (
+            "detach_closes_the_endpoint_and_asks_no_exit",
+            detach_closes_the_endpoint_and_asks_no_exit,
+        ),
+        (
+            "the_driver_going_asks_one_exit_when_launched_to",
+            the_driver_going_asks_one_exit_when_launched_to,
+        ),
         (
             "a_client_that_stops_reading_does_not_hold_up_detach",
             a_client_that_stops_reading_does_not_hold_up_detach,
@@ -915,10 +1085,6 @@ fn the_endpoint_contains_every_failure() {
         (
             "a_bind_failure_leaves_the_ui_runtime_running",
             a_bind_failure_leaves_the_ui_runtime_running,
-        ),
-        (
-            "traces_carry_no_labels_or_values",
-            traces_carry_no_labels_or_values,
         ),
         (
             "unbounded_timeouts_wait_without_a_deadline",

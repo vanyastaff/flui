@@ -1,0 +1,89 @@
+//! The driver agent as a development hook: bound at `attach`, handed each
+//! window, stopped at `detach`.
+
+use std::fmt;
+use std::sync::Arc;
+
+use flui_protocol::AppInfo;
+use flui_view::dev_agent::{AgentWindow, DevAgentHook};
+
+use super::super::Disconnect;
+use super::endpoint::{self, Running};
+use super::launch::Launch;
+
+/// The driver agent: a [`DevAgentHook`] that serves the windows the host
+/// hands it over the endpoint its [`Launch`] names. See the
+/// [module docs](self).
+pub(crate) struct DriverAgent {
+    launch: Launch,
+    app: AppInfo,
+    /// `Some` when the launch asked to exit when the driver goes.
+    disconnect: Option<Arc<Disconnect>>,
+    /// Between a successful bind at `attach` and `detach`.
+    running: Option<Running>,
+}
+
+impl DriverAgent {
+    /// An agent for `launch`, introducing itself as `app`. `disconnect` is
+    /// what a driver's disconnect does when the launch asked to exit on one.
+    pub(crate) fn new(launch: Launch, app: AppInfo, disconnect: Arc<Disconnect>) -> Self {
+        let disconnect = launch.exit_on_disconnect().then_some(disconnect);
+        Self {
+            launch,
+            app,
+            disconnect,
+            running: None,
+        }
+    }
+
+    fn stop(&mut self) {
+        if let Some(running) = self.running.take() {
+            running.stop();
+        }
+    }
+}
+
+impl DevAgentHook for DriverAgent {
+    fn attach(&mut self) -> bool {
+        self.stop();
+        match endpoint::listen(&self.launch, self.app.clone(), self.disconnect.clone()) {
+            Ok(running) => {
+                tracing::info!("driver agent listening");
+                self.running = Some(running);
+                true
+            }
+            Err(error) => {
+                tracing::warn!(
+                    %error,
+                    "the driver agent could not bind its endpoint; the app runs without it"
+                );
+                false
+            }
+        }
+    }
+
+    fn detach(&mut self) {
+        self.stop();
+    }
+
+    fn window_opened(&mut self, window: AgentWindow) {
+        if let Some(running) = &self.running {
+            running.window_opened(window);
+        }
+    }
+}
+
+impl Drop for DriverAgent {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
+
+impl fmt::Debug for DriverAgent {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("DriverAgent")
+            .field("launch", &self.launch)
+            .field("listening", &self.running.is_some())
+            .finish_non_exhaustive()
+    }
+}

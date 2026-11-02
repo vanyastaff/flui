@@ -1,9 +1,11 @@
-//! A connection to an app's development endpoint.
+//! A connection to an app's driver agent (ADR-0239).
 //!
-//! Framing is `flui_devtools::agent`'s: newline-delimited JSON, a
-//! `{"hello":{"token":…}}` line first, then `{"id":n,"op":…}` requests
-//! answered by `{"id":n,"result":…}` or `{"id":n,"error":{…}}`. One request is
-//! in flight at a time.
+//! The conversation is `flui-protocol`'s: newline-delimited JSON, a
+//! `{"hello":{"token","protocol","client"}}` line first, answered by the
+//! app's hello (or a `version` error when it speaks another protocol), then
+//! `{"id","method","params"}` requests answered by `{"id","result"}` or
+//! `{"id","error"}`. One request is in flight at a time, and this client
+//! subscribes to no events.
 //!
 //! Reads happen on a thread of the connection's own, so a peer that stops
 //! answering costs a bounded wait ([`REPLY_TIMEOUT`]) instead of a stuck
@@ -14,11 +16,16 @@ use std::sync::mpsc::{self, RecvTimeoutError};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use flui_protocol::session::{Hello, HelloReply};
+use flui_protocol::version::PROTOCOL_VERSION;
 use interprocess::local_socket::traits::Stream as _;
 use interprocess::local_socket::{Name, Stream};
 use serde_json::{Value, json};
 
 use super::Credentials;
+
+/// How the CLI names itself in its hello.
+const CLIENT: &str = concat!("flui-cli/", env!("CARGO_PKG_VERSION"));
 
 /// How long one request waits for its reply. The app's own reply timeout is
 /// 5 s, so this only fires for a peer that is not an agent server.
@@ -36,12 +43,15 @@ pub(crate) enum Failure {
     /// The endpoint could not be reached, or the conversation broke. The
     /// connection is unusable afterwards.
     Transport(String),
+    /// The request never reached the app whole: the connection was already
+    /// broken when it was written. The connection is unusable afterwards.
+    Unsent(String),
 }
 
 /// One authenticated connection to an app's endpoint.
 pub(crate) struct Connection {
     requests: mpsc::Sender<String>,
-    replies: mpsc::Receiver<Result<String, String>>,
+    replies: mpsc::Receiver<Result<String, Failure>>,
     next_id: u64,
 }
 
@@ -77,31 +87,39 @@ impl Connection {
             replies,
             next_id: 1,
         };
-        let hello = json!({ "hello": { "token": credentials.token } });
+        let hello = Hello::new(credentials.token.clone(), PROTOCOL_VERSION).with_client(CLIENT);
         let reply = connection
-            .exchange(&hello.to_string())
+            .exchange(&json!({ "hello": hello }).to_string())
             .map_err(|e| match e {
                 // The server closes unread on a wrong token.
-                Failure::Transport(why) => format!(
+                Failure::Transport(why) | Failure::Unsent(why) => format!(
                     "the app refused the connection ({why}); the session is stale or belongs to another run"
                 ),
                 Failure::Wire(error) => error.to_string(),
             })?;
+        if let Some(error) = reply.get("error") {
+            // A `version` refusal names what the app speaks.
+            return Err(format!(
+                "the app refused protocol {PROTOCOL_VERSION}: {}",
+                error
+                    .get("message")
+                    .and_then(Value::as_str)
+                    .unwrap_or("no reason given")
+            ));
+        }
         reply
             .get("hello")
-            .and_then(|hello| hello.get("protocol"))
-            .and_then(Value::as_str)
+            .cloned()
+            .and_then(|hello| serde_json::from_value::<HelloReply>(hello).ok())
             .ok_or("the peer did not answer with a hello; it is not a flui agent")?;
         Ok(connection)
     }
 
-    pub(crate) fn request(&mut self, op: &str, fields: Value) -> Result<Value, Failure> {
+    /// Calls `method` with `params` and returns its result.
+    pub(crate) fn request(&mut self, method: &str, params: Value) -> Result<Value, Failure> {
         let id = self.next_id;
         self.next_id += 1;
-        let mut line = json!({ "id": id, "op": op });
-        if let (Some(line), Value::Object(fields)) = (line.as_object_mut(), fields) {
-            line.extend(fields);
-        }
+        let line = json!({ "id": id, "method": method, "params": params });
         let mut reply = self.exchange(&line.to_string())?;
         if reply.get("id").and_then(Value::as_u64) != Some(id) {
             return Err(Failure::Transport(format!(
@@ -117,11 +135,11 @@ impl Connection {
     fn exchange(&mut self, line: &str) -> Result<Value, Failure> {
         self.requests
             .send(line.to_owned())
-            .map_err(|_| Failure::Transport("the connection closed".into()))?;
+            .map_err(|_| Failure::Unsent("the connection closed".into()))?;
         match self.replies.recv_timeout(REPLY_TIMEOUT) {
             Ok(Ok(reply)) => serde_json::from_str(&reply)
                 .map_err(|e| Failure::Transport(format!("the app sent a malformed reply: {e}"))),
-            Ok(Err(why)) => Err(Failure::Transport(why)),
+            Ok(Err(failure)) => Err(failure),
             Err(RecvTimeoutError::Timeout) => Err(Failure::Transport(format!(
                 "no reply within {} s",
                 REPLY_TIMEOUT.as_secs()
@@ -138,11 +156,13 @@ impl Connection {
 fn pump(
     stream: Stream,
     inbox: &mpsc::Receiver<String>,
-    outbox: &mpsc::Sender<Result<String, String>>,
+    outbox: &mpsc::Sender<Result<String, Failure>>,
 ) {
     let mut reader = BufReader::new(stream);
     while let Ok(line) = inbox.recv() {
-        let result = write_line(&mut reader, &line).and_then(|()| read_line(&mut reader));
+        let result = write_line(&mut reader, &line)
+            .map_err(Failure::Unsent)
+            .and_then(|()| read_line(&mut reader).map_err(Failure::Transport));
         let failed = result.is_err();
         if outbox.send(result).is_err() || failed {
             return;
@@ -176,7 +196,7 @@ fn read_line(reader: &mut BufReader<Stream>) -> Result<String, String> {
     Ok(reply)
 }
 
-/// The endpoint's name for `address`, as `flui-devtools` binds it.
+/// The endpoint's name for `address`, as the app binds it.
 pub(crate) fn name(address: &str) -> std::io::Result<Name<'_>> {
     #[cfg(windows)]
     {

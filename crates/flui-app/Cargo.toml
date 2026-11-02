@@ -69,6 +69,12 @@ native = []
 # this crate's tests turn it on through the dev-dependency on itself.
 testing = []
 
+# The driver agent (ADR-0239) in an optimized build: a debug build always
+# carries it. It serves the app's windows only when the launch names an
+# endpoint (`flui_protocol::launch`); with none, nothing is created. The facade's
+# `driver` feature forwards here.
+driver = []
+
 [dependencies]
 flui-platform = { workspace = true }
 # Core FLUI crates
@@ -110,12 +116,28 @@ web-time = { workspace = true }
 # The reply channel from the IO pool back to a storage request. Already in
 # the tree through `tokio-util`; `sync` alone builds on wasm32 too.
 tokio = { workspace = true, features = ["sync"] }
+# The driver agent (ADR-0239): the wire schema it speaks, and the JSON lines
+# it reads and writes. Compiled in debug builds and under `driver` only.
+flui-protocol = { workspace = true, features = ["serde"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
 
 # `CancellationToken`, which the task/worker/service lifecycle layer
 # (ADR-0049) derives from the execution services' cancellation root. Native
 # only, like that layer.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 tokio-util = { workspace = true }
+
+# The driver agent's endpoint (ADR-0239): a named pipe or a Unix socket.
+# `interprocess` builds for Windows and Unix only; the web transport is a
+# function the web runner exports instead.
+[target.'cfg(any(unix, windows))'.dependencies]
+interprocess = { workspace = true }
+
+# The driver agent's pipe security descriptor, as SDDL (`interprocess` takes
+# it as a wide string).
+[target.'cfg(windows)'.dependencies]
+widestring = { workspace = true }
 
 # Web/WASM platform (runner spawns the frame loop via spawn_local)
 [target.'cfg(target_arch = "wasm32")'.dependencies]
