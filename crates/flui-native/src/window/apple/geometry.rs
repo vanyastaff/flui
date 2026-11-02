@@ -439,7 +439,7 @@ pub(crate) mod mode {
             honoured.enters_fullscreen = Unavailable;
         }
         if flags.fullscreen {
-            honoured.sets_decorated = Unavailable;
+            honoured.sets_frame = Unavailable;
             honoured.hides = Unavailable;
         }
         let mode = heading.unwrap_or_else(|| mode_of(flags.mode_flags()));
@@ -930,7 +930,7 @@ pub(crate) mod mode {
             every.maximizes = Native;
             every.enters_fullscreen = Native;
             every.sets_resizable = Native;
-            every.sets_decorated = Native;
+            every.sets_frame = Native;
             every.hides = Native;
             /// What a window with `flags` honours.
             #[derive(Debug, PartialEq)]
@@ -939,7 +939,7 @@ pub(crate) mod mode {
                 maximizes: Availability,
                 enters_fullscreen: Availability,
                 sets_resizable: Availability,
-                sets_decorated: Availability,
+                sets_frame: Availability,
                 hides: Availability,
             }
             let rows = [
@@ -948,7 +948,7 @@ pub(crate) mod mode {
                     maximizes: Native,
                     enters_fullscreen: Native,
                     sets_resizable: Native,
-                    sets_decorated: Native,
+                    sets_frame: Native,
                     hides: Native,
                 },
                 // A fixed-size window is neither zoomed nor made full screen.
@@ -957,7 +957,7 @@ pub(crate) mod mode {
                     maximizes: Unavailable,
                     enters_fullscreen: Unavailable,
                     sets_resizable: Native,
-                    sets_decorated: Native,
+                    sets_frame: Native,
                     hides: Native,
                 },
                 Row {
@@ -965,7 +965,7 @@ pub(crate) mod mode {
                     maximizes: Unavailable,
                     enters_fullscreen: Unavailable,
                     sets_resizable: Native,
-                    sets_decorated: Native,
+                    sets_frame: Native,
                     hides: Native,
                 },
                 // Made fixed-size only from normal mode.
@@ -974,7 +974,7 @@ pub(crate) mod mode {
                     maximizes: Native,
                     enters_fullscreen: Native,
                     sets_resizable: Unavailable,
-                    sets_decorated: Native,
+                    sets_frame: Native,
                     hides: Native,
                 },
                 Row {
@@ -982,7 +982,7 @@ pub(crate) mod mode {
                     maximizes: Native,
                     enters_fullscreen: Native,
                     sets_resizable: Unavailable,
-                    sets_decorated: Native,
+                    sets_frame: Native,
                     hides: Native,
                 },
                 Row {
@@ -990,7 +990,7 @@ pub(crate) mod mode {
                     maximizes: Unavailable,
                     enters_fullscreen: Unavailable,
                     sets_resizable: Unavailable,
-                    sets_decorated: Native,
+                    sets_frame: Native,
                     hides: Native,
                 },
                 // Not restyled, nor ordered out, while full screen.
@@ -999,7 +999,7 @@ pub(crate) mod mode {
                     maximizes: Native,
                     enters_fullscreen: Native,
                     sets_resizable: Unavailable,
-                    sets_decorated: Unavailable,
+                    sets_frame: Unavailable,
                     hides: Unavailable,
                 },
             ];
@@ -1010,7 +1010,7 @@ pub(crate) mod mode {
                     maximizes: honoured.maximizes,
                     enters_fullscreen: honoured.enters_fullscreen,
                     sets_resizable: honoured.sets_resizable,
-                    sets_decorated: honoured.sets_decorated,
+                    sets_frame: honoured.sets_frame,
                     hides: honoured.hides,
                 };
                 assert_eq!(actual, expected);

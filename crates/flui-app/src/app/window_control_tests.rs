@@ -15,7 +15,7 @@ use flui_native::HeadlessPlatform;
 use flui_platform::WindowId;
 use flui_platform::{CursorError, CursorIcon};
 use flui_platform::{Unsupported, UnsupportedReason};
-use flui_platform::{WindowCapabilities, WindowMode, WindowOptions};
+use flui_platform::{WindowCapabilities, WindowFrame, WindowMode, WindowOptions};
 use flui_view::{WindowClosed, WindowHandle};
 
 use super::*;
@@ -419,19 +419,19 @@ fn a_command_submitted_while_applying_runs_on_the_following_turn() {
     let as_platform: Rc<dyn PlatformWindow> = window.clone();
     let rig = rig(&as_platform, 8);
     REENTRANT.with(|slot| *slot.borrow_mut() = Some(rig.handle.clone()));
-    rig.handle.set_decorated(false).expect("accepted");
+    rig.handle.set_frame(WindowFrame::None).expect("accepted");
 
     rig.queues.apply_pending();
     assert_eq!(
         applied(&window),
-        [WindowCommand::SetDecorated(false)],
+        [WindowCommand::SetFrame(WindowFrame::None)],
         "the command made during the walk waits"
     );
     rig.queues.apply_pending();
     assert_eq!(
         applied(&window),
         [
-            WindowCommand::SetDecorated(false),
+            WindowCommand::SetFrame(WindowFrame::None),
             WindowCommand::SetResizable(true)
         ]
     );
@@ -462,7 +462,7 @@ fn a_panic_while_applying_neither_wedges_the_walk_nor_loses_the_rest() {
     let as_platform: Rc<dyn PlatformWindow> = window.clone();
     let rig = rig(&as_platform, 12);
     rig.handle.set_resizable(false).expect("accepted");
-    rig.handle.set_decorated(false).expect("accepted");
+    rig.handle.set_frame(WindowFrame::None).expect("accepted");
     rig.handle.set_title("last").expect("accepted");
 
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -480,7 +480,7 @@ fn a_panic_while_applying_neither_wedges_the_walk_nor_loses_the_rest() {
         applied(&window),
         [
             WindowCommand::SetResizable(false),
-            WindowCommand::SetDecorated(false),
+            WindowCommand::SetFrame(WindowFrame::None),
             WindowCommand::SetTitle("last".into()),
         ],
         "what the panic cut off still applies, in order, on the next turn"
@@ -604,7 +604,7 @@ fn a_panic_in_one_window_still_applies_the_others_and_asks_for_a_turn() {
     let (a, b) = (source(&failing_platform, 15), source(&healthy_platform, 16));
     a.handle().set_resizable(false).expect("accepted");
     a.handle().set_title("cut off").expect("accepted");
-    b.handle().set_decorated(false).expect("accepted");
+    b.handle().set_frame(WindowFrame::None).expect("accepted");
     b.handle().set_title("other").expect("accepted");
     let submitted = wakes.get();
 
@@ -618,7 +618,7 @@ fn a_panic_in_one_window_still_applies_the_others_and_asks_for_a_turn() {
     assert_eq!(
         applied(&healthy),
         [
-            WindowCommand::SetDecorated(false),
+            WindowCommand::SetFrame(WindowFrame::None),
             WindowCommand::SetTitle("other".into())
         ],
         "the window after the one that panicked still applies its batch"

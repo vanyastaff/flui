@@ -7,12 +7,12 @@ use std::time::Duration;
 
 use flui_foundation::geometry::{Bounds, DeviceSize, EdgeInsets, Point, Size, WindowMetrics};
 use flui_platform::{
-    Availability, CapabilitiesOwner, CapabilityAbsence, ColorGamut, DisplayColor, DisplayInfo,
-    DisplayKey, DisplayRegistry, GesturePreferences, HourCycle, KeyboardInset, Locale,
+    AppTitleBar, Availability, CapabilitiesOwner, CapabilityAbsence, ColorGamut, DisplayColor,
+    DisplayInfo, DisplayKey, DisplayRegistry, GesturePreferences, HourCycle, KeyboardInset, Locale,
     MeasurementSystem, MotionPreference, NumberingSystem, RegionOverride, RegionalFormats,
     SizeConstraints, SystemPreferences, TextWeightPreference, Weekday, WheelPreferences, WheelStep,
-    WindowAppearance, WindowCapabilities, WindowCommand, WindowExecutionState, WindowGeometry,
-    WindowInsets, WindowMaterial, WindowMode, WindowState,
+    WindowAppearance, WindowCapabilities, WindowCommand, WindowExecutionState, WindowFrame,
+    WindowGeometry, WindowInsets, WindowMaterial, WindowMode, WindowState,
 };
 
 fn preferences_round_trip_through_their_parts() {
@@ -98,7 +98,7 @@ fn a_window_state_round_trips_through_its_parts() {
     .with_title(Some("Notes".to_owned()))
     .with_constraints(SizeConstraints::new(Some(Size::new(200.0, 100.0)), None))
     .with_resizable(false)
-    .with_decorated(true)
+    .with_frame(WindowFrame::AppTitleBar(AppTitleBar::new()))
     .with_metrics(Some(metrics))
     .with_appearance(WindowAppearance::Dark)
     .with_insets(

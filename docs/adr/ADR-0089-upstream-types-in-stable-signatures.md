@@ -219,14 +219,14 @@ semantics vocabularies also expose their outbound `ALL` sets, and the AccessKit
 translation has exhaustive inbound matches and its outbound role-family test.
 §6's gate exists and passes on every Stable package (`flui`, `flui-platform`, `flui-protocol`).
 
-- `cargo xtask api-closure` and its `--self-test` (§6), in CI's `doc` job: the self-test plants a
+- `cargo xtask api-closure` and its `--self-test` (§6), in CI's `api-contracts` job: the self-test plants a
   `ui-events` type, a `RawWindowHandle` (§2), an allowed `CursorIcon` and `HandleError`, an
   unused exception and, under an allow list, an OS type and an OS crate no list names, a left-out
   type inside an admitted workspace trait's implementation, another workspace trait's and outside
   both, an admission and an entry in use beside ones no longer needed into the contract's real
   rustdoc output, and the rule reports exactly the violations. The same gate checks the core
   host's allow list on every target it builds a host for (ADR-0151 §8).
-- `cargo xtask send-positions` and its `--self-test` (§6), in CI's `doc` job: the self-test runs
+- `cargo xtask send-positions` and its `--self-test` (§6), in CI's `api-contracts` job: the self-test runs
   the rule over a rustdoc JSON document with one planted position of each kind, a private sealed
   supertrait, a stale and an over-counted entry, and the items the walk must not reach or count
   (a private item, a public item in a private module, a private field, a synthetic impl, a

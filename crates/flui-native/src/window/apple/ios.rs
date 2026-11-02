@@ -1434,7 +1434,7 @@ impl IOSWindow {
             .with_visible(!closed)
             .with_focused(focused)
             .with_resizable(false)
-            .with_decorated(false)
+            .with_frame(flui_platform::WindowFrame::None)
             .with_display(self.screen.lock().id);
         ReportedFacts {
             metrics: flui_foundation::geometry::WindowMetrics::from_logical(
