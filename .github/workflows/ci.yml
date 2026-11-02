@@ -476,6 +476,16 @@ jobs:
         with:
           persist-credentials: false
 
+      # The nested group's build outgrew the runner's free disk as well (rustc
+      # failed with "No space left on device"): the same reclaim as `test`,
+      # before the cache restores.
+      - name: Free disk space (ubuntu)
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /usr/local/.ghcup /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
+          sudo docker image prune --all --force || true
+          df -h /
+
       - name: Install pinned Rust
         uses: ./.github/actions/rust-toolchain
 
