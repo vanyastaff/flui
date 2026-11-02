@@ -8,7 +8,7 @@
 //! reaches the store, and what it lets through reaches the key's own
 //! delivery, in the order the stand-in answered.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader};
 use std::process::{Child, Command, Stdio};
@@ -76,6 +76,8 @@ struct StandInBus {
     made: AtomicU32,
     /// How long making a context takes, in milliseconds.
     delay: Arc<AtomicU64>,
+    /// How long answering a focus takes, in milliseconds.
+    focus_delay: Arc<AtomicU64>,
 }
 
 #[interface(name = "org.freedesktop.IBus")]
@@ -98,6 +100,7 @@ impl StandInBus {
                 StandInContext {
                     heard: Arc::clone(&self.heard),
                     content: (0, 0),
+                    focus_delay: Arc::clone(&self.focus_delay),
                 },
             )
             .await
@@ -158,6 +161,8 @@ const LATE: u32 = 'l' as u32;
 struct StandInContext {
     heard: Heard,
     content: (u32, u32),
+    /// How long answering a focus takes, in milliseconds.
+    focus_delay: Arc<AtomicU64>,
 }
 
 #[interface(name = "org.freedesktop.IBus.InputContext")]
@@ -227,8 +232,12 @@ impl StandInContext {
         }
     }
 
-    fn focus_in(&self) {
+    async fn focus_in(&self) {
         self.heard.lock().push("focus in".to_owned());
+        let delay = self.focus_delay.load(Ordering::SeqCst);
+        if delay > 0 {
+            async_io::Timer::after(Duration::from_millis(delay)).await;
+        }
     }
 
     fn focus_out(&self) {
@@ -310,6 +319,8 @@ struct Rig {
     delivered: Delivered,
     /// How long the stand-in takes to make a context, in milliseconds.
     create_delay: Arc<AtomicU64>,
+    /// How long the stand-in takes to answer a focus, in milliseconds.
+    focus_delay: Arc<AtomicU64>,
 }
 
 impl Rig {
@@ -325,6 +336,7 @@ impl Rig {
             .expect("a runtime");
         let heard = Heard::default();
         let create_delay = Arc::new(AtomicU64::new(0));
+        let focus_delay = Arc::new(AtomicU64::new(0));
         let server = runtime
             .block_on(
                 zbus::connection::Builder::address(bus.address.as_str())
@@ -335,6 +347,7 @@ impl Rig {
                             heard: Arc::clone(&heard),
                             made: AtomicU32::new(0),
                             delay: Arc::clone(&create_delay),
+                            focus_delay: Arc::clone(&focus_delay),
                         },
                     )
                     .build(),
@@ -366,6 +379,7 @@ impl Rig {
             heard,
             delivered: Delivered::default(),
             create_delay,
+            focus_delay,
         };
         rig.ime.event(&focus(FocusInEvent {
             response_type: xproto::FOCUS_IN_EVENT,
@@ -1092,4 +1106,109 @@ fn a_pointer_press_comes_after_the_keys_typed_before_it() {
     rig.settle("the field stated to a new context", || {
         rig.heard_count("context for") == 2 && rig.heard_any("destroy")
     });
+}
+
+/// A key typed right after one that moves the field (a Tab the input method
+/// lets through) reaches the next field: its edit, made for the field
+/// before, is fenced off, so it goes as typed.
+#[test]
+fn a_key_typed_after_one_that_moves_the_field_reaches_the_next() {
+    let Some(rig) = Rig::start() else {
+        return;
+    };
+    let next = InMemoryTextStore::new("");
+    let client = rig.text.client().expect("the window's client");
+    let moved = Rc::clone(&next);
+    // `b` is let through, and moves the focus as a Tab would.
+    rig.ime.key(X11Key {
+        window: rig.window,
+        keysym: u32::from('b'),
+        keycode: 38,
+        state: 0,
+        release: false,
+        time: 0,
+        deliver: Box::new(move || {
+            client.focus_store(Some(Rc::clone(&moved) as Rc<dyn TextStore>));
+        }),
+    });
+    rig.press('a');
+    rig.settle("the key after the move", || {
+        !rig.delivered().is_empty() || !next.text().is_empty()
+    });
+    assert_eq!(
+        rig.delivered(),
+        [('a', String::new())],
+        "the key goes as typed, its edit for the field before fenced off"
+    );
+    assert_eq!(rig.store.text(), "", "nothing reaches the field before");
+}
+
+/// A key the bus refuses mid-composition goes as typed to a field no longer
+/// composing, which would not take it otherwise.
+#[test]
+fn a_key_the_bus_refuses_mid_composition_reaches_a_field_no_longer_composing() {
+    let Some(rig) = Rig::start() else {
+        return;
+    };
+    rig.press('p');
+    rig.settle("the preedit", || rig.store.composition().is_some());
+    let context = rig
+        .ime
+        .state
+        .with(|ime| ime.by_id(rig.window.id).map(|held| held.wire.context.get()))
+        .flatten()
+        .expect("the window's context");
+    // The bus task may take a command between the queue filling and the
+    // key: the key is tried until the bus refuses it, which delivers it at
+    // once.
+    for _ in 0..20 {
+        let mut full = false;
+        for _ in 0..1_000_000 {
+            if !rig.ime.bus.send(context, super::bus::Request::FocusOut) {
+                full = true;
+                break;
+            }
+        }
+        assert!(full, "the bus task fell behind");
+        let composing = Rc::new(Cell::new(None));
+        let (seen, store) = (Rc::clone(&composing), Rc::clone(&rig.store));
+        rig.ime.key(X11Key {
+            window: rig.window,
+            keysym: u32::from('b'),
+            keycode: 38,
+            state: 0,
+            release: false,
+            time: 0,
+            deliver: Box::new(move || seen.set(Some(store.composition().is_some()))),
+        });
+        if let Some(composing) = composing.get() {
+            assert!(!composing, "the composition ends before the key goes");
+            return;
+        }
+        rig.settle("the key the bus took", || composing.get().is_some());
+        assert!(
+            rig.store.composition().is_some(),
+            "the composition stays for the next try"
+        );
+    }
+    panic!("the bus never refused the key");
+}
+
+/// A focus the input method leaves unanswered retires its context: what it
+/// sends can no longer be told to be for the field it names.
+#[test]
+fn a_focus_unanswered_in_time_retires_its_context() {
+    let Some(rig) = Rig::start() else {
+        return;
+    };
+    rig.focus_delay.store(1_000, Ordering::SeqCst);
+    let next = InMemoryTextStore::new("");
+    rig.text
+        .client()
+        .expect("the window's client")
+        .focus_store(Some(Rc::clone(&next) as Rc<dyn TextStore>));
+    rig.settle("the context retired", || {
+        rig.heard_count("context for") >= 2 && rig.heard_any("destroy")
+    });
+    rig.focus_delay.store(0, Ordering::SeqCst);
 }

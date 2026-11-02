@@ -555,7 +555,9 @@ impl X11Ime {
         let Some((old, next, wire, client)) = replaced else {
             return;
         };
-        tracing::debug!("the input method left a key unanswered: its input context is replaced");
+        tracing::debug!(
+            "the input method's stream for a field broke: its input context is replaced"
+        );
         self.bus.close(old);
         self.bus.open(next);
         let Some(client) = client.filter(|_| wire.focused.get()) else {
@@ -598,7 +600,14 @@ impl X11Ime {
             .with(|ime| {
                 match &heard {
                     Heard::Answer(_, ticket, taken) => {
-                        ime.hold.answer(*ticket, *taken);
+                        // A key the input method took before it answered the
+                        // field's last focus made its edit for the field
+                        // before, which reached none (a Tab it let through
+                        // moved the field ahead of the key): it goes as typed.
+                        let current = ime
+                            .by_context(context)
+                            .is_none_or(|held| held.wire.current());
+                        ime.hold.answer(*ticket, *taken && current);
                         return None;
                     }
                     Heard::Lost(_) => {
@@ -809,6 +818,7 @@ impl LoopText for X11Ime {
     fn key(&self, key: X11Key) {
         let now = Instant::now();
         let mut evicted = None;
+        let mut refused = None;
         self.state.with(|ime| {
             let wire = ime
                 .focused
@@ -820,8 +830,14 @@ impl LoopText for X11Ime {
                 ime.hold.pass(key);
                 return;
             };
-            let (keysym, keycode, state, release, time) =
-                (key.keysym, key.keycode, key.state, key.release, key.time);
+            let (window, keysym, keycode, state, release, time) = (
+                key.window.id,
+                key.keysym,
+                key.keycode,
+                key.state,
+                key.release,
+                key.time,
+            );
             let ticket = ime
                 .hold
                 .ask(key, now, |oldest| evicted = Some(oldest.window.id));
@@ -836,12 +852,18 @@ impl LoopText for X11Ime {
             if !self.bus.send(wire.context.get(), request) {
                 // The bus takes no more now: the key goes as typed.
                 ime.hold.answer(ticket, false);
+                refused = Some(window);
             }
         });
         let mut failure = FirstPanic::new();
         // A key the full hold let go is typed as one overdue: an edit the
-        // input method sends for it late must reach no field.
+        // input method sends for it late must reach no field. A key the bus
+        // refused goes the same way: the composition the context made ends
+        // first, as a field still composing would not take the key.
         if let Some(window) = evicted {
+            self.replace_context(window, &mut failure);
+        }
+        if let Some(window) = refused.filter(|window| evicted != Some(*window)) {
             self.replace_context(window, &mut failure);
         }
         self.deliver_ready(&mut failure);

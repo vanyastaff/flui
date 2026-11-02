@@ -137,11 +137,12 @@ pub(crate) enum Heard {
     /// The engine asks for the field's state: one attached after the field
     /// last told it heard nothing of it.
     StateAsked(ContextId),
-    /// Something the context sent was dropped, the owner behind: nothing
-    /// more of it was queued, and the owner retires it.
+    /// The context's stream has a gap (something it sent was dropped,
+    /// the owner behind, or a focus went unanswered): nothing more of it is
+    /// queued, and the owner retires it.
     Spilled(ContextId),
-    /// The daemon answered the [`Request::FocusIn`] of this fence, or will
-    /// not: what it sends from here is for the field it names.
+    /// The daemon answered the [`Request::FocusIn`] of this fence, or its
+    /// context went: what it sends from here is for the field it names.
     Fenced(ContextId, u64),
     /// The context is gone (the daemon refused it, or the bus went): what
     /// waits on it is answered as not taken.
@@ -210,7 +211,11 @@ impl Inbox {
             if !kept && spilled.contains(&context) {
                 return;
             }
-            if queue.len() >= MAX_HEARD && !kept {
+            if let Heard::Spilled(_) = heard {
+                // The one mark of a context retired.
+                spilled.insert(context);
+                queue.push_back(heard);
+            } else if queue.len() >= MAX_HEARD && !kept {
                 tracing::debug!(
                     ?heard,
                     "the input method's messages are not taken: its context is retired"
@@ -507,13 +512,15 @@ enum Awaited {
 }
 
 impl Awaited {
-    /// What the owner hears of a call answered with an error, unsent or
-    /// given up on; `None` for a context's making, which is handled apart.
+    /// What the owner hears of a call unsent or given up on; `None` for a
+    /// context's making, which is handled apart. A focus never answered
+    /// leaves no point past which what the daemon sends is for the field it
+    /// names: the context is retired, as one whose stream has a gap.
     fn unanswered(&self) -> Option<Heard> {
         match *self {
             Self::Create(_) => None,
             Self::Key(context, ticket) => Some(Heard::Answer(context, ticket, false)),
-            Self::Focus(context, fence) => Some(Heard::Fenced(context, fence)),
+            Self::Focus(context, _) => Some(Heard::Spilled(context)),
         }
     }
 
@@ -880,9 +887,10 @@ impl Session {
 
     /// Give up on the calls unanswered by `now`. A key's late answer would
     /// be dropped anyway, the owner having delivered the key at its own
-    /// deadline; a focus fences no longer, so the field hears the daemon
-    /// again; a context the daemon did not make in time is lost, so no key
-    /// waits on it, and destroyed should the daemon make it late.
+    /// deadline; a focus retires its context, as nothing it sends can be
+    /// told to be for the field it names; a context the daemon did not make
+    /// in time is lost, so no key waits on it, and destroyed should the
+    /// daemon make it late.
     fn expire(&mut self, now: tokio::time::Instant) {
         let mut overdue = Vec::new();
         let abandoned = &mut self.abandoned;
