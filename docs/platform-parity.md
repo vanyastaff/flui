@@ -92,8 +92,11 @@ secrets).
 
 Dedicated UI owners are not available in any production runner. The accepted, unimplemented
 [ownership decision](adr/ADR-0284-ui-runtimes-may-have-dedicated-owners.md) requires separate
-host-specific native evidence before availability changes. The 2026-11-01 headless CPU
-experiment is not a native run and changes no cell or readiness count in this document.
+host-specific native evidence before availability changes. Headless CPU measurements and
+the Win32 prerequisite test `two_win32_loops_keep_tsf_grants_and_retirement_on_their_owners`
+do not qualify the production runner. The latter runs real hidden HWNDs, TSF grants, UIA,
+input defaults and STA teardown; foreground IME, GPU presentation and application shutdown
+still require the integrated runner's native acceptance. No readiness count changes.
 
 ### App lifecycle
 

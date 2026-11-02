@@ -214,6 +214,27 @@ successful shutdown by detaching the thread. Explicit process termination is not
 
 ## Runner and consumer migration inventory
 
+### Existing process startup to extract
+
+The native qualification intentionally enters `WindowsPlatform::run`, not
+`Application::run`. The latter calls `runner::run_application`; its main-window
+bootstrap repeats the following responsibilities if used for a dedicated worker:
+
+| Current path | Existing ownership | Required coordinator boundary |
+|---|---|---|
+| `app/runner/main_window.rs`: `init_managed_logging`, application configuration | One startup guard and application identity | Keep one guard/identity on the initial application owner. |
+| `app/runtime.rs`: `SharedEngineServices::resolve`, `ensure_services`, `resolved_services` | Owner-local `OnceCell`, font collection, host feed and fallback requests | Resolve once for the application; share transferable service handles and subscribe each local runtime. A new TLS slot must not start another feed. |
+| `app/runtime.rs`: `ensure_execution`, `prepare_service`; main-window service loop | Per-loop pools and service registry today | One application execution/service lifetime; a dedicated loop retiring must not cancel siblings' services. |
+| `app/runner/host.rs`: `install_host_storage`, `storage_dir` | Configuration resolves application data roots and storage | Resolve once, inject shared storage; preserve owner-local persistence/close obligations. |
+| `app/runner/main_window.rs`: `DevAgent::attach`; local reload/driver wiring | Attachments currently made during main-window install | Attach windows to the coordinated tool service; do not launch another application endpoint. |
+| `flui-native::WindowsPlatform::try_new`, `WindowsLoop::run` | Thread-bound native resources, window class registration, STA lease | Fresh loop/STA per owner using the same host type; process DPI/pointer settings and class registration remain idempotent native setup. |
+
+The low-level native test uses real loops, TSF grants, UIA queries, native input
+defaults and owner-side teardown. It is a prerequisite for this extraction,
+not evidence that the application coordinator or factory entry exists. Its TSF
+client IDs may equal one another across threads (both were `32` in the local
+run); a client ID alone is not a cross-owner identity.
+
 | Existing consumer | Required migration | Acceptance |
 |---|---|---|
 | `app/runtime.rs`, `runner/host.rs`, `installed_host.rs`, `native_bindings.rs` | Extract run coordinator; keep logical/native bindings local per owner. Inject shared services instead of resolving process startup anew per TLS slot. | MO1, MO5, MO9, MO13 |

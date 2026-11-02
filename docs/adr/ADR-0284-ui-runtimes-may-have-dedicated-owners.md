@@ -1,7 +1,7 @@
 # ADR-0284: Independent UI runtimes may have dedicated owners
 
 - **Status:** Accepted (2026-11-01). Not implemented: dedicated-owner bootstrap, coordinator,
-  runner migration and native qualification. Acceptance authorizes the design, not support.
+  runner migration and production native acceptance. Acceptance authorizes the design, not support.
 - **Date:** 2026-11-01
 - **Supersedes:** [ADR-0266](ADR-0266-one-owner-thread-ui-runtimes-isolate.md)
   §1's process-wide owner requirement, §2's unconditional denial of independent frame progress,
