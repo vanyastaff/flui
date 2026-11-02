@@ -109,13 +109,25 @@ fn a_window_opens_with_the_system_frame() {
 }
 
 fn a_controls_offset_is_finite_and_non_negative() {
-    let offset = ControlsOffset::try_new(12.0, 6.5).expect("a finite, non-negative offset");
-    assert_eq!((offset.along(), offset.down()), (12.0, 6.5));
+    for (along, down) in [
+        (0.0, 0.0),
+        (0.0, 6.5),
+        (12.0, 0.0),
+        (12.0, 6.5),
+        (f64::MAX, f64::MAX),
+    ] {
+        let offset = ControlsOffset::try_new(along, down).expect("a finite, non-negative offset");
+        assert_eq!((offset.along(), offset.down()), (along, down));
+    }
     for (along, down) in [
         (-1.0, 0.0),
         (0.0, -0.5),
         (f64::NAN, 0.0),
+        (0.0, f64::NAN),
+        (f64::INFINITY, 0.0),
         (0.0, f64::INFINITY),
+        (f64::NEG_INFINITY, 0.0),
+        (0.0, f64::NEG_INFINITY),
     ] {
         assert_eq!(
             ControlsOffset::try_new(along, down),

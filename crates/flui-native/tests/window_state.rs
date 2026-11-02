@@ -6,7 +6,7 @@
 //! and a command admitted before the capabilities changed is `Superseded`.
 
 use flui_platform::CommandRefusal;
-use flui_platform::WindowFrame;
+use flui_platform::{AppTitleBar, ControlsOffset, SystemControls, WindowFrame};
 use flui_testing::window_commands::AdmitAndApply as _;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -184,6 +184,37 @@ fn fullscreen_is_borderless_on_the_whole_display() {
         WindowFrame::None,
         "fullscreen has no frame"
     );
+}
+
+fn app_title_bar_controls_survive_open_commands_and_fullscreen() {
+    for controls in [
+        SystemControls::Shown,
+        SystemControls::Hidden,
+        SystemControls::Offset(ControlsOffset::try_new(17.0, 9.0).expect("finite offset")),
+    ] {
+        let frame = WindowFrame::AppTitleBar(AppTitleBar::new().with_system_controls(controls));
+        let platform = HeadlessPlatform::new();
+        let window = Opened::on(&platform, WindowOptions::default().with_frame(frame))
+            .expect("a headless window opens with an app title bar");
+        assert_eq!(window.state().frame, frame, "opening keeps {controls:?}");
+        applied(&window, WindowCommand::SetFrame(WindowFrame::System));
+        let (before, changed) = applied(&window, WindowCommand::SetFrame(frame));
+        assert_eq!(changed.frame, frame, "a command keeps {controls:?}");
+        assert_eq!(changed.revision.get(), before.revision.get() + 1);
+        let (_, repeated) = applied(&window, WindowCommand::SetFrame(frame));
+        assert_eq!(repeated, changed, "the same payload is not a change");
+
+        applied(&window, WindowCommand::SetFrame(WindowFrame::System));
+        applied(&window, WindowCommand::SetMode(WindowMode::Fullscreen));
+        assert_eq!(window.state().frame, WindowFrame::None);
+        applied(&window, WindowCommand::SetFrame(frame));
+        assert_eq!(window.state().frame, WindowFrame::None);
+        let (_, restored) = applied(&window, WindowCommand::SetMode(WindowMode::Normal));
+        assert_eq!(
+            restored.frame, frame,
+            "restoring keeps the latest {controls:?}"
+        );
+    }
 }
 
 fn repeating_a_command_keeps_the_revision_and_stays_silent() {
@@ -609,6 +640,10 @@ fn window_state_contract() {
     crate::run_table(
         "window_state_contract",
         &[
+            (
+                "app_title_bar_controls_survive_open_commands_and_fullscreen",
+                app_title_bar_controls_survive_open_commands_and_fullscreen as fn(),
+            ),
             (
                 "every_command_changes_the_snapshot_and_advances_the_revision_by_one",
                 every_command_changes_the_snapshot_and_advances_the_revision_by_one as fn(),

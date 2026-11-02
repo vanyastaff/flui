@@ -30,9 +30,10 @@ impl WindowFrame {
         matches!(self, Self::System)
     }
 
-    /// The frame a window asked to open with this one gets under `capabilities`:
-    /// [`WindowFrame::System`] in place of a [`WindowFrame::AppTitleBar`] the window
-    /// cannot take, so a window never opens without a title bar to move it by.
+    /// Resolves an opening request for a host with a system frame:
+    /// [`WindowFrame::System`] replaces a [`WindowFrame::AppTitleBar`] the window
+    /// cannot take, keeping a title bar to move it by. Hosts without a system frame,
+    /// such as mobile and web, retain their native frame policy instead.
     #[must_use]
     pub const fn at_open(self, capabilities: &WindowCapabilities) -> Self {
         match self {

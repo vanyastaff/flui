@@ -112,8 +112,9 @@ pub struct AppConfig {
     pub resizable: bool,
 
     /// What frames the window: the system's title bar, the application's, or none.
-    /// A platform that cannot take a title bar of the application's opens the window
-    /// with the system's frame.
+    /// A desktop host that cannot take a title bar of the application's opens the window
+    /// with the system's frame. Hosts without a system frame, such as mobile and web,
+    /// retain their native frame policy.
     pub frame: flui_platform::WindowFrame,
 
     /// What the window is created with on each operating system that has

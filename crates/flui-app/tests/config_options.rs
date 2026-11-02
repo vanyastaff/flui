@@ -5,7 +5,10 @@
 use flui_app::AppConfig;
 use flui_foundation::geometry::{Point, Size};
 use flui_platform::os_options::{OsWindowOptions, Win32WindowOptions, WindowsCornerPreference};
-use flui_platform::{InputLatency, WindowFrame, WindowMode, WindowOptions, WindowReveal};
+use flui_platform::{
+    AppTitleBar, ControlsOffset, InputLatency, SystemControls, WindowFrame, WindowMode,
+    WindowOptions, WindowReveal,
+};
 
 fn options(config: &AppConfig) -> WindowOptions {
     WindowOptions::from(config)
@@ -36,13 +39,21 @@ fn the_limits_are_kept() {
 }
 
 fn the_frame_flags_are_kept() {
-    let converted = options(
-        &AppConfig::new()
-            .with_resizable(false)
-            .with_frame(WindowFrame::None),
-    );
-    assert!(!converted.resizable);
-    assert_eq!(converted.frame, WindowFrame::None);
+    for frame in [
+        WindowFrame::System,
+        WindowFrame::None,
+        WindowFrame::AppTitleBar(AppTitleBar::new()),
+        WindowFrame::AppTitleBar(AppTitleBar::new().with_system_controls(SystemControls::Hidden)),
+        WindowFrame::AppTitleBar(
+            AppTitleBar::new().with_system_controls(SystemControls::Offset(
+                ControlsOffset::try_new(17.0, 9.0).expect("finite offset"),
+            )),
+        ),
+    ] {
+        let converted = options(&AppConfig::new().with_resizable(false).with_frame(frame));
+        assert!(!converted.resizable);
+        assert_eq!(converted.frame, frame);
+    }
 }
 
 fn the_position_is_kept() {

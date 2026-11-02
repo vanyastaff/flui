@@ -384,6 +384,31 @@ fn the_frame_follows_resizable_and_the_system_frame_and_keeps_the_content() {
     assert!(!window.state().resizable);
 }
 
+fn an_unsupported_app_title_bar_opens_with_the_system_frame() {
+    use flui_platform::{AdmissionError, AppTitleBar, CapabilityAbsence, SystemControls};
+
+    let platform = platform();
+    let requested =
+        WindowFrame::AppTitleBar(AppTitleBar::new().with_system_controls(SystemControls::Hidden));
+    let window = open(&platform, hidden().with_frame(requested));
+    let opened = window.state();
+    assert_eq!(opened.frame, WindowFrame::System);
+    assert_eq!(style(&window) & WS_CAPTION.0, WS_CAPTION.0);
+    assert!(content_is(&opened, 640.0, 480.0));
+    assert_eq!(
+        opened.capabilities.into_parts().app_title_bar,
+        Err(CapabilityAbsence::NotYetOnThisHost),
+    );
+    assert_eq!(
+        window.admit_and_apply(WindowCommand::SetFrame(requested)),
+        Err(CommandRefusal::Admission(AdmissionError::Unsupported(
+            flui_platform::Unsupported::new(flui_platform::UnsupportedReason::NotYetOnThisHost),
+        ))),
+    );
+    assert_eq!(window.state(), opened);
+    assert_eq!(style(&window) & WS_CAPTION.0, WS_CAPTION.0);
+}
+
 fn the_limits_hold_against_resizing() {
     let platform = platform();
     let window = open(
@@ -1767,6 +1792,10 @@ fn native_window_commands() {
             a_window_opened_at_open_is_shown,
         ),
         ("a_close_command_asks_no_veto", a_close_command_asks_no_veto),
+        (
+            "an_unsupported_app_title_bar_opens_with_the_system_frame",
+            an_unsupported_app_title_bar_opens_with_the_system_frame,
+        ),
         (
             "a_deferred_window_is_hidden_until_its_first_frame",
             a_deferred_window_is_hidden_until_its_first_frame,

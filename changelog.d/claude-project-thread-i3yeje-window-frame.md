@@ -7,8 +7,9 @@
   place of `decorated`, `SetDecorated`, `sets_decorated`, `set_decorated` and `decorations`.
   `WindowFrame::AppTitleBar` is a title bar the application draws inside a frame the system
   keeps, admitted where the new `WindowCapabilities::app_title_bar` is available; only the
-  headless host takes it so far, and a window asking for it elsewhere opens with the system's
-  frame (`WindowFrame::at_open`). `AppTitleBar` keeps, moves (`ControlsOffset`) or hides the
+  headless host takes it so far. Other desktop hosts open it with the system's frame
+  (`WindowFrame::at_open`); mobile and web retain their native frame-less policy.
+  `AppTitleBar` keeps, moves (`ControlsOffset`) or hides the
   system's own controls (`SystemControls`).
 - **Native recording format 2** (`flui-protocol`): a window snapshot records `frame` in place of
   `decorated`, and its capabilities `sets_frame` and `app_title_bar` in place of

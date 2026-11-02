@@ -840,17 +840,16 @@ fn an_unknown_native_variant_is_a_typed_error_not_a_skipped_row() {
 /// Another major version, a value outside its range and a device the header
 /// does not declare are refused.
 fn a_native_recording_outside_its_format_is_refused() {
-    let version = HEADER.replace(
-        r#""flui_native_recording":2"#,
-        r#""flui_native_recording":3"#,
-    );
-    assert!(matches!(
-        read_error(&version),
-        CodecError::Version {
-            found: 3,
-            supported: 2
-        }
-    ));
+    for version in [1, 3] {
+        let header = HEADER.replace(
+            r#""flui_native_recording":2"#,
+            &format!(r#""flui_native_recording":{version}"#),
+        );
+        assert!(matches!(
+            read_error(&header),
+            CodecError::Version { found, supported: 2 } if found == version
+        ));
+    }
     let zero_frequency = HEADER.replace(
         r#""uptime_ns":0"#,
         r#""uptime_ns":0,"counter":{"count":1,"frequency":0}"#,

@@ -4318,6 +4318,15 @@ versions, out-of-range values and undeclared devices, and, with the feature,
 pins the capture's journal, session identity, panic containment and reentrant
 release and replacement.
 
+Its `app_title_bar_snapshots_keep_their_wire_values_and_replay` row records actual
+headless snapshots with shown, hidden and asymmetrically offset controls. It checks the
+wire fields independently, replays the exact payload and distinct frame capability
+slots, and refuses negative offsets; the format rejection row refuses both version 1
+and a future version. `window_state_contract` checks the same authored frames at open,
+after commands and after leaving fullscreen. On Windows, `native_window_commands`
+checks the system-frame fallback against the native caption style and refuses an
+unsupported app-titlebar command without changing the snapshot.
+
 ### A window's input waits behind its capability snapshot
 
 A window is opened with its handler (ADR-0254 §4), so nothing it delivers can

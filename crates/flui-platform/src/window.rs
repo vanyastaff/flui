@@ -100,9 +100,10 @@ pub struct WindowOptions {
     /// see [`WindowReveal`] for who should pick what. Ignored for
     /// `visible: false`.
     pub reveal: WindowReveal,
-    /// What frames the window. A window that cannot take
+    /// What frames the window. A desktop window that cannot take
     /// [`WindowFrame::AppTitleBar`] ([`WindowCapabilities::app_title_bar`](crate::WindowCapabilities::app_title_bar))
-    /// opens with [`WindowFrame::System`].
+    /// opens with [`WindowFrame::System`]. Hosts without a system frame, such as
+    /// mobile and web, retain their native frame policy.
     pub frame: WindowFrame,
     /// Minimum window size
     pub min_size: Option<Size<f64>>,

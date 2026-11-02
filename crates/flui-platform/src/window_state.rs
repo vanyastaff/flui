@@ -480,8 +480,9 @@ pub struct WindowCapabilities {
     /// [`WindowFrame::AppTitleBar`], at open ([`WindowOptions::frame`](crate::WindowOptions::frame))
     /// and through [`WindowCommand::SetFrame`]: the window system keeps the
     /// resize borders, shadow and snapping of a frame whose title bar the
-    /// application draws. A window opened with it where this is `Unavailable`
-    /// opens with [`WindowFrame::System`].
+    /// application draws. A desktop window opened with it where this is `Unavailable`
+    /// opens with [`WindowFrame::System`]. Hosts without a system frame, such as
+    /// mobile and web, retain their native frame policy.
     pub app_title_bar: Availability,
     /// [`WindowMode::Minimized`] through [`WindowCommand::SetMode`].
     pub minimizes: Availability,
