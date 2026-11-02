@@ -407,7 +407,10 @@ fn mount_laid_out(
         reapply_constraints,
         unconstrained_wrap,
     );
-    let host = WidgetHost::mount(wrapped, HeadlessWindow::new(surface.0, surface.1), storage);
+    // Every platform window has an input method: the kit's plays a push-model
+    // one, as winit does, so [`LaidOut::dispatch_ime`] reaches the focused field.
+    let window = HeadlessWindow::new(surface.0, surface.1).with_text_input();
+    let host = WidgetHost::mount(wrapped, window, storage);
     let pipeline_owner = host.pipeline().clone();
 
     LaidOut {
@@ -1789,6 +1792,13 @@ impl LaidOut {
     /// input arrives: the runtime sees it before focus does.
     pub fn dispatch_key(&self, event: flui_platform::keyboard::KeyEvent) {
         self.host.dispatch_key(event);
+    }
+
+    /// Dispatch an input-method event through the UI runtime's input path,
+    /// as a push-model platform input method delivers one: the focused text
+    /// field composes, commits or cancels with it.
+    pub fn dispatch_ime(&self, event: flui_platform::ImeEvent) {
+        self.host.dispatch_ime(event);
     }
 
     /// Advance the UI runtime's virtual clock by `dt` before a synthetic Move

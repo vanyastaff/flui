@@ -10,3 +10,5 @@
 
 - **`HeadlessHost::time_to_next_frame`, `pump_next_frame` and `set_window_display`**: wait
   as a host's loop does before its next frame, and deliver the display a window is on.
+- **`LaidOut::dispatch_ime`** delivers an input-method event to the focused field, and the
+  testing kit's window now offers a push-model input method, as winit does.
