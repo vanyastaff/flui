@@ -738,12 +738,26 @@ fn selection_menu() {
             ("selection_menu::an_assistive_click_on_the_toolbar_takes_it_away", crate::selection_menu::an_assistive_click_on_the_toolbar_takes_it_away),
             ("selection_menu::the_toolbar_follows_a_scroll", crate::selection_menu::the_toolbar_follows_a_scroll),
             ("selection_menu::a_rebuilt_field_refreshes_its_shown_toolbar", crate::selection_menu::a_rebuilt_field_refreshes_its_shown_toolbar),
-            ("selection_menu::a_toolbar_wider_than_the_window_wraps", crate::selection_menu::a_toolbar_wider_than_the_window_wraps),
+            ("selection_menu::a_toolbar_wider_than_the_window_moves_its_last_commands_behind_more", crate::selection_menu::a_toolbar_wider_than_the_window_moves_its_last_commands_behind_more),
             ("selection_menu::the_toolbar_reads_in_the_field_s_direction", crate::selection_menu::the_toolbar_reads_in_the_field_s_direction),
             ("selection_menu::a_field_rebuilt_without_its_menu_closes_the_popup", crate::selection_menu::a_field_rebuilt_without_its_menu_closes_the_popup),
             ("selection_menu::a_field_s_secondary_click_wins_over_an_enclosing_menu", crate::selection_menu::a_field_s_secondary_click_wins_over_an_enclosing_menu),
             ("selection_menu::a_field_rebuilt_with_other_commands_closes_the_popup", crate::selection_menu::a_field_rebuilt_with_other_commands_closes_the_popup),
             ("selection_menu::a_field_rebuilt_without_its_menu_takes_its_toolbar_away", crate::selection_menu::a_field_rebuilt_without_its_menu_takes_its_toolbar_away),
+        ],
+    );
+}
+
+/// `ToolbarItems`: a toolbar's row, the overflow button, and the controller
+/// a design package holds.
+#[test]
+fn toolbar_items() {
+    run_cases(
+        "toolbar_items",
+        &[
+            ("toolbar_items::a_toolbar_s_controller_expands_it_and_names_what_it_hides", crate::toolbar_items::a_toolbar_s_controller_expands_it_and_names_what_it_hides as fn()),
+            ("toolbar_items::a_toolbar_s_own_controller_starts_from_the_row_when_its_items_change", crate::toolbar_items::a_toolbar_s_own_controller_starts_from_the_row_when_its_items_change),
+            ("toolbar_items::nothing_in_a_toolbar_takes_the_focus", crate::toolbar_items::nothing_in_a_toolbar_takes_the_focus),
         ],
     );
 }

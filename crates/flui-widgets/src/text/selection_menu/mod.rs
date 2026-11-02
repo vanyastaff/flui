@@ -12,9 +12,11 @@
 
 mod host;
 mod toolbar;
+mod toolbar_items;
 
 pub(crate) use self::host::{MenuHost, MenuSettings, ShowSelectionMenu, show_menu_action};
 pub(crate) use self::toolbar::{ToolbarAnchors, toolbar};
+pub use self::toolbar_items::{ToolbarItems, ToolbarItemsController, ToolbarItemsState};
 
 use std::fmt;
 use std::rc::Rc;
