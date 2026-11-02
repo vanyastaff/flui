@@ -216,7 +216,8 @@ pub use interaction::{
     PreviousFocusAction, PreviousFocusIntent, RawButton, RawGestureDetector,
     RawGestureDetectorState, RecognizerContext, SelectAllTextIntent, ShortcutCallback, Shortcuts,
     ShortcutsState, ShowContextMenuIntent, SingleActivator, SystemGestureExclusion,
-    TransformationController, Visibility, VisibilityGate,
+    TransformationController, Visibility, VisibilityGate, WindowCaptionButton, WindowChromeState,
+    WindowMovePassThrough, WindowResizeArea, WindowTitleBar,
 };
 pub use interaction::{DragSlot, ForcePressSlot, MultiTapCount, MultiTapCountError, TransformSlot};
 pub use layout::{

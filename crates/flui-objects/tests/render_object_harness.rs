@@ -74,6 +74,7 @@
 //! | `RenderHitSlop` | `harness_hit_slop_*` | yes | yes | — | yes | — |
 //! | `RenderIgnorePointer` | `harness_ignore_pointer_*` | yes | yes | — | yes | — |
 //! | `RenderInputRegion` | `harness_input_regions*` | yes | yes | — | yes | input regions |
+//! | `RenderPressPassThrough` | `harness_press_pass_through_*`, `harness_input_regions_cut_*` | yes | yes | — | yes | input regions |
 //! | `RenderIgnoreBaseline` | `harness_ignore_baseline_*` | yes | yes | — | yes | baseline hidden |
 //! | `RenderListener` | `harness_listener_*` | yes | yes | — | yes | — |
 //! | `RenderMouseRegion` | `harness_mouse_region_*` | yes | yes | — | yes | cursor/annotation |
@@ -261,6 +262,7 @@ const RENDER_OBJECT_TYPES: &[&str] = &[
     "RenderContentShape",
     "RenderHitSlop",
     "RenderInputRegion",
+    "RenderPressPassThrough",
     "RenderIgnorePointer",
     "RenderIgnoreBaseline",
     "RenderListener",
@@ -8255,6 +8257,137 @@ fn harness_input_regions_follow_the_order_a_parent_paints_in() {
     assert_eq!(run.owner().input_regions(), vec![move_area, button]);
 }
 
+/// Under a move area a listener that takes presses is cut out of it as window content,
+/// in paint order after the area; a hover-only listener is not, nor is a press-taking one
+/// a pass-through wraps, until a move area below the pass-through starts again, nor one a
+/// caption button draws. A listener
+/// outside any move area reports nothing.
+fn harness_input_regions_cut_press_takers_out_of_a_move_area() {
+    use flui_rendering::input_regions::{CaptionButton, InputRegion, InputRegionKind};
+    let at = |left: f64, top: f64| StackParentData::new().with_top(top).with_left(left);
+    let listener = |claims: bool| {
+        let mut listener = RenderListener::new(None, HitTestBehavior::DeferToChild);
+        let _ = listener.set_claims_presses(claims);
+        box_node(listener).child(box_node(RenderColoredBox::green(20.0, 20.0)))
+    };
+    let bar = box_node(RenderInputRegion::new(InputRegionKind::WindowMove)).child(
+        box_node(RenderStack::new())
+            .child(box_node(RenderColoredBox::red(200.0, 32.0)))
+            .child(listener(true).with_stack_parent_data(at(10.0, 6.0)))
+            .child(listener(false).with_stack_parent_data(at(40.0, 6.0)))
+            .child(
+                box_node(RenderPressPassThrough::new())
+                    .child(listener(true))
+                    .with_stack_parent_data(at(70.0, 6.0)),
+            )
+            .child(
+                box_node(RenderPressPassThrough::new())
+                    .child(
+                        box_node(RenderInputRegion::new(InputRegionKind::WindowMove))
+                            .child(listener(true)),
+                    )
+                    .with_stack_parent_data(at(100.0, 6.0)),
+            )
+            .child(
+                box_node(RenderInputRegion::new(InputRegionKind::CaptionButton(
+                    CaptionButton::Close,
+                )))
+                .child(listener(true))
+                .with_stack_parent_data(at(170.0, 6.0)),
+            ),
+    );
+    let run = RenderTester::mount(
+        box_node(RenderStack::new())
+            .child(bar)
+            .child(listener(true).with_stack_parent_data(at(10.0, 100.0))),
+    )
+    .with_size(Size::new(200.0, 200.0))
+    .run_frame();
+
+    assert_eq!(
+        run.owner().input_regions(),
+        vec![
+            InputRegion::new(
+                InputRegionKind::WindowMove,
+                Rect::from_ltrb(0.0, 0.0, 200.0, 32.0)
+            ),
+            InputRegion::new(
+                InputRegionKind::WindowContent,
+                Rect::from_ltrb(10.0, 6.0, 30.0, 26.0)
+            ),
+            InputRegion::new(
+                InputRegionKind::WindowMove,
+                Rect::from_ltrb(100.0, 6.0, 120.0, 26.0)
+            ),
+            InputRegion::new(
+                InputRegionKind::WindowContent,
+                Rect::from_ltrb(100.0, 6.0, 120.0, 26.0)
+            ),
+            InputRegion::new(
+                InputRegionKind::CaptionButton(CaptionButton::Close),
+                Rect::from_ltrb(170.0, 6.0, 190.0, 26.0)
+            ),
+        ],
+    );
+
+    let mut listener = RenderListener::new(None, HitTestBehavior::DeferToChild);
+    assert_eq!(
+        listener.set_claims_presses(true),
+        flui_rendering::RenderUpdateImpact::PAINT
+    );
+    assert_eq!(
+        listener.set_claims_presses(true),
+        flui_rendering::RenderUpdateImpact::NONE
+    );
+    let mut pass_through = RenderPressPassThrough::new();
+    assert_eq!(
+        pass_through.set_enabled(false),
+        flui_rendering::RenderUpdateImpact::PAINT
+    );
+}
+
+/// A disabled pass-through lets the walk cut its press-taking listener out again.
+fn harness_press_pass_through_disabled_cuts_out_again() {
+    use flui_rendering::input_regions::{InputRegion, InputRegionKind};
+    let mut listener = RenderListener::new(None, HitTestBehavior::DeferToChild);
+    let _ = listener.set_claims_presses(true);
+    let mut pass_through = RenderPressPassThrough::new();
+    let _ = pass_through.set_enabled(false);
+    let run = RenderTester::mount(
+        box_node(RenderStack::new()).child(
+            box_node(RenderInputRegion::new(InputRegionKind::WindowMove)).child(
+                box_node(pass_through)
+                    .child(box_node(listener).child(box_node(RenderColoredBox::green(20.0, 20.0))))
+                    .label("pass_through"),
+            ),
+        ),
+    )
+    .with_size(Size::new(200.0, 200.0))
+    .run_frame();
+    assert_eq!(
+        run.box_geometry(run.id("pass_through")),
+        Size::new(20.0, 20.0)
+    );
+    assert_eq!(
+        run.owner().input_regions(),
+        vec![
+            InputRegion::new(
+                InputRegionKind::WindowMove,
+                Rect::from_ltrb(0.0, 0.0, 20.0, 20.0)
+            ),
+            InputRegion::new(
+                InputRegionKind::WindowContent,
+                Rect::from_ltrb(0.0, 0.0, 20.0, 20.0)
+            ),
+        ],
+    );
+    assert_descendant_properties(
+        &run.render_snapshot(),
+        "RenderPressPassThrough",
+        &["disabled"],
+    );
+}
+
 /// A region under a follower is reported at the follower's composite-resolved
 /// position (its leader's anchor), where it is painted and hit-tested, not at
 /// its tree-relative position.
@@ -13760,6 +13893,14 @@ fn family_pointer() {
             (
                 "input_regions_follow_the_order_a_parent_paints_in",
                 harness_input_regions_follow_the_order_a_parent_paints_in,
+            ),
+            (
+                "input_regions_cut_press_takers_out_of_a_move_area",
+                harness_input_regions_cut_press_takers_out_of_a_move_area,
+            ),
+            (
+                "press_pass_through_disabled_cuts_out_again",
+                harness_press_pass_through_disabled_cuts_out_again,
             ),
         ],
     );

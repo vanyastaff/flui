@@ -22,6 +22,13 @@
 //! answered by a theater's covered entries, an offstage child, a transparent animated
 //! opacity), a node that skips paint, a node still needing layout and a sliver that is not
 //! visible.
+//!
+//! Regions come out in paint order, a node before its descendants, so a later region lies
+//! over an earlier one. A node that takes presses
+//! ([`InputRegionSink::claim_presses`]) inside a [`InputRegionKind::WindowMove`] area an
+//! ancestor reported is cut out of it as [`InputRegionKind::WindowContent`]: the buttons and
+//! fields of an application's title bar are pressed, the rest of the bar moves the window.
+//! [`InputRegionSink::pass_presses_through`] keeps a subtree's presses moving the window.
 
 use flui_foundation::geometry::{Matrix4, Point, Rect};
 use smallvec::SmallVec;
@@ -33,6 +40,19 @@ pub use flui_platform::input_regions::{CaptionButton, InputRegion, InputRegionKi
 #[derive(Debug, Default)]
 pub struct InputRegionSink {
     pending: SmallVec<[(InputRegionKind, Rect); 2]>,
+    presses: Presses,
+}
+
+/// What a node said about presses on its box this frame.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Presses {
+    /// Nothing: presses fall to whatever region lies under them.
+    #[default]
+    Unclaimed,
+    /// The node takes presses on its box ([`InputRegionSink::claim_presses`]).
+    Claimed,
+    /// Presses in the node's subtree move the window ([`InputRegionSink::pass_presses_through`]).
+    PassedThrough,
 }
 
 impl InputRegionSink {
@@ -43,8 +63,38 @@ impl InputRegionSink {
         self.pending.push((kind, rect));
     }
 
+    /// Says the reporting node takes presses on its box: a pointer-down handler or a
+    /// gesture-arena member. Inside a [`InputRegionKind::WindowMove`] area an ancestor
+    /// reported, the walk cuts the box out as [`InputRegionKind::WindowContent`], so a
+    /// button in an application's title bar is pressed rather than dragging the window.
+    /// A caption button or resize border between the two keeps its presses its own.
+    /// Elsewhere it reports nothing.
+    pub fn claim_presses(&mut self) {
+        if self.presses == Presses::Unclaimed {
+            self.presses = Presses::Claimed;
+        }
+    }
+
+    /// Says presses anywhere in the reporting node's subtree move the window as the move
+    /// area around it does: the press-claiming nodes below it are not cut out of the move
+    /// area. A [`InputRegionKind::WindowMove`] area reported below it starts cutting out
+    /// again.
+    pub fn pass_presses_through(&mut self) {
+        self.presses = Presses::PassedThrough;
+    }
+
     pub(crate) fn is_empty(&self) -> bool {
         self.pending.is_empty()
+    }
+
+    /// Whether a region this node reported is of a kind `matches` accepts.
+    pub(crate) fn reports(&self, matches: impl Fn(InputRegionKind) -> bool) -> bool {
+        self.pending.iter().any(|(kind, _)| matches(*kind))
+    }
+
+    /// What the node said about presses, forgotten for the next node.
+    pub(crate) fn take_presses(&mut self) -> Presses {
+        std::mem::take(&mut self.presses)
     }
 
     pub(crate) fn drain(&mut self) -> impl Iterator<Item = (InputRegionKind, Rect)> + '_ {
