@@ -78,8 +78,6 @@
 //! | `flui.signals`, `flui.a11y`, `flui.pace`, `flui.gpu` | reactive reads and writes, accessibility fallbacks, frame pacing, the renderer |
 //!
 //! Frame-path fields are primitives: ids are `u64` and kinds are `&'static str`.
-//! The older spellings (`flui::reconcile`, `flui_animation`, `flui::signals`, `flui::a11y`)
-//! still work in a directive for one release, through [`TARGET_ALIASES`].
 //!
 //! # Adding a profiler layer
 //!
@@ -154,7 +152,7 @@ pub use backend::privacy::{
 };
 pub use backend::{LogcatPriority, PlatformLayer};
 pub use config::{DesktopFormat, LogConfig, LogConfigBuilder};
-pub use filter::{DEFAULT_DIRECTIVES, DEFAULT_ENV_VAR, FilterConfig, FilterError, TARGET_ALIASES};
+pub use filter::{DEFAULT_DIRECTIVES, DEFAULT_ENV_VAR, FilterConfig, FilterError};
 pub use identity::{
     APP_ID_MAX_LEN, APPLE_CATEGORY, AppId, AppIdentity, DEFAULT_DISPLAY_NAME, IdentityError,
     UNIDENTIFIED_APPLE_SUBSYSTEM,
