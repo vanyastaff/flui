@@ -154,7 +154,6 @@
 //! # Feature Flags
 //!
 //! - `images` - Enable image loading (PNG, JPEG, GIF, WebP)
-//! - `network` - Enable HTTP/HTTPS asset loading
 //! - `full` - Enable all stable features
 
 // Ship bar: crate is doc-complete — keep it that way.
@@ -200,15 +199,13 @@ pub use crate::core::{Asset, AssetMetadata};
 pub use crate::error::{AssetError, Result};
 pub use crate::registry::{AssetRegistry, AssetRegistryBuilder, HasCapacity, NoCapacity};
 #[cfg(feature = "images")]
-pub use crate::registry::{ImageLoad, ImageSource};
+pub use crate::registry::{ImageLoad, ImageSource, LoadServices, NetworkSource};
 pub use crate::types::{
     AssetHandle, AssetHandleCore, AssetHandleExt, AssetKey, FontData, LoadState,
 };
 
 // Re-export loaders
 pub use crate::loaders::BytesFileLoader;
-#[cfg(feature = "network")]
-pub use crate::loaders::NetworkLoader;
 
 // Re-export concrete asset types
 pub use crate::assets::font::FontAsset;
