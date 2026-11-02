@@ -11,7 +11,7 @@
 //! answering costs a bounded wait ([`REPLY_TIMEOUT`]) instead of a stuck
 //! `flui mcp`; the thread ends when the peer closes or the connection drops.
 
-use std::io::{BufRead as _, BufReader, Read as _, Write as _};
+use std::io::{BufRead as _, BufReader, Read as _, Write};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -160,8 +160,7 @@ fn pump(
 ) {
     let mut reader = BufReader::new(stream);
     while let Ok(line) = inbox.recv() {
-        let result = write_line(&mut reader, &line)
-            .map_err(Failure::Unsent)
+        let result = write_line(reader.get_mut(), &line)
             .and_then(|()| read_line(&mut reader).map_err(Failure::Transport));
         let failed = result.is_err();
         if outbox.send(result).is_err() || failed {
@@ -170,13 +169,17 @@ fn pump(
     }
 }
 
-fn write_line(reader: &mut BufReader<Stream>, line: &str) -> Result<(), String> {
-    let stream = reader.get_mut();
+/// Sends `line` and its newline. A failure before the newline is written
+/// leaves the request unsent (the app dispatches whole lines only); one in
+/// the flush after it may have delivered it.
+fn write_line(stream: &mut impl Write, line: &str) -> Result<(), Failure> {
     stream
         .write_all(line.as_bytes())
         .and_then(|()| stream.write_all(b"\n"))
-        .and_then(|()| stream.flush())
-        .map_err(|e| format!("could not send: {e}"))
+        .map_err(|e| Failure::Unsent(format!("could not send: {e}")))?;
+    stream
+        .flush()
+        .map_err(|e| Failure::Transport(format!("the request may not have arrived: {e}")))
 }
 
 fn read_line(reader: &mut BufReader<Stream>) -> Result<String, String> {
@@ -210,5 +213,60 @@ pub(crate) fn name(address: &str) -> std::io::Result<Name<'_>> {
     {
         use interprocess::local_socket::{GenericFilePath, ToFsName as _};
         address.to_fs_name::<GenericFilePath>()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::{self, Write};
+
+    use super::{Failure, write_line};
+
+    /// Takes `accept` bytes, then fails; fails its flush when `flush_fails`.
+    struct Pipe {
+        accept: usize,
+        flush_fails: bool,
+    }
+
+    impl Write for Pipe {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            if self.accept == 0 {
+                return Err(io::Error::from(io::ErrorKind::BrokenPipe));
+            }
+            let taken = buf.len().min(self.accept);
+            self.accept -= taken;
+            Ok(taken)
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            if self.flush_fails {
+                Err(io::Error::from(io::ErrorKind::BrokenPipe))
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    #[test]
+    fn a_request_is_unsent_only_while_its_newline_is_not_written() {
+        let line = r#"{"id":1}"#;
+        for (accept, flush_fails, unsent) in [
+            (0, false, true),
+            // The whole request but its newline: the app never dispatches it.
+            (line.len(), false, true),
+            // Written whole, then the flush failed: it may have arrived.
+            (line.len() + 1, true, false),
+        ] {
+            let mut pipe = Pipe {
+                accept,
+                flush_fails,
+            };
+            let failure = write_line(&mut pipe, line).expect_err("the pipe fails");
+            assert_eq!(
+                matches!(failure, Failure::Unsent(_)),
+                unsent,
+                "{accept} bytes taken, flush fails: {flush_fails}: {failure:?}"
+            );
+        }
     }
 }

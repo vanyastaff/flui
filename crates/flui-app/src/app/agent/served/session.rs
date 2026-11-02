@@ -61,7 +61,12 @@ pub(super) fn serve(stream: Stream, shared: &Arc<Shared>) {
         .disconnect
         .as_ref()
         .filter(|_| !shared.driver_claimed.swap(true, Ordering::SeqCst));
-    let end = converse(&mut connection, shared);
+    // A conversation that panics (a subscriber at one of its traces) broke the
+    // connection as surely as the driver closing it: the driver is gone.
+    let end = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        converse(&mut connection, shared)
+    }))
+    .unwrap_or(End::Peer);
     if let (End::Peer, Some(disconnect)) = (end, disconnect) {
         disconnect.fire();
     }

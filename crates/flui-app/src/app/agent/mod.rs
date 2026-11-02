@@ -111,12 +111,17 @@ impl Disconnect {
         if self.happened.swap(true, Ordering::SeqCst) {
             return;
         }
-        tracing::info!("the driver disconnected; the app exits");
         // Taken out, so the quit runs with no lock held.
         let quit = self.quit.lock().take();
         if let Some(quit) = quit {
             quit();
         }
+        // Traced once the quit is asked: a subscriber is user code, and one
+        // that panics must not keep the app running past its driver.
+        let traced = std::panic::catch_unwind(|| {
+            tracing::info!("the driver disconnected; the app exits");
+        });
+        drop(traced);
     }
 }
 
@@ -154,4 +159,52 @@ pub(crate) fn install_from_env(config: &mut crate::AppConfig, disconnect: &Arc<D
         not(target_os = "android")
     )))]
     let _ = (config, disconnect);
+}
+
+#[cfg(all(
+    test,
+    any(debug_assertions, feature = "driver"),
+    any(unix, windows),
+    not(target_os = "android")
+))]
+mod tests {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use tracing::span::{Attributes, Id, Record};
+    use tracing::{Event, Metadata, Subscriber};
+
+    use super::Disconnect;
+
+    /// A subscriber that panics at every event.
+    struct Panicking;
+
+    impl Subscriber for Panicking {
+        fn enabled(&self, _: &Metadata<'_>) -> bool {
+            true
+        }
+        fn new_span(&self, _: &Attributes<'_>) -> Id {
+            Id::from_u64(1)
+        }
+        fn record(&self, _: &Id, _: &Record<'_>) {}
+        fn record_follows_from(&self, _: &Id, _: &Id) {}
+        fn event(&self, _: &Event<'_>) {
+            panic!("the subscriber panics");
+        }
+        fn enter(&self, _: &Id) {}
+        fn exit(&self, _: &Id) {}
+    }
+
+    #[test]
+    fn a_subscriber_that_panics_does_not_keep_the_app_running_past_its_driver() {
+        let disconnect = Disconnect::default();
+        let quits = Arc::new(AtomicUsize::new(0));
+        let counted = Arc::clone(&quits);
+        disconnect.arm(move || {
+            counted.fetch_add(1, Ordering::SeqCst);
+        });
+        tracing::subscriber::with_default(Panicking, || disconnect.fire());
+        assert_eq!(quits.load(Ordering::SeqCst), 1, "the quit was asked");
+        assert!(disconnect.happened());
+    }
 }
