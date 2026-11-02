@@ -225,6 +225,8 @@ impl SelectionModel {
         self.handles.grip.set(grip.map(|grip| (side, grip)));
         let mut failure = FirstPanic::new();
         self.hide_toolbar(&mut failure);
+        // The magnifier shows over the end the drag holds.
+        self.handles.refresh_magnifier(&mut failure);
         failure.resume();
     }
 

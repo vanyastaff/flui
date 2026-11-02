@@ -392,6 +392,7 @@ impl ViewState<SelectionArea> for SelectionAreaState {
                 Look::Given,
             );
         self.model.handles.set_look(look);
+        (self.model.handles).set_magnifier(DefaultSelectionControls::magnifier_of(ctx));
         // The document reads its lines in the ambient direction.
         let direction = match crate::Directionality::maybe_of(ctx).unwrap_or_default() {
             TextDirection::Ltr => SemanticsTextDirection::Ltr,

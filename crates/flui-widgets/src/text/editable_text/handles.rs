@@ -36,7 +36,10 @@ use crate::overlay::{InsertPosition, OverlayEntry, OverlayHandle};
 use crate::text::controller::TextEditingController;
 use crate::text::selection_area::handles::{LinkFollower, Look};
 use crate::text::text_store::with_editable_global;
-use crate::text::{MenuHost, MenuSettings, PopupOrigin, ToolbarAnchors, editing_commands};
+use crate::text::{
+    MagnifierInfo, MenuHost, MenuSettings, PopupOrigin, SelectionMagnifier, ToolbarAnchors,
+    editing_commands,
+};
 use crate::{HandleInfo, HandleSide, Positioned, Stack};
 
 /// Whether a tap in an editable text shows a handle under its caret, which
@@ -178,6 +181,9 @@ pub(super) struct FieldHandles {
     /// layout, so a handle sized from its line follows a new line height.
     watches: RefCell<Vec<LeaderWatch>>,
     warned: Cell<bool>,
+    /// What a handle drag shows over the dragged end, resolved at the
+    /// field's last build.
+    magnifier: RefCell<Option<Rc<dyn SelectionMagnifier>>>,
     /// The field's selection menu, whose toolbar shows over shown handles.
     menu: Rc<MenuHost>,
     /// Whether the finger on a handle has dragged it since it touched.
@@ -211,6 +217,7 @@ impl FieldHandles {
             warned: Cell::new(false),
             menu: Rc::new(MenuHost::default()),
             touch_dragged: Cell::new(false),
+            magnifier: RefCell::new(None),
         })
     }
 
@@ -423,6 +430,30 @@ impl FieldHandles {
             }
         }
         failure.resume();
+    }
+
+    /// Rebuilds the handles when a drag shows a magnifier, which comes or
+    /// goes with the drag; a wake that fails is held in `failure`.
+    pub(super) fn refresh_magnifier(&self, failure: &mut FirstPanic) {
+        if self.magnifier.borrow().is_some() {
+            self.refresh(failure);
+        }
+    }
+
+    /// Sets what a handle drag shows over its end, rebuilding the handles
+    /// when a drag shows another one now.
+    pub(super) fn set_magnifier(&self, magnifier: Option<Rc<dyn SelectionMagnifier>>) {
+        let old = self.magnifier.replace(magnifier);
+        let same = match (&old, &*self.magnifier.borrow()) {
+            (Some(old), Some(new)) => Rc::ptr_eq(old, new),
+            (None, None) => true,
+            _ => false,
+        };
+        if !same && self.grip.get().is_some() {
+            let mut failure = FirstPanic::new();
+            self.refresh(&mut failure);
+            failure.resume();
+        }
     }
 
     /// Shows the handles a touch left: the caret's while nothing is
@@ -670,6 +701,10 @@ impl FieldHandles {
         failure.resume();
         let grip = self.end_line(side).map(|(middle, _)| middle - global);
         self.grip.set(grip.map(|grip| (side, grip)));
+        // The magnifier shows over the end the drag holds.
+        let mut failure = FirstPanic::new();
+        self.refresh_magnifier(&mut failure);
+        failure.resume();
     }
 
     /// `side`'s handle was dragged to `global`: its end moves there, and a
@@ -705,12 +740,14 @@ impl FieldHandles {
     fn drag_ended(self: &Rc<Self>, side: HandleSide) {
         if self.grip.get().is_some_and(|(gripped, _)| gripped == side) {
             self.grip.set(None);
+            let mut failure = FirstPanic::new();
+            // The magnifier goes with the drag.
+            self.refresh_magnifier(&mut failure);
             self.restart_timer();
             if self.menu.policy().after_handle_drag() {
-                let mut failure = FirstPanic::new();
                 self.show_toolbar(&mut failure);
-                failure.resume();
             }
+            failure.resume();
         }
     }
 
@@ -929,6 +966,7 @@ impl StatelessView for HandlesView {
                     .iter()
                     .filter_map(|&(side, link)| handle(&handles, side, link, ctx))
                     .collect();
+                shown.extend(drag_magnifier(&handles, ctx));
                 if handles.menu.toolbar_shown() {
                     shown.extend(toolbar(&handles));
                 }
@@ -1024,6 +1062,19 @@ fn handle(
             .top(0.0)
             .boxed(),
     )
+}
+
+/// The magnifier over the end a handle drag holds, if the field shows one.
+fn drag_magnifier(handles: &Rc<FieldHandles>, ctx: &dyn BuildContext) -> Option<BoxedView> {
+    let (side, _) = handles.grip.get()?;
+    let look = handles.magnifier.borrow().clone()?;
+    let (_, line_height) = handles.end_line(side)?;
+    let link = match side {
+        HandleSide::End => handles.links[1],
+        HandleSide::Start | HandleSide::Collapsed => handles.links[0],
+    };
+    let info = MagnifierInfo::new(side, TextDirection::Ltr, line_height);
+    Some(crate::text::magnifier(look.as_ref(), &info, link, ctx))
 }
 
 /// The menu's toolbar over the selection's start (the caret while the
