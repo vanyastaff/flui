@@ -181,12 +181,14 @@ impl TextInputWire for BusWire {
     /// A field takes text input, or the input method is reset: what it sent
     /// before is fenced off until it answers this focus.
     fn enable(&self) {
-        // Enabled again while focused, the client ended the composition
-        // itself: the input method forgets it too. A focus alone would not
-        // reach an engine already focused.
-        if self.focused.replace(true) {
-            self.batch.borrow_mut().push(Request::Reset);
-        }
+        // Every enablement starts with no composition in the field: the
+        // client ended it (completed in place, or the field changed, its
+        // preedit committed in the field it left), so the input method
+        // forgets it too. A focus alone would not reach an engine already
+        // focused, and one that keeps its composition across a focus out
+        // would bring it to the next field.
+        self.focused.set(true);
+        self.batch.borrow_mut().push(Request::Reset);
         self.forget_preedit();
         let fence = self.fence.get().wrapping_add(1);
         self.fence.set(fence);

@@ -1000,3 +1000,22 @@ fn a_context_whose_edits_overflow_is_retired() {
         rig.heard_count("context for") == 2 && rig.heard_any("destroy")
     });
 }
+
+/// A composition left behind as the application focuses another field is
+/// forgotten by the input method too: its engine is reset, so it does not
+/// resume in the next field.
+#[test]
+fn a_composition_left_for_another_field_resets_the_engine() {
+    let Some(rig) = Rig::start() else {
+        return;
+    };
+    rig.press('p');
+    rig.settle("the preedit", || rig.store.composition().is_some());
+    let resets = rig.heard_count("reset");
+    let next = InMemoryTextStore::new("");
+    rig.text
+        .client()
+        .expect("the window's client")
+        .focus_store(Some(Rc::clone(&next) as Rc<dyn TextStore>));
+    rig.settle("the engine is reset", || rig.heard_count("reset") > resets);
+}
