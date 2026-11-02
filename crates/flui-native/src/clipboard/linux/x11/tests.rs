@@ -20,7 +20,7 @@ use x11rb::protocol::xproto::{self, ConnectionExt as _};
 use x11rb::rust_connection::RustConnection;
 
 use super::X11Clipboard;
-use crate::clipboard::linux::text::{CONCEALED_HINT, CONCEALED_HINT_VALUE};
+use crate::clipboard::text::{CONCEALED_HINT, CONCEALED_HINT_VALUE};
 use crate::host::{NativeClipboard, NativePrimarySelection};
 use crate::owner::linux::x11::LoopClipboard as _;
 use crate::testing::clipboard::a_concealed_write_stays_out_of_history;

@@ -57,6 +57,7 @@ use flui_platform::CursorError;
 use flui_platform::input_capabilities::InputCapabilities;
 use std::sync::{Arc, Weak};
 
+use flui_platform::data_transfer::DataTransferSource;
 use flui_platform::{
     DisplayRevision, DisplaySnapshot, SessionEndAnswer, SessionEndPhase, SystemNotice,
     SystemPreferences, WindowAppearance, WindowId,
@@ -231,6 +232,41 @@ pub(crate) trait X11Host: 'static {
     /// [`PlatformError::Init`] when its connection, window or thread cannot
     /// be made.
     fn clipboard(doorbell: &Doorbell) -> Result<Arc<dyn LoopClipboard>, PlatformError>;
+
+    /// The windows' drag and drop on `connection`: XDND drops on them, made
+    /// on the thread that builds the loop, ringing `doorbell` when work started
+    /// off the loop has a deadline for it.
+    ///
+    /// # Errors
+    /// [`PlatformError::Init`] when its atoms cannot be interned.
+    fn drag(
+        connection: &Arc<X11Connection>,
+        doorbell: &Doorbell,
+    ) -> Result<Arc<dyn LoopDrag>, PlatformError>;
+}
+
+/// The drag and drop of the X11 loop's windows, the drag feature's (ADR-0151
+/// §10): the platform's one data-transfer source, which the loop hands
+/// every event before the input, and which a window tells as it opens and
+/// closes. A fetch it waits on has a deadline the loop wakes for. Every
+/// method but the [`DataTransferSource`]'s runs on the owner thread, and
+/// none runs user code with a lock of its own held.
+pub(crate) trait LoopDrag: DataTransferSource {
+    /// `target` opened: drags over it are offered to it from now on.
+    fn window_opened(&self, target: InputTarget);
+
+    /// `window` closed: a drag over it ends with nothing told.
+    fn window_closed(&self, window: WindowRef);
+
+    /// An event the server sent; `true` when it was the drag's alone.
+    fn event(&self, event: &Event) -> bool;
+
+    /// When the first fetch under way times out.
+    fn deadline(&self) -> Option<web_time::Instant>;
+
+    /// End the fetches whose time is out at `now`, or whose request was
+    /// dropped.
+    fn expire(&self, now: web_time::Instant);
 }
 
 /// What the loop asks of the clipboard, the clipboard feature's: what
@@ -323,6 +359,14 @@ impl host::Clipboard<X11Loop> for X11Loop {
     }
 }
 
+/// The drag position is the loop's: the drag the table made, the platform's
+/// one data-transfer source.
+impl host::Drag<X11Loop> for X11Loop {
+    fn data_transfer(owner: &X11Loop) -> Arc<dyn DataTransferSource> {
+        Arc::clone(&owner.drag) as Arc<dyn DataTransferSource>
+    }
+}
+
 /// The primary selection position is the loop's too: X11 always has
 /// `PRIMARY`, on the clipboard's connection.
 impl host::PrimarySelection<X11Loop> for X11Loop {
@@ -407,6 +451,7 @@ pub struct X11Loop {
     windows: Arc<dyn LoopWindows>,
     input: Arc<dyn LoopInput>,
     clipboard: Arc<dyn LoopClipboard>,
+    drag: Arc<dyn LoopDrag>,
     start_preferences: fn(&BackgroundExecutor, &Arc<OwnerSignal>) -> Arc<dyn LinuxPreferences>,
     start_host_notices: fn(&BackgroundExecutor, &Arc<OwnerSignal>) -> Arc<dyn LinuxNotices>,
     background_executor: Arc<BackgroundExecutor>,
@@ -446,6 +491,7 @@ impl X11Loop {
         let displays = H::displays();
         let input = H::input(&connection);
         let clipboard = H::clipboard(&doorbell)?;
+        let drag = H::drag(&connection, &doorbell)?;
         notices.mark_held_stale_on_wake(Arc::downgrade(&displays) as Weak<dyn StaleOnWake>);
         let affinity = flui_foundation::OwnerAffinity::new();
         affinity.bind_current();
@@ -459,6 +505,7 @@ impl X11Loop {
             windows,
             input,
             clipboard,
+            drag,
             start_preferences: H::preferences,
             start_host_notices: H::host_notices,
             background_executor: Arc::new(BackgroundExecutor::new()),
@@ -488,6 +535,12 @@ impl X11Loop {
     /// and sets its cursor through.
     pub(crate) fn input(&self) -> &Arc<dyn LoopInput> {
         &self.input
+    }
+
+    /// The windows' drag and drop, which a window opens and closes as a
+    /// drop target with.
+    pub(crate) fn drag(&self) -> &Arc<dyn LoopDrag> {
+        &self.drag
     }
 
     /// The displays, which a window names its display from.
@@ -538,7 +591,8 @@ impl X11Loop {
             if web_time::Instant::now() >= deadline {
                 return Ok(());
             }
-            self.wait(&mut turns, Some(deadline))?;
+            self.drag.expire(web_time::Instant::now());
+            self.wait(&mut turns, earliest(Some(deadline), self.drag.deadline()))?;
         }
     }
 
@@ -562,6 +616,11 @@ impl X11Loop {
                 // A request on a window the server no longer has (a property
                 // read racing a close): the request's own reply says so too.
                 tracing::debug!(?error, "the X server refused a request");
+                continue;
+            }
+            // A drag message, or the answer to a fetch, is the drag's alone;
+            // the drag contains what a window's handler raises as it hears it.
+            if self.drag.event(&event) {
                 continue;
             }
             // A handler's panic in what the input delivered still leaves the
@@ -672,7 +731,8 @@ impl X11Loop {
             {
                 return Ok(());
             }
-            let wake_at = self.wake_deadline(&mut deadline);
+            self.drag.expire(web_time::Instant::now());
+            let wake_at = earliest(self.wake_deadline(&mut deadline), self.drag.deadline());
             self.wait(&mut turns, wake_at)?;
         }
     }
@@ -686,6 +746,17 @@ impl X11Loop {
             None
         };
         deadline.arm(answer, self.windows.frames())
+    }
+}
+
+/// The earlier of two instants to wake at, either of which may be none.
+fn earliest(
+    first: Option<web_time::Instant>,
+    second: Option<web_time::Instant>,
+) -> Option<web_time::Instant> {
+    match (first, second) {
+        (Some(first), Some(second)) => Some(first.min(second)),
+        (first, second) => first.or(second),
     }
 }
 

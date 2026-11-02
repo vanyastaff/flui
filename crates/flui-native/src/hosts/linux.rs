@@ -7,9 +7,10 @@
 //! input, X11 with XInput 2 and XKB. Wayland fills the clipboard and primary
 //! selection positions with its seats' selections, X11 with the `CLIPBOARD`
 //! and `PRIMARY` selections on a connection of its own. Wayland fills the
-//! text position with its seats' `zwp_text_input_v3`. X11's text input and
-//! its drag and drop are `Absent` until it speaks their protocols; a desktop
-//! has no haptics and no system bars.
+//! text position with its seats' `zwp_text_input_v3`, X11 the drag position
+//! with XDND drops on its windows. X11's text input and Wayland's drag and
+//! drop are `Absent` until each host speaks their protocols; a desktop has
+//! no haptics and no system bars.
 
 use std::sync::Arc;
 
@@ -169,9 +170,10 @@ mod x11 {
     };
     use crate::clipboard::linux::x11::X11Clipboard;
     use crate::display::linux::source::LinuxDisplays;
+    use crate::drag::x11::X11Drag;
     use crate::input::linux::x11::X11Input;
     use crate::owner::linux::x11::{
-        Doorbell, HostDisplays, LoopClipboard, LoopInput, X11Connection, X11Host, X11Loop,
+        Doorbell, HostDisplays, LoopClipboard, LoopDrag, LoopInput, X11Connection, X11Host, X11Loop,
     };
     use crate::window::linux::x11::{WindowAtoms, X11Window, X11Windows};
 
@@ -190,7 +192,7 @@ mod x11 {
         type Accessibility = UnixAccessibility;
         type Clipboard = X11Loop;
         type PrimarySelection = X11Loop;
-        type Drag = Absent<position::Drag>;
+        type Drag = X11Loop;
         // A desktop has no haptic hardware to drive.
         type Haptics = Absent<position::Haptics>;
         type Preferences = X11Loop;
@@ -241,6 +243,20 @@ mod x11 {
                 }
             };
             Ok(Arc::new(X11Clipboard::start(Box::new(wake))?))
+        }
+
+        /// XDND drops on the windows, on the platform's connection.
+        fn drag(
+            connection: &Arc<X11Connection>,
+            doorbell: &Doorbell,
+        ) -> Result<Arc<dyn LoopDrag>, PlatformError> {
+            let doorbell = doorbell.clone();
+            let wake = Box::new(move || {
+                if let Err(error) = doorbell.ring() {
+                    tracing::debug!(%error, "cannot wake the X11 loop for a drop's transfer");
+                }
+            });
+            Ok(X11Drag::try_new(connection, wake)?)
         }
     }
 

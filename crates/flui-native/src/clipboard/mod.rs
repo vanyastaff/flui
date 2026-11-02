@@ -2,8 +2,10 @@
 //!
 //! The model is `lock`, the process-wide lock that every Win32 clipboard
 //! session runs under, which the Win32 host and winit's `arboard` clipboard on
-//! Windows share. Beside it, one file per platform holds the host's clipboard
-//! and fills the clipboard position of its table:
+//! Windows share, and `text`, the forms text takes between the Linux desktops,
+//! which the Linux clipboards and the X11 host's drops read. Beside them, one
+//! file per platform holds the host's clipboard and fills the clipboard
+//! position of its table:
 //!
 //! - `windows`: `OpenClipboard` with an owner window of its own;
 //! - `apple`: `NSPasteboard` on macOS, `UIPasteboard` on iOS;
@@ -11,8 +13,7 @@
 //! - `web`: `navigator.clipboard`, whose read answers when its promise
 //!   settles;
 //! - `linux`: the Wayland seats' selection through `wl_data_device`, X11's
-//!   `CLIPBOARD` selection on a connection of its own, and
-//!   the text forms the Linux desktops exchange;
+//!   `CLIPBOARD` selection on a connection of its own;
 //! - `winit`: `arboard`;
 //! - `headless`: a `MemoryClipboard`, one per loop.
 
@@ -25,6 +26,8 @@ mod headless;
 pub(crate) mod linux;
 #[cfg(windows)]
 mod lock;
+#[cfg(any(wayland_host, x11_host))]
+pub(crate) mod text;
 #[cfg(target_arch = "wasm32")]
 pub(crate) mod web;
 #[cfg(windows)]

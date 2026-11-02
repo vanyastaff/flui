@@ -42,7 +42,7 @@ use web_time::Instant;
 
 use super::{MAX_WRITERS, OfferData, Shared, TRANSFER_TIMEOUT, transfer};
 use crate::clipboard::linux::offered::{SelectionText, answer_with, ask, drop_retired};
-use crate::clipboard::linux::text::TextForm;
+use crate::clipboard::text::TextForm;
 use crate::owner::linux::wayland::WaylandState;
 
 /// The primary selection's part of the clipboard's state, reached on the
