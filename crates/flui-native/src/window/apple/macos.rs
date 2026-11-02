@@ -52,7 +52,7 @@ use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
 
 use flui_foundation::geometry::{Bounds, Point, Size};
 use flui_platform::{
-    AdmittedCommand, ApplyError, SizeConstraints, WindowCapabilities, WindowCommand,
+    AdmittedCommand, ApplyError, SizeConstraints, WindowCapabilities, WindowCommand, WindowFrame,
     WindowGeometry, WindowMode, WindowState,
 };
 
@@ -99,7 +99,7 @@ use crate::{
     owner::OpenWindowError,
     owner::slot::OwnerWeak,
     owner::window_delivery::{Retirement, WindowDelivery},
-    window::state::{ReportedFacts, WindowStateCell, mode_of},
+    window::state::{ReportedFacts, WindowStateCell, mode_of, system_frame_or_none},
 };
 use flui_platform::{
     CursorError, DisplayId, PlatformWindow, RedrawRequester, SurfaceTarget, WindowHandler,
@@ -412,7 +412,9 @@ impl MacOSWindow {
             // Build window style mask
             let mut style_mask = NSWindowStyleMask::Closable | NSWindowStyleMask::Miniaturizable;
 
-            if options.decorated {
+            // No title bar of the application's here yet: one asked for opens
+            // with the system's frame.
+            if options.frame != WindowFrame::None {
                 style_mask |= NSWindowStyleMask::Titled;
             }
 
@@ -625,7 +627,7 @@ impl MacOSWindow {
                         .with_title(Some(options.title.clone()))
                         .with_constraints(SizeConstraints::new(options.min_size, options.max_size))
                         .with_resizable(options.resizable)
-                        .with_decorated(options.decorated),
+                        .with_frame(system_frame_or_none(options.frame != WindowFrame::None)),
                 )),
             });
 
@@ -1341,8 +1343,8 @@ impl PlatformWindow for MacOSWindow {
             WindowCommand::SetResizable(on) => {
                 self.set_style_bit(NSWindowStyleMask::Resizable, on)?;
             }
-            WindowCommand::SetDecorated(on) => {
-                self.set_style_bit(NSWindowStyleMask::Titled, on)?;
+            WindowCommand::SetFrame(frame) => {
+                self.set_style_bit(NSWindowStyleMask::Titled, frame.has_system_title_bar())?;
             }
             WindowCommand::SetMode(mode) => self.change_mode(mode)?,
             WindowCommand::Show => self.show_window()?,
@@ -1677,7 +1679,9 @@ impl MacOSWindow {
             .with_focused(focused)
             .with_title(Some(title))
             .with_resizable(flags.resizable)
-            .with_decorated(mask.contains(NSWindowStyleMask::Titled))
+            .with_frame(system_frame_or_none(
+                mask.contains(NSWindowStyleMask::Titled),
+            ))
             .with_constraints(constraints_of_content_limits(
                 Size::new(min.width, min.height),
                 Size::new(max.width, max.height),

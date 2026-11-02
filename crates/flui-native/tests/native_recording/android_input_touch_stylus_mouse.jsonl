@@ -1,4 +1,4 @@
-{"flui_native_recording":1,"backend":"android","epoch_ns":0,"uptime_ns":0,"devices":[{"device":4294967295,"kinds":["touch","pen","mouse"]}]}
+{"flui_native_recording":2,"backend":"android","epoch_ns":0,"uptime_ns":0,"devices":[{"device":4294967295,"kinds":["touch","pen","mouse"]}]}
 {"row":"add_device","device":4294967295,"kind":"unknown","time_ns":376885214000000}
 {"row":"reading","reading":{"device":4294967295,"contact":0,"kind":"touch","action":{"press":1},"buttons":[1],"time":{"epoch_ns":376885214000000},"position":[480.6044921875,1200.0],"scale":2.8125}}
 {"row":"reading","reading":{"device":4294967295,"contact":0,"kind":"touch","action":{"release":1},"buttons":[],"time":{"epoch_ns":376885214000000},"position":[487.29296875,1200.0],"scale":2.8125}}

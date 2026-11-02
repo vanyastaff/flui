@@ -11,8 +11,9 @@ use std::time::Duration;
 use flui_foundation::geometry::Size;
 use flui_objects::RenderSizedBox;
 use flui_platform::{
-    AdmissionError, HostNotice, SubmitError, WindowCapabilities, WindowCommand, WindowControl,
-    WindowGeometry, WindowMode, WindowState,
+    AdmissionError, AppTitleBar, ControlsOffset, HostNotice, SubmitError, SystemControls,
+    WindowCapabilities, WindowCommand, WindowControl, WindowFrame, WindowGeometry, WindowMode,
+    WindowState,
 };
 use flui_rendering::protocol::BoxProtocol;
 use flui_testing::HeadlessBinding;
@@ -149,6 +150,10 @@ fn commands_reach_the_control_checked_and_in_order() {
     let handle = handle.expect("window");
     handle.set_title("A").expect("accepted");
     handle.set_mode(WindowMode::Maximized).expect("accepted");
+    let frame = WindowFrame::AppTitleBar(AppTitleBar::new().with_system_controls(
+        SystemControls::Offset(ControlsOffset::try_new(17.0, 9.0).expect("finite offset")),
+    ));
+    handle.set_frame(frame).expect("accepted");
     assert_eq!(
         handle.set_size(Size::new(0.0, 10.0)),
         Err(SubmitError::Admission(AdmissionError::InvalidGeometry)),
@@ -160,6 +165,7 @@ fn commands_reach_the_control_checked_and_in_order() {
         [
             WindowCommand::SetTitle("A".into()),
             WindowCommand::SetMode(WindowMode::Maximized),
+            WindowCommand::SetFrame(frame),
             WindowCommand::Hide
         ]
     );

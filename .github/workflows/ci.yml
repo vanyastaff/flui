@@ -658,6 +658,38 @@ jobs:
       - name: cargo doc --no-deps (every `testing` feature on)
         run: cargo xtask doc-strict
 
+      # The contract rides the release train until cargo-semver-checks shows it
+      # stable for two trains in a row (ADR-0153). A report, not a gate: before
+      # the first publication every change to the contract is a break.
+      - name: Install cargo-semver-checks
+        if: github.event_name == 'pull_request' || github.event_name == 'push'
+        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        with:
+          tool: cargo-semver-checks@0.51
+
+      - name: cargo semver-checks flui-platform (report)
+        if: github.event_name == 'pull_request' || github.event_name == 'push'
+        continue-on-error: true
+        env:
+          BASELINE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: cargo semver-checks check-release -p flui-platform --baseline-rev "$BASELINE"
+
+  # Nightly API contracts keep their rustdoc JSON output in one job, separately
+  # from stable documentation and the semver report.
+  api-contracts:
+    name: api-contracts
+    needs: [checks, plan]
+    if: contains(fromJSON('["wide","full"]'), needs.plan.outputs.lane)
+    runs-on: ubuntu-26.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install pinned Rust
+        uses: ./.github/actions/rust-toolchain
+
       # rustdoc's JSON output is nightly-only. The gate runs it through
       # `rustup run nightly`, so the committed rust-toolchain.toml pin stays the
       # toolchain of every other step.
@@ -693,22 +725,6 @@ jobs:
           set -euo pipefail
           cargo xtask send-positions
           cargo xtask send-positions --self-test
-
-      # The contract rides the release train until cargo-semver-checks shows it
-      # stable for two trains in a row (ADR-0153). A report, not a gate: before
-      # the first publication every change to the contract is a break.
-      - name: Install cargo-semver-checks
-        if: github.event_name == 'pull_request' || github.event_name == 'push'
-        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
-        with:
-          tool: cargo-semver-checks@0.51
-
-      - name: cargo semver-checks flui-platform (report)
-        if: github.event_name == 'pull_request' || github.event_name == 'push'
-        continue-on-error: true
-        env:
-          BASELINE: ${{ github.event.pull_request.base.sha || github.event.before }}
-        run: cargo semver-checks check-release -p flui-platform --baseline-rev "$BASELINE"
 
   # ─────────────────────────────────────────────────────────────────────────
   # deps — `cargo xtask deps`: cargo-deny over every workspace member (bans,
@@ -1110,7 +1126,7 @@ jobs:
   ci:
     name: ci
     if: always()
-    needs: [checks, plan, clippy, feature-matrix, wasm-check, cross-typecheck, test, test-nested, test-trybuild, test-features, doc, deps, doc-test, miri]
+    needs: [checks, plan, clippy, feature-matrix, wasm-check, cross-typecheck, test, test-nested, test-trybuild, test-features, doc, api-contracts, deps, doc-test, miri]
     runs-on: ubuntu-26.04
     timeout-minutes: 10
     steps:
@@ -1153,7 +1169,7 @@ jobs:
         env:
           NEEDS: ${{ toJSON(needs) }}
           HEAVY_JOBS: >-
-            clippy wasm-check cross-typecheck test test-nested doc test-features
+            clippy wasm-check cross-typecheck test test-nested doc api-contracts test-features
           FULL_JOBS: >-
             feature-matrix doc-test miri test-trybuild
           LANE: ${{ needs.plan.outputs.lane }}

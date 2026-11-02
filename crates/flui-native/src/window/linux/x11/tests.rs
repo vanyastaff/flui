@@ -265,6 +265,7 @@ fn x11_window_takes_commands_and_publishes_what_the_server_holds() {
                 .without_presentation_feedback(CapabilityAbsence::NotYetOnThisHost)
                 .without_keyboard_inset(CapabilityAbsence::NotYetOnThisHost)
                 .without_system_gestures(CapabilityAbsence::NotOnThisPlatform)
+                .without_app_title_bar(CapabilityAbsence::NotYetOnThisHost)
         );
         let watching = Arc::clone(&watched);
         window.with(move |window| *watching.lock() = Some(OwnerWeak::new(window)));
@@ -624,7 +625,8 @@ fn x11_window_without_a_probe_does_not_claim_to_observe_minimizing() {
             let mut expected = WindowCapabilities::ALL
                 .without_presentation_feedback(CapabilityAbsence::NotYetOnThisHost)
                 .without_keyboard_inset(CapabilityAbsence::NotYetOnThisHost)
-                .without_system_gestures(CapabilityAbsence::NotOnThisPlatform);
+                .without_system_gestures(CapabilityAbsence::NotOnThisPlatform)
+                .without_app_title_bar(CapabilityAbsence::NotYetOnThisHost);
             expected.observes_minimized = flui_platform::Availability::Unavailable;
             assert_eq!(capabilities, expected);
             // Asking is still allowed: the compositor or window manager acts.
