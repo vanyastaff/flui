@@ -54,8 +54,37 @@ use web_time::{Duration, Instant};
 /// The period assumed for a frame that reports none: one 60 Hz frame.
 const DEFAULT_FRAME_PERIOD_MS: f64 = 1000.0 / 60.0;
 
-/// How many hand-measured phases wait, with no frame to place them, before the oldest is forgotten.
+/// How many hand-measured phases wait, with no frame to place them, before the oldest of the same
+/// phase are summed into one.
 const MAX_UNPLACED_PHASES: usize = 256;
+
+/// A hand-measured phase, or the sum of several of the same phase, waiting for the captured frame
+/// it ran inside.
+struct Unplaced {
+    phase: FramePhase,
+    /// How long it ran, in total.
+    duration: Duration,
+    /// When the first of its measurements started.
+    started: Instant,
+    /// When the last of its measurements ended.
+    ended: Instant,
+}
+
+/// Bounds `waiting` without losing a measurement: when it is full, measurements of one phase are
+/// summed into one entry spanning them all, so their total survives.
+fn compact(waiting: &mut Vec<Unplaced>) {
+    let mut merged: Vec<Unplaced> = Vec::new();
+    for entry in waiting.drain(..) {
+        if let Some(same) = merged.iter_mut().find(|m| m.phase == entry.phase) {
+            same.duration += entry.duration;
+            same.started = same.started.min(entry.started);
+            same.ended = same.ended.max(entry.ended);
+        } else {
+            merged.push(entry);
+        }
+    }
+    *waiting = merged;
+}
 
 /// Where the profiler draws the line between a smooth frame and jank.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -228,7 +257,7 @@ struct ProfilerInner {
     /// Phases measured by hand while no frame was begun by the caller, with how long each ran and
     /// when it started:
     /// a frame the capture closes places them against its own start.
-    unplaced: Vec<(FramePhase, Duration, Instant)>,
+    unplaced: Vec<Unplaced>,
     /// Frame history
     frame_history: VecDeque<FrameStats>,
     /// Total frames processed
@@ -323,9 +352,14 @@ impl ProfilerInner {
             // No frame was begun by hand, so no frame owns this phase yet: it waits, with when it
             // ran, for a captured frame it ran inside.
             if self.unplaced.len() >= MAX_UNPLACED_PHASES {
-                self.unplaced.remove(0);
+                compact(&mut self.unplaced);
             }
-            self.unplaced.push((phase, duration, started));
+            self.unplaced.push(Unplaced {
+                phase,
+                duration,
+                started,
+                ended: started + duration,
+            });
             return;
         };
         let start_offset = frame_start.elapsed().saturating_sub(duration);
@@ -410,12 +444,12 @@ impl Profiler {
         // ran between frames, or while another runtime's frame was excluded, is not this frame's.
         let frame_began = epoch + frame_start;
         let frame_ended = frame_began + frame.span().duration();
-        for (phase, duration, started) in std::mem::take(&mut inner.unplaced) {
-            if started >= frame_began && started + duration <= frame_ended {
+        for waiting in std::mem::take(&mut inner.unplaced) {
+            if waiting.started >= frame_began && waiting.ended <= frame_ended {
                 inner.add_phase(
-                    phase,
-                    duration,
-                    started.saturating_duration_since(frame_began),
+                    waiting.phase,
+                    waiting.duration,
+                    waiting.started.saturating_duration_since(frame_began),
                 );
             }
         }
@@ -568,6 +602,25 @@ impl std::fmt::Debug for Profiler {
 mod tests {
 
     use super::*;
+
+    /// More measurements than the pending queue holds are summed, not dropped.
+    #[test]
+    fn many_hand_measurements_wait_without_losing_their_total() {
+        let mut inner = ProfilerInner::new(ProfilerConfig::default());
+        let began = Instant::now();
+        let count = MAX_UNPLACED_PHASES as u32 * 2;
+        for i in 0..count {
+            inner.end_phase(
+                FramePhase::Custom("per node"),
+                Duration::from_millis(1),
+                began + Duration::from_millis(u64::from(i)),
+            );
+        }
+
+        let total: Duration = inner.unplaced.iter().map(|waiting| waiting.duration).sum();
+        assert_eq!(total, Duration::from_millis(u64::from(count)));
+        assert!(inner.unplaced.len() <= MAX_UNPLACED_PHASES);
+    }
 
     #[test]
     fn test_jank_detection() {
