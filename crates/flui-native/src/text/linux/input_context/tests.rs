@@ -22,9 +22,9 @@ type DeletionCase = (Told, i32, u32, Option<(u32, u32)>);
 fn keys_behind_an_unanswered_key_wait_in_order() {
     let now = Instant::now();
     let mut hold = KeyHold::default();
-    let first = hold.ask('a', now);
+    let first = hold.ask('a', now, |_| {});
     hold.pass('b');
-    let third = hold.ask('c', now);
+    let third = hold.ask('c', now, |_| {});
     assert!(
         hold.ready().is_empty(),
         "nothing passes the first key's wait"
@@ -43,7 +43,7 @@ fn keys_behind_an_unanswered_key_wait_in_order() {
 fn a_key_the_input_method_took_is_not_delivered() {
     let now = Instant::now();
     let mut hold = KeyHold::default();
-    let taken = hold.ask('a', now);
+    let taken = hold.ask('a', now, |_| {});
     hold.pass('b');
     assert!(hold.answer(taken, true));
     assert_eq!(hold.ready(), ['b']);
@@ -53,8 +53,8 @@ fn a_key_the_input_method_took_is_not_delivered() {
 fn an_unanswered_key_is_delivered_at_its_deadline_and_its_late_answer_dropped() {
     let now = Instant::now();
     let mut hold = KeyHold::default();
-    let slow = hold.ask('a', now);
-    let next = hold.ask('b', now + ANSWER_TIMEOUT / 2);
+    let slow = hold.ask('a', now, |_| {});
+    let next = hold.ask('b', now + ANSWER_TIMEOUT / 2, |_| {});
     assert_eq!(hold.deadline(), Some(now + ANSWER_TIMEOUT));
     hold.expire(now + ANSWER_TIMEOUT / 2, |key| panic!("{key} is not due"));
     assert_eq!(hold.ready(), Vec::<char>::new(), "not due yet");
@@ -78,9 +78,9 @@ fn an_unanswered_key_is_delivered_at_its_deadline_and_its_late_answer_dropped() 
 fn keys_of_a_context_that_went_are_delivered_in_order() {
     let now = Instant::now();
     let mut hold = KeyHold::default();
-    hold.ask(('x', 1), now);
-    hold.ask(('y', 2), now);
-    hold.ask(('x', 3), now);
+    hold.ask(('x', 1), now, |_| {});
+    hold.ask(('y', 2), now, |_| {});
+    hold.ask(('x', 3), now, |_| {});
     hold.release_where(|(window, _)| *window == 'x');
     assert_eq!(
         hold.ready(),
@@ -96,9 +96,11 @@ fn a_full_hold_lets_its_oldest_waiting_key_go() {
     let now = Instant::now();
     let mut hold = KeyHold::default();
     for key in 0..MAX_HELD_KEYS {
-        hold.ask(key, now);
+        hold.ask(key, now, |_| {});
     }
-    hold.ask(MAX_HELD_KEYS, now);
+    let mut evicted = Vec::new();
+    hold.ask(MAX_HELD_KEYS, now, |key| evicted.push(*key));
+    assert_eq!(evicted, [0], "the input method is told which key went");
     assert_eq!(hold.ready(), [0], "the oldest key no longer waits");
 }
 

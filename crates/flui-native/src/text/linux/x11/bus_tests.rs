@@ -32,7 +32,7 @@ use super::bus::{Bus, CREATE_TIMEOUT, Reach};
 use super::{WindowText, X11Ime};
 use crate::owner::linux::x11::{LoopText, WindowRef, WindowScale, X11Key};
 use crate::text::TextInput;
-use crate::text::linux::input_context::{ANSWER_TIMEOUT, Daemon};
+use crate::text::linux::input_context::{ANSWER_TIMEOUT, Daemon, MAX_HELD_KEYS};
 
 /// A private session bus, stopped when dropped.
 struct PrivateBus {
@@ -923,5 +923,25 @@ fn an_engine_asking_for_the_field_is_told_it() {
     rig.press('r');
     rig.settle("the field told again", || {
         rig.heard_count("surrounding \"abc\"") > told
+    });
+}
+
+/// A key a full hold lets go is typed as one overdue: the window's context
+/// is replaced, so what the input method does with it late reaches no field.
+#[test]
+fn a_key_a_full_hold_lets_go_retires_its_context() {
+    let Some(rig) = Rig::start() else {
+        return;
+    };
+    for _ in 0..=MAX_HELD_KEYS {
+        rig.press('c');
+    }
+    assert_eq!(
+        rig.delivered().len(),
+        MAX_HELD_KEYS + 1,
+        "the window's keys go as typed with its context"
+    );
+    rig.settle("the field stated to a new context", || {
+        rig.heard_count("context for") == 2 && rig.heard_any("destroy")
     });
 }

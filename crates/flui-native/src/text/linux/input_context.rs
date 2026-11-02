@@ -70,15 +70,17 @@ impl<K> Default for KeyHold<K> {
 impl<K> KeyHold<K> {
     /// `key` waits for the input method's answer from `now`: the ticket its
     /// answer names. Past [`MAX_HELD_KEYS`] the oldest key still waiting
-    /// stops waiting first.
-    pub(crate) fn ask(&mut self, key: K, now: Instant) -> Ticket {
+    /// stops waiting first, told to `evicted`: as with a key overdue, the
+    /// input method that has it may still act on it.
+    pub(crate) fn ask(&mut self, key: K, now: Instant, evicted: impl FnOnce(&K)) -> Ticket {
         if self.queue.len() >= MAX_HELD_KEYS
-            && let Some((_, fate)) = self
+            && let Some((oldest, fate)) = self
                 .queue
                 .iter_mut()
                 .find(|(_, fate)| matches!(fate, Fate::Asked { .. }))
         {
             *fate = Fate::Deliver;
+            evicted(oldest);
         }
         let ticket = Ticket(self.next);
         self.next = self

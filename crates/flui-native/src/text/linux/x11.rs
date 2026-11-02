@@ -726,6 +726,7 @@ impl LoopText for X11Ime {
 
     fn key(&self, key: X11Key) {
         let now = Instant::now();
+        let mut evicted = None;
         self.state.with(|ime| {
             let wire = ime
                 .focused
@@ -739,7 +740,9 @@ impl LoopText for X11Ime {
             };
             let (keysym, keycode, state, release, time) =
                 (key.keysym, key.keycode, key.state, key.release, key.time);
-            let ticket = ime.hold.ask(key, now);
+            let ticket = ime
+                .hold
+                .ask(key, now, |oldest| evicted = Some(oldest.window.id));
             let request = Request::Key {
                 ticket,
                 keysym,
@@ -754,6 +757,11 @@ impl LoopText for X11Ime {
             }
         });
         let mut failure = FirstPanic::new();
+        // A key the full hold let go is typed as one overdue: an edit the
+        // input method sends for it late must reach no field.
+        if let Some(window) = evicted {
+            self.replace_context(window, &mut failure);
+        }
         self.deliver_ready(&mut failure);
         failure.resume();
     }
