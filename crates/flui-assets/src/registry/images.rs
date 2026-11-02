@@ -250,9 +250,8 @@ impl LoadTicket {
 struct Pending {
     ticket: Arc<LoadTicket>,
     subscribers: usize,
-    /// The lead's first, as admitted. Told that a run is parked, they are
-    /// taken out and each registers again as it claims.
-    waiters: Vec<oneshot::Sender<Delivery>>,
+    /// The lead's first, as admitted.
+    waiters: Vec<Waiter>,
     /// Dropping it cancels a load spawned on the IO lane; `None` while the
     /// load waits for its load slot, runs inside a subscriber's
     /// [`ImageLoad`], or before its spawn returns.
@@ -262,13 +261,21 @@ struct Pending {
     parked: Option<Run>,
 }
 
-/// What a subscriber's channel delivers. A channel closed with none means
-/// the load closed unsettled, and the subscriber takes it over.
+/// One subscriber's ends of its channels.
+struct Waiter {
+    /// Settles the subscriber.
+    settle: oneshot::Sender<Delivery>,
+    /// Tells the subscriber the run is parked for it to claim; taken when
+    /// it is told. Apart from `settle`, so the outcome still reaches a
+    /// subscriber told after another claimed and finished the run.
+    claim: Option<oneshot::Sender<()>>,
+}
+
+/// What a subscriber's settle channel delivers. A channel closed with none
+/// means the load closed unsettled, and the subscriber takes it over.
 enum Delivery {
     /// The load's outcome.
     Settled(Result<Image>),
-    /// The load's run is parked: claim it, unless another subscriber did.
-    Claim,
     /// The lead's lanes are shutting down and took no run (to the lead
     /// only; the other subscribers take the load over).
     Refused(SpawnError),
@@ -409,16 +416,28 @@ impl DecodedImages {
         if let Some(image) = state.entries.get(source) {
             return Admission::Cached(image.clone());
         }
-        let (tx, rx) = oneshot::channel();
+        let (waiter, channels) = Waiter::new();
         if let Some(pending) = state.pending.get_mut(source) {
             pending.subscribers = pending
                 .subscribers
                 .checked_add(1)
                 .expect("BUG: an image load has more subscribers than addressable memory");
-            pending.waiters.push(tx);
             let ticket = Arc::clone(&pending.ticket);
+            // A run parked before this request joined is its to claim too.
+            // Told on a channel nobody polls yet, so no waker runs here.
+            let waiter = if pending.parked.is_some() {
+                waiter.tell_parked()
+            } else {
+                waiter
+            };
+            pending.waiters.push(waiter);
             drop(state);
-            return Admission::Joined(Subscription::new(rx, Arc::clone(self), source, ticket));
+            return Admission::Joined(Subscription::new(
+                channels,
+                Arc::clone(self),
+                source,
+                ticket,
+            ));
         }
         let order = state.next_order;
         state.next_order = order
@@ -433,7 +452,7 @@ impl DecodedImages {
             Pending {
                 ticket: Arc::clone(&ticket),
                 subscribers: 1,
-                waiters: vec![tx],
+                waiters: vec![waiter],
                 cancel: None,
                 parked: None,
             },
@@ -444,7 +463,7 @@ impl DecodedImages {
             ticket: Arc::clone(&ticket),
             settled: false,
         };
-        let subscription = Subscription::new(rx, Arc::clone(self), source, ticket);
+        let subscription = Subscription::new(channels, Arc::clone(self), source, ticket);
         // Reserved under the lock that assigned `order`, so load slots follow
         // admission order however late each load first runs. A load with no
         // lanes is admitted only once polled, so it reserves no slot while
@@ -507,7 +526,13 @@ impl DecodedImages {
                 }
                 Err(SpawnError::Saturated | SpawnError::Unavailable) => {
                     let run = shared.lock().take();
-                    run.and_then(|run| images.park_run(&source, &ticket, run))
+                    match run.map(|run| images.park_run(&source, &ticket, run)) {
+                        // Parked with its slot, held until the run that
+                        // claims it finishes.
+                        Some(None) => return None,
+                        Some(Some(unparked)) => Some(unparked),
+                        None => None,
+                    }
                 }
                 Err(reason) => {
                     images.refuse_lead(&source, &ticket, reason);
@@ -565,23 +590,27 @@ impl DecodedImages {
     /// subscribers polled next to claim, and tells every one of them; the run
     /// back when no subscriber is left to tell.
     fn park_run(&self, source: &ImageSource, ticket: &Arc<LoadTicket>, run: Run) -> Option<Run> {
-        let waiters = {
+        let told = {
             let mut state = self.state.lock();
             match state.pending.get_mut(source) {
                 Some(pending)
                     if Arc::ptr_eq(&pending.ticket, ticket) && !pending.waiters.is_empty() =>
                 {
                     pending.parked = Some(run);
-                    std::mem::take(&mut pending.waiters)
+                    pending
+                        .waiters
+                        .iter_mut()
+                        .filter_map(|waiter| waiter.claim.take())
+                        .collect::<Vec<oneshot::Sender<()>>>()
                 }
                 _ => return Some(run),
             }
         };
         // Told outside the lock: a send wakes its subscriber's task. One
         // that left changes nothing; one never polled again leaves the run
-        // to the others.
-        for waiter in waiters {
-            let _ = waiter.send(Delivery::Claim);
+        // to the others, and every one still hears the outcome.
+        for claim in told {
+            let _ = claim.send(());
         }
         None
     }
@@ -600,28 +629,23 @@ impl DecodedImages {
                 _ => None,
             }
         };
+        // Sent and dropped outside the lock. A lead that left before hearing
+        // it changes nothing.
         if let Some(lead) = lead {
-            // A lead that left before hearing it changes nothing.
-            let _ = lead.send(Delivery::Refused(reason));
+            let _ = lead.settle.send(Delivery::Refused(reason));
         }
     }
 
-    /// Takes the run parked for `subscription`'s load, if no other subscriber
-    /// claimed it first, and registers the subscriber as a waiter again; a
-    /// load gone by then leaves its channel closed.
-    fn claim(&self, subscription: &mut Subscription) -> Option<Run> {
-        let (tx, rx) = oneshot::channel();
+    /// Takes the run parked for `subscription`'s load, unless another
+    /// subscriber claimed it first.
+    fn claim(&self, subscription: &Subscription) -> Option<Run> {
         let mut state = self.state.lock();
-        let run = match state.pending.get_mut(&subscription.source) {
+        match state.pending.get_mut(&subscription.source) {
             Some(pending) if Arc::ptr_eq(&pending.ticket, &subscription.ticket) => {
-                pending.waiters.push(tx);
                 pending.parked.take()
             }
             _ => None,
-        };
-        drop(state);
-        subscription.rx = rx;
-        run
+        }
     }
 
     /// Settles the load `ticket` names: removes its entry, keeps a decoded
@@ -664,7 +688,7 @@ impl DecodedImages {
         if let Some(outcome) = outcome {
             for waiter in waiters {
                 // A waiter whose subscriber left before completion is closed.
-                let _ = waiter.send(Delivery::Settled(outcome.clone()));
+                let _ = waiter.settle.send(Delivery::Settled(outcome.clone()));
             }
         }
     }
@@ -984,23 +1008,71 @@ enum LoadState {
 /// A subscriber's claim on a pending load; dropping it unsubscribes.
 struct Subscription {
     rx: oneshot::Receiver<Delivery>,
+    /// Told when the load's run is parked; `None` once told or closed.
+    claim: Option<oneshot::Receiver<()>>,
     images: Arc<DecodedImages>,
     source: ImageSource,
     ticket: Arc<LoadTicket>,
 }
 
+/// A subscriber's ends of the channels its [`Waiter`] sends on.
+struct Channels {
+    settle: oneshot::Receiver<Delivery>,
+    claim: oneshot::Receiver<()>,
+}
+
+impl Waiter {
+    fn new() -> (Self, Channels) {
+        let (settle, settle_rx) = oneshot::channel();
+        let (claim, claim_rx) = oneshot::channel();
+        (
+            Self {
+                settle,
+                claim: Some(claim),
+            },
+            Channels {
+                settle: settle_rx,
+                claim: claim_rx,
+            },
+        )
+    }
+
+    /// This waiter, already told a run is parked.
+    fn tell_parked(mut self) -> Self {
+        if let Some(claim) = self.claim.take() {
+            let _ = claim.send(());
+        }
+        self
+    }
+}
+
 impl Subscription {
     fn new(
-        rx: oneshot::Receiver<Delivery>,
+        channels: Channels,
         images: Arc<DecodedImages>,
         source: &ImageSource,
         ticket: Arc<LoadTicket>,
     ) -> Self {
         Self {
-            rx,
+            rx: channels.settle,
+            claim: Some(channels.claim),
             images,
             source: source.clone(),
             ticket,
+        }
+    }
+
+    /// Whether this subscriber was just told the load's run is parked.
+    fn poll_told(&mut self, cx: &mut Context<'_>) -> bool {
+        let Some(claim) = &mut self.claim else {
+            return false;
+        };
+        match Pin::new(claim).poll(cx) {
+            Poll::Pending => false,
+            Poll::Ready(told) => {
+                self.claim = None;
+                told.is_ok()
+            }
         }
     }
 
@@ -1043,30 +1115,38 @@ impl ImageLoad {
     /// Acts on what the load delivered: its outcome, its run to drive here,
     /// or the refusal of this subscriber's lanes. `None` once it drives the
     /// run.
-    fn deliver(&mut self, delivery: Delivery) -> Option<Result<Image>> {
+    fn deliver(&mut self, delivery: Delivery) -> Result<Image> {
         match delivery {
-            Delivery::Settled(outcome) => Some(outcome),
-            Delivery::Refused(reason) => Some(Err(AssetError::LanesRefused {
+            Delivery::Settled(outcome) => outcome,
+            Delivery::Refused(reason) => Err(AssetError::LanesRefused {
                 path: self.source.label().to_string(),
                 reason,
-            })),
-            Delivery::Claim => {
-                let LoadState::Waiting(mut subscription) =
-                    std::mem::replace(&mut self.state, LoadState::Unadmitted)
-                else {
-                    unreachable!("BUG: a run is parked only for a load no subscriber drives");
-                };
-                self.state = match self.images.claim(&mut subscription) {
-                    Some(run) => LoadState::Leading {
-                        run: Some(run),
-                        subscription,
-                    },
-                    // Another subscriber claimed it: wait for that one.
-                    None => LoadState::Waiting(subscription),
-                };
-                None
-            }
+            }),
         }
+    }
+
+    /// Drives the load's parked run here, if this subscriber was just told
+    /// of it and no other claimed it first.
+    fn claim_parked(&mut self, cx: &mut Context<'_>) -> bool {
+        let LoadState::Waiting(subscription) = &mut self.state else {
+            return false;
+        };
+        if !subscription.poll_told(cx) {
+            return false;
+        }
+        let Some(run) = self.images.claim(subscription) else {
+            return false;
+        };
+        let LoadState::Waiting(subscription) =
+            std::mem::replace(&mut self.state, LoadState::Unadmitted)
+        else {
+            unreachable!("BUG: the state was waiting under the same borrow");
+        };
+        self.state = LoadState::Leading {
+            run: Some(run),
+            subscription,
+        };
+        true
     }
 
     /// Takes over a load closed unsettled, or answers once it has been
@@ -1104,6 +1184,9 @@ impl Future for ImageLoad {
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         loop {
+            if self.claim_parked(cx) {
+                continue;
+            }
             let settled = match &mut self.state {
                 LoadState::Unadmitted => {
                     self.admit();
@@ -1129,9 +1212,7 @@ impl Future for ImageLoad {
             match settled {
                 Poll::Pending => return Poll::Pending,
                 Poll::Ready(Some(delivery)) => {
-                    if let Some(outcome) = self.deliver(delivery) {
-                        return Poll::Ready(outcome);
-                    }
+                    return Poll::Ready(self.deliver(delivery));
                 }
                 Poll::Ready(None) => self.hand_over(),
             }

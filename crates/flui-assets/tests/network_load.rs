@@ -573,6 +573,10 @@ fn no_room_leads_here() {
     let http = ScriptedHttp::new();
     let lanes = QueuedLanes::new();
     let (registry, mut loads) = held_loads(&http, &lanes, LOAD_SLOTS + 1);
+    http.respond(
+        nth_url(LOAD_SLOTS),
+        ScriptedResponse::Fail(HttpError::Timeout),
+    );
     let mut joined = registry.load_network_image(
         nth_url(LOAD_SLOTS),
         LoadServices::new().with_http(http.handle()),
@@ -584,15 +588,49 @@ fn no_room_leads_here() {
     lanes.run_until_idle();
     assert!(poll_once(&mut loads[0]).is_ready());
     assert_eq!(http.requests_to(&nth_url(LOAD_SLOTS)), 0, "not yet driven");
-    let std::task::Poll::Ready(image) = poll_once(&mut joined) else {
+
+    // The parked run keeps the slot freed for it: a load from elsewhere
+    // waits for one.
+    let spare = QueuedLanes::new();
+    let extra = registry.load_network_image(
+        nth_url(LOAD_SLOTS + 1),
+        spare.services().with_http(http.handle()),
+    );
+    assert_eq!(spare.pending_io(), 0, "every slot is held");
+
+    let std::task::Poll::Ready(answered) = poll_once(&mut joined) else {
         panic!("the joined subscriber claimed the run and drove it to its end");
     };
-    image.expect("the load decodes where it is polled");
-    assert_eq!(http.requests_to(&nth_url(LOAD_SLOTS)), 1);
-    let std::task::Poll::Ready(image) = poll_once(&mut loads[LOAD_SLOTS]) else {
+    assert!(
+        matches!(
+            answered,
+            Err(AssetError::Http {
+                source: HttpError::Timeout,
+                ..
+            })
+        ),
+        "the load fails where it is polled"
+    );
+    assert_eq!(
+        spare.pending_io(),
+        1,
+        "the run's slot went to the next load"
+    );
+    let std::task::Poll::Ready(answered) = poll_once(&mut loads[LOAD_SLOTS]) else {
         panic!("the lead hears the outcome");
     };
-    image.expect("the lead shares it");
+    assert!(
+        matches!(
+            answered,
+            Err(AssetError::Http {
+                source: HttpError::Timeout,
+                ..
+            })
+        ),
+        "the lead, told of the run after it was claimed, hears its outcome"
+    );
+    assert_eq!(http.requests_to(&nth_url(LOAD_SLOTS)), 1, "one request");
+    drop(extra);
 }
 
 /// The lead's lanes shut down while it waits for a slot: the lead answers
