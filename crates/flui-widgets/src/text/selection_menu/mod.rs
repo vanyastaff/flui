@@ -10,8 +10,12 @@
 //! the menu key or assistive technology opens its popup.
 //! [`SelectionMenuPolicy`] says which touches show the toolbar.
 
+mod host;
+mod toolbar;
 mod toolbar_items;
 
+pub(crate) use self::host::{MenuHost, MenuSettings, ShowSelectionMenu, show_menu_action};
+pub(crate) use self::toolbar::{ToolbarAnchors, toolbar};
 pub use self::toolbar_items::{ToolbarItems, ToolbarItemsController, ToolbarItemsState};
 
 use std::fmt;
@@ -43,7 +47,7 @@ pub trait SelectionMenu: 'static {
     /// FLUI places it above the selection, or below it where there is no
     /// room, never gives it the focus, and hides it with the selection's
     /// handles. Choosing an item is [`MenuItem::perform`]; FLUI hides the
-    /// toolbar once a press in it ends.
+    /// toolbar after the frame, however the item was chosen.
     fn toolbar(&self, items: &[MenuItem], ctx: &dyn BuildContext) -> BoxedView;
 
     /// A popup for one mounted field or area, which keeps it while this look
@@ -448,6 +452,14 @@ pub(crate) fn editing_commands(ctx: &dyn BuildContext) -> [GestureCommand; 4] {
             SelectAllTextIntent,
         ),
     ]
+}
+
+/// The standard commands of a selection of static text, labelled in the
+/// locale at `ctx`: copy and select all. An enclosing answer to cut or
+/// paste has nothing to act on there, so they are not offered.
+pub(crate) fn reading_commands(ctx: &dyn BuildContext) -> [GestureCommand; 2] {
+    let [_cut, copy, _paste, select_all] = editing_commands(ctx);
+    [copy, select_all]
 }
 
 /// A menu set for a field or a subtree: shown with a look, or turned off.

@@ -57,8 +57,8 @@ mod clipboard;
 mod cursor_area;
 mod handles;
 mod menu;
+use crate::text::{MenuSettings, ShowSelectionMenu};
 use cursor_area::CursorAreaLoop;
-use menu::{MenuSettings, ShowFieldMenu};
 
 pub use handles::CaretHandle;
 use handles::{FieldHandles, FieldLongPress, HandleParts};
@@ -1484,7 +1484,7 @@ impl EditableTextState {
                 erased_action::<ActivateIntent>(KeptByTheField),
                 erased_action::<ActivationPressIntent>(KeptByTheField),
                 erased_action::<DismissIntent>(KeptByTheField),
-                erased_action::<ShowContextMenuIntent>(ShowFieldMenu::new(
+                erased_action::<ShowContextMenuIntent>(ShowSelectionMenu::new(
                     self.touch_handles.menu(),
                     enclosing.as_ref(),
                 )),
@@ -2266,8 +2266,7 @@ impl ViewState<EditableText> for EditableTextState {
         let origin =
             crate::PopupOrigin::new(self.inner_anchor.clone(), self.pipeline_owner.clone());
         let chain = self.action_chain.clone();
-        (self.touch_handles.menu()).configure(ctx, &view.menu, chain, &origin);
-        self.touch_handles.menu_configured();
+        (self.touch_handles).menu_configured(ctx, &view.menu, chain, &origin);
         let touch_handles = Rc::clone(&self.touch_handles);
 
         // OUTSIDE the inner `AnchoredBox`, not inside it: the IME cursor-area
@@ -2948,7 +2947,9 @@ fn build_field_view(
             let focus = actions.clone();
             semantics = semantics.on_focus(move |cx| focus.focus(cx));
         }
-        semantics = menu::show_menu_action(semantics, handles.menu(), actions.clone());
+        let focus = actions.clone();
+        semantics =
+            crate::text::show_menu_action(semantics, handles.menu(), move |cx| focus.focus(cx));
     }
     let field = crate::__private::AnchoredBox::new(
         inner_anchor,

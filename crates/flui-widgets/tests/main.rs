@@ -161,6 +161,8 @@ mod selection_area_controller;
 mod selection_area_handles;
 #[path = "selection_area_input.rs"]
 mod selection_area_input;
+#[path = "selection_area_menu.rs"]
+mod selection_area_menu;
 #[path = "selection_menu.rs"]
 mod selection_menu;
 #[path = "semantics.rs"]

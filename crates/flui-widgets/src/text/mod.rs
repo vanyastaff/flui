@@ -30,7 +30,10 @@ pub use selection_menu::{
     DefaultSelectionControls, PopupOrigin, SelectionMenu, SelectionMenuPolicy, SelectionPopup,
     ToolbarItems, ToolbarItemsController, ToolbarItemsState,
 };
-pub(crate) use selection_menu::{MenuChoice, editing_commands};
+pub(crate) use selection_menu::{
+    MenuHost, MenuSettings, ShowSelectionMenu, ToolbarAnchors, editing_commands, reading_commands,
+    show_menu_action, toolbar,
+};
 pub use selection_style::{DefaultSelectionStyle, SelectionStyle};
 pub use text::Text;
 pub use text_field::{RawTextField, RawTextFieldState};
