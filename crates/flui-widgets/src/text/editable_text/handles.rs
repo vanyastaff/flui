@@ -13,7 +13,8 @@ use std::time::Duration;
 use flui_animation::{
     Animation, AnimationController, AnimationStatus, DrivenController, StatusSubscription, Vsync,
 };
-use flui_foundation::geometry::Offset;
+use flui_foundation::ListenerId;
+use flui_foundation::geometry::{Offset, Point, Size};
 use flui_foundation::notifier::{ChangeNotifier, Listenable};
 use flui_foundation::panic::FirstPanic;
 use flui_interaction::{
@@ -21,21 +22,25 @@ use flui_interaction::{
 };
 use flui_painting::typography::{TextDirection, TextPosition};
 use flui_platform::TargetPlatform;
+use flui_rendering::constraints::BoxConstraints;
+use flui_rendering::delegates::SingleChildLayoutDelegate;
 use flui_rendering::hit_testing::HitTestBehavior;
 use flui_rendering::layer::LayerLink;
 use flui_rendering::pipeline::{LeaderWatch, PipelineCell};
 use flui_view::prelude::*;
 use flui_view::{BoxedView, View, ViewExt};
 
+use super::menu::FieldMenu;
 use super::{CompositionCommit, source_offset_at_global, source_word_range_at_global};
 use crate::interaction::GesturePolicy;
+use crate::interaction::MenuItem;
 use crate::interaction::recognizer_attachment::RecognizerAttachment;
 use crate::interaction::{DragSlot, GestureDetector, Listener};
 use crate::overlay::{InsertPosition, OverlayEntry, OverlayHandle};
 use crate::text::controller::TextEditingController;
 use crate::text::selection_area::handles::{LinkFollower, Look};
 use crate::text::text_store::with_editable_global;
-use crate::{HandleInfo, HandleSide, Positioned, Stack};
+use crate::{CustomSingleChildLayout, HandleInfo, HandleSide, Positioned, SizedBox, Stack};
 
 /// Whether a tap in an editable text shows a handle under its caret, which
 /// a drag moves, and how long it stays without a touch.
@@ -176,6 +181,14 @@ pub(super) struct FieldHandles {
     /// layout, so a handle sized from its line follows a new line height.
     watches: RefCell<Vec<LeaderWatch>>,
     warned: Cell<bool>,
+    /// The field's selection menu, whose toolbar shows over shown handles.
+    menu: Rc<FieldMenu>,
+    /// Set while the toolbar shows.
+    toolbar: Cell<bool>,
+    /// Whether the finger on a handle has dragged it since it touched.
+    touch_dragged: Cell<bool>,
+    /// The toolbar's subscriptions to its items' enablement.
+    toolbar_watches: RefCell<Vec<(ChangeNotifier, ListenerId)>>,
 }
 
 impl FieldHandles {
@@ -203,7 +216,99 @@ impl FieldHandles {
             long_press: RefCell::new(Weak::new()),
             watches: RefCell::new(Vec::new()),
             warned: Cell::new(false),
+            menu: Rc::new(FieldMenu::default()),
+            toolbar: Cell::new(false),
+            touch_dragged: Cell::new(false),
+            toolbar_watches: RefCell::new(Vec::new()),
         })
+    }
+
+    /// The field's selection menu.
+    pub(super) fn menu(&self) -> &Rc<FieldMenu> {
+        &self.menu
+    }
+
+    /// Shows the menu's toolbar over shown handles, when the field has a
+    /// menu; it follows its items' enablement while it shows.
+    fn show_toolbar(self: &Rc<Self>, failure: &mut FirstPanic) {
+        if self.shown.get().is_none() || self.menu.look().is_none() || self.toolbar.replace(true) {
+            return;
+        }
+        let watches: Vec<(ChangeNotifier, ListenerId)> = self
+            .menu
+            .items()
+            .iter()
+            .filter_map(MenuItem::enablement_changes)
+            .map(|changes| {
+                let handles = Rc::downgrade(self);
+                let id = changes.add_listener(Rc::new(move || {
+                    if let Some(handles) = handles.upgrade() {
+                        let mut failure = FirstPanic::new();
+                        handles.refresh(&mut failure);
+                        failure.resume();
+                    }
+                }));
+                (changes, id)
+            })
+            .collect();
+        *self.toolbar_watches.borrow_mut() = watches;
+        self.refresh(failure);
+    }
+
+    /// The field's build resolved its menu again: the popup of a replaced
+    /// look closes after the frame, and a shown toolbar shows the new
+    /// items, follows their enablement, or goes with the look.
+    pub(super) fn menu_configured(self: &Rc<Self>) {
+        if self.menu.has_retired() {
+            let post_frame = self
+                .parts
+                .borrow()
+                .as_ref()
+                .and_then(|parts| parts.post_frame.clone());
+            if let Some(post_frame) = post_frame {
+                let menu = Rc::downgrade(&self.menu);
+                let _ = post_frame.schedule(move |_timing: &flui_scheduler::FrameTiming| {
+                    if let Some(menu) = menu.upgrade() {
+                        menu.close_retired();
+                    }
+                });
+            }
+        }
+        if !self.toolbar.get() {
+            return;
+        }
+        let mut failure = FirstPanic::new();
+        self.drop_toolbar();
+        self.show_toolbar(&mut failure);
+        failure.resume();
+    }
+
+    /// Takes the toolbar away, leaving the handles. Returns whether it
+    /// showed.
+    fn drop_toolbar(&self) -> bool {
+        let watches = std::mem::take(&mut *self.toolbar_watches.borrow_mut());
+        for (changes, id) in watches {
+            changes.remove_listener(id);
+        }
+        self.toolbar.replace(false)
+    }
+
+    fn hide_toolbar(&self, failure: &mut FirstPanic) {
+        if self.drop_toolbar() {
+            self.refresh(failure);
+        }
+    }
+
+    /// The caret's handle was tapped: the toolbar shows, or goes when it
+    /// showed, as the menu's policy lets a tap show it.
+    fn caret_tapped(self: &Rc<Self>) {
+        let mut failure = FirstPanic::new();
+        if self.toolbar.get() {
+            self.hide_toolbar(&mut failure);
+        } else if self.menu.policy().on_caret_handle_tap() {
+            self.show_toolbar(&mut failure);
+        }
+        failure.resume();
     }
 
     /// Mounts the handles on the field: what they reach, and the timer that
@@ -213,16 +318,30 @@ impl FieldHandles {
         let pipeline = parts.pipeline.clone();
         *self.parts.borrow_mut() = Some(parts);
         if let (Some(pipeline), Some(post_frame)) = (&pipeline, &post_frame) {
-            let watches = self
+            let watches: Vec<LeaderWatch> = self
                 .links
-                .map(|link| {
+                .iter()
+                .enumerate()
+                .map(|(index, &link)| {
                     let watch = pipeline.watch_leader(link, post_frame.clone());
                     let handles = Rc::downgrade(self);
+                    // The handles follow a move by themselves; their look
+                    // depends on the leader's size, and the toolbar's
+                    // placement against the overlay on where it stands too.
+                    let size = Cell::new(watch.geometry().map(|geometry| geometry.size));
                     watch.add_listener(Rc::new(move || {
                         let Some(handles) = handles.upgrade() else {
                             return;
                         };
-                        if handles.shown.get().is_some() {
+                        let geometry = handles
+                            .watches
+                            .borrow()
+                            .get(index)
+                            .and_then(LeaderWatch::geometry);
+                        let resized = size.replace(geometry.map(|geometry| geometry.size))
+                            != geometry.map(|geometry| geometry.size);
+                        let placed = resized || handles.toolbar.get();
+                        if handles.shown.get().is_some() && placed {
                             let mut failure = FirstPanic::new();
                             handles.refresh(&mut failure);
                             failure.resume();
@@ -230,7 +349,7 @@ impl FieldHandles {
                     }));
                     watch
                 })
-                .to_vec();
+                .collect();
             *self.watches.borrow_mut() = watches;
         }
         let handles = Rc::downgrade(self);
@@ -348,6 +467,8 @@ impl FieldHandles {
         } else {
             Shown::Selection
         };
+        // A new touch takes the toolbar the last one showed.
+        self.drop_toolbar();
         let overlay = self.overlay.borrow().clone();
         let Some(overlay) = overlay else {
             if cfg!(debug_assertions) && !self.warned.replace(true) {
@@ -423,6 +544,7 @@ impl FieldHandles {
         self.pressed_word.borrow_mut().take();
         *self.expected.borrow_mut() = None;
         let _ = self.timer.borrow().controller().stop();
+        self.drop_toolbar();
         let was_shown = self.shown.replace(None).is_some();
         let entry = self.entry.borrow_mut().take();
         if let Some(entry) = entry {
@@ -494,6 +616,9 @@ impl FieldHandles {
     pub(super) fn long_press_ended(self: &Rc<Self>, failure: &mut FirstPanic) {
         if self.pressed_word.borrow_mut().take().is_some() {
             self.show_for_touch(failure);
+            if self.shown.get() == Some(Shown::Selection) && self.menu.policy().after_long_press() {
+                self.show_toolbar(failure);
+            }
         }
     }
 
@@ -554,6 +679,7 @@ impl FieldHandles {
     /// end keeps the distance it had from the contact, and a composition is
     /// committed first.
     fn drag_started(&self, side: HandleSide, global: Offset<f64>) {
+        self.touch_dragged.set(true);
         let commit = self
             .parts
             .borrow()
@@ -565,6 +691,9 @@ impl FieldHandles {
             calls.resume();
         }
         let _ = self.timer.borrow().controller().stop();
+        let mut failure = FirstPanic::new();
+        self.hide_toolbar(&mut failure);
+        failure.resume();
         let grip = self.end_line(side).map(|(middle, _)| middle - global);
         self.grip.set(grip.map(|grip| (side, grip)));
     }
@@ -599,10 +728,15 @@ impl FieldHandles {
     }
 
     /// `side`'s handle was let go.
-    fn drag_ended(&self, side: HandleSide) {
+    fn drag_ended(self: &Rc<Self>, side: HandleSide) {
         if self.grip.get().is_some_and(|(gripped, _)| gripped == side) {
             self.grip.set(None);
             self.restart_timer();
+            if self.menu.policy().after_handle_drag() {
+                let mut failure = FirstPanic::new();
+                self.show_toolbar(&mut failure);
+                failure.resume();
+            }
         }
     }
 
@@ -659,6 +793,7 @@ impl FieldHandles {
     fn held(&self, touching: bool) {
         self.held.set(touching);
         if touching {
+            self.touch_dragged.set(false);
             let _ = self.timer.borrow().controller().stop();
         } else if self.grip.get().is_none() {
             self.restart_timer();
@@ -816,10 +951,14 @@ impl StatelessView for HandlesView {
                     Some(Shown::Selection) => &[(HandleSide::Start, 0), (HandleSide::End, 1)],
                     None => &[],
                 };
-                sides
+                let mut shown: Vec<BoxedView> = sides
                     .iter()
                     .filter_map(|&(side, link)| handle(&handles, side, link, ctx))
-                    .collect()
+                    .collect();
+                if handles.toolbar.get() {
+                    shown.extend(toolbar(&handles));
+                }
+                shown
             })
             .unwrap_or_default();
         Stack::new(shown)
@@ -892,6 +1031,11 @@ fn handle(
         .on_pointer_up(move |_cx, _dispatch| {
             if let Some(handles) = up.upgrade() {
                 handles.held(false);
+                // A finger that lifts from the caret's handle without
+                // dragging it taps it.
+                if side == HandleSide::Collapsed && !handles.touch_dragged.get() {
+                    handles.caret_tapped();
+                }
             }
         })
         .on_pointer_cancel(move |_cx, _dispatch| {
@@ -906,4 +1050,178 @@ fn handle(
             .top(0.0)
             .boxed(),
     )
+}
+
+/// How far the toolbar stands off the line it goes over or under, and off
+/// the overlay's edges.
+const TOOLBAR_GAP: f64 = 8.0;
+/// How far under the line a toolbar flipped below it stands, clear of the
+/// handle there.
+const TOOLBAR_BELOW_GAP: f64 = 32.0;
+
+/// The menu's toolbar centred over the selection's start (the caret while
+/// the caret's handle shows), or under its end when there is no room above,
+/// and kept inside the overlay. It is laid out in a box the overlay's size,
+/// pinned to the start's leader where that leader was, so the toolbar moves
+/// with the selection (a scroll) and goes while the start is clipped out.
+/// Choosing an item, by a touch or by assistive technology, takes it away
+/// after the frame, once the item has performed.
+fn toolbar(handles: &Rc<FieldHandles>) -> Option<BoxedView> {
+    let look = handles.menu.look()?;
+    let offered = handles.menu.offered();
+    if offered.is_empty() {
+        return None;
+    }
+    let (first, last) = match handles.shown.get()? {
+        Shown::Caret => (HandleSide::Collapsed, HandleSide::Collapsed),
+        Shown::Selection => (HandleSide::Start, HandleSide::End),
+    };
+    let (start, start_height) = handles.end_line(first)?;
+    let (end, end_height) = handles.end_line(last)?;
+    let ([over, under], room) = handles.in_overlay([
+        Offset::new(start.dx, start.dy - start_height / 2.0),
+        Offset::new(end.dx, end.dy + end_height / 2.0),
+    ])?;
+    let post_frame = handles
+        .parts
+        .borrow()
+        .as_ref()
+        .and_then(|parts| parts.post_frame.clone());
+    let weak = Rc::downgrade(handles);
+    let chosen: Rc<dyn Fn()> = Rc::new(move || {
+        let weak = weak.clone();
+        if let Some(post_frame) = &post_frame {
+            let _ = post_frame.schedule(move |_timing: &flui_scheduler::FrameTiming| {
+                if let Some(handles) = weak.upgrade() {
+                    let mut failure = FirstPanic::new();
+                    handles.hide_toolbar(&mut failure);
+                    failure.resume();
+                }
+            });
+        }
+    });
+    let items: Rc<[MenuItem]> = offered
+        .into_iter()
+        .map(|item| item.when_chosen(Rc::clone(&chosen)))
+        .collect();
+    // The look builds under the field's reading direction, though the
+    // toolbar stands in the overlay.
+    let bar = crate::localization::Directionality::new(
+        handles.menu.direction(),
+        ToolbarLook { look, items },
+    );
+    let layout = CustomSingleChildLayout::new(ToolbarLayout { over, under }).child(bar);
+    let room = SizedBox::new(room.width, room.height).child(layout);
+    let pinned = LinkFollower::pinned(handles.links[0], Offset::new(-over.dx, -over.dy), room);
+    Some(Positioned::new(pinned).left(0.0).top(0.0).boxed())
+}
+
+impl FieldHandles {
+    /// `points` in render-root coordinates, moved into the overlay's space,
+    /// and the overlay's size; `None` while the overlay is not laid out.
+    fn in_overlay<const N: usize>(
+        &self,
+        points: [Offset<f64>; N],
+    ) -> Option<([Offset<f64>; N], Size<f64>)> {
+        let overlay = self
+            .overlay
+            .borrow()
+            .as_ref()
+            .and_then(OverlayHandle::render_id)?;
+        let pipeline = self
+            .parts
+            .borrow()
+            .as_ref()
+            .and_then(|parts| parts.pipeline.clone())?;
+        pipeline
+            .try_with_layout(|owner| {
+                let size = owner.box_size(overlay)?;
+                let mut moved = points;
+                for point in &mut moved {
+                    let local =
+                        owner.global_to_local(overlay, Point::new(point.dx, point.dy), None)?;
+                    *point = Offset::new(local.x, local.y);
+                }
+                Some((moved, size))
+            })
+            .flatten()
+    }
+}
+
+/// The menu's toolbar as its look draws it, built where it stands so the
+/// look reads the context above it.
+#[derive(Clone)]
+struct ToolbarLook {
+    look: Rc<dyn crate::text::SelectionMenu>,
+    items: Rc<[MenuItem]>,
+}
+
+impl std::fmt::Debug for ToolbarLook {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ToolbarLook")
+            .field("items", &self.items.len())
+            .finish_non_exhaustive()
+    }
+}
+
+impl View for ToolbarLook {
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateless(self)
+    }
+}
+
+impl StatelessView for ToolbarLook {
+    fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
+        self.look.toolbar(&self.items, ctx)
+    }
+}
+
+/// Places the toolbar in the overlay: its bottom centre [`TOOLBAR_GAP`] over
+/// `over`, else its top centre [`TOOLBAR_BELOW_GAP`] under `under`, then
+/// moved sideways and down into the overlay.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct ToolbarLayout {
+    over: Offset<f64>,
+    under: Offset<f64>,
+}
+
+impl SingleChildLayoutDelegate for ToolbarLayout {
+    fn get_constraints_for_child(&self, constraints: BoxConstraints) -> BoxConstraints {
+        let loose = constraints.loosen();
+        // The toolbar keeps a gap from both edges; one wider scrolls.
+        let width = (loose.max_width - 2.0 * TOOLBAR_GAP).max(0.0);
+        BoxConstraints::new(0.0, width, 0.0, loose.max_height)
+    }
+
+    fn get_position_for_child(&self, size: Size, child_size: Size) -> Offset<f64> {
+        let top = self.over.dy - TOOLBAR_GAP - child_size.height;
+        let (x, y) = if top >= TOOLBAR_GAP {
+            (self.over.dx, top)
+        } else {
+            (self.under.dx, self.under.dy + TOOLBAR_BELOW_GAP)
+        };
+        let clamp = |at: f64, extent: f64, room: f64| {
+            let max = (room - extent - TOOLBAR_GAP).max(TOOLBAR_GAP);
+            if at.is_finite() {
+                at.clamp(TOOLBAR_GAP, max)
+            } else {
+                TOOLBAR_GAP
+            }
+        };
+        Offset::new(
+            clamp(x - child_size.width / 2.0, child_size.width, size.width),
+            clamp(y, child_size.height, size.height),
+        )
+    }
+
+    fn should_relayout(&self, old_delegate: &dyn SingleChildLayoutDelegate) -> bool {
+        old_delegate
+            .as_any()
+            .downcast_ref::<Self>()
+            .is_none_or(|old| old != self)
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 }
