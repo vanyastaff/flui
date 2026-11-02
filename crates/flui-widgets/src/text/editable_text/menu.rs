@@ -22,16 +22,16 @@ use crate::interaction::{GestureCommand, MenuCause, MenuItem, MenuPresenter, Men
 use crate::semantics::Semantics;
 use crate::text::controller::TextEditingController;
 use crate::text::{
-    DefaultSelectionControls, PopupOrigin, SelectionMenu, SelectionMenuPolicy, SelectionPopup,
-    editing_commands,
+    DefaultSelectionControls, MenuChoice, PopupOrigin, SelectionMenu, SelectionMenuPolicy,
+    SelectionPopup, editing_commands,
 };
 
 /// The menu knobs of one [`EditableText`].
 #[derive(Clone, Default)]
 pub(crate) struct MenuSettings {
-    /// `Some(None)` turns the menu off; `None` takes the nearest
+    /// `Some(MenuChoice::Hide)` turns the menu off; `None` takes the nearest
     /// [`DefaultSelectionControls`]' look.
-    look: Option<Option<Rc<dyn SelectionMenu>>>,
+    look: Option<MenuChoice>,
     policy: Option<SelectionMenuPolicy>,
     commands: Vec<GestureCommand>,
 }
@@ -48,7 +48,7 @@ impl EditableText {
     /// and those added with [`Self::menu_command`].
     #[must_use]
     pub fn menu(mut self, menu: impl SelectionMenu) -> Self {
-        self.menu.look = Some(Some(Rc::new(menu)));
+        self.menu.look = Some(MenuChoice::Show(Rc::new(menu)));
         self
     }
 
@@ -56,7 +56,7 @@ impl EditableText {
     /// gives one.
     #[must_use]
     pub fn no_menu(mut self) -> Self {
-        self.menu.look = Some(None);
+        self.menu.look = Some(MenuChoice::Hide);
         self
     }
 
@@ -111,7 +111,7 @@ impl FieldMenu {
                 .as_ref()
                 .is_some_and(|controls| controls.menu_decided());
         let look = match &settings.look {
-            Some(look) => look.clone(),
+            Some(choice) => choice.look(),
             None => controls.as_ref().and_then(|controls| controls.menu()),
         };
         if !decided && cfg!(debug_assertions) && !self.warned.replace(true) {

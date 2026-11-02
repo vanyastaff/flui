@@ -715,6 +715,7 @@ fn selection_menu() {
             ("selection_menu::added_commands_follow_the_editing_commands", crate::selection_menu::added_commands_follow_the_editing_commands),
             ("selection_menu::a_handle_drag_hides_the_toolbar_until_it_lets_go", crate::selection_menu::a_handle_drag_hides_the_toolbar_until_it_lets_go),
             ("selection_menu::a_policy_or_no_menu_keeps_the_menu_away", crate::selection_menu::a_policy_or_no_menu_keeps_the_menu_away),
+            ("selection_menu::a_tap_on_the_caret_handle_toggles_the_toolbar", crate::selection_menu::a_tap_on_the_caret_handle_toggles_the_toolbar),
         ],
     );
 }

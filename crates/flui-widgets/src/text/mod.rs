@@ -26,10 +26,10 @@ pub use selection_area::{
     SelectionChangeCause, SelectionContainer, SelectionController, SelectionHandles,
     SelectionInput,
 };
-pub(crate) use selection_menu::editing_commands;
 pub use selection_menu::{
     DefaultSelectionControls, PopupOrigin, SelectionMenu, SelectionMenuPolicy, SelectionPopup,
 };
+pub(crate) use selection_menu::{MenuChoice, editing_commands};
 pub use selection_style::{DefaultSelectionStyle, SelectionStyle};
 pub use text::Text;
 pub use text_field::{RawTextField, RawTextFieldState};

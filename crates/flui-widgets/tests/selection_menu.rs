@@ -20,8 +20,8 @@ use flui_testing::a11y::{A11yTree, Action, ActionRequest, Role, TreeId};
 use flui_testing::replay::{MouseScript, PointerScript};
 use flui_view::{BoxedView, BuildContext, ViewExt};
 use flui_widgets::{
-    Actions, CallbackAction, Column, DefaultSelectionControls, EditableText, GestureCommand,
-    HandleInfo, Intent, SelectionHandles, SelectionMenuPolicy, SizedBox, Text,
+    Actions, CallbackAction, CaretHandle, Column, DefaultSelectionControls, EditableText,
+    GestureCommand, HandleInfo, Intent, SelectionHandles, SelectionMenuPolicy, SizedBox, Text,
     TextEditingController, WidgetsApp,
 };
 
@@ -112,8 +112,9 @@ impl Scene {
         }
     }
 
+    /// The field with every toolbar trigger on, whatever the host.
     fn plain() -> Self {
-        Self::with(|field| field, None)
+        Self::with(|field| field.menu_policy(SelectionMenuPolicy::ALWAYS), None)
     }
 
     fn tree(&self) -> A11yTree {
@@ -238,6 +239,12 @@ fn width_of(words: &str) -> f64 {
         .width
 }
 
+/// Where the text after `prefix` begins: a paragraph's width leaves out
+/// trailing spaces, so this measures the prefix with a letter after it.
+fn start_of(prefix: &str) -> f64 {
+    width_of(&format!("{prefix}x")) - width_of("x")
+}
+
 fn strings(labels: &[&str]) -> Vec<String> {
     labels.iter().map(|label| (*label).to_owned()).collect()
 }
@@ -332,7 +339,7 @@ pub(crate) fn the_menu_key_and_assistive_technology_open_the_popup() {
     scene.key(NamedKey::ContextMenu);
     assert_eq!(scene.popup(), strings(&EDITING));
     scene.key(NamedKey::Escape);
-    assert!(scene.popup().is_empty());
+    assert_eq!(scene.popup(), Vec::<String>::new());
 
     let field = scene
         .tree()
@@ -416,14 +423,42 @@ pub(crate) fn a_policy_or_no_menu_keeps_the_menu_away() {
     let mut scene = Scene::with(|field| field.menu_policy(SelectionMenuPolicy::NEVER), None);
     scene.long_press(scene.along(width_of("alpha be")));
     assert_eq!(scene.controller.selection(), 6..10);
-    assert!(scene.toolbar().is_empty());
+    assert_eq!(scene.toolbar(), Vec::<String>::new());
 
     let mut scene = Scene::with(EditableText::no_menu, None);
     let _ = scene.field_focus.request_focus();
     scene.controller.set_selection(6, 10);
     scene.settle();
     scene.secondary_click(scene.along(width_of("alpha be")));
-    assert!(scene.popup().is_empty());
+    assert_eq!(scene.popup(), Vec::<String>::new());
     scene.long_press(scene.along(width_of("alpha be")));
-    assert!(scene.toolbar().is_empty());
+    assert_eq!(scene.toolbar(), Vec::<String>::new());
+}
+
+/// A tap on the caret's handle shows the toolbar with what a caret allows,
+/// paste and select all, and the next tap takes it away.
+///
+/// Red-check: let a lift from the caret's handle do nothing (no toolbar).
+pub(crate) fn a_tap_on_the_caret_handle_toggles_the_toolbar() {
+    let mut scene = Scene::with(
+        |field| {
+            field
+                .caret_handle(CaretHandle::on_tap())
+                .menu_policy(SelectionMenuPolicy::ALWAYS)
+        },
+        None,
+    );
+    let caret = start_of("alpha ");
+    scene.tap(scene.along(caret));
+    assert_eq!(scene.controller.caret_byte_offset(), 6);
+    assert_eq!(
+        scene.toolbar(),
+        Vec::<String>::new(),
+        "a tap shows no toolbar"
+    );
+
+    scene.tap(scene.end_handle(caret));
+    assert_eq!(scene.toolbar(), strings(&["Paste", "Select all"]));
+    scene.tap(scene.end_handle(caret));
+    assert_eq!(scene.toolbar(), Vec::<String>::new());
 }

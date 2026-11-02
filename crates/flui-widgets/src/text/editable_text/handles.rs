@@ -185,6 +185,8 @@ pub(super) struct FieldHandles {
     menu: Rc<FieldMenu>,
     /// Set while the toolbar shows.
     toolbar: Cell<bool>,
+    /// Whether the finger on a handle has dragged it since it touched.
+    touch_dragged: Cell<bool>,
     /// The toolbar's subscriptions to its items' enablement.
     toolbar_watches: RefCell<Vec<(ChangeNotifier, ListenerId)>>,
 }
@@ -216,6 +218,7 @@ impl FieldHandles {
             warned: Cell::new(false),
             menu: Rc::new(FieldMenu::default()),
             toolbar: Cell::new(false),
+            touch_dragged: Cell::new(false),
             toolbar_watches: RefCell::new(Vec::new()),
         })
     }
@@ -634,6 +637,7 @@ impl FieldHandles {
     /// end keeps the distance it had from the contact, and a composition is
     /// committed first.
     fn drag_started(&self, side: HandleSide, global: Offset<f64>) {
+        self.touch_dragged.set(true);
         let commit = self
             .parts
             .borrow()
@@ -747,6 +751,7 @@ impl FieldHandles {
     fn held(&self, touching: bool) {
         self.held.set(touching);
         if touching {
+            self.touch_dragged.set(false);
             let _ = self.timer.borrow().controller().stop();
         } else if self.grip.get().is_none() {
             self.restart_timer();
@@ -938,16 +943,8 @@ fn handle(
         Rc::downgrade(handles),
         Rc::downgrade(handles),
     );
-    let mut detector = GestureDetector::new().behavior(HitTestBehavior::Opaque);
-    if side == HandleSide::Collapsed {
-        let tapped = Rc::downgrade(handles);
-        detector = detector.on_tap(move |_cx| {
-            if let Some(handles) = tapped.upgrade() {
-                handles.caret_tapped();
-            }
-        });
-    }
-    let dragged = detector
+    let dragged = GestureDetector::new()
+        .behavior(HitTestBehavior::Opaque)
         .drag(
             DragSlot::pan()
                 .on_start(move |_cx, details| {
@@ -992,6 +989,11 @@ fn handle(
         .on_pointer_up(move |_cx, _dispatch| {
             if let Some(handles) = up.upgrade() {
                 handles.held(false);
+                // A finger that lifts from the caret's handle without
+                // dragging it taps it.
+                if side == HandleSide::Collapsed && !handles.touch_dragged.get() {
+                    handles.caret_tapped();
+                }
             }
         })
         .on_pointer_cancel(move |_cx, _dispatch| {

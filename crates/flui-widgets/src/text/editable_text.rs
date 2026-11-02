@@ -761,7 +761,7 @@ impl std::fmt::Debug for EditableText {
             .field("field_semantics", &self.field_semantics)
             .field("handles", &self.handles.is_some())
             .field("caret_handle", &self.caret_handle)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 

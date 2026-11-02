@@ -217,8 +217,8 @@ pub struct DefaultSelectionControls {
 pub(crate) struct SelectionControls {
     handles: Option<Rc<dyn SelectionHandles>>,
     caret_handle: Option<CaretHandle>,
-    /// `Some(None)` turns the menu off.
-    menu: Option<Option<Rc<dyn SelectionMenu>>>,
+    /// `Some(MenuChoice::Hide)` turns the menu off.
+    menu: Option<MenuChoice>,
     policy: Option<SelectionMenuPolicy>,
     commands: Rc<[GestureCommand]>,
 }
@@ -251,7 +251,10 @@ impl SelectionControls {
 
     /// The menu's look, unless a scope turned the menu off or none set one.
     pub(crate) fn menu(&self) -> Option<Rc<dyn SelectionMenu>> {
-        self.menu.clone().flatten()
+        match &self.menu {
+            Some(MenuChoice::Show(menu)) => Some(Rc::clone(menu)),
+            Some(MenuChoice::Hide) | None => None,
+        }
     }
 
     /// Whether some scope set a look or turned the menu off.
@@ -313,14 +316,14 @@ impl DefaultSelectionControls {
     /// The look of the selection menu beneath.
     #[must_use]
     pub fn menu(mut self, menu: impl SelectionMenu) -> Self {
-        self.own.menu = Some(Some(Rc::new(menu)));
+        self.own.menu = Some(MenuChoice::Show(Rc::new(menu)));
         self
     }
 
     /// No selection menu beneath: neither a toolbar nor a popup.
     #[must_use]
     pub fn no_menu(mut self) -> Self {
-        self.own.menu = Some(None);
+        self.own.menu = Some(MenuChoice::Hide);
         self
     }
 
@@ -425,17 +428,37 @@ pub(crate) fn editing_commands(ctx: &dyn BuildContext) -> [GestureCommand; 4] {
     };
     [
         GestureCommand::new(
-            label(|l| l.cut_button_label(), "Cut"),
+            label(WidgetsLocalizations::cut_button_label, "Cut"),
             CopySelectionTextIntent::Cut,
         ),
         GestureCommand::new(
-            label(|l| l.copy_button_label(), "Copy"),
+            label(WidgetsLocalizations::copy_button_label, "Copy"),
             CopySelectionTextIntent::Copy,
         ),
-        GestureCommand::new(label(|l| l.paste_button_label(), "Paste"), PasteTextIntent),
         GestureCommand::new(
-            label(|l| l.select_all_button_label(), "Select all"),
+            label(WidgetsLocalizations::paste_button_label, "Paste"),
+            PasteTextIntent,
+        ),
+        GestureCommand::new(
+            label(WidgetsLocalizations::select_all_button_label, "Select all"),
             SelectAllTextIntent,
         ),
     ]
+}
+
+/// A menu set for a field or a subtree: shown with a look, or turned off.
+#[derive(Clone)]
+pub(crate) enum MenuChoice {
+    Show(Rc<dyn SelectionMenu>),
+    Hide,
+}
+
+impl MenuChoice {
+    /// The look, unless the menu is turned off.
+    pub(crate) fn look(&self) -> Option<Rc<dyn SelectionMenu>> {
+        match self {
+            Self::Show(menu) => Some(Rc::clone(menu)),
+            Self::Hide => None,
+        }
+    }
 }
