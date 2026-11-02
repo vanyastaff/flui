@@ -6,4 +6,5 @@
   caret rectangle reach the input method. Each key of a composing field waits for the input
   method's answer and keys behind it wait in order; a key unanswered within 200 ms, the keys of a
   window losing the focus or closing, and every key once the input method is gone are delivered as
-  typed in their original order. `flui-app` still picks winit on Linux.
+  typed in their original order; an input method that leaves a key unanswered has its context
+  replaced, so a late edit for that key types nothing. `flui-app` still picks winit on Linux.

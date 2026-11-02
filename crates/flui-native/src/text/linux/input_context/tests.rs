@@ -56,9 +56,11 @@ fn an_unanswered_key_is_delivered_at_its_deadline_and_its_late_answer_dropped() 
     let slow = hold.ask('a', now);
     let next = hold.ask('b', now + ANSWER_TIMEOUT / 2);
     assert_eq!(hold.deadline(), Some(now + ANSWER_TIMEOUT));
-    hold.expire(now + ANSWER_TIMEOUT / 2);
+    hold.expire(now + ANSWER_TIMEOUT / 2, |key| panic!("{key} is not due"));
     assert_eq!(hold.ready(), Vec::<char>::new(), "not due yet");
-    hold.expire(now + ANSWER_TIMEOUT);
+    let mut overdue = Vec::new();
+    hold.expire(now + ANSWER_TIMEOUT, |key| overdue.push(*key));
+    assert_eq!(overdue, ['a'], "the overdue key is told");
     assert_eq!(
         hold.ready(),
         ['a'],

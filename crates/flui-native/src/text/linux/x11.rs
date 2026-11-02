@@ -133,7 +133,9 @@ type Locate = Box<dyn Fn(Bounds<f64>) -> Option<(i32, i32, i32, i32)>>;
 /// A window's input context as its client reaches it: what the client
 /// states is gathered and sent at its `commit`.
 struct BusWire {
-    context: ContextId,
+    /// The window's input context: replaced when the input method left a
+    /// key unanswered, so nothing it sends late reaches the field.
+    context: Cell<ContextId>,
     bus: Arc<Bus>,
     locate: Locate,
     batch: RefCell<Vec<Request>>,
@@ -179,7 +181,12 @@ impl TextInputWire for BusWire {
     /// A field takes text input, or the input method is reset: what it sent
     /// before is fenced off until it answers this focus.
     fn enable(&self) {
-        self.focused.set(true);
+        // Enabled again while focused, the client ended the composition
+        // itself: the input method forgets it too. A focus alone would not
+        // reach an engine already focused.
+        if self.focused.replace(true) {
+            self.batch.borrow_mut().push(Request::Reset);
+        }
         self.forget_preedit();
         let fence = self.fence.get().wrapping_add(1);
         self.fence.set(fence);
@@ -233,7 +240,7 @@ impl TextInputWire for BusWire {
                     Request::FocusIn { fence } => Some(fence),
                     _ => None,
                 };
-                if !self.bus.send(self.context, request) {
+                if !self.bus.send(self.context.get(), request) {
                     tracing::debug!(
                         "the input method's bus is behind: a field's state goes untold"
                     );
@@ -340,7 +347,7 @@ impl Ime {
     fn by_context(&self, context: ContextId) -> Option<&Attached> {
         self.windows
             .iter()
-            .find(|held| held.wire.context == context)
+            .find(|held| held.wire.context.get() == context)
     }
 }
 
@@ -423,7 +430,7 @@ impl X11Ime {
             self.finish_leaving(leaving, failure);
         }
         if !wire.opened.replace(true) {
-            self.bus.open(wire.context);
+            self.bus.open(wire.context.get());
         }
         if let Some(client) = client {
             failure.contain(|| client.entered(wire as Rc<dyn TextInputWire>));
@@ -455,7 +462,7 @@ impl X11Ime {
         let held = ime.by_id(id)?;
         let wire = Rc::clone(&held.wire);
         if wire.focused.replace(false) && !wire.lost.get() {
-            self.bus.send(wire.context, Request::FocusOut);
+            self.bus.send(wire.context.get(), Request::FocusOut);
         }
         // The client takes the preedit out of the field as it hears the
         // window leave: no later batch states it again.
@@ -475,6 +482,47 @@ impl X11Ime {
         }
     }
 
+    /// Window `id`'s input method left a key unanswered past its deadline,
+    /// which goes as typed: an edit it sends for that key late would type
+    /// it twice. Its context is destroyed and a new one made, so nothing the
+    /// old one sends reaches the field; the field's composition, which the
+    /// old context made, ends, and the field is stated to the new one.
+    fn replace_context(&self, id: WindowId, failure: &mut FirstPanic) {
+        let replaced = self
+            .state
+            .with(|ime| {
+                let next = ime.next;
+                let held = ime.by_id(id)?;
+                let wire = Rc::clone(&held.wire);
+                if !wire.opened.get() || wire.lost.get() {
+                    return None;
+                }
+                let client = held.text.client();
+                ime.next = next.next();
+                let old = wire.context.replace(next);
+                // The keys the old context still holds go as typed too.
+                ime.hold.release_where(|key| key.window.id == id);
+                wire.fenced.set(wire.fence.get());
+                wire.forget_preedit();
+                Some((old, next, wire, client))
+            })
+            .flatten();
+        let Some((old, next, wire, client)) = replaced else {
+            return;
+        };
+        tracing::debug!("the input method left a key unanswered: its input context is replaced");
+        self.bus.close(old);
+        self.bus.open(next);
+        self.deliver_ready(failure);
+        if let Some(client) = client
+            && wire.focused.get()
+        {
+            let wire: Rc<dyn TextInputWire> = wire;
+            failure.contain(|| client.left(&*wire));
+            failure.contain(|| client.entered(wire));
+        }
+    }
+
     /// Apply what the bus heard.
     fn apply(&self, heard: Heard, failure: &mut FirstPanic) {
         let context = heard.context();
@@ -490,9 +538,11 @@ impl X11Ime {
                         let held = ime.by_context(context)?;
                         held.wire.lost.set(true);
                         held.wire.focused.set(false);
-                        let id = held.window.id;
+                        let (id, client, wire) =
+                            (held.window.id, held.text.client(), Rc::clone(&held.wire));
                         ime.hold.release_where(|key| key.window.id == id);
-                        return None;
+                        // Its client hears it leave, below.
+                        return client.map(|client| (client, wire));
                     }
                     Heard::Fenced(_, fence) => {
                         ime.by_context(context)?.wire.fenced.set(*fence);
@@ -508,6 +558,14 @@ impl X11Ime {
         let Some((client, wire)) = target else {
             return;
         };
+        if matches!(heard, Heard::Lost(_)) {
+            // The input method went: the composition it made ends in the
+            // field, before the keys it held go as typed, which a field
+            // still composing would not take.
+            wire.forget_preedit();
+            failure.contain(|| client.left(&*wire));
+            return;
+        }
         if !wire.current() {
             tracing::debug!(
                 ?heard,
@@ -564,7 +622,7 @@ impl LoopText for X11Ime {
             let context = ime.next;
             ime.next = context.next();
             let wire = Rc::new(BusWire {
-                context,
+                context: Cell::new(context),
                 bus: Arc::clone(&self.bus),
                 locate,
                 batch: RefCell::new(Vec::new()),
@@ -589,7 +647,7 @@ impl LoopText for X11Ime {
         });
         if let Some(Some(replaced)) = replaced {
             if replaced.wire.opened.get() {
-                self.bus.close(replaced.wire.context);
+                self.bus.close(replaced.wire.context.get());
             }
             contain_owner_callback(|| drop(replaced));
         }
@@ -614,7 +672,7 @@ impl LoopText for X11Ime {
         self.deliver_ready(&mut failure);
         if let Some(removed) = removed {
             if removed.wire.opened.get() {
-                self.bus.close(removed.wire.context);
+                self.bus.close(removed.wire.context.get());
             }
             failure.contain(|| drop(removed));
         }
@@ -666,7 +724,7 @@ impl LoopText for X11Ime {
                 release,
                 time,
             };
-            if !self.bus.send(wire.context, request) {
+            if !self.bus.send(wire.context.get(), request) {
                 // The bus takes no more now: the key goes as typed.
                 ime.hold.answer(ticket, false);
             }
@@ -684,7 +742,17 @@ impl LoopText for X11Ime {
             // input method sent after it.
             self.deliver_ready(&mut failure);
         }
-        self.state.with(|ime| ime.hold.expire(now));
+        let mut overdue = Vec::new();
+        self.state.with(|ime| {
+            ime.hold.expire(now, |key| {
+                if !overdue.contains(&key.window.id) {
+                    overdue.push(key.window.id);
+                }
+            });
+        });
+        for window in overdue {
+            self.replace_context(window, &mut failure);
+        }
         self.deliver_ready(&mut failure);
         failure.resume();
     }
@@ -706,7 +774,7 @@ impl LoopText for X11Ime {
         };
         for held in &windows {
             if held.wire.opened.get() {
-                self.bus.close(held.wire.context);
+                self.bus.close(held.wire.context.get());
             }
         }
         // What the keys and the windows hold goes with no borrow held.

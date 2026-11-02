@@ -95,7 +95,28 @@ impl StandInBus {
             )
             .await
             .expect("the stand-in serves its context");
+        server
+            .at(
+                path.as_str(),
+                StandInService {
+                    heard: Arc::clone(&self.heard),
+                },
+            )
+            .await
+            .expect("the stand-in serves its context's service");
         OwnedObjectPath::try_from(path).expect("a valid path")
+    }
+}
+
+/// The stand-in's `org.freedesktop.IBus.Service` on each context.
+struct StandInService {
+    heard: Heard,
+}
+
+#[interface(name = "org.freedesktop.IBus.Service")]
+impl StandInService {
+    fn destroy(&self) {
+        self.heard.lock().push("destroy".to_owned());
     }
 }
 
@@ -117,9 +138,11 @@ fn ibus_text(text: &str) -> Variant<'static> {
 const COMMITS: u32 = 'a' as u32;
 const SLOW: u32 = 'c' as u32;
 const COMPOSES: u32 = 'p' as u32;
+const LATE: u32 = 'l' as u32;
 
 /// One input context of the stand-in: an engine that commits "あ" for `a`,
-/// lets `b` through, answers `c` after a second, and composes "にほ" for `p`.
+/// lets `b` through, answers `c` after a second, composes "にほ" for `p`,
+/// and commits "遅" for `l` after 400 ms.
 struct StandInContext {
     heard: Heard,
     content: (u32, u32),
@@ -156,6 +179,14 @@ impl StandInContext {
                 async_io::Timer::after(Duration::from_secs(1)).await;
                 true
             }
+            LATE if !release => {
+                async_io::Timer::after(Duration::from_millis(400)).await;
+                Self::commit_text(&emitter, ibus_text("遅"))
+                    .await
+                    .expect("the stand-in commits late");
+                self.heard.lock().push("late commit".to_owned());
+                true
+            }
             COMMITS | COMPOSES => true,
             _ => false,
         }
@@ -167,6 +198,10 @@ impl StandInContext {
 
     fn focus_out(&self) {
         self.heard.lock().push("focus out".to_owned());
+    }
+
+    fn reset(&self) {
+        self.heard.lock().push("reset".to_owned());
     }
 
     fn set_capabilities(&self, capabilities: u32) {
@@ -644,4 +679,85 @@ fn a_call_unanswered_in_time_is_given_up_on() {
         "given up on before the input method answers, a second after: {:?}",
         pressed.elapsed()
     );
+}
+
+/// A window closed while the bus task is behind still has its context
+/// destroyed: the close is not dropped with the requests the task could not
+/// take.
+#[test]
+fn a_window_closed_while_the_bus_is_behind_still_destroys_its_context() {
+    let Some(rig) = Rig::start() else {
+        return;
+    };
+    let context = rig
+        .ime
+        .state
+        .with(|ime| ime.by_id(rig.window.id).map(|held| held.wire.context.get()))
+        .flatten()
+        .expect("the window's context");
+    let mut full = false;
+    for _ in 0..1_000_000 {
+        if !rig.ime.bus.send(context, super::bus::Request::FocusOut) {
+            full = true;
+            break;
+        }
+    }
+    assert!(full, "the bus task fell behind");
+    rig.ime.window_closed(rig.window);
+    rig.settle("the context is destroyed", || rig.heard_any("destroy"));
+}
+
+/// The input method going mid-composition ends the composition in the
+/// field, which then takes keys as typed.
+#[test]
+fn a_composition_ends_as_the_input_method_goes() {
+    let Some(mut rig) = Rig::start() else {
+        return;
+    };
+    rig.press('p');
+    rig.settle("the preedit", || rig.store.composition().is_some());
+    rig.bus.stop();
+    rig.settle("the composition ends", || rig.store.composition().is_none());
+    rig.press('b');
+    rig.settle("the key as typed", || !rig.delivered().is_empty());
+}
+
+/// A key the input method answers past its deadline goes as typed, and what
+/// it commits for that key late reaches no field: the window's context is
+/// replaced, and the field is stated to the new one.
+#[test]
+fn an_edit_for_a_key_already_typed_reaches_no_field() {
+    let Some(rig) = Rig::start() else {
+        return;
+    };
+    rig.press('l');
+    rig.settle("the key as typed", || !rig.delivered().is_empty());
+    rig.settle("the late commit", || rig.heard_any("late commit"));
+    rig.settle("the field stated to a new context", || {
+        rig.heard_count("context for") == 2 && rig.heard_any("destroy")
+    });
+    let settled = Instant::now() + Duration::from_millis(200);
+    rig.settle("the turns after", || Instant::now() >= settled);
+    assert_eq!(rig.store.text(), "", "the late commit types nothing");
+    rig.press('a');
+    rig.settle("the new context's commit", || rig.store.text() == "あ");
+}
+
+/// A composition the application completes is forgotten by the input method
+/// too: its engine is reset.
+#[test]
+fn a_completed_composition_resets_the_engine() {
+    let Some(rig) = Rig::start() else {
+        return;
+    };
+    rig.press('p');
+    rig.settle("the preedit", || rig.store.composition().is_some());
+    let store: Rc<dyn TextStore> = Rc::clone(&rig.store) as _;
+    let _ = rig
+        .text
+        .client()
+        .expect("the window's client")
+        .complete_composition(&store);
+    assert_eq!(rig.store.text(), "にほ", "the preedit stays as text");
+    rig.settle("the engine is reset", || rig.heard_any("reset"));
 }

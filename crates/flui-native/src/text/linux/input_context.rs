@@ -115,11 +115,14 @@ impl<K> KeyHold<K> {
         true
     }
 
-    /// Every key whose answer is due by `now` is delivered as not taken.
-    pub(crate) fn expire(&mut self, now: Instant) {
-        for (_, fate) in &mut self.queue {
+    /// Every key whose answer is due by `now` is delivered as not taken,
+    /// each told to `overdue`: the input method that left it unanswered may
+    /// still act on it.
+    pub(crate) fn expire(&mut self, now: Instant, mut overdue: impl FnMut(&K)) {
+        for (key, fate) in &mut self.queue {
             if matches!(fate, Fate::Asked { deadline, .. } if *deadline <= now) {
                 *fate = Fate::Deliver;
+                overdue(key);
             }
         }
     }

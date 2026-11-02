@@ -84,6 +84,8 @@ pub(crate) enum Request {
     },
     /// It lost the focus.
     FocusOut,
+    /// The client ended the composition: the engine forgets it.
+    Reset,
     /// Does the input method take this key? Its answer names `ticket`.
     Key {
         ticket: Ticket,
@@ -212,6 +214,9 @@ enum Command {
 /// The owner's end of the bus task.
 pub(crate) struct Bus {
     commands: mpsc::Sender<Command>,
+    /// The contexts to destroy: apart from the bounded commands, so a
+    /// window's close is never dropped while the task is behind.
+    closes: mpsc::UnboundedSender<ContextId>,
     inbox: Arc<Inbox>,
     task: tokio::task::JoinHandle<()>,
 }
@@ -231,15 +236,17 @@ impl Bus {
         wake: Box<dyn Fn() + Send + Sync>,
     ) -> Self {
         let (commands, receiver) = mpsc::channel(MAX_COMMANDS);
+        let (closes, closing) = mpsc::unbounded_channel();
         let inbox = Arc::new(Inbox {
             heard: Mutex::new(VecDeque::new()),
             #[cfg(test)]
             awaited: std::sync::atomic::AtomicUsize::new(0),
             wake,
         });
-        let task = runtime.spawn(serve(reach, receiver, Arc::clone(&inbox)));
+        let task = runtime.spawn(serve(reach, receiver, closing, Arc::clone(&inbox)));
         Self {
             commands,
+            closes,
             inbox,
             task,
         }
@@ -268,8 +275,9 @@ impl Bus {
 
     /// Destroy `context`; nothing more is heard of it.
     pub(crate) fn close(&self, context: ContextId) {
-        if self.commands.try_send(Command::Close(context)).is_err() {
-            tracing::debug!("an input context goes undestroyed: the bus task is behind");
+        // Fails only once the task ended, and its connection with it.
+        if self.closes.send(context).is_err() {
+            tracing::debug!("an input context closes with its bus already gone");
         }
     }
 }
@@ -474,11 +482,16 @@ struct Session {
     calls: HashMap<NonZeroU32, (tokio::time::Instant, Awaited)>,
 }
 
-async fn serve(reach: Reach, mut commands: mpsc::Receiver<Command>, inbox: Arc<Inbox>) {
+async fn serve(
+    reach: Reach,
+    mut commands: mpsc::Receiver<Command>,
+    mut closes: mpsc::UnboundedReceiver<ContextId>,
+    inbox: Arc<Inbox>,
+) {
     let Some(link) = connect(reach).await else {
         tracing::info!("no input method answers on D-Bus: X11 windows take keys as typed (gap 5)");
         // Every context is lost at once, so no key waits on it.
-        refuse(&mut commands, &inbox).await;
+        refuse(&mut commands, &mut closes, &inbox).await;
         return;
     };
     // The daemon's signals reach this connection alone; a bus that
@@ -517,6 +530,14 @@ async fn serve(reach: Reach, mut commands: mpsc::Receiver<Command>, inbox: Arc<I
                 };
                 session.command(command).await;
             }
+            Some(context) = closes.recv() => {
+                // What the owner asked before the close goes first, so the
+                // context is not made again after it was destroyed.
+                while let Ok(command) = commands.try_recv() {
+                    session.command(command).await;
+                }
+                session.command(Command::Close(context)).await;
+            }
             message = stream.next() => {
                 match message {
                     Some(Ok(message)) => session.heard(&message).await,
@@ -537,7 +558,7 @@ async fn serve(reach: Reach, mut commands: mpsc::Receiver<Command>, inbox: Arc<I
     for context in session.contexts.keys() {
         session.inbox.post(Heard::Lost(*context));
     }
-    refuse(&mut commands, &session.inbox).await;
+    refuse(&mut commands, &mut closes, &session.inbox).await;
 }
 
 impl Session {
@@ -641,6 +662,7 @@ impl Session {
                 Some(Awaited::Focus(context, fence)),
             ),
             (_, Request::FocusOut) => (on("FocusOut").build(&()), None),
+            (_, Request::Reset) => (on("Reset").build(&()), None),
             (
                 Daemon::IBus,
                 Request::Key {
@@ -1040,8 +1062,20 @@ pub(crate) fn ibus_text_of(value: &Value<'_>) -> Option<String> {
 /// With no input method on the bus: every context is lost as it is opened,
 /// and every key asked is answered as not taken, so nothing waits on a
 /// daemon that is not there.
-async fn refuse(commands: &mut mpsc::Receiver<Command>, inbox: &Inbox) {
-    while let Some(command) = commands.recv().await {
+async fn refuse(
+    commands: &mut mpsc::Receiver<Command>,
+    closes: &mut mpsc::UnboundedReceiver<ContextId>,
+    inbox: &Inbox,
+) {
+    loop {
+        let command = tokio::select! {
+            command = commands.recv() => command,
+            // No context lives to destroy.
+            Some(_) = closes.recv() => continue,
+        };
+        let Some(command) = command else {
+            return;
+        };
         match command {
             Command::Open(context) => inbox.post(Heard::Lost(context)),
             Command::Send(context, request) => {
