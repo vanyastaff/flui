@@ -21,7 +21,9 @@ use super::{CompositionCommit, EditableText};
 use crate::interaction::actions::{
     Action, ActionChain, ActionOutcome, ErasedAction, ShowContextMenuIntent,
 };
-use crate::interaction::{GestureCommand, MenuCause, MenuItem, MenuPresenter, MenuRequest};
+use crate::interaction::{
+    GestureCommand, GestureDetector, MenuCause, MenuItem, MenuPresenter, MenuRequest,
+};
 use crate::localization::Directionality;
 use crate::semantics::Semantics;
 use crate::text::controller::TextEditingController;
@@ -303,12 +305,22 @@ pub(super) fn show_menu_action(
 /// `ContextMenuArea` or app binding.
 #[derive(Clone)]
 pub(super) struct ShowFieldMenu {
-    pub(super) menu: Weak<FieldMenu>,
+    menu: Weak<FieldMenu>,
     /// The enclosing chain's answer to the intent.
-    pub(super) enclosing: Option<ErasedAction>,
+    enclosing: Option<ErasedAction>,
 }
 
 impl ShowFieldMenu {
+    /// The field's answer over `enclosing`, the chain the field is in.
+    pub(super) fn new(menu: &Rc<FieldMenu>, enclosing: Option<&ActionChain>) -> Self {
+        Self {
+            menu: Rc::downgrade(menu),
+            enclosing: enclosing
+                .and_then(|chain| chain.get(&std::any::TypeId::of::<ShowContextMenuIntent>()))
+                .cloned(),
+        }
+    }
+
     fn field_opens(&self) -> Option<Rc<FieldMenu>> {
         self.menu.upgrade().filter(|menu| menu.can_open())
     }
@@ -369,4 +381,21 @@ pub(super) fn secondary_press(
         menu.open(cx, MenuCause::SecondaryClick, Some(position));
     });
     calls.resume();
+}
+
+/// `detector` opening the field's popup on the secondary tap a press in
+/// the field began (the field's pointer handler records where), through
+/// the arena: a `ContextMenuArea` around the field loses that tap, so one
+/// click opens one menu.
+pub(super) fn with_secondary_tap(
+    detector: GestureDetector,
+    menu: Rc<FieldMenu>,
+    field: (Rc<RefCell<TextEditingController>>, Rc<FocusNode>),
+    commit: CompositionCommit,
+) -> GestureDetector {
+    detector.on_secondary_tap(move |cx| {
+        if let Some((position, at)) = menu.take_secondary() {
+            secondary_press(cx, &menu, position, at, (&field.0, &field.1), &commit);
+        }
+    })
 }

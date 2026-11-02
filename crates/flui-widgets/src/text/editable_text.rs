@@ -1289,22 +1289,12 @@ impl EditableTextState {
                 }
             });
         }
-        // The popup opens on the secondary tap a press in the field began
-        // (`install_pointer_handlers` records where), through the arena, so
-        // a `ContextMenuArea` around the field doesn't open its menu too. A
-        // field with no menu leaves the tap to it.
+        // The popup opens on the secondary tap a press in the field began,
+        // through the arena (see `menu::with_secondary_tap`).
         if view.enabled && self.touch_handles.menu().look().is_some() {
-            let controller = Rc::clone(&self.controller);
-            let focus_node = Rc::clone(&self.focus_node);
-            let commit = self.composition_commit();
-            let handles = Rc::clone(&self.touch_handles);
-            detector = detector.on_secondary_tap(move |cx| {
-                let menu = handles.menu();
-                if let Some((position, at)) = menu.take_secondary() {
-                    let field = (&controller, &focus_node);
-                    menu::secondary_press(cx, menu, position, at, field, &commit);
-                }
-            });
+            let field = (Rc::clone(&self.controller), Rc::clone(&self.focus_node));
+            let menu = Rc::clone(self.touch_handles.menu());
+            detector = menu::with_secondary_tap(detector, menu, field, self.composition_commit());
         }
         detector.child(child)
     }
@@ -1494,15 +1484,10 @@ impl EditableTextState {
                 erased_action::<ActivateIntent>(KeptByTheField),
                 erased_action::<ActivationPressIntent>(KeptByTheField),
                 erased_action::<DismissIntent>(KeptByTheField),
-                erased_action::<ShowContextMenuIntent>(ShowFieldMenu {
-                    menu: Rc::downgrade(self.touch_handles.menu()),
-                    enclosing: enclosing
-                        .as_ref()
-                        .and_then(|chain| {
-                            chain.get(&std::any::TypeId::of::<ShowContextMenuIntent>())
-                        })
-                        .cloned(),
-                }),
+                erased_action::<ShowContextMenuIntent>(ShowFieldMenu::new(
+                    self.touch_handles.menu(),
+                    enclosing.as_ref(),
+                )),
             ],
         );
         // Register the new record before the old token drops: the old one is
