@@ -747,7 +747,11 @@ impl Selections {
         let atoms = Atoms::intern(&connection)?;
         let [clipboard] = intern(&connection, [b"CLIPBOARD"])?;
         let clipboard = Selection::try_new(&connection, clipboard, "CLIPBOARD")?;
-        let primary = Selection::try_new(&connection, AtomEnum::PRIMARY.into(), "PRIMARY")?;
+        let primary = Selection::try_new(
+            &connection,
+            xproto::Atom::from(AtomEnum::PRIMARY),
+            "PRIMARY",
+        )?;
         let chunk = connection
             .maximum_request_bytes()
             .saturating_sub(64)
