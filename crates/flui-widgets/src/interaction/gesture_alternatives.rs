@@ -712,8 +712,8 @@ impl MenuItem {
     }
 
     /// Perform the item's command, as choosing it does. A menu that hears
-    /// of the choice ([`Self::when_chosen`]) hears of it though the command
-    /// panics; the panic resumes after.
+    /// of the choice hears of it though the command panics; the panic
+    /// resumes after.
     pub fn perform(&self, cx: &mut EventCx<'_>) -> ActionOutcome {
         let mut failure = flui_foundation::panic::FirstPanic::new();
         let outcome = failure.contain(|| self.command.perform(cx, self.chain.as_ref()));
