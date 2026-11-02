@@ -188,7 +188,9 @@ pub trait TextStoreRead {
     ///
     /// # Errors
     ///
-    /// [`TextStoreError::Protected`] on a protected store, or an offset error.
+    /// Validate the offsets first: a split surrogate pair or an offset past
+    /// the document is [`TextStoreError::Offset`] even on a protected store.
+    /// A valid range in a protected store is [`TextStoreError::Protected`].
     fn text(&self, range: Utf16Range) -> Result<String, TextStoreError>;
 
     /// The current selection.

@@ -232,7 +232,7 @@ fn a_read_after_a_write_answers_the_write() {
 /// before reaches whoever owned it then. Whoever owned it is let go first.
 fn offer_primary(owner: &X11Clipboard, text: Rc<dyn Fn() -> Option<String>>) {
     let (connection, _) = RustConnection::connect(None).expect("the X server answers");
-    let primary: x11rb::protocol::xproto::Atom = x11rb::protocol::xproto::AtomEnum::PRIMARY.into();
+    let primary = xproto::Atom::from(xproto::AtomEnum::PRIMARY);
     connection
         .set_selection_owner(x11rb::NONE, primary, x11rb::CURRENT_TIME)
         .expect("the request is sent");
@@ -665,7 +665,7 @@ fn requests_while_every_transfer_is_held_do_not_ask_the_selection() {
         requestor
             .convert_selection(
                 window,
-                x11rb::protocol::xproto::AtomEnum::PRIMARY.into(),
+                xproto::Atom::from(xproto::AtomEnum::PRIMARY),
                 utf8,
                 property,
                 x11rb::CURRENT_TIME,
@@ -822,4 +822,38 @@ fn a_concealed_write_offers_the_password_manager_hint() {
         "an ordinary write offers no hint"
     );
     assert_eq!(convert(CONCEALED_HINT.as_bytes()), None);
+}
+
+/// When the thread ends, here because the owner's queue fails as a read is
+/// answered, its connection closes and the selections it owned with it: the
+/// application's offer is not the selection any more, and the owner's turn
+/// drops its closure.
+#[test]
+fn an_offer_ends_with_its_thread() {
+    let Some(_server) = server() else {
+        return;
+    };
+    let owner = clipboard();
+    let asked = Rc::new(Cell::new(0));
+    let text = counted("selected", &asked);
+    let held = Rc::downgrade(&text);
+    offer_primary(&owner, text);
+    assert!(owner.owns(), "the offer is the selection");
+
+    owner.write_text("copied".to_owned());
+    let poster = OwnerPoster::new(|_| panic!("the owner's queue failed"));
+    let source = CompletionSource::new(poster, PendingCompletions::new());
+    let (_read, answer) = source.pending::<ClipboardRead>();
+    NativeClipboard::read_text(&owner, answer);
+    let deadline = Instant::now() + STEP;
+    while owner.owns() {
+        assert!(
+            Instant::now() < deadline,
+            "the offer outlived the thread that owned it"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    owner.deliver();
+    assert!(held.upgrade().is_none(), "the turn dropped the closure");
+    assert_eq!(asked.get(), 0);
 }

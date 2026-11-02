@@ -953,6 +953,31 @@ fn an_incr_answer_is_read_in_chunks_and_held_to_its_limit() {
             limit: 1000
         })
     );
+
+    // A whole answer past the limit is measured, not held, and refused; its
+    // property goes, so the next answer reads whole.
+    let past = target.drag.request(
+        id,
+        RepresentationIndex(0),
+        TransferLimits::default().with_max_bytes(100),
+    );
+    let read = target.resolve(&source, past, |source, asked| {
+        source.answer_with(asked, text.as_bytes());
+    });
+    assert_same!(
+        read,
+        Err(TransferError::TooLarge {
+            actual: 5000,
+            limit: 100
+        })
+    );
+    let next = target
+        .drag
+        .request(id, RepresentationIndex(0), TransferLimits::default());
+    let read = target.resolve(&source, next, |source, asked| {
+        source.answer_with(asked, b"after");
+    });
+    assert_same!(read, Ok(TransferPayload::Text("after".to_owned())));
 }
 
 /// The source's conversion requests, turning `target` until `count` came.

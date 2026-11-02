@@ -60,6 +60,7 @@ use std::time::{Duration, Instant};
 
 use cursor_icon::CursorIcon;
 use flui_foundation::geometry::{Point, Size, WindowMetrics};
+use flui_foundation::panic::FirstPanic;
 use flui_platform::{
     AdmittedCommand, ApplyError, CloseDecision, CursorError, DisplaySnapshot, PlatformTextInput,
     PlatformWindow, SizeConstraints, Unsupported, UnsupportedReason, WindowAppearance,
@@ -1032,9 +1033,18 @@ impl X11Window {
         }
         self.facets.text.detach();
         self.facets.accessibility.detach();
-        self.input.window_closed(self.window_ref());
-        self.drag.window_closed(self.window_ref());
-        self.retire();
+        self.forget_features();
+    }
+
+    /// Tell the input and the drag the window is gone, then retire it. Each
+    /// may run user code (a request's waker, a handler): the retirement runs
+    /// whatever fails first, and the first failure goes on after it.
+    fn forget_features(&self) {
+        let mut failure = FirstPanic::new();
+        failure.contain(|| self.input.window_closed(self.window_ref()));
+        failure.contain(|| self.drag.window_closed(self.window_ref()));
+        failure.contain(|| self.retire());
+        failure.resume();
     }
 
     /// What a feature reaches this window by.
@@ -1137,9 +1147,7 @@ impl X11Window {
     /// which only a close delivers.
     fn release(&self) {
         self.closed.set(true);
-        self.input.window_closed(self.window_ref());
-        self.drag.window_closed(self.window_ref());
-        self.retire();
+        self.forget_features();
     }
 }
 

@@ -337,6 +337,14 @@ impl FaultyFixture {
 }
 
 impl TextStoreFixture for FaultyFixture {
+    fn application_editor(&self) -> Rc<dyn Fn(&str)> {
+        let inner = Rc::clone(&self.store.inner);
+        Rc::new(move |text| {
+            let whole = Utf16Range::try_new(Utf16Offset::ZERO, utf16::utf16_len(&inner.text()))
+                .expect("zero precedes every document length");
+            inner.app_replace(whole, text);
+        })
+    }
     fn store(&mut self) -> Rc<dyn TextStore> {
         let store: Rc<dyn TextStore> = self.store.clone(); // the kit drives the faulty wrapper through the erased contract.
         store
@@ -501,6 +509,9 @@ fn kit_drops_opaque_failure_payloads_and_continues() {
         drops: Arc<AtomicUsize>,
     }
     impl TextStoreFixture for Fixture {
+        fn application_editor(&self) -> Rc<dyn Fn(&str)> {
+            self.inner.application_editor()
+        }
         fn store(&mut self) -> Rc<dyn TextStore> {
             self.inner.store()
         }
