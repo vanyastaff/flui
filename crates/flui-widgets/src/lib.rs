@@ -178,7 +178,6 @@ pub use async_builders::{
 };
 pub use container::Container;
 pub use context_menu::{ContextMenuArea, ContextMenuAreaState};
-pub use popup_menu::PlainSelectionMenu;
 pub use controls::{
     ActivityArc, ActivityIndicator, ActivityIndicatorState, Disclosure, DisclosureState,
     ExpansionState, Slider, SliderState,
@@ -233,6 +232,7 @@ pub use motion::{
     ParticleEmitter, ParticleEmitterState, Shimmer, ShimmerBand, ShimmerState, Skeleton,
     SkeletonState, Transition, Trigger,
 };
+pub use popup_menu::PlainSelectionMenu;
 // `OverflowBoxFit` configures `OverflowBox`'s size policy; exposed at crate root
 // so consumers don't need to reach into `flui_objects`.
 pub use flui_objects::OverflowBoxFit;
@@ -323,10 +323,10 @@ pub use swipe::{
 pub use text::{
     AnimatedDefaultTextStyle, CaretHandle, DefaultSelectionControls, DefaultSelectionStyle,
     DefaultTextStyle, DotHandles, EditableText, EditableTextState, HandleInfo, HandleSide,
-    RawTextField, RawTextFieldState, RichText, SelectError, SelectedText, SelectionArea,
-    SelectionChange, SelectionChangeCause, SelectionContainer, SelectionController,
+    PopupOrigin, RawTextField, RawTextFieldState, RichText, SelectError, SelectedText,
+    SelectionArea, SelectionChange, SelectionChangeCause, SelectionContainer, SelectionController,
     SelectionHandles, SelectionInput, SelectionMenu, SelectionMenuPolicy, SelectionPopup,
-    PopupOrigin, SelectionStyle, SubmitCallback, Text, TextEditingController,
+    SelectionStyle, SubmitCallback, Text, TextEditingController,
 };
 pub use transitions::{
     AlignTransition, AlignTransitionState, AnimatedBuilder, AnimatedBuilderState,

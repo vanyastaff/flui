@@ -32,14 +32,13 @@ use flui_view::prelude::*;
 use crate::interaction::{
     Action, ActionOutcome, Actions, ActivateIntent, ActivationPressIntent, ButtonActivateIntent,
     Focus, FocusRing, GestureArenaScope, GestureDetector, Intent, MenuItem, MenuPresenter,
-    MenuRequest, Shortcuts,
-    SingleActivator,
+    MenuRequest, Shortcuts, SingleActivator,
 };
 use crate::localization::Directionality;
 use crate::navigator::{NavigatorHandle, PopupRoute, RouteId};
 use crate::{
     Align, ColoredBox, Column, ConstrainedBox, CustomSingleChildLayout, ExcludeSemantics,
-    IntrinsicWidth, Padding, PopupOrigin, Row, Semantics, SelectionMenu, SelectionPopup,
+    IntrinsicWidth, Padding, PopupOrigin, Row, SelectionMenu, SelectionPopup, Semantics,
     SemanticsRole, Text,
 };
 
@@ -487,9 +486,8 @@ impl SelectionMenu for PlainSelectionMenu {
             .container(true)
             .role(SemanticsRole::Toolbar)
             .child(
-                ColoredBox::new(MENU_SURFACE).child(
-                    Row::new(buttons).main_axis_size(MainAxisSize::Min),
-                ),
+                ColoredBox::new(MENU_SURFACE)
+                    .child(Row::new(buttons).main_axis_size(MainAxisSize::Min)),
             )
             .boxed()
     }
@@ -521,19 +519,26 @@ fn toolbar_button(item: &MenuItem, direction: TextDirection, min_target: f64) ->
                     let _ = chosen.perform(cx);
                 })
                 .child(
-                    ConstrainedBox::new(BoxConstraints::new(side, f64::INFINITY, side, f64::INFINITY))
-                        .child(
-                            Padding::symmetric(12.0, 8.0).child(
-                                Align::new(AlignmentDirectional::CENTER.resolve(direction.is_ltr()))
-                                    .child(
-                                        ExcludeSemantics::new().child(
-                                            Text::new(label)
-                                                .direction(direction)
-                                                .style(TextStyle::default().with_color(MENU_LABEL)),
-                                        ),
+                    ConstrainedBox::new(BoxConstraints::new(
+                        side,
+                        f64::INFINITY,
+                        side,
+                        f64::INFINITY,
+                    ))
+                    .child(
+                        Padding::symmetric(12.0, 8.0).child(
+                            Align::new(AlignmentDirectional::CENTER.resolve(direction.is_ltr()))
+                                .width_factor(1.0)
+                                .height_factor(1.0)
+                                .child(
+                                    ExcludeSemantics::new().child(
+                                        Text::new(label)
+                                            .direction(direction)
+                                            .style(TextStyle::default().with_color(MENU_LABEL)),
                                     ),
-                            ),
+                                ),
                         ),
+                    ),
                 ),
         )
         .boxed()

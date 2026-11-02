@@ -90,9 +90,7 @@ use crate::localization::{
 use crate::navigator::{Navigator, NavigatorHandle, NavigatorObserver, PageRoute, RouteId};
 use crate::router::{Routable, Router};
 use crate::text::DefaultTextStyle;
-use crate::{
-    DefaultSelectionControls, FocusScope, MediaQuery, MediaQueryData, PlainSelectionMenu,
-};
+use crate::{DefaultSelectionControls, FocusScope, MediaQuery, MediaQueryData, PlainSelectionMenu};
 
 /// The app-level wrapping hook: receives the routing subtree
 /// (`Some` when the app has a router or a navigator, `None` otherwise) and returns the

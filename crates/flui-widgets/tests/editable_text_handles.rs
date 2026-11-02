@@ -22,7 +22,7 @@ use flui_platform::{EventTime, TargetPlatform};
 use flui_testing::replay::{PointerScript, TouchScript};
 use flui_view::{BoxedView, BuildContext, ViewExt};
 use flui_widgets::{
-    CaretHandle, Column, DefaultSelectionHandles, EditableText, Focus, HandleInfo, HandleSide,
+    CaretHandle, Column, DefaultSelectionControls, EditableText, Focus, HandleInfo, HandleSide,
     SelectionHandles, SizedBox, Text, TextEditingController, WidgetsApp,
 };
 
@@ -242,7 +242,7 @@ pub(crate) fn a_tap_shows_a_caret_handle_that_a_drag_moves() {
 }
 
 /// A field whose caret handle is `NEVER`, as on iOS, shows none after a tap,
-/// and a `DefaultSelectionHandles` above a field chooses its caret handle.
+/// and a `DefaultSelectionControls` above a field chooses its caret handle.
 ///
 /// Red-check: ignore the field's `CaretHandle` (the `NEVER` tap shows one).
 pub(crate) fn a_caret_handle_follows_the_field_or_its_default() {
@@ -265,10 +265,10 @@ pub(crate) fn a_caret_handle_follows_the_field_or_its_default() {
     let field = EditableText::new(controller.clone(), FocusNode::with_debug_label("field"))
         .text_style(style())
         .handles(marked);
-    let app = WidgetsApp::new(Column::new((DefaultSelectionHandles::new(
-        Marked::default(),
+    let app = WidgetsApp::new(Column::new((DefaultSelectionControls::new(
         SizedBox::new(400.0, 40.0).child(field),
     )
+    .handles(Marked::default())
     .caret_handle(CaretHandle::NEVER),)));
     let mut laid = lay_out(app, tight(400.0, 300.0));
     laid.pump();

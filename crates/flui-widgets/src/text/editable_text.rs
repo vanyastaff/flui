@@ -41,8 +41,8 @@ use flui_view::{BoxedView, RenderView, impl_render_view};
 use crate::AnimatedBuilder;
 use crate::interaction::actions::{
     Action, ActionChain, ActionChainProvider, ActionOutcome, ActivateIntent, ActivationPressIntent,
-    CopySelectionTextIntent, DismissIntent, PasteTextIntent, SelectAllTextIntent, as_node_context,
-    erased_action, layered_chain,
+    CopySelectionTextIntent, DismissIntent, PasteTextIntent, SelectAllTextIntent,
+    ShowContextMenuIntent, as_node_context, erased_action, layered_chain,
 };
 use crate::semantics::Semantics;
 use crate::support::{command_modifiers, ref_callback};
@@ -56,7 +56,9 @@ use crate::{DefaultSelectionControls, DotHandles, SelectionHandles};
 mod clipboard;
 mod cursor_area;
 mod handles;
+mod menu;
 use cursor_area::CursorAreaLoop;
+use menu::{MenuSettings, ShowFieldMenu};
 
 pub use handles::CaretHandle;
 use handles::{FieldHandles, FieldLongPress, HandleParts};
@@ -454,6 +456,7 @@ pub struct EditableText {
     pub(super) field_semantics: FieldSemantics,
     pub(super) handles: Option<Rc<dyn SelectionHandles>>,
     pub(super) caret_handle: Option<CaretHandle>,
+    pub(super) menu: MenuSettings,
 }
 
 /// The field's name, placeholder, validity and whether it is required, as its semantics node
@@ -496,6 +499,7 @@ impl EditableText {
             field_semantics: FieldSemantics::default(),
             handles: None,
             caret_handle: None,
+            menu: MenuSettings::default(),
         }
     }
 
@@ -1051,7 +1055,7 @@ impl EditableTextState {
             let commit = self.composition_commit();
             let paste = self.clipboard_action();
             let handles = Rc::clone(&self.touch_handles);
-            move |_cx: &mut EventCx<'_>, dispatch: PointerDispatch<'_>| {
+            move |cx: &mut EventCx<'_>, dispatch: PointerDispatch<'_>| {
                 let flui_interaction::PointerEvent::Down(press) = dispatch.global else {
                     return;
                 };
@@ -1065,6 +1069,12 @@ impl EditableTextState {
                     failure.resume();
                 }
                 if !enabled || drag_anchor.get().is_some() {
+                    return;
+                }
+                if press.button() == PointerButton::SECONDARY {
+                    let field = (&controller, &focus_node);
+                    let menu = handles.menu();
+                    menu::secondary_press(cx, menu, position, resolve(position), field, &commit);
                     return;
                 }
                 if press.button() == PointerButton::AUXILIARY {
@@ -1466,6 +1476,9 @@ impl EditableTextState {
                 erased_action::<ActivateIntent>(KeptByTheField),
                 erased_action::<ActivationPressIntent>(KeptByTheField),
                 erased_action::<DismissIntent>(KeptByTheField),
+                erased_action::<ShowContextMenuIntent>(ShowFieldMenu(Rc::downgrade(
+                    self.touch_handles.menu(),
+                ))),
             ],
         );
         // Register the new record before the old token drops: the old one is
@@ -2241,6 +2254,10 @@ impl ViewState<EditableText> for EditableTextState {
             .or_else(|| DefaultSelectionControls::caret_handle_of(ctx))
             .unwrap_or_default();
         self.touch_handles.set_look(look, caret_handle);
+        let origin =
+            crate::PopupOrigin::new(self.inner_anchor.clone(), self.pipeline_owner.clone());
+        let chain = self.action_chain.clone();
+        (self.touch_handles.menu()).configure(ctx, &view.menu, chain, &origin);
         let touch_handles = Rc::clone(&self.touch_handles);
 
         // OUTSIDE the inner `AnchoredBox`, not inside it: the IME cursor-area
@@ -2289,6 +2306,7 @@ impl ViewState<EditableText> for EditableTextState {
             handles.retire(&mut failure);
             failure.resume();
         });
+        calls.run(|| self.touch_handles.menu().close());
         // This field's own rebuild listener goes first: the commit below
         // must not schedule a build of a subtree that is being unmounted.
         if let Some(id) = self.controller_listener_id.take() {
@@ -2920,6 +2938,7 @@ fn build_field_view(
             let focus = actions.clone();
             semantics = semantics.on_focus(move |cx| focus.focus(cx));
         }
+        semantics = menu::show_menu_action(semantics, handles.menu());
     }
     let field = crate::__private::AnchoredBox::new(
         inner_anchor,

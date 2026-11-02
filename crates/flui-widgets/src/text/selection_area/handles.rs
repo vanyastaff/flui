@@ -20,10 +20,7 @@ use flui_rendering::layer::{LayerLink, LeaderClip};
 use flui_rendering::pipeline::LeaderWatch;
 use flui_rendering::protocol::BoxProtocol;
 use flui_view::prelude::*;
-use flui_view::{
-    BoxedView, Child, RenderView, View, ViewExt,
-    impl_render_view,
-};
+use flui_view::{BoxedView, Child, RenderView, View, ViewExt, impl_render_view};
 
 use super::SelectionModel;
 use crate::interaction::{DragSlot, GestureDetector};
