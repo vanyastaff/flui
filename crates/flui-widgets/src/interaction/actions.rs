@@ -397,6 +397,18 @@ pub(crate) struct ActionChainProvider {
     child: BoxedView,
 }
 
+impl ActionChainProvider {
+    /// `chain` for `child`: a widget that keeps its own layered chain (a
+    /// selection area, whose menu items perform through it) provides it
+    /// as an `Actions` would.
+    pub(crate) fn new(chain: ActionChain, child: impl IntoView) -> Self {
+        Self {
+            chain,
+            child: BoxedView::new(child.into_view()),
+        }
+    }
+}
+
 impl std::fmt::Debug for ActionChainProvider {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ActionChainProvider")

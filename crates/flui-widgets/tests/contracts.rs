@@ -701,6 +701,23 @@ fn editable_text_handles() {
     );
 }
 
+/// The selection menu of `SelectionArea`: the toolbar a touch selection
+/// shows, the popup a secondary click, the menu key or assistive technology
+/// opens, what each offers, and an enclosing menu for an area without one.
+#[test]
+fn selection_area_menu() {
+    run_cases(
+        "selection_area_menu",
+        &[
+            ("selection_area_menu::an_area_s_long_press_shows_its_toolbar", crate::selection_area_menu::an_area_s_long_press_shows_its_toolbar as fn()),
+            ("selection_area_menu::an_area_s_secondary_click_opens_its_popup", crate::selection_area_menu::an_area_s_secondary_click_opens_its_popup),
+            ("selection_area_menu::the_menu_key_and_assistive_technology_open_an_area_s_popup", crate::selection_area_menu::the_menu_key_and_assistive_technology_open_an_area_s_popup),
+            ("selection_area_menu::an_area_s_handle_drag_hides_its_toolbar_until_it_lets_go", crate::selection_area_menu::an_area_s_handle_drag_hides_its_toolbar_until_it_lets_go),
+            ("selection_area_menu::an_enclosing_menu_answers_only_for_an_area_without_one", crate::selection_area_menu::an_enclosing_menu_answers_only_for_an_area_without_one),
+        ],
+    );
+}
+
 /// The selection menu of `EditableText`: the toolbar a touch selection
 /// shows, the popup a secondary click, the menu key or assistive technology
 /// opens, what each offers, and what keeps them away.
