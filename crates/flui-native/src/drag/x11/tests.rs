@@ -2066,6 +2066,8 @@ fn only_the_dropped_on_client_reads_the_session_data() {
         atoms.utf8,
         "the target reads the drop"
     );
+}
+
 /// A drag that enters again while the window still hears the last one is
 /// offered with its types, though the window's handler panics as it hears
 /// the last one end: the failure goes on once the new drag is set up.
