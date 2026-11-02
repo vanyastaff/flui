@@ -6,7 +6,7 @@
 //! [`SelectionMenu`] given to the field or to the nearest
 //! [`DefaultSelectionControls`]; without one the field shows no menu, which
 //! a debug build reports once. The menu itself is the shared
-//! [`MenuHost`](crate::text::MenuHost).
+//! [`MenuHost`].
 
 use std::cell::RefCell;
 use std::rc::Rc;
