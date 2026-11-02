@@ -47,7 +47,9 @@ use flui_platform::TextStore;
 /// Version 3 adds hit-testing's two independent choices: rounding to the
 /// nearer edge inside a character's box, and the nearest position for a
 /// point outside every box (TSF's `GXFPF_ROUND_NEAREST` and `GXFPF_NEAREST`).
-pub const KIT_VERSION: u32 = 3;
+/// Version 4 adds atomic application-change publication: before callbacks
+/// read the previous document, after callbacks read the new document.
+pub const KIT_VERSION: u32 = 4;
 
 /// A text field under test, as the kit drives it.
 pub trait TextStoreFixture {
@@ -63,6 +65,11 @@ pub trait TextStoreFixture {
     /// Replace the whole text the way the application would, not the
     /// platform: the store reports it to its observer.
     fn app_replace_all(&mut self, text: &str);
+
+    /// An application editor usable from inside an observer notification.
+    /// Version 4 uses this to replace the same field's whole text without
+    /// driving a frame or routing the edit through a platform session.
+    fn application_editor(&self) -> Rc<dyn Fn(&str)>;
 
     /// Reach the next commit anchor, where deferred grants run. A widget
     /// fixture drives a frame here.
@@ -286,6 +293,18 @@ impl TextStoreFixture for InMemoryFixture {
         )
         .expect("BUG: zero precedes every length");
         self.store.app_replace(whole, text);
+    }
+
+    fn application_editor(&self) -> Rc<dyn Fn(&str)> {
+        let store = Rc::clone(&self.store);
+        Rc::new(move |text| {
+            let whole = flui_platform::text_store::Utf16Range::try_new(
+                flui_platform::text_store::Utf16Offset::ZERO,
+                flui_platform::text_store::utf16::utf16_len(&store.text()),
+            )
+            .expect("BUG: zero precedes every document length");
+            store.app_replace(whole, text);
+        })
     }
 
     fn pump(&mut self) {

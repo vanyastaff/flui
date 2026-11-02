@@ -1159,6 +1159,42 @@ mod input {
             }
         }
 
+        /// An application ended marked text without replacing its bytes.
+        /// Forget the browser's transient composition only after a successful
+        /// read, and only while this store and surface still own the answer.
+        fn composition_changed(&self, surface: &Surface) {
+            let mut failure = flui_foundation::panic::FirstPanic::new();
+            failure.contain(|| {
+                let _entered = self.queue.enter();
+                if !self.keys.composing() {
+                    return;
+                }
+                let Some(store) = self.focused() else {
+                    return;
+                };
+                let composing: Rc<Cell<Option<bool>>> = Rc::new(Cell::new(None));
+                let out = Rc::clone(&composing);
+                let grant = LockGrant::read(move |session| {
+                    out.set(Some(session.composition().is_some()));
+                });
+                if store.request_lock(grant, LockTiming::Sync).is_err() {
+                    return;
+                }
+                let current = !self.retired.get()
+                    && self.attached.borrow().as_ref().is_some_and(|attached| {
+                        Rc::ptr_eq(&attached.store, &store)
+                            && std::ptr::eq::<Surface>(Rc::as_ref(&attached.surface), surface)
+                    });
+                if current && composing.get() == Some(false) {
+                    let _ = self.end_composition();
+                }
+            });
+            while let Some(op) = self.queue.next() {
+                failure.contain(|| self.run(op));
+            }
+            failure.resume();
+        }
+
         fn push_selection(&self, surface: &Surface) {
             let Some(store) = self.focused() else {
                 return;
@@ -1483,6 +1519,12 @@ mod input {
 
         fn selection_changed(&self) {
             self.with(WebTextInput::push_selection);
+        }
+
+        fn composition_changed(&self) {
+            self.with(WebTextInput::composition_changed);
+            // Every composition publication also sends selection_changed,
+            // which refreshes the surface's selection and bounds once.
         }
 
         fn layout_changed(&self) {

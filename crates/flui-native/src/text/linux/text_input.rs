@@ -964,6 +964,8 @@ impl TextStoreObserver for ClientObserver {
         }
     }
 
+    // A composition publication includes this notice, so its surrounding
+    // text and caret are resent once even when their numeric offsets match.
     fn selection_changed(&self) {
         if let Some(client) = self.client.upgrade() {
             client.resend_state();
