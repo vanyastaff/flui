@@ -263,9 +263,11 @@ pub(crate) fn ibus_address(file: &str) -> Option<String> {
 /// `IBUS_CAP_PREEDIT_TEXT | IBUS_CAP_FOCUS | IBUS_CAP_SURROUNDING_TEXT`: the
 /// client shows the preedit in the field, has the focus, and states the text
 /// around the caret.
+#[cfg(x11_host)]
 pub(crate) const IBUS_CAPABILITIES: u32 = (1 << 0) | (1 << 3) | (1 << 5);
 
 /// `IBUS_RELEASE_MASK`: the key is released.
+#[cfg(x11_host)]
 pub(crate) const IBUS_RELEASE: u32 = 1 << 30;
 
 /// Fcitx5's `Preedit | FormattedPreedit | SurroundingText`.
@@ -273,6 +275,7 @@ const FCITX_BASE: u64 = (1 << 1) | (1 << 4) | (1 << 6);
 
 /// The X server's key codes are the kernel's plus 8; IBus takes the
 /// kernel's.
+#[cfg(x11_host)]
 pub(crate) const X_KEYCODE_OFFSET: u32 = 8;
 
 /// IBus's `ContentType`, purpose and hints, of `content`.
