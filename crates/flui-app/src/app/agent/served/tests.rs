@@ -845,6 +845,65 @@ fn events_stream_after_a_subscription_until_it_ends() {
     });
 }
 
+fn a_window_too_busy_for_a_subscription_is_asked_again() {
+    let address = Address::new();
+    // One past the cap a window keeps (`MAX_SUBSCRIPTIONS`, 64).
+    let launch = address.launch().with_limits(Limits {
+        subscriptions: 65,
+        ..Limits::default()
+    });
+    let (agent, _, _) = driver_agent(launch);
+    let mut owner = Owner::new(agent);
+    let at = address.address;
+    owner.drive(move |owner| {
+        let mut client = Client::hello(&at);
+        client.only_window();
+        let semantics = json!({ "events": [{ "kind": "semantics" }] });
+        let first = client.call("events.subscribe", semantics.clone());
+        let first = first["result"]["subscription"].clone();
+        for _ in 1..64 {
+            let subscribed = client.call("events.subscribe", semantics.clone());
+            assert!(
+                subscribed["result"]["subscription"].is_u64(),
+                "{subscribed}"
+            );
+        }
+        // With no window open, the last subscription reaches none yet.
+        owner.ask(Command::CloseWindow);
+        let deadline = Instant::now() + RECV;
+        while !client.windows().is_empty() {
+            assert!(Instant::now() < deadline, "the window never closed");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let frames = client.call(
+            "events.subscribe",
+            json!({ "events": [{ "kind": "frame" }] }),
+        );
+        assert!(frames["result"]["subscription"].is_u64(), "{frames}");
+
+        // The window opened next holds the 64 subscriptions made first, and
+        // refuses the last as busy.
+        owner.ask(Command::OpenWindow);
+        let second = loop {
+            if let Some(second) = client.windows().pop() {
+                break second;
+            }
+            assert!(Instant::now() < deadline, "the second window never listed");
+            std::thread::sleep(Duration::from_millis(5));
+        };
+        let button = client.button(&second);
+        // Ending one frees a place, and the refused subscription takes it.
+        let ended = client.call("events.unsubscribe", json!({ "subscription": first }));
+        assert_eq!(ended["result"], json!({}), "{ended}");
+        client.events.clear();
+        client.tap(&button);
+        client.next_event(
+            |event| event["event"] == "frame" && event["params"]["window"] == second.as_str(),
+            "a frame event of the window that was busy",
+        );
+    });
+}
+
 fn a_wait_without_a_timeout_is_answered_by_the_window() {
     let address = Address::new();
     let launch = address.launch().with_limits(Limits {
@@ -1145,6 +1204,10 @@ fn the_driver_agent_contains_every_failure() {
         (
             "events_stream_after_a_subscription_until_it_ends",
             events_stream_after_a_subscription_until_it_ends,
+        ),
+        (
+            "a_window_too_busy_for_a_subscription_is_asked_again",
+            a_window_too_busy_for_a_subscription_is_asked_again,
         ),
         (
             "a_wait_without_a_timeout_is_answered_by_the_window",

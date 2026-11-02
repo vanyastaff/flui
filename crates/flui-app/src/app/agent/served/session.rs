@@ -196,7 +196,12 @@ fn converse(connection: &mut Connection, shared: &Arc<Shared>) -> End {
                 return End::Peer;
             }
         }
-        let events = subscriptions.lock().drain(&shared.registry);
+        // Traced only once the subscriptions are let go: a subscriber is user code.
+        let drained = subscriptions.lock().drain(&shared.registry);
+        for (window, code) in drained.refused {
+            tracing::warn!(window = %window, code = %code, "a subscription cannot reach a window");
+        }
+        let events = drained.events;
         for event in events {
             busy = true;
             let Ok(line) = serde_json::to_value(&event) else {

@@ -52,6 +52,15 @@ pub(super) const SERVED: &[&str] = &[
     WindowsList::NAME,
 ];
 
+/// What one drain of a connection's subscriptions found.
+pub(super) struct Drained {
+    /// The events the streams held, oldest first per stream.
+    pub(super) events: Vec<flui_protocol::Event>,
+    /// The windows a subscription could not reach for good, and why: traced
+    /// once the subscriptions are let go.
+    pub(super) refused: Vec<(WindowId, ErrorCode)>,
+}
+
 /// One connection's event subscriptions.
 #[derive(Default)]
 pub(super) struct Subscriptions {
@@ -65,8 +74,8 @@ struct Subscribed {
     filters: Vec<flui_protocol::EventFilter>,
     streams: Vec<AgentEvents>,
     /// Streams asked of windows opened since, not answered yet.
-    asked: Vec<AgentAnswer<AgentEvents>>,
-    /// Every window a stream was asked of.
+    asked: Vec<(WindowId, AgentAnswer<AgentEvents>)>,
+    /// Every window a stream was asked of, or that has none to give.
     reached: BTreeSet<WindowId>,
 }
 
@@ -75,15 +84,16 @@ impl Subscriptions {
     /// whose window closed is let go. Each subscription first asks a stream
     /// of every window opened since it was made, and takes the streams
     /// asked earlier that the owners answered.
-    pub(super) fn drain(&mut self, registry: &Registry) -> Vec<flui_protocol::Event> {
+    pub(super) fn drain(&mut self, registry: &Registry) -> Drained {
         let windows = if self.live.is_empty() {
             Vec::new()
         } else {
             registry.list()
         };
         let mut events = Vec::new();
+        let mut refused = Vec::new();
         for subscribed in self.live.values_mut() {
-            subscribed.reach(&windows, registry);
+            subscribed.reach(&windows, registry, &mut refused);
             for stream in &mut subscribed.streams {
                 while let Some(event) = stream.try_next() {
                     events.push(event);
@@ -91,29 +101,55 @@ impl Subscriptions {
             }
             subscribed.streams.retain(|stream| !stream.is_finished());
         }
-        events
+        Drained { events, refused }
     }
 }
 
 impl Subscribed {
-    fn reach(&mut self, windows: &[WindowId], registry: &Registry) {
+    /// Asks a stream of every window not reached yet, and takes the streams
+    /// the owners answered. A window whose owner was busy (a full inbox, its
+    /// subscriptions at their cap) is asked again at the next drain; one that
+    /// closed, or refused for good, is not.
+    fn reach(
+        &mut self,
+        windows: &[WindowId],
+        registry: &Registry,
+        refused: &mut Vec<(WindowId, ErrorCode)>,
+    ) {
         for &id in windows {
-            if !self.reached.insert(id) {
+            if self.reached.contains(&id) {
                 continue;
             }
-            if let Lookup::Open(window) = registry.lookup(id)
-                && let Ok(answer) = window.subscribe(self.filters.clone())
-            {
-                self.asked.push(answer);
+            let Lookup::Open(window) = registry.lookup(id) else {
+                self.reached.insert(id);
+                continue;
+            };
+            match window.subscribe(self.filters.clone()) {
+                Ok(answer) => {
+                    self.reached.insert(id);
+                    self.asked.push((id, answer));
+                }
+                Err(fault) if fault.retry() == Retry::Soon => {}
+                Err(fault) => {
+                    self.reached.insert(id);
+                    refused.push((id, fault.code()));
+                }
             }
         }
         let mut waiting = Vec::with_capacity(self.asked.len());
-        for mut answer in self.asked.drain(..) {
+        for (id, mut answer) in self.asked.drain(..) {
             match answer.try_take() {
                 Some(Ok(stream)) => self.streams.push(stream),
-                // The window closed in between: it has nothing to stream.
-                Some(Err(_)) => {}
-                None => waiting.push(answer),
+                Some(Err(fault)) if fault.retry() == Retry::Soon => {
+                    self.reached.remove(&id);
+                }
+                // The window closed in between, or refused for good.
+                Some(Err(fault)) => {
+                    if fault.code() != ErrorCode::Gone {
+                        refused.push((id, fault.code()));
+                    }
+                }
+                None => waiting.push((id, answer)),
             }
         }
         self.asked = waiting;
