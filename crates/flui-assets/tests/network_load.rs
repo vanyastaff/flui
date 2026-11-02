@@ -4,7 +4,7 @@
 use std::time::{Duration, Instant};
 
 use flui_assets::{AssetError, AssetRegistryBuilder, LoadServices};
-use flui_platform::executor::SpawnError;
+use flui_platform::executor::{Lane, SpawnError};
 use flui_platform::http::{HttpError, StatusCode};
 use flui_platform::testing::{ScriptedHttp, ScriptedResponse};
 
@@ -590,7 +590,7 @@ fn no_room_leads_here() {
         LoadServices::new().with_http(http.handle()),
     );
     assert!(poll_once(&mut joined).is_pending());
-    lanes.refuse(SpawnError::Saturated);
+    lanes.refuse_lane(Lane::Io, SpawnError::Saturated);
     http.release(&nth_url(0));
     http.release(&nth_url(LOAD_SLOTS));
     lanes.run_until_idle();
@@ -684,7 +684,7 @@ fn a_panicking_waker_leaves_the_rest_told() {
         LoadServices::new().with_http(http.handle()),
     );
     assert!(poll_once(&mut last).is_pending());
-    lanes.refuse(SpawnError::Saturated);
+    lanes.refuse_lane(Lane::Io, SpawnError::Saturated);
     http.release(&nth_url(0));
     http.release(&nth_url(LOAD_SLOTS));
     let parked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| lanes.run_until_idle()));

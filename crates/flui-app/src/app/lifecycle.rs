@@ -1929,6 +1929,10 @@ mod tests {
                 None => self.queue.spawn_job(job),
             }
         }
+
+        fn room(&self) -> flui_runtime::execution::RoomFuture {
+            flui_runtime::execution::RoomFuture::ready(Ok(()))
+        }
     }
 
     fn idle_worker_handoff_cannot_execute_refused_input() {

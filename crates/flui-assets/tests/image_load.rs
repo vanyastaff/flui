@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use flui_assets::{AssetError, AssetRegistry, AssetRegistryBuilder, Image, LoadServices};
 use flui_foundation::memory::{MemoryPressureLevel, ReclaimMemory};
-use flui_platform::executor::SpawnError;
+use flui_platform::executor::{Lane, SpawnError};
 
 use crate::lanes::{QueuedLanes, ThreadLanes, block_on};
 
@@ -54,17 +54,99 @@ fn without_lanes_the_load_runs_where_it_is_polled() {
     assert_fixture(&image);
 }
 
-/// Lanes with no room for the load leave it to the request, which runs it
-/// where it is polled.
+/// Lanes with no room for the load leave its read to the request, which
+/// runs it where it is polled; its decode waits for room on the compute
+/// lane rather than running there too.
 ///
 /// Red-check: answer the refusal as the load's failure.
 fn saturated_lanes_leave_the_load_to_the_request() {
     let lanes = QueuedLanes::new();
     lanes.refuse(SpawnError::Saturated);
-    let image = block_on(registry().load_image(fixture_path(), lanes.services()))
-        .expect("the fixture decodes");
-    assert_fixture(&image);
-    assert_eq!((lanes.pending_io(), lanes.computes()), (0, 0));
+    let mut load = registry().load_image(fixture_path(), lanes.services());
+    poll_until(&mut load, || lanes.waiting_for_room() > 0);
+    assert_eq!(
+        (lanes.pending_io(), lanes.computes()),
+        (0, 0),
+        "read where it is polled"
+    );
+
+    lanes.make_room();
+    assert!(poll(&mut load).is_pending(), "the decode is on the lane");
+    assert_eq!(lanes.computes(), 1);
+    lanes.run_until_idle();
+    let std::task::Poll::Ready(image) = poll(&mut load) else {
+        panic!("the decode answered");
+    };
+    assert_fixture(&image.expect("the fixture decodes"));
+}
+
+/// A load read on the IO lane whose compute lane is full waits for room
+/// there, leaving the IO lane's worker free, and decodes on the compute
+/// lane once there is room.
+///
+/// Red-check: decode where the load runs when the compute lane refuses.
+fn a_full_compute_lane_is_waited_for_off_the_io_lane() {
+    let lanes = QueuedLanes::new();
+    lanes.refuse_lane(Lane::Compute, SpawnError::Saturated);
+    let mut load = registry().load_image(fixture_path(), lanes.services());
+    lanes.run_io_until_idle();
+    assert_eq!(lanes.waiting_for_room(), 1, "waits for the compute lane");
+    assert_eq!(
+        lanes.pending_io(),
+        1,
+        "the IO future yields while it waits, decoding nothing"
+    );
+    assert!(poll(&mut load).is_pending());
+
+    lanes.make_room();
+    lanes.run_until_idle();
+    assert_eq!(lanes.computes(), 1, "the decode ran on the compute lane");
+    assert_eq!(lanes.pending_io(), 0);
+    let std::task::Poll::Ready(image) = poll(&mut load) else {
+        panic!("the decode answered");
+    };
+    assert_fixture(&image.expect("the fixture decodes"));
+}
+
+/// A compute lane shutting down while a decode waits for room on it ends
+/// the wait: the run ends, its decode not run, and gives up its place on
+/// the IO lane.
+///
+/// Red-check: leave a waiter for room unwoken when its lane shuts down.
+fn a_lane_shutting_down_ends_the_wait_for_room() {
+    let lanes = QueuedLanes::new();
+    lanes.refuse_lane(Lane::Compute, SpawnError::Saturated);
+    let load = registry().load_image(fixture_path(), lanes.services());
+    lanes.run_io_until_idle();
+    assert_eq!(lanes.waiting_for_room(), 1);
+
+    lanes.refuse_lane(Lane::Compute, SpawnError::ShuttingDown);
+    lanes.run_io_until_idle();
+    assert_eq!(
+        (
+            lanes.waiting_for_room(),
+            lanes.pending_io(),
+            lanes.computes()
+        ),
+        (0, 0, 0),
+        "the run ended without its decode"
+    );
+    drop(load);
+}
+
+fn poll<F: std::future::Future + Unpin>(load: &mut F) -> std::task::Poll<F::Output> {
+    std::pin::Pin::new(load).poll(&mut std::task::Context::from_waker(std::task::Waker::noop()))
+}
+
+/// Polls `load` until `done`, which must hold before it settles.
+fn poll_until<F: std::future::Future + Unpin>(load: &mut F, done: impl Fn() -> bool) {
+    for _ in 0..1_000 {
+        if done() {
+            return;
+        }
+        assert!(poll(load).is_pending(), "settled before it waited");
+    }
+    panic!("never waited");
 }
 
 /// A missing file resolves to a typed error, and the next load succeeds.
@@ -420,6 +502,14 @@ fn image_loads_run_on_their_lanes_and_survive_the_requests_that_leave() {
         (
             "saturated lanes",
             saturated_lanes_leave_the_load_to_the_request,
+        ),
+        (
+            "a full compute lane is waited for off the IO lane",
+            a_full_compute_lane_is_waited_for_off_the_io_lane,
+        ),
+        (
+            "a lane shutting down ends the wait for room",
+            a_lane_shutting_down_ends_the_wait_for_room,
         ),
         (
             "missing file recovery",
