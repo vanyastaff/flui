@@ -179,7 +179,7 @@ impl FrameTimingLayer {
         // The profiler's frame begins when the followed frame opens, so a phase the application
         // measures by hand while the frame runs belongs to that frame, and one measured between
         // frames is dropped by the next frame's start.
-        let opened = Arc::new(Mutex::new(false));
+        let opened: Arc<Mutex<Option<u64>>> = Arc::new(Mutex::new(None));
         {
             let (accepts, opened, profiler) = (
                 Arc::clone(&accepts),
@@ -189,7 +189,7 @@ impl FrameTimingLayer {
             capture.on_frame_open(move |_, opening| {
                 if opening.is_outermost() && accepts(opening.runtime()) {
                     profiler.begin_frame();
-                    *opened.lock() = true;
+                    *opened.lock() = Some(opening.id());
                 }
             });
         }
@@ -199,9 +199,9 @@ impl FrameTimingLayer {
             }
             let runtime = frame.span().partition().runtime();
             if accepts(runtime) {
-                *opened.lock() = false;
+                take_if_equal(&opened, frame.id());
                 profiler.ingest(frame);
-            } else if std::mem::take(&mut *opened.lock()) {
+            } else if take_if_equal(&opened, frame.id()) {
                 profiler.abandon_frame();
             }
         });
@@ -209,6 +209,19 @@ impl FrameTimingLayer {
             inner: CaptureLayer::new(capture.clone()),
         };
         layer.with_filter(crate::capture::filter())
+    }
+}
+
+/// Clears the frame the profiler began if `id` is that frame: another frame closing must not
+/// abandon it.
+#[allow(clippy::must_use_candidate)]
+fn take_if_equal(opened: &Mutex<Option<u64>>, id: u64) -> bool {
+    let mut opened = opened.lock();
+    if *opened == Some(id) {
+        *opened = None;
+        true
+    } else {
+        false
     }
 }
 
@@ -522,6 +535,56 @@ mod tests {
         assert!(
             stats
                 .phase(crate::profiler::FramePhase::Custom("inside"))
+                .is_some(),
+            "{stats:?}"
+        );
+    }
+
+    /// An excluded runtime's frame that finishes while the followed runtime's is still running
+    /// must not abandon the followed frame's measurements.
+    #[test]
+    fn another_runtimes_frame_closing_does_not_abandon_the_followed_frame() {
+        use std::num::NonZeroU32;
+        let profiler = Arc::new(Profiler::new());
+        let capture = Capture::new();
+        let followed = UiRuntimeId::new_gen(0, NonZeroU32::MIN);
+        let subscriber = tracing_subscriber::registry().with(FrameTimingLayer::over_runtime(
+            &capture,
+            Arc::clone(&profiler),
+            followed,
+        ));
+        flui_testing::log_capture::disarm_interest_cache();
+        let dispatch = Dispatch::new(subscriber);
+        tracing::dispatcher::with_default(&dispatch, || {
+            let _frame = tracing::debug_span!(
+                target: "flui.frame",
+                "frame",
+                runtime = followed.as_u64()
+            )
+            .entered();
+            drop(profiler.profile_phase(crate::profiler::FramePhase::Custom("followed work")));
+            std::thread::scope(|scope| {
+                scope.spawn(|| {
+                    tracing::dispatcher::with_default(&dispatch, || {
+                        drop(
+                            tracing::debug_span!(
+                                target: "flui.frame",
+                                "frame",
+                                runtime = UiRuntimeId::new_gen(1, NonZeroU32::MIN).as_u64()
+                            )
+                            .entered(),
+                        );
+                    });
+                });
+            });
+        });
+
+        let stats = profiler
+            .frame_stats()
+            .expect("the followed frame was recorded");
+        assert!(
+            stats
+                .phase(crate::profiler::FramePhase::Custom("followed work"))
                 .is_some(),
             "{stats:?}"
         );

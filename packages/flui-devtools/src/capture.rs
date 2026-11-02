@@ -191,9 +191,15 @@ pub struct CapturedFrame {
     period: Option<Duration>,
     spans: Vec<CapturedSpan>,
     outermost: bool,
+    id: u64,
 }
 
 impl CapturedFrame {
+    /// The span id the frame ran under: it tells an opening and a closing apart from another
+    /// frame's while both are live.
+    pub(crate) const fn id(&self) -> u64 {
+        self.id
+    }
     /// The frame span itself.
     #[must_use]
     pub const fn span(&self) -> &CapturedSpan {
@@ -228,9 +234,15 @@ type FrameSink = Arc<dyn Fn(&Capture, &CapturedFrame) + Send + Sync>;
 pub struct FrameOpening {
     runtime: Option<UiRuntimeId>,
     outermost: bool,
+    id: u64,
 }
 
 impl FrameOpening {
+    /// The span id the frame ran under: it tells an opening and a closing apart from another
+    /// frame's while both are live.
+    pub(crate) const fn id(&self) -> u64 {
+        self.id
+    }
     /// The runtime driving the frame, if its span named one by now.
     #[must_use]
     pub const fn runtime(&self) -> Option<UiRuntimeId> {
@@ -250,7 +262,10 @@ type FrameOpenSink = Arc<dyn Fn(&Capture, &FrameOpening) + Send + Sync>;
 /// the sinks after it, so the first panic is kept and resumed after the last sink has run.
 type Sink<T> = Arc<dyn Fn(&Capture, &T) + Send + Sync>;
 
-fn deliver<T>(capture: &Capture, sinks: Vec<Sink<T>>, value: &T) {
+type Payload = Box<dyn std::any::Any + Send>;
+
+/// Calls every sink with `value`, returning the first panic once the last sink has run.
+fn deliver_contained<T>(capture: &Capture, sinks: Vec<Sink<T>>, value: &T) -> Option<Payload> {
     let mut first_panic = None;
     for sink in sinks {
         if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -264,7 +279,11 @@ fn deliver<T>(capture: &Capture, sinks: Vec<Sink<T>>, value: &T) {
             }
         }
     }
-    if let Some(payload) = first_panic {
+    first_panic
+}
+
+fn deliver<T>(capture: &Capture, sinks: Vec<Sink<T>>, value: &T) {
+    if let Some(payload) = deliver_contained(capture, sinks, value) {
         std::panic::resume_unwind(payload);
     }
 }
@@ -480,6 +499,8 @@ struct FrameState {
     period: Option<Duration>,
     outermost: bool,
     ended: Vec<Ended>,
+    id: u64,
+    opener_panic: Mutex<Option<Payload>>,
 }
 
 /// A phase or segment that ended inside a frame, until the frame closes and names its runtime.
@@ -660,6 +681,8 @@ where
                     period: fields.period_us.map(Duration::from_micros),
                     outermost,
                     ended: Vec::new(),
+                    id: id.into_u64(),
+                    opener_panic: Mutex::new(None),
                 },
             );
         } else if is_segment(metadata) {
@@ -696,6 +719,7 @@ where
                     Some(FrameOpening {
                         runtime: state.runtime.and_then(UiRuntimeId::from_u64),
                         outermost: state.outermost,
+                        id: state.id,
                     })
                 } else {
                     None
@@ -705,7 +729,21 @@ where
             if let Some(opening) = opening {
                 // Cloned out so a sink that reads the capture, or adds a sink, does not deadlock.
                 let openers: Vec<_> = self.capture.shared.openers.lock().clone();
-                deliver(&self.capture, openers, &opening);
+                // An opener is user code. A panic here would unwind out of `enter` before the
+                // registry has handed back its guard and leave the frame entered for good, so the
+                // first failure is kept and raised when the frame closes.
+                if let Some(payload) = deliver_contained(&self.capture, openers, &opening) {
+                    let mut payload = Some(payload);
+                    slot_modify(&span, owner, |state: &mut FrameState| {
+                        let mut kept = state.opener_panic.lock();
+                        if kept.is_none() {
+                            *kept = payload.take();
+                        }
+                    });
+                    if let Some(lost) = payload {
+                        std::mem::forget(lost);
+                    }
+                }
             }
             return;
         }
@@ -764,7 +802,21 @@ where
             })
             .unwrap_or(false);
             if last && let Some(state) = slot_take::<FrameState, S>(&span, owner) {
-                self.finish_frame(state);
+                let opener_panic = state.opener_panic.lock().take();
+                let finished = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    self.finish_frame(state);
+                }));
+                // The first failure wins: an opener ran before any sink did.
+                match (opener_panic, finished) {
+                    (Some(first), later) => {
+                        if let Err(later) = later {
+                            std::mem::forget(later);
+                        }
+                        std::panic::resume_unwind(first);
+                    }
+                    (None, Err(payload)) => std::panic::resume_unwind(payload),
+                    (None, Ok(())) => {}
+                }
             }
             return;
         }
@@ -838,6 +890,7 @@ impl CaptureLayer {
             period: state.period,
             spans: state.ended.iter().map(span_of).collect(),
             outermost: state.outermost,
+            id: state.id,
         };
         self.capture.publish(frame);
     }
@@ -1160,12 +1213,14 @@ mod tests {
         );
     }
 
-    /// An opener runs while the outermost frame is still open, knowing the runtime that drives it;
-    /// a panicking opener does not stop the ones after it.
+    /// An opener runs while the outermost frame is still open, knowing the runtime that drives it.
+    /// One that panics does not stop the ones after it, and its failure surfaces when the frame
+    /// closes, so entering the frame stays balanced and the next frame is outermost again.
     #[test]
-    fn frame_openers_run_before_the_frame_closes_and_a_panic_does_not_stop_the_rest() {
+    fn a_panicking_frame_opener_is_raised_at_close_and_leaves_the_next_frame_outermost() {
         let capture = Capture::new();
         let seen = Arc::new(Mutex::new(Vec::new()));
+        let closed = Arc::new(Mutex::new(Vec::new()));
         capture.on_frame_open(|_, _| panic!("opener failure"));
         {
             let seen = Arc::clone(&seen);
@@ -1177,20 +1232,33 @@ mod tests {
                 ));
             });
         }
+        {
+            let closed = Arc::clone(&closed);
+            capture.on_frame(move |_, frame| closed.lock().push(frame.is_outermost()));
+        }
         let subscriber = tracing_subscriber::registry().with(capture.layer());
         flui_testing::log_capture::disarm_interest_cache();
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            tracing::dispatcher::with_default(&Dispatch::new(subscriber), || {
+        let dispatch = Dispatch::new(subscriber);
+        for _ in 0..2 {
+            tracing::dispatcher::with_default(&dispatch, || {
                 let frame = tracing::debug_span!(
                     target: "flui.frame",
                     "frame",
                     runtime = runtime(7).as_u64()
                 );
-                drop(frame.entered());
+                let entered =
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| frame.enter()));
+                let guard = entered.expect("entering the frame does not unwind");
+                let closing =
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(guard)));
+                assert!(closing.is_err(), "the opener's panic is raised at close");
             });
-        }));
-        assert!(result.is_err(), "the opener's panic is resumed");
-        assert_eq!(*seen.lock(), [(Some(runtime(7)), true, 0)]);
+        }
+        assert_eq!(
+            *seen.lock(),
+            [(Some(runtime(7)), true, 0), (Some(runtime(7)), true, 1)]
+        );
+        assert_eq!(*closed.lock(), [true, true], "both frames were captured");
     }
 
     /// Two captures on one registry see the same spans; neither may disturb the other's state.
