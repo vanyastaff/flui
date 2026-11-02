@@ -121,7 +121,9 @@ impl Disconnect {
         let traced = std::panic::catch_unwind(|| {
             tracing::info!("the driver disconnected; the app exits");
         });
-        drop(traced);
+        if let Err(payload) = traced {
+            flui_foundation::panic::discard_payload(payload);
+        }
     }
 }
 
@@ -176,7 +178,16 @@ mod tests {
 
     use super::Disconnect;
 
-    /// A subscriber that panics at every event.
+    /// A payload whose destructor panics too.
+    struct Bomb;
+
+    impl Drop for Bomb {
+        fn drop(&mut self) {
+            panic!("the payload panics as it is dropped");
+        }
+    }
+
+    /// A subscriber that panics at every event, with a [`Bomb`].
     struct Panicking;
 
     impl Subscriber for Panicking {
@@ -189,7 +200,7 @@ mod tests {
         fn record(&self, _: &Id, _: &Record<'_>) {}
         fn record_follows_from(&self, _: &Id, _: &Id) {}
         fn event(&self, _: &Event<'_>) {
-            panic!("the subscriber panics");
+            std::panic::panic_any(Bomb);
         }
         fn enter(&self, _: &Id) {}
         fn exit(&self, _: &Id) {}

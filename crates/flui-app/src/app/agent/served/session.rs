@@ -66,7 +66,10 @@ pub(super) fn serve(stream: Stream, shared: &Arc<Shared>) {
     let end = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         converse(&mut connection, shared)
     }))
-    .unwrap_or(End::Peer);
+    .unwrap_or_else(|payload| {
+        flui_foundation::panic::discard_payload(payload);
+        End::Peer
+    });
     if let (End::Peer, Some(disconnect)) = (end, disconnect) {
         disconnect.fire();
     }

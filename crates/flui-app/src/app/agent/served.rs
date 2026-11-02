@@ -18,7 +18,9 @@ pub(crate) use self::launch::Limits;
 /// that thread accepted. Used for every trace on the agent's own threads.
 pub(super) fn trace(event: impl FnOnce()) {
     let traced = std::panic::catch_unwind(std::panic::AssertUnwindSafe(event));
-    drop(traced);
+    if let Err(payload) = traced {
+        flui_foundation::panic::discard_payload(payload);
+    }
 }
 
 /// Install an agent for `launch` on `config`, after the application's own
