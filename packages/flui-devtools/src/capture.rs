@@ -222,6 +222,53 @@ impl CapturedFrame {
 
 type FrameSink = Arc<dyn Fn(&Capture, &CapturedFrame) + Send + Sync>;
 
+/// A frame the moment it is first entered, before any of its work has run.
+#[derive(Debug, Clone, Copy)]
+#[non_exhaustive]
+pub struct FrameOpening {
+    runtime: Option<UiRuntimeId>,
+    outermost: bool,
+}
+
+impl FrameOpening {
+    /// The runtime driving the frame, if its span named one by now.
+    #[must_use]
+    pub const fn runtime(&self) -> Option<UiRuntimeId> {
+        self.runtime
+    }
+
+    /// Whether the frame was opened outside every other frame.
+    #[must_use]
+    pub const fn is_outermost(&self) -> bool {
+        self.outermost
+    }
+}
+
+type FrameOpenSink = Arc<dyn Fn(&Capture, &FrameOpening) + Send + Sync>;
+
+/// Calls every sink with `value`. A sink is user code: one that panics must not take the value from
+/// the sinks after it, so the first panic is kept and resumed after the last sink has run.
+type Sink<T> = Arc<dyn Fn(&Capture, &T) + Send + Sync>;
+
+fn deliver<T>(capture: &Capture, sinks: Vec<Sink<T>>, value: &T) {
+    let mut first_panic = None;
+    for sink in sinks {
+        if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            sink(capture, value);
+        })) {
+            if first_panic.is_none() {
+                first_panic = Some(payload);
+            } else {
+                // Forgotten, not dropped: its `Drop` may panic too.
+                std::mem::forget(payload);
+            }
+        }
+    }
+    if let Some(payload) = first_panic {
+        std::panic::resume_unwind(payload);
+    }
+}
+
 /// What one runtime has captured.
 #[derive(Default)]
 struct Ring {
@@ -235,6 +282,7 @@ struct Shared {
     max_spans: usize,
     rings: Mutex<HashMap<Option<UiRuntimeId>, Ring>>,
     sinks: Mutex<Vec<FrameSink>>,
+    openers: Mutex<Vec<FrameOpenSink>>,
 }
 
 /// The spans of every frame the framework has driven under a [`CaptureLayer`], bounded per
@@ -279,6 +327,7 @@ impl Capture {
                 max_spans,
                 rings: Mutex::new(HashMap::new()),
                 sinks: Mutex::new(Vec::new()),
+                openers: Mutex::new(Vec::new()),
             }),
         }
     }
@@ -318,6 +367,14 @@ impl Capture {
     /// panic is resumed once the last has run.
     pub fn on_frame(&self, sink: impl Fn(&Capture, &CapturedFrame) + Send + Sync + 'static) {
         self.shared.sinks.lock().push(Arc::new(sink));
+    }
+
+    /// Call `sink` when a frame is first entered, before any of its work runs.
+    ///
+    /// The runtime is the one the frame's span named when it opened. Like [`Self::on_frame`], a
+    /// sink that panics does not stop the sinks after it.
+    pub fn on_frame_open(&self, sink: impl Fn(&Capture, &FrameOpening) + Send + Sync + 'static) {
+        self.shared.openers.lock().push(Arc::new(sink));
     }
 
     /// The runtimes that have captured a frame; `None` is frames that did not say which runtime
@@ -410,24 +467,7 @@ impl Capture {
         }
         // Cloned out so a sink that reads the capture, or adds a sink, does not deadlock.
         let sinks: Vec<_> = self.shared.sinks.lock().clone();
-        // A sink is user code: one that panics must not take the frame from the sinks after it.
-        // The first panic is kept and resumed after the last sink has run.
-        let mut first_panic = None;
-        for sink in sinks {
-            if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                sink(self, &frame);
-            })) {
-                if first_panic.is_none() {
-                    first_panic = Some(payload);
-                } else {
-                    // Forgotten, not dropped: its `Drop` may panic too.
-                    std::mem::forget(payload);
-                }
-            }
-        }
-        if let Some(payload) = first_panic {
-            std::panic::resume_unwind(payload);
-        }
+        deliver(self, sinks, &frame);
     }
 }
 
@@ -648,13 +688,25 @@ where
         let metadata = span.metadata();
         let owner = self.capture.owner();
         if is_frame(metadata) {
-            slot_modify(&span, owner, |state: &mut FrameState| {
+            let opening = slot_modify(&span, owner, |state: &mut FrameState| {
                 state.entries += 1;
                 if state.entries == 1 {
                     state.start = Some(Instant::now());
                     state.thread = std::thread::current().id();
+                    Some(FrameOpening {
+                        runtime: state.runtime.and_then(UiRuntimeId::from_u64),
+                        outermost: state.outermost,
+                    })
+                } else {
+                    None
                 }
-            });
+            })
+            .flatten();
+            if let Some(opening) = opening {
+                // Cloned out so a sink that reads the capture, or adds a sink, does not deadlock.
+                let openers: Vec<_> = self.capture.shared.openers.lock().clone();
+                deliver(&self.capture, openers, &opening);
+            }
             return;
         }
         if !is_segment(metadata) && Phase::of(metadata).is_none() {
@@ -1106,6 +1158,39 @@ mod tests {
             [Phase::Build],
             "the inner frame's build is its own"
         );
+    }
+
+    /// An opener runs while the outermost frame is still open, knowing the runtime that drives it;
+    /// a panicking opener does not stop the ones after it.
+    #[test]
+    fn frame_openers_run_before_the_frame_closes_and_a_panic_does_not_stop_the_rest() {
+        let capture = Capture::new();
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        capture.on_frame_open(|_, _| panic!("opener failure"));
+        {
+            let seen = Arc::clone(&seen);
+            capture.on_frame_open(move |capture, opening| {
+                seen.lock().push((
+                    opening.runtime(),
+                    opening.is_outermost(),
+                    capture.frames().len(),
+                ));
+            });
+        }
+        let subscriber = tracing_subscriber::registry().with(capture.layer());
+        flui_testing::log_capture::disarm_interest_cache();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            tracing::dispatcher::with_default(&Dispatch::new(subscriber), || {
+                let frame = tracing::debug_span!(
+                    target: "flui.frame",
+                    "frame",
+                    runtime = runtime(7).as_u64()
+                );
+                drop(frame.entered());
+            });
+        }));
+        assert!(result.is_err(), "the opener's panic is resumed");
+        assert_eq!(*seen.lock(), [(Some(runtime(7)), true, 0)]);
     }
 
     /// Two captures on one registry see the same spans; neither may disturb the other's state.

@@ -169,24 +169,41 @@ impl FrameTimingLayer {
         S: Subscriber + for<'a> LookupSpan<'a>,
     {
         let followed: Mutex<Option<UiRuntimeId>> = Mutex::new(pinned);
-        capture.on_frame(move |from, frame| {
+        let accepts = move |runtime: Option<UiRuntimeId>| match runtime {
+            Some(runtime) => *followed.lock().get_or_insert(runtime) == runtime,
+            // A frame that did not say which runtime drove it cannot be told apart, so a
+            // profiler that follows the first runtime takes it; one pinned to a runtime does not.
+            None => pinned.is_none(),
+        };
+        let accepts = Arc::new(accepts);
+        // The profiler's frame begins when the followed frame opens, so a phase the application
+        // measures by hand while the frame runs belongs to that frame, and one measured between
+        // frames is dropped by the next frame's start.
+        let opened = Arc::new(Mutex::new(false));
+        {
+            let (accepts, opened, profiler) = (
+                Arc::clone(&accepts),
+                Arc::clone(&opened),
+                Arc::clone(&profiler),
+            );
+            capture.on_frame_open(move |_, opening| {
+                if opening.is_outermost() && accepts(opening.runtime()) {
+                    profiler.begin_frame();
+                    *opened.lock() = true;
+                }
+            });
+        }
+        capture.on_frame(move |_, frame| {
             if !frame.is_outermost() {
                 return;
             }
-            match frame.span().partition().runtime() {
-                Some(runtime) => {
-                    let mut followed = followed.lock();
-                    if *followed.get_or_insert(runtime) != runtime {
-                        return;
-                    }
-                }
-                // A frame that did not say which runtime drove it cannot be told apart, so a
-                // profiler that follows the first runtime takes it; one pinned to a runtime
-                // does not.
-                None if pinned.is_some() => return,
-                None => {}
+            let runtime = frame.span().partition().runtime();
+            if accepts(runtime) {
+                *opened.lock() = false;
+                profiler.ingest(frame);
+            } else if std::mem::take(&mut *opened.lock()) {
+                profiler.abandon_frame();
             }
-            profiler.ingest(frame, from.epoch());
         });
         let layer = Self {
             inner: CaptureLayer::new(capture.clone()),
@@ -478,6 +495,36 @@ mod tests {
             "work done before the frame began is not the frame's: {stats:?}"
         );
         assert!(stats.phase(crate::profiler::FramePhase::Paint).is_some());
+    }
+
+    /// A measurement taken between frames must not displace or merge with the ones taken inside
+    /// the frame: the frame's statistics carry every one of its own.
+    #[test]
+    fn many_hand_measured_phases_in_a_frame_all_reach_its_statistics() {
+        let profiler = Arc::new(Profiler::new());
+        let subscriber =
+            tracing_subscriber::registry().with(FrameTimingLayer::new(Arc::clone(&profiler)));
+        flui_testing::log_capture::disarm_interest_cache();
+        tracing::dispatcher::with_default(&Dispatch::new(subscriber), || {
+            drop(profiler.profile_phase(crate::profiler::FramePhase::Custom("between frames")));
+            let _frame = tracing::debug_span!(target: "flui.frame", "frame").entered();
+            for _ in 0..1000 {
+                drop(profiler.profile_phase(crate::profiler::FramePhase::Custom("inside")));
+            }
+        });
+
+        let stats = profiler.frame_stats().expect("a frame was recorded");
+        assert!(
+            stats
+                .phase(crate::profiler::FramePhase::Custom("between frames"))
+                .is_none()
+        );
+        assert!(
+            stats
+                .phase(crate::profiler::FramePhase::Custom("inside"))
+                .is_some(),
+            "{stats:?}"
+        );
     }
 
     /// A phase measured by hand part-way through a frame keeps its place in it.

@@ -39,3 +39,5 @@
   opens, so a frame whose callback panics still says whose frame it was.
   `FrameTimingLayer::over_runtime` profiles a named runtime, one pair per runtime, and a phase
   measured by hand with `Profiler::profile_phase` keeps its offset inside a captured frame.
+  `Capture::on_frame_open` (with `FrameOpening`) runs a sink when the outermost frame opens; the
+  profiler begins its frame there, so a measurement taken between frames is never charged to one.

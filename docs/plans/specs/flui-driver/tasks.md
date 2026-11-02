@@ -3,7 +3,7 @@
 - **Status:** approved by the owner (2026-10-20). FD27 (#1773), FD1 (#1782), FD4 (#1796), FD31
   (#1804), FD2 (#1809, #1814) and FD3 (#1890) have merged; FD5 is in progress in steps (the
   locate and actionability jobs (#1968), the snapshot delta (#1980) and the waits (#1995) have
-  merged, the events (#2139) have merged, the inspect jobs (#2148) and layers (#2153) have merged, FD28 has merged (#2163, #2168), FD29 has merged in two parts (#2184 and the capture), FD30 can start now.
+  merged, the events (#2139) have merged, the inspect jobs (#2148) and layers (#2153) have merged, FD28 has merged (#2163, #2168), FD29 has merged in two parts (#2184 and #2189), FD30 can start now.
   `interaction/completeness` has merged
   (#1733), so the IC tasks are unblocked.
   `flui run --agent` and `flui mcp` exist on the ADR-0095 endpoint (#1769); the tasks that replace

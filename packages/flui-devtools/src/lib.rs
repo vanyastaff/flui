@@ -96,7 +96,7 @@ pub mod profiler;
 pub mod timeline;
 
 #[cfg(feature = "profiling")]
-pub use capture::{Capture, CaptureLayer, CapturedFrame, CapturedSpan, Partition};
+pub use capture::{Capture, CaptureLayer, CapturedFrame, CapturedSpan, FrameOpening, Partition};
 #[cfg(feature = "profiling")]
 pub use frame_timing_layer::FrameTimingLayer;
 #[cfg(feature = "profiling")]
