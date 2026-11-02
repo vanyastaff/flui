@@ -1051,6 +1051,7 @@ fn an_edit_for_the_field_before_an_unsent_focus_reaches_no_field() {
         }
     }
     assert!(full, "the bus task fell behind");
+    let resets = rig.heard_count("reset");
     let next = InMemoryTextStore::new("");
     rig.text
         .client()
@@ -1066,6 +1067,10 @@ fn an_edit_for_the_field_before_an_unsent_focus_reaches_no_field() {
     rig.settle("the next field's focus sent again", || {
         rig.heard_count("focus in") == 2
     });
+    assert!(
+        rig.heard_count("reset") > resets,
+        "the engine is reset with the focus sent again"
+    );
 }
 
 /// A press of the pointer, which may move the caret, comes after the keys

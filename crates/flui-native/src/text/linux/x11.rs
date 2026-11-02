@@ -427,9 +427,12 @@ impl X11Ime {
                 // the next.
                 if wire.lost.get()
                     || !wire.focused.get()
-                    || self
-                        .bus
-                        .send(wire.context.get(), Request::FocusIn { fence })
+                    // The reset first, as every enablement sends it: the
+                    // daemon forgets the composition the field ended.
+                    || (self.bus.send(wire.context.get(), Request::Reset)
+                        && self
+                            .bus
+                            .send(wire.context.get(), Request::FocusIn { fence }))
                 {
                     wire.unsent.set(None);
                 }
