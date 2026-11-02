@@ -8,7 +8,7 @@ use super::WgpuPainter;
 use crate::{
     clip_chain::ClipOp,
     clip_geometry::{ValidatedAffine, ValidatedClip},
-    command_ir::{BackdropEffect, BackdropOp, DrawItem, DrawSegment, RecordError},
+    command_ir::{BackdropEffect, BackdropOp, DrawItem, DrawSegment, RecordError, ResampleFilter},
     device_domain::PreparedCost,
     error::{EngineError, EngineResult, GeometryError},
     pipeline_set::PipelineSet,
@@ -176,7 +176,7 @@ fn blur_effect(sigma_x: f64, sigma_y: f64, matrix: &[f64; 16]) -> EngineResult<B
 /// the device backdrop pixel it shows.
 ///
 /// The device map is `matrix · transform⁻¹ · matrix⁻¹`. Only an
-/// axis-aligned map with positive scales and bilinear sampling has a
+/// axis-aligned map with positive scales, sampled nearest or bilinearly, has a
 /// lowering; anything else fails the frame rather than drawing the backdrop
 /// untransformed.
 fn resample_effect(
@@ -184,11 +184,15 @@ fn resample_effect(
     sampling: ImageSampling,
     matrix: &[f64; 16],
 ) -> EngineResult<BackdropEffect> {
-    if sampling != ImageSampling::Linear {
-        return Err(EngineError::UnsupportedBackdropFilter {
-            reason: "a backdrop transform is sampled bilinearly only",
-        });
-    }
+    let filter = match sampling {
+        ImageSampling::Nearest => ResampleFilter::Nearest,
+        ImageSampling::Linear => ResampleFilter::Linear,
+        _ => {
+            return Err(EngineError::UnsupportedBackdropFilter {
+                reason: "a backdrop transform has no lowering for this sampling",
+            });
+        }
+    };
     let device = glam::DAffine2::from_cols_array(&[
         matrix[0], matrix[1], matrix[4], matrix[5], matrix[12], matrix[13],
     ]);
@@ -212,12 +216,39 @@ fn resample_effect(
     Ok(BackdropEffect::Resample {
         scale: [xx, yy],
         offset: [x0, y0],
+        filter,
     })
 }
 
 /// Whether `off_axis` is only rounding beside `on_axis`.
 fn axis_roundoff(off_axis: f64, on_axis: f64) -> bool {
     off_axis.abs() <= 8.0 * f64::EPSILON * on_axis.abs()
+}
+
+impl ResampleFilter {
+    /// How far past a sample point the texels it reads reach: half a texel
+    /// for a bilinear read, none for a nearest one.
+    fn reach(self) -> f64 {
+        match self {
+            Self::Nearest => 0.0,
+            Self::Linear => 0.5,
+        }
+    }
+
+    /// The texels one output pixel reads.
+    fn taps(self) -> usize {
+        match self {
+            Self::Nearest => 1,
+            Self::Linear => 4,
+        }
+    }
+
+    fn filter_mode(self) -> wgpu::FilterMode {
+        match self {
+            Self::Nearest => wgpu::FilterMode::Nearest,
+            Self::Linear => wgpu::FilterMode::Linear,
+        }
+    }
 }
 
 impl GpuReplay {
@@ -334,7 +365,12 @@ impl GpuReplay {
                     .ok_or(EngineError::PreparedResourceOverflow)?;
                 (read, output, taps, [0_u32; 4])
             }
-            BackdropEffect::Resample { scale, offset } => {
+            BackdropEffect::Resample {
+                scale,
+                offset,
+                filter,
+            } => {
+                let reach = filter.reach();
                 let to_source = |rect: Rect<f64>| {
                     Rect::from_ltrb(
                         rect.left() * scale[0] + offset[0],
@@ -345,13 +381,13 @@ impl GpuReplay {
                 };
                 // Output whose source lies past the readable attachment shows
                 // nothing: crop the output to what maps inside it, keeping
-                // the half texel past the edge where a bilinear sample still
-                // reads the edge texel.
+                // the `reach` past the edge where a sample still reads the
+                // edge texel.
                 let support = Rect::from_ltrb(
-                    readable.left() - 0.5,
-                    readable.top() - 0.5,
-                    readable.right() + 0.5,
-                    readable.bottom() + 0.5,
+                    readable.left() - reach,
+                    readable.top() - reach,
+                    readable.right() + reach,
+                    readable.bottom() + reach,
                 );
                 let Some(source) = to_source(output)
                     .intersect(&support)
@@ -370,14 +406,14 @@ impl GpuReplay {
                 };
                 output = cropped;
                 let shown = to_source(output);
-                // A bilinear sample at the shown rect's edge blends the texel
-                // half a texel past it, so the copy takes that halo too;
-                // past the attachment the halo is transparent.
+                // A sample at the shown rect's edge reads texels `reach` past
+                // it, so the copy takes that halo too; past the attachment the
+                // halo is transparent.
                 let halo = Rect::from_ltrb(
-                    (shown.left() - 0.5).floor(),
-                    (shown.top() - 0.5).floor(),
-                    (shown.right() + 0.5).ceil(),
-                    (shown.bottom() + 0.5).ceil(),
+                    (shown.left() - reach).floor(),
+                    (shown.top() - reach).floor(),
+                    (shown.right() + reach).ceil(),
+                    (shown.bottom() + reach).ceil(),
                 );
                 let read = Rect::from_ltrb(
                     halo.left().max(readable.left()),
@@ -392,8 +428,8 @@ impl GpuReplay {
                     halo.bottom() - read.bottom(),
                 ]
                 .map(|texels| texels.max(0.0) as u32);
-                // A bilinear read takes four texels per output pixel.
-                (read, shown, 4, pad)
+                // Each output pixel reads its filter's taps.
+                (read, shown, filter.taps(), pad)
             }
         };
         if read.is_empty() {
@@ -535,7 +571,7 @@ impl GpuReplay {
                 device,
                 encoder,
             ),
-            // The composite's bilinear sampler does the resampling.
+            // The composite's sampler does the resampling.
             BackdropEffect::Resample { .. } => source,
         };
         // The texture's origin sits `pad` texels before the copied rect.
@@ -547,11 +583,11 @@ impl GpuReplay {
             ((shown.right() - origin_x) / f64::from(texture_size.0)) as f32,
             ((shown.bottom() - origin_y) / f64::from(texture_size.1)) as f32,
         ];
-        // A resampled backdrop is read between its texels, also where the
+        // A resampled backdrop is read through its filter, also where the
         // composite blends through the destination-reading path.
         let sampling = match op.effect {
             BackdropEffect::Blur(_) => wgpu::FilterMode::Nearest,
-            BackdropEffect::Resample { .. } => wgpu::FilterMode::Linear,
+            BackdropEffect::Resample { filter, .. } => filter.filter_mode(),
         };
         self.composite_group_texture(
             filtered,

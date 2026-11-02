@@ -271,7 +271,7 @@ impl GpuReplay {
             unit_quad_index_buffer,
             default_sampler,
             nearest_sampler: device.create_sampler(&wgpu::SamplerDescriptor {
-                label: Some("External Nearest Sampler"),
+                label: Some("Nearest Sampler"),
                 mag_filter: wgpu::FilterMode::Nearest,
                 min_filter: wgpu::FilterMode::Nearest,
                 mipmap_filter: wgpu::MipmapFilterMode::Nearest,

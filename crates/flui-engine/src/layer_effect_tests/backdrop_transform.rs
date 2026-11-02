@@ -86,6 +86,24 @@ pub(super) fn magnified_backdrop_doubles_the_stripes_it_covers(renderer: &Headle
         &blended(Matrix4::IDENTITY, magnify.clone(), BlendMode::Multiply),
     );
     grey(&multiplied, 23);
+    // Read nearest, the same pixels take the texel they fall in: 27.75 the
+    // black texel 27 and 24.25 the black texel 24, through either composite
+    // path.
+    let nearest = ImageFilter::Transform {
+        transform: ImageTransform::try_scale_about(Point::new(32.0, 32.0), 2.0, 2.0)
+            .expect("a valid scale"),
+        sampling: ImageSampling::Nearest,
+    };
+    let sharp = capture(renderer, &scene(Matrix4::IDENTITY, nearest.clone()));
+    dump_named("backdrop-transform-nearest", &sharp);
+    for (x, expected) in [(16, BLACK), (23, BLACK), (24, WHITE), (31, WHITE)] {
+        expect_pixel(&sharp, (x, 32), expected);
+    }
+    let sharp_multiplied = capture(
+        renderer,
+        &blended(Matrix4::IDENTITY, nearest, BlendMode::Multiply),
+    );
+    expect_pixel(&sharp_multiplied, (23, 32), BLACK);
 
     // Under a layer transform the magnifier is in the layer's space: moved
     // 8 px right, the loupe covers 24..56 and its focal point is at 40, so
@@ -275,15 +293,6 @@ pub(super) fn magnified_backdrop_doubles_the_stripes_it_covers(renderer: &Headle
     };
     assert!(matches!(
         renderer.render_layer_tree(&scene(Matrix4::IDENTITY, turned), (SIDE, SIDE)),
-        Err(crate::EngineError::UnsupportedBackdropFilter { .. })
-    ));
-    let nearest = ImageFilter::Transform {
-        transform: ImageTransform::try_scale_about(Point::new(32.0, 32.0), 2.0, 2.0)
-            .expect("a valid scale"),
-        sampling: ImageSampling::Nearest,
-    };
-    assert!(matches!(
-        renderer.render_layer_tree(&scene(Matrix4::IDENTITY, nearest), (SIDE, SIDE)),
         Err(crate::EngineError::UnsupportedBackdropFilter { .. })
     ));
     // On a layer's own content a transform filter fails the frame too.
