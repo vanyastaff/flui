@@ -118,34 +118,45 @@ fn no_client() {
     );
 }
 
-/// The lead's lanes shut down under its held request; the request waiting on
-/// other lanes takes the load over and fetches with its own client.
+/// The lead's lanes shut down under its held request; the request that
+/// subscribed to that load on other lanes takes it over and fetches again.
 fn handed_over() {
-    let first_http = ScriptedHttp::new();
-    first_http.hold(URL);
-    let second_http = ScriptedHttp::new();
-    second_http.respond(URL, ScriptedResponse::ok(PNG.to_vec()));
+    use std::future::Future as _;
+    use std::task::{Context, Poll, Waker};
+
+    let http = ScriptedHttp::new();
+    http.hold(URL);
     let retiring = QueuedLanes::new();
     let registry = AssetRegistryBuilder::new().with_default_capacity().build();
-    let first =
-        registry.load_network_image(URL, retiring.services().with_http(first_http.handle()));
+    let first = registry.load_network_image(URL, retiring.services().with_http(http.handle()));
     retiring.run_until_idle();
+    assert_eq!(http.requests_to(URL), 1, "the lead's request is in flight");
+    let mut second =
+        Box::pin(registry.load_network_image(URL, LoadServices::new().with_http(http.handle())));
+    let mut cx = Context::from_waker(Waker::noop());
+    assert!(second.as_mut().poll(&mut cx).is_pending());
     assert_eq!(
-        first_http.requests_to(URL),
+        http.requests_to(URL),
         1,
-        "the lead's request is in flight"
+        "one client at one URL: the second load waits on the lead's request"
     );
-    let second =
-        registry.load_network_image(URL, LoadServices::new().with_http(second_http.handle()));
     retiring.shut_down();
-    assert_eq!(
-        first_http.abandoned(),
-        1,
-        "the retired lanes dropped the request"
-    );
-    let image = block_on(second).expect("the waiter takes the load over");
+    assert_eq!(http.abandoned(), 1, "the retired lanes dropped the request");
+    http.respond(URL, ScriptedResponse::ok(PNG.to_vec()));
+    http.release(URL);
+    let image = (0..64)
+        .find_map(|_| match second.as_mut().poll(&mut cx) {
+            Poll::Ready(answered) => Some(answered),
+            Poll::Pending => None,
+        })
+        .expect("the waiter takes the load over")
+        .expect("the takeover fetches the image");
     assert_eq!((image.width(), image.height()), (4, 2));
-    assert_eq!(second_http.requests_to(URL), 1);
+    assert_eq!(
+        http.requests_to(URL),
+        2,
+        "the takeover sent its own request"
+    );
     drop(first);
 }
 
@@ -424,4 +435,39 @@ fn one_registry_keeps_two_clients_images_of_one_url_apart() {
             .expect("the second client's image is kept");
         assert_eq!((cached.width(), cached.height()), (5, 3));
     }
+}
+
+/// A writer that asks the client it is formatting how many requests it sent.
+struct ReenteringWriter {
+    http: ScriptedHttp,
+    asked: usize,
+}
+
+impl std::fmt::Write for ReenteringWriter {
+    fn write_str(&mut self, _: &str) -> std::fmt::Result {
+        let _sent: usize = self.http.requests_to(URL);
+        self.asked += 1;
+        Ok(())
+    }
+}
+
+#[test]
+fn a_debug_writer_may_reenter_the_client() {
+    let http = ScriptedHttp::new();
+    let (sender, written) = std::sync::mpsc::channel::<usize>();
+    // On a thread of its own: formatting under the client's lock would wait
+    // on itself forever, and the test fails instead.
+    std::thread::spawn(move || {
+        let mut writer = ReenteringWriter {
+            http: http.clone(),
+            asked: 0,
+        };
+        std::fmt::Write::write_fmt(&mut writer, format_args!("{http:?}"))
+            .expect("the writer accepts everything");
+        sender.send(writer.asked).expect("BUG: the test waits");
+    });
+    let asked = written
+        .recv_timeout(Duration::from_secs(10))
+        .expect("formatting finishes instead of waiting on its own lock");
+    assert!(asked > 0, "the writer was called");
 }

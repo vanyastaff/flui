@@ -294,11 +294,16 @@ pub(crate) const LOADS_PER_DECODE_THREAD: usize = 4;
 
 impl std::fmt::Debug for DecodedImages {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let state = self.state.lock();
+        // Read under the lock and written after it: the formatter's writer
+        // is the caller's code, which may call back here.
+        let (images, bytes, pending) = {
+            let state = self.state.lock();
+            (state.entries.len(), state.bytes, state.pending.len())
+        };
         f.debug_struct("DecodedImages")
-            .field("images", &state.entries.len())
-            .field("bytes", &state.bytes)
-            .field("pending", &state.pending.len())
+            .field("images", &images)
+            .field("bytes", &bytes)
+            .field("pending", &pending)
             .field("budget", &self.budget)
             .finish_non_exhaustive()
     }

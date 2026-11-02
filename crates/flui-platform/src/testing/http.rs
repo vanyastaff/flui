@@ -236,10 +236,15 @@ impl Drop for Pending {
 
 impl fmt::Debug for ScriptedHttp {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let state = self.state.lock();
+        // Counted under the lock and written after it: the formatter's writer
+        // is the caller's code, which may call back here.
+        let (scripts, requests) = {
+            let state = self.state.lock();
+            (state.scripts.len(), state.requests.len())
+        };
         f.debug_struct("ScriptedHttp")
-            .field("scripts", &state.scripts.len())
-            .field("requests", &state.requests.len())
+            .field("scripts", &scripts)
+            .field("requests", &requests)
             .finish_non_exhaustive()
     }
 }

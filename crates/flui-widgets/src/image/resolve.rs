@@ -118,11 +118,16 @@ pub(super) struct ImageResolver {
 
 impl std::fmt::Debug for ImageResolver {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let published = self.published.lock();
+        // Read under the lock and written after it: the formatter's writer
+        // is the caller's code, which may call back here.
+        let (generation, has_frame) = {
+            let published = self.published.lock();
+            (published.generation, published.image.is_some())
+        };
         f.debug_struct("ImageResolver")
             .field("key", &self.key)
-            .field("generation", &published.generation)
-            .field("has_frame", &published.image.is_some())
+            .field("generation", &generation)
+            .field("has_frame", &has_frame)
             .field("loading", &self.token.is_some())
             .field("gapless_playback", &self.gapless_playback)
             .finish_non_exhaustive()
