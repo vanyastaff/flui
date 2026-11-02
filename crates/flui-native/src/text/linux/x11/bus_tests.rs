@@ -1019,3 +1019,51 @@ fn a_composition_left_for_another_field_resets_the_engine() {
         .focus_store(Some(Rc::clone(&next) as Rc<dyn TextStore>));
     rig.settle("the engine is reset", || rig.heard_count("reset") > resets);
 }
+
+/// A focus the bus could not take leaves the earlier field's edits fenced
+/// off until the focus, sent again once the bus takes it, is answered.
+#[test]
+fn an_edit_for_the_field_before_an_unsent_focus_reaches_no_field() {
+    let Some(rig) = Rig::start() else {
+        return;
+    };
+    rig.press('a');
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !rig.heard_any("key 97") {
+        assert!(
+            Instant::now() < deadline,
+            "the stand-in never heard the key"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    std::thread::sleep(Duration::from_millis(100));
+    let context = rig
+        .ime
+        .state
+        .with(|ime| ime.by_id(rig.window.id).map(|held| held.wire.context.get()))
+        .flatten()
+        .expect("the window's context");
+    let mut full = false;
+    for _ in 0..1_000_000 {
+        if !rig.ime.bus.send(context, super::bus::Request::FocusOut) {
+            full = true;
+            break;
+        }
+    }
+    assert!(full, "the bus task fell behind");
+    let next = InMemoryTextStore::new("");
+    rig.text
+        .client()
+        .expect("the window's client")
+        .focus_store(Some(Rc::clone(&next) as Rc<dyn TextStore>));
+    let settled = Instant::now() + Duration::from_millis(300);
+    rig.settle("the turns after", || Instant::now() >= settled);
+    assert_eq!(
+        next.text(),
+        "",
+        "the earlier field's commit reaches no field"
+    );
+    rig.settle("the next field's focus sent again", || {
+        rig.heard_count("focus in") == 2
+    });
+}

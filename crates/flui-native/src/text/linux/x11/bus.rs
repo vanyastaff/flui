@@ -265,9 +265,11 @@ enum Command {
 /// The owner's end of the bus task.
 pub(crate) struct Bus {
     commands: mpsc::Sender<Command>,
-    /// The contexts to destroy: apart from the bounded commands, so a
-    /// window's close is never dropped while the task is behind.
-    closes: mpsc::UnboundedSender<ContextId>,
+    /// The contexts to make and destroy, apart from the bounded commands and
+    /// taken before them: a window's context is never dropped while the task
+    /// is behind, and is made before anything is sent on it. One of each per
+    /// window and per replacement, so bounded by what the owner does.
+    lifecycle: mpsc::UnboundedSender<Command>,
     inbox: Arc<Inbox>,
     task: tokio::task::JoinHandle<()>,
 }
@@ -287,17 +289,17 @@ impl Bus {
         wake: Box<dyn Fn() + Send + Sync>,
     ) -> Self {
         let (commands, receiver) = mpsc::channel(MAX_COMMANDS);
-        let (closes, closing) = mpsc::unbounded_channel();
+        let (lifecycle, lifecycles) = mpsc::unbounded_channel();
         let inbox = Arc::new(Inbox {
             heard: Mutex::new(Heards::default()),
             #[cfg(test)]
             awaited: std::sync::atomic::AtomicUsize::new(0),
             wake,
         });
-        let task = runtime.spawn(serve(reach, receiver, closing, Arc::clone(&inbox)));
+        let task = runtime.spawn(serve(reach, receiver, lifecycles, Arc::clone(&inbox)));
         Self {
             commands,
-            closes,
+            lifecycle,
             inbox,
             task,
         }
@@ -311,7 +313,8 @@ impl Bus {
     /// Make context `context`; it is [`Heard::Ready`] once the daemon made
     /// it, else [`Heard::Lost`].
     pub(crate) fn open(&self, context: ContextId) {
-        if self.commands.try_send(Command::Open(context)).is_err() {
+        // Fails only once the task ended, and its connection with it.
+        if self.lifecycle.send(Command::Open(context)).is_err() {
             self.inbox.post(Heard::Lost(context));
         }
     }
@@ -327,7 +330,7 @@ impl Bus {
     /// Destroy `context`; nothing more is heard of it.
     pub(crate) fn close(&self, context: ContextId) {
         // Fails only once the task ended, and its connection with it.
-        if self.closes.send(context).is_err() {
+        if self.lifecycle.send(Command::Close(context)).is_err() {
             tracing::debug!("an input context closes with its bus already gone");
         }
     }
@@ -539,13 +542,13 @@ struct Session {
 async fn serve(
     reach: Reach,
     mut commands: mpsc::Receiver<Command>,
-    mut closes: mpsc::UnboundedReceiver<ContextId>,
+    mut lifecycle: mpsc::UnboundedReceiver<Command>,
     inbox: Arc<Inbox>,
 ) {
     let Some(link) = connect(reach).await else {
         tracing::info!("no input method answers on D-Bus: X11 windows take keys as typed (gap 5)");
         // Every context is lost at once, so no key waits on it.
-        refuse(&mut commands, &mut closes, &inbox).await;
+        refuse(&mut commands, &mut lifecycle, &inbox).await;
         return;
     };
     // The daemon's signals reach this connection alone; a bus that
@@ -595,6 +598,14 @@ async fn serve(
     loop {
         let due = session.next_due();
         tokio::select! {
+            // A context is made or destroyed before any command is taken:
+            // the owner sends a context's making before anything on it, so a
+            // command sent on it finds it made, and one sent on a context
+            // destroyed is answered as not taken.
+            biased;
+            Some(command) = lifecycle.recv() => {
+                session.command(command).await;
+            }
             () = tokio::time::sleep_until(due.unwrap_or_else(tokio::time::Instant::now)), if due.is_some() => {
                 session.expire(tokio::time::Instant::now());
             }
@@ -603,14 +614,6 @@ async fn serve(
                     return;
                 };
                 session.command(command).await;
-            }
-            Some(context) = closes.recv() => {
-                // What the owner asked before the close goes first, so the
-                // context is not made again after it was destroyed.
-                while let Ok(command) = commands.try_recv() {
-                    session.command(command).await;
-                }
-                session.command(Command::Close(context)).await;
             }
             message = stream.next() => {
                 match message {
@@ -632,7 +635,7 @@ async fn serve(
     for context in session.contexts.keys() {
         session.inbox.post(Heard::Lost(*context));
     }
-    refuse(&mut commands, &mut closes, &session.inbox).await;
+    refuse(&mut commands, &mut lifecycle, &session.inbox).await;
 }
 
 impl Session {
@@ -1182,14 +1185,14 @@ pub(crate) fn ibus_text_of(value: &Value<'_>) -> Option<String> {
 /// daemon that is not there.
 async fn refuse(
     commands: &mut mpsc::Receiver<Command>,
-    closes: &mut mpsc::UnboundedReceiver<ContextId>,
+    lifecycle: &mut mpsc::UnboundedReceiver<Command>,
     inbox: &Inbox,
 ) {
     loop {
         let command = tokio::select! {
+            biased;
+            Some(command) = lifecycle.recv() => Some(command),
             command = commands.recv() => command,
-            // No context lives to destroy.
-            Some(_) = closes.recv() => continue,
         };
         let Some(command) = command else {
             return;

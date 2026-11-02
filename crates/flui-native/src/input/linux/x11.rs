@@ -1769,13 +1769,15 @@ mod live {
         fn key_event(&self, event: &xinput::KeyPressEvent, state: KeyState) -> Option<X11Key> {
             let repeat = u32::from(event.flags) & u32::from(xinput::KeyEventFlags::KEY_REPEAT) != 0;
             let time = EventTime::from_nanos(event_timestamp_ns());
+            let shared = Rc::downgrade(&self.state.cloned()?);
             self.with_state(|input| {
                 let target = input.windows.get(&event.event)?;
                 let window = target.window;
                 let delivery = Arc::clone(&target.delivery);
                 let core = input.keyboard.as_mut()?;
                 let keysym = core.keyboard.keysym(event.detail);
-                let key = core.keyboard.key(event.detail, state, repeat, time)?;
+                let keycode = event.detail;
+                let (held, held_keysym) = core.keyboard.key_held(keycode, state, repeat, time)?;
                 // The core protocol's state: the modifier mask, and the
                 // group in bits 13 and 14.
                 let group = u32::from(event.group.effective) & 0b11;
@@ -1787,7 +1789,17 @@ mod live {
                     state: u16::try_from(mask).unwrap_or(u16::MAX),
                     release: state == KeyState::Up,
                     time: event.time,
+                    // Only a key typed as it is feeds compose: one the input
+                    // method takes is its own sequence's.
                     deliver: Box::new(move || {
+                        let key = shared
+                            .upgrade()
+                            .and_then(|state| {
+                                let mut state = state.try_borrow_mut().ok()?;
+                                let core = state.keyboard.as_mut()?;
+                                Some(core.keyboard.key_typed(keycode, held_keysym, held.clone()))
+                            })
+                            .unwrap_or(held);
                         delivery.dispatch_input(PlatformInput::Keyboard(key));
                     }),
                 })

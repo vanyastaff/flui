@@ -54,6 +54,9 @@ mod bus_tests;
 
 use bus::{Bus, ContextId, Heard, Reach, Request};
 
+/// How soon a focus the bus could not take is sent again.
+const FOCUS_RETRY: std::time::Duration = std::time::Duration::from_millis(20);
+
 // ============================================================================
 // The text position
 // ============================================================================
@@ -150,6 +153,10 @@ struct BusWire {
     /// and reaches none.
     fence: Cell<u64>,
     fenced: Cell<u64>,
+    /// The fence of a focus the bus could not take yet: the owner sends it
+    /// again in its turn, and until the daemon answers it, what it sends
+    /// stays the field's before.
+    unsent: Cell<Option<u64>>,
     /// The field has the input method's focus: keys are asked of it.
     focused: Cell<bool>,
     /// The context was asked for.
@@ -242,13 +249,20 @@ impl TextInputWire for BusWire {
                     Request::FocusIn { fence } => Some(fence),
                     _ => None,
                 };
-                if !self.bus.send(self.context.get(), request) {
+                if self.bus.send(self.context.get(), request) {
+                    if fence.is_some() {
+                        // A newer focus went: it fences what the one unsent
+                        // would have.
+                        self.unsent.set(None);
+                    }
+                } else {
                     tracing::debug!(
                         "the input method's bus is behind: a field's state goes untold"
                     );
-                    // A focus never sent is never answered: it fences nothing.
-                    if let Some(fence) = fence {
-                        self.fenced.set(fence);
+                    // The daemon still serves the field before: the fence
+                    // stays up, and the focus goes in a later turn.
+                    if fence.is_some() {
+                        self.unsent.set(fence);
                     }
                 }
             }
@@ -400,6 +414,29 @@ impl X11Ime {
         }
     }
 
+    /// Send again each focus the bus could not take, while its window's
+    /// context lives: what the daemon sends stays fenced until it answers.
+    fn resend_focus(&self) {
+        self.state.with(|ime| {
+            for held in &ime.windows {
+                let wire = &held.wire;
+                let Some(fence) = wire.unsent.get() else {
+                    continue;
+                };
+                // A field that went needs no focus: its fence stays up until
+                // the next.
+                if wire.lost.get()
+                    || !wire.focused.get()
+                    || self
+                        .bus
+                        .send(wire.context.get(), Request::FocusIn { fence })
+                {
+                    wire.unsent.set(None);
+                }
+            }
+        });
+    }
+
     /// Deliver the keys whose turn came, each contained.
     fn deliver_ready(&self, failure: &mut FirstPanic) {
         let ready = self.state.with(|ime| ime.hold.ready()).unwrap_or_default();
@@ -507,6 +544,7 @@ impl X11Ime {
                 // The keys the old context still holds go as typed too.
                 ime.hold.release_where(|key| key.window.id == id);
                 wire.fenced.set(wire.fence.get());
+                wire.unsent.set(None);
                 wire.forget_preedit();
                 Some((old, next, wire, client))
             })
@@ -673,6 +711,7 @@ impl LoopText for X11Ime {
                 commits: Cell::new(0),
                 fence: Cell::new(0),
                 fenced: Cell::new(0),
+                unsent: Cell::new(None),
                 focused: Cell::new(false),
                 opened: Cell::new(false),
                 lost: Cell::new(false),
@@ -804,11 +843,21 @@ impl LoopText for X11Ime {
             self.replace_context(window, &mut failure);
         }
         self.deliver_ready(&mut failure);
+        self.resend_focus();
         failure.resume();
     }
 
     fn deadline(&self) -> Option<Instant> {
-        self.state.with(|ime| ime.hold.deadline()).flatten()
+        self.state
+            .with(|ime| {
+                let retry = ime
+                    .windows
+                    .iter()
+                    .any(|held| held.wire.unsent.get().is_some())
+                    .then(|| Instant::now() + FOCUS_RETRY);
+                [ime.hold.deadline(), retry].into_iter().flatten().min()
+            })
+            .flatten()
     }
 
     fn release(&self) {

@@ -1041,6 +1041,21 @@ mod keyboard {
             repeat: bool,
             time: EventTime,
         ) -> Option<KeyEvent> {
+            let (event, keysym) = self.key_held(keycode, state, repeat, time)?;
+            Some(self.key_typed(keycode, keysym, event))
+        }
+
+        /// The first half of [`Self::key`]: the key held or let go, and its
+        /// event in the keyboard's state now, with the keysym it makes. A
+        /// key an input method takes stops here, so it feeds no compose
+        /// sequence of the keys typed as they are.
+        pub(crate) fn key_held(
+            &mut self,
+            keycode: u32,
+            state: KeyState,
+            repeat: bool,
+            time: EventTime,
+        ) -> Option<(KeyEvent, u32)> {
             let releases_held = state == KeyState::Up && self.held.contains(&keycode);
             if !self.keycodes.contains(&keycode) && !releases_held {
                 return None;
@@ -1058,12 +1073,7 @@ mod keyboard {
             // SAFETY: the live state; any key code may be asked.
             let keysym =
                 unsafe { (self.api.xkb_state_key_get_one_sym)(self.state.as_ptr(), keycode) };
-            let composed = if state == KeyState::Down && !repeat {
-                self.compose(keysym)
-            } else {
-                None
-            };
-            let key = composed.unwrap_or_else(|| key_of(keysym, &self.keysym_text(keysym)));
+            let key = key_of(keysym, &self.keysym_text(keysym));
             let code = code_of(keycode.saturating_sub(EVDEV_OFFSET));
             let event = KeyEvent::new(state, key, code, time)
                 .with_location(location_for_code(code))
@@ -1073,7 +1083,24 @@ mod keyboard {
                 } else {
                     KeyRepeat::First
                 });
-            Some(self.unplaced.settle(Some(keycode), event))
+            Some((event, keysym))
+        }
+
+        /// The second half of [`Self::key`], as the key is typed: a first
+        /// press feeds compose, and the key a release names is its press's.
+        pub(crate) fn key_typed(
+            &mut self,
+            keycode: u32,
+            keysym: u32,
+            mut event: KeyEvent,
+        ) -> KeyEvent {
+            if event.state() == KeyState::Down
+                && event.repeat() == KeyRepeat::First
+                && let Some(composed) = self.compose(keysym)
+            {
+                event.key = composed;
+            }
+            self.unplaced.settle(Some(keycode), event)
         }
 
         /// The keyboard leaves its window: the compose sequence in progress
@@ -1156,6 +1183,33 @@ xkb_symbols \"flui\" {
                 press(&mut keyboard, 18),
                 Key::character("e"),
                 "composed once"
+            );
+        }
+
+        /// A key held but never typed (an input method took it) feeds no
+        /// compose sequence: the key typed after it is itself.
+        #[test]
+        fn a_key_held_but_not_typed_feeds_no_compose() {
+            if xkbcommon_dl::xkbcommon_option().is_none() {
+                eprintln!("skipped: libxkbcommon is not installed");
+                return;
+            }
+            let source =
+                KeymapSource::compositor(COMPOSITOR_KEYMAP.to_vec()).expect("the keymap is text");
+            let mut keyboard = Keyboard::try_new(&source).expect("the keymap compiles");
+            let time = EventTime::from_nanos(1);
+            for state in [KeyState::Down, KeyState::Up] {
+                keyboard
+                    .key_held(40 + EVDEV_OFFSET, state, false, time)
+                    .expect("the keymap defines the key");
+            }
+            let (event, keysym) = keyboard
+                .key_held(18 + EVDEV_OFFSET, KeyState::Down, false, time)
+                .expect("the keymap defines the key");
+            assert_eq!(
+                keyboard.key_typed(18 + EVDEV_OFFSET, keysym, event).key,
+                Key::character("e"),
+                "the dead key the input method took composes nothing"
             );
         }
 
