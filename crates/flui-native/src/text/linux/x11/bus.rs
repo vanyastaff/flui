@@ -25,8 +25,8 @@ use zbus::{Connection, Message, MessageStream};
 use zbus::{OwnedObjectPath, Variant as Value};
 
 use crate::text::linux::input_context::{
-    Daemon, Endpoint, IBUS_CAPABILITIES, IBUS_RELEASE, Ticket, X_KEYCODE_OFFSET, endpoints,
-    fcitx_capability, ibus_address, ibus_address_file, ibus_content,
+    ANSWER_TIMEOUT, Daemon, Endpoint, IBUS_CAPABILITIES, IBUS_RELEASE, Ticket, X_KEYCODE_OFFSET,
+    endpoints, fcitx_capability, ibus_address, ibus_address_file, ibus_content,
 };
 use crate::text::linux::text_input::ContentType;
 
@@ -47,6 +47,17 @@ const MAX_HEARD: usize = 4096;
 /// The most requests one context holds while the daemon makes it.
 const MAX_WAITING: usize = 256;
 
+/// The most calls awaiting the daemon's answer. Past it a key is not asked
+/// and is delivered as typed.
+const MAX_CALLS: usize = 1024;
+
+/// How long a key's call is awaited: past the owner's own deadline its
+/// answer is dropped there anyway.
+const KEY_CALL_TIMEOUT: Duration = ANSWER_TIMEOUT.saturating_mul(2);
+
+/// How long the daemon has to make a context before it counts as lost.
+const CREATE_TIMEOUT: Duration = Duration::from_secs(5);
+
 /// Names one window's input context.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub(crate) struct ContextId(u64);
@@ -66,7 +77,11 @@ impl ContextId {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum Request {
     /// The window's field took the focus.
-    FocusIn,
+    FocusIn {
+        /// Named again by [`Heard::Fenced`] once the daemon answered it:
+        /// what it sent before is the earlier field's.
+        fence: u64,
+    },
     /// It lost the focus.
     FocusOut,
     /// Does the input method take this key? Its answer names `ticket`.
@@ -109,6 +124,9 @@ pub(crate) enum Heard {
     Preedit(ContextId, String, i32),
     /// Delete `chars` characters from `offset` characters past the cursor.
     Delete(ContextId, i32, u32),
+    /// The daemon answered the [`Request::FocusIn`] of this fence, or will
+    /// not: what it sends from here is for the field it names.
+    Fenced(ContextId, u64),
     /// The context is gone (the daemon refused it, or the bus went): what
     /// waits on it is answered as not taken.
     Lost(ContextId),
@@ -123,7 +141,18 @@ impl Heard {
             | Self::Commit(context, _)
             | Self::Preedit(context, ..)
             | Self::Delete(context, ..)
+            | Self::Fenced(context, _)
             | Self::Lost(context) => *context,
+        }
+    }
+
+    /// The answer to `request` the daemon never gives: a key not taken, a
+    /// focus that fences nothing. `None` for a request no answer awaits.
+    fn unanswered(context: ContextId, request: &Request) -> Option<Self> {
+        match *request {
+            Request::Key { ticket, .. } => Some(Self::Answer(context, ticket, false)),
+            Request::FocusIn { fence } => Some(Self::Fenced(context, fence)),
+            _ => None,
         }
     }
 }
@@ -133,13 +162,21 @@ impl Heard {
 pub(crate) struct Inbox {
     heard: Mutex<VecDeque<Heard>>,
     wake: Box<dyn Fn() + Send + Sync>,
+    /// How many calls the task awaits an answer to, as its last turn left
+    /// them.
+    #[cfg(test)]
+    pub(crate) awaited: std::sync::atomic::AtomicUsize,
 }
 
 impl Inbox {
     fn post(&self, heard: Heard) {
         {
             let mut queue = self.heard.lock();
-            if queue.len() >= MAX_HEARD {
+            // A fence or a loss is kept past the bound: one comes of each
+            // focus and each context the owner asked for, and without it the
+            // owner would wait on that context for good.
+            let kept = matches!(heard, Heard::Fenced(..) | Heard::Lost(_));
+            if queue.len() >= MAX_HEARD && !kept {
                 tracing::debug!(?heard, "the input method's messages are not taken: dropped");
                 return;
             }
@@ -196,6 +233,8 @@ impl Bus {
         let (commands, receiver) = mpsc::channel(MAX_COMMANDS);
         let inbox = Arc::new(Inbox {
             heard: Mutex::new(VecDeque::new()),
+            #[cfg(test)]
+            awaited: std::sync::atomic::AtomicUsize::new(0),
             wake,
         });
         let task = runtime.spawn(serve(reach, receiver, Arc::clone(&inbox)));
@@ -402,6 +441,26 @@ struct Context {
 enum Awaited {
     Create(ContextId),
     Key(ContextId, Ticket),
+    Focus(ContextId, u64),
+}
+
+impl Awaited {
+    /// What the owner hears of a call answered with an error, unsent or
+    /// given up on; `None` for a context's making, which is handled apart.
+    fn unanswered(&self) -> Option<Heard> {
+        match *self {
+            Self::Create(_) => None,
+            Self::Key(context, ticket) => Some(Heard::Answer(context, ticket, false)),
+            Self::Focus(context, fence) => Some(Heard::Fenced(context, fence)),
+        }
+    }
+
+    /// The context it waits for an answer about.
+    fn context(&self) -> ContextId {
+        match *self {
+            Self::Create(context) | Self::Key(context, _) | Self::Focus(context, _) => context,
+        }
+    }
 }
 
 /// The bus task's state on a live connection.
@@ -410,7 +469,9 @@ struct Session {
     inbox: Arc<Inbox>,
     contexts: HashMap<ContextId, Context>,
     paths: HashMap<OwnedObjectPath, ContextId>,
-    calls: HashMap<NonZeroU32, Awaited>,
+    /// The calls awaiting an answer, each until its deadline, at most
+    /// [`MAX_CALLS`].
+    calls: HashMap<NonZeroU32, (tokio::time::Instant, Awaited)>,
 }
 
 async fn serve(reach: Reach, mut commands: mpsc::Receiver<Command>, inbox: Arc<Inbox>) {
@@ -445,7 +506,11 @@ async fn serve(reach: Reach, mut commands: mpsc::Receiver<Command>, inbox: Arc<I
         calls: HashMap::new(),
     };
     loop {
+        let due = session.next_due();
         tokio::select! {
+            () = tokio::time::sleep_until(due.unwrap_or_else(tokio::time::Instant::now)), if due.is_some() => {
+                session.expire(tokio::time::Instant::now());
+            }
             command = commands.recv() => {
                 let Some(command) = command else {
                     return;
@@ -462,6 +527,11 @@ async fn serve(reach: Reach, mut commands: mpsc::Receiver<Command>, inbox: Arc<I
                 }
             }
         }
+        #[cfg(test)]
+        session
+            .inbox
+            .awaited
+            .store(session.calls.len(), std::sync::atomic::Ordering::Relaxed);
     }
     tracing::debug!("the input method's bus went: its contexts are lost");
     for context in session.contexts.keys() {
@@ -503,16 +573,16 @@ impl Session {
                 let Some(held) = self.contexts.get_mut(&context) else {
                     // Closed, or never opened: a key's answer is that it was
                     // not taken.
-                    if let Request::Key { ticket, .. } = request {
-                        self.inbox.post(Heard::Answer(context, ticket, false));
+                    if let Some(heard) = Heard::unanswered(context, &request) {
+                        self.inbox.post(heard);
                     }
                     return;
                 };
                 let Some(path) = held.path.clone() else {
                     if held.waiting.len() < MAX_WAITING {
                         held.waiting.push(request);
-                    } else if let Request::Key { ticket, .. } = request {
-                        self.inbox.post(Heard::Answer(context, ticket, false));
+                    } else if let Some(heard) = Heard::unanswered(context, &request) {
+                        self.inbox.post(heard);
                     }
                     return;
                 };
@@ -522,6 +592,11 @@ impl Session {
                 let Some(held) = self.contexts.remove(&context) else {
                     return;
                 };
+                // Its answers have no one to reach; the call that makes it
+                // stays, so a context made after all is destroyed.
+                self.calls.retain(|_, (_, awaited)| {
+                    matches!(awaited, Awaited::Create(_)) || awaited.context() != context
+                });
                 let Some(path) = held.path else {
                     return;
                 };
@@ -535,14 +610,11 @@ impl Session {
     /// Send `request` on the context at `path`.
     async fn request(&mut self, context: ContextId, path: &OwnedObjectPath, request: Request) {
         let (call, awaited) = self.build(context, path, request);
-        let key = match &awaited {
-            Some(Awaited::Key(context, ticket)) => Some((*context, *ticket)),
-            _ => None,
-        };
+        let unanswered = awaited.as_ref().and_then(Awaited::unanswered);
         if !self.send(call, awaited).await
-            && let Some((context, ticket)) = key
+            && let Some(heard) = unanswered
         {
-            self.inbox.post(Heard::Answer(context, ticket, false));
+            self.inbox.post(heard);
         }
     }
 
@@ -564,7 +636,10 @@ impl Session {
             )
         };
         match (names.daemon, request) {
-            (_, Request::FocusIn) => (on("FocusIn").build(&()), None),
+            (_, Request::FocusIn { fence }) => (
+                on("FocusIn").build(&()),
+                Some(Awaited::Focus(context, fence)),
+            ),
             (_, Request::FocusOut) => (on("FocusOut").build(&()), None),
             (
                 Daemon::IBus,
@@ -676,8 +751,18 @@ impl Session {
             }
         };
         if let Some(awaited) = awaited {
-            self.calls
-                .insert(call.primary_header().serial_num(), awaited);
+            if self.calls.len() >= MAX_CALLS {
+                tracing::debug!("too many calls await the input method: one is not sent");
+                return false;
+            }
+            let timeout = match awaited {
+                Awaited::Create(_) => CREATE_TIMEOUT,
+                Awaited::Key(..) | Awaited::Focus(..) => KEY_CALL_TIMEOUT,
+            };
+            self.calls.insert(
+                call.primary_header().serial_num(),
+                (tokio::time::Instant::now() + timeout, awaited),
+            );
         }
         match self.link.connection.send(&call).await {
             Ok(()) => true,
@@ -689,6 +774,38 @@ impl Session {
         }
     }
 
+    /// When the first call awaiting an answer runs out of time.
+    fn next_due(&self) -> Option<tokio::time::Instant> {
+        self.calls.values().map(|(due, _)| *due).min()
+    }
+
+    /// Give up on the calls unanswered by `now`. A key's late answer would
+    /// be dropped anyway, the owner having delivered the key at its own
+    /// deadline; a focus fences no longer, so the field hears the daemon
+    /// again; a context the daemon did not make in time is lost, so no key
+    /// waits on it.
+    fn expire(&mut self, now: tokio::time::Instant) {
+        let mut overdue = Vec::new();
+        self.calls.retain(|_, (due, awaited)| {
+            let live = *due > now;
+            if !live {
+                overdue.push(awaited.unanswered().ok_or(awaited.context()));
+            }
+            live
+        });
+        for overdue in overdue {
+            match overdue {
+                Ok(heard) => self.inbox.post(heard),
+                Err(context) => {
+                    if self.contexts.contains_key(&context) {
+                        tracing::debug!("the input method did not make an input context in time");
+                        self.lost(context);
+                    }
+                }
+            }
+        }
+    }
+
     /// `context` is gone: what waits on it is answered.
     fn lost(&mut self, context: ContextId) {
         if let Some(held) = self.contexts.remove(&context) {
@@ -696,8 +813,8 @@ impl Session {
                 self.paths.remove(&path);
             }
             for request in held.waiting {
-                if let Request::Key { ticket, .. } = request {
-                    self.inbox.post(Heard::Answer(context, ticket, false));
+                if let Some(heard) = Heard::unanswered(context, &request) {
+                    self.inbox.post(heard);
                 }
             }
         }
@@ -709,7 +826,7 @@ impl Session {
         let header = message.header();
         match message.message_type() {
             MessageType::MethodReturn | MessageType::Error => {
-                let Some(awaited) = header
+                let Some((_, awaited)) = header
                     .reply_serial()
                     .and_then(|serial| self.calls.remove(&serial))
                 else {
@@ -721,6 +838,11 @@ impl Session {
                         let taken =
                             !failed && message.body().deserialize::<bool>().unwrap_or(false);
                         self.inbox.post(Heard::Answer(context, ticket, taken));
+                    }
+                    // Refused or not, the daemon handled it in its turn: what
+                    // it sent before came before this answer.
+                    Awaited::Focus(context, fence) => {
+                        self.inbox.post(Heard::Fenced(context, fence));
                     }
                     Awaited::Create(context) => {
                         let path = if failed {
@@ -922,10 +1044,12 @@ async fn refuse(commands: &mut mpsc::Receiver<Command>, inbox: &Inbox) {
     while let Some(command) = commands.recv().await {
         match command {
             Command::Open(context) => inbox.post(Heard::Lost(context)),
-            Command::Send(context, Request::Key { ticket, .. }) => {
-                inbox.post(Heard::Answer(context, ticket, false));
+            Command::Send(context, request) => {
+                if let Some(heard) = Heard::unanswered(context, &request) {
+                    inbox.post(heard);
+                }
             }
-            Command::Send(..) | Command::Close(_) => {}
+            Command::Close(_) => {}
         }
     }
 }

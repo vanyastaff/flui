@@ -143,6 +143,11 @@ struct BusWire {
     /// states again: a commit or a deletion leaves it as it was.
     preedit: RefCell<(String, i32)>,
     commits: Cell<u32>,
+    /// The last focus asked of the input method, and the last it answered:
+    /// until they match, what it sends was for the field it served before,
+    /// and reaches none.
+    fence: Cell<u64>,
+    fenced: Cell<u64>,
     /// The field has the input method's focus: keys are asked of it.
     focused: Cell<bool>,
     /// The context was asked for.
@@ -156,16 +161,34 @@ impl BusWire {
     fn asks(&self) -> bool {
         self.focused.get() && !self.lost.get()
     }
+
+    /// Whether what the input method sends now is for the field served now:
+    /// it answered the last focus asked of it.
+    fn current(&self) -> bool {
+        self.fenced.get() == self.fence.get()
+    }
+
+    /// The composition ended (the field changed, or the window lost the
+    /// focus): its preedit is stated again in no later batch.
+    fn forget_preedit(&self) {
+        *self.preedit.borrow_mut() = (String::new(), 0);
+    }
 }
 
 impl TextInputWire for BusWire {
+    /// A field takes text input, or the input method is reset: what it sent
+    /// before is fenced off until it answers this focus.
     fn enable(&self) {
         self.focused.set(true);
-        self.batch.borrow_mut().push(Request::FocusIn);
+        self.forget_preedit();
+        let fence = self.fence.get().wrapping_add(1);
+        self.fence.set(fence);
+        self.batch.borrow_mut().push(Request::FocusIn { fence });
     }
 
     fn disable(&self) {
         self.focused.set(false);
+        self.forget_preedit();
         self.batch.borrow_mut().push(Request::FocusOut);
     }
 
@@ -206,10 +229,18 @@ impl TextInputWire for BusWire {
         let batch = std::mem::take(&mut *self.batch.borrow_mut());
         if !self.lost.get() {
             for request in batch {
+                let fence = match request {
+                    Request::FocusIn { fence } => Some(fence),
+                    _ => None,
+                };
                 if !self.bus.send(self.context, request) {
                     tracing::debug!(
                         "the input method's bus is behind: a field's state goes untold"
                     );
+                    // A focus never sent is never answered: it fences nothing.
+                    if let Some(fence) = fence {
+                        self.fenced.set(fence);
+                    }
                 }
             }
         }
@@ -426,6 +457,9 @@ impl X11Ime {
         if wire.focused.replace(false) && !wire.lost.get() {
             self.bus.send(wire.context, Request::FocusOut);
         }
+        // The client takes the preedit out of the field as it hears the
+        // window leave: no later batch states it again.
+        wire.forget_preedit();
         Some(Leaving {
             client: held.text.client(),
             wire,
@@ -460,6 +494,10 @@ impl X11Ime {
                         ime.hold.release_where(|key| key.window.id == id);
                         return None;
                     }
+                    Heard::Fenced(_, fence) => {
+                        ime.by_context(context)?.wire.fenced.set(*fence);
+                        return None;
+                    }
                     Heard::Ready(_) => return None,
                     _ => {}
                 }
@@ -470,6 +508,13 @@ impl X11Ime {
         let Some((client, wire)) = target else {
             return;
         };
+        if !wire.current() {
+            tracing::debug!(
+                ?heard,
+                "the input method sent this for the field it served before"
+            );
+            return;
+        }
         match heard {
             Heard::Commit(_, text) => {
                 failure.contain(|| client.commit_string(&*wire, Some(text)));
@@ -488,7 +533,7 @@ impl X11Ime {
                 };
                 failure.contain(|| client.delete_surrounding(&*wire, before, after));
             }
-            Heard::Ready(_) | Heard::Answer(..) | Heard::Lost(_) => return,
+            Heard::Ready(_) | Heard::Answer(..) | Heard::Fenced(..) | Heard::Lost(_) => return,
         }
         // The batch states the preedit as it stands and applies at once.
         let (text, caret) = wire.preedit.borrow().clone();
@@ -526,6 +571,8 @@ impl LoopText for X11Ime {
                 told: RefCell::new(Told::default()),
                 preedit: RefCell::new((String::new(), 0)),
                 commits: Cell::new(0),
+                fence: Cell::new(0),
+                fenced: Cell::new(0),
                 focused: Cell::new(false),
                 opened: Cell::new(false),
                 lost: Cell::new(false),

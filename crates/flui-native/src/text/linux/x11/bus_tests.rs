@@ -308,6 +308,26 @@ impl Rig {
         }
     }
 
+    /// How many things the stand-in heard start with `prefix`.
+    fn heard_count(&self, prefix: &str) -> usize {
+        self.heard
+            .lock()
+            .iter()
+            .filter(|heard| heard.starts_with(prefix))
+            .count()
+    }
+
+    /// The window takes the keyboard's focus again.
+    fn focus_in(&self) {
+        self.ime.event(&focus(FocusInEvent {
+            response_type: xproto::FOCUS_IN_EVENT,
+            detail: NotifyDetail::NONLINEAR,
+            sequence: 0,
+            event: self.window.xid,
+            mode: NotifyMode::NORMAL,
+        }));
+    }
+
     fn heard_any(&self, prefix: &str) -> bool {
         self.heard
             .lock()
@@ -527,5 +547,101 @@ fn a_window_that_closes_delivers_its_keys_and_hears_nothing_more() {
         rig.delivered().len(),
         2,
         "a key of no window it knows goes as typed"
+    );
+}
+
+/// What the input method sent for a field reaches no field focused after
+/// it: the focus asked of it fences what it sent before, and what it sends
+/// once it answered reaches the new field.
+#[test]
+fn an_edit_sent_for_the_field_before_reaches_not_the_next() {
+    let Some(rig) = Rig::start() else {
+        return;
+    };
+    rig.press('a');
+    // The commit is heard, and waits for the owner's turn, as the
+    // application moves the focus to another field.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !rig.heard_any("key 97") {
+        assert!(
+            Instant::now() < deadline,
+            "the stand-in never heard the key"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    std::thread::sleep(Duration::from_millis(100));
+    let next = InMemoryTextStore::new("");
+    rig.text
+        .client()
+        .expect("the window's client")
+        .focus_store(Some(Rc::clone(&next) as Rc<dyn TextStore>));
+    rig.settle("the input method hears the next field", || {
+        rig.heard_count("focus in") == 2
+    });
+    let settled = Instant::now() + Duration::from_millis(200);
+    rig.settle("the turns after", || Instant::now() >= settled);
+    assert_eq!(
+        next.text(),
+        "",
+        "the earlier field's commit reaches no field"
+    );
+    assert_eq!(rig.store.text(), "");
+    rig.ime.key(X11Key {
+        window: rig.window,
+        keysym: u32::from('a'),
+        keycode: 38,
+        state: 0,
+        release: false,
+        time: 0,
+        deliver: Box::new(|| {}),
+    });
+    rig.settle("the next field's commit", || next.text() == "あ");
+}
+
+/// A preedit the window's focus loss took out of the field is not composed
+/// again by the next batch, which states no preedit of its own.
+#[test]
+fn a_preedit_ended_with_the_focus_is_not_composed_again() {
+    let Some(rig) = Rig::start() else {
+        return;
+    };
+    rig.press('p');
+    rig.settle("the preedit", || rig.store.composition().is_some());
+    rig.focus_out();
+    assert_eq!(rig.store.text(), "");
+    rig.focus_in();
+    rig.settle("the input method hears the focus back", || {
+        rig.heard_count("focus in") == 2
+    });
+    rig.press('a');
+    rig.settle("the commit", || !rig.store.text().is_empty());
+    assert_eq!(rig.store.text(), "あ", "the commit alone, no preedit");
+    assert!(rig.store.composition().is_none());
+}
+
+/// A call the input method leaves unanswered is given up on: what the task
+/// keeps for it goes, before the input method answers at all.
+#[test]
+fn a_call_unanswered_in_time_is_given_up_on() {
+    let Some(rig) = Rig::start() else {
+        return;
+    };
+    let awaited = || {
+        rig.ime
+            .bus
+            .inbox()
+            .awaited
+            .load(std::sync::atomic::Ordering::Relaxed)
+    };
+    let pressed = Instant::now();
+    for _ in 0..3 {
+        rig.press('c');
+    }
+    rig.settle("the calls are sent", || awaited() == 3);
+    rig.settle("the calls are given up on", || awaited() == 0);
+    assert!(
+        pressed.elapsed() < Duration::from_millis(900),
+        "given up on before the input method answers, a second after: {:?}",
+        pressed.elapsed()
     );
 }
