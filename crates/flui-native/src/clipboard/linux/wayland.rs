@@ -58,7 +58,7 @@ use wayland_client::{Connection, Dispatch, Proxy, QueueHandle, event_created_chi
 use web_time::Instant;
 
 use super::owners::Owners;
-use super::text::{CONCEALED_HINT, CONCEALED_HINT_VALUE, TextForm};
+use crate::clipboard::text::{CONCEALED_HINT, CONCEALED_HINT_VALUE, TextForm};
 use crate::host::{MAX_TEXT, NativeClipboard, NativePrimarySelection, owned_text};
 use crate::owner::linux::wayland::{LastInput, WaylandClipboard, WaylandState};
 use crate::owner::slot::OwnerCell;
