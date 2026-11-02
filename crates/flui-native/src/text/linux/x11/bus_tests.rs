@@ -255,8 +255,8 @@ type Delivered = Rc<RefCell<Vec<(char, String)>>>;
 /// IBus on a private bus.
 struct Rig {
     bus: PrivateBus,
-    _server: zbus::Connection,
-    _runtime: tokio::runtime::Runtime,
+    server: zbus::Connection,
+    runtime: tokio::runtime::Runtime,
     ime: X11Ime,
     window: WindowRef,
     text: Arc<WindowText>,
@@ -308,8 +308,8 @@ impl Rig {
             .focus_store(Some(Rc::clone(&store) as Rc<dyn TextStore>));
         let rig = Self {
             bus,
-            _server: server,
-            _runtime: runtime,
+            server,
+            runtime,
             ime,
             window,
             text,
@@ -760,4 +760,57 @@ fn a_completed_composition_resets_the_engine() {
         .complete_composition(&store);
     assert_eq!(rig.store.text(), "にほ", "the preedit stays as text");
     rig.settle("the engine is reset", || rig.heard_any("reset"));
+}
+
+/// A key held mid-composition goes as typed to a field whose composition
+/// already ended, which a field still composing would not take: whether the
+/// input method left it unanswered or the window lost the focus.
+#[test]
+fn a_key_held_mid_composition_reaches_a_field_no_longer_composing() {
+    for focus_lost in [false, true] {
+        let Some(rig) = Rig::start() else {
+            return;
+        };
+        rig.press('p');
+        rig.settle("the preedit", || rig.store.composition().is_some());
+        let composing = Rc::new(RefCell::new(Vec::new()));
+        let mut key = rig.key('c', false);
+        key.deliver = Box::new({
+            let composing = Rc::clone(&composing);
+            let store = Rc::clone(&rig.store);
+            move || composing.borrow_mut().push(store.composition().is_some())
+        });
+        rig.ime.key(key);
+        if focus_lost {
+            rig.focus_out();
+        }
+        rig.settle("the key as typed", || !composing.borrow().is_empty());
+        assert_eq!(
+            *composing.borrow(),
+            [false],
+            "delivered after the composition ended (focus lost: {focus_lost})"
+        );
+    }
+}
+
+/// An input method that leaves a session bus still running is gone all the
+/// same: its composition ends, and the field takes keys as typed.
+#[test]
+fn a_composition_ends_as_the_input_method_leaves_a_running_bus() {
+    let Some(rig) = Rig::start() else {
+        return;
+    };
+    rig.press('p');
+    rig.settle("the preedit", || rig.store.composition().is_some());
+    rig.runtime
+        .block_on(rig.server.release_name("org.freedesktop.IBus"))
+        .expect("the stand-in lets its name go");
+    rig.settle("the composition ends", || rig.store.composition().is_none());
+    let pressed = Instant::now();
+    rig.press('b');
+    rig.settle("the key as typed", || !rig.delivered().is_empty());
+    assert!(
+        pressed.elapsed() < ANSWER_TIMEOUT,
+        "no key waits on an input method that went"
+    );
 }

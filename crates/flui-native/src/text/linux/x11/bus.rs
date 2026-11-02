@@ -58,6 +58,9 @@ const KEY_CALL_TIMEOUT: Duration = ANSWER_TIMEOUT.saturating_mul(2);
 /// How long the daemon has to make a context before it counts as lost.
 const CREATE_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// The message bus's own name, the sender of what it says about names.
+const BUS_NAME: &str = "org.freedesktop.DBus";
+
 /// Names one window's input context.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub(crate) struct ContextId(u64);
@@ -510,6 +513,25 @@ async fn serve(
     {
         tracing::debug!(%error, "the input method's signals are not asked for");
     }
+    // A daemon that stops leaves a session bus running, so the stream does
+    // not end: its name losing its owner says it went.
+    let owner = format!(
+        "type='signal',sender='{BUS_NAME}',interface='{BUS_NAME}',member='NameOwnerChanged',arg0='{}'",
+        link.names.destination
+    );
+    if let Err(error) = link
+        .connection
+        .call_method(
+            Some(BUS_NAME),
+            "/org/freedesktop/DBus",
+            Some(BUS_NAME),
+            "AddMatch",
+            &(owner.as_str(),),
+        )
+        .await
+    {
+        tracing::debug!(%error, "the input method's going is not watched");
+    }
     let mut stream = MessageStream::from(&link.connection);
     let mut session = Session {
         link,
@@ -843,6 +865,23 @@ impl Session {
         self.inbox.post(Heard::Lost(context));
     }
 
+    /// The bus says who owns a name: when the daemon's name loses the owner
+    /// that made the contexts, every context is lost with it.
+    fn owner_changed(&mut self, message: &Message) {
+        let body = message.body();
+        let Ok((name, old, _new)) = body.deserialize::<(&str, &str, &str)>() else {
+            return;
+        };
+        if name != self.link.names.destination || old.is_empty() {
+            return;
+        }
+        tracing::debug!("the input method left the bus: its contexts are lost");
+        let contexts: Vec<ContextId> = self.contexts.keys().copied().collect();
+        for context in contexts {
+            self.lost(context);
+        }
+    }
+
     /// A message from the bus: an answer to a call, or a signal of a context.
     async fn heard(&mut self, message: &Message) {
         let header = message.header();
@@ -891,6 +930,15 @@ impl Session {
                 }
             }
             MessageType::Signal => {
+                if header.sender().is_some_and(|sender| sender == BUS_NAME) {
+                    if header
+                        .member()
+                        .is_some_and(|member| member == "NameOwnerChanged")
+                    {
+                        self.owner_changed(message);
+                    }
+                    return;
+                }
                 let Some(context) = header
                     .path()
                     .and_then(|path| self.paths.get(&OwnedObjectPath::from(path.to_owned())))

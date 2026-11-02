@@ -476,10 +476,12 @@ impl X11Ime {
     /// The keys a window held go before its client hears it leave, which
     /// takes the preedit out of its field.
     fn finish_leaving(&self, leaving: Leaving, failure: &mut FirstPanic) {
-        self.deliver_ready(failure);
+        // The composition ends in the field before the keys it held go as
+        // typed, which a field still composing would not take.
         if let Some(client) = leaving.client {
             failure.contain(|| client.left(&*leaving.wire));
         }
+        self.deliver_ready(failure);
     }
 
     /// Window `id`'s input method left a key unanswered past its deadline,
@@ -513,12 +515,22 @@ impl X11Ime {
         tracing::debug!("the input method left a key unanswered: its input context is replaced");
         self.bus.close(old);
         self.bus.open(next);
+        let Some(client) = client.filter(|_| wire.focused.get()) else {
+            self.deliver_ready(failure);
+            return;
+        };
+        // The composition the old context made ends in the field before the
+        // keys it held go as typed, which a field still composing would not
+        // take.
+        failure.contain(|| client.left(&*wire));
         self.deliver_ready(failure);
-        if let Some(client) = client
-            && wire.focused.get()
-        {
+        // A key delivered may have moved the focus or closed the window.
+        let still = self
+            .state
+            .with(|ime| ime.focused == Some(id) && ime.by_id(id).is_some())
+            .unwrap_or(false);
+        if still && !wire.lost.get() {
             let wire: Rc<dyn TextInputWire> = wire;
-            failure.contain(|| client.left(&*wire));
             failure.contain(|| client.entered(wire));
         }
     }
