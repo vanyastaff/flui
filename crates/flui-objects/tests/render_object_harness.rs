@@ -7164,6 +7164,51 @@ fn harness_backdrop_filter_carries_its_group_to_the_layer() {
     );
 }
 
+/// A magnifying backdrop filter keeps its focal point where its node put
+/// it: the layer's transform, a node's padding away from the layer's origin,
+/// still holds the node's own point still, under a composed filter too.
+fn harness_backdrop_filter_transform_follows_its_node() {
+    let focal = Point::new(20.0, 15.0);
+    let magnify = ImageFilter::try_magnify(focal, 2.0).expect("a valid scale");
+    for filter in [
+        magnify.clone(),
+        ImageFilter::Compose(vec![ImageFilter::blur(1.0), magnify]),
+    ] {
+        let run = RenderTester::mount(
+            box_node(RenderPadding::new(EdgeInsets::new(20.0, 0.0, 0.0, 10.0))).child(
+                box_node(RenderBackdropFilter::new(filter))
+                    .child(box_node(RenderColoredBox::red(40.0, 30.0))),
+            ),
+        )
+        .with_constraints(loose(200.0))
+        .run_frame();
+        let transforms: Vec<[f64; 6]> = run
+            .layer_tree()
+            .expect("a painted frame")
+            .iter()
+            .filter_map(|(_, node)| match node.layer() {
+                flui_rendering::layer::Layer::BackdropFilter(layer) => Some(layer.filter().clone()),
+                _ => None,
+            })
+            .filter_map(|filter| match filter {
+                ImageFilter::Compose(filters) => filters.into_iter().last(),
+                other => Some(other),
+            })
+            .filter_map(|filter| match filter {
+                ImageFilter::Transform { transform, .. } => Some(transform.inverse_coefficients()),
+                _ => None,
+            })
+            .collect::<Vec<[f64; 6]>>();
+        assert_eq!(transforms.len(), 1, "one transform filter: {transforms:?}");
+        let [xx, yx, xy, yy, x0, y0] = transforms[0];
+        // The node sits at (10, 20), so its focal point is (30, 35) in the
+        // layer: the transform there must leave it in place.
+        let (x, y) = (30.0, 35.0);
+        let shows = (xx * x + xy * y + x0, yx * x + yy * y + y0);
+        assert_eq!(shows, (x, y), "the focal point moved");
+    }
+}
+
 // ============================================================================
 // RenderLeaderLayer / RenderFollowerLayer
 // ============================================================================
@@ -13609,6 +13654,10 @@ fn family_clips_and_effects() {
             (
                 "backdrop_filter_carries_its_group_to_the_layer",
                 harness_backdrop_filter_carries_its_group_to_the_layer,
+            ),
+            (
+                "backdrop_filter_transform_follows_its_node",
+                harness_backdrop_filter_transform_follows_its_node,
             ),
             (
                 "opacity_paints_with_alpha_layer",
