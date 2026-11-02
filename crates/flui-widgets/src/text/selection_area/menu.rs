@@ -154,7 +154,8 @@ impl SelectionModel {
         let post_frame = self.post_frame.borrow().clone();
         if menu.configured(post_frame.as_ref()) {
             let mut failure = FirstPanic::new();
-            menu.stop_toolbar();
+            // Taken away first, so a menu turned off leaves no toolbar.
+            self.hide_toolbar(&mut failure);
             self.show_toolbar(&mut failure);
             failure.resume();
         }

@@ -714,6 +714,7 @@ fn selection_area_menu() {
             ("selection_area_menu::the_menu_key_and_assistive_technology_open_an_area_s_popup", crate::selection_area_menu::the_menu_key_and_assistive_technology_open_an_area_s_popup),
             ("selection_area_menu::an_area_s_handle_drag_hides_its_toolbar_until_it_lets_go", crate::selection_area_menu::an_area_s_handle_drag_hides_its_toolbar_until_it_lets_go),
             ("selection_area_menu::an_enclosing_menu_answers_only_for_an_area_without_one", crate::selection_area_menu::an_enclosing_menu_answers_only_for_an_area_without_one),
+            ("selection_area_menu::an_area_rebuilt_without_its_menu_takes_its_toolbar_away", crate::selection_area_menu::an_area_rebuilt_without_its_menu_takes_its_toolbar_away),
         ],
     );
 }
@@ -742,6 +743,7 @@ fn selection_menu() {
             ("selection_menu::a_field_rebuilt_without_its_menu_closes_the_popup", crate::selection_menu::a_field_rebuilt_without_its_menu_closes_the_popup),
             ("selection_menu::a_field_s_secondary_click_wins_over_an_enclosing_menu", crate::selection_menu::a_field_s_secondary_click_wins_over_an_enclosing_menu),
             ("selection_menu::a_field_rebuilt_with_other_commands_closes_the_popup", crate::selection_menu::a_field_rebuilt_with_other_commands_closes_the_popup),
+            ("selection_menu::a_field_rebuilt_without_its_menu_takes_its_toolbar_away", crate::selection_menu::a_field_rebuilt_without_its_menu_takes_its_toolbar_away),
         ],
     );
 }

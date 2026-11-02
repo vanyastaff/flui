@@ -261,7 +261,8 @@ impl FieldHandles {
             return;
         }
         let mut failure = FirstPanic::new();
-        self.menu.stop_toolbar();
+        // Taken away first, so a menu turned off leaves no toolbar.
+        self.hide_toolbar(&mut failure);
         self.show_toolbar(&mut failure);
         failure.resume();
     }

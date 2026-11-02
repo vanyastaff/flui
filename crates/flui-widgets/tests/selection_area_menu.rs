@@ -5,7 +5,7 @@
 //! `WidgetsApp`, whose `PlainSelectionMenu` draws both, so every button and
 //! item below is found and pressed as assistive technology reads it.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -18,13 +18,14 @@ use flui_platform::keyboard::{Code, Key, KeyEvent, KeyState, NamedKey};
 use flui_platform::pointer::PointerButton;
 use flui_testing::a11y::{A11yTree, Action, ActionRequest, Role, TreeId};
 use flui_testing::replay::{MouseScript, PointerScript};
+use flui_view::prelude::{Signal, SignalWriteExt};
 use flui_view::{BoxedView, ViewExt};
 use flui_widgets::{
     Actions, CallbackAction, Column, ContextMenuArea, DefaultSelectionControls, Focus,
     GestureCommand, Intent, SelectionArea, ShowContextMenuIntent, SizedBox, Text, WidgetsApp,
 };
 
-use crate::common::{LaidOut, lay_out, tight};
+use crate::common::{LaidOut, SignalProbe, lay_out, tight};
 
 const WORDS: &str = "alpha beta gamma";
 const READING: [&str; 2] = ["Copy", "Select all"];
@@ -419,4 +420,58 @@ pub(crate) fn an_enclosing_menu_answers_only_for_an_area_without_one() {
     scene.key(NamedKey::Escape);
     scene.long_press(scene.along(width_of("alpha be")));
     assert!(scene.toolbar().is_empty(), "no menu shows no toolbar");
+}
+
+/// An area rebuilt with no menu while its toolbar shows takes the toolbar
+/// away, though its handles look the same. Only the area rebuilds.
+///
+/// Red-check: only show the toolbar again after a rebuild, without taking
+/// it away first (the old toolbar stays).
+pub(crate) fn an_area_rebuilt_without_its_menu_takes_its_toolbar_away() {
+    let off = Rc::new(Cell::new(false));
+    let count: Rc<RefCell<Option<Signal<u32>>>> = Rc::default();
+    let heard: Rc<RefCell<Option<String>>> = Rc::default();
+    let probe = {
+        let (off, count, hears) = (Rc::clone(&off), Rc::clone(&count), Rc::clone(&heard));
+        SignalProbe::new(move |signals| {
+            count.replace(Some(signals.count));
+            let hears = Rc::clone(&hears);
+            let area = SelectionArea::new(Column::new((Text::new(WORDS).style(style()),)))
+                .on_selection_changed(move |_cx, change| {
+                    *hears.borrow_mut() = change
+                        .selected
+                        .as_ref()
+                        .map(|selected| selected.text.clone());
+                });
+            let area = if off.get() { area.no_menu() } else { area };
+            SizedBox::new(400.0, 40.0).child(area)
+        })
+    };
+    let page = Column::new((SizedBox::new(400.0, 80.0), probe.view()));
+    let mut laid = lay_out(WidgetsApp::new(page), tight(400.0, 300.0));
+    laid.enable_semantics();
+    laid.pump();
+    let paragraph = laid.find_all_by_render_type("RenderParagraph")[0];
+    let mut scene = Scene {
+        laid,
+        elsewhere: FocusNode::with_debug_label("elsewhere"),
+        log: Rc::default(),
+        heard,
+        paragraph,
+    };
+    scene.long_press(scene.along(width_of("alpha be")));
+    assert_eq!(scene.toolbar(), strings(&READING));
+
+    off.set(true);
+    let signal = count.borrow().expect("the probe built");
+    probe
+        .write(|cx| signal.set(cx, 1))
+        .expect("the probe's signal takes it");
+    scene.settle();
+    assert_eq!(scene.toolbar(), Vec::<String>::new());
+    assert_eq!(
+        scene.selected().as_deref(),
+        Some("beta"),
+        "the selection stays"
+    );
 }
