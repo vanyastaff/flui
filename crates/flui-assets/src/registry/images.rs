@@ -692,20 +692,21 @@ impl DecodedImages {
         } = pending;
         drop(cancel);
         // Each waiter answered, or closed when there is no outcome so it takes
-        // the load over, in turn: a waker that panics leaves the rest
-        // answered, and the first panic is raised once every one is
-        // (ADR-0281).
+        // the load over, in turn. Its outcome is sent, and its claim channel
+        // closed, each under containment of its own: a waker that panics
+        // costs no subscriber its outcome, and the first panic is raised
+        // once every one is answered (ADR-0281).
         let mut first = flui_foundation::panic::FirstPanic::new();
         for waiter in waiters {
+            let Waiter { settle, claim } = waiter;
             let delivery = outcome.clone().map(Delivery::Settled);
             first.contain(move || {
-                let Waiter { settle, claim } = waiter;
-                drop(claim);
                 // A waiter whose subscriber left before completion is closed.
                 if let Some(delivery) = delivery {
                     let _ = settle.send(delivery);
                 }
             });
+            first.contain(move || drop(claim));
         }
         first.resume();
     }

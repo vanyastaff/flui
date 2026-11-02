@@ -502,6 +502,10 @@ fn a_load_waiting_for_its_load_slot_holds_no_place_on_the_io_lane() {
             a_panicking_waker_leaves_the_rest_told,
         ),
         (
+            "a panicking waker keeps its outcome",
+            a_panicking_waker_keeps_its_outcome,
+        ),
+        (
             "lanes shutting down refuse the lead only",
             shutting_down_refuses_the_lead,
         ),
@@ -701,6 +705,43 @@ fn a_panicking_waker_leaves_the_rest_told() {
     );
     assert_eq!(http.requests_to(&nth_url(LOAD_SLOTS)), 1, "one request");
     drop((loads.drain(..), panicking));
+}
+
+/// A load settles while a subscriber's waker panics on its first wake: that
+/// subscriber still hears the outcome rather than taking the load over.
+fn a_panicking_waker_keeps_its_outcome() {
+    let http = ScriptedHttp::new();
+    let lanes = QueuedLanes::new();
+    let registry = AssetRegistryBuilder::new().with_default_capacity().build();
+    http.respond(URL, ScriptedResponse::Fail(HttpError::Timeout));
+    let lead = registry.load_network_image(URL, lanes.services().with_http(http.handle()));
+    let mut panicking = registry.load_network_image(URL, lanes.services().with_http(http.handle()));
+    let waker = std::task::Waker::from(std::sync::Arc::new(PanicsOnFirstWake(
+        std::sync::atomic::AtomicBool::new(false),
+    )));
+    assert!(
+        std::pin::Pin::new(&mut panicking)
+            .poll(&mut std::task::Context::from_waker(&waker))
+            .is_pending()
+    );
+    let settled = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| lanes.run_until_idle()));
+    assert!(settled.is_err(), "the waker's panic is raised");
+
+    let std::task::Poll::Ready(answered) = poll_once(&mut panicking) else {
+        panic!("the subscriber whose waker panicked hears the outcome");
+    };
+    assert!(
+        matches!(
+            answered,
+            Err(AssetError::Http {
+                source: HttpError::Timeout,
+                ..
+            })
+        ),
+        "the outcome the run settled with"
+    );
+    assert_eq!(http.requests_to(URL), 1, "one request");
+    drop(lead);
 }
 
 /// The lead's lanes shut down while it waits for a slot: the lead answers
