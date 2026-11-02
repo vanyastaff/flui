@@ -1,9 +1,10 @@
 # Multi-owner implementation tasks and evidence
 
-- **Status:** Approved by the owner (2026-11-01); implementation authorized, starting with
-  headless evidence and actual two-loop Win32/TSF qualification. No platform support is claimed.
+- **Status:** In progress, approved by the owner (2026-11-01). Headless and low-level
+  Win32/TSF prerequisites implemented and executed; production integration remains pending.
+  No platform support is claimed.
 - **Base:** `bb618a7f7f1510ff11093109094ba02c937d1970`.
-- **Next:** MO-T2, then MO-T5; MO-T3/MO-T4 follow the qualification evidence.
+- **Next:** MO-T3, then MO-T4; preserve the executed MO-T2/MO-T5 prerequisites during integration.
 - **Requirements:** [requirements.md](requirements.md). **Design:** [design.md](design.md).
 
 ## Work and dependency order
@@ -26,10 +27,11 @@
 
 - [x] MO-T1 — owner accepted the corrected ADR/spec, factory exception, consumer/configuration
   inventory and bounded-work design on 2026-11-01; no transfer allowlist entry added yet.
-- [ ] MO-T2 — reproducible public-path headless baseline and failing control.
+- [x] MO-T2 — checked-in public-path headless test/example, raw baseline and failing control.
 - [ ] MO-T3 — transport and identity contracts.
 - [ ] MO-T4 — coordinator, local runner migration and lifecycle.
-- [ ] MO-T5 — native multi-loop/STA qualification preserving local input and text contracts.
+- [x] MO-T5 — two actual Win32 loops: local input defaults, real TSF grants, UIA and STA teardown;
+  process-startup inventory in design.md. This is a prerequisite, not MO-T8 production acceptance.
 - [ ] MO-T6 — public dedicated entry and real consumer.
 - [ ] MO-T7 — native frame and recovery integration.
 - [ ] MO-T8 — executed Win32 acceptance and measurements.
@@ -66,10 +68,59 @@ numbers in a release decision; it is not a portable checked-in test suite yet.
 
 ## Native evidence ledger
 
+### Executed prerequisites (2026-11-01, Windows 11 build 26300, Rust 1.99)
+
+- MO-T2: `flui-testing::multi_owner::independent_runtime_frames_progress_while_a_sibling_callback_is_held`
+  uses real mounted runtime transactions; both sibling roots are mounted before the frame
+  request. Shared-owner control cannot produce while the callback is held. Separate-owner
+  output includes changed text and exactly one scene before release.
+- The checked-in `flui-testing/examples/multi_owner.rs` replaces the external probe.
+  Final release build `r8358`, bundled fonts, 15 fresh processes, 40 measured rounds after
+  5 warmups each (600 measured rounds). Median light-frame latency: **36.0541 ms** shared,
+  **0.1484 ms** separate; reversed-order shared control **0.1189 ms**. Two 1,000-text-row
+  runtimes: median pair **71.86055 ms** shared / **36.9413 ms** separate (about **1.95x**).
+  Every request produced one scene; final text and paragraph counts matched in every process.
+  Semantics disabled; these are CPU transactions, not native/GPU presentation latencies.
+- MO-T5: `text::windows::tsf::multi_owner::two_win32_loops_keep_tsf_grants_and_retirement_on_their_owners`
+  enters two real `WindowsPlatform::run` loops of the production host type. Each creates its
+  HWND, STA and TSF connection locally. Actual `ITfContext::RequestEditSession` edits Unicode
+  text through the production ACP store; a shut commit gate refuses a synchronous edit
+  without changing text, and the next allowed edit succeeds. While A's callback is held,
+  B's TSF edit and actual UI Automation name query complete. B also works after A retires.
+  Prevented F11 leaves native `WindowMode` unchanged on both loops; allowed F11 toggles it
+  and toggles it back. HWND destruction, TSF shutdown inside STA and final STA release are
+  asserted on each owner. No foreground change or system-wide keyboard injection is used.
+- The full local Windows suite (`r8354`) passed **626 tests**, with two opt-in tests skipped.
+  It first exposed an obsolete TSF test expecting a retained payload (`r8351`, reproduced
+  alone in `r8352`). ADR-0281 requires contained destruction; the corrected assertion counts
+  one destruction and verifies the next healthy focus. Production cleanup behavior did not change.
+- Three temporary negative controls (`r8355`) all failed as intended: forced shared routing
+  timed out waiting for the independent frame; ignored `default_prevented` made prevented F11
+  change native mode; retaining the TSF payload yielded zero destructions instead of one.
+  Exact source bytes were restored and checked. Final targeted run `r8357`: **3/3 passed**.
+- `cargo heli clippy --locked -p flui-native -p flui-testing --all-targets -- -D warnings`
+  passed (`r8356`); formatting and diff whitespace checks passed. Builds used an isolated
+  checkout target and `CARGO_INCREMENTAL=0`.
+- `cargo heli xtask checks` passed (`r8359`, exit 0): source/documentation, module, panic,
+  transfer, test-kit and repository consistency gates. This does not replace native acceptance.
+
+Artifact bundle: `multi-owner-implementation-2026-11-01`, archived outside the public source
+tree. It contains the original historical source/raw baseline, both new measurement series,
+source/lockfile and executable copies, machine/toolchain metadata, negative-control details,
+restoration hashes and complete success/failure logs. Final measured executable SHA256:
+`bdd07165da3778cd66f95b8a93be08c87746d406276d112530f3d8ff64b363ce`.
+Reproduction commands and argument meanings are in `crates/flui-testing/ARCHITECTURE.md`.
+The native command is `cargo heli nextest run --locked -p flui-native --lib -E 'test(two_win32_loops_keep_tsf)'`.
+
+These runs qualify the low-level placement prerequisite only. They use the reference text
+store, not a mounted editor, and do not exercise real foreground IME composition/candidates,
+GPU frames, the future factory/coordinator, shared-service shutdown or runner migration.
+MO-T6–MO-T11 and the integrated MO-T8 matrix remain required; no support cell changes.
+
 | Host / mode | Implementation acceptance | Native execution | Availability |
 |---|---|---|---|
-| Headless dedicated production route | Not implemented | Not applicable; historical probe only | Unavailable in production runner |
-| Win32 dedicated | Not implemented | Not run | Unavailable |
+| Headless dedicated production route | Not implemented | Public harness test and repeatable benchmark executed | Unavailable in production runner |
+| Win32 dedicated | Not implemented | Low-level two-loop/TSF/UIA/input/STA prerequisite passed; integrated native matrix not run | Unavailable |
 | Native Wayland dedicated | Not implemented | Not run | Unavailable |
 | Native X11 dedicated | Not implemented | Not run | Unavailable |
 | winit Wayland/X11 dedicated | Not implemented | Not run | Unavailable |

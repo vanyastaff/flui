@@ -339,7 +339,7 @@ impl TsfStore {
                 state.poisoned.set(true);
                 // The log runs a user-installed subscriber: contained, so
                 // nothing it raises unwinds into TSF (a failure it raises is
-                // retained with the scope).
+                // discarded under containment with the scope, ADR-0281).
                 let mut diagnostics = OwnerCalls::new();
                 diagnostics.run(|| {
                     tracing::error!(

@@ -7,7 +7,7 @@ use std::cell::{Cell, RefCell};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::rc::Rc;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use flui_foundation::geometry::Size;
 use flui_platform::ImeEvent;
@@ -164,11 +164,11 @@ fn a_completion_reaches_only_the_focused_store(hwnd: HWND) {
 }
 
 /// A panic payload that records whether it was destroyed.
-struct RecordsDrop(Arc<AtomicBool>);
+struct RecordsDrop(Arc<AtomicUsize>);
 
 impl Drop for RecordsDrop {
     fn drop(&mut self) {
-        self.0.store(true, Ordering::SeqCst);
+        self.0.fetch_add(1, Ordering::SeqCst);
     }
 }
 
@@ -180,7 +180,7 @@ struct FailingStore {
     inner: Rc<InMemoryTextStore>,
     fail_retirement: Cell<bool>,
     /// Set: the retirement panics with a [`RecordsDrop`] payload instead.
-    retirement_payload: RefCell<Option<Arc<AtomicBool>>>,
+    retirement_payload: RefCell<Option<Arc<AtomicUsize>>>,
     fail_lock: Cell<bool>,
     refuse_sync: Cell<bool>,
     on_status: RefCell<Option<Box<dyn FnOnce()>>>,
@@ -266,14 +266,14 @@ impl tracing::Subscriber for PanicsOnTsfErrors {
 /// A field losing focus inside a TSF call (queued, applied when the call
 /// returns) whose observer retirement panics, under a subscriber that panics
 /// on the error the teardown logs: nothing unwinds out of the COM entry, the
-/// teardown's payload is retained rather than destroyed, and TSF is back on
+/// teardown's payload is destroyed once under containment (ADR-0281), and TSF is back on
 /// the empty document.
 fn a_queued_unfocus_whose_teardown_and_diagnostic_panic_stays_in_the_com_entry(hwnd: HWND) {
     let services =
         TextServices::activate(window_ref(hwnd), unscaled(), apartment()).expect("TSF activates");
     let store = FailingStore::new("ab");
     services.focus_store(Some(store.clone()));
-    let dropped = Arc::new(AtomicBool::new(false));
+    let dropped = Arc::new(AtomicUsize::new(0));
     *store.retirement_payload.borrow_mut() = Some(Arc::clone(&dropped));
     let unfocus = Rc::clone(&services);
     *store.on_status.borrow_mut() = Some(Box::new(move || unfocus.focus_store(None)));
@@ -285,9 +285,10 @@ fn a_queued_unfocus_whose_teardown_and_diagnostic_panic_stays_in_the_com_entry(h
         tracing::subscriber::with_default(PanicsOnTsfErrors, || document.GetStatus())
     }));
     assert!(answer.is_ok(), "no panic leaves the COM entry");
-    assert!(
-        !dropped.load(Ordering::SeqCst),
-        "the teardown's payload is retained, not destroyed"
+    assert_eq!(
+        dropped.load(Ordering::SeqCst),
+        1,
+        "the teardown's payload is destroyed once despite the diagnostic panic"
     );
     assert!(
         matches!(*services.serving.borrow(), Serving::Nothing),
@@ -296,6 +297,11 @@ fn a_queued_unfocus_whose_teardown_and_diagnostic_panic_stays_in_the_com_entry(h
     assert!(
         associates_the_empty_document(&services),
         "TSF is associated with the empty document again"
+    );
+    services.focus_store(Some(FailingStore::new("next healthy field")));
+    assert!(
+        matches!(*services.serving.borrow(), Serving::Field(_)),
+        "the next focus opens a healthy document"
     );
     services.shutdown();
 }

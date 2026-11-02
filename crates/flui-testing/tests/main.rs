@@ -53,6 +53,8 @@ mod log_capture;
 mod memory_storage;
 #[path = "mount_bootstrap.rs"]
 mod mount_bootstrap;
+#[cfg(not(target_arch = "wasm32"))]
+mod multi_owner;
 #[path = "multi_presentation_clock.rs"]
 mod multi_presentation_clock;
 #[path = "owner_local_write_paths.rs"]

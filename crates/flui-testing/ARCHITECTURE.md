@@ -9,6 +9,29 @@ substrate driver over raw owners, which the raw-owner suites still use.
 
 ## Invariants
 
+- **Independent owners are measured through the real frame transaction.**
+  `independent_runtime_frames_progress_while_a_sibling_callback_is_held`
+  constructs and retires both mounted runtimes on their respective owners.
+  A held post-frame callback prevents a sibling frame on the shared-owner
+  control; on separate owners the sibling publishes its changed text and
+  exactly one scene before release. It does not exercise a dedicated app runner.
+  The `multi_owner` example measures the same public widget harness with
+  1,000 visible text rows, a light sibling, reversed ordering and two heavy
+  siblings. It emits raw CSV; timings are observations, not CI thresholds.
+  `xtask perf` retains its separate deterministic work-count contract.
+
+  ```sh
+  cargo heli run --locked --release -p flui-testing --example multi_owner --features flui-painting/bundled-fonts -- serial 1000 40 5 1
+  cargo heli run --locked --release -p flui-testing --example multi_owner --features flui-painting/bundled-fonts -- separate 1000 40 5 1
+  cargo heli run --locked --release -p flui-testing --example multi_owner --features flui-painting/bundled-fonts -- serial-reverse 1000 40 5 1
+  ```
+
+  Repeat each in a fresh process, then repeat `serial` and `separate` with
+  the final argument `1000`. Arguments are mode, heavy rows, samples, warmup,
+  sibling rows. Archive the source revision/diff, lockfile, executable hash,
+  environment and raw stdout/stderr. This measures CPU transactions with
+  semantics disabled, without native input, GPU, presentation or vsync.
+
 - **Raw-owner animation work runs inside its scheduler frame.**
   `HeadlessBinding::pump_frame` projects time, then ticks Vsync in the persistent
   pipeline slot before build/layout/paint. This matches runtime sampling and
