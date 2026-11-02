@@ -616,10 +616,6 @@ pub enum MenuCause {
     Assistive,
     /// The control revealed while focus is in the row.
     Control,
-    /// A touch selected text: a long press, or a tap on the caret.
-    SelectionTouch,
-    /// A touch let go of a selection handle it dragged.
-    HandleReleased,
 }
 
 /// One request to show a context menu, handed to its [`MenuPresenter`].

@@ -1,0 +1,6 @@
+### Added
+- `EditableText` has a selection menu. A secondary click, the menu key (Shift+F10) or assistive technology's `ShowContextMenu` opens it as a popup; a click off the selection moves the caret there first. A touch long press, a tap on the caret's handle or letting go of a dragged handle shows it as a toolbar over the selection, kept inside the overlay. Both offer cut, copy, paste and select all while the field can perform them, then added commands. `EditableText::menu`, `no_menu`, `menu_policy` and `menu_command` set it per field.
+- `SelectionMenu` is the menu's look: `toolbar` builds the toolbar from `MenuItem`s, and `popup` gives a `SelectionPopup` that presents a `MenuRequest` from a `PopupOrigin`. `PlainSelectionMenu` is the theme-free look `WidgetsApp` installs.
+- `SelectionMenuPolicy` says which touches show the toolbar. `SelectionMenuPolicy::for_platform` shows it after a long press only on macOS, and on every trigger elsewhere.
+- `MenuItem::is_enabled` and `MenuItem::enablement_changes` tell a menu look whether an item can perform now.
+- `DefaultSelectionControls` sets the handles (`handles`), the caret handle (`caret_handle`), the menu's look (`menu`, `no_menu`), its policy (`menu_policy`) and added commands (`command`) for a subtree. A nested one keeps what it doesn't set from the one above and adds its commands after the outer ones.
