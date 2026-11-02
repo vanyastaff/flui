@@ -339,7 +339,7 @@ fn take<T: InspectTree + ?Sized>(
             unit: None,
             default: None,
         });
-        crate::panic::retain_opaque_payload(payload);
+        crate::panic::discard_payload(payload);
     }
     Some(SnapshotNode {
         id,

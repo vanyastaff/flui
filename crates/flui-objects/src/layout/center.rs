@@ -112,13 +112,14 @@ impl RenderCenter {
     }
 }
 
-impl flui_foundation::Diagnosticable for RenderCenter {
-    fn debug_fill_properties(&self, builder: &mut flui_foundation::DiagnosticsBuilder) {
-        builder.add_optional("width_factor", self.width_factor.map(|f| format!("{f:?}")));
-        builder.add_optional(
-            "height_factor",
-            self.height_factor.map(|f| format!("{f:?}")),
-        );
+impl flui_foundation::inspect::Inspect for RenderCenter {
+    fn kind(&self) -> &'static str {
+        "RenderCenter"
+    }
+
+    fn inspect(&self, out: &mut flui_foundation::inspect::Fields<'_>) {
+        out.field("width_factor", &self.width_factor);
+        out.field("height_factor", &self.height_factor);
     }
 }
 

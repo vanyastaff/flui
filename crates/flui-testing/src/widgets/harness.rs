@@ -290,6 +290,21 @@ impl Harness {
             .expect("ime_allowed_calls requires mount_with_push_ime")
     }
 
+    /// Every field status the UI runtime's presentation told the platform
+    /// text input, in delivery order: one when a field is attached, one each
+    /// time its status changes.
+    ///
+    /// # Panics
+    ///
+    /// As [`Self::cursor_area_calls`].
+    pub fn field_status_calls(&self) -> Vec<flui_platform::text_store::TextStoreStatus> {
+        self.host
+            .ui_runtime()
+            .window()
+            .ime_field_statuses()
+            .expect("field_status_calls requires mount_with_push_ime")
+    }
+
     /// Deliver an IME event to the UI runtime's primary presentation, as the
     /// platform delivers one between frames.
     pub fn dispatch_ime(&self, event: &flui_platform::ImeEvent) {

@@ -109,7 +109,7 @@ impl AssistiveFocusChange {
                 if first.is_none() {
                     first = Some(payload);
                 } else {
-                    flui_foundation::panic::retain_opaque_payload(payload);
+                    flui_foundation::panic::discard_payload(payload);
                 }
             }
             if first.is_some() {

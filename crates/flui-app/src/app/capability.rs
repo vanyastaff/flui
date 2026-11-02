@@ -5,7 +5,7 @@
 use std::{
     cell::{Cell, RefCell},
     rc::Rc,
-    sync::Arc,
+    sync::{Arc, Weak},
 };
 
 use flui_interaction::{
@@ -13,13 +13,16 @@ use flui_interaction::{
     PrimarySelectionBackend, PrimarySelectionCapability, PrimarySelectionHandle, SelectionText,
 };
 use flui_native::{NativeClipboard, NativePrimarySelection};
+use flui_platform::executor::{ComputeJob, Executor, IoFuture, SpawnError};
 use flui_platform::{
-    Storage, Unsupported, UnsupportedReason,
+    ClipboardRead, ClipboardWrite, Concealment, Storage, Unsupported, UnsupportedReason,
     capability::{
         Capability, CapabilityProvider, CapabilityRegistrar, Plugin, ProviderContext, Resolver,
     },
 };
 use flui_runtime::capability::{CapabilityConflict, CapabilityRegistry};
+use flui_runtime::execution::ExecutionServices;
+use flui_view::background::{Background, BackgroundCapability};
 use flui_view::persist::{StorageCapability, StorageHandle};
 
 /// The slot the owner platform's clipboard is installed in for a loop's life.
@@ -112,6 +115,9 @@ pub(crate) fn built_in_registry(slots: &CapabilitySlots) -> CapabilityRegistry {
 /// The providers this crate ships.
 fn built_ins(slots: &CapabilitySlots) -> CapabilityRegistrar {
     let mut registrar = CapabilityRegistrar::new();
+    registrar.provide::<BackgroundCapability>(HostBackground {
+        slot: Rc::clone(&slots.execution),
+    });
     registrar.provide::<StorageCapability>(HostStorageProvider {
         slot: slots.storage.clone(),
     });
@@ -137,10 +143,7 @@ impl CapabilityProvider<ClipboardCapability> for PlatformClipboard {
             // Between loops: no owner platform is installed.
             Unsupported::of::<ClipboardCapability>(UnsupportedReason::Unavailable)
         })?;
-        Ok(ClipboardHandle::new(
-            NativeBackend(native),
-            cx.completions().clone(),
-        ))
+        Ok(ClipboardHandle::new(NativeBackend(native), cx))
     }
 }
 
@@ -148,12 +151,16 @@ impl CapabilityProvider<ClipboardCapability> for PlatformClipboard {
 struct NativeBackend(Rc<dyn NativeClipboard>);
 
 impl ClipboardBackend for NativeBackend {
-    fn read_text(&self, answer: Resolver<Option<String>>) {
+    fn read_text(&self, answer: Resolver<ClipboardRead>) {
         self.0.read_text(answer);
     }
 
-    fn write_text(&self, text: String) {
-        self.0.write_text(text);
+    fn write(&self, write: ClipboardWrite) {
+        self.0.write(write);
+    }
+
+    fn concealment(&self) -> Concealment {
+        self.0.concealment()
     }
 }
 
@@ -183,6 +190,7 @@ impl NativePrimary {
 #[derive(Clone, Default)]
 pub(crate) struct CapabilitySlots {
     pub(crate) storage: StorageSlot,
+    pub(crate) execution: ExecutionSlot,
     pub(crate) clipboard: ClipboardSlot,
     #[cfg_attr(
         not(target_os = "linux"),
@@ -212,10 +220,7 @@ impl CapabilityProvider<PrimarySelectionCapability> for PlatformPrimarySelection
             // a compositor without the protocol).
             Unsupported::of::<PrimarySelectionCapability>(UnsupportedReason::Unavailable)
         })?;
-        Ok(PrimarySelectionHandle::new(
-            native,
-            cx.completions().clone(),
-        ))
+        Ok(PrimarySelectionHandle::new(native, cx))
     }
 }
 
@@ -251,7 +256,7 @@ impl PrimarySelectionBackend for NativePrimary {
         self.native.owns() && self.claims.borrow().is_current(claim)
     }
 
-    fn read_text(&self, answer: Resolver<Option<String>>) {
+    fn read_text(&self, answer: Resolver<ClipboardRead>) {
         self.native.read_text(answer);
     }
 }
@@ -290,7 +295,7 @@ mod tests {
             self.offered.borrow().is_some()
         }
 
-        fn read_text(&self, answer: Resolver<Option<String>>) {
+        fn read_text(&self, answer: Resolver<ClipboardRead>) {
             drop(answer);
         }
     }
@@ -356,6 +361,34 @@ mod tests {
             "the current claim's release withdraws"
         );
         assert!(!native.owns());
+    }
+
+    /// The built-in lanes run work while the run's services live, and refuse
+    /// as shut down once they are gone, without keeping them alive.
+    #[test]
+    fn the_loop_executor_refuses_once_the_services_are_gone() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let executors = flui_runtime::execution::DeterministicExecutors::new();
+        let services = Arc::new(ExecutionServices::with_host(executors.host_executors()));
+        let executor = LoopExecutor(Arc::downgrade(&services));
+        let ran = Arc::new(AtomicBool::new(false));
+        let job_ran = Arc::clone(&ran);
+        executor
+            .spawn_compute(Box::new(move || job_ran.store(true, Ordering::SeqCst)))
+            .expect("live services admit the job");
+        let _ = executors.run_until_idle();
+        assert!(ran.load(Ordering::SeqCst));
+
+        drop(services);
+        assert_eq!(
+            executor.spawn_compute(Box::new(|| {})),
+            Err(SpawnError::ShuttingDown)
+        );
+        assert_eq!(
+            executor.spawn_io(Box::pin(async {})),
+            Err(SpawnError::ShuttingDown)
+        );
     }
 }
 
@@ -431,5 +464,48 @@ impl CapabilityProvider<StorageCapability> for HostStorageProvider {
             );
         }
         Err(refusal)
+    }
+}
+
+/// The slot the run's execution services are reachable through once the
+/// host resolves them; held weakly, so a handle never keeps them alive past
+/// the loop's shutdown.
+pub(crate) type ExecutionSlot = Rc<RefCell<Option<Weak<ExecutionServices>>>>;
+
+/// The built-in background lanes: the run's execution services, inside
+/// their admission windows and shutdown.
+struct HostBackground {
+    slot: ExecutionSlot,
+}
+
+impl CapabilityProvider<BackgroundCapability> for HostBackground {
+    fn provide(&self, cx: &ProviderContext<'_>) -> Result<Background, Unsupported> {
+        let services = self.slot.borrow().clone().ok_or_else(|| {
+            // Before the host installs a UI runtime it has no lanes.
+            Unsupported::of::<BackgroundCapability>(UnsupportedReason::Unavailable)
+        })?;
+        Ok(Background::new(
+            Arc::new(LoopExecutor(services)),
+            cx.completions().clone(),
+        ))
+    }
+}
+
+/// The run's execution services, refusing as shut down once they are gone.
+struct LoopExecutor(Weak<ExecutionServices>);
+
+impl Executor for LoopExecutor {
+    fn spawn_compute(&self, job: ComputeJob) -> Result<(), SpawnError> {
+        self.0
+            .upgrade()
+            .ok_or(SpawnError::ShuttingDown)?
+            .spawn_compute(job)
+    }
+
+    fn spawn_io(&self, future: IoFuture) -> Result<(), SpawnError> {
+        self.0
+            .upgrade()
+            .ok_or(SpawnError::ShuttingDown)?
+            .spawn_io(future)
     }
 }

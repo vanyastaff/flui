@@ -104,7 +104,13 @@ mod tests {
         size: Size,
     }
 
-    impl flui_foundation::Diagnosticable for HittableLeaf {}
+    impl flui_foundation::inspect::Inspect for HittableLeaf {
+        fn kind(&self) -> &'static str {
+            "HittableLeaf"
+        }
+
+        fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+    }
 
     impl RenderBox for HittableLeaf {
         type Arity = flui_foundation::Leaf;

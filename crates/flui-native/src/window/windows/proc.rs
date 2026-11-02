@@ -65,7 +65,7 @@ use crate::owner::windows::{
 };
 use crate::owner::windows::{get_x_lparam, get_y_lparam};
 use crate::window::config::WindowConfiguration;
-use crate::window::state::{ReportedFacts, WindowStateCell, mode_of};
+use crate::window::state::{ReportedFacts, WindowStateCell, mode_of, system_frame_or_none};
 
 /// Posted to a window nothing paints, so its frame still runs: a hidden window
 /// never receives `WM_PAINT`.
@@ -1506,7 +1506,7 @@ pub(crate) fn sample_state(
         .with_title(window_text(hwnd))
         .with_constraints(constraints)
         .with_resizable(style & WS_THICKFRAME.0 != 0)
-        .with_decorated(style & WS_CAPTION.0 == WS_CAPTION.0)
+        .with_frame(system_frame_or_none(style & WS_CAPTION.0 == WS_CAPTION.0))
         .with_display(display);
     ReportedFacts {
         // The client area in device pixels at the window's scale; a minimized
@@ -1522,7 +1522,7 @@ pub(crate) fn sample_state(
             .flatten(),
         appearance,
         // A desktop window has no safe area, and Win32 never suspends one.
-        safe_area: flui_foundation::geometry::EdgeInsets::ZERO,
+        insets: flui_platform::WindowInsets::ZERO,
         execution: flui_platform::WindowExecutionState::Running,
         // Win32 tells of a cloak and a locked session; a window covered by
         // others it does not report.

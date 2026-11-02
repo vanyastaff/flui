@@ -59,7 +59,7 @@ use crate::owner::android::ActivityRef;
 use crate::owner::android::java_view::{JavaView, ViewAccessibility};
 use flui_semantics::platform::{
     AccessibilityActionListener, AccessibilityActivationListener, AssistiveFocusListener,
-    PlatformAccessibility,
+    PlatformAccessibility, RouteChange, RouteChangeSupport,
 };
 
 /// The adapter with the handlers it calls.
@@ -185,6 +185,65 @@ unsafe fn with_env<R>(
     // dropped.
     let host = unsafe { JObject::from_raw(host.cast()) };
     Some(f(&mut env, &host))
+}
+
+/// `AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED`.
+const TYPE_WINDOW_STATE_CHANGED: jni021::jint = 0x20;
+
+/// Raise a window state change from `host`, carrying `name` as its text, as
+/// a native screen does when it opens.
+fn send_window_state_changed(
+    env: &mut JNIEnv<'_>,
+    host: &JObject<'_>,
+    name: Option<&str>,
+) -> accesskit_android::jni::errors::Result<()> {
+    let parent = env
+        .call_method(host, "getParent", "()Landroid/view/ViewParent;", &[])?
+        .l()?;
+    // A view detached since the change was posted has no window to tell.
+    if parent.is_null() {
+        return Ok(());
+    }
+    let event = env
+        .call_static_method(
+            "android/view/accessibility/AccessibilityEvent",
+            "obtain",
+            "(I)Landroid/view/accessibility/AccessibilityEvent;",
+            &[TYPE_WINDOW_STATE_CHANGED.into()],
+        )?
+        .l()?;
+    let context = env
+        .call_method(host, "getContext", "()Landroid/content/Context;", &[])?
+        .l()?;
+    let package = env
+        .call_method(&context, "getPackageName", "()Ljava/lang/String;", &[])?
+        .l()?;
+    env.call_method(
+        &event,
+        "setPackageName",
+        "(Ljava/lang/CharSequence;)V",
+        &[(&package).into()],
+    )?;
+    env.call_method(
+        &event,
+        "setSource",
+        "(Landroid/view/View;)V",
+        &[host.into()],
+    )?;
+    if let Some(name) = name {
+        let text = env
+            .call_method(&event, "getText", "()Ljava/util/List;", &[])?
+            .l()?;
+        let name = env.new_string(name)?;
+        env.call_method(&text, "add", "(Ljava/lang/Object;)Z", &[(&name).into()])?;
+    }
+    env.call_method(
+        &parent,
+        "requestSendAccessibilityEvent",
+        "(Landroid/view/View;Landroid/view/accessibility/AccessibilityEvent;)Z",
+        &[host.into(), (&event).into()],
+    )?;
+    Ok(())
 }
 
 impl ViewAccessibility for NodeProvider {
@@ -381,6 +440,33 @@ impl PlatformAccessibility for AndroidAccessibility {
     fn set_assistive_focus_listener(&self, listener: AssistiveFocusListener) {
         self.shared.set_assistive_focus_listener(listener);
     }
+
+    fn route_change_support(&self) -> RouteChangeSupport {
+        Self::ROUTE_CHANGE
+    }
+
+    /// Android's notice of a new window state, with the route's name as its
+    /// text, which TalkBack reads as the screen it moved to.
+    fn route_changed(&self, change: RouteChange) {
+        if self.detached.load(Ordering::Acquire) || !self.shared.is_active() {
+            return;
+        }
+        let name = change.name().map(str::to_owned);
+        self.view.post(move |env, view| {
+            // SAFETY: the posted call runs attached on the Java main thread
+            // with this environment, and `view` is the installed view's
+            // reference, held for the call, which the closure ends with.
+            unsafe {
+                with_env(env.get_raw(), view.as_raw(), |env, host| {
+                    // A failed call leaves the screen unannounced; the
+                    // pending exception is cleared as the environment is
+                    // given back.
+                    let _ = send_window_state_changed(env, host, name.as_deref());
+                });
+            }
+            Ok(())
+        });
+    }
 }
 
 impl AndroidAccessibility {
@@ -390,6 +476,10 @@ impl AndroidAccessibility {
     /// ([gap 36](https://github.com/vanyastaff/flui/blob/main/docs/gaps.md#36-accessibility-bridge-fidelity-properties-and-announcements)).
     pub(crate) const ASSISTIVE_FOCUS: flui_semantics::AssistiveFocusSupport =
         flui_semantics::AssistiveFocusSupport::Reported;
+
+    /// A route change is a window state change TalkBack reads; a run on a
+    /// device has not checked it yet.
+    pub(crate) const ROUTE_CHANGE: RouteChangeSupport = RouteChangeSupport::Native;
 }
 
 impl std::fmt::Debug for AndroidAccessibility {

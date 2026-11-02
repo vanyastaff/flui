@@ -479,7 +479,7 @@ impl Listener {
             }));
             match (raw, recognized) {
                 (Err(first), Err(later)) => {
-                    flui_foundation::panic::retain_opaque_payload(later);
+                    flui_foundation::panic::discard_payload(later);
                     resume_unwind(first);
                 }
                 (Err(payload), Ok(())) | (Ok(()), Err(payload)) => resume_unwind(payload),

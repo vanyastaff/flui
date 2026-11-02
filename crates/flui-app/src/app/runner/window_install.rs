@@ -338,7 +338,7 @@ impl WindowInstall {
         if let Some(metrics) = seed.metrics {
             self.observe(WindowObservation::Metrics(metrics));
         }
-        self.observe(WindowObservation::SafeArea(seed.safe_area));
+        self.observe(WindowObservation::Insets(seed.insets));
         self.observe(WindowObservation::Brightness(seed.appearance.into()));
         self.host.displays().follow(dispatcher, &window);
         let display = self.host.displays().derive(window.as_ref());

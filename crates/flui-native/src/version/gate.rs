@@ -469,6 +469,16 @@ pub(crate) mod android {
         const SINCE: u64 = 30;
     }
 
+    /// `ClipDescription.setExtras` (API 24). Without it a concealed clipboard write carries no
+    /// sensitive-content extra and is an ordinary one.
+    #[derive(Debug, Clone, Copy)]
+    pub(crate) struct ClipExtras;
+
+    impl Gate for ClipExtras {
+        type Version = AndroidApi;
+        const SINCE: u64 = 24;
+    }
+
     /// `Configuration.fontWeightAdjustment` (API 31). Without it the text-weight preference is
     /// reported as unavailable.
     #[derive(Debug, Clone, Copy)]
@@ -477,17 +487,6 @@ pub(crate) mod android {
     impl Gate for TextWeight {
         type Version = AndroidApi;
         const SINCE: u64 = 31;
-    }
-
-    /// `AFontMatcher` (API 29), the supported way to ask which system face draws a text. Below it
-    /// the fallback order is read from `fonts.xml`, whose format is frozen there; from it the file
-    /// is not to be parsed (ADR-0271 §3).
-    #[derive(Debug, Clone, Copy)]
-    pub(crate) struct FontMatcher;
-
-    impl Gate for FontMatcher {
-        type Version = AndroidApi;
-        const SINCE: u64 = 29;
     }
 
     /// `ViewConfiguration.getScaledHorizontalScrollFactor` and its vertical twin (API 26). Without
@@ -577,6 +576,16 @@ pub(crate) mod android {
     pub(crate) struct GestureExclusion;
 
     impl Gate for GestureExclusion {
+        type Version = AndroidApi;
+        const SINCE: u64 = 29;
+    }
+
+    /// `WindowInsets.getSystemGestureInsets` (API 29). Without it a window reports no system
+    /// gesture regions, `NotOnThisDevice`.
+    #[derive(Debug, Clone, Copy)]
+    pub(crate) struct SystemGestureInsets;
+
+    impl Gate for SystemGestureInsets {
         type Version = AndroidApi;
         const SINCE: u64 = 29;
     }
@@ -706,11 +715,11 @@ pub(crate) mod testing {
 #[cfg(test)]
 mod tests {
     use super::android::{
-        AndroidApi, BackgroundBlur, ContextDisplay, DisplayCutout, DragSource, EnvelopeEffects,
-        FontMatcher, GestureExclusion, HapticComposition, InMemoryDex, InsetsByType,
+        AndroidApi, BackgroundBlur, ClipExtras, ContextDisplay, DisplayCutout, DragSource,
+        EnvelopeEffects, GestureExclusion, HapticComposition, InMemoryDex, InsetsByType,
         InsetsController, LocaleList, PointerIcons, RoundPrimitives, ScaledScrollFactor,
-        SegmentFeedback, StylusHandwriting, SystemContrast, TextWeight, TouchpadGestures,
-        VibrationTouchUsage,
+        SegmentFeedback, StylusHandwriting, SystemContrast, SystemGestureInsets, TextWeight,
+        TouchpadGestures, VibrationTouchUsage,
     };
     use super::testing::row;
 
@@ -730,6 +739,7 @@ mod tests {
         ));
         failures.extend(row::<TextWeight>("TextWeight", api(30), api(31), unknown));
         failures.extend(row::<LocaleList>("LocaleList", api(23), api(24), unknown));
+        failures.extend(row::<ClipExtras>("ClipExtras", api(23), api(24), unknown));
         failures.extend(row::<SystemContrast>(
             "SystemContrast",
             api(33),
@@ -761,7 +771,6 @@ mod tests {
             unknown,
         ));
         failures.extend(row::<DragSource>("DragSource", api(23), api(24), unknown));
-        failures.extend(row::<FontMatcher>("FontMatcher", api(28), api(29), unknown));
         failures.extend(row::<InMemoryDex>("InMemoryDex", api(25), api(26), unknown));
         failures.extend(row::<PointerIcons>(
             "PointerIcons",
@@ -777,6 +786,12 @@ mod tests {
         ));
         failures.extend(row::<GestureExclusion>(
             "GestureExclusion",
+            api(28),
+            api(29),
+            unknown,
+        ));
+        failures.extend(row::<SystemGestureInsets>(
+            "SystemGestureInsets",
             api(28),
             api(29),
             unknown,

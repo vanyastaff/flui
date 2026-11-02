@@ -13,6 +13,8 @@ use flui_painting::{
 
 #[path = "layer_effect_tests/backdrop_rotation.rs"]
 mod backdrop_rotation;
+#[path = "layer_effect_tests/backdrop_transform.rs"]
+mod backdrop_transform;
 #[path = "layer_effect_tests/radial_circles.rs"]
 mod radial_circles;
 #[path = "layer_effect_tests/reflected_shapes.rs"]
@@ -156,6 +158,69 @@ fn followers_resolve_and_hide(renderer: &HeadlessRenderer) {
         expect_pixel(&bytes, (6, 42), [255; 4]);
         expect_pixel(&bytes, (55, 55), [0, 255, 0, 255]);
     }
+}
+/// A leader under a scale of 2 at (8, 8) sits at (16, 16) on screen, and its
+/// follower's 8x8 content is drawn 16x16 there. A translation-only follower
+/// would cover (8, 8)-(16, 16) instead.
+fn followers_take_the_leaders_scale(renderer: &HeadlessRenderer) {
+    let link = LayerLink::new();
+    let mut tree = LayerTree::new(Layer::from(OffsetLayer::zero()));
+    let scaled = tree.push_child(
+        tree.root(),
+        Layer::from(TransformLayer::new(Matrix4::scaling(2.0, 2.0, 1.0))),
+    );
+    tree.push_child(
+        scaled,
+        Layer::from(LeaderLayer::with_offset(
+            link,
+            Size::new(8.0, 8.0),
+            Offset::new(8.0, 8.0),
+        )),
+    );
+    let follower = tree.push_child(
+        tree.root(),
+        Layer::from(FollowerLayer::new(link).with_size(Size::new(8.0, 8.0))),
+    );
+    tree.push_child(
+        follower,
+        picture(Rect::from_xywh(0.0, 0.0, 8.0, 8.0), Color::RED),
+    );
+    let bytes = capture(renderer, &tree);
+    expect_pixel(&bytes, (18, 18), [255, 0, 0, 255]);
+    expect_pixel(&bytes, (29, 29), [255, 0, 0, 255]);
+    expect_pixel(&bytes, (10, 10), [255; 4]);
+}
+/// A follower under a scale of 7 undoes it: its 8x8 content lands on the
+/// unscaled leader at (14, 14) at its own size. The resolved transform must
+/// keep the affine shape the painter admits, which a general inverse of a
+/// scale of 7 does not.
+fn followers_under_a_scaled_parent_paint(renderer: &HeadlessRenderer) {
+    let link = LayerLink::new();
+    let mut tree = LayerTree::new(Layer::from(OffsetLayer::zero()));
+    tree.push_child(
+        tree.root(),
+        Layer::from(LeaderLayer::with_offset(
+            link,
+            Size::new(8.0, 8.0),
+            Offset::new(14.0, 14.0),
+        )),
+    );
+    let scaled = tree.push_child(
+        tree.root(),
+        Layer::from(TransformLayer::new(Matrix4::scaling(7.0, 7.0, 1.0))),
+    );
+    let follower = tree.push_child(
+        scaled,
+        Layer::from(FollowerLayer::new(link).with_size(Size::new(8.0, 8.0))),
+    );
+    tree.push_child(
+        follower,
+        picture(Rect::from_xywh(0.0, 0.0, 8.0, 8.0), Color::RED),
+    );
+    let bytes = capture(renderer, &tree);
+    expect_pixel(&bytes, (18, 18), [255, 0, 0, 255]);
+    expect_pixel(&bytes, (10, 10), [255; 4]);
+    expect_pixel(&bytes, (26, 26), [255; 4]);
 }
 fn nested_backdrop_reads_child_and_keeps_tail(renderer: &HeadlessRenderer) {
     let mut tree = LayerTree::new(picture(Rect::from_xywh(0.0, 0.0, 64.0, 64.0), Color::GREEN));
@@ -1570,6 +1635,10 @@ fn layer_effects_capture_as_specified() {
             "quarter-turn backdrop axes",
             backdrop_rotation::quarter_turn_backdrops_match_baked_axes,
         ),
+        (
+            "magnified backdrop",
+            backdrop_transform::magnified_backdrop_doubles_the_stripes_it_covers,
+        ),
         #[cfg(feature = "testing")]
         (
             "backdrop resize attachment coordinates",
@@ -1620,6 +1689,14 @@ fn layer_effects_capture_as_specified() {
         ),
         ("mask modes and tail", mask_modes_and_tail),
         ("followers linked and hidden", followers_resolve_and_hide),
+        (
+            "followers take the leader's scale",
+            followers_take_the_leaders_scale,
+        ),
+        (
+            "followers under a scaled parent paint",
+            followers_under_a_scaled_parent_paint,
+        ),
         (
             "nested backdrop target and tail",
             nested_backdrop_reads_child_and_keeps_tail,

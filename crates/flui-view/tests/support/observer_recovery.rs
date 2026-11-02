@@ -1,4 +1,4 @@
-//! Public observer callbacks with abort-capable destruction stay in children.
+//! Public observer callbacks run in children, with payloads dropped and captures retained.
 use flui_foundation::observe::{ElementMounted, ElementRebuilt, TreeObserver};
 use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
 use flui_view::{BuildOwner, ElementTree, RebuildReason};
@@ -15,6 +15,13 @@ impl Drop for Bomb {
         panic!("opaque observer obligation dropped");
     }
 }
+/// A panic payload that records its drop and does not panic.
+struct DropCounted(Arc<AtomicUsize>);
+impl Drop for DropCounted {
+    fn drop(&mut self) {
+        self.0.fetch_add(1, Ordering::SeqCst);
+    }
+}
 struct FailingObserver {
     aggregate_payload: bool,
     fail_detach: bool,
@@ -27,10 +34,7 @@ impl FailingObserver {
     fn fail(&self) {
         self.calls.fetch_add(1, Ordering::SeqCst);
         if self.aggregate_payload {
-            std::panic::panic_any((
-                Bomb(Arc::clone(&self.payload_drops)),
-                Bomb(Arc::clone(&self.payload_drops)),
-            ));
+            std::panic::panic_any(DropCounted(Arc::clone(&self.payload_drops)));
         }
         panic!("observer callback failed");
     }
@@ -65,7 +69,7 @@ impl<S: tracing::Subscriber> Layer<S> for FailedTelemetry {
             && event.metadata().target().starts_with("flui_view::owner")
         {
             self.calls.fetch_add(1, Ordering::SeqCst);
-            std::panic::panic_any((Bomb(Arc::clone(&self.drops)), Bomb(Arc::clone(&self.drops))));
+            std::panic::panic_any(DropCounted(Arc::clone(&self.drops)));
         }
     }
 }
@@ -129,13 +133,16 @@ fn run_child(kind: &str) {
         usize::from(detach),
         "emission failure must not invoke detached"
     );
-    assert_eq!(payload_drops.load(Ordering::SeqCst), 0);
+    assert_eq!(payload_drops.load(Ordering::SeqCst), usize::from(payload));
     assert_eq!(
         capture_drops.load(Ordering::SeqCst),
         0,
         "last failed observer envelope is retained"
     );
-    assert_eq!(telemetry_drops.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        telemetry_drops.load(Ordering::SeqCst),
+        telemetry_calls.load(Ordering::SeqCst)
+    );
     assert_eq!(
         telemetry_calls.load(Ordering::SeqCst),
         usize::from(telemetry),
@@ -219,13 +226,13 @@ pub(crate) fn dispatch_child(kind: &str) {
     ));
     run_child(kind);
 }
-pub(crate) fn emission_retains_aggregate_payload() {
+pub(crate) fn emission_drops_its_payload() {
     child("emit_payload");
 }
 pub(crate) fn emission_retains_failed_capture_envelope() {
     child("emit_capture");
 }
-pub(crate) fn emission_retains_competing_payload_and_captures() {
+pub(crate) fn emission_drops_competing_payload_and_retains_captures() {
     child("emit_payload_capture");
 }
 pub(crate) fn emission_contains_reporting_failure() {
@@ -234,7 +241,7 @@ pub(crate) fn emission_contains_reporting_failure() {
 pub(crate) fn emission_contains_all_opaque_obligations() {
     child("emit_all");
 }
-pub(crate) fn detach_retains_aggregate_payload() {
+pub(crate) fn detach_drops_its_payload() {
     child("detach_payload");
 }
 pub(crate) fn detach_retains_failed_capture_envelope() {

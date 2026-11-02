@@ -407,7 +407,7 @@ pub fn run_backend_conformance<B: BackendUnderTest>(backend: &mut B) -> Conforma
                         .unwrap_or_else(|| "a non-string panic payload".to_owned());
                     // The table owns the caught opaque payload; an aggregate's
                     // Drop may panic before any catch regains control.
-                    flui_foundation::panic::retain_opaque_payload(payload);
+                    flui_foundation::panic::discard_payload(payload);
                     RowOutcome::Failed(format!("panicked: {text}"))
                 }
             };

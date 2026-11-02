@@ -23,6 +23,7 @@ use crate::{
 /// it, or a repetition, has no meaning there.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[non_exhaustive]
+#[derive(flui_foundation::inspect::Inspect)]
 pub enum ImagePlacement {
     /// Inscribe the image with `fit`, place it at `alignment` and optionally
     /// repeat it to cover the rest of the rectangle.
@@ -31,6 +32,7 @@ pub enum ImagePlacement {
         fit: BoxFit,
         /// Where the fitted image sits; on a cropping fit, also which part of
         /// the image stays visible.
+        #[inspect(unit = fraction)]
         alignment: Alignment,
         /// Whether copies of the fitted image cover the rest of the rectangle.
         repeat: ImageRepeat,
@@ -41,6 +43,7 @@ pub enum ImagePlacement {
     /// on an axis, the corners shrink proportionally on that axis.
     Sliced {
         /// The stretchable middle of the image, in decoded pixels.
+        #[inspect(unit = logical_px)]
         center: Rect<f64>,
     },
 }

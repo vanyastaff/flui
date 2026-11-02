@@ -144,6 +144,22 @@ fn action_component_contracts() {
             icon_button::icon_button_theme_slot_reaches_the_icons_icon_theme,
         ),
         (
+            "icon_button::a toggle icon button announces its selection",
+            icon_button::a_toggle_icon_button_announces_its_selection,
+        ),
+        (
+            "icon_button::a selected icon button takes the primary color",
+            icon_button::a_selected_icon_button_takes_the_primary_color,
+        ),
+        (
+            "icon_button::a toggle cross fades to its selected icon",
+            icon_button::a_toggle_cross_fades_to_its_selected_icon,
+        ),
+        (
+            "icon_button::a selected icon button hovers in primary",
+            icon_button::a_selected_icon_button_hovers_in_primary,
+        ),
+        (
             "ink_well::a well shows focus only when the keyboard is in use",
             ink_well::a_well_shows_focus_only_when_the_keyboard_is_in_use,
         ),
@@ -353,6 +369,10 @@ fn text_input_contracts() {
         (
             "text_field::tapping the decorated area focuses the field and reaches the decorator",
             text_field::tapping_the_decorated_area_focuses_the_field_and_reaches_the_decorator,
+        ),
+        (
+            "text_field::a field highlights its selection in the theme colours",
+            text_field::a_field_highlights_its_selection_in_the_theme_colours,
         ),
         (
             "text_field::the input purpose reaches the text store",

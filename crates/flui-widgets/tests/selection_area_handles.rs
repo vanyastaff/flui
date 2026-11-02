@@ -4,7 +4,7 @@
 //! their ends through layer links, so every touch below lands where the
 //! handle is painted.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -18,11 +18,13 @@ use flui_platform::pointer::{
     PointerButton, PointerButtons, PointerEvent, PointerId, PointerInfo, PointerKind, PointerMove,
     PointerPosition, PointerPress, PointerRelease, PointerSample,
 };
+use flui_rendering::semantics::{DocumentPosition, DocumentSelection};
 use flui_testing::replay::{MouseScript, PointerScript};
 use flui_view::{BoxedView, BuildContext, ViewExt};
 use flui_widgets::{
     Column, DefaultSelectionHandles, DefaultTextStyle, Directionality, Focus, HandleInfo,
-    HandleSide, SelectionArea, SelectionHandles, SizedBox, Text, WidgetsApp,
+    HandleSide, SelectionArea, SelectionChangeCause, SelectionController, SelectionHandles,
+    SelectionInput, SizedBox, Text, WidgetsApp,
 };
 
 use crate::common::{LaidOut, lay_out, tight};
@@ -69,10 +71,13 @@ impl Scene {
     fn area(heard: &Heard, handles: Option<Marked>) -> SelectionArea {
         let recorded = Rc::clone(heard);
         let area = SelectionArea::new(Column::new((Text::new(WORDS),))).on_selection_changed(
-            move |_cx, selected| {
-                recorded
-                    .borrow_mut()
-                    .push(selected.map(|selected| selected.text.clone()));
+            move |_cx, change| {
+                recorded.borrow_mut().push(
+                    change
+                        .selected
+                        .as_ref()
+                        .map(|selected| selected.text.clone()),
+                );
             },
         );
         match handles {
@@ -200,6 +205,16 @@ impl Scene {
     }
 }
 
+/// Whether `paragraph` reports a link for both selection handles, read from its typed
+/// `start_handle` / `end_handle` fields.
+fn publishes_both_handles(laid: &LaidOut, paragraph: flui_foundation::RenderId) -> bool {
+    let node = laid.render_node(paragraph);
+    ["start_handle", "end_handle"].into_iter().all(|name| {
+        node.field(name)
+            .is_some_and(|field| field.value != flui_foundation::inspect::OwnedValue::None)
+    })
+}
+
 /// The laid-out width of `words` in the default style, the x of the caret
 /// after them in [`WORDS`].
 fn width_of(words: &str) -> f64 {
@@ -237,11 +252,10 @@ pub(crate) fn a_long_press_selects_a_word_and_shows_a_handle_under_each_end() {
         assert_eq!(info.text_direction, TextDirection::Ltr);
         assert!((info.line_height - line).abs() < 0.5, "{info:?} on {line}");
     }
-    let published = scene
-        .laid
-        .render_property(scene.paragraph(), "selection_handles")
-        .expect("the paragraph reports its handles");
-    assert!(!published.contains("None"), "{published}");
+    assert!(
+        publishes_both_handles(&scene.laid, scene.paragraph()),
+        "the paragraph reports its handles"
+    );
 }
 
 /// Dragging a handle moves its end and leaves the other; an end never
@@ -327,6 +341,89 @@ pub(crate) fn a_tap_esc_or_the_mouse_hides_the_handles() {
     assert_eq!(scene.handles(), 0, "a mouse selection");
 }
 
+/// A long press is reported as touch; a controller's selection, even of the
+/// range a touch selected, is under no
+/// finger, so it hides the handles.
+pub(crate) fn a_controller_selection_hides_the_handles() {
+    let controller = SelectionController::new();
+    let heard: Heard = Rc::default();
+    let causes = Rc::new(RefCell::new(Vec::new()));
+    let (recorded, noted) = (Rc::clone(&heard), Rc::clone(&causes));
+    let area = SelectionArea::new(Column::new((Text::new(WORDS),)))
+        .controller(controller.clone())
+        .on_selection_changed(move |_cx, change| {
+            recorded.borrow_mut().push(
+                change
+                    .selected
+                    .as_ref()
+                    .map(|selected| selected.text.clone()),
+            );
+            noted.borrow_mut().push(change.cause);
+        });
+    let mut scene = Scene::laid_out(WidgetsApp::new(area), heard);
+    scene.long_press(scene.along(width_of("alpha be")));
+    assert_eq!(scene.handles(), 2);
+    assert_eq!(
+        causes.borrow().last(),
+        Some(&SelectionChangeCause::User(SelectionInput::Touch))
+    );
+    // The same range from a controller is no change, yet it hides them.
+    let reports = causes.borrow().len();
+    controller
+        .select(controller.selection().expect("the word is selected"))
+        .expect("the same range");
+    scene.settle();
+    assert_eq!((scene.handles(), causes.borrow().len()), (0, reports));
+
+    scene.long_press(scene.along(width_of("alpha be")));
+    assert_eq!(scene.handles(), 2);
+    let text = controller.texts()[0].clone();
+    controller
+        .select(DocumentSelection::new(
+            DocumentPosition::new(text.clone(), 0),
+            DocumentPosition::new(text, 5),
+        ))
+        .expect("a range of the text");
+    scene.settle();
+    assert_eq!(
+        (scene.selected().as_deref(), scene.handles()),
+        (Some("alpha"), 0)
+    );
+}
+
+/// A listener that answers a long press by selecting another range through
+/// a controller leaves no handles: the word they were for is gone.
+pub(crate) fn a_listener_selecting_elsewhere_leaves_no_handles() {
+    let controller = SelectionController::new();
+    let heard: Heard = Rc::default();
+    let (recorded, redirect) = (Rc::clone(&heard), controller.clone());
+    let area = SelectionArea::new(Column::new((Text::new(WORDS),)))
+        .controller(controller)
+        .on_selection_changed(move |_cx, change| {
+            recorded.borrow_mut().push(
+                change
+                    .selected
+                    .as_ref()
+                    .map(|selected| selected.text.clone()),
+            );
+            if change.cause == SelectionChangeCause::User(SelectionInput::Touch) {
+                let text = redirect.texts()[0].clone();
+                redirect
+                    .select(DocumentSelection::new(
+                        DocumentPosition::new(text.clone(), 0),
+                        DocumentPosition::new(text, 5),
+                    ))
+                    .expect("a range of the text");
+            }
+        });
+    let mut scene = Scene::laid_out(WidgetsApp::new(area), heard);
+    scene.long_press(scene.along(width_of("alpha be")));
+    assert_eq!(
+        (scene.selected().as_deref(), scene.handles()),
+        (Some("alpha"), 0)
+    );
+}
+
 /// The handles are the area's own, else the nearest default's, else dots;
 /// without an overlay there are none, and the long press still selects.
 ///
@@ -373,10 +470,13 @@ pub(crate) fn a_panicking_listener_still_shows_the_handles() {
     let heard: Heard = Rc::default();
     let recorded = Rc::clone(&heard);
     let area = SelectionArea::new(Column::new((Text::new(WORDS),)))
-        .on_selection_changed(move |_cx, selected| {
-            recorded
-                .borrow_mut()
-                .push(selected.map(|selected| selected.text.clone()));
+        .on_selection_changed(move |_cx, change| {
+            recorded.borrow_mut().push(
+                change
+                    .selected
+                    .as_ref()
+                    .map(|selected| selected.text.clone()),
+            );
             assert!(recorded.borrow().is_empty(), "the listener fails");
         })
         .handles(Marked::default());
@@ -425,10 +525,13 @@ pub(crate) fn an_end_at_a_text_edge_drags_from_where_its_handle_is() {
     let heard: Heard = Rc::default();
     let recorded = Rc::clone(&heard);
     let area = SelectionArea::new(Column::new((Text::new(WORDS), Text::new(NEXT))))
-        .on_selection_changed(move |_cx, selected| {
-            recorded
-                .borrow_mut()
-                .push(selected.map(|selected| selected.text.clone()));
+        .on_selection_changed(move |_cx, change| {
+            recorded.borrow_mut().push(
+                change
+                    .selected
+                    .as_ref()
+                    .map(|selected| selected.text.clone()),
+            );
         })
         .handles(Marked::default());
     let mut scene = Scene::laid_out(WidgetsApp::new(area), heard);
@@ -668,10 +771,13 @@ pub(crate) fn an_end_inside_a_new_cluster_sits_where_the_highlight_ends() {
     let area = |text: &'static str, heard: &Heard| {
         let recorded = Rc::clone(heard);
         SelectionArea::new(Column::new((Text::new(text),)))
-            .on_selection_changed(move |_cx, selected| {
-                recorded
-                    .borrow_mut()
-                    .push(selected.map(|selected| selected.text.clone()));
+            .on_selection_changed(move |_cx, change| {
+                recorded.borrow_mut().push(
+                    change
+                        .selected
+                        .as_ref()
+                        .map(|selected| selected.text.clone()),
+                );
             })
             .handles(Marked::default())
     };
@@ -814,10 +920,13 @@ pub(crate) fn a_listener_taking_the_focus_away_leaves_no_handles() {
     let elsewhere = FocusNode::with_debug_label("elsewhere");
     let (recorded, moved) = (Rc::clone(&heard), Rc::clone(&elsewhere));
     let area = SelectionArea::new(Column::new((Text::new(WORDS),)))
-        .on_selection_changed(move |_cx, selected| {
-            recorded
-                .borrow_mut()
-                .push(selected.map(|selected| selected.text.clone()));
+        .on_selection_changed(move |_cx, change| {
+            recorded.borrow_mut().push(
+                change
+                    .selected
+                    .as_ref()
+                    .map(|selected| selected.text.clone()),
+            );
             let _ = moved.request_focus();
         })
         .handles(Marked::default());
@@ -832,13 +941,14 @@ pub(crate) fn a_listener_taking_the_focus_away_leaves_no_handles() {
     assert_eq!(scene.handles(), 0);
 }
 
-/// Frame requests that fail both as the focus leaves the area (taking its
-/// handles away) and as the area then asks to rebuild surface the first
-/// failure, with the handles gone.
+/// Every frame request failing as the focus leaves the area (the focus
+/// nodes' own, the area's as it takes its handles away, and its rebuild) is
+/// reported, not raised into the code that moved the focus, and the handles
+/// still go.
 ///
-/// Red-check: ask for the rebuild outside the containment (the second
-/// failure is the one that surfaces).
-pub(crate) fn failing_wakes_as_the_focus_leaves_surface_the_first() {
+/// Red-check: let a failing frame request unwind into its caller (the
+/// focus move raises the failure).
+pub(crate) fn failing_wakes_as_the_focus_leaves_are_reported_not_raised() {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
@@ -850,11 +960,9 @@ pub(crate) fn failing_wakes_as_the_focus_leaves_surface_the_first() {
     let (arm, count) = (Arc::clone(&armed), Arc::clone(&failures));
     laid.with_build_owner_mut(|owner| {
         owner.set_on_build_scheduled(move || {
-            // The focus nodes' own rebuild requests come first and pass; the
-            // area's, as it hears the focus leave, fail.
             if arm.load(Ordering::SeqCst) {
                 let request = count.fetch_add(1, Ordering::SeqCst) + 1;
-                assert!(request <= 2, "frame request {request} failed");
+                panic!("frame request {request} failed");
             }
         });
     });
@@ -870,17 +978,255 @@ pub(crate) fn failing_wakes_as_the_focus_leaves_surface_the_first() {
     assert_eq!(scene.handles(), 2);
 
     armed.store(true, Ordering::SeqCst);
-    let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+    let ((), log) = flui_testing::log_capture::capture(|| {
         let _ = elsewhere.request_focus();
-    }));
+    });
     armed.store(false, Ordering::SeqCst);
-    let message = caught
-        .expect_err("the frame requests failed")
-        .downcast::<String>()
-        .map(|message| *message)
-        .unwrap_or_default();
-    assert!(failures.load(Ordering::SeqCst) >= 4, "{message}");
-    assert_eq!(message, "frame request 3 failed");
+    assert!(failures.load(Ordering::SeqCst) >= 3, "a request failed");
+    assert!(log.contains("a frame request failed"), "{log}");
     scene.settle();
+    assert_eq!(scene.handles(), 0);
+    assert!(elsewhere.has_primary_focus());
+}
+
+/// A handle whose end scrolls out of its viewport takes no touch where it
+/// would paint, and takes them again once the end scrolls back.
+///
+/// Red-check: let the handles escape their ends' clips (the drag above the
+/// viewport moves the end).
+pub(crate) fn a_handle_scrolled_out_of_view_takes_no_touch() {
+    use flui_widgets::{ScrollController, Scrollable};
+
+    const ABOVE: f64 = 150.0;
+    const SCROLLED: f64 = 100.0;
+    let heard: Heard = Rc::default();
+    let controller = ScrollController::new();
+    let area = SelectionArea::new(Column::new((Text::new(WORDS), SizedBox::new(400.0, 300.0))))
+        .handles(Marked::default())
+        .on_selection_changed({
+            let recorded = Rc::clone(&heard);
+            move |_cx, change| {
+                recorded.borrow_mut().push(
+                    change
+                        .selected
+                        .as_ref()
+                        .map(|selected| selected.text.clone()),
+                );
+            }
+        });
+    let app = WidgetsApp::new(Column::new((
+        SizedBox::new(400.0, ABOVE),
+        SizedBox::new(400.0, 60.0)
+            .child(Scrollable::new().controller(controller.clone()).child(area)),
+    )));
+    let mut scene = Scene::laid_out(app, heard);
+    scene.long_press(scene.along(width_of("alpha be")));
+    assert_eq!(scene.selected().as_deref(), Some("beta"));
+
+    let end = width_of("alpha beta");
+    let past = Offset::new(width_of(WORDS) + 10.0 - end, 0.0);
+    let shown = scene.handle_at(end);
+    let scrolled = shown - Offset::new(0.0, SCROLLED);
+    assert!(
+        scrolled.dy < ABOVE,
+        "the handle would paint above the viewport"
+    );
+    controller.jump_to(SCROLLED).expect("no build is running");
+    scene.settle();
+    scene.touch_drag(scrolled, scrolled + past);
+    assert_eq!(scene.selected().as_deref(), Some("beta"));
+
+    controller.jump_to(0.0).expect("no build is running");
+    scene.settle();
+    scene.touch_drag(shown, shown + past);
+    assert_eq!(scene.selected().as_deref(), Some("beta gamma"));
+}
+
+/// A box `width` wide that rebuilds alone, so its row lays the rest out
+/// anew without building it.
+#[derive(Clone)]
+struct Gap {
+    width: Rc<Cell<f64>>,
+    rebuild: Rc<RefCell<Option<flui_view::RebuildHandle>>>,
+}
+
+impl flui_view::View for Gap {
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateful(self)
+    }
+}
+
+impl flui_view::StatefulView for Gap {
+    type State = GapState;
+    fn create_state(&self) -> Self::State {
+        GapState(Rc::clone(&self.rebuild))
+    }
+}
+
+struct GapState(Rc<RefCell<Option<flui_view::RebuildHandle>>>);
+
+impl flui_view::ViewState<Gap> for GapState {
+    fn init_state(&mut self, ctx: &dyn flui_view::LifecycleContext) {
+        *self.0.borrow_mut() = Some(ctx.rebuild_handle());
+    }
+
+    fn build(&self, view: &Gap, _ctx: &dyn BuildContext) -> impl flui_view::IntoView {
+        SizedBox::new(view.width.get(), 10.0)
+    }
+}
+
+/// Text narrowed by a sibling, with no build of the area or its text, wraps
+/// a tall span off an end's line: the handles rebuild for the shorter line
+/// once the frame that laid it out has painted, and a steady layout after
+/// it schedules no frame.
+///
+/// Red-check: rebuild the handles only after their own or their text's
+/// build (they keep the tall line).
+pub(crate) fn shown_handles_follow_a_relayout_without_a_build() {
+    use flui_painting::typography::TextSpan;
+    use flui_widgets::{Expanded, RichText, Row};
+
+    let width = Rc::new(Cell::new(0.0));
+    let rebuild = Rc::default();
+    let marked = Marked::default();
+    let tall = TextStyle::new().with_font_size(40.0);
+    let text =
+        RichText::new(TextSpan::new("alpha beta ").with_child(TextSpan::styled("GAMMA", tall)));
+    let app = WidgetsApp::new(Row::new((
+        Gap {
+            width: Rc::clone(&width),
+            rebuild: Rc::clone(&rebuild),
+        },
+        Expanded::new(SelectionArea::new(Column::new((text,))).handles(marked.clone())),
+    )));
+    let mut scene = Scene::laid_out(app, Rc::default());
+    let paragraph = scene.paragraph();
+    let line = scene.laid.size(paragraph).height;
+    scene.long_press(
+        scene.laid.absolute_offset(paragraph) + Offset::new(width_of("alpha be"), line / 2.0),
+    );
+    assert_eq!(scene.handles(), 2);
+    let before = marked.0.borrow().last().expect("built").line_height;
+    assert!(
+        before > 40.0,
+        "the end's line holds the tall span: {before}"
+    );
+
+    width.set(300.0);
+    rebuild
+        .borrow()
+        .as_ref()
+        .expect("the gap is mounted")
+        .schedule(flui_view::RebuildReason::StateChange);
+    scene.settle();
+    let after = marked.0.borrow().last().expect("built").line_height;
+    assert!(after < before / 2.0, "{after} after {before}");
+
+    let built = marked.0.borrow().len();
+    scene.settle();
+    assert_eq!(
+        marked.0.borrow().len(),
+        built,
+        "a steady layout rebuilds nothing"
+    );
+    assert!(
+        !scene.laid.scheduler().is_frame_scheduled(),
+        "a steady layout schedules no frame"
+    );
+}
+
+/// The touch that long-pressed a word goes on to extend the selection by
+/// words as it moves, keeping that word whichever way it goes, and the
+/// handles follow; the release ends the extension where it lands.
+///
+/// Red-check: leave the long press without a drag (the selection stays
+/// "beta"); report the moves as a pointer's (the cause is not touch).
+pub(crate) fn a_long_press_extends_by_words_as_the_touch_moves() {
+    let heard: Heard = Rc::default();
+    let causes = Rc::new(RefCell::new(Vec::new()));
+    let (recorded, noted) = (Rc::clone(&heard), Rc::clone(&causes));
+    let area = SelectionArea::new(Column::new((Text::new(WORDS),)))
+        .handles(Marked::default())
+        .on_selection_changed(move |_cx, change| {
+            recorded.borrow_mut().push(
+                change
+                    .selected
+                    .as_ref()
+                    .map(|selected| selected.text.clone()),
+            );
+            noted.borrow_mut().push(change.cause);
+        });
+    let mut scene = Scene::laid_out(WidgetsApp::new(area), heard);
+
+    scene.touch(1, Touch::Down, 0, scene.along(width_of("alpha be")));
+    scene.laid.pump_for(Duration::from_millis(800));
+    scene.settle();
+    assert_eq!(scene.selected().as_deref(), Some("beta"));
+    assert_eq!(scene.handles(), 2);
+
+    scene.touch(1, Touch::Move, 900, scene.along(width_of("alpha beta ga")));
+    scene.settle();
+    assert_eq!(scene.selected().as_deref(), Some("beta gamma"));
+    assert_eq!(
+        causes.borrow().last(),
+        Some(&SelectionChangeCause::User(SelectionInput::Touch))
+    );
+
+    scene.touch(1, Touch::Move, 950, scene.along(width_of("al")));
+    scene.settle();
+    assert_eq!(scene.selected().as_deref(), Some("alpha beta"));
+
+    scene.touch(1, Touch::Up, 1000, scene.along(width_of("alpha beta ga")));
+    scene.settle();
+    assert_eq!(scene.selected().as_deref(), Some("beta gamma"));
+    assert_eq!(scene.handles(), 2);
+    assert!(
+        publishes_both_handles(&scene.laid, scene.paragraph()),
+        "the paragraph reports its handles"
+    );
+}
+
+/// A listener that moves the focus away during a long press's extension
+/// ends it: the same touch moving on or releasing selects nothing more and
+/// leaves the focus where the listener put it.
+///
+/// Red-check: keep the extension when the focus leaves (the release takes
+/// the focus back and selects "alpha beta").
+pub(crate) fn losing_the_focus_ends_a_long_press_extension() {
+    let heard: Heard = Rc::default();
+    let elsewhere = FocusNode::with_debug_label("elsewhere");
+    let (recorded, moved) = (Rc::clone(&heard), Rc::clone(&elsewhere));
+    let area = SelectionArea::new(Column::new((Text::new(WORDS),)))
+        .on_selection_changed(move |_cx, change| {
+            let selected = change
+                .selected
+                .as_ref()
+                .map(|selected| selected.text.clone());
+            if selected.as_deref() == Some("beta gamma") {
+                let _ = moved.request_focus();
+            }
+            recorded.borrow_mut().push(selected);
+        })
+        .handles(Marked::default());
+    let app = WidgetsApp::new(Column::new((
+        area,
+        Focus::new(SizedBox::new(10.0, 10.0)).focus_node(Rc::clone(&elsewhere)),
+    )));
+    let mut scene = Scene::laid_out(app, heard);
+
+    scene.touch(1, Touch::Down, 0, scene.along(width_of("alpha be")));
+    scene.laid.pump_for(Duration::from_millis(800));
+    scene.settle();
+    assert_eq!(scene.selected().as_deref(), Some("beta"));
+    scene.touch(1, Touch::Move, 900, scene.along(width_of("alpha beta ga")));
+    scene.settle();
+    assert_eq!(scene.selected().as_deref(), Some("beta gamma"));
+    assert!(elsewhere.has_primary_focus());
+
+    scene.touch(1, Touch::Move, 950, scene.along(width_of("al")));
+    scene.touch(1, Touch::Up, 1000, scene.along(width_of("al")));
+    scene.settle();
+    assert_eq!(scene.selected().as_deref(), Some("beta gamma"));
+    assert!(elsewhere.has_primary_focus());
     assert_eq!(scene.handles(), 0);
 }

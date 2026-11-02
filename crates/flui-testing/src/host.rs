@@ -39,6 +39,7 @@ use flui_foundation::{ManualClock, PresentationId};
 use flui_platform::data_transfer::{RepresentationDescriptor, TransferActions};
 use flui_platform::drag::{DragError, OsDragEnd, OsDragRequest, OsDragStart, PlatformDragSource};
 use flui_platform::input_regions::{DeviceInputRegion, InputRegion};
+use flui_platform::text_store::TextStoreStatus;
 use flui_platform::{
     CursorError, CursorIcon, DisplayId, PlatformInput, PlatformTextInput, PlatformWindow,
     Unsupported, UnsupportedReason, WindowId,
@@ -85,6 +86,8 @@ pub struct HeadlessWindow {
     text_store_host: bool,
     gesture_preset: flui_interaction::GestureProfiles,
     display: Mutex<Option<DisplayId>>,
+    /// What covers the window, as the test last reported it.
+    insets: Mutex<flui_platform::WindowInsets>,
     /// The revision of the state [`PlatformWindow::state`] reports: advanced by
     /// every change this double makes to it.
     revision: Mutex<flui_platform::WindowRevision>,
@@ -159,6 +162,7 @@ impl HeadlessWindow {
             text_store_host: false,
             gesture_preset: flui_interaction::GestureSettings::default().into(),
             display: Mutex::new(None),
+            insets: Mutex::new(flui_platform::WindowInsets::ZERO),
             revision: Mutex::new(flui_platform::WindowRevision::ZERO),
             input_regions: Mutex::default(),
             haptics: Arc::new(flui_platform::testing::FakeHaptics::new()),
@@ -246,6 +250,16 @@ impl HeadlessWindow {
         self.text_input
             .as_ref()
             .map(|input| input.ime_allowed.lock().clone())
+    }
+
+    /// Every field status the UI runtime told the window's text input (a
+    /// field attached, or its status changed), in delivery order; `None` for
+    /// a window built without a text input.
+    #[must_use]
+    pub fn ime_field_statuses(&self) -> Option<Vec<TextStoreStatus>> {
+        self.text_input
+            .as_ref()
+            .map(|input| input.field_statuses.lock().clone())
     }
 
     /// Every input-region set this window handed the OS, in device pixels and delivery
@@ -341,6 +355,7 @@ impl PlatformWindow for HeadlessWindow {
             flui_platform::WindowState::new(flui_platform::WindowGeometry::new(None, size), size)
                 .with_focused(true)
                 .with_display(*self.display.lock())
+                .with_insets(*self.insets.lock())
                 .with_metrics(
                     flui_foundation::geometry::WindowMetrics::from_logical(
                         size,
@@ -429,6 +444,7 @@ impl PlatformDragSource for HeadlessOsDrags {
 struct RecordingTextInput {
     cursor_areas: Mutex<Vec<Bounds<f64>>>,
     ime_allowed: Mutex<Vec<bool>>,
+    field_statuses: Mutex<Vec<TextStoreStatus>>,
 }
 
 impl PlatformTextInput for RecordingTextInput {
@@ -438,6 +454,10 @@ impl PlatformTextInput for RecordingTextInput {
 
     fn set_ime_cursor_area(&self, area: Bounds<f64>) {
         self.cursor_areas.lock().push(area);
+    }
+
+    fn set_field_status(&self, status: TextStoreStatus) {
+        self.field_statuses.lock().push(status);
     }
 
     /// No input method composes in a headless window.
@@ -629,6 +649,7 @@ pub use flui_view::__runtime::SESSION_END_BUDGET;
 struct ScriptedBuiltIns {
     clipboard: crate::ScriptedClipboard,
     primary_selection: crate::ScriptedPrimarySelection,
+    background: HeadlessBackground,
 }
 
 impl ScriptedBuiltIns {
@@ -636,7 +657,60 @@ impl ScriptedBuiltIns {
         let mut registrar = flui_platform::capability::CapabilityRegistrar::new();
         self.clipboard.register(&mut registrar);
         self.primary_selection.register(&mut registrar);
+        self.background.register(&mut registrar);
         registrar
+    }
+}
+
+/// The host's background lanes: deterministic, on the test's thread, run
+/// by [`HeadlessHost::pump`] before each frame unless held.
+#[derive(Clone)]
+struct HeadlessBackground {
+    executors: flui_runtime::execution::DeterministicExecutors,
+    /// The lanes as a widget reaches them, with the admission windows and
+    /// shutdown of a hosted run.
+    services: Arc<flui_runtime::execution::ExecutionServices>,
+    held: Rc<std::cell::Cell<bool>>,
+}
+
+impl Default for HeadlessBackground {
+    fn default() -> Self {
+        let executors = flui_runtime::execution::DeterministicExecutors::new();
+        let services = Arc::new(flui_runtime::execution::ExecutionServices::with_host(
+            executors.host_executors(),
+        ));
+        Self {
+            executors,
+            services,
+            held: Rc::default(),
+        }
+    }
+}
+
+impl HeadlessBackground {
+    fn register(&self, registrar: &mut flui_platform::capability::CapabilityRegistrar) {
+        let services = Arc::clone(&self.services);
+        registrar.provide::<flui_view::background::BackgroundCapability>(
+            move |cx: &flui_platform::capability::ProviderContext<'_>| {
+                Ok(flui_view::background::Background::new(
+                    Arc::clone(&services) as Arc<dyn flui_platform::executor::Executor>,
+                    cx.completions().clone(),
+                ))
+            },
+        );
+    }
+
+    /// Queued background jobs and futures not yet finished.
+    fn pending(&self) -> usize {
+        let (jobs, futures) = self.executors.pending();
+        jobs + futures
+    }
+
+    /// Run queued work until none is runnable, unless held.
+    fn drain_unless_held(&self) {
+        if !self.held.get() {
+            let _ran = self.executors.run_until_idle();
+        }
     }
 }
 
@@ -942,6 +1016,9 @@ impl HeadlessHost {
         }
         self.clock.advance(dt);
         self.settle_lifecycle();
+        // Background work runs before the frame, so an answer it posts
+        // settles in this pump.
+        self.scripted.background.drain_unless_held();
         // The frame is delivered as `HostInput::Frame` would be: every
         // window's vsync is the clock's reading, on the event timeline, so a
         // recording sees the frame where its deadlines fire.
@@ -1486,6 +1563,52 @@ impl HeadlessHost {
         );
     }
 
+    /// Report `insets` as what covers `window`, as a host reports a change of
+    /// its safe area, keyboard or system gesture regions: the presentation's
+    /// `MediaQuery` carries them from the next [`pump`](Self::pump), and a
+    /// moving keyboard is sampled at each frame's time until it settles.
+    ///
+    /// # Panics
+    ///
+    /// If `window` was not opened by this host.
+    pub fn set_window_insets(&self, window: HeadlessWindowId, insets: flui_platform::WindowInsets) {
+        *self.window_of(window).insets.lock() = insets;
+        self.observe(
+            window.0,
+            flui_runtime::owner::WindowObservation::Insets(insets),
+        );
+    }
+
+    /// Start moving `window`'s keyboard to `target` now, over `duration` on
+    /// `curve`, as a host reports a keyboard that begins to show or hide: the
+    /// motion starts where the keyboard is at this instant, and the safe area
+    /// and system gesture regions stay as they were. Returns the keyboard as
+    /// reported, whose [`at`](flui_platform::KeyboardInset::at) names the
+    /// occlusion each later frame lays out with.
+    ///
+    /// # Panics
+    ///
+    /// If `window` was not opened by this host, or the motion is invalid: a
+    /// negative or non-finite `target`, a zero `duration`, or an invalid
+    /// `curve`.
+    pub fn move_keyboard(
+        &self,
+        window: HeadlessWindowId,
+        target: flui_foundation::geometry::EdgeInsets,
+        duration: Duration,
+        curve: flui_platform::InsetCurve,
+    ) -> flui_platform::KeyboardInset {
+        let now = self.event_now();
+        let insets = *self.window_of(window).insets.lock();
+        let motion =
+            flui_platform::InsetMotion::try_new(insets.keyboard().at(now), now, duration, curve)
+                .expect("a keyboard motion with a duration and a valid curve");
+        let keyboard = flui_platform::KeyboardInset::try_moving(target, motion)
+            .expect("a keyboard target that is finite and not negative");
+        self.set_window_insets(window, insets.with_keyboard(keyboard));
+        keyboard
+    }
+
     /// The primary window's gesture arena, the one its detectors compete in:
     /// observe it to watch the arena decide what this host dispatches.
     #[must_use]
@@ -1738,12 +1861,48 @@ impl HeadlessHost {
         if !retrying
             && (runtime.needs_redraw()
                 || runtime.scheduler().is_frame_scheduled()
-                || runtime.has_pending_work())
+                || runtime.has_pending_work()
+                || self.background_runs_next_pump())
         {
             return Some(Duration::ZERO);
         }
         let wake = runtime.next_wake()?;
         Some(wake.saturating_duration_since(now))
+    }
+
+    /// Stop [`pump`](Self::pump) running background work, so a test sees a
+    /// widget while its work is still pending; the work waits until
+    /// [`release_background`](Self::release_background) or
+    /// [`run_background`](Self::run_background).
+    pub fn hold_background(&mut self) {
+        self.scripted.background.held.set(true);
+    }
+
+    /// Let [`pump`](Self::pump) run background work again, from its next
+    /// call.
+    pub fn release_background(&mut self) {
+        self.scripted.background.held.set(false);
+    }
+
+    /// Run queued background work now, held or not, until none is runnable.
+    /// Its answers settle at the next pump. Returns the jobs run plus the
+    /// polls made.
+    pub fn run_background(&mut self) -> usize {
+        self.scripted.background.executors.run_until_idle()
+    }
+
+    /// Background jobs and futures queued and not yet finished. Counted by
+    /// [`pump_until_settled`](Self::pump_until_settled): held work keeps a
+    /// host unsettled.
+    #[must_use]
+    pub fn pending_background(&self) -> usize {
+        self.scripted.background.pending()
+    }
+
+    /// Whether the next pump runs background work: a parked future waits
+    /// for its wake, not for a frame.
+    fn background_runs_next_pump(&self) -> bool {
+        !self.scripted.background.held.get() && self.scripted.background.executors.runnable() > 0
     }
 
     /// Wait as a host's loop does, [`time_to_next_frame`](Self::time_to_next_frame),
@@ -1777,6 +1936,7 @@ impl HeadlessHost {
             if !runtime.needs_redraw()
                 && !runtime.scheduler().is_frame_scheduled()
                 && !runtime.has_pending_work()
+                && self.pending_background() == 0
                 && runtime.next_wake().is_none()
             {
                 return Ok(frames);

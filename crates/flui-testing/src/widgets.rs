@@ -550,6 +550,12 @@ impl LaidOut {
         self.host.ui_runtime().set_window_focused(focused);
     }
 
+    /// Report the window shown or hidden; see
+    /// [`HeadlessHost::set_window_visible`](crate::HeadlessHost::set_window_visible).
+    pub fn set_window_visible(&self, visible: bool) {
+        self.host.ui_runtime().set_window_visible(visible);
+    }
+
     /// Ask to close the tree's presentation for `reason`, as its platform
     /// does. The presentation's close guard is asked first: a close it
     /// refuses is recorded and nothing changes, and the pump after its last
@@ -569,6 +575,19 @@ impl LaidOut {
             .ui_runtime()
             .enter(flui_runtime::ui_runtime::UiRuntime::stop_presentations);
         true
+    }
+
+    /// Whether the tree's presentation has closed: a close carried out at
+    /// once by [`request_close`](Self::request_close), one carried out by a
+    /// pump after its last hold was released or a decision closed it, or a
+    /// session end. A close refused and still recorded is not one.
+    #[must_use]
+    pub fn is_closed(&self) -> bool {
+        let runtime = self.host.ui_runtime();
+        runtime
+            .ui_runtime()
+            .presentation_closing_for_test(runtime.ui_runtime().presentation_id())
+            .unwrap_or(true)
     }
 
     /// End the session the tree runs in, as the operating system does at log
@@ -798,17 +817,30 @@ impl LaidOut {
             .expect("render node should have box geometry after layout")
     }
 
-    /// The string value of a mounted render node's named diagnostics
-    /// property — mirrors the flui-material harness helper of the same
-    /// name, so parity ports can assert configuration reached the render
-    /// object without downcasting.
-    pub fn render_property(&self, id: RenderId, property_name: &str) -> Option<String> {
-        self.pipeline_owner.with(|owner| {
-            let diagnostics = owner.debug_node_diagnostics(id)?;
-            diagnostics
-                .find_property(property_name)
-                .map(|property| property.value().to_string())
-        })
+    /// The typed snapshot of one mounted render node, without its children: read a field by
+    /// type, `laid.render_node(id).get::<Rgba>("color")`. Mirrors the flui-material harness
+    /// helper, so parity ports can assert configuration reached the render object without
+    /// downcasting.
+    ///
+    /// # Panics
+    ///
+    /// When `id` is not a live node of the render tree.
+    pub fn render_node(&self, id: RenderId) -> flui_foundation::inspect::SnapshotNode {
+        self.pipeline_owner
+            .with(|owner| inspect::node_snapshot(owner, id))
+    }
+
+    /// The `Debug` text of a render node's untyped field `name` — a field its object could
+    /// only describe by `Debug` (`Value::Debug`, counted as untyped by the snapshot), such as
+    /// a `RenderDecoratedBox`'s `decoration`. `None` when the node has no such field or the
+    /// field is typed; prefer [`render_node`](Self::render_node) and a typed `get` for those.
+    pub fn render_debug_field(&self, id: RenderId, name: &str) -> Option<String> {
+        use flui_foundation::inspect::OwnedValue;
+
+        match self.render_node(id).field(name)?.value {
+            OwnedValue::Debug(ref text) => Some(text.clone()),
+            _ => None,
+        }
     }
 
     /// The committed sliver geometry of a render node.
@@ -939,6 +971,31 @@ impl LaidOut {
     /// `setState`/`pump` one.
     pub fn tick(&mut self) {
         self.host.pump(Duration::ZERO);
+    }
+
+    /// Stop frames running background work; see
+    /// [`HeadlessHost::hold_background`](crate::HeadlessHost::hold_background).
+    pub fn hold_background(&mut self) {
+        self.host.ui_runtime_mut().hold_background();
+    }
+
+    /// Let frames run background work again; see
+    /// [`HeadlessHost::release_background`](crate::HeadlessHost::release_background).
+    pub fn release_background(&mut self) {
+        self.host.ui_runtime_mut().release_background();
+    }
+
+    /// Run queued background work now; see
+    /// [`HeadlessHost::run_background`](crate::HeadlessHost::run_background).
+    pub fn run_background(&mut self) -> usize {
+        self.host.ui_runtime_mut().run_background()
+    }
+
+    /// Background work queued and not yet finished; see
+    /// [`HeadlessHost::pending_background`](crate::HeadlessHost::pending_background).
+    #[must_use]
+    pub fn pending_background(&self) -> usize {
+        self.host.ui_runtime().pending_background()
     }
 
     /// Hot-reload entry point: mark every mounted element dirty, without
@@ -1400,8 +1457,9 @@ impl LaidOut {
         self.find_all_by_render_type("RenderSemanticsAnnotations")
             .into_iter()
             .filter(|&id| {
-                self.render_property(id, "actions_only").is_none()
-                    && self.render_property(id, "focus_state_only").is_none()
+                let node = self.render_node(id);
+                node.get::<bool>("actions_only") == Ok(false)
+                    && node.get::<bool>("focus_state_only") == Ok(false)
             })
             .collect()
     }
@@ -1409,18 +1467,15 @@ impl LaidOut {
     /// All render nodes whose short type name equals `render_type_name`.
     ///
     /// Walks the caller's logical render subtree and matches each node's
-    /// [`DiagnosticsNode`](flui_foundation::DiagnosticsNode) name against
+    /// [`kind`](flui_foundation::inspect::SnapshotNode::kind) against
     /// `render_type_name` (the short, crate-unqualified type name such as
     /// `"RenderConstrainedBox"` or `"RenderCenter"`). Returns all matching ids
     /// in slab-iteration order (not geometry order). Presentation-owned nodes
     /// above the caller's root are deliberately excluded.
     ///
-    /// Compares **base** names — the part before any `<...>` — on both
-    /// sides: `Diagnosticable::to_diagnostics_node`'s short name keeps full
-    /// generic fidelity (a `RenderViewport<ScrollPosition>` node names
-    /// itself exactly that), but a caller querying "by render type" wants
-    /// the base name regardless of which generic argument a render object
-    /// happens to be monomorphized over.
+    /// A kind never carries its type arguments (they are `kind_args`), so a
+    /// `RenderViewport<ScrollPosition>` node matches `"RenderViewport"`; a generic suffix in
+    /// the query is ignored.
     pub fn find_all_by_render_type(&self, render_type_name: &str) -> Vec<RenderId> {
         let logical_root = self.current_root();
         self.pipeline_owner.with(|owner| {
@@ -1433,14 +1488,14 @@ impl LaidOut {
             }
 
             let queried = base_type_name(render_type_name);
+            let snapshot_of = inspect::node_snapshotter(owner);
             render_tree
                 .iter()
                 .filter_map(|(id, _node)| {
                     if !logical_ids.contains(&id) {
                         return None;
                     }
-                    let diagnostics = owner.debug_node_diagnostics(id)?;
-                    (diagnostics.name().map(base_type_name) == Some(queried)).then_some(id)
+                    (snapshot_of(id).kind == queried).then_some(id)
                 })
                 .collect()
         })
@@ -1623,34 +1678,20 @@ impl LaidOut {
     /// Find the unique `RenderParagraph` node that contains `text` as its
     /// plain-text content.
     ///
-    /// Requires the `RenderParagraph` diagnostics to emit a `"text"` property
-    /// (added to `RenderParagraph`'s
-    /// [`Diagnosticable::debug_fill_properties`](flui_foundation::Diagnosticable::debug_fill_properties)
-    /// for this purpose). Returns `None` when no paragraph matches.
+    /// Reads the `"text"` field `RenderParagraph` publishes through `Inspect`.
+    /// Returns `None` when no paragraph matches.
     ///
     /// # Panics
     ///
     /// Panics when more than one `RenderParagraph` emits the same `text`.
     pub fn find_text(&self, text: &str) -> Option<RenderId> {
-        self.pipeline_owner.with(|owner| {
-            let mut found: Option<RenderId> = None;
-            for (id, _node) in owner.render_tree().iter() {
-                let Some(diagnostics) = owner.debug_node_diagnostics(id) else {
-                    continue;
-                };
-                if diagnostics.name() != Some("RenderParagraph") {
-                    continue;
-                }
-                if diagnostics.get_property("text") == Some(text) {
-                    assert!(
-                        found.is_none(),
-                        "find_text: multiple RenderParagraph nodes contain {text:?}"
-                    );
-                    found = Some(id);
-                }
-            }
-            found
-        })
+        let mut matches = self.find_all_text(text).into_iter();
+        let found = matches.next();
+        assert!(
+            matches.next().is_none(),
+            "find_text: multiple RenderParagraph nodes contain {text:?}"
+        );
+        found
     }
 
     /// Find every `RenderParagraph` node whose plain-text content equals
@@ -1663,14 +1704,13 @@ impl LaidOut {
     /// behavior is unchanged. Returns an empty `Vec` when nothing matches.
     pub fn find_all_text(&self, text: &str) -> Vec<RenderId> {
         self.pipeline_owner.with(|owner| {
+            let snapshot_of = inspect::node_snapshotter(owner);
             owner
                 .render_tree()
                 .iter()
                 .filter_map(|(id, _node)| {
-                    let diagnostics = owner.debug_node_diagnostics(id)?;
-                    (diagnostics.name() == Some("RenderParagraph")
-                        && diagnostics.get_property("text") == Some(text))
-                    .then_some(id)
+                    let node = snapshot_of(id);
+                    (inspect::paragraph_text(&node).as_deref() == Some(text)).then_some(id)
                 })
                 .collect()
         })
@@ -1955,9 +1995,7 @@ pub fn offset(dx: f64, dy: f64) -> Offset {
 /// The part of `type_name` before its first `<`, if any — the base name
 /// ignoring generic parameters (`RenderViewport<ScrollPosition>` ->
 /// `RenderViewport`; `RenderConstrainedBox` -> `RenderConstrainedBox`
-/// unchanged). Mirrors `flui_foundation::debug`'s private helper of the
-/// same name (not public — this harness has its own tiny copy rather than
-/// growing the library's public surface for a test-only concern).
+/// unchanged), so a query may name a kind with or without its type arguments.
 fn base_type_name(type_name: &str) -> &str {
     type_name.split('<').next().unwrap_or(type_name)
 }
@@ -1971,4 +2009,15 @@ fn a11y_tree(pipeline: &PipelineCell) -> Option<crate::A11yTree> {
             .and_then(|semantics| semantics.to_accesskit_tree_update(None))
     })?;
     Some(crate::A11yTree::new(update))
+}
+
+/// `color` as a render node's colour field reads back, so a test compares typed values:
+/// `assert_eq!(laid.render_node(id).get::<Rgba>("color"), Ok(rgba(expected)))`.
+pub fn rgba(color: flui_painting::styling::Color) -> flui_foundation::inspect::Rgba {
+    use flui_foundation::inspect::{ToValue, Value};
+
+    match color.to_value() {
+        Value::Color(rgba) => rgba,
+        other => unreachable!("BUG: a Color describes itself as a colour, not {other:?}"),
+    }
 }

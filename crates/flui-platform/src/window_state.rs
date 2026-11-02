@@ -8,7 +8,7 @@
 //! never what code asked for: a size the OS clamped is the clamped size, and a
 //! maximize the OS refused leaves the mode where it was. It holds every fact of
 //! the window (ADR-0254 §1): geometry and mode, the drawable metrics and scale,
-//! appearance, display, safe area, execution state, focus, activation, visibility,
+//! appearance, display, insets, execution state, focus, activation, visibility,
 //! occlusion, hover and the [`WindowCapabilities`]. Whether the window is shown
 //! ([`visible`](WindowState::visible)), minimized ([`mode`](WindowState::mode))
 //! and covered ([`occluded`](WindowState::occluded)) are three facts, and
@@ -33,10 +33,11 @@
 
 use std::num::NonZeroU64;
 
-use flui_foundation::geometry::{EdgeInsets, Point, Size, WindowMetrics};
+use flui_foundation::geometry::{Point, Size, WindowMetrics};
 
 use crate::{
-    Availability, CapabilityAbsence, DisplayId, Unsupported, WindowAppearance, WindowExecutionState,
+    Availability, CapabilityAbsence, DisplayId, Unsupported, WindowAppearance,
+    WindowExecutionState, WindowFrame, WindowInsets,
 };
 
 /// The monotone version of a [`WindowState`]. Never wraps.
@@ -171,8 +172,8 @@ pub struct WindowState {
     pub constraints: SizeConstraints,
     /// Whether the user can resize the window.
     pub resizable: bool,
-    /// Whether the window has its frame and title bar.
-    pub decorated: bool,
+    /// What frames the window: the system's title bar, the application's, or none.
+    pub frame: WindowFrame,
     /// The display the window is on, named by the display snapshot's identity
     /// (ADR-0236); `None` when the platform cannot tell, which a consumer reads
     /// as an unknown display, never as the primary one.
@@ -188,9 +189,12 @@ pub struct WindowState {
     /// (ADR-0222). A backend that cannot observe the theme reports
     /// [`WindowAppearance::Light`].
     pub appearance: WindowAppearance,
-    /// Safe-area intrusions in logical pixels, relative to the content area;
-    /// zero where the platform reports none. Not keyboard occlusion.
-    pub safe_area: EdgeInsets,
+    /// Where the content is covered or contested: the safe area, the soft
+    /// keyboard and its motion, and the system-gesture edges (ADR-0277).
+    /// Zero where the platform reports none; whether a window reports the
+    /// keyboard and the gesture edges at all is in its
+    /// [`capabilities`](Self::capabilities).
+    pub insets: WindowInsets,
     /// Whether the platform lets the window run its UI, independent of focus,
     /// visibility and the GPU surface (ADR-0035).
     pub execution: WindowExecutionState,
@@ -209,8 +213,8 @@ pub struct WindowState {
 
 impl WindowState {
     /// A visible, unoccluded, unfocused, inactive, unhovered, running, resizable,
-    /// decorated window in normal mode at revision zero, with no title, limits, display,
-    /// metrics or safe area, the light appearance, and capabilities that
+    /// system-framed window in normal mode at revision zero, with no title, limits, display,
+    /// metrics or insets, the light appearance, and capabilities that
     /// honour nothing.
     #[must_use]
     pub fn new(outer: WindowGeometry, content_size: Size<f64>) -> Self {
@@ -226,11 +230,11 @@ impl WindowState {
             title: None,
             constraints: SizeConstraints::NONE,
             resizable: true,
-            decorated: true,
+            frame: WindowFrame::System,
             display: None,
             metrics: None,
             appearance: WindowAppearance::Light,
-            safe_area: EdgeInsets::ZERO,
+            insets: WindowInsets::ZERO,
             execution: WindowExecutionState::Running,
             hovered: false,
             active: false,
@@ -295,10 +299,10 @@ impl WindowState {
         self
     }
 
-    /// Set whether the window has its frame.
+    /// Set what frames the window.
     #[must_use]
-    pub fn with_decorated(mut self, decorated: bool) -> Self {
-        self.decorated = decorated;
+    pub fn with_frame(mut self, frame: WindowFrame) -> Self {
+        self.frame = frame;
         self
     }
 
@@ -324,10 +328,10 @@ impl WindowState {
         self
     }
 
-    /// Set the safe-area insets.
+    /// Set the insets.
     #[must_use]
-    pub fn with_safe_area(mut self, safe_area: EdgeInsets) -> Self {
-        self.safe_area = safe_area;
+    pub fn with_insets(mut self, insets: WindowInsets) -> Self {
+        self.insets = insets;
         self
     }
 
@@ -441,11 +445,14 @@ impl WindowState {
 /// says. The same holds for the input regions, whose capability lives in the
 /// input capabilities.
 ///
-/// The one report a window makes outside its snapshot,
-/// [`reports_presentation`](Self::reports_presentation), does keep its reason
-/// here: no verb answers for it, so
+/// The reports a window makes, [`reports_presentation`](Self::reports_presentation),
+/// [`reports_keyboard_inset`](Self::reports_keyboard_inset) and
+/// [`reports_system_gestures`](Self::reports_system_gestures), do keep their
+/// reasons here: no verb answers for them, so
 /// [`presentation_feedback`](Self::presentation_feedback) is where a caller
-/// learns why frames come without [`FrameRequest::presented`](crate::FrameRequest::presented).
+/// learns why frames come without [`FrameRequest::presented`](crate::FrameRequest::presented),
+/// and [`keyboard_inset`](Self::keyboard_inset) and
+/// [`system_gestures`](Self::system_gestures) why those insets stay zero.
 ///
 /// The capabilities in a published snapshot also carry their
 /// [`revision`](Self::revision): the snapshot revision at which what the
@@ -467,8 +474,16 @@ pub struct WindowCapabilities {
     pub sets_constraints: Availability,
     /// [`WindowCommand::SetResizable`].
     pub sets_resizable: Availability,
-    /// [`WindowCommand::SetDecorated`].
-    pub sets_decorated: Availability,
+    /// [`WindowCommand::SetFrame`] to [`WindowFrame::System`] or
+    /// [`WindowFrame::None`]: the system's frame put on or taken off.
+    pub sets_frame: Availability,
+    /// [`WindowFrame::AppTitleBar`], at open ([`WindowOptions::frame`](crate::WindowOptions::frame))
+    /// and through [`WindowCommand::SetFrame`]: the window system keeps the
+    /// resize borders, shadow and snapping of a frame whose title bar the
+    /// application draws. A desktop window opened with it where this is `Unavailable`
+    /// opens with [`WindowFrame::System`]. Hosts without a system frame, such as
+    /// mobile and web, retain their native frame policy.
+    pub app_title_bar: Availability,
     /// [`WindowMode::Minimized`] through [`WindowCommand::SetMode`].
     pub minimizes: Availability,
     /// [`WindowMode::Maximized`] through [`WindowCommand::SetMode`].
@@ -505,12 +520,22 @@ pub struct WindowCapabilities {
     /// [`without_presentation_feedback`](Self::without_presentation_feedback),
     /// which records why; set by hand, the reason is the platform's.
     pub reports_presentation: Availability,
+    /// [`WindowInsets::keyboard`](crate::WindowInsets::keyboard): the window
+    /// reports where the soft keyboard covers it. Set it `Unavailable` with
+    /// [`without_keyboard_inset`](Self::without_keyboard_inset), which records
+    /// why; set by hand, the reason is the platform's.
+    pub reports_keyboard_inset: Availability,
+    /// [`WindowInsets::system_gestures`](crate::WindowInsets::system_gestures):
+    /// the window reports the edges system gestures take. Set it `Unavailable`
+    /// with [`without_system_gestures`](Self::without_system_gestures), which
+    /// records why; set by hand, the reason is the platform's.
+    pub reports_system_gestures: Availability,
     /// Why each command's capability is `Unavailable`, indexed by [`Slot`];
     /// read only while it is.
     absences: [CapabilityAbsence; Slot::COUNT],
-    /// Why [`reports_presentation`](Self::reports_presentation) is
-    /// `Unavailable`; read only while it is.
-    presentation_absence: CapabilityAbsence,
+    /// Why each report is `Unavailable`, indexed by [`Report`]; read only
+    /// while it is.
+    report_absences: [CapabilityAbsence; Report::COUNT],
     /// The window whose snapshot publishes these capabilities; `None` for
     /// capabilities built by hand. Kept by [`WindowState::successor`].
     owner: Option<CapabilitiesOwner>,
@@ -541,7 +566,7 @@ impl PartialEq for WindowCapabilities {
     fn eq(&self, other: &Self) -> bool {
         self.honoured() == other.honoured()
             && self.absences_in_force() == other.absences_in_force()
-            && self.presentation_absence_in_force() == other.presentation_absence_in_force()
+            && self.report_absences_in_force() == other.report_absences_in_force()
     }
 }
 
@@ -551,7 +576,103 @@ impl std::hash::Hash for WindowCapabilities {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.honoured().hash(state);
         self.absences_in_force().hash(state);
-        self.presentation_absence_in_force().hash(state);
+        self.report_absences_in_force().hash(state);
+    }
+}
+
+/// A report a window makes outside the commands, whose absence keeps its
+/// reason in [`WindowCapabilities`]: the index of that reason.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Report {
+    /// [`WindowCapabilities::reports_presentation`].
+    Presentation,
+    /// [`WindowCapabilities::reports_keyboard_inset`].
+    KeyboardInset,
+    /// [`WindowCapabilities::reports_system_gestures`].
+    SystemGestures,
+}
+
+impl Report {
+    /// Every report, in index order.
+    const ALL: [Self; 3] = [
+        Self::Presentation,
+        Self::KeyboardInset,
+        Self::SystemGestures,
+    ];
+    /// How many there are: the length of the report absences.
+    const COUNT: usize = Self::ALL.len();
+}
+
+impl WindowCapabilities {
+    /// The field `report` reads.
+    const fn report(&self, report: Report) -> Availability {
+        match report {
+            Report::Presentation => self.reports_presentation,
+            Report::KeyboardInset => self.reports_keyboard_inset,
+            Report::SystemGestures => self.reports_system_gestures,
+        }
+    }
+
+    /// The field `report` reads, to set.
+    const fn report_mut(&mut self, report: Report) -> &mut Availability {
+        match report {
+            Report::Presentation => &mut self.reports_presentation,
+            Report::KeyboardInset => &mut self.reports_keyboard_inset,
+            Report::SystemGestures => &mut self.reports_system_gestures,
+        }
+    }
+
+    /// `report` made `Unavailable` for `absence`.
+    const fn without_report(mut self, report: Report, absence: CapabilityAbsence) -> Self {
+        *self.report_mut(report) = Availability::Unavailable;
+        self.report_absences[report as usize] = absence;
+        self
+    }
+
+    /// How the window makes `report`, or why it does not.
+    const fn report_or_absence(&self, report: Report) -> Result<Availability, Unsupported> {
+        match self.report_absence_in_force(report) {
+            Some(absence) => Err(Unsupported::new(absence.reason())),
+            None => Ok(self.report(report)),
+        }
+    }
+
+    /// `report`'s absence, while it is `Unavailable`.
+    const fn report_absence_in_force(&self, report: Report) -> Option<CapabilityAbsence> {
+        match self.report(report) {
+            Availability::Unavailable => Some(self.report_absences[report as usize]),
+            Availability::Native | Availability::Emulated => None,
+        }
+    }
+
+    /// What `report` reports, or its absence while it is `Unavailable`.
+    const fn report_in(&self, report: Report) -> Result<Availability, CapabilityAbsence> {
+        match self.report_absence_in_force(report) {
+            Some(absence) => Err(absence),
+            None => Ok(self.report(report)),
+        }
+    }
+
+    /// Every report's absence in force, for equality and hashing.
+    const fn report_absences_in_force(&self) -> [Option<CapabilityAbsence>; Report::COUNT] {
+        let mut absences = [None; Report::COUNT];
+        let mut at = 0;
+        while at < Report::COUNT {
+            absences[at] = self.report_absence_in_force(Report::ALL[at]);
+            at += 1;
+        }
+        absences
+    }
+
+    /// `report` set from its parts: what it reports, or its absence.
+    const fn set_report(&mut self, report: Report, parts: Result<Availability, CapabilityAbsence>) {
+        match parts {
+            Ok(availability) => *self.report_mut(report) = availability,
+            Err(absence) => {
+                *self.report_mut(report) = Availability::Unavailable;
+                self.report_absences[report as usize] = absence;
+            }
+        }
     }
 }
 
@@ -599,7 +720,8 @@ command_capabilities! {
     SetSize => sets_size,
     SetConstraints => sets_constraints,
     SetResizable => sets_resizable,
-    SetDecorated => sets_decorated,
+    SetFrame => sets_frame,
+    SetAppTitleBar => app_title_bar,
     Minimize => minimizes,
     Maximize => maximizes,
     EnterFullscreen => enters_fullscreen,
@@ -617,14 +739,15 @@ const NOT_ON_THIS_PLATFORM: [CapabilityAbsence; Slot::COUNT] =
 impl WindowCapabilities {
     /// Every field but the revision, for equality and hashing. Destructured,
     /// so a field the type gains does not compile until it is listed here.
-    const fn honoured(&self) -> [Availability; 19] {
+    const fn honoured(&self) -> [Availability; 22] {
         let Self {
             sets_title,
             sets_position,
             sets_size,
             sets_constraints,
             sets_resizable,
-            sets_decorated,
+            sets_frame,
+            app_title_bar,
             minimizes,
             maximizes,
             enters_fullscreen,
@@ -638,8 +761,10 @@ impl WindowCapabilities {
             frame_rate_hint,
             material,
             reports_presentation,
+            reports_keyboard_inset,
+            reports_system_gestures,
             absences: _,
-            presentation_absence: _,
+            report_absences: _,
             owner: _,
             revision: _,
         } = *self;
@@ -649,7 +774,8 @@ impl WindowCapabilities {
             sets_size,
             sets_constraints,
             sets_resizable,
-            sets_decorated,
+            sets_frame,
+            app_title_bar,
             minimizes,
             maximizes,
             enters_fullscreen,
@@ -663,6 +789,8 @@ impl WindowCapabilities {
             frame_rate_hint,
             material,
             reports_presentation,
+            reports_keyboard_inset,
+            reports_system_gestures,
         ]
     }
 }
@@ -675,7 +803,8 @@ impl WindowCapabilities {
         sets_size: Availability::Unavailable,
         sets_constraints: Availability::Unavailable,
         sets_resizable: Availability::Unavailable,
-        sets_decorated: Availability::Unavailable,
+        sets_frame: Availability::Unavailable,
+        app_title_bar: Availability::Unavailable,
         minimizes: Availability::Unavailable,
         maximizes: Availability::Unavailable,
         enters_fullscreen: Availability::Unavailable,
@@ -689,8 +818,10 @@ impl WindowCapabilities {
         frame_rate_hint: Availability::Unavailable,
         material: Availability::Unavailable,
         reports_presentation: Availability::Unavailable,
+        reports_keyboard_inset: Availability::Unavailable,
+        reports_system_gestures: Availability::Unavailable,
         absences: NOT_ON_THIS_PLATFORM,
-        presentation_absence: CapabilityAbsence::NotOnThisPlatform,
+        report_absences: [CapabilityAbsence::NotOnThisPlatform; Report::COUNT],
         owner: None,
         revision: WindowRevision::ZERO,
     };
@@ -703,7 +834,8 @@ impl WindowCapabilities {
         sets_size: Availability::Native,
         sets_constraints: Availability::Native,
         sets_resizable: Availability::Native,
-        sets_decorated: Availability::Native,
+        sets_frame: Availability::Native,
+        app_title_bar: Availability::Native,
         minimizes: Availability::Native,
         maximizes: Availability::Native,
         enters_fullscreen: Availability::Native,
@@ -717,8 +849,10 @@ impl WindowCapabilities {
         frame_rate_hint: Availability::Native,
         material: Availability::Native,
         reports_presentation: Availability::Native,
+        reports_keyboard_inset: Availability::Native,
+        reports_system_gestures: Availability::Native,
         absences: NOT_ON_THIS_PLATFORM,
-        presentation_absence: CapabilityAbsence::NotOnThisPlatform,
+        report_absences: [CapabilityAbsence::NotOnThisPlatform; Report::COUNT],
         owner: None,
         revision: WindowRevision::ZERO,
     };
@@ -802,6 +936,18 @@ impl WindowCapabilities {
         self
     }
 
+    /// These capabilities with [`app_title_bar`](Self::app_title_bar)
+    /// `Unavailable` because of `absence`: what
+    /// [`unavailable`](Self::unavailable) does for
+    /// [`WindowCommand::SetFrame`] to an [`AppTitleBar`](crate::AppTitleBar),
+    /// in a constant.
+    #[must_use]
+    pub const fn without_app_title_bar(mut self, absence: CapabilityAbsence) -> Self {
+        self.app_title_bar = Availability::Unavailable;
+        self.absences[Slot::SetAppTitleBar as usize] = absence;
+        self
+    }
+
     /// Why admission refuses `command` when its capability is `Unavailable`:
     /// the absence [`unavailable`](Self::unavailable) gave it or, for a field
     /// set by hand, [`NotOnThisPlatform`](CapabilityAbsence::NotOnThisPlatform).
@@ -833,10 +979,8 @@ impl WindowCapabilities {
     /// );
     /// ```
     #[must_use]
-    pub const fn without_presentation_feedback(mut self, absence: CapabilityAbsence) -> Self {
-        self.reports_presentation = Availability::Unavailable;
-        self.presentation_absence = absence;
-        self
+    pub const fn without_presentation_feedback(self, absence: CapabilityAbsence) -> Self {
+        self.without_report(Report::Presentation, absence)
     }
 
     /// How the window reports that its frames reached the screen
@@ -849,18 +993,52 @@ impl WindowCapabilities {
     /// [`without_presentation_feedback`](Self::without_presentation_feedback)
     /// recorded, or the platform's for a field set by hand.
     pub const fn presentation_feedback(&self) -> Result<Availability, Unsupported> {
-        match self.presentation_absence_in_force() {
-            Some(absence) => Err(Unsupported::new(absence.reason())),
-            None => Ok(self.reports_presentation),
-        }
+        self.report_or_absence(Report::Presentation)
     }
 
-    /// The presentation report's absence, while it is `Unavailable`.
-    const fn presentation_absence_in_force(&self) -> Option<CapabilityAbsence> {
-        match self.reports_presentation {
-            Availability::Unavailable => Some(self.presentation_absence),
-            Availability::Native | Availability::Emulated => None,
-        }
+    /// These capabilities with
+    /// [`reports_keyboard_inset`](Self::reports_keyboard_inset) `Unavailable`
+    /// because of `absence`, which [`keyboard_inset`](Self::keyboard_inset)
+    /// then answers.
+    #[must_use]
+    pub const fn without_keyboard_inset(self, absence: CapabilityAbsence) -> Self {
+        self.without_report(Report::KeyboardInset, absence)
+    }
+
+    /// How the window reports where the soft keyboard covers it, or why it
+    /// does not: a zero keyboard inset from a window that does not report it
+    /// is unknown, not a hidden keyboard.
+    ///
+    /// # Errors
+    /// [`Unsupported`] while
+    /// [`reports_keyboard_inset`](Self::reports_keyboard_inset) is
+    /// `Unavailable`, with the absence
+    /// [`without_keyboard_inset`](Self::without_keyboard_inset) recorded, or
+    /// the platform's for a field set by hand.
+    pub const fn keyboard_inset(&self) -> Result<Availability, Unsupported> {
+        self.report_or_absence(Report::KeyboardInset)
+    }
+
+    /// These capabilities with
+    /// [`reports_system_gestures`](Self::reports_system_gestures)
+    /// `Unavailable` because of `absence`, which
+    /// [`system_gestures`](Self::system_gestures) then answers.
+    #[must_use]
+    pub const fn without_system_gestures(self, absence: CapabilityAbsence) -> Self {
+        self.without_report(Report::SystemGestures, absence)
+    }
+
+    /// How the window reports the edges system gestures take, or why it does
+    /// not.
+    ///
+    /// # Errors
+    /// [`Unsupported`] while
+    /// [`reports_system_gestures`](Self::reports_system_gestures) is
+    /// `Unavailable`, with the absence
+    /// [`without_system_gestures`](Self::without_system_gestures) recorded, or
+    /// the platform's for a field set by hand.
+    pub const fn system_gestures(&self) -> Result<Availability, Unsupported> {
+        self.report_or_absence(Report::SystemGestures)
     }
 
     /// The absence recorded for `slot`, while its capability is `Unavailable`;
@@ -894,7 +1072,8 @@ impl WindowCapabilities {
             WindowCommand::SetSize(_) => Slot::SetSize,
             WindowCommand::SetConstraints(_) => Slot::SetConstraints,
             WindowCommand::SetResizable(_) => Slot::SetResizable,
-            WindowCommand::SetDecorated(_) => Slot::SetDecorated,
+            WindowCommand::SetFrame(WindowFrame::AppTitleBar(_)) => Slot::SetAppTitleBar,
+            WindowCommand::SetFrame(WindowFrame::System | WindowFrame::None) => Slot::SetFrame,
             WindowCommand::SetMode(WindowMode::Minimized) => Slot::Minimize,
             WindowCommand::SetMode(WindowMode::Maximized) => Slot::Maximize,
             WindowCommand::SetMode(WindowMode::Fullscreen) => Slot::EnterFullscreen,
@@ -923,8 +1102,9 @@ pub enum WindowCommand {
     SetConstraints(SizeConstraints),
     /// Allow or forbid user resizing.
     SetResizable(bool),
-    /// Show or remove the frame and title bar.
-    SetDecorated(bool),
+    /// Frame the window: the system's frame, a title bar the application
+    /// draws inside a frame the system keeps, or no frame.
+    SetFrame(WindowFrame),
     /// Enter a mode. [`WindowMode::Normal`] restores from any other mode.
     SetMode(WindowMode),
     /// Show the window.
@@ -974,7 +1154,7 @@ impl WindowCommand {
             }
             Self::SetTitle(_)
             | Self::SetResizable(_)
-            | Self::SetDecorated(_)
+            | Self::SetFrame(_)
             | Self::SetMode(_)
             | Self::Show
             | Self::Hide
@@ -1280,16 +1460,16 @@ pub struct WindowStateParts {
     pub constraints: SizeConstraints,
     /// [`WindowState::resizable`].
     pub resizable: bool,
-    /// [`WindowState::decorated`].
-    pub decorated: bool,
+    /// [`WindowState::frame`].
+    pub frame: WindowFrame,
     /// [`WindowState::display`].
     pub display: Option<DisplayId>,
     /// [`WindowState::metrics`].
     pub metrics: Option<WindowMetrics>,
     /// [`WindowState::appearance`].
     pub appearance: WindowAppearance,
-    /// [`WindowState::safe_area`].
-    pub safe_area: EdgeInsets,
+    /// [`WindowState::insets`].
+    pub insets: WindowInsets,
     /// [`WindowState::execution`].
     pub execution: WindowExecutionState,
     /// [`WindowState::hovered`].
@@ -1321,8 +1501,10 @@ pub struct CapabilityParts {
     pub sets_constraints: Result<Availability, CapabilityAbsence>,
     /// [`WindowCapabilities::sets_resizable`].
     pub sets_resizable: Result<Availability, CapabilityAbsence>,
-    /// [`WindowCapabilities::sets_decorated`].
-    pub sets_decorated: Result<Availability, CapabilityAbsence>,
+    /// [`WindowCapabilities::sets_frame`].
+    pub sets_frame: Result<Availability, CapabilityAbsence>,
+    /// [`WindowCapabilities::app_title_bar`].
+    pub app_title_bar: Result<Availability, CapabilityAbsence>,
     /// [`WindowCapabilities::minimizes`].
     pub minimizes: Result<Availability, CapabilityAbsence>,
     /// [`WindowCapabilities::maximizes`].
@@ -1342,6 +1524,12 @@ pub struct CapabilityParts {
     /// [`WindowCapabilities::reports_presentation`], with
     /// [`WindowCapabilities::presentation_feedback`]'s absence.
     pub reports_presentation: Result<Availability, CapabilityAbsence>,
+    /// [`WindowCapabilities::reports_keyboard_inset`], with
+    /// [`WindowCapabilities::keyboard_inset`]'s absence.
+    pub reports_keyboard_inset: Result<Availability, CapabilityAbsence>,
+    /// [`WindowCapabilities::reports_system_gestures`], with
+    /// [`WindowCapabilities::system_gestures`]'s absence.
+    pub reports_system_gestures: Result<Availability, CapabilityAbsence>,
     /// [`WindowCapabilities::observes_position`].
     pub observes_position: Availability,
     /// [`WindowCapabilities::observes_minimized`].
@@ -1368,11 +1556,11 @@ impl WindowState {
             title,
             constraints,
             resizable,
-            decorated,
+            frame,
             display,
             metrics,
             appearance,
-            safe_area,
+            insets,
             execution,
             hovered,
             active,
@@ -1389,11 +1577,11 @@ impl WindowState {
             title,
             constraints,
             resizable,
-            decorated,
+            frame,
             display,
             metrics,
             appearance,
-            safe_area,
+            insets,
             execution,
             hovered,
             active,
@@ -1419,11 +1607,11 @@ impl WindowStateParts {
             title,
             constraints,
             resizable,
-            decorated,
+            frame,
             display,
             metrics,
             appearance,
-            safe_area,
+            insets,
             execution,
             hovered,
             active,
@@ -1441,11 +1629,11 @@ impl WindowStateParts {
             title,
             constraints,
             resizable,
-            decorated,
+            frame,
             display,
             metrics,
             appearance,
-            safe_area,
+            insets,
             execution,
             hovered,
             active,
@@ -1473,7 +1661,8 @@ impl WindowCapabilities {
             sets_size: _,
             sets_constraints: _,
             sets_resizable: _,
-            sets_decorated: _,
+            sets_frame: _,
+            app_title_bar: _,
             minimizes: _,
             maximizes: _,
             enters_fullscreen: _,
@@ -1486,9 +1675,11 @@ impl WindowCapabilities {
             places_at_open,
             frame_rate_hint,
             material: _,
-            reports_presentation,
+            reports_presentation: _,
+            reports_keyboard_inset: _,
+            reports_system_gestures: _,
             absences: _,
-            presentation_absence: _,
+            report_absences: _,
             owner: _,
             revision: _,
         } = self;
@@ -1498,7 +1689,8 @@ impl WindowCapabilities {
             sets_size: self.honoured_in(Slot::SetSize),
             sets_constraints: self.honoured_in(Slot::SetConstraints),
             sets_resizable: self.honoured_in(Slot::SetResizable),
-            sets_decorated: self.honoured_in(Slot::SetDecorated),
+            sets_frame: self.honoured_in(Slot::SetFrame),
+            app_title_bar: self.honoured_in(Slot::SetAppTitleBar),
             minimizes: self.honoured_in(Slot::Minimize),
             maximizes: self.honoured_in(Slot::Maximize),
             enters_fullscreen: self.honoured_in(Slot::EnterFullscreen),
@@ -1507,10 +1699,9 @@ impl WindowCapabilities {
             activates: self.honoured_in(Slot::Activate),
             closes: self.honoured_in(Slot::Close),
             material: self.honoured_in(Slot::SetMaterial),
-            reports_presentation: match self.presentation_absence_in_force() {
-                Some(absence) => Err(absence),
-                None => Ok(reports_presentation),
-            },
+            reports_presentation: self.report_in(Report::Presentation),
+            reports_keyboard_inset: self.report_in(Report::KeyboardInset),
+            reports_system_gestures: self.report_in(Report::SystemGestures),
             observes_position,
             observes_minimized,
             places_at_open,
@@ -1530,7 +1721,8 @@ impl CapabilityParts {
             sets_size,
             sets_constraints,
             sets_resizable,
-            sets_decorated,
+            sets_frame,
+            app_title_bar,
             minimizes,
             maximizes,
             enters_fullscreen,
@@ -1540,6 +1732,8 @@ impl CapabilityParts {
             closes,
             material,
             reports_presentation,
+            reports_keyboard_inset,
+            reports_system_gestures,
             observes_position,
             observes_minimized,
             places_at_open,
@@ -1558,7 +1752,8 @@ impl CapabilityParts {
             (Slot::SetSize, sets_size),
             (Slot::SetConstraints, sets_constraints),
             (Slot::SetResizable, sets_resizable),
-            (Slot::SetDecorated, sets_decorated),
+            (Slot::SetFrame, sets_frame),
+            (Slot::SetAppTitleBar, app_title_bar),
             (Slot::Minimize, minimizes),
             (Slot::Maximize, maximizes),
             (Slot::EnterFullscreen, enters_fullscreen),
@@ -1580,13 +1775,9 @@ impl CapabilityParts {
             }
             at += 1;
         }
-        match reports_presentation {
-            Ok(availability) => capabilities.reports_presentation = availability,
-            Err(absence) => {
-                capabilities.reports_presentation = Availability::Unavailable;
-                capabilities.presentation_absence = absence;
-            }
-        }
+        capabilities.set_report(Report::Presentation, reports_presentation);
+        capabilities.set_report(Report::KeyboardInset, reports_keyboard_inset);
+        capabilities.set_report(Report::SystemGestures, reports_system_gestures);
         capabilities
     }
 }

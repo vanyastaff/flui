@@ -109,10 +109,16 @@ impl RenderSizedBox {
     }
 }
 
-impl flui_foundation::Diagnosticable for RenderSizedBox {
-    fn debug_fill_properties(&self, properties: &mut flui_foundation::DiagnosticsBuilder) {
-        properties.add_optional("width", self.width.map(|w| format!("{w:?}")));
-        properties.add_optional("height", self.height.map(|h| format!("{h:?}")));
+impl flui_foundation::inspect::Inspect for RenderSizedBox {
+    fn kind(&self) -> &'static str {
+        "RenderSizedBox"
+    }
+
+    fn inspect(&self, out: &mut flui_foundation::inspect::Fields<'_>) {
+        out.field("width", &self.width)
+            .unit(flui_foundation::inspect::Unit::LogicalPx);
+        out.field("height", &self.height)
+            .unit(flui_foundation::inspect::Unit::LogicalPx);
     }
 }
 impl RenderBox for RenderSizedBox {

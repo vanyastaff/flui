@@ -328,6 +328,124 @@ fn wheel_observations_keep_lines_pages_and_characters_apart() {
     );
 }
 
+/// Regional formats join a locale as `u` extension keywords (ADR-0278): in
+/// key order, inside the extensions in singleton order and before private
+/// use, with a key the locale already carries kept as it is. Fails if a key
+/// overrides the app's own, lands out of canonical order, or a tag that
+/// cannot carry an extension is changed.
+fn regional_formats_join_the_locale_a_formatter_takes() {
+    use flui_platform::{
+        HourCycle, Locale, MeasurementSystem, NumberingSystem, RegionOverride, RegionalFormats,
+        Weekday,
+    };
+
+    let all = RegionalFormats::default()
+        .with_first_weekday(Weekday::Monday)
+        .with_hour_cycle(HourCycle::H23)
+        .with_measurement(MeasurementSystem::UsCustomary)
+        .with_numbering(NumberingSystem::try_new("ARAB").expect("valid numbering"))
+        .with_region(RegionOverride::try_new("gb").expect("valid region"));
+    let hours = RegionalFormats::default().with_hour_cycle(HourCycle::H23);
+    for (tag, formats, expected) in [
+        (
+            "en-US",
+            &all,
+            "en-US-u-fw-mon-hc-h23-ms-ussystem-nu-arab-rg-gbzzzz",
+        ),
+        ("en-US", &RegionalFormats::default(), "en-US"),
+        (
+            "en-US-u-hc-h12",
+            &all,
+            "en-US-u-fw-mon-hc-h12-ms-ussystem-nu-arab-rg-gbzzzz",
+        ),
+        ("ja-JP-u-ca-japanese", &hours, "ja-JP-u-ca-japanese-hc-h23"),
+        ("en-a-bbb-x-priv", &hours, "en-a-bbb-u-hc-h23-x-priv"),
+        ("de-t-en-z-zzz", &hours, "de-t-en-u-hc-h23-z-zzz"),
+        (
+            "en-u-attr-co-phonebk",
+            &hours,
+            "en-u-attr-co-phonebk-hc-h23",
+        ),
+        ("x-private", &hours, "x-private"),
+        ("i-klingon", &hours, "i-klingon"),
+    ] {
+        let locale: Locale = tag.parse().expect("valid tag");
+        assert_eq!(
+            formats.apply_to(&locale).to_language_tag(),
+            expected
+                .parse::<Locale>()
+                .expect("valid expectation")
+                .to_language_tag(),
+            "{tag}"
+        );
+    }
+}
+
+/// Each regional value names itself by its Unicode key's value and is read
+/// back from it in any case; a value outside the key's vocabulary is
+/// refused. Fails if a variant's name does not read back, or a malformed
+/// numbering system or region enters a snapshot.
+fn regional_values_read_back_their_unicode_names() {
+    use flui_platform::{
+        HourCycle, InvalidRegionalFormat, MeasurementSystem, NumberingSystem, RegionOverride,
+        Weekday,
+    };
+
+    for day in Weekday::ALL {
+        assert_eq!(Weekday::from_unicode_value(day.unicode_value()), Some(day));
+        let upper = day.unicode_value().to_ascii_uppercase();
+        assert_eq!(Weekday::from_unicode_value(&upper), Some(day));
+    }
+    for cycle in HourCycle::ALL {
+        assert_eq!(
+            HourCycle::from_unicode_value(cycle.unicode_value()),
+            Some(cycle)
+        );
+    }
+    assert!(HourCycle::H23.is_24_hour() && HourCycle::H24.is_24_hour());
+    assert!(!HourCycle::H11.is_24_hour() && !HourCycle::H12.is_24_hour());
+    for system in MeasurementSystem::ALL {
+        assert_eq!(
+            MeasurementSystem::from_unicode_value(system.unicode_value()),
+            Some(system)
+        );
+    }
+    assert_eq!(Weekday::from_unicode_value("monday"), None);
+    assert_eq!(HourCycle::from_unicode_value("h13"), None);
+    assert_eq!(MeasurementSystem::from_unicode_value("imperial"), None);
+
+    for bad in ["ar", "latin-ext", "abcdefghi", "la_n"] {
+        assert_eq!(
+            NumberingSystem::try_new(bad),
+            Err(InvalidRegionalFormat::NumberingSystem),
+            "{bad}"
+        );
+    }
+    assert_eq!(
+        NumberingSystem::try_new("HANIDEC").map(|numbering| numbering.unicode_value().to_owned()),
+        Ok("hanidec".to_owned())
+    );
+    for bad in ["G", "GBR", "4l9", "1234", "g1"] {
+        assert_eq!(
+            RegionOverride::try_new(bad),
+            Err(InvalidRegionalFormat::Region),
+            "{bad}"
+        );
+    }
+    let latin_america = RegionOverride::try_new("419").expect("valid region");
+    assert_eq!(latin_america.code(), "419");
+    assert_eq!(latin_america.unicode_value(), "419zzzz");
+    assert_eq!(
+        RegionOverride::from_unicode_value("gbzzzz").map(|region| region.code().to_owned()),
+        Some("GB".to_owned())
+    );
+    assert_eq!(
+        RegionOverride::from_unicode_value("usca").map(|region| region.code().to_owned()),
+        Some("US".to_owned())
+    );
+    assert_eq!(RegionOverride::from_unicode_value("gb"), None);
+}
+
 #[test]
 fn preferences_contract() {
     crate::run_table(
@@ -372,6 +490,14 @@ fn preferences_contract() {
             (
                 "wheel_observations_keep_lines_pages_and_characters_apart",
                 wheel_observations_keep_lines_pages_and_characters_apart as fn(),
+            ),
+            (
+                "regional_formats_join_the_locale_a_formatter_takes",
+                regional_formats_join_the_locale_a_formatter_takes as fn(),
+            ),
+            (
+                "regional_values_read_back_their_unicode_names",
+                regional_values_read_back_their_unicode_names as fn(),
             ),
         ],
     );

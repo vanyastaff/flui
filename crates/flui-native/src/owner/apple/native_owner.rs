@@ -9,9 +9,6 @@ impl<T: 'static> NativeOwner<T> {
         Self(Some(MainThreadBound::new(value, marker)))
     }
 
-    // macOS only holds a value to release it on the main thread; iOS reads
-    // its values too.
-    #[cfg(target_os = "ios")]
     pub(crate) fn get(&self, marker: MainThreadMarker) -> &T {
         self.0
             .as_ref()

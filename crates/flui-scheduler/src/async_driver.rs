@@ -212,7 +212,7 @@ impl WakeShared {
                  the next wake"
             );
             // Its destructor may panic too; the owner's failure signal is set.
-            flui_foundation::panic::retain_opaque_payload(payload);
+            flui_foundation::panic::discard_payload(payload);
         }
     }
 }
@@ -235,6 +235,8 @@ pub(crate) struct TaskStore {
     closed: Cell<bool>,
     execution_failure: RefCell<Option<Weak<crate::wake_delivery::FailureSignal>>>,
     shared: Arc<WakeShared>,
+    /// The UI runtime's deadlines, fired at the start of every poll.
+    pub(crate) deadlines: Rc<crate::timer::Deadlines>,
 }
 
 impl TaskStore {
@@ -256,6 +258,7 @@ impl TaskStore {
             next_id: Cell::new(first),
             closed: Cell::new(false),
             execution_failure: RefCell::new(None),
+            deadlines: Rc::default(),
             shared: Arc::new(WakeShared {
                 ready: Mutex::new(Vec::new()),
                 request_frame: Mutex::new(None),
@@ -408,6 +411,8 @@ impl TaskStore {
     }
 
     pub(crate) fn poll_ready(&self) -> usize {
+        // Deadlines due by now wake their tasks into this batch.
+        self.deadlines.fire_due();
         // Drain the ready index, then release every lock and borrow: a task's
         // `poll` may spawn, cancel, or wake. Swap with `spare`, not
         // `mem::take` `ready` directly — see `spare`'s doc for why.
@@ -546,7 +551,12 @@ impl TaskStore {
         }
         let hook = self.shared.request_frame.lock().take();
         self.shared.ready.lock().clear();
-        RetiringTasks { tasks, hook }
+        let wakers = self.deadlines.close();
+        RetiringTasks {
+            tasks,
+            hook,
+            wakers,
+        }
     }
 
     #[cfg(any(test, feature = "testing"))]
@@ -563,6 +573,8 @@ impl TaskStore {
 pub(crate) struct RetiringTasks {
     tasks: BTreeMap<TaskId, Task>,
     hook: Option<RequestFrame>,
+    /// The wakers the deadlines held: dropped with the tasks, never woken.
+    wakers: Vec<Waker>,
 }
 
 impl RetiringTasks {
@@ -597,13 +609,28 @@ impl RetiringTasks {
                 if first.is_none() {
                     first = Some(payload);
                 } else {
-                    flui_foundation::panic::retain_opaque_payload(payload);
+                    flui_foundation::panic::discard_payload(payload);
                 }
             }
         };
         for (_, mut task) in self.tasks {
             if let Some(future) = task.future.take() {
                 retire(future);
+            }
+        }
+        // A deadline's waker is not woken at teardown: its task is gone.
+        for waker in self.wakers {
+            if preserve_failure
+                || first.is_some()
+                || failure_signal.is_some_and(crate::wake_delivery::FailureSignal::get)
+                || std::thread::panicking()
+            {
+                mem::forget(waker);
+            } else if let Err(payload) = release_opaque(waker) {
+                if let Some(signal) = failure_signal {
+                    signal.set(true);
+                }
+                first = Some(payload);
             }
         }
         // Its captures die here, not with the last outstanding waker.
@@ -842,6 +869,16 @@ impl AsyncDriver {
         }
     }
 
+    /// The UI runtime's deadlines, on its clock: [`Sleep`](crate::Sleep)
+    /// futures a task awaits. Weak, like the driver.
+    #[must_use]
+    pub fn timer(&self) -> crate::TimerHandle {
+        match self.store.upgrade() {
+            Some(store) => crate::TimerHandle::new(&store.deadlines),
+            None => crate::TimerHandle::new(&Rc::default()),
+        }
+    }
+
     /// Replace the "request a frame" hook. A test probe: production installs
     /// the hook only through [`OwnerFrame::try_new`](crate::OwnerFrame::try_new), so a
     /// widget cannot replace its UI runtime's frame hook.
@@ -999,7 +1036,7 @@ fn refuse(
         );
     });
     if let Err(payload) = diagnostic {
-        flui_foundation::panic::retain_opaque_payload(payload);
+        flui_foundation::panic::discard_payload(payload);
     }
     if let Err(payload) = released {
         resume_unwind(payload);

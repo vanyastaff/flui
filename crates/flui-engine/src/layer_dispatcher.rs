@@ -873,6 +873,13 @@ impl LayerStateStack for LayerDispatcher<'_> {
         if let Err(error) = validate_image_filter_parameters(filter) {
             self.painter.reject_image_filter_parameter(error);
         }
+        // A transform filter is drawn only over a backdrop: on a layer's own
+        // content the frame fails rather than drawing it untransformed.
+        if transforms_content(filter) {
+            self.painter.reject_unsupported_image_filter(
+                "a transform image filter is supported only as a backdrop filter",
+            );
+        }
 
         match filter {
             ImageFilter::Blur { sigma_x, sigma_y } => {
@@ -956,6 +963,11 @@ impl LayerStateStack for LayerDispatcher<'_> {
                         filters.len(),
                     );
                 }
+            }
+            ImageFilter::Transform { .. } => {
+                // Rejected above; a plain group keeps save/restore balanced.
+                let paint = Paint::fill(Color::WHITE);
+                self.painter.save_layer(None, &paint);
             }
             #[cfg(debug_assertions)]
             ImageFilter::OverflowIndicator {
@@ -1041,6 +1053,11 @@ pub(crate) fn flatten_compose(
                 // Depth-first recursion: inner_filters[0] is innermost at this level.
                 flatten_compose(inner_filters, out);
             }
+            ImageFilter::Transform { .. } => {
+                // `push_image_filter` already failed the frame for it; the
+                // Identity keeps the chain's indices.
+                out.push(ImageFilterPass::Identity);
+            }
             #[cfg(debug_assertions)]
             ImageFilter::OverflowIndicator {
                 overflow_h,
@@ -1058,6 +1075,16 @@ pub(crate) fn flatten_compose(
                 );
             }
         }
+    }
+}
+
+/// Whether `filter`, or a filter it composes, transforms its source.
+fn transforms_content(filter: &flui_painting::paint::effects::ImageFilter) -> bool {
+    use flui_painting::paint::effects::ImageFilter;
+    match filter {
+        ImageFilter::Transform { .. } => true,
+        ImageFilter::Compose(filters) => filters.iter().any(transforms_content),
+        _ => false,
     }
 }
 

@@ -580,10 +580,59 @@ impl SemanticsTree {
                         children.push(id);
                     }
                 }
+                children.extend(self.run_children(node));
                 children
             },
             text_selection: self.published_document_selection(node),
         })
+    }
+
+    /// The text runs `node` lists after its children: the runs of the text it
+    /// is, unless regions beneath it hold them, or the runs of the enclosing
+    /// text a region holds (ADR-0214 §2 as amended).
+    fn run_children(&self, node: &SemanticsNode) -> Vec<crate::AccessibilityNodeId> {
+        if let Some(runs) = node.config().hosted_runs() {
+            let Some(text) = node.parent().and_then(|parent| self.get(parent)) else {
+                return Vec::new();
+            };
+            return match crate::accesskit_translation::published_text(text.config().attributes()) {
+                Some((_, identities)) if self.regions_hold_runs(text, identities.len()) => {
+                    identities.get(runs).map(<[_]>::to_vec).unwrap_or_default()
+                }
+                _ => Vec::new(),
+            };
+        }
+        let Some((_, identities)) =
+            crate::accesskit_translation::published_text(node.config().attributes())
+        else {
+            return Vec::new();
+        };
+        if self.regions_hold_runs(node, identities.len()) {
+            Vec::new()
+        } else {
+            identities.to_vec()
+        }
+    }
+
+    /// Whether `text`'s regions in the tree hold all of its `runs` runs, one
+    /// consecutive range each. A region the assembly left out (one
+    /// clipped away) leaves its runs with no owner, so the text then keeps
+    /// every run and its regions list none.
+    fn regions_hold_runs(&self, text: &SemanticsNode, runs: usize) -> bool {
+        let mut ranges: SmallVec<[std::ops::Range<usize>; 4]> = text
+            .children()
+            .iter()
+            .filter_map(|&child| self.get(child)?.config().hosted_runs())
+            .collect();
+        ranges.sort_unstable_by_key(|range| range.start);
+        let mut next = 0;
+        for range in &ranges {
+            if range.start != next {
+                return false;
+            }
+            next = range.end;
+        }
+        !ranges.is_empty() && next == runs
     }
 
     /// `node`'s document selection (ADR-0214 §3) as positions in the runs of

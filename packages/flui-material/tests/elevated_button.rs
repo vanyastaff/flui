@@ -16,22 +16,12 @@
 
 use crate::common;
 
-use common::{lay_out, tight};
+use common::{lay_out, rgba, tight};
 use flui_material::{
     ButtonStyle, ElevatedButton, ElevatedButtonThemeData, Theme, ThemeData, ThemeDataOverrides,
 };
 use flui_sdk::widgets::{Text, WidgetStateProperty};
 use flui_testing::a11y::Role;
-
-/// `_ElevatedButtonDefaultsM3`'s formatted `Debug` string for a given
-/// resolved [`Color`](flui_sdk::painting::Color) — what `RenderPhysicalShape`'s
-/// `Diagnosticable::debug_fill_properties` writes into its `"color"`
-/// property (`add_color("color", format!("{:?}", self.color))`,
-/// `crates/flui-objects/src/proxy/physical_model.rs`), so a test can compare
-/// against it without downcasting the render object.
-fn color_property(color: flui_sdk::painting::Color) -> String {
-    format!("{color:?}")
-}
 
 /// The highest tier still wins over a configured theme: an explicit
 /// `.style(..)` override on the widget itself must resolve over the theme's
@@ -66,8 +56,9 @@ pub fn widget_level_style_wins_over_the_elevated_button_theme() {
         .try_find_by_render_type("RenderPhysicalShape")
         .expect("ElevatedButton must compose a Material surface");
     assert_eq!(
-        laid.render_property(material, "color"),
-        Some(color_property(widget_background)),
+        laid.render_node(material)
+            .get::<flui_sdk::foundation::inspect::Rgba>("color"),
+        Ok(rgba(widget_background)),
         "an explicit widget-level style must win over a configured elevated_button_theme",
     );
 }

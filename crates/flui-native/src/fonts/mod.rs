@@ -41,9 +41,9 @@ fn host_answer(locale: &str) -> SystemFallback {
 
 /// The faces the operating system falls back on for `locale`, a BCP 47
 /// tag such as `ja-JP`: DirectWrite's system fallback on Windows, CoreText's
-/// on macOS and iOS, fontconfig's order on Linux and the BSDs, and the
-/// system's `fonts.xml` on Android below API 29. Android from API 29 and the
-/// web give no answer yet (`docs/gaps.md`, entry 35).
+/// on macOS and iOS, fontconfig's order on Linux and the BSDs, and on
+/// Android `AFontMatcher` from API 29 and the system's `fonts.xml` below it.
+/// The web gives no answer.
 ///
 /// Blocking: it reads the system's configuration and may scan its fonts,
 /// so it belongs on the font feed's thread, not the owner's.

@@ -131,6 +131,17 @@ pub(crate) struct AChoreographerFrameCallbackData {
 #[cfg(target_os = "android")]
 pub(crate) use android_activity::ndk_sys::AChoreographerFrameCallbackData;
 
+/// `AFontMatcher` (`<android/font_matcher.h>`), opaque.
+#[repr(C)]
+pub(crate) struct AFontMatcher {
+    _opaque: [u8; 0],
+}
+/// `AFont` (`<android/font.h>`), opaque.
+#[repr(C)]
+pub(crate) struct AFont {
+    _opaque: [u8; 0],
+}
+
 /// `void (*)(int64_t frameTimeNanos, void* data)`, the frame callback of both
 /// posts: `AChoreographer_frameCallback64`, and on a 64-bit process
 /// `AChoreographer_frameCallback`, whose `long` is the same 64 bits.
@@ -260,6 +271,85 @@ ndk_function!(
     33,
     unsafe extern "C" fn(*const AChoreographerFrameCallbackData, usize) -> i64
 );
+ndk_function!(
+    /// `AFontMatcher* AFontMatcher_create(void)` (`<android/font_matcher.h>`).
+    FontMatcherCreate,
+    c"AFontMatcher_create",
+    29,
+    unsafe extern "C" fn() -> *mut AFontMatcher
+);
+ndk_function!(
+    /// `void AFontMatcher_destroy(AFontMatcher*)`.
+    FontMatcherDestroy,
+    c"AFontMatcher_destroy",
+    29,
+    unsafe extern "C" fn(*mut AFontMatcher)
+);
+ndk_function!(
+    /// `void AFontMatcher_setLocales(AFontMatcher*, const char* languageTags)`.
+    FontMatcherSetLocales,
+    c"AFontMatcher_setLocales",
+    29,
+    unsafe extern "C" fn(*mut AFontMatcher, *const c_char)
+);
+ndk_function!(
+    /// `AFont* AFontMatcher_match(const AFontMatcher*, const char* familyName,
+    /// const uint16_t* text, uint32_t textLength, uint32_t* runLengthOut)`.
+    FontMatcherMatch,
+    c"AFontMatcher_match",
+    29,
+    unsafe extern "C" fn(*const AFontMatcher, *const c_char, *const u16, u32, *mut u32) -> *mut AFont
+);
+ndk_function!(
+    /// `const char* AFont_getFontFilePath(const AFont*)` (`<android/font.h>`).
+    FontFilePath,
+    c"AFont_getFontFilePath",
+    29,
+    unsafe extern "C" fn(*const AFont) -> *const c_char
+);
+ndk_function!(
+    /// `size_t AFont_getCollectionIndex(const AFont*)`.
+    FontCollectionIndex,
+    c"AFont_getCollectionIndex",
+    29,
+    unsafe extern "C" fn(*const AFont) -> usize
+);
+ndk_function!(
+    /// `void AFont_close(AFont*)`.
+    FontClose,
+    c"AFont_close",
+    29,
+    unsafe extern "C" fn(*mut AFont)
+);
+
+/// The font matcher's functions, all or none: the system's own answer to
+/// which face draws a text, from API 29.
+pub(crate) struct FontMatching {
+    pub(crate) create: NdkFn<FontMatcherCreate>,
+    pub(crate) destroy: NdkFn<FontMatcherDestroy>,
+    pub(crate) set_locales: NdkFn<FontMatcherSetLocales>,
+    pub(crate) matches: NdkFn<FontMatcherMatch>,
+    pub(crate) file_path: NdkFn<FontFilePath>,
+    pub(crate) collection_index: NdkFn<FontCollectionIndex>,
+    pub(crate) close: NdkFn<FontClose>,
+}
+
+impl FontMatching {
+    /// The functions from `library`, when `api` has them and the library
+    /// exports every one.
+    pub(crate) fn resolve(library: &Arc<dyn SymbolSource>, api: AndroidApi) -> Option<Self> {
+        Some(Self {
+            create: NdkFn::resolve(library, api)?,
+            destroy: NdkFn::resolve(library, api)?,
+            set_locales: NdkFn::resolve(library, api)?,
+            matches: NdkFn::resolve(library, api)?,
+            file_path: NdkFn::resolve(library, api)?,
+            collection_index: NdkFn::resolve(library, api)?,
+            close: NdkFn::resolve(library, api)?,
+        })
+    }
+}
+
 /// A function of the NDK, found by name on a system new enough to have it.
 ///
 /// Holds the source of the symbol, so the library the pointer points into is not
@@ -674,6 +764,54 @@ mod tests {
         );
     }
 
+    fn the_font_matcher_needs_all_seven_functions() {
+        const NAMES: [&CStr; 7] = [
+            c"AFontMatcher_create",
+            c"AFontMatcher_destroy",
+            c"AFontMatcher_setLocales",
+            c"AFontMatcher_match",
+            c"AFont_getFontFilePath",
+            c"AFont_getCollectionIndex",
+            c"AFont_close",
+        ];
+        let table = |skip: Option<usize>| {
+            let mut symbols = FakeSymbols::default();
+            for (index, name) in NAMES.iter().enumerate() {
+                if Some(index) != skip {
+                    symbols = symbols.with(name, address(index + 1));
+                }
+            }
+            library(symbols)
+        };
+        let matching = FontMatching::resolve(&table(None), AndroidApi::from_level(29))
+            .expect("API 29 has the matcher");
+        let found = [
+            matching.create.get() as *const (),
+            matching.destroy.get() as *const (),
+            matching.set_locales.get() as *const (),
+            matching.matches.get() as *const (),
+            matching.file_path.get() as *const (),
+            matching.collection_index.get() as *const (),
+            matching.close.get() as *const (),
+        ];
+        let expected: Vec<*const ()> = (1..=NAMES.len()).map(address).collect();
+        assert_eq!(
+            found.to_vec(),
+            expected,
+            "each handle is the function its name names"
+        );
+        assert!(
+            FontMatching::resolve(&table(None), AndroidApi::from_level(28)).is_none(),
+            "below API 29 the matcher is not looked up"
+        );
+        for (missing, name) in NAMES.iter().enumerate() {
+            assert!(
+                FontMatching::resolve(&table(Some(missing)), AndroidApi::from_level(34)).is_none(),
+                "{name:?} is missing, so none of the matcher is used"
+            );
+        }
+    }
+
     fn an_unreadable_api_level_is_unknown() {
         assert_eq!(AndroidApi::detect(&FakeSymbols::default()), None);
         let symbols =
@@ -745,6 +883,12 @@ mod tests {
             api(33),
             unknown,
         ));
+        failures.extend(row::<FontMatcherMatch>(
+            "FontMatcherMatch",
+            api(28),
+            api(29),
+            unknown,
+        ));
         failures.extend(row::<VsyncExpectedPresent>(
             "VsyncExpectedPresent",
             api(32),
@@ -786,6 +930,10 @@ mod tests {
                 (
                     "the_api_level_falls_back_to_the_system_property",
                     the_api_level_falls_back_to_the_system_property as fn(),
+                ),
+                (
+                    "the_font_matcher_needs_all_seven_functions",
+                    the_font_matcher_needs_all_seven_functions as fn(),
                 ),
                 (
                     "an_unreadable_api_level_is_unknown",

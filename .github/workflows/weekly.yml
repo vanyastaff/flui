@@ -61,7 +61,7 @@ jobs:
         with:
           persist-credentials: false
 
-      # Same reclaim as the PR `test` job — the full-workspace build with
+      # Same reclaim as the PR `test` job: the full-workspace build with
       # dev-deps approaches the runner's disk ceiling without it.
       - name: Free disk space (ubuntu)
         run: |

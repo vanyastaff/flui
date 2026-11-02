@@ -3,20 +3,21 @@
 //! ## Implemented subset
 //!
 //! `size`, `device_pixel_ratio`, `text_sizing`, `font_weight_adjustment`, `view_padding`,
-//! `padding`, `view_insets`, `platform_brightness`, `high_contrast`, `preferred_locales`, `motion` — presentation and
+//! `padding`, `view_insets`, `system_gesture_insets`, `platform_brightness`, `high_contrast`,
+//! `preferred_locales`, `regional_formats`, `motion` — presentation and
 //! preference fields for layout and theming.
 //!
 //! ## Deferred (not yet implemented)
 //!
-//! System gesture insets, 24-hour-format preference,
-//! accessible navigation, inverted colors, display features, and navigation mode. Text-weight observation
+//! Accessible navigation, inverted colors, display features, and
+//! navigation mode. Text-weight observation
 //! is implemented by the UIKit backend; other backends leave it unavailable.
 //! These require platform event plumbing (accessibility bridge, IME state)
 //! that lives above this layer.
 
 use flui_foundation::geometry::Size;
 use flui_foundation::geometry::{EdgeInsets, Edges};
-use flui_platform::{Brightness, Locale};
+use flui_platform::{Brightness, Locale, RegionalFormats};
 use flui_view::prelude::*;
 use flui_view::{BoxedView, FieldMask, InheritedData, InheritedView, impl_inherited_view};
 use std::sync::Arc;
@@ -45,10 +46,12 @@ use std::sync::Arc;
 /// - [`view_padding`](Self::view_padding)
 /// - [`padding`](Self::padding)
 /// - [`view_insets`](Self::view_insets)
+/// - [`system_gesture_insets`](Self::system_gesture_insets)
 /// - [`platform_brightness`](Self::platform_brightness)
 /// - [`high_contrast`](Self::high_contrast)
 /// - [`motion`](Self::motion)
 /// - [`preferred_locales`](Self::preferred_locales)
+/// - [`regional_formats`](Self::regional_formats)
 #[derive(Debug, Clone, PartialEq, flui_view::prelude::InheritedData)]
 pub struct MediaQueryData {
     /// Logical size of the current display surface (window or full screen).
@@ -80,9 +83,15 @@ pub struct MediaQueryData {
     /// Insets occupied by system UI that fully obscures part of the window,
     /// such as the software keyboard when it is visible. Unlike
     /// [`padding`](Self::padding), these areas are hidden, not just reserved.
-    /// The runtime does not publish keyboard insets yet; widgets honour the
-    /// value once a platform producer does.
+    /// While the keyboard moves, each frame carries its occlusion at that
+    /// frame's time.
     pub view_insets: EdgeInsets,
+
+    /// Edges where a system gesture (back, home, the notification shade)
+    /// takes precedence over the application's own drag: a horizontal drag or
+    /// an edge slider pads itself away from them. Zero where the platform
+    /// reports none.
+    pub system_gesture_insets: EdgeInsets,
 
     /// The OS-level light/dark preference as reported by the platform.
     /// An app-level `Theme` (e.g. `flui_material::Theme`) may override this
@@ -104,6 +113,14 @@ pub struct MediaQueryData {
     /// `MediaQuery` replaces this value; copy parent data to preserve it when
     /// overriding another field.
     pub preferred_locales: Option<Arc<[Locale]>>,
+
+    /// The user's regional formats observed by the host: first weekday,
+    /// hour cycle, measurement, numbering system and region override
+    /// (ADR-0278). Empty when the host reported none. A date, time or number
+    /// formatter takes the resolved locale through
+    /// [`RegionalFormats::apply_to`]; the locale [`Localizations`](crate::Localizations)
+    /// resolves stays without these keys, so delegates match it as declared.
+    pub regional_formats: RegionalFormats,
 }
 
 impl Default for MediaQueryData {
@@ -115,10 +132,12 @@ impl Default for MediaQueryData {
             font_weight_adjustment: 0,
             view_padding: EdgeInsets::ZERO,
             view_insets: EdgeInsets::ZERO,
+            system_gesture_insets: EdgeInsets::ZERO,
             platform_brightness: Brightness::Light,
             high_contrast: false,
             motion: flui_animation::MotionPolicy::Full,
             preferred_locales: None,
+            regional_formats: RegionalFormats::default(),
         }
     }
 }
@@ -305,6 +324,14 @@ impl MediaQuery {
         Self::depend_on_fields(ctx, MediaQueryData::FIELD_VIEW_INSETS, |d| d.view_insets)
     }
 
+    /// The system-gesture edges, depending on `system_gesture_insets` only.
+    #[must_use]
+    pub fn system_gesture_insets_of(ctx: &dyn BuildContext) -> Option<EdgeInsets> {
+        Self::depend_on_fields(ctx, MediaQueryData::FIELD_SYSTEM_GESTURE_INSETS, |d| {
+            d.system_gesture_insets
+        })
+    }
+
     /// The platform brightness, depending on `platform_brightness` only.
     #[must_use]
     pub fn platform_brightness_of(ctx: &dyn BuildContext) -> Option<Brightness> {
@@ -318,6 +345,13 @@ impl MediaQuery {
     pub fn high_contrast_of(ctx: &dyn BuildContext) -> Option<bool> {
         Self::depend_on_fields(ctx, MediaQueryData::FIELD_HIGH_CONTRAST, |d| {
             d.high_contrast
+        })
+    }
+
+    /// The user's regional formats, depending on `regional_formats` only.
+    pub fn regional_formats_of(ctx: &dyn BuildContext) -> Option<RegionalFormats> {
+        Self::depend_on_fields(ctx, MediaQueryData::FIELD_REGIONAL_FORMATS, |d| {
+            d.regional_formats.clone()
         })
     }
 }

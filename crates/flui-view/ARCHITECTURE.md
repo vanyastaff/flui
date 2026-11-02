@@ -299,6 +299,22 @@ its state was lost. A failed owed wake still reaches the caller and stays
 owed for the next request to retry. Pinned by
 `a_failing_frame_request_while_a_provider_notifies_keeps_its_subtree`.
 
+**Decision 5 (a frame request made for user code never unwinds into it):**
+`RebuildHandle::schedule`, `BuildOwner::schedule_build_for`, the
+`ExternalBuildScheduler` behind signals, and an entry scheduled outside a
+pass all run `on_build_scheduled` contained: a failing hook is reported
+through `tracing` and retained, the entry stays queued, and the wake stays
+owed for the next request to retry. The hook is the binding's failure, not
+the caller's: a widget that schedules and then keeps working (a `Focus`
+listener that rebuilds and then calls `on_focus_change`, a `SelectionArea`
+that reports its committed selection, a snack bar queue that wakes every
+scaffold) would otherwise stop halfway through accepted work, and fixing
+that widget by widget never ends. Only the pass's own owed wake (Decision 4)
+still reaches its caller, the binding. Pinned by
+`a_failing_frame_request_still_delivers_every_focus_edge`,
+`a_panicking_wake_still_reports_the_committed_selection` and
+`a_failing_wake_during_an_update_is_reported_not_unwound`.
+
 ### Render children adopt themselves at mount
 
 **Rule:** a render child enters the render tree by adopting ITSELF at mount

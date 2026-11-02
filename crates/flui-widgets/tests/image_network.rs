@@ -1,5 +1,5 @@
-//! `NetworkImage` end-to-end test (`network-images` feature): a hermetic
-//! local HTTP server, no external network — placeholder → decoded.
+//! `NetworkImage` end-to-end tests (`network-images` feature): a hermetic
+//! local HTTP server, no external network.
 //!
 //! Mirrors the hermetic-server pattern already established in
 //! `flui-assets`' own `NetworkLoader` test
@@ -9,14 +9,14 @@
 //! loopback port, serving real PNG fixture bytes as the response body.
 #![cfg(feature = "network-images")]
 
-mod common;
+#[path = "common/cases.rs"]
+mod cases;
 
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpListener};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use common::{lay_out, loose, size};
 use flui_assets::AssetRegistry;
 use flui_widgets::{Image, ImageProvider, NetworkImage};
 
@@ -60,50 +60,58 @@ fn spawn_single_response_server(body: Vec<u8>) -> SocketAddr {
     addr
 }
 
-fn pump_until(laid: &mut common::LaidOut, mut check: impl FnMut(&mut common::LaidOut) -> bool) {
-    let deadline = Instant::now() + DECODE_BUDGET;
-    loop {
-        laid.tick();
-        if check(laid) {
-            return;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "the network image did not decode within the {DECODE_BUDGET:?} budget -- \
-             the hermetic server or the bridged fetch is stuck",
-        );
-        std::thread::sleep(POLL_INTERVAL);
-    }
-}
-
-/// `Image::network` against a hermetic local server: placeholder on the
-/// first frame (the fetch cannot complete synchronously), then the fixture's
-/// true 5×3 dimensions once the response lands as a scheduled rebuild.
+/// `Image::network` against a hermetic local server, on the background lanes
+/// a native host has by default: the request runs on the tokio IO lane and
+/// the decoded image lands in the registry. The headless host's own lanes
+/// run IO on the test thread, outside tokio, where a network load is a typed
+/// error instead (`docs/gaps.md`).
+///
+/// Red-check: run the load where it is polled instead of on the lanes (the
+/// owner thread has no reactor, and the image never decodes).
 #[test]
-fn network_image_placeholder_then_decodes_from_a_hermetic_local_server() {
+fn network_image_loads_on_a_native_hosts_default_lanes() {
+    use flui_platform::capability::{CapabilityRegistrar, ProviderContext};
+    use flui_platform::executor::Executor;
+    use flui_runtime::capability::CapabilityRegistry;
+    use flui_runtime::execution::ExecutionServices;
+    use flui_testing::{HeadlessHost, HeadlessWindow};
+    use flui_view::background::{Background, BackgroundCapability};
+
     let addr = spawn_single_response_server(fixture_bytes());
     let registry = Arc::new(AssetRegistry::default());
-
-    let mut laid = lay_out(
-        Image::network(registry, format!("http://{addr}/fixture.png")),
-        loose(1000.0),
-    );
-
-    assert_eq!(
-        laid.size(laid.current_root()),
-        size(0.0, 0.0),
-        "the first frame must show the empty-box placeholder while the \
-         hermetic fetch is in flight",
-    );
-
-    pump_until(&mut laid, |laid| {
-        laid.size(laid.current_root()) == size(5.0, 3.0)
+    let url = format!("http://{addr}/fixture.png");
+    let services = Arc::new(ExecutionServices::with_defaults());
+    let mut registrar = CapabilityRegistrar::new();
+    registrar.provide::<BackgroundCapability>(move |cx: &ProviderContext<'_>| {
+        Ok(Background::new(
+            Arc::clone(&services) as Arc<dyn Executor>,
+            cx.completions().clone(),
+        ))
     });
+    let capabilities = CapabilityRegistry::builder()
+        .overrides(registrar)
+        .build()
+        .expect("one provider");
+    let mut host = HeadlessHost::with_capabilities(HeadlessWindow::new(100, 100), capabilities);
+    host.attach(&Image::network(Arc::clone(&registry), url.clone()))
+        .expect("root attaches");
+    let source = flui_assets::ImageSource::Network(url.into());
+    let deadline = Instant::now() + DECODE_BUDGET;
+    while registry.cached_image(&source).is_none() {
+        assert!(
+            Instant::now() < deadline,
+            "the network image did not decode within the {DECODE_BUDGET:?} budget"
+        );
+        let _ = host.pump(Duration::ZERO);
+        std::thread::sleep(POLL_INTERVAL);
+    }
+    let image = registry.cached_image(&source).expect("the image is kept");
+    assert_eq!((image.width(), image.height()), (5, 3));
 }
 
 #[test]
 fn network_images_scope_cached_and_pending_responses_to_the_registry() {
-    common::cases::run_cases(
+    cases::run_cases(
         "network registry identity",
         &[
             ("cached responses", cached_responses),
@@ -186,9 +194,9 @@ fn registry_responses(concurrent: bool) {
         let load = async {
             let (a, b) = if concurrent {
                 let (a, same_owner, b) = tokio::join!(
-                    first.resolve_async(),
-                    first.clone().resolve_async(),
-                    second.resolve_async()
+                    first.resolve_async(None),
+                    first.clone().resolve_async(None),
+                    second.resolve_async(None)
                 );
                 let original = a.as_ref().expect("first image decodes");
                 let shared = same_owner.expect("same-owner image decodes");
@@ -199,12 +207,12 @@ fn registry_responses(concurrent: bool) {
                 );
                 (a, b)
             } else {
-                let a = first.resolve_async().await;
+                let a = first.resolve_async(None).await;
                 assert!(
                     second.resolve().is_err(),
                     "another registry must not inherit the first registry's cached response"
                 );
-                let b = second.resolve_async().await;
+                let b = second.resolve_async(None).await;
                 (a, b)
             };
             [a, b].map(|image| {

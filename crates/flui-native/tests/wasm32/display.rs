@@ -91,6 +91,12 @@ class FakeCanvas extends EventTarget {
     getRootNode() { return document; }
     contains(node) { return node === this; }
     setAttribute() {}
+    // Laid out at the page's left edge, `top` below its top (0 unless a test
+    // scrolls it), drawn `scale` times its size (1 unless a test transforms it).
+    getBoundingClientRect() {
+        const scale = this.scale ?? 1;
+        return { left: 0, top: this.top ?? 0, width: this.clientWidth * scale, height: this.clientHeight * scale };
+    }
 }
 
 // The page's own `flui-canvas`, laid out as a browser lays out a replaced

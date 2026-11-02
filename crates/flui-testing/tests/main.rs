@@ -27,6 +27,8 @@
 mod a11y_query;
 #[path = "async_driver.rs"]
 mod async_driver;
+#[path = "background_work.rs"]
+mod background_work;
 #[path = "capability_seam.rs"]
 mod capability_seam;
 #[path = "close_guard.rs"]
@@ -47,6 +49,8 @@ mod layout_builder_seam;
 mod lifecycle_panic_containment;
 #[path = "log_capture.rs"]
 mod log_capture;
+#[path = "memory_storage.rs"]
+mod memory_storage;
 #[path = "mount_bootstrap.rs"]
 mod mount_bootstrap;
 #[path = "multi_presentation_clock.rs"]
@@ -74,10 +78,14 @@ mod scripts;
 mod self_rescheduling_local_post_frame;
 #[path = "text_store_kit.rs"]
 mod text_store_kit;
+#[path = "timer.rs"]
+mod timer;
 #[path = "window_commands.rs"]
 mod window_commands;
 #[path = "window_conformance.rs"]
 mod window_conformance;
+#[path = "window_insets.rs"]
+mod window_insets;
 #[path = "window_scale_factor.rs"]
 mod window_scale_factor;
 
@@ -192,6 +200,8 @@ fn containment_and_isolation_matrix() {
             ("window_scale_factor::rescaling_a_secondary_window_updates_only_its_semantics_bounds", window_scale_factor::rescaling_a_secondary_window_updates_only_its_semantics_bounds as fn()),
             ("window_scale_factor::rescaling_the_primary_window_updates_only_its_semantics_bounds", window_scale_factor::rescaling_the_primary_window_updates_only_its_semantics_bounds as fn()),
             ("window_scale_factor::a_secondary_window_publishes_its_own_media_query", window_scale_factor::a_secondary_window_publishes_its_own_media_query as fn()),
+            ("window_insets::a_keyboard_motion_lays_out_each_frame_at_its_time", window_insets::a_keyboard_motion_lays_out_each_frame_at_its_time as fn()),
+            ("window_insets::reported_insets_reach_their_media_query_fields", window_insets::reported_insets_reach_their_media_query_fields as fn()),
             ("multi_presentation_clock::the_motion_clock_rate_and_step_drive_the_binding_vsync", multi_presentation_clock::the_motion_clock_rate_and_step_drive_the_binding_vsync as fn()),
             ("multi_presentation_clock::presentation_rates_pause_and_step_are_independent", multi_presentation_clock::presentation_rates_pause_and_step_are_independent as fn()),
             ("multi_presentation_clock::extra_registry_drivers_request_frames_and_retire_on_replacement", multi_presentation_clock::extra_registry_drivers_request_frames_and_retire_on_replacement as fn()),
@@ -202,6 +212,32 @@ fn containment_and_isolation_matrix() {
 #[test]
 fn semantics_listener_retirement_preserves_independent_envelopes() {
     owner_scope::semantics_listener_retirement_preserves_independent_envelopes();
+}
+
+/// A capture of a panicking `on_complete` closure is kept through the
+/// unwind; dropped there, its own panicking `Drop` would abort the process,
+/// so the case runs in a child process.
+#[test]
+fn background_work_callback_keeps_its_captures() {
+    if std::env::var(background_work::CALLBACK_UNWIND_CHILD).is_ok() {
+        background_work::an_on_complete_panic_keeps_its_captures();
+        return;
+    }
+    let output = std::process::Command::new(std::env::current_exe().expect("test executable"))
+        .args([
+            "--exact",
+            "background_work_callback_keeps_its_captures",
+            "--test-threads=1",
+        ])
+        .env(background_work::CALLBACK_UNWIND_CHILD, "1")
+        .env("RUST_BACKTRACE", "0")
+        .output()
+        .expect("child test process");
+    assert!(
+        output.status.success(),
+        "the child aborted: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 /// Each case runs in a child process: without retention, a capture dropped
@@ -249,6 +285,10 @@ fn capability_seam() {
                 capability_seam::copy_and_paste_round_trip_through_the_headless_clipboard as fn(),
             ),
             (
+                "capability_seam::a_concealed_write_reaches_the_host_marked",
+                capability_seam::a_concealed_write_reaches_the_host_marked as fn(),
+            ),
+            (
                 "capability_seam::an_answer_from_another_thread_settles_at_an_owner_turn",
                 capability_seam::an_answer_from_another_thread_settles_at_an_owner_turn as fn(),
             ),
@@ -260,6 +300,27 @@ fn capability_seam() {
             (
                 "capability_seam::a_read_whose_answer_is_dropped_ends_as_provider_dropped",
                 capability_seam::a_read_whose_answer_is_dropped_ends_as_provider_dropped as fn(),
+            ),
+            (
+                "capability_seam::reads_asked_while_one_is_in_flight_share_its_answer",
+                capability_seam::reads_asked_while_one_is_in_flight_share_its_answer as fn(),
+            ),
+            (
+                "capability_seam::each_runtime_asks_for_its_own_read",
+                capability_seam::each_runtime_asks_for_its_own_read as fn(),
+            ),
+            (
+                "capability_seam::a_read_after_a_write_never_joins_the_read_before_it",
+                capability_seam::a_read_after_a_write_never_joins_the_read_before_it as fn(),
+            ),
+            (
+                "capability_seam::a_failed_read_reaches_every_reader_that_joined_it",
+                capability_seam::a_failed_read_reaches_every_reader_that_joined_it as fn(),
+            ),
+            (
+                "capability_seam::an_abandoned_read_abandons_its_joiners_and_the_next_read_asks_again",
+                capability_seam::an_abandoned_read_abandons_its_joiners_and_the_next_read_asks_again
+                    as fn(),
             ),
             (
                 "capability_seam::a_dropped_handle_ends_its_subscription",
@@ -284,6 +345,11 @@ fn capability_seam() {
                 capability_seam::a_provider_after_a_teardown_failure_is_kept_not_dropped as fn(),
             ),
             (
+                "capability_seam::a_primary_read_after_a_release_never_joins_the_read_before_it",
+                capability_seam::a_primary_read_after_a_release_never_joins_the_read_before_it
+                    as fn(),
+            ),
+            (
                 "capability_seam::a_primary_claim_is_asked_lazily_and_released_only_while_current",
                 capability_seam::a_primary_claim_is_asked_lazily_and_released_only_while_current
                     as fn(),
@@ -296,6 +362,74 @@ fn capability_seam() {
             (
                 "capability_seam::a_claim_whose_predecessor_panics_as_it_drops_is_withdrawn",
                 capability_seam::a_claim_whose_predecessor_panics_as_it_drops_is_withdrawn
+                    as fn(),
+            ),
+        ],
+    );
+}
+
+#[test]
+fn background_work() {
+    run_table(
+        "background_work",
+        &[
+            (
+                "background_work::a_compute_job_answers_at_the_pump_that_runs_it",
+                background_work::a_compute_job_answers_at_the_pump_that_runs_it as fn(),
+            ),
+            (
+                "background_work::on_complete_keeps_the_work_and_runs_once_with_its_answer",
+                background_work::on_complete_keeps_the_work_and_runs_once_with_its_answer as fn(),
+            ),
+            (
+                "background_work::held_work_keeps_its_widget_loading_until_released",
+                background_work::held_work_keeps_its_widget_loading_until_released as fn(),
+            ),
+            (
+                "background_work::run_background_runs_held_work_and_its_answer_settles_at_the_pump",
+                background_work::run_background_runs_held_work_and_its_answer_settles_at_the_pump
+                    as fn(),
+            ),
+            (
+                "background_work::a_dropped_task_skips_its_job",
+                background_work::a_dropped_task_skips_its_job as fn(),
+            ),
+            (
+                "background_work::a_dropped_task_drops_its_parked_future_at_the_next_pump",
+                background_work::a_dropped_task_drops_its_parked_future_at_the_next_pump as fn(),
+            ),
+            (
+                "background_work::a_cancelled_task_answers_cancelled",
+                background_work::a_cancelled_task_answers_cancelled as fn(),
+            ),
+            (
+                "background_work::a_panicking_job_answers_panicked_on_the_owner_thread",
+                background_work::a_panicking_job_answers_panicked_on_the_owner_thread as fn(),
+            ),
+            (
+                "background_work::a_panicking_log_of_a_panicked_job_still_answers_panicked",
+                background_work::a_panicking_log_of_a_panicked_job_still_answers_panicked as fn(),
+            ),
+            (
+                "background_work::a_refused_spawn_answers_refused_at_the_next_pump",
+                background_work::a_refused_spawn_answers_refused_at_the_next_pump as fn(),
+            ),
+            (
+                "background_work::a_task_cancelled_while_its_job_runs_answers_cancelled",
+                background_work::a_task_cancelled_while_its_job_runs_answers_cancelled as fn(),
+            ),
+            (
+                "background_work::a_replaced_waker_that_cancels_as_it_drops_does_not_deadlock",
+                background_work::a_replaced_waker_that_cancels_as_it_drops_does_not_deadlock
+                    as fn(),
+            ),
+            (
+                "background_work::a_future_whose_poll_panicked_is_kept_not_dropped",
+                background_work::a_future_whose_poll_panicked_is_kept_not_dropped as fn(),
+            ),
+            (
+                "background_work::work_handed_to_on_complete_is_cancelled_when_its_runtime_ends",
+                background_work::work_handed_to_on_complete_is_cancelled_when_its_runtime_ends
                     as fn(),
             ),
         ],

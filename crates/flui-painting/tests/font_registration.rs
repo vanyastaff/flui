@@ -302,6 +302,14 @@ fn a_rescan_swaps_the_fallback_order_between_frames() {
     assert!(order.set_system_fallback(&arabic_answer("en-US")));
     assert_eq!(fonts.generation(), fed + 2);
     assert_eq!(notdef_glyphs(&fonts, ARABIC), 0, "the host's face is back");
+    assert_eq!(order.locale(), "en-US");
+
+    assert!(order.set_system_fallback(&SystemFallback::none("ja-JP")));
+    assert_eq!(
+        order.locale(),
+        "ja-JP",
+        "the order is for the locale installed last"
+    );
 }
 
 /// A rescan replaces the whole order, the emoji generic included, even when

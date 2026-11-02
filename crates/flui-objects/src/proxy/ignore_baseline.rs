@@ -42,7 +42,13 @@ impl RenderIgnoreBaseline {
     }
 }
 
-impl flui_foundation::Diagnosticable for RenderIgnoreBaseline {}
+impl flui_foundation::inspect::Inspect for RenderIgnoreBaseline {
+    fn kind(&self) -> &'static str {
+        "RenderIgnoreBaseline"
+    }
+
+    fn inspect(&self, _out: &mut flui_foundation::inspect::Fields<'_>) {}
+}
 
 impl RenderBox for RenderIgnoreBaseline {
     type Arity = Single;

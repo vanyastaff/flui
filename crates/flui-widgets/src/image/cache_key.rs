@@ -11,9 +11,11 @@ use std::sync::Arc;
 /// [`Image`](super::Image) holds while it is mounted: a rebuild whose provider
 /// has an equal key resolves nothing again.
 ///
-/// Keys are typed, never labels. The built-in providers key by their asset
-/// registry and source, so equal paths in two registries are two images, and
-/// an asset path never equals a URL with the same text. A custom provider keys
+/// Keys are typed, never labels. `AssetImage` and `NetworkImage` key by their
+/// asset registry and source, so equal paths in two registries are two images,
+/// and an asset path never equals a URL with the same text. `MemoryImage` keys
+/// by its bytes and `FileImage` by its path, and neither equals the other or
+/// a registry source. A custom provider keys
 /// by a value of its own type through [`custom`](Self::custom); values of
 /// different types are never equal.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -24,6 +26,10 @@ enum Repr {
     /// `AssetImage` and `NetworkImage`: a source within one registry.
     #[cfg(feature = "asset-images")]
     Registry(RegistryImageKey),
+    /// `MemoryImage`: its encoded bytes.
+    Memory(MemoryKey),
+    /// `FileImage`: its path.
+    File(std::path::PathBuf),
     Custom(CustomKey),
 }
 
@@ -35,6 +41,16 @@ impl ImageCacheKey {
         K: Hash + Eq + fmt::Debug + Send + Sync + 'static,
     {
         Self(Repr::Custom(CustomKey(Arc::new(key))))
+    }
+
+    /// The key of encoded `bytes` whose hash is `hash`.
+    pub(super) fn memory(bytes: Arc<[u8]>, hash: u64) -> Self {
+        Self(Repr::Memory(MemoryKey { bytes, hash }))
+    }
+
+    /// The key of the file at `path`.
+    pub(super) fn file(path: std::path::PathBuf) -> Self {
+        Self(Repr::File(path))
     }
 
     /// The key of `source` loaded through `registry`.
@@ -77,6 +93,40 @@ impl Hash for RegistryImageKey {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.registry.as_ptr().hash(state);
         self.source.hash(state);
+    }
+}
+
+/// Encoded bytes, compared by allocation first, then by hash and length,
+/// then byte for byte: equal bytes in two allocations are one image.
+#[derive(Clone)]
+struct MemoryKey {
+    bytes: Arc<[u8]>,
+    hash: u64,
+}
+
+impl PartialEq for MemoryKey {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.bytes, &other.bytes)
+            || (self.hash == other.hash
+                && self.bytes.len() == other.bytes.len()
+                && self.bytes == other.bytes)
+    }
+}
+
+impl Eq for MemoryKey {}
+
+impl Hash for MemoryKey {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.hash.hash(state);
+    }
+}
+
+impl fmt::Debug for MemoryKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("MemoryKey")
+            .field("len", &self.bytes.len())
+            .field("hash", &self.hash)
+            .finish()
     }
 }
 

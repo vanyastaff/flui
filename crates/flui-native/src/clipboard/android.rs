@@ -4,21 +4,25 @@
 //! manager posts to the Java main thread itself, so the owner thread may call
 //! it. A read takes the primary clip's first item as text
 //! (`ClipData.Item.coerceToText`), so a URI or an intent reads as its textual
-//! form. From Android 10 a read answers `None` unless the app has input focus,
-//! and from Android 13 the system shows its own notice on a read: both are the
-//! system's policy, not a failure. A failed call is logged and reads as empty
-//! or writes nothing, as on the other hosts.
+//! form. From Android 10 a read answers `Ok(None)` unless the app has input
+//! focus, and from Android 13 the system shows its own notice on a read: both
+//! are the system's policy, not a failure. A failed call is logged; a read
+//! answers [`ClipboardError::Unavailable`], a write writes nothing.
 
 use android_activity::AndroidApp;
+use flui_platform::{ClipboardError, ClipboardRead, ClipboardWrite, Concealment};
 use jni::objects::JObject;
 use jni::{JValue, jni_sig, jni_str};
 
-use crate::host::SyncClipboard;
+use crate::host::{SyncClipboard, host_text};
 use crate::owner::android::activity::with_activity;
+use crate::version::gate::android::{AndroidApi, ClipExtras};
 
 /// The system clipboard of the Activity `app` runs.
 pub(crate) struct AndroidClipboard {
     app: AndroidApp,
+    /// The running system's level: whether a clip carries extras.
+    api: AndroidApi,
 }
 
 impl std::fmt::Debug for AndroidClipboard {
@@ -28,8 +32,8 @@ impl std::fmt::Debug for AndroidClipboard {
 }
 
 impl AndroidClipboard {
-    pub(crate) fn new(app: AndroidApp) -> Self {
-        Self { app }
+    pub(crate) fn new(app: AndroidApp, api: AndroidApi) -> Self {
+        Self { app, api }
     }
 }
 
@@ -49,8 +53,8 @@ fn clipboard_manager<'local>(
 }
 
 impl SyncClipboard for AndroidClipboard {
-    fn read_now(&self) -> Option<String> {
-        with_activity(&self.app, |env, activity| {
+    fn read_now(&self) -> ClipboardRead {
+        let text = with_activity(&self.app, |env, activity| {
             let manager = clipboard_manager(env, activity)?;
             if manager.is_null() {
                 return Ok(None);
@@ -102,24 +106,28 @@ impl SyncClipboard for AndroidClipboard {
             let text = env.cast_local::<jni::objects::JString<'_>>(text)?;
             Ok(Some(text.try_to_string(env)?))
         })
-        .unwrap_or_else(|error| {
+        .map_err(|error| {
             tracing::warn!(
                 target: "flui_native::android",
                 %error,
-                "clipboard read failed; it reads as empty"
+                "clipboard read failed"
             );
-            None
-        })
+            ClipboardError::Unavailable
+        })?;
+        text.map_or(Ok(None), host_text)
     }
 
-    fn write_now(&self, text: String) {
+    fn write_now(&self, write: ClipboardWrite) {
+        // Below the gate the write cannot carry the extra: it is an ordinary
+        // one, as `concealment` says.
+        let sensitive = write.is_concealed() && self.api.since::<ClipExtras>().is_some();
         let written = with_activity(&self.app, |env, activity| {
             let manager = clipboard_manager(env, activity)?;
             if manager.is_null() {
                 return Ok(());
             }
             let label = env.new_string("")?;
-            let text = env.new_string(&text)?;
+            let text = env.new_string(write.as_text())?;
             let clip = env
                 .call_static_method(
                     jni_str!("android/content/ClipData"),
@@ -130,6 +138,9 @@ impl SyncClipboard for AndroidClipboard {
                     &[JValue::Object(&label), JValue::Object(&text)],
                 )?
                 .l()?;
+            if sensitive {
+                mark_sensitive(env, &clip)?;
+            }
             env.call_method(
                 &manager,
                 jni_str!("setPrimaryClip"),
@@ -146,4 +157,53 @@ impl SyncClipboard for AndroidClipboard {
             );
         }
     }
+
+    /// A concealed write carries `ClipDescription.EXTRA_IS_SENSITIVE`, which
+    /// the system's copy preview and keyboards that read it honour; below
+    /// API 24 a clip carries no extras.
+    fn concealment(&self) -> Concealment {
+        if self.api.since::<ClipExtras>().is_some() {
+            Concealment::HintOnly
+        } else {
+            Concealment::Unavailable
+        }
+    }
 }
+
+/// Mark `clip` sensitive: `ClipDescription.EXTRA_IS_SENSITIVE` in its
+/// description's extras (ADR-0152 §6). The key is the constant's value,
+/// which a system before API 33 does not name but keyboards read all the
+/// same. A clip that could not be marked is not written: the error ends the
+/// write before `setPrimaryClip`.
+fn mark_sensitive(env: &mut jni::Env<'_>, clip: &JObject<'_>) -> jni::errors::Result<()> {
+    let description = env
+        .call_method(
+            clip,
+            jni_str!("getDescription"),
+            jni_sig!("()Landroid/content/ClipDescription;"),
+            &[],
+        )?
+        .l()?;
+    let extras = env.new_object(
+        jni_str!("android/os/PersistableBundle"),
+        jni_sig!("()V"),
+        &[],
+    )?;
+    let key = env.new_string(SENSITIVE_EXTRA)?;
+    env.call_method(
+        &extras,
+        jni_str!("putBoolean"),
+        jni_sig!("(Ljava/lang/String;Z)V"),
+        &[JValue::Object(&key), JValue::Bool(true)],
+    )?;
+    env.call_method(
+        &description,
+        jni_str!("setExtras"),
+        jni_sig!("(Landroid/os/PersistableBundle;)V"),
+        &[JValue::Object(&extras)],
+    )?;
+    Ok(())
+}
+
+/// `ClipDescription.EXTRA_IS_SENSITIVE`.
+const SENSITIVE_EXTRA: &str = "android.content.extra.IS_SENSITIVE";

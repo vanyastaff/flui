@@ -26,6 +26,7 @@ mod file_length;
 mod fonts;
 mod globals;
 mod icon_import;
+mod inspect_debug;
 mod key_vocabulary;
 mod markers;
 mod module_dag;
@@ -122,6 +123,9 @@ enum Command {
     /// Check that every place the public API names `Send` or `Sync` is listed and the list
     /// only shrinks (ADR-0136).
     SendPositions(send_positions::SendPositionsArgs),
+    /// Check that every `Value::Debug(` site of `flui_foundation::inspect` is counted per file
+    /// and the counts only go down (R50, ADR-0242).
+    InspectDebug(inspect_debug::InspectDebugArgs),
     /// Check that every `new` returning `Result` or `Option` is listed and the list only
     /// shrinks: such a constructor is `try_new` (AGENTS.md).
     TryNew(try_new::TryNewArgs),
@@ -209,6 +213,7 @@ fn main() -> ExitCode {
         Command::SendImpls(args) => send_impls::send_impls(&args),
         Command::SendPositions(args) => send_positions::send_positions(&args),
         Command::TryNew(args) => try_new::try_new(&args),
+        Command::InspectDebug(args) => inspect_debug::inspect_debug(&args),
         Command::WasmImports(args) => wasm::wasm_imports(&args),
         Command::WasmTestCrates(args) => wasm::wasm_test_crates(&args),
         Command::LockedVersion(args) => wasm::locked_version(&args),

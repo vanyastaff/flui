@@ -10,8 +10,8 @@ use anyhow::bail;
 use super::exec::{Cmd, Runner, installed, parsed};
 use crate::{
     android_dex, change_scope, changelog, docs_links, docs_paths, file_length, fonts, globals,
-    icon_import, key_vocabulary, markers, module_dag, panic_boundary, perf, platform_floor,
-    recording_vocabulary, send_impls, testing, toolchain, try_new, wgsl, workspace,
+    icon_import, inspect_debug, key_vocabulary, markers, module_dag, panic_boundary, perf,
+    platform_floor, recording_vocabulary, send_impls, testing, toolchain, try_new, wgsl, workspace,
 };
 
 /// A formatter or linter that is a binary of its own, not a cargo step.
@@ -101,7 +101,7 @@ type InProcess = fn(&[&str]) -> anyhow::Result<ExitCode>;
 /// This crate's own checks, in the order they run: each `cargo xtask`
 /// command line and the command it names. lychee is skippable like
 /// [`TOOLS`], so `--strict` reaches `docs-links` too.
-fn in_process(strict: bool) -> [(&'static str, InProcess); 36] {
+fn in_process(strict: bool) -> [(&'static str, InProcess); 37] {
     [
         (
             if strict {
@@ -143,6 +143,9 @@ fn in_process(strict: bool) -> [(&'static str, InProcess); 36] {
             try_new::try_new(&parsed(args)?)
         }),
         ("try-new", |args| try_new::try_new(&parsed(args)?)),
+        ("inspect-debug", |args| {
+            inspect_debug::inspect_debug(&parsed(args)?)
+        }),
         ("paths-filter", |args| {
             change_scope::paths_filter(&parsed(args)?)
         }),
@@ -231,6 +234,7 @@ mod tests {
                 "send-impls",
                 "try-new --self-test",
                 "try-new",
+                "inspect-debug",
                 "paths-filter",
                 "font-assets --package-list",
                 "icon-import material",

@@ -10,7 +10,7 @@ use flui_rendering::{
 #[derive(Debug)]
 struct RawConsumer;
 
-impl flui_foundation::Diagnosticable for RawConsumer {}
+impl flui_foundation::inspect::Inspect for RawConsumer { fn kind(&self) -> &'static str { "RawConsumer" } fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {} }
 
 impl RenderObject<BoxProtocol> for RawConsumer {
     fn perform_layout_raw(

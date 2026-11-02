@@ -1,7 +1,7 @@
 //! `RenderSliverFillViewport` — Box children with viewport-fraction extents.
 
-use flui_foundation::Diagnosticable;
 use flui_foundation::Variable;
+use flui_foundation::inspect::{Fields, Inspect};
 
 use flui_rendering::{
     constraints::{SliverConstraints, SliverGeometry, child_paint_offset},
@@ -86,11 +86,16 @@ impl Default for RenderSliverFillViewport {
     }
 }
 
-impl Diagnosticable for RenderSliverFillViewport {
-    fn debug_fill_properties(&self, properties: &mut flui_foundation::DiagnosticsBuilder) {
-        properties.add_double("viewport_fraction", self.viewport_fraction, None);
+impl Inspect for RenderSliverFillViewport {
+    fn kind(&self) -> &'static str {
+        "RenderSliverFillViewport"
+    }
+
+    fn inspect(&self, out: &mut Fields<'_>) {
+        out.field("viewport_fraction", &self.viewport_fraction);
     }
 }
+
 impl RenderSliver for RenderSliverFillViewport {
     type Arity = Variable;
     type ParentData = SliverPhysicalParentData;

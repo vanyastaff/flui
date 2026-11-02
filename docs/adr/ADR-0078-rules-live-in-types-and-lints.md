@@ -4,6 +4,8 @@
 - **Date:** 2026-09-23
 - **Superseded-by:** [ADR-0152](ADR-0152-capability-seam-revised.md) for the last sentence of §1
   only: a platform capability is reached through the seam, not as a method on `LifecycleContext`.
+- **Amended:** 2026-10-31 — `LifecycleContext::on_unmount` hands a state its element's unmount; see
+  [Amendment (2026-10-31)](#amendment-2026-10-31-a-state-hands-its-unmount-to-what-it-opens).
 - **Amended:** 2026-10-11 — the lifecycle example uses the single owner-local post-frame handle; geometry checks name the current trybuild suite.
 - **Amended:** 2026-09-26 — scanners over structured data return under four conditions; see
   §4 ([ADR-0081](ADR-0081-workspace-tiers-and-reach-facts.md)); an allowlist entry may also
@@ -170,3 +172,50 @@ conditions.
   could not tell legal from illegal code; without them every lock and `dyn` would fail.
 - **A custom lint (dylint).** Real precision, but a nightly-pinned toolchain and a
   maintained lint crate for rules that types and stock clippy already cover.
+
+## Amendment (2026-10-31): a state hands its unmount to what it opens
+
+A value a state opens in `init_state` can outlive the state through its clones: a stored document
+([ADR-0262](ADR-0262-persisted-documents-over-a-byte-storage-capability.md)), a router's shared
+state. When its listeners hold those clones, the value and its listeners keep each other alive
+after the state is gone, and only the state knows when it is gone. `LifecycleContext` therefore
+carries the unmount as a capability:
+
+```rust
+pub trait LifecycleContext: BuildContext {
+    // …
+    fn on_unmount(&self, hook: Box<dyn FnOnce()>) -> UnmountHook;
+}
+
+#[must_use]
+pub struct UnmountHook { /* !Send; dropping it unregisters the hook without running it */ }
+impl UnmountHook {
+    pub fn forget(self); // the hook stays registered and still runs; only the token goes
+}
+```
+
+- **When.** Once, when the element leaves the tree for good, right after its state's `dispose`:
+  a removal, a subtree eviction, and the tree torn down at exit or at a session end
+  ([ADR-0260](ADR-0260-session-end-flushes-before-it-tears-down.md)), in the same
+  order as `dispose`. A `GlobalKey` move deactivates and reactivates and runs nothing.
+- **Order.** The hooks of one element run in registration order.
+- **Containment.** Each hook runs under its own catch. A panic does not keep the next hook or the
+  rest of the teardown from running, and the first is recorded as the element's
+  `LifecycleHook::Dispose` failure; the others' payloads are retained.
+- **No re-entry.** A hook registered while hooks run is refused, with a debug assertion, so
+  teardown never extends itself.
+- **Ownership.** The hooks live in the owner's table by element, like keep-alive holds; the token
+  holds that table weakly, so a value that drops before its state leaves nothing registered. Each
+  hook leaves the table only at its turn, so a token an earlier hook drops still unregisters.
+
+`Persisted::open` registers a hook that drops the document's queued delivery and its listeners,
+and a listener added after that is not kept. A router's listeners go the same way.
+
+Confirmed by `crates/flui-view/tests/unmount_hook.rs`
+(`hooks_run_once_after_dispose_in_registration_order`,
+`a_panicking_hook_leaves_the_next_one_running_and_is_the_dispose_failure`,
+`a_dropped_token_unregisters_and_a_forgotten_one_runs`,
+`a_token_dropped_by_an_earlier_hook_keeps_its_hook_from_running`, `a_move_is_not_an_unmount`,
+`a_tree_torn_down_runs_its_hooks`), the unit test `a_hook_registered_while_hooks_run_is_refused`,
+`unmounting_the_opening_state_drops_the_listeners` in `crates/flui-view/tests/persist.rs`, and
+`an_unmounted_router_lets_go_of_its_listeners` in `crates/flui-widgets/tests/router.rs`.

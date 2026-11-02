@@ -689,6 +689,7 @@ pub(crate) enum RecordError {
     External(crate::error::ExternalTextureError),
     Geometry(crate::error::GeometryError),
     Backdrop(&'static str),
+    ImageFilter(&'static str),
     Limit {
         resource: &'static str,
         requested: usize,
@@ -824,6 +825,9 @@ impl DrawSegment {
         match self.record_error.clone().or_else(|| self.budget.error()) {
             Some(RecordError::External(error)) => Err(error.into()),
             Some(RecordError::Geometry(error)) => Err(error.into()),
+            Some(RecordError::ImageFilter(reason)) => {
+                Err(crate::error::EngineError::UnsupportedImageFilter { reason })
+            }
             Some(RecordError::Backdrop(reason)) => {
                 Err(crate::error::EngineError::UnsupportedBackdropFilter { reason })
             }
@@ -1158,13 +1162,23 @@ pub(crate) enum DrawItem {
     Filter(FilterOp),
 }
 
+/// What a backdrop read does to the pixels under it, in device pixels.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum BackdropEffect {
+    /// A separable Gaussian blur with these sigmas.
+    Blur([f32; 2]),
+    /// The backdrop resampled through an axis-aligned map: the output pixel
+    /// at `p` shows the backdrop at `scale * p + offset`, read bilinearly.
+    Resample { scale: [f64; 2], offset: [f64; 2] },
+}
+
 /// Backdrop input is independent of the output clip and damage write region.
 pub(crate) struct BackdropOp {
     pub(crate) context: SealedSegment,
     pub(crate) clip: GroupClip,
     pub(crate) scissor: ScissorRect,
     pub(crate) output_bounds: Rect<f64>,
-    pub(crate) sigma: [f32; 2],
+    pub(crate) effect: BackdropEffect,
     pub(crate) blend: BlendMode,
     /// Grouped filters read one backdrop snapshot per item list.
     pub(crate) group: Option<flui_layer::BackdropGroupKey>,

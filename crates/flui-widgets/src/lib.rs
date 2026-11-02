@@ -103,6 +103,7 @@ pub mod interaction;
 pub mod layout;
 pub mod localization;
 mod media_query;
+mod popup_menu;
 // Effects, reversible transitions and `Animate`; flat re-exports below.
 pub mod motion;
 
@@ -123,6 +124,7 @@ mod overlay;
 pub mod paint;
 pub mod physical_model;
 // The typed `Router` (ADR-0093); its items are re-exported from the crate root.
+mod reorderable;
 pub mod router;
 pub mod scroll;
 pub mod semantics;
@@ -190,13 +192,11 @@ pub use icon::{
 };
 #[cfg(feature = "asset-images")]
 pub use image::AssetImage;
-#[cfg(feature = "asset-images")]
-pub use image::ImageState;
 #[cfg(feature = "network-images")]
 pub use image::NetworkImage;
 pub use image::{
-    DirectImageProvider, FileImage, Image, ImageCacheKey, ImageProvider, ImageProviderError,
-    MemoryImage, Texture, TextureState,
+    DecodeJob, DirectImageProvider, FileImage, Image, ImageCacheKey, ImageProvider,
+    ImageProviderError, ImageState, MemoryImage, Texture, TextureState,
 };
 pub use interaction::{
     AbsorbPointer, Action, ActionOutcome, Actions, ActivateIntent, ActivateLinkIntent,
@@ -271,6 +271,10 @@ pub use paint::{
     DecoratedBox, IgnorePointer, Opacity, RepaintBoundary,
 };
 pub use physical_model::{PhysicalModel, PhysicalShape};
+pub use reorderable::{
+    Reorder, ReorderCause, ReorderHandles, ReorderIntent, ReorderPreview, ReorderableItem,
+    ReorderableList, ReorderableListState,
+};
 pub use router::{
     Routable, RouteParseError, RoutePath, Router, RouterError, RouterHandle, RouterState,
 };
@@ -316,10 +320,11 @@ pub use swipe::{
     SwipeActions, SwipeActionsError, SwipeActionsState, SwipeAlternative, SwipeEdge,
 };
 pub use text::{
-    AnimatedDefaultTextStyle, DefaultSelectionHandles, DefaultSelectionStyle, DefaultTextStyle,
-    DotHandles, EditableText, EditableTextState, HandleInfo, HandleSide, RawTextField,
-    RawTextFieldState, RichText, SelectedText, SelectionArea, SelectionContainer, SelectionHandles,
-    SelectionStyle, SubmitCallback, Text, TextEditingController,
+    AnimatedDefaultTextStyle, CaretHandle, DefaultSelectionHandles, DefaultSelectionStyle,
+    DefaultTextStyle, DotHandles, EditableText, EditableTextState, HandleInfo, HandleSide,
+    RawTextField, RawTextFieldState, RichText, SelectError, SelectedText, SelectionArea,
+    SelectionChange, SelectionChangeCause, SelectionContainer, SelectionController,
+    SelectionHandles, SelectionInput, SelectionStyle, SubmitCallback, Text, TextEditingController,
 };
 pub use transitions::{
     AlignTransition, AlignTransitionState, AnimatedBuilder, AnimatedBuilderState,
@@ -434,15 +439,15 @@ pub mod prelude {
         RawButton, RawTextField, RawTextFieldState, RawTextFormField, RepaintBoundary, RichText,
         RotatedBox, Routable, RoutePath, Router, RouterHandle, Row, SafeArea, ScrollController,
         Scrollable, Scrollbar, SelectAllTextIntent, SelectionArea, SelectionContainer,
-        SelectionHandles, SelectionStyle, Semantics, Shortcuts, ShrinkWrappingViewport,
-        SimpleRoute, SingleActivator, SingleChildScrollView, SizedBox, SizedOverflowBox, Slider,
-        SliderState, SliverChildBuilderDelegate, SliverFadeTransition, SliverFillRemaining,
-        SliverFillRemainingAndOverscroll, SliverFillRemainingWithScrollable, SliverFillViewport,
-        SliverFixedExtentList, SliverGrid, SliverIgnorePointer, SliverList, SliverOffstage,
-        SliverOpacity, SliverPadding, SliverToBoxAdapter, Spacer, Stack, StreamBuilder,
-        SubmitCallback, Table, TableCell, TableRow, Text, TextEditingController, TickerMode,
-        Transform, UnconstrainedBox, ValueListenableBuilder, Viewport, Visibility, VisibilityGate,
-        WidgetState, WidgetStateConstraint, WidgetStateProperty, WidgetStates,
+        SelectionController, SelectionHandles, SelectionStyle, Semantics, Shortcuts,
+        ShrinkWrappingViewport, SimpleRoute, SingleActivator, SingleChildScrollView, SizedBox,
+        SizedOverflowBox, Slider, SliderState, SliverChildBuilderDelegate, SliverFadeTransition,
+        SliverFillRemaining, SliverFillRemainingAndOverscroll, SliverFillRemainingWithScrollable,
+        SliverFillViewport, SliverFixedExtentList, SliverGrid, SliverIgnorePointer, SliverList,
+        SliverOffstage, SliverOpacity, SliverPadding, SliverToBoxAdapter, Spacer, Stack,
+        StreamBuilder, SubmitCallback, Table, TableCell, TableRow, Text, TextEditingController,
+        TickerMode, Transform, UnconstrainedBox, ValueListenableBuilder, Viewport, Visibility,
+        VisibilityGate, WidgetState, WidgetStateConstraint, WidgetStateProperty, WidgetStates,
         WidgetStatesController, WidgetsApp, WidgetsLocalizations, Wrap,
     };
 

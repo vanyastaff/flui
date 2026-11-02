@@ -208,6 +208,17 @@ const RECORDED: &[Recorded] = &[
         "crates/flui-platform/src/preferences.rs",
         "WheelStep",
     ),
+    repo("Weekday", "crates/flui-platform/src/regional.rs", "Weekday"),
+    repo(
+        "HourCycle",
+        "crates/flui-platform/src/regional.rs",
+        "HourCycle",
+    ),
+    repo(
+        "MeasurementSystem",
+        "crates/flui-platform/src/regional.rs",
+        "MeasurementSystem",
+    ),
     repo(
         "GestureDisposition",
         "crates/flui-interaction/src/gesture/arena/mod.rs",

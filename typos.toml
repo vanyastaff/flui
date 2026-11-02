@@ -23,6 +23,7 @@ extend-exclude = [
     # (third_party/README.md).
     "third_party/accesskit_android/**",
     "third_party/accesskit_ios/**",
+    "third_party/accesskit_windows/**",
 ]
 
 [default]
@@ -67,3 +68,5 @@ mis = "mis"
 # OpenType table tag: `loca` is the glyph-location table (spec name, exactly
 # four characters like every other tag), not a truncation of "local".
 loca = "loca"
+# CLDR numbering system identifier for Bengali digits (`nu-beng`, UTS #35).
+beng = "beng"

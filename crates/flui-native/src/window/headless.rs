@@ -21,8 +21,9 @@ use flui_platform::text_store::TextStoreHost;
 use flui_platform::{
     AdmittedCommand, ApplyError, CursorError, DispatchEventResult, DisplayId, PlatformHaptics,
     PlatformInput, PlatformTextInput, PlatformWindow, SizeConstraints, SurfaceChange, Unsupported,
-    UnsupportedReason, WindowAppearance, WindowCapabilities, WindowCommand, WindowGeometry,
-    WindowHandler, WindowId, WindowMaterial, WindowMode, WindowOptions, WindowState,
+    UnsupportedReason, WindowAppearance, WindowCapabilities, WindowCommand, WindowFrame,
+    WindowGeometry, WindowHandler, WindowId, WindowMaterial, WindowMode, WindowOptions,
+    WindowState,
 };
 use parking_lot::Mutex;
 
@@ -606,13 +607,13 @@ struct MockWindowState {
     normal_geometry: Option<WindowGeometry>,
     constraints: SizeConstraints,
     resizable: bool,
-    decorated: bool,
+    frame: WindowFrame,
     scale_factor: f64,
     focused: bool,
     visible: bool,
     occluded: bool,
     execution: flui_platform::WindowExecutionState,
-    safe_area: flui_foundation::geometry::EdgeInsets,
+    insets: flui_platform::WindowInsets,
     closed: bool,
 
     appearance: WindowAppearance,
@@ -731,7 +732,11 @@ fn sample_window_state(model: &MockWindowState, hovered: bool) -> WindowState {
         .with_title(Some(model.title.clone()))
         .with_constraints(model.constraints)
         .with_resizable(model.resizable)
-        .with_decorated(model.decorated && model.mode != WindowMode::Fullscreen)
+        .with_frame(if model.mode == WindowMode::Fullscreen {
+            WindowFrame::None
+        } else {
+            model.frame
+        })
         .with_display(model.display);
     // This host has no activation apart from focus.
     ReportedFacts {
@@ -741,7 +746,7 @@ fn sample_window_state(model: &MockWindowState, hovered: bool) -> WindowState {
         )
         .ok(),
         appearance: model.appearance,
-        safe_area: model.safe_area,
+        insets: model.insets,
         execution,
         occluded: model.occluded,
         hovered,
@@ -809,11 +814,11 @@ impl MockWindow {
             normal_geometry: None,
             constraints: SizeConstraints::new(options.min_size, options.max_size),
             resizable: options.resizable,
-            decorated: options.decorated,
+            frame: options.frame.at_open(&capabilities),
             scale_factor: 1.0,
             focused: true,
             execution: flui_platform::WindowExecutionState::Running,
-            safe_area: flui_foundation::geometry::EdgeInsets::ZERO,
+            insets: flui_platform::WindowInsets::ZERO,
             visible: options.visible,
             occluded: false,
             closed: false,
@@ -1075,15 +1080,16 @@ impl MockWindow {
         self.delivery.report_hover(hovered);
     }
 
-    /// Simulate an owner-thread safe-area report. Closed and detached windows
+    /// Simulate an owner-thread insets report: the safe area, the keyboard
+    /// and its motion, the system-gesture edges. Closed and detached windows
     /// ignore the report.
-    pub fn simulate_safe_area(&self, insets: flui_foundation::geometry::EdgeInsets) {
+    pub fn simulate_insets(&self, insets: flui_platform::WindowInsets) {
         {
             let mut state = self.state.lock();
             if state.closed || state.execution == flui_platform::WindowExecutionState::Detached {
                 return;
             }
-            state.safe_area = insets;
+            state.insets = insets;
         }
         self.publish_state();
     }
@@ -1267,7 +1273,7 @@ impl PlatformWindow for MockWindow {
                     }
                 }
                 WindowCommand::SetResizable(resizable) => state.resizable = resizable,
-                WindowCommand::SetDecorated(decorated) => state.decorated = decorated,
+                WindowCommand::SetFrame(frame) => state.frame = frame,
                 WindowCommand::SetMode(mode) => {
                     state.enter_mode(mode, &self.limits, display_bounds);
                 }

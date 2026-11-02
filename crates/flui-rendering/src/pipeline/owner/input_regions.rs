@@ -153,7 +153,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         let mut transform = Matrix4::IDENTITY;
         let mut clip = walk.window;
         let root = walk.path.first().map_or(id, |&(root, _)| root);
-        self.shift_by_follower_offset(root, &mut transform);
+        self.compose_follower_transform(root, &mut transform);
         let children = walk
             .path
             .iter()
@@ -170,7 +170,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
                 clip = clip.intersect(&mapped).unwrap_or(Rect::ZERO);
             }
             ancestor.apply_paint_transform(slot, child.offset(), &mut transform)?;
-            self.shift_by_follower_offset(child_id, &mut transform);
+            self.compose_follower_transform(child_id, &mut transform);
             if transform
                 .to_col_major_array()
                 .iter()
@@ -182,12 +182,12 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         Some((transform, clip))
     }
 
-    /// Composes the offset the last composite resolved for follower `id` (a
-    /// `CompositedTransformFollower` placed against its leader), the same shift the
+    /// Composes the transform the last composite resolved for follower `id` (a
+    /// `CompositedTransformFollower` placed against its leader), the same placement the
     /// engine paints its subtree with and hit-testing applies.
-    fn shift_by_follower_offset(&self, id: RenderId, transform: &mut Matrix4) {
-        if let Some(offset) = self.last_follower_offsets.get(&id) {
-            *transform *= Matrix4::translation(offset.dx, offset.dy, 0.0);
+    fn compose_follower_transform(&self, id: RenderId, transform: &mut Matrix4) {
+        if let Some(follower) = self.last_follower_transforms.get(&id) {
+            *transform *= *follower;
         }
     }
 }

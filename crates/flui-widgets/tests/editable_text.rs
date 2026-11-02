@@ -2356,7 +2356,7 @@ pub(crate) mod text_store {
         let text = flui_foundation::panic::payload_text(&*payload)
             .unwrap_or("an opaque payload")
             .to_owned();
-        flui_foundation::panic::retain_opaque_payload(payload);
+        flui_foundation::panic::discard_payload(payload);
         Some(text)
     }
 
@@ -3196,4 +3196,107 @@ pub(crate) fn the_store_reports_the_purpose_the_field_was_built_with() {
         TextInputPurpose::Url,
         "and leaves its purpose alone"
     );
+}
+
+/// A push platform reads no store, so it is told the focused field's status
+/// as the field attaches and again each time obscuring or the purpose
+/// changes: what an iOS keyboard turns into secure entry and its layout.
+///
+/// Red-check: drop the observer `attach_entered` installs — only the
+/// attach-time status arrives.
+pub(crate) fn a_push_platform_is_told_the_focused_fields_status() {
+    use flui_platform::text_store::{TextInputPurpose, TextStoreStatus};
+    use flui_widgets::SizedBox;
+
+    let controller = TextEditingController::new();
+    let focus = FocusNode::new();
+    let field = |purpose, obscured| {
+        SizedBox::new(60.0, 30.0).child(
+            EditableText::new(controller.clone(), Rc::clone(&focus))
+                .input_purpose(purpose)
+                .obscure_text(obscured),
+        )
+    };
+    let mut harness =
+        crate::common::harness::mount_with_push_ime(field(TextInputPurpose::Email, false));
+    harness.tick();
+    assert_eq!(harness.field_status_calls(), [], "no field has focus yet");
+
+    let _ = focus.request_focus();
+    harness.tick();
+    let email = TextStoreStatus::EDITABLE_SINGLE_LINE.with_purpose(TextInputPurpose::Email);
+    assert_eq!(harness.field_status_calls(), [email], "told as it attaches");
+
+    harness.swap_root(field(TextInputPurpose::Email, true));
+    harness.tick();
+    let protected = email.with_protected(true);
+    assert_eq!(
+        harness.field_status_calls().last(),
+        Some(&protected),
+        "obscuring reaches the platform"
+    );
+
+    harness.swap_root(field(TextInputPurpose::Url, true));
+    harness.tick();
+    assert_eq!(
+        harness.field_status_calls().last(),
+        Some(&protected.with_purpose(TextInputPurpose::Url)),
+        "and so does the purpose"
+    );
+}
+
+/// The colours of the rectangles the frame paints, in layer order.
+fn painted_rect_colors(laid: &crate::common::LaidOut) -> Vec<flui_painting::styling::Color> {
+    use flui_painting::DrawOp;
+    use flui_rendering::layer::Layer;
+    let tree = laid.layer_tree().expect("a painted frame");
+    tree.iter()
+        .filter_map(|(_, node)| match node.layer() {
+            Layer::Picture(picture) => Some(picture.picture().commands().to_vec()),
+            _ => None,
+        })
+        .flatten()
+        .filter_map(|command| match command.op {
+            DrawOp::Rect { paint, .. } => Some(paint.color),
+            _ => None,
+        })
+        .collect::<Vec<flui_painting::styling::Color>>()
+}
+
+/// A field highlights its selection with the nearest `DefaultSelectionStyle`:
+/// its active colour while focused, its inactive one after a blur, which
+/// keeps the selection; the field's own style wins over the inherited one.
+pub(crate) fn a_field_highlights_its_selection_with_the_inherited_style() {
+    use flui_painting::styling::Color;
+    use flui_widgets::{DefaultSelectionStyle, SelectionStyle, SizedBox};
+    let inherited = SelectionStyle::new(Color::rgba(200, 0, 0, 128), Color::rgba(0, 200, 0, 64));
+    let own = SelectionStyle::new(Color::rgba(0, 0, 200, 128), Color::rgba(90, 90, 0, 64));
+    for (field_style, expected) in [(None, inherited), (Some(own), own)] {
+        let controller = TextEditingController::with_text("hello world");
+        let focus = FocusNode::with_debug_label("highlighted field");
+        let mut field = EditableText::new(controller.clone(), Rc::clone(&focus));
+        if let Some(style) = field_style {
+            field = field.selection_style(style);
+        }
+        let mut laid = crate::common::lay_out(
+            DefaultSelectionStyle::new(inherited, SizedBox::new(300.0, 40.0).child(field)),
+            crate::common::tight(300.0, 40.0),
+        );
+        let _ = focus.request_focus();
+        controller.set_selection(0, 5);
+        laid.tick();
+        let focused = painted_rect_colors(&laid);
+        assert!(
+            focused.contains(&expected.active),
+            "a focused field paints the active highlight, painted {focused:?}"
+        );
+        focus.unfocus();
+        laid.tick();
+        let blurred = painted_rect_colors(&laid);
+        assert_eq!(controller.selection(), 0..5, "a blur keeps the selection");
+        assert!(
+            blurred.contains(&expected.inactive) && !blurred.contains(&expected.active),
+            "a blurred field paints the inactive highlight, painted {blurred:?}"
+        );
+    }
 }

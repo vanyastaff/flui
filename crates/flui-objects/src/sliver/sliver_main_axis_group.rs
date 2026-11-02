@@ -26,6 +26,7 @@
 use flui_foundation::Variable;
 use flui_foundation::geometry::Axis;
 use flui_foundation::geometry::Offset;
+use flui_foundation::inspect::{Fields, Inspect};
 
 use flui_rendering::{
     constraints::{GrowthDirection, SliverConstraints, SliverGeometry},
@@ -74,9 +75,13 @@ impl std::fmt::Debug for RenderSliverMainAxisGroup {
     }
 }
 
-impl flui_foundation::Diagnosticable for RenderSliverMainAxisGroup {
-    fn debug_fill_properties(&self, builder: &mut flui_foundation::DiagnosticsBuilder) {
-        builder.add_int("laid_out_children", self.laid_out_child_count as i64, None);
+impl Inspect for RenderSliverMainAxisGroup {
+    fn kind(&self) -> &'static str {
+        "RenderSliverMainAxisGroup"
+    }
+
+    fn inspect(&self, out: &mut Fields<'_>) {
+        out.field("laid_out_children", &self.laid_out_child_count);
     }
 }
 

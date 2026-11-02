@@ -33,7 +33,10 @@
 //!
 //! #[derive(Debug)]
 //! struct MyRenderBox { preferred_size: Size }
-//! impl flui_foundation::Diagnosticable for MyRenderBox {}
+//! impl flui_foundation::inspect::Inspect for MyRenderBox {
+//!     fn kind(&self) -> &'static str { "MyRenderBox" }
+//!     fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+//! }
 //!
 //! impl RenderBox for MyRenderBox {
 //!     type Arity = Leaf;

@@ -6,6 +6,7 @@
 //! and a command admitted before the capabilities changed is `Superseded`.
 
 use flui_platform::CommandRefusal;
+use flui_platform::{AppTitleBar, ControlsOffset, SystemControls, WindowFrame};
 use flui_testing::window_commands::AdmitAndApply as _;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -92,9 +93,9 @@ fn commands() -> Vec<(&'static str, WindowCommand, Change)> {
             |state| !state.resizable,
         ),
         (
-            "set_decorated",
-            WindowCommand::SetDecorated(false),
-            |state| !state.decorated,
+            "set_frame",
+            WindowCommand::SetFrame(WindowFrame::None),
+            |state| !state.frame.has_system_title_bar(),
         ),
         (
             "maximize",
@@ -109,7 +110,7 @@ fn commands() -> Vec<(&'static str, WindowCommand, Change)> {
         (
             "fullscreen",
             WindowCommand::SetMode(WindowMode::Fullscreen),
-            |state| state.mode == WindowMode::Fullscreen && !state.decorated,
+            |state| state.mode == WindowMode::Fullscreen && !state.frame.has_system_title_bar(),
         ),
         ("hide", WindowCommand::Hide, |state| !state.visible),
     ]
@@ -178,7 +179,42 @@ fn fullscreen_is_borderless_on_the_whole_display() {
         Size::new(1280.0, 720.0),
         "the display's size in its own logical pixels"
     );
-    assert!(!fullscreen.decorated, "fullscreen has no frame");
+    assert_eq!(
+        fullscreen.frame,
+        WindowFrame::None,
+        "fullscreen has no frame"
+    );
+}
+
+fn app_title_bar_controls_survive_open_commands_and_fullscreen() {
+    for controls in [
+        SystemControls::Shown,
+        SystemControls::Hidden,
+        SystemControls::Offset(ControlsOffset::try_new(17.0, 9.0).expect("finite offset")),
+    ] {
+        let frame = WindowFrame::AppTitleBar(AppTitleBar::new().with_system_controls(controls));
+        let platform = HeadlessPlatform::new();
+        let window = Opened::on(&platform, WindowOptions::default().with_frame(frame))
+            .expect("a headless window opens with an app title bar");
+        assert_eq!(window.state().frame, frame, "opening keeps {controls:?}");
+        applied(&window, WindowCommand::SetFrame(WindowFrame::System));
+        let (before, changed) = applied(&window, WindowCommand::SetFrame(frame));
+        assert_eq!(changed.frame, frame, "a command keeps {controls:?}");
+        assert_eq!(changed.revision.get(), before.revision.get() + 1);
+        let (_, repeated) = applied(&window, WindowCommand::SetFrame(frame));
+        assert_eq!(repeated, changed, "the same payload is not a change");
+
+        applied(&window, WindowCommand::SetFrame(WindowFrame::System));
+        applied(&window, WindowCommand::SetMode(WindowMode::Fullscreen));
+        assert_eq!(window.state().frame, WindowFrame::None);
+        applied(&window, WindowCommand::SetFrame(frame));
+        assert_eq!(window.state().frame, WindowFrame::None);
+        let (_, restored) = applied(&window, WindowCommand::SetMode(WindowMode::Normal));
+        assert_eq!(
+            restored.frame, frame,
+            "restoring keeps the latest {controls:?}"
+        );
+    }
 }
 
 fn repeating_a_command_keeps_the_revision_and_stays_silent() {
@@ -495,7 +531,13 @@ fn window_facts_arrive_only_in_the_snapshot() {
     let right = platform.display_snapshot().expect("displays").displays()[1].id;
     let window = open(&platform);
     let mock = mock(&window).clone();
-    let insets = EdgeInsets::new(24.0, 0.0, 48.0, 0.0);
+    let insets = flui_platform::WindowInsets::ZERO
+        .try_with_safe_area(EdgeInsets::new(24.0, 0.0, 48.0, 0.0))
+        .expect("a finite safe area")
+        .with_keyboard(
+            flui_platform::KeyboardInset::try_at_rest(EdgeInsets::new(0.0, 0.0, 300.0, 0.0))
+                .expect("a finite keyboard"),
+        );
     type Report = Box<dyn Fn(&MockWindow)>;
     type Holds = Box<dyn Fn(&WindowState) -> bool>;
     let rows: Vec<(&str, Report, Holds)> = vec![
@@ -520,9 +562,9 @@ fn window_facts_arrive_only_in_the_snapshot() {
             Box::new(|state: &WindowState| state.appearance == WindowAppearance::Dark),
         ),
         (
-            "safe area",
-            Box::new(move |mock: &MockWindow| mock.simulate_safe_area(insets)),
-            Box::new(move |state: &WindowState| state.safe_area == insets),
+            "insets",
+            Box::new(move |mock: &MockWindow| mock.simulate_insets(insets)),
+            Box::new(move |state: &WindowState| state.insets == insets),
         ),
         (
             "execution",
@@ -598,6 +640,10 @@ fn window_state_contract() {
     crate::run_table(
         "window_state_contract",
         &[
+            (
+                "app_title_bar_controls_survive_open_commands_and_fullscreen",
+                app_title_bar_controls_survive_open_commands_and_fullscreen as fn(),
+            ),
             (
                 "every_command_changes_the_snapshot_and_advances_the_revision_by_one",
                 every_command_changes_the_snapshot_and_advances_the_revision_by_one as fn(),

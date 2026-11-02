@@ -166,14 +166,17 @@ impl std::fmt::Debug for RenderAnimatedOpacity {
     }
 }
 
-impl flui_foundation::Diagnosticable for RenderAnimatedOpacity {
-    fn debug_fill_properties(&self, properties: &mut flui_foundation::DiagnosticsBuilder) {
-        properties.add_default_double("opacity", self.opacity(), 1.0, None);
-        properties.add_flag(
-            "always_include_semantics",
-            self.always_include_semantics,
-            "always include semantics",
-        );
+impl flui_foundation::inspect::Inspect for RenderAnimatedOpacity {
+    fn kind(&self) -> &'static str {
+        "RenderAnimatedOpacity"
+    }
+
+    fn inspect(&self, out: &mut flui_foundation::inspect::Fields<'_>) {
+        out.field("opacity", &self.opacity())
+            .unit(flui_foundation::inspect::Unit::Fraction)
+            .default(&1.0_f64);
+        out.field("always_include_semantics", &self.always_include_semantics)
+            .default(&false);
     }
 }
 

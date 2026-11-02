@@ -102,7 +102,8 @@ impl Manager {
     #[zbus(name = "GetSessionByPID")]
     async fn get_session_by_pid(&self, pid: u32) -> OwnedObjectPath {
         let delay = *self.0.session_delay.lock();
-        tokio::time::sleep(delay).await;
+        // Handlers run on zbus's own executor, not on the test's Tokio runtime.
+        async_io::Timer::after(delay).await;
         assert_eq!(pid, std::process::id(), "the adapter asks about itself");
         OwnedObjectPath::try_from(self.1).expect("a valid path")
     }

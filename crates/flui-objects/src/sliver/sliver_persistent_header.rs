@@ -98,7 +98,7 @@ use flui_animation::{
 };
 use flui_foundation::Single;
 use flui_foundation::geometry::Axis;
-use flui_foundation::{Diagnosticable, DiagnosticsBuilder, DiagnosticsNode};
+use flui_foundation::inspect::{Fields, Inspect, Unit};
 
 use flui_rendering::{
     constraints::{SliverConstraints, SliverGeometry, child_paint_offset},
@@ -354,12 +354,15 @@ impl PersistentHeaderCore {
     ///
     /// Set once by the element that owns the delegate, at mount. A header with
     /// a static child never calls this and publishes nothing.
-    /// Record the core's diagnostics shared by every header variant.
-    fn fill_diagnostics(&self, builder: &mut DiagnosticsBuilder) {
-        builder.add("min_extent", self.min_extent);
-        builder.add("max_extent", self.max_extent);
+    /// Record the core's fields shared by every header variant.
+    fn inspect_core(&self, out: &mut Fields<'_>) {
+        out.field("min_extent", &self.min_extent)
+            .unit(Unit::LogicalPx);
+        out.field("max_extent", &self.max_extent)
+            .unit(Unit::LogicalPx);
         if let Some(stretch) = &self.stretch_configuration {
-            builder.add("stretch_trigger_offset", stretch.stretch_trigger_offset);
+            out.field("stretch_trigger_offset", &stretch.stretch_trigger_offset)
+                .unit(Unit::LogicalPx);
         }
     }
 
@@ -613,9 +616,13 @@ impl RenderSliverScrollingPersistentHeader {
     }
 }
 
-impl Diagnosticable for RenderSliverScrollingPersistentHeader {
-    fn debug_fill_properties(&self, builder: &mut DiagnosticsBuilder) {
-        self.core.fill_diagnostics(builder);
+impl Inspect for RenderSliverScrollingPersistentHeader {
+    fn kind(&self) -> &'static str {
+        "RenderSliverScrollingPersistentHeader"
+    }
+
+    fn inspect(&self, out: &mut Fields<'_>) {
+        self.core.inspect_core(out);
     }
 }
 
@@ -690,9 +697,13 @@ impl RenderSliverPinnedPersistentHeader {
     }
 }
 
-impl Diagnosticable for RenderSliverPinnedPersistentHeader {
-    fn debug_fill_properties(&self, builder: &mut DiagnosticsBuilder) {
-        self.core.fill_diagnostics(builder);
+impl Inspect for RenderSliverPinnedPersistentHeader {
+    fn kind(&self) -> &'static str {
+        "RenderSliverPinnedPersistentHeader"
+    }
+
+    fn inspect(&self, out: &mut Fields<'_>) {
+        self.core.inspect_core(out);
     }
 }
 
@@ -782,7 +793,7 @@ mod sealed {
 /// verbatim-identical between the two variants — everything else about the
 /// two types is shared.
 pub trait FloatingHeaderMode: sealed::Sealed + Send + Sync + 'static {
-    /// Diagnostics label.
+    /// The inspect kind.
     const DIAGNOSTIC_NAME: &'static str;
 
     /// Computes this variant's [`SliverGeometry`] and the child's main-axis
@@ -1173,19 +1184,16 @@ impl<M: FloatingHeaderMode> fmt::Debug for RenderSliverFloatingHeaderBase<M> {
     }
 }
 
-impl<M: FloatingHeaderMode> Diagnosticable for RenderSliverFloatingHeaderBase<M> {
-    fn to_diagnostics_node(&self) -> DiagnosticsNode {
-        let mut node = DiagnosticsNode::new(M::DIAGNOSTIC_NAME);
-        let mut builder = DiagnosticsBuilder::new();
-        self.debug_fill_properties(&mut builder);
-        *node.properties_mut() = builder.build();
-        node
+impl<M: FloatingHeaderMode> Inspect for RenderSliverFloatingHeaderBase<M> {
+    fn kind(&self) -> &'static str {
+        M::DIAGNOSTIC_NAME
     }
 
-    fn debug_fill_properties(&self, builder: &mut DiagnosticsBuilder) {
-        self.core.fill_diagnostics(builder);
-        if let Some(offset) = self.effective_scroll_offset {
-            builder.add("effective_scroll_offset", offset);
+    fn inspect(&self, out: &mut Fields<'_>) {
+        self.core.inspect_core(out);
+        if let Some(offset) = &self.effective_scroll_offset {
+            out.field("effective_scroll_offset", offset)
+                .unit(Unit::LogicalPx);
         }
     }
 }

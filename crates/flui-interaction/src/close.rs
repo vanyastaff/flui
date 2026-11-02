@@ -147,7 +147,7 @@ impl ClosePanic {
             terminal.preserve();
         }
         if self.preserving() {
-            flui_foundation::panic::retain_opaque_payload(payload);
+            flui_foundation::panic::discard_payload(payload);
         } else {
             self.first = Some(payload);
         }
@@ -181,11 +181,11 @@ impl ClosePanic {
     /// ordinary close, retained by a preserving one (ADR-0123).
     pub(crate) fn keep_earlier(&mut self, payload: Box<dyn Any + Send>) {
         if self.preserving {
-            flui_foundation::panic::retain_opaque_payload(payload);
+            flui_foundation::panic::discard_payload(payload);
             return;
         }
         if let Some(later) = self.first.replace(payload) {
-            flui_foundation::panic::retain_opaque_payload(later);
+            flui_foundation::panic::discard_payload(later);
         }
     }
 
@@ -197,7 +197,7 @@ impl ClosePanic {
 
     pub(crate) fn finish_contained(mut self) {
         if let Some(payload) = self.first.take() {
-            flui_foundation::panic::retain_opaque_payload(payload);
+            flui_foundation::panic::discard_payload(payload);
         }
     }
 

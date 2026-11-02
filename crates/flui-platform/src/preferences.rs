@@ -6,7 +6,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::Locale;
+use crate::{Locale, RegionalFormats, RegionalParts};
 
 /// An observed text-weight request, before framework or application policy.
 ///
@@ -268,6 +268,7 @@ pub struct SystemPreferences {
     haptics: Option<bool>,
     text_weight: Option<TextWeightPreference>,
     locales: Option<Arc<[Locale]>>,
+    regional: RegionalFormats,
     gestures: GesturePreferences,
     wheel: WheelPreferences,
 }
@@ -366,6 +367,21 @@ impl SystemPreferences {
         self
     }
 
+    /// The user's regional formats: first weekday, hour cycle, measurement
+    /// system, numbering system and region override (ADR-0278). Empty when
+    /// the host reported none.
+    #[must_use]
+    pub const fn regional(&self) -> &RegionalFormats {
+        &self.regional
+    }
+
+    /// Record the regional formats in this snapshot.
+    #[must_use]
+    pub fn with_regional(mut self, value: RegionalFormats) -> Self {
+        self.regional = value;
+        self
+    }
+
     /// Observed gesture timing, before recognizer policy and authored overrides.
     #[must_use]
     pub const fn gestures(&self) -> &GesturePreferences {
@@ -417,6 +433,8 @@ pub struct PreferenceParts {
     pub text_weight: Option<TextWeightPreference>,
     /// [`SystemPreferences::locales`].
     pub locales: Option<Arc<[Locale]>>,
+    /// [`SystemPreferences::regional`], taken apart.
+    pub regional: RegionalParts,
     /// [`SystemPreferences::gestures`], taken apart.
     pub gestures: GestureParts,
     /// [`SystemPreferences::wheel`], taken apart.
@@ -460,6 +478,7 @@ impl SystemPreferences {
             haptics,
             text_weight,
             locales,
+            regional,
             gestures,
             wheel,
         } = self;
@@ -470,6 +489,7 @@ impl SystemPreferences {
             haptics,
             text_weight,
             locales,
+            regional: regional.into_parts(),
             gestures: gestures.into_parts(),
             wheel: wheel.into_parts(),
         }
@@ -490,6 +510,7 @@ impl PreferenceParts {
             haptics,
             text_weight,
             locales,
+            regional,
             gestures,
             wheel,
         } = self;
@@ -500,6 +521,7 @@ impl PreferenceParts {
             haptics,
             text_weight,
             locales,
+            regional: regional.into_formats(),
             gestures: gestures.into_preferences(),
             wheel: wheel.into_preferences(),
         };

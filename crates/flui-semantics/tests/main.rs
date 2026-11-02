@@ -19,6 +19,8 @@ mod incremental_flush;
 mod locate;
 #[path = "reading_order.rs"]
 mod reading_order;
+#[path = "route_change.rs"]
+mod route_change;
 #[path = "text_runs.rs"]
 mod text_runs;
 #[path = "wait.rs"]

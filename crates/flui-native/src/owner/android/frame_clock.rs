@@ -63,7 +63,7 @@ pub(crate) enum FrameStamp {
 }
 
 #[cfg(target_os = "android")]
-pub(crate) use clock::FrameClock;
+pub(crate) use clock::{FrameClock, monotonic_nanos};
 
 #[cfg(target_os = "android")]
 mod clock {
@@ -179,7 +179,7 @@ mod clock {
             reason = "the fields are 32 bits on a 32-bit process"
         )
     )]
-    fn monotonic_nanos() -> i64 {
+    pub(crate) fn monotonic_nanos() -> i64 {
         let mut now = libc::timespec {
             tv_sec: 0,
             tv_nsec: 0,

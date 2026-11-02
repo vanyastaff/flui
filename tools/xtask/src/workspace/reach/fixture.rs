@@ -142,6 +142,9 @@ impl Fixture {
                 "V": { "extends": "S", "forbid": ["tokio"] },
                 "R": { "extends": "K" },
                 "pkg": { "extends": "K", "forbid": ["windows-*", "windows_*"] },
+            },
+            "kind": {
+                "capability": { "forbid": ["flui-native", "winit", "wgpu", "tokio", "flui-engine"] },
             }
         }))
     }

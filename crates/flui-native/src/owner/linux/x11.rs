@@ -223,13 +223,15 @@ pub(crate) trait X11Host: 'static {
     /// the cursor, made on the thread that builds the loop.
     fn input(connection: &Arc<X11Connection>) -> Arc<dyn LoopInput>;
 
-    /// The clipboard: the `CLIPBOARD` selection, owned and read on a
-    /// connection and a thread of its own.
+    /// The clipboard and the primary selection: the `CLIPBOARD` and
+    /// `PRIMARY` selections, owned and read on a connection and a thread of
+    /// their own, which ring `doorbell` when the application's primary
+    /// selection is asked for. Made on the thread that builds the loop.
     ///
     /// # Errors
     /// [`PlatformError::Init`] when its connection, window or thread cannot
     /// be made.
-    fn clipboard() -> Result<Arc<dyn host::SharedClipboard>, PlatformError>;
+    fn clipboard(doorbell: &Doorbell) -> Result<Arc<dyn LoopClipboard>, PlatformError>;
 
     /// The windows' drag and drop on `connection`: XDND drops on them, made
     /// on the thread that builds the loop, ringing `doorbell` when work started
@@ -265,6 +267,21 @@ pub(crate) trait LoopDrag: DataTransferSource {
     /// End the fetches whose time is out at `now`, or whose request was
     /// dropped.
     fn expire(&self, now: web_time::Instant);
+}
+
+/// What the loop asks of the clipboard, the clipboard feature's: what
+/// [`Platform::clipboard`] and
+/// [`Platform::primary_selection`] hand
+/// out, and the turn's answer for the application's primary selection,
+/// which the application offers as a closure only the owner thread may
+/// call.
+pub(crate) trait LoopClipboard:
+    host::NativeClipboard + host::NativePrimarySelection + Send + Sync
+{
+    /// Answer the requests for the application's primary selection that
+    /// rang the doorbell, asking its text with no lock of the loop or of
+    /// the clipboard held.
+    fn deliver(&self);
 }
 
 /// The input of the X11 loop's windows, the input feature's (ADR-0151 §10):
@@ -350,6 +367,14 @@ impl host::Drag<X11Loop> for X11Loop {
     }
 }
 
+/// The primary selection position is the loop's too: X11 always has
+/// `PRIMARY`, on the clipboard's connection.
+impl host::PrimarySelection<X11Loop> for X11Loop {
+    fn primary_selection(owner: &X11Loop) -> Option<Rc<dyn host::NativePrimarySelection>> {
+        Some(Rc::new(Arc::clone(&owner.clipboard)))
+    }
+}
+
 /// The input position is the loop's: the input the table made, which keeps
 /// the keyboard's layout.
 impl host::Input<X11Loop> for X11Loop {
@@ -425,7 +450,7 @@ pub struct X11Loop {
     displays: Arc<dyn HostDisplays>,
     windows: Arc<dyn LoopWindows>,
     input: Arc<dyn LoopInput>,
-    clipboard: Arc<dyn host::SharedClipboard>,
+    clipboard: Arc<dyn LoopClipboard>,
     drag: Arc<dyn LoopDrag>,
     start_preferences: fn(&BackgroundExecutor, &Arc<OwnerSignal>) -> Arc<dyn LinuxPreferences>,
     start_host_notices: fn(&BackgroundExecutor, &Arc<OwnerSignal>) -> Arc<dyn LinuxNotices>,
@@ -465,7 +490,7 @@ impl X11Loop {
         let notices = H::notices(&app);
         let displays = H::displays();
         let input = H::input(&connection);
-        let clipboard = H::clipboard()?;
+        let clipboard = H::clipboard(&doorbell)?;
         let drag = H::drag(&connection, &doorbell)?;
         notices.mark_held_stale_on_wake(Arc::downgrade(&displays) as Weak<dyn StaleOnWake>);
         let affinity = flui_foundation::OwnerAffinity::new();
@@ -555,6 +580,9 @@ impl X11Loop {
         loop {
             self.doorbell.answer();
             self.dispatch_events(&mut turns)?;
+            // The application's primary selection is asked for its text here,
+            // at the turn, with nothing of the loop held.
+            self.clipboard.deliver();
             let turn = self.signal.begin_turn();
             self.read_sources(&mut turns, None);
             let _ = turn.drive();
@@ -610,7 +638,7 @@ impl X11Loop {
                             self.windows.event(&event);
                         }))
                     {
-                        flui_foundation::panic::retain_opaque_payload(second);
+                        flui_foundation::panic::discard_payload(second);
                     }
                     std::panic::resume_unwind(payload);
                 }
@@ -683,6 +711,9 @@ impl X11Loop {
                 self.windows.redraw_for_deadline();
             }
             self.dispatch_events(&mut turns)?;
+            // The application's primary selection is asked for its text here,
+            // at the turn, with nothing of the loop held.
+            self.clipboard.deliver();
             let turn = self.signal.begin_turn();
             self.read_sources(&mut turns, host_notices);
             if turn.drive() {

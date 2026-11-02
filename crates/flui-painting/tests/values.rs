@@ -1430,3 +1430,142 @@ pub(crate) fn text_styles_interpolate_magnitudes_and_switch_the_rest() {
         "finite magnitudes keep a finite midpoint"
     );
 }
+
+pub(crate) fn image_transforms_refuse_what_they_cannot_invert() {
+    use flui_painting::paint::{ImageFilter, ImageSampling, ImageTransform, InvalidImageTransform};
+    let focal = Point::new(10.0, 20.0);
+    for (scale, refusal) in [
+        (0.0, InvalidImageTransform::Singular),
+        (-2.0, InvalidImageTransform::Singular),
+        (f64::NAN, InvalidImageTransform::NonFinite),
+        (f64::INFINITY, InvalidImageTransform::NonFinite),
+    ] {
+        assert_eq!(
+            ImageFilter::try_magnify(focal, scale),
+            Err(refusal),
+            "scale {scale}"
+        );
+    }
+    assert_eq!(
+        ImageFilter::try_magnify(Point::new(f64::NAN, 0.0), 2.0),
+        Err(InvalidImageTransform::NonFinite)
+    );
+    // A collapsed axis, a determinant that underflows to zero, and one
+    // that overflows.
+    assert_eq!(
+        ImageTransform::try_new(1.0, 2.0, 2.0, 4.0, 0.0, 0.0),
+        Err(InvalidImageTransform::Singular)
+    );
+    assert_eq!(
+        ImageTransform::try_new(1e-300, 0.0, 0.0, 1e-300, 1.0, 0.0),
+        Err(InvalidImageTransform::Singular)
+    );
+    assert_eq!(
+        ImageTransform::try_new(1e200, 0.0, 0.0, 1e200, 0.0, 0.0),
+        Err(InvalidImageTransform::Singular)
+    );
+
+    // A magnifier keeps its focal point and spreads the rest about it; the
+    // inverse maps a shown point back to the source point it shows.
+    let Ok(ImageFilter::Transform {
+        transform,
+        sampling,
+    }) = ImageFilter::try_magnify(focal, 2.0)
+    else {
+        panic!("a valid magnifier");
+    };
+    assert_eq!(sampling, ImageSampling::Linear);
+    assert_eq!(
+        Ok(transform),
+        ImageTransform::try_new(2.0, 0.0, 0.0, 2.0, -10.0, -20.0)
+    );
+    assert_eq!(
+        transform.inverse_coefficients(),
+        [0.5, 0.0, 0.0, 0.5, 5.0, 10.0]
+    );
+
+    #[cfg(feature = "serde")]
+    {
+        use serde::Deserialize;
+        use serde::de::value::{Error, MapDeserializer, SeqDeserializer};
+
+        let fields = ["xx", "yx", "xy", "yy", "x0", "y0"];
+        let rejected = [
+            ("singular", [1.0, 2.0, 2.0, 4.0, 0.0, 0.0]),
+            (
+                "determinant underflow",
+                [1e-300, 0.0, 0.0, 1e-300, 1.0, 0.0],
+            ),
+            ("determinant overflow", [1e200, 0.0, 0.0, 1e200, 0.0, 0.0]),
+            ("inverse overflow", [1e-308, 0.0, 0.0, 1.0, f64::MAX, 0.0]),
+            ("NaN", [1.0, 0.0, 0.0, 1.0, f64::NAN, 0.0]),
+            ("infinity", [1.0, 0.0, 0.0, f64::INFINITY, 0.0, 0.0]),
+        ];
+        let mut admitted = Vec::new();
+        for (name, coefficients) in rejected {
+            // Value deserializers deliver actual NaN/infinity, unlike JSON.
+            let map = MapDeserializer::<_, Error>::new(fields.into_iter().zip(coefficients));
+            if ImageTransform::deserialize(map).is_ok() {
+                admitted.push((name, "map"));
+            }
+            let sequence = SeqDeserializer::<_, Error>::new(coefficients.into_iter());
+            if ImageTransform::deserialize(sequence).is_ok() {
+                admitted.push((name, "sequence"));
+            }
+            if coefficients
+                .iter()
+                .all(|coefficient| coefficient.is_finite())
+            {
+                let wire = serde_json::json!({
+                    "Transform": {
+                        "transform": {
+                            "xx": coefficients[0], "yx": coefficients[1],
+                            "xy": coefficients[2], "yy": coefficients[3],
+                            "x0": coefficients[4], "y0": coefficients[5]
+                        },
+                        "sampling": "Linear"
+                    }
+                });
+                if serde_json::from_value::<ImageFilter>(wire).is_ok() {
+                    admitted.push((name, "filter"));
+                }
+            }
+        }
+        assert!(
+            admitted.is_empty(),
+            "invalid transforms admitted: {admitted:?}"
+        );
+
+        for coefficients in [
+            [2.0, 1.0, 0.5, 3.0, 7.0, -4.0],
+            [-2.0, 0.0, 0.0, 3.0, 7.0, -4.0],
+        ] {
+            let [xx, yx, xy, yy, x0, y0] = coefficients;
+            let original = ImageTransform::try_new(xx, yx, xy, yy, x0, y0)
+                .expect("an invertible affine transform, including reflection");
+            let wire = serde_json::to_value(original).expect("a transform serializes");
+            assert_eq!(
+                wire,
+                serde_json::json!({
+                    "xx": xx, "yx": yx, "xy": xy, "yy": yy, "x0": x0, "y0": y0
+                })
+            );
+            let restored: ImageTransform =
+                serde_json::from_value(wire).expect("a valid transform deserializes");
+            assert_eq!(restored, original);
+            let sequence = SeqDeserializer::<_, Error>::new(coefficients.into_iter());
+            assert_eq!(
+                ImageTransform::deserialize(sequence).expect("field order preserved"),
+                original
+            );
+            let filter = ImageFilter::Transform {
+                transform: original,
+                sampling: ImageSampling::Linear,
+            };
+            let wire = serde_json::to_value(&filter).expect("a filter serializes");
+            let restored: ImageFilter =
+                serde_json::from_value(wire).expect("a valid nested transform deserializes");
+            assert_eq!(restored, filter);
+        }
+    }
+}

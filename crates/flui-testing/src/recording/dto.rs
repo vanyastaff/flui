@@ -11,6 +11,7 @@
 
 use std::num::{NonZeroU8, NonZeroU32, NonZeroU64};
 use std::sync::Arc;
+use std::time::Duration;
 
 use flui_foundation::DataTransferId;
 use flui_foundation::geometry::{DevicePixelRatio, EdgeInsets, Point, Size, WindowMetrics};
@@ -36,9 +37,11 @@ use flui_platform::pointer::{
     ScrollPrecision, ScrollUnit, SmartZoomEvent, TangentialPressure, Twist,
 };
 use flui_platform::{
-    Brightness, DragDropEvent, EventTime, FramePresented, GestureParts, ImeEvent, Locale,
-    MotionPreference, NativeMouseGeometry, NativeTouchGeometry, PlatformInput, PreferenceParts,
-    SystemPreferences, TextWeightPreference, WheelParts, WheelStep, WindowExecutionState, WindowId,
+    Brightness, DragDropEvent, EventTime, FramePresented, GestureParts, HourCycle, ImeEvent,
+    InsetCurve, InsetMotion, KeyboardInset, Locale, MeasurementSystem, MotionPreference,
+    NativeMouseGeometry, NativeTouchGeometry, NumberingSystem, PlatformInput, PreferenceParts,
+    RegionOverride, RegionalParts, SystemPreferences, TextWeightPreference, Weekday, WheelParts,
+    WheelStep, WindowExecutionState, WindowId, WindowInsets,
 };
 use flui_protocol::native_recording as wire;
 use flui_runtime::owner::{InputOutcome, WindowObservation};
@@ -1810,12 +1813,15 @@ enum WindowObservationDto {
     Hover(bool),
     #[serde(rename = "moved")]
     Moved,
-    #[serde(rename = "safe_area")]
-    SafeArea {
-        top: f64,
-        right: f64,
-        bottom: f64,
-        left: f64,
+    #[serde(rename = "insets")]
+    /// What covers the window: the safe area, the keyboard and the system
+    /// gesture regions, in logical pixels as top, right, bottom, left.
+    Insets {
+        safe_area: [f64; 4],
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        keyboard: Option<wire::KeyboardInset>,
+        #[serde(default)]
+        system_gestures: [f64; 4],
     },
     #[serde(rename = "brightness")]
     Brightness(BrightnessDto),
@@ -1853,11 +1859,10 @@ impl TryFrom<&WindowObservation> for WindowObservationDto {
             },
             WindowObservation::Hover(inside) => Self::Hover(inside),
             WindowObservation::Moved => Self::Moved,
-            WindowObservation::SafeArea(insets) => Self::SafeArea {
-                top: insets.top,
-                right: insets.right,
-                bottom: insets.bottom,
-                left: insets.left,
+            WindowObservation::Insets(insets) => Self::Insets {
+                safe_area: edges_to_wire(insets.safe_area()),
+                keyboard: keyboard_to_wire(insets.keyboard())?,
+                system_gestures: edges_to_wire(insets.system_gestures()),
             },
             WindowObservation::Brightness(brightness) => Self::Brightness(match brightness {
                 Brightness::Light => BrightnessDto::Light,
@@ -1898,18 +1903,89 @@ impl TryFrom<WindowObservationDto> for WindowObservation {
             },
             WindowObservationDto::Hover(inside) => Self::Hover(inside),
             WindowObservationDto::Moved => Self::Moved,
-            WindowObservationDto::SafeArea {
-                top,
-                right,
-                bottom,
-                left,
-            } => Self::SafeArea(EdgeInsets::new(top, right, bottom, left)),
+            WindowObservationDto::Insets {
+                safe_area,
+                keyboard,
+                system_gestures,
+            } => Self::Insets(
+                WindowInsets::try_new(
+                    edges_from_wire(safe_area),
+                    keyboard
+                        .map(keyboard_from_wire)
+                        .transpose()?
+                        .unwrap_or(KeyboardInset::HIDDEN),
+                    edges_from_wire(system_gestures),
+                )
+                .map_err(invalid)?,
+            ),
             WindowObservationDto::Brightness(brightness) => Self::Brightness(match brightness {
                 BrightnessDto::Light => Brightness::Light,
                 BrightnessDto::Dark => Brightness::Dark,
             }),
         })
     }
+}
+
+fn edges_to_wire(edges: EdgeInsets) -> [f64; 4] {
+    [edges.top, edges.right, edges.bottom, edges.left]
+}
+
+fn edges_from_wire([top, right, bottom, left]: [f64; 4]) -> EdgeInsets {
+    EdgeInsets::new(top, right, bottom, left)
+}
+
+/// `keyboard` in the recording; `None` for a hidden keyboard at rest.
+fn keyboard_to_wire(keyboard: KeyboardInset) -> Result<Option<wire::KeyboardInset>> {
+    if keyboard == KeyboardInset::HIDDEN {
+        return Ok(None);
+    }
+    let motion = keyboard
+        .motion()
+        .map(|motion| {
+            Ok(wire::InsetMotion {
+                from: edges_to_wire(motion.from()),
+                start_ns: motion.start().as_nanos(),
+                duration_ns: u64::try_from(motion.duration().as_nanos())
+                    .map_err(|_| invalid("a keyboard motion longer than the timeline"))?,
+                curve: match motion.curve() {
+                    InsetCurve::Linear => wire::InsetCurve::Linear,
+                    InsetCurve::CubicBezier { x1, y1, x2, y2 } => {
+                        wire::InsetCurve::CubicBezier { x1, y1, x2, y2 }
+                    }
+                    InsetCurve::SystemKeyboard => wire::InsetCurve::SystemKeyboard,
+                    _ => return Err(unmirrored("InsetCurve")),
+                },
+            })
+        })
+        .transpose()?;
+    Ok(Some(wire::KeyboardInset {
+        target: edges_to_wire(keyboard.target()),
+        motion,
+    }))
+}
+
+/// The keyboard `wire` describes, validated as its types validate it.
+fn keyboard_from_wire(wire: wire::KeyboardInset) -> Result<KeyboardInset> {
+    let target = edges_from_wire(wire.target);
+    let Some(motion) = wire.motion else {
+        return KeyboardInset::try_at_rest(target).map_err(invalid);
+    };
+    let curve = match motion.curve {
+        wire::InsetCurve::Linear => InsetCurve::Linear,
+        wire::InsetCurve::CubicBezier { x1, y1, x2, y2 } => {
+            InsetCurve::CubicBezier { x1, y1, x2, y2 }
+        }
+        wire::InsetCurve::SystemKeyboard => InsetCurve::SystemKeyboard,
+        _ => return Err(invalid("a keyboard curve this build does not read")),
+    };
+    let motion = InsetMotion::try_new(
+        edges_from_wire(motion.from),
+        EventTime::from_nanos(motion.start_ns),
+        Duration::from_nanos(motion.duration_ns),
+        curve,
+    )
+    .map_err(invalid)?;
+    KeyboardInset::try_moving(target, motion).map_err(invalid)
 }
 
 // ============================================================================
@@ -2167,6 +2243,7 @@ fn preferences_wire(values: SystemPreferences) -> Result<wire::Preferences> {
         haptics,
         text_weight,
         locales,
+        regional,
         gestures:
             GestureParts {
                 double_click_interval,
@@ -2207,6 +2284,7 @@ fn preferences_wire(values: SystemPreferences) -> Result<wire::Preferences> {
             })
             .transpose()?,
         locales: locales.map(|locales| locales.iter().map(Locale::to_language_tag).collect()),
+        regional: regional_wire(regional),
         gestures: wire::Gestures {
             double_click_interval_ns: double_click_interval.map(nanos),
             double_tap_interval_ns: double_tap_interval.map(nanos),
@@ -2241,6 +2319,68 @@ fn preferences_wire(values: SystemPreferences) -> Result<wire::Preferences> {
     })
 }
 
+/// `parts` in the shared schema, each format as its Unicode value; none when
+/// no format was observed.
+fn regional_wire(parts: RegionalParts) -> Option<Box<wire::Regional>> {
+    if parts == RegionalParts::default() {
+        return None;
+    }
+    let RegionalParts {
+        first_weekday,
+        hour_cycle,
+        measurement,
+        numbering,
+        region,
+    } = parts;
+    Some(Box::new(wire::Regional {
+        first_weekday: first_weekday.map(|day| day.unicode_value().to_owned()),
+        hour_cycle: hour_cycle.map(|cycle| cycle.unicode_value().to_owned()),
+        measurement: measurement.map(|system| system.unicode_value().to_owned()),
+        numbering: numbering.map(|numbering| numbering.unicode_value().to_owned()),
+        region: region.map(|region| region.code().to_owned()),
+    }))
+}
+
+/// The formats `wire` names, each checked as its type checks it.
+fn regional_from_wire(wire: Option<Box<wire::Regional>>) -> Result<RegionalParts> {
+    let Some(wire) = wire else {
+        return Ok(RegionalParts::default());
+    };
+    let wire::Regional {
+        first_weekday,
+        hour_cycle,
+        measurement,
+        numbering,
+        region,
+    } = *wire;
+    Ok(RegionalParts {
+        first_weekday: first_weekday
+            .map(|value| {
+                Weekday::from_unicode_value(&value)
+                    .ok_or_else(|| invalid(format!("first weekday {value}")))
+            })
+            .transpose()?,
+        hour_cycle: hour_cycle
+            .map(|value| {
+                HourCycle::from_unicode_value(&value)
+                    .ok_or_else(|| invalid(format!("hour cycle {value}")))
+            })
+            .transpose()?,
+        measurement: measurement
+            .map(|value| {
+                MeasurementSystem::from_unicode_value(&value)
+                    .ok_or_else(|| invalid(format!("measurement system {value}")))
+            })
+            .transpose()?,
+        numbering: numbering
+            .map(|value| NumberingSystem::try_new(&value).map_err(invalid))
+            .transpose()?,
+        region: region
+            .map(|value| RegionOverride::try_new(&value).map_err(invalid))
+            .transpose()?,
+    })
+}
+
 fn pixel_ratio(value: f64) -> Result<DevicePixelRatio> {
     DevicePixelRatio::try_new(value).ok_or_else(|| invalid(format!("pixel ratio {value}")))
 }
@@ -2255,6 +2395,7 @@ fn preferences_from_wire(wire: wire::Preferences) -> Result<SystemPreferences> {
         haptics,
         text_weight,
         locales,
+        regional,
         gestures,
         wheel_vertical,
         wheel_horizontal_characters,
@@ -2298,6 +2439,7 @@ fn preferences_from_wire(wire: wire::Preferences) -> Result<SystemPreferences> {
                     .collect::<Result<Arc<[Locale]>>>()
             })
             .transpose()?,
+        regional: regional_from_wire(regional)?,
         gestures: GestureParts {
             double_click_interval: gestures.double_click_interval_ns.map(duration),
             double_tap_interval: gestures.double_tap_interval_ns.map(duration),

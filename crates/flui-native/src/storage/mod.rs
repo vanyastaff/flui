@@ -36,12 +36,35 @@ mod os_error;
 #[cfg(target_arch = "wasm32")]
 mod page_store;
 
+mod headless;
+mod memory_store;
+// Every host but Android and headless keeps its data there.
+#[cfg(any(
+    windows,
+    target_os = "macos",
+    target_os = "ios",
+    target_arch = "wasm32",
+    wayland_host,
+    x11_host,
+    all(feature = "winit-backend", target_os = "linux")
+))]
 mod user_dirs;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use file_store::FileStore;
+pub(crate) use headless::HeadlessData;
+pub(crate) use memory_store::MemoryStore;
 #[cfg(target_arch = "wasm32")]
 pub use page_store::FileStore;
+#[cfg(any(
+    windows,
+    target_os = "macos",
+    target_os = "ios",
+    target_arch = "wasm32",
+    wayland_host,
+    x11_host,
+    all(feature = "winit-backend", target_os = "linux")
+))]
 pub(crate) use user_dirs::UserDataDirs;
 
 /// The two directories a [`FileStore`] writes under.
@@ -77,5 +100,142 @@ pub fn data_dirs(app: &AppDataDir) -> Option<DataDirs> {
             roaming: PathBuf::from(app.as_str()),
             local: PathBuf::from(app.as_str()),
         })
+    }
+}
+
+/// Where a platform keeps an application's values: a [`FileStore`] under
+/// its data roots, or values in memory on a host with no disk of its own to
+/// write to (headless, unless a test gives it a root).
+///
+/// Its calls are the [`FileStore`]'s: blocking on native targets, so the
+/// host runs them on an IO thread, and futures on wasm32.
+#[derive(Debug)]
+pub struct DataStore {
+    backing: Backing,
+}
+
+#[derive(Debug)]
+enum Backing {
+    Files(FileStore),
+    Memory(MemoryStore),
+}
+
+impl DataStore {
+    /// The values under `dirs`, one file each.
+    #[must_use]
+    pub fn on_disk(dirs: DataDirs) -> Self {
+        Self {
+            backing: Backing::Files(FileStore::new(dirs)),
+        }
+    }
+
+    /// The values `store` keeps; clones of it see the same values.
+    #[must_use]
+    pub(crate) fn in_memory(store: MemoryStore) -> Self {
+        Self {
+            backing: Backing::Memory(store),
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl DataStore {
+    /// [`FileStore::read`].
+    ///
+    /// # Errors
+    ///
+    /// As [`FileStore::read`].
+    pub fn read(
+        &self,
+        name: &flui_platform::StorageName,
+        limit: u64,
+    ) -> Result<flui_platform::Stored, flui_platform::StorageError> {
+        match &self.backing {
+            Backing::Files(store) => store.read(name, limit),
+            Backing::Memory(store) => store.read(name, limit),
+        }
+    }
+
+    /// [`FileStore::write`].
+    ///
+    /// # Errors
+    ///
+    /// As [`FileStore::write`].
+    pub fn write(
+        &self,
+        name: &flui_platform::StorageName,
+        bytes: &[u8],
+        mode: flui_platform::WriteMode,
+    ) -> Result<flui_platform::StoredVersion, flui_platform::StorageError> {
+        match &self.backing {
+            Backing::Files(store) => store.write(name, bytes, mode),
+            Backing::Memory(store) => store.write(name, bytes, mode),
+        }
+    }
+
+    /// [`FileStore::copy_aside`].
+    ///
+    /// # Errors
+    ///
+    /// As [`FileStore::copy_aside`].
+    pub fn copy_aside(
+        &self,
+        name: &flui_platform::StorageName,
+    ) -> Result<flui_platform::CopiedAside, flui_platform::StorageError> {
+        match &self.backing {
+            Backing::Files(store) => store.copy_aside(name),
+            Backing::Memory(store) => store.copy_aside(name),
+        }
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+impl DataStore {
+    /// [`FileStore::read`].
+    ///
+    /// # Errors
+    ///
+    /// As [`FileStore::read`].
+    pub async fn read(
+        &self,
+        name: &flui_platform::StorageName,
+        limit: u64,
+    ) -> Result<flui_platform::Stored, flui_platform::StorageError> {
+        match &self.backing {
+            Backing::Files(store) => store.read(name, limit).await,
+            Backing::Memory(store) => store.read(name, limit),
+        }
+    }
+
+    /// [`FileStore::write`].
+    ///
+    /// # Errors
+    ///
+    /// As [`FileStore::write`].
+    pub async fn write(
+        &self,
+        name: &flui_platform::StorageName,
+        bytes: &[u8],
+        mode: flui_platform::WriteMode,
+    ) -> Result<flui_platform::StoredVersion, flui_platform::StorageError> {
+        match &self.backing {
+            Backing::Files(store) => store.write(name, bytes, mode).await,
+            Backing::Memory(store) => store.write(name, bytes, mode),
+        }
+    }
+
+    /// [`FileStore::copy_aside`].
+    ///
+    /// # Errors
+    ///
+    /// As [`FileStore::copy_aside`].
+    pub async fn copy_aside(
+        &self,
+        name: &flui_platform::StorageName,
+    ) -> Result<flui_platform::CopiedAside, flui_platform::StorageError> {
+        match &self.backing {
+            Backing::Files(store) => store.copy_aside(name).await,
+            Backing::Memory(store) => store.copy_aside(name),
+        }
     }
 }

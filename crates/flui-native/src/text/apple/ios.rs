@@ -98,6 +98,14 @@ impl flui_platform::PlatformTextInput for Keyboard {
         }
     }
 
+    /// The keyboard shows, suggests and learns as the field's status says: a
+    /// protected field's keyboard is secure (`isSecureTextEntry`).
+    fn set_field_status(&self, status: flui_platform::text_store::TextStoreStatus) {
+        if let Some(responder) = self.responder() {
+            responder.set_field_status(status);
+        }
+    }
+
     fn set_ime_cursor_area(&self, area: flui_foundation::geometry::Bounds<f64>) {
         if let Some(responder) = self.responder() {
             responder.set_caret(objc2_foundation::NSRect::new(

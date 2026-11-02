@@ -3,6 +3,7 @@
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 /// How text is aligned horizontally within its container.
+#[derive(flui_foundation::inspect::Inspect)]
 pub enum TextAlign {
     /// Align text to the left edge.
     #[default]
@@ -93,6 +94,7 @@ pub use crate::TextBaseline;
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 /// The directionality in which text flows.
+#[derive(flui_foundation::inspect::Inspect)]
 pub enum TextDirection {
     /// Left-to-right text direction.
     #[default]

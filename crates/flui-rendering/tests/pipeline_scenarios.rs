@@ -3,8 +3,8 @@
 //! Each scenario drives the REAL frame pipeline (layout → compositing →
 //! paint) the bindings use in production, then asserts on observable
 //! outputs: committed offsets, layer-tree structure, picture bounds, hit
-//! paths, dirty-queue hygiene, and — via the `Diagnosticable`-backed
-//! diagnostics — the render objects' self-described configuration.
+//! paths, dirty-queue hygiene, and — via the typed render snapshot —
+//! the render objects' self-described configuration.
 //!
 //! These scenarios are expressed with the `flui_rendering::testing` harness
 //! (`RenderTester` / `FrameRun` / `Probe`): declarative tree specs, symmetric

@@ -14,6 +14,15 @@
   `NotOnThisDevice`: below the version that has the feature the device lacks it, and only from
   that version on is the host's gap `NotYetOnThisHost`. How a window carries it follows from
   this decision (ADR-0254 §6).
+- **Amended:** 2026-10-31 — §5: a clipboard or primary-selection read answers
+  `Result<Option<Arc<str>>, ClipboardError>`, and the readers that ask while one read is in flight
+  share its answer, so a failed host read is no empty clipboard and a burst of pastes holds one
+  copy of the text. The read in flight is per UI runtime, kept in
+  `ProviderContext::runtime_local`, the one place for a provider's per-runtime state.
+- **Amended:** 2026-10-31 — §6: a write is a `ClipboardWrite`, which a password manager marks
+  `concealed` to keep it out of the clipboard's history and cloud sync, and every backend answers
+  what it does with one as a `Concealment`, so an application can tell a system that honours the
+  mark from one where only some clipboard managers read it and one with no way to mark it.
 - **Supersedes:** [ADR-0084](ADR-0084-open-capability-seam-and-plugins.md) (Proposed) as a whole;
   what carries over is restated in §1.
   [ADR-0078](ADR-0078-rules-live-in-types-and-lints.md) §1's last sentence ("A new capability is a
@@ -421,6 +430,136 @@ removal of `clipboard_handle`, the synchronous `Clipboard` trait and the contrac
 - a package fixture that depends only on `flui-sdk` and the contract declares, registers and
   acquires its own capability, and so does a leaf-crate fixture that depends on the contract alone.
 
+### 5. Clipboard reads share one answer and name their failure
+
+Amendment of 2026-10-31. A read answered `Option<String>`: every read held its own copy of the
+text, so a burst of pastes of a large clipboard held as many copies as readers, and a host that
+could not read answered `None`, which a caller could not tell from an empty clipboard. The
+clipboard and the primary selection now answer one shape:
+
+```rust
+pub type ClipboardRead = Result<Option<Arc<str>>, ClipboardError>;
+
+#[non_exhaustive]
+pub enum ClipboardError { Unavailable, Denied, Timeout, Malformed, TooLarge }
+
+impl ClipboardHandle {
+    pub fn new(backend: impl ClipboardBackend, cx: &ProviderContext<'_>) -> Self;
+    pub fn read_text(&self) -> Completion<ClipboardRead>;
+}
+pub trait ClipboardBackend { fn read_text(&self, answer: Resolver<ClipboardRead>); /* … */ }
+
+impl ProviderContext<'_> { pub fn runtime_local<T: Default + 'static>(&self) -> Rc<T>; }
+```
+
+The primary selection's handle and backend take the same types.
+
+- **One read in flight per UI runtime.** Every handle a UI runtime hands out shares one read in
+  flight, whichever widget or window acquired it. A reader that asks while it is in flight joins
+  it; the first reader starts the host read. When the host answers, every reader settles with a
+  clone of the same `ClipboardRead`, so they all hold one allocation of the text, and ten fields
+  pasting at once ask the host once. The next read after the answer starts afresh. The read lives
+  and ends with its runtime, so a runtime retiring never strands another's readers. The X11
+  thread still refuses reads past `MAX_READERS` waiting at once, as `Unavailable`, a backstop
+  for many runtimes reading together.
+- **Per-runtime provider state.** A provider is registered once and asked by every UI runtime,
+  so state it holds itself is shared across them. `ProviderContext::runtime_local::<T>()` is the
+  one place a provider keeps state for one runtime, shared by every handle it hands out there:
+  a typed slot per `T`, made with `T::default()` on first ask, which a capability names with a
+  private type. The handles' constructors take the context and find their slot there, so no
+  provider has to remember to share it. Later capabilities keep their per-runtime state the same
+  way (an HTTP pool, an open store).
+- **Drop order at retirement.** The runtime ends its pending completions first, then drops the
+  jobs still queued, then retires its runtime-local slots, each drop contained and the first
+  failure kept. A completion's closure dropped in the first step still finds its provider's
+  slot alive. A slot a handle still holds ends when that handle drops; an acquisition after
+  retirement gets a fresh value kept nowhere.
+- **Containment.** No borrow of the shared state is held while the backend runs. Each reader's
+  delivery is contained, so a wake hook that panics leaves the readers after it answered and
+  its failure goes on after them. A write, or a primary-selection claim or its release, through
+  any handle of the runtime ends the sharing: a read asked after it never joins one asked
+  before. A backend that drops its resolver, or panics and drops it, abandons the read: every
+  reader that joined it settles `Abandoned::ProviderDropped`. A runtime that retires before the
+  answer drops the waiting closure unrun; the readers go with it, and a later read never finds
+  the stale one, because a read clears only its own entry.
+- **Ok(None) means no text.** A clipboard that holds nothing, or only data that is not text,
+  answers `Ok(None)`. `Unavailable` is a clipboard the host could not reach (another application
+  holds it open, the display connection is gone, a host without one). `Denied` is a permission:
+  the browser's `NotAllowedError`. `Timeout` is a selection owner that did not answer in time
+  (X11, Wayland). `Malformed` is text invalid in its encoding (an unterminated `CF_UNICODETEXT`,
+  `arboard`'s conversion failure). `TooLarge` is text past 64 MiB, one limit on every host,
+  refused before FLUI copies it (decoded text measured first on Win32, X11 and Wayland). On
+  the web, a refused read still answers what the page last wrote, and names its refusal only
+  before the page wrote anything.
+- **Cost.** An answer takes one more owner job than before: the host's answer settles the shared
+  read, which then resolves each reader.
+
+### 6. A write says whether it is concealed
+
+Amendment of 2026-10-31. A write was a `String`: a password manager that copied a secret put it
+in Windows' clipboard history and cloud clipboard, in macOS's and KDE's clipboard managers and on
+the user's other Apple devices, with no way to ask otherwise. A write now names what it asks:
+
+```rust
+#[non_exhaustive]
+pub struct ClipboardWrite { /* text, concealed */ }
+
+impl ClipboardWrite {
+    pub fn text(text: impl Into<String>) -> Self;
+    pub fn concealed(self) -> Self;
+    pub fn as_text(&self) -> &str;
+    pub fn is_concealed(&self) -> bool;
+    pub fn into_text(self) -> String;
+}
+
+#[non_exhaustive]
+pub enum Concealment { Honored, HintOnly, Unavailable }
+
+impl ClipboardHandle {
+    pub fn write(&self, write: ClipboardWrite);
+    pub fn write_text(&self, text: impl Into<String>); // write(ClipboardWrite::text(text))
+    pub fn concealment(&self) -> Concealment;
+}
+pub trait ClipboardBackend {
+    fn write(&self, write: ClipboardWrite);
+    fn concealment(&self) -> Concealment;
+    /* read_text */
+}
+```
+
+`flui_native::NativeClipboard` takes the same `write` and `concealment`, with `write_text` as its
+shorthand.
+
+- **A struct, not a flag.** A builder grows (an expiry, a second form of the text) without
+  another method on every backend, and `write_text` stays the short form for an ordinary copy.
+  Its `Debug` shows the length and the mark, never the text.
+- **What each host does.**
+
+  | Host | A concealed write | `concealment()` |
+  |------|-------------------|-----------------|
+  | Win32 | `ExcludeClipboardContentFromMonitorProcessing`, `CanIncludeInClipboardHistory` and `CanUploadToCloudClipboard`, each the DWORD 0, beside the text | `Honored` |
+  | AppKit | `org.nspasteboard.ConcealedType` and `org.nspasteboard.TransientType`, and `prepareForNewContentsWithOptions(CurrentHostOnly)`, which keeps it off the universal clipboard | `Honored` |
+  | UIKit | `setItems:options:` with `UIPasteboardOptionLocalOnly`; iOS keeps no history | `Honored` |
+  | `arboard` (winit) | its `exclude_from_history`: Win32's formats, the nspasteboard.org concealed type, KDE's hint | `Honored` on Windows, `HintOnly` elsewhere |
+  | X11, Wayland | the target or MIME type `x-kde-passwordManagerHint`, answered `secret` | `HintOnly` |
+  | Android | `ClipDescription.EXTRA_IS_SENSITIVE` in the clip's extras (API 24 and later) | `HintOnly`, `Unavailable` below API 24 |
+  | Web | an ordinary `writeText`: the Clipboard API has no mark; a debug build warns once per clipboard | `Unavailable` |
+  | Headless, in memory | the text; nothing keeps a history | `Honored` |
+
+- **Honored, HintOnly, Unavailable.** `Honored` is the system keeping the entry out of its own
+  history and sync. `HintOnly` is a mark only what reads it honours: a clipboard manager on
+  Linux, the copy preview and keyboards on Android. `Unavailable` is a host with no mark, where a
+  concealed write is an ordinary one. The answer is a property of the backend, constant for its
+  life, so an application asks before it offers to copy a secret, not after.
+- **A mark that fails drops the write.** On Win32 and AppKit the markers are set before the text,
+  in one clipboard session; a marker the system refuses leaves the clipboard empty rather than
+  hand the secret to the history. On Android a clip that could not be marked is not set.
+- **Gap 26 is a scenario.** `flui_native::testing::clipboard::a_concealed_write_stays_out_of_history`
+  is the one scenario every host's clipboard runs: the concealed write pastes back whole, and the
+  host's answer is not `Unavailable`. A host that answers `Unavailable` fails it as gap 26, which
+  its test names with `expect_fail(CONCEALED_WRITES, …)` rather than skipping it; that call fails
+  once the host conceals, so the fix closes the gap and the call together.
+
 ### As built
 
 The clipboard landing spells the shape of §3 as follows; the properties of §2 hold as written.
@@ -456,9 +595,10 @@ The clipboard landing spells the shape of §3 as follows; the properties of §2 
   UIKit and `arboard` answer at once, the web when `navigator.clipboard.readText()` settles
   (falling back to what the page wrote when the browser refuses). Android reads and writes
   `ClipboardManager` through JNI.
-- **The scripted double.** `flui_testing::ScriptedClipboard` holds, answers, drops or refuses
-  reads and counts live handles; `HeadlessHost::with_capabilities` and `HeadlessHost::with_plugin`
-  mount a tree over another registry. `CompletionSource` is public, so the contract needs no
+- **The scripted double.** `flui_testing::ScriptedClipboard` holds, answers, fails, drops or
+  refuses reads, and counts the reads it was asked and the live handles;
+  `HeadlessHost::with_capabilities` and `HeadlessHost::with_plugin` mount a tree over another
+  registry. `CompletionSource` is public, so the contract needs no
   `scripted` feature; ADR-0243 names test support `testing` in any case.
 - **Checked failures.** `capability` on a `BuildContext` is the E0599 doctest of
   `LifecycleContextExt`; `ClipboardHandle: Send` and `Completion<T>: Send` are the E0277 cases
@@ -509,6 +649,29 @@ The clipboard landing spells the shape of §3 as follows; the properties of §2 
   when the last clone of a handle drops (§2, item 3). That long-lived OS work is an application
   service and not a widget-held handle is a row of each capability conformance table (ADR-0154),
   not of the seam.
+- §5: `reads_asked_while_one_is_in_flight_share_its_answer` (two widgets in two windows of one
+  runtime: one host read for a burst, every reader holding the same allocation, a later read
+  asking again),
+  `each_runtime_asks_for_its_own_read` (one provider, two runtimes: a read each, and the retired
+  one strands nobody),
+  `a_read_after_a_write_never_joins_the_read_before_it`,
+  `a_primary_read_after_a_release_never_joins_the_read_before_it`,
+  `a_failed_read_reaches_every_reader_that_joined_it` (a failure is no empty clipboard) and
+  `an_abandoned_read_abandons_its_joiners_and_the_next_read_asks_again`, in the `capability_seam`
+  table of `flui-testing`; `runtime_locals_keep_one_value_per_type_until_retirement`
+  (`flui-platform`: one value per type, every slot dropped at retirement though one panics, the
+  first failure returned, nothing kept after);
+  `a_wake_that_panics_mid_fan_out_leaves_the_other_readers_answered` (`flui-interaction`).
+- §6: `a_concealed_write_reaches_the_host_marked` (the `capability_seam` table of
+  `flui-testing`: the mark reaches the backend, an ordinary write clears it, the handle answers
+  the backend's `Concealment`); the scenario on each host:
+  `a_concealed_write_stays_out_of_the_headless_history`,
+  `a_concealed_write_offers_the_password_manager_hint` (X11 under Xvfb: `TARGETS` offers the hint
+  and it converts to `secret`, an ordinary write offers neither),
+  `the_selection_crosses_between_clients` (Wayland, with `a_concealed_source_offers_and_answers_the_hint`
+  for the offer and its answer), `a_concealed_write_is_an_ordinary_one_on_the_web`
+  (the expected failure), and `a_concealed_write_stays_out_of_the_windows_history` and
+  `a_concealed_write_stays_out_of_the_macos_history`, run on those hosts.
 
 ## Pros and cons of the options
 

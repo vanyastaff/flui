@@ -62,7 +62,7 @@ fn frame_request_at(
 /// of that clock taken now (`platform_now`): the stamp lies as far before or after this reading of
 /// the event clock as it lies from `platform_now`, so no epoch has to be aligned. A stamp further
 /// back than the timeline's start is its start.
-#[cfg(any(windows, wayland_host))]
+#[cfg(any(windows, wayland_host, target_os = "android"))]
 #[must_use]
 pub(crate) fn rebased(platform_now: std::time::Duration, stamp: std::time::Duration) -> EventTime {
     rebased_at(EventTime::now().as_nanos(), platform_now, stamp)
@@ -76,7 +76,13 @@ pub(crate) fn aged(age: std::time::Duration) -> EventTime {
     rebased(age, std::time::Duration::ZERO)
 }
 
-#[cfg(any(windows, wayland_host, target_os = "macos", test))]
+#[cfg(any(
+    windows,
+    wayland_host,
+    target_os = "macos",
+    target_os = "android",
+    test
+))]
 pub(crate) fn rebased_at(
     event_now: u64,
     platform_now: std::time::Duration,
@@ -236,22 +242,15 @@ mod tests {
             Arc,
             atomic::{AtomicUsize, Ordering},
         };
-        struct Hostile;
-        impl Drop for Hostile {
-            fn drop(&mut self) {
-                panic!("hostile payload drop");
-            }
-        }
         struct Capture(Arc<AtomicUsize>);
         impl Drop for Capture {
             fn drop(&mut self) {
                 self.0.fetch_add(1, Ordering::SeqCst);
-                std::panic::panic_any(Hostile);
             }
         }
         // A teardown that runs a one-shot callback from a destructor, as the
         // Win32 run guard tells the application it quits: the callback is
-        // taken for good, so a failed call retains it rather than putting it
+        // taken for good, so a failed call does not put it
         // back for the guard's own drop.
         struct OneShot<'a>(&'a Mutex<Option<Box<dyn FnMut() + Send>>>);
         impl crate::owner::call_point::HandlerSlot for OneShot<'_> {
@@ -284,7 +283,7 @@ mod tests {
                 let guard = Guard(Mutex::new(Some(Box::new(move || {
                     let _ = &capture;
                     observed.fetch_add(1, Ordering::SeqCst);
-                    std::panic::panic_any(Hostile);
+                    panic!("callback failure");
                 }))));
                 assert!(!already_unwinding, "original bootstrap panic");
                 drop(guard);
@@ -301,8 +300,8 @@ mod tests {
                 assert!(outcome.is_ok());
             }
             assert_eq!(invoked.load(Ordering::SeqCst), 1);
-            // The call failed: its captures are retained, never dropped into
-            // a second failure (ADR-0127 §2).
+            // `call` still forgets the displaced handler after a failed call
+            // (a crate-local retention, ADR-0127 §2).
             assert_eq!(dropped.load(Ordering::SeqCst), 0);
         }
     }
@@ -543,7 +542,7 @@ mod tests {
         signal.close();
     }
 
-    /// The owner-thread machinery's contracts: hostile callback captures and
+    /// The owner-thread machinery's contracts: failing callback captures and
     /// payloads are contained (a direct clear drops each capture without
     /// unwinding; an owner callback's own and capture panics never replace an
     /// existing unwind), and the owner signal coalesces a burst and gives a

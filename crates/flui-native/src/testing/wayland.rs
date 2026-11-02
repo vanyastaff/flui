@@ -92,6 +92,20 @@ pub fn suspend(window: &dyn HostWindow, suspended: bool) -> bool {
         .is_some_and(|window| window.suspend_as_told(suspended))
 }
 
+/// The text-store host of `window`, as the presentation that owns it reads it
+/// on the owner thread: the window's `zwp_text_input_v3` client. `None` for a
+/// window of another host, and where the compositor offers no text input.
+#[must_use]
+pub fn text_store_host(
+    window: &dyn HostWindow,
+) -> Option<std::rc::Rc<dyn flui_platform::text_store::TextStoreHost>> {
+    let window = window.as_any().downcast_ref::<WaylandWindow>()?;
+    crate::host_window::HostWindow::text_store_host(
+        window,
+        crate::host_window::OwnerThreadToken::new(),
+    )
+}
+
 /// Draw one blank frame on `window` at its metrics and commit it, as a
 /// renderer presents one: a compositor shows a window, and holds it to the
 /// state it acknowledged, only once it has a buffer. Call the window's
@@ -265,4 +279,15 @@ pub fn compositor_report(window: &dyn HostWindow) -> Option<CompositorReport> {
         activation_tokens: said.activation_tokens,
         activations: said.activations,
     })
+}
+
+/// Whether the selection offer the last input's seat of `platform`, a
+/// `WaylandPlatform`, holds names KDE's concealment hint
+/// (`x-kde-passwordManagerHint`, ADR-0152 §6): what a clipboard manager
+/// reading that hint sees. `None` while the seat holds no selection offer.
+#[must_use]
+pub fn selection_offers_concealed_hint<H: Host<Loop = WaylandLoop>>(
+    platform: &HostPlatform<H>,
+) -> Option<bool> {
+    platform.owner().selection_offers_hint()
 }

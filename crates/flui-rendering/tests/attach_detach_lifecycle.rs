@@ -97,7 +97,13 @@ impl Drop for LifecycleProbe {
     }
 }
 
-impl flui_foundation::Diagnosticable for LifecycleProbe {}
+impl flui_foundation::inspect::Inspect for LifecycleProbe {
+    fn kind(&self) -> &'static str {
+        "LifecycleProbe"
+    }
+
+    fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+}
 
 impl RenderBox for LifecycleProbe {
     type Arity = Leaf;
@@ -139,7 +145,13 @@ impl RenderBox for LifecycleProbe {
 #[derive(Debug)]
 struct LifecycleContainer(LifecycleProbe);
 
-impl flui_foundation::Diagnosticable for LifecycleContainer {}
+impl flui_foundation::inspect::Inspect for LifecycleContainer {
+    fn kind(&self) -> &'static str {
+        "LifecycleContainer"
+    }
+
+    fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+}
 
 impl RenderBox for LifecycleContainer {
     type Arity = flui_foundation::Variable;

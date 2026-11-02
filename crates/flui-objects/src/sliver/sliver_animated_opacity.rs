@@ -25,6 +25,7 @@ use crate::subscription::RenderSubscription;
 
 use flui_foundation::Single;
 use flui_foundation::geometry::Size;
+use flui_foundation::inspect::{Fields, Inspect, Unit};
 
 use flui_animation::{Animation, ProxyAnimation};
 use flui_foundation::panic::PanicRecovery;
@@ -112,14 +113,17 @@ impl std::fmt::Debug for RenderSliverAnimatedOpacity {
     }
 }
 
-impl flui_foundation::Diagnosticable for RenderSliverAnimatedOpacity {
-    fn debug_fill_properties(&self, builder: &mut flui_foundation::DiagnosticsBuilder) {
-        builder.add_default_double("opacity", self.opacity(), 1.0, None);
-        builder.add_flag(
-            "always_include_semantics",
-            self.always_include_semantics,
-            "always include semantics",
-        );
+impl Inspect for RenderSliverAnimatedOpacity {
+    fn kind(&self) -> &'static str {
+        "RenderSliverAnimatedOpacity"
+    }
+
+    fn inspect(&self, out: &mut Fields<'_>) {
+        out.field("opacity", &self.opacity())
+            .unit(Unit::Fraction)
+            .default(&1.0_f64);
+        out.field("always_include_semantics", &self.always_include_semantics)
+            .default(&false);
     }
 }
 

@@ -232,6 +232,10 @@ impl PlatformAccessibility for MacosAccessibility {
     fn assistive_focus_support(&self) -> flui_semantics::AssistiveFocusSupport {
         Self::ASSISTIVE_FOCUS
     }
+
+    fn route_change_support(&self) -> flui_semantics::platform::RouteChangeSupport {
+        Self::ROUTE_CHANGE
+    }
 }
 
 impl MacosAccessibility {
@@ -239,4 +243,9 @@ impl MacosAccessibility {
     /// ([gap 36](https://github.com/vanyastaff/flui/blob/main/docs/gaps.md#36-accessibility-bridge-fidelity-properties-and-announcements)).
     pub(crate) const ASSISTIVE_FOCUS: flui_semantics::AssistiveFocusSupport =
         flui_semantics::AssistiveFocusSupport::Unreported;
+
+    /// NSAccessibility has no notice of a new screen an application raises, so a route
+    /// change is spoken as an announcement.
+    pub(crate) const ROUTE_CHANGE: flui_semantics::platform::RouteChangeSupport =
+        flui_semantics::platform::RouteChangeSupport::Announced;
 }
