@@ -479,6 +479,24 @@ impl X11Ime {
         }
     }
 
+    /// The window `xid` moved on the screen: its focused field's caret is
+    /// told again, at its new place on the screen.
+    fn window_moved(&self, xid: xproto::Window, failure: &mut FirstPanic) {
+        let target = self
+            .state
+            .with(|ime| {
+                let held = ime.by_xid(xid)?;
+                if ime.focused != Some(held.window.id) || !held.wire.asks() {
+                    return None;
+                }
+                Some((held.text.client()?, Rc::clone(&held.wire)))
+            })
+            .flatten();
+        if let Some((client, wire)) = target {
+            failure.contain(|| client.window_moved(&*wire));
+        }
+    }
+
     /// The window `xid` lost the keyboard's focus.
     fn focus_out(&self, xid: xproto::Window, failure: &mut FirstPanic) {
         let leaving = self
@@ -787,6 +805,15 @@ impl LoopText for X11Ime {
                     && focus.detail != NotifyDetail::POINTER =>
             {
                 self.focus_out(focus.event, &mut failure);
+            }
+            // The window moved on the screen (a reparenting window manager
+            // tells it with a synthetic configure): the input method's popup
+            // follows the caret, whose place in the window stayed.
+            Event::ConfigureNotify(configure) => {
+                self.window_moved(configure.window, &mut failure);
+            }
+            Event::ReparentNotify(reparent) => {
+                self.window_moved(reparent.window, &mut failure);
             }
             _ => {}
         }

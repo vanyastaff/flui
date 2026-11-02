@@ -1212,3 +1212,29 @@ fn a_focus_unanswered_in_time_retires_its_context() {
     });
     rig.focus_delay.store(0, Ordering::SeqCst);
 }
+
+/// A window moved on the screen tells the input method where its field's
+/// caret is again, though the caret's place in the window stayed.
+#[test]
+fn a_window_moved_tells_the_caret_again() {
+    let Some(rig) = Rig::start() else {
+        return;
+    };
+    rig.settle("the caret told", || rig.heard_any("cursor"));
+    let told = rig.heard_count("cursor");
+    rig.ime
+        .event(&Event::ConfigureNotify(xproto::ConfigureNotifyEvent {
+            response_type: xproto::CONFIGURE_NOTIFY_EVENT,
+            sequence: 0,
+            event: rig.window.xid,
+            window: rig.window.xid,
+            above_sibling: x11rb::NONE,
+            x: 40,
+            y: 30,
+            width: 200,
+            height: 100,
+            border_width: 0,
+            override_redirect: false,
+        }));
+    rig.settle("the caret told again", || rig.heard_count("cursor") > told);
+}
