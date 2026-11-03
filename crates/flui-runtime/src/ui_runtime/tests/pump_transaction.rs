@@ -176,7 +176,7 @@ pub(crate) fn a_stopping_realm_ticks_no_presentation() {
 
 pub(crate) fn step_during_a_tick_applies_next_frame() {
     use flui_foundation::Listenable as _;
-    use flui_protocol::MotionRequest;
+    use flui_protocol::{MotionParams, MotionRequest, method};
     use std::cell::{Cell, RefCell};
     use std::rc::Rc;
 
@@ -219,7 +219,10 @@ pub(crate) fn step_during_a_tick_applies_next_frame() {
             move || {
                 if armed.replace(false) {
                     let answer = window
-                        .motion(MotionRequest::new().with_rate(0.0).with_step_ms(100))
+                        .call::<method::MotionSet>(MotionParams::new(
+                            window.id(),
+                            MotionRequest::new().with_rate(0.0).with_step_ms(100),
+                        ))
                         .expect("admitted during traversal");
                     *reply.borrow_mut() = Some(answer);
                 }

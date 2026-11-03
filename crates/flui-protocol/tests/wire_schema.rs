@@ -91,7 +91,7 @@ fn current_schema() -> Value {
     macro_rules! method_rows {
         ($(
             $(#[$meta:meta])*
-            $ty:ident = $name:literal, $served:ident, $effect:ident, $tier:ident,
+            $ty:ident = $name:literal, $served:ident $(($scope:ident))?, $effect:ident, $tier:ident,
                 $params:ty => $output:ty;
         )+) => {$(
             methods.insert($name.to_owned(), serde_json::json!({

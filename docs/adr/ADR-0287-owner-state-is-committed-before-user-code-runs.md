@@ -1,7 +1,8 @@
 # ADR-0287: Owner state is committed before user code runs
 
-- **Status:** Accepted (2026-11-03). Not implemented: `flui-foundation` has the primitives; each
-  seam moves to them in its own change (see Migration).
+- **Status:** Accepted (2026-11-03). Partly implemented: `flui-foundation` has the primitives and
+  the capability seam's `Completion` uses them; each other seam moves to them in its own change
+  (see Migration).
 - **Date:** 2026-11-03
 - **Related:** [ADR-0281](ADR-0281-a-destructor-that-panics-during-an-unwind-aborts-as-in-std.md)
   (what a destructor that panics costs, and the containment after a caught failure);
@@ -60,8 +61,10 @@ queue runs after the borrow ends.
 §1. **Commit, then call.** `flui_foundation::panic::commit(&RefCell<S>, mutate)` borrows the state
 mutably and runs `mutate(&mut S, &mut Outbox)`. `Outbox` has no public constructor, so user code
 an owner wants to run is queued, never called, while the state is borrowed: `Outbox::call` (a
-`'static` closure), `Outbox::wake` (a `Waker`, woken by value) and `Outbox::release` (a value
-whose destructor is user code, such as a replaced listener). After `mutate` returns, the borrow is
+`'static` `FnMut` called at most once, so its captures outlive the call and are destroyed after
+it, contained, a panic included, never during its unwind: ADR-0281 §3), `Outbox::wake` (a
+`Waker`, woken by value) and `Outbox::release` (a value whose destructor is user code, such as a
+replaced listener). After `mutate` returns, the borrow is
 released and the queue runs in order, each item contained (`FirstPanic`); the first panic is then
 resumed, after every item ran; while the thread already unwinds (a `commit` run from a `Drop`), it
 is discarded behind that unwind (ADR-0281 §4). A queued call may commit on the same cell again:
@@ -113,8 +116,9 @@ kinds of request apart at compile time.
   code cannot meet in one scope through this API (compiler).
 - The table test `commit_then_call_contract` in `flui-foundation` (`tests/commit.rs`) covers each
   rule above through the public API: the borrow is released before a queued call, a re-entrant
-  call commits again, the first failure propagates after every item ran, a queued failure during
-  an unwind is discarded behind it, a failed mutation wakes and runs no call, a re-entrant
+  call commits again, the first failure propagates after every item ran, a failing call's captures
+  are destroyed after its panic is caught, a queued failure during an unwind is discarded behind
+  it, a failed mutation wakes and runs no call, a re-entrant
   `commit` panics with `BUG:`, an obligation dropped by a panic is put back and one raised during
   a delivery survives `discharge`, a redeemed ticket is not accepted twice and an invalidated one
   is stale.
@@ -151,6 +155,12 @@ The seams migrate one per change, the costliest first by the review data: the cl
 `Persisted`, `SelectionArea` and the capability seam. Each change replaces the hand-written
 ordering of one owner and keeps its tests; a seam whose tests named an order this ADR changes
 says so in its changelog fragment.
+
+The clipboard's reads settle through the capability seam's `Completion`, so it moved first: its
+owner-side state is one `RefCell` changed through `commit` wherever the change runs or destroys
+user code (the waiting closure, a waker). An owner whose state lives on its own thread behind
+`&mut self` (the X11 selection thread) has no borrow to release; it keeps `FirstPanic` for its
+fan-out.
 
 ## More information
 

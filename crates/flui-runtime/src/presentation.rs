@@ -1538,7 +1538,7 @@ impl PresentationState {
     /// This presentation's semantics enablement gate and platform
     /// accessibility delivery — the per-window home the retired
     /// `SemanticsBinding` singleton's enablement/announce/event state moved
-    /// into. `UiRuntime::semantics_agent` acquires its enablement handle
+    /// into. `UiRuntime::dev_agent_window` acquires its enablement handle
     /// here; announce/event delivery itself still has no production caller
     /// (future platform-embedder wiring).
     #[must_use]

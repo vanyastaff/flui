@@ -158,8 +158,8 @@ pub struct AppConfig {
     /// default: the system's per-frame batches.
     /// [`InputLatency::Low`](flui_platform::InputLatency::Low) asks for every
     /// sample as soon as the system has it, for live ink and drawing: the web
-    /// host listens to `pointerrawupdate`; a host that cannot deliver earlier
-    /// ignores it.
+    /// host listens to `pointerrawupdate`, Android (API 30+) asks for unbuffered
+    /// pointer dispatch; a host that cannot deliver earlier ignores it.
     pub input_latency: flui_platform::InputLatency,
 
     /// The development reload driver, if the application installed one with

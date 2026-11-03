@@ -5,44 +5,49 @@
 use std::time::Duration;
 
 use flui_foundation::ManualClock;
+use flui_protocol::method;
 use flui_protocol::{
-    ActionName, ActionRequest, Condition, ErrorCode, Locator, Retry, UnsettledReason, WaitOutcome,
+    ActionName, Condition, ErrorCode, HandleKind, Locator, Retry, UnsettledReason, WaitOutcome,
     WaitParams, WindowId,
 };
 
-use super::agent_semantics::{counter, find, frame, read};
+use flui_view::dev_agent::{AgentAnswer, AgentWindow};
+
+use super::agent_semantics::{act_params, counter, find, frame, read};
 use super::pump_transaction::manual_clock_ui_runtime;
 use super::*;
 
-static_assertions::assert_impl_all!(AgentReply<WaitOutcome>: Send);
+static_assertions::assert_impl_all!(AgentAnswer<WaitOutcome>: Send);
 
-fn window(ui_runtime: &UiRuntime) -> WindowId {
+fn window_id(ui_runtime: &UiRuntime) -> WindowId {
     WindowId::from_u64(ui_runtime.presentation_id().as_u64())
         .expect("a presentation id packs a non-zero generation")
 }
 
 /// A counter on a manual clock, one frame in, and the agent that waits on it.
-fn shown() -> (UiRuntime, ManualClock, SemanticsAgent, ScriptedSink) {
+fn shown() -> (UiRuntime, ManualClock, AgentWindow, ScriptedSink) {
     let clock = ManualClock::new();
     let ui_runtime = manual_clock_ui_runtime(&clock);
     let _presses = counter(&ui_runtime, None);
-    let agent = ui_runtime
-        .semantics_agent(ui_runtime.presentation_id())
+    let window = ui_runtime
+        .dev_agent_window(ui_runtime.presentation_id())
         .expect("the ui_runtime hosts its primary presentation");
     let mut sink = ScriptedSink::always_presents();
     frame(&ui_runtime, &mut sink);
-    (ui_runtime, clock, agent, sink)
+    (ui_runtime, clock, window, sink)
 }
 
 fn wait(
     ui_runtime: &UiRuntime,
-    agent: &SemanticsAgent,
+    window: &AgentWindow,
     condition: Condition,
     timeout_ms: Option<u64>,
-) -> AgentReply<WaitOutcome> {
-    let mut params = WaitParams::new(window(ui_runtime), condition);
+) -> AgentAnswer<WaitOutcome> {
+    let mut params = WaitParams::new(window_id(ui_runtime), condition);
     params.timeout_ms = timeout_ms;
-    agent.wait(params).expect("the inbox has room")
+    window
+        .call::<method::WaitUntil>(params)
+        .expect("the inbox has room")
 }
 
 fn appears(name: &str) -> Condition {
@@ -51,17 +56,17 @@ fn appears(name: &str) -> Condition {
 
 #[test]
 fn a_wait_is_satisfied_at_the_frame_its_condition_first_holds() {
-    let (ui_runtime, _clock, agent, mut sink) = shown();
-    let mut reply = wait(&ui_runtime, &agent, appears("Count: 1"), None);
+    let (ui_runtime, _clock, window, mut sink) = shown();
+    let mut reply = wait(&ui_runtime, &window, appears("Count: 1"), None);
     let _report = ui_runtime.drain_commands();
     assert!(
         reply.try_take().is_none(),
         "the condition does not hold yet, so the wait is parked"
     );
 
-    let button = find(&read(&ui_runtime, &agent), "Increment").id;
-    let tap = agent
-        .act(ActionRequest::new(button, ActionName::Invoke))
+    let button = find(&read(&ui_runtime, &window), "Increment").id;
+    let tap = window
+        .call::<method::SemanticsAct>(act_params(&window, button, ActionName::Invoke))
         .expect("the inbox has room");
     let _report = ui_runtime.drain_commands();
     drop(tap);
@@ -88,8 +93,8 @@ fn a_wait_is_satisfied_at_the_frame_its_condition_first_holds() {
 
 #[test]
 fn a_condition_that_holds_already_answers_at_the_drain() {
-    let (ui_runtime, _clock, agent, _sink) = shown();
-    let mut reply = wait(&ui_runtime, &agent, appears("Increment"), None);
+    let (ui_runtime, _clock, window, _sink) = shown();
+    let mut reply = wait(&ui_runtime, &window, appears("Increment"), None);
     let _report = ui_runtime.drain_commands();
 
     let outcome = reply
@@ -102,8 +107,8 @@ fn a_condition_that_holds_already_answers_at_the_drain() {
 
 #[test]
 fn a_frame_count_keeps_frames_coming_and_counts_the_ones_after_the_request() {
-    let (ui_runtime, _clock, agent, mut sink) = shown();
-    let mut reply = wait(&ui_runtime, &agent, Condition::Frames(2), None);
+    let (ui_runtime, _clock, window, mut sink) = shown();
+    let mut reply = wait(&ui_runtime, &window, Condition::Frames(2), None);
     let _report = ui_runtime.drain_commands();
     assert!(reply.try_take().is_none());
     assert!(
@@ -128,9 +133,9 @@ fn a_frame_count_keeps_frames_coming_and_counts_the_ones_after_the_request() {
 
 #[test]
 fn a_wait_that_runs_out_answers_unsatisfied_at_its_deadline_without_a_frame() {
-    let (ui_runtime, clock, agent, _sink) = shown();
+    let (ui_runtime, clock, window, _sink) = shown();
     let idle_wake = ui_runtime.next_wake();
-    let mut reply = wait(&ui_runtime, &agent, appears("Missing"), Some(50));
+    let mut reply = wait(&ui_runtime, &window, appears("Missing"), Some(50));
     let _report = ui_runtime.drain_commands();
     assert!(reply.try_take().is_none());
     assert!(
@@ -163,13 +168,13 @@ fn a_timeout_names_why_the_window_had_not_settled() {
     let clock = ManualClock::new();
     let ui_runtime = manual_clock_ui_runtime(&clock);
     let _presses = counter(&ui_runtime, None);
-    let agent = ui_runtime
-        .semantics_agent(ui_runtime.presentation_id())
+    let window = ui_runtime
+        .dev_agent_window(ui_runtime.presentation_id())
         .expect("the ui_runtime hosts its primary presentation");
     // No frame has run: the attach asked for one.
     let mut reply = wait(
         &ui_runtime,
-        &agent,
+        &window,
         Condition::All(vec![Condition::Settled, appears("Missing")]),
         Some(0),
     );
@@ -189,7 +194,7 @@ fn a_timeout_names_why_the_window_had_not_settled() {
 
 #[test]
 fn a_parked_wait_is_not_a_reason_the_window_has_not_settled() {
-    let (ui_runtime, _clock, agent, _sink) = shown();
+    let (ui_runtime, _clock, window, _sink) = shown();
     let now = ui_runtime
         .presentations
         .get(ui_runtime.presentation_id())
@@ -198,7 +203,7 @@ fn a_parked_wait_is_not_a_reason_the_window_has_not_settled() {
         .now();
     let before = ui_runtime.unsettled_causes(now);
 
-    let _parked = wait(&ui_runtime, &agent, appears("Missing"), Some(10));
+    let _parked = wait(&ui_runtime, &window, appears("Missing"), Some(10));
     let _report = ui_runtime.drain_commands();
 
     assert!(
@@ -214,23 +219,27 @@ fn a_parked_wait_is_not_a_reason_the_window_has_not_settled() {
 
 #[test]
 fn a_window_admits_a_bounded_number_of_waits_and_refuses_the_next_with_a_typed_error() {
-    let (ui_runtime, _clock, agent, _sink) = shown();
+    let (ui_runtime, _clock, window, _sink) = shown();
     // The inbox holds 256 commands, so the waits go in two waves.
     let mut parked = Vec::new();
     for _ in 0..2 {
-        parked.extend((0..128).map(|_| wait(&ui_runtime, &agent, appears("Missing"), None)));
+        parked.extend((0..128).map(|_| wait(&ui_runtime, &window, appears("Missing"), None)));
         let _report = ui_runtime.drain_commands();
     }
-    let mut refused = wait(&ui_runtime, &agent, appears("Missing"), None);
+    let mut refused = wait(&ui_runtime, &window, appears("Missing"), None);
     let _report = ui_runtime.drain_commands();
 
     let error = refused
         .try_take()
         .expect("the wait past the cap is answered at once")
         .expect_err("it is refused, not parked or taking an older one's place");
-    assert_eq!(error, AgentError::TooManyWaits);
-    assert_eq!(error.code(), ErrorCode::Busy);
-    assert_eq!(error.retry(), Retry::Soon);
+    assert!(
+        error.message.contains("as many waits"),
+        "busy because the cap is reached: {}",
+        error.message
+    );
+    assert_eq!(error.code, ErrorCode::Busy);
+    assert_eq!(error.retry, Retry::Soon);
     assert!(
         parked.iter_mut().all(|reply| reply.try_take().is_none()),
         "the waits already admitted are untouched"
@@ -239,15 +248,15 @@ fn a_window_admits_a_bounded_number_of_waits_and_refuses_the_next_with_a_typed_e
 
 #[test]
 fn a_wait_nobody_takes_any_more_gives_up_its_place() {
-    let (ui_runtime, _clock, agent, _sink) = shown();
+    let (ui_runtime, _clock, window, _sink) = shown();
     let mut parked = Vec::new();
     for _ in 0..2 {
-        parked.extend((0..128).map(|_| wait(&ui_runtime, &agent, appears("Missing"), None)));
+        parked.extend((0..128).map(|_| wait(&ui_runtime, &window, appears("Missing"), None)));
         let _report = ui_runtime.drain_commands();
     }
     // Every asker goes away, as a driver's connection does mid-wait.
     drop(parked);
-    let mut admitted = wait(&ui_runtime, &agent, appears("Missing"), None);
+    let mut admitted = wait(&ui_runtime, &window, appears("Missing"), None);
     let _report = ui_runtime.drain_commands();
     assert!(
         admitted.try_take().is_none(),
@@ -269,13 +278,11 @@ fn a_wait_nobody_takes_any_more_gives_up_its_place() {
 fn a_window_that_closes_first_answers_its_waits_gone() {
     let mut ui_runtime = UiRuntime::for_test();
     let second = ui_runtime.install_second_presentation_for_test();
-    let agent = ui_runtime
-        .semantics_agent(second)
+    let window = ui_runtime
+        .dev_agent_window(second)
         .expect("the ui_runtime hosts the second presentation");
-    let window =
-        WindowId::from_u64(second.as_u64()).expect("a presentation id packs a non-zero generation");
-    let mut reply = agent
-        .wait(WaitParams::new(window, Condition::Frames(5)))
+    let mut reply = window
+        .call::<method::WaitUntil>(WaitParams::new(window.id(), Condition::Frames(5)))
         .expect("the inbox has room");
     let _report = ui_runtime.drain_commands();
     assert!(reply.try_take().is_none(), "the wait is parked");
@@ -285,16 +292,22 @@ fn a_window_that_closes_first_answers_its_waits_gone() {
         .try_take()
         .expect("closing answered what it held")
         .expect_err("the window is gone");
-    assert_eq!(error, AgentError::PresentationGone);
-    assert_eq!(error.code(), ErrorCode::Gone);
+    assert_eq!(
+        (error.code, error.kind, error.handle.as_deref()),
+        (
+            ErrorCode::Gone,
+            Some(HandleKind::Window),
+            Some(window.id().to_string().as_str())
+        )
+    );
 }
 
 #[test]
 fn a_timer_the_window_waits_on_is_named_with_when_it_is_due() {
-    let (ui_runtime, _clock, agent, _sink) = shown();
+    let (ui_runtime, _clock, window, _sink) = shown();
     // The test window cannot answer the native gesture-geometry query, so the owner keeps
     // its retry as a timer: a window with one is not settled.
-    let mut reply = wait(&ui_runtime, &agent, Condition::Settled, Some(0));
+    let mut reply = wait(&ui_runtime, &window, Condition::Settled, Some(0));
     let _report = ui_runtime.drain_commands();
 
     let outcome = reply

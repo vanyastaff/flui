@@ -1,7 +1,7 @@
 //! Real widget reassembly delivers a frame request; a failed host delivery
 //! must not strand an already accepted command behind the reload.
 use super::*;
-use flui_protocol::{ErrorCode, ReadQuery};
+use flui_protocol::{ErrorCode, ReadParams, method};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
 fn reload_failure(failures: usize, fail_reassemble: bool) {
@@ -22,9 +22,9 @@ fn reload_failure(failures: usize, fail_reassemble: bool) {
     ui_runtime
         .attach_root_widget_to_for_test(ui_runtime.presentation_id(), &SizedBox::square(20.0))
         .expect("root");
-    let agent = ui_runtime
-        .semantics_agent(ui_runtime.presentation_id())
-        .expect("agent");
+    let window = ui_runtime
+        .dev_agent_window(ui_runtime.presentation_id())
+        .expect("window");
     let sender = ui_runtime.command_sender();
     let frame_sender = sender.clone();
     ui_runtime
@@ -36,7 +36,9 @@ fn reload_failure(failures: usize, fail_reassemble: bool) {
     sender
         .request_hot_reload(crate::reload::ReloadTier::Reassemble)
         .expect("reload accepted");
-    let mut tail = agent.read(ReadQuery::new()).expect("tail accepted");
+    let mut tail = window
+        .call::<method::SemanticsRead>(ReadParams::new(window.id()))
+        .expect("tail accepted");
     let _ = ui_runtime.take_redraw_request();
     let before = delivered.load(Ordering::Relaxed);
     failures_left.store(failures, Ordering::Relaxed);
@@ -78,7 +80,7 @@ fn reload_failure(failures: usize, fail_reassemble: bool) {
         .try_take()
         .expect("accepted read answered at the next turn");
     assert_eq!(
-        reply.expect_err("no semantics frame yet").code(),
+        reply.expect_err("no semantics frame yet").code,
         ErrorCode::Busy
     );
     assert_eq!(
