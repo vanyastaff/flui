@@ -74,7 +74,7 @@ lets a test hand every layer the same scripted client.
 2. **The client drives its requests.** `send`'s future and a body's chunks need no runtime of the
    caller's; dropping either abandons the request.
 3. **Providers.** `flui-app` registers the built-in provider behind its `http` feature (on by
-   default): on Linux, macOS and iOS `reqwest` on the run's IO lane, one connection pool per run.
+   default): on macOS and iOS `reqwest` on the run's IO lane, one connection pool per run.
    The caller's future waits on a channel; the exchange on the lane stops when the channel closes.
    On lanes an embedder injects, which may run no Tokio drivers, it spawns nothing and answers
    `NotYetOnThisHost { host: EmbedderExecutors }`. On the web the page's `fetch` sends
@@ -96,7 +96,17 @@ lets a test hand every layer the same scripted client.
    it, so an abort closes the request handle only while no call is inside WinHTTP on it, never
    leaving a call to run on a closed handle whose value may name another request's. The session
    takes the system's automatic proxy and trust store; an error code maps by its meaning, a failed
-   secure check naming what failed, else by the stage that failed. Without the feature the
+   secure check naming what failed, else by the stage that failed. Linux and the BSDs, which have
+   no system stack, send through `ureq` (`flui_native::http::UreqClient`, `flui-native`'s `http`
+   feature, which `flui-app`'s turns on) in the same model, held on the IO lane the same way, over
+   rustls with the platform's verifier and the proxy the environment names. `ureq` interrupts an
+   agent, not a request: `Agent::shutdown` closes the agent's connection under a blocked
+   handshake, send or read, so each request runs on an agent of its own, and that shutdown is its
+   abort. An agent whose body ended goes back to a pool of eight idle agents, matched by origin, so
+   the next request there reuses its connection; the abort and the return each take the agent out
+   of the request's slot under one lock, so an abort that comes after the return reaches no later
+   request, and an aborted agent never goes back. A held exchange also ends, `Cancelled`, when the
+   lane shuts down under it, as `reqwest`'s exchange on the lane does. Without the feature the
    capability is not registered.
 4. **The kit's client.** `flui_platform::testing::ScriptedHttp` answers what a test scripted per
    URL, holds and releases requests, counts them and the abandoned ones, and fails an unscripted URL
@@ -127,16 +137,22 @@ lets a test hand every layer the same scripted client.
   and no test opens a socket.
 - Good, because `flui-assets` links no TLS stack, and an application without network can drop
   `reqwest` with one feature.
-- Bad, because embedders' executors have no client yet: their network images
-  fail with a typed gap until a system stack that needs no Tokio lands there.
-- Neutral, because each provider owns its own connection pool, so two runs do not share
-  connections.
+- Bad, because embedders' executors on macOS and iOS have no client yet: their network images
+  fail with a typed gap until NSURLSession lands there.
+- Neutral, because each provider owns its own connection pool (`ureq`'s is a pool of idle agents),
+  so two runs do not share connections.
 
 ### Confirmation
 
 - `requests_on_the_runs_lanes_answer_without_a_runtime_of_the_callers` and
   `dropping_a_request_or_its_body_closes_the_connection` (`flui-app`): the built-in provider against
-  a loopback server, polled without a runtime, the embedder-executor gap and refusal.
+  a loopback server, polled without a runtime, on Linux through `ureq` held on the IO lane, an
+  embedder's executors sending too, a lane shut down under a body ending it, and refusal; on macOS
+  and iOS the same table runs `reqwest` and its embedder-executor gap.
+- `an_agent_goes_back_to_the_pool_only_when_its_body_ended_unaborted`,
+  `a_request_carries_its_parts_and_any_status_answers` and
+  `ureq_errors_map_to_what_the_caller_can_act_on` (`flui-native`, Linux): the `ureq` stack's pool
+  against a late abort, what a request carries and answers, and its error mapping.
 - `a_request_through_fetch_answers_its_head_and_body`,
   `a_request_left_or_past_its_deadline_aborts_the_fetch` and
   `the_pages_fetch_answers_from_the_test_server` (`flui-native`, headless Chrome): the web's client;
@@ -185,5 +201,6 @@ lets a test hand every layer the same scripted client.
 ## More information
 
 The system stacks (NSURLSession on Apple, WinHTTP on Windows, OkHttp or Cronet on Android, `fetch`
-on the web) are later providers behind the same trait; each removes a `NotYetOnThisHost` host or
-replaces `reqwest` where the system's proxy and trust settings matter.
+on the web) and `ureq` where the system has none are later providers behind the same trait; each
+removes a `NotYetOnThisHost` host or replaces `reqwest` where the system's proxy and trust
+settings matter.

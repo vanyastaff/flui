@@ -588,8 +588,8 @@ mod tests {
 
     /// The table of what a request on the run's lanes answers: a body, a
     /// status, a body past its limit, a failed TLS handshake, a URL that is
-    /// not HTTP, and the host-executor gap; each polled on a thread with no
-    /// async runtime.
+    /// not HTTP, and an embedder's executors, which send, or answer the gap
+    /// where `reqwest` sends; each polled on a thread with no async runtime.
     #[test]
     fn requests_on_the_runs_lanes_answer_without_a_runtime_of_the_callers() {
         let (address, _seen) = serve(|path| match path {
@@ -667,7 +667,8 @@ mod tests {
 
     /// Dropping the request's future, and later the body of an answered one,
     /// closes its connection on the lane, and so does a body its reader holds
-    /// unread past the request's deadline.
+    /// unread past the request's deadline; a lane shut down under a body
+    /// ends it, and a lane gone refuses the request.
     #[test]
     fn dropping_a_request_or_its_body_closes_the_connection() {
         let (address, seen) = serve(|path| match path {
