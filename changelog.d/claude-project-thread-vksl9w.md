@@ -37,6 +37,10 @@
   and a strict pick that matches several answers `ambiguous` with its candidates.
 - **The driver agent advertises only the methods its app serves**: a window method the runtime
   does not answer is left out of `capabilities.methods` and refused `not_supported`.
+- **The driver agent's conversation is `flui_runtime::agent`'s** (ADR-0288): one service and
+  a session per connection that do no I/O, so every transport serves the same protocol and
+  limits. The desktop transport keeps no worker thread and waits on no answer: an owner's answer
+  or event is written as soon as it arrives, and an idle Unix connection never wakes.
 
 ### Added
 
@@ -58,6 +62,12 @@
 - **`flui_protocol::WindowMethod` and `Addressed`**: the methods of the table marked
   `Agent(window)`, and the window their params address; `for_each_window_method!` walks those
   rows, so a server's dispatch is generated from the one table.
+- **`flui_runtime::agent`**: `Service` (the windows a hook serves, `Limits`, the driver's
+  obligation) and `Session`, one conversation driven by its transport with `receive`,
+  `peer_closed`, `poll`, `transmit`, `next_deadline` and `status`.
+- **`AgentAnswer::register` and `AgentEvents::register`** (`flui-view`'s development-agent
+  seam): the last waker registered is woken once when the answer or an event can be read, and
+  when the owner goes.
 
 ### Removed
 

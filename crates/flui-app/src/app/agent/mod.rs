@@ -6,11 +6,13 @@
 //! when the launch names an endpoint (`served::Launch::from_env`); with none,
 //! nothing is created: no thread, no socket. The agent is a
 //! [`DevAgentHook`](flui_view::dev_agent::DevAgentHook): the host attaches it
-//! when the loop starts and hands it each window with content, and the agent
-//! answers drivers from threads of its own. Every operation goes through the
-//! window's owner inbox, so nothing here touches a tree: the owner answers at
-//! its next drain, a frame boundary, and the agent only waits for the answer,
-//! a bounded time.
+//! when the loop starts and hands it each window with content. The
+//! conversation is [`flui_runtime::agent`]'s (ADR-0288): this module keeps the
+//! launch and the desktop transport, which hands each connection's bytes to a
+//! [`Session`](flui_runtime::agent::Session) and writes what it answers. Every
+//! operation goes through the window's owner inbox, so nothing here touches a
+//! tree, and no thread waits on an answer: the owner's answer wakes the
+//! connection's thread.
 //!
 //! # The endpoint
 //!
@@ -23,32 +25,6 @@
 //! The token keeps out other users and remote callers. It does not keep out
 //! other processes of the same user, which can read the application's
 //! environment just as they can reach the endpoint.
-//!
-//! # The conversation
-//!
-//! Protocol [`PROTOCOL_VERSION`](flui_protocol::version::PROTOCOL_VERSION)
-//! (ADR-0238): newline-delimited JSON lines of at most
-//! [`MAX_LINE`](flui_protocol::framing::MAX_LINE) bytes.
-//!
-//! ```text
-//! → {"hello":{"token":"…","protocol":"0.9","client":"flui-driver/0.1.0"}}
-//! ← {"hello":{"protocol":"0.9","app":{…},"capabilities":{…}}}
-//! → {"id":7,"method":"semantics.locate","params":{…}}
-//! ← {"id":7,"result":{…}}  |  {"id":7,"error":{"code":…,"message":…,"retry":…}}
-//! ← {"event":"frame","params":{…}}   (after events.subscribe)
-//! ```
-//!
-//! A wrong token, a first line that is not a hello, or no hello within the
-//! handshake timeout closes the connection without a word; a hello in
-//! another protocol is answered `version` and closed. Requests run in order,
-//! one at a time; a connection holds at most `Limits::queue` of them, and
-//! one beyond that is answered `busy` at once. A reply the owner has not sent
-//! within the reply timeout answers `timeout`: with retry `soon` for a
-//! read-only method, and with the `may_have_run` effect for one that acts,
-//! which is still queued and runs at the owner's next drain.
-//!
-//! What the agent traces carries the method, window and element ids, error
-//! codes and timings, never a label, a value or a request line.
 //!
 //! # Exit on disconnect
 //!

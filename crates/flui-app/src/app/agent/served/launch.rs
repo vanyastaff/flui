@@ -1,42 +1,12 @@
 //! What the launch tells the agent: where to listen, the token a driver
 //! presents, and whether to exit when the driver goes (ADR-0239 §3, §5).
 
+use flui_runtime::agent::Limits;
 use std::fmt;
-use std::time::Duration;
 
 use flui_protocol::launch::{
     ENDPOINT_ENV, EXIT_ON_DISCONNECT_ENV, MIN_TOKEN_LEN, TOKEN_ENV, exit_on_disconnect,
 };
-
-/// The bounds one agent serves within.
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct Limits {
-    /// How long a request waits for the owner's answer before it answers
-    /// `timeout`. A wait adds its own timeout to it.
-    pub(crate) reply_timeout: Duration,
-    /// How long a new connection has to present its hello.
-    pub(crate) handshake_timeout: Duration,
-    /// How many connections are served at once; one beyond it is closed
-    /// unread.
-    pub(crate) max_connections: usize,
-    /// How many requests one connection holds, the running one included; one
-    /// beyond it is answered `busy`.
-    pub(crate) queue: usize,
-    /// How many event subscriptions one connection holds.
-    pub(crate) subscriptions: usize,
-}
-
-impl Default for Limits {
-    fn default() -> Self {
-        Self {
-            reply_timeout: Duration::from_secs(5),
-            handshake_timeout: Duration::from_secs(5),
-            max_connections: 4,
-            queue: 32,
-            subscriptions: 16,
-        }
-    }
-}
 
 /// Where the agent listens, the token a driver presents, and what a
 /// driver's disconnect does.
