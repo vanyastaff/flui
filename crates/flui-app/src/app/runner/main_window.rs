@@ -859,6 +859,8 @@ where
                 ..
             } = application;
             let proxy = owner.proxy();
+            // What the driver agent's launch is read through.
+            let launch = owner.shared();
             let ingress = Ingress::new(proxy, startup == StartupWindow::Open);
             let handle = ingress.handle();
             install_owner_platform(owner)?;
@@ -893,7 +895,11 @@ where
                     let _ = ingress.quit_now();
                 }
             });
-            crate::app::agent::install_from_env(&mut config, &ended);
+            crate::app::agent::install_from_launch(
+                &mut config,
+                |key| launch.launch_value(key),
+                &ended,
+            );
             // The loop takes the hooks and owns them until it ends
             // (`shutdown_main_window`).
             super::dev_agents::start(&config);

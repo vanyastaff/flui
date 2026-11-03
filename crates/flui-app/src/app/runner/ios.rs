@@ -247,7 +247,13 @@ where
         // the simulator launch named an endpoint. A driver ends the app with
         // `simctl terminate`, so a disconnect asks no quit here.
         let mut config = config;
-        crate::app::agent::install_from_env(&mut config, &std::sync::Arc::default());
+        let launch = with_owner_platform(flui_native::OwnerPlatform::shared)
+            .expect("BUG: owner installed above");
+        crate::app::agent::install_from_launch(
+            &mut config,
+            |key| launch.launch_value(key),
+            &std::sync::Arc::default(),
+        );
         let reload = WorkerReload::from_config(&config);
         let watcher = reload.spawn_watcher(runtime_wake_callback());
         // The loop takes the hooks and owns them until the process stops

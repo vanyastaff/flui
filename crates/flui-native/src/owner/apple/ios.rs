@@ -799,6 +799,10 @@ impl host::Loop for IOSLoop {
 }
 
 impl host::Services for IOSLoop {
+    fn launch_value(&self, key: flui_platform::LaunchKey) -> Option<String> {
+        host::environment_launch_value(key)
+    }
+
     fn background_executor(&self) -> Arc<dyn PlatformExecutor> {
         self.background_executor.clone()
     }

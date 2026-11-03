@@ -401,6 +401,12 @@ impl SharedPlatform {
         self.platform.app_path()
     }
 
+    /// The value the process was launched with under `key`; see [`Platform::launch_value`].
+    #[must_use]
+    pub fn launch_value(&self, key: flui_platform::LaunchKey) -> Option<String> {
+        self.platform.launch_value(key)
+    }
+
     /// Where the application `app` keeps its data, or `None` when this
     /// platform has nowhere to keep it.
     #[must_use]

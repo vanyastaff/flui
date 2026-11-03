@@ -82,6 +82,16 @@
   `observer`; an observer reads and subscribes beside the driver, its hello lists only the
   methods that read, and a call of its that acts is refused with the new
   `ErrorCode::NotDriver`. `flui mcp` says when another client drives the app.
+- **The driver agent on Android** (ADR-0288 §6): a debug app started with the intent extras
+  `flui.agent.endpoint` (`@name`), `flui.agent.token` and `flui.agent.exit_on_disconnect` serves
+  its window over the abstract socket `name`, which a driver reaches through
+  `adb forward tcp:0 localabstract:name`. A connection whose peer is not the app's user, root or
+  the shell is closed unread. On Linux an endpoint `@name` is an abstract socket that admits
+  the app's user and root.
+- **`Platform::launch_value(LaunchKey)`** and `SharedPlatform::launch_value` (`flui-native`),
+  with `flui_platform::LaunchKey`: the value the process was launched with under a dotted key,
+  the launching intent's string extra on Android and the environment variable the key spells
+  elsewhere. `flui_native::current_user_id` on Linux and Android.
 
 ### Removed
 

@@ -96,13 +96,24 @@ where
     // The application's development reload hook may own frames with a scene
     // plugin (`flui run --scene`); inert unless one is installed.
     let hot_reload = ScenePlugin::from_config(&config, app.internal_data_path().as_deref());
+    let platform: Box<dyn Platform> =
+        flui_native::android_platform(app).map_err(crate::app::LaunchError::from_platform)?;
+
+    // The driver agent (ADR-0239), beside the application's own hooks, when
+    // the launching intent named an endpoint (ADR-0288 §7). A driver that goes
+    // under `EXIT_ON_DISCONNECT` quits the loop, and the process exits once
+    // the teardown ran.
+    let disconnect = Arc::new(crate::app::agent::Disconnect::default());
+    let mut config = config;
+    crate::app::agent::install_from_launch(
+        &mut config,
+        |key| platform.launch_value(key),
+        &disconnect,
+    );
     // The loop takes the hooks and owns them until `run` returns. The window
     // is handed over once it is installed.
     super::dev_agents::start(&config);
     let agents = super::dev_agents::EndOnDrop;
-
-    let platform: Box<dyn Platform> =
-        flui_native::android_platform(app).map_err(crate::app::LaunchError::from_platform)?;
 
     /// The actual Android bootstrap: window, GPU, UI runtime, and callback
     /// wiring. Runs once, synchronously, inside `on_ready` — which this
@@ -501,7 +512,13 @@ where
     let refused: std::rc::Rc<std::cell::Cell<Option<crate::app::UnsupportedSystem>>> =
         std::rc::Rc::default();
     let refusal = std::rc::Rc::clone(&refused);
+    let ended = Arc::clone(&disconnect);
     let result = platform.run(crate::app::runner::app_handler(move |owner| {
+        // A driver that goes under `EXIT_ON_DISCONNECT` quits the loop.
+        let quit = owner.proxy();
+        ended.arm(move || {
+            let _ = quit.request_quit();
+        });
         install_owner_platform(owner)?;
         with_owner_platform(|owner| owner.on_wake(Box::new(super::host::drive_native_text_sizing)))
             .expect("BUG: Android owner was just installed")?;
@@ -538,6 +555,13 @@ where
     if let Some(unsupported) = refused.take() {
         tracing::error!(%unsupported, "FLUI cannot run on this system");
         return Err(crate::app::LaunchError::UnsupportedSystem(unsupported));
+    }
+    if disconnect.happened() {
+        // The teardown above wrote what the application persisted. Android
+        // reports no exit code, so the driver that launched the app sees the
+        // process go; ending it keeps a cached process from carrying this
+        // run's state into the next launch.
+        std::process::exit(flui_protocol::launch::EXIT_DISCONNECTED);
     }
     if let Err(err) = result {
         panic!("android bootstrap failed: {err:?}");
