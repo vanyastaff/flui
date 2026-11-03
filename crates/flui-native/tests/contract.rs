@@ -52,7 +52,7 @@ fn test_window_lifecycle_contract() {
     );
 
     // Contract 2: Platform must sample its displays: a snapshot (empty before a
-    // winit loop runs) or a typed error, never a panic
+    // loop runs) or a typed error, never a panic
     match platform.display_snapshot() {
         Ok(snapshot) => tracing::info!("Platform has {} display(s)", snapshot.displays().len()),
         Err(error) => tracing::info!("Platform has no display source: {error}"),
@@ -145,8 +145,8 @@ fn test_window_lifecycle_contract() {
             // Contract 9: a Win32 window is reachable by UI Automation in
             // every build, with no feature to turn on. Only a native window
             // can tell: the headless double always hands out its fake. The
-            // Linux winit window's bridge is pinned by a real-loop test, since
-            // winit opens no window outside its loop.
+            // Linux windows' bridges are pinned by `linux_atspi.rs`, against a
+            // real display server.
             #[cfg(target_os = "windows")]
             {
                 use flui_native::os::windows::WindowsWindowExt as _;

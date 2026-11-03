@@ -293,7 +293,11 @@ pub mod painting {
     pub use flui_painting::styling::BoxShadow;
     pub use flui_painting::styling::Color;
     pub use flui_painting::styling::Shadow;
+    pub use flui_painting::typography::DecorationThickness;
     pub use flui_painting::typography::FontWeight;
+    pub use flui_painting::typography::TextDecoration;
+    pub use flui_painting::typography::TextDecorationLines;
+    pub use flui_painting::typography::TextDecorationStyle;
     pub use flui_painting::typography::TextDirection;
     pub use flui_painting::typography::TextStyle;
     pub use flui_rendering::semantics::SemanticsRegion;

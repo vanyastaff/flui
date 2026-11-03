@@ -191,6 +191,8 @@ mod shapes_contract;
 mod text_boundaries;
 #[path = "text_context.rs"]
 mod text_context;
+#[path = "text_decorations.rs"]
+mod text_decorations;
 #[path = "text_layout_pipeline.rs"]
 mod text_layout_pipeline;
 #[path = "text_overflow_unit.rs"]
@@ -805,6 +807,70 @@ fn text_context_contract() {
     );
 }
 
+/// A style's decoration draws its lines where the font puts them, in
+/// CSS's order, and a byte range draws the same lines (ADR-0310).
+#[test]
+fn text_decorations_contract() {
+    use text_decorations as td;
+    run_cases(
+        "text_decorations",
+        &[
+            (
+                "an_underline_lies_where_the_font_puts_it",
+                td::an_underline_lies_where_the_font_puts_it,
+            ),
+            (
+                "a_line_through_is_drawn_over_the_glyphs",
+                td::a_line_through_is_drawn_over_the_glyphs,
+            ),
+            ("each_style_draws_its_shape", td::each_style_draws_its_shape),
+            (
+                "trailing_whitespace_and_breaks_are_not_decorated",
+                td::trailing_whitespace_and_breaks_are_not_decorated,
+            ),
+            (
+                "an_ellipsis_takes_its_spans_decoration",
+                td::an_ellipsis_takes_its_spans_decoration,
+            ),
+            (
+                "a_decoration_only_change_repaints_without_relayout",
+                td::a_decoration_only_change_repaints_without_relayout,
+            ),
+            (
+                "a_decoration_takes_its_glyphs_colour_unless_it_names_one",
+                td::a_decoration_takes_its_glyphs_colour_unless_it_names_one,
+            ),
+            (
+                "a_child_clears_an_inherited_decoration",
+                td::a_child_clears_an_inherited_decoration,
+            ),
+            (
+                "adjacent_spans_with_one_decoration_draw_one_line",
+                td::adjacent_spans_with_one_decoration_draw_one_line,
+            ),
+            (
+                "a_range_decoration_is_the_spans_decoration",
+                td::a_range_decoration_is_the_spans_decoration,
+            ),
+            (
+                "a_thickness_scales_the_fonts",
+                td::a_thickness_scales_the_fonts,
+            ),
+            (
+                "a_decoration_thickness_is_bounded",
+                td::a_decoration_thickness_is_bounded,
+            ),
+            (
+                "decorations_interpolate_their_colour_and_thickness",
+                td::decorations_interpolate_their_colour_and_thickness,
+            ),
+            (
+                "a_pattern_far_from_the_origin_is_drawn_in_bounded_steps",
+                td::a_pattern_far_from_the_origin_is_drawn_in_bounded_steps,
+            ),
+        ],
+    );
+}
 /// Backgrounds, shadows and their blur reach the display list as a
 /// paragraph paints them (ADR-0309).
 #[test]

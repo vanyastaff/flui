@@ -2,8 +2,8 @@
 //!
 //! A two-finger trackpad pan is a scroll with [`ScrollPhase`]s on every OS,
 //! and platform momentum is `ScrollPhase::Momentum*`, whatever the native
-//! event family (AppKit `scrollWheel:` phases, winit `MouseWheel` and
-//! `PanGesture` touch phases). Backends report the native phases as plain
+//! event family (AppKit `scrollWheel:` phases, the Wayland finger axis source and
+//! Direct Manipulation's contact phases). Backends report the native phases as plain
 //! [`ScrollReading`]s; [`ScrollPhases`] turns them into the owned phase.
 
 use flui_platform::EventTime;

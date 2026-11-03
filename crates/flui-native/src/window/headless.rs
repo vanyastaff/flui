@@ -422,7 +422,7 @@ pub struct HeadlessWindowSystem {
 /// needs to drive a window from the outside:
 ///
 /// - a configurable scale factor ([`Self::simulate_scale_factor_change`],
-///   delivered through the resize path exactly like the winit backend);
+///   delivered through the resize path exactly like a native host);
 /// - `request_redraw` dispatching through the window handler on the
 ///   owner thread, a request from another thread in the owner's next turn,
 ///   like a real backend's frame wire;
@@ -453,7 +453,7 @@ pub struct MockWindow {
     input_regions: Arc<Mutex<RecordedInputRegions>>,
     /// Back-reference to the platform this window was opened on, so closing
     /// it can — only once every tracked window is gone — consult the
-    /// exit-policy hook exactly like the winit backend's `CloseRequested`
+    /// exit-policy hook exactly like a native host's close
     /// handling does (see `notify_closed`). `Weak`: a window must never
     /// keep the platform state alive past the platform's own lifetime.
     platform_state: Weak<Mutex<HeadlessState>>,
@@ -900,7 +900,7 @@ impl MockWindow {
     /// handler, and consult the exit policy only once nothing is tracked any
     /// more.
     ///
-    /// Mirrors `WinitAppHandler::complete_window_close`. Two of its steps have
+    /// Mirrors the native hosts' close path. Two of their steps have
     /// no analogue here and are deliberately absent rather than forgotten:
     /// there is no native handle to hide beyond the state flag, and
     /// `forget_window` has nothing to forget because this backend's data
@@ -929,8 +929,8 @@ impl MockWindow {
 
     /// Removes this window from the platform's own tracking and, only once
     /// every window this platform knows about is gone, asks the application's
-    /// handler ([`crate::AppHandler::exit_policy`]) exactly as the winit
-    /// backend's `CloseRequested` handling does; with no handler bound the
+    /// handler ([`crate::AppHandler::exit_policy`]) exactly as a native
+    /// host's close handling does; with no handler bound the
     /// platform keeps running.
     ///
     /// The handler is asked, and told of the quit, with the state lock

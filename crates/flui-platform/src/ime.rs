@@ -4,9 +4,9 @@
 //! its native IME notifications into. The shape follows winit 0.30's `Ime`
 //! enum (`Enabled` / `Preedit` / `Commit` / `Disabled`) rather than the W3C
 //! `compositionstart`/`compositionupdate`/`compositionend` web events or
-//! Android's `InputConnection` callback set — winit is FLUI's lead desktop
-//! backend (see `flui-native`'s winit integration), and its four-variant
-//! shape maps *imperfectly* onto both alternatives:
+//! Android's `InputConnection` callback set — winit's four-variant
+//! shape is the one FLUI keeps, and it maps *imperfectly* onto both
+//! alternatives:
 //!
 //! - The W3C model splits "composition changed" from "commit" as two
 //!   `compositionupdate`/`compositionend` events that both carry text, where

@@ -46,7 +46,6 @@ mod memory_store;
     target_arch = "wasm32",
     wayland_host,
     x11_host,
-    all(feature = "winit-backend", target_os = "linux")
 ))]
 mod user_dirs;
 
@@ -63,7 +62,6 @@ pub use page_store::FileStore;
     target_arch = "wasm32",
     wayland_host,
     x11_host,
-    all(feature = "winit-backend", target_os = "linux")
 ))]
 pub(crate) use user_dirs::UserDataDirs;
 

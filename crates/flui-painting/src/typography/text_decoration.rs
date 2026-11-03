@@ -1,99 +1,226 @@
-//! Text decoration types.
+//! Text decoration, the lines drawn along a span's text (ADR-0310), and the
+//! paragraph-level text options.
+
+use core::ops::BitOr;
 
 use crate::styling::Color;
 
-/// A linear decoration to draw near the text (underline, overline, line-through).
+/// Which lines a [`TextDecoration`] draws along its text.
 ///
-/// Decorations are stored as a bitfield, so multiple decorations can be
-/// combined via [`TextDecoration::combine`].
-#[derive(Debug)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct TextDecoration {
-    /// Bitfield of decoration flags.
-    flags: u8,
-}
+/// A set: combine lines with `|` or [`union`](Self::union).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize, serde::Deserialize),
+    serde(try_from = "u8", into = "u8")
+)]
+pub struct TextDecorationLines(u8);
 
-impl TextDecoration {
-    /// No decoration.
-    pub const NONE: Self = Self { flags: 0 };
-    /// Underline decoration.
-    pub const UNDERLINE: Self = Self { flags: 1 << 0 };
-    /// Overline decoration.
-    pub const OVERLINE: Self = Self { flags: 1 << 1 };
-    /// Line-through decoration.
-    pub const LINE_THROUGH: Self = Self { flags: 1 << 2 };
+impl TextDecorationLines {
+    /// No line.
+    pub const NONE: Self = Self(0);
+    /// A line under the text, at the position its font gives.
+    pub const UNDERLINE: Self = Self(1);
+    /// A line over the text, at its font's ascent.
+    pub const OVERLINE: Self = Self(1 << 1);
+    /// A line through the text, at its font's strikeout position.
+    pub const LINE_THROUGH: Self = Self(1 << 2);
 
-    /// Creates a decoration from a raw bitfield of decoration flags.
+    #[cfg(feature = "serde")]
+    const ALL: u8 = Self::UNDERLINE.0 | Self::OVERLINE.0 | Self::LINE_THROUGH.0;
+
+    /// The lines of both sets.
     #[must_use]
-    #[inline]
-    pub const fn new(flags: u8) -> Self {
-        Self { flags }
+    pub const fn union(self, other: Self) -> Self {
+        Self(self.0 | other.0)
     }
 
-    /// Combines multiple decorations into one by OR-ing their flags.
+    /// Whether every line of `other` is in this set.
     #[must_use]
-    #[inline]
-    pub const fn combine(decorations: &[Self]) -> Self {
-        let mut flags = 0;
-        let mut i = 0;
-        while i < decorations.len() {
-            flags |= decorations[i].flags;
-            i += 1;
+    pub const fn contains(self, other: Self) -> bool {
+        self.0 & other.0 == other.0
+    }
+
+    /// Whether the set draws no line.
+    #[must_use]
+    pub const fn is_empty(self) -> bool {
+        self.0 == 0
+    }
+}
+
+impl BitOr for TextDecorationLines {
+    type Output = Self;
+
+    fn bitor(self, other: Self) -> Self {
+        self.union(other)
+    }
+}
+
+#[cfg(feature = "serde")]
+impl TryFrom<u8> for TextDecorationLines {
+    type Error = &'static str;
+
+    fn try_from(bits: u8) -> Result<Self, Self::Error> {
+        if bits & !Self::ALL == 0 {
+            Ok(Self(bits))
+        } else {
+            Err("a text decoration names a line that does not exist")
         }
-        Self { flags }
-    }
-
-    /// Returns `true` if the underline decoration is set.
-    #[must_use]
-    #[inline]
-    pub const fn has_underline(&self) -> bool {
-        self.flags & Self::UNDERLINE.flags != 0
-    }
-
-    /// Returns `true` if the overline decoration is set.
-    #[must_use]
-    #[inline]
-    pub const fn has_overline(&self) -> bool {
-        self.flags & Self::OVERLINE.flags != 0
-    }
-
-    /// Returns `true` if the line-through decoration is set.
-    #[must_use]
-    #[inline]
-    pub const fn has_line_through(&self) -> bool {
-        self.flags & Self::LINE_THROUGH.flags != 0
-    }
-
-    /// Returns `true` if no decoration is set.
-    #[must_use]
-    #[inline]
-    pub const fn is_none(&self) -> bool {
-        self.flags == 0
     }
 }
 
-impl Default for TextDecoration {
-    #[inline]
-    fn default() -> Self {
-        Self::NONE
+#[cfg(feature = "serde")]
+impl From<TextDecorationLines> for u8 {
+    fn from(lines: TextDecorationLines) -> Self {
+        lines.0
     }
 }
 
+/// The shape a decoration's lines are drawn in.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-/// The style in which a text decoration line is drawn.
+#[non_exhaustive]
 pub enum TextDecorationStyle {
     /// A single solid line.
     #[default]
     Solid,
-    /// Double line.
+    /// Two solid lines, a line's thickness apart.
     Double,
-    /// Dotted line.
+    /// Round dots as wide as the line is thick.
     Dotted,
-    /// Dashed line.
+    /// Dashes four times as long as the line is thick.
     Dashed,
-    /// Wavy line.
+    /// A wave around the line's centre.
     Wavy,
+}
+
+/// How thick a decoration's lines are, as a multiple of the thickness the
+/// text's font recommends: finite, positive and at most
+/// [`DecorationThickness::MAX`].
+#[derive(Clone, Copy, Debug, PartialEq, PartialOrd)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize, serde::Deserialize),
+    serde(try_from = "f32", into = "f32")
+)]
+pub struct DecorationThickness(f32);
+
+impl DecorationThickness {
+    /// The font's own thickness.
+    pub const FROM_FONT: Self = Self(1.0);
+
+    /// The thickest scale: sixteen times the font's thickness, about an em.
+    pub const MAX: Self = Self(16.0);
+
+    /// `scale` times the font's thickness, or `None` unless `scale` is
+    /// finite, positive and at most [`Self::MAX`].
+    #[must_use]
+    pub fn try_new(scale: f64) -> Option<Self> {
+        // In range, the narrowing only rounds.
+        (scale.is_finite() && scale > 0.0 && scale <= f64::from(Self::MAX.0))
+            .then_some(Self(scale as f32))
+    }
+
+    /// The multiple of the font's thickness.
+    #[must_use]
+    pub const fn get(self) -> f32 {
+        self.0
+    }
+}
+
+impl Default for DecorationThickness {
+    fn default() -> Self {
+        Self::FROM_FONT
+    }
+}
+
+#[cfg(feature = "serde")]
+impl TryFrom<f32> for DecorationThickness {
+    type Error = &'static str;
+
+    fn try_from(scale: f32) -> Result<Self, Self::Error> {
+        Self::try_new(f64::from(scale))
+            .ok_or("a decoration thickness is finite, positive and at most 16")
+    }
+}
+
+#[cfg(feature = "serde")]
+impl From<DecorationThickness> for f32 {
+    fn from(thickness: DecorationThickness) -> Self {
+        thickness.0
+    }
+}
+
+/// The lines drawn along a span's text: which lines, their shape, colour and
+/// thickness (ADR-0310).
+///
+/// Each line sits where the text's font puts it: an underline at the font's
+/// underline position and thickness, a line-through at its strikeout, an
+/// overline at its ascent with the underline's thickness. Underlines and
+/// overlines are painted under the glyphs, a line-through over them.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[non_exhaustive]
+pub struct TextDecoration {
+    /// The lines drawn.
+    pub lines: TextDecorationLines,
+    /// Their shape.
+    pub style: TextDecorationStyle,
+    /// Their colour; `None` draws them in the colour of the glyphs they run
+    /// along.
+    pub color: Option<Color>,
+    /// Their thickness, as a multiple of the font's.
+    pub thickness: DecorationThickness,
+}
+
+impl TextDecoration {
+    /// No decoration: a span styled with it draws none, whatever it
+    /// inherits.
+    pub const NONE: Self = Self::new(TextDecorationLines::NONE);
+    /// A solid underline in the glyphs' colour.
+    pub const UNDERLINE: Self = Self::new(TextDecorationLines::UNDERLINE);
+    /// A solid overline in the glyphs' colour.
+    pub const OVERLINE: Self = Self::new(TextDecorationLines::OVERLINE);
+    /// A solid line-through in the glyphs' colour.
+    pub const LINE_THROUGH: Self = Self::new(TextDecorationLines::LINE_THROUGH);
+
+    /// `lines`, solid, in the glyphs' colour, at the font's thickness.
+    #[must_use]
+    pub const fn new(lines: TextDecorationLines) -> Self {
+        Self {
+            lines,
+            style: TextDecorationStyle::Solid,
+            color: None,
+            thickness: DecorationThickness::FROM_FONT,
+        }
+    }
+
+    /// The same lines drawn in `style`.
+    #[must_use]
+    pub const fn with_style(mut self, style: TextDecorationStyle) -> Self {
+        self.style = style;
+        self
+    }
+
+    /// The same lines drawn in `color`.
+    #[must_use]
+    pub const fn with_color(mut self, color: Color) -> Self {
+        self.color = Some(color);
+        self
+    }
+
+    /// The same lines drawn at `thickness`.
+    #[must_use]
+    pub const fn with_thickness(mut self, thickness: DecorationThickness) -> Self {
+        self.thickness = thickness;
+        self
+    }
+
+    /// Whether the decoration draws no line.
+    #[must_use]
+    pub const fn is_none(&self) -> bool {
+        self.lines.is_empty()
+    }
 }
 
 #[derive(Debug, Default)]

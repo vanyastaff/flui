@@ -71,7 +71,7 @@ pub(crate) fn not_carried_out(command: &flui_platform::WindowCommand) -> flui_pl
 /// draws no title bar of the application's
 /// ([`WindowCapabilities::app_title_bar`](WindowCapabilities::app_title_bar)
 /// `Unavailable`) has no third answer.
-#[cfg(any(windows, target_os = "macos", winit_host, wayland_host))]
+#[cfg(any(windows, target_os = "macos", wayland_host))]
 pub(crate) const fn system_frame_or_none(decorated: bool) -> flui_platform::WindowFrame {
     if decorated {
         flui_platform::WindowFrame::System
@@ -117,10 +117,10 @@ pub(crate) fn held_to(
 }
 
 /// What a window system says of a window, as the three facts its mode is
-/// decided from. Each platform reads them from its own report (winit's
-/// queries, AppKit's style mask and flags, the X11 window manager's
+/// decided from. Each platform reads them from its own report (AppKit's style
+/// mask and flags, the X11 window manager's
 /// properties, the Win32 window's tracked mode) and [`mode_of`] decides.
-#[cfg(any(windows, target_os = "macos", x11_host, winit_host, test))]
+#[cfg(any(windows, target_os = "macos", x11_host, test))]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct ModeFlags {
     /// The window is minimized: iconic, in the Dock or on the taskbar.
@@ -134,7 +134,7 @@ pub(crate) struct ModeFlags {
 /// The mode of a window with these flags. A minimized window is hidden
 /// whatever else is set; a fullscreen one often keeps its maximized flag, so
 /// fullscreen comes before maximized.
-#[cfg(any(windows, target_os = "macos", x11_host, winit_host, test))]
+#[cfg(any(windows, target_os = "macos", x11_host, test))]
 pub(crate) const fn mode_of(flags: ModeFlags) -> flui_platform::WindowMode {
     use flui_platform::WindowMode;
     if flags.minimized {
@@ -182,7 +182,7 @@ struct Slot {
 /// One window's last published [`WindowState`] and its staleness.
 ///
 /// A backend marks the cell stale on every OS event that may change the window
-/// (`WM_SIZE`, `windowDidResize`, a winit `Resized`, `fullscreenchange`, or a
+/// (`WM_SIZE`, `windowDidResize`, `fullscreenchange`, or a
 /// command it just issued). The next [`state_with`](Self::state_with) reads the
 /// OS again, with no lock held across the read, and publishes the sample; a
 /// sample equal to the published one keeps its revision.
@@ -610,7 +610,7 @@ mod mapping {
     }
 
     /// Every window system decides a row's mode by the one rule from its own
-    /// reading; winit's three queries are the flags as they stand.
+    /// reading; `said` is the flags as they stand.
     #[test]
     fn every_window_system_decides_the_mode_alike() {
         for Row {
@@ -621,7 +621,7 @@ mod mapping {
         } in ROWS
         {
             let modes = [
-                ("winit", mode_of(said), mode),
+                ("flags", mode_of(said), mode),
                 ("X11", mode_of(x11(said)), mode),
                 ("Win32", mode_of(win32(said)), mode),
                 ("AppKit", mode_of(appkit(said)), appkit_mode),

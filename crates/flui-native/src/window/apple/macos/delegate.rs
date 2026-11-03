@@ -680,13 +680,11 @@ impl MacOSWindow {
         // lifetime.
         //
         // Removal precedes `dispatch_close()` so the closing window is already
-        // untracked when user close callbacks run. Unlike the repo's winit
-        // backend — which removes from tracking only AFTER its own close
-        // callbacks (owner/winit.rs dispatch_close before windows.remove) —
-        // this ordering is safe here because the macOS map is private with no
-        // content readers: the early removal is observable only as the intended
-        // lifetime change. The removed entry drops at the end of this
-        // statement's scope, and the delegate holds the window meanwhile.
+        // untracked when user close callbacks run. This ordering is safe here
+        // because the macOS map is private with no content readers: the early
+        // removal is observable only as the intended lifetime change. The
+        // removed entry drops at the end of this statement's scope, and the
+        // delegate holds the window meanwhile.
         let _prev = self.windows_map.remove(&(self.ns_window as u64));
 
         self.delivery.dispatch_close();

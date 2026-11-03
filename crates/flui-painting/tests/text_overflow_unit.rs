@@ -366,7 +366,8 @@ pub(crate) fn every_style_and_span_field_is_classified_by_what_the_shaped_paragr
     use flui_foundation::geometry::Offset;
     use flui_painting::styling::{Color, Shadow};
     use flui_painting::typography::{
-        FontFeature, FontStyle, FontVariation, FontWeight, InlineSpan, TextLink, TextStyle,
+        FontFeature, FontStyle, FontVariation, FontWeight, InlineSpan, TextDecoration, TextLink,
+        TextStyle,
     };
     use flui_painting::{Canvas, DrawOp, Invalidation, TextContext};
 
@@ -437,6 +438,7 @@ pub(crate) fn every_style_and_span_field_is_classified_by_what_the_shaped_paragr
         font_features,
         font_variations,
         shadows,
+        decoration,
     } = TextStyle {
         color: Some(Color::RED),
         background_color: Some(Color::rgb(250, 240, 10)),
@@ -452,6 +454,7 @@ pub(crate) fn every_style_and_span_field_is_classified_by_what_the_shaped_paragr
         font_features: vec![FontFeature::enable("smcp")],
         font_variations: vec![FontVariation::new("wght", 700.0)],
         shadows: Some(vec![Shadow::new(Color::BLACK, Offset::new(1.0, 1.0), 2.0)]),
+        decoration: Some(TextDecoration::UNDERLINE),
     };
     let TextSpan {
         text,
@@ -620,6 +623,15 @@ pub(crate) fn every_style_and_span_field_is_classified_by_what_the_shaped_paragr
             "child shadows",
             child_style(TextStyle {
                 shadows,
+                ..TextStyle::new()
+            }),
+            Paint,
+            None,
+        ),
+        (
+            "child decoration",
+            child_style(TextStyle {
+                decoration,
                 ..TextStyle::new()
             }),
             Paint,

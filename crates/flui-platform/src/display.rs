@@ -260,7 +260,7 @@ impl RefreshPeriod {
         )
     }
 
-    /// The period of a rate in millihertz, as Wayland and winit report it.
+    /// The period of a rate in millihertz, as Wayland reports it.
     ///
     /// # Errors
     /// [`InvalidRefreshPeriod`] for a non-positive rate or a period outside

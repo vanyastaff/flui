@@ -3,11 +3,11 @@
 //!
 //! FLUI's delta grows the consumer's scroll offset: positive scrolls down and
 //! right. A platform reports its amounts in its own unit, which it picks
-//! (Win32's detents, the DOM's `deltaMode`, winit's line or pixel delta,
-//! Android's axis factors, AppKit's precise deltas), and in its own
+//! (Win32's detents, the DOM's `deltaMode`, Android's axis factors, AppKit's
+//! precise deltas), and in its own
 //! direction ([`WheelDirection`]); [`wheel_step`] turns each axis to FLUI's
 //! direction and refuses an amount that is not finite. What a refused step
-//! becomes is the backend's: winit and AppKit deliver a zero step in the
+//! becomes is the backend's: AppKit delivers a zero step in the
 //! event's unit, the Web and Android drop the event.
 
 use flui_platform::pointer::{InputValueError, ScrollDelta, ScrollUnit};
@@ -20,7 +20,7 @@ pub(crate) enum WheelDirection {
     /// horizontal wheel, tilted right.
     Offset,
     /// A positive amount moves the content down or right, so the offset
-    /// shrinks: winit's and AppKit's deltas, Android's scroll axes and the
+    /// shrinks: AppKit's deltas, Android's scroll axes and the
     /// Win32 vertical wheel, turned away from the user.
     Content,
 }
@@ -183,19 +183,6 @@ mod mapping {
         crate::input::apple::wheel::step(false, moving_the_content(x), moving_the_content(y)).0
     }
 
-    /// winit's line delta for the turn.
-    #[cfg(all(
-        feature = "winit-backend",
-        any(target_os = "windows", target_os = "macos", target_os = "linux")
-    ))]
-    fn winit((x, y): (f64, f64)) -> ScrollDelta {
-        let delta = winit::event::MouseScrollDelta::LineDelta(
-            moving_the_content(x) as f32,
-            moving_the_content(y) as f32,
-        );
-        crate::input::winit::scroll_step(&delta, 1.0, false).delta
-    }
-
     /// Every backend whose wheel step runs on this host takes each turn alike.
     #[test]
     fn every_backend_steps_a_turn_alike() {
@@ -210,11 +197,6 @@ mod mapping {
                 ("DOM", dom(amounts)),
                 ("Android", android(amounts)),
                 ("AppKit", Some(appkit(amounts))),
-                #[cfg(all(
-                    feature = "winit-backend",
-                    any(target_os = "windows", target_os = "macos", target_os = "linux")
-                ))]
-                ("winit", Some(winit(amounts))),
             ];
             for (backend, delta) in steps {
                 let Some(delta) = delta else {
@@ -232,7 +214,7 @@ mod mapping {
     }
 
     /// An amount that is not finite is refused: the Web and Android drop the
-    /// event, winit and AppKit deliver a zero step in the event's unit.
+    /// event, AppKit delivers a zero step in the event's unit.
     #[test]
     fn a_turn_that_is_not_finite_steps_nothing() {
         for amount in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
@@ -240,14 +222,6 @@ mod mapping {
             assert_eq!(android((0.0, amount)), None, "Android: {amount}");
             let zero = appkit((amount, 0.0));
             assert_eq!((zero.x(), zero.y()), (0.0, 0.0), "AppKit: {amount}");
-            #[cfg(all(
-                feature = "winit-backend",
-                any(target_os = "windows", target_os = "macos", target_os = "linux")
-            ))]
-            {
-                let zero = winit((amount, 0.0));
-                assert_eq!((zero.x(), zero.y()), (0.0, 0.0), "winit: {amount}");
-            }
         }
     }
 }

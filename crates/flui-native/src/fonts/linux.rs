@@ -200,6 +200,10 @@ impl Fontconfig {
         let Some(config) = NonNull::new(unsafe { init() }) else {
             // Not dropped: its `Drop` would destroy the dangling
             // configuration and close the handle `open` closes.
+            #[expect(
+                clippy::mem_forget,
+                reason = "its Drop would destroy the dangling configuration and close the handle open closes"
+            )]
             std::mem::forget(fc);
             return None;
         };

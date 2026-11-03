@@ -183,9 +183,8 @@ pub(crate) fn probe_target(target: &Arc<dyn WindowTarget>) -> EngineResult<()> {
 
 impl<S> Drop for SurfaceLease<S> {
     fn drop(&mut self) {
-        // Harnesses assert this line: it must precede the winit backend's
-        // "Quitting event loop" line, on BOTH close routes (compositor/`WM_DELETE` and
-        // `FLUI_SELF_CLOSE_ROUTE=programmatic`). It is the only executed
+        // Harnesses assert this line on both close routes (the window system's
+        // close and a programmatic one). It is the only executed
         // witness that the surface — and this lease's `Arc` clone of the
         // target — was actually released rather than orphaned by the
         // frame-callback cycle described in

@@ -14,7 +14,7 @@ use flui_platform::input_regions::InputRegionKind;
 /// gestures, input regions, outgoing drags.
 #[test]
 fn every_backend_states_its_availability() {
-    use crate::input::availability::{self as table, AndroidInputApis, WinitSession};
+    use crate::input::availability::{self as table, AndroidInputApis};
     use Availability::{Emulated, Native, Unavailable};
     let android = |gesture_exclusion, touchpad_gestures, drag_source| {
         table::android(AndroidInputApis {
@@ -79,27 +79,6 @@ fn every_backend_states_its_availability() {
             table::web(true),
             [Native, Unavailable, Native, Unavailable, Native],
         ),
-        (
-            "winit x11",
-            table::winit(WinitSession::X11),
-            [
-                Unavailable,
-                Unavailable,
-                Unavailable,
-                Unavailable,
-                Unavailable,
-            ],
-        ),
-        (
-            "winit wayland",
-            table::winit(WinitSession::Wayland),
-            [Unavailable, Native, Unavailable, Unavailable, Unavailable],
-        ),
-        (
-            "winit macos",
-            table::winit(WinitSession::MacOs),
-            [Unavailable, Native, Native, Unavailable, Unavailable],
-        ),
     ];
     for (backend, capabilities, expected) in rows {
         assert_eq!(
@@ -121,14 +100,14 @@ fn every_backend_states_its_availability() {
 }
 
 /// Win32 answers the system's hit test from every chrome region and AppKit
-/// moves the window from a move area (ADR-0286 §7, §8), and winit moves and
-/// resizes a window without decorations from them (§9), as the native X11 host
-/// does through its window manager (§10) and the native Wayland host through
+/// moves the window from a move area (ADR-0286 §7, §8); the native X11 host
+/// moves and resizes a window from them through its window manager (§10) and
+/// the native Wayland host through
 /// its compositor (§11); the others leave them
 /// `Unavailable` until they do.
 #[test]
 fn the_desktop_hosts_honour_the_chrome_regions_they_answer() {
-    use crate::input::availability::{self as table, AndroidInputApis, WinitSession};
+    use crate::input::availability::{self as table, AndroidInputApis};
     use Availability::{Native, Unavailable};
     use flui_platform::input_regions::{CaptionButton, ResizeEdge};
 
@@ -153,21 +132,6 @@ fn the_desktop_hosts_honour_the_chrome_regions_they_answer() {
         (
             "wayland",
             table::wayland(table::WaylandInputGlobals::default()),
-            move_and_resize,
-        ),
-        (
-            "winit x11",
-            table::winit(WinitSession::X11),
-            move_and_resize,
-        ),
-        (
-            "winit wayland",
-            table::winit(WinitSession::Wayland),
-            move_and_resize,
-        ),
-        (
-            "winit macos",
-            table::winit(WinitSession::MacOs),
             move_and_resize,
         ),
     ] {

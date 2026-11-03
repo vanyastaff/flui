@@ -6,7 +6,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use flui_animation::{SharedCurve, curves};
-use flui_foundation::MutatedDuringBuild;
+use flui_foundation::{ChangeNotifier, Listenable, ListenerId, MutatedDuringBuild};
 use flui_objects::{CarouselGeometry, CarouselItemFrames, CarouselLayout};
 use flui_view::{EventCx, EventOutcome};
 
@@ -45,11 +45,8 @@ struct Inner {
     paused: Cell<bool>,
     /// Told when [`CarouselController::pause`] or [`resume`](CarouselController::resume) changes
     /// the pause.
-    pause_listeners: RefCell<Vec<PauseListener>>,
+    pause_listeners: ChangeNotifier,
 }
-
-/// A listener told of pause changes, by the id that removes it.
-type PauseListener = (u64, Rc<dyn Fn()>);
 
 /// The carousel a controller drives.
 #[derive(Clone)]
@@ -177,17 +174,7 @@ impl CarouselController {
         if self.inner.paused.replace(paused) == paused {
             return;
         }
-        // Cloned out: a listener that pauses again or drops its carousel runs with no borrow.
-        let listeners: Vec<_> = self
-            .inner
-            .pause_listeners
-            .borrow()
-            .iter()
-            .map(|(_, listener)| Rc::clone(listener))
-            .collect();
-        for listener in listeners {
-            listener();
-        }
+        self.inner.pause_listeners.notify_listeners();
     }
 
     /// Calls `callback` with the new active item after each change, once per change; it
@@ -261,22 +248,12 @@ impl CarouselController {
         holds && self.inner.index.replace(Some(index)) != Some(index)
     }
 
-    pub(super) fn add_pause_listener(&self, listener: Rc<dyn Fn()>) -> u64 {
-        let id = self.inner.next_token.get() + 1;
-        self.inner.next_token.set(id);
-        self.inner.pause_listeners.borrow_mut().push((id, listener));
-        id
+    pub(super) fn add_pause_listener(&self, listener: Rc<dyn Fn()>) -> ListenerId {
+        self.inner.pause_listeners.add_listener(listener)
     }
 
-    pub(super) fn remove_pause_listener(&self, id: u64) {
-        let removed = {
-            let mut listeners = self.inner.pause_listeners.borrow_mut();
-            listeners
-                .iter()
-                .position(|(listener_id, _)| *listener_id == id)
-                .map(|position| listeners.remove(position))
-        };
-        drop(removed);
+    pub(super) fn remove_pause_listener(&self, id: ListenerId) {
+        self.inner.pause_listeners.remove_listener(id);
     }
 
     pub(super) fn ptr_eq(&self, other: &Self) -> bool {

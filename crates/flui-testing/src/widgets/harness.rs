@@ -12,7 +12,7 @@
 //!
 //! [`mount_with_ime`] gives the UI runtime's window a recording input-method host
 //! (pull-model, as on Windows) and [`mount_with_push_ime`] a recording push
-//! text input (as with winit), so the UI runtime's presentation owns the IME
+//! text input, so the UI runtime's presentation owns the IME
 //! session and its frames are text-store
 //! transactions exactly as on screen: commits close for the frame's
 //! duration, and the grants queued meanwhile run once it returns.
@@ -84,8 +84,8 @@ pub fn mount_with_ime(root: impl View) -> Harness {
     )
 }
 
-/// [`mount`], with a window that offers a recording push-model text input,
-/// as winit does: the UI runtime's presentation enables the IME and reports the
+/// [`mount`], with a window that offers a recording push-model text input:
+/// the UI runtime's presentation enables the IME and reports the
 /// candidate area ([`Harness::cursor_area_calls`],
 /// [`Harness::ime_allowed_calls`]), and [`Harness::dispatch_ime`] delivers
 /// platform IME events to it.

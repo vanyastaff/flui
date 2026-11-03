@@ -2,9 +2,14 @@
 //! [`super::measure`]'s `layout()` cached: paint records its paragraph, and
 //! the cursor queries read the layout that measured it.
 
-use crate::typography::{LineMetrics, TextBox, TextLineLayout, TextPosition, TextRange};
+use std::ops::Range;
+
+use crate::typography::{
+    LineMetrics, TextBox, TextDecoration, TextLineLayout, TextPosition, TextRange,
+};
 use flui_foundation::geometry::Offset;
 
+use super::decoration::{self, Drawn, Pass};
 use super::{TextLayoutCache, TextPainter};
 use crate::Canvas;
 
@@ -117,15 +122,37 @@ impl TextPainter {
 
     /// Paints the text onto the canvas at the given offset: each span's
     /// background, then the shadows spans cast in list order, then the
-    /// glyphs (ADR-0309 §2). Text with neither background nor shadow records
-    /// its paragraph op alone.
+    /// underlines and overlines of their decorations, the glyphs, and last
+    /// the line-throughs (ADR-0309 §2, ADR-0310 §4). Text that paints none of
+    /// them records its paragraph op alone.
+    ///
+    /// # Panics
+    ///
+    /// Panics if [`layout`](super::TextPainter::layout) has not been
+    /// called.
+    pub fn paint(&self, canvas: &mut Canvas, offset: Offset<f64>) {
+        self.paint_with_decorations(canvas, offset, &[]);
+    }
+
+    /// Paints the text as [`paint`](Self::paint) does, and draws each
+    /// decoration of `ranges` along the bytes of its range as though their
+    /// span were styled with it: where the font puts its lines, in the
+    /// colour of the glyphs it runs along unless it names its own, and in the
+    /// same order (ADR-0310 §5). An input method's composing region is drawn
+    /// this way. A range's decoration is drawn beside any its span already
+    /// has; the ellipsis is not in any range.
     ///
     /// # Panics
     ///
     /// Panics if [`layout`](super::TextPainter::layout) has not been
     /// called.
     #[expect(clippy::expect_used)] // Documented precondition: layout() must be called first, text must be set
-    pub fn paint(&self, canvas: &mut Canvas, offset: Offset<f64>) {
+    pub fn paint_with_decorations(
+        &self,
+        canvas: &mut Canvas,
+        offset: Offset<f64>,
+        ranges: &[(Range<usize>, TextDecoration)],
+    ) {
         // Check `text` first: it is the *root-cause* precondition.
         // If both `text` and `layout_cache` are unset, "text must be
         // set" is the actionable message — the cache only exists
@@ -144,11 +171,24 @@ impl TextPainter {
             .style()
             .and_then(crate::text_layout::paint_color)
             .unwrap_or(crate::styling::Color::BLACK);
+        let mut stretches = Vec::new();
         if let Some(decor) = &cache.decor {
-            decor.paint(canvas, &cache.layout, offset);
+            decor.paint_backgrounds_and_shadows(canvas, &cache.layout, offset);
+            stretches = decor.decorated(&cache.layout, color);
         }
+        for (range, decoration) in ranges {
+            if range.is_empty() || decoration.is_none() {
+                continue;
+            }
+            stretches.extend(cache.layout.decorated_stretches(&|site| {
+                site.text_byte.filter(|byte| range.contains(byte))?;
+                Drawn::of(*decoration, site.glyph, color)
+            }));
+        }
+        decoration::draw(canvas, &stretches, offset, Pass::UnderGlyphs);
         // The very paragraph this painter measured: what the engine
         // rasterises is, by identity, what was laid out.
         canvas.draw_paragraph(&cache.paragraph, offset, color);
+        decoration::draw(canvas, &stretches, offset, Pass::OverGlyphs);
     }
 }

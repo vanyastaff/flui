@@ -9,6 +9,13 @@ import android.app.NativeActivity;
  * reads input from the native input queue, as before. Naming this class in
  * the manifest, with {@code android:hasCode="true"}, puts FLUI's classes in
  * the APK, where the Activity's class loader finds them, and gives FLUI the
- * callbacks only an Activity subclass receives.
+ * callbacks only an Activity subclass receives, which it forwards to the
+ * queue in {@link FluiHost}.
  */
-public class FluiActivity extends NativeActivity {}
+public class FluiActivity extends NativeActivity {
+    @Override
+    public void onTrimMemory(int level) {
+        super.onTrimMemory(level);
+        FluiHost.trimMemory(level);
+    }
+}

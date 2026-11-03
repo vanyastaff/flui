@@ -118,7 +118,6 @@ pub(crate) struct DisplaySource {
     #[cfg(any(
         windows,
         wayland_host,
-        winit_host,
         target_os = "macos",
         target_os = "ios",
         target_os = "android",
@@ -166,7 +165,6 @@ impl DisplaySource {
             #[cfg(any(
                 windows,
                 wayland_host,
-                winit_host,
                 target_os = "macos",
                 target_os = "ios",
                 target_os = "android",
@@ -307,14 +305,7 @@ impl DisplaySource {
     /// `handle` in a snapshot revision invalidates the snapshot; the same miss
     /// again, however often it repeats, costs nothing until the revision
     /// changes.
-    #[cfg(any(
-        windows,
-        wayland_host,
-        winit_host,
-        target_os = "macos",
-        target_os = "ios",
-        test
-    ))]
+    #[cfg(any(windows, wayland_host, target_os = "macos", target_os = "ios", test))]
     pub(crate) fn note_miss(&self, handle: u64) {
         self.note_miss_with(handle, || {});
     }
@@ -328,7 +319,6 @@ impl DisplaySource {
     #[cfg(any(
         windows,
         wayland_host,
-        winit_host,
         target_os = "macos",
         target_os = "ios",
         target_os = "android",
@@ -351,7 +341,6 @@ impl DisplaySource {
 #[cfg(any(
     windows,
     wayland_host,
-    winit_host,
     target_os = "macos",
     target_os = "ios",
     target_os = "android",
@@ -366,7 +355,6 @@ struct MissLedger {
 #[cfg(any(
     windows,
     wayland_host,
-    winit_host,
     target_os = "macos",
     target_os = "ios",
     target_os = "android",

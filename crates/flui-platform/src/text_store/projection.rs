@@ -1,6 +1,6 @@
 //! The push vocabulary as store edits (ADR-0090 §2).
 //!
-//! winit, the one push-model source today, delivers
+//! A push-model source delivers
 //! [`ImeEvent::{Enabled, Preedit, Commit, Disabled}`](ImeEvent). A
 //! push event is not a second editing path: [`project_ime_event`] turns each
 //! into edits made under a read-write lock on the field's [`TextStore`],

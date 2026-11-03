@@ -723,9 +723,8 @@ impl IOSLoop {
 //
 // Thread-local rather than a process static, on purpose: `UIApplicationMain`
 // owns the main thread for the process's life, and both the delegate and
-// these values are reachable only from there. This is the same owner-affine
-// scope the winit backend uses for its `ActiveEventLoop` publication, and it
-// adds no process-global.
+// these values are reachable only from there. This is an owner-affine scope
+// and adds no process-global.
 thread_local! {
     static DELEGATE_STATE: RefCell<DelegateState> = const { RefCell::new(DelegateState {
         handler: None,

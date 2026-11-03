@@ -1,6 +1,7 @@
 # ADR-0255: How Android, iOS and the Web host FLUI
 
-- **Status:** Accepted (2026-10-20). Implemented in part: Android decisions 1, 4, 5 and 7, and of
+- **Status:** Accepted (2026-10-20). Implemented in part: Android decisions 1, 4, 5 and 7, of
+  decision 2 the queue with `onTrimMemory` (the other entries come with their consumers), and of
   decision 6 the Activity, `hasCode`, `singleTop`, the back flag and `configChanges` (the dex is a
   declaration of `flui-native`, ADR-0307 version 2; the handshake is
   `owner::android::java_host`). The rest lands as separate PRs, and a platform's row in
@@ -467,6 +468,7 @@ are open, with the run that settles each:
 | Claim | Run |
 |---|---|
 | The view installs and the S21 input run passes with the dex delivered by the APK | a manual input run on the S21, and on an API 23 to 25 image, which ADR-0247 never ran |
+| Each `onTrimMemory` reaches the application as a memory-pressure notice, in the foreground and the background, and one sent before `android_main` runs arrives once the platform starts | A device: `adb shell am send-trim-memory <package> RUNNING_LOW`, then `BACKGROUND` with the app in the background; a trim sent while the app is held in a debugger before `android_main`, then released |
 | A system dark-mode, font-scale or locale change reaches `ConfigChanged` and no longer replaces the runtime | A device: `adb shell cmd uimode night yes`, `settings put system font_scale 1.3`; watch for a second `android_main` |
 | A warm deep link, an activity result and a permission result reach the owner, including one that arrives before `android_main` | A device, with the location pilot as the first consumer |
 | TalkBack's hover events reach the native queue and are consumed through `Adapter::on_hover_event`; `accesskit_android`'s minimum API; the `viewIdResourceName` mapping for ADR-0240 identifiers | A device with TalkBack, on Android 6 and 15 |
@@ -488,7 +490,8 @@ The tests that do so: `android_manifest::tests::the_base_names_flui_activity_wit
 `android_package::tests::libraries_and_dex_files_are_appended_where_the_platform_reads_them`,
 `gradle_project::tests::gradle_compiles_the_java_sources_the_crates_declare` (`flui-cli`) and
 `owner::android::java_host::tests::the_java_classes_state_the_protocol_of_the_library` and
-`the_platform_starts_only_over_its_own_java_classes` (`flui-native`).
+`the_platform_starts_only_over_its_own_java_classes`, `the_host_queue_is_read_as_the_java_classes_lay_it_out`
+and `android_lifecycle_mapping_delivers_every_memory_call` (`flui-native`).
 
 - `cargo xtask android-dex`, extended to every `build.rs` (ADR-0154), fails a build script that
   names `javac`, `d8` or `swiftc` (decision 21); a generated project file that differs from the

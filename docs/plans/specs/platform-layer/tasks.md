@@ -3325,6 +3325,24 @@ graph LR
   серии (тема — с экраном запуска, `<queries>` — с первой возможностью). Остаток LY62: очередь
   `FluiActivity` (`onActivityResult`, `onTrimMemory` как host notice, `onMultiWindowModeChanged`,
   `onTopResumedActivityChanged`, `onUserLeaveHint`), буфер до `android_main`, пробуждение owner.
+- [ ] **LY62**, очередь — ветка `claude/project-thread-op0kt3` поверх части доставки. Сделано:
+  `FluiActivity.onTrimMemory` кладёт уровень в очередь `FluiHost` (Java static, буферизует до
+  `android_main` и между двумя платформами процесса, не больше одной записи на уровень).
+  `java_host::HostQueue` на Java main thread регистрирует `nativeWake` и привязывает handle
+  (`Box<Arc<Inbox>>`), записи до привязки будят сразу; owner снимает флаг и только тогда
+  забирает очередь через JNI, каждый ход цикла, в фоне тоже. На выходе цикла `FluiHost.unbind`
+  забывает handle, только если его не заменила более поздняя платформа, затем handle
+  освобождается. `PROTOCOL` = 2. Уровень доходит через `ActivityEvent::TrimMemory` и правило
+  жизненного цикла как `SystemNotice::MemoryPressure`, каждый вызов системы; чтение
+  `lastTrimLevel` через JNI на `Pause`/`Stop`/`Resume`/`LowMemory` удалено (ADR-0237 дополнен).
+  Тесты: `the_host_queue_is_read_as_the_java_classes_lay_it_out`,
+  `android_lifecycle_mapping_delivers_every_memory_call` и обновлённые `android_lifecycle_mapping*`
+  (падают при откате: давление от `TrimMemory` убрано — три падают; разбор пар выключен — падает
+  тест очереди). Clippy чистый на Linux и `aarch64-linux-android`. Не пересылаются:
+  `onActivityResult` (приходит с `launch_for_result`, LY64), `onMultiWindowModeChanged`,
+  `onTopResumedActivityChanged`, `onUserLeaveHint` (у снимка окна нет поля, которое они бы
+  наполняли; приходят вместе с ним). Прогон на устройстве: `am send-trim-memory` на переднем
+  плане и в фоне, запись до `android_main`.
 - [ ] **LY63**, часть `configChanges` — ветка `android/config-changes`. Шаблон `flui create`
   объявляет все изменения, которые хост читает на `ConfigChanged`:
   `orientation|screenSize|smallestScreenSize|screenLayout|density|uiMode|fontScale|fontWeightAdjustment|keyboard|keyboardHidden|navigation`

@@ -27,7 +27,7 @@ Design decisions are recorded under [Mapping decisions](#mapping-decisions).
 | Raster side | `glyphs/{mod,key,registry,swash}.rs` | `GlyphKey` (a face named by font blob), `FontRegistry` (faces and interned variation instances), `SwashRasterizer` (the engine's atlas draws through it), `GlyphRasterizer`, `PlacedGlyph`, `GlyphImage` |
 | Paint values | `paint/{style,path,shader,effects,image,clipping,blend_mode,canvas}.rs` | `Paint`, `Path` (with its shape hint), shaders, filters, images, clip and blend modes: the vocabulary the recorder records. `BlendMode::coverage_class` is the one classification coverage, compositing and damage route on; it and every blend predicate derived from it, `ColorFilter::modifies_transparent_black` and `Color::blend` name every mode with no wildcard arm |
 | Style values | `styling/*.rs`, `lerp_impls.rs` | `Color` (straight-alpha sRGB; `lerp` in premultiplied Oklab), borders, radii, decorations, gradients, shadows |
-| Text values | `typography/*.rs` | `TextStyle`, spans, alignment, decoration, metrics |
+| Text values | `typography/*.rs` | `TextStyle`, spans, alignment, decoration (`TextDecoration`, `DecorationThickness`), metrics |
 | Layout-facing values | `alignment.rs`, `box_fit.rs`, `text_painter/baseline.rs` | `Alignment` and its directional form, `BoxFit`/`BoxShape`/`FittedSizes`, `TextBaseline` |
 | Decorations | `decoration.rs`, `table_border.rs` | `paint_box_decoration` / `box_decoration_hit_test`, `paint_table_border` |
 | Test support | `testing/mod.rs` | `record`, the collection and host-scan queries tests read, and `EVERY_BLEND_MODE`, a list a compile-time match keeps complete (`testing` feature) |
@@ -140,6 +140,24 @@ blur is a `BlurSigma`, finite, non-negative and at most 128 logical pixels; a
 shadow with a non-finite radius or offset, or a transparent colour, records
 nothing. A paint-only `set_text` replaces the backgrounds and shadows with the
 layout kept. `text_paint_attributes_contract` pins each rule.
+
+A span's decoration is drawn from its font (ADR-0310). `TextStyle::decoration`
+is paint only: `None` inherits, `TextDecoration::NONE` clears, and the lines,
+style, colour and `DecorationThickness` scale are read in `SpanPaint::of`.
+`ParagraphLayout::decorated_stretches` walks the kept lines' visual clusters,
+attributed by byte offset, and merges adjacent clusters with one resolved value
+into a stretch that ends at the line's last visible glyph (trailing spaces and
+the break are not decorated, the ellipsis takes its span's). A stretch takes
+the decoration metrics of its largest run, `DecorationMetrics::of`, which
+trusts a font's offsets within an em of the baseline and a thickness up to a
+quarter em, and otherwise falls back to an eighteenth of an em, since Parley
+substitutes font units for a font without the metrics. Underlines and overlines
+record before the paragraph, line-throughs after, as rectangles or paths of the
+existing vocabulary (`text_painter/decoration.rs`); a pattern of more than 4096
+steps, or finer than its coordinates can place, draws solid.
+`TextPainter::paint_with_decorations` draws a decoration over byte ranges the
+same way, which `RenderEditable`'s composing underline uses.
+`text_decorations_contract` pins each rule.
 
 Carets, selection boxes, word boundaries, line metrics and hit-testing read
 the same `ParagraphLayout`, which the cache keeps beside the paragraph

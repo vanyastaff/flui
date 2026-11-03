@@ -210,6 +210,10 @@ impl Receiver {
             if let Err(error) = destroy(hwnd) {
                 // Keep both userdata and its unique class name reserved if the
                 // OS still owns the HWND. The already-closed source is inert.
+                #[expect(
+                    clippy::mem_forget,
+                    reason = "the OS still owns the HWND and its userdata"
+                )]
                 std::mem::forget(context);
                 contain_owner_callback(
                     || tracing::error!(%error, "broadcast receiver retained after failed destruction"),
