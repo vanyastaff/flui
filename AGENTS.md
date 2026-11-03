@@ -30,7 +30,29 @@ Each has shipped more than once:
 - identity compared by label instead of typed ID, stale generations, ID counters that wrap;
 - overflow in intermediate arithmetic, non-finite geometry published;
 - regression tests that pass with the fix reverted;
-- workspace-wide changes that skip features, examples, shaders or tooling.
+- workspace-wide changes that skip features, examples, shaders or tooling;
+- a replacement that leaves the replaced form alive: a better primitive, API or rule lands, the
+  old one keeps its callers and the documents that teach it, and the next change copies the old
+  one (panic containment, frame demand, navigation and crate ordering each have two or three live
+  generations on `main`).
+
+## Current forms
+
+Where a concept has more than one form on `main`, new code uses the form in the "Use" column.
+The forms in the "Not" column are on their way out: copying one is a defect even where the
+neighbouring code does it. A change that removes the last user of such a form deletes the form
+and edits its row.
+
+| Need | Use | Not |
+|------|-----|-----|
+| An owner changes its state, then runs code it does not own | `flui_foundation::panic::commit` / `commit_into` and `Outbox` (ADR-0287) | calling the listener, waker or `Drop` with the borrow or guard still held |
+| Keep the first of several caught panics and resume it after cleanup | `FirstPanic`; a payload nobody resumes goes to `discard_payload` (ADR-0281) | a crate-local first-failure fold, `PanicRecovery` outside `flui-foundation`, retaining or `mem::forget`ting a payload |
+| State only the owner thread touches | `Rc` with `Cell`/`RefCell`; a re-entry that finds it busy gets a typed outcome (ADR-0266) | `Arc<Mutex<_>>`, atomics, `try_lock` as a re-entrancy detector, `Send + Sync` on a callback that never leaves the thread |
+| A list of listeners | `Notifier<Arg>`, `ChangeNotifier` | a hand-rolled `Vec` of callbacks guarded by a `notifying: bool` |
+| A new identity | `IdMint<I>` and `IdExhausted` (`flui_foundation::sequence`), or a generational key under the ID-offset rule | `wrapping_add`, a `pub` integer field, an ID derived from an OS handle or pointer |
+| A test that drives an application's frames | `flui_testing::HeadlessHost` over `UiRuntime::pump` and its manual clock | `HeadlessBinding::pump_frame`, which ADR-0083 removes |
+| Which crate may depend on which | `tier`, `order` and `reach` (ADR-0081) | reasoning from `layer = N`, which ADR-0081 removes |
+| A platform's status, a version floor, an open gap | `docs/platform-parity.md`, `platform-support.toml`, `docs/gaps.md` | a status line in an ADR, a spec or an `ARCHITECTURE.md` |
 
 ## Codebase map
 
@@ -55,6 +77,19 @@ conversation:
   feature is on `main`, its spec is deleted.
 - A decision that outlives the task goes into an ADR or the crate's `ARCHITECTURE.md`. Plans,
   roadmaps, research, reviews and session notes stay out of the public repository.
+- **A replacement finishes in its own change.** A PR that brings a form to replace another (a
+  primitive, an API, a rule, an ADR decision) moves every user of the old form and deletes it, or
+  marks it `#[deprecated(note = "use …")]` and adds a `docs/gaps.md` entry for what is left.
+  Every user includes the documents: `rg` the old name and the old rule across `crates/`,
+  `packages/`, `docs/`, each `ARCHITECTURE.md` and this file, and correct them in the same PR.
+- **A document states the current rule.** When a rule changes, the ADR, `ARCHITECTURE.md` or spec
+  that states it is rewritten, not appended to: no "Amended" line over an unchanged body, no dated
+  session entries, no progress diary. History is git's. A spec's `tasks.md` is a status table
+  with its validation evidence, and the spec closes when its code and headless tests are on
+  `main`; runs still owed on devices become `docs/platform-parity.md` rows.
+- **One source per fact.** A count, a status, a version, a crate list or a feature table lives in
+  one place (a manifest, `platform-support.toml`, `docs/gaps.md`) and other documents link it.
+  A PR that changes a fact someone copied fixes each copy.
 - A consumer-visible change adds `changelog.d/<branch-slug>.md`
   (`### Added|Changed|Deprecated|Removed|Fixed|Security` and bullets), so parallel PRs never
   edit `CHANGELOG.md`. A platform-support change updates `docs/platform-parity.md` (✅ only
@@ -62,7 +97,8 @@ conversation:
 - Commits are `area: what changed`. CI executes Linux and wasm32 only; native and GPU changes are
   run locally.
 - No process markers (`Cycle N`, `PR #NNN review`, `Phase B`, slice labels) in code or docs.
-  Archival roots are exempt (`docs/plans`).
+  Archival roots are exempt (`docs/plans`). That root holds the live specs, and their task IDs
+  are what a spec tracks.
 - No Python, Perl or PowerShell scripts for edits.
 
 ## Commands
@@ -109,7 +145,10 @@ ADRs (`docs/adr/`) record the cross-crate decisions the code follows, in the MAD
 [`docs/adr/README.md`](docs/adr/README.md) gives: drivers, every option with its pros and cons,
 the decision as a Rust shape, and how compliance is confirmed. A change of decision is a new ADR
 with `Supersedes:`, and `Superseded-by:` on the old one; code that disagrees with an accepted ADR
-is a defect in one of them.
+is a defect in one of them. A reversal reaches, in the same PR, every record that still states the
+old rule (other ADRs, specs, each `ARCHITECTURE.md`, `docs/`), and a `Proposed` ADR supersedes
+nothing until it is accepted. When a topic has gathered several partial supersessions, the next
+change to it writes one ADR that states the whole current rule and supersedes the chain.
 
 ## Extending FLUI
 
@@ -162,6 +201,9 @@ with an answer you can point to in the code; the reviewers ask the same ones.
     and `docs/platform-parity.md` updated with a platform change.
 12. **A review finding fixes its class.** Apply items 1–3 to every similar point in the PR, not
     only the line the reviewer named.
+13. **Replaced forms.** What does the diff replace or reverse? Name the old form, `rg` it across
+    code and documents, and point to zero users left, or to the deprecation and its
+    `docs/gaps.md` entry. Does any new line use a form from the "Not" column of "Current forms"?
 
 ## Where to read next
 
@@ -192,7 +234,11 @@ by, with the better shape. What this repository keeps getting wrong:
   infer: name it with a turbofish or a typed binding;
 - `SAFETY:` comments that restate the operation instead of naming the invariant;
 - workflow actions not pinned to a full SHA, cargo without `--locked`, caches saved off `main`;
-- an exemption (`deny.toml` skip, `typos.toml` word, `#[expect]`) without its reason.
+- an exemption (`deny.toml` skip, `typos.toml` word, `#[expect]`) without its reason;
+- a second way to do something that already has one, with the first left undeprecated, or a new
+  use of a form from the "Not" column of "Current forms";
+- a document that records a change by appending to a record instead of rewriting its rule, or a
+  reversal that leaves other records teaching the old rule.
 
 Not a finding: a native or GPU path not yet run on its platform. CI runs Linux and wasm32 only;
 the PR body names the platforms the change still needs a run on, and the owner runs them from a
