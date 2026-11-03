@@ -49,17 +49,21 @@ pub trait PreferredSizeView: View {
 /// ```
 #[derive(Clone, StatelessView)]
 pub struct PreferredSize {
-    preferred_size: Size,
+    size: Size,
     child: BoxedView,
+    #[view(site)]
+    site: CreationSite,
 }
 
 impl PreferredSize {
     /// Wrap `child`, advertising `preferred_size` to whatever slot requires
     /// [`PreferredSizeView`].
+    #[track_caller]
     pub fn new(preferred_size: Size, child: impl IntoView) -> Self {
         Self {
-            preferred_size,
+            size: preferred_size,
             child: child.into_view().boxed(),
+            site: CreationSite::here(),
         }
     }
 }
@@ -67,7 +71,7 @@ impl PreferredSize {
 impl std::fmt::Debug for PreferredSize {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PreferredSize")
-            .field("preferred_size", &self.preferred_size)
+            .field("preferred_size", &self.size)
             .finish_non_exhaustive()
     }
 }
@@ -82,6 +86,6 @@ impl StatelessView for PreferredSize {
 
 impl PreferredSizeView for PreferredSize {
     fn preferred_size(&self) -> Size {
-        self.preferred_size
+        self.size
     }
 }

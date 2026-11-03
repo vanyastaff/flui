@@ -2,7 +2,7 @@
 
 use flui_objects::RenderIntrinsicHeight;
 use flui_rendering::protocol::BoxProtocol;
-use flui_view::{Child, IntoView, RenderView, impl_render_view};
+use flui_view::{Child, CreationSite, IntoView, RenderView, impl_render_view};
 
 /// Sizes its child to the child's maximum intrinsic height.
 ///
@@ -14,13 +14,16 @@ use flui_view::{Child, IntoView, RenderView, impl_render_view};
 #[derive(Clone, Debug)]
 pub struct IntrinsicHeight {
     child: Child,
+    site: CreationSite,
 }
 
 impl IntrinsicHeight {
     /// Creates the widget.
+    #[track_caller]
     pub fn new() -> Self {
         Self {
             child: Child::empty(),
+            site: CreationSite::here(),
         }
     }
 
@@ -34,6 +37,7 @@ impl IntrinsicHeight {
 
 impl Default for IntrinsicHeight {
     fn default() -> Self {
+        // A trait fn cannot be `#[track_caller]`: the site is this line.
         Self::new()
     }
 }
@@ -61,4 +65,4 @@ impl RenderView for IntrinsicHeight {
     flui_view::single_child_view_children!();
 }
 
-impl_render_view!(IntrinsicHeight);
+impl_render_view!(IntrinsicHeight, site = site);

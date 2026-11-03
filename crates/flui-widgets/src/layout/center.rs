@@ -2,23 +2,30 @@
 
 use flui_objects::RenderCenter;
 use flui_rendering::protocol::BoxProtocol;
-use flui_view::{Child, IntoView, RenderView, impl_render_view};
+use flui_view::{Child, CreationSite, IntoView, RenderView, impl_render_view};
 
 /// Centers its child within itself.
 ///
 /// An `Align` fixed to `Alignment::CENTER`. Optionally sizes itself to a multiple of the child's
 /// dimensions via `width_factor`/`height_factor`.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct Center {
     width_factor: Option<f64>,
     height_factor: Option<f64>,
     child: Child,
+    site: CreationSite,
 }
 
 impl Center {
     /// Create a `Center` with no child yet.
+    #[track_caller]
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            width_factor: None,
+            height_factor: None,
+            child: Child::empty(),
+            site: CreationSite::here(),
+        }
     }
 
     /// Size this box to `factor` × the child's width (must be `>= 0`).
@@ -54,6 +61,13 @@ impl Center {
     }
 }
 
+impl Default for Center {
+    fn default() -> Self {
+        // A trait fn cannot be `#[track_caller]`: the site is this line.
+        Self::new()
+    }
+}
+
 impl RenderView for Center {
     type Protocol = BoxProtocol;
     type RenderObject = RenderCenter;
@@ -76,4 +90,4 @@ impl RenderView for Center {
     flui_view::single_child_view_children!();
 }
 
-impl_render_view!(Center);
+impl_render_view!(Center, site = site);

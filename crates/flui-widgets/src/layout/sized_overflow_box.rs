@@ -4,7 +4,7 @@ use flui_foundation::geometry::Size;
 use flui_objects::RenderSizedOverflowBox;
 use flui_painting::Alignment;
 use flui_rendering::protocol::BoxProtocol;
-use flui_view::{Child, IntoView, RenderView, impl_render_view};
+use flui_view::{Child, CreationSite, IntoView, RenderView, impl_render_view};
 
 /// Claims a specific size for itself while laying its child out under the
 /// incoming (parent) constraints, which may allow the child to be a different
@@ -19,15 +19,18 @@ pub struct SizedOverflowBox {
     alignment: Alignment,
     requested_size: Size,
     child: Child,
+    site: CreationSite,
 }
 
 impl SizedOverflowBox {
     /// Creates the widget with center alignment.
+    #[track_caller]
     pub fn new(requested_size: Size) -> Self {
         Self {
             alignment: Alignment::CENTER,
             requested_size,
             child: Child::empty(),
+            site: CreationSite::here(),
         }
     }
 
@@ -71,4 +74,4 @@ impl RenderView for SizedOverflowBox {
     flui_view::single_child_view_children!();
 }
 
-impl_render_view!(SizedOverflowBox);
+impl_render_view!(SizedOverflowBox, site = site);
