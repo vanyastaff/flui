@@ -83,6 +83,16 @@ struct InputTarget {
     surface: InputSurface,
 }
 
+/// Who sent an input: the platform, or the development agent injecting it (ADR-0288 §9). The
+/// two take one path; an agent's journal marks the agent's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum InputOrigin {
+    /// The platform: the user's input, or a host replaying it.
+    Platform,
+    /// The development agent's `input.inject` or `input.release`.
+    Agent,
+}
+
 /// Keep the earliest input-phase panic when cleanup or wake work also
 /// unwinds. Secondary panic payloads are discarded under containment
 /// (ADR-0281 §2), so a destructor that panics does not replace the original
@@ -368,13 +378,24 @@ impl UiRuntime {
         surface: InputSurface,
         input: PlatformInput,
     ) -> bool {
+        self.handle_input_from(presentation_id, surface, input, InputOrigin::Platform)
+    }
+
+    /// [`handle_input_on`](Self::handle_input_on) for input from `origin`.
+    pub(super) fn handle_input_from(
+        &self,
+        presentation_id: PresentationId,
+        surface: InputSurface,
+        input: PlatformInput,
+        origin: InputOrigin,
+    ) -> bool {
         let recording = self.begin_recorded_input();
         // Resolved once, before dispatch: the row names where the input went
         // even when a handler it reaches moves keyboard focus.
         let target = self.input_target(presentation_id, surface, &input);
         if !recording {
             return self
-                .apply_platform_input(presentation_id, target, input, false)
+                .apply_platform_input(presentation_id, target, input, false, origin)
                 .handled;
         }
         let keyboard = matches!(input, PlatformInput::Keyboard(_));
@@ -384,7 +405,7 @@ impl UiRuntime {
             reason = "ADR-0287: platform input applies contained so the recording is finished"
         )]
         let applied = catch_unwind(AssertUnwindSafe(|| {
-            self.apply_platform_input(presentation_id, target, input, true)
+            self.apply_platform_input(presentation_id, target, input, true, origin)
         }));
         let (outcome, sequence) = match &applied {
             // Its row waits for the dispatch; the rows of input the hold
@@ -441,13 +462,15 @@ impl UiRuntime {
 
     /// Apply `input`, stamped for `presentation_id`, at `target`; while
     /// `recording`, pointer input held for the tree's commit takes its input
-    /// row along.
+    /// row along. Input from `origin` is journaled for an agent as it is
+    /// routed.
     fn apply_platform_input(
         &self,
         presentation_id: PresentationId,
         target: InputTarget,
         input: PlatformInput,
         recording: bool,
+        origin: InputOrigin,
     ) -> Applied {
         let target_id = target.presentation;
         let Some(presentation) = self.presentations.get(target_id) else {
@@ -478,7 +501,7 @@ impl UiRuntime {
             self.request_redraw_for(presentation);
         }
         if !begins_contact(&input) {
-            return self.route_platform_input(target, presentation, input, recording);
+            return self.journal_and_route(target, presentation, input, recording, origin);
         }
         // A press anywhere in the presentation, the composing field included,
         // commits the composition before the press is held or hit-tested, so
@@ -507,7 +530,7 @@ impl UiRuntime {
             if self.input_dropped_for(presentation, &input) {
                 Applied::default()
             } else {
-                self.route_platform_input(target, presentation, input, recording)
+                self.journal_and_route(target, presentation, input, recording, origin)
             }
         }));
         match (committed, routed) {
@@ -536,6 +559,19 @@ impl UiRuntime {
             );
         }
         dropped
+    }
+
+    /// Journal `input` from `origin` for an agent, then route it at `target`.
+    fn journal_and_route(
+        &self,
+        target: InputTarget,
+        presentation: &PresentationState,
+        input: PlatformInput,
+        recording: bool,
+        origin: InputOrigin,
+    ) -> Applied {
+        self.journal_input(presentation, &input, origin == InputOrigin::Agent);
+        self.route_platform_input(target, presentation, input, recording)
     }
 
     /// Route `input`, which `presentation` accepts, at `target`.

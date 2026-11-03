@@ -572,6 +572,8 @@ pub(crate) struct DevAgentSlot {
     collecting: Weak<SemanticsHandle>,
     /// The element handles this presentation's answers reported.
     issued: Rc<RefCell<IssuedHandles>>,
+    /// The input the window was delivered since the slot was made.
+    pub(super) journal: super::agent_journal::InputJournal,
 }
 
 /// The development seam's port: a [`flui_view::dev_agent::AgentWindow`]
@@ -1021,6 +1023,7 @@ impl UiRuntime {
                     }),
                     collecting: Weak::new(),
                     issued: Rc::default(),
+                    journal: super::agent_journal::InputJournal::default(),
                 }
             });
             let kept = slot.collecting.upgrade();

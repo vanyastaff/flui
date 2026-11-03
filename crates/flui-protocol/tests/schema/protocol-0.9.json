@@ -815,6 +815,10 @@
         {
           "const": "ime",
           "type": "string"
+        },
+        {
+          "const": "other",
+          "type": "string"
         }
       ]
     },

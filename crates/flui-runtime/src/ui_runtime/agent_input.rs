@@ -28,8 +28,8 @@ use flui_platform::pointer::{
 use flui_platform::{EventTime, ImeEvent, PlatformInput};
 use flui_protocol::method::{self, Method};
 use flui_protocol::{
-    ActOutcome, ActionSequence, Effect, EffectKind, ImeAction, InputPath, InputSource, KeyAction,
-    LogicalPoint, PointerAction, PointerDevice, Released, Snapshot, WheelAction,
+    ActOutcome, ActionSequence, Effect, EffectKind, ImeAction, InputPath, InputSource, JournalSpan,
+    KeyAction, LogicalPoint, PointerAction, PointerDevice, Released, Snapshot, WheelAction,
 };
 use flui_semantics::TreeSnapshot;
 use flui_view::__runtime::LeaseId;
@@ -37,6 +37,7 @@ use web_time::Instant;
 
 use super::UiRuntime;
 use super::agent::{AgentError, ReadingOwed, ReplySender, send_reply};
+use super::input::InputOrigin;
 use crate::presentation::PresentationState;
 
 /// The most ticks one injection plans.
@@ -399,6 +400,8 @@ pub(crate) struct AgentInput {
     jobs: VecDeque<Job>,
     /// How many injected pointer ids the window has handed out.
     pointers: u64,
+    /// How many injections the window has queued: the next one's id.
+    injections: u64,
 }
 
 /// What one lease holds: its sources' pointers, as the platform's own would be, and the keys it
@@ -740,6 +743,8 @@ impl Job {
 
 /// One `input.inject` the window is playing.
 struct Injection {
+    /// Which of the window's injections it is.
+    id: u64,
     lease: LeaseId,
     plan: Plan,
     /// The tick under way, while its moves and pauses last.
@@ -749,6 +754,8 @@ struct Injection {
     snapshot: Snapshot,
     before: Option<TreeSnapshot>,
     reply: ReplySender<ActOutcome>,
+    /// The window's journal entries its ticks so far made.
+    observed: Option<JournalSpan>,
 }
 
 /// A tick whose moves or pause are still running.
@@ -799,7 +806,12 @@ impl AgentInput {
             return Err(reply);
         }
         let total = plan.len();
+        self.injections = self
+            .injections
+            .checked_add(1)
+            .expect("BUG: a window queues fewer than 2^64 injections");
         self.jobs.push_back(Job::Inject(Box::new(Injection {
+            id: self.injections,
             lease,
             plan,
             current: None,
@@ -807,6 +819,7 @@ impl AgentInput {
             snapshot,
             before,
             reply,
+            observed: None,
         })));
         Ok(())
     }
@@ -834,12 +847,22 @@ impl AgentInput {
         self.jobs.drain(..).map(Abandoned::from).collect()
     }
 
+    /// The journal entries in `span` came of injection `id`'s tick, if it is still under way.
+    fn observe(&mut self, id: u64, span: Option<JournalSpan>) {
+        if let Some(Job::Inject(injection)) = self.jobs.front_mut()
+            && injection.id == id
+        {
+            injection.observed = widen(injection.observed, span);
+        }
+    }
+
     /// The next step of the window's work at a frame boundary at `now`, stamped `time`.
     fn turn(&mut self, now: Instant, time: EventTime) -> Turn {
         let Self {
             leases,
             jobs,
             pointers,
+            injections: _,
         } = self;
         let Some(front) = jobs.front_mut() else {
             return Turn::Idle;
@@ -875,7 +898,7 @@ impl AgentInput {
             }
             if elapsed < running.lasts {
                 injection.current = Some(running);
-                return Turn::Sent(batch);
+                return Turn::Sent(batch, injection.id);
             }
         } else if let Some(Tick { steps, lasts }) = injection.plan.ticks.pop_front() {
             let applied = held.apply(pointers, &injection.plan.sources, steps, time);
@@ -900,12 +923,12 @@ impl AgentInput {
                     lasts,
                     moves: applied.glides,
                 });
-                return Turn::Sent(batch);
+                return Turn::Sent(batch, injection.id);
             }
         }
         if !injection.plan.ticks.is_empty() {
             // The next tick starts at the next boundary.
-            return Turn::Sent(batch);
+            return Turn::Sent(batch, injection.id);
         }
         let Some(Job::Inject(injection)) = jobs.pop_front() else {
             unreachable!("BUG: the front job is an injection");
@@ -982,8 +1005,8 @@ impl Abandoned {
 enum Turn {
     /// Nothing is queued.
     Idle,
-    /// Input to send; the window waits for its next frame boundary.
-    Sent(Vec<PlatformInput>),
+    /// Input injection `id` sends; the window waits for its next frame boundary.
+    Sent(Vec<PlatformInput>, u64),
     /// A release let its lease's input go: send it, answer, and take the next job.
     Released(Vec<PlatformInput>, Released, ReplySender<Released>),
     /// The injection played its last tick: send its input, and answer once a frame has passed.
@@ -1054,37 +1077,42 @@ impl UiRuntime {
             let turn = state.agent_input.borrow_mut().turn(now, time);
             match turn {
                 Turn::Idle => return,
-                Turn::Sent(batch) => {
+                Turn::Sent(batch, id) => {
                     self.request_redraw_for(state);
-                    self.send_agent_input(state, batch);
+                    let sent = self.send_agent_input(state, batch);
+                    state.agent_input.borrow_mut().observe(id, sent.observed);
+                    sent.resume();
                     return;
                 }
                 Turn::Released(batch, released, reply) => {
                     // Answered after its input went out, a panic in a handler included: the
                     // input was let go.
-                    let mut first = FirstPanic::new();
-                    first.contain(|| self.send_agent_input(state, batch));
-                    first.contain(|| send_reply(&reply, None, Ok(released)));
-                    first.resume();
+                    let mut sent = self.send_agent_input(state, batch);
+                    sent.panic
+                        .contain(|| send_reply(&reply, None, Ok(released)));
+                    sent.resume();
                 }
                 Turn::Played(batch, injection) => {
                     let Injection {
                         snapshot,
                         before,
                         reply,
+                        observed,
                         ..
                     } = *injection;
-                    let outcome =
+                    let sent = self.send_agent_input(state, batch);
+                    let mut outcome =
                         ActOutcome::new(InputPath::Synthetic, Effect::new(EffectKind::Ran));
-                    // Owed before the input goes out: a handler that panics leaves the answer to
-                    // the frame after it, which shows what the input did.
+                    outcome.observed = widen(observed, sent.observed);
+                    // Owed once the input has gone out, a handler's panic included: the answer
+                    // waits for the frame after it, which shows what the input did. The window
+                    // is still open, since closing one takes the runtime mutably.
                     self.park_act_read(state, ReadingOwed::new(outcome, snapshot, before), reply);
-                    self.send_agent_input(state, batch);
+                    sent.resume();
                     return;
                 }
                 Turn::Failed(batch, error, played, total, reply) => {
-                    let mut first = FirstPanic::new();
-                    first.contain(|| self.send_agent_input(state, batch));
+                    let mut sent = self.send_agent_input(state, batch);
                     let error = if played == 0 {
                         error
                     } else {
@@ -1094,21 +1122,33 @@ impl UiRuntime {
                             total: u32::try_from(total).unwrap_or(u32::MAX),
                         }
                     };
-                    first.contain(|| send_reply(&reply, None, Err(error)));
-                    first.resume();
+                    sent.panic.contain(|| send_reply(&reply, None, Err(error)));
+                    sent.resume();
                 }
             }
         }
     }
 
     /// Send injected `batch` to `state`'s window, each input contained: a handler that panics
-    /// does not keep the rest from going out, and the first panic continues once all have gone.
-    fn send_agent_input(&self, state: &PresentationState, batch: Vec<PlatformInput>) {
+    /// does not keep the rest from going out. What went out made the journal entries it says, and
+    /// its first panic continues once the caller has answered for it.
+    #[must_use = "the first panic is resumed with `SentInput::resume`"]
+    fn send_agent_input(&self, state: &PresentationState, batch: Vec<PlatformInput>) -> SentInput {
+        let before = super::agent_journal::last_seq(state);
         let mut first = FirstPanic::new();
         for input in batch {
-            first.contain(|| self.handle_input_on(state.id(), InputSurface::Window, input));
+            first.contain(|| {
+                self.handle_input_from(state.id(), InputSurface::Window, input, InputOrigin::Agent);
+            });
         }
-        first.resume();
+        let after = super::agent_journal::last_seq(state);
+        SentInput {
+            observed: (after > before).then(|| JournalSpan {
+                from: before.saturating_add(1),
+                to: after,
+            }),
+            panic: first,
+        }
     }
 
     /// How many leases each window's handles have let go so far, counted before a drain reads its
@@ -1162,13 +1202,38 @@ impl UiRuntime {
                 dropped.extend(jobs);
             }
         }
-        let mut first = FirstPanic::new();
-        first.contain(|| self.send_agent_input(state, batch));
+        let mut sent = self.send_agent_input(state, batch);
         // An answer wakes its asker, user code: they go after the input is let go, and before a
         // panic continues.
         if let Some(payload) = super::deliver_each(dropped, Abandoned::lease_released) {
-            first.record(payload);
+            sent.panic.record(payload);
         }
-        first.resume();
+        sent.resume();
+    }
+}
+
+/// What sending one batch of injected input came to.
+struct SentInput {
+    /// The window's journal entries it made.
+    observed: Option<JournalSpan>,
+    /// The first panic of a handler it reached, and of what its caller ran after it.
+    panic: FirstPanic,
+}
+
+impl SentInput {
+    /// Continue the first panic, if a handler panicked.
+    fn resume(self) {
+        self.panic.resume();
+    }
+}
+
+/// The span covering both `a` and `b`.
+fn widen(a: Option<JournalSpan>, b: Option<JournalSpan>) -> Option<JournalSpan> {
+    match (a, b) {
+        (Some(a), Some(b)) => Some(JournalSpan {
+            from: a.from.min(b.from),
+            to: a.to.max(b.to),
+        }),
+        (a, b) => a.or(b),
     }
 }

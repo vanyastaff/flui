@@ -783,6 +783,9 @@ vocabulary! {
         Keyboard => "keyboard",
         /// An input method.
         Ime => "ime",
+        /// A pointer of another kind: one with no physical contact, or one the platform did
+        /// not name.
+        Other => "other",
     }
 }
 
@@ -847,6 +850,36 @@ pub struct JournalEntry {
     pub injected: bool,
 }
 
+impl JournalEntry {
+    /// Entry `seq`: `kind` from a `device`, at `time_us`, delivered natively and with no
+    /// position.
+    #[must_use]
+    pub const fn new(seq: u64, device: DeviceClass, kind: InputKind, time_us: u64) -> Self {
+        Self {
+            seq,
+            device,
+            kind,
+            at: None,
+            time_us,
+            injected: false,
+        }
+    }
+
+    /// The same entry, delivered at `at`.
+    #[must_use]
+    pub const fn with_position(mut self, at: LogicalPoint) -> Self {
+        self.at = Some(at);
+        self
+    }
+
+    /// The same entry, injected by the driver when `injected`.
+    #[must_use]
+    pub const fn with_injected(mut self, injected: bool) -> Self {
+        self.injected = injected;
+        self
+    }
+}
+
 /// `input.journal`: the entries after `since`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -869,6 +902,18 @@ pub struct JournalParams {
     pub max_entries: Option<u32>,
 }
 
+impl JournalParams {
+    /// Every entry `window`'s journal still holds.
+    #[must_use]
+    pub const fn new(window: WindowId) -> Self {
+        Self {
+            window,
+            since: None,
+            max_entries: None,
+        }
+    }
+}
+
 /// What `input.journal` answers.
 #[derive(Debug, Clone, PartialEq, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -889,6 +934,26 @@ pub struct Journal {
         serde(default, skip_serializing_if = "crate::skip::is_default")
     )]
     pub dropped: u64,
+}
+
+impl Journal {
+    /// `entries`, oldest first, after `dropped` the journal no longer holds; the span runs from
+    /// the first entry to the last.
+    #[must_use]
+    pub fn new(entries: Vec<JournalEntry>, dropped: u64) -> Self {
+        let span = entries
+            .first()
+            .zip(entries.last())
+            .map(|(first, last)| JournalSpan {
+                from: first.seq,
+                to: last.seq,
+            });
+        Self {
+            entries,
+            span,
+            dropped,
+        }
+    }
 }
 
 /// What `input.release` answers: the contacts and keys the agent had held and let go.

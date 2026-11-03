@@ -135,6 +135,15 @@
 - **`ActionSequence::ticks` and `ActionSequence::span`** (`flui-protocol`): how many ticks a
   sequence plays and how long it takes; `InputParams::holds_for` is its span, so a server's
   reply deadline covers the input.
+- **The driver agent journals a window's input** (`input.journal`, the `input` event,
+  ADR-0288 §10): every input the window is delivered, the platform's and the agent's (marked
+  `injected`), takes the next sequence number and goes out as an `input` event; the journal keeps
+  the last 4096 entries and counts the ones a reader missed. An injection's answer carries
+  `observed`, the span of the entries it made.
+- **`JournalEntry::new`, `with_position`, `with_injected`, `Journal::new`,
+  `JournalParams::new` and `InputEvent::new`** (`flui-protocol`), and
+  `DeviceClass::Other`, the class of a pointer with no physical contact or of a kind the
+  platform did not name.
 
 ### Removed
 
