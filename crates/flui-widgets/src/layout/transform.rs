@@ -5,7 +5,7 @@ use flui_foundation::geometry::Offset;
 use flui_objects::RenderTransform;
 use flui_painting::Alignment;
 use flui_rendering::protocol::BoxProtocol;
-use flui_view::{Child, IntoView, RenderView, impl_render_view};
+use flui_view::{Child, CreationSite, IntoView, RenderView, impl_render_view};
 
 /// Applies a [`Matrix4`] transform to its child before painting.
 ///
@@ -27,10 +27,12 @@ pub struct Transform {
     origin: Option<Offset>,
     transform_hit_tests: bool,
     child: Child,
+    site: CreationSite,
 }
 
 impl Transform {
     /// Apply an arbitrary [`Matrix4`].
+    #[track_caller]
     pub fn new(transform: Matrix4) -> Self {
         Self {
             transform,
@@ -38,20 +40,24 @@ impl Transform {
             origin: None,
             transform_hit_tests: true,
             child: Child::empty(),
+            site: CreationSite::here(),
         }
     }
 
     /// Translate the child by `(x, y)` device pixels.
+    #[track_caller]
     pub fn translate(x: f64, y: f64) -> Self {
         Self::new(*RenderTransform::translate(x, y).transform())
     }
 
     /// Scale the child by `(sx, sy)`, about its centre.
+    #[track_caller]
     pub fn scale(sx: f64, sy: f64) -> Self {
         Self::new(*RenderTransform::scale(sx, sy).transform()).alignment(Alignment::CENTER)
     }
 
     /// Rotate the child by `radians` about the Z axis, about its centre.
+    #[track_caller]
     pub fn rotation(radians: f64) -> Self {
         Self::new(*RenderTransform::rotation(radians).transform()).alignment(Alignment::CENTER)
     }
@@ -135,4 +141,4 @@ impl RenderView for Transform {
     flui_view::single_child_view_children!();
 }
 
-impl_render_view!(Transform);
+impl_render_view!(Transform, site = site);

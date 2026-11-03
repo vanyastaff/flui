@@ -5,7 +5,7 @@ use flui_painting::Alignment;
 use flui_painting::BoxFit;
 use flui_painting::paint::Clip;
 use flui_rendering::protocol::BoxProtocol;
-use flui_view::{Child, IntoView, RenderView, impl_render_view};
+use flui_view::{Child, CreationSite, IntoView, RenderView, impl_render_view};
 
 /// Scales and positions its child within itself according to a [`BoxFit`].
 ///
@@ -17,23 +17,31 @@ pub struct FittedBox {
     alignment: Alignment,
     clip: Clip,
     child: Child,
+    site: CreationSite,
 }
 
 impl Default for FittedBox {
     fn default() -> Self {
-        Self {
-            fit: BoxFit::Contain,
-            alignment: Alignment::CENTER,
-            clip: Clip::None,
-            child: Child::empty(),
-        }
+        // A trait fn cannot be `#[track_caller]`: the site is this line.
+        Self::at(CreationSite::here())
     }
 }
 
 impl FittedBox {
     /// A `FittedBox` with the default fit (`Contain` / centered / no clip).
+    #[track_caller]
     pub fn new() -> Self {
-        Self::default()
+        Self::at(CreationSite::here())
+    }
+
+    fn at(site: CreationSite) -> Self {
+        Self {
+            fit: BoxFit::Contain,
+            alignment: Alignment::CENTER,
+            clip: Clip::None,
+            child: Child::empty(),
+            site,
+        }
     }
 
     /// Set how the child is inscribed into the available space.
@@ -89,4 +97,4 @@ impl RenderView for FittedBox {
     flui_view::single_child_view_children!();
 }
 
-impl_render_view!(FittedBox);
+impl_render_view!(FittedBox, site = site);

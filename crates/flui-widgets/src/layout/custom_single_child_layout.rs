@@ -7,7 +7,7 @@ use std::rc::Rc;
 use flui_objects::RenderCustomSingleChildLayoutBox;
 use flui_rendering::delegates::SingleChildLayoutDelegate;
 use flui_rendering::protocol::BoxProtocol;
-use flui_view::{Child, IntoView, RenderView, impl_render_view};
+use flui_view::{Child, CreationSite, IntoView, RenderView, impl_render_view};
 
 /// A widget that sizes and positions one child using a layout delegate.
 ///
@@ -16,14 +16,17 @@ use flui_view::{Child, IntoView, RenderView, impl_render_view};
 pub struct CustomSingleChildLayout {
     delegate: Rc<dyn SingleChildLayoutDelegate>,
     child: Child,
+    site: CreationSite,
 }
 
 impl CustomSingleChildLayout {
     /// Creates a custom single-child layout with no child.
+    #[track_caller]
     pub fn new(delegate: impl SingleChildLayoutDelegate + 'static) -> Self {
         Self {
             delegate: Rc::new(delegate),
             child: Child::empty(),
+            site: CreationSite::here(),
         }
     }
 
@@ -66,4 +69,4 @@ impl RenderView for CustomSingleChildLayout {
     flui_view::single_child_view_children!();
 }
 
-impl_render_view!(CustomSingleChildLayout);
+impl_render_view!(CustomSingleChildLayout, site = site);

@@ -3,7 +3,7 @@
 
 use flui_objects::RenderLimitedBox;
 use flui_rendering::protocol::BoxProtocol;
-use flui_view::{Child, IntoView, RenderView, impl_render_view};
+use flui_view::{Child, CreationSite, IntoView, RenderView, impl_render_view};
 
 /// Caps the maximum size of its child *only when* the corresponding incoming
 /// constraint is unbounded; bounded constraints pass through untouched.
@@ -14,15 +14,18 @@ pub struct LimitedBox {
     max_width: f64,
     max_height: f64,
     child: Child,
+    site: CreationSite,
 }
 
 impl LimitedBox {
     /// A box capping width/height (use `f64::INFINITY` for "no cap").
+    #[track_caller]
     pub fn new(max_width: f64, max_height: f64) -> Self {
         Self {
             max_width,
             max_height,
             child: Child::empty(),
+            site: CreationSite::here(),
         }
     }
 
@@ -61,4 +64,4 @@ impl RenderView for LimitedBox {
     flui_view::single_child_view_children!();
 }
 
-impl_render_view!(LimitedBox);
+impl_render_view!(LimitedBox, site = site);

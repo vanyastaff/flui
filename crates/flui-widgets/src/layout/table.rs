@@ -13,8 +13,8 @@ use flui_rendering::parent_data::TableCellParentData;
 use flui_rendering::parent_data::TableCellVerticalAlignment;
 use flui_rendering::protocol::BoxProtocol;
 use flui_view::{
-    BoxedView, BuildContext, IntoView, ParentDataView, RenderView, StatelessView, View, ViewExt,
-    impl_parent_data_view, impl_render_view,
+    BoxedView, BuildContext, CreationSite, IntoView, ParentDataView, RenderView, StatelessView,
+    View, ViewExt, impl_parent_data_view, impl_render_view,
 };
 
 /// One row of a [`Table`]: an optional background decoration plus its cells.
@@ -238,11 +238,13 @@ pub struct Table {
     default_vertical_alignment: TableCellVerticalAlignment,
     text_baseline: Option<TextBaseline>,
     border: Option<TableBorder>,
+    site: CreationSite,
 }
 
 impl Table {
     /// A table of `rows`, with the default column width, alignment, no
     /// border, and no explicit text baseline.
+    #[track_caller]
     pub fn new(rows: Vec<TableRow>) -> Self {
         let rows = square_up(rows);
         Self {
@@ -253,6 +255,7 @@ impl Table {
             default_vertical_alignment: TableCellVerticalAlignment::Top,
             text_baseline: None,
             border: None,
+            site: CreationSite::here(),
         }
     }
 
@@ -437,7 +440,7 @@ impl RenderView for Table {
     }
 }
 
-impl_render_view!(Table);
+impl_render_view!(Table, site = site);
 
 /// Overrides a cell's vertical alignment within its [`Table`] row.
 ///
