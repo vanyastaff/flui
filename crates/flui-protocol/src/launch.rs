@@ -5,9 +5,9 @@
 //! Desktop and iOS Simulator apps read the environment variables; the iOS Simulator passes
 //! them through `simctl launch` as `SIMCTL_CHILD_` variables. An Android app reads the intent
 //! extras `am start` carried. A web app has neither: the driver's preload script installs an
-//! object of the extras' names and values as `globalThis.__FLUI_LAUNCH__` before the module
-//! starts (its endpoint is the name of the global the agent defines, `__flui_agent`), and no URL
-//! carries the token.
+//! object of the extras' names and values as [`PAGE_LAUNCH_GLOBAL`] before the module starts
+//! (its endpoint is the name of the global the agent defines its export as, `__flui_agent`, in
+//! the shape [`PAGE_EXPORT_VERSION`] versions), and no URL carries the token.
 //!
 //! Each variable is its extra's name in the environment's spelling, uppercase with `_` for `.`,
 //! so an app reads both under one key (ADR-0288 §7).
@@ -37,6 +37,17 @@ pub const TOKEN_EXTRA: &str = "flui.agent.token";
 
 /// The Android intent extra that carries [`EXIT_ON_DISCONNECT_ENV`]'s value.
 pub const EXIT_ON_DISCONNECT_EXTRA: &str = "flui.agent.exit_on_disconnect";
+
+/// The global a web app's launch object is installed as: an object whose properties are the
+/// extras' names ([`ENDPOINT_EXTRA`], …) with their string values, installed before the app's
+/// module runs. The app removes it as it starts.
+pub const PAGE_LAUNCH_GLOBAL: &str = "__FLUI_LAUNCH__";
+
+/// The version of the export a web app's agent defines as the global its endpoint names:
+/// `{ version, connect(onLine) }`. `connect` returns `{ version, send(line), close() }` or
+/// throws when the agent refuses the connection; each line the app writes reaches `onLine`
+/// without its newline, and `onLine(null)` says the app ended the connection.
+pub const PAGE_EXPORT_VERSION: u32 = 1;
 
 /// The shortest token an app accepts, in bytes. A shorter one leaves the agent inert.
 pub const MIN_TOKEN_LEN: usize = 32;

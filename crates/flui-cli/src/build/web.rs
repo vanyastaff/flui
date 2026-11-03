@@ -90,6 +90,10 @@ impl WebBuilder {
             args.push(flag.into());
         }
         args.extend(target.cargo_args());
+        // `flui run --agent`'s `driver` feature, for a build without debug assertions.
+        for feature in &ctx.features {
+            args.extend(["--features".to_owned(), feature.clone()]);
+        }
         crate::ui::debug(format!("building {} for {WASM_TARGET}", target.metadata()));
         let wasm = cargo::build_artifact(dir, &args, &target, &[]).await?;
         Ok(BuildArtifacts {

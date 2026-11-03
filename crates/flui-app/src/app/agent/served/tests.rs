@@ -1384,6 +1384,11 @@ fn the_launch_is_read_through_its_keys() {
     ] {
         assert_eq!(key.environment_variable(), variable, "{key}");
     }
+    // A page reads the object a driver installs under the name the protocol tells it.
+    assert_eq!(
+        flui_platform::PAGE_LAUNCH_GLOBAL,
+        flui_protocol::launch::PAGE_LAUNCH_GLOBAL
+    );
 
     let read = |endpoint: Option<&str>, token: &str, exit: Option<&str>| {
         Launch::read(|key| {

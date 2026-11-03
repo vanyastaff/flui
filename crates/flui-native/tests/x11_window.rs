@@ -38,9 +38,10 @@ mod cases {
     use flui_foundation::geometry::{Size, WindowMetrics};
     use flui_native::testing::app::{AppCall, AppLog, with_log};
     use flui_native::testing::x11::run_for;
-    use flui_native::{AppHandler, HostWindow, Platform as _, X11Platform};
+    use flui_native::{AppHandler, HostWindow, Platform as _, WindowRequest, X11Platform};
     use flui_platform::{
-        CloseDecision, PlatformWindow, WindowCommand, WindowMode, WindowOptions, WindowReveal,
+        CloseDecision, PlatformWindow, WindowCommand, WindowHandler, WindowMode, WindowOptions,
+        WindowReveal,
     };
     use flui_testing::window_commands::AdmitAndApply as _;
     use flui_testing::window_conformance::{self, Readback, WindowFixture};
@@ -79,6 +80,10 @@ mod cases {
         (
             "a_frame_asked_for_on_another_thread_wakes_the_loop",
             a_frame_asked_for_on_another_thread_wakes_the_loop,
+        ),
+        (
+            "a_window_asked_for_on_another_thread_opens_on_the_loop",
+            a_window_asked_for_on_another_thread_opens_on_the_loop,
         ),
         (
             "the_loop_ends_with_its_last_window",
@@ -852,6 +857,57 @@ mod cases {
         assert!(
             started.elapsed() < Duration::from_secs(5),
             "the frame came only with the watchdog's quit"
+        );
+    }
+
+    /// A window another thread asks for through the proxy opens on the
+    /// loop's thread in its next turn, the requester hears its identity, and
+    /// the loop keeps it as it keeps the windows its owner opens: it is drawn
+    /// until the loop quits.
+    fn a_window_asked_for_on_another_thread_opens_on_the_loop() {
+        thread_local! {
+            static OPENED: RefCell<Option<Rc<RecordingWindowHandler>>> =
+                const { RefCell::new(None) };
+        }
+        let platform = Box::new(X11Platform::try_new().expect("the X11 platform"));
+        let heard = Arc::new(std::sync::Mutex::new(None));
+        let answer = Arc::clone(&heard);
+        let app = with_log(move |log, owner| {
+            log.answer_deadline(None);
+            let proxy = owner.proxy();
+            quit_after(proxy.clone(), Duration::from_secs(10));
+            std::thread::spawn(move || {
+                let request = WindowRequest::new(WindowOptions::default(), || {
+                    let handler = RecordingWindowHandler::new();
+                    OPENED.with(|opened| *opened.borrow_mut() = Some(Rc::clone(&handler)));
+                    handler as Rc<dyn WindowHandler>
+                });
+                let opened = proxy
+                    .open_window(request)
+                    .expect("the loop takes the open")
+                    .wait()
+                    .map_err(|error| error.to_string());
+                *answer.lock().expect("the answer") = Some(opened);
+                std::thread::sleep(Duration::from_millis(500));
+                let _ = proxy.request_quit();
+            });
+            Ok(())
+        });
+        platform.run(app).expect("the loop runs");
+
+        let opened = heard.lock().expect("the answer").take();
+        let id = opened
+            .expect("the worker heard an answer")
+            .expect("the window opened");
+        let handler = OPENED
+            .with(|opened| opened.borrow_mut().take())
+            .expect("the factory ran on the loop's thread");
+        assert!(
+            handler
+                .calls()
+                .iter()
+                .any(|call| matches!(call, HandlerCall::FrameRequested(_))),
+            "window {id:?} lived to be drawn"
         );
     }
 

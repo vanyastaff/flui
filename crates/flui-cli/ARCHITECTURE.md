@@ -74,7 +74,13 @@ APK as `classes.dex` (then `classes2.dex`, … for further crates), and Gradle c
 sources (`android.java`) from `flui.javaSources`, refusing a build script that does not read it
 (`libraries_and_dex_files_are_appended_where_the_platform_reads_them`,
 `gradle_compiles_the_java_sources_the_crates_declare`). No `javac` or `d8` runs on the SDK-tools
-path. The library checks the classes' protocol before it starts (ADR-0255 decision 5).
+path. The library checks the classes' protocol before it starts (ADR-0255 decision 5). The R8
+rules the crates declare (`android.proguard`; `flui-native` keeps `dev.flui.**`, which only native
+code names) reach a Gradle release as `flui.proguardFiles`, beside the app's own scaffolded
+`proguard-rules.pro`, and a script that does not read them is refused
+(`a_minified_release_keeps_what_the_crates_rules_keep`). The generated manifest and the
+scaffolded script have goldens (`the_generated_manifest_matches_its_golden`,
+`the_scaffolded_gradle_script_matches_its_golden`).
 
 The iOS bundle's `PrivacyInfo.xcprivacy` lists the required-reason APIs the graph of the device or
 simulator target declares (`apple.privacy.accessed-apis`), joined per category with the
@@ -197,8 +203,8 @@ the contract crate `flui-protocol`, the CLI's one FLUI dependency: the launch
 variables and the shortest token (`launch`), the hello, the method names and
 each method's parameter type.
 
-- **Launch.** `flui run --agent` is admitted on this desktop and on an Android
-  device. A debug
+- **Launch.** `flui run --agent` is admitted on this desktop, on an Android
+  device and in a browser with a remote protocol of its own. A debug
   build needs nothing of the application; a profile other than `dev` (whose
   debug assertions it cannot be sure of) builds with the `driver` feature of
   the `flui` facade, or of `flui-app` for an app that names the runtime crate,
@@ -218,6 +224,25 @@ each method's parameter type.
   shell's user, which the app admits. The forward is removed with the session,
   after the app is stopped. A release build gets the `driver` feature through
   `cargo ndk`. The token stays out of every rendered `adb` command.
+- **Browser.** A page has no socket, so the command reaches it for the client
+  (ADR-0288 §6): it starts the browser itself (`agent::browser::launch`, a
+  profile of its own, `--remote-debugging-port=0`, the WebSocket read off its
+  stderr) and drives one tab through a `BrowserLink`, the four things the relay
+  asks of a tab: install a preload and load a URL, call a function that gets a
+  report function last and keep what it returns, call a function on what was
+  kept, and read the tab's events. Each browser is spoken to in the protocol it
+  has without a driver: WebDriver BiDi in Firefox (`bidi`, the report function
+  is a channel), the DevTools protocol in the Chromium family (`cdp`, a
+  binding); the session and the relay never see which. The preload installs
+  `PAGE_LAUNCH_GLOBAL` in top-level documents only, so every reload is given
+  the launch again. The relay (`agent::browser::relay`) serves the session's
+  usual local endpoint on one polling thread and carries each client to a
+  connection of the export the launch names, its lines queued until the export
+  appears; a reload closes the clients whose connections went with the
+  document, and closes those connections in the page all the same, in case one
+  belongs to the next document. `flui mcp` does not change. The WebSocket is
+  `tungstenite`'s handshake and framing over a loopback `TcpStream`, no TLS.
+  Safari is refused (`docs/gaps.md` entry 42).
 - **Serve.** `flui mcp` speaks MCP over stdio (hand-written JSON-RPC: four
   tools, no SDK, so the CLI's graph does not grow) and forwards each call as
   one protocol method, its parameters checked against the method's parameter
@@ -238,6 +263,10 @@ each method's parameter type.
   over a forwarded port, and
   `an_android_session_forwards_a_port_to_a_fresh_abstract_socket_and_removes_it`
   pins the `adb` calls and the intent extras with an `adb` that logs them.
+  `agent::browser::tests` run the relay against a tab of the test's own, and
+  both dialects end to end against a real browser (a page standing in for the
+  app, its launch, a connection, a reload): Chromium and Firefox where one is
+  installed, which CI's Linux image has.
 
 ### Native iOS selection and launch
 

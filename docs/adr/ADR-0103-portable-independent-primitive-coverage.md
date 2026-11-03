@@ -1,6 +1,6 @@
 # ADR-0103: Portable independent primitive coverage
 
-- **Status:** Accepted (2026-11-03). Not run on a browser or a mobile GPU: [`docs/gaps.md` entry 42, ADR-0103](../gaps.md#42-accepted-adr-sections-not-built-yet)
+- **Status:** Accepted (2026-11-03). Not run on a browser or a mobile GPU: [`docs/gaps.md` entry 43, ADR-0103](../gaps.md#43-accepted-adr-sections-not-built-yet)
 - **Date:** 2026-10-02
 - **Supersedes:** [ADR-0102](ADR-0102-immutable-geometric-clip-composition.md),
   its direct-primitive capability decision only; the geometric expression,

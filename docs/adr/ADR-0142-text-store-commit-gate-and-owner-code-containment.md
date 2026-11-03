@@ -1,7 +1,7 @@
 # ADR-0142: Text store owner notification, commit gate and owner-code containment
 
 - **Status:** Accepted (2026-10-06). Not implemented:
-  [`docs/gaps.md` entry 42, ADR-0142 item 4](../gaps.md#42-accepted-adr-sections-not-built-yet).
+  [`docs/gaps.md` entry 43, ADR-0142 item 4](../gaps.md#43-accepted-adr-sections-not-built-yet).
 - **Date:** 2026-10-06
 - **Superseded-by:** [ADR-0281](ADR-0281-a-destructor-that-panics-during-an-unwind-aborts-as-in-std.md),
   only where items 2 and 8 and the consequences retain a later failure or a failed scope's values

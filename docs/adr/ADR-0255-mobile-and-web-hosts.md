@@ -1,6 +1,6 @@
 # ADR-0255: How Android, iOS and the Web host FLUI
 
-- **Status:** Accepted (2026-10-20). Not implemented: [`docs/gaps.md` entry 42, ADR-0255](../gaps.md#42-accepted-adr-sections-not-built-yet)
+- **Status:** Accepted (2026-10-20). Not implemented: [`docs/gaps.md` entry 43, ADR-0255](../gaps.md#43-accepted-adr-sections-not-built-yet)
 - **Date:** 2026-10-20
 - **Amended:** 2026-11-03 — decision 9 matches the platform: `InputLatency::Low` on Android does
   not need a Java touch path, since `ViewRootImpl` batches ahead of the native input queue and
@@ -483,7 +483,10 @@ agrees with `platform-support.toml` for the new key, and the protocol check reje
 before any native is bound. The support claim for a platform is the run.
 The tests that do so: `android_manifest::tests::the_base_names_flui_activity_with_the_code_it_needs`,
 `android_package::tests::libraries_and_dex_files_are_appended_where_the_platform_reads_them`,
-`gradle_project::tests::gradle_compiles_the_java_sources_the_crates_declare` (`flui-cli`) and
+`gradle_project::tests::gradle_compiles_the_java_sources_the_crates_declare`,
+`a_minified_release_keeps_what_the_crates_rules_keep`, the goldens
+`the_generated_manifest_matches_its_golden` and `the_scaffolded_gradle_script_matches_its_golden`
+(`flui-cli`) and
 `owner::android::java_host::tests::the_java_classes_state_the_protocol_of_the_library` and
 `the_platform_starts_only_over_its_own_java_classes`, `the_host_queue_is_read_as_the_java_classes_lay_it_out`
 and `android_lifecycle_mapping_delivers_every_memory_call` (`flui-native`).

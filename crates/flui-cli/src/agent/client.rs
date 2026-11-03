@@ -278,7 +278,7 @@ fn open(endpoint: &Endpoint) -> io::Result<(Box<dyn Read + Send>, Box<dyn Write 
 }
 
 /// The endpoint's name for `address`, as the app binds it.
-fn name(address: &str) -> io::Result<Name<'_>> {
+pub(super) fn name(address: &str) -> io::Result<Name<'_>> {
     #[cfg(windows)]
     {
         use interprocess::local_socket::{GenericNamespaced, ToNsName as _};

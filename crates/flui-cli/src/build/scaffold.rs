@@ -23,6 +23,8 @@ const ANDROID_SETTINGS_GRADLE: &str =
 const ANDROID_GRADLE_PROPERTIES: &str =
     include_str!("../../templates/platforms/android/gradle.properties");
 const ANDROID_GITIGNORE: &str = include_str!("../../templates/platforms/android/.gitignore");
+const ANDROID_PROGUARD_RULES: &str =
+    include_str!("../../templates/platforms/android/proguard-rules.pro");
 
 // iOS
 const IOS_README: &str = include_str!("../../templates/platforms/ios/README.md");
@@ -54,6 +56,10 @@ fn platform_templates(platform: &str) -> &'static [TemplateFile] {
             TemplateFile {
                 rel_path: "app/build.gradle.kts",
                 content: ANDROID_BUILD_GRADLE,
+            },
+            TemplateFile {
+                rel_path: "app/proguard-rules.pro",
+                content: ANDROID_PROGUARD_RULES,
             },
             TemplateFile {
                 rel_path: "build.gradle.kts",
@@ -288,7 +294,7 @@ mod tests {
         let params = test_params();
 
         let planned = scaffold_platform_plan("android", &params).expect("plan android");
-        assert_eq!(planned.len(), 6);
+        assert_eq!(planned.len(), 7);
 
         let dir = tempfile::tempdir().expect("failed to create temp dir");
         scaffold_platform("android", dir.path(), &params).expect("scaffold android");
@@ -304,5 +310,22 @@ mod tests {
                 file.rel_path.display()
             );
         }
+    }
+
+    /// The Gradle script and rules `flui create` scaffolds for Android,
+    /// whole: what it reads from gradle.properties shows up here.
+    #[test]
+    fn the_scaffolded_gradle_script_matches_its_golden() {
+        let planned = scaffold_platform_plan("android", &test_params()).expect("plan android");
+        let file = |path: &str| {
+            planned
+                .iter()
+                .find(|file| file.rel_path == std::path::Path::new(path))
+                .unwrap_or_else(|| panic!("{path} is scaffolded"))
+                .contents
+                .clone()
+        };
+        insta::assert_snapshot!("app_build_gradle_kts", file("app/build.gradle.kts"));
+        insta::assert_snapshot!("app_proguard_rules_pro", file("app/proguard-rules.pro"));
     }
 }

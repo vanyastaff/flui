@@ -1,6 +1,6 @@
 # ADR-0102: Immutable geometric clips and effect coverage ownership
 
-- **Status:** Accepted (2026-11-03). Not run on a browser or a mobile GPU: [`docs/gaps.md` entry 42, ADR-0102 §5](../gaps.md#42-accepted-adr-sections-not-built-yet)
+- **Status:** Accepted (2026-11-03). Not run on a browser or a mobile GPU: [`docs/gaps.md` entry 43, ADR-0102 §5](../gaps.md#43-accepted-adr-sections-not-built-yet)
 - **Date:** 2026-10-01
 - **Superseded-by:** [ADR-0103](ADR-0103-portable-independent-primitive-coverage.md)
   for §5's direct-primitive capability admission only (the refusal of a direct destructive draw

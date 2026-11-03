@@ -1,0 +1,4 @@
+# The app's own R8 rules, for its own Java or Kotlin code. A minified release
+# applies them after Android's defaults and the rules of the crates the app
+# links, which `flui build` lists in gradle.properties (`flui.proguardFiles`):
+# FLUI's classes are kept there, so nothing is needed here for them.

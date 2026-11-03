@@ -22,8 +22,8 @@ not invoke runtime code or supply a second policy authority. The native posting
 edge uses `js_sys::futures::spawn_local`, which schedules a microtask even for a
 ready future. Admission therefore commits before callbacks run. The shared
 signal retains coalesced delivery debt and schedules reentrant wakes on another
-turn. Wake and quit proxies work without a canvas; deferred window creation
-remains unsupported because owner-local creation already returns Ready.
+turn. Wake and quit proxies work without a canvas, and a window another thread
+asks for through the proxy opens in the owner's next turn, as on every host.
 
 The application runner installs the same host-refresh callback used on desktop.
 It checks the installed loop identity and logical host before accepting native

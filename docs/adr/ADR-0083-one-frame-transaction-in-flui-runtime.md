@@ -1,7 +1,7 @@
 # ADR-0083: One frame transaction lives in `flui-runtime` above `flui-widgets`
 
 - **Status:** Accepted (2026-11-03) for §1, §3, §4 and §5; §2 is Proposed. Not implemented:
-  [`docs/gaps.md` entry 42, ADR-0083 §3 and §4](../gaps.md#42-accepted-adr-sections-not-built-yet)
+  [`docs/gaps.md` entry 43, ADR-0083 §3 and §4](../gaps.md#43-accepted-adr-sections-not-built-yet)
 - **Superseded-by:** [ADR-0182](ADR-0182-complete-owner-execution.md) for scheduler execution
   authority and the raw background sequence only. The runtime now submits preparation and
   pipeline through complete owner operations.

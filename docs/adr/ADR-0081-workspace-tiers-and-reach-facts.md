@@ -1,7 +1,7 @@
 # ADR-0081: Workspace tiers, reach facts and stability kinds
 
 - **Status:** Accepted (2026-11-03) for §1, §2, §3 and §4.2; §4.1 and §5 are Proposed. Not
-  implemented: [`docs/gaps.md` entry 42, ADR-0081 §1](../gaps.md#42-accepted-adr-sections-not-built-yet)
+  implemented: [`docs/gaps.md` entry 43, ADR-0081 §1](../gaps.md#43-accepted-adr-sections-not-built-yet)
 - **Date:** 2026-09-25
 - **Superseded-by:** [ADR-0154](ADR-0154-capability-crates.md) for §3's list of kinds and §2's
   reach table only (the kinds gain `capability`; the reach table gains its row).

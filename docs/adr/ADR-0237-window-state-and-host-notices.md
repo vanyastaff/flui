@@ -5,9 +5,6 @@
 - **Amended:** 2026-10-19 — decision 9's image cache is the renderer's image textures; decoded
   images belong to the application's asset registry, reclaimed once registered
   ([ADR-0250](ADR-0250-asset-registry-keeps-decoded-images.md)).
-- **Amended:** 2026-11-03 — Android's pressure source is `onLowMemory` and each `onTrimMemory`,
-  which `FluiActivity` forwards through its queue ([ADR-0255](ADR-0255-mobile-and-web-hosts.md)
-  decision 2); the process trim level is no longer read at lifecycle transitions.
 - **Superseded-by:** [ADR-0254](ADR-0254-window-contract.md), in part: the window-scoped getters
   and per-fact callbacks that sit beside the snapshot (decision 1 keeps `PlatformWindow` as the
   one window trait, but it no longer carries them); decision 3's refusal inside `apply` (it moves

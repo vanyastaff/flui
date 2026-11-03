@@ -644,10 +644,6 @@ impl WindowRequest {
     /// its handler. The factory is application code: its panic is contained
     /// here (logged, its payload retained) and the open fails with what it
     /// said, so a loop draining requests carries on.
-    #[expect(
-        dead_code,
-        reason = "no host defers a window open: every transport refuses `PlatformProxy::open_window`"
-    )]
     pub(crate) fn build_on_owner(
         self,
     ) -> Result<(WindowOptions, Rc<dyn WindowHandler>), OpenWindowError> {
@@ -712,11 +708,14 @@ impl PlatformProxy {
     }
 
     /// Enqueues a window-open request. Never blocks — on any thread,
-    /// including the owner (deferral replaces the old owner-side refusal;
-    /// the blocking hazard lives in [`PendingWindow::wait`], which is where
-    /// it is refused). The request's handler factory runs once, on the owner,
-    /// right before the window is built. Fails fast with the rejected request
-    /// returned so the producer can retry without rebuilding it.
+    /// including the owner (the blocking hazard lives in
+    /// [`PendingWindow::wait`], which is where it is refused). In its next
+    /// turn the owner runs the request's handler factory, once, and opens
+    /// the window, which it keeps until the window closes; the
+    /// [`PendingWindow`] gets its identity, or why it did not open. Requests
+    /// open in the order they were made. Fails fast with the rejected request
+    /// returned so the producer can retry without rebuilding it; a full
+    /// queue refuses it with [`ProxySendError::Full`], which names its capacity.
     ///
     /// # Errors
     /// See [`ProxySendError`].
@@ -736,9 +735,8 @@ impl PlatformProxy {
     /// be retried; admission remains fenced until the owner stops.
     ///
     /// # Errors
-    /// `Unsupported` on mobile/web transports, `OwnerGone` after shutdown,
-    /// or `WakeFailed` when physical notification fails. Native desktop and
-    /// headless implement this independently of proxy window creation support.
+    /// `OwnerGone` after shutdown, or `WakeFailed` when physical notification
+    /// fails.
     pub fn request_quit(&self) -> Result<(), ProxySendError<()>> {
         self.transport.request_quit()
     }
@@ -799,14 +797,13 @@ pub enum ProxySendError<T: fmt::Debug> {
         /// The value that could not be delivered.
         rejected: T,
     },
-    /// This backend has no owner lane behind [`PlatformProxy`] at all —
-    /// not "the queue is full", not "the loop died", but "cross-thread
-    /// platform requests are not implemented here". **Permanent** on
-    /// windows/macos/web/android/headless until those backends adopt the owner lane (ADR-
-    /// 0039 slice-2 amendment b) — do not retry; this is not a transient
-    /// condition. Treat it as a standing capability signal, the same way a
-    /// missing OS feature would be reported, not a request to back off and
-    /// try again.
+    /// This owner cannot take the request from another thread at all — not
+    /// "the queue is full", not "the loop died", but "not implemented here".
+    /// **Permanent**: do not retry. Every host takes wakes, quits and window
+    /// opens; only an owner the headless deferred-open test mode drives
+    /// refuses a window open. Treat it as a standing capability signal, the
+    /// same way a missing OS feature would be reported, not a request to back
+    /// off and try again.
     #[error("cross-thread platform requests are unsupported on this backend")]
     Unsupported {
         /// The value that could not be enqueued or delivered.
@@ -949,11 +946,17 @@ impl PendingWindow {
         }
     }
 
-    /// Non-blocking poll; safe on any thread.
+    /// Non-blocking poll; safe on any thread. `None` while the owner has not
+    /// answered, and again once an earlier poll took the answer; an owner
+    /// that stopped before answering answers [`OpenWindowError::OwnerGone`].
     #[must_use = "discarding Some(_) strands whatever the owner delivered \
                   (a live window, or the typed error explaining why not)"]
     pub fn try_take(&mut self) -> Option<Result<OpenedWindow, OpenWindowError>> {
-        self.handle.try_take()
+        match self.handle.try_claim()? {
+            ClaimOutcome::Delivered(result) => Some(result),
+            ClaimOutcome::OwnerGone => Some(Err(OpenWindowError::OwnerGone { rejected: None })),
+            ClaimOutcome::AlreadyClaimed => None,
+        }
     }
 }
 
@@ -1049,12 +1052,12 @@ pub(crate) trait OwnerHooks: Send + Sync {
     fn transport(&self) -> Arc<dyn ProxyTransport>;
 }
 
-/// Direct-creation [`OwnerHooks`] for backends without an owner lane
-/// (windows/macos/headless/web/android): every `open_owner_window` call
-/// creates synchronously via the wrapped [`Platform`] and is always
-/// `Ready` — there is no deferral without a lane to defer onto.
-/// [`Platform::open_window`] itself returns the typed [`OpenWindowError`]
-/// taxonomy, so its failure passes through unmapped.
+/// Direct-creation [`OwnerHooks`]: every `open_owner_window` call on the
+/// owner creates synchronously via the wrapped [`Platform`] and is always
+/// `Ready`. [`Platform::open_window`] itself returns the typed
+/// [`OpenWindowError`] taxonomy, so its failure passes through unmapped. A
+/// window another thread asks for ([`PlatformProxy::open_window`]) opens
+/// through the same platform in the owner's next turn.
 pub(crate) struct DirectOwnerHooks {
     signal: Arc<OwnerSignal>,
     platform: Arc<dyn Platform>,
@@ -1062,8 +1065,10 @@ pub(crate) struct DirectOwnerHooks {
 
 impl DirectOwnerHooks {
     /// Captures the calling thread as the permanent owner — call this from
-    /// the backend's `on_ready` (or wherever it mints its `OwnerPlatform`).
+    /// the backend's `on_ready` (or wherever it mints its `OwnerPlatform`),
+    /// on the owner thread, which keeps the windows other threads open.
     pub(crate) fn with_signal(platform: Arc<dyn Platform>, signal: Arc<OwnerSignal>) -> Self {
+        signal.open_windows_through(&platform);
         Self { signal, platform }
     }
 }
@@ -1093,8 +1098,8 @@ impl OwnerHooks for DirectOwnerHooks {
     }
 }
 
-/// Cross-thread transport behind [`PlatformProxy`]. Every backend supports
-/// signals and refuses deferred window creation.
+/// Cross-thread transport behind [`PlatformProxy`]: signals, quit and window
+/// opens, each answered in an owner turn.
 pub(crate) trait ProxyTransport: Send + Sync {
     fn wake(&self) -> Result<(), ProxySendError<()>> {
         Err(ProxySendError::Unsupported { rejected: () })

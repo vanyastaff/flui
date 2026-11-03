@@ -2,7 +2,7 @@
 
 - **Status:** Accepted (2026-11-03) for §1, §2, §5 and the contract of §6 (its first item);
   §3, §4 and the rest of §6 are Proposed. Not implemented:
-  [`docs/gaps.md` entry 42, ADR-0085 §5](../gaps.md#42-accepted-adr-sections-not-built-yet).
+  [`docs/gaps.md` entry 43, ADR-0085 §5](../gaps.md#43-accepted-adr-sections-not-built-yet).
 - **Date:** 2026-09-25
 - **Revised:** 2026-09-26 (prototype of the read contract; see Context. Then §2 and §5 shipped,
   with the drivers, `RebuildSink`, `ScopeRef::detached` and `SignalError::NoGraph` moved to §6

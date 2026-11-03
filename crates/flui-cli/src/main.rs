@@ -228,11 +228,17 @@ enum Commands {
         #[arg(long)]
         no_open: bool,
 
-        /// Serve the app to an AI agent (this desktop or an Android device):
-        /// starts it with a local endpoint and a launch token (a release
-        /// build with the `driver` feature), then `flui mcp` connects to it
+        /// Serve the app to an AI agent (this desktop, an Android device or a
+        /// browser): starts it with a local endpoint and a launch token (a
+        /// release build with the `driver` feature), then `flui mcp` connects
+        /// to it. In a browser, this command starts the browser and carries
+        /// the endpoint to the page
         #[arg(long, conflicts_with = "scene")]
         agent: bool,
+
+        /// With `--device browser:… --agent`: start the browser without a window
+        #[arg(long, requires = "agent")]
+        headless: bool,
     },
 
     /// Serve a running app to an AI agent over MCP (stdio)
@@ -734,6 +740,7 @@ fn main() {
             profile,
             web_port,
             no_open,
+            headless,
             agent,
         } => {
             if scene {
@@ -754,6 +761,7 @@ fn main() {
                         web: commands::run::WebOptions {
                             port: web_port,
                             open: !no_open,
+                            headless,
                         },
                         agent,
                     },

@@ -1,7 +1,7 @@
 # ADR-0089: Stable signatures carry no upstream type except raw-window-handle
 
-- **Status:** Accepted (2026-11-03). Not implemented: [`docs/gaps.md` entry 42, ADR-0089 §5
-  and §6](../gaps.md#42-accepted-adr-sections-not-built-yet)
+- **Status:** Accepted (2026-11-03). Not implemented: [`docs/gaps.md` entry 43, ADR-0089 §5
+  and §6](../gaps.md#43-accepted-adr-sections-not-built-yet)
 - **Superseded-by:** [ADR-0203](ADR-0203-semantics-vocabulary.md) for §3's narrower semantics
   vocabulary and its flags only (FLUI's roles and actions now cover ARIA 1.2 where AccessKit has
   a counterpart, and role-bearing flags are roles). The rule that stable signatures carry no

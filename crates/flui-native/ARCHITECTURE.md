@@ -3104,6 +3104,19 @@ finds no callback stays owed, and a registration posts it. Tests:
 `an_undriven_turn_posts_the_next_one`,
 `a_change_with_no_turn_callback_reaches_the_next_one_registered`.
 
+A window another thread asks for (`PlatformProxy::open_window`) queues on the
+same signal, at most 64 at once, and opens in a turn of its own before the
+application's turn, through the platform `DirectOwnerHooks` gave the signal, in
+the order asked. Every host serves it, since every host's hooks are
+`DirectOwnerHooks`; only the headless deferred-open test mode answers
+`Unsupported`. The factory and the window's first delivery run outside the
+signal's lock with their panics contained, and the request is answered with the
+window's identity or why it did not open; a request whose `PendingWindow` was
+dropped opens nothing, and a quit or close answers what is still queued with
+`OwnerGone`. The window stays with the loop's own table, as the windows the
+owner opens do. Tests: `proxy_open_window_contract`,
+`a_window_asked_for_on_another_thread_opens_on_the_loop`.
+
 macOS posts through GCD, and Win32
 through a dedicated message-only class with its own typed userdata. Headless
 provides `HeadlessOwnerTurns`, an owner-local driver and one-shot posting failure
