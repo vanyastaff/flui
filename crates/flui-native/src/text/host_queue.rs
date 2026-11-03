@@ -18,6 +18,7 @@ use std::collections::VecDeque;
     target_os = "ios",
     target_os = "macos",
     wayland_host,
+    x11_host,
     target_arch = "wasm32",
     test
 ))]
@@ -28,6 +29,7 @@ use std::rc::Rc;
     target_os = "ios",
     target_os = "macos",
     wayland_host,
+    x11_host,
     target_arch = "wasm32",
     test
 ))]
@@ -117,7 +119,13 @@ impl<Op> HostQueue<Op> {
     }
 
     /// Forget every queued request: the host retired with its window.
-    #[cfg(any(target_os = "android", wayland_host, target_arch = "wasm32", test))]
+    #[cfg(any(
+        target_os = "android",
+        wayland_host,
+        x11_host,
+        target_arch = "wasm32",
+        test
+    ))]
     pub(crate) fn clear(&self) {
         // Taken out before dropping, so a store a request held cannot reach
         // the queue from its destructor while it is borrowed.
@@ -131,6 +139,7 @@ impl<Op> HostQueue<Op> {
     target_os = "ios",
     target_os = "macos",
     wayland_host,
+    x11_host,
     target_arch = "wasm32",
     test
 ))]
@@ -149,6 +158,7 @@ pub(crate) enum MirrorHostOp {
     target_os = "ios",
     target_os = "macos",
     wayland_host,
+    x11_host,
     target_arch = "wasm32",
     test
 ))]

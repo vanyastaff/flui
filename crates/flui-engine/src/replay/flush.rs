@@ -682,7 +682,8 @@ impl GpuReplay {
     /// premultiplied, so `src_factor = One` is correct.
     ///
     /// Takes `pipelines: &mut PipelineSet` because lazy pipeline creation may
-    /// be needed on the first call for a given mode.
+    /// be needed on the first call for a given mode. `sampling` reads the
+    /// source between its texels.
     pub(crate) fn flush_texture_batch_premultiplied_with_mode(
         &mut self,
         mode: flui_painting::paint::BlendMode,
@@ -694,6 +695,7 @@ impl GpuReplay {
         encoder: &mut wgpu::CommandEncoder,
         view: &wgpu::TextureView,
         texture_view: &wgpu::TextureView,
+        sampling: wgpu::FilterMode,
         scissor: ScissorRect,
     ) {
         self.flush_texture_batch_with_filter_binding(
@@ -707,6 +709,7 @@ impl GpuReplay {
             encoder,
             view,
             texture_view,
+            sampling,
             scissor,
         );
     }
@@ -748,6 +751,7 @@ impl GpuReplay {
             encoder,
             view,
             texture_view,
+            wgpu::FilterMode::Linear,
             scissor,
         );
         Ok(())
@@ -765,6 +769,7 @@ impl GpuReplay {
         encoder: &mut wgpu::CommandEncoder,
         view: &wgpu::TextureView,
         texture_view: &wgpu::TextureView,
+        sampling: wgpu::FilterMode,
         scissor: ScissorRect,
     ) {
         if self.texture_batch.is_empty() {
@@ -784,6 +789,10 @@ impl GpuReplay {
             pipelines.ensure_texture_composite(device, mode);
         }
 
+        let sampler = match sampling {
+            wgpu::FilterMode::Nearest => &self.nearest_sampler,
+            wgpu::FilterMode::Linear => &self.default_sampler,
+        };
         // Both of these are now `&pipelines` (shared) borrows — no conflict.
         let texture_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("SSAA Tile Composite Bind Group"),
@@ -791,7 +800,7 @@ impl GpuReplay {
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: wgpu::BindingResource::Sampler(&self.default_sampler),
+                    resource: wgpu::BindingResource::Sampler(sampler),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,

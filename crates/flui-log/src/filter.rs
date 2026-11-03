@@ -181,77 +181,15 @@ impl FilterConfig {
             && let Some(directives) = env_value.map(str::trim)
             && !directives.is_empty()
         {
-            return EnvFilter::try_new(with_aliases(directives)).map_err(|source| {
-                FilterError::Environment {
-                    env_var: env_var.clone(),
-                    source,
-                }
+            return EnvFilter::try_new(directives).map_err(|source| FilterError::Environment {
+                env_var: env_var.clone(),
+                source,
             });
         }
 
-        EnvFilter::try_new(with_aliases(&self.directives)).map_err(|source| {
-            FilterError::Configured {
-                directives: self.directives.clone(),
-                source,
-            }
+        EnvFilter::try_new(&self.directives).map_err(|source| FilterError::Configured {
+            directives: self.directives.clone(),
+            source,
         })
     }
-}
-
-/// Spellings of tracing targets that predate the `flui.<subsystem>` convention, each with the
-/// target that replaces it. They are honored for one release: a directive naming an old spelling
-/// is read as naming the new one as well.
-///
-/// The old spelling stays in the filter too, because an event that sets no target of its own
-/// still carries its module path (`flui_animation::controller`).
-pub const TARGET_ALIASES: &[(&str, &str)] = &[
-    ("flui::reconcile", "flui.tree.reconcile"),
-    ("flui_animation", "flui.animation"),
-    ("flui::signals", "flui.signals"),
-    ("flui::a11y", "flui.a11y"),
-];
-
-/// `directives` with the replacement of every aliased target added right after its directive.
-///
-/// `flui_animation::diagnostics=debug` also admits `flui.animation.diagnostics=debug`. A bare
-/// level (`info`) and a directive that names no old target pass through unchanged. The
-/// replacement sits beside its original, not at the end, because a later directive for the same
-/// target wins: `flui::signals=trace,flui.signals=off` stays off.
-fn with_aliases(directives: &str) -> String {
-    let mut out = Vec::new();
-    let mut depth = 0_u32;
-    let mut start = 0;
-    let mut pieces = Vec::new();
-    for (at, character) in directives.char_indices() {
-        match character {
-            '[' | '{' => depth += 1,
-            ']' | '}' => depth = depth.saturating_sub(1),
-            ',' if depth == 0 => {
-                pieces.push(&directives[start..at]);
-                start = at + 1;
-            }
-            _ => {}
-        }
-    }
-    pieces.push(&directives[start..]);
-    for piece in pieces {
-        let piece = piece.trim();
-        out.push(piece.to_owned());
-        let target_end = piece.find(['=', '[']).unwrap_or(piece.len());
-        let target = &piece[..target_end];
-        for (old, new) in TARGET_ALIASES {
-            let Some(rest) = target.strip_prefix(old) else {
-                continue;
-            };
-            if !(rest.is_empty() || rest.starts_with("::")) {
-                continue;
-            }
-            out.push(format!(
-                "{new}{}{}",
-                rest.replace("::", "."),
-                &piece[target_end..]
-            ));
-        }
-    }
-    out.join(",")
 }

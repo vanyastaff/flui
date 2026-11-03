@@ -34,12 +34,12 @@ use crate::interaction::{
     Focus, FocusRing, GestureArenaScope, GestureDetector, Intent, MenuItem, MenuPresenter,
     MenuRequest, Shortcuts, SingleActivator,
 };
-use crate::localization::Directionality;
+use crate::localization::{BoxedWidgetsLocalizations, Directionality};
 use crate::navigator::{NavigatorHandle, PopupRoute, RouteId};
 use crate::{
     Align, ColoredBox, Column, ConstrainedBox, CustomSingleChildLayout, ExcludeSemantics,
     IntrinsicWidth, Padding, PopupOrigin, SelectionMenu, SelectionPopup, Semantics, SemanticsRole,
-    Text, Wrap,
+    Text, ToolbarItems,
 };
 
 // ============================================================================
@@ -465,7 +465,8 @@ impl fmt::Debug for MenuPanelState {
 
 /// The theme-free [`SelectionMenu`] [`WidgetsApp`](crate::WidgetsApp)
 /// installs: the popup is this module's plain menu, and the toolbar a white
-/// strip of the same labels in a row.
+/// strip of the same labels in a row, the ones it has no room for behind
+/// "⋯" ([`ToolbarItems`]).
 ///
 /// The toolbar's buttons never take the focus, so the field keeps it and its
 /// input session; each is a button to assistive technology, labelled by its
@@ -480,15 +481,40 @@ impl SelectionMenu for PlainSelectionMenu {
         let direction = Directionality::maybe_of(ctx).unwrap_or(TextDirection::Ltr);
         let buttons: Vec<BoxedView> = items
             .iter()
-            .map(|item| toolbar_button(item, direction, min_target))
+            .map(|item| {
+                let chosen = item.clone();
+                toolbar_button(
+                    item.label().to_owned(),
+                    item.label().to_owned(),
+                    move |cx| {
+                        let _ = chosen.perform(cx);
+                    },
+                    direction,
+                    min_target,
+                )
+            })
             .collect();
         Semantics::new()
             .container(true)
             .role(SemanticsRole::Toolbar)
             .child(ColoredBox::new(MENU_SURFACE).child(
-                // Labels wider than the room wrap onto another run, so
-                // every command stays reachable.
-                Wrap::new(buttons),
+                // The commands the room has no space for are behind "⋯".
+                ToolbarItems::new(buttons).overflow_button(move |controller, ctx| {
+                    let strings = BoxedWidgetsLocalizations::of(ctx);
+                    let (glyph, label) = if controller.is_expanded() {
+                        ("\u{2039}", strings.back_button_label())
+                    } else {
+                        ("\u{22EF}", strings.more_button_label())
+                    };
+                    let controller = controller.clone();
+                    toolbar_button(
+                        glyph.to_owned(),
+                        label.to_owned(),
+                        move |_cx| controller.toggle(),
+                        direction,
+                        min_target,
+                    )
+                }),
             ))
             .boxed()
     }
@@ -500,25 +526,27 @@ impl SelectionMenu for PlainSelectionMenu {
     }
 }
 
-/// One toolbar button: the item's label, performing it on a tap.
-fn toolbar_button(item: &MenuItem, direction: TextDirection, min_target: f64) -> BoxedView {
+/// One toolbar button: `text` shown, `label` heard, `tap` run on a tap.
+fn toolbar_button(
+    text: String,
+    label: String,
+    tap: impl Fn(&mut EventCx<'_>) + 'static,
+    direction: TextDirection,
+    min_target: f64,
+) -> BoxedView {
     let side = if min_target.is_finite() {
         min_target.max(0.0)
     } else {
         0.0
     };
-    let label = item.label().to_owned();
-    let chosen = item.clone();
     Semantics::new()
         .container(true)
         .role(SemanticsRole::Button)
-        .label(label.clone())
+        .label(label)
         .child(
             GestureDetector::new()
                 .behavior(HitTestBehavior::Opaque)
-                .on_tap(move |cx| {
-                    let _ = chosen.perform(cx);
-                })
+                .on_tap(move |cx| tap(cx))
                 .child(
                     ConstrainedBox::new(BoxConstraints::new(
                         side,
@@ -533,7 +561,7 @@ fn toolbar_button(item: &MenuItem, direction: TextDirection, min_target: f64) ->
                                 .height_factor(1.0)
                                 .child(
                                     ExcludeSemantics::new().child(
-                                        Text::new(label)
+                                        Text::new(text)
                                             .direction(direction)
                                             .style(TextStyle::default().with_color(MENU_LABEL)),
                                     ),

@@ -803,6 +803,7 @@ impl GpuReplay {
                 encoder,
                 target_view,
                 one_x_tile.view(),
+                wgpu::FilterMode::Linear,
                 None, // no scissor — tile exactly covers composite_bounds
             );
             // one_x_tile drops here → returns to pool (RAII).

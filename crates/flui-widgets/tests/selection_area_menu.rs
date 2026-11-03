@@ -475,3 +475,185 @@ pub(crate) fn an_area_rebuilt_without_its_menu_takes_its_toolbar_away() {
         "the selection stays"
     );
 }
+
+/// An area's handle drag shows the scope's magnifier over the dragged end
+/// as it moves, its bottom centre a gap above the end's line, and takes it
+/// away with the drag; a scope that turns it off shows none, and the
+/// area's own choice wins over the scope's.
+///
+/// Red-check: leave the magnifier out of the area's handles (none during
+/// the drag), keep it after the release (one after), or ignore the area's
+/// own choice (the scope's look).
+pub(crate) fn an_area_s_handle_drag_shows_the_magnifier_over_the_dragged_end() {
+    use flui_testing::replay::TouchScript;
+    use flui_widgets::{MagnifierInfo, PlainMagnifier};
+
+    let drag_end = |scene: &mut Scene| {
+        scene.long_press(scene.along(width_of("alpha be")));
+        let from = scene.end_handle(width_of("alpha beta"));
+        let to = scene.end_handle(width_of("alpha beta ga"));
+        // The finger rests where it moved for two frames, so the end's
+        // leader is where the selection went before the last one.
+        let mut script = TouchScript::new("drag the end handle").down(1, from);
+        for step in 1..=6_u32 {
+            let along = f64::from(step) / 6.0;
+            script = script
+                .wait(Duration::from_millis(16))
+                .move_to(1, from + (to - from) * along)
+                .frame();
+        }
+        let drag = script
+            .wait(Duration::from_millis(16))
+            .frame()
+            .wait(Duration::from_millis(16))
+            .frame()
+            .up(1)
+            .build()
+            .expect("a valid script");
+        let last = drag.steps().len() - 1;
+        let mut during = None;
+        scene.laid.replay_with(&drag, |laid, index| {
+            if index + 1 == last {
+                during = Some(crate::editable_text_handles::magnifiers(laid));
+            }
+        });
+        scene.settle();
+        (
+            during.expect("the drag ran"),
+            crate::editable_text_handles::magnifiers(&scene.laid),
+        )
+    };
+
+    let mut scene = Scene::build(
+        // As on macOS, letting go shows no toolbar, so only the drag
+        // itself takes the magnifier away.
+        |area| {
+            area.menu_policy(flui_widgets::SelectionMenuPolicy::NEVER.with_after_long_press(true))
+        },
+        Some(|controls| controls.magnifier(PlainMagnifier::capsule())),
+        |page| page,
+    );
+    let (shown, after) = drag_end(&mut scene);
+    assert_eq!(scene.selected().as_deref(), Some("beta ga"));
+    assert_eq!(shown.len(), 1, "one magnifier during the drag: {shown:?}");
+    let loupe = shown[0];
+    assert_eq!((loupe.width(), loupe.height()), (80.0, 48.0));
+    let line = scene.laid.absolute_offset(scene.paragraph);
+    let end_x = line.dx + width_of("alpha beta ga");
+    assert!(
+        (loupe.center().x - end_x).abs() < 0.5,
+        "centred on the end at {end_x}: {loupe:?}"
+    );
+    assert!(
+        (loupe.bottom() - (line.dy - MagnifierInfo::GAP)).abs() < 0.5,
+        "a gap above the line at {}: {loupe:?}",
+        line.dy
+    );
+    assert!(after.is_empty(), "the release takes it: {after:?}");
+
+    let mut scene = Scene::build(
+        |area| area,
+        Some(|controls| controls.magnifier(PlainMagnifier::capsule()).no_magnifier()),
+        |page| page,
+    );
+    let (shown, _) = drag_end(&mut scene);
+    assert!(shown.is_empty(), "turned off shows none: {shown:?}");
+
+    // The area's own choice wins over the scope's.
+    let mut scene = Scene::build(
+        |area| area.magnifier(PlainMagnifier::rounded()),
+        Some(|controls| controls.magnifier(PlainMagnifier::capsule())),
+        |page| page,
+    );
+    let (shown, _) = drag_end(&mut scene);
+    let sizes = shown
+        .iter()
+        .map(|loupe| (loupe.width(), loupe.height()))
+        .collect::<Vec<_>>();
+    assert_eq!(sizes, [(78.0, 38.0)], "the area's own look");
+    let mut scene = Scene::build(
+        flui_widgets::SelectionArea::no_magnifier,
+        Some(|controls| controls.magnifier(PlainMagnifier::capsule())),
+        |page| page,
+    );
+    let (shown, _) = drag_end(&mut scene);
+    assert!(shown.is_empty(), "the area turned it off: {shown:?}");
+}
+
+/// While a drag of an area's end handle steps the end over characters,
+/// each step plays one selection click, and the magnifier follows the
+/// finger between characters: a finger resting a third of a letter past
+/// the end has the magnifier centred under it, not on the end.
+///
+/// Red-check: play no click on a step (none heard), or keep the magnifier
+/// on the end (centred a third of a letter short).
+pub(crate) fn an_area_s_handle_drag_s_magnifier_follows_the_finger_and_each_step_clicks() {
+    use flui_platform::HapticFeedback;
+    use flui_testing::replay::TouchScript;
+    use flui_widgets::PlainMagnifier;
+
+    let mut scene = Scene::build(
+        |area| area,
+        Some(|controls| controls.magnifier(PlainMagnifier::capsule())),
+        |page| page,
+    );
+    scene.long_press(scene.along(width_of("alpha be")));
+    let end = width_of("alpha beta");
+    let from = scene.end_handle(end);
+    // The prefixes of the line the steps stop after.
+    let line = "alpha beta gamma";
+    let at = |bytes: usize| width_of(&line[..bytes]);
+    let letter = at(15) - at(14);
+    // Three steps, then a third of the next letter.
+    let stops = [at(12), at(13), at(14), at(14) + letter / 3.0];
+    // The finger first goes down past the drag slop, which the line's
+    // letters keep: a step of one letter alone would not start the drag.
+    let below = from + Offset::new(0.0, 30.0);
+    let mut script = TouchScript::new("step the end handle")
+        .down(1, from)
+        .wait(Duration::from_millis(16))
+        .move_to(1, below)
+        .frame();
+    for stop in stops {
+        script = script
+            .wait(Duration::from_millis(16))
+            .move_to(1, below + Offset::new(stop - end, 0.0))
+            .frame();
+    }
+    let drag = script
+        .wait(Duration::from_millis(16))
+        .frame()
+        .wait(Duration::from_millis(16))
+        .frame()
+        .up(1)
+        .build()
+        .expect("a valid script");
+    let last = drag.steps().len() - 1;
+    let mut during = None;
+    scene.laid.replay_with(&drag, |laid, index| {
+        if index + 1 == last {
+            during = Some(crate::editable_text_handles::magnifiers(laid));
+        }
+    });
+    scene.settle();
+    let shown = during.expect("the drag ran");
+    assert_eq!(scene.selected().as_deref(), Some(&line[6..14]));
+    let clicks = scene
+        .laid
+        .window()
+        .haptic_actuator()
+        .feedback()
+        .iter()
+        .filter(|kind| **kind == HapticFeedback::SelectionClick)
+        .count();
+    assert_eq!(clicks, 3, "one click a step");
+    assert_eq!(shown.len(), 1, "one magnifier during the drag: {shown:?}");
+    let line = scene.laid.absolute_offset(scene.paragraph);
+    let finger_x = line.dx + stops[3];
+    assert!(
+        (shown[0].center().x - finger_x).abs() < 0.5,
+        "centred under the finger at {finger_x}, the end at {}: {:?}",
+        line.dx + stops[2],
+        shown[0]
+    );
+}

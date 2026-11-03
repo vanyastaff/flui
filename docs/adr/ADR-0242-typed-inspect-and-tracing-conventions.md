@@ -97,7 +97,7 @@ properties.
 - Migration is mechanical but wide: about 81 files define a fill function and 21 use the derive.
   It lands beside the old trait, migrates `flui-objects` by derive, moves consumers, then deletes
   the old machinery.
-- Two published tracing targets change spelling, with an alias for one release.
+- Two published tracing targets change spelling; the old spellings are not kept (pre-release).
 
 ## Alternatives considered
 

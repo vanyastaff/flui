@@ -57,7 +57,7 @@ mod clipboard;
 mod cursor_area;
 mod handles;
 mod menu;
-use crate::text::{MenuSettings, ShowSelectionMenu};
+use crate::text::{MagnifierChoice, MenuSettings, ShowSelectionMenu};
 use cursor_area::CursorAreaLoop;
 
 pub use handles::CaretHandle;
@@ -457,6 +457,7 @@ pub struct EditableText {
     pub(super) handles: Option<Rc<dyn SelectionHandles>>,
     pub(super) caret_handle: Option<CaretHandle>,
     pub(super) menu: MenuSettings,
+    pub(super) magnifier: Option<MagnifierChoice>,
 }
 
 /// The field's name, placeholder, validity and whether it is required, as its semantics node
@@ -500,6 +501,7 @@ impl EditableText {
             handles: None,
             caret_handle: None,
             menu: MenuSettings::default(),
+            magnifier: None,
         }
     }
 
@@ -581,27 +583,6 @@ impl EditableText {
     /// [`DefaultSelectionControls`]' or [`DotHandles`] in the opaque active
     /// selection colour, as a [`SelectionArea`](crate::SelectionArea) does.
     ///
-    /// A touch selection (a long press, which the same touch extends by
-    /// words, a double tap or a drag) shows a handle under each end, and a
-    /// tap one under the caret as [`Self::caret_handle`] says; dragging a
-    /// handle moves its end. They show in the nearest
-    /// [`Overlay`](crate::Overlay), and none without one.
-    #[must_use]
-    pub fn handles(mut self, handles: impl SelectionHandles) -> Self {
-        self.handles = Some(Rc::new(handles));
-        self
-    }
-
-    /// Whether a tap shows a handle under the caret, in place of the
-    /// nearest [`DefaultSelectionControls`]' choice or the platform's
-    /// ([`CaretHandle::default`]).
-    #[must_use]
-    pub fn caret_handle(mut self, caret_handle: CaretHandle) -> Self {
-        self.caret_handle = Some(caret_handle);
-        self
-    }
-
-    /// Override the caret color (default black).
     #[must_use]
     pub fn caret_color(mut self, color: Color) -> Self {
         self.caret_color = color;
@@ -1305,6 +1286,7 @@ impl EditableTextState {
         self.touch_handles.set_scope(
             crate::Overlay::maybe_of(ctx),
             crate::animated::VsyncScope::maybe_of(ctx),
+            ctx.haptics(),
         );
         let drag = Rc::downgrade(&self.selection_drag);
         self.long_press.build(
@@ -2263,6 +2245,10 @@ impl ViewState<EditableText> for EditableTextState {
             .or_else(|| DefaultSelectionControls::caret_handle_of(ctx))
             .unwrap_or_default();
         self.touch_handles.set_look(look, caret_handle);
+        (self.touch_handles).set_magnifier(DefaultSelectionControls::magnifier_of(
+            ctx,
+            view.magnifier.as_ref(),
+        ));
         let origin =
             crate::PopupOrigin::new(self.inner_anchor.clone(), self.pipeline_owner.clone());
         let chain = self.action_chain.clone();

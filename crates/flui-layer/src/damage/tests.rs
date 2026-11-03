@@ -520,6 +520,44 @@ fn damage_meeting_a_foreground_blur_takes_its_footprint() {
     );
 }
 
+/// A foreground transform filter draws its children where the transform
+/// sends them: moved 100 px right, a child over 100..150 shows over
+/// 200..250, a texel past for a bilinear read. Damage there takes that
+/// footprint; damage over the child's own place, which no longer shows it,
+/// stays small.
+#[test]
+fn a_foreground_transforms_footprint_follows_its_moved_content() {
+    let (root, moved) = (ContentToken::mint(), ContentToken::mint());
+    let shift = ImageFilter::Transform {
+        transform: ImageTransform::try_new(1.0, 0.0, 0.0, 1.0, 100.0, 0.0).expect("a translation"),
+        sampling: ImageSampling::Linear,
+    };
+    let build = |moving: &ContentToken, at: Offset<f64>| {
+        let mut frame = Frame::new(1.0, &root);
+        let parent = frame.root();
+        let node = LayerNode::new(Layer::from(OffsetLayer::new(Offset::ZERO)))
+            .with_boundary(id(3), moved.clone());
+        let boundary = frame.tree.push_child(parent, node);
+        let filter = frame.push(boundary, crate::ImageFilterLayer::new(shift.clone()));
+        frame.push(filter, picture(Rect::from_xywh(100.0, 100.0, 50.0, 50.0)));
+        frame.boundary(parent, 2, moving, at, Size::new(6.0, 6.0));
+        frame.scene()
+    };
+    let moving = ContentToken::mint();
+    let mut differ = LayerDiffer::default();
+    differ.diff(&build(&moving, Offset::new(120.0, 120.0)), SURFACE);
+    assert_eq!(
+        partial(differ.diff(&build(&moving, Offset::new(120.0, 124.0)), SURFACE)),
+        covering(120.0, 120.0, 126.0, 130.0),
+        "damage over the child's own place stays small"
+    );
+    differ.diff(&build(&moving, Offset::new(220.0, 120.0)), SURFACE);
+    assert_eq!(
+        partial(differ.diff(&build(&moving, Offset::new(220.0, 124.0)), SURFACE)),
+        covering(199.0, 99.0, 251.0, 151.0)
+    );
+}
+
 /// Under a shrinking transform a foreground blur's footprint still reaches
 /// the renderer's kernel half-width in physical pixels, `ceil(sqrt(3) x
 /// sigma)`, which there exceeds three sigma scaled down.

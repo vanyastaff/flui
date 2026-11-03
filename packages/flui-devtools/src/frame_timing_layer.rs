@@ -1,5 +1,5 @@
-//! [`FrameTimingLayer`] — feeds the [`Profiler`] from
-//! the framework's own tracing spans.
+//! [`FrameTimingLayer`] — feeds the [`Profiler`] from the one [`Capture`] of the framework's
+//! frame spans.
 //!
 //! # Why a subscriber and not a call
 //!
@@ -10,18 +10,25 @@
 //! subscribes. That is the only seam the layering permits, and it is why the
 //! framework needed no knowledge of the profiler at all.
 //!
+//! # One recorder
+//!
+//! The layer is a [`CaptureLayer`] with the profiler as one reader of what it captures. It
+//! recognizes nothing itself: [`Phase::of`] says which spans are phases, and [`crate::capture`]
+//! says how a span is measured, attributed to its frame, and partitioned by the runtime and
+//! presentation it ran for. [`FrameTimingLayer::over`] shares one [`Capture`] with a
+//! [`Timeline`](crate::timeline::Timeline) and the trace export, so every tool shows the same
+//! measurement.
+//!
 //! # What it listens to
 //!
 //! | span | opened by | phase |
 //! |------|-----------|-------|
-//! | `frame` | `UpdateScheduler::drive_frame` (`flui-scheduler`) | the frame itself; its `period_us` field is the display period the jank line follows |
+//! | `frame` | `UpdateScheduler::drive_frame` (`flui-scheduler`) | the frame itself; its `period_us` field is the display period the jank line follows, its `runtime` field the runtime that drove it |
 //! | `build` | `BuildOwner::build_scope` (`flui-view`) | [`Build`](crate::profiler::FramePhase::Build) |
 //! | `layout` | `PipelineOwner::run_layout` (`flui-rendering`) | [`Layout`](crate::profiler::FramePhase::Layout) |
 //! | `paint` | `PipelineOwner::run_paint` (`flui-rendering`) | [`Paint`](crate::profiler::FramePhase::Paint) |
-//! | `compositing` | the compositing pass (`flui-rendering`) | `Custom("Compositing")` |
-//! | `animation_tick` | the public Vsync registry walk (`flui-animation`) | `Custom("Animation tick")` |
-//! | `animation_sampling` | time, simulation or repeat computation (`flui-animation`) | `Custom("Animation sampling")` |
-//! | `animation_listeners` | value/status listeners and run delivery (`flui-animation`) | `Custom("Animation listeners")` |
+//! | `compositing`, `semantics`, `commit`, `submit` | the pipeline and the runtime | `Custom("Compositing")`, … |
+//! | `animation_tick`, `animation_sampling`, `animation_listeners` | `flui-animation` | `Custom("Animation tick")`, … |
 //!
 //! Animation spans require the `flui.animation` target (ADR-0202).
 //! `profiling` enables their optional producer through the SDK. Their durations
@@ -57,115 +64,37 @@
 //! the dispatch cost the moment profiling starts. Measuring must not change
 //! what is measured.
 //!
-//! # One frame at a time, by span identity
+//! # One runtime at a time
 //!
-//! The layer owns at most one frame at a time, keyed by the frame span's `Id`.
-//! Phase spans count only when their nearest frame is that owning span, and
-//! only its outermost exit ends the frame. Scheduler frames are recognized by
-//! target as well as name, so an application's `frame` span cannot hide them.
-//! So when two `UiRuntime`s render
-//! concurrently under one shared subscriber, the second UI runtime's frame — and
-//! every phase inside it — is **dropped whole** rather than mixed into the
-//! first UI runtime's measurements: a missing frame is honest, a blended one is a
-//! fabrication. To profile several UI runtimes at once, install one
-//! `FrameTimingLayer` + [`Profiler`] pair per UI runtime.
+//! A [`Profiler`] has one stream of frames, so it follows the first runtime that reports a
+//! frame and ignores frames of any other, and ignores a frame opened inside another. When two
+//! `UiRuntime`s render concurrently under one shared subscriber the second runtime's frames
+//! are not mixed into the first's statistics; a missing frame is honest, a blended one is a
+//! fabrication. The [`Capture`] keeps both, partitioned. To profile several runtimes at once,
+//! install one pair per runtime with [`FrameTimingLayer::over_runtime`], each over its own
+//! capture.
 //!
 //! # Timing comes from the span, not the callback
 //!
-//! Duration is measured by a [phase guard](crate::profiler::PhaseGuard) parked
-//! in the span's own extensions. Phases record their outermost
-//! entered producer visit at exit, including reentry depth. Retaining a span clone
-//! cannot postpone its measurement into another frame. Scheduler frames also
-//! end at their outermost exit: a retained child keeps its parent's identity
-//! alive, but cannot extend the frame's measurement.
-//! A completed phase span keeps a closed marker until final destruction;
-//! entering its clone again cannot restart sampling inside listener work.
+//! Duration is measured from a span's outermost entered visit, including reentry depth.
+//! Retaining a span clone cannot postpone its measurement into another frame, and scheduler
+//! frames end at their outermost exit: a retained child keeps its parent's identity alive but
+//! cannot extend the frame's measurement. A completed span keeps a closed marker until final
+//! destruction; entering its clone again cannot restart sampling inside listener work.
 
 use std::sync::Arc;
 
-use tracing::field::{Field, Visit};
+use flui_sdk::foundation::UiRuntimeId;
+use parking_lot::Mutex;
+use tracing::Subscriber;
 use tracing::span::{Attributes, Id, Record};
-use tracing::{Metadata, Subscriber};
-use tracing_subscriber::filter::{FilterFn, Filtered, filter_fn};
+use tracing_subscriber::filter::Filtered;
 use tracing_subscriber::layer::{Context, Layer};
 use tracing_subscriber::registry::LookupSpan;
 
-use crate::profiler::{FramePhase, PhaseGuard, Profiler};
-
-/// The span `UpdateScheduler::drive_frame` opens around every frame.
-const FRAME_SPAN: &str = "frame";
-
-/// The scheduler's frame boundary, not an application's same-named span.
-fn is_scheduler_frame(metadata: &Metadata<'_>) -> bool {
-    metadata.is_span() && metadata.name() == FRAME_SPAN && metadata.target() == "flui.frame"
-}
-
-fn is_animation_phase(metadata: &Metadata<'_>) -> bool {
-    metadata.target() == "flui.animation"
-        && matches!(
-            metadata.name(),
-            "animation_tick" | "animation_sampling" | "animation_listeners"
-        )
-}
-
-/// Maps a span to the phase it measures, or `None` if it is not a phase.
-///
-/// A phase is recognized by its target and its name together, so an application span named
-/// `paint` is not the framework's paint phase.
-fn phase_for(metadata: &Metadata<'_>) -> Option<FramePhase> {
-    match (metadata.target(), metadata.name()) {
-        ("flui.frame", "build") => Some(FramePhase::Build),
-        ("flui.frame", "layout") => Some(FramePhase::Layout),
-        ("flui.frame", "paint") => Some(FramePhase::Paint),
-        ("flui.frame", "compositing") => Some(FramePhase::Custom("Compositing")),
-        ("flui.frame", "semantics") => Some(FramePhase::Custom("Semantics")),
-        ("flui.frame", "commit") => Some(FramePhase::Custom("Commit")),
-        ("flui.frame", "submit") => Some(FramePhase::Custom("Submit")),
-        ("flui.animation", "animation_tick") => Some(FramePhase::Custom("Animation tick")),
-        ("flui.animation", "animation_sampling") => Some(FramePhase::Custom("Animation sampling")),
-        ("flui.animation", "animation_listeners") => {
-            Some(FramePhase::Custom("Animation listeners"))
-        }
-        _ => None,
-    }
-}
-
-/// Frame/phase spans and controller identities; no events or unrelated spans.
-fn is_frame_or_phase(metadata: &Metadata<'_>) -> bool {
-    if matches!(
-        metadata.name(),
-        "animation_tick" | "animation_sampling" | "animation_listeners"
-    ) {
-        return metadata.is_span() && is_animation_phase(metadata);
-    }
-    metadata.is_span()
-        && (is_scheduler_frame(metadata)
-            || phase_for(metadata).is_some()
-            || (metadata.target() == "flui.animation.diagnostics"
-                && metadata.name() == "animation_controller"))
-}
-
-/// The filter [`FrameTimingLayer::new`] wraps the layer in.
-pub type FrameSpanFilter = FilterFn<fn(&Metadata<'_>) -> bool>;
-
-/// Parked in a phase span's extensions for the span's lifetime.
-///
-/// A newtype rather than a bare `PhaseGuard` so this layer's entry cannot
-/// collide with another layer storing the same type in the same extensions map.
-// The field is never read on purpose: the guard records the phase duration when
-// it is *dropped*, which is the whole mechanism.
-struct ActivePhase {
-    _guard: PhaseGuard,
-    entries: usize,
-}
-
-/// A producer owns one entered visit; retained clones cannot restart it.
-struct ClosedPhase;
-
-struct ActiveFrame {
-    id: Id,
-    entries: usize,
-}
+pub use crate::capture::FrameSpanFilter;
+use crate::capture::{Capture, CaptureLayer};
+use crate::profiler::{FramePhase, Profiler};
 
 /// Subscriber layer that turns the framework's frame spans into
 /// [frame statistics](crate::profiler::FrameStats).
@@ -186,54 +115,118 @@ struct ActiveFrame {
 ///
 /// In a FLUI app the registry is the one `flui_log::LogConfig::subscriber`
 /// builds; the crate README shows that composition.
-#[derive(Clone)]
 pub struct FrameTimingLayer {
-    profiler: Arc<Profiler>,
-    /// The frame span currently being measured, if any.
-    ///
-    /// Shared across clones (`Arc`) so a cloned layer still sees the same
-    /// single-frame ownership. `Some` from the owning span's creation until
-    /// its outermost exit; a frame span created while this is `Some` belongs to a
-    /// concurrently rendering UI runtime and is ignored entirely.
-    active_frame: Arc<parking_lot::Mutex<Option<ActiveFrame>>>,
+    inner: CaptureLayer,
 }
 
 impl FrameTimingLayer {
     /// Wraps a profiler this layer will feed, behind the layer's own filter
-    /// (the module docs say why the filter is not optional).
+    /// (the module docs say why the filter is not optional), over a capture of its own.
     #[must_use]
-    pub fn new<S>(profiler: Arc<Profiler>) -> Filtered<Self, FrameSpanFilter, S>
+    pub fn new<S>(profiler: Arc<Profiler>) -> Filtered<Self, crate::capture::FrameSpanFilter, S>
     where
         S: Subscriber + for<'a> LookupSpan<'a>,
     {
-        let layer = Self {
-            profiler,
-            active_frame: Arc::new(parking_lot::Mutex::new(None)),
+        Self::over(&Capture::new(), profiler)
+    }
+
+    /// Like [`Self::new`], over a capture other readers share: the same measurement then feeds
+    /// the profiler, a [`Timeline`](crate::timeline::Timeline) and the trace export.
+    #[must_use]
+    pub fn over<S>(
+        capture: &Capture,
+        profiler: Arc<Profiler>,
+    ) -> Filtered<Self, crate::capture::FrameSpanFilter, S>
+    where
+        S: Subscriber + for<'a> LookupSpan<'a>,
+    {
+        Self::following(capture, profiler, None)
+    }
+
+    /// Like [`Self::over`], profiling exactly `runtime`: the frames of any other runtime, and
+    /// frames that did not say which runtime drove them, are left to the capture. One pair per
+    /// runtime profiles several runtimes at once.
+    #[must_use]
+    pub fn over_runtime<S>(
+        capture: &Capture,
+        profiler: Arc<Profiler>,
+        runtime: UiRuntimeId,
+    ) -> Filtered<Self, crate::capture::FrameSpanFilter, S>
+    where
+        S: Subscriber + for<'a> LookupSpan<'a>,
+    {
+        Self::following(capture, profiler, Some(runtime))
+    }
+
+    /// `pinned` is the runtime the profiler follows; without one, the first runtime that names
+    /// itself.
+    fn following<S>(
+        capture: &Capture,
+        profiler: Arc<Profiler>,
+        pinned: Option<UiRuntimeId>,
+    ) -> Filtered<Self, crate::capture::FrameSpanFilter, S>
+    where
+        S: Subscriber + for<'a> LookupSpan<'a>,
+    {
+        let followed: Mutex<Option<UiRuntimeId>> = Mutex::new(pinned);
+        let accepts = move |runtime: Option<UiRuntimeId>| match runtime {
+            Some(runtime) => *followed.lock().get_or_insert(runtime) == runtime,
+            // A frame that did not say which runtime drove it cannot be told apart, so a
+            // profiler that follows the first runtime takes it; one pinned to a runtime does not.
+            None => pinned.is_none(),
         };
-        layer.with_filter(filter_fn(is_frame_or_phase as fn(&Metadata<'_>) -> bool))
+        let accepts = Arc::new(accepts);
+        // The profiler's frame begins when the followed frame opens, so a phase the application
+        // measures by hand while the frame runs belongs to that frame, and one measured between
+        // frames is dropped by the next frame's start.
+        let opened: Arc<Mutex<Option<u64>>> = Arc::new(Mutex::new(None));
+        {
+            let (accepts, opened, profiler) = (
+                Arc::clone(&accepts),
+                Arc::clone(&opened),
+                Arc::clone(&profiler),
+            );
+            capture.on_frame_open(move |_, opening| {
+                // One frame at a time: the profiler is reserved for the frame it began until that
+                // frame closes, so an overlapping one cannot reset or ingest its measurements.
+                let mut opened = opened.lock();
+                if opened.is_none() && opening.is_outermost() && accepts(opening.runtime()) {
+                    profiler.begin_frame();
+                    *opened = Some(opening.id());
+                }
+            });
+        }
+        capture.on_frame(move |_, frame| {
+            if !frame.is_outermost() {
+                return;
+            }
+            // Held through ingestion: another frame opening meanwhile must not begin over this
+            // frame's measurements.
+            let mut opened = opened.lock();
+            if *opened != Some(frame.id()) {
+                // Not the frame the profiler was reserved for.
+                return;
+            }
+            let _release = Release(&mut opened);
+            if accepts(frame.span().partition().runtime()) {
+                profiler.ingest(frame);
+            } else {
+                profiler.abandon_frame();
+            }
+        });
+        let layer = Self {
+            inner: CaptureLayer::new(capture.clone()),
+        };
+        layer.with_filter(crate::capture::filter())
     }
 }
 
-impl FrameTimingLayer {
-    /// Forward the `period_us` field of the owning frame span, if `record`
-    /// carries one, to the profiler: the period of the display the frame is
-    /// produced for, which the jank line follows.
-    fn report_period(&self, record: impl FnOnce(&mut dyn Visit)) {
-        struct PeriodVisitor(Option<u64>);
-        impl Visit for PeriodVisitor {
-            fn record_u64(&mut self, field: &Field, value: u64) {
-                if field.name() == "period_us" {
-                    self.0 = Some(value);
-                }
-            }
-            fn record_debug(&mut self, _: &Field, _: &dyn std::fmt::Debug) {}
-        }
-        let mut visitor = PeriodVisitor(None);
-        record(&mut visitor);
-        if let Some(micros) = visitor.0 {
-            self.profiler
-                .set_frame_period(std::time::Duration::from_micros(micros));
-        }
+/// Releases the profiler's reservation when the admitted frame is done with it, however that goes.
+struct Release<'a>(&'a mut Option<u64>);
+
+impl Drop for Release<'_> {
+    fn drop(&mut self) {
+        *self.0 = None;
     }
 }
 
@@ -247,152 +240,30 @@ impl<S> Layer<S> for FrameTimingLayer
 where
     S: Subscriber + for<'a> LookupSpan<'a>,
 {
-    fn on_new_span(&self, attrs: &Attributes<'_>, id: &Id, _ctx: Context<'_, S>) {
-        if !is_scheduler_frame(attrs.metadata()) {
-            return;
-        }
-        // Frame boundaries open here rather than on enter: a frame span is
-        // entered once, and opening on creation keeps `begin_frame` ahead of
-        // any phase span the same frame may create.
-        let mut active_frame = self.active_frame.lock();
-        if active_frame.is_some() {
-            // A second ui_runtime's frame under the same subscriber. Dropping it
-            // whole is honest; letting its `begin_frame` reset the running
-            // frame would blend two ui_runtimes' timings into one measurement.
-            return;
-        }
-        *active_frame = Some(ActiveFrame {
-            id: id.clone(),
-            entries: 0,
-        });
-        self.profiler.begin_frame();
-        self.report_period(|visitor| attrs.record(visitor));
+    fn on_new_span(&self, attrs: &Attributes<'_>, id: &Id, ctx: Context<'_, S>) {
+        self.inner.on_new_span(attrs, id, ctx);
     }
 
-    fn on_record(&self, id: &Id, values: &Record<'_>, _ctx: Context<'_, S>) {
-        let owns_frame = self
-            .active_frame
-            .lock()
-            .as_ref()
-            .is_some_and(|active| active.id == *id);
-        if owns_frame {
-            self.report_period(|visitor| values.record(visitor));
-        }
+    fn on_record(&self, id: &Id, values: &Record<'_>, ctx: Context<'_, S>) {
+        self.inner.on_record(id, values, ctx);
     }
 
     fn on_enter(&self, id: &Id, ctx: Context<'_, S>) {
-        let Some(span) = ctx.span(id) else { return };
-        if is_scheduler_frame(span.metadata()) {
-            let mut active_frame = self.active_frame.lock();
-            if let Some(active) = active_frame.as_mut()
-                && active.id == *id
-            {
-                active.entries += 1;
-            }
-            return;
-        }
-        let Some(phase) = phase_for(span.metadata()) else {
-            return;
-        };
-        if span.extensions().get::<ClosedPhase>().is_some() {
-            return;
-        }
-
-        // Only phases inside the owning frame span count. A phase from a
-        // concurrently rendering ui_runtime — or outside any frame — must not be
-        // attributed to the frame being measured.
-        let owning_frame = self
-            .active_frame
-            .lock()
-            .as_ref()
-            .map(|active| active.id.clone());
-        let Some(frame_id) = owning_frame else { return };
-        if !span
-            .scope()
-            .find(|ancestor| is_scheduler_frame(ancestor.metadata()))
-            .is_some_and(|owner| owner.id() == frame_id)
-        {
-            return;
-        }
-
-        // A reentrant walk/sample is already covered by the same phase's
-        // enclosing extent. Adding both guards would double-count its work.
-        if span.scope().skip(1).any(|ancestor| {
-            phase_for(ancestor.metadata()) == Some(phase)
-                && ancestor.extensions().get::<ActivePhase>().is_some()
-        }) {
-            return;
-        }
-
-        let mut extensions = span.extensions_mut();
-        if let Some(active) = extensions.get_mut::<ActivePhase>() {
-            active.entries += 1;
-            // Re-entered without closing: the guard already running measures
-            // the full extent, so a second one would double-count.
-            return;
-        }
-        extensions.insert(ActivePhase {
-            _guard: self.profiler.profile_phase(phase),
-            entries: 1,
-        });
+        self.inner.on_enter(id, ctx);
     }
 
     fn on_exit(&self, id: &Id, ctx: Context<'_, S>) {
-        let Some(span) = ctx.span(id) else { return };
-        if is_scheduler_frame(span.metadata()) {
-            let mut active_frame = self.active_frame.lock();
-            if let Some(active) = active_frame.as_mut()
-                && active.id == *id
-            {
-                active.entries -= 1;
-                if active.entries == 0 {
-                    self.profiler.end_frame();
-                    *active_frame = None;
-                }
-            }
-            return;
-        }
-        if phase_for(span.metadata()).is_none() {
-            return;
-        }
-        // User sources can retain or reenter Span::current(). The outermost
-        // exit ends this visit; external clones must not extend its CPU time.
-        let finished = {
-            let mut extensions = span.extensions_mut();
-            let Some(active) = extensions.get_mut::<ActivePhase>() else {
-                // Covered or unowned visits must not become new work later.
-                let _ = extensions.replace(ClosedPhase);
-                return;
-            };
-            active.entries -= 1;
-            if active.entries == 0 {
-                let finished = extensions.remove::<ActivePhase>();
-                let _ = extensions.replace(ClosedPhase);
-                finished
-            } else {
-                None
-            }
-        };
-        drop(finished);
+        self.inner.on_exit(id, ctx);
     }
+}
 
-    fn on_close(&self, id: Id, ctx: Context<'_, S>) {
-        let Some(span) = ctx.span(&id) else { return };
-
-        if phase_for(span.metadata()).is_some() {
-            // Dropping the guard is what records the duration.
-            drop(span.extensions_mut().remove::<ActivePhase>());
-            return;
-        }
-
-        if is_scheduler_frame(span.metadata()) {
-            // Fallback for a frame closed without entry. Normal frames end
-            // at exit even if a retained child keeps this span alive.
-            let mut active_frame = self.active_frame.lock();
-            if active_frame.as_ref().is_some_and(|active| active.id == id) {
-                self.profiler.end_frame();
-                *active_frame = None;
-            }
+impl From<crate::phase::Phase> for FramePhase {
+    fn from(phase: crate::phase::Phase) -> Self {
+        match phase {
+            crate::phase::Phase::Build => Self::Build,
+            crate::phase::Phase::Layout => Self::Layout,
+            crate::phase::Phase::Paint => Self::Paint,
+            other => Self::Custom(other.label()),
         }
     }
 }
@@ -460,6 +331,28 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_phase_measured_by_hand_during_a_frame_stays_in_its_stats() {
+        let profiler = Arc::new(Profiler::new());
+        let subscriber =
+            tracing_subscriber::registry().with(FrameTimingLayer::new(Arc::clone(&profiler)));
+        flui_testing::log_capture::disarm_interest_cache();
+        tracing::dispatcher::with_default(&Dispatch::new(subscriber), || {
+            let _frame = tracing::debug_span!(target: "flui.frame", "frame").entered();
+            drop(profiler.profile_phase(crate::profiler::FramePhase::Custom("app work")));
+            let _paint = tracing::debug_span!(target: "flui.frame", "paint").entered();
+        });
+
+        let stats = profiler.frame_stats().expect("a frame was recorded");
+        assert!(
+            stats
+                .phase(crate::profiler::FramePhase::Custom("app work"))
+                .is_some(),
+            "the hand-measured phase is kept: {stats:?}"
+        );
+        assert!(stats.phase(crate::profiler::FramePhase::Paint).is_some());
+    }
+
     /// This side of the wiring contract: the names this layer maps to phases.
     /// It can only prove the layer's half, because the spans are emitted here
     /// by the test itself; `tests/frame_profile_end_to_end.rs` proves the
@@ -525,7 +418,240 @@ mod tests {
     }
 
     /// A phase is a `(target, name)` pair: an application span that merely shares a name with
-    /// one is not counted.
+    /// A profiler has one stream of frames: it follows the first runtime that names itself and
+    /// leaves another's frames to the capture, which keeps both.
+    ///
+    /// Fails when the profiler takes every frame, which blends two runtimes' statistics.
+    #[test]
+    fn a_profiler_follows_one_runtime_and_the_capture_keeps_both() {
+        use std::num::NonZeroU32;
+
+        let frame_of = |runtime: u64| {
+            let _frame =
+                tracing::debug_span!(target: "flui.frame", "frame", runtime = runtime).entered();
+            let _paint = tracing::debug_span!(target: "flui.frame", "paint").entered();
+        };
+        let first = UiRuntimeId::new_gen(0, NonZeroU32::MIN).as_u64();
+        let second = UiRuntimeId::new_gen(1, NonZeroU32::MIN).as_u64();
+        let capture = Capture::new();
+        let profiler = Arc::new(Profiler::new());
+        let subscriber = tracing_subscriber::registry()
+            .with(FrameTimingLayer::over(&capture, Arc::clone(&profiler)));
+        flui_testing::log_capture::disarm_interest_cache();
+        tracing::dispatcher::with_default(&Dispatch::new(subscriber), || {
+            frame_of(first);
+            frame_of(second);
+            frame_of(first);
+        });
+
+        assert_eq!(
+            profiler.frame_history().len(),
+            2,
+            "the second runtime's frame is left out"
+        );
+        assert_eq!(
+            capture.frames().len(),
+            3,
+            "the capture keeps every runtime's frames"
+        );
+    }
+
+    /// Two pairs on one registry each profile the runtime they were given, not the first one seen.
+    #[test]
+    fn a_profiler_over_a_named_runtime_ignores_the_others() {
+        use std::num::NonZeroU32;
+
+        let frame_of = |runtime: u64| {
+            let _frame =
+                tracing::debug_span!(target: "flui.frame", "frame", runtime = runtime).entered();
+            let _paint = tracing::debug_span!(target: "flui.frame", "paint").entered();
+        };
+        let first = UiRuntimeId::new_gen(0, NonZeroU32::MIN);
+        let second = UiRuntimeId::new_gen(1, NonZeroU32::MIN);
+        let (profile_first, profile_second) =
+            (Arc::new(Profiler::new()), Arc::new(Profiler::new()));
+        let subscriber = tracing_subscriber::registry()
+            .with(FrameTimingLayer::over_runtime(
+                &Capture::new(),
+                Arc::clone(&profile_first),
+                first,
+            ))
+            .with(FrameTimingLayer::over_runtime(
+                &Capture::new(),
+                Arc::clone(&profile_second),
+                second,
+            ));
+        flui_testing::log_capture::disarm_interest_cache();
+        tracing::dispatcher::with_default(&Dispatch::new(subscriber), || {
+            frame_of(first.as_u64());
+            frame_of(second.as_u64());
+            frame_of(second.as_u64());
+        });
+
+        assert_eq!(profile_first.frame_history().len(), 1);
+        assert_eq!(profile_second.frame_history().len(), 2);
+    }
+
+    /// A phase measured between frames is no frame's work.
+    #[test]
+    fn a_hand_measured_phase_outside_the_frame_is_not_charged_to_it() {
+        let profiler = Arc::new(Profiler::new());
+        let subscriber =
+            tracing_subscriber::registry().with(FrameTimingLayer::new(Arc::clone(&profiler)));
+        flui_testing::log_capture::disarm_interest_cache();
+        tracing::dispatcher::with_default(&Dispatch::new(subscriber), || {
+            drop(profiler.profile_phase(crate::profiler::FramePhase::Custom("between frames")));
+            let _frame = tracing::debug_span!(target: "flui.frame", "frame").entered();
+            let _paint = tracing::debug_span!(target: "flui.frame", "paint").entered();
+        });
+
+        let stats = profiler.frame_stats().expect("a frame was recorded");
+        assert!(
+            stats
+                .phase(crate::profiler::FramePhase::Custom("between frames"))
+                .is_none(),
+            "work done before the frame began is not the frame's: {stats:?}"
+        );
+        assert!(stats.phase(crate::profiler::FramePhase::Paint).is_some());
+    }
+
+    /// A measurement taken between frames must not displace or merge with the ones taken inside
+    /// the frame: the frame's statistics carry every one of its own.
+    #[test]
+    fn many_hand_measured_phases_in_a_frame_all_reach_its_statistics() {
+        let profiler = Arc::new(Profiler::new());
+        let subscriber =
+            tracing_subscriber::registry().with(FrameTimingLayer::new(Arc::clone(&profiler)));
+        flui_testing::log_capture::disarm_interest_cache();
+        tracing::dispatcher::with_default(&Dispatch::new(subscriber), || {
+            drop(profiler.profile_phase(crate::profiler::FramePhase::Custom("between frames")));
+            let _frame = tracing::debug_span!(target: "flui.frame", "frame").entered();
+            for _ in 0..1000 {
+                drop(profiler.profile_phase(crate::profiler::FramePhase::Custom("inside")));
+            }
+        });
+
+        let stats = profiler.frame_stats().expect("a frame was recorded");
+        assert!(
+            stats
+                .phase(crate::profiler::FramePhase::Custom("between frames"))
+                .is_none()
+        );
+        assert!(
+            stats
+                .phase(crate::profiler::FramePhase::Custom("inside"))
+                .is_some(),
+            "{stats:?}"
+        );
+    }
+
+    /// An excluded runtime's frame that finishes while the followed runtime's is still running
+    /// must not abandon the followed frame's measurements.
+    #[test]
+    fn another_runtimes_frame_closing_does_not_abandon_the_followed_frame() {
+        use std::num::NonZeroU32;
+        let profiler = Arc::new(Profiler::new());
+        let capture = Capture::new();
+        let followed = UiRuntimeId::new_gen(0, NonZeroU32::MIN);
+        let subscriber = tracing_subscriber::registry().with(FrameTimingLayer::over_runtime(
+            &capture,
+            Arc::clone(&profiler),
+            followed,
+        ));
+        flui_testing::log_capture::disarm_interest_cache();
+        let dispatch = Dispatch::new(subscriber);
+        tracing::dispatcher::with_default(&dispatch, || {
+            let _frame = tracing::debug_span!(
+                target: "flui.frame",
+                "frame",
+                runtime = followed.as_u64()
+            )
+            .entered();
+            drop(profiler.profile_phase(crate::profiler::FramePhase::Custom("followed work")));
+            std::thread::scope(|scope| {
+                scope.spawn(|| {
+                    tracing::dispatcher::with_default(&dispatch, || {
+                        drop(
+                            tracing::debug_span!(
+                                target: "flui.frame",
+                                "frame",
+                                runtime = UiRuntimeId::new_gen(1, NonZeroU32::MIN).as_u64()
+                            )
+                            .entered(),
+                        );
+                    });
+                });
+            });
+        });
+
+        let stats = profiler
+            .frame_stats()
+            .expect("the followed frame was recorded");
+        assert!(
+            stats
+                .phase(crate::profiler::FramePhase::Custom("followed work"))
+                .is_some(),
+            "{stats:?}"
+        );
+    }
+
+    /// Two frames that name no runtime and overlap on different threads: the second must not reset
+    /// the first's measurements, nor take the profiler when it closes first.
+    #[test]
+    fn an_overlapping_unnamed_frame_does_not_disturb_the_admitted_one() {
+        let profiler = Arc::new(Profiler::new());
+        let subscriber =
+            tracing_subscriber::registry().with(FrameTimingLayer::new(Arc::clone(&profiler)));
+        flui_testing::log_capture::disarm_interest_cache();
+        let dispatch = Dispatch::new(subscriber);
+        tracing::dispatcher::with_default(&dispatch, || {
+            let _frame = tracing::debug_span!(target: "flui.frame", "frame").entered();
+            drop(profiler.profile_phase(crate::profiler::FramePhase::Custom("admitted work")));
+            std::thread::scope(|scope| {
+                scope.spawn(|| {
+                    tracing::dispatcher::with_default(&dispatch, || {
+                        drop(tracing::debug_span!(target: "flui.frame", "frame").entered());
+                    });
+                });
+            });
+        });
+
+        let stats = profiler
+            .frame_stats()
+            .expect("the admitted frame was recorded");
+        assert!(
+            stats
+                .phase(crate::profiler::FramePhase::Custom("admitted work"))
+                .is_some(),
+            "{stats:?}"
+        );
+    }
+
+    /// A phase measured by hand part-way through a frame keeps its place in it.
+    #[test]
+    fn a_hand_measured_phase_keeps_its_offset_in_the_frame() {
+        let profiler = Arc::new(Profiler::new());
+        let subscriber =
+            tracing_subscriber::registry().with(FrameTimingLayer::new(Arc::clone(&profiler)));
+        flui_testing::log_capture::disarm_interest_cache();
+        tracing::dispatcher::with_default(&Dispatch::new(subscriber), || {
+            let _frame = tracing::debug_span!(target: "flui.frame", "frame").entered();
+            std::thread::sleep(std::time::Duration::from_millis(30));
+            drop(profiler.profile_phase(crate::profiler::FramePhase::Custom("late work")));
+        });
+
+        let stats = profiler.frame_stats().expect("a frame was recorded");
+        let late = stats
+            .phase(crate::profiler::FramePhase::Custom("late work"))
+            .expect("the hand-measured phase is kept");
+        assert!(
+            late.start_offset >= std::time::Duration::from_millis(25),
+            "placed after the 30 ms wait, not at the frame start: {late:?}"
+        );
+    }
+
+    /// An application span that merely shares a phase's name
+    /// is not counted.
     ///
     /// Fails when `phase_for` goes back to matching the name alone.
     #[test]

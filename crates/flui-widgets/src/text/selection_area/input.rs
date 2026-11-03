@@ -26,6 +26,7 @@ use flui_rendering::semantics::{DocumentPosition, DocumentSelection};
 use flui_view::BoxedView;
 use flui_view::prelude::*;
 
+use super::handles::play_step;
 use super::{
     HandleSide, SelectableEntry, SelectionChangeCause, SelectionInput, SelectionModel,
     paragraph_beneath,
@@ -223,14 +224,18 @@ impl SelectionModel {
     pub(super) fn handle_drag_started(&self, side: HandleSide, global: Offset<f64>) {
         let grip = self.end_line(side).map(|(middle, _)| middle - global);
         self.handles.grip.set(grip.map(|grip| (side, grip)));
+        self.handles.magnifier_along.set(0.0);
         let mut failure = FirstPanic::new();
         self.hide_toolbar(&mut failure);
+        // The magnifier shows over the end the drag holds.
+        self.handles.refresh_magnifier(&mut failure);
         failure.resume();
     }
 
-    /// `side`'s handle was dragged to `global`: its end moves to the
-    /// position there, the other end stays, and an end never passes the
-    /// other, so the handles keep their sides.
+    /// `side`'s handle was dragged to `global`. Each step of its end plays
+    /// a selection click, and the magnifier stays under the finger; both
+    /// happen though the selection's listener fails, whose first failure is
+    /// resumed after.
     pub(super) fn handle_dragged(&self, side: HandleSide, global: Offset<f64>) {
         let Some((gripped, grip)) = self.handles.grip.get() else {
             return;
@@ -238,15 +243,44 @@ impl SelectionModel {
         if gripped != side {
             return;
         }
+        let held = global + grip;
+        let before = self.selection.borrow().clone();
+        let mut failure = FirstPanic::new();
+        failure.contain(|| self.move_dragged_end(side, held));
+        if *self.selection.borrow() != before {
+            let haptics = self.handles.haptics.borrow().clone();
+            failure.contain(|| play_step(haptics.as_ref()));
+        }
+        failure.contain(|| self.follow_finger(side, held));
+        failure.resume();
+    }
+
+    /// Keeps a drag's magnifier under the finger, which holds `side`'s end
+    /// at `held`: it sits that far along the line from where the end is
+    /// now, so it moves between characters while the end steps over them.
+    fn follow_finger(&self, side: HandleSide, held: Offset<f64>) {
+        let Some((end, _)) = self.end_line(side) else {
+            return;
+        };
+        let along = held.dx - end.dx;
+        if self.handles.magnifier_along.replace(along) != along {
+            let mut failure = FirstPanic::new();
+            self.handles.refresh_magnifier(&mut failure);
+            failure.resume();
+        }
+    }
+
+    /// Moves `side`'s end to the position at `held`; the other end stays,
+    /// and an end never passes the other, so the handles keep their sides.
+    fn move_dragged_end(&self, side: HandleSide, held: Offset<f64>) {
         let ordered = self.ordered();
         let other = match side {
             HandleSide::End => HandleSide::Start,
             _ => HandleSide::End,
         };
-        let (Some(hit), Some((_, fixed))) = (
-            self.position_at(&ordered, global + grip),
-            self.end(&ordered, other),
-        ) else {
+        let (Some(hit), Some((_, fixed))) =
+            (self.position_at(&ordered, held), self.end(&ordered, other))
+        else {
             return;
         };
         let keeps_side = match side {

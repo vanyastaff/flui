@@ -11,7 +11,7 @@
 //! dropped it on the floor, because headlessly there is no compositor to hand it
 //! to. These tests pin that it is kept and reachable.
 
-use crate::common::{lay_out, tight};
+use crate::common::{lay_out, loose, tight};
 use flui_foundation::geometry::Matrix4;
 use flui_painting::styling::Color;
 use flui_widgets::{ColoredBox, SizedBox, Transform};
@@ -166,5 +166,94 @@ pub(crate) fn backdrop_filters_in_one_group_share_a_stable_identity() {
         groups(&laid),
         first,
         "rebuilding keeps the group's identity"
+    );
+}
+
+/// The inverse transform of the one backdrop transform filter in `laid`'s
+/// frame, with the filter's bounds, and the bounds of every clip layer.
+fn magnifier_layers(
+    laid: &crate::common::LaidOut,
+) -> (
+    [f64; 6],
+    flui_foundation::geometry::Rect<f64>,
+    Vec<flui_foundation::geometry::Rect<f64>>,
+) {
+    use flui_painting::paint::ImageFilter;
+    use flui_rendering::layer::Layer;
+
+    let tree = laid.layer_tree().expect("a pumped frame composites a tree");
+    let mut filters = Vec::new();
+    let mut clips = Vec::new();
+    for (_, node) in tree.iter() {
+        match node.layer() {
+            Layer::BackdropFilter(layer) => match layer.filter() {
+                ImageFilter::Transform { transform, .. } => {
+                    filters.push((transform.inverse_coefficients(), layer.bounds()));
+                }
+                other => panic!("a magnifier filters with a transform, not {other:?}"),
+            },
+            layer @ (Layer::ClipRect(_) | Layer::ClipRRect(_) | Layer::ClipPath(_)) => {
+                clips.push(layer.bounds().expect("a clip has bounds"));
+            }
+            _ => {}
+        }
+    }
+    assert_eq!(filters.len(), 1, "one loupe: {filters:?}");
+    let (inverse, bounds) = filters[0];
+    (inverse, bounds, clips)
+}
+
+/// A magnifier shows the point its focal offset names at its centre,
+/// enlarged by its scale, wherever it is drawn; it clips that to its shape.
+pub(crate) fn a_magnifier_shows_its_focal_point_at_its_centre_enlarged() {
+    use flui_foundation::geometry::{EdgeInsets, Offset, Rect, Size};
+    use flui_widgets::{Align, MagnifierScale, MagnifierShape, Padding, RawMagnifier};
+
+    let scene = |shape: MagnifierShape| {
+        Align::new(flui_painting::Alignment::TOP_LEFT).child(
+            Padding::new(EdgeInsets::new(20.0, 0.0, 0.0, 30.0)).child(
+                RawMagnifier::new(
+                    Size::new(80.0, 40.0),
+                    MagnifierScale::try_new(2.0).expect("a valid scale"),
+                )
+                .focal_offset(Offset::new(0.0, -30.0))
+                .shape(shape),
+            ),
+        )
+    };
+
+    let mut laid = lay_out(scene(MagnifierShape::Capsule), loose(200.0));
+    laid.pump();
+    let ([xx, yx, xy, yy, x0, y0], bounds, clips) = magnifier_layers(&laid);
+    let shows = |x: f64, y: f64| (xx * x + xy * y + x0, yx * x + yy * y + y0);
+    assert_eq!(bounds, Rect::from_xywh(30.0, 20.0, 80.0, 40.0));
+    // The centre (70, 40) shows the point 30 above it; 10 to its right
+    // shows 5 to the focal point's right.
+    assert_eq!(shows(70.0, 40.0), (70.0, 10.0));
+    assert_eq!(shows(80.0, 40.0), (75.0, 10.0));
+    assert_eq!(clips, [Rect::from_xywh(30.0, 20.0, 80.0, 40.0)]);
+
+    laid.pump_widget(scene(MagnifierShape::Circle));
+    let (_, _, clips) = magnifier_layers(&laid);
+    assert_eq!(
+        clips,
+        [Rect::from_xywh(50.0, 20.0, 40.0, 40.0)],
+        "a circle is centred and as wide as the shorter side"
+    );
+}
+
+/// A magnifier's scale is finite and above zero.
+pub(crate) fn a_magnifier_scale_is_finite_and_above_zero() {
+    use flui_widgets::MagnifierScale;
+
+    for scale in [0.0, -1.5, f64::NAN, f64::INFINITY] {
+        assert!(
+            MagnifierScale::try_new(scale).is_err(),
+            "{scale} is no scale"
+        );
+    }
+    assert_eq!(
+        MagnifierScale::try_new(1.25).map(MagnifierScale::get),
+        Ok(1.25)
     );
 }

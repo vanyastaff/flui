@@ -644,12 +644,16 @@ pub(crate) fn a_rebuilt_field_refreshes_its_shown_toolbar() {
     assert_eq!(scene.toolbar(), Vec::<String>::new());
 }
 
-/// Commands wider together than the window wrap onto another row of the
-/// toolbar, so every one stays inside the window and takes a tap.
+/// Commands wider together than the window leave the trailing ones behind
+/// "More", which shows them in a column with "Back"; assistive technology
+/// finds exactly the buttons that show, and choosing a hidden command
+/// performs it and takes the toolbar away. A toolbar shown again starts
+/// from its row.
 ///
-/// Red-check: lay the buttons out in one row (the last ones run past the
-/// window's right edge).
-pub(crate) fn a_toolbar_wider_than_the_window_wraps() {
+/// Red-check: lay every button out (the last ones run past the window's
+/// right edge); show the row's buttons under the column (Cut is still
+/// announced).
+pub(crate) fn a_toolbar_wider_than_the_window_moves_its_last_commands_behind_more() {
     let mut scene = Scene::with(
         |field| {
             field
@@ -658,22 +662,64 @@ pub(crate) fn a_toolbar_wider_than_the_window_wraps() {
         },
         Some(|controls| controls.command(GestureCommand::new("Shout across the room", Shout))),
     );
-    scene.long_press(scene.along(width_of("alpha be")));
-    let labels = scene.toolbar();
-    assert_eq!(labels.len(), 6);
-    let tree = scene.tree();
-    for label in &labels {
-        let node = tree
-            .find_by_role_and_label(Role::Button, label)
-            .expect("the toolbar shows the button");
-        let bounds = tree.window_bounds(&node).expect("the button has bounds");
-        assert!(
-            bounds.x0 >= 0.0 && bounds.x1 <= 400.0,
-            "{label} is inside the window: {bounds:?}"
-        );
-    }
+    let word = scene.along(width_of("alpha be"));
+    scene.long_press(word);
+    let row = scene.toolbar();
+    assert_eq!(row.first().map(String::as_str), Some("Cut"));
+    assert_eq!(row.last().map(String::as_str), Some("More"));
+    assert!(
+        !row.iter().any(|label| label == "Whisper to the far corner"),
+        "the last command is behind More: {row:?}"
+    );
+    let inside = |scene: &Scene| {
+        let tree = scene.tree();
+        for label in scene.toolbar() {
+            let node = tree
+                .find_by_role_and_label(Role::Button, &label)
+                .expect("the toolbar shows the button");
+            let bounds = tree.window_bounds(&node).expect("the button has bounds");
+            assert!(
+                bounds.x0 >= 0.0 && bounds.x1 <= 400.0 && bounds.y0 >= 0.0,
+                "{label} is inside the window: {bounds:?}"
+            );
+        }
+    };
+    inside(&scene);
+
+    scene.tap(scene.center_of(Role::Button, "More"));
+    let column = scene.toolbar();
+    assert!(
+        scene.center_of(Role::Button, "Back").dy
+            < scene
+                .center_of(Role::Button, "Whisper to the far corner")
+                .dy,
+        "Back heads the column: {column:?}"
+    );
+    assert!(
+        column.contains(&"Whisper to the far corner".to_owned())
+            && !column.contains(&"Cut".to_owned()),
+        "the column holds what the row left over: {column:?}"
+    );
+    assert_eq!(
+        column.len() + row.len(),
+        8,
+        "every command shows in one of them, beside More and Back"
+    );
+    inside(&scene);
+
+    scene.tap(scene.center_of(Role::Button, "Back"));
+    assert_eq!(scene.toolbar(), row);
+    scene.tap(scene.center_of(Role::Button, "More"));
     scene.tap(scene.center_of(Role::Button, "Whisper to the far corner"));
     assert_eq!(*scene.log.borrow(), ["whisper"]);
+    assert_eq!(scene.toolbar(), Vec::<String>::new());
+
+    scene.long_press(word);
+    assert_eq!(
+        scene.toolbar(),
+        row,
+        "a toolbar shown again starts from its row"
+    );
 }
 
 /// A field reading right to left lays its toolbar out from the right,

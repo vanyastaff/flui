@@ -873,13 +873,7 @@ impl LayerStateStack for LayerDispatcher<'_> {
         if let Err(error) = validate_image_filter_parameters(filter) {
             self.painter.reject_image_filter_parameter(error);
         }
-        // A transform filter is drawn only over a backdrop: on a layer's own
-        // content the frame fails rather than drawing it untransformed.
-        if transforms_content(filter) {
-            self.painter.reject_unsupported_image_filter(
-                "a transform image filter is supported only as a backdrop filter",
-            );
-        }
+        let matrix = self.painter.current_transform_matrix().m;
 
         match filter {
             ImageFilter::Blur { sigma_x, sigma_y } => {
@@ -944,7 +938,10 @@ impl LayerStateStack for LayerDispatcher<'_> {
                 // which emits a single `DrawItem::Filter` with `cumulative_growth`
                 // bounds and the full ordered chain.
                 let mut passes: SmallVec<[ImageFilterPass; 4]> = SmallVec::new();
-                flatten_compose(filters, &mut passes);
+                if let Err(error) = flatten_compose(filters, &matrix, &mut passes) {
+                    self.painter.reject_image_filter(error);
+                    passes.clear();
+                }
 
                 if passes.is_empty() {
                     // Degenerate empty Compose — no filter math to apply.  Open a
@@ -964,11 +961,21 @@ impl LayerStateStack for LayerDispatcher<'_> {
                     );
                 }
             }
-            ImageFilter::Transform { .. } => {
-                // Rejected above; a plain group keeps save/restore balanced.
-                let paint = Paint::fill(Color::WHITE);
-                self.painter.save_layer(None, &paint);
-            }
+            ImageFilter::Transform {
+                transform,
+                sampling,
+            } => match transform_pass(transform, *sampling, &matrix) {
+                Ok(pass) => self
+                    .painter
+                    .save_layer_with_image_filter(ImageFilterSpec::Chain(smallvec::smallvec![
+                        pass
+                    ])),
+                Err(error) => {
+                    // The frame fails; a plain group keeps save/restore balanced.
+                    self.painter.reject_image_filter(error);
+                    self.painter.save_layer(None, &Paint::fill(Color::WHITE));
+                }
+            },
             #[cfg(debug_assertions)]
             ImageFilter::OverflowIndicator {
                 overflow_h,
@@ -1018,8 +1025,9 @@ impl LayerStateStack for LayerDispatcher<'_> {
 /// a compile error here, ensuring the flatten stays up-to-date.
 pub(crate) fn flatten_compose(
     filters: &[flui_painting::paint::effects::ImageFilter],
+    matrix: &[f64; 16],
     out: &mut SmallVec<[ImageFilterPass; 4]>,
-) {
+) -> Result<(), crate::command_ir::RecordError> {
     use flui_painting::paint::effects::ImageFilter;
     for filter in filters {
         match filter {
@@ -1051,13 +1059,12 @@ pub(crate) fn flatten_compose(
             }
             ImageFilter::Compose(inner_filters) => {
                 // Depth-first recursion: inner_filters[0] is innermost at this level.
-                flatten_compose(inner_filters, out);
+                flatten_compose(inner_filters, matrix, out)?;
             }
-            ImageFilter::Transform { .. } => {
-                // `push_image_filter` already failed the frame for it; the
-                // Identity keeps the chain's indices.
-                out.push(ImageFilterPass::Identity);
-            }
+            ImageFilter::Transform {
+                transform,
+                sampling,
+            } => out.push(transform_pass(transform, *sampling, matrix)?),
             #[cfg(debug_assertions)]
             ImageFilter::OverflowIndicator {
                 overflow_h,
@@ -1076,18 +1083,23 @@ pub(crate) fn flatten_compose(
             }
         }
     }
+    Ok(())
 }
 
-/// Whether `filter`, or a filter it composes, transforms its source.
-fn transforms_content(filter: &flui_painting::paint::effects::ImageFilter) -> bool {
-    use flui_painting::paint::effects::ImageFilter;
-    match filter {
-        ImageFilter::Transform { .. } => true,
-        ImageFilter::Compose(filters) => filters.iter().any(transforms_content),
-        _ => false,
-    }
+/// The pass a transform filter lowers to under the 4x4 column-major
+/// `matrix` that maps its layer to root device pixels.
+fn transform_pass(
+    transform: &flui_painting::paint::ImageTransform,
+    sampling: flui_painting::paint::ImageSampling,
+    matrix: &[f64; 16],
+) -> Result<ImageFilterPass, crate::command_ir::RecordError> {
+    use crate::command_ir::RecordError;
+    let filter = crate::resample::ResampleFilter::of(sampling).ok_or(RecordError::ImageFilter(
+        "a transform image filter has no lowering for this sampling",
+    ))?;
+    let map = crate::resample::device_map(transform, matrix).map_err(RecordError::Geometry)?;
+    Ok(ImageFilterPass::Resample { map, filter })
 }
-
 /// Reject nonfinite and lossy-to-zero parameters before narrowing to GPU values.
 fn validate_image_filter_parameters(
     filter: &flui_painting::paint::effects::ImageFilter,

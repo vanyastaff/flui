@@ -19,7 +19,8 @@ devtools cost by not depending on this crate, not by a feature flag here.
 ## Profiling a running app
 
 The framework emits a `frame` span from `UpdateScheduler::drive_frame` and
-`build`, `layout`, `paint`, `compositing` spans from the pipeline. The
+`build`, `layout`, `paint`, `compositing`, `semantics`, `commit` and `submit` spans from the
+pipeline and the runtime. The
 `profiling` feature also enables animation instrumentation through the SDK:
 registry walks, source sampling and listener/future delivery become
 `Animation tick`, `Animation sampling` and `Animation listeners` phases.
@@ -54,6 +55,15 @@ blended into the owning frame. CPU spans do not measure GPU execution.
 Scheduler frames are recognized by their producer target as well as their name.
 Animation phases and frames end at their outermost span exit; retaining a span
 clone in application code cannot extend their timing into another frame.
+
+All of this reads one `Capture`. `FrameTimingLayer::new` makes a private one;
+`FrameTimingLayer::over(&capture, profiler)` shares it, and `Timeline::over(&capture)` is a view
+over the same spans. A frame belongs to the runtime that drove it (the `runtime` field of its
+`frame` span) and a span inside it to the presentation whose segment it ran in, so two runtimes
+rendering under one subscriber are two `Partition`s of the capture. A `Profiler` has one stream
+of frames: it follows the first runtime that names itself (or the one `over_runtime` names), and the capture keeps the others.
+Which spans are phases is `Phase::of`, the one `(target, name)` table, so an application span
+named `paint` is not one.
 
 Transition events can be logged separately with `animation-diagnostics` on
 `flui` or `flui-sdk`, or `diagnostics` on `flui-animation`, and a DEBUG filter
@@ -94,6 +104,10 @@ let timeline = Timeline::new();
 }
 std::fs::write("trace.json", timeline.export_chrome_trace())?;
 ```
+
+`export_chrome_trace` writes one complete (`X`) event per span, a process per runtime, a thread
+per thread, and, for a timeline over a capture, `frame_ms` and `jank` counters; it opens in
+`ui.perfetto.dev` and `chrome://tracing`.
 
 `Timeline::record_frame_snapshots` converts `flui_sdk::hooks::FrameSnapshot`s
 into `Frame` events in the same trace, so a presentation's frame history and

@@ -13,7 +13,7 @@ use flui_interaction::{
     PrimarySelectionBackend, PrimarySelectionCapability, PrimarySelectionHandle, SelectionText,
 };
 use flui_native::{NativeClipboard, NativePrimarySelection};
-use flui_platform::executor::{ComputeJob, Executor, IoFuture, SpawnError};
+use flui_platform::executor::{ComputeJob, Executor, IoFuture, Lane, RoomFuture, SpawnError};
 use flui_platform::{
     ClipboardRead, ClipboardWrite, Concealment, Storage, Unsupported, UnsupportedReason,
     capability::{
@@ -511,5 +511,12 @@ impl Executor for LoopExecutor {
             .upgrade()
             .ok_or(SpawnError::ShuttingDown)?
             .spawn_io(future)
+    }
+
+    fn room(&self, lane: Lane) -> RoomFuture {
+        match self.0.upgrade() {
+            Some(services) => services.room(lane),
+            None => RoomFuture::ready(Err(SpawnError::ShuttingDown)),
+        }
     }
 }
