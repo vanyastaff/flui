@@ -25,10 +25,11 @@ crate-type = ["rlib"]
 [features]
 default = ["desktop", "http"]
 
-# The built-in HTTP capability (ADR-0280): `reqwest` on the run's IO lane.
+# The built-in HTTP capability (ADR-0280): each host's own stack, `ureq` on
+# Linux and the BSDs, which have none (`flui-native`'s `http` feature).
 # Without it a widget acquiring `HttpCapability` is refused as not
 # registered, and the application links no TLS stack.
-http = ["dep:reqwest", "dep:rustls"]
+http = ["flui-native/http"]
 
 # Accepted and ignored: `UiCommand::SignalWrite` is always compiled (ADR-0085 §5).
 # It stays only because CI's `test-features` job still passes
@@ -141,16 +142,6 @@ interprocess = { workspace = true }
 # it as a wide string).
 [target.'cfg(windows)'.dependencies]
 widestring = { workspace = true }
-
-# The built-in HTTP client (`http` feature, ADR-0280), driven on the run's IO
-# lane on Linux. The web, Android, Windows, macOS and iOS send through the
-# system's own stack (`flui-native::http`).
-[target.'cfg(not(any(target_arch = "wasm32", target_os = "android", target_os = "windows", target_os = "macos", target_os = "ios")))'.dependencies]
-reqwest = { workspace = true, optional = true }
-# Names a failed TLS handshake in reqwest's error chain (`HttpError::Tls`).
-rustls = { workspace = true, optional = true }
-# "time": the lane keeps a request's deadline while its reader holds the body.
-tokio = { workspace = true, features = ["sync", "time"] }
 
 # Web/WASM platform (runner spawns the frame loop via spawn_local)
 [target.'cfg(target_arch = "wasm32")'.dependencies]

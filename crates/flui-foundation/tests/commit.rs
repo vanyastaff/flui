@@ -112,6 +112,29 @@ fn the_first_failure_propagates_after_every_item_ran() {
     assert!(cell.try_borrow_mut().is_ok(), "the cell is free again");
 }
 
+/// A call that panics keeps its captures until its panic is caught; they are
+/// destroyed after it, contained, so a capture whose destructor panics too
+/// does not abort, and the call's panic is the one resumed.
+fn a_failing_calls_captures_are_destroyed_after_it() {
+    let cell = RefCell::new(());
+    let drops = Rc::new(Cell::new(0));
+    let capture = Destroyed {
+        drops: Rc::clone(&drops),
+        fails: Some("capture failed"),
+    };
+    let failure = catch_unwind(AssertUnwindSafe(|| {
+        commit(&cell, move |(), out| {
+            out.call(move || {
+                let _ = &capture;
+                panic!("call failed");
+            });
+        });
+    }))
+    .expect_err("the call's panic propagates");
+    assert_eq!(caught_text(&*failure).as_deref(), Some("call failed"));
+    assert_eq!(drops.get(), 1, "the capture was destroyed");
+}
+
 /// Commits from `Drop` while the thread unwinds; its queued call panics.
 struct CommitsWhileUnwinding {
     ran: Rc<Cell<usize>>,
@@ -318,6 +341,10 @@ fn commit_then_call_contract() {
         (
             "first failure after every item",
             the_first_failure_propagates_after_every_item_ran,
+        ),
+        (
+            "a failing call's captures",
+            a_failing_calls_captures_are_destroyed_after_it,
         ),
         (
             "queued failure during an unwind",
