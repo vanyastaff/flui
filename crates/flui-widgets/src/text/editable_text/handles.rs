@@ -28,7 +28,11 @@ use flui_rendering::pipeline::{LeaderWatch, PipelineCell};
 use flui_view::prelude::*;
 use flui_view::{BoxedView, View, ViewExt};
 
-use super::{CompositionCommit, source_offset_at_global, source_word_range_at_global};
+use super::{
+    CompositionCommit, EditableText, source_offset_at_global, source_word_range_at_global,
+};
+#[cfg(doc)]
+use crate::DefaultSelectionControls;
 use crate::interaction::GesturePolicy;
 use crate::interaction::actions::ActionChain;
 use crate::interaction::recognizer_attachment::RecognizerAttachment;
@@ -38,10 +42,10 @@ use crate::text::controller::TextEditingController;
 use crate::text::selection_area::handles::{LinkFollower, Look, play_step};
 use crate::text::text_store::with_editable_global;
 use crate::text::{
-    MagnifierInfo, MenuHost, MenuSettings, PopupOrigin, SelectionMagnifier, ToolbarAnchors,
-    editing_commands,
+    MagnifierChoice, MagnifierInfo, MenuHost, MenuSettings, PopupOrigin, SelectionMagnifier,
+    ToolbarAnchors, editing_commands,
 };
-use crate::{HandleInfo, HandleSide, Positioned, Stack};
+use crate::{HandleInfo, HandleSide, Positioned, SelectionHandles, Stack};
 
 /// Whether a tap in an editable text shows a handle under its caret, which
 /// a drag moves, and how long it stays without a touch.
@@ -132,6 +136,45 @@ pub(super) enum Shown {
     Caret,
     /// One under each end of the selection.
     Selection,
+}
+
+impl EditableText {
+    /// A touch selection (a long press, which the same touch extends by
+    /// words, a double tap or a drag) shows a handle under each end, and a
+    /// tap one under the caret as [`Self::caret_handle`] says; dragging a
+    /// handle moves its end. They show in the nearest
+    /// [`Overlay`](crate::Overlay), and none without one.
+    #[must_use]
+    pub fn handles(mut self, handles: impl SelectionHandles) -> Self {
+        self.handles = Some(Rc::new(handles));
+        self
+    }
+
+    /// Show `magnifier` while a finger drags a handle, in place of the
+    /// nearest [`DefaultSelectionControls`]' or the platform's
+    /// ([`PlainMagnifier::for_platform`](crate::text::PlainMagnifier::for_platform)).
+    #[must_use]
+    pub fn magnifier(mut self, magnifier: impl SelectionMagnifier) -> Self {
+        self.magnifier = Some(MagnifierChoice::Show(Rc::new(magnifier)));
+        self
+    }
+
+    /// Show no magnifier while a finger drags a handle, though a
+    /// [`DefaultSelectionControls`] above or the platform gives one.
+    #[must_use]
+    pub fn no_magnifier(mut self) -> Self {
+        self.magnifier = Some(MagnifierChoice::Hide);
+        self
+    }
+
+    /// Whether a tap shows a handle under the caret, in place of the
+    /// nearest [`DefaultSelectionControls`]' choice or the platform's
+    /// ([`CaretHandle::default`]).
+    #[must_use]
+    pub fn caret_handle(mut self, caret_handle: CaretHandle) -> Self {
+        self.caret_handle = Some(caret_handle);
+        self
+    }
 }
 
 /// What a field's handles reach in the field: its render object, its
