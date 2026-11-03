@@ -114,10 +114,9 @@ impl PipelineOwner<Layout> {
             match pass {
                 Ok(Ok(())) => self.scheduler.recycle_layout_batch(dirty_nodes),
                 Ok(Err(stop)) => {
-                    if let Some(wait_for_input) = stop.retain {
-                        self.scheduler
-                            .retain_layout_batch(&dirty_nodes[next..], wait_for_input);
-                    }
+                    // `resume_at` is `next` or the entry after it: in bounds.
+                    self.scheduler
+                        .retain_layout_batch(&dirty_nodes[stop.resume_at..], stop.wait_for_input);
                     self.scheduler.recycle_layout_batch(dirty_nodes);
                     return Err(stop.error);
                 }
@@ -288,7 +287,8 @@ impl PipelineOwner<Layout> {
                         );
                         return Err(BatchStop {
                             error: e,
-                            retain: Some(wait_for_input),
+                            resume_at: index,
+                            wait_for_input,
                         });
                     }
                     let kind = LayoutFailureKind::of(&e);
@@ -323,8 +323,15 @@ impl PipelineOwner<Layout> {
                         // run_layout passes skip the node via the
                         // backstop above, so the Err is a one-frame
                         // signal rather than a perpetual frame drop.
+                        //
+                        // The rest of the batch goes back to the queue
+                        // either way: the failed frame's retry lays out the
+                        // healthy roots after this one. A root with budget
+                        // left goes back with them and is attempted again; a
+                        // poisoned one does not.
                         first @ (Some(true) | None) => {
-                            if first.is_some() {
+                            let poisoned = first.is_some();
+                            if poisoned {
                                 if let Some(node) = self.render_tree.get(dirty_node.id) {
                                     node.clear_needs_layout();
                                 }
@@ -341,7 +348,8 @@ impl PipelineOwner<Layout> {
                             }
                             return Err(BatchStop {
                                 error: e,
-                                retain: None,
+                                resume_at: if poisoned { index + 1 } else { index },
+                                wait_for_input: false,
                             });
                         }
                     }
@@ -770,13 +778,23 @@ impl PipelineOwner<Layout> {
     }
 }
 
-/// Why a layout batch stopped before its last entry.
+/// Why a layout batch stopped before its last entry, and where the rest of it
+/// resumes.
+///
+/// A stop always hands the unfinished entries back to the queue: there is no
+/// stop that ends the batch. An entry left out would keep `NEEDS_LAYOUT` with
+/// nothing queued to clear it, so neither the retry the runtime arms after a
+/// failed frame nor a later frame would lay it out until an unrelated mark
+/// walked over it.
 struct BatchStop {
     error: crate::error::RenderError,
-    /// `Some(wait_for_input)` puts the unfinished entries back in the
-    /// queue, waiting for changed input (an authored rejection) or runnable
-    /// as they are; `None` ends the batch with the error.
-    retain: Option<bool>,
+    /// Index of the first entry put back. It is the failed root itself while
+    /// that root is to be attempted again, and the entry after it once the
+    /// failure poisoned it (the poison skip would only discard it).
+    resume_at: usize,
+    /// Whether the entries put back wait for changed input (an authored
+    /// rejection) or are runnable as they are.
+    wait_for_input: bool,
 }
 
 /// Reports a node's layout poison to the `tracing` subscriber: an error on
