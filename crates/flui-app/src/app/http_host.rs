@@ -1,51 +1,29 @@
 //! The built-in HTTP capability (ADR-0280).
 //!
-//! On Linux a request is sent from the run's IO lane, whose default pool runs
-//! inside a Tokio runtime, so `reqwest` drives it there and its connections
-//! stay in one pool per run. Elsewhere the host's own stack sends it: the
-//! page's `fetch` on the web, `HttpURLConnection` on Android, WinHTTP on
-//! Windows and `NSURLSession` on macOS and iOS. There the exchange holds a
-//! slot of the IO lane until it ends, so a full or stopping lane refuses it as
-//! it refuses a `reqwest` request. Either way the caller's future only waits
-//! on a channel: it needs no runtime of its own. Dropping it, or the
-//! response's body, abandons the exchange.
-//!
-//! Where FLUI has no client yet (a Linux host on its embedder's executors,
-//! where `reqwest` would find no Tokio drivers) a request answers
-//! [`HttpError::NotYetOnThisHost`]: a gap of FLUI's, reported as such and
-//! never skipped.
-//!
-//! [`HttpError::NotYetOnThisHost`]: flui_platform::http::HttpError::NotYetOnThisHost
+//! Every host sends through a stack of its own: the page's `fetch` on the
+//! web, the system's `HttpURLConnection` on Android, WinHTTP on Windows,
+//! `NSURLSession` on macOS and iOS, and `ureq` on Linux and the BSDs, which
+//! have no system stack. Each exchange holds a slot of the run's IO lane until
+//! it ends, so a full or stopping lane refuses it as it refuses any work, and
+//! a lane that shuts down under an exchange ends it. The caller's future only
+//! waits on a channel: it needs no runtime of its own, and an embedder's
+//! executors send as the host's own lanes do. Dropping it, or the response's
+//! body, abandons the exchange.
 
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 
 use flui_platform::Unsupported;
 use flui_platform::capability::{CapabilityProvider, ProviderContext};
 use flui_platform::http::{Http, HttpCapability};
+use flui_runtime::execution::ExecutionServices;
 
 use super::capability::ExecutionSlot;
 
 /// The built-in HTTP provider over the run's lanes.
 pub(crate) struct HostHttp {
     slot: ExecutionSlot,
-    /// One connection pool per run, built on the first request.
-    #[cfg(not(any(
-        target_os = "android",
-        target_os = "windows",
-        target_os = "macos",
-        target_os = "ios",
-        target_arch = "wasm32"
-    )))]
-    client: Arc<std::sync::OnceLock<Result<reqwest::Client, String>>>,
     /// The host's own stack, one authority per run: the page's `fetch`,
-    /// Android's `HttpURLConnection`, WinHTTP or `NSURLSession`.
-    #[cfg(any(
-        target_os = "android",
-        target_os = "windows",
-        target_os = "macos",
-        target_os = "ios",
-        target_arch = "wasm32"
-    ))]
+    /// Android's `HttpURLConnection`, WinHTTP, `NSURLSession` or `ureq`.
     system: Http,
 }
 
@@ -53,14 +31,6 @@ impl HostHttp {
     pub(crate) fn new(slot: ExecutionSlot) -> Self {
         Self {
             slot,
-            #[cfg(not(any(
-                target_os = "android",
-                target_os = "windows",
-                target_os = "macos",
-                target_os = "ios",
-                target_arch = "wasm32"
-            )))]
-            client: Arc::default(),
             #[cfg(target_arch = "wasm32")]
             system: Http::new(Arc::new(flui_native::http::FetchClient::new())),
             #[cfg(target_os = "android")]
@@ -69,7 +39,20 @@ impl HostHttp {
             system: Http::new(Arc::new(flui_native::http::WinHttpClient::new())),
             #[cfg(any(target_os = "macos", target_os = "ios"))]
             system: Http::new(Arc::new(flui_native::http::UrlSessionClient::new())),
+            #[cfg(not(any(
+                target_arch = "wasm32",
+                target_os = "android",
+                target_os = "windows",
+                target_os = "macos",
+                target_os = "ios"
+            )))]
+            system: Http::new(Arc::new(flui_native::http::UreqClient::new())),
         }
+    }
+
+    /// The client this provider hands out over `services`.
+    fn http(&self, services: Weak<ExecutionServices>) -> Http {
+        Http::new(Arc::new(held::LaneHeld::new(services, self.system.clone())))
     }
 }
 
@@ -79,43 +62,16 @@ impl CapabilityProvider<HttpCapability> for HostHttp {
             // Before the host installs a UI runtime it has no lanes.
             Unsupported::of::<HttpCapability>(flui_platform::UnsupportedReason::Unavailable)
         })?;
-        #[cfg(any(
-            target_os = "android",
-            target_os = "windows",
-            target_os = "macos",
-            target_os = "ios",
-            target_arch = "wasm32"
-        ))]
-        return Ok(Http::new(Arc::new(held::LaneHeld::new(
-            services,
-            self.system.clone(),
-        ))));
-        #[cfg(not(any(
-            target_os = "android",
-            target_os = "windows",
-            target_os = "macos",
-            target_os = "ios",
-            target_arch = "wasm32"
-        )))]
-        Ok(Http::new(Arc::new(lanes::LaneHttp::new(
-            services,
-            Arc::clone(&self.client),
-        ))))
+        Ok(self.http(services))
     }
 }
 
 /// A client whose exchanges each hold a slot of the run's IO lane: the host's
 /// own stack (the page's `fetch`, Android's `HttpURLConnection`, WinHTTP,
-/// `NSURLSession`) runs off the lane, and is admitted by it all the same.
-#[cfg(any(
-    target_arch = "wasm32",
-    target_os = "android",
-    target_os = "windows",
-    target_os = "macos",
-    target_os = "ios",
-    test
-))]
+/// `NSURLSession`, `ureq`) runs off the lane, and is admitted by it all the
+/// same.
 mod held {
+    use std::future::poll_fn;
     use std::pin::Pin;
     use std::sync::Weak;
     use std::task::{Context, Poll};
@@ -151,20 +107,29 @@ mod held {
                 return refused(SpawnError::ShuttingDown);
             };
             // The slot is the lane's task that waits for the exchange to let
-            // go of `release`; the lane's admission refuses it as any work.
+            // go of `release`; the lane's admission refuses it as any work,
+            // and a lane that shuts down drops it, which ends the exchange.
             let (release, released) = oneshot::channel::<()>();
             if let Err(reason) = services.spawn_io(Box::pin(async move {
                 let _ = released.await;
             })) {
                 return refused(reason);
             }
-            let head = self.client.send(request);
+            let mut head = self.client.send(request);
             Box::pin(async move {
-                let response = head.await?;
+                let mut release = release;
+                let response = poll_fn(|cx| {
+                    if release.poll_closed(cx).is_ready() {
+                        // Dropping `head` abandons the request.
+                        return Poll::Ready(Err(HttpError::Cancelled));
+                    }
+                    head.as_mut().poll(cx)
+                })
+                .await?;
                 let status = response.status();
                 let headers = response.headers().clone();
                 let body = Held {
-                    body: response.into_body(),
+                    body: Some(response.into_body()),
                     release: Some(release),
                 };
                 // The inner body keeps the request's limit.
@@ -183,7 +148,9 @@ mod held {
 
     /// A body that holds its exchange's IO slot until it ends.
     struct Held {
-        body: ResponseBody,
+        /// `None` once the lane shut down under it: dropping it abandoned the
+        /// exchange.
+        body: Option<ResponseBody>,
         /// Dropped at the body's end or failure, or with the body.
         release: Option<oneshot::Sender<()>>,
     }
@@ -193,7 +160,17 @@ mod held {
             mut self: Pin<&mut Self>,
             cx: &mut Context<'_>,
         ) -> Poll<Option<Result<Vec<u8>, HttpError>>> {
-            let chunk = std::task::ready!(self.body.poll_chunk(cx));
+            if let Some(release) = self.release.as_mut()
+                && release.poll_closed(cx).is_ready()
+            {
+                self.release = None;
+                self.body = None;
+                return Poll::Ready(Some(Err(HttpError::Cancelled)));
+            }
+            let Some(body) = self.body.as_mut() else {
+                return Poll::Ready(None);
+            };
+            let chunk = std::task::ready!(body.poll_chunk(cx));
             if !matches!(chunk, Some(Ok(_))) {
                 self.release = None;
             }
@@ -202,339 +179,15 @@ mod held {
     }
 }
 
-#[cfg(not(any(
-    target_os = "android",
-    target_os = "windows",
-    target_os = "macos",
-    target_os = "ios",
-    target_arch = "wasm32"
-)))]
-mod lanes {
-    use std::future::{Future, poll_fn};
-    use std::pin::{Pin, pin};
-    use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::{Arc, OnceLock, Weak};
-    use std::task::{Context, Poll};
-    use std::time::Duration;
-
-    use flui_platform::executor::SpawnError;
-    use flui_platform::http::{
-        BodySource, HeaderName, HeaderValue, Headers, HttpAuthority, HttpClient, HttpError,
-        HttpFuture, HttpHost, HttpRequest, HttpResponse, Method, ResponseBody, StatusCode,
-    };
-    use flui_runtime::execution::ExecutionServices;
-    use tokio::sync::{mpsc, oneshot};
-
-    /// How long the client waits for a connection.
-    const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
-
-    /// How long the client waits for the next bytes of a response.
-    const READ_TIMEOUT: Duration = Duration::from_secs(30);
-
-    /// Body chunks a response holds unread before the lane waits for the
-    /// reader.
-    const BODY_CHUNKS_IN_FLIGHT: usize = 4;
-
-    /// The run's pool, built once.
-    type ClientCell = Arc<OnceLock<Result<reqwest::Client, String>>>;
-
-    /// Sends requests from the run's IO lane.
-    pub(super) struct LaneHttp {
-        services: Weak<ExecutionServices>,
-        client: ClientCell,
-    }
-
-    impl LaneHttp {
-        pub(super) fn new(services: Weak<ExecutionServices>, client: ClientCell) -> Self {
-            Self { services, client }
-        }
-    }
-
-    impl HttpClient for LaneHttp {
-        // The run's pool answers: every handle the provider hands out shares it.
-        fn authority(&self) -> HttpAuthority {
-            HttpAuthority::of(&self.client)
-        }
-
-        fn send(&self, request: HttpRequest) -> HttpFuture<HttpResponse> {
-            let Some(services) = self.services.upgrade() else {
-                return refused(SpawnError::ShuttingDown);
-            };
-            // `reqwest` runs on Tokio's IO and timer drivers, which FLUI's
-            // own IO lane enables; an embedder's executor may run no Tokio,
-            // or one without them, and `reqwest` would panic there.
-            if !services.owns_default_pools() {
-                return Box::pin(std::future::ready(Err(HttpError::NotYetOnThisHost {
-                    host: HttpHost::EmbedderExecutors,
-                })));
-            }
-            let (head_tx, head_rx) = oneshot::channel();
-            let exchange = exchange(Arc::clone(&self.client), request, head_tx);
-            if let Err(reason) = services.spawn_io(Box::pin(exchange)) {
-                return refused(reason);
-            }
-            // A sender dropped unanswered is a lane that shut down under it.
-            Box::pin(async move { head_rx.await.unwrap_or(Err(HttpError::Cancelled)) })
-        }
-    }
-
-    fn refused(reason: SpawnError) -> HttpFuture<HttpResponse> {
-        Box::pin(std::future::ready(Err(HttpError::Refused(reason))))
-    }
-
-    /// Sends `request` and answers its head on `head_tx`, then streams its
-    /// body to the reader; stops as soon as nobody waits.
-    async fn exchange(
-        client: ClientCell,
-        request: HttpRequest,
-        mut head_tx: oneshot::Sender<Result<HttpResponse, HttpError>>,
-    ) {
-        let limit = request.body_limit();
-        // `None` past what the clock can name: no deadline to keep.
-        let deadline = std::time::Instant::now().checked_add(request.deadline());
-        let send = match build(&client, request) {
-            Ok(send) => send,
-            Err(error) => {
-                let _ = head_tx.send(Err(error));
-                return;
-            }
-        };
-        let Some(sent) = unless_closed(send, poll_fn(|cx| head_tx.poll_closed(cx))).await else {
-            return;
-        };
-        let mut response = match sent {
-            Ok(response) => response,
-            Err(error) => {
-                let _ = head_tx.send(Err(transport(&error)));
-                return;
-            }
-        };
-        if response
-            .content_length()
-            .is_some_and(|length| length > limit)
-        {
-            let _ = head_tx.send(Err(HttpError::TooLarge { limit }));
-            return;
-        }
-        let head = match head(&response) {
-            Ok(head) => head,
-            Err(error) => {
-                let _ = head_tx.send(Err(error));
-                return;
-            }
-        };
-        let (body_tx, body_rx) = mpsc::channel(BODY_CHUNKS_IN_FLIGHT);
-        let timed_out = Arc::new(AtomicBool::new(false));
-        let (status, headers) = head;
-        let chunks = Chunks {
-            receiver: body_rx,
-            ended: false,
-            timed_out: Arc::clone(&timed_out),
-        };
-        let answered = HttpResponse::new(status, headers, ResponseBody::new(chunks, limit));
-        if head_tx.send(Ok(answered)).is_err() {
-            return;
-        }
-        loop {
-            let next = unless_closed(response.chunk(), body_tx.closed()).await;
-            let chunk = match next {
-                None => return,
-                Some(Ok(None)) => Chunk::End,
-                Some(Ok(Some(bytes))) => Chunk::Bytes(bytes.to_vec()),
-                Some(Err(error)) => Chunk::Failed(transport(&error)),
-            };
-            let last = !matches!(chunk, Chunk::Bytes(_));
-            // A reader that stops reading leaves the response unpolled, so
-            // its own deadline would never fire: the wait for room in the
-            // channel keeps the request's deadline instead.
-            let forwarded = match deadline {
-                Some(at) => tokio::time::timeout_at(at.into(), body_tx.send(chunk)).await,
-                None => Ok(body_tx.send(chunk).await),
-            };
-            match forwarded {
-                Ok(Ok(())) if !last => {}
-                Ok(_) => return,
-                Err(_elapsed) => {
-                    timed_out.store(true, Ordering::Release);
-                    return;
-                }
-            }
-        }
-    }
-
-    /// `work`'s output, or `None` once `closed` resolves first: the reader
-    /// left.
-    async fn unless_closed<T>(
-        work: impl Future<Output = T>,
-        closed: impl Future<Output = ()>,
-    ) -> Option<T> {
-        let mut work = pin!(work);
-        let mut closed = pin!(closed);
-        poll_fn(|cx| {
-            if closed.as_mut().poll(cx).is_ready() {
-                return Poll::Ready(None);
-            }
-            work.as_mut().poll(cx).map(Some)
-        })
-        .await
-    }
-
-    /// The `reqwest` request for `request`, on the run's pool.
-    fn build(
-        client: &ClientCell,
-        request: HttpRequest,
-    ) -> Result<impl Future<Output = reqwest::Result<reqwest::Response>>, HttpError> {
-        let client = client
-            .get_or_init(|| {
-                reqwest::Client::builder()
-                    .connect_timeout(CONNECT_TIMEOUT)
-                    .read_timeout(READ_TIMEOUT)
-                    .build()
-                    .map_err(|error| error.to_string())
-            })
-            .as_ref()
-            .map_err(|detail| HttpError::Tls {
-                detail: detail.clone(),
-            })?;
-        let invalid = || HttpError::InvalidUrl {
-            url: request.url().to_owned(),
-        };
-        let url = reqwest::Url::parse(request.url()).map_err(|_| invalid())?;
-        if !matches!(url.scheme(), "http" | "https") {
-            return Err(invalid());
-        }
-        let mut builder = client
-            .request(method(request.method()), url)
-            .timeout(request.deadline());
-        for (name, value) in request.headers().iter() {
-            builder = builder.header(name.as_str(), value.as_bytes());
-        }
-        if !request.body().is_empty() {
-            builder = builder.body(request.body().to_vec());
-        }
-        Ok(builder.send())
-    }
-
-    fn method(method: Method) -> reqwest::Method {
-        reqwest::Method::from_bytes(method.as_str().as_bytes())
-            .expect("BUG: every Method's name is a token")
-    }
-
-    /// The status and headers of `response`.
-    fn head(response: &reqwest::Response) -> Result<(StatusCode, Headers), HttpError> {
-        let status = StatusCode::try_new(response.status().as_u16())?;
-        let mut headers = Headers::new();
-        for (name, value) in response.headers() {
-            // `http` validated both already, to the same rules.
-            let name = HeaderName::try_new(name.as_str()).map_err(protocol)?;
-            let value = HeaderValue::try_new(value.as_bytes()).map_err(protocol)?;
-            headers.append(name, value);
-        }
-        Ok((status, headers))
-    }
-
-    fn protocol(error: impl std::fmt::Display) -> HttpError {
-        HttpError::Protocol {
-            detail: error.to_string(),
-        }
-    }
-
-    /// What a failed exchange means to the caller.
-    fn transport(error: &reqwest::Error) -> HttpError {
-        if error.is_timeout() {
-            HttpError::Timeout
-        } else if let Some(tls) = tls_failure(error) {
-            HttpError::Tls {
-                detail: tls.to_string(),
-            }
-        } else if error.is_connect() {
-            HttpError::Connect {
-                detail: error.to_string(),
-            }
-        } else {
-            protocol(error)
-        }
-    }
-
-    /// The TLS failure behind `error`, if a handshake or certificate check
-    /// failed. Rustls reports it inside an `io::Error`, often one wrapped in
-    /// another, and an `io::Error`'s `source` skips the error it wraps, so
-    /// the walk steps into each wrapped error instead.
-    fn tls_failure(error: &reqwest::Error) -> Option<&rustls::Error> {
-        let mut link: Option<&(dyn std::error::Error + 'static)> = Some(error);
-        while let Some(current) = link {
-            if let Some(tls) = current.downcast_ref::<rustls::Error>() {
-                return Some(tls);
-            }
-            link = match current.downcast_ref::<std::io::Error>() {
-                Some(io) => io
-                    .get_ref()
-                    .map(|wrapped| wrapped as &(dyn std::error::Error + 'static)),
-                None => current.source(),
-            };
-        }
-        None
-    }
-
-    /// What the lane forwards of a response's body.
-    enum Chunk {
-        Bytes(Vec<u8>),
-        /// The body ended where its server ended it.
-        End,
-        Failed(HttpError),
-    }
-
-    /// The body chunks the lane forwards.
-    struct Chunks {
-        receiver: mpsc::Receiver<Chunk>,
-        /// Whether the lane reported the body's end or its failure.
-        ended: bool,
-        /// Set by the lane when the request's deadline passed while it waited
-        /// for the reader.
-        timed_out: Arc<AtomicBool>,
-    }
-
-    impl BodySource for Chunks {
-        fn poll_chunk(
-            mut self: Pin<&mut Self>,
-            cx: &mut Context<'_>,
-        ) -> Poll<Option<Result<Vec<u8>, HttpError>>> {
-            if self.ended {
-                return Poll::Ready(None);
-            }
-            Poll::Ready(match std::task::ready!(self.receiver.poll_recv(cx)) {
-                Some(Chunk::Bytes(bytes)) => Some(Ok(bytes)),
-                Some(Chunk::End) => {
-                    self.ended = true;
-                    None
-                }
-                Some(Chunk::Failed(error)) => {
-                    self.ended = true;
-                    Some(Err(error))
-                }
-                // The lane left mid-body: the deadline passed while the reader
-                // held its chunks, or the host shut down.
-                None => {
-                    self.ended = true;
-                    Some(Err(if self.timed_out.load(Ordering::Acquire) {
-                        HttpError::Timeout
-                    } else {
-                        HttpError::Cancelled
-                    }))
-                }
-            })
-        }
-    }
-}
-
+// The tests run where `ureq` sends: real sockets against a loopback server.
 #[cfg(all(
     test,
     not(any(
+        target_arch = "wasm32",
         target_os = "android",
         target_os = "windows",
         target_os = "macos",
-        target_os = "ios",
-        target_arch = "wasm32"
+        target_os = "ios"
     ))
 ))]
 mod tests {
@@ -544,7 +197,7 @@ mod tests {
     use std::sync::mpsc;
     use std::time::Duration;
 
-    use flui_platform::http::{Http, HttpError, HttpHost, HttpRequest};
+    use flui_platform::http::{Http, HttpError, HttpRequest};
     use flui_runtime::execution::{DeterministicExecutors, ExecutionServices};
 
     use super::*;
@@ -557,10 +210,7 @@ mod tests {
 
     /// An `Http` over `services`, as the built-in provider hands it out.
     fn http_over(services: &Arc<ExecutionServices>) -> Http {
-        Http::new(Arc::new(lanes::LaneHttp::new(
-            Arc::downgrade(services),
-            Arc::default(),
-        )))
+        HostHttp::new(ExecutionSlot::default()).http(Arc::downgrade(services))
     }
 
     /// A loopback server that answers each connection's request with
@@ -609,8 +259,8 @@ mod tests {
 
     /// The table of what a request on the run's lanes answers: a body, a
     /// status, a body past its limit, a failed TLS handshake, a URL that is
-    /// not HTTP, and the host-executor gap; each polled on a thread with no
-    /// async runtime.
+    /// not HTTP, and an embedder's executors, which send too; each polled on
+    /// a thread with no async runtime.
     #[test]
     fn requests_on_the_runs_lanes_answer_without_a_runtime_of_the_callers() {
         let (address, _seen) = serve(|path| match path {
@@ -658,21 +308,20 @@ mod tests {
         let pending = http_over(&hosted).send(HttpRequest::get(format!("http://{address}/image")));
         assert_eq!(
             embedder.run_until_idle(),
-            0,
-            "nothing reaches an embedder's executor"
+            1,
+            "the exchange holds a slot of the embedder's IO lane"
         );
+        let response = block_on(pending).expect("an embedder's executors send too");
         assert_eq!(
-            block_on(pending).map(|_| ()),
-            Err(HttpError::NotYetOnThisHost {
-                host: HttpHost::EmbedderExecutors
-            }),
-            "an embedder's executor may run no Tokio drivers: a typed gap, not a panic"
+            block_on(response.into_body().into_bytes()).expect("the body arrives"),
+            b"bytes"
         );
     }
 
     /// Dropping the request's future, and later the body of an answered one,
     /// closes its connection on the lane, and so does a body its reader holds
-    /// unread past the request's deadline.
+    /// unread past the request's deadline; a lane shut down under a body
+    /// ends it, and a lane gone refuses the request.
     #[test]
     fn dropping_a_request_or_its_body_closes_the_connection() {
         let (address, seen) = serve(|path| match path {

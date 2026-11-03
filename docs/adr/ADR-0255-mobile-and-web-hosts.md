@@ -4,6 +4,10 @@
   this ADR, and a platform's row in `docs/platform-parity.md` moves only after a run on that
   platform (Confirmation).
 - **Date:** 2026-10-20
+- **Amended:** 2026-11-03 — decision 9 matches the platform: `InputLatency::Low` on Android does
+  not need a Java touch path, since `ViewRootImpl` batches ahead of the native input queue and
+  honours `View.requestUnbufferedDispatch(int)` (API 30) for `NativeActivity`; native views remain
+  the one trigger to leave it.
 - **Supersedes:** [ADR-0247](ADR-0247-android-java-view.md) in three places: item 1, where it embeds
   the dex in the native library with `include_bytes!` and has every packager ship that copy (the
   sources, the checked-in dex, the digest gate and "no JDK, no build script" stand); item 2, except
@@ -267,11 +271,15 @@ text-input paths its platform requires.
 9. **Triggers to leave `NativeActivity`.** The taken surface means Views never paint in the window
    (`ViewRootImpl` returns before drawing when the app owns the surface:
    [aosp-mirror/platform_frameworks_base@1cdfff555f core/java/android/view/ViewRootImpl.java:5652-5659](https://github.com/aosp-mirror/platform_frameworks_base/blob/1cdfff555f/core/java/android/view/ViewRootImpl.java#L5652-L5659)), and `NativeActivity` takes
-   touch from the native queue. Two requirements end that:
-   - native views (a web view, a map, video) inside the UI, which cannot be inline children;
-   - `InputLatency::Low` on Android, which needs a Java touch path.
+   touch from the native queue. One requirement ends that: native views (a web view, a map, video)
+   inside the UI, which cannot be inline children. `InputLatency::Low` is not one: the window's
+   `ViewRootImpl` batches input before its native-pre-IME stage hands it to the native queue, and
+   consumes a batch at once for the sources the root view asked for with
+   `View.requestUnbufferedDispatch(int)` (API 30; `WindowInputEventReceiver.onBatchedInputEventPending`
+   in `core/java/android/view/ViewRootImpl.java`), so the host asks the decor view for the pointer
+   class.
 
-   If either arrives, the next step is a decision of its own: `GameActivity` when `flui build`'s
+   If it arrives, the next step is a decision of its own: `GameActivity` when `flui build`'s
    Gradle-free path is no longer a hard requirement, and an own Activity with own glue when it is.
    `FluiView`, `FluiInputConnection` and the accessibility, back and inset code are View-level and
    move unchanged; only the Activity class and the native glue change.
@@ -500,7 +508,7 @@ before any native is bound. The support claim for a platform is the run.
 - Good, because native source travels with the crate whose Rust it must match, and the CLI finds
   it from the lockfile (decision 21).
 - Bad, because `NativeActivity` keeps its limits: Views never paint in the window under the taken
-  surface, and native views or `InputLatency::Low` on Android would need a different Activity
+  surface, and native views on Android would need a different Activity
   (decision 9).
 - Bad, because a packager other than `flui-cli` must add the dex and the manifest itself, and apps
   scaffolded earlier hold a manifest the CLI no longer writes from a template.
@@ -596,8 +604,8 @@ before any native is bound. The support claim for a platform is the run.
 - **Not implemented.** Nothing in this ADR has run; the code changes land as separate changes
   after this ADR, and a platform's row in `docs/platform-parity.md` moves only after a run on that
   platform (see Confirmation).
-- **Revisit when.** Native views (a web view, a map, video) inside the UI, or `InputLatency::Low`
-  on Android, arrive (decision 9): the next step is then a decision of its own, `GameActivity`
+- **Revisit when.** Native views (a web view, a map, video) inside the UI arrive
+  (decision 9): the next step is then a decision of its own, `GameActivity`
   when `flui build`'s Gradle-free path is no longer a hard requirement and an own Activity with
   own glue when it is.
 - **Open questions with their runs.** `windowSoftInputMode`, a full `UITextInput` conformance
