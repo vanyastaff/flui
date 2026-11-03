@@ -176,6 +176,8 @@ pub mod key;
 pub mod memory;
 // Input sequence identity and its owner-local mint (ADR-0207 §4)
 pub mod sequence;
+// Tickets that match an asynchronous answer to its request (ADR-0287 §5).
+pub mod ticket;
 // Panic-payload text extraction and the `BUG:` internal-invariant
 // classifier every `catch_unwind` boundary in the workspace shares. Not in
 // the prelude: this is a narrow, deliberately-reached-for utility, not a
@@ -232,6 +234,7 @@ pub use claim_slot::{ClaimHandle, ClaimOutcome, ClaimSlot, claim_slot};
 pub use clock::{ManualClock, MonotonicClock, SystemClock, event_epoch};
 pub use creation_site::CreationSite;
 pub use sequence::{DragSessionId, IdExhausted, IdMint, InputSequenceId, MintedId};
+pub use ticket::{Ticket, TicketSource};
 pub use tree_error::{PathEntry, TREE_CONTEXT_DEPTH, TreeContext, TreeError};
 // Constants
 pub use consts::{DEBUG_MODE, EPSILON, EPSILON_F32, IS_DESKTOP, IS_MOBILE, IS_WEB, RELEASE_MODE};
