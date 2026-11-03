@@ -511,6 +511,45 @@ pub(crate) struct GradientRun {
     pub(crate) mesh: Option<std::ops::Range<u32>>,
 }
 
+/// A recorded span of consecutive instances in one batch arena: a
+/// [`ScissorRegion`] or a [`GradientRun`].
+pub(crate) trait InstanceSpan {
+    fn instances(&self) -> std::ops::Range<usize>;
+}
+
+impl InstanceSpan for ScissorRegion {
+    fn instances(&self) -> std::ops::Range<usize> {
+        self.start as usize..self.start as usize + self.count as usize
+    }
+}
+
+impl InstanceSpan for GradientRun {
+    fn instances(&self) -> std::ops::Range<usize> {
+        self.start as usize..self.start as usize + self.count as usize
+    }
+}
+
+/// The instances of `range` each span holds, with that span, in order.
+///
+/// `spans` tile their arena in order, as the recorder pushes them. Replay
+/// draws exactly these pieces, and the clip footprint reads the same ones, so
+/// a mask is never cut to a span replay does not draw.
+pub(crate) fn spans_within<T: InstanceSpan>(
+    spans: &[T],
+    range: std::ops::Range<usize>,
+) -> impl Iterator<Item = (std::ops::Range<usize>, &T)> {
+    let (low, high) = (range.start, range.end);
+    let first = spans.partition_point(|span| span.instances().end <= low);
+    spans[first..]
+        .iter()
+        .take_while(move |span| span.instances().start < high)
+        .filter_map(move |span| {
+            let held = span.instances();
+            let piece = low.max(held.start)..high.min(held.end);
+            (piece.start < piece.end).then_some((piece, span))
+        })
+}
+
 /// The per-batch SDF clip, in the layout `shape.wgsl`'s `ClipUniform` expects.
 ///
 /// `vec4` members because WGSL uniform layout aligns them to 16 bytes; the
@@ -716,6 +755,10 @@ pub(crate) struct DrawSegment {
     pub(crate) circle_scissors: crate::recording_budget::BudgetVec<ScissorRegion>,
     /// Scissor regions for arc instanced batch
     pub(crate) arc_scissors: crate::recording_budget::BudgetVec<ScissorRegion>,
+    /// Scissor regions for the analytic shadow batch. A shadow's penumbra
+    /// reaches past its shape, so its recorded scissor (a clip's enclosing
+    /// rectangle, a partial frame's damage) is what keeps it inside them.
+    pub(crate) shadow_scissors: crate::recording_budget::BudgetVec<ScissorRegion>,
     /// Draw runs for the linear gradient batch, split by scissor and blend mode.
     pub(crate) linear_gradient_runs: crate::recording_budget::BudgetVec<GradientRun>,
     /// Draw runs for the radial gradient batch, split by scissor and blend mode.
@@ -826,6 +869,7 @@ impl DrawSegment {
             rect_scissors: crate::recording_budget::BudgetVec::new(),
             circle_scissors: crate::recording_budget::BudgetVec::new(),
             arc_scissors: crate::recording_budget::BudgetVec::new(),
+            shadow_scissors: crate::recording_budget::BudgetVec::new(),
             linear_gradient_runs: crate::recording_budget::BudgetVec::new(),
             radial_gradient_runs: crate::recording_budget::BudgetVec::new(),
             sweep_gradient_runs: crate::recording_budget::BudgetVec::new(),
@@ -851,6 +895,7 @@ impl DrawSegment {
         self.rect_scissors = crate::recording_budget::BudgetVec::with_budget(&self.budget);
         self.circle_scissors = crate::recording_budget::BudgetVec::with_budget(&self.budget);
         self.arc_scissors = crate::recording_budget::BudgetVec::with_budget(&self.budget);
+        self.shadow_scissors = crate::recording_budget::BudgetVec::with_budget(&self.budget);
         self.linear_gradient_runs = crate::recording_budget::BudgetVec::with_budget(&self.budget);
         self.radial_gradient_runs = crate::recording_budget::BudgetVec::with_budget(&self.budget);
         self.sweep_gradient_runs = crate::recording_budget::BudgetVec::with_budget(&self.budget);
@@ -906,6 +951,54 @@ impl DrawSegment {
         self.budget.record_error(RecordError::External(error));
         if self.record_error.is_none() {
             self.record_error = self.budget.error();
+        }
+    }
+    /// Visits the hardware scissor of every piece of `run` that replay draws:
+    /// each fragment the run writes passes one of them. `None` is the whole
+    /// attachment.
+    pub(crate) fn visit_scissors(&self, run: &DrawRun, visit: &mut dyn FnMut(ScissorRect)) {
+        fn pieces<T: InstanceSpan>(
+            spans: &[T],
+            range: &std::ops::Range<usize>,
+            scissor: fn(&T) -> ScissorRect,
+            visit: &mut dyn FnMut(ScissorRect),
+        ) {
+            for (_, span) in spans_within(spans, range.clone()) {
+                visit(scissor(span));
+            }
+        }
+        let region = |region: &ScissorRegion| region.scissor;
+        let gradient = |run: &GradientRun| run.scissor;
+        match run {
+            DrawRun::Rect(range) => pieces(&self.rect_scissors, range, region, visit),
+            DrawRun::Circle(range) => pieces(&self.circle_scissors, range, region, visit),
+            DrawRun::Arc(range) => pieces(&self.arc_scissors, range, region, visit),
+            DrawRun::Shadow(range) => pieces(&self.shadow_scissors, range, region, visit),
+            DrawRun::Glyph(range) => pieces(&self.glyph_scissors, range, region, visit),
+            DrawRun::LinearGradient(range) => {
+                pieces(&self.linear_gradient_runs, range, gradient, visit);
+            }
+            DrawRun::RadialGradient(range) => {
+                pieces(&self.radial_gradient_runs, range, gradient, visit);
+            }
+            DrawRun::SweepGradient(range) => {
+                pieces(&self.sweep_gradient_runs, range, gradient, visit);
+            }
+            DrawRun::Tess(range) => {
+                for batch in &self.tess_batches[range.clone()] {
+                    visit(batch.scissor);
+                }
+            }
+            DrawRun::CachedImage(range) => {
+                for draw in &self.cached_images[range.clone()] {
+                    visit(draw.scissor);
+                }
+            }
+            DrawRun::ExternalImage(range) => {
+                for (_, _, scissor, _) in &self.external_images[range.clone()] {
+                    visit(*scissor);
+                }
+            }
         }
     }
     pub(crate) fn try_clone_for_remap(&self) -> crate::error::EngineResult<Self> {

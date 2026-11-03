@@ -2,6 +2,7 @@ use super::{
     Arc, DrawRun, DrawSegment, GpuResources, GradientKind, GradientMesh, PipelineSet, ScissorRect,
     clamp_scissor_to_attachment,
 };
+use crate::{command_ir::spans_within, replay::clip::MaskFootprint};
 
 // Render-pass state is local: barriers start a fresh cache. Pipeline families
 // share group zero, while glyph and gradient group one have distinct layouts.
@@ -37,6 +38,31 @@ impl QuadReplayState {
         }
         true
     }
+}
+
+/// One distinct clip of a segment: the attachment pixels its draws can write,
+/// then the binding prepared over them.
+#[derive(Default)]
+struct ClipUse {
+    footprint: Option<MaskFootprint>,
+    binding: Option<wgpu::BindGroup>,
+}
+
+/// Whether `run` enforces every captured clip through its scissor regions.
+/// Only these instanced families do; composites and other routes keep their
+/// mask.
+fn scissor_covers_clip(run: &DrawRun) -> bool {
+    matches!(
+        run,
+        DrawRun::Rect(_)
+            | DrawRun::Circle(_)
+            | DrawRun::Arc(_)
+            | DrawRun::Glyph(_)
+            | DrawRun::Shadow(_)
+            | DrawRun::LinearGradient(_)
+            | DrawRun::RadialGradient(_)
+            | DrawRun::SweepGradient(_)
+    )
 }
 
 // Ordered replay over immutable typed arena slices.
@@ -185,8 +211,8 @@ impl super::GpuReplay {
             .and_then(|buckets| {
                 buckets
                     .checked_mul(
-                        std::mem::size_of::<crate::clip_chain::ClipChain>()
-                            + std::mem::size_of::<wgpu::BindGroup>()
+                        std::mem::size_of::<(crate::clip_chain::ClipChain, bool)>()
+                            + std::mem::size_of::<ClipUse>()
                             + 32,
                     )
                     .and_then(|table| {
@@ -212,10 +238,8 @@ impl super::GpuReplay {
             clippy::mutable_key_type,
             reason = "Hash and equality use immutable Arc identity; budget atomics are not key state"
         )]
-        let mut prepared = std::collections::HashMap::<
-            (crate::clip_chain::ClipChain, bool),
-            wgpu::BindGroup,
-        >::new();
+        let mut uses =
+            std::collections::HashMap::<(crate::clip_chain::ClipChain, bool), ClipUse>::new();
         bindings
             .try_reserve_exact(segment.runs.len())
             .map_err(
@@ -224,42 +248,44 @@ impl super::GpuReplay {
                     source,
                 },
             )?;
-        prepared.try_reserve(segment.runs.len()).map_err(|source| {
+        uses.try_reserve(segment.runs.len()).map_err(|source| {
             crate::error::EngineError::PreparedResourceAllocation {
                 resource: "clip snapshot bindings",
                 source,
             }
         })?;
+        // A mask is read only by fragments that pass their draw's scissor, so
+        // each distinct clip is resolved over the pixels its draws can write in
+        // this attachment, never over pixels no draw reaches (a partial frame's
+        // damage, a clip's enclosing rectangle).
         for run in &segment.runs {
-            // Only these instanced families enforce every captured clip through
-            // their scissor regions. Shadows apply the exact lowered scissor;
-            // composites and other routes retain their mask.
-            let scissor_covers_clip = matches!(
-                run.kind,
-                DrawRun::Rect(_)
-                    | DrawRun::Circle(_)
-                    | DrawRun::Arc(_)
-                    | DrawRun::Glyph(_)
-                    | DrawRun::Shadow(_)
-                    | DrawRun::LinearGradient(_)
-                    | DrawRun::RadialGradient(_)
-                    | DrawRun::SweepGradient(_)
-            );
-            let key = (run.clip.clone(), scissor_covers_clip);
-            let binding = if let Some(binding) = prepared.get(&key) {
+            let footprint =
+                MaskFootprint::of_run(segment, &run.kind, viewport_size, self.attachment_origin);
+            let used = uses
+                .entry((run.clip.clone(), scissor_covers_clip(&run.kind)))
+                .or_default();
+            used.footprint = MaskFootprint::union(used.footprint, footprint);
+        }
+        for run in &segment.runs {
+            let covers = scissor_covers_clip(&run.kind);
+            let used = uses
+                .get_mut(&(run.clip.clone(), covers))
+                .expect("BUG: the footprint pass visits every run");
+            let binding = if let Some(binding) = &used.binding {
                 binding.clone()
             } else {
                 let binding = self.prepare_clip_binding(
                     segment,
                     &run.clip,
-                    scissor_covers_clip,
+                    covers,
+                    used.footprint,
                     viewport_size,
                     device,
                     pipelines,
                     resources,
                     encoder,
                 )?;
-                prepared.insert(key, binding.clone());
+                used.binding = Some(binding.clone());
                 binding
             };
             bindings.push(binding);
@@ -434,7 +460,7 @@ impl super::GpuReplay {
                             } else {
                                 self.replay_instanced_run(
                                     segment,
-                                    &segment.runs[cursor],
+                                    run,
                                     viewport_size,
                                     pipelines,
                                     &mut pass,
@@ -455,13 +481,12 @@ impl super::GpuReplay {
     fn replay_instanced_run(
         &self,
         segment: &DrawSegment,
-        recorded: &crate::command_ir::RecordedRun,
+        run: &DrawRun,
         viewport_size: (u32, u32),
         pipelines: &PipelineSet,
         pass: &mut wgpu::RenderPass<'_>,
         state: &mut QuadReplayState,
     ) {
-        let run = &recorded.kind;
         let (pipeline, regions, range): (
             &wgpu::RenderPipeline,
             &[crate::command_ir::ScissorRegion],
@@ -470,7 +495,7 @@ impl super::GpuReplay {
             DrawRun::Rect(r) => (&pipelines.instanced_rect, &segment.rect_scissors, r),
             DrawRun::Circle(r) => (&pipelines.instanced_circle, &segment.circle_scissors, r),
             DrawRun::Arc(r) => (&pipelines.instanced_arc, &segment.arc_scissors, r),
-            DrawRun::Shadow(r) => (&pipelines.shadow, &[], r),
+            DrawRun::Shadow(r) => (&pipelines.shadow, &segment.shadow_scissors, r),
             DrawRun::Glyph(r) => (&pipelines.instanced_glyph, &segment.glyph_scissors, r),
             _ => return,
         };
@@ -489,28 +514,9 @@ impl super::GpuReplay {
             state.secondary = None;
         }
         let (w, h) = viewport_size;
-        if matches!(run, DrawRun::Shadow(_)) {
-            let scissor = if segment.attachment_to_root == [1.0, 0.0, 0.0, 1.0, 0.0, 0.0] {
-                recorded.clip.integral_rect_scissor()
-            } else {
-                None
-            };
-            if state.scissor(pass, scissor, w, h, self.attachment_origin) {
-                pass.draw_indexed(0..6, 0, range.start as u32..range.end as u32);
-            }
-        } else {
-            let first = regions
-                .partition_point(|region| (region.start + region.count) as usize <= range.start);
-            for region in regions[first..]
-                .iter()
-                .take_while(|region| (region.start as usize) < range.end)
-            {
-                let start = range.start.max(region.start as usize);
-                let end = range.end.min((region.start + region.count) as usize);
-                if start < end && state.scissor(pass, region.scissor, w, h, self.attachment_origin)
-                {
-                    pass.draw_indexed(0..6, 0, start as u32..end as u32);
-                }
+        for (piece, region) in spans_within(regions, range.clone()) {
+            if state.scissor(pass, region.scissor, w, h, self.attachment_origin) {
+                pass.draw_indexed(0..6, 0, piece.start as u32..piece.end as u32);
             }
         }
     }
@@ -536,16 +542,7 @@ impl super::GpuReplay {
             _ => return,
         };
         let (w, h) = viewport_size;
-        let first = runs.partition_point(|run| (run.start + run.count) as usize <= range.start);
-        for run in runs[first..]
-            .iter()
-            .take_while(|run| (run.start as usize) < range.end)
-        {
-            let start = range.start.max(run.start as usize);
-            let end = range.end.min((run.start + run.count) as usize);
-            if start >= end {
-                continue;
-            }
+        for (piece, run) in spans_within(runs, range.clone()) {
             if state.gradient_pipeline != Some((kind, run.blend)) {
                 pass.set_pipeline(pipelines.gradients.get(kind, run.blend));
                 state.gradient_pipeline = Some((kind, run.blend));
@@ -577,7 +574,7 @@ impl super::GpuReplay {
                 0..6
             };
             if state.scissor(pass, run.scissor, w, h, origin) {
-                pass.draw_indexed(indices, 0, start as u32..end as u32);
+                pass.draw_indexed(indices, 0, piece.start as u32..piece.end as u32);
             }
         }
     }

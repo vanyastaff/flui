@@ -83,7 +83,7 @@ impl GradientMesh {
 /// draw call. Returns `Some` with the rect clamped to
 /// `[0, full_w) × [0, full_h)` otherwise (a no-op for an already in-bounds
 /// rect).
-fn clamp_scissor_to_attachment(
+pub(super) fn clamp_scissor_to_attachment(
     x: i64,
     y: i64,
     w: u32,

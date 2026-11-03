@@ -414,11 +414,8 @@ impl GpuReplay {
         let (Some(buffer), Some(stops)) = (buffer, stops) else {
             return Ok(());
         };
-        for run in runs.iter().filter(|run| {
-            (run.start as usize) < range.end && (run.start + run.count) as usize > range.start
-        }) {
-            let start = range.start.max(run.start as usize);
-            let end = range.end.min((run.start + run.count) as usize);
+        for (piece, run) in crate::command_ir::spans_within(runs, range.clone()) {
+            let (start, end) = (piece.start, piece.end);
             // Isolation is per instance: a shared mode does not make overlapping
             // operations one operator. Native runs retain their instancing.
             if !needs_portable(device, run.blend) {

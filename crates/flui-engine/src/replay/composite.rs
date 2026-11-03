@@ -70,10 +70,13 @@ impl GpuReplay {
         // Freeze the composite in its attachment coordinate system. A managed
         // resize can leave the recorder's viewport different from this target.
         let previous_uniform_size = std::mem::replace(&mut self.uniform_size, viewport_size);
+        // A group's chain already holds its inherited scissor (the damage
+        // among it) as a leaf, so the chain's own bounds crop this mask.
         let binding = self.prepare_clip_binding(
             context,
             chain,
             false,
+            super::clip::MaskFootprint::of_scissor(None, viewport_size, self.attachment_origin),
             viewport_size,
             device,
             pipelines,
