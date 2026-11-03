@@ -1,7 +1,7 @@
 # ADR-0288: The development agent is one sans-IO service; transports only move lines
 
-- **Status:** Accepted (2026-11-03). Implemented: §§1–8, the desktop and Android transports;
-  the web's is to come.
+- **Status:** Accepted (2026-11-03). Implemented: §§1–8, the desktop, Android and web
+  transports.
 - **Date:** 2026-11-03
 - **Supersedes in part:** [ADR-0239](ADR-0239-every-debug-app-hosts-the-driver-agent.md) §1,
   where the server lives: the conversation is `flui-runtime`'s, and `flui-app` keeps the desktop
@@ -122,8 +122,27 @@ names the abstract socket `name`, the only kind Android's driver reaches, throug
 user's, and any process of the system reaches it; on Android any other app could also start this
 one with an endpoint and a token of its choosing. So each accepted connection's peer is read
 (`SO_PEERCRED`) before anything else, and one whose effective user is not the app's own, root, or
-on Android the shell (`adb forward` connects as it) is closed unread. The web and a headless run
-drive the same `Session` over their own transport.
+on Android the shell (`adb forward` connects as it) is closed unread. A headless run drives the
+same `Session` over its own pump.
+
+The web has no thread and no socket: the page's event loop is the transport. The launch names a
+global (`__flui_agent`), and `flui-native`'s `PageExport` defines it as
+`{ version, connect(onLine) }`; `connect` returns `{ version, send(line), close() }`, both objects
+carrying the shape's version (`PAGE_EXPORT_VERSION`, 1) so the shape can grow without breaking a
+driver that reads it. Every line the app writes reaches `onLine` as a string, `onLine(null)` tells
+the script the app ended the connection, and a WebDriver BiDi driver passes a channel as `onLine`
+and calls `send` through `script.callFunction`. A connection the service does not accept (one past
+`Limits::max_connections`, or any once it stopped) makes `connect` throw the refusal; a second
+driver is refused by its hello, as on every transport (§8). Each connection's conversation is a
+task of the page's executor: a line the script sends is handed to the session at once (a line
+past `MAX_LINE` is copied no further than `MAX_LINE + 1` units, so the session refuses it as on a
+socket), the task polls the session when its waker is woken, the session's deadline is kept with
+the page's timer (`PageTimer`), and the lines are written to `onLine` with nothing borrowed. An
+`onLine` that throws, or a deadline no timer can keep, ends the connection. Every JS binding stays
+in `flui-native`; `flui-app` drives the service through `PageExport`'s Rust traits. The export is
+not `Send`, so a task of the page's executor holds it while the hook holds a handle that may cross
+a thread: stopping stops the service at once, and at the page's next turn the global goes and
+every connection ends.
 
 §7. **The loop owns the hooks.** `DevAgentHost` is a value the event loop owns, with no
 `Arc<Mutex>`: `DevAgentHost::attach(hooks)` attaches the hooks the loop took from its
@@ -139,9 +158,18 @@ one seam, `Platform::launch_value(LaunchKey)`: a `LaunchKey` is a dotted name
 (`flui.agent.token`), and each host reads it in its own spelling, the launching intent's string
 extra of that name on Android, the environment variable it spells (`FLUI_AGENT_TOKEN`)
 elsewhere, an iOS Simulator app's included (`simctl launch` hands it
-`SIMCTL_CHILD_FLUI_AGENT_TOKEN` as `FLUI_AGENT_TOKEN`). The web reads none until its
-transport brings the page's preload. One key names both spellings, so a runner reads the launch
-the same way on every host.
+`SIMCTL_CHILD_FLUI_AGENT_TOKEN` as `FLUI_AGENT_TOKEN`), and the string property of that name of
+the page's launch object on the web. The launcher's preload script installs the object as
+`globalThis.__FLUI_LAUNCH__` (`PAGE_LAUNCH_GLOBAL`) before the application's module starts; the
+web platform takes it as it is made, before the application runs any code: it removes the global
+whatever it holds (deleted, or overwritten where a script declared it with `var`), then checks
+what it held within bounds (at most 32 properties, each named by a launch key, each a string of
+at most 4096 units, checked before it is copied). A malformed object fails the platform's start,
+traced, with no value in the message. One key names every spelling, so a runner reads the launch
+the same way on every host. The token keeps other origins and other tabs out; a script of the
+page's own origin that runs before the module can read it, as a process of the same user can read
+a desktop app's environment. Under `EXIT_ON_DISCONNECT` a page's loop quits, which ends its
+agents; a page cannot close its tab, so the driver closes it.
 
 §8. **A role in the hello.** The hello names what its client may do: `Hello.role`, a
 `ClientRole` of `driver` (the default, which a hello may leave out) or `observer`, in protocol
@@ -166,6 +194,9 @@ is answered `shutting_down`. This replaces §5's "first conversation past its he
 - Bad, because a Windows connection still looks for input every 10 ms, and a Windows client that
   stops reading holds its connection until it reads, leaves or the agent stops, since the pipe
   takes no write timeout.
+- Bad, because a page's agent stops a turn after it is asked to: the page export is not `Send`,
+  so a task of the page's executor holds it, and a stop reaches it at the page's next turn. The
+  service refuses new conversations at once.
 - Neutral, because the request order, the refusals and their wording are unchanged: the socket
   suite runs as before, faster.
 
@@ -197,7 +228,7 @@ is answered `shutting_down`. This replaces §5's "first conversation past its he
   lent and finds the host dropped, its hook detached once, when it comes back.
 - `flui-app`'s build script and the agent's module agree on `cfg(driver_agent)`: a
   `compile_error!` fires in a build where the alias and `any(debug_assertions, feature = "driver")`
-  on a system with a local-socket transport differ.
+  on a system with a local-socket transport, or wasm32, differ.
 - `flui-runtime`'s `one_driver_at_a_time_and_an_observer_only_reads` refuses a second driver's
   hello `not_driver` until the first goes, lists an observer only the methods that read, and
   answers its act `not_driver` without running it; `the_drivers_end_runs_its_obligation_once_and_not_after_a_stop`
@@ -212,6 +243,22 @@ is answered `shutting_down`. This replaces §5's "first conversation past its he
   each key's environment spelling is the variable the protocol names. The Android intent read
   and the abstract socket on a device are compile-checked for `aarch64-linux-android` and run on
   a device by the owner.
+- The web transport runs on Node and the Linux host. `flui-native`'s wasm32 suite drives the page
+  export against Node's global object:
+  `a_page_export_carries_lines_both_ways_and_its_drop_ends_every_connection`,
+  `a_page_connection_ends_alone_when_its_script_or_the_application_closes_it` and
+  `a_page_timer_runs_once_per_arm_and_never_after_its_cancel_or_drop`; it takes the launch off the
+  page with `the_web_platform_takes_its_launch_values_off_the_page_as_it_starts`,
+  `a_malformed_page_launch_fails_the_start_and_leaves_the_page_all_the_same` and
+  `a_launch_object_a_script_declared_is_cleared_when_it_cannot_be_deleted`, and its Linux tests
+  pin the launch object's bounds (`a_malformed_page_launch_is_refused_naming_only_a_launch_key`).
+  `flui-app`'s page conversation runs on the Linux host with the test as the page's event loop:
+  `a_page_conversation_answers_its_script_and_ends_when_the_script_closes_it`,
+  `a_page_conversation_ends_when_its_script_stops_listening_or_no_timer_keeps_its_deadline`,
+  `a_page_conversation_keeps_its_session_deadline_through_the_timer`,
+  `a_line_sent_while_the_session_runs_closes_the_conversation` and
+  `a_stopped_service_ends_its_page_conversations_without_the_driver_going`. A served page in a
+  browser is run by the owner.
 
 ## Pros and cons of the options
 
@@ -248,6 +295,7 @@ loop in the next (§7), and the role came into the hello after it (§8). The And
 came next (§6, with the launch read through the platform, §7), and then `flui run --agent` on
 Android: the endpoint and the token as `am start` extras, and a session file that names the
 loopback port `adb forward` holds instead of the app's own endpoint, which only the device
-reaches. Then, each in its own change: the web transport (the page's export, driven from the JS
-event loop), and held input per connection (a lease the session owns, released when it is
-dropped).
+reaches. The web transport came after it (§6, with the page's launch object, §7). Then, each in
+its own change: `flui run --agent` in a browser (a WebDriver BiDi client that installs the
+preload and bridges `flui mcp` to the channel), and held input per connection (a lease the
+session owns, released when it is dropped).
