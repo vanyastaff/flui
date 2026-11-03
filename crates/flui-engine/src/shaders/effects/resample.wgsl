@@ -3,31 +3,35 @@
 // Resamples a premultiplied RGBA source through an affine map: the output
 // pixel whose centre is `p` (in output texels) shows the source at
 // `map · p`, in source texels, read through the bound sampler (nearest or
-// bilinear). Past the source's edge the sampler clamps, so a caller that
-// wants transparency there pads the source with transparent texels.
+// bilinear). A point outside `decal` reads transparent black; between
+// `decal` and the texture edge the sampler clamps.
 //
 // ## Bind-group layout (group 0)
 //
 // | Binding | Stage | Type               | Content                        |
 // |---------|-------|--------------------|--------------------------------|
-// | 0       | FS    | Uniform buffer     | `ResampleUniforms` (48 bytes)  |
+// | 0       | FS    | Uniform buffer     | `ResampleUniforms` (64 bytes)  |
 // | 1       | FS    | 2D float texture   | Source (premultiplied RGBA)    |
 // | 2       | FS    | Filtering sampler  | Nearest or linear, clamped     |
 //
-// ## Uniform layout (`ResampleUniforms`, 48 bytes)
+// ## Uniform layout (`ResampleUniforms`, 64 bytes)
 //
 // | Byte offset | Size | Field       | Semantics                             |
 // |-------------|------|-------------|---------------------------------------|
 // | 0           | 16   | map_x       | `[xx, xy, x0, 0]`: source x of `p`    |
 // | 16          | 16   | map_y       | `[yx, yy, y0, 0]`: source y of `p`    |
-// | 32          | 8    | source_size | Source texture size in texels         |
-// | 40          | 8    | _pad        | alignment padding                     |
+// | 32          | 16   | decal       | Source texels read, `[l, t, r, b]`    |
+// | 48          | 8    | source_size | Source texture size in texels         |
+// | 56          | 8    | _pad        | alignment padding                     |
 
 struct ResampleUniforms {
     /// Source x of output point `p` is `dot(map_x.xy, p) + map_x.z`.
     map_x: vec4<f32>,
     /// Source y of output point `p` is `dot(map_y.xy, p) + map_y.z`.
     map_y: vec4<f32>,
+    /// The source texels a sample may read, `[left, top, right, bottom]`:
+    /// a point outside them reads transparent black.
+    decal: vec4<f32>,
     /// Source texture size in texels, to turn a texel position into UV.
     source_size: vec2<f32>,
     /// Alignment padding — not read by the shader.
@@ -65,5 +69,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         dot(u.map_x.xy, p) + u.map_x.z,
         dot(u.map_y.xy, p) + u.map_y.z,
     );
-    return textureSample(src_texture, src_sampler, source / u.source_size);
+    // Sampled before the decal test, so the sample stays in uniform control
+    // flow.
+    let texel = textureSample(src_texture, src_sampler, source / u.source_size);
+    let inside = all(source >= u.decal.xy) && all(source <= u.decal.zw);
+    return select(vec4<f32>(0.0), texel, inside);
 }

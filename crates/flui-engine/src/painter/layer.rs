@@ -3,7 +3,7 @@
 // Moved from `painter.rs` into `painter/layer.rs` as part of the C1 LOC-cap
 // refactor.  Zero behaviour changes.
 
-use smallvec::smallvec;
+use smallvec::{SmallVec, smallvec};
 
 use flui_foundation::geometry::Rect;
 use flui_painting::Paint;
@@ -175,11 +175,9 @@ impl WgpuPainter {
         ))
     }
 
-    /// Fail the frame for a layer filter this device path cannot draw.
-    pub(crate) fn reject_unsupported_image_filter(&mut self, reason: &'static str) {
-        self.current_segment
-            .budget
-            .record_error(crate::command_ir::RecordError::ImageFilter(reason));
+    /// Fail the frame for a layer filter that cannot be recorded.
+    pub(crate) fn reject_image_filter(&mut self, error: crate::command_ir::RecordError) {
+        self.current_segment.budget.record_error(error);
     }
 
     pub(crate) fn reject_image_filter_parameter(&mut self, error: crate::error::GeometryError) {
@@ -188,18 +186,18 @@ impl WgpuPainter {
             .record_error(crate::command_ir::RecordError::Geometry(error));
     }
 
-    /// Bound a nested effect's desired output by all enclosing filters' input debt.
+    /// Bound a nested effect's desired output by all enclosing filters' input
+    /// demand: what the outermost reads to cover the viewport, then what the
+    /// next one in reads to draw that, and so on inwards.
     pub(super) fn filter_desired_output(
         &self,
     ) -> Result<Rect<f64>, crate::command_ir::RecordError> {
-        let mut desired = self.viewport_bounds();
-        for filter in self.compositor.image_filters() {
-            let (x, y) = filter
-                .support_extent()
-                .map_err(crate::command_ir::RecordError::Geometry)?;
-            desired = desired.inflate(x, y);
-        }
-        Ok(desired)
+        self.compositor
+            .image_filters()
+            .try_fold(self.viewport_bounds(), |desired, filter| {
+                filter.required_input(desired)
+            })
+            .map_err(crate::command_ir::RecordError::Geometry)
     }
 
     fn queue_image_filter(
@@ -211,7 +209,6 @@ impl WgpuPainter {
     ) {
         use crate::command_ir::RecordError;
         let planned = (|| {
-            let (x, y) = spec.support_extent().map_err(RecordError::Geometry)?;
             let passes = spec.into_passes();
             let mut desired = self.filter_desired_output()?;
             if let Some(clip) = &composite_clip {
@@ -241,7 +238,18 @@ impl WgpuPainter {
             if desired.is_empty() {
                 return Ok(None);
             }
-            let required = desired.inflate(x, y).expand_to_int();
+            // What each pass must draw, from the desired output back: the
+            // demand on the chain's input first.
+            let mut demands: SmallVec<[Rect<f64>; 5]> = SmallVec::new();
+            demands.push(desired);
+            for pass in passes.iter().rev() {
+                let next = pass
+                    .required_input(*demands.last().expect("BUG: demands start with the output"))
+                    .map_err(RecordError::Geometry)?;
+                demands.push(next);
+            }
+            demands.reverse();
+            let required = demands[0].expand_to_int();
             // Nested items and kinds without a reliable bound use the finite input
             // demand, never the whole scene nor an unbounded source union.
             let source = if items.is_empty() {
@@ -262,19 +270,27 @@ impl WgpuPainter {
             if input_support.is_empty() && !creates_alpha {
                 return Ok(None);
             }
-            let output_support = input_support
-                .inflate(x, y)
-                .intersect(&desired)
-                .unwrap_or(Rect::ZERO);
+            // Each intermediate support is what the passes before it draw, cut
+            // to what the passes after it read; the framebuffer holds every
+            // stage, which a moving pass need not keep inside the input.
+            let mut support = input_support;
+            let mut frame = input_support;
+            for (pass, demand) in passes.iter().zip(&demands[1..]) {
+                support = if matches!(pass, ImageFilterPass::ColorMatrix(matrix) if matrix[19] > 0.0)
+                {
+                    *demand
+                } else {
+                    pass.output_support(support)
+                        .map_err(RecordError::Geometry)?
+                };
+                support = support.intersect(demand).unwrap_or(Rect::ZERO);
+                frame = frame.union(&support);
+            }
+            let output_support = support;
             if output_support.is_empty() {
                 return Ok(None);
             }
-            // Every forward support is inside the cumulative expanded source;
-            // retain only its intersection with backwards input demand.
-            let frame = input_support
-                .inflate(x, y)
-                .intersect(&required)
-                .unwrap_or(Rect::ZERO);
+            let frame = frame.intersect(&required).unwrap_or(Rect::ZERO);
             let (fb_origin, fb_dim) = self.filter_fb_rect(frame)?;
             Ok(Some(FilterOp {
                 composite_clip,
@@ -728,7 +744,7 @@ impl WgpuPainter {
     /// Used by `push_image_filter` in `backend.rs` for `Dilate`, `Erode`, `Blur`,
     /// and `Compose` (the latter via a pre-flattened `ImageFilterSpec::Chain`).
     pub(crate) fn save_layer_with_image_filter(&mut self, spec: ImageFilterSpec) {
-        if let Err(error) = spec.support_extent() {
+        if let Err(error) = spec.validate() {
             self.current_segment
                 .budget
                 .record_error(crate::command_ir::RecordError::Geometry(error));

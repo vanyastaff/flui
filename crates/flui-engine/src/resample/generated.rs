@@ -6,7 +6,7 @@
 //! bind-group layout.
 //!
 //! The generated module `resample` exposes:
-//! - `ResampleUniforms` — a `Pod + Zeroable` uniform struct (48 bytes).
+//! - `ResampleUniforms` — a `Pod + Zeroable` uniform struct (64 bytes).
 //! - `WgpuBindGroup0` / `WgpuBindGroup0Entries` — typed bind-group helpers.
 //!
 //! The `const` assertions in `pipeline.rs` pin the uniform layout.
