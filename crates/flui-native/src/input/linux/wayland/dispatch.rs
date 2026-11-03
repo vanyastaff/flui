@@ -520,7 +520,7 @@ impl TextRecorder for Shared {
 
 /// The surface key of window `id`.
 fn surface_key(id: WindowId) -> NativeSurface {
-    NativeSurface(id.as_u64())
+    NativeSurface::of_window(id)
 }
 
 /// The Wayland seats' input: the loop's input hook. See the module docs.

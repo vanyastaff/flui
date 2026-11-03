@@ -2691,7 +2691,7 @@ mod native_windows {
         });
         assert_eq!(
             *destroyed.lock().expect("recorder lock"),
-            [window.id().0],
+            [window.id().get().get()],
             "closing one window traces its destruction, under its own identity, once"
         );
         sibling.close_now();
@@ -2758,7 +2758,7 @@ mod native_windows {
                 window.close_now();
             }
         });
-        let id = window.id().0;
+        let id = window.id().get().get();
         drop(window);
         let subscriber =
             tracing_subscriber::registry().with(DestroyedWindows(Arc::clone(&destroyed)));

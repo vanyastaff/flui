@@ -132,7 +132,7 @@ struct DragWindow {
 
 impl PlatformWindow for DragWindow {
     fn id(&self) -> WindowId {
-        WindowId(1)
+        WindowId::try_from_raw(1).expect("a nonzero window id")
     }
     fn request_redraw(&self) {}
     fn redraw_requester(&self) -> Arc<dyn flui_platform::RedrawRequester> {
@@ -369,7 +369,11 @@ impl Fixture {
         });
         let hit = HitTestHandle::new(dispatch.clone(), probe.clone());
         let handle = owner.handle();
-        owner.attach_presentation(presentation(1), WindowId(1), hit.clone());
+        owner.attach_presentation(
+            presentation(1),
+            WindowId::try_from_raw(1).expect("a nonzero window id"),
+            hit.clone(),
+        );
         Self {
             dispatch,
             owner,
@@ -838,8 +842,11 @@ fn escalates_only_outside_window_with_outside_actions_or_sibling_presentation() 
         let f = Fixture::new(&lane);
         lane.enter(|| {
             if case.sibling {
-                f.owner
-                    .attach_presentation(presentation(2), WindowId(2), f.hit.clone());
+                f.owner.attach_presentation(
+                    presentation(2),
+                    WindowId::try_from_raw(2).expect("a nonzero window id"),
+                    f.hit.clone(),
+                );
             }
             let w = (case.window)();
             let session = f.start_with(Rc::clone(&w), case.allowed, case.reach, text());
@@ -968,8 +975,11 @@ fn an_at_start_backend_decides_at_the_start_and_never_escalates_later() {
     let lane = InteractionLane::try_new().expect("lane");
     let f = Fixture::new(&lane);
     lane.enter(|| {
-        f.owner
-            .attach_presentation(presentation(2), WindowId(2), f.hit.clone());
+        f.owner.attach_presentation(
+            presentation(2),
+            WindowId::try_from_raw(2).expect("a nonzero window id"),
+            f.hit.clone(),
+        );
         let ios = window(Some(OsDragStart::AtStart { eager_data: false }));
         let items = || vec![DragItem::new().with_value(1_u8)];
         let session = f.start_with(Rc::clone(&ios), AllowedActions::within(MOVE), None, items());
@@ -1024,8 +1034,11 @@ fn drag_between_presentations_of_one_runtime_redeems_the_value() {
     let f = Fixture::new(&lane);
     lane.enter(|| {
         let sibling = presentation(2);
-        f.owner
-            .attach_presentation(sibling, WindowId(2), f.hit.clone());
+        f.owner.attach_presentation(
+            sibling,
+            WindowId::try_from_raw(2).expect("a nonzero window id"),
+            f.hit.clone(),
+        );
         let target = f.spot("S", 0.0, 100.0, Some(MOVE));
         let w = desktop();
         let session = f.start(Rc::clone(&w), AllowedActions::within(MOVE));
@@ -1354,8 +1367,11 @@ fn value_is_redeemed_only_in_source_runtime() {
     let a = Fixture::in_runtime(&lane_a, 1, nonce());
     let b = Fixture::in_runtime(&lane_b, 2, nonce());
     let sibling = presentation(7);
-    b.owner
-        .attach_presentation(sibling, WindowId(7), b.hit.clone());
+    b.owner.attach_presentation(
+        sibling,
+        WindowId::try_from_raw(7).expect("a nonzero window id"),
+        b.hit.clone(),
+    );
 
     let (request, session) = lane_a.enter(|| {
         let w = desktop();
@@ -2300,8 +2316,11 @@ fn a_drop_whose_receiver_and_conclusion_fail_reports_the_receiver() {
 fn one_offer_over_two_windows_is_two_hovers() {
     in_lane(|f| {
         let second = presentation(2);
-        f.owner
-            .attach_presentation(second, WindowId(2), f.hit.clone());
+        f.owner.attach_presentation(
+            second,
+            WindowId::try_from_raw(2).expect("a nonzero window id"),
+            f.hit.clone(),
+        );
         let _first_spot = f.spot("A", 0.0, 50.0, Some(COPY));
         let _second_spot = f.spot("B", 50.0, 100.0, Some(COPY));
         let offer = f.text_offer();
@@ -2373,8 +2392,11 @@ fn closing_the_dropped_window_waits_for_a_fetch_made_over_another() {
 fn another_windows_hover_keeps_the_answer_standing() {
     in_lane(|f| {
         let second = presentation(2);
-        f.owner
-            .attach_presentation(second, WindowId(2), f.hit.clone());
+        f.owner.attach_presentation(
+            second,
+            WindowId::try_from_raw(2).expect("a nonzero window id"),
+            f.hit.clone(),
+        );
         let _first_spot = f.spot("A", 0.0, 50.0, Some(COPY));
         let leaving = f.unregistered("B", Some(COPY), None);
         let ticket = f.register(&leaving, 50.0, 100.0);
@@ -2466,8 +2488,11 @@ fn an_offer_outlives_its_last_hover_while_a_fetch_is_in_flight() {
 /// meanwhile, otherwise the second window was its only hover.
 fn fetched_over_a_window_that_left(f: &Fixture, stay: bool) -> (DataTransferOffer, DragFetch) {
     let second = presentation(2);
-    f.owner
-        .attach_presentation(second, WindowId(2), f.hit.clone());
+    f.owner.attach_presentation(
+        second,
+        WindowId::try_from_raw(2).expect("a nonzero window id"),
+        f.hit.clone(),
+    );
     let _first_spot = f.spot("A", 0.0, 50.0, Some(COPY));
     let fetcher = Rc::new(Spot {
         name: "B",
@@ -2570,8 +2595,11 @@ fn the_last_fetch_dropped_off_thread_wakes_the_owner() {
 /// dropped over the first: the drop and the outstanding fetch.
 fn dropped_while_fetching_elsewhere(f: &Fixture) -> (DataTransferId, DragFetch) {
     let second = presentation(2);
-    f.owner
-        .attach_presentation(second, WindowId(2), f.hit.clone());
+    f.owner.attach_presentation(
+        second,
+        WindowId::try_from_raw(2).expect("a nonzero window id"),
+        f.hit.clone(),
+    );
     let _first_spot = f.spot("A", 0.0, 50.0, Some(COPY));
     let fetcher = Rc::new(Spot {
         name: "B",

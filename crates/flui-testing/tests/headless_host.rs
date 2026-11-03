@@ -324,6 +324,40 @@ fn close_delivery_is_idempotent() {
     );
 }
 
+/// A window opened after another closed gets an id no window of the host
+/// had, so what a recording or a late event names never reaches it in place
+/// of the closed one.
+#[test]
+fn a_window_opened_after_another_closed_has_an_id_of_its_own() {
+    use flui_platform::PlatformWindow as _;
+
+    let mut host = HeadlessHost::new(HeadlessWindow::new(100, 100));
+    let first = host.open_window(HeadlessWindow::new(100, 100));
+    let second = host.open_window(HeadlessWindow::new(100, 100));
+    let mut seen = vec![
+        host.window().id(),
+        host.window_of(first).id(),
+        host.window_of(second).id(),
+    ];
+    assert!(
+        host.request_close(first, CloseReason::Program),
+        "the first secondary closes"
+    );
+    let third = host.open_window(HeadlessWindow::new(100, 100));
+    let reopened = host.window_of(third).id();
+    assert!(
+        !seen.contains(&reopened),
+        "{reopened:?} is an id another window had: {seen:?}"
+    );
+    seen.push(reopened);
+    let distinct: std::collections::HashSet<_> = seen.iter().collect();
+    assert_eq!(
+        distinct.len(),
+        seen.len(),
+        "every window has an id of its own: {seen:?}"
+    );
+}
+
 #[test]
 fn secondary_window_preserves_its_text_store_backend() {
     let mut host = HeadlessHost::new(HeadlessWindow::new(100, 100));

@@ -43,7 +43,7 @@ use crate::{
 };
 use flui_platform::data_transfer::DataTransferSource;
 use flui_platform::drag::PlatformDragSource;
-use flui_platform::{DisplayId, DisplaySnapshot, SystemPreferences};
+use flui_platform::{DisplayId, DisplaySnapshot, SystemPreferences, WindowId, WindowIdMint};
 
 use crate::owner::sources::SystemPreferenceSource;
 use crate::owner::watch::Watch;
@@ -489,10 +489,23 @@ pub(crate) struct WebState {
     background_executor: Arc<WebExecutor>,
     pub(crate) clipboard: Arc<dyn crate::host::SharedClipboard>,
     is_running: bool,
-    /// Window callbacks for RAF loop frame dispatch.
-    /// Set when `open_window` creates the single browser window.
-    pub(crate) window_delivery: Option<Arc<WindowDelivery>>,
+    /// The page's open window: its id and the callbacks the RAF loop
+    /// dispatches frames to. Set when `open_window` creates the single
+    /// browser window, taken when it retires.
+    pub(crate) window: Option<(WindowId, Arc<WindowDelivery>)>,
+    /// Issues the id of every window the page opens, never one twice: a
+    /// window opened after the first retired is another window.
+    pub(crate) window_ids: WindowIdMint,
     owner: Weak<WebLoop>,
+}
+
+impl WebState {
+    /// The callbacks of the page's open window.
+    fn window_delivery(&self) -> Option<Arc<WindowDelivery>> {
+        self.window
+            .as_ref()
+            .map(|(_, delivery)| Arc::clone(delivery))
+    }
 }
 
 // SAFETY: the page has one thread (`owner::web` refuses `+atomics`), so the
@@ -519,7 +532,8 @@ impl WebLoop {
             background_executor: Arc::new(WebExecutor::new()),
             clipboard: H::clipboard(),
             is_running: false,
-            window_delivery: None,
+            window: None,
+            window_ids: WindowIdMint::new(),
             owner: Weak::new(),
         };
         let state = Arc::new(Mutex::new(state));
@@ -534,7 +548,7 @@ impl WebLoop {
                 };
                 let (owner, window) = {
                     let state = state.lock();
-                    (state.owner.upgrade(), state.window_delivery.clone())
+                    (state.owner.upgrade(), state.window_delivery())
                 };
                 // A wake is how a screen change reaches the page: the window
                 // reads which screen it is on again before the owner's turn, so
@@ -627,7 +641,7 @@ impl WebLoop {
         *g.borrow_mut() = Some(Closure::new(move |timestamp: f64| {
             let (is_running, delivery) = {
                 let s = state.lock();
-                (s.is_running, s.window_delivery.clone())
+                (s.is_running, s.window_delivery())
             };
             if !is_running {
                 return;

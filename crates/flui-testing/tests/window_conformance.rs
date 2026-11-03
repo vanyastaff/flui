@@ -24,12 +24,21 @@ use flui_testing::window_handler::{HandlerCall, RecordingWindowHandler};
 /// capability while the window takes none ([`Fault::ClaimsWhatItCannot`]),
 /// it stays open when told to close ([`Fault::IgnoresClose`]), or it
 /// publishes a snapshot without the facts the window system reports
-/// ([`Fault::SnapshotWithoutFacts`]).
-struct Faulty(Rc<dyn PlatformWindow>, Fault);
+/// ([`Fault::SnapshotWithoutFacts`]). It reports the id it is given, which is
+/// the window's own unless the fault is [`Fault::ReissuesAClosedId`].
+struct Faulty(Rc<dyn PlatformWindow>, Fault, WindowId);
+
+impl Faulty {
+    /// `window` with `fault`, reporting its own id.
+    fn new(window: Rc<dyn PlatformWindow>, fault: Fault) -> Self {
+        let id = window.id();
+        Self(window, fault, id)
+    }
+}
 
 impl PlatformWindow for Faulty {
     fn id(&self) -> WindowId {
-        self.0.id()
+        self.2
     }
     fn request_redraw(&self) {
         self.0.request_redraw();
@@ -145,6 +154,8 @@ impl flui_platform::SurfaceTarget for BlockingSurface {
 /// A headless window under `capabilities`, with `fault` applied to how the
 /// fixture settles or closes it.
 struct Fixture {
+    /// The platform that opened the window, which opens the next one.
+    platform: HeadlessPlatform,
     window: Rc<dyn PlatformWindow>,
     /// The headless window itself, whose model is the window system.
     model: Rc<dyn HostWindow>,
@@ -195,6 +206,9 @@ enum Fault {
     /// The window's frame requests carry the platform's stamps on the
     /// platform's own clock, never rebased onto the event epoch.
     StampsFramesOffTheTimeline,
+    /// The window opened after the one under test closed reports the closed
+    /// one's id, as a host that took a recycled handle for an id would.
+    ReissuesAClosedId,
 }
 
 impl Fixture {
@@ -228,10 +242,11 @@ impl Fixture {
                 | Fault::ClaimsPresentation
                 | Fault::DisclaimsPresentation
                 | Fault::HidesWhenMinimized),
-            ) => Rc::new(Faulty(Rc::clone(&model) as _, fault)),
+            ) => Rc::new(Faulty::new(Rc::clone(&model) as _, fault)),
             _ => Rc::clone(&model) as _,
         };
         Self {
+            platform,
             window,
             model,
             handler,
@@ -241,6 +256,21 @@ impl Fixture {
 }
 
 impl WindowFixture for Fixture {
+    /// A second window of the same platform, with the faulty id where the
+    /// fault reissues the closed one's.
+    fn open_another(&mut self) -> Option<Rc<dyn PlatformWindow>> {
+        let another = self
+            .platform
+            .open_window(WindowOptions::default(), RecordingWindowHandler::new())
+            .expect("a headless window opens");
+        Some(match self.fault {
+            Some(fault @ Fault::ReissuesAClosedId) => {
+                Rc::new(Faulty(another as _, fault, self.window.id()))
+            }
+            _ => another as _,
+        })
+    }
+
     fn window(&self) -> Rc<dyn PlatformWindow> {
         Rc::clone(&self.window)
     }
@@ -438,6 +468,13 @@ fn a_window_that_claims_what_it_cannot_do_is_caught() {
     );
 }
 
+fn a_host_that_reissues_a_closed_windows_id_is_caught() {
+    assert_eq!(
+        caught(Fault::ReissuesAClosedId),
+        ["a_window_opened_after_a_close_has_an_id_of_its_own"]
+    );
+}
+
 fn a_window_that_ignores_the_token_is_caught() {
     let checks = caught(Fault::IgnoresTheToken);
     assert_eq!(
@@ -525,6 +562,10 @@ fn window_conformance_checks() {
             (
                 "a_window_that_claims_what_it_cannot_do_is_caught",
                 a_window_that_claims_what_it_cannot_do_is_caught as fn(),
+            ),
+            (
+                "a_host_that_reissues_a_closed_windows_id_is_caught",
+                a_host_that_reissues_a_closed_windows_id_is_caught as fn(),
             ),
             (
                 "a_snapshot_without_the_windows_facts_is_caught",

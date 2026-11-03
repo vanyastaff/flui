@@ -170,11 +170,18 @@ foundation suite.
   state at Idle commit points, where each work class applies its own freshness
   check (ADR-0027 §6). A window opened for a UI runtime that died meanwhile is
   reclaimed through the abandoned slot.
-- **Window identity.** `WindowId` stays the platform-internal native key;
-  UI runtime-facing identity is the generational `PresentationAddress`
-  (ADR-0037 §2). winit's ids are monotonic. The macOS backend's pointer-as-id
-  is an ABA hazard to replace with a monotonic mint before multi-window
-  sessions on that backend.
+- **Window identity.** `WindowId` is the platform's key for a window it
+  opened; UI runtime-facing identity is the generational
+  `PresentationAddress` (ADR-0037 §2). A host issues each window's `WindowId`
+  from its own `WindowIdMint` as the window opens, never reissues one and
+  never wraps: exhaustion refuses the open with
+  `OpenWindowError::IdsExhausted`. A native handle or address (an HWND, an
+  `NSWindow` pointer, an X id) is never an id, since the OS reuses them: a
+  backend keyed by one keeps a handle → `WindowId` map whose entry goes when
+  the window is destroyed, and a handle that misses the map names no window.
+  `WindowId` has no public constructor from a number; a recording decoder
+  builds one with `WindowId::try_from_raw` under `flui-platform`'s `testing`
+  feature and refuses 0.
 
 ### 5. `Clipboard` stays `Send + Sync`; macOS routes internally
 

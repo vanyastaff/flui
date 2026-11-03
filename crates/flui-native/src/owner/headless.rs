@@ -127,13 +127,17 @@ pub(crate) trait TrackedWindows: OpenWindows {
     /// tracks it; `platform` is the lock `state` came from, which the window
     /// keeps to close. The caller delivers the capability snapshot once the
     /// lock is released.
+    ///
+    /// # Errors
+    /// [`OpenWindowError::IdsExhausted`] once the platform issued every
+    /// window id.
     fn open(
         self: Arc<Self>,
         state: &mut HeadlessState,
         platform: Weak<Mutex<HeadlessState>>,
         options: WindowOptions,
         handler: Rc<dyn WindowHandler>,
-    ) -> Rc<dyn HostWindow>;
+    ) -> Result<Rc<dyn HostWindow>, OpenWindowError>;
 
     /// Keep `window`, which a deferred open built, until it closes: its
     /// opener gets its identity, never the window (ADR-0254 §4).
@@ -860,9 +864,10 @@ impl HeadlessDeferredWindowOpens {
     /// a genuine `.close()` — since the whole point of this test seam is
     /// that nothing else in the framework hands that handle back once a
     /// request defers), or `None` if there was nothing pending (the platform
-    /// was dropped, or every request so far has already been resolved) or
-    /// the call is not on the owner thread whose handler the oldest request
-    /// carries, which it leaves pending. The window's handler hears the
+    /// was dropped, or every request so far has already been resolved), when
+    /// the platform refused the open, whose requester hears the refusal, or
+    /// when the call is not on the owner thread whose handler the oldest
+    /// request carries, which it leaves pending. The window's handler hears the
     /// capability snapshot before this returns.
     pub fn resolve_next(&self) -> Option<Rc<dyn HostWindow>> {
         let platform_state = self.state.upgrade()?;
@@ -888,14 +893,27 @@ impl HeadlessDeferredWindowOpens {
                 .take()
                 .expect("BUG: a deferred open resolves on the owner thread that made it");
             let windows = Arc::clone(&state.windows);
-            let window = Arc::clone(&windows).open(
+            let opened = Arc::clone(&windows).open(
                 &mut state,
                 Arc::downgrade(&platform_state),
                 options,
                 handler,
             );
-            windows.keep_deferred(&window);
-            (slot, window)
+            match opened {
+                Ok(window) => {
+                    windows.keep_deferred(&window);
+                    (slot, window)
+                }
+                Err(refused) => {
+                    // The request was accepted: its opener hears the refusal,
+                    // outside the lock.
+                    drop(state);
+                    // A requester that abandoned the request has nothing to
+                    // hear.
+                    let _abandoned = slot.deliver(Err(refused));
+                    return None;
+                }
+            }
         };
         // The lock is released: the handler hears its window's capabilities
         // before anything later.
@@ -1019,7 +1037,7 @@ mod tests {
             _: Weak<Mutex<HeadlessState>>,
             _: WindowOptions,
             _: Rc<dyn WindowHandler>,
-        ) -> Rc<dyn HostWindow> {
+        ) -> Result<Rc<dyn HostWindow>, OpenWindowError> {
             unreachable!("the test opens no window")
         }
 

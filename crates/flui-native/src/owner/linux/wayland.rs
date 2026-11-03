@@ -1046,8 +1046,9 @@ mod event_loop {
         /// The last window closed since the loop last looked: it asks the
         /// application's exit policy.
         emptied: AtomicBool,
-        /// The last identity issued.
-        issued: AtomicU64,
+        /// Issues the id of every window, on the owner thread, never one
+        /// twice.
+        ids: OwnerCell<flui_platform::WindowIdMint>,
         /// The activation token the process was launched with, until the
         /// first window is held.
         launch_token: OwnerCell<Option<ActivationToken>>,
@@ -1063,21 +1064,26 @@ mod event_loop {
                 windows: OwnerMap::new(),
                 active: OwnerCell::new(),
                 emptied: AtomicBool::new(false),
-                issued: AtomicU64::new(0),
+                ids: OwnerCell::new(),
                 launch_token: held,
             }
         }
 
-        /// An identity no window of this loop had; `None` once the space is
-        /// used up, never wrapped onto a window something still names.
-        fn issue(&self) -> Option<WindowId> {
-            let previous = self
-                .issued
-                .try_update(Ordering::Relaxed, Ordering::Relaxed, |issued| {
-                    issued.checked_add(1)
-                })
-                .ok()?;
-            previous.checked_add(1).map(WindowId::new)
+        /// An identity no window of this loop had, on the owner thread.
+        ///
+        /// # Errors
+        ///
+        /// [`OpenWindowError::IdsExhausted`] once the space is used up, never
+        /// wrapped onto a window something still names, and
+        /// [`OpenWindowError::Backend`] off the owner thread.
+        fn issue(&self) -> Result<WindowId, OpenWindowError> {
+            let issued =
+                self.ids
+                    .with(|ids| ids.next())
+                    .ok_or_else(|| OpenWindowError::Backend {
+                        message: "a Wayland window opens on the loop's owner thread".to_owned(),
+                    })?;
+            Ok(issued?)
         }
 
         /// Hold `window` as `id`, on the owner thread. The first window held
@@ -1763,12 +1769,7 @@ mod event_loop {
             if !self.signal.accepting() {
                 return Err(OpenWindowError::OwnerGone { rejected: None });
             }
-            let id = self
-                .windows
-                .issue()
-                .ok_or_else(|| OpenWindowError::Backend {
-                    message: "the Wayland loop has issued every window identity".to_owned(),
-                })?;
+            let id = self.windows.issue()?;
             Ok(WindowSeed {
                 id,
                 protocol: self.protocol.clone(),
@@ -2386,7 +2387,8 @@ mod event_loop {
         fn the_launch_token_goes_to_the_first_window_held() {
             let token = ActivationToken::new("launcher".to_owned());
             let table = WindowTable::new(Some(token.clone()));
-            let (first, second, third) = (WindowId::new(1), WindowId::new(2), WindowId::new(3));
+            let issue = || table.issue().expect("the table issues an id");
+            let (first, second, third) = (issue(), issue(), issue());
             assert!(
                 matches!(table.windows.insert(first, Rc::new(Idle)), Ok(None)),
                 "a window held before"

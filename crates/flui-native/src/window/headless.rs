@@ -7,10 +7,7 @@
 
 use std::{
     rc::Rc,
-    sync::{
-        Arc, Weak,
-        atomic::{AtomicU64, Ordering},
-    },
+    sync::{Arc, Weak},
     thread,
 };
 
@@ -22,8 +19,8 @@ use flui_platform::{
     AdmittedCommand, ApplyError, CursorError, DispatchEventResult, DisplayId, PlatformHaptics,
     PlatformInput, PlatformTextInput, PlatformWindow, SizeConstraints, SurfaceChange, Unsupported,
     UnsupportedReason, WindowAppearance, WindowCapabilities, WindowCommand, WindowFrame,
-    WindowGeometry, WindowHandler, WindowId, WindowMaterial, WindowMode, WindowOptions,
-    WindowState,
+    WindowGeometry, WindowHandler, WindowId, WindowIdMint, WindowMaterial, WindowMode,
+    WindowOptions, WindowState,
 };
 use parking_lot::Mutex;
 
@@ -72,22 +69,15 @@ impl HeadlessWindowPolicy {
     }
 }
 
-/// Process-wide identity source for mock windows.
+/// The ids of the mock windows of every
+/// [`HeadlessPlatform`](crate::HeadlessPlatform) in the process.
 ///
-/// A headless test may construct several independent [`HeadlessPlatform`](crate::HeadlessPlatform)
-/// values whose windows later meet in one application registry. Scoping the
-/// counter to a platform instance lets those windows alias even though real
-/// backend handles are process-unique.
-static NEXT_HEADLESS_WINDOW_ID: AtomicU64 = AtomicU64::new(0);
-
-fn next_headless_window_id() -> WindowId {
-    let raw = NEXT_HEADLESS_WINDOW_ID
-        .try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
-            current.checked_add(1)
-        })
-        .expect("BUG: exhausted the process-wide headless WindowId space");
-    WindowId(raw)
-}
+/// A headless test builds several independent platforms whose windows later
+/// meet in one application registry, which keys them by id: a mint per
+/// platform would give the first window of each the same id. One mint for the
+/// process issues each id once, never 0, and refuses the open with
+/// [`OpenWindowError::IdsExhausted`] once it has issued them all.
+static HEADLESS_WINDOW_IDS: Mutex<WindowIdMint> = Mutex::new(WindowIdMint::new());
 
 /// The windows the headless platform tracks, and what the simulated OS gives
 /// every window opened from now on.
@@ -182,9 +172,9 @@ impl TrackedWindows for HeadlessWindows {
         platform: Weak<Mutex<HeadlessState>>,
         options: WindowOptions,
         handler: Rc<dyn WindowHandler>,
-    ) -> Rc<dyn HostWindow> {
-        let window_id = next_headless_window_id();
+    ) -> Result<Rc<dyn HostWindow>, OpenWindowError> {
         let display = state.window_display();
+        let window_id = HEADLESS_WINDOW_IDS.lock().next()?;
         let (capabilities, limits) = {
             let tracked = self.tracked.lock();
             (tracked.capabilities, tracked.policy)
@@ -231,7 +221,7 @@ impl TrackedWindows for HeadlessWindows {
             tracked.active = Some(window_id);
         }
 
-        Rc::new(window) as Rc<dyn HostWindow>
+        Ok(Rc::new(window) as Rc<dyn HostWindow>)
     }
 
     /// The deferred open's window stays with the host until it closes.
@@ -357,10 +347,9 @@ impl host::Window<HeadlessLoop> for MockWindow {
         tracing::info!(?options, "Creating mock window");
 
         let platform_state = Arc::downgrade(&owner.state);
-        let window = owner.with_state(|state| {
+        owner.with_state(|state| {
             TrackedWindows::open(Arc::clone(windows), state, platform_state, options, handler)
-        });
-        Ok(window)
+        })
     }
 
     fn active(_: &HeadlessLoop, windows: &HeadlessWindows) -> Option<WindowId> {

@@ -97,6 +97,23 @@ pub fn framed(contacts: impl IntoIterator<Item = Assembled>) -> Assembled {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 pub struct NativeSurface(pub u64);
 
+impl NativeSurface {
+    /// The surface of window `id`, for a backend whose registry serves
+    /// several windows. There is no way back: a backend that names the window
+    /// of a surface finds it among the windows it holds, so a surface whose
+    /// window closed names none.
+    #[cfg_attr(
+        not(any(wayland_host, x11_host)),
+        expect(
+            dead_code,
+            reason = "only the Wayland and X11 registries serve several windows"
+        )
+    )]
+    pub(crate) fn of_window(id: flui_platform::WindowId) -> Self {
+        Self(id.get().get())
+    }
+}
+
 /// The backend's label for an input device. Labels are minted into
 /// [`DeviceId`](flui_platform::pointer::DeviceId)s by the registry, so a
 /// label the OS reuses after removal never revives a retired identity.

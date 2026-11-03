@@ -357,7 +357,7 @@ impl Rig {
         let ime = X11Ime::with_bus(None, Bus::start(runtime.handle(), reach, Box::new(|| {})));
         let window = WindowRef {
             xid,
-            id: WindowId(1),
+            id: WindowId::try_from_raw(1).expect("a nonzero window id"),
         };
         let text = Arc::new(WindowText::new());
         ime.window_opened(window, WindowScale::new(1.0), Some(Arc::clone(&text) as _));

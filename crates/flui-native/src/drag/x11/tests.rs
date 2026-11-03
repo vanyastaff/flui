@@ -246,7 +246,7 @@ impl Target {
         drag.window_opened(InputTarget {
             window: WindowRef {
                 xid,
-                id: WindowId(1),
+                id: WindowId::try_from_raw(1).expect("a nonzero window id"),
             },
             delivery: Arc::new(WindowDelivery::new(
                 Rc::clone(&handler) as _,
@@ -1372,7 +1372,7 @@ impl Target {
     fn start(&self, request: OsDragRequest) -> Result<(), DragError> {
         let source = Arc::clone(&self.drag).drag_source(WindowRef {
             xid: self.xid,
-            id: WindowId(1),
+            id: WindowId::try_from_raw(1).expect("a nonzero window id"),
         });
         source.start(request)?;
         self.learn_the_visit();
@@ -1978,11 +1978,11 @@ fn a_closed_windows_drag_source_starts_no_session() {
     let _held = Held::press(&other.connection);
     let source = Arc::clone(&target.drag).drag_source(WindowRef {
         xid: target.xid,
-        id: WindowId(1),
+        id: WindowId::try_from_raw(1).expect("a nonzero window id"),
     });
     target.drag.window_closed(WindowRef {
         xid: target.xid,
-        id: WindowId(1),
+        id: WindowId::try_from_raw(1).expect("a nonzero window id"),
     });
     let ended = Rc::new(Cell::new(None));
     assert!(

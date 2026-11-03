@@ -290,6 +290,13 @@ impl<T: Default + 'static> Default for OwnerCell<T> {
     }
 }
 
+impl<T: 'static> std::fmt::Debug for OwnerCell<T> {
+    /// The value is the owner thread's, and formatting may happen anywhere.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OwnerCell").finish_non_exhaustive()
+    }
+}
+
 /// A map of a `Send + Sync` host structure that only its owner thread
 /// reaches: an [`OwnerCell`] of a `HashMap`, for a host's table of open
 /// windows. Off the owner thread it is empty and takes nothing.
@@ -324,14 +331,18 @@ impl<K: std::hash::Hash + Eq + Copy + 'static, V: Clone + 'static> OwnerMap<K, V
     }
 }
 
-/// How the X11 host reads its window table.
-#[cfg(x11_host)]
+/// How the AppKit and X11 hosts look a window up in their tables.
+#[cfg(any(target_os = "macos", x11_host))]
 impl<K: std::hash::Hash + Eq + Copy + 'static, V: Clone + 'static> OwnerMap<K, V> {
     /// A clone of the value under `key`.
     pub(crate) fn get(&self, key: &K) -> Option<V> {
         self.cell.with(|map| map.get(key).cloned()).flatten()
     }
+}
 
+/// How the X11 host reads its window table.
+#[cfg(x11_host)]
+impl<K: std::hash::Hash + Eq + Copy + 'static, V: Clone + 'static> OwnerMap<K, V> {
     /// A snapshot of the keys and values: what is done with them next may
     /// open or close windows.
     pub(crate) fn entries(&self) -> Vec<(K, V)> {

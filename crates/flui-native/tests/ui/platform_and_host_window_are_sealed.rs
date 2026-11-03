@@ -19,7 +19,7 @@ use flui_platform::data_transfer::DataTransferSource;
 use flui_platform::{
     CursorError, CursorIcon, DisplaySnapshot, PlatformWindow,
     AppDataDir, LaunchKey, SystemPreferences,
-    AdmittedCommand, ApplyError, WindowCapabilities, WindowGeometry, WindowId,
+    AdmittedCommand, ApplyError, WindowCapabilities, WindowGeometry, WindowId, WindowIdMint,
     WindowHandler, WindowOptions, WindowState,
 };
 use flui_semantics::platform::PlatformAccessibility;
@@ -135,7 +135,7 @@ struct OutsideWindow;
 
 impl PlatformWindow for OutsideWindow {
     fn id(&self) -> WindowId {
-        WindowId(7)
+        WindowIdMint::new().next().expect("a fresh mint issues an id")
     }
 
     fn request_redraw(&self) {}

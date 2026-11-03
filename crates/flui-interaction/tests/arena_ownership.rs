@@ -496,7 +496,7 @@ impl RedrawCounter {
 
 impl flui_platform::PlatformWindow for RedrawCounter {
     fn id(&self) -> flui_platform::WindowId {
-        flui_platform::WindowId(1)
+        flui_platform::WindowId::try_from_raw(1).expect("a nonzero window id")
     }
     fn request_redraw(&self) {
         self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
