@@ -420,6 +420,10 @@ impl Reactive {
         if nested {
             // Leaked before the diagnostic: running this destructor would
             // recreate the value and refuse it again, without bound.
+            #[expect(
+                clippy::mem_forget,
+                reason = "running this destructor would recreate the value and refuse it again, without bound"
+            )]
             std::mem::forget(value);
             tracing::debug!(
                 target: "flui.signals",

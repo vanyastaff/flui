@@ -229,6 +229,10 @@ fn contained<R>(
 /// on the wrong thread, including while the caller is already unwinding.
 #[cfg(any(target_os = "windows", target_os = "macos", test))]
 pub(crate) fn retain_off_owner_resource<T>(resource: T, report: impl FnOnce()) {
+    #[expect(
+        clippy::mem_forget,
+        reason = "an owner-affine resource must not be destroyed off its owner thread"
+    )]
     std::mem::forget(resource);
     contain_owner_callback(report);
 }
