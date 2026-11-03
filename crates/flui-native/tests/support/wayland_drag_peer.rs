@@ -65,6 +65,8 @@ pub(crate) struct Wanted {
 pub(crate) enum Heard {
     /// The drag started.
     Started,
+    /// The pointer entered the surface.
+    Pointed,
     /// The target accepts this type, or none.
     Target(Option<String>),
     /// The compositor chose this action.
@@ -299,6 +301,10 @@ impl Dispatch<WlPointer, ()> for State {
         _: &Connection,
         queue: &QueueHandle<Self>,
     ) {
+        if let wl_pointer::Event::Enter { .. } = event {
+            let _ = state.tell.send(Heard::Pointed);
+            return;
+        }
         let wl_pointer::Event::Button {
             serial,
             state: WEnum::Value(wl_pointer::ButtonState::Pressed),
