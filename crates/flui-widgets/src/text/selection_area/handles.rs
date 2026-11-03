@@ -9,12 +9,14 @@ use std::rc::{Rc, Weak};
 use flui_foundation::geometry::Offset;
 use flui_foundation::notifier::Listenable;
 use flui_foundation::panic::FirstPanic;
-use flui_interaction::GestureEndReason;
+use flui_interaction::{GestureEndReason, HapticsHandle};
 use flui_objects::RenderFollowerLayer;
 use flui_painting::BoxShape;
 use flui_painting::paint::Alignment;
 use flui_painting::styling::{BoxDecoration, Color};
 use flui_painting::typography::TextDirection;
+use flui_platform::HapticFeedback;
+use flui_platform::haptics::{HapticRequest, HapticTiming};
 use flui_rendering::hit_testing::HitTestBehavior;
 use flui_rendering::layer::{LayerLink, LeaderClip};
 use flui_rendering::pipeline::LeaderWatch;
@@ -149,6 +151,12 @@ pub(super) struct HandleState {
     /// What a handle drag shows over the dragged end, resolved at the
     /// area's last build.
     magnifier: RefCell<Option<Rc<dyn SelectionMagnifier>>>,
+    /// How far along the line from the dragged end the drag's magnifier
+    /// sits: where the finger holds the end, less where the end is.
+    pub(super) magnifier_along: Cell<f64>,
+    /// What a handle drag plays a step over a character with, acquired
+    /// with the area's dependencies.
+    pub(super) haptics: RefCell<Option<HapticsHandle>>,
     /// The area's selection menu, whose toolbar shows over shown handles.
     pub(super) menu: Rc<MenuHost>,
     /// Whether the missing overlay was already reported.
@@ -166,6 +174,8 @@ impl Default for HandleState {
             watches: RefCell::new(Vec::new()),
             grip: Cell::new(None),
             magnifier: RefCell::new(None),
+            magnifier_along: Cell::new(0.0),
+            haptics: RefCell::new(None),
             menu: Rc::new(MenuHost::default()),
             warned: Cell::new(false),
         }
@@ -378,6 +388,7 @@ fn drag_magnifier(model: &Rc<SelectionModel>, ctx: &dyn BuildContext) -> Option<
         look.as_ref(),
         &info,
         model.handles.link(side),
+        model.handles.magnifier_along.get(),
         ctx,
     ))
 }
@@ -488,12 +499,13 @@ impl LinkFollower {
         }
     }
 
-    /// The child's bottom centre `gap` above the leader's top-left corner:
-    /// over the line of the end the leader marks.
-    pub(crate) fn above(link: LayerLink, gap: f64, child: impl IntoView) -> Self {
+    /// The child's bottom centre `gap` above the leader's top-left corner
+    /// and `along` past it: over the line of the end the leader marks,
+    /// `along` from the end.
+    pub(crate) fn above(link: LayerLink, gap: f64, along: f64, child: impl IntoView) -> Self {
         Self {
             anchors: (Alignment::TOP_LEFT, Alignment::BOTTOM_CENTER),
-            offset: Offset::new(0.0, -gap),
+            offset: Offset::new(along, -gap),
             ..Self::new(link, child)
         }
     }
@@ -530,3 +542,14 @@ impl RenderView for LinkFollower {
 }
 
 impl_render_view!(LinkFollower);
+
+/// Plays the selection click of a handle drag's step over a character, with
+/// the frame that shows the end moved.
+pub(crate) fn play_step(haptics: Option<&HapticsHandle>) {
+    if let Some(haptics) = haptics {
+        let _ = haptics.perform(
+            HapticFeedback::SelectionClick,
+            HapticRequest::new(HapticTiming::FramePresented),
+        );
+    }
+}

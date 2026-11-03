@@ -355,8 +355,10 @@ impl ViewState<SelectionArea> for SelectionAreaState {
         }
     }
 
-    /// Follows the overlay the handles go in.
+    /// Follows the overlay the handles go in and the haptics a handle drag
+    /// plays.
     fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
+        *self.model.handles.haptics.borrow_mut() = ctx.haptics();
         let overlay = Overlay::maybe_of(ctx);
         let moved = match (
             self.model.handles.overlay.borrow().as_ref(),
