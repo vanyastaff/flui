@@ -69,8 +69,8 @@ The core is build-agnostic: it answers visible range and anchor only. A lazy sli
 own layout, calls `request_child_build(logical_index)` for a missing child and
 `emit_retain_band(first, last)` for the band it wants kept. The element tree's `ChildManager`
 services those requests **between layout passes inside the frame** — ADR-0017's fixpoint, bounded
-by `MAX_LAYOUT_BUILD_PASSES` and the softer `MAX_LAZY_BAND_PASSES` — and a post-frame service picks
-up whatever the budget left over.
+by ADR-0308 (passes without progress are charged; band passes are not) and the band's own
+`MAX_LAZY_BAND_PASSES` — and a post-frame service picks up whatever the budget left over.
 
 `ChildLayout` is `{ Scheduled, NoChild, Unwired }`: a request is answered at whole-pass
 granularity — the child is built after the pass that asked for it and laid out in the next pass of
@@ -81,7 +81,7 @@ in-frame fixpoint instead of by re-entrancy.
 The cost: under a wrong extent estimate a band converges over several passes. The band walk
 therefore adapts its estimate to the band's own measured mean and re-queries in the pass that
 measured it (ADR-0051), and a band that still has not settled when its budget trips defers the
-remainder to the next frame instead of hitting the fixpoint's `BUG:` bound.
+remainder to the next frame.
 
 **Re-adding a true mid-pass build** (Compose `SubcomposeLayout` style) is a breaking change to
 `SliverLayoutCtxErased` and `ChildLayout`. It returns only with a consumer that measures a real
