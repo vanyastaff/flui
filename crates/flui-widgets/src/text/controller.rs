@@ -160,7 +160,7 @@ pub(super) struct ComposingState {
     /// describing text that moved.
     pub(super) range: Range<usize>,
     /// Whether the caret should be hidden because the IME currently owns
-    /// its position — winit's `ImeEvent::Preedit { cursor: None, .. }`
+    /// its position — the `ImeEvent::Preedit { cursor: None, .. }`
     /// signal. Cleared (implicitly, by this whole struct going away) on
     /// commit, on `Disabled`, and on any non-IME edit; explicitly reset to
     /// `false` by a direct caret-navigation call while composing stays

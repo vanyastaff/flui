@@ -3,8 +3,8 @@
 - **Status:** Accepted (2026-11-02)
 - **Date:** 2026-11-02
 - **Amended:** 2026-11-02: §5 and §6, the press takers cut out of a move area and the widgets that
-  mark the regions; §7, the Win32 frame. 2026-11-03: §8, the AppKit title bar; §9, the winit
-  window; §10, the X11 window; §11, the Wayland window.
+  mark the regions; §7, the Win32 frame. 2026-11-03: §8, the AppKit title bar; §9, a frameless
+  window's presses; §10, the X11 window; §11, the Wayland window.
 - **Amends:** [ADR-0217](ADR-0217-interaction-module-layers-and-pointer-assembly.md) §5: input
   regions gain the chrome kinds the title-bar follow-up named, and their availability is
   answered per kind.
@@ -159,21 +159,22 @@ or nothing. Every other press reaches the application. AppKit keeps the resize b
 caption buttons, so its input capabilities answer only `window_move`, and the other chrome kinds
 stay `Unavailable`.
 
-§9. **winit.** A window with `AppTitleBar` has no decorations: no window system draws a frame
-around it, so the window answers each press itself, from the regions and from a resize band of
+§9. **A frameless window's presses.** Where no window system draws a frame around a window with
+`AppTitleBar`, the window answers each press itself, from the regions and from a resize band of
 its own (6 logical pixels along every edge of a window that is resizable, not maximized and not
-full screen), the band above any region. A primary press on the band or on a `WindowResize`
-region calls `drag_resize_window`. One on a `Move` region calls `drag_window` once the pointer
-has travelled 4 logical pixels while held, as the system's own title bars wait: a window manager
+full screen), the band above any region; the shared press model (`input::regions::presses`)
+holds these rules and §10 and §11 apply them. A primary press on the band or on a
+`WindowResize` region resizes the window. One on a `Move` region moves it once the pointer has
+travelled 4 logical pixels while held, as the system's own title bars wait: a window manager
 handed the move at the press holds the pointer, and the second click of a double-click would end
 its move instead of reaching the window. A second press within 500 ms and 4 logical pixels of a
-first that did not move the window toggles maximize, since winit reads no system setting for
-either; a secondary press on the bar opens the window menu (`show_window_menu`). The loop takes
-each such press and its release from the handler; the next press of the button ends a taken one
-whose release the window system kept. A
-`WindowFrame::None` window answers from its regions without the band. Caption buttons are the
-application's own buttons, so winit's input capabilities answer `window_move` and
-`window_resize` and leave `caption_buttons` `Unavailable`.
+first that did not move the window toggles maximize, since no system setting is read for either;
+a secondary press on the bar opens the window menu where the window system has one. The loop
+takes each such press and its release from the handler; the next press of the button ends a
+taken one whose release the window system kept. A `WindowFrame::None` window answers from its
+regions without the band. Caption buttons are the application's own buttons, so the input
+capabilities answer `window_move` and `window_resize` and leave `caption_buttons`
+`Unavailable`.
 
 §10. **X11.** A window with `AppTitleBar` has no decorations (`_MOTIF_WM_HINTS`) and answers its
 presses as §9 says, from the XInput 2 events the loop hands it before the input: a move or a
@@ -243,10 +244,9 @@ compositor overrules reads back as the system's. The input capabilities answer `
   `a_double_click_on_the_bar_does_what_system_settings_says`), and
   `the_desktop_hosts_honour_the_chrome_regions_they_answer` for the kinds each host honours, pin
   §8.
-- `a_press_on_a_frameless_window_moves_resizes_or_reaches_the_app`,
-  `a_second_press_on_the_bar_soon_and_near_toggles_maximize` and
-  `only_the_release_of_a_taken_press_is_taken` in `flui-native`, and on an X server
-  `x11_window_with_an_app_title_bar_has_no_decorations_and_answers_its_bar`, pin §9.
+- `a_press_on_a_frameless_window_moves_resizes_or_reaches_the_app` and
+  `a_second_press_on_the_bar_soon_and_near_toggles_maximize` in `flui-native`'s shared press
+  model (`input::regions::presses`) pin §9's press rules, which §10 and §11 apply.
 - `a_title_bar_of_the_applications_moves_and_resizes_through_the_window_manager` in
   `flui-native`'s `x11_input` suite, run on Xvfb under openbox, pins §10.
 - `a_press_on_the_applications_bar_is_the_windows` in `flui-native`, and

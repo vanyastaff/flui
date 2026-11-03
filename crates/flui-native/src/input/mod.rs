@@ -2,8 +2,8 @@
 //! beside one file per platform.
 //!
 //! The model is what two or more platforms share: the pointer assembly
-//! ([`assembly`], ADR-0217 §3), the key rules ([`keys`]: Win32's tables, which
-//! the winit host on Windows reads too, the adapter from `keyboard-types`
+//! ([`assembly`], ADR-0217 §3), the key rules ([`keys`]: Win32's tables, the
+//! adapter from `keyboard-types`
 //! and the one table of key locations), the availability table
 //! ([`availability`], ADR-0213), the input-region projection (`regions`,
 //! ADR-0217 §5), the one wheel step (`scroll`) and the event
@@ -17,7 +17,7 @@
 //! window's input, the messages' decoding in `raw` and the precision touchpad
 //! in `direct_manipulation`), `apple`, `android`, `web`, `linux` (what the
 //! Wayland and X11 hosts share, the XKB keyboard, beside the Wayland seats
-//! and the X11 host's XInput 2), `winit` and `headless`. A platform file's
+//! and the X11 host's XInput 2) and `headless`. A platform file's
 //! pure half is a module inside it, compiled and tested on every host.
 //!
 //! The model and the pure halves the backend conformance table and the native
@@ -46,11 +46,6 @@ pub mod linux;
 pub mod web;
 #[doc(hidden)]
 pub mod windows;
-#[cfg(all(
-    feature = "winit-backend",
-    any(target_os = "windows", target_os = "macos", target_os = "linux")
-))]
-pub(crate) mod winit;
 
 /// Nanoseconds since the process event epoch.
 #[inline]

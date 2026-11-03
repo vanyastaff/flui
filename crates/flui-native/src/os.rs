@@ -4,7 +4,7 @@
 //!
 //! Each module's extension trait is implemented for [`dyn HostWindow`](crate::HostWindow):
 //! its one method narrows a window to that system's view of it, and answers
-//! `None` for a window of any other host (headless, winit, another system),
+//! `None` for a window of any other host (headless, another system),
 //! so nothing is asked of a window that cannot take it and nothing panics.
 //! The views take and return FLUI types only, and each of their commands does
 //! what it says or answers why not; a raw window or display handle leaves only

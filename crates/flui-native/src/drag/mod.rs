@@ -14,7 +14,6 @@
 //! - `windows`: OLE;
 //! - `android`: `FluiView`'s drag events and system drags;
 //! - `web`: HTML drag and drop;
-//! - `winit`: the files winit reports dragged and dropped;
 //! - `wayland`: drops on the native Wayland host's windows through the seats'
 //!   data devices, and the sessions they start;
 //! - `x11`: XDND drops on the native X11 host's windows, and the sessions they
@@ -40,10 +39,5 @@ pub(crate) mod wayland;
 pub(crate) mod web;
 #[cfg(any(windows, test))]
 pub(crate) mod windows;
-#[cfg(all(
-    feature = "winit-backend",
-    any(target_os = "windows", target_os = "macos", target_os = "linux")
-))]
-pub(crate) mod winit;
 #[cfg(x11_host)]
 pub(crate) mod x11;

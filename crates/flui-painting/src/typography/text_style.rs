@@ -1,6 +1,7 @@
 //! Text styling types.
 
 use crate::styling::{Color, Shadow};
+use crate::typography::TextDecoration;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -262,6 +263,11 @@ pub struct TextStyle {
     /// by its offset and blurred by its blur radius (ADR-0309). `None`
     /// inherits the enclosing style's; an empty list casts none.
     pub shadows: Option<Vec<Shadow<f64>>>,
+    /// The lines drawn along the span's text, where its font puts them
+    /// (ADR-0310). `None` inherits the enclosing style's;
+    /// [`TextDecoration::NONE`] draws none.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub decoration: Option<TextDecoration>,
 }
 
 impl TextStyle {
@@ -301,6 +307,7 @@ impl TextStyle {
             // Paint only: `SpanPaint::of` reads them over the kept layout.
             background_color: _,
             shadows: _,
+            decoration: _,
         } = self;
         *font_size == other.font_size
             && *sizing == other.sizing
@@ -399,6 +406,14 @@ impl TextStyle {
         self
     }
 
+    /// Sets the lines drawn along the text; [`TextDecoration::NONE`] clears
+    /// an inherited decoration.
+    #[inline]
+    pub fn with_decoration(mut self, decoration: TextDecoration) -> Self {
+        self.decoration = Some(decoration);
+        self
+    }
+
     /// Merges this style with another, with the other taking precedence.
     #[inline]
     pub fn merge(&self, other: &TextStyle) -> Self {
@@ -432,6 +447,7 @@ impl TextStyle {
                 other.font_variations.clone()
             },
             shadows: other.shadows.clone().or_else(|| self.shadows.clone()),
+            decoration: other.decoration.or(self.decoration),
         }
     }
 }

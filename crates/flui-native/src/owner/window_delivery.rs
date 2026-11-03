@@ -40,8 +40,8 @@ const UNANSWERED_KEYS: usize = 8;
 /// Whether a window's native retirement has started, as any thread reads it.
 ///
 /// Every host clears its window's delivery where the native window is
-/// retired (Win32's `WM_DESTROY`, AppKit's `windowWillClose:`, winit's close
-/// completion, the Android loop's exit, UIKit's scene teardown, the web
+/// retired (Win32's `WM_DESTROY`, AppKit's `windowWillClose:`, the Linux hosts'
+/// window retirement, the Android loop's exit, UIKit's scene teardown, the web
 /// canvas's retirement, the headless close), so this is set before the
 /// native window it describes is gone. A window's surface target and redraw
 /// requester (ADR-0254 §5) live on other threads and outlive the window: they
@@ -139,29 +139,6 @@ type RetirementNotice = Box<dyn FnOnce() + Send>;
 /// Closes a window whose queued close request the handler granted, without
 /// asking it again.
 type DeferredClose = Box<dyn FnOnce() + Send>;
-
-/// Close `window` the way the application would, by an admitted
-/// [`WindowCommand::Close`](flui_platform::WindowCommand::Close), which asks
-/// no handler: the deferred close of a request the handler already granted.
-#[cfg_attr(
-    not(all(
-        feature = "winit-backend",
-        any(target_os = "windows", target_os = "macos", target_os = "linux")
-    )),
-    expect(
-        dead_code,
-        reason = "only the winit loop closes a granted request by command"
-    )
-)]
-pub(crate) fn close_by_command(window: &dyn flui_platform::PlatformWindow) {
-    let closed = flui_platform::WindowCommand::Close
-        .admit(&window.state().capabilities)
-        .map_err(|error| error.to_string())
-        .and_then(|command| window.apply(command).map_err(|error| error.to_string()));
-    if let Err(error) = closed {
-        tracing::warn!(%error, "a granted close request could not close its window");
-    }
-}
 
 struct DispatchState {
     pending: VecDeque<Delivery>,
@@ -270,7 +247,7 @@ pub struct WindowDelivery {
     /// see [`Self::set_state_publisher`].
     state_publisher: Mutex<Option<StatePublisher>>,
     /// What the last hover report said: whatever reports it (Win32 or web
-    /// input, AppKit's tracking area, winit's cursor events), a hover reaches
+    /// input, AppKit's tracking area, the Linux seats' pointer events), a hover reaches
     /// the window through [`Self::report_hover`] alone, and the window's
     /// snapshot reads it here ([`Self::hovered`]).
     hovered: AtomicBool,
@@ -380,14 +357,10 @@ impl WindowDelivery {
     /// publication raised elsewhere publishes nothing, and the owner's next
     /// read publishes what changed.
     ///
-    /// The winit, X11, AppKit, UIKit and web windows publish this way; the
+    /// The X11, Wayland, AppKit, UIKit and web windows publish this way; the
     /// Win32 window publishes through its window procedure, and the Android
     /// window, which its looper shares, through [`Self::publish_through`].
     #[cfg(any(
-        all(
-            feature = "winit-backend",
-            any(target_os = "windows", target_os = "macos", target_os = "linux")
-        ),
         all(target_os = "linux", feature = "x11"),
         target_os = "macos",
         target_os = "ios",
@@ -431,7 +404,7 @@ impl WindowDelivery {
 
     /// The pointer entered (`true`) or left (`false`) the window. A hover
     /// reaches the snapshot through here whichever feature reports it (Win32
-    /// or web input, AppKit's tracking area, winit's cursor events), with no
+    /// or web input, AppKit's tracking area, the Linux seats' pointer events), with no
     /// edge from the input to the window.
     pub(crate) fn report_hover(&self, hovered: bool) {
         self.hovered.store(hovered, Ordering::Release);
@@ -444,8 +417,7 @@ impl WindowDelivery {
     /// application keeps for the window (in `flui-app`, its renderer, whose
     /// surface is built from the window and must go while the native window
     /// still exists, ADR-0063), so a host calls this where the native window
-    /// is retired: winit's `complete_window_close` and the quit route that
-    /// releases every window still tracked (`owner/winit.rs`), the headless
+    /// is retired: the Linux hosts' window retirement, the headless
     /// `complete_close`, Win32's `WM_DESTROY`, AppKit's `windowWillClose:`
     /// and the Android loop's exit.
     ///

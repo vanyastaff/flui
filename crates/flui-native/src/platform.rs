@@ -86,7 +86,7 @@ pub trait AppHandler: 'static {
 
     /// Whether the platform may end its loop now that its own window
     /// bookkeeping holds no window ([`ExitAnswer`]). Asked by the Win32,
-    /// AppKit, winit and headless hosts when their last window closes, and
+    /// AppKit, X11, Wayland and headless hosts when their last window closes, and
     /// again on [`Platform::request_exit_policy_reevaluation`]; Android, the
     /// web and iOS leave the end of the process to the Activity, the page and
     /// UIKit.
@@ -95,7 +95,7 @@ pub trait AppHandler: 'static {
     /// The earliest wall-clock instant the loop must wake at even with
     /// nothing else to do (a gesture's hold deadline, a timer), or `None`.
     /// Asked once per idle iteration by the hosts that wait idle (Win32,
-    /// AppKit, winit, Android, iOS); the headless and web hosts have no idle
+    /// AppKit, X11, Wayland, Android, iOS); the headless and web hosts have no idle
     /// wait to bound.
     fn wake_deadline(&self, owner: &OwnerPlatform) -> Option<web_time::Instant>;
 }
@@ -109,7 +109,7 @@ pub enum ExitAnswer {
     /// holds the application.
     KeepRunning,
     /// The application has no policy of its own: the host decides as it does
-    /// before `ready` and after the loop ended. The Win32, AppKit and winit
+    /// before `ready` and after the loop ended. The Win32, AppKit, X11 and Wayland
     /// hosts end the loop; the headless host keeps it running.
     HostDecides,
 }
@@ -130,7 +130,7 @@ mod sealed {
 ///
 /// This trait provides the complete interface for platform-specific operations.
 /// Every host answers it as [`HostPlatform`] over the host's table (Win32,
-/// AppKit, UIKit, Android, the web, winit, headless).
+/// AppKit, UIKit, Android, the web, X11, Wayland, headless).
 ///
 /// # Architecture
 ///
@@ -174,8 +174,7 @@ pub trait Platform: sealed::Sealed + Send + Sync + 'static {
     /// wake-deadline questions go for the rest of the run; it is released when
     /// the loop ends.
     ///
-    /// Takes `self: Box<Self>` because some backends (e.g. winit) require
-    /// ownership of the event loop to run it.
+    /// Takes `self: Box<Self>`: the run consumes the platform.
     ///
     /// Desktop event loops, including standalone AppKit, return after orderly
     /// shutdown. Backends tied to a page/process lifetime may not return.
@@ -215,7 +214,7 @@ pub trait Platform: sealed::Sealed + Send + Sync + 'static {
     /// one re-check); always safe to over-call — a re-check while windows
     /// are still open, or while the handler still vetoes, is a no-op.
     ///
-    /// The `winit`, AppKit and Win32 hosts wake their owner loop to re-check.
+    /// The Win32, AppKit, X11 and Wayland hosts wake their owner loop to re-check.
     /// Android, the web and iOS have no exit policy to ask again, so a
     /// keep-alive holder's release does not end the process there until an
     /// explicit [`quit`](Self::quit). The headless host parks the request; its
@@ -242,7 +241,7 @@ pub trait Platform: sealed::Sealed + Send + Sync + 'static {
     /// [`OpenWindowError`] — the same typed taxonomy the
     /// [`OwnerPlatform`]/`PlatformProxy` capability surfaces use (ADR-0039):
     /// [`Backend`](OpenWindowError::Backend) when the OS-level creation
-    /// itself fails; backends with an owner lane (winit) additionally
+    /// itself fails; backends with an owner lane that defers additionally
     /// surface [`LaneFull`](OpenWindowError::LaneFull) /
     /// [`OwnerGone`](OpenWindowError::OwnerGone) /
     /// [`Unavailable`](OpenWindowError::Unavailable) for cross-thread
@@ -327,8 +326,8 @@ pub trait Platform: sealed::Sealed + Send + Sync + 'static {
     /// started or handed the right (`AllowSetForegroundWindow`); Wayland only
     /// to a window whose `xdg-activation` token the compositor accepts. AppKit
     /// activates the application once, as its loop starts, not on this call;
-    /// UIKit and Android decide which application is in front; winit raises
-    /// one window at a time; the Web has no way to.
+    /// UIKit and Android decide which application is in front; the Web has
+    /// no way to.
     fn activate(&self, ignoring_other_apps: bool);
 
     // ==================== File Operations (US3) ====================
@@ -405,7 +404,7 @@ pub trait Platform: sealed::Sealed + Send + Sync + 'static {
     ///
     /// Zero is exact for a platform whose windows have no non-client area
     /// (headless, mobile, web). Win32 answers zero, an under-estimate, since it
-    /// does not measure the frame before a window exists; winit answers the
+    /// does not measure the frame before a window exists; X11 answers the
     /// frame it has measured so far and AppKit the one its window style gives.
     fn window_frame_inset(&self, scale_factor: f64) -> flui_foundation::geometry::Size<f64>;
 

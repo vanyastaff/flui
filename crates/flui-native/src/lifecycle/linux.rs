@@ -1,7 +1,6 @@
 //! The Linux host's system notices: sleep and wake, shutdown, the screen lock
 //! and memory pressure, gathered from the login manager and the kernel and
-//! handed to the owner. Every Linux host reads them: the Wayland and X11 hosts
-//! and the winit host.
+//! handed to the owner. Both Linux hosts read them: the Wayland and X11 hosts.
 //!
 //! Two sources run beside the owner and never run application code:
 //!
@@ -22,7 +21,7 @@
 //! A source that cannot start (no system bus, a kernel without pressure
 //! information) leaves the others running and says so once in the log.
 //!
-//! The sources name no host; how the native loops and the winit loop deliver
+//! The sources name no host; how the native loops deliver
 //! what they queue sits apart, in a block each. What each source's answers
 //! mean is a pure rule beside it, which every host checks.
 
@@ -188,76 +187,6 @@ impl Drop for HostNoticeSource {
         self.logind.abort();
     }
 }
-
-/// The winit host on Linux starts the sources once its owner can deliver what
-/// they queue, and delivers it on each owner turn.
-#[cfg(all(target_os = "linux", feature = "winit-backend"))]
-mod winit {
-    use std::sync::Arc;
-
-    use flui_foundation::panic::FirstPanic;
-    use flui_platform::{SessionEndAnswer, SessionEndPhase};
-
-    use super::{HostEvent, HostNoticeSource};
-    use crate::executor::BackgroundExecutor;
-    use crate::owner::signal::OwnerSignal;
-    use crate::owner::winit::{HostNoticeStart, HostNotices, WinitLoop};
-
-    /// The Linux sources of system notices as the winit loop starts them.
-    #[derive(Debug)]
-    pub(crate) struct WinitNotices;
-
-    impl HostNoticeStart for WinitNotices {
-        fn start(
-            &self,
-            executor: &BackgroundExecutor,
-            signal: &Arc<OwnerSignal>,
-        ) -> Box<dyn HostNotices> {
-            Box::new(HostNoticeSource::start(executor, signal))
-        }
-    }
-
-    /// The source holds a sleep or shutdown until its event has been
-    /// delivered, so each runs to the end here before the next.
-    impl HostNotices for HostNoticeSource {
-        fn deliver(&self, platform: &WinitLoop) {
-            // A subscriber that panics must not keep the rest from hearing, nor
-            // keep logind waiting for the events behind it: every delivery
-            // runs, and the first panic is raised once all have.
-            let mut panics = FirstPanic::new();
-            for delivery in self.take() {
-                panics.contain(|| {
-                    delivery.deliver_with(|event| match event {
-                        HostEvent::Notice(notice) => platform.notices.dispatch(notice),
-                        // Linux cannot hold a shutdown for the user, so the
-                        // answer to the query is not read; the application
-                        // hears the query so that it can start saving, then
-                        // the shutdown.
-                        HostEvent::SessionEnding => {
-                            let mut phases = FirstPanic::new();
-                            let answer =
-                                phases.contain(|| platform.session_end(SessionEndPhase::Query));
-                            if answer == Some(SessionEndAnswer::Block) {
-                                tracing::info!(
-                                    "the application asked to hold the shutdown; logind cannot wait for the user, so it goes on"
-                                );
-                            }
-                            phases.contain(|| platform.session_end(SessionEndPhase::Ending));
-                            phases.resume();
-                        }
-                        HostEvent::SessionEndCancelled => {
-                            platform.session_end(SessionEndPhase::Cancelled);
-                        }
-                    });
-                });
-            }
-            panics.resume();
-        }
-    }
-}
-
-#[cfg(all(target_os = "linux", feature = "winit-backend"))]
-pub(crate) use winit::WinitNotices;
 
 /// The native Linux loops, Wayland's and X11's, start the sources once their
 /// owner can deliver what they queue, and deliver it on each of their turns.

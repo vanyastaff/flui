@@ -146,6 +146,10 @@ struct Walk<'a>(&'a AppDelivery);
 
 impl Walk<'_> {
     fn disarm(self) {
+        #[expect(
+            clippy::mem_forget,
+            reason = "disarms the guard once the delivery ended under the lock"
+        )]
         std::mem::forget(self);
     }
 }

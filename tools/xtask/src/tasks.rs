@@ -174,18 +174,18 @@ fn hack_passes(packages: &str) -> [Cmd; 2] {
     ]
 }
 
-/// flui-native's suite on Linux. `--all-features` is needed just to compile
-/// the winit backend (invisible under `default = ["desktop"]`);
+/// flui-native's suite on Linux, with every feature (the test kits and the
+/// native capture are off under `default = ["desktop"]`).
 /// `FLUI_HEADLESS=1` routes `current_platform()` to the `HeadlessPlatform`
-/// mock, so most of the suite needs no display server; the few winit-internals
-/// tests that construct `WinitPlatform::new()` need a real (if virtual) X11
-/// connection for clipboard init, which `xvfb-run` supplies. The server runs
+/// mock, so most of the suite needs no display server; the native X11 host's
+/// suites that open windows on the run's X server need a real (if virtual)
+/// one, which `xvfb-run` supplies. The server runs
 /// with `-noreset`: by default Xvfb resets when its last client leaves and
 /// drops a client still in its connection handshake, and with one process per
 /// test that is a test failing with `ECONNRESET` when another test's process
 /// exits. The screen is `xvfb-run`'s default, which the X11 tests lay their
 /// windows out on.
-/// `WAYLAND_DISPLAY` is cleared, so the winit tests take Xvfb's X11 display
+/// `WAYLAND_DISPLAY` is cleared, so these tests take Xvfb's X11 display
 /// even where a compositor runs beside it; the native Wayland host's tests
 /// run apart ([`wayland_suite_linux`]).
 fn platform_suite_linux() -> Cmd {
@@ -250,7 +250,7 @@ fn platform_suite(host: Host) -> Vec<Step> {
                 .into(),
         ],
         Host::MacOs | Host::Other => vec![Step::Note(
-            "Skipping native flui-native tests on this host: the CI-mirroring invocation needs xvfb-run (Linux-only) for the winit backend X11-dependent tests; see docs/testing.md."
+            "Skipping native flui-native tests on this host: the CI-mirroring invocation needs xvfb-run (Linux-only) for the native X11 host's tests; see docs/testing.md."
                 .to_owned(),
         )],
     }
@@ -585,13 +585,7 @@ fn feature_matrix_plan(slice: Slice) -> Vec<Step> {
 /// default build and the workspace pass enable `desktop` (Wayland and X11)
 /// together, so a `cfg` that is wrong with only one backend, or with none,
 /// compiles there and breaks only in the full `feature-matrix` on main.
-const NATIVE_FEATURE_SLICES: [&[&str]; 5] = [
-    &[],
-    &["x11"],
-    &["wayland"],
-    &["winit-backend"],
-    &["testing"],
-];
+const NATIVE_FEATURE_SLICES: [&[&str]; 4] = [&[], &["x11"], &["wayland"], &["testing"]];
 
 /// `-D warnings` clippy of flui-native for each of [`NATIVE_FEATURE_SLICES`]
 /// with default features off: libs and bins as a downstream crate builds them,
@@ -1482,7 +1476,7 @@ mod tests {
 
     fn native_feature_slices_lint_each_feature_alone_with_and_without_all_targets() {
         let plan = lines(&native_feature_slice_plan(None));
-        assert_eq!(plan.len(), 10);
+        assert_eq!(plan.len(), 8);
         let command = |features: &str, all_targets: &str| {
             format!(
                 "$ cargo clippy -p flui-native --locked --no-default-features{features}{all_targets} -- -D warnings"
@@ -1492,7 +1486,6 @@ mod tests {
             "",
             " --features x11",
             " --features wayland",
-            " --features winit-backend",
             " --features testing",
         ]) {
             assert_eq!(pair[0], command(features, ""));

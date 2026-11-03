@@ -293,7 +293,7 @@ mod x11 {
     /// host's notices.
     ///
     /// Built and run on one thread, which owns its windows. `current_platform`
-    /// picks it in an X11 session when the winit host is not built.
+    /// picks it in an X11 session.
     pub type X11Platform = HostPlatform<X11>;
 
     impl HostPlatform<X11> {

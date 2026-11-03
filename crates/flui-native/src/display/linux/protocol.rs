@@ -7,14 +7,9 @@
 //! session too (WSLg offers both). The native Wayland host and the display
 //! source both connect to that socket, so the windows and the outputs are the
 //! same compositor's. `WAYLAND_SOCKET`, one descriptor already connected,
-//! names no socket a second connection could reach, so it is not followed:
-//! winit takes it, and the winit backend checks this choice against the
-//! protocol of the display winit actually opened.
+//! names no socket a second connection could reach, so it is not followed.
 
 use std::path::PathBuf;
-
-#[cfg(any(feature = "winit-backend", test))]
-use raw_window_handle::RawDisplayHandle;
 
 /// A display server protocol.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -24,13 +19,6 @@ pub(crate) enum Protocol {
 }
 
 impl Protocol {
-    /// The protocol this process speaks, read from its own environment: the
-    /// winit host's guess before winit opened its display.
-    #[cfg(all(target_os = "linux", feature = "winit-backend"))]
-    pub(crate) fn current() -> Option<Self> {
-        Self::from_environment(&Environment::current())
-    }
-
     /// The protocol of the session the environment names, or `None` when it
     /// names no display server (a headless session).
     pub(crate) fn from_environment(environment: &Environment) -> Option<Self> {
@@ -41,17 +29,6 @@ impl Protocol {
             Some(Self::X11)
         } else {
             None
-        }
-    }
-
-    /// The protocol of the display a window system handle belongs to: the
-    /// winit host checks the display winit opened against the environment's.
-    #[cfg(any(feature = "winit-backend", test))]
-    pub(crate) fn of_display(handle: RawDisplayHandle) -> Option<Self> {
-        match handle {
-            RawDisplayHandle::Wayland(_) => Some(Self::Wayland),
-            RawDisplayHandle::Xlib(_) | RawDisplayHandle::Xcb(_) => Some(Self::X11),
-            _ => None,
         }
     }
 }
@@ -106,8 +83,6 @@ impl Environment {
 mod tests {
     use std::path::Path;
 
-    use raw_window_handle::{RawDisplayHandle, WaylandDisplayHandle, XcbDisplayHandle};
-
     use super::*;
 
     fn environment(wayland: &str, socket: &str, display: &str) -> Environment {
@@ -145,25 +120,6 @@ mod tests {
         );
         assert_eq!(Protocol::from_environment(&environment("", "", "")), None);
         assert_eq!(Protocol::from_environment(&Environment::default()), None);
-    }
-
-    #[test]
-    fn the_protocol_of_a_display_handle() {
-        let wayland = WaylandDisplayHandle::new(std::ptr::NonNull::dangling());
-        assert_eq!(
-            Protocol::of_display(RawDisplayHandle::Wayland(wayland)),
-            Some(Protocol::Wayland)
-        );
-        assert_eq!(
-            Protocol::of_display(RawDisplayHandle::Xcb(XcbDisplayHandle::new(None, 0))),
-            Some(Protocol::X11)
-        );
-        assert_eq!(
-            Protocol::of_display(RawDisplayHandle::Web(
-                raw_window_handle::WebDisplayHandle::new()
-            )),
-            None
-        );
     }
 
     #[test]

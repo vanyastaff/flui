@@ -9,8 +9,10 @@
 
 use flui_platform::{MemoryPressureLevel, WindowExecutionState};
 
-/// The Activity callbacks that matter for the lifecycle, without the payloads
-/// `android_activity::MainEvent` carries.
+/// The Activity callbacks that matter for the lifecycle: the ones
+/// `android-activity` hands over, without the payloads
+/// `android_activity::MainEvent` carries, and `onTrimMemory`, which
+/// `FluiActivity` forwards through `FluiHost`'s queue.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ActivityEvent {
     Start,
@@ -21,6 +23,8 @@ pub(crate) enum ActivityEvent {
     LostFocus,
     LowMemory,
     SaveState,
+    /// `onTrimMemory`, with the `ComponentCallbacks2` level.
+    TrimMemory(i32),
 }
 
 impl ActivityEvent {

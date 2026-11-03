@@ -1,23 +1,18 @@
 //! The process-wide lock every Win32 clipboard session in FLUI runs under.
 //!
-//! `OpenClipboard(NULL)` does **not** exclude other threads of the same
-//! process: Win32 keys the "clipboard is open" check on the owner window,
-//! and all `NULL`-owner openers count as the same owner. While thread A
-//! holds the clipboard and scans the `CF_UNICODETEXT` handle through
-//! `GlobalLock`, thread B's `OpenClipboard(NULL)` therefore succeeds, its
-//! `EmptyClipboard` frees that handle, and A reads freed memory — the
-//! process dies with `STATUS_HEAP_CORRUPTION` (`0xc0000374`). The winit
-//! backend's `ArboardClipboard` opens with a `NULL` owner (inside `arboard`);
-//! the Win32 backend's `WindowsClipboard` opens with its own owner window,
-//! which Win32 does not let a `NULL` opener share, but a `NULL`-owner
-//! `arboard` session would still let a `WindowsClipboard` session in beside
-//! it. Either may exist in several instances on several threads, so a
-//! per-instance lock cannot close the race; this one can.
+//! `OpenClipboard` does **not** exclude other threads of the same process
+//! that open with the same owner: Win32 keys the "clipboard is open" check on
+//! the owner window. Every `WindowsClipboard` opens with the one owner window
+//! of the process, so while thread A holds the clipboard and scans the
+//! `CF_UNICODETEXT` handle through `GlobalLock`, thread B's `OpenClipboard`
+//! would succeed, its `EmptyClipboard` would free that handle, and A would
+//! read freed memory — the process dies with `STATUS_HEAP_CORRUPTION`
+//! (`0xc0000374`). Instances exist on several threads, so a per-instance lock
+//! cannot close the race; this one can.
 //!
 //! Not covered: third-party code in the same process that opens the
-//! clipboard on its own thread bypasses this lock. It is shut out of a
-//! `WindowsClipboard` session by the owner window, but not out of an
-//! `ArboardClipboard` one ([safety review](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/safety-review.md)).
+//! clipboard on its own thread bypasses this lock. Win32 shuts it out of a
+//! `WindowsClipboard` session by the owner window ([safety review](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/safety-review.md)).
 
 use parking_lot::{Mutex, MutexGuard};
 
@@ -77,12 +72,4 @@ mod reentrancy {
             SESSION_OPEN.with(|open| open.set(false));
         }
     }
-}
-
-/// Runs `session` — a call that opens and closes the clipboard itself, such
-/// as one `arboard` operation — under the process-wide clipboard lock.
-#[cfg(feature = "winit-backend")]
-pub(crate) fn with_clipboard_session<R>(session: impl FnOnce() -> R) -> R {
-    let _lock = acquire();
-    session()
 }

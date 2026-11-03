@@ -22,7 +22,7 @@
 //!   which field it serves, and ending that field's composition (ADR-0135);
 //!   [`commit_composition_in_place`] when the platform cannot end it.
 //! - [`project_ime_event`]: a push-model [`ImeEvent`](crate::ImeEvent)
-//!   (winit) applied as store edits, so there is one editing path.
+//!   applied as store edits, so there is one editing path.
 //!
 //! Stores are owner-thread objects (`Rc<dyn TextStore>`, not `Send`). The
 //! machinery a widget's store is built from (the lock arbiter, the

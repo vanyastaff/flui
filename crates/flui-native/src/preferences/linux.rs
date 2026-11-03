@@ -1,7 +1,7 @@
 //! The Linux host's system preferences: the Settings portal
 //! (`org.freedesktop.portal.Settings`) on the session bus, observed for one
-//! incarnation of the owner's loop. Every Linux host reads it: the Wayland and
-//! X11 hosts and the winit host.
+//! incarnation of the owner's loop. Both Linux hosts read it: the Wayland and
+//! X11 hosts.
 //!
 //! D-Bus runs on the existing background executor. The owner only reads an
 //! immutable accepted snapshot; no portal request runs in build/layout/paint.
@@ -60,46 +60,6 @@ impl SystemPreferenceSource for PreferenceSource {
         Ok(self.observation.lock().accepted.clone())
     }
 }
-
-/// The winit host on Linux starts the portal's watch as it resumes, and its
-/// windows without a theme of their own follow the portal's colour scheme.
-/// The watch itself names no winit type, so the Wayland and X11 hosts start
-/// it the same way.
-#[cfg(feature = "winit-backend")]
-mod winit {
-    use std::sync::Arc;
-
-    use flui_platform::WindowAppearance;
-
-    use super::PreferenceSource;
-    use crate::executor::BackgroundExecutor;
-    use crate::owner::signal::OwnerSignal;
-    use crate::owner::winit::{PortalPreferences, PreferenceStart};
-
-    /// The Settings portal as the winit loop starts watching it.
-    #[derive(Debug)]
-    pub(crate) struct WinitSettings;
-
-    impl PreferenceStart for WinitSettings {
-        fn start(
-            &self,
-            executor: &BackgroundExecutor,
-            signal: &Arc<OwnerSignal>,
-        ) -> Arc<dyn PortalPreferences> {
-            PreferenceSource::new(executor, signal)
-        }
-    }
-
-    impl PortalPreferences for PreferenceSource {
-        /// The accepted `color-scheme`; light until the portal says otherwise.
-        fn appearance(&self) -> WindowAppearance {
-            self.observation.lock().appearance
-        }
-    }
-}
-
-#[cfg(feature = "winit-backend")]
-pub(crate) use winit::WinitSettings;
 
 /// The native Linux loops start the portal's watch as they run, and their
 /// windows follow the portal's colour scheme.

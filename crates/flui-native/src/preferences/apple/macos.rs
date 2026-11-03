@@ -10,8 +10,7 @@
 //! failed read schedules one wake for its retry; nothing polls.
 //!
 //! The native AppKit loop keeps the observers and the source together
-//! ([`AppKitPreferences`]); the winit host on macOS starts them as it resumes
-//! and keeps the observers as a watch, which it ends first.
+//! ([`AppKitPreferences`]).
 
 // The notification-name constants are AppKit's and Foundation's statics.
 #![expect(unsafe_code)]
@@ -67,36 +66,6 @@ impl SystemPreferenceSource for AppKitPreferences {
         self.source.sample()
     }
 }
-
-/// The winit host on macOS keeps the same source, which it starts as it
-/// resumes.
-#[cfg(feature = "winit-backend")]
-mod winit {
-    use std::sync::Arc;
-
-    use super::PreferenceSource;
-    use crate::owner::signal::OwnerSignal;
-    use crate::owner::sources::SystemPreferenceSource;
-    use crate::owner::watch::Watch;
-    use crate::owner::winit::PreferenceStart;
-
-    /// AppKit's preferences as the winit loop starts them.
-    #[derive(Debug)]
-    pub(crate) struct WinitSettings;
-
-    impl PreferenceStart for WinitSettings {
-        fn start(
-            &self,
-            signal: &Arc<OwnerSignal>,
-        ) -> (Arc<dyn SystemPreferenceSource + Send + Sync>, Watch) {
-            let (source, observers) = PreferenceSource::new(signal);
-            (source, Watch::new(observers))
-        }
-    }
-}
-
-#[cfg(feature = "winit-backend")]
-pub(crate) use winit::WinitSettings;
 
 /// The macOS host's preferences: what AppKit reports, sampled on the owner lane.
 struct PreferenceSource {

@@ -715,22 +715,6 @@ fn handlers_run_outside_every_lock_of_the_headless_platform() {
     );
 }
 
-// --- winit ----------------------------------------------------------------
-
-/// The winit platform's keyboard layout callback, before its loop runs: a
-/// replaced callback's destructor reaches the platform.
-#[cfg(all(
-    feature = "winit-backend",
-    any(target_os = "windows", target_os = "linux")
-))]
-#[test]
-fn replaced_winit_handlers_reach_the_platform() {
-    within("winit keyboard layout callback", || {
-        let platform: Arc<dyn Platform> = Arc::new(flui_native::WinitPlatform::new());
-        a_replaced_keyboard_layout_callback_reaches_the_platform(&platform);
-    });
-}
-
 // --- Win32 ----------------------------------------------------------------
 
 #[cfg(target_os = "windows")]

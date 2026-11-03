@@ -275,7 +275,7 @@ The native adapter does not replace the portable store's lock/settle contract.
 between engine and client: the field is
 a `TextStore` the platform locks, reads and edits, in UTF-16 offsets, the
 shape of TSF's `ITextStoreACP` that AppKit's `NSTextInputClient` and Android's
-`InputConnection` also map onto. A push source (winit's `ImeEvent`) goes
+`InputConnection` also map onto. A push source (`ImeEvent`, shaped after winit's `Ime`) goes
 through `project_ime_event`, so a field has one editing path. The contract
 holds the lock's values and the `CommitGate` a store reads; the state machine
 that keeps the lock rules (`LockArbiter`), the ledger of the committed text
@@ -373,7 +373,7 @@ make a cross-platform application choose one, so setting Windows options and
 then macOS ones would drop the first. The types live here because the slot is
 here; they are pure data, built on every target, so a cross-platform
 application sets every system's options without a `cfg` of its own. Only that
-system's host reads its field. Another host (the headless host, winit, another
+system's host reads its field. Another host (the headless host, another
 system's) opens the window without it, and the application sees that its
 options were not taken when that system's extension in `flui::native` has no
 view of the window. They sit in their own public module, `os_options`, not at

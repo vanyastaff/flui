@@ -32,7 +32,7 @@
 //!   [`UnsupportedReason`], which every error that can mean "not here"
 //!   embeds, and [`Availability`] (ADR-0151 §4).
 //!
-//! No OS, winit, AccessKit or tokio type may appear here (ADR-0082 §1). That
+//! No OS, AccessKit or tokio type may appear here (ADR-0082 §1). That
 //! is the point of the crate: naming a contract must not link a backend, so a
 //! framework crate or plugin that names or implements a capability depends on
 //! this crate, stays free of every OS stack and builds without

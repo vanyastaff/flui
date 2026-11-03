@@ -9,7 +9,7 @@
 //! - `windows`: UI Automation (`accesskit_windows`);
 //! - `apple`: NSAccessibility on macOS (`accesskit_macos`);
 //! - `linux`: AT-SPI (`accesskit_unix`), which every Linux host's windows
-//!   hand out (the Wayland, X11 and winit hosts');
+//!   hand out (the Wayland and X11 hosts');
 //! - `android`: TalkBack (`accesskit_android`), through `FluiView`'s node
 //!   provider;
 //! - `web`: a parallel ARIA DOM over the canvas, which the browser's own
@@ -19,7 +19,7 @@
 //!
 //! The adapters have no feature: every window of a host that has one hands it
 //! out, and each compiles wherever a host of its operating system does
-//! (ADR-0151 §15): on Linux, with any of the Wayland, X11 and winit hosts.
+//! (ADR-0151 §15): on Linux, with the Wayland or the X11 host.
 
 #[cfg(target_os = "android")]
 pub(crate) mod android;

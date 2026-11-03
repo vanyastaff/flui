@@ -130,24 +130,11 @@ impl OwnerSignal {
             shared: SharedTurnSlot::default(),
         })
     }
-    #[cfg(any(
-        target_os = "macos",
-        all(
-            feature = "winit-backend",
-            any(target_os = "windows", target_os = "linux")
-        )
-    ))]
+    #[cfg(target_os = "macos")]
     pub(crate) fn fence(&self) {
         let mut state = self.state.lock();
         state.accepting = false;
         state.pending = false;
-    }
-    #[cfg(all(
-        feature = "winit-backend",
-        any(target_os = "windows", target_os = "macos", target_os = "linux")
-    ))]
-    pub(crate) fn quitting(&self) -> bool {
-        self.state.lock().quit
     }
     pub(crate) fn accepting(&self) -> bool {
         self.state.lock().accepting
@@ -355,17 +342,6 @@ pub(crate) struct OwnerTurn<'signal> {
 }
 
 impl OwnerTurn<'_> {
-    /// The application's turn has work: a read on the owner thread found
-    /// something it must see (the winit loop's Windows preferences). Unlike a
-    /// wake, this posts nothing; the drive that follows runs it, or the drop
-    /// of an undriven turn posts it.
-    #[cfg(all(windows, feature = "winit-backend"))]
-    pub(crate) fn owe(&self) {
-        let mut state = self.signal.state.lock();
-        if state.accepting {
-            state.pending = true;
-        }
-    }
     /// The application's turn over the signal's own shared slot. `true` asks
     /// the native owner to perform its quit path.
     pub(crate) fn drive(self) -> bool {

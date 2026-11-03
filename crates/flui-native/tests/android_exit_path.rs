@@ -68,7 +68,7 @@ const MAX_EXIT_REGION_LINES: usize = 20;
 /// masked — in that order.
 ///
 /// Stripping runs FIRST because the comments in and around `run` carry
-/// apostrophes (`` `run`'s ``, `loop's`, `winit's own`), and a char-literal
+/// apostrophes (`` `run`'s ``, `loop's`, `window's own`), and a char-literal
 /// masker that ran first would swallow from one apostrophe to the next,
 /// taking a real closure's braces with it and mis-locating the loop's close.
 ///
@@ -593,8 +593,8 @@ fn android_run_releases_its_own_window_reference_before_clearing() {
     assert!(
         take_index < clear_index,
         "the platform's own window reference must be released BEFORE the handler is let go of, \
-         in the order the winit and headless close bodies use (their `complete_window_close` / \
-         `complete_close`: dispatch close, drop the platform's tracking entry, then clear)"
+         in the order the headless close body uses (its `complete_close`: \
+         dispatch close, drop the platform's tracking entry, then clear)"
     );
     let revoke_index = window_revocation_line(&region, take_index, clear_index, binding);
     assert_only_the_expected_lines_name_the_binding(

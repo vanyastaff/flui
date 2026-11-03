@@ -162,7 +162,7 @@ fn font_digest(font_bytes: &[u8]) -> FontDigest {
 /// **Live-wired** (issue #555's native-lifecycle follow-up): `AppConfig::
 /// exit_policy` carries this to `run_desktop`'s bootstrap, which routes the
 /// application handler's exit policy to it (`install_exit_policy_hook` in
-/// `runner/host.rs`). The winit backend's `CloseRequested` handling and the
+/// `runner/host.rs`). The native hosts' close handling and the
 /// headless backend's window `WindowCommand::Close` and `simulate_close()`
 /// both ask that handler (`flui_native::AppHandler::exit_policy`) instead of
 /// deciding from their own native window count alone; see

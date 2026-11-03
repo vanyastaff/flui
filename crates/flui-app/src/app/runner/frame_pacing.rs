@@ -18,7 +18,7 @@
 /// backend calls the surface target's
 /// [`pre_present_notify`](flui_platform::SurfaceTarget::pre_present_notify)
 /// immediately before every present, and only then. On Wayland this is what makes a running
-/// animation compositor-paced (winit withholds the next `RedrawRequested`
+/// animation compositor-paced (the Wayland host withholds the next frame
 /// until the surface's frame callback) and an occluded window silent; on
 /// every other backend the notify is a no-op. A named function rather than
 /// an inline closure at the bootstrap so the wiring — the hook is installed,
@@ -288,7 +288,7 @@ pub(super) struct FallbackGate {
 /// consumed by the wake it brings, or cleared once it has passed without
 /// one (a hidden Wayland surface never delivers that wake — its redraw is
 /// withheld until the compositor resumes — and a past deadline handed back
-/// to `about_to_wait` again and again would be the busy-spin ADR-0044 §7
+/// to the loop's wake query again and again would be the busy-spin ADR-0044 §7
 /// measured, not a wake).
 ///
 /// A stack whose present blocks at vsync, or whose compositor paces
@@ -403,10 +403,10 @@ impl FallbackWake {
     ///
     /// **This query never consumes the deadline** — [`Self::gate`], called
     /// from the frame callback, is the sole consumer, and splitting those
-    /// two roles is not a style choice: `about_to_wait` and the frame
-    /// callback observe the same wake, and winit runs `about_to_wait` on
-    /// the very iteration the deadline expires, BEFORE the redraw its
-    /// `ResumeTimeReached` poke queues has been dispatched. A version of
+    /// two roles is not a style choice: the loop's wake query and the frame
+    /// callback observe the same wake, and the loop queries the deadline on
+    /// the very iteration it expires, BEFORE the redraw its poke queues has
+    /// been dispatched. A version of
     /// this method that cleared a just-passed deadline destroyed it in
     /// that window: the hook then answered `None`, the loop parked in
     /// `ControlFlow::Wait`, the poke never happened, and — because a

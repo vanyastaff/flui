@@ -5,6 +5,9 @@
 - **Amended:** 2026-10-19 — decision 9's image cache is the renderer's image textures; decoded
   images belong to the application's asset registry, reclaimed once registered
   ([ADR-0250](ADR-0250-asset-registry-keeps-decoded-images.md)).
+- **Amended:** 2026-11-03 — Android's pressure source is `onLowMemory` and each `onTrimMemory`,
+  which `FluiActivity` forwards through its queue ([ADR-0255](ADR-0255-mobile-and-web-hosts.md)
+  decision 2); the process trim level is no longer read at lifecycle transitions.
 - **Superseded-by:** [ADR-0254](ADR-0254-window-contract.md), in part: the window-scoped getters
   and per-fact callbacks that sit beside the snapshot (decision 1 keeps `PlatformWindow` as the
   one window trait, but it no longer carries them); decision 3's refusal inside `apply` (it moves
@@ -113,8 +116,8 @@ Web ignored page freeze and GPU context loss.
   `flui-testing` holds each one to "capability false ⇔ `Unsupported`" and to snapshot convergence.
 - Callers of the removed methods (runner, first-reveal policy, examples, hot reload) move to the
   snapshot and commands in the change that introduces them.
-- Android has no `onTrimMemory` without Java code; its pressure source is `onLowMemory` plus the
-  process trim level read at lifecycle transitions. Linux notices need logind and PSI; without
+- Android's pressure source is `onLowMemory` and each `onTrimMemory`, forwarded by `FluiActivity`
+  (ADR-0255). Linux notices need logind and PSI; without
   them the sources stay silent, with one diagnostic.
 - Wayland cannot report minimized state or global position; the capabilities say so instead of a
   default that pretends.

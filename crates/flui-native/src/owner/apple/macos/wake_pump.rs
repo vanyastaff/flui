@@ -3,8 +3,8 @@
 //! # Why this module exists
 //!
 //! The application's handler answers the earliest wall-clock instant the
-//! event loop should come back at. `winit` hands that to
-//! `ControlFlow::WaitUntil` and the Android backend checks it once per
+//! event loop should come back at. The Linux loops hand that to their poll
+//! timeout and the Android backend checks it once per
 //! iteration of its own loop. AppKit has neither: `[NSApplication run]` is an
 //! opaque, unbounded run loop, so a deadline nothing actuated was dropped
 //! on the floor and the process parked in

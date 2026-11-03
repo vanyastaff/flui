@@ -6,6 +6,9 @@
   decoration as today" only (a run carries a colour and nothing else);
   [ADR-0065](ADR-0065-painting-owns-shaping-text-crosses-the-display-list-shaped.md) Part 2 "one
   `Paragraph` op on the wire" only (a paragraph also crosses as the shadows it casts)
+- **Superseded-by:** [ADR-0310](ADR-0310-a-text-decoration-is-drawn-where-its-font-puts-it.md) for
+  the Consequences clause "decorations stay out of the vocabulary" only: a style accepts a
+  decoration and paints it
 - **Related:** [ADR-0066](ADR-0066-display-list-command-representation.md) (the closed `DrawOp`
   vocabulary), [ADR-0087](ADR-0087-raster-contract-and-cpu-backend.md) (the raster contract a new op
   joins), [ADR-0149](ADR-0149-interpolation-contracts.md) (`TextStyle` interpolation),

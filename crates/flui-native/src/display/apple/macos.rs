@@ -108,9 +108,9 @@ fn display_key_of(screen: &NSScreen) -> Option<DisplayKey> {
 /// when the display cannot be reached.
 ///
 /// Reads the refresh rate of the display's *current* mode
-/// (`CGDisplayModeGetRefreshRate` over `CGDisplayCopyDisplayMode`), the same
-/// source the winit backend reads, so the snapshot carries what
-/// `PlatformWindow::refresh_period` answered for the same display and a
+/// (`CGDisplayModeGetRefreshRate` over `CGDisplayCopyDisplayMode`), so the
+/// snapshot carries what `PlatformWindow::refresh_period` answers for the
+/// same display and a
 /// 120 Hz panel does not fall back to 60 Hz. A rate of 0 — CoreGraphics
 /// reports 0 for modes it cannot describe, and some displays do — becomes no
 /// period (`RefreshPeriod::from_hz` refuses it), not an infinite one.
@@ -303,65 +303,6 @@ impl crate::owner::apple::macos::HostDisplays for MacosDisplays {
             self.source.note_miss(id.get());
         }
         Some(id)
-    }
-
-    fn observe(self: Arc<Self>, signal: &Arc<OwnerSignal>) -> Watch {
-        Watch::new(ScreenObserver::new(&self, signal))
-    }
-}
-
-/// The winit host's displays on macOS are these screens. winit enumerates
-/// monitors only through a live event loop and keys them by a
-/// `CGDirectDisplayID`; this source reads `NSScreen.screens`, keys each screen
-/// by its display UUID, takes the refresh period from the display's current
-/// mode and names a window's display by the window's `NSScreen`. winit's own
-/// monitor list is not read. The source is invalidated by
-/// `NSApplicationDidChangeScreenParametersNotification` (the watch the loop
-/// starts on resume) and by a window whose screen is one the last sample lacks.
-#[cfg(feature = "winit-backend")]
-impl crate::owner::winit::HostDisplays for MacosDisplays {
-    fn version(&self) -> MacOSVersion {
-        self.version
-    }
-
-    /// The current snapshot: the last sample unless something invalidated it.
-    /// [`PlatformError::Displays`] off the main thread, where `NSScreen` is
-    /// not read.
-    fn snapshot(&self) -> Result<DisplaySnapshot, PlatformError> {
-        let mtm = MainThreadMarker::new().ok_or_else(|| PlatformError::Displays {
-            message: "the screens are read on the main thread".into(),
-        })?;
-        crate::owner::apple::macos::HostDisplays::snapshot(self, mtm)
-    }
-
-    /// The display `window` is on, by the `NSScreen` of its native window.
-    /// `None` off the main thread, for a window on no screen, and for a screen
-    /// the source leaves out.
-    fn id_of_window(&self, window: &winit::window::Window) -> Option<DisplayId> {
-        use objc2_app_kit::NSView;
-        use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-
-        // `NSView` is main-thread state.
-        MainThreadMarker::new()?;
-        let RawWindowHandle::AppKit(handle) = window.window_handle().ok()?.as_raw() else {
-            return None;
-        };
-        // SAFETY: winit's AppKit handle is the window's content `NSView`, which
-        // the borrowed `window` keeps alive for this call, and the main-thread
-        // check above makes the message send legal.
-        let view: &NSView = unsafe { handle.ns_view.cast::<NSView>().as_ref() };
-        let screen = view.window()?.screen()?;
-        crate::owner::apple::macos::HostDisplays::id_of(self, &screen)
-    }
-
-    /// Mark the screens stale; the sample the wake leads to reads them.
-    fn resample(
-        &self,
-        _event_loop: &winit::event_loop::ActiveEventLoop,
-        _signal: Option<&Arc<OwnerSignal>>,
-    ) -> bool {
-        self.source.invalidate();
-        true
     }
 
     fn observe(self: Arc<Self>, signal: &Arc<OwnerSignal>) -> Watch {

@@ -11,21 +11,7 @@
 use flui_platform::Availability;
 use flui_platform::input_capabilities::InputCapabilities;
 
-use Availability::{Emulated, Native, Unavailable};
-
-/// The OS session a winit window runs in.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[non_exhaustive]
-pub enum WinitSession {
-    /// Win32.
-    Windows,
-    /// AppKit.
-    MacOs,
-    /// A Wayland compositor.
-    Wayland,
-    /// An X11 server.
-    X11,
-}
+use Availability::{Emulated, Native};
 
 /// The native Win32 backend: pointer messages carry pen input. A window whose
 /// DirectManipulation viewport initialised (`direct_manipulation`) delivers
@@ -125,27 +111,6 @@ pub const fn web(gesture_events: bool) -> InputCapabilities {
         .build()
 }
 
-/// The winit backend in `session`: winit 0.30 reports no pen; touch phases on
-/// pixel scrolling arrive on macOS and Wayland; pinch and rotate on macOS
-/// only; outgoing drags are not supported. A window whose application draws
-/// the title bar has no decorations, and moves and resizes from its regions
-/// (`drag_window`, `drag_resize_window`, ADR-0286 §9); no window system draws
-/// caption buttons around it.
-#[must_use]
-pub const fn winit(session: WinitSession) -> InputCapabilities {
-    let builder = InputCapabilities::builder()
-        .window_move(Native)
-        .window_resize(Native);
-    match session {
-        WinitSession::MacOs => builder
-            .precise_scroll(Native)
-            .trackpad_gestures(Native)
-            .build(),
-        WinitSession::Wayland => builder.precise_scroll(Native).build(),
-        WinitSession::Windows | WinitSession::X11 => builder.precise_scroll(Unavailable).build(),
-    }
-}
-
 /// The protocols beside `wl_seat` a Wayland compositor offers for input.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub struct WaylandInputGlobals {
@@ -201,8 +166,8 @@ pub const fn x11(gestures: bool) -> InputCapabilities {
     }
 }
 
-/// When an OS drag session can start on Win32, X11, AppKit, Android and
-/// winit: the drag runs in its window and escalates when the pointer leaves
+/// When an OS drag session can start on Win32, X11, AppKit and Android: the
+/// drag runs in its window and escalates when the pointer leaves
 /// it (ADR-0211 §2). Win32 starts them through OLE, X11 over XDND and Android
 /// through `startDragAndDrop` (ADR-0247); the other backends report outgoing
 /// drags `Unavailable` until their native session lands.
