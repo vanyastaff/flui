@@ -277,7 +277,10 @@ mod tests {
         });
         waiting.recv().expect("the operation started");
         // Whether the thread is still leaving the call or already waits,
-        // the abort closes the handle once and ends the wait.
+        // the abort closes the handle once and ends the wait. The pause lets
+        // the thread reach its wait, the case only a wake ends; the outcome
+        // does not depend on it.
+        std::thread::sleep(Duration::from_millis(50));
         gate.abort();
         assert_eq!(ended(&outcome), Outcome::Aborted);
         assert_eq!(closes(2), 1);
