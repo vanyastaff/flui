@@ -2,7 +2,7 @@
 //! presents, and whether to exit when the driver goes (ADR-0239 §3, §5). The
 //! values are read through the platform's one seam (ADR-0288 §7): the
 //! environment on the desktop and the iOS Simulator, the launching intent's
-//! extras on Android.
+//! extras on Android, the page's launch object on the web.
 
 use flui_platform::LaunchKey;
 use flui_runtime::agent::Limits;
@@ -36,7 +36,7 @@ pub(crate) struct Launch {
     pub(super) limits: Limits,
     /// `Some` for an abstract socket, which any process of the system reaches: only the peers
     /// it admits hold a connection. `None` where the system keeps the endpoint the current
-    /// user's (a pipe's DACL, a socket file in a private directory).
+    /// user's (a pipe's DACL, a socket file in a private directory), and in a page.
     pub(super) peers: Option<PeerRule>,
 }
 
@@ -80,7 +80,7 @@ impl Launch {
     }
 
     /// With `limits` in place of the defaults.
-    #[cfg(test)]
+    #[cfg(all(test, any(unix, windows)))]
     pub(crate) fn with_limits(mut self, limits: Limits) -> Self {
         self.limits = limits;
         self

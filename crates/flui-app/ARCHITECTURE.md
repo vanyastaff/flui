@@ -143,7 +143,8 @@ the dispatch layer moves there too.
   the application's own `DevAgentHook`s when its launch names an endpoint
   (`flui_protocol::launch`), read through the platform's `launch_value`: the
   environment on the desktop and the iOS Simulator, the launching intent's
-  extras on Android (ADR-0288 §7). With none, nothing is created. The event loop
+  extras on Android, the page's launch object on the web (ADR-0288 §7). With
+  none, nothing is created. The event loop
   owns the hooks (ADR-0288 §7): it takes them from its configuration when it
   starts into one `DevAgentHost` kept in its state, lends that host out for
   each call so no borrow is held while a hook runs, and drops it when it ends,
@@ -172,6 +173,16 @@ the dispatch layer moves there too.
   closed windows, events, a client that stops reading, a bind failure and the
   exit; `reads_the_counter_and_taps_it_by_element_and_by_locator` the
   conversation over a real socket or pipe.
+  In a page the transport is `flui-native`'s page export: the global the launch
+  names takes `connect(onLine)`, each connection's conversation is a task of
+  the page's executor that hands the script's lines to its session, keeps the
+  session's deadline with the page's timer and writes to `onLine` with nothing
+  borrowed. The export is not `Send`, so a page task holds it and the hook a
+  handle; stopping stops the service at once and ends the connections at the
+  page's next turn. Under `EXIT_ON_DISCONNECT` the page's loop quits, which
+  ends its hooks. The conversation runs on the Linux host with the test as the
+  page's event loop
+  (`a_page_conversation_answers_its_script_and_ends_when_the_script_closes_it`).
 
 - **Quit is a closed operation.** The host stops installed runtimes in mount
   order and restores each checkout before continuing. A failing lifecycle

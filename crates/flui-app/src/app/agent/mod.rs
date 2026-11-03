@@ -5,8 +5,9 @@
 //! The runner installs it beside the application's own development hooks
 //! when the launch names an endpoint, read through the platform's launch
 //! values (ADR-0288 §7): the environment on the desktop and the iOS
-//! Simulator, the launching intent's extras on Android. With none, nothing is
-//! created: no thread, no socket. The agent is a
+//! Simulator, the launching intent's extras on Android, the page's launch
+//! object on the web. With none, nothing is
+//! created: no thread, no socket, no global. The agent is a
 //! [`DevAgentHook`](flui_view::dev_agent::DevAgentHook): the host attaches it
 //! when the loop starts and hands it each window with content. The
 //! conversation is [`flui_runtime::agent`]'s (ADR-0288): this module keeps the
@@ -28,9 +29,19 @@
 //! or on Android the shell is closed unread. No TCP port. A bind failure is
 //! logged, and the application keeps running without an agent.
 //!
+//! In a page the endpoint is a global the launch names (`__flui_agent`, say):
+//! `connect(onLine)` opens a connection whose lines reach `onLine`, and
+//! returns `send(line)` and `close()` (flui-native's
+//! `page_export`, built for wasm32 alone). A WebDriver BiDi driver calls
+//! it through `script.callFunction` with a channel as `onLine`. Each
+//! connection's conversation runs as a task of the page's executor.
+//!
 //! The token keeps out other users and remote callers. It does not keep out
 //! other processes of the same user, which can read the application's
-//! environment just as they can reach the endpoint.
+//! environment just as they can reach the endpoint. In a page it keeps out
+//! other origins and other tabs; a script of the page's own origin that runs
+//! before the application's module starts can read the launch object, as a
+//! process of the same user can read the environment.
 //!
 //! # Exit on disconnect
 //!
@@ -38,11 +49,13 @@
 //! makes the connection admitted as the app's driver (ADR-0288 §8) the one it exits with: when it
 //! closes, the app quits, past every close guard, and the process exits with
 //! [`EXIT_DISCONNECTED`](flui_protocol::launch::EXIT_DISCONNECTED) once the
-//! teardown has written what the application persisted.
+//! teardown has written what the application persisted. A page cannot close
+//! its tab: there the loop quits and the agent stops, and the driver closes
+//! the tab.
 
 // The server is built where it has a transport (`cfg(driver_agent)`, set by
 // `build.rs`): a debug build, or one with the `driver` feature, on a system
-// with local sockets. The web transport is not built yet.
+// with local sockets, or in a page.
 #[cfg(driver_agent)]
 mod served;
 
@@ -53,7 +66,7 @@ mod served;
     all(
         not(driver_agent),
         any(debug_assertions, feature = "driver"),
-        any(unix, windows)
+        any(unix, windows, target_arch = "wasm32")
     )
 ))]
 compile_error!("BUG: build.rs set `driver_agent` against this build's profile and features");
@@ -78,11 +91,8 @@ impl Disconnect {
     /// went before the loop could arm this.
     // The served agent's tests arm it on iOS too.
     #[cfg_attr(
-        any(target_arch = "wasm32", all(target_os = "ios", not(test))),
-        expect(
-            dead_code,
-            reason = "only the desktop and Android loops exit when their driver goes"
-        )
+        all(target_os = "ios", not(test)),
+        expect(dead_code, reason = "an iOS loop does not exit when its driver goes")
     )]
     pub(crate) fn arm(&self, quit: impl Fn() + Send + Sync + 'static) {
         *self.quit.lock() = Some(Box::new(quit));
@@ -138,10 +148,6 @@ impl fmt::Debug for Disconnect {
 /// when this build carries it and the launch values `value` reads name an endpoint
 /// (ADR-0288 §7); otherwise `config` is left alone and nothing is created.
 /// `disconnect` is what the driver's going does under `EXIT_ON_DISCONNECT`.
-#[cfg_attr(
-    target_arch = "wasm32",
-    expect(dead_code, reason = "the page's runner installs no agent yet")
-)]
 pub(crate) fn install_from_launch(
     config: &mut crate::AppConfig,
     value: impl Fn(flui_platform::LaunchKey) -> Option<String>,
@@ -220,6 +226,8 @@ mod tests {
         assert!(disconnect.happened());
     }
 
+    // A page has no agent thread to trace on.
+    #[cfg(any(unix, windows))]
     #[test]
     fn a_trace_on_an_agent_thread_survives_a_subscriber_that_panics() {
         let mut after = false;

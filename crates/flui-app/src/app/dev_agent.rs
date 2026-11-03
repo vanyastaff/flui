@@ -21,8 +21,9 @@
 //!   application opened it with. The window's agent is vended while the UI
 //!   runtime is still the runner's, so an installation that fails drops the
 //!   agent with the UI runtime and no hook ever sees a half-installed window.
-//! - The page's loop never ends while the page lives, so on the web the hooks
-//!   are never detached.
+//! - The page's loop ends only with a quit (its driver going under
+//!   `EXIT_ON_DISCONNECT`), which ends its hooks; a page that is closed
+//!   ends with them attached.
 //!
 //! The host is lent out of the loop's state for each call, so no borrow of
 //! that state is held while a hook runs: a call made meanwhile finds it lent
