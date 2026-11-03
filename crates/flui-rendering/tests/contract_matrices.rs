@@ -81,6 +81,7 @@ fn semantics_assembly_matrix() {
         ("semantics_assembly::nonfinite_reading_order_is_refused_before_publication", crate::semantics_assembly::nonfinite_reading_order_is_refused_before_publication),
         ("semantics_assembly::re_assembling_marked_subtrees_refuses_like_the_whole_tree", crate::semantics_assembly::re_assembling_marked_subtrees_refuses_like_the_whole_tree),
         ("semantics_assembly::a_panicking_semantics_callback_leaves_the_phase", crate::semantics_assembly::a_panicking_semantics_callback_leaves_the_phase),
+        ("semantics_assembly::a_failing_semantics_lifecycle_hook_keeps_the_transition", crate::semantics_assembly::a_failing_semantics_lifecycle_hook_keeps_the_transition),
         ("semantics_assembly::excludes_semantics_subtree_drops_descendant_content", crate::semantics_assembly::excludes_semantics_subtree_drops_descendant_content),
         ("semantics_assembly::explicit_child_nodes_forms_direct_contributors", crate::semantics_assembly::explicit_child_nodes_forms_direct_contributors),
         ("semantics_assembly::merge_semantics_boundary_collapses_plain_children_into_one_node", crate::semantics_assembly::merge_semantics_boundary_collapses_plain_children_into_one_node),

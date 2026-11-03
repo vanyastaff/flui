@@ -239,25 +239,38 @@ bounds, while widget row
 `show_on_screen_reveals_offscreen_targets_on_both_axes_and_reverse` exercises
 actual viewport addressability, advertised native actions and visible output.
 
-### Render storage and pipeline callbacks retain user values on failure
+### Render storage and pipeline callbacks drop as std drops
 
 Dropping a render entry drops its render object, then its parent data; a
 render tree drops its entries in slot order, and a `VisualUpdateNotifier` its
-visual-update, created, then disposed callbacks. Once one of those destructors
-panics, or when the drop begins while the thread is already panicking, the
-remaining render objects, parent data and callback captures are retained, not
-dropped, and the first panic propagates (ADR-0127). Framework-owned entry
-state (geometry, links, layout cache) still drops normally. Semantic `dispose`
-is not invoked by physical destruction. Pinned by
+references to the visual-update, created, then disposed callbacks. If one of
+those destructors panics the rest are still dropped and the first panic
+propagates; one that panics while the thread is already unwinding aborts, as
+in std (ADR-0281, which supersedes ADR-0127). Framework-owned entry state
+(geometry, links, layout cache) drops normally. Semantic `dispose` is not
+invoked by physical destruction. Pinned by
 `render_tree_retirement_preserves_independent_envelopes`.
 
-### Callback replacement retires captures after unlocking
+### Pipeline callbacks run with no notifier guard held
 
-Pipeline callback setters install the new callback under the notifier write
-guard and drop the displaced one after releasing it, so a displaced capture's
-destructor can mark a node dirty and wake the pipeline. A panic in that
-destructor propagates and leaves the new callback installed. Pinned by
+The pipeline shares one notifier through `SharedNotifier`, whose lock never
+leaves `notifier.rs`: every wake site and lifecycle event takes an owned
+snapshot of its callback, releases the lock, and only then runs it (ADR-0287).
+A wake on a worker thread, from a `RenderInvalidationHandle`, may therefore
+re-enter a handle or wait for the owner thread while that thread replaces the
+callback. A setter commits its replacement for every wake that starts after
+it returns; a wake already in flight finishes with the callback it took, and
+when it holds the last reference its thread destroys the displaced capture.
+Setters retire the displaced callback after the lock is released, so its
+destructor can mark a node dirty and wake the pipeline; a panic in it
+propagates and leaves the new callback installed. Pinned by
 `pipeline_callback_replacement_reentry`.
+
+`set_semantics_enabled` commits the transition (the flag, the owner, the
+root's semantics seed, and on disable the owner's teardown) before the
+lifecycle callback and the visual-update wake run. Each of them runs even when
+an earlier one panics, and the first panic is resumed at the end. Pinned by
+`a_failing_semantics_lifecycle_hook_keeps_the_transition`.
 
 ### Caught hit-test panics do not change sibling coordinates
 
@@ -989,7 +1002,7 @@ layout and nothing else.
 is the literal reading — rejected on two counts. It is redundant: the arena walks the
 subtree of the dirty root, so every node that laid out is already under it, and `try_graft_pass`
 re-assembles a marked node's whole subtree. And it is expensive in a way that is easy to miss:
-each `add_node_needing_semantics` fires `fire_need_visual_update`, whose production callback asks
+each `add_node_needing_semantics` delivers the visual-update wake, whose production callback asks
 the platform to redraw, and the graft resolves every marked node by walking its ancestor chain —
 so an N-node relayout would cost N redraw requests and O(N·depth) graft work.
 
