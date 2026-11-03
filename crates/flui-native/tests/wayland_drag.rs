@@ -5,8 +5,8 @@
 //! surface to the window.
 //!
 //! sway tiles the window the case opens first on the left half of its
-//! output and the drag source opened after it on the right, its surface
-//! a square centred in that half.
+//! output and the other client opened after it on the right, its surface
+//! drawn at the size of that half.
 //!
 //! Its own harness, as `wayland_primary_selection`: it starts Xvfb and a sway
 //! before anything connects and names that sway for the process. A run
@@ -66,8 +66,8 @@ mod cases {
 
     /// The size of the output window sway's X11 backend opens.
     const OUTPUT: (u16, u16) = (1024, 768);
-    /// A point on the peer's surface, which sway centres in the right
-    /// half.
+    /// A point on the peer's surface, which fills the right half sway
+    /// tiles it in.
     const ON_PEER: (i16, i16) = (768, 384);
     /// A point on the window, in the left half.
     const ON_WINDOW: (i16, i16) = (256, 400);
@@ -164,6 +164,20 @@ mod cases {
             self.cursor(&["press", "button1"]);
         }
 
+        /// sway's tree as `get_tree` prints it, for a failure to show where
+        /// sway put the windows.
+        fn layout(&self) -> String {
+            Command::new("swaymsg")
+                .arg("-s")
+                .arg(&self.socket)
+                .args(["-r", "-t", "get_tree"])
+                .output()
+                .map_or_else(
+                    |error| format!("nothing: {error}"),
+                    |output| String::from_utf8_lossy(&output.stdout).into_owned(),
+                )
+        }
+
         fn release(&self) {
             self.cursor(&["release", "button1"]);
         }
@@ -231,8 +245,9 @@ mod cases {
             client.turn();
             assert!(
                 Instant::now() < deadline,
-                "the pointer never reached the source; it heard {:?}",
-                source.heard()
+                "the pointer never reached the source; it heard {:?}; sway laid out {}",
+                source.heard(),
+                pointer.layout()
             );
         }
         pointer.press();
