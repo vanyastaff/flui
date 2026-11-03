@@ -5,6 +5,7 @@ use flui_painting::typography::{InlineSpan, TextAlign, TextDirection, TextLink};
 use flui_rendering::layer::LayerLink;
 use flui_rendering::protocol::BoxProtocol;
 use flui_rendering::semantics::SemanticsAnchor;
+use flui_view::CreationSite;
 use flui_view::element::ElementKind;
 use flui_view::{
     BoxedView, BuildContext, EventCx, EventOutcome, IntoView, RenderView, StatelessView, View,
@@ -70,6 +71,7 @@ pub struct RichText {
     direction: TextDirection,
     max_lines: Option<u32>,
     pub(super) on_link: Option<RefCallback<TextLink>>,
+    site: CreationSite,
 }
 
 impl std::fmt::Debug for RichText {
@@ -80,7 +82,7 @@ impl std::fmt::Debug for RichText {
             .field("direction", &self.direction)
             .field("max_lines", &self.max_lines)
             .field("on_link", &self.on_link.is_some())
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -88,6 +90,7 @@ impl RichText {
     /// Display `text` (any type convertible into an [`InlineSpan`] — most
     /// commonly a [`TextSpan`](flui_painting::typography::TextSpan)) with start
     /// alignment and left-to-right direction.
+    #[track_caller]
     pub fn new(text: impl Into<InlineSpan>) -> Self {
         Self {
             text: text.into(),
@@ -95,6 +98,7 @@ impl RichText {
             direction: TextDirection::Ltr,
             max_lines: None,
             on_link: None,
+            site: CreationSite::here(),
         }
     }
 
@@ -136,6 +140,10 @@ impl RichText {
 impl View for RichText {
     fn create_element(&self) -> ElementKind {
         ElementKind::stateless(self)
+    }
+
+    fn creation_site(&self) -> CreationSite {
+        self.site
     }
 }
 

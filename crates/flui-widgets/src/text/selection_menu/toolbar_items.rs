@@ -15,7 +15,7 @@ use flui_rendering::protocol::BoxProtocol;
 use flui_view::element::ElementKind;
 use flui_view::prelude::*;
 use flui_view::seq::ViewSeq;
-use flui_view::{BoxedView, RebuildHandle, RebuildReason, View};
+use flui_view::{BoxedView, CreationSite, RebuildHandle, RebuildReason, View};
 
 use crate::interaction::{ExcludeFocus, GestureDetector};
 use crate::localization::{BoxedWidgetsLocalizations, Directionality};
@@ -145,16 +145,19 @@ pub struct ToolbarItems {
     items: Vec<BoxedView>,
     button: Option<ButtonBuilder>,
     controller: Option<ToolbarItemsController>,
+    site: CreationSite,
 }
 
 impl ToolbarItems {
     /// A toolbar of `items`, in reading order.
     #[must_use]
+    #[track_caller]
     pub fn new(items: Vec<BoxedView>) -> Self {
         Self {
             items,
             button: None,
             controller: None,
+            site: CreationSite::here(),
         }
     }
 
@@ -188,13 +191,17 @@ impl fmt::Debug for ToolbarItems {
             .field("items", &self.items.len())
             .field("button", &self.button.is_some())
             .field("controller", &self.controller)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
 impl View for ToolbarItems {
     fn create_element(&self) -> ElementKind {
         ElementKind::stateful(self)
+    }
+
+    fn creation_site(&self) -> CreationSite {
+        self.site
     }
 }
 
