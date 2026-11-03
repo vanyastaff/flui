@@ -108,8 +108,16 @@ pub(crate) fn apply_update<T, E>(
     };
     // The incoming value belongs to the published slot already. Retiring the
     // old snapshot cannot destroy it during the old value's unwind.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "ADR-0287: a retired snapshot's drop runs contained after the swap"
+    )]
     let mut first = catch_unwind(AssertUnwindSafe(|| drop(retired))).err();
     if rebuild {
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: the rebuild wake runs contained after the slot is published"
+        )]
         let wake = catch_unwind(AssertUnwindSafe(|| {
             handle.schedule(crate::RebuildReason::AsyncCompletion);
         }))

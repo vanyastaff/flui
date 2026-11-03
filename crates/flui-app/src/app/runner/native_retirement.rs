@@ -42,6 +42,10 @@ impl NativeRetirement {
     pub(super) fn drain(&self, first_panic: &mut Option<Box<dyn std::any::Any + Send>>) {
         let owners = std::mem::take(&mut *self.0.borrow_mut());
         for owner in owners {
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "ADR-0287: each retired owner drops contained; the first panic is kept"
+            )]
             let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match owner {
                 RetiredNativeOwner::TextSizing(sizing) => drop(sizing),
                 RetiredNativeOwner::Frame(driver) => drop(driver),

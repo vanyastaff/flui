@@ -169,6 +169,10 @@ impl Shared {
             Seat::Free
         };
         if let Some(gone) = gone {
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "ADR-0287: a disconnect obligation runs contained so the service survives"
+            )]
             let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(gone));
             if let Err(payload) = ran {
                 let text = flui_foundation::panic::payload_text(payload.as_ref());

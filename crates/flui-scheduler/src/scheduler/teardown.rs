@@ -57,6 +57,10 @@ impl Retirement<'_> {
     fn retire<T>(&mut self, value: T) {
         // Contained after any earlier failure too: a destructor panic competes
         // and the first failure stays (ADR-0281).
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: a retired value's drop runs contained; the first failure stays"
+        )]
         if let Err(payload) = catch_unwind(AssertUnwindSafe(|| drop(value))) {
             self.observe(payload);
         }

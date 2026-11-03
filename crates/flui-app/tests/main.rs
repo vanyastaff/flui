@@ -2,6 +2,10 @@
 //! that writes process-global state keeps its own `[[test]]` target instead (see
 //! `Cargo.toml`).
 
+#![allow(
+    clippy::disallowed_methods,
+    reason = "test code catches a panic to assert on it (ADR-0303 §5)"
+)]
 // `Application` is the desktop entry point.
 #[cfg(all(
     not(target_os = "android"),

@@ -451,6 +451,10 @@ impl MessengerCore {
         let handles: Vec<_> = self.scaffolds.borrow().values().cloned().collect();
         let mut first = None;
         for rebuild in &handles {
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "ADR-0287: a scaffold's host wake runs contained; the others still rebuild"
+            )]
             remember_completion_failure(
                 &mut first,
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -463,6 +467,10 @@ impl MessengerCore {
         // unwind and abort. The first wake failure stays the one raised
         // (ADR-0281 §3).
         for handle in handles {
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "ADR-0287: a wake handle's drop runs contained; the first panic is kept"
+            )]
             remember_completion_failure(
                 &mut first,
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || drop(handle))),
@@ -586,6 +594,10 @@ impl MessengerCore {
         if let Some(entry) = &popped {
             // Pin the opaque entry outside invocation: the clone's unwind
             // cannot retire the last owner of its snack-bar value.
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "ADR-0287: a snack bar completion callback's panic is kept as the first failure"
+            )]
             remember_completion_failure(
                 &mut first,
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -596,6 +608,10 @@ impl MessengerCore {
 
         let has_next = !self.queue.borrow().is_empty();
         if has_next {
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "ADR-0287: the next entry's animation start runs contained"
+            )]
             remember_completion_failure(
                 &mut first,
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -603,6 +619,10 @@ impl MessengerCore {
                 })),
             );
         }
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: scaffold rebuild wakes run contained so completion finishes"
+        )]
         remember_completion_failure(
             &mut first,
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {

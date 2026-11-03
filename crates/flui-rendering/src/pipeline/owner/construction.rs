@@ -256,6 +256,10 @@ impl PipelineOwner<Idle> {
         // Observe node-bound cross-thread invalidation before any phase runs — an
         // async decode that finished while the app idled lands in this
         // frame, not never.
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: the pending-dirty drain runs contained; the owner exits the frame"
+        )]
         if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             self.drain_pending_dirty();
         })) {
@@ -327,6 +331,10 @@ fn contain_phase<P: PipelinePhase>(
     owner: &mut PipelineOwner<P>,
     run: impl FnOnce(&mut PipelineOwner<P>) -> crate::error::RenderResult<()>,
 ) -> Result<Result<(), flui_foundation::TreeError<crate::error::RenderError>>, Unwind> {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "ADR-0287: a frame phase runs contained so the owner is kept (ADR-0258)"
+    )]
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         run(&mut *owner).map_err(|error| owner.in_tree(error))
     }))

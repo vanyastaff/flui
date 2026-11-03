@@ -128,6 +128,10 @@ impl DevReload {
         let Some(mut hook) = self.0.lock().hook.take() else {
             return Lent::Absent;
         };
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: a dev hook's panic disables it; the lent slot is never lost"
+        )]
         match catch_unwind(AssertUnwindSafe(|| call(hook.as_mut()))) {
             Ok(value) => {
                 let owed = std::mem::take(&mut self.0.lock().detach_owed);
@@ -184,6 +188,10 @@ fn disable(what: &'static str, hook: Box<dyn DevReloadHook>) {
 /// but is not compiled for Android.)
 #[cfg(not(target_arch = "wasm32"))]
 fn contain(body: impl FnOnce()) {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "ADR-0287: a hook-reload body's panic is discarded so the caller proceeds"
+    )]
     if let Err(payload) = catch_unwind(AssertUnwindSafe(body)) {
         flui_foundation::panic::discard_payload(payload);
     }

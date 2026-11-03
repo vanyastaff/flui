@@ -1570,6 +1570,10 @@ impl BuildOwner {
             payload.as_ref(),
             "running a stateful lifecycle hook during rebuild",
         );
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: a user error-view builder's panic must not escape recovery"
+        )]
         let recovery_view = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             crate::view::recovery_view_for(&error, self.capabilities.error_view_builder)
         })) {
@@ -1607,6 +1611,10 @@ impl BuildOwner {
             self.scope_depth += 1;
         }
 
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: the scoped drain restores build state before a panic propagates"
+        )]
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             self.drain_build_scope(tree, target, live_scopes)
         }));
@@ -1825,6 +1833,10 @@ impl BuildOwner {
             // recovered (reset-on-build then keeps its masks).
             let build_recovered = std::cell::Cell::new(false);
             let partitioned_dirty_count = self.partitioned_dirty_count();
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "ADR-0287: the element slot is restored after a build panic"
+            )]
             let build_outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 let mut element_owner = super::ElementOwner {
                     global_keys: &mut self.global_keys,
@@ -2049,6 +2061,10 @@ impl BuildOwner {
             // the rebuilding parent regains its consumed reason and queue
             // entry before the scoped-drain guard repartitions all work.
             let partitioned_dirty_count = self.partitioned_dirty_count();
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "ADR-0287: the reconciling parent regains its queue entry after a panic"
+            )]
             let reconcile_outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 let mut element_owner = super::ElementOwner {
                     global_keys: &mut self.global_keys,
@@ -2999,11 +3015,19 @@ impl Drop for BuildScopeGuard<'_> {
 /// the same containment that guards event emission applies here: a panic is
 /// caught and logged, never unwound through the owner.
 fn notify_detached(observer: Arc<dyn flui_foundation::observe::TreeObserver>) {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "ADR-0287: a tree observer's detached() runs contained, never unwinds the owner"
+    )]
     if let Err(payload) =
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| observer.detached()))
     {
         flui_foundation::panic::discard_payload(payload);
         crate::drop_contained(observer);
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: a panicking log is contained and discarded"
+        )]
         let reported = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             tracing::error!("TreeObserver::detached() panicked; ignored");
         }));

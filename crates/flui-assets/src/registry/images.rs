@@ -791,6 +791,10 @@ impl DecodedImages {
             }
             // A decoder that panics fails this load, not the lane or the
             // thread that polls it.
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "ADR-0287: a panicking image decoder fails its load, not the lane"
+            )]
             Some(
                 std::panic::catch_unwind(AssertUnwindSafe(|| {
                     crate::assets::image::decode_rgba8(&label, &bytes)

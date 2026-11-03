@@ -321,6 +321,10 @@ impl std::fmt::Debug for LifecycleCloseWindow {
 impl Drop for LifecycleSource {
     fn drop(&mut self) {
         let mut first: Option<Panic> = None;
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: lifecycle releases run contained so Drop keeps the first failure"
+        )]
         let failure = catch_unwind(AssertUnwindSafe(|| {
             self.states.release(&mut first);
             self.notices.release(&mut first);

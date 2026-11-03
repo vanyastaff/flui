@@ -455,6 +455,10 @@ impl ArenaSlot {
 fn observe_after(observers: &ObserverHub, operation: impl FnOnce()) {
     let earlier = observers.take_clock_failure();
     let hold = observers.hold();
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "ADR-0287: an arena operation runs contained so observers still deliver"
+    )]
     let outcome = catch_unwind(AssertUnwindSafe(operation));
     drop(hold);
     observers.deliver();

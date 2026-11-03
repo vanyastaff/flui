@@ -153,6 +153,10 @@ impl UiRuntime {
         // live window. What it did to the presentation is recorded instead, as
         // the move it was when the content went somewhere else.
         let mut recorded = Some(WindowObservation::from(observation));
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: a window observation applies contained so the host's order holds"
+        )]
         let applied = catch_unwind(AssertUnwindSafe(|| match observation {
             OrderedObservation::Focus(focused) => self.update_window_focus(id, focused),
             OrderedObservation::Visibility(visible) => self.update_window_visibility(id, visible),
@@ -259,6 +263,10 @@ impl PendingWindowState {
         // A display update asks for its own redraw, and only when it changes the
         // display the presentation holds (see `UiRuntime::apply_window_display`).
         let redraw = self.metrics.is_some() || self.insets.is_some() || self.brightness.is_some();
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: surface resize runs contained so the first failure is kept"
+        )]
         if let Some(metrics) = self.metrics {
             first = catch_unwind(AssertUnwindSafe(|| {
                 resize_surface(metrics);
@@ -273,6 +281,10 @@ impl PendingWindowState {
             }
         }
         if self.metrics.is_some() {
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "ADR-0287: gesture context refresh runs contained so the first failure is kept"
+            )]
             let failure =
                 catch_unwind(AssertUnwindSafe(|| runtime.refresh_gesture_context_for(id))).err();
             crate::lifecycle_state::preserve_first_lifecycle_panic(
@@ -287,6 +299,10 @@ impl PendingWindowState {
         if let Some(insets) = self.insets {
             runtime.hold_keyboard_inset_for(id, insets.keyboard());
         }
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: media query publication runs contained so the first failure is kept"
+        )]
         let failure = catch_unwind(AssertUnwindSafe(|| {
             if let Some(source) = runtime.media_query_for(id) {
                 source.update(|data| {
@@ -317,6 +333,10 @@ impl PendingWindowState {
             "window state publication",
         );
         if let Some(update) = self.display {
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "ADR-0287: a display update runs contained so the first failure is kept"
+            )]
             let failure = catch_unwind(AssertUnwindSafe(|| {
                 runtime.apply_window_display(id, update.get());
             }))
@@ -328,6 +348,10 @@ impl PendingWindowState {
             );
         }
         if redraw {
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "ADR-0287: a redraw request runs contained so the first failure is kept"
+            )]
             let failure = catch_unwind(AssertUnwindSafe(|| runtime.request_redraw_of(id))).err();
             crate::lifecycle_state::preserve_first_lifecycle_panic(
                 &mut first,

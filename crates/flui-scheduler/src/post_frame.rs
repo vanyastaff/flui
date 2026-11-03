@@ -397,6 +397,10 @@ impl OwnerCleanup {
             .map(|tasks| tasks.detach_for_retirement());
         let mut first: Option<RetirePanic> = None;
         for entry in callbacks {
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "ADR-0287: a retired callback's drop runs contained; the rest still drop"
+            )]
             if let Err(payload) = catch_unwind(AssertUnwindSafe(move || drop(entry))) {
                 self.record_execution_failure();
                 if held {
@@ -807,6 +811,10 @@ impl PresentationFrameScope {
         let held = cleanup.preserving_execution_failure();
         let mut first = None;
         for entry in retired {
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "ADR-0287: a retired callback's drop runs contained; the rest still drop"
+            )]
             if let Err(payload) = catch_unwind(AssertUnwindSafe(move || drop(entry))) {
                 cleanup.record_execution_failure();
                 if held {

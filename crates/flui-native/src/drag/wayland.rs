@@ -384,6 +384,10 @@ impl SeatDrag {
         if after.sent {
             (self.shared.wake)();
         }
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: a handler's panic still lets accepted requests be answered"
+        )]
         let dispatched = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             if let Some((window, event)) = after.dispatch {
                 let delivery = self
@@ -405,6 +409,10 @@ impl SeatDrag {
         // rather than dropped (ADR-0127 §2).
         let mut failure = dispatched.err();
         for (completer, result) in after.completions {
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "ADR-0287: a waker's panic leaves the remaining completions answered"
+            )]
             if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 completer.complete(result);
             })) {

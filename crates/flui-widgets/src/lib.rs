@@ -51,6 +51,13 @@
 //! [`StatelessView`]: flui_view::prelude::StatelessView
 //! [`ParentDataView`]: flui_view::prelude::ParentDataView
 
+#![cfg_attr(
+    test,
+    allow(
+        clippy::disallowed_methods,
+        reason = "test code catches a panic to assert on it (ADR-0303 §5)"
+    )
+)]
 // Lint levels come from `[workspace.lints]`. Ship bar (wave 3): every public
 // item is documented; keep it that way.
 #![deny(missing_docs)]

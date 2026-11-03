@@ -48,8 +48,10 @@ impl Worker {
                     // the failure to its caller; the thread keeps serving.
                     // It may have panicked with a button or a key down, so
                     // everything held is released before the next job.
+                    #[expect(clippy::disallowed_methods, reason = "ADR-0287: a panicking job must not stop the desktop worker thread")]
                     if catch_unwind(AssertUnwindSafe(|| job(&mut desktop))).is_err() {
                         tracing::error!("a desktop job panicked; releasing held input");
+                        #[expect(clippy::disallowed_methods, reason = "ADR-0287: releasing input after a panicked job must not kill the worker")]
                         let released = catch_unwind(AssertUnwindSafe(|| desktop.release_input()));
                         if released.is_err() {
                             tracing::error!("releasing held input panicked too");

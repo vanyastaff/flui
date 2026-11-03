@@ -60,6 +60,10 @@ impl PipelineOwner<Layout> {
         // the pass already failed, that failure is the first one: a wake that
         // panics after it is discarded (ADR-0281 §2).
         let mut paint_queued = false;
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: the layout batches' panic still lets the paint wake go out"
+        )]
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             self.run_layout_batches(&mut paint_queued)
         }));
@@ -101,6 +105,10 @@ impl PipelineOwner<Layout> {
             // and puts its unfinished entries back before the failure goes on,
             // so the retry lays out what this pass did not.
             let mut next = 0;
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "ADR-0287: a layout pass's panic puts unfinished entries back first"
+            )]
             let pass = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 self.layout_batch(&dirty_nodes, &mut next, paint_queued)
             }));
@@ -662,6 +670,10 @@ impl PipelineOwner<Layout> {
         // reporting on the dirty root, say. It is caught here: the work the
         // walk finished before the panic is committed below exactly as a
         // completed walk's is, and only then does the panic go on.
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: the layout walk's panic is held until its committed work lands"
+        )]
         let walked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             arena.layout_child(id, constraints)
         }));

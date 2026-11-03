@@ -304,6 +304,10 @@ impl OwnerJobs {
         drop(self.admission.lock().take());
         let mut first = self.pending.retire();
         while let Ok(job) = self.rx.try_recv() {
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "ADR-0287: a queued job's drop runs contained so the drain finishes"
+            )]
             let failure =
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(job))).err();
             flui_foundation::panic::FirstPanic::fold(&mut first, failure);

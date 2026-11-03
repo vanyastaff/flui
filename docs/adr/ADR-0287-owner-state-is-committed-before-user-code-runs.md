@@ -2,7 +2,9 @@
 
 - **Status:** Accepted (2026-11-03). Partly implemented: `flui-foundation` has the primitives, and
   the capability seam's `Completion` and `Persisted` use them; each other seam moves to them in
-  its own change (see Migration).
+  its own change (see Migration). Every hand-written `catch_unwind` left carries an
+  `ADR-0287:` expectation of `clippy::disallowed_methods` (ADR-0303 §6), so those expectations are
+  the migration's remaining count.
 - **Date:** 2026-11-03
 - **Superseded-by:** [ADR-0303](ADR-0303-a-rule-takes-the-first-rung-that-states-it-and-an-xtask-gate-is-the-last.md) §6 for the last bullet of Confirmation
   only: the hand-written `catch_unwind` calls are a `clippy.toml` entry with an expectation at
@@ -28,9 +30,9 @@ classes that come from that order:
 | Accepted work or an obligation is lost on a failure path | ~8% | a re-arm only when the inbox was not empty; a flag cleared before the delivery that failed |
 | A late answer is taken for the answer to a newer request | part of ~12% | a read issued after a write joins the read issued before it |
 
-Each fix closed one call site, and the next review found its neighbour. The workspace has about
-670 hand-written `catch_unwind` calls outside tests, most of them in owners that order this
-themselves.
+Each fix closed one call site, and the next review found its neighbour. The workspace's production
+code has about 420 hand-written `catch_unwind` calls in about 140 files, most of them in owners
+that order this themselves.
 
 How does an owner change its state and call user code so that the four classes cannot be
 written?
@@ -171,6 +173,11 @@ is the one that propagates; its refresh queues the release of a close hold, the 
 watch and the listeners' delivery, so a release that panics no longer leaves the watch unstarted.
 Work whose failure the owner must observe itself (a spawn whose refusal resets `watching`) keeps
 its own `catch_unwind` inside the queued call.
+
+`SelectionArea` already contains its fan-out with `FirstPanic` and has no hand-written
+`catch_unwind` left. Its state is spread over the separate cells of its model, so `commit` reaches
+it only once that model is one cell. The next seams are the owners with the most `ADR-0287:`
+expectations.
 
 ## More information
 

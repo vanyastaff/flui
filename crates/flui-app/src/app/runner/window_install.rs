@@ -122,6 +122,10 @@ impl Drop for InstallationWindow {
             return;
         };
         let mut first = None;
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: an unpublished window's discard is contained; first failure kept"
+        )]
         if !self.published {
             self.closed.store(true, Ordering::Release);
             first = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -129,6 +133,10 @@ impl Drop for InstallationWindow {
             }))
             .err();
         }
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: a retired window's drop runs contained; the first failure is kept"
+        )]
         let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(window))).err();
         crate::app::lifecycle_state::preserve_first_lifecycle_panic(
             &mut first,
@@ -137,6 +145,10 @@ impl Drop for InstallationWindow {
         );
         {
             let agent = self.agent.take();
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "ADR-0287: a retired window agent's drop runs contained; first failure kept"
+            )]
             let failure =
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(agent))).err();
             crate::app::lifecycle_state::preserve_first_lifecycle_panic(

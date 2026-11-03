@@ -163,6 +163,10 @@ where
     let Some(mut handler) = slot.take() else {
         return Called::Vacant;
     };
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "ADR-0287: the handler is restored after its call, whether or not it panicked"
+    )]
     let outcome = catch_unwind(AssertUnwindSafe(|| body(&mut handler)));
     let displaced = slot.restore(handler);
     retire(displaced);

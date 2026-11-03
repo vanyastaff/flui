@@ -648,6 +648,10 @@ fn a_panicking_grant_releases_the_lock(fixture: &mut dyn TextStoreFixture) -> Ou
     let store = fresh(fixture, CORPUS);
     let grant_ran = Rc::new(Cell::new(false));
     let ran = Rc::clone(&grant_ran);
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "ADR-0287: the kit observes the panic of a deliberately failing grant"
+    )]
     let unwound = catch_unwind(AssertUnwindSafe(|| {
         let _ = store.request_lock(
             LockGrant::read_write(move |_| {
@@ -1112,6 +1116,10 @@ fn publication_finishes_accepted_writes_and_keeps_the_first_failure(
         let records_return = !matches!(behavior, PublicationBehavior::FailBefore);
         let observer = PublicationObserver::new(&store, behavior);
         store.set_observer(Some(Rc::clone(&observer) as Rc<dyn TextStoreObserver>));
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: the kit observes the panic of a failing application edit"
+        )]
         let result = catch_unwind(AssertUnwindSafe(|| fixture.app_replace_all("new😀")));
         ensure_eq(
             observer.writes_completed.get(),
@@ -1270,6 +1278,10 @@ fn publication_respects_the_queue_bound_and_a_closed_commit_gate(
         };
         let observer = PublicationObserver::new(&store, behavior);
         store.set_observer(Some(Rc::clone(&observer) as Rc<dyn TextStoreObserver>));
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: the kit observes the panic of a failing application edit"
+        )]
         let failure = publication_failure(catch_unwind(AssertUnwindSafe(|| {
             fixture.app_replace_all("new😀");
         })));
@@ -1350,6 +1362,10 @@ fn queued_work_app_edit(fixture: &mut dyn TextStoreFixture, in_settle: bool) -> 
     };
     let observer = PublicationObserver::new(&store, behavior);
     store.set_observer(Some(Rc::clone(&observer) as Rc<dyn TextStoreObserver>));
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "ADR-0287: the kit observes the panic of a failing application edit"
+    )]
     let failure = publication_failure(catch_unwind(AssertUnwindSafe(|| {
         fixture.app_replace_all("new😀");
     })));
@@ -1638,6 +1654,10 @@ fn a_grant_that_panics_after_marking_leaves_the_committed_text(
     let before = fixture.owner_notifications();
     let marked = Rc::new(Cell::new(false));
     let ran = Rc::clone(&marked);
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "ADR-0287: the kit observes the panic of a deliberately failing grant"
+    )]
     let unwound = catch_unwind(AssertUnwindSafe(|| {
         let _ = store.request_lock(
             LockGrant::read_write(move |session| {

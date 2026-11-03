@@ -175,6 +175,15 @@ tests and the contract's share the desktop's foreground and run one at a time
 `#[inspect(debug)]` (ADR-0303 §7). A site that gains a typed value drops its call, and the
 compiler reports the expectation left behind.
 
+`std::panic::catch_unwind` is a disallowed method in `clippy.toml` (ADR-0303 §6): user code runs
+through `flui_foundation::panic` (`commit`, `FirstPanic`, ADR-0287) and an OS entry through
+`owner::panic_boundary::os_entry`. A production site that still catches by hand carries
+`#[expect(clippy::disallowed_methods, reason = "ADR-0287: …")]` on its `let` or expression
+statement, or on its function, never on a file or module; the primitives carry one that names them
+as the boundary. Test code is exempt per crate, by `#![cfg_attr(test, allow(..))]` on the crate
+root and `#![allow(..)]` on `tests/main.rs` (ADR-0303 §5). A site that moves to a primitive drops
+its call, and the compiler reports the expectation left behind.
+
 xtask does not schedule its commands. On a host shared by several agents and
 checkouts, [heli](https://github.com/vanyastaff/heli) does: every cargo, the
 ones xtask spawns included, inherits its pool through `CARGO_MAKEFLAGS` and

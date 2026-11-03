@@ -136,6 +136,10 @@ fn install(order: &mut FallbackOrder, tag: &str, ask: &AskHost) -> bool {
 /// payload is discarded under containment, since the payload's destructor is
 /// the panicking code's too (ADR-0281 §2).
 pub(crate) fn contained<T>(what: &str, f: impl FnOnce() -> T) -> Option<T> {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "ADR-0287: a rescan callback's panic is logged and contained"
+    )]
     match catch_unwind(AssertUnwindSafe(f)) {
         Ok(value) => Some(value),
         Err(payload) => {

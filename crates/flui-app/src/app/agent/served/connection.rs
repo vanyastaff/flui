@@ -50,6 +50,10 @@ pub(super) fn serve(stream: Stream, session: Session, transport: &Arc<Transport>
     // A conversation that panics (a subscriber at one of its traces, an owner's wake) broke the
     // connection as surely as the client closing it: the session is dropped as for a client
     // that left.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "ADR-0287: a panicking conversation drops its session like a client leaving"
+    )]
     let served = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         platform::serve(stream, session, transport, done, &waker);
     }));

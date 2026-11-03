@@ -119,6 +119,10 @@ pub(crate) fn retire_with_execution_custody<T>(
 ) {
     let signal = slot.borrow().as_ref().and_then(Weak::upgrade);
     let held = std::thread::panicking() || signal.as_ref().is_some_and(|signal| signal.get());
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "ADR-0287: a retired value's drop runs contained; an earlier failure stays first"
+    )]
     if let Err(payload) = catch_unwind(AssertUnwindSafe(|| drop(value))) {
         if held {
             flui_foundation::panic::discard_payload(payload);
@@ -161,6 +165,10 @@ impl<'a> Recovery<'a> {
     }
 
     fn attempt<T>(&mut self, action: impl FnOnce() -> T) -> Option<T> {
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: an owner-turn action runs contained; the first failure is kept"
+        )]
         match catch_unwind(AssertUnwindSafe(action)) {
             Ok(value) => Some(value),
             Err(payload) => {

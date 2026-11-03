@@ -1,6 +1,10 @@
 //! The flui-semantics integration tests, one `semantics_it` binary: each file
 //! is a module of it.
 
+#![allow(
+    clippy::disallowed_methods,
+    reason = "test code catches a panic to assert on it (ADR-0303 §5)"
+)]
 #[path = "actionability.rs"]
 mod actionability;
 #[path = "announce.rs"]

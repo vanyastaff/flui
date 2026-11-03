@@ -423,6 +423,10 @@ impl ObserverHub {
         let Some(clock) = self.clock.as_deref() else {
             return EventTime::from_nanos(0);
         };
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: a user clock cannot unwind past a stamped verdict"
+        )]
         match catch_unwind(AssertUnwindSafe(|| crate::events::interaction_now(clock))) {
             Ok(now) => now,
             Err(payload) => {
@@ -527,6 +531,10 @@ impl ObserverHub {
                 .map(|entry| Rc::clone(&entry.observer))
                 .collect();
             for observer in observers {
+                #[expect(
+                    clippy::disallowed_methods,
+                    reason = "ADR-0287: a listener's panic must not stop the remaining observers"
+                )]
                 if let Err(payload) =
                     catch_unwind(AssertUnwindSafe(|| observer.observe(&observation)))
                 {
@@ -551,6 +559,10 @@ impl ObserverHub {
     fn request_wake(&self) {
         let window = self.wake.borrow().as_ref().and_then(Weak::upgrade);
         if let Some(window) = window {
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "ADR-0287: the window's redraw wake runs contained; the queue stays consistent"
+            )]
             let woke = catch_unwind(AssertUnwindSafe(|| window.request_redraw()));
             match woke {
                 Ok(()) => drop(window),
@@ -598,6 +610,10 @@ impl Failures {
         let panic = flui_foundation::panic::payload_text(first.as_ref()).unwrap_or("<opaque>");
         let later = self.later;
         let destroyed = retire.failed.get();
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: reporting runs foreign tracing subscribers, contained"
+        )]
         if let Err(payload) = catch_unwind(AssertUnwindSafe(|| {
             tracing::error!(
                 target: "flui.input.observer",
@@ -630,6 +646,10 @@ impl Retire {
         let Some(observer) = observer else {
             return;
         };
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: a retired observer's drop runs contained; delivery goes on"
+        )]
         if let Err(payload) = catch_unwind(AssertUnwindSafe(|| drop(observer))) {
             self.failed.set(self.failed.get() + 1);
             flui_foundation::panic::discard_payload(payload);

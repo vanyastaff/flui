@@ -412,6 +412,10 @@ impl<D: Document> Persisted<D> {
         if document.registry.is_none() {
             return Err(PersistError::Storage(NO_REGISTRY.into()));
         }
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: a document's encode runs contained and reports a typed error"
+        )]
         let body = match catch_unwind(AssertUnwindSafe(|| value.encode())) {
             Ok(body) => body,
             Err(payload) => {
@@ -752,12 +756,20 @@ impl<D: Document> OpenDocument<D> {
                 // then cancelled, and the fresh start is left failed, so
                 // `retry` copies again. The hook's panic is raised, or kept
                 // while a panic already unwinds.
+                #[expect(
+                    clippy::disallowed_methods,
+                    reason = "ADR-0287: the frame hook woken by spawn runs contained; the copy is cancelled"
+                )]
                 let spawned = catch_unwind(AssertUnwindSafe(|| {
                     driver.spawn_local(Box::pin(copy_aside(Rc::downgrade(self), copy, base)))
                 }));
                 let token = match spawned {
                     Ok(token) => token,
                     Err(payload) => {
+                        #[expect(
+                            clippy::disallowed_methods,
+                            reason = "ADR-0287: a failure report runs contained while the spawn panic is handled"
+                        )]
                         let failed = catch_unwind(AssertUnwindSafe(|| {
                             self.fail(PersistError::Storage(StorageError::Cancelled));
                         }));
@@ -794,6 +806,10 @@ impl<D: Document> OpenDocument<D> {
                 return;
             }
         };
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: a document's encode runs contained and reports a typed error"
+        )]
         let body = match catch_unwind(AssertUnwindSafe(|| value.encode())) {
             Ok(body) => body,
             Err(payload) => {
@@ -992,6 +1008,10 @@ impl<D: Document> OpenDocument<D> {
         let (Some(driver), Some((registry, _))) = (&self.driver, &self.registry) else {
             return;
         };
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: the frame hook woken by spawn runs contained; the watch can restart"
+        )]
         let spawned = catch_unwind(AssertUnwindSafe(|| {
             driver.spawn_local(Box::pin(watch(Rc::downgrade(self), registry.clone())))
         }));
@@ -1073,6 +1093,10 @@ impl<D: Document> OpenDocument<D> {
         // Spawning wakes the frame hook, which may panic; the task is then
         // cancelled, and nothing stays queued, so the next announcement tries
         // again. While a panic already unwinds, the hook's is kept, not raised.
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: the frame hook woken by spawn runs contained; nothing stays queued"
+        )]
         let spawned = catch_unwind(AssertUnwindSafe(|| {
             driver.spawn_local(Box::pin(async move { deliver(&document) }))
         }));
@@ -1121,6 +1145,10 @@ fn deliver<D: Document>(document: &Weak<OpenDocument<D>>) {
     // queues nothing more. A refresh that panics (a frame hook it wakes)
     // ends this delivery, and the next announcement queues another.
     let announcer = &open.announcer;
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "ADR-0287: a refresh that panics clears the queued flag before resuming"
+    )]
     if let Err(payload) = catch_unwind(AssertUnwindSafe(|| open.refresh())) {
         announcer.queued.set(false);
         resume_unwind(payload);
@@ -1338,6 +1366,10 @@ fn framed<D: Document>(revision: Revision, body: &[u8]) -> Vec<u8> {
 
 /// [`Document::initial`], with a panic in it contained and reported.
 fn contained_initial<D: Document>() -> Result<D, PersistError> {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "ADR-0287: a document's initial runs contained and reports a typed error"
+    )]
     catch_unwind(D::initial).map_err(|payload| {
         let message = payload_text(&*payload)
             .unwrap_or("a panic without a message")
@@ -1369,6 +1401,10 @@ fn decode_stored<D: Document>(stored: Stored) -> Result<Loaded<D>, PersistError>
         });
     }
     let body = &bytes[header.body_start..];
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "ADR-0287: a document's decode runs contained and reports a typed error"
+    )]
     let decoded = catch_unwind(AssertUnwindSafe(|| D::decode(header.version, body)));
     let value = match decoded {
         Ok(Ok(value)) => value,

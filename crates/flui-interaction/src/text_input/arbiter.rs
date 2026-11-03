@@ -270,6 +270,10 @@ impl LockArbiter {
     ) -> usize {
         let mut attempted = 0_usize;
         while !self.locked.get() && self.may_commit() && self.pending() > 0 {
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "ADR-0287: a before-grant callback runs contained so pending grants proceed"
+            )]
             let prepared = catch_unwind(AssertUnwindSafe(|| before_grant(calls)));
             if let Err(payload) = prepared {
                 calls.keep(payload);
@@ -369,6 +373,10 @@ impl LockArbiter {
         // session the owner's code opens after it, or, with no owner gate,
         // resumes once the settle is done.
         let mut settling = OwnerCalls::parking_in(admitting);
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: the store owner's settle runs contained after the grant"
+        )]
         let settled = catch_unwind(AssertUnwindSafe(|| settle(&mut settling)));
         if let Err(payload) = settled {
             settling.keep(payload);
