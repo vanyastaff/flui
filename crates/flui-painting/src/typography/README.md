@@ -12,7 +12,7 @@ font faces in [`fonts`](../fonts.rs).
 | `text_style` | `TextStyle`, `StrutStyle`, `FontWeight`, `FontStyle`, `FontFeature`, `FontVariation` |
 | `text_spans` | `InlineSpan`, `TextSpan`, `TextLink`, `PlaceholderSpan`, `PlaceholderDimensions`, `PlaceholderAlignment` |
 | `text_alignment` | `TextAlign`, `TextAlignVertical`, `TextDirection`, `TextAffinity` |
-| `text_decoration` | `TextDecoration`, `TextDecorationStyle`, `TextOverflow`, `TextWidthBasis`, `TextHeightBehavior`, `TextLeadingDistribution` |
+| `text_decoration` | `TextDecoration`, `TextDecorationLines`, `TextDecorationStyle`, `DecorationThickness`, `TextOverflow`, `TextWidthBasis`, `TextHeightBehavior`, `TextLeadingDistribution` |
 | `text_metrics` | `TextPosition`, `TextRange`, `TextSelection`, `TextBox`, `GlyphInfo`, `LineMetrics` |
 
 Every item is re-exported at `flui_painting::typography`.
@@ -38,7 +38,7 @@ let span = TextSpan::new("Hello, World!").with_style(style);
 `TextStyle::merge` combines two styles, the argument taking precedence; `layout_affecting_eq`
 compares only the fields that change glyph geometry. FLUI's `TextPainter` also compares the
 span colours its shaped runs carry, so it keeps the shaped layout when only the root colour or
-a field shaping does not read (background, shadows) differs.
+a field shaping does not read (background, shadows, decoration) differs.
 
 ## Font weights
 

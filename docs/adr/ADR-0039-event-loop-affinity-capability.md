@@ -245,9 +245,8 @@ Built: `OwnerAffinity` debug assertions on macOS and Windows; `OwnerPlatform`,
 `SharedPlatform`, `PlatformProxy`, `PendingWindow` and the claim slot; the
 fallible ready callback on every backend; owner signals; loop-owned pending
 windows; the resident main window; the owner lane behind
-`PlatformProxy::open_window` on every host: a window another thread asks for
-queues on the loop's owner signal (at most 64 at once) and opens in the owner's
-next turn, and a quit or close answers what is still queued with `OwnerGone`.
+`PlatformProxy::open_window` on every host (`flui-native`'s `ARCHITECTURE.md`,
+"Window-independent owner turns").
 Not yet: moving the §1 methods off `Platform` into a `pub(crate)`
 owner-operations trait (after which `MacOSPlatform`'s `unsafe impl Send/Sync`
 covers only the residual surface). That move waits on on-device validation of

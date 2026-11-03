@@ -107,12 +107,12 @@ mod hooks {
             signal: &Arc<OwnerSignal>,
         ) -> Arc<dyn ActivityPreferences>;
 
-        /// The channel the trim level and the low-memory call take to the
+        /// The channel the system's memory calls take to the
         /// application.
         fn notices(app: &Arc<AppDelivery>) -> Arc<dyn NoticeChannel>;
 
-        /// What each of the Activity's lifecycle callbacks means for `app`.
-        fn activity(app: &AndroidApp) -> Box<dyn ActivityCallbacks>;
+        /// What each of the Activity's lifecycle callbacks means.
+        fn activity() -> Box<dyn ActivityCallbacks>;
 
         /// The input of `app`'s queue: the loop hands it each event it
         /// drains and answers the table's input position.

@@ -324,3 +324,47 @@ pub(crate) fn viewport_positions_first_sliver_for_axis_and_growth_matrix() {
 // child_count` is invalid configuration, not a synonym for `None`. That
 // state does not exist any more; there is nothing left for this test to
 // pin, so it is deleted rather than rewritten.
+
+/// A listener is user code. One that panics while a scrollable offset notifies leaves the rest of
+/// that round and every later change delivered.
+///
+/// Fails when the panic skips the listeners after it, or leaves the offset believing it is still
+/// notifying: the next `set_pixels` then only counts a pass nobody runs, and the viewport never
+/// hears of another scroll.
+#[test]
+fn a_listener_that_panics_leaves_the_scrollable_offset_notifying() {
+    use std::{
+        cell::Cell,
+        panic::{AssertUnwindSafe, catch_unwind},
+        rc::Rc,
+    };
+
+    let mut offset = ScrollableViewportOffset::zero();
+    let armed = Rc::new(Cell::new(true));
+    let failing: Rc<dyn Fn()> = Rc::new({
+        let armed = Rc::clone(&armed);
+        move || assert!(!armed.replace(false), "the first listener fails once")
+    });
+    let heard = Rc::new(Cell::new(0_usize));
+    let counting: Rc<dyn Fn()> = Rc::new({
+        let heard = Rc::clone(&heard);
+        move || heard.set(heard.get() + 1)
+    });
+    offset.add_listener(Rc::clone(&failing));
+    offset.add_listener(Rc::clone(&counting));
+
+    let unwound = catch_unwind(AssertUnwindSafe(|| offset.set_pixels(10.0)));
+    assert!(unwound.is_err(), "the listener's panic continues");
+    assert_eq!(
+        heard.get(),
+        1,
+        "the listener after the failing one still ran"
+    );
+
+    offset.set_pixels(20.0);
+    assert_eq!(heard.get(), 2, "the next change reached the listeners");
+
+    offset.remove_listener(&counting);
+    offset.set_pixels(30.0);
+    assert_eq!(heard.get(), 2, "a removed listener is not told");
+}

@@ -112,6 +112,9 @@ their tests, measured at `431c8757c` (2026-09-26):
 `painting::Shadow` and `painting::BlurSigma` are added because `TextStyle::shadows` and
 `DrawOp::ParagraphShadow` name them (ADR-0309): a package styles shadowed text and its paint
 tests read the shadow op.
+`painting::{TextDecoration, TextDecorationLines, TextDecorationStyle, DecorationThickness}`
+are added because `TextStyle::decoration` names them (ADR-0310): a package underlines a link
+or strikes through a price.
 `flui-devtools`, measured the same way when it moved, adds `hooks::FrameSnapshot` and the
 `foundation::observe` paths (see Consumers). Their
 tests under `tests/` also use `flui-interaction`'s `testing` feature and `flui-testing` (whose

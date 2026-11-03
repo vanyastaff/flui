@@ -42,6 +42,8 @@ pub(crate) struct SpanPaint<'a> {
     pub(crate) background: Option<crate::styling::Color>,
     /// The shadows the span's glyphs cast; `None` inherits.
     pub(crate) shadows: Option<&'a [crate::styling::Shadow<f64>]>,
+    /// The lines drawn along the span's text (ADR-0310); `None` inherits.
+    pub(crate) decoration: Option<crate::typography::TextDecoration>,
 }
 
 impl<'a> SpanPaint<'a> {
@@ -50,6 +52,7 @@ impl<'a> SpanPaint<'a> {
             color,
             background_color,
             shadows,
+            decoration,
             // Shaped: `layout_affecting_eq` compares them.
             font_size: _,
             sizing: _,
@@ -67,6 +70,7 @@ impl<'a> SpanPaint<'a> {
             glyph: *color,
             background: *background_color,
             shadows: shadows.as_deref(),
+            decoration: *decoration,
         }
     }
 }

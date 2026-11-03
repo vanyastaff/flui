@@ -11,7 +11,9 @@
   push vocabulary is now projected onto a pull text store)
 - **Superseded-by:** [ADR-0142](ADR-0142-text-store-commit-gate-and-owner-code-containment.md) item 4
   (commit-on-blur implemented), for §6's blur rule only: a field losing its input commits its composition
-  instead of leaving it in place
+  instead of leaving it in place; [ADR-0310](ADR-0310-a-text-decoration-is-drawn-where-its-font-puts-it.md)
+  §5, for §6's underline approximation and the consequence restating it only: the composing
+  region is underlined as a span decoration over its bytes
 - **Amended by:** [ADR-0082](ADR-0082-platform-api-contract-crate.md) (§2: `PlatformTextInput`
   now lives in `flui-platform`, re-exported at its old `flui-native` path; its contract is
   unchanged); [ADR-0098](ADR-0098-owned-f64-geometry-values.md) (on acceptance; §1: `flui-types` is deleted
