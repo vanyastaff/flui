@@ -4,16 +4,18 @@
 //! [`apply_resample`](crate::resample::apply_resample) is the pass a transform image filter lowers to. Each
 //! output texel shows the source at the map of its centre, so rotation,
 //! shear and scale need no special case. Past the source's edge the sampler
-//! clamps: a caller that wants transparency there pads the source with
-//! transparent texels as far as the sampler reaches.
+//! clamps, and past a decal rect the caller gives it reads transparent
+//! black.
 
 use std::sync::Arc;
 
 use bytemuck::cast_slice;
+use flui_foundation::geometry::Rect;
+use flui_painting::paint::{ImageSampling, ImageTransform};
 
 pub(crate) use pipeline::ResamplePipeline;
 
-use crate::{resources::GpuResources, texture_pool::PooledTexture};
+use crate::{error::GeometryError, resources::GpuResources, texture_pool::PooledTexture};
 
 mod generated;
 mod pipeline;
@@ -23,7 +25,8 @@ use generated::resample;
 /// `source` (of `source_size` texels) resampled into a new texture of
 /// `output_size` texels: the output texel whose centre is `p` shows the
 /// source at `map · p`, both in texels from each texture's top-left corner,
-/// read through `filter`.
+/// read through `filter`. A point outside `decal` (source texels) reads
+/// transparent black.
 #[expect(
     clippy::too_many_arguments,
     reason = "GPU pass functions require device/encoder/pipeline/resources plus the operation inputs"
@@ -33,6 +36,7 @@ pub(crate) fn apply_resample(
     filter: wgpu::FilterMode,
     source: &PooledTexture,
     source_size: (u32, u32),
+    decal: Rect<f64>,
     output_size: (u32, u32),
     surface_format: wgpu::TextureFormat,
     pipeline: &ResamplePipeline,
@@ -48,6 +52,12 @@ pub(crate) fn apply_resample(
     let uniform = resample::ResampleUniforms::new(
         [xx as f32, xy as f32, x0 as f32, 0.0],
         [yx as f32, yy as f32, y0 as f32, 0.0],
+        [
+            decal.left() as f32,
+            decal.top() as f32,
+            decal.right() as f32,
+            decal.bottom() as f32,
+        ],
         [source_size.0 as f32, source_size.1 as f32],
     );
     let uniform_buffer = resources.uniform_pool_mut().alloc(cast_slice(&[uniform]));
@@ -95,4 +105,87 @@ pub(crate) fn apply_resample(
         render_pass.draw(0..6, 0..1);
     }
     output
+}
+
+/// How a resample reads between texels.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ResampleFilter {
+    /// The texel the sample point falls in.
+    Nearest,
+    /// Bilinear interpolation between the four texels around it.
+    Linear,
+}
+
+impl ResampleFilter {
+    /// The filter `sampling` asks for, if it has one.
+    pub(crate) fn of(sampling: ImageSampling) -> Option<Self> {
+        match sampling {
+            ImageSampling::Nearest => Some(Self::Nearest),
+            ImageSampling::Linear => Some(Self::Linear),
+            _ => None,
+        }
+    }
+
+    /// How far past a sample point the texels it reads reach: half a texel
+    /// for a bilinear read, none for a nearest one.
+    pub(crate) fn reach(self) -> f64 {
+        match self {
+            Self::Nearest => 0.0,
+            Self::Linear => 0.5,
+        }
+    }
+
+    /// The texels one output pixel reads.
+    pub(crate) fn taps(self) -> usize {
+        match self {
+            Self::Nearest => 1,
+            Self::Linear => 4,
+        }
+    }
+
+    pub(crate) fn filter_mode(self) -> wgpu::FilterMode {
+        match self {
+            Self::Nearest => wgpu::FilterMode::Nearest,
+            Self::Linear => wgpu::FilterMode::Linear,
+        }
+    }
+}
+
+/// `transform`, given in the space the 4x4 column-major `matrix` maps to
+/// device pixels, as a map from a device output pixel to the device pixel
+/// it shows: `matrix · transform⁻¹ · matrix⁻¹`.
+pub(crate) fn device_map(
+    transform: &ImageTransform,
+    matrix: &[f64; 16],
+) -> Result<glam::DAffine2, GeometryError> {
+    let device = glam::DAffine2::from_cols_array(&[
+        matrix[0], matrix[1], matrix[4], matrix[5], matrix[12], matrix[13],
+    ]);
+    let shown_to_source = glam::DAffine2::from_cols_array(&transform.inverse_coefficients());
+    let map = device * shown_to_source * device.inverse();
+    let determinant = map.matrix2.determinant();
+    if !map.to_cols_array().iter().all(|value| value.is_finite()) || !determinant.is_normal() {
+        return Err(GeometryError::NonFinite {
+            context: "image transform",
+        });
+    }
+    Ok(map)
+}
+
+/// The bounding box of `rect` mapped through `map`.
+pub(crate) fn mapped_bounds(map: glam::DAffine2, rect: Rect<f64>) -> Rect<f64> {
+    let corners = [
+        (rect.left(), rect.top()),
+        (rect.right(), rect.top()),
+        (rect.left(), rect.bottom()),
+        (rect.right(), rect.bottom()),
+    ]
+    .map(|(x, y)| map.transform_point2(glam::DVec2::new(x, y)));
+    let low = corners
+        .iter()
+        .fold(glam::DVec2::INFINITY, |low, &corner| low.min(corner));
+    let high = corners
+        .iter()
+        .fold(glam::DVec2::NEG_INFINITY, |high, &corner| high.max(corner));
+    Rect::from_ltrb(low.x, low.y, high.x, high.y)
 }

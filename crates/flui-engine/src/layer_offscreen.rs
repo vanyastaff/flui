@@ -982,16 +982,43 @@ pub(crate) fn apply_image_filter_passes(
                     encoder,
                 )
             }
+
+            ImageFilterPass::Resample { map, filter } => {
+                // From a texel of the frame to the root pixel it covers,
+                // through the map, back to a texel of the frame.
+                let origin = glam::DVec2::new(fb_origin.0 as f64, fb_origin.1 as f64);
+                let texel_map = glam::DAffine2::from_translation(-origin)
+                    * *map
+                    * glam::DAffine2::from_translation(origin);
+                // Past the current support the input is transparent; the
+                // decal keeps a sample past the frame's edge from clamping
+                // onto content there.
+                let reach = filter.reach();
+                let decal = flui_foundation::geometry::Rect::from_ltrb(
+                    support.left() - origin.x - reach,
+                    support.top() - origin.y - reach,
+                    support.right() - origin.x + reach,
+                    support.bottom() - origin.y + reach,
+                );
+                crate::resample::apply_resample(
+                    texel_map,
+                    filter.filter_mode(),
+                    &acc,
+                    fb_dim,
+                    decal,
+                    fb_dim,
+                    surface_format,
+                    &pipelines.resample,
+                    resources,
+                    device,
+                    encoder,
+                )
+            }
         };
-        let (rx, ry) = pass.support_radius()?;
-        support = flui_foundation::geometry::Rect::from_ltrb(
-            support.left() - f64::from(rx),
-            support.top() - f64::from(ry),
-            support.right() + f64::from(rx),
-            support.bottom() + f64::from(ry),
-        )
-        .intersect(&frame)
-        .unwrap_or_default();
+        support = pass
+            .output_support(support)?
+            .intersect(&frame)
+            .unwrap_or_default();
         if matches!(pass, ImageFilterPass::ColorMatrix(matrix) if matrix[19] > 0.0) {
             support = frame;
         }

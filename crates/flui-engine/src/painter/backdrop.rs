@@ -8,12 +8,13 @@ use super::WgpuPainter;
 use crate::{
     clip_chain::ClipOp,
     clip_geometry::{ValidatedAffine, ValidatedClip},
-    command_ir::{BackdropEffect, BackdropOp, DrawItem, DrawSegment, RecordError, ResampleFilter},
+    command_ir::{BackdropEffect, BackdropOp, DrawItem, DrawSegment, RecordError},
     device_domain::PreparedCost,
     error::{EngineError, EngineResult, GeometryError},
     pipeline_set::PipelineSet,
     render_target::RenderTarget,
     replay::GpuReplay,
+    resample::{ResampleFilter, mapped_bounds},
     resources::GpuResources,
     texture_pool::PooledTexture,
 };
@@ -183,80 +184,16 @@ fn resample_effect(
     sampling: ImageSampling,
     matrix: &[f64; 16],
 ) -> EngineResult<BackdropEffect> {
-    let filter = match sampling {
-        ImageSampling::Nearest => ResampleFilter::Nearest,
-        ImageSampling::Linear => ResampleFilter::Linear,
-        _ => {
-            return Err(EngineError::UnsupportedBackdropFilter {
-                reason: "a backdrop transform has no lowering for this sampling",
-            });
-        }
-    };
-    let device = glam::DAffine2::from_cols_array(&[
-        matrix[0], matrix[1], matrix[4], matrix[5], matrix[12], matrix[13],
-    ]);
-    let shown_to_source = glam::DAffine2::from_cols_array(&transform.inverse_coefficients());
-    let map = device * shown_to_source * device.inverse();
-    let [xx, yx, xy, yy, x0, y0] = map.to_cols_array();
-    if ![xx, yx, xy, yy, x0, y0]
-        .iter()
-        .all(|value| value.is_finite())
-    {
-        return Err(GeometryError::NonFinite {
-            context: "backdrop transform",
-        }
-        .into());
-    }
+    let filter = ResampleFilter::of(sampling).ok_or(EngineError::UnsupportedBackdropFilter {
+        reason: "a backdrop transform has no lowering for this sampling",
+    })?;
+    let map = crate::resample::device_map(transform, matrix)?;
     Ok(BackdropEffect::Resample { map, filter })
-}
-
-/// The bounding box of `rect` mapped through `map`.
-fn mapped_bounds(map: glam::DAffine2, rect: Rect<f64>) -> Rect<f64> {
-    let corners = [
-        (rect.left(), rect.top()),
-        (rect.right(), rect.top()),
-        (rect.left(), rect.bottom()),
-        (rect.right(), rect.bottom()),
-    ]
-    .map(|(x, y)| map.transform_point2(glam::DVec2::new(x, y)));
-    let low = corners
-        .iter()
-        .fold(glam::DVec2::INFINITY, |low, &corner| low.min(corner));
-    let high = corners
-        .iter()
-        .fold(glam::DVec2::NEG_INFINITY, |high, &corner| high.max(corner));
-    Rect::from_ltrb(low.x, low.y, high.x, high.y)
 }
 
 /// Whether `off_axis` is only rounding beside `on_axis`.
 fn axis_roundoff(off_axis: f64, on_axis: f64) -> bool {
     off_axis.abs() <= 8.0 * f64::EPSILON * on_axis.abs()
-}
-
-impl ResampleFilter {
-    /// How far past a sample point the texels it reads reach: half a texel
-    /// for a bilinear read, none for a nearest one.
-    fn reach(self) -> f64 {
-        match self {
-            Self::Nearest => 0.0,
-            Self::Linear => 0.5,
-        }
-    }
-
-    /// The texels one output pixel reads.
-    fn taps(self) -> usize {
-        match self {
-            Self::Nearest => 1,
-            Self::Linear => 4,
-        }
-    }
-
-    fn filter_mode(self) -> wgpu::FilterMode {
-        match self {
-            Self::Nearest => wgpu::FilterMode::Nearest,
-            Self::Linear => wgpu::FilterMode::Linear,
-        }
-    }
 }
 
 impl GpuReplay {
@@ -604,6 +541,13 @@ impl GpuReplay {
                         filter.filter_mode(),
                         &source,
                         texture_size,
+                        // The pad already reads transparent past the attachment.
+                        Rect::from_xywh(
+                            0.0,
+                            0.0,
+                            f64::from(texture_size.0),
+                            f64::from(texture_size.1),
+                        ),
                         out_size,
                         surface_format,
                         &pipelines.resample,
