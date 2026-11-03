@@ -60,7 +60,8 @@ lets a test hand every layer the same scripted client.
    pub trait BodySource: Send + 'static { fn poll_chunk(..) -> Poll<Option<Result<Vec<u8>, HttpError>>>; }
    #[non_exhaustive] pub enum HttpError {
        InvalidUrl { url }, Connect { detail }, Tls { detail }, Timeout, TooLarge { limit },
-       Protocol { detail }, Cancelled, Refused(SpawnError), NotYetOnThisHost { host: HttpHost },
+       Protocol { detail }, Cancelled, Refused(SpawnError), Host { detail },
+       NotYetOnThisHost { host: HttpHost },
    }
    ```
 
@@ -79,8 +80,17 @@ lets a test hand every layer the same scripted client.
    `NotYetOnThisHost { host: EmbedderExecutors }`. On the web the page's `fetch` sends
    (`flui_native::http::FetchClient`, a task of the page answering through a channel), and each
    exchange holds a slot of the IO lane from the request until its body ends or is dropped, so the
-   lane admits and refuses it as on a native host. Android answers `NotYetOnThisHost` until its
-   provider lands (`docs/gaps.md`). Without the feature the capability is not registered.
+   lane admits and refuses it as on a native host. Android sends through the system's
+   `HttpURLConnection` over JNI (`flui_native::http::UrlConnectionClient`), held on the IO lane
+   the same way: each request runs on a thread of its own attached to the VM, which answers its
+   head through a channel and reads the body a chunk at a time into a queue of four, waiting for
+   room while the reader holds it; a dropped request or body, and a deadline kept by one thread
+   per client, disconnect the connection from another thread, which ends the blocked read. Only
+   system classes are called and nothing calls back into Rust, so the provider needs no class of
+   FLUI's dex. A Java exception is mapped by its class (TLS, socket timeout, failed lookup or
+   connection, malformed URL), else by the stage that threw it, and a failure of the bridge itself
+   is `HttpError::Host`; no JNI failure panics. Without the feature the capability is not
+   registered.
 4. **The kit's client.** `flui_platform::testing::ScriptedHttp` answers what a test scripted per
    URL, holds and releases requests, counts them and the abandoned ones, and fails an unscripted URL
    with `Connect`. `HeadlessHost` registers it among its built-ins (`HeadlessHost::http`).
@@ -110,8 +120,8 @@ lets a test hand every layer the same scripted client.
   and no test opens a socket.
 - Good, because `flui-assets` links no TLS stack, and an application without network can drop
   `reqwest` with one feature.
-- Bad, because Android, the web and embedders' executors have no client yet: their network images
-  fail with a typed gap until the system stacks land.
+- Bad, because embedders' executors have no client yet: their network images
+  fail with a typed gap until a system stack that needs no Tokio lands there.
 - Neutral, because each provider owns its own connection pool, so two runs do not share
   connections.
 
@@ -123,7 +133,13 @@ lets a test hand every layer the same scripted client.
 - `a_request_through_fetch_answers_its_head_and_body`,
   `a_request_left_or_past_its_deadline_aborts_the_fetch` and
   `the_pages_fetch_answers_from_the_test_server` (`flui-native`, headless Chrome): the web's client;
-  `a_held_exchange_takes_an_io_slot_until_its_body_lets_go` (`flui-app`): its IO slot.
+  `a_held_exchange_takes_an_io_slot_until_its_body_lets_go` (`flui-app`): its IO slot, which
+  Android's client holds too.
+- `a_request_on_its_own_thread_answers_its_head_and_body`,
+  `a_body_left_unread_holds_the_download_until_it_is_dropped` and
+  `a_request_left_or_past_its_deadline_aborts_its_connection` (`flui-native`, Linux): Android's
+  request-per-thread model over a scripted stack; its JNI exchange is type-checked, not yet run on a
+  device.
 - `network_loads_fetch_with_the_callers_client_and_recover_after_errors` and
   `an_image_request_lives_exactly_as_long_as_someone_waits_for_it` (`flui-assets`).
 - `network_image_loads_with_the_hosts_http_client` (`flui-widgets`): `Image::network` on the
