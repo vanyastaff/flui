@@ -8,6 +8,9 @@ pub mod app;
 #[cfg(target_os = "macos")]
 pub mod appkit;
 pub mod clipboard;
+/// The request-per-thread HTTP client's scripted stack.
+#[cfg(test)]
+pub(crate) mod http;
 #[cfg(all(target_os = "linux", feature = "wayland"))]
 pub mod wayland;
 #[cfg(all(target_os = "linux", feature = "x11"))]

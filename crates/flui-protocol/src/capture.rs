@@ -2,6 +2,7 @@
 //! announces a [`BlobRef`], and the bytes follow as a length-prefixed frame on byte transports
 //! or a base64 string over BiDi (ADR-0238 §2).
 
+use crate::framing::BlobId;
 use crate::geometry::LogicalRect;
 use crate::tree::WindowId;
 
@@ -59,7 +60,7 @@ impl CaptureParams {
 #[non_exhaustive]
 pub struct BlobRef {
     /// The frame's number on this connection.
-    pub id: u64,
+    pub id: BlobId,
     /// Its length.
     pub bytes: u64,
     /// Its media type, such as `image/png`.
@@ -69,7 +70,7 @@ pub struct BlobRef {
 impl BlobRef {
     /// Blob `id` of `bytes` bytes of `media`.
     #[must_use]
-    pub fn new(id: u64, bytes: u64, media: impl Into<String>) -> Self {
+    pub fn new(id: BlobId, bytes: u64, media: impl Into<String>) -> Self {
         Self {
             id,
             bytes,

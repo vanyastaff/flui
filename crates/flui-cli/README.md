@@ -196,15 +196,18 @@ the app): `flui run --scene --scene-crate <crate> --package <android.package>`.
 ## Driving an app from an agent
 
 ```bash
-flui run --agent                  # debug build with the `dev-agent` feature, on this desktop
+flui run --agent                  # debug build, on this desktop
+flui run --agent --release        # release build with the `driver` feature
 ```
 
-`flui run --agent` builds the app with its `dev-agent` feature (`flui create`
-projects have it), gives it a private local endpoint (a Unix socket in a
+`flui run --agent` gives the app a private local endpoint (a Unix socket in a
 `0700` directory, or a named pipe on Windows) and a random launch token, and
-writes both to `target/flui-agent.json`. It refuses `--release`, a device
-other than this desktop and a project without the feature. With `--json` it
-emits `run.agent.ready {endpoint, session}`; the token stays out of the stream.
+writes both to `target/flui-agent.json`. Every debug FLUI app serves its
+driver agent there with no code of its own (ADR-0239); an optimized build
+gets the `driver` feature of `flui` (or of `flui-app` for an app that names the
+runtime crate), under the key the app names it by. It refuses a device other
+than this desktop. With `--json` it emits `run.agent.ready {endpoint, session}`;
+the token stays out of the stream.
 
 The agent's client launches `flui mcp` in the same project, for example in an
 MCP client's configuration:

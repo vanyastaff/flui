@@ -1054,3 +1054,171 @@ pub(crate) fn a_handle_drag_s_magnifier_follows_the_finger_and_each_step_clicks(
         shown[0]
     );
 }
+
+/// Under [`LongPressSelection::Caret`], a long press places the caret under
+/// the finger, and the touch moves it between characters with the
+/// magnifier over it, following the finger; letting go takes the magnifier
+/// away and leaves the caret where the touch did, which assistive
+/// technology reads too. Under [`LongPressSelection::Word`], the magnifier
+/// shows over the end the touch extends, and the handles show once it
+/// lifts.
+///
+/// Red-check: select the word whatever the choice (a selection under
+/// `Caret`), or show no magnifier while the touch is down (none during).
+pub(crate) fn a_long_press_moves_the_caret_or_extends_the_word_under_the_magnifier() {
+    use flui_widgets::{LongPressSelection, PlainMagnifier};
+
+    // Presses at `at`, waits out the long press, moves through `stops`
+    // and rests; the magnifiers and the selection the frame before the
+    // release, then the magnifiers after it.
+    let press = |scene: &mut Scene, at: f64, stops: &[f64]| {
+        let mut script = TouchScript::new("long press and move")
+            .down(1, scene.along(at))
+            .wait(Duration::from_millis(800))
+            .frame();
+        for &stop in stops {
+            script = script
+                .wait(Duration::from_millis(16))
+                .move_to(1, scene.along(stop))
+                .frame();
+        }
+        let gesture = script
+            .wait(Duration::from_millis(16))
+            .frame()
+            .wait(Duration::from_millis(16))
+            .frame()
+            .up(1)
+            .build()
+            .expect("a valid script");
+        let last = gesture.steps().len() - 1;
+        let mut during = None;
+        let controller = scene.controller.clone();
+        scene.laid.replay_with(&gesture, |laid, index| {
+            if index + 1 == last {
+                during = Some((magnifiers(laid), controller.selection()));
+            }
+        });
+        scene.settle();
+        (during.expect("the press ran"), magnifiers(&scene.laid))
+    };
+    let letter = start_of("alpha beta") - start_of("alpha bet");
+
+    let mut scene = Scene::build(Some(|c| c.magnifier(PlainMagnifier::rounded())), |field| {
+        field
+            .caret_handle(CaretHandle::NEVER)
+            .long_press(LongPressSelection::Caret)
+    });
+    scene.laid.enable_semantics();
+    let stops = [
+        start_of("alpha be"),
+        start_of("alpha bet"),
+        start_of("alpha bet") + letter / 3.0,
+    ];
+    let ((shown, selection), after) = press(&mut scene, start_of("alpha b"), &stops);
+    let caret = "alpha bet".len();
+    assert_eq!(selection, caret..caret, "a caret moved with the touch");
+    assert_eq!(shown.len(), 1, "one magnifier during the press: {shown:?}");
+    let field = scene.laid.absolute_offset(scene.editable());
+    let finger_x = field.dx + stops[2];
+    assert!(
+        (shown[0].center().x - finger_x).abs() < 0.5,
+        "centred under the finger at {finger_x}: {:?}",
+        shown[0]
+    );
+    assert!(after.is_empty(), "the release takes it: {after:?}");
+    assert_eq!(scene.selection(), caret..caret);
+    let tree = accesskit_consumer::Tree::new(
+        scene
+            .laid
+            .a11y_tree()
+            .expect("semantics enabled")
+            .raw()
+            .clone(),
+        true,
+    );
+    let state = tree.state();
+    let mut pending = vec![state.root()];
+    let mut focus = None;
+    while let Some(node) = pending.pop() {
+        if let Some(at) = node.text_selection_focus() {
+            focus.get_or_insert(at.to_global_usv_index());
+        }
+        pending.extend(node.children());
+    }
+    assert_eq!(
+        focus.expect("the field publishes its caret"),
+        caret,
+        "assistive technology agrees"
+    );
+
+    let mut scene = Scene::build(Some(|c| c.magnifier(PlainMagnifier::rounded())), |field| {
+        field
+            .caret_handle(CaretHandle::NEVER)
+            .long_press(LongPressSelection::Word)
+    });
+    let ((shown, selection), after) = press(
+        &mut scene,
+        width_of("alpha be"),
+        &[start_of("alpha beta ga")],
+    );
+    assert_eq!(selection, 6..16, "the word extended to the next");
+    assert_eq!(shown.len(), 1, "one magnifier during the press: {shown:?}");
+    let finger_x = field.dx + start_of("alpha beta ga");
+    assert!(
+        (shown[0].center().x - finger_x).abs() < 0.5,
+        "centred under the finger at {finger_x}: {:?}",
+        shown[0]
+    );
+    assert!(after.is_empty(), "the release takes it: {after:?}");
+    assert_eq!(scene.handles(), 2, "the handles show once it lifts");
+
+    // The scope's choice reaches a field that makes none.
+    let mut scene = Scene::build(
+        Some(|c| {
+            c.magnifier(PlainMagnifier::rounded())
+                .long_press(LongPressSelection::Caret)
+        }),
+        |field| field.caret_handle(CaretHandle::NEVER),
+    );
+    let ((_, selection), _) = press(&mut scene, start_of("alpha b"), &[start_of("alpha be")]);
+    assert_eq!(selection, 8..8, "the scope's caret press");
+
+    // The focus leaving mid-press takes the magnifier with the press.
+    let mut scene = Scene::build(Some(|c| c.magnifier(PlainMagnifier::rounded())), |field| {
+        field
+            .caret_handle(CaretHandle::NEVER)
+            .long_press(LongPressSelection::Caret)
+    });
+    let gesture = TouchScript::new("press while the focus leaves")
+        .down(1, scene.along(start_of("alpha b")))
+        .wait(Duration::from_millis(800))
+        .frame()
+        .wait(Duration::from_millis(16))
+        .frame()
+        .wait(Duration::from_millis(16))
+        .frame()
+        .up(1)
+        .build()
+        .expect("a valid script");
+    let (elsewhere, mut magnified, mut left) = (Rc::clone(&scene.elsewhere), false, Vec::new());
+    scene.laid.replay_with(&gesture, |laid, step| match step {
+        2 => {
+            magnified = magnifiers(laid).len() == 1;
+            let _ = elsewhere.request_focus();
+        }
+        4 => left = magnifiers(laid),
+        _ => {}
+    });
+    scene.settle();
+    assert!(magnified, "the press showed the magnifier");
+    assert!(left.is_empty(), "the focus took it: {left:?}");
+    assert_eq!(scene.handles(), 0);
+    assert_eq!(
+        (
+            LongPressSelection::for_platform(TargetPlatform::iOS),
+            LongPressSelection::for_platform(TargetPlatform::Android),
+        ),
+        (LongPressSelection::Caret, LongPressSelection::Word),
+        "iOS moves the caret, Android selects the word"
+    );
+}

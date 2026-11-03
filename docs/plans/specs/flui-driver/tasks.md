@@ -450,6 +450,27 @@ graph LR
   - a Linux CI test launches a debug example and kills it mid-call (`gone`, kind `process`);
   - the Android and web transports compile in `cross-typecheck` and `wasm-check` (live runs are
     FD12 and FD13).
+- **Slices:** the desktop transports with the launch contract, the CLI and devtools' removal;
+  Android (abstract socket, extras through the Java view); web (`__flui_agent.call`, BiDi).
+- **Evidence, desktop (2026-11-02):** `flui_protocol::launch` (`ENDPOINT_ENV`, `TOKEN_ENV`,
+  `EXIT_ON_DISCONNECT_ENV`, the Android extras, `MIN_TOKEN_LEN`, `EXIT_DISCONNECTED` = 75) and
+  `framing` (`MAX_LINE`, `BlobHeader`, `BlobId`), pinned by
+  `a_payload_header_round_trips_and_refuses_what_the_reader_does_not_take` and
+  `the_exit_on_disconnect_switch_is_exactly_one`. `flui-app::app::agent` serves 0.8 on desktop
+  and iOS; `AppConfig::with_dev_agent` appends, each hook in a host of its own
+  (`every_installed_hook_is_attached_and_one_that_panics_is_dropped_alone`).
+  `reads_the_counter_and_taps_it_by_element_and_by_locator` and the 13 rows of
+  `the_driver_agent_contains_every_failure` cover no hello, a wrong or short token, another
+  protocol, a client leaving mid-request, timeouts by effect, `busy`, malformed and unserved
+  requests, a closed window, events, detach, the exit under the flag, a client that stops reading
+  and a bind failure. `flui-devtools` lost `agent`, the facade `dev-agent` (now `devtools` and
+  `driver`); `flui run --agent` needs no feature in debug and adds `flui/driver` otherwise
+  (`an_optimized_agent_build_turns_on_the_driver_feature_and_a_debug_one_needs_none`), and
+  `flui mcp` speaks 0.8. The `counter` example launched with the two variables binds its endpoint
+  with no code of its own (run by hand: the container has neither a GPU nor
+  `libxkbcommon-x11`, so the window never opens). Not yet: the kill-mid-call test, which needs the
+  client that reports `gone` with kind `process` (FD9) and a Linux CI job that opens a window;
+  remote and other-user refusal on Windows (W).
 
 ### FD8. Presented-frame capture
 

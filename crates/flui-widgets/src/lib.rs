@@ -220,7 +220,8 @@ pub use interaction::{
     PreviousFocusAction, PreviousFocusIntent, RawButton, RawGestureDetector,
     RawGestureDetectorState, RecognizerContext, SelectAllTextIntent, ShortcutCallback, Shortcuts,
     ShortcutsState, ShowContextMenuIntent, SingleActivator, SystemGestureExclusion,
-    TransformationController, Visibility, VisibilityGate,
+    TransformationController, Visibility, VisibilityGate, WindowCaptionButton, WindowChromeState,
+    WindowMovePassThrough, WindowResizeArea, WindowTitleBar,
 };
 pub use interaction::{DragSlot, ForcePressSlot, MultiTapCount, MultiTapCountError, TransformSlot};
 pub use layout::{
@@ -327,11 +328,12 @@ pub use swipe::{
 pub use text::{
     AnimatedDefaultTextStyle, CaretHandle, DefaultSelectionControls, DefaultSelectionStyle,
     DefaultTextStyle, DotHandles, EditableText, EditableTextState, HandleInfo, HandleSide,
-    MagnifierInfo, PlainMagnifier, PopupOrigin, RawTextField, RawTextFieldState, RichText,
-    SelectError, SelectedText, SelectionArea, SelectionChange, SelectionChangeCause,
-    SelectionContainer, SelectionController, SelectionHandles, SelectionInput, SelectionMagnifier,
-    SelectionMenu, SelectionMenuPolicy, SelectionPopup, SelectionStyle, SubmitCallback, Text,
-    TextEditingController, ToolbarItems, ToolbarItemsController, ToolbarItemsState,
+    LongPressSelection, MagnifierInfo, PlainMagnifier, PopupOrigin, RawTextField,
+    RawTextFieldState, RichText, SelectError, SelectedText, SelectionArea, SelectionChange,
+    SelectionChangeCause, SelectionContainer, SelectionController, SelectionHandles,
+    SelectionInput, SelectionMagnifier, SelectionMenu, SelectionMenuPolicy, SelectionPopup,
+    SelectionStyle, SubmitCallback, Text, TextEditingController, ToolbarItems,
+    ToolbarItemsController, ToolbarItemsState,
 };
 pub use transitions::{
     AlignTransition, AlignTransitionState, AnimatedBuilder, AnimatedBuilderState,

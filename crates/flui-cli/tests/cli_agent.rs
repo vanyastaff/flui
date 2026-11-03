@@ -1,9 +1,9 @@
 //! `flui run --agent` and `flui mcp`, end to end on a fixture app.
 //!
-//! The fixture stands in for an application with the `dev-agent` feature: it
-//! binds the endpoint it is given, checks the launch token and answers the
-//! framing `flui_devtools::agent` documents. The real server's behaviour is
-//! pinned by `flui-devtools`' `agent_endpoint` tests; what is pinned here is
+//! The fixture stands in for a FLUI app's driver agent (ADR-0239): it binds
+//! the endpoint it is given, checks the launch token and answers the
+//! protocol's hello and the four methods `flui mcp` calls. The real server's
+//! behaviour is pinned by `flui-app`'s agent tests; what is pinned here is
 //! the CLI's half: the feature and environment it launches the app with, the
 //! session file it writes, and the MCP calls that reach the endpoint.
 use std::io::Write as _;
@@ -13,8 +13,11 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 
 use assert_cmd::cargo::cargo_bin_cmd;
+use flui_protocol::version::PROTOCOL_VERSION;
 use tempfile::TempDir;
 
+/// The fixture app. It prints whether its facade was built with the
+/// `driver` feature, and with `FIXTURE_EXIT` set exits right after.
 const FIXTURE_MAIN: &str = r##"
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixListener;
@@ -23,38 +26,41 @@ fn field(line: &str, key: &str) -> Option<String> {
     let at = line.find(key)? + key.len();
     let rest = &line[at..];
     let rest = rest.trim_start_matches('"');
-    Some(rest.chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '_').collect())
+    Some(rest.chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '.').collect())
 }
 
 fn main() {
+    println!("FIXTURE_DRIVER {}", flui::DRIVER);
+    if std::env::var_os("FIXTURE_EXIT").is_some() {
+        return;
+    }
     let endpoint = std::env::var("FLUI_AGENT_ENDPOINT").expect("endpoint");
     let token = std::env::var("FLUI_AGENT_TOKEN").expect("token");
-    assert!(cfg!(feature = "dev-agent"), "launched without the feature");
     let listener = UnixListener::bind(&endpoint).expect("bind");
     for stream in listener.incoming() {
         let stream = stream.expect("accept");
         let mut writer = stream.try_clone().expect("clone");
         let mut lines = BufReader::new(stream).lines();
         let hello = lines.next().expect("hello").expect("line");
-        if !hello.contains(&token) {
+        if !hello.contains(&token) || !hello.contains(r#""protocol":"__PROTOCOL__""#) {
             continue; // the real server closes unread on a wrong token
         }
-        writeln!(writer, r#"{{"hello":{{"protocol":"0.4"}}}}"#).unwrap();
+        writeln!(writer, r#"{{"hello":{{"protocol":"__PROTOCOL__"}}}}"#).unwrap();
         for line in lines {
             let line = line.expect("line");
             let id = field(&line, r#""id":"#).expect("id");
-            let op = field(&line, r#""op":"#).expect("op");
-            let reply = match op.as_str() {
-                "windows" => format!(r#"{{"id":{id},"result":{{"windows":["w1"]}}}}"#),
-                "read" => format!(
-                    r#"{{"id":{id},"result":{{"protocol":"0.4","nodes":[{{"id":"e1","role":"button"}}]}}}}"#
+            let method = field(&line, r#""method":"#).expect("method");
+            let reply = match method.as_str() {
+                "windows.list" => format!(r#"{{"id":{id},"result":{{"windows":["w1"]}}}}"#),
+                "semantics.read" => format!(
+                    r#"{{"id":{id},"result":{{"protocol":"__PROTOCOL__","nodes":[{{"id":"e1","role":"button"}}]}}}}"#
                 ),
-                "act" => {
-                    writeln!(writer, r#"{{"id":{id},"result":{{}}}}"#).unwrap();
+                "semantics.act" => {
+                    writeln!(writer, r#"{{"id":{id},"result":{{"via":"semantic"}}}}"#).unwrap();
                     println!("FIXTURE_ACTED {line}");
                     return;
                 }
-                _ => format!(r#"{{"id":{id},"error":{{"code":"invalid_argument","message":"unknown op","retry":"never"}}}}"#),
+                _ => format!(r#"{{"id":{id},"error":{{"code":"invalid_argument","message":"no such method","retry":"never"}}}}"#),
             };
             writeln!(writer, "{reply}").unwrap();
         }
@@ -62,31 +68,59 @@ fn main() {
 }
 "##;
 
-fn fixture(root: &Path, with_feature: bool) -> std::path::PathBuf {
+/// A fixture app depending on `dependency`, a stand-in facade with a
+/// `driver` feature.
+fn fixture(root: &Path, dependency: &str) -> std::path::PathBuf {
+    fixture_as(root, dependency, dependency)
+}
+
+/// A fixture app naming `dependency` under the key `key` (`package =` when
+/// they differ), as an app that renames the facade does.
+fn fixture_as(root: &Path, dependency: &str, key: &str) -> std::path::PathBuf {
     let facade = root.join("facade");
     std::fs::create_dir_all(facade.join("src")).expect("fixture");
     std::fs::write(
         facade.join("Cargo.toml"),
-        "[package]\nname = \"flui\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        format!(
+            "[package]\nname = \"{dependency}\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\
+             [lib]\nname = \"flui\"\n[features]\ndriver = []\n"
+        ),
     )
     .expect("fixture");
-    std::fs::write(facade.join("src/lib.rs"), "").expect("fixture");
+    std::fs::write(
+        facade.join("src/lib.rs"),
+        "pub const DRIVER: bool = cfg!(feature = \"driver\");\n",
+    )
+    .expect("fixture");
     let app = root.join("app");
     std::fs::create_dir_all(app.join("src")).expect("fixture");
-    let features = if with_feature {
-        "[features]\ndev-agent = []\n"
+    // A renamed dependency is reached by its key, not its library name.
+    let (declaration, krate) = if key == dependency {
+        (
+            format!("{key} = {{ path = \"../facade\" }}"),
+            "flui".to_owned(),
+        )
     } else {
-        ""
+        (
+            format!("{key} = {{ package = \"{dependency}\", path = \"../facade\" }}"),
+            key.replace('-', "_"),
+        )
     };
     std::fs::write(
         app.join("Cargo.toml"),
         format!(
             "[package]\nname = \"app\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\
-             [workspace]\n{features}[dependencies]\nflui = {{ path = \"../facade\" }}\n"
+             [workspace]\n[dependencies]\n{declaration}\n"
         ),
     )
     .expect("fixture");
-    std::fs::write(app.join("src/main.rs"), FIXTURE_MAIN).expect("fixture");
+    std::fs::write(
+        app.join("src/main.rs"),
+        FIXTURE_MAIN
+            .replace("__PROTOCOL__", &PROTOCOL_VERSION.to_string())
+            .replace("flui::DRIVER", &format!("{krate}::DRIVER")),
+    )
+    .expect("fixture");
     app
 }
 
@@ -95,33 +129,64 @@ fn flui() -> Command {
 }
 
 #[test]
-fn agent_is_refused_in_release_and_without_the_apps_feature() {
+fn an_optimized_agent_build_is_refused_where_no_crate_keeps_the_agent() {
     let tmp = TempDir::new().unwrap();
-    let app = fixture(tmp.path(), false);
+    let app = fixture(tmp.path(), "flui-widgets");
 
-    let release = cargo_bin_cmd!("flui")
+    let optimized = cargo_bin_cmd!("flui")
         .current_dir(&app)
-        .args(["run", "--agent", "--release"])
+        .args(["run", "--agent", "--release", "--no-hot-reload"])
         .assert()
         .failure();
-    let stderr = String::from_utf8_lossy(&release.get_output().stderr).into_owned();
-    assert!(stderr.contains("cannot be used with"), "{stderr}");
+    let stderr = String::from_utf8_lossy(&optimized.get_output().stderr).into_owned();
+    assert!(stderr.contains("names neither"), "{stderr}");
+}
 
-    let profile = cargo_bin_cmd!("flui")
-        .current_dir(&app)
-        .args(["run", "--agent", "--profile", "release"])
-        .assert()
-        .failure();
-    let stderr = String::from_utf8_lossy(&profile.get_output().stderr).into_owned();
-    assert!(stderr.contains("debug builds only"), "{stderr}");
+/// The lines the app printed, from `flui run --json`'s events.
+#[cfg(unix)]
+fn app_lines(events: impl std::io::BufRead) -> Vec<String> {
+    events
+        .lines()
+        .filter_map(|line| {
+            let event: serde_json::Value =
+                serde_json::from_str(&line.expect("an event line")).ok()?;
+            (event["event"] == "run.app.log")
+                .then(|| event["line"].as_str().expect("a log line").to_owned())
+        })
+        .collect()
+}
 
-    let missing = cargo_bin_cmd!("flui")
-        .current_dir(&app)
-        .args(["run", "--agent"])
-        .assert()
-        .failure();
-    let stderr = String::from_utf8_lossy(&missing.get_output().stderr).into_owned();
-    assert!(stderr.contains("dev-agent"), "{stderr}");
+#[cfg(unix)]
+#[test]
+fn an_optimized_agent_build_turns_on_the_driver_feature_and_a_debug_one_needs_none() {
+    for (args, key, driver) in [
+        (&["--release"][..], "flui", true),
+        // The feature goes through the key an app renamed the facade to.
+        (&["--release"][..], "ui", true),
+        (&["--profile", "release"][..], "flui", true),
+        (&[][..], "flui", false),
+    ] {
+        let tmp = TempDir::new().unwrap();
+        let app = fixture_as(tmp.path(), "flui", key);
+        let mut run = flui()
+            .current_dir(&app)
+            .env("CARGO_TARGET_DIR", tmp.path().join("target"))
+            .env("CARGO_NET_OFFLINE", "true")
+            .env("FIXTURE_EXIT", "1")
+            .args(["--json", "run", "--agent", "--no-hot-reload"])
+            .args(args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let lines = app_lines(BufReader::new(run.stdout.take().unwrap()));
+        run.wait().unwrap();
+        assert!(
+            lines.contains(&format!("FIXTURE_DRIVER {driver}")),
+            "{args:?} as `{key}`: {lines:?}"
+        );
+    }
 }
 
 #[test]
@@ -156,7 +221,7 @@ fn mcp_without_a_running_app_says_how_to_start_one() {
 #[test]
 fn an_agent_reads_and_taps_the_app_run_with_agent_through_mcp() {
     let tmp = TempDir::new().unwrap();
-    let app = fixture(tmp.path(), true);
+    let app = fixture(tmp.path(), "flui");
     let target = tmp.path().join("target");
 
     let mut run = flui()
@@ -257,9 +322,6 @@ fn an_agent_reads_and_taps_the_app_run_with_agent_through_mcp() {
     }
     run.wait().unwrap();
     let acted = acted.expect("the app saw the act");
-    assert!(
-        acted.contains(r#""element":"e1""#) && acted.contains(r#""window":"w1""#),
-        "{acted}"
-    );
+    assert!(acted.contains(r#""target":{"element":"w1/e1"}"#), "{acted}");
     assert!(!session.exists(), "the session file goes with the run");
 }

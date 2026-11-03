@@ -1,9 +1,9 @@
-//! The development agent from the CLI's side (ADR-0095 §3).
+//! The driver agent from the CLI's side (ADR-0239).
 //!
-//! The application serves its semantics tree over a local endpoint
-//! (`flui_devtools::agent::AgentServer`, behind the app's `dev-agent`
-//! feature). Two commands meet at that endpoint and share nothing but its
-//! framing and the credentials in this module:
+//! Every debug FLUI app, and a release build with the `driver` feature,
+//! serves its windows over a local endpoint when its launch names one. Two
+//! commands meet at that endpoint and share nothing but the protocol and the
+//! credentials in this module:
 //!
 //! - `flui run --agent` creates a [`Session`]: a fresh endpoint address, a
 //!   launch token, and a file naming both. It starts the app with the
@@ -11,10 +11,8 @@
 //! - `flui mcp` ([`mcp`]) serves MCP over stdio and forwards each tool call
 //!   to that endpoint through a [`client::Connection`].
 //!
-//! The CLI links no FLUI crate, so the wire (newline-delimited JSON, a hello
-//! line first) is spelled out here and in [`client`]; `flui-devtools`' own
-//! docs are the other half of the contract, and `commands/run.rs`' env-name
-//! test pins the shared names.
+//! The launch contract (the variable names, the shortest token) and the wire
+//! types are `flui-protocol`'s, the contract crate the app's server reads too.
 
 pub(crate) mod client;
 pub(crate) mod mcp;
@@ -25,16 +23,13 @@ use std::io::{self, Write as _};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+pub(crate) use flui_protocol::launch::{ENDPOINT_ENV, TOKEN_ENV};
+
 use crate::error::{CliError, CliResult, ResultExt};
 
-/// The environment variable the app reads its endpoint address from.
-pub(crate) const ENDPOINT_ENV: &str = "FLUI_AGENT_ENDPOINT";
-
-/// The environment variable the app reads its launch token from.
-pub(crate) const TOKEN_ENV: &str = "FLUI_AGENT_TOKEN";
-
-/// The Cargo feature an application declares to host the agent server.
-pub(crate) const APP_FEATURE: &str = "dev-agent";
+/// The feature, on the `flui` facade and on `flui-app`, that keeps the agent
+/// in a build without debug assertions; a debug build carries it without one.
+pub(crate) const DRIVER_FEATURE: &str = "driver";
 
 /// The file `flui run --agent` writes beside the build output so
 /// `flui mcp` finds the running app without arguments.
@@ -137,6 +132,8 @@ pub(crate) struct Session {
     /// Holds the socket (Unix). Removed on drop.
     _dir: tempfile::TempDir,
     file: PathBuf,
+    /// The feature a build without debug assertions needs to keep the agent.
+    driver_feature: Option<String>,
 }
 
 impl Session {
@@ -160,7 +157,8 @@ impl Session {
             fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o700))
                 .context("could not make the agent session directory private")?;
         }
-        let token = random_hex(32)?;
+        // Twice the shortest token the app takes, as hex.
+        let token = random_hex(flui_protocol::launch::MIN_TOKEN_LEN)?;
         let endpoint = endpoint_in(dir.path(), &random_hex(4)?)?;
         let credentials = Credentials {
             endpoint,
@@ -173,7 +171,15 @@ impl Session {
             credentials,
             _dir: dir,
             file,
+            driver_feature: None,
         })
+    }
+
+    /// Building with `feature` (`<key>/`[`DRIVER_FEATURE`], by the key the
+    /// application names the crate under), for a profile without debug assertions.
+    pub(crate) fn with_driver_feature(mut self, feature: String) -> Self {
+        self.driver_feature = Some(feature);
+        self
     }
 
     pub(crate) fn credentials(&self) -> &Credentials {
@@ -185,8 +191,12 @@ impl Session {
         &self.file
     }
 
-    /// Gives `cmd` (the app, or the cargo that runs it) the endpoint and token.
+    /// Gives `cmd` (the cargo that builds and runs the app) the driver
+    /// feature when the profile needs it, and the endpoint and token.
     pub(crate) fn apply(&self, cmd: &mut Command) {
+        if let Some(feature) = &self.driver_feature {
+            cmd.args(["--features", feature]);
+        }
         cmd.env(ENDPOINT_ENV, &self.credentials.endpoint)
             .env(TOKEN_ENV, &self.credentials.token);
     }
@@ -299,8 +309,8 @@ mod tests {
         let project = tempfile::tempdir().unwrap();
         let session = Session::create(project.path(), None, None).unwrap();
         let credentials = session.credentials();
-        // flui-devtools refuses a token shorter than this.
-        assert!(credentials.token.len() >= 32);
+        // The app refuses a token shorter than this.
+        assert!(credentials.token.len() >= flui_protocol::launch::MIN_TOKEN_LEN);
         assert!(credentials.token.chars().all(|c| c.is_ascii_hexdigit()));
         assert_eq!(credentials.pid, std::process::id());
 
@@ -334,11 +344,7 @@ mod tests {
         let mode = |p: &Path| fs::metadata(p).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode(session.file()), 0o600);
         let socket_dir = Path::new(&session.credentials().endpoint).parent().unwrap();
-        assert_eq!(
-            mode(socket_dir),
-            0o700,
-            "flui-devtools refuses anything wider"
-        );
+        assert_eq!(mode(socket_dir), 0o700, "the app refuses anything wider");
     }
 
     #[test]

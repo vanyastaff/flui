@@ -36,7 +36,7 @@ use crate::interaction::{
     SelectAllTextIntent,
 };
 use crate::localization::{BoxedWidgetsLocalizations, WidgetsLocalizations};
-use crate::text::editable_text::CaretHandle;
+use crate::text::editable_text::{CaretHandle, LongPressSelection};
 use crate::text::selection_area::SelectionHandles;
 
 /// How a selection's menu looks: the floating toolbar a touch shows and
@@ -229,6 +229,7 @@ pub struct DefaultSelectionControls {
 pub(crate) struct SelectionControls {
     handles: Option<Rc<dyn SelectionHandles>>,
     caret_handle: Option<CaretHandle>,
+    long_press: Option<LongPressSelection>,
     /// `Some(MenuChoice::Hide)` turns the menu off.
     menu: Option<MenuChoice>,
     policy: Option<SelectionMenuPolicy>,
@@ -244,6 +245,7 @@ impl SelectionControls {
         Self {
             handles: self.handles.clone().or_else(|| outer.handles.clone()),
             caret_handle: self.caret_handle.or(outer.caret_handle),
+            long_press: self.long_press.or(outer.long_press),
             menu: self.menu.clone().or_else(|| outer.menu.clone()),
             policy: self.policy.or(outer.policy),
             magnifier: self.magnifier.clone().or_else(|| outer.magnifier.clone()),
@@ -258,6 +260,10 @@ impl SelectionControls {
 
     pub(crate) fn handles(&self) -> Option<Rc<dyn SelectionHandles>> {
         self.handles.clone()
+    }
+
+    pub(crate) fn long_press(&self) -> Option<LongPressSelection> {
+        self.long_press
     }
 
     pub(crate) fn caret_handle(&self) -> Option<CaretHandle> {
@@ -306,6 +312,7 @@ impl fmt::Debug for DefaultSelectionControls {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("DefaultSelectionControls")
             .field("caret_handle", &self.own.caret_handle)
+            .field("long_press", &self.own.long_press)
             .field("policy", &self.own.policy)
             .field(
                 "commands",
@@ -341,6 +348,14 @@ impl DefaultSelectionControls {
     #[must_use]
     pub fn caret_handle(mut self, caret_handle: CaretHandle) -> Self {
         self.own.caret_handle = Some(caret_handle);
+        self
+    }
+
+    /// What a touch long press in an editable text beneath selects, in
+    /// place of the platform's ([`LongPressSelection::default`]).
+    #[must_use]
+    pub fn long_press(mut self, selection: LongPressSelection) -> Self {
+        self.own.long_press = Some(selection);
         self
     }
 
@@ -406,6 +421,12 @@ impl DefaultSelectionControls {
     /// dependency on it.
     pub fn caret_handle_of(ctx: &dyn BuildContext) -> Option<CaretHandle> {
         Self::controls_of(ctx).and_then(|controls| controls.caret_handle())
+    }
+
+    /// What a long press selects as the nearest scope above `ctx` sets,
+    /// registering a dependency on it.
+    pub fn long_press_of(ctx: &dyn BuildContext) -> Option<LongPressSelection> {
+        Self::controls_of(ctx).and_then(|controls| controls.long_press())
     }
 
     /// The magnifier a handle drag of a widget under `ctx` shows: the

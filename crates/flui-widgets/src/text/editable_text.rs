@@ -60,7 +60,7 @@ mod menu;
 use crate::text::{MagnifierChoice, MenuSettings, ShowSelectionMenu};
 use cursor_area::CursorAreaLoop;
 
-pub use handles::CaretHandle;
+pub use handles::{CaretHandle, LongPressSelection};
 use handles::{FieldHandles, FieldLongPress, HandleParts};
 
 use clipboard::{ClipboardTextAction, claim_primary};
@@ -458,6 +458,7 @@ pub struct EditableText {
     pub(super) caret_handle: Option<CaretHandle>,
     pub(super) menu: MenuSettings,
     pub(super) magnifier: Option<MagnifierChoice>,
+    pub(super) long_press: Option<LongPressSelection>,
 }
 
 /// The field's name, placeholder, validity and whether it is required, as its semantics node
@@ -502,6 +503,7 @@ impl EditableText {
             caret_handle: None,
             menu: MenuSettings::default(),
             magnifier: None,
+            long_press: None,
         }
     }
 
@@ -1162,7 +1164,7 @@ impl EditableTextState {
                 // handles of what it placed: the caret's or the selection's.
                 if drag.touch {
                     let mut failure = FirstPanic::new();
-                    handles.show_for_touch(&mut failure);
+                    handles.show_for_touch(false, &mut failure);
                     failure.resume();
                 }
             }
@@ -1265,7 +1267,7 @@ impl EditableTextState {
                 drag_anchor.set(None);
                 if details.kind == flui_interaction::PointerKind::Touch {
                     let mut failure = FirstPanic::new();
-                    handles.show_for_touch(&mut failure);
+                    handles.show_for_touch(false, &mut failure);
                     failure.resume();
                 }
             });
@@ -2245,6 +2247,11 @@ impl ViewState<EditableText> for EditableTextState {
             .or_else(|| DefaultSelectionControls::caret_handle_of(ctx))
             .unwrap_or_default();
         self.touch_handles.set_look(look, caret_handle);
+        (self.touch_handles).set_long_press(
+            view.long_press
+                .or_else(|| DefaultSelectionControls::long_press_of(ctx))
+                .unwrap_or_default(),
+        );
         (self.touch_handles).set_magnifier(DefaultSelectionControls::magnifier_of(
             ctx,
             view.magnifier.as_ref(),
