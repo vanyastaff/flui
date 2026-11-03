@@ -176,12 +176,17 @@ pub const fn wayland(globals: WaylandInputGlobals) -> InputCapabilities {
 /// The native X11 backend: XInput 2 carries pen input (a tablet's stylus and
 /// eraser) and touch, and on a server with XInput 2.4 (`gestures`) a
 /// touchpad's pinch; its smooth scrolling has no phases. Every window starts
-/// OS drag sessions over XDND.
+/// OS drag sessions over XDND. A window whose application draws the title bar
+/// has no decorations, and the window manager moves and resizes it from its
+/// regions (`_NET_WM_MOVERESIZE`, ADR-0286 §10); no window system draws
+/// caption buttons around it.
 #[must_use]
 pub const fn x11(gestures: bool) -> InputCapabilities {
     let builder = InputCapabilities::builder()
         .pen(Native)
-        .outgoing_drag(Native);
+        .outgoing_drag(Native)
+        .window_move(Native)
+        .window_resize(Native);
     if gestures {
         builder.trackpad_gestures(Native).build()
     } else {

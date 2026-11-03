@@ -1,11 +1,11 @@
 //! What a press does on a window whose application draws the title bar, on a
-//! host that keeps no frame around it (ADR-0286 §9): winit, whose window has
-//! no decorations then. The host answers each press from the chrome regions
-//! the last composited frame handed it and from a resize band of its own along
-//! the window's edges, and moves, resizes or maximizes the window through the
-//! window system, which then owns the pointer until the release. A press on
-//! the bar waits for the pointer to travel before the move starts, so a
-//! double-click reaches the window.
+//! host that keeps no frame around it (ADR-0286 §9, §10): winit and the native
+//! X11 host, whose window has no decorations then. The host answers each press
+//! from the chrome regions the last composited frame handed it and from a
+//! resize band of its own along the window's edges, and moves, resizes or
+//! maximizes the window through the window system, which then owns the pointer
+//! until the release. A press on the bar waits for the pointer to travel before
+//! the move starts, so a double-click reaches the window.
 
 #![forbid(unsafe_code)]
 
@@ -15,8 +15,8 @@ use flui_foundation::geometry::{DevicePoint, DeviceSize};
 use flui_platform::input_regions::{ChromeHit, DeviceInputRegion, ResizeEdge, chrome_hit};
 
 /// The longest wait between the two presses of a double-click on the bar.
-/// winit reads no system setting for it; 500 ms is the default of Windows and
-/// GNOME alike.
+/// Neither winit nor X11 reads a system setting for it; 500 ms is the default
+/// of Windows and GNOME alike.
 pub(crate) const DOUBLE_CLICK_INTERVAL: Duration = Duration::from_millis(500);
 
 /// How far, in logical pixels, the second press of a double-click may land from

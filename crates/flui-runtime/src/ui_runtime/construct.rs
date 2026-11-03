@@ -547,7 +547,9 @@ impl UiRuntime {
                 hook,
                 message,
                 internal_invariant,
+                context,
             } => {
+                let context_text = detail.context_text(context);
                 tracing::error!(
                     { flui_foundation::diagnostics::PRESENTATION_ID } =
                         report.address.presentation_id.as_u64(),
@@ -558,6 +560,7 @@ impl UiRuntime {
                     ?view_type_id,
                     ?hook,
                     panic_message = %message,
+                    context = %context_text,
                     "lifecycle panic contained; frame continued for this presentation"
                 );
             }

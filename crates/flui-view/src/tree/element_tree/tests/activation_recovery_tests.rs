@@ -54,7 +54,7 @@ fn seed_prior_record(owner: &mut BuildOwner, element: ElementId) {
     let payload: Box<dyn std::any::Any + Send> = Box::new("prior recovery");
     owner.element_owner_mut().record_hook_panic(
         Some(element),
-        None,
+        flui_foundation::CreationSite::unknown(),
         TypeId::of::<UnitRenderHost>(),
         LifecycleHook::Build,
         payload.as_ref(),

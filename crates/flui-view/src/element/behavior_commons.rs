@@ -225,7 +225,8 @@ where
                 LifecycleHook::Build,
                 payload.as_ref(),
                 format!("building {behavior_name}"),
-            );
+            )
+            .with_site(core.creation_site());
             flui_foundation::panic::discard_payload(payload);
             owner.reactive.end_element_build(element, false);
             // A recovery factory failure retains its existing authority. No

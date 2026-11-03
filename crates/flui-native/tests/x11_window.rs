@@ -362,14 +362,22 @@ mod cases {
             title: &str,
             handler: Rc<dyn flui_platform::WindowHandler>,
         ) -> Self {
+            Self::open_with_options(
+                WindowOptions::default()
+                    .with_title(title)
+                    .with_size(Size::new(400.0, 300.0)),
+                handler,
+            )
+        }
+
+        /// A window opened with `options`, delivering to `handler`.
+        pub(crate) fn open_with_options(
+            options: WindowOptions,
+            handler: Rc<dyn flui_platform::WindowHandler>,
+        ) -> Self {
             let platform = X11Platform::try_new().expect("the X11 platform");
             let window = platform
-                .open_window(
-                    WindowOptions::default()
-                        .with_title(title)
-                        .with_size(Size::new(400.0, 300.0)),
-                    handler,
-                )
+                .open_window(options, handler)
                 .expect("an X11 window opens");
             let xid = xid_of(window.as_ref());
             let server = RustConnection::connect(None)
@@ -509,9 +517,10 @@ mod cases {
             true
         }
 
-        /// An X11 window takes no input region: its input capabilities say so.
+        /// An X11 window takes the chrome regions (ADR-0286 §10), as its input
+        /// capabilities say.
         fn input_capabilities(&self) -> flui_platform::input_capabilities::InputCapabilities {
-            flui_platform::input_capabilities::InputCapabilities::UNAVAILABLE
+            flui_native::input::availability::x11(false)
         }
 
         fn has_native_surface(&self) -> bool {
