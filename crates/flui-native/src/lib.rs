@@ -229,6 +229,8 @@ mod table_test;
 pub mod task;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
+#[cfg(wayland_host)]
+mod transfer;
 // Reachable for the text position's trait, which bounds a host's table; not
 // an embedding API.
 #[doc(hidden)]
