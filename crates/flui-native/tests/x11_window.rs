@@ -69,6 +69,10 @@ mod cases {
             a_window_destroyed_by_another_client_closes_and_lets_go,
         ),
         (
+            "a_covered_window_reads_occluded_and_shown",
+            a_covered_window_reads_occluded_and_shown,
+        ),
+        (
             "a_frame_asked_for_on_another_thread_wakes_the_loop",
             a_frame_asked_for_on_another_thread_wakes_the_loop,
         ),
@@ -732,6 +736,63 @@ mod cases {
             handler.take_calls().is_empty(),
             "a destroyed window delivers nothing more"
         );
+    }
+
+    /// A window another client covers whole reads occluded and still shown,
+    /// and reads unoccluded once the cover goes: the server's
+    /// `VisibilityNotify`, not a guess from the mode.
+    fn a_covered_window_reads_occluded_and_shown() {
+        let platform = X11Platform::try_new().expect("the X11 platform");
+        let server = RustConnection::connect(None)
+            .expect("the X server answers")
+            .0;
+        let handler = RecordingWindowHandler::new();
+        let window = platform
+            .open_window(WindowOptions::default(), Rc::clone(&handler) as _)
+            .expect("an X11 window opens");
+        let settle = |what: &str, done: &dyn Fn() -> bool| {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while !done() {
+                assert!(Instant::now() < deadline, "timed out waiting for {what}");
+                run_for(&platform, Duration::from_millis(20)).expect("the loop turns");
+            }
+        };
+        settle("the window shown and uncovered", &|| {
+            let state = window.state();
+            state.visible && !state.occluded
+        });
+
+        // Override-redirect, so the window manager neither frames nor places
+        // it: it lies over the whole screen.
+        let screen = &server.setup().roots[0];
+        let cover = server.generate_id().expect("an id");
+        server
+            .create_window(
+                screen.root_depth,
+                cover,
+                screen.root,
+                0,
+                0,
+                screen.width_in_pixels,
+                screen.height_in_pixels,
+                0,
+                WindowClass::INPUT_OUTPUT,
+                0,
+                &CreateWindowAux::new()
+                    .override_redirect(1)
+                    .background_pixel(screen.black_pixel),
+            )
+            .expect("request");
+        server.map_window(cover).expect("request");
+        server.flush().expect("flush");
+        settle("the window covered", &|| window.state().occluded);
+        assert!(window.state().visible, "a covered window is still shown");
+
+        server.destroy_window(cover).expect("request");
+        server.flush().expect("flush");
+        settle("the window uncovered", &|| !window.state().occluded);
+        window.close_for_cleanup();
+        run_for(&platform, Duration::from_millis(100)).expect("the loop turns");
     }
 
     /// A frame asked for on another thread wakes a loop that waits with no
