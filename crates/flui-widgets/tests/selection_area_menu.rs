@@ -478,10 +478,12 @@ pub(crate) fn an_area_rebuilt_without_its_menu_takes_its_toolbar_away() {
 
 /// An area's handle drag shows the scope's magnifier over the dragged end
 /// as it moves, its bottom centre a gap above the end's line, and takes it
-/// away with the drag; a scope that turns it off shows none.
+/// away with the drag; a scope that turns it off shows none, and the
+/// area's own choice wins over the scope's.
 ///
 /// Red-check: leave the magnifier out of the area's handles (none during
-/// the drag), or keep it after the release (one after).
+/// the drag), keep it after the release (one after), or ignore the area's
+/// own choice (the scope's look).
 pub(crate) fn an_area_s_handle_drag_shows_the_magnifier_over_the_dragged_end() {
     use flui_testing::replay::TouchScript;
     use flui_widgets::{MagnifierInfo, PlainMagnifier};
@@ -556,4 +558,24 @@ pub(crate) fn an_area_s_handle_drag_shows_the_magnifier_over_the_dragged_end() {
     );
     let (shown, _) = drag_end(&mut scene);
     assert!(shown.is_empty(), "turned off shows none: {shown:?}");
+
+    // The area's own choice wins over the scope's.
+    let mut scene = Scene::build(
+        |area| area.magnifier(PlainMagnifier::rounded()),
+        Some(|controls| controls.magnifier(PlainMagnifier::capsule())),
+        |page| page,
+    );
+    let (shown, _) = drag_end(&mut scene);
+    let sizes = shown
+        .iter()
+        .map(|loupe| (loupe.width(), loupe.height()))
+        .collect::<Vec<_>>();
+    assert_eq!(sizes, [(78.0, 38.0)], "the area's own look");
+    let mut scene = Scene::build(
+        flui_widgets::SelectionArea::no_magnifier,
+        Some(|controls| controls.magnifier(PlainMagnifier::capsule())),
+        |page| page,
+    );
+    let (shown, _) = drag_end(&mut scene);
+    assert!(shown.is_empty(), "the area turned it off: {shown:?}");
 }
