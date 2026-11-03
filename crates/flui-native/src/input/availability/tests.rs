@@ -119,3 +119,56 @@ fn every_backend_states_its_availability() {
         );
     }
 }
+
+/// Only Win32 of the native backends answers the system's hit test from the
+/// chrome regions (ADR-0286 §7); the others leave them `Unavailable` until
+/// they do.
+#[test]
+fn only_win32_honours_the_chrome_regions() {
+    use crate::input::availability::{self as table, AndroidInputApis, WinitSession};
+    use Availability::{Native, Unavailable};
+    use flui_platform::input_regions::{CaptionButton, ResizeEdge};
+
+    let chrome = [
+        InputRegionKind::WindowMove,
+        InputRegionKind::WindowResize(ResizeEdge::Top),
+        InputRegionKind::CaptionButton(CaptionButton::Maximize),
+        InputRegionKind::WindowContent,
+    ];
+    let android = table::android(AndroidInputApis {
+        gesture_exclusion: true,
+        touchpad_gestures: true,
+        drag_source: true,
+    });
+    for (backend, capabilities, expected) in [
+        ("windows", table::windows(false), Native),
+        (
+            "windows with DirectManipulation",
+            table::windows(true),
+            Native,
+        ),
+        ("macos", table::macos(), Unavailable),
+        ("ios", table::ios(), Unavailable),
+        ("android", android, Unavailable),
+        ("web", table::web(true), Unavailable),
+        ("winit x11", table::winit(WinitSession::X11), Unavailable),
+        (
+            "winit wayland",
+            table::winit(WinitSession::Wayland),
+            Unavailable,
+        ),
+        (
+            "winit macos",
+            table::winit(WinitSession::MacOs),
+            Unavailable,
+        ),
+    ] {
+        for kind in chrome {
+            assert_eq!(
+                capabilities.input_region(kind),
+                expected,
+                "{backend}: {kind:?}"
+            );
+        }
+    }
+}

@@ -421,12 +421,15 @@ pub(crate) fn open_spot(
 /// content area of `content` at `dpi`: the content plus its title bar and
 /// borders (`AdjustWindowRectExForDpi`), measured for the style given and not
 /// for the window's current rectangle, which a maximized or minimized window
-/// does not keep.
+/// does not keep. A window whose application draws its title bar
+/// (`app_title_bar`) has neither caption nor top border above its content
+/// (`chrome::outer_extent`).
 pub(crate) fn outer_size(
     style: u32,
     ex_style: u32,
     dpi: u32,
     content: (i32, i32),
+    app_title_bar: bool,
 ) -> windows::core::Result<(i32, i32)> {
     use windows::Win32::UI::{
         HiDpi::AdjustWindowRectExForDpi,
@@ -450,6 +453,15 @@ pub(crate) fn outer_size(
             dpi,
         )?;
     }
+    let rect = super::chrome::outer_extent(
+        super::chrome::Edges {
+            left: rect.left,
+            top: rect.top,
+            right: rect.right,
+            bottom: rect.bottom,
+        },
+        app_title_bar,
+    );
     rect.right
         .checked_sub(rect.left)
         .zip(rect.bottom.checked_sub(rect.top))

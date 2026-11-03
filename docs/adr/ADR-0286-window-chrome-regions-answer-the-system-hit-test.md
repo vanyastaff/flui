@@ -2,7 +2,8 @@
 
 - **Status:** Accepted (2026-11-02)
 - **Date:** 2026-11-02
-- **Amended:** 2026-11-02: §5 and §6, the press takers cut out of a move area and the widgets that mark the regions.
+- **Amended:** 2026-11-02: §5 and §6, the press takers cut out of a move area and the widgets that
+  mark the regions; §7, the Win32 frame.
 - **Amends:** [ADR-0217](ADR-0217-interaction-module-layers-and-pointer-assembly.md) §5: input
   regions gain the chrome kinds the title-bar follow-up named, and their availability is
   answered per kind.
@@ -134,6 +135,18 @@ reads the window's frame through a `WindowHandle` subscription and marks nothing
 draws the title bar, so one tree runs on every frame and host. Ordering the caption buttons after
 the platform's convention belongs to the title bars the design packages build from these parts.
 
+§7. **Win32.** A window with `AppTitleBar` keeps the overlapped style, so the system still
+resizes, snaps, animates and offers its window menu. `WM_NCCALCSIZE` keeps the client the default
+procedure computes but moves its top to the window's (a maximized window's to the monitor's), so
+the caption and the top border go and the side and bottom borders stay. `WM_NCHITTEST` keeps the
+default answer over those borders and otherwise answers from the regions the last composited frame
+handed `set_input_regions`, through `chrome_hit`: a resize band of the sizing frame's thickness
+along the top of a resizable window that is not maximized, then `HTCAPTION`, the resize edges and
+`HTMINBUTTON`, `HTMAXBUTTON` (the snap layouts) and `HTCLOSE`. The non-client pointer messages over
+a caption button reach the application's button as client ones and never the default procedure, so
+the application's tap decides. A `WindowFrame::None` window answers from the regions without the
+band. A fullscreen window answers as the system does.
+
 ### Consequences
 
 - Good, because the system's callback reads a slice and returns: no framework code, no lock
@@ -145,8 +158,8 @@ the platform's convention belongs to the title bars the design packages build fr
 - Bad, because the answer can be one frame behind a layout change: a press during the frame
   that moves a button is resolved against the previous frame's regions. A frame is the
   granularity every other input path has too.
-- Neutral, because the native hosts do not answer from the regions yet; until they do, their
-  capabilities leave the chrome kinds `Unavailable` and their windows open
+- Neutral, because only Win32 of the native hosts answers from the regions; until the others do,
+  their capabilities leave the chrome kinds `Unavailable` and their windows open
   `WindowFrame::AppTitleBar` with the system's frame (`WindowFrame::at_open`).
 
 ### Confirmation
@@ -165,6 +178,12 @@ the platform's convention belongs to the title bars the design packages build fr
   with a button, a hover area, a pass-through and a close button publishes, nothing under the
   system's frame, a frame change, no resize border while maximized, and the caption buttons
   minimizing, maximizing, restoring and asking to close under the names they announce.
+- The pure halves of `flui-native`'s Win32 window and input, on the Linux CI host
+  (`the_hit_test_answers_from_the_regions_below_the_top_band`,
+  `only_pointer_messages_over_a_caption_button_become_the_applications`,
+  `the_client_reaches_the_top_and_a_maximized_one_stays_on_the_monitor`), and on Windows
+  `an_app_title_bar_drops_the_caption_and_keeps_the_content` and
+  `the_system_hit_test_answers_from_the_chrome_regions` in `native_window_commands`, pin §7.
 
 ## Pros and cons of the options
 
