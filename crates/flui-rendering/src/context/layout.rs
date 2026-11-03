@@ -529,6 +529,7 @@ where
     /// this pass.
     ///
     /// [`BoxChildSize`]: crate::protocol::BoxChildSize
+    /// [`BoxChildSize::Measured`]: crate::protocol::BoxChildSize::Measured
     pub fn measure_box_child(
         &mut self,
         index: usize,
