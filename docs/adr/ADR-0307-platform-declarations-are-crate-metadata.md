@@ -1,8 +1,9 @@
 # ADR-0307: Platform declarations are crate metadata
 
 - **Status:** Accepted (2026-11-03). Partly implemented: the reader, the version-1 keys
-  (`android.permissions`, `apple.privacy.accessed-apis`), the generated Android manifest and the
-  iOS privacy manifest are in `flui-cli`; the verify mode and `flui add` follow (see Migration).
+  (`android.permissions`, `apple.privacy.accessed-apis`), the generated Android manifest, the
+  iOS privacy manifest and the verify mode of `flui doctor` are in `flui-cli`; `flui add` follows
+  (see Migration).
 - **Date:** 2026-11-03
 - **Supersedes:** [ADR-0154](ADR-0154-capability-crates.md) §7 only (where declarations live and
   their keys: a versioned `declares` table in any crate, in place of the illustrative schema)
@@ -120,6 +121,17 @@ join is a set per key, in a fixed order, with the crates that asked for each ent
   (`scripts/cocoapods/privacy_manifest_utils.rb`, `add_aggregated_privacy_manifest`: every pod's
   accessed APIs, the core's and the application's, joined per category with the reasons
   deduplicated), which settles the check ADR-0154 §7 left for this change.
+- **Manifests the CLI does not write.** `flui doctor` reads the same declarations. In a FLUI
+  project, `project.declarations` fails on a table `flui build` would refuse, and
+  `project.android-manifest` fails on a hand-written Android manifest, listing what it lacks.
+  `flui doctor --manifest <PATH>`, repeatable, checks an `AndroidManifest.xml` or an XML
+  `PrivacyInfo.xcprivacy` the CLI does not write, such as an embedding project's, against the
+  graph of the project in the current directory for that manifest's targets: one
+  `project.manifest` check per path, each missing entry named with the crates that declare it and
+  the line to add. The ids are stable, for `--json` readers. An Android file is read as written:
+  Gradle's manifest merger is not run, so a file that is not the merged manifest carries a note
+  saying entries library manifests merge in are not seen. A `uses-permission` marked
+  `tools:node="remove"` counts as absent.
 
 ### Consequences
 
@@ -147,6 +159,10 @@ join is a set per key, in a fixed order, with the crates that asked for each ent
   manifest joins the application's own") reads FLUI's own workspace built for `aarch64-apple-ios`
   and finds `35F9.1` and `C617.1`, joined with an application's reasons.
 - `declarations::tests::a_privacy_reason_is_an_approved_reason_code`.
+- `cli_doctor::doctor_lists_what_a_manifest_lacks_of_the_crates_declarations` (the project's
+  declarations and hand-written Android manifest; `--manifest` files lacking an entry, one removing
+  it with `tools:node`, complete ones, a merged one without the note, privacy manifests, a binary
+  property list).
 - `cargo xtask workspace` accepts `declares` among the `[package.metadata.flui]` keys.
 
 ## Pros and cons of the options
@@ -178,7 +194,7 @@ join is a set per key, in a fixed order, with the crates that asked for each ent
    `PrivacyInfo.xcprivacy` is still joined. The macOS bundle has no privacy manifest yet; when it
    gets one, `flui-native`'s read of the global `NSUserDefaults` (the title bar's double-click
    setting) needs a declared reason.
-3. The verify mode, a `flui doctor` check for projects whose manifests the CLI does not write.
+3. Done: the verify mode, `flui doctor`'s Project section and `--manifest`.
 4. `flui add <capability>`.
 
 ## More information

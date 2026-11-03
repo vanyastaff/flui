@@ -1978,6 +1978,7 @@ dependencies = [
  "interprocess",
  "notify-debouncer-mini",
  "predicates",
+ "roxmltree",
  "rustix 1.1.5",
  "serde",
  "serde_json",
