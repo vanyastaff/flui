@@ -487,7 +487,7 @@ before any native is bound. The support claim for a platform is the run.
 The tests that do so: `android_manifest::tests::the_base_names_flui_activity_with_the_code_it_needs`,
 `android_package::tests::libraries_and_dex_files_are_appended_where_the_platform_reads_them`,
 `gradle_project::tests::gradle_compiles_the_java_sources_the_crates_declare` (`flui-cli`) and
-`owner::android::java_host::tests::the_java_classes_state_the_librarys_protocol` and
+`owner::android::java_host::tests::the_java_classes_state_the_protocol_of_the_library` and
 `the_platform_starts_only_over_its_own_java_classes` (`flui-native`).
 
 - `cargo xtask android-dex`, extended to every `build.rs` (ADR-0154), fails a build script that

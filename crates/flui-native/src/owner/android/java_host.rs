@@ -196,7 +196,7 @@ mod tests {
     /// The classes this library is built with state its protocol, and the
     /// Activity the manifest names is one of them, extending `NativeActivity`.
     #[test]
-    fn the_java_classes_state_the_librarys_protocol() {
+    fn the_java_classes_state_the_protocol_of_the_library() {
         let host = java_source(HOST_CLASS);
         let stated = format!("public static final int PROTOCOL = {PROTOCOL};");
         assert!(host.contains(&stated), "{stated:?} in\n{host}");
