@@ -432,15 +432,25 @@ impl<T> ClaimHandle<T> {
     /// later call (on this handle, or after the request is otherwise
     /// resolved, including `OwnerGone`) returns `None`. Safe on any thread,
     /// including the owner. Callers that need to distinguish "nothing yet"
-    /// from "the owner is gone" should poll the `Future` impl instead (or
-    /// use [`wait`](Self::wait), off the owner thread).
+    /// from "the owner is gone" use [`try_claim`](Self::try_claim), poll the
+    /// `Future` impl, or [`wait`](Self::wait) off the owner thread.
     #[must_use = "discarding Some(value) strands whatever the owner delivered"]
     pub fn try_take(&mut self) -> Option<T> {
+        match self.try_claim()? {
+            ClaimOutcome::Delivered(value) => Some(value),
+            ClaimOutcome::AlreadyClaimed | ClaimOutcome::OwnerGone => None,
+        }
+    }
+
+    /// Non-blocking poll that tells "nothing yet" (`None`) from every
+    /// resolution, `OwnerGone` included, without registering a waker. Safe
+    /// on any thread, including the owner. The first call observing
+    /// `Delivered` claims it; later calls answer `AlreadyClaimed`.
+    #[must_use = "discarding Some(Delivered(value)) strands whatever the owner delivered"]
+    pub fn try_claim(&mut self) -> Option<ClaimOutcome<T>> {
         match self.poll_claim(None) {
-            Poll::Ready(ClaimOutcome::Delivered(value)) => Some(value),
-            Poll::Ready(ClaimOutcome::AlreadyClaimed | ClaimOutcome::OwnerGone) | Poll::Pending => {
-                None
-            }
+            Poll::Ready(outcome) => Some(outcome),
+            Poll::Pending => None,
         }
     }
 

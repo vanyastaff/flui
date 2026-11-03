@@ -59,6 +59,9 @@ mod launch_values;
 mod native_recording;
 #[path = "preferences.rs"]
 mod preferences;
+#[path = "proxy_open_window.rs"]
+#[cfg(not(target_arch = "wasm32"))]
+mod proxy_open_window;
 #[path = "wayland_window.rs"]
 #[cfg(all(target_os = "linux", feature = "wayland"))]
 mod wayland_window;
