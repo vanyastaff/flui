@@ -349,12 +349,6 @@ pub(crate) mod replay;
 pub(crate) mod resample;
 pub(crate) mod resources;
 mod retained_target;
-/// naga_oil shader composition helper: resolves `#import` directives
-/// in WGSL at pipeline-init time via [`shader_composer::compose_wgsl_shader`].
-/// Used by `mode/pipeline.rs` and `advanced_blend/pipeline.rs` to
-/// compose `blend_helpers.wgsl` into each entry shader, replacing the
-/// previous `concat!(include_str!(...))` approach.
-pub(crate) mod shader_composer;
 mod shaders;
 /// SSAA (2× supersampled) path anti-aliasing: downsample pipeline and replay
 /// helper `GpuReplay::render_ssaa_path` / `GpuReplay::downsample_ssaa_tile`.

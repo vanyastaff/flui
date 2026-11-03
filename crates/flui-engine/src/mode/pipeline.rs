@@ -31,7 +31,6 @@
 use flui_painting::paint::BlendMode;
 
 use super::generated::mode;
-use crate::shader_composer::compose_filter_shader;
 
 // ── Byte-identity gate ────────────────────────────────────────────────────────
 //
@@ -158,14 +157,9 @@ impl ModePipeline {
             immediate_size: 0,
         });
 
-        let composed_source = compose_filter_shader(
-            include_str!("../shaders/effects/mode.wgsl"),
-            "shaders/effects/mode.wgsl",
-        );
-
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Mode Shader"),
-            source: composed_source,
+            source: wgpu::ShaderSource::Wgsl(crate::shaders::composed_wgsl!("effects/mode").into()),
         });
 
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {

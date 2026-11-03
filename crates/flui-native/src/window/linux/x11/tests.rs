@@ -264,8 +264,7 @@ fn x11_window_takes_commands_and_publishes_what_the_server_holds() {
             WindowCapabilities::ALL
                 .without_presentation_feedback(CapabilityAbsence::NotYetOnThisHost)
                 .without_keyboard_inset(CapabilityAbsence::NotYetOnThisHost)
-                .without_system_gestures(CapabilityAbsence::NotOnThisPlatform)
-                .without_app_title_bar(CapabilityAbsence::NotYetOnThisHost)
+                .without_system_gestures(CapabilityAbsence::NotOnThisPlatform),
         );
         let watching = Arc::clone(&watched);
         window.with(move |window| *watching.lock() = Some(OwnerWeak::new(window)));
@@ -625,8 +624,7 @@ fn x11_window_without_a_probe_does_not_claim_to_observe_minimizing() {
             let mut expected = WindowCapabilities::ALL
                 .without_presentation_feedback(CapabilityAbsence::NotYetOnThisHost)
                 .without_keyboard_inset(CapabilityAbsence::NotYetOnThisHost)
-                .without_system_gestures(CapabilityAbsence::NotOnThisPlatform)
-                .without_app_title_bar(CapabilityAbsence::NotYetOnThisHost);
+                .without_system_gestures(CapabilityAbsence::NotOnThisPlatform);
             expected.observes_minimized = flui_platform::Availability::Unavailable;
             assert_eq!(capabilities, expected);
             // Asking is still allowed: the compositor or window manager acts.
@@ -635,4 +633,84 @@ fn x11_window_without_a_probe_does_not_claim_to_observe_minimizing() {
                 .expect("a minimize is requested");
         },
     );
+}
+
+/// The `decorations` field of the window's `_MOTIF_WM_HINTS`, which winit
+/// writes to turn the window manager's frame on and off; `None` while the
+/// window has none.
+fn motif_decorations(connection: &RustConnection, id: u32) -> Option<u32> {
+    let hints = connection
+        .intern_atom(false, b"_MOTIF_WM_HINTS")
+        .expect("request")
+        .reply()
+        .expect("the atom")
+        .atom;
+    let reply = connection
+        .get_property(false, id, hints, hints, 0, 5)
+        .expect("request")
+        .reply()
+        .expect("the property");
+    // flags, functions, decorations, input mode, status
+    reply.value32()?.nth(2)
+}
+
+/// A window whose application draws its title bar opens without the window
+/// manager's decorations and reads back the frame it asked for; a primary
+/// press on its bar or along its edges goes to the window manager, one on its
+/// content or of another button stays the application's, and with the system's
+/// frame back nothing is taken (ADR-0286 §9).
+#[test]
+fn x11_window_with_an_app_title_bar_has_no_decorations_and_answers_its_bar() {
+    use flui_foundation::geometry::Rect;
+    use flui_platform::input_regions::{InputRegion, InputRegionKind};
+    use flui_platform::{AppTitleBar, PlatformWindow as _, WindowFrame};
+    use winit::dpi::PhysicalPosition;
+    use winit::event::MouseButton;
+
+    let opening = WindowOptions::default()
+        .with_title("x11-app-title-bar")
+        .with_size(Size::new(200.0, 120.0))
+        .with_position(Some(Point::new(1040.0, 80.0)))
+        .with_frame(WindowFrame::AppTitleBar(AppTitleBar::new()));
+    run_x11_scenario(recorded(opening), |window, id, server| {
+        assert!(
+            matches!(window.state().frame, WindowFrame::AppTitleBar(_)),
+            "{:?}",
+            window.state().frame
+        );
+        assert_eq!(motif_decorations(server, id), Some(0));
+        let presses = || {
+            window.with(|window| {
+                let window = window
+                    .as_any()
+                    .downcast_ref::<WinitWindow>()
+                    .expect("the scenario's window is a winit window");
+                let bar = InputRegion::new(
+                    InputRegionKind::WindowMove,
+                    Rect::from_ltrb(0.0, 0.0, 200.0, 24.0),
+                );
+                window
+                    .set_input_regions(&[bar])
+                    .expect("winit takes chrome regions");
+                // (x, y, button)
+                let presses = [
+                    (100.0, 12.0, MouseButton::Left),
+                    (100.0, 80.0, MouseButton::Left),
+                    (100.0, 12.0, MouseButton::Middle),
+                    (1.0, 80.0, MouseButton::Left),
+                ];
+                presses.map(|(x, y, button)| {
+                    LoopWindow::press_chrome(window, PhysicalPosition::new(x, y), button)
+                })
+            })
+        };
+        assert_eq!(presses(), [true, false, false, true]);
+
+        window
+            .admit_and_apply(WindowCommand::SetFrame(WindowFrame::System))
+            .expect("winit takes the system's frame back");
+        assert_eq!(window.state().frame, WindowFrame::System);
+        assert_ne!(motif_decorations(server, id), Some(0));
+        assert_eq!(presses(), [false; 4]);
+    });
 }

@@ -74,8 +74,8 @@ impl ProjectedInputRegions {
     }
 
     /// The device-pixel regions the OS was last handed: what the Win32 window
-    /// answers its hit test from, and the AppKit window a left press.
-    #[cfg(any(test, windows, target_os = "macos"))]
+    /// answers its hit test from, and the AppKit and winit windows a press.
+    #[cfg(any(test, windows, target_os = "macos", winit_host))]
     #[must_use]
     pub(crate) fn sent(&self) -> &[DeviceInputRegion] {
         &self.sent
@@ -99,6 +99,9 @@ fn project(region: InputRegion, ratio: DevicePixelRatio) -> Option<DeviceInputRe
         }
     }
 }
+
+#[cfg(any(test, winit_host))]
+pub(crate) mod presses;
 
 #[cfg(test)]
 mod tests;

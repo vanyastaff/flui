@@ -6,7 +6,7 @@ use wgpu::util::DeviceExt;
 /// A uniform is also the batch identity: two draws only share a batch when all
 /// effective filter parameters agree. Images keep their original texture key.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) struct ImageSourceFilter(generated::color_filter::ImageSourceFilter);
+pub(crate) struct ImageSourceFilter(generated::image_source_filter_layout::ImageSourceFilter);
 
 // The generated module owns the WGSL layout and checks every uniform offset.
 #[allow(
@@ -33,7 +33,7 @@ mod generated {
 
 impl ImageSourceFilter {
     pub(crate) fn from_filter(filter: ColorFilter) -> Option<Self> {
-        let mut value = generated::color_filter::ImageSourceFilter::zeroed();
+        let mut value = generated::image_source_filter_layout::ImageSourceFilter::zeroed();
         match filter {
             ColorFilter::Mode { color, blend_mode } => {
                 value.color = color.to_rgba_f32_array();
@@ -70,7 +70,8 @@ impl ImageSourceFilter {
         resources: &mut crate::resources::GpuResources,
     ) -> crate::error::EngineResult<wgpu::BindGroup> {
         let limits = device.limits();
-        let uniform_bytes = size_of::<generated::color_filter::ImageSourceFilter>() as u64;
+        let uniform_bytes =
+            size_of::<generated::image_source_filter_layout::ImageSourceFilter>() as u64;
         for (resource, requested, limit) in [
             (
                 "image filter bind groups",

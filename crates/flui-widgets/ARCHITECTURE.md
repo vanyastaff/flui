@@ -676,7 +676,7 @@ row composes `ContextMenuArea` for its theme-free menu.
 
 `reorderable` shares the `swipe` layer: a reorderable row composes
 `ContextMenuArea` for its moves, `Draggable` and `DropTarget` (`interaction`)
-for its drag and `ListView` (`scroll`) for its rows.
+for its drag and `ListView` or `GridView` (`scroll`) for its rows.
 
 `form` sits in the top widget layer beside `icon` and `app`: a text form
 field composes `RawTextField` (`text`), a `Focus` wrapper (`interaction`) and
@@ -963,6 +963,20 @@ Rows `a_handle_drag_reports_one_move_counted_after_removal`,
 `a_long_press_on_selectable_text_selects_and_the_handle_still_drags`,
 `moving_a_row_to_the_end_of_a_long_list_keeps_its_focus` and the matrix row
 `reorderable_list` pin these.
+
+`ReorderableGrid` is the same session over a `GridView`'s tiles, one module and one
+row type with the list. Its moves add the two arrows across its rows, and a row's width
+and order are read where they are decided: the grid wraps the app's delegate in one that
+records each layout it gives (tiles per row, and whether either axis runs against the
+screen), so the commands move by the rows on screen after a width change or in a
+right-to-left locale, and no column count is configured apart from the delegate. A tile's
+handle drags it any way (`MultiDragAxis::Free`), and `PanClaim::None` around it keeps the
+contact from the grid's scroll, which would otherwise take a free drag's motion along its
+axis (ADR-0208 rule 1). The default handle sits in a band above the tile's content. Rows
+`a_tile_dragged_by_its_handle_moves_onto_another_tile`,
+`the_grid_moves_go_along_a_row_and_by_a_row`,
+`the_row_moves_follow_the_rows_the_grid_lays_out` and the matrix row `reorderable_grid` pin
+these.
 
 ### Programmatic scroll replacement preserves the published velocity
 

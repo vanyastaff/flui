@@ -4,7 +4,7 @@
 use flui_objects::RenderAlign;
 use flui_painting::Alignment;
 use flui_rendering::protocol::BoxProtocol;
-use flui_view::{Child, IntoView, RenderView, impl_render_view};
+use flui_view::{Child, CreationSite, IntoView, RenderView, impl_render_view};
 
 /// Aligns its child within itself.
 ///
@@ -18,16 +18,19 @@ pub struct Align {
     width_factor: Option<f64>,
     height_factor: Option<f64>,
     child: Child,
+    site: CreationSite,
 }
 
 impl Align {
     /// Align a child at the given [`Alignment`] (e.g. [`Alignment::CENTER`]).
+    #[track_caller]
     pub fn new(alignment: Alignment) -> Self {
         Self {
             alignment,
             width_factor: None,
             height_factor: None,
             child: Child::empty(),
+            site: CreationSite::here(),
         }
     }
 
@@ -86,4 +89,4 @@ impl RenderView for Align {
     flui_view::single_child_view_children!();
 }
 
-impl_render_view!(Align);
+impl_render_view!(Align, site = site);

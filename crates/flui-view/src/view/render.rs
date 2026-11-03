@@ -683,6 +683,9 @@ pub trait RenderView: Clone + 'static + Sized {
 ///     // ...
 /// }
 /// impl_render_view!(MyColoredBox);
+///
+/// // A view with a `CreationSite` field reports it through `View::creation_site`:
+/// impl_render_view!(MyColoredBox, site = site);
 /// ```
 #[macro_export]
 macro_rules! impl_render_view {
@@ -690,6 +693,17 @@ macro_rules! impl_render_view {
         impl $crate::View for $ty {
             fn create_element(&self) -> $crate::element::ElementKind {
                 $crate::element::ElementKind::render_variable(self)
+            }
+        }
+    };
+    ($ty:ty, site = $field:ident) => {
+        impl $crate::View for $ty {
+            fn create_element(&self) -> $crate::element::ElementKind {
+                $crate::element::ElementKind::render_variable(self)
+            }
+
+            fn creation_site(&self) -> $crate::CreationSite {
+                self.$field
             }
         }
     };

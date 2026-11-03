@@ -1,5 +1,4 @@
-#define_import_path color_filter
-#import blend_helpers::{hard_light, lum, set_lum, sat, set_sat}
+import package::blend_helpers::{hard_light, lum, set_lum, sat, set_sat};
 
 struct ImageSourceFilter {
     matrix: mat4x4<f32>,

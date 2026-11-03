@@ -113,6 +113,10 @@ impl AndroidBuilder {
                 BuildError::path_not_found(target_dir, "scene plugin .so not found in target dir")
             })?;
 
+        // A 16 KB-page device cannot `dlopen` a 4 KB-aligned plugin either.
+        if super::android_elf::needs_16_kb_pages(target) {
+            super::android_elf::check_page_alignment(&so_path)?;
+        }
         crate::ui::debug(format!("Scene plugin built: {}", so_path.display()));
         Ok(so_path)
     }
@@ -293,6 +297,9 @@ impl AndroidBuilder {
                     let entry = entry?;
                     let path = entry.path();
                     if path.extension().is_some_and(|ext| ext == "so") {
+                        if super::android_elf::needs_16_kb_pages(target) {
+                            super::android_elf::check_page_alignment(&path)?;
+                        }
                         rust_libs.push(path);
                     }
                 }
@@ -339,7 +346,11 @@ impl AndroidBuilder {
             install_hint: "set JAVA_HOME to a JDK 17+, or remove platforms/android/gradlew to package without Gradle".to_string(),
         })?;
 
-        crate::build::gradle_floor::state_min_sdk(&android_dir, ctx.floors.android_api())?;
+        crate::build::gradle_floor::state_sdk_levels(
+            &android_dir,
+            ctx.floors.android_api(),
+            crate::build::platform_floor::ANDROID_TARGET_SDK,
+        )?;
         let gradle_task = match ctx.profile {
             crate::build::platform::Profile::Debug => "assembleDebug",
             crate::build::platform::Profile::Release => "assembleRelease",

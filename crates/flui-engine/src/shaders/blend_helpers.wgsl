@@ -3,19 +3,18 @@
 // Shared W3C Compositing and Blending Level 1 leaf helpers used by both
 // `effects/mode.wgsl` and `advanced_blend.wgsl`.
 //
-// ## Module composition (naga_oil)
+// ## Module composition (WESL)
 //
-// This file is a naga_oil composable module.  The `#define_import_path`
-// directive below registers the module name; consumers import it with:
-//   #import blend_helpers::{hard_light, lum, clip_color, set_lum, sat, set_sat}
-// Composition occurs at pipeline-init time via `compose_wgsl_shader` in
-// `src/wgpu/mod.rs`, which replaces the previous `concat!(include_str!(...))`.
+// This file is a WESL module named by its path.  Consumers import it with:
+//   import package::blend_helpers::{hard_light, lum, clip_color, set_lum, sat, set_sat};
+// `build.rs` resolves the imports with the `wesl` compiler and writes plain
+// WGSL into `OUT_DIR/shaders/`, which the pipelines include.
 //
 // ## Single source of truth
 //
 // These 6 helpers are imported (not copied) by each consumer shader.
-// Any duplicate fn definition would cause a naga_oil "redefined" error —
-// the import enforces that this file is the sole definition site.
+// Names are not mangled, so a duplicate fn definition in a consumer is a
+// redefinition error when naga parses the composed shader.
 //
 // ## Correctness contract
 //
@@ -31,8 +30,6 @@
 // any mode-index switch) are NOT shared: `mode.wgsl` encodes modes 15-29 and
 // `advanced_blend.wgsl` encodes modes 0-14.  Only the leaf helpers below are
 // identical between the two shaders and belong here.
-
-#define_import_path blend_helpers
 
 // ── Leaf helpers (verbatim port of color.rs) ─────────────────────────────────
 
