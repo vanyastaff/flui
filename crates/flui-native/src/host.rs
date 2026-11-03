@@ -62,9 +62,9 @@ use flui_foundation::geometry::Size;
 use flui_platform::data_transfer::{DataTransferSource, NullDataTransferSource};
 use flui_platform::haptics::{HapticCapabilities, HapticOutcome, HapticPattern, HapticRequest};
 use flui_platform::{
-    AppDataDir, DeviceId, DisplaySnapshot, HapticFeedback, PlatformHaptics, PlatformSystemChrome,
-    SystemPreferences, SystemUiOverlayStyle, Unsupported, UnsupportedReason, WindowCapabilities,
-    WindowHandler, WindowId, WindowOptions,
+    AppDataDir, DeviceId, DisplaySnapshot, HapticFeedback, LaunchKey, PlatformHaptics,
+    PlatformSystemChrome, SystemPreferences, SystemUiOverlayStyle, Unsupported, UnsupportedReason,
+    WindowCapabilities, WindowHandler, WindowId, WindowOptions,
 };
 use flui_semantics::platform::{
     AccessibilityActionListener, AccessibilityActivationListener, PlatformAccessibility,
@@ -77,6 +77,14 @@ use crate::platform::{AppHandler, PathPromptOptions, Platform, PlatformExecutor}
 use crate::storage::DataStore;
 use crate::task::Task;
 use crate::text::TextInput;
+
+/// `key`'s launch value where a host reads the environment (ADR-0288 §7): the variable
+/// [`LaunchKey::environment_variable`] spells, `None` when it is unset, empty or not Unicode.
+pub(crate) fn environment_launch_value(key: LaunchKey) -> Option<String> {
+    std::env::var(key.environment_variable())
+        .ok()
+        .filter(|value| !value.is_empty())
+}
 
 /// One type for each position of the closed list (ADR-0151 §3).
 ///
@@ -159,6 +167,9 @@ pub trait Services {
     /// # Errors
     /// [`PlatformError::AppPath`] when the lookup fails.
     fn app_path(&self) -> Result<PathBuf, PlatformError>;
+
+    /// [`Platform::launch_value`].
+    fn launch_value(&self, key: LaunchKey) -> Option<String>;
 
     /// [`Platform::open_url`].
     fn open_url(&self, url: &str);

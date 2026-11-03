@@ -95,7 +95,8 @@ trait depends on `flui-platform` instead.
   names (`WindowsPlatform`, `HeadlessPlatform`, …) are `HostPlatform` over each
   table, and what a host offers beyond `Platform` (headless test controls, a
   scene registration) is an inherent method on `HostPlatform<H>` for the `H`
-  whose loop it is. The executor, the application path, URL and path opening,
+  whose loop it is. The executor, the application path, the launch values (an
+  Android intent's extras, the environment elsewhere; ADR-0288 §7), URL and path opening,
   the file prompts and the compositor name are no position: the loop carries
   them (`host::Services`) until the system capability crate takes them.
   The Android host has no public platform name: it starts over the Activity

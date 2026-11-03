@@ -309,6 +309,8 @@ pub use task::{Task, TaskLabel};
 // Each has this one path (ADR-0151 §9).
 pub use host_window::HostWindow;
 pub use platform::{AppHandler, ExitAnswer, PathPromptOptions, Platform, PlatformExecutor};
+#[cfg(any(target_os = "linux", target_os = "android"))]
+pub use process::current_user_id;
 #[cfg(windows)]
 pub use process::current_user_sid;
 #[cfg(any(windows, unix))]

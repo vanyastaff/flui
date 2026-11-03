@@ -134,6 +134,7 @@ pub mod input_capabilities;
 pub mod input_regions;
 pub mod keyboard;
 pub mod launch;
+mod launch_key;
 mod locale;
 pub mod os_options;
 mod placement;
@@ -181,6 +182,7 @@ pub use input::{
     DispatchEventResult, DragDropEvent, EmptyPointerFrame, PlatformInput, PointerFrame,
 };
 pub use keyboard::{Code, Key, KeyEvent, KeyState, Location, Modifiers, NamedKey};
+pub use launch_key::{LaunchKey, MAX_LAUNCH_KEY_LEN};
 pub use locale::{InvalidLocale, Locale};
 pub use placement::{PlacementError, ResolvedPlacement, WindowPlacement};
 pub use platform_window::{PlatformWindow, WindowAt};

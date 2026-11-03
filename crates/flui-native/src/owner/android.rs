@@ -32,6 +32,8 @@ pub(crate) mod frame_clock;
 #[cfg(target_os = "android")]
 pub(crate) mod java_view;
 #[cfg(target_os = "android")]
+mod launch;
+#[cfg(target_os = "android")]
 mod looper;
 pub(crate) mod ndk;
 pub(crate) mod poll;

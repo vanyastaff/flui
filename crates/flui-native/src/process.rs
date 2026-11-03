@@ -1,8 +1,8 @@
 //! Process-wide calls: ending the process at once, for the exit watchdog
-//! (ADR-0258 §7), and, on Windows, the current user's SID.
+//! (ADR-0258 §7), and the current user: its SID on Windows, its ID on Linux and Android.
 #![expect(
     unsafe_code,
-    reason = "ending the process is `TerminateProcess` or `_exit`, and the token reads are Win32, all FFI"
+    reason = "ending the process is `TerminateProcess` or `_exit`, the token reads are Win32 and the user ID `geteuid`, all FFI"
 )]
 
 /// End the process now with `code`, running no destructor, `atexit` handler
@@ -108,4 +108,15 @@ pub fn current_user_sid() -> std::io::Result<String> {
     // once, and is not read after.
     let _: HLOCAL = unsafe { LocalFree(Some(HLOCAL(text.0.cast()))) };
     converted.map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))
+}
+
+/// The process's effective user ID.
+///
+/// The development agent's abstract socket, which any process of the system can reach, admits
+/// a peer of this user (ADR-0288 §6), as a pipe's DACL admits [`current_user_sid`]'s on Windows.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+#[must_use]
+pub fn current_user_id() -> u32 {
+    // SAFETY: `geteuid` takes nothing, always succeeds and touches no memory of this process.
+    unsafe { libc::geteuid() }
 }
