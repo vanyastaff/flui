@@ -740,6 +740,7 @@ fn selection_menu() {
             ("selection_menu::a_handle_drag_hides_the_toolbar_until_it_lets_go", crate::selection_menu::a_handle_drag_hides_the_toolbar_until_it_lets_go),
             ("selection_menu::a_policy_or_no_menu_keeps_the_menu_away", crate::selection_menu::a_policy_or_no_menu_keeps_the_menu_away),
             ("selection_menu::a_tap_on_the_caret_handle_toggles_the_toolbar", crate::selection_menu::a_tap_on_the_caret_handle_toggles_the_toolbar),
+            ("selection_menu::a_caret_long_press_shows_the_toolbar_over_the_caret", crate::selection_menu::a_caret_long_press_shows_the_toolbar_over_the_caret),
             ("selection_menu::an_assistive_click_on_the_toolbar_takes_it_away", crate::selection_menu::an_assistive_click_on_the_toolbar_takes_it_away),
             ("selection_menu::the_toolbar_follows_a_scroll", crate::selection_menu::the_toolbar_follows_a_scroll),
             ("selection_menu::a_rebuilt_field_refreshes_its_shown_toolbar", crate::selection_menu::a_rebuilt_field_refreshes_its_shown_toolbar),

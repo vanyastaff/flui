@@ -1164,7 +1164,7 @@ impl EditableTextState {
                 // handles of what it placed: the caret's or the selection's.
                 if drag.touch {
                     let mut failure = FirstPanic::new();
-                    handles.show_for_touch(&mut failure);
+                    handles.show_for_touch(false, &mut failure);
                     failure.resume();
                 }
             }
@@ -1267,7 +1267,7 @@ impl EditableTextState {
                 drag_anchor.set(None);
                 if details.kind == flui_interaction::PointerKind::Touch {
                     let mut failure = FirstPanic::new();
-                    handles.show_for_touch(&mut failure);
+                    handles.show_for_touch(false, &mut failure);
                     failure.resume();
                 }
             });
