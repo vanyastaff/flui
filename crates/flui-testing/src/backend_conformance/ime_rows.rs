@@ -4,8 +4,8 @@
 //! One scenario drives each path: a preedit grows, a candidate is picked, the
 //! composition commits; a second composition is cancelled. After each step
 //! the field holds the same text, composing range and caret whichever path
-//! made it, and each step is one read-write session of the field's store, so
-//! the field's owner hears of it as one change.
+//! made it, and each step is one read-write session that changes the field's
+//! store, so the field's owner hears of it as one change.
 
 use std::cell::Cell;
 use std::rc::Rc;
@@ -13,7 +13,7 @@ use std::rc::Rc;
 use flui_interaction::testing::InMemoryTextStore;
 use flui_platform::text_store::{
     CommitGate, LockGrant, LockOutcome, LockTiming, TextStore, TextStoreError, TextStoreObserver,
-    TextStoreStatus,
+    TextStoreRead, TextStoreStatus, Utf16Offset, Utf16Range,
 };
 
 use super::rows::Outcome;
@@ -89,10 +89,11 @@ const CANCELLED: [(CompositionStep, Expected); 2] = [
     (CompositionStep::Cancel, field("ab", None, 2)),
 ];
 
-/// The reference store, counting the read-write sessions it grants.
+/// The reference store, counting the read-write sessions that change the
+/// field: a session that leaves it as it was is no edit of it.
 struct Counted {
     store: Rc<InMemoryTextStore>,
-    sessions: Rc<Cell<usize>>,
+    edits: Rc<Cell<usize>>,
 }
 
 impl TextStore for Counted {
@@ -107,10 +108,13 @@ impl TextStore for Counted {
     ) -> Result<LockOutcome, TextStoreError> {
         let grant = match grant {
             LockGrant::ReadWrite(body) => {
-                let sessions = Rc::clone(&self.sessions);
+                let edits = Rc::clone(&self.edits);
                 LockGrant::read_write(move |session| {
-                    sessions.set(sessions.get() + 1);
+                    let before = read(&*session);
                     body(session);
+                    if read(&*session) != before {
+                        edits.set(edits.get() + 1);
+                    }
                 })
             }
             read @ LockGrant::Read(_) => read,
@@ -141,13 +145,13 @@ fn focused<B: BackendUnderTest>(
     backend: &mut B,
 ) -> Result<(Rc<InMemoryTextStore>, Rc<Cell<usize>>), RowOutcome> {
     let store = InMemoryTextStore::new(FIELD);
-    let sessions = Rc::new(Cell::new(0));
+    let edits = Rc::new(Cell::new(0));
     let counted = Rc::new(Counted {
         store: Rc::clone(&store),
-        sessions: Rc::clone(&sessions),
+        edits: Rc::clone(&edits),
     });
     match backend.focus_text_store(counted) {
-        TextInputPath::Focused => Ok((store, sessions)),
+        TextInputPath::Focused => Ok((store, edits)),
         TextInputPath::Gap(gap) => Err(RowOutcome::Gap(gap)),
         TextInputPath::None(why) => Err(RowOutcome::NotApplicable(why)),
     }
@@ -168,15 +172,31 @@ fn held(store: &InMemoryTextStore) -> Field {
     }
 }
 
+/// What a session of the field's store reads of it.
+fn read(session: &dyn TextStoreRead) -> Field {
+    let len = session.document_len();
+    let all = Utf16Range::try_new(Utf16Offset::new(0), len).expect("BUG: a document starts at 0");
+    let selection = session.selection();
+    Field {
+        text: session.text(all).unwrap_or_default(),
+        composing: session.composition().map(|composition| {
+            (
+                composition.range.start().get(),
+                composition.range.end().get(),
+            )
+        }),
+        selection: (selection.anchor.get(), selection.active.get()),
+    }
+}
+
 /// Run `steps` on a newly focused field: after each, the field holds what the
-/// step names, and when `one_session` is set, the step was one read-write
-/// session.
+/// step names, and when `one_session` is set, the step was one edit of it.
 fn compose<B: BackendUnderTest>(
     backend: &mut B,
     steps: &[(CompositionStep, Expected)],
     one_session: bool,
 ) -> Outcome {
-    let (store, sessions) = match focused(backend) {
+    let (store, edits) = match focused(backend) {
         Ok(focused) => focused,
         Err(outcome) => return Ok(outcome),
     };
@@ -192,7 +212,7 @@ fn compose<B: BackendUnderTest>(
         let Some(reading) = backend.reading(Step::Composition(step)) else {
             return Err(format!("{step:?}: the focused path has no reading for it"));
         };
-        let before = sessions.get();
+        let before = edits.get();
         let inputs = backend.decode(reading).count();
         if inputs != 0 {
             return Err(format!(
@@ -210,10 +230,10 @@ fn compose<B: BackendUnderTest>(
                 "{step:?}: the field holds {got:?}, not {expected:?}"
             ));
         }
-        let ran = sessions.get() - before;
+        let ran = edits.get() - before;
         if one_session && ran != 1 {
             return Err(format!(
-                "{step:?}: reached the field in {ran} read-write sessions, not one"
+                "{step:?}: reached the field in {ran} edits, not one"
             ));
         }
     }
@@ -238,8 +258,8 @@ pub(super) fn a_cancelled_composition_leaves_the_field_as_it_was<B: BackendUnder
     compose(backend, &CANCELLED, false)
 }
 
-/// Each step of a composition is one read-write session of the field's
-/// store: the field's owner hears of each as one change, never of a
+/// Each step of a composition is one read-write session that changes the
+/// field's store: its owner hears of each as one change, never of a
 /// half-made one.
 pub(super) fn each_composition_step_is_one_edit_of_the_field<B: BackendUnderTest>(
     backend: &mut B,

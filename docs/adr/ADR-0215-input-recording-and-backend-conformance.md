@@ -12,8 +12,8 @@
   `crates/flui-native/tests/native_recording/`, with the `native-capture` feature to record on a
   native host. §7 is implemented for pointer assembly, clocks, the scroll grammar, undecodable
   readings, availability, ownership, DnD, haptics and keys (`flui_testing::backend_conformance`),
-  and for the IME event order on the Linux hosts', the Apple and Android's input method paths;
-  TSF, the Web and winit report the IME rows as `docs/gaps.md` entry 1. §5's `--keep-text`
+  and for the IME event order on the Linux, Apple, Android and Web input method paths;
+  TSF and winit report the IME rows as `docs/gaps.md` entry 1. §5's `--keep-text`
   is the API's `Privacy::KeepText`; the command-line flag arrives with a recording tool. §8 is
   implemented on Windows: [`cargo xtask device windows-input`](https://github.com/vanyastaff/flui/blob/e8a42673ad23a2e88614940a266cd01224dcb25f/tools/xtask/src/device.rs) injects touch and pen
   (`InjectSyntheticPointerInput`) and mouse and wheel (`SendInput`) into a real window, records

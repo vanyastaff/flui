@@ -7,6 +7,8 @@
 //! - [`TextInputV3`]: `zwp_text_input_v3`'s events on Wayland, which the X11
 //!   host's IBus, Fcitx5 and XIM contexts are translated into as well;
 //! - [`AppKitClient`]: `NSTextInputClient`'s verbs on macOS, and UIKit's on iOS;
+//! - [`WebEditContext`] and [`WebTextarea`]: what the browser tells the web
+//!   backend of an `EditContext`'s text, or of a hidden textarea's value;
 //! - [`AndroidMirror`]: what `FluiView` reports of its editor after each
 //!   `InputConnection` edit, replayed into the store as the owner replays it.
 //!
@@ -269,5 +271,129 @@ impl AndroidMirror {
 impl std::fmt::Debug for AndroidMirror {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AndroidMirror").finish_non_exhaustive()
+    }
+}
+
+/// Run `edit` in `store` under an asynchronous read-write lock, as the web
+/// backend runs the browser's edits.
+fn edit_store(
+    store: &Rc<dyn TextStore>,
+    edit: impl FnOnce(&mut dyn flui_platform::text_store::TextStoreEdit) -> bool + 'static,
+) {
+    use flui_platform::text_store::{LockGrant, LockTiming};
+
+    let grant = LockGrant::read_write(move |session| {
+        let _taken = edit(session);
+    });
+    if let Err(error) = store.request_lock(grant, LockTiming::Async) {
+        tracing::debug!(?error, "the focused store refused the browser's edit");
+    }
+}
+
+/// A field focused on the web backend's `EditContext` on the canvas.
+pub struct WebEditContext {
+    store: Rc<dyn TextStore>,
+}
+
+impl WebEditContext {
+    /// The context serving `store`.
+    #[must_use]
+    pub fn focus(store: Rc<dyn TextStore>) -> Self {
+        Self { store }
+    }
+
+    /// `textupdate`: the browser replaced `replaced` with `text` and
+    /// selected `selection`, in UTF-16 code units of the field, while its
+    /// input method composes or not.
+    pub fn text_update(
+        &self,
+        replaced: std::ops::Range<usize>,
+        text: &str,
+        selection: std::ops::Range<usize>,
+        composing: bool,
+    ) {
+        let (replaced, selection) = (web::range(replaced), web::range(selection));
+        let text = text.to_owned();
+        edit_store(&self.store, move |session| {
+            crate::text::web::ime::text_update(session, replaced, &text, selection, composing)
+        });
+    }
+
+    /// `compositionend`.
+    pub fn composition_end(&self) {
+        edit_store(&self.store, crate::text::web::ime::composition_end);
+    }
+}
+
+/// A field focused on the web backend's hidden `<textarea>`, which shows
+/// the store's text.
+pub struct WebTextarea {
+    store: Rc<dyn TextStore>,
+    mirror: std::cell::RefCell<crate::text::web::ime::FieldValue>,
+}
+
+impl WebTextarea {
+    /// The textarea showing `store`'s text.
+    ///
+    /// # Panics
+    ///
+    /// When the store refuses a synchronous read, which a free store grants.
+    #[must_use]
+    pub fn focus(store: Rc<dyn TextStore>) -> Self {
+        use flui_platform::text_store::{LockGrant, LockTiming};
+
+        let read = Rc::new(std::cell::RefCell::new(Vec::new()));
+        let out = Rc::clone(&read);
+        let _granted = store
+            .request_lock(
+                LockGrant::read(move |session| {
+                    *out.borrow_mut() = crate::text::ime::document_text(session)
+                        .encode_utf16()
+                        .collect();
+                }),
+                LockTiming::Sync,
+            )
+            .expect("BUG: the table focuses a free store, which grants a sync read");
+        let mirror = crate::text::web::ime::FieldValue::of(&read.take(), false);
+        Self {
+            store,
+            mirror: std::cell::RefCell::new(mirror),
+        }
+    }
+
+    /// `input` (or `compositionend`): the textarea holds `value`, with
+    /// `selection` selected forward in UTF-16 code units of it, while its
+    /// input method composes or not.
+    pub fn input(&self, value: &str, selection: std::ops::Range<usize>, composing: bool) {
+        let now: Vec<u16> = value.encode_utf16().collect();
+        let change = crate::text::web::ime::field_change(&mut self.mirror.borrow_mut(), &now);
+        let selection = self
+            .mirror
+            .borrow()
+            .selection(selection.start, selection.end, false);
+        edit_store(&self.store, move |session| {
+            crate::text::web::ime::field_edit(session, change.as_ref(), selection, composing)
+        });
+    }
+}
+
+mod web {
+    use flui_platform::text_store::utf16::{Utf16Offset, Utf16Range};
+
+    pub(super) fn range(range: std::ops::Range<usize>) -> Utf16Range {
+        Utf16Range::try_new(Utf16Offset::new(range.start), Utf16Offset::new(range.end))
+            .expect("BUG: the table names ordered ranges")
+    }
+}
+
+impl std::fmt::Debug for WebEditContext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WebEditContext").finish_non_exhaustive()
+    }
+}
+
+impl std::fmt::Debug for WebTextarea {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WebTextarea").finish_non_exhaustive()
     }
 }

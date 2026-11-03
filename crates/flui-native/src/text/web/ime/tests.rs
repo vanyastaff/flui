@@ -4,8 +4,17 @@
 //! `input::web::keys`'s; the mirror's own rules are `text::ime`'s; the DOM
 //! side runs in Chrome (`tests/web_browser.rs`).
 
-use super::{FieldValue, autocomplete, enter_key_hint, input_mode};
-use flui_platform::text_store::{TextInputPurpose, TextStoreStatus};
+use std::rc::Rc;
+
+use super::{
+    FieldValue, autocomplete, composition_end, enter_key_hint, field_change, field_edit,
+    input_mode, range, text_update,
+};
+use flui_platform::text_store::{
+    Composition, LockGrant, LockTiming, Selection, TextInputPurpose, TextStore, TextStoreEdit,
+    TextStoreStatus, Utf16Offset,
+};
+use flui_testing::text_store_kit::InMemoryTextStore;
 
 /// The purpose a field was built with picks the virtual keyboard the browser
 /// shows; free text and a purpose this backend has no keyboard for get plain
@@ -202,5 +211,100 @@ fn an_edit_of_the_shown_text_is_an_edit_of_the_store() {
             "{why}"
         );
         assert_eq!(value, FieldValue::of(&units(edited), single_line), "{why}");
+    }
+}
+
+/// Run `edit` in `store` under a read-write lock, which a free store grants
+/// at once.
+fn edit(
+    store: &Rc<InMemoryTextStore>,
+    edit: impl FnOnce(&mut dyn TextStoreEdit) -> bool + 'static,
+) {
+    let _granted = store
+        .request_lock(
+            LockGrant::read_write(move |session| assert!(edit(session), "the store took the edit")),
+            LockTiming::Sync,
+        )
+        .expect("a free store grants a sync lock");
+}
+
+fn composing(start: usize, end: usize) -> Composition {
+    Composition {
+        range: range(
+            u32::try_from(start).expect("short"),
+            u32::try_from(end).expect("short"),
+        ),
+        hides_caret: false,
+    }
+}
+
+/// An `EditContext`'s `textupdate` puts the browser's text in the field and
+/// composes it while the input method composes; `compositionend` ends the
+/// composition and keeps its text.
+#[test]
+fn an_edit_context_composition_reaches_the_store() {
+    let store = InMemoryTextStore::new("ab");
+    edit(&store, |session| {
+        text_update(session, range(2, 2), "に", range(3, 3), true)
+    });
+    assert_eq!(store.text(), "abに");
+    assert_eq!(store.composition(), Some(composing(2, 3)));
+    edit(&store, |session| {
+        text_update(session, range(2, 3), "日本", range(4, 4), true)
+    });
+    assert_eq!(store.text(), "ab日本");
+    assert_eq!(store.composition(), Some(composing(2, 4)));
+    assert_eq!(store.selection(), Selection::collapsed(Utf16Offset::new(4)));
+    edit(&store, composition_end);
+    assert_eq!(store.text(), "ab日本", "the composed text stays");
+    assert_eq!(store.composition(), None);
+}
+
+/// A textarea's change composes what it inserted while the input method
+/// composes; a read with no change after the composition ends ends it.
+#[test]
+fn a_textarea_composition_reaches_the_store() {
+    let store = InMemoryTextStore::new("ab");
+    let mut mirror = FieldValue::of(&units("ab"), false);
+    let change = field_change(&mut mirror, &units("abか"));
+    assert_eq!(mirror.shown(), units("abか").as_slice());
+    assert_eq!(
+        field_change(&mut mirror, &units("abか")),
+        None,
+        "no change is no edit"
+    );
+    let caret = Selection::collapsed(Utf16Offset::new(3));
+    edit(&store, move |session| {
+        field_edit(session, change.as_ref(), caret, true)
+    });
+    assert_eq!(store.text(), "abか");
+    assert_eq!(store.composition(), Some(composing(2, 3)));
+    edit(&store, move |session| {
+        field_edit(session, None, caret, false)
+    });
+    assert_eq!(store.text(), "abか");
+    assert_eq!(store.composition(), None);
+    assert_eq!(store.selection(), caret);
+}
+
+/// A textarea's change is only what differs, so a code unit typed into the
+/// preedit or deleted from it grows or shrinks the composition it touches,
+/// which keeps its start.
+#[test]
+fn a_textarea_change_inside_the_preedit_keeps_the_composition() {
+    let store = InMemoryTextStore::new("ab");
+    let mut mirror = FieldValue::of(&units("ab"), false);
+    for (value, composition) in [("abに", (2, 3)), ("abにほ", (2, 4)), ("abに", (2, 3))] {
+        let change = field_change(&mut mirror, &units(value));
+        let caret = Selection::collapsed(Utf16Offset::new(composition.1));
+        edit(&store, move |session| {
+            field_edit(session, change.as_ref(), caret, true)
+        });
+        assert_eq!(store.text(), value);
+        assert_eq!(
+            store.composition(),
+            Some(composing(composition.0, composition.1)),
+            "{value}"
+        );
     }
 }

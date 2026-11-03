@@ -13,6 +13,7 @@
 //! Each row of the table also fails against a deliberately broken backend
 //! ([`Fault`]), so a row that cannot fail is caught.
 
+use std::cell::RefCell;
 use std::num::NonZeroU64;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -44,7 +45,7 @@ use flui_native::input::linux::xkb::{key_of, keysym as xkb_keysym};
 use flui_native::input::web::keys::key_composition;
 #[cfg(all(target_os = "linux", any(feature = "wayland", feature = "x11")))]
 use flui_native::text::conformance::TextInputV3;
-use flui_native::text::conformance::{AndroidMirror, AppKitClient};
+use flui_native::text::conformance::{AndroidMirror, AppKitClient, WebEditContext, WebTextarea};
 use flui_native::{HeadlessPlatform, HostWindow, MockWindow, OwnerPlatform, Platform as _};
 use flui_platform::Availability;
 use flui_platform::EventTime;
@@ -60,7 +61,7 @@ use flui_platform::pointer::{
     CancelReason, PenTool, PointerButton, PointerEvent, PointerId, PointerInfo, PointerKind,
     PointerPosition, PointerRole, ScrollDelta, ScrollEvent, ScrollPrecision, ScrollUnit,
 };
-use flui_platform::text_store::TextStore;
+use flui_platform::text_store::{LockGrant, LockTiming, TextStore, Utf16Offset, Utf16Range};
 use flui_platform::{DeviceId, HapticFeedback, PlatformHaptics, Unsupported, UnsupportedReason};
 
 /// What a table answers for a request its actuator cannot play: this device
@@ -145,8 +146,13 @@ enum Ime {
     /// `InputConnection`'s edits of `FluiView`'s editor, which the view reports
     /// and the owner replays into the store through the mirror.
     Android,
-    /// A path whose pure half the table does not reach yet (TSF, the Web's
-    /// `EditContext` and textarea, winit):
+    /// The browser's `EditContext` on the canvas: a `textupdate` for each
+    /// change of the composing text, then `compositionend`.
+    WebEditContext,
+    /// A hidden `<textarea>` where the browser has no `EditContext`: an
+    /// `input` for each change of its value, then `compositionend`.
+    WebTextarea,
+    /// A path whose pure half the table does not reach yet (TSF, winit):
     /// [`IME_ORDER_GAP`].
     Undriven,
     /// No input method, and why.
@@ -163,6 +169,8 @@ enum ImeField {
     TextInputV3(TextInputV3),
     Apple(AppKitClient),
     Android(AndroidMirror, Editable),
+    WebEditContext(WebEditContext, Editable),
+    WebTextarea(WebTextarea, Editable),
 }
 
 /// A backend's input method path and the field it focused.
@@ -201,6 +209,14 @@ impl ImeDriver {
                 let mirror = AndroidMirror::focus(store);
                 let editable = Editable::holding(mirror.text());
                 ImeField::Android(mirror, editable)
+            }
+            Ime::WebEditContext => {
+                let editable = Editable::reading(&store);
+                ImeField::WebEditContext(WebEditContext::focus(store), editable)
+            }
+            Ime::WebTextarea => {
+                let editable = Editable::reading(&store);
+                ImeField::WebTextarea(WebTextarea::focus(store), editable)
             }
             Ime::Undriven => return TextInputPath::Gap(IME_ORDER_GAP),
             Ime::None(why) => return TextInputPath::None(why),
@@ -257,18 +273,38 @@ impl ImeDriver {
                 _ => field.set_marked_text("", 0..0, None),
             },
             (Some(ImeField::Android(mirror, editable)), _) => {
-                match step {
-                    CompositionStep::Preedit { text, caret } => {
-                        editable.set_composing_text(text, caret);
-                    }
-                    CompositionStep::Commit { text } => editable.commit_text(text),
-                    _ => editable.set_composing_text("", 0),
-                }
+                let _ = editable.compose(step);
                 mirror.report(
                     &editable.text(),
                     (editable.caret, editable.caret),
                     editable.composing,
                 );
+            }
+            (Some(ImeField::WebEditContext(context, editable)), _) => {
+                let (start, end) = editable
+                    .composing
+                    .unwrap_or((editable.caret, editable.caret));
+                let text = editable.compose(step);
+                // The browser updates the text only when the step changes it.
+                if !matches!(step, CompositionStep::Commit { text } if text == preedit) {
+                    let caret = editable.caret;
+                    context.text_update(start..end, text, caret..caret, true);
+                }
+                if !matches!(step, CompositionStep::Preedit { .. })
+                    && fault != Some(Fault::ImeEndLost)
+                {
+                    context.composition_end();
+                }
+            }
+            (Some(ImeField::WebTextarea(area, editable)), _) => {
+                let _ = editable.compose(step);
+                let (value, caret) = (editable.text(), editable.caret);
+                area.input(&value, caret..caret, true);
+                if !matches!(step, CompositionStep::Preedit { .. })
+                    && fault != Some(Fault::ImeEndLost)
+                {
+                    area.input(&value, caret..caret, false);
+                }
             }
             (None, _) => {}
         }
@@ -292,6 +328,43 @@ impl Editable {
             caret: units.len(),
             units,
             composing: None,
+        }
+    }
+
+    /// The editor holding `store`'s text, the caret at its end.
+    fn reading(store: &Rc<dyn TextStore>) -> Self {
+        let text = Rc::new(RefCell::new(String::new()));
+        let out = Rc::clone(&text);
+        let _granted = store
+            .request_lock(
+                LockGrant::read(move |session| {
+                    let all = Utf16Range::try_new(Utf16Offset::new(0), session.document_len())
+                        .expect("a document starts at 0");
+                    *out.borrow_mut() = session.text(all).expect("the whole document reads");
+                }),
+                LockTiming::Sync,
+            )
+            .expect("a free store grants a sync read");
+        let text = text.take();
+        Self::holding(&text)
+    }
+
+    /// Edit the editor as the input method's `step` does; the text the step
+    /// puts in the composing span's place.
+    fn compose(&mut self, step: CompositionStep) -> &'static str {
+        match step {
+            CompositionStep::Preedit { text, caret } => {
+                self.set_composing_text(text, caret);
+                text
+            }
+            CompositionStep::Commit { text } => {
+                self.commit_text(text);
+                text
+            }
+            _ => {
+                self.set_composing_text("", 0);
+                ""
+            }
         }
     }
 
@@ -321,6 +394,7 @@ impl Editable {
     }
 }
 
+#[cfg(all(target_os = "linux", any(feature = "wayland", feature = "x11")))]
 /// The byte offset of the UTF-16 offset `units` into `text`.
 fn byte_offset(text: &str, units: usize) -> usize {
     let mut counted = 0;
@@ -431,7 +505,16 @@ fn web() -> Profile {
         haptics: Some(HapticsTable::Web),
         drag: Some(input_availability::WEB_DRAG_START),
         keys: Some(KeyDecoder::Web),
-        ime: Ime::Undriven,
+        ime: Ime::WebEditContext,
+    }
+}
+
+/// A browser with no `EditContext`: the field's store
+/// is served through a hidden textarea.
+fn web_textarea() -> Profile {
+    Profile {
+        ime: Ime::WebTextarea,
+        ..web()
     }
 }
 
@@ -547,6 +630,8 @@ enum Fault {
     /// A preedit reaches the field as two edits: the old one cleared, then
     /// the new one.
     ImeStepInTwoEdits,
+    /// `compositionend` never reaches the field, so the composition stays.
+    ImeEndLost,
 }
 
 /// The degradation table a backend's window actuator plays by.
@@ -1832,12 +1917,13 @@ fn each_input_method_path_holds_the_ime_rows_or_names_its_gap() {
     } else {
         RowOutcome::NotApplicable("built without a Linux host")
     };
-    let backends: [(&str, Profile, RowOutcome); 7] = [
+    let backends: [(&str, Profile, RowOutcome); 8] = [
         ("win32", win32(), RowOutcome::Gap(IME_ORDER_GAP)),
         ("appkit", appkit(), RowOutcome::Held),
         ("uikit", uikit(), RowOutcome::Held),
         ("android", android(), RowOutcome::Held),
-        ("web", web(), RowOutcome::Gap(IME_ORDER_GAP)),
+        ("web", web(), RowOutcome::Held),
+        ("web through a textarea", web_textarea(), RowOutcome::Held),
         ("x11 through winit", x11(), RowOutcome::Gap(IME_ORDER_GAP)),
         ("wayland", wayland(), driven.clone()),
     ];
@@ -2033,6 +2119,16 @@ const BROKEN: &[BrokenRow] = &[
         "each_composition_step_is_one_edit_of_the_field",
         Fault::ImeStepInTwoEdits,
         wayland,
+    ),
+    (
+        "a_composition_reaches_the_field_in_order",
+        Fault::ImeEndLost,
+        web,
+    ),
+    (
+        "a_composition_reaches_the_field_in_order",
+        Fault::ImeEndLost,
+        web_textarea,
     ),
     (
         "outgoing_drag_is_delivered_as_claimed",

@@ -2,13 +2,24 @@
 //! mirrored into an `EditContext` on the canvas, or a hidden textarea beside
 //! it where the browser has none, and served to the browser's input method.
 //!
-//! - `ime`: the decidable half, which virtual keyboard a field asks for and
-//!   what the browser fills it with;
-//!   pure, built for the web and for tests on every host;
+//! - `ime`: the decidable half, which virtual keyboard a field asks for,
+//!   what the browser fills it with, and the edits of the store an
+//!   `EditContext`'s `textupdate` or a textarea's change makes; pure, built
+//!   for the web and for tests on every host (and with `testing`, for the
+//!   backend conformance table);
 //! - `input`: `WebTextInput`, the window's `TextStoreHost` over the DOM.
 
-#[cfg(any(target_arch = "wasm32", test))]
-mod ime {
+// Built on every host with `testing` too, for the conformance table's Web
+// rows (`text::conformance`), which reach only the store edits.
+#[cfg(any(target_arch = "wasm32", test, feature = "testing"))]
+#[cfg_attr(
+    not(any(target_arch = "wasm32", test)),
+    allow(
+        dead_code,
+        reason = "off the Web only the conformance table's store edits are reached"
+    )
+)]
+pub(crate) mod ime {
     //! The decidable half of the web backend's text input (ADR-0090): which
     //! virtual keyboard a field asks for, what the browser fills it with and
     //! how its Enter key is labelled. What a hidden `<textarea>`'s change
@@ -18,7 +29,10 @@ mod ime {
 
     #![forbid(unsafe_code)]
 
-    use flui_platform::text_store::{TextInputPurpose, TextStoreStatus};
+    use flui_platform::text_store::{
+        Composition, Selection, TextInputPurpose, TextStoreEdit, TextStoreStatus, Utf16Offset,
+        Utf16Range,
+    };
 
     /// The `inputmode` (and `EditContext.inputMode`) a field of `purpose` asks the
     /// browser's virtual keyboard for.
@@ -157,6 +171,25 @@ mod ime {
             (from, to)
         }
 
+        /// The store's selection of the shown `start..end`
+        /// ([`Self::store_range`]), its anchor at the end when `backward`.
+        #[must_use]
+        pub(crate) fn selection(&self, start: usize, end: usize, backward: bool) -> Selection {
+            let (start, end) = self.store_range(start, end);
+            let (start, end) = (Utf16Offset::new(start), Utf16Offset::new(end));
+            if backward {
+                Selection {
+                    anchor: end,
+                    active: start,
+                }
+            } else {
+                Selection {
+                    anchor: start,
+                    active: end,
+                }
+            }
+        }
+
         /// The shown offset of the store's `offset`: the units the field
         /// drops before it are not counted, and an offset inside a CRLF is
         /// before its line feed.
@@ -166,6 +199,157 @@ mod ime {
         }
     }
 
+    /// `start..end` as a store range, ordered.
+    pub(crate) fn range(start: u32, end: u32) -> Utf16Range {
+        let (start, end) = (start.min(end), start.max(end));
+        Utf16Range::try_new(offset(start), offset(end)).expect("BUG: an ordered range")
+    }
+
+    fn offset(value: u32) -> Utf16Offset {
+        Utf16Offset::new(usize::try_from(value).unwrap_or(usize::MAX))
+    }
+
+    /// `range` clamped into a document of `len` code units.
+    pub(crate) fn clamped(range: Utf16Range, len: Utf16Offset) -> Utf16Range {
+        let start = range.start().min(len);
+        let end = range.end().min(len);
+        Utf16Range::try_new(start, end).expect("BUG: clamping keeps the order")
+    }
+
+    pub(crate) fn len16(text: &str) -> usize {
+        text.encode_utf16().count()
+    }
+
+    /// The composition after the browser replaced `replaced` with `units`
+    /// code units while its input method composes: the composition before it,
+    /// `old`, grown over the edit when the edit touches it (a textarea's
+    /// change is only what differs, a code unit typed into the preedit or one
+    /// deleted from it), else what the edit inserted. None once it is empty,
+    /// as after a cancel, or when the input method does not compose.
+    fn composing_after(
+        old: Option<Composition>,
+        replaced: Utf16Range,
+        units: usize,
+        composing: bool,
+    ) -> Option<Composition> {
+        if !composing {
+            return None;
+        }
+        let (start, end) = (replaced.start().get(), replaced.end().get());
+        let inserted_end = start.saturating_add(units);
+        let (from, to) = match old {
+            Some(old) if start <= old.range.end().get() && end >= old.range.start().get() => {
+                // The old composition's end, moved by the edit.
+                let moved = old
+                    .range
+                    .end()
+                    .get()
+                    .max(end)
+                    .saturating_sub(end - start)
+                    .saturating_add(units);
+                (old.range.start().get().min(start), moved)
+            }
+            _ => (start, inserted_end),
+        };
+        (to > from).then(|| Composition {
+            range: Utf16Range::try_new(Utf16Offset::new(from), Utf16Offset::new(to))
+                .expect("BUG: a composition is ordered"),
+            hides_caret: false,
+        })
+    }
+
+    /// An `EditContext`'s `textupdate` in the field's store: the browser
+    /// replaced `replaced` with `text` and selected `selection`; what it put
+    /// there composes while its input method composes. Whether the store took
+    /// the replacement; a refusal resynchronises the surface.
+    pub(crate) fn text_update(
+        session: &mut dyn TextStoreEdit,
+        replaced: Utf16Range,
+        text: &str,
+        selection: Utf16Range,
+        composing: bool,
+    ) -> bool {
+        let replaced = clamped(replaced, session.document_len());
+        let old = session.composition();
+        if session.replace(replaced, text).is_err() {
+            return false;
+        }
+        let composition = composing_after(old, replaced, len16(text), composing);
+        let _ = session.set_composition(composition);
+        let selected = clamped(selection, session.document_len());
+        let _ = session.set_selection(Selection {
+            anchor: selected.start(),
+            active: selected.end(),
+        });
+        true
+    }
+
+    /// `compositionend` on an `EditContext`: the composition ends, its text
+    /// kept.
+    pub(crate) fn composition_end(session: &mut dyn TextStoreEdit) -> bool {
+        let _ = session.set_composition(None);
+        true
+    }
+
+    /// One edit of a hidden `<textarea>`, in the field's store.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub(crate) struct FieldChange {
+        /// The store range the browser's edit replaced.
+        pub(crate) replaced: Utf16Range,
+        /// What it inserted.
+        pub(crate) inserted: String,
+        /// The code units it inserted.
+        pub(crate) units: usize,
+    }
+
+    /// The edit that took `mirror`'s shown value to the element's `now`, as
+    /// an edit of the store, after which `mirror` shows the edited store
+    /// ([`FieldValue::replace`]); `None` when the value did not change.
+    pub(crate) fn field_change(mirror: &mut FieldValue, now: &[u16]) -> Option<FieldChange> {
+        let change = crate::text::ime::diff(mirror.shown(), now)?;
+        let inserted = &now[change.start..change.new_end];
+        let (from, to) = mirror.replace(change.start, change.old_end, inserted);
+        Some(FieldChange {
+            replaced: Utf16Range::try_new(Utf16Offset::new(from), Utf16Offset::new(to))
+                .expect("BUG: a store range is ordered"),
+            inserted: String::from_utf16_lossy(inserted),
+            units: inserted.len(),
+        })
+    }
+
+    /// A hidden `<textarea>`'s change in the field's store: `change`
+    /// ([`field_change`]), composing while the input method composes, then
+    /// the textarea's `selection`. With no change, a composition the
+    /// input method ended ends. Whether the store took the replacement.
+    pub(crate) fn field_edit(
+        session: &mut dyn TextStoreEdit,
+        change: Option<&FieldChange>,
+        selection: Selection,
+        composing: bool,
+    ) -> bool {
+        if let Some(FieldChange {
+            replaced,
+            inserted,
+            units,
+        }) = change
+        {
+            let replaced = clamped(*replaced, session.document_len());
+            let old = session.composition();
+            if session.replace(replaced, inserted).is_err() {
+                return false;
+            }
+            let composition = composing_after(old, replaced, *units, composing);
+            let _ = session.set_composition(composition);
+        } else if !composing {
+            let _ = session.set_composition(None);
+        }
+        let len = session.document_len();
+        let _ = session.set_selection(Selection {
+            anchor: selection.anchor.min(len),
+            active: selection.active.min(len),
+        });
+        true
+    }
     #[cfg(test)]
     mod tests;
 }
@@ -208,7 +392,6 @@ mod input {
     use std::rc::{Rc, Weak};
 
     use flui_platform::keyboard::KeyState;
-    use flui_platform::text_store::Composition;
     use flui_platform::text_store::{
         CompositionEnd, LockGrant, LockTiming, Selection, TextChange, TextStore, TextStoreEdit,
         TextStoreHost, TextStoreHostError, TextStoreObserver, TextStoreStatus, Utf16Offset,
@@ -216,13 +399,16 @@ mod input {
     };
     use wasm_bindgen::{JsCast, prelude::*};
 
-    use super::ime::{FieldValue, autocomplete, enter_key_hint, input_mode};
+    use super::ime::{
+        FieldValue, autocomplete, composition_end, enter_key_hint, field_change, field_edit,
+        input_mode, range, text_update,
+    };
     use crate::owner::panic_boundary::contain_owner_callback;
     use crate::owner::slot::OwnerSlot;
     use crate::owner::web::listener::{CanvasListener, viewport_listeners};
     use crate::owner::web::{Accepting, CanvasEditor, CanvasKeys, CanvasRef, FocusedField};
     use crate::text::host_queue::{HostQueue, MirrorHostOp};
-    use crate::text::ime::{diff, document_text, scalar_spans};
+    use crate::text::ime::{document_text, scalar_spans};
 
     #[wasm_bindgen(inline_js = "
     export function hasEditContext() { return typeof globalThis.EditContext === 'function'; }
@@ -372,19 +558,8 @@ mod input {
             let offset = |offset: Result<Option<u32>, JsValue>| {
                 usize::try_from(offset.ok().flatten().unwrap_or(0)).unwrap_or(usize::MAX)
             };
-            let (start, end) = shown.store_range(offset(start), offset(end));
-            let (start, end) = (Utf16Offset::new(start), Utf16Offset::new(end));
-            if direction.ok().flatten().as_deref() == Some("backward") {
-                Selection {
-                    anchor: end,
-                    active: start,
-                }
-            } else {
-                Selection {
-                    anchor: start,
-                    active: end,
-                }
-            }
+            let backward = direction.ok().flatten().as_deref() == Some("backward");
+            shown.selection(offset(start), offset(end), backward)
         }
 
         /// Select the store's `selection` in the element showing `shown`,
@@ -441,26 +616,6 @@ mod input {
         /// queued.
         resync_queued: RefCell<Vec<Rc<dyn TextStore>>>,
         this: Weak<Self>,
-    }
-
-    fn offset(value: u32) -> Utf16Offset {
-        Utf16Offset::new(value as usize)
-    }
-
-    fn range(start: u32, end: u32) -> Utf16Range {
-        let (start, end) = (start.min(end), start.max(end));
-        Utf16Range::try_new(offset(start), offset(end)).expect("BUG: an ordered range")
-    }
-
-    /// `range` clamped into a document of `len` code units.
-    fn clamped(range: Utf16Range, len: Utf16Offset) -> Utf16Range {
-        let start = range.start().min(len);
-        let end = range.end().min(len);
-        Utf16Range::try_new(start, end).expect("BUG: clamping keeps the order")
-    }
-
-    fn len16(text: &str) -> usize {
-        text.encode_utf16().count()
     }
 
     /// The offset in what `shown` shows of the store's `offset`.
@@ -791,33 +946,13 @@ mod input {
                         let replaced =
                             range(update.update_range_start(), update.update_range_end());
                         let text = update.update_text_value();
-                        let selection = (
+                        let selection = range(
                             update.update_selection_start(),
                             update.update_selection_end(),
                         );
                         let composing = this.keys.composing();
                         this.edit(move |session| {
-                            let replaced = clamped(replaced, session.document_len());
-                            let inserted = len16(&text);
-                            if session.replace(replaced, &text).is_err() {
-                                return false;
-                            }
-                            let composition = composing.then(|| Composition {
-                                range: Utf16Range::try_new(
-                                    replaced.start(),
-                                    Utf16Offset::new(replaced.start().get() + inserted),
-                                )
-                                .expect("BUG: an inserted range is ordered"),
-                                hides_caret: false,
-                            });
-                            let _ = session.set_composition(composition);
-                            let selected =
-                                clamped(range(selection.0, selection.1), session.document_len());
-                            let _ = session.set_selection(Selection {
-                                anchor: selected.start(),
-                                active: selected.end(),
-                            });
-                            true
+                            text_update(session, replaced, &text, selection, composing)
                         });
                     }),
                 )?);
@@ -832,10 +967,7 @@ mod input {
                         };
                         this.keys.set_composing(composing);
                         if !composing {
-                            this.edit(|session| {
-                                let _ = session.set_composition(None);
-                                true
-                            });
+                            this.edit(composition_end);
                         }
                     }),
                 )?);
@@ -1072,57 +1204,23 @@ mod input {
                 return;
             };
             let now: Vec<u16> = element.value().encode_utf16().collect();
-            let change = diff(mirror.borrow().shown(), &now);
-            let change = change.map(|change| {
-                let inserted = &now[change.start..change.new_end];
-                let (from, to) =
-                    mirror
-                        .borrow_mut()
-                        .replace(change.start, change.old_end, inserted);
-                (from, to, String::from_utf16_lossy(inserted), inserted.len())
-            });
+            let change = field_change(&mut mirror.borrow_mut(), &now);
             // An edit whose store the browser would show otherwise (a line
             // feed typed after a lone carriage return) is shown again, the
             // caret after what it inserted.
             let reshown = change
                 .as_ref()
                 .filter(|_| mirror.borrow().shown() != now.as_slice())
-                .map(|&(from, _, _, units)| {
-                    let caret = Selection::collapsed(Utf16Offset::new(from + units));
+                .map(|change| {
+                    let caret = Selection::collapsed(Utf16Offset::new(
+                        change.replaced.start().get() + change.units,
+                    ));
                     element.set_shown(&mirror.borrow());
                     element.select(&mirror.borrow(), caret);
                     caret
                 });
             let selection = reshown.unwrap_or_else(|| element.selection(&mirror.borrow()));
-            self.edit(move |session| {
-                if let Some((from, to, inserted, units)) = &change {
-                    let replaced = clamped(
-                        Utf16Range::try_new(Utf16Offset::new(*from), Utf16Offset::new(*to))
-                            .expect("BUG: a store range is ordered"),
-                        session.document_len(),
-                    );
-                    if session.replace(replaced, inserted).is_err() {
-                        return false;
-                    }
-                    let composition = composing.then(|| Composition {
-                        range: Utf16Range::try_new(
-                            replaced.start(),
-                            Utf16Offset::new(replaced.start().get() + units),
-                        )
-                        .expect("BUG: an inserted range is ordered"),
-                        hides_caret: false,
-                    });
-                    let _ = session.set_composition(composition);
-                } else if !composing {
-                    let _ = session.set_composition(None);
-                }
-                let len = session.document_len();
-                let _ = session.set_selection(Selection {
-                    anchor: selection.anchor.min(len),
-                    active: selection.active.min(len),
-                });
-                true
-            });
+            self.edit(move |session| field_edit(session, change.as_ref(), selection, composing));
         }
 
         /// The store's text changed outside the browser's edits: give the
