@@ -468,7 +468,10 @@ moka = { version = "0.12.16", features = ["future"] }
 # the BSDs, flui-native's `http` feature). The TLS backend is rustls with the
 # provider flui-native names and the platform's verifier, so the system's
 # trust store decides; no gzip, which would hide a body's declared length.
-ureq = { version = "3.5", default-features = false, features = ["rustls-no-provider", "platform-verifier"] }
+ureq = { version = "3.5", default-features = false, features = [
+    "rustls-no-provider",
+    "platform-verifier",
+] }
 # The TLS stack ureq runs, to recognise its handshake errors; the crate that
 # hands it to ureq names the provider.
 rustls = { version = "0.23", default-features = false }
