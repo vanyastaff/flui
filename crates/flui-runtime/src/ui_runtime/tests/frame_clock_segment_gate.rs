@@ -100,7 +100,7 @@ pub(crate) fn starting_an_idle_presentation_animation_requests_its_first_frame()
 
 pub(crate) fn agent_playback_drives_independent_windows_and_one_paused_step_frame() {
     use flui_animation::{Animation as _, AnimationController};
-    use flui_protocol::MotionRequest;
+    use flui_protocol::{MotionParams, MotionRequest, method};
     use std::time::Duration;
 
     let mut runtime = mount_root_here();
@@ -112,7 +112,9 @@ pub(crate) fn agent_playback_drives_independent_windows_and_one_paused_step_fram
     let a_window = runtime.dev_agent_window(a).expect("A agent");
     let b_window = runtime.dev_agent_window(b).expect("B agent");
     let edit = |window: &flui_view::dev_agent::AgentWindow, request| {
-        let mut answer = window.motion(request).expect("admitted");
+        let mut answer = window
+            .call::<method::MotionSet>(MotionParams::new(window.id(), request))
+            .expect("admitted");
         assert_eq!(runtime.drain_commands().invoked, 1);
         answer.try_take().expect("answered").expect("valid request")
     };

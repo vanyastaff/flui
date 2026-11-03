@@ -1,56 +1,49 @@
-//! An agent's read of, and actions on, one presentation's semantics tree,
-//! through the UI runtime's owner inbox (ADR-0095 §3, the UI runtime half of the
-//! in-process backend).
+//! The owner's side of the development agent (ADR-0095 §3, ADR-0239): the port a presentation's
+//! [`AgentWindow`] calls through, and the owner's halves of what it asks.
 //!
-//! A [`SemanticsAgent`] is a `Send + Sync` capability vended by
-//! [`UiRuntime::semantics_agent`]. It never touches a tree: [`SemanticsAgent::read`]
-//! and [`SemanticsAgent::act`] enqueue a command on the UI runtime's bounded inbox
-//! and return an [`AgentReply`] that the owner fills at its next drain, a
-//! frame boundary. A read reflects the last committed frame's semantics; an
-//! action reaches the same handler an assistive technology's does, through
-//! `PresentationState::dispatch_semantics_action`.
+//! [`UiRuntime::dev_agent_window`] vends a presentation's [`AgentWindow`]. Its port never
+//! touches a tree: it enqueues one command on the UI runtime's bounded inbox, and the owner
+//! answers at its next drain, a frame boundary ([`agent_serve`](super::agent_serve)). A read
+//! reflects the last committed frame's semantics; an action reaches the same handler an
+//! assistive technology's does, through `PresentationState::dispatch_semantics_action`.
 //!
-//! Holding an agent keeps semantics collected for its presentation (a
-//! [`SemanticsHandle`] shared by every clone), so the tree an agent reads is
-//! the tree assistive technology is published. Dropping the last clone lets
-//! collection stop on the next frame; a reply still unanswered does not keep
-//! it on.
+//! While any clone of the window is alive the presentation collects semantics (one
+//! [`SemanticsHandle`] they share), so the tree an agent reads is the tree assistive technology
+//! is published. Dropping the last clone lets collection stop on the next frame; a request still
+//! unanswered does not keep it on.
 
-use std::cell::Cell;
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::num::NonZeroU32;
+use std::rc::Rc;
 use std::sync::{Arc, Weak};
-use std::time::Duration;
 
-use crossbeam_channel::{Receiver, RecvTimeoutError, Sender, TryRecvError, TrySendError};
 use flui_foundation::PresentationId;
 use flui_foundation::geometry::DevicePixelRatio;
 use flui_protocol::{
-    ActOutcome, ActionName, ActionRequest, Actionability, ActionabilityParams, AnnouncementJournal,
-    AnnouncementsParams, Effect, EffectKind, ElementId, ElementRef, ErrorCode, EventFilter,
-    InputPath, InspectParams, InspectReading, LocateParams, Matches, ReadQuery, Retry, Snapshot,
-    SnapshotReading, Tree, WaitOutcome, WaitParams, WindowId,
+    ActOutcome, ActionName, ActionRequest, Actionability, ActionabilityParams, Effect, EffectKind,
+    ElementId, ElementRef, ErrorCode, ErrorObject, EventFilter, HandleKind, InputPath,
+    LocateParams, Matches, ReadQuery, Retry, Snapshot, SnapshotReading, Tree, WaitOutcome,
+    WindowId,
 };
 use flui_rendering::binding::{RendererBinding as _, ViewHitTest};
 use flui_semantics::{
     Placement, SemanticsActionError, TreeSnapshot, WireActionError, WireLocateError, WireReadError,
 };
-use flui_view::__runtime::{AgentPort, PendingAnswer};
-use flui_view::dev_agent::{
-    AgentAnswer, AgentEvents, AgentFault, AgentWindow, HandleKind, InspectTarget,
-};
-use parking_lot::{Mutex, RwLock};
+use flui_view::__runtime::{AgentPort, Reply, WindowCall};
+use flui_view::dev_agent::{AgentAnswer, AgentEvents, AgentWindow};
+use parking_lot::RwLock;
 
 use super::UiRuntime;
-use super::agent_events::EventStream;
+use super::agent_serve::PanicAnswer;
 use super::commands::{CommandSendError, UiCommand, UiCommandSender};
+use crate::presentation::PresentationState;
 use crate::semantics_host::SemanticsHandle;
 
-/// Why an agent's read or action failed. Each variant has its ADR-0080 code
-/// and retry advice.
+/// Why an agent's request failed, on the owner. Each variant has its ADR-0080 code and retry
+/// advice, and becomes the protocol's error object with [`Self::into_error`].
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[non_exhaustive]
-pub enum AgentError {
+pub(crate) enum AgentError {
     /// The UI runtime's inbox is full; retry soon.
     #[error("the ui_runtime's command inbox is full")]
     InboxFull,
@@ -154,13 +147,40 @@ pub enum AgentError {
     /// A node reference names a window that is not this one, or is closed: the node it names is
     /// never looked up here.
     #[error("the node reference names another window")]
-    UnknownPresentation,
+    UnknownPresentation {
+        /// The window the reference names.
+        window: WindowId,
+    },
+    /// A locator matches no element now.
+    #[error("the locator matches no element now")]
+    NoMatch,
+    /// A strict locator matches several elements.
+    #[error("the locator matches {matched} elements")]
+    Ambiguous {
+        /// How many it matched, at most the candidates looked at.
+        matched: usize,
+        /// An outline of each match, for the caller to tell them apart.
+        candidates: Vec<String>,
+    },
+    /// The window does not answer this request; `capability` names what does, or the method
+    /// this build's windows do not answer yet.
+    #[error("{reason}")]
+    NotSupported {
+        /// The method or capability that does, or that is not answered.
+        capability: &'static str,
+        /// Why, for people.
+        reason: &'static str,
+    },
+    /// Serving the request panicked outside the steps that name their own failure; the panic
+    /// continues on the owner thread.
+    #[error("the window panicked while answering")]
+    Panicked,
 }
 
 impl AgentError {
     /// The ADR-0080 code an agent branches on.
     #[must_use]
-    pub fn code(&self) -> ErrorCode {
+    pub(crate) fn code(&self) -> ErrorCode {
         match self {
             Self::InboxFull
             | Self::NoTreeYet
@@ -172,23 +192,27 @@ impl AgentError {
             Self::PresentationGone
             | Self::NodeNotFound { issued: true, .. }
             | Self::NodeGone { .. } => ErrorCode::Gone,
-            Self::NodeNotFound { issued: false, .. } | Self::UnknownPresentation => {
+            Self::NodeNotFound { issued: false, .. } | Self::UnknownPresentation { .. } => {
                 ErrorCode::UnknownHandle
             }
             Self::ActionUnsupported { .. } => ErrorCode::ActionUnsupported,
             Self::Disabled { .. } => ErrorCode::Disabled,
             Self::InvalidArgument { .. } => ErrorCode::InvalidArgument,
+            Self::NoMatch => ErrorCode::NotFound,
+            Self::Ambiguous { .. } => ErrorCode::Ambiguous,
+            Self::NotSupported { .. } => ErrorCode::NotSupported,
             Self::Malformed
             | Self::HandlerPanicked { .. }
             | Self::ResolvePanicked { .. }
             | Self::HitTestPanicked { .. }
-            | Self::InspectPanicked => ErrorCode::Platform,
+            | Self::InspectPanicked
+            | Self::Panicked => ErrorCode::Platform,
         }
     }
 
     /// Whether the same call can succeed later.
     #[must_use]
-    pub fn retry(&self) -> Retry {
+    pub(crate) fn retry(&self) -> Retry {
         match self {
             Self::InboxFull
             | Self::NoTreeYet
@@ -196,6 +220,7 @@ impl AgentError {
             | Self::TooManyWaits
             | Self::TooManySubscriptions
             | Self::TreeBusy(_) => Retry::Soon,
+            Self::NoMatch => Retry::WhenAppears,
             _ => Retry::Never,
         }
     }
@@ -203,21 +228,54 @@ impl AgentError {
     /// Whether part of the action may have reached the application
     /// (ADR-0080's `may_have_run` effect).
     #[must_use]
-    pub fn may_have_run(&self) -> bool {
+    pub(crate) fn may_have_run(&self) -> bool {
         matches!(self, Self::HandlerPanicked { .. })
     }
 
-    /// The kind of handle a `gone` or `unknown_handle` names.
+    /// The element this failure is about, if it is about one.
     #[must_use]
-    pub fn handle_kind(&self) -> Option<&'static str> {
+    pub(crate) fn element(&self) -> Option<ElementId> {
         match self {
-            Self::PresentationGone | Self::UnknownPresentation => Some("window"),
-            Self::NodeNotFound { .. } | Self::NodeGone { .. } => Some("element"),
+            Self::NodeNotFound { element, .. }
+            | Self::ActionUnsupported { element, .. }
+            | Self::Disabled { element }
+            | Self::HandlerPanicked { element }
+            | Self::ResolvePanicked { element }
+            | Self::HitTestPanicked { element } => Some(*element),
             _ => None,
         }
     }
 
-    fn from_read(error: WireReadError, issued: bool) -> Self {
+    /// The protocol's error object for this failure in `window`: its code, retry advice and
+    /// effect, the handle a `gone` or `unknown_handle` is about, and a message that names ids
+    /// only, never a label or a value.
+    pub(crate) fn into_error(self, window: WindowId) -> ErrorObject {
+        let (code, retry, may_have_run) = (self.code(), self.retry(), self.may_have_run());
+        let message = self.to_string();
+        let mut error =
+            match self {
+                Self::Ambiguous { candidates, .. } => ErrorObject::ambiguous(message, candidates),
+                Self::PresentationGone => ErrorObject::new(code, message)
+                    .with_handle(HandleKind::Window, window.to_string()),
+                Self::UnknownPresentation { window: named } => ErrorObject::new(code, message)
+                    .with_handle(HandleKind::Window, named.to_string()),
+                Self::NodeNotFound { element, .. } => ErrorObject::new(code, message)
+                    .with_handle(HandleKind::Element, element.to_string()),
+                Self::NotSupported { capability, .. } => {
+                    let mut error = ErrorObject::new(code, message);
+                    error.capability = Some(capability.to_owned());
+                    error
+                }
+                _ => ErrorObject::new(code, message),
+            }
+            .with_retry(retry);
+        if may_have_run {
+            error = error.with_effect(Effect::new(EffectKind::MayHaveRun));
+        }
+        error
+    }
+
+    pub(super) fn from_read(error: WireReadError, issued: bool) -> Self {
         match error {
             WireReadError::NoTree => Self::NoTreeYet,
             WireReadError::NotFound { element } => Self::NodeNotFound { element, issued },
@@ -225,24 +283,24 @@ impl AgentError {
         }
     }
 
-    fn from_unscoped_read(error: WireReadError) -> Self {
+    pub(super) fn from_unscoped_read(error: WireReadError) -> Self {
         match error {
             WireReadError::NoTree => Self::NoTreeYet,
             _ => Self::Malformed,
         }
     }
 
-    fn from_locate(error: WireLocateError) -> Self {
+    pub(super) fn from_locate(error: WireLocateError) -> Self {
         match error {
             WireLocateError::NoTree => Self::NoTreeYet,
             // `locate_wire` lists matches and never answers `NotFound` or
-            // `Ambiguous`; they belong to resolving one element, which no
-            // agent job does yet.
+            // `Ambiguous`: resolving one element is `semantics.act`'s, over
+            // the matches it lists.
             _ => Self::Malformed,
         }
     }
 
-    fn from_act(error: WireActionError, issued: bool) -> Self {
+    pub(super) fn from_act(error: WireActionError, issued: bool) -> Self {
         match error {
             WireActionError::NoTree => Self::NoTreeYet,
             WireActionError::NotFound { element } => Self::NodeNotFound { element, issued },
@@ -255,7 +313,7 @@ impl AgentError {
         }
     }
 
-    fn from_send(error: CommandSendError) -> Self {
+    pub(super) fn from_send(error: CommandSendError) -> Self {
         match error {
             CommandSendError::ChannelFull { .. } => Self::InboxFull,
             CommandSendError::OwnerGone { .. } => Self::RuntimeGone,
@@ -263,30 +321,74 @@ impl AgentError {
     }
 }
 
-impl From<AgentError> for AgentFault {
-    /// The development seam's view of the error: its code, retry advice and
-    /// effect, and a message that names element ids only.
-    fn from(error: AgentError) -> Self {
-        let kind = match &error {
-            AgentError::PresentationGone | AgentError::UnknownPresentation => {
-                Some(HandleKind::Window)
-            }
-            AgentError::NodeNotFound { .. } | AgentError::NodeGone { .. } => {
-                Some(HandleKind::Element)
-            }
-            _ => None,
-        };
-        let fault = AgentFault::new(error.code(), error.retry(), error.to_string())
-            .with_may_have_run(error.may_have_run());
-        match kind {
-            Some(kind) => fault.with_kind(kind),
-            None => fault,
+/// The window a presentation is on the wire.
+pub(super) fn window_of(presentation: PresentationId) -> WindowId {
+    WindowId::from_u64(presentation.as_u64())
+        .expect("BUG: a presentation id packs a non-zero generation")
+}
+
+/// Where the owner answers one request: the seam's reply, with what the owner records from an
+/// answer and the window its errors name. Owner thread only. Clones answer the same request,
+/// and the first answer sent is the one taken.
+pub(crate) struct ReplySender<T> {
+    reply: Reply<T>,
+    window: WindowId,
+    /// The presentation's record of the element handles its answers reported.
+    issued: Rc<RefCell<IssuedHandles>>,
+    record: fn(&T, &mut IssuedHandles),
+}
+
+impl<T> Clone for ReplySender<T> {
+    fn clone(&self) -> Self {
+        Self {
+            reply: self.reply.clone(),
+            window: self.window,
+            issued: Rc::clone(&self.issued),
+            record: self.record,
         }
     }
 }
 
-/// The owner's half of an [`AgentReply`].
-pub(super) type ReplySender<T> = Sender<Result<T, AgentError>>;
+impl<T> ReplySender<T> {
+    pub(super) fn new(
+        reply: Reply<T>,
+        window: WindowId,
+        issued: Rc<RefCell<IssuedHandles>>,
+        record: fn(&T, &mut IssuedHandles),
+    ) -> Self {
+        Self {
+            reply,
+            window,
+            issued,
+            record,
+        }
+    }
+
+    /// Whether anyone can still take the answer: a request the owner holds whose asker is gone
+    /// is let go.
+    pub(crate) fn is_awaited(&self) -> bool {
+        self.reply.is_awaited()
+    }
+}
+
+impl<T> std::fmt::Debug for ReplySender<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ReplySender")
+            .field("window", &self.window)
+            .field("awaited", &self.is_awaited())
+            .finish_non_exhaustive()
+    }
+}
+
+/// The record of element handles `state`'s answers reported, shared by every reply.
+pub(super) fn issued_of(state: &PresentationState) -> Rc<RefCell<IssuedHandles>> {
+    state
+        .dev_agent
+        .borrow()
+        .as_ref()
+        .map(|slot| Rc::clone(&slot.issued))
+        .unwrap_or_default()
+}
 
 /// What an agent's reads have reported, enough to tell a handle that is
 /// gone from one that was never issued, in memory bounded by the render
@@ -380,22 +482,25 @@ impl IssuedHandles {
 
 /// Records the element handles a read reported, so a later call naming one
 /// that is no longer in the tree answers `gone` rather than `unknown_handle`.
-fn record_issued(tree: &Tree, issued: &Mutex<IssuedHandles>) {
+pub(super) fn record_issued(tree: &Tree, issued: &mut IssuedHandles) {
     fn walk(nodes: &[flui_protocol::Node], issued: &mut IssuedHandles) {
         for node in nodes {
             issued.record(node.id);
             walk(&node.children, issued);
         }
     }
-    walk(&tree.roots, &mut issued.lock());
+    walk(&tree.roots, issued);
 }
 
-/// Records the element handles an action's reading reported, as a read does.
-fn record_issued_outcome(outcome: &ActOutcome, issued: &Mutex<IssuedHandles>) {
+/// Records the element an action reported acting on, which a locator may have named, and the
+/// handles its reading reported, as a read does.
+pub(super) fn record_issued_outcome(outcome: &ActOutcome, issued: &mut IssuedHandles) {
+    if let Some(element) = outcome.element {
+        issued.record(element.element);
+    }
     match &outcome.snapshot {
         Some(SnapshotReading::Full(tree)) => record_issued(tree, issued),
         Some(SnapshotReading::Delta(delta)) => {
-            let mut issued = issued.lock();
             for node in &delta.appeared {
                 issued.record(node.id);
             }
@@ -408,103 +513,16 @@ fn record_issued_outcome(outcome: &ActOutcome, issued: &Mutex<IssuedHandles>) {
 }
 
 /// Records the element handles a locate reported, as a read does.
-fn record_issued_matches(matches: &Matches, issued: &Mutex<IssuedHandles>) {
-    let mut issued = issued.lock();
+pub(super) fn record_issued_matches(matches: &Matches, issued: &mut IssuedHandles) {
     for found in &matches.matches {
         issued.record(found.element.element);
     }
 }
 
 /// Records the element handles a wait's last observation reported.
-fn record_issued_wait(outcome: &WaitOutcome, issued: &Mutex<IssuedHandles>) {
-    let mut issued = issued.lock();
+pub(super) fn record_issued_wait(outcome: &WaitOutcome, issued: &mut IssuedHandles) {
     for node in &outcome.observation.matched {
         issued.record(node.id);
-    }
-}
-
-/// The answer to one [`SemanticsAgent::read`] or [`SemanticsAgent::act`],
-/// filled by the UI runtime's owner at its next drain.
-#[must_use = "a reply carries the result of the read or action"]
-#[derive(Debug)]
-pub struct AgentReply<T> {
-    rx: Receiver<Result<T, AgentError>>,
-    /// The agent's record of issued handles, and not its semantics handle:
-    /// an unanswered reply does not keep collection on.
-    issued: Arc<Mutex<IssuedHandles>>,
-    /// What the agent learns from a successful answer.
-    record: fn(&T, &Mutex<IssuedHandles>),
-    delivered: bool,
-    /// Held while someone can still take the answer: a parked wait whose
-    /// asker is gone is let go at the owner's next look.
-    asker: Arc<()>,
-}
-
-impl<T> AgentReply<T> {
-    fn deliver(&mut self, received: Result<T, AgentError>) -> Result<T, AgentError> {
-        self.delivered = true;
-        if let Ok(answer) = &received {
-            (self.record)(answer, &self.issued);
-        }
-        received
-    }
-
-    /// The answer, if the owner has sent it; `None` while it has not, and
-    /// after the answer has been taken once.
-    pub fn try_take(&mut self) -> Option<Result<T, AgentError>> {
-        if self.delivered {
-            return None;
-        }
-        match self.rx.try_recv() {
-            Ok(received) => Some(self.deliver(received)),
-            Err(TryRecvError::Empty) => None,
-            Err(TryRecvError::Disconnected) => Some(self.deliver(Err(AgentError::RuntimeGone))),
-        }
-    }
-
-    /// The answer, waiting up to `timeout` for it; `None` if it has not come
-    /// by then, and after the answer has been taken once. Never call this on
-    /// the UI runtime's owner thread: the owner answers only at its drain.
-    pub fn recv_timeout(&mut self, timeout: Duration) -> Option<Result<T, AgentError>> {
-        if self.delivered {
-            return None;
-        }
-        match self.rx.recv_timeout(timeout) {
-            Ok(received) => Some(self.deliver(received)),
-            Err(RecvTimeoutError::Timeout) => None,
-            Err(RecvTimeoutError::Disconnected) => Some(self.deliver(Err(AgentError::RuntimeGone))),
-        }
-    }
-}
-
-impl<T: Send + 'static> PendingAnswer<T> for AgentReply<T> {
-    fn try_take(&mut self) -> Option<Result<T, AgentFault>> {
-        AgentReply::try_take(self).map(|answer| answer.map_err(AgentFault::from))
-    }
-
-    fn recv_timeout(&mut self, timeout: Duration) -> Option<Result<T, AgentFault>> {
-        AgentReply::recv_timeout(self, timeout).map(|answer| answer.map_err(AgentFault::from))
-    }
-}
-
-/// A subscription's answer, handed to a hook as the stream it reads.
-struct EventsAnswer(AgentReply<EventStream>);
-
-impl PendingAnswer<AgentEvents> for EventsAnswer {
-    fn try_take(&mut self) -> Option<Result<AgentEvents, AgentFault>> {
-        self.0.try_take().map(Self::wrap)
-    }
-
-    fn recv_timeout(&mut self, timeout: Duration) -> Option<Result<AgentEvents, AgentFault>> {
-        self.0.recv_timeout(timeout).map(Self::wrap)
-    }
-}
-
-impl EventsAnswer {
-    fn wrap(answer: Result<EventStream, AgentError>) -> Result<AgentEvents, AgentFault> {
-        answer
-            .map(flui_view::__runtime::agent_events)
-            .map_err(AgentFault::from)
     }
 }
 
@@ -513,389 +531,16 @@ impl EventsAnswer {
 pub(crate) struct DevAgentSlot {
     /// The port every window handle answers through. Closed, and dropped,
     /// with the presentation.
-    pub(super) agent: Arc<DevAgentPort>,
+    port: Arc<DevAgentPort>,
     /// The semantics handle the window handles share; dead once the hook
     /// has dropped them all.
     collecting: Weak<SemanticsHandle>,
-}
-
-/// A capability to read one presentation's semantics tree and act on its
-/// elements, from any thread, through the UI runtime's owner inbox.
-///
-/// Vended by [`UiRuntime::semantics_agent`]. `Clone + Send + Sync`; clones
-/// share one semantics handle and one record of issued element handles.
-///
-/// Its [`ElementId`]s are scoped to the one presentation it was vended for:
-/// they are render identities, so another window's agent can report the same
-/// `e<n>` for a different element. A server that addresses several windows
-/// through one session keeps its own handle table over these (ADR-0095 §3).
-#[derive(Debug, Clone)]
-pub struct SemanticsAgent {
-    sender: UiCommandSender,
-    /// Keeps semantics collected while any clone is alive. `None` for the
-    /// development agent's, whose [`AgentWindow`]s hold the handle instead.
-    _semantics: Option<Arc<SemanticsHandle>>,
-    /// What this agent's reads reported. Touched only on the agent's side,
-    /// never by the owner.
-    issued: Arc<Mutex<IssuedHandles>>,
-}
-
-impl SemanticsAgent {
-    fn reply<T>(&self, record: fn(&T, &Mutex<IssuedHandles>)) -> (ReplySender<T>, AgentReply<T>) {
-        let (tx, rx) = crossbeam_channel::bounded(1);
-        (
-            tx,
-            AgentReply {
-                rx,
-                issued: Arc::clone(&self.issued),
-                record,
-                delivered: false,
-                asker: Arc::new(()),
-            },
-        )
-    }
-
-    /// Read the presentation's tree as ADR-0080 wire nodes, as of the last
-    /// committed frame.
-    ///
-    /// # Errors
-    ///
-    /// [`AgentError::InboxFull`] or [`AgentError::RuntimeGone`] when the
-    /// request cannot be enqueued; the reply carries the rest.
-    pub fn read(&self, query: ReadQuery) -> Result<AgentReply<Tree>, AgentError> {
-        let (command, answer) = self.read_command(query);
-        self.sender.send(command).map_err(AgentError::from_send)?;
-        Ok(answer)
-    }
-
-    fn read_command(&self, query: ReadQuery) -> (UiCommand, AgentReply<Tree>) {
-        let issued = query
-            .root
-            .is_none_or(|root| self.issued.lock().was_issued(root));
-        let (reply, answer) = self.reply(record_issued);
-        (
-            UiCommand::SemanticsRead {
-                presentation_id: self.sender.presentation_id,
-                query,
-                issued,
-                reply,
-            },
-            answer,
-        )
-    }
-
-    /// Perform `request` on its element, checked against the element as the
-    /// last committed frame shows it.
-    ///
-    /// The reply comes at the owner's next drain. `Ok` means the action was
-    /// delivered to the element's semantics handler, not that its effect has
-    /// happened: a handler may do its work later. A `GestureDetector`, behind
-    /// most tappable widgets, runs a semantics tap in the frame after the
-    /// drain, so its effect shows in a read two frames on, and a tap it drops
-    /// (the widget unmounted first) still answered `Ok`. Read the tree for
-    /// the effect rather than acting again, since a second action is a second
-    /// press.
-    ///
-    /// # Errors
-    ///
-    /// [`AgentError::InboxFull`] or [`AgentError::RuntimeGone`] when the
-    /// request cannot be enqueued; the reply carries the rest.
-    pub fn act(&self, request: ActionRequest) -> Result<AgentReply<()>, AgentError> {
-        let (command, answer) = self.action_command(request);
-        self.sender.send(command).map_err(AgentError::from_send)?;
-        Ok(answer)
-    }
-
-    fn action_command(&self, request: ActionRequest) -> (UiCommand, AgentReply<()>) {
-        let issued = self.issued.lock().was_issued(request.element);
-        let (reply, answer) = self.reply(|(), _| {});
-        (
-            UiCommand::SemanticsAgentAction {
-                presentation_id: self.sender.presentation_id,
-                request,
-                issued,
-                reply,
-            },
-            answer,
-        )
-    }
-
-    /// As [`Self::act`], and read the tree back once the action's effect has
-    /// settled, as `snapshot` asks: the frame the action ran in, or the next
-    /// one when it ran between frames.
-    ///
-    /// The outcome names the `semantic` path and the effect `ran` (the action
-    /// reached the element's handler), the element, and the reading: with
-    /// [`Snapshot::Delta`], what appeared, went and changed since the tree
-    /// the action started on; with [`Snapshot::Full`], the whole tree; with
-    /// [`Snapshot::None`] nothing, and the reply comes at the drain. A tree
-    /// that cannot be read back afterwards (the window closed first, or the
-    /// tree is malformed) is `readback_failed` on an outcome that still says
-    /// the action ran.
-    ///
-    /// # Errors
-    ///
-    /// [`AgentError::InboxFull`] or [`AgentError::RuntimeGone`] when the
-    /// request cannot be enqueued; the reply carries the rest, as for
-    /// [`Self::act`].
-    pub fn act_and_read(
-        &self,
-        request: ActionRequest,
-        snapshot: Snapshot,
-    ) -> Result<AgentReply<ActOutcome>, AgentError> {
-        let (command, answer) = self.action_read_command(request, snapshot);
-        self.sender.send(command).map_err(AgentError::from_send)?;
-        Ok(answer)
-    }
-
-    fn action_read_command(
-        &self,
-        request: ActionRequest,
-        snapshot: Snapshot,
-    ) -> (UiCommand, AgentReply<ActOutcome>) {
-        let issued = self.issued.lock().was_issued(request.element);
-        let (reply, answer) = self.reply(record_issued_outcome);
-        (
-            UiCommand::SemanticsAgentActionRead {
-                presentation_id: self.sender.presentation_id,
-                request,
-                snapshot,
-                issued,
-                reply,
-            },
-            answer,
-        )
-    }
-
-    /// Hold out for `params.condition` in this agent's window, without polling: the owner
-    /// evaluates it as the request arrives, after each frame it presents and when the deadline
-    /// passes, and answers once it holds or time is up.
-    ///
-    /// A wait that runs out is still an answer: `satisfied: false`, with the last observation
-    /// and why the window had not settled. `Frames` counts frames the owner presents after the
-    /// request and keeps them coming. A condition on an event holds once the window emits an
-    /// event of that kind after the request; it never holds for `input` or `announcement`, which
-    /// the window does not emit yet, so a wait on one runs to its timeout. The timeout is on the
-    /// window's clock, 5 s when absent and at most a day.
-    ///
-    /// # Errors
-    ///
-    /// [`AgentError::InboxFull`] or [`AgentError::RuntimeGone`] when the request cannot be
-    /// enqueued; the reply carries the rest, among them [`AgentError::TooManyWaits`] when the
-    /// window already holds as many waits as it admits.
-    pub fn wait(&self, params: WaitParams) -> Result<AgentReply<WaitOutcome>, AgentError> {
-        let (command, answer) = self.wait_command(params);
-        self.sender.send(command).map_err(AgentError::from_send)?;
-        Ok(answer)
-    }
-
-    fn wait_command(&self, params: WaitParams) -> (UiCommand, AgentReply<WaitOutcome>) {
-        let (reply, answer) = self.reply(record_issued_wait);
-        let reply = super::agent_wait::WaitReply::new(reply, Arc::downgrade(&answer.asker));
-        (
-            UiCommand::SemanticsAgentWait {
-                presentation_id: self.sender.presentation_id,
-                params: Box::new(params),
-                reply,
-            },
-            answer,
-        )
-    }
-
-    /// Read one of the window's trees, as the typed snapshot it describes itself with: the
-    /// element tree (`Widgets`), the render tree (`Render`) or the layers of the last painted
-    /// scene (`Layers`), or the subtree under `params.root`. `params.window` is the caller's own
-    /// bookkeeping: the read is this window's.
-    ///
-    /// Ids in the answer are the tree's own handles (`v3.2`, `r12`, `l4.37`); `root` takes one,
-    /// or a `p3/v3.2` reference that must name this window. The element and render trees are
-    /// read at the owner's turn; the layer tree belongs to the scene a frame paints, so its read
-    /// is parked and answered with the next scene the window shows (the window is asked to
-    /// repaint, and the host must pump it). A node whose own `inspect` panics is
-    /// recorded on it and the read goes on; at most 4096 nodes are reported.
-    ///
-    /// # Errors
-    ///
-    /// [`AgentError::InboxFull`] or [`AgentError::RuntimeGone`] when the request cannot be
-    /// enqueued; the reply carries the rest, among them [`AgentError::UnknownPresentation`] for
-    /// a reference to another window, [`AgentError::NodeGone`] for a root that is no longer in
-    /// its tree, [`AgentError::TreeBusy`] while a frame holds the tree and
-    /// `TreeBusy` again when the window already parks as many layer reads as it admits.
-    pub fn inspect(
-        &self,
-        target: InspectTarget,
-        params: InspectParams,
-    ) -> Result<AgentReply<InspectReading>, AgentError> {
-        let (command, answer) = self.inspect_command(target, params);
-        self.sender.send(command).map_err(AgentError::from_send)?;
-        Ok(answer)
-    }
-
-    fn inspect_command(
-        &self,
-        target: InspectTarget,
-        params: InspectParams,
-    ) -> (UiCommand, AgentReply<InspectReading>) {
-        let (reply, answer) = self.reply(|_, _| {});
-        (
-            UiCommand::SemanticsAgentInspect {
-                presentation_id: self.sender.presentation_id,
-                target,
-                params: Box::new(params),
-                reply,
-            },
-            answer,
-        )
-    }
-
-    /// Subscribe to this agent's window's events: the kinds `filters` select, in the order the
-    /// window emits them, from the moment the owner registers the subscription. The reply
-    /// carries the stream; dropping the stream ends the subscription.
-    ///
-    /// A subscriber that reads slower than the window emits misses events, counted, never
-    /// silently: its queue holds 256, and the next event that fits is preceded by a `gap` naming
-    /// how many were missed. `Input` and `Announcement` are accepted as filters but the window
-    /// does not emit them yet: a stream that selects only those stays silent until the window
-    /// closes.
-    ///
-    /// # Errors
-    ///
-    /// [`AgentError::InboxFull`] or [`AgentError::RuntimeGone`] when the request cannot be
-    /// enqueued; the reply carries the rest, among them [`AgentError::TooManySubscriptions`] and
-    /// [`AgentError::InvalidArgument`] for no filter at all.
-    pub fn subscribe(
-        &self,
-        filters: Vec<EventFilter>,
-    ) -> Result<AgentReply<EventStream>, AgentError> {
-        let (command, answer) = self.subscribe_command(filters);
-        self.sender.send(command).map_err(AgentError::from_send)?;
-        Ok(answer)
-    }
-
-    fn subscribe_command(&self, filters: Vec<EventFilter>) -> (UiCommand, AgentReply<EventStream>) {
-        let (reply, answer) = self.reply(|_, _| {});
-        (
-            UiCommand::SemanticsAgentSubscribe {
-                presentation_id: self.sender.presentation_id,
-                filters,
-                reply,
-            },
-            answer,
-        )
-    }
-
-    /// Resolve `params.locator` over the last committed tree: every match, or
-    /// the ones `pick` and `max_matches` leave. No match is an empty list.
-    ///
-    /// # Errors
-    ///
-    /// [`AgentError::InboxFull`] or [`AgentError::RuntimeGone`] when the
-    /// request cannot be enqueued; the reply carries the rest.
-    pub fn locate(&self, params: LocateParams) -> Result<AgentReply<Matches>, AgentError> {
-        let (command, answer) = self.locate_command(params);
-        self.sender.send(command).map_err(AgentError::from_send)?;
-        Ok(answer)
-    }
-
-    fn locate_command(&self, params: LocateParams) -> (UiCommand, AgentReply<Matches>) {
-        let (reply, answer) = self.reply(record_issued_matches);
-        (
-            UiCommand::SemanticsLocate {
-                presentation_id: self.sender.presentation_id,
-                params: Box::new(params),
-                reply,
-            },
-            answer,
-        )
-    }
-
-    /// The facts that decide whether input reaches `params.element`, read in
-    /// one owner turn: the last committed tree's, and the render hit-test's at
-    /// the point the action would land. An element the tree does not hold
-    /// answers `attached: false`, not a fault.
-    ///
-    /// `stable` compares the element's bounds with those the previous call
-    /// read; the first call answers unstable.
-    ///
-    /// # Errors
-    ///
-    /// [`AgentError::InboxFull`] or [`AgentError::RuntimeGone`] when the
-    /// request cannot be enqueued; the reply carries the rest.
-    pub fn actionability(
-        &self,
-        params: ActionabilityParams,
-    ) -> Result<AgentReply<Actionability>, AgentError> {
-        let (command, answer) = self.actionability_command(params);
-        self.sender.send(command).map_err(AgentError::from_send)?;
-        Ok(answer)
-    }
-
-    fn actionability_command(
-        &self,
-        params: ActionabilityParams,
-    ) -> (UiCommand, AgentReply<Actionability>) {
-        let (reply, answer) = self.reply(|_, _| {});
-        (
-            UiCommand::ElementActionability {
-                presentation_id: self.sender.presentation_id,
-                params,
-                reply,
-            },
-            answer,
-        )
-    }
-
-    /// The announcements the presentation delivered to assistive technology
-    /// after `params.since`, oldest first: a read leaves out the announcer
-    /// nodes that carry them, so this is where an agent hears them.
-    ///
-    /// # Errors
-    ///
-    /// [`AgentError::InboxFull`] or [`AgentError::RuntimeGone`] when the
-    /// request cannot be enqueued; the reply carries the rest.
-    pub fn announcements(
-        &self,
-        params: AnnouncementsParams,
-    ) -> Result<AgentReply<AnnouncementJournal>, AgentError> {
-        let (command, answer) = self.announcements_command(params);
-        self.sender.send(command).map_err(AgentError::from_send)?;
-        Ok(answer)
-    }
-
-    fn announcements_command(
-        &self,
-        params: AnnouncementsParams,
-    ) -> (UiCommand, AgentReply<AnnouncementJournal>) {
-        let (reply, answer) = self.reply(|_, _| {});
-        (
-            UiCommand::SemanticsAnnouncements {
-                presentation_id: self.sender.presentation_id,
-                params,
-                reply,
-            },
-            answer,
-        )
-    }
-
-    fn motion_command(
-        &self,
-        request: flui_protocol::MotionRequest,
-    ) -> (UiCommand, AgentReply<flui_protocol::MotionState>) {
-        let (reply, answer) = self.reply(|_, _| {});
-        (
-            UiCommand::Motion {
-                presentation_id: self.sender.presentation_id,
-                request,
-                reply,
-            },
-            answer,
-        )
-    }
+    /// The element handles this presentation's answers reported.
+    issued: Rc<RefCell<IssuedHandles>>,
 }
 
 /// The development seam's port: a [`flui_view::dev_agent::AgentWindow`]
-/// reads and acts through the agent the UI runtime vended for it, while its
-/// presentation is open.
+/// enqueues its calls through it, while its presentation is open.
 ///
 /// A call on another thread can hold the port (upgraded from the window's
 /// weak reference) past the presentation's close, so the port's lifetime
@@ -907,36 +552,35 @@ impl SemanticsAgent {
 /// returns no call is still enqueueing and none that starts later is
 /// admitted. The lock is held across a non-blocking enqueue only.
 pub(crate) struct DevAgentPort {
-    agent: SemanticsAgent,
+    sender: UiCommandSender,
+    window: WindowId,
     open: RwLock<bool>,
 }
 
+// A refusal is the protocol's error object itself, which the window answers with.
+// The error object is under the lint's size only where a pointer is 32 bits.
+#[cfg_attr(
+    target_pointer_width = "64",
+    expect(
+        clippy::result_large_err,
+        reason = "the error object is the answer, returned once per call"
+    )
+)]
 impl DevAgentPort {
-    /// Run `enqueue` if the window is open, holding admission open for it.
-    fn admit<T, P>(
-        &self,
-        prepare: impl FnOnce(&SemanticsAgent) -> (UiCommand, P),
-    ) -> Result<AgentAnswer<T>, AgentFault>
-    where
-        T: Send + 'static,
-        P: PendingAnswer<T> + 'static,
-    {
-        let (admission, answer) = {
+    /// Enqueue `command` if the window is open, holding admission open for it.
+    fn admit(&self, command: UiCommand) -> Result<(), ErrorObject> {
+        let admission = {
             let open = self.open.read();
             if !*open {
-                return Err(AgentFault::window_gone());
+                return Err(AgentError::PresentationGone.into_error(self.window));
             }
-            let (command, answer) = prepare(&self.agent);
-            (self.agent.sender.enqueue(command), answer)
+            self.sender.enqueue(command)
         };
         // A wake can re-enter this port or synchronously close its presentation.
         // Only the enqueue belongs inside the close/admission fence.
-        self.agent
-            .sender
+        self.sender
             .deliver_enqueued(admission)
-            .map_err(AgentError::from_send)
-            .map_err(AgentFault::from)?;
-        Ok(flui_view::__runtime::agent_answer(answer))
+            .map_err(|error| AgentError::from_send(error).into_error(self.window))
     }
 
     /// Close admission, waiting for any call already admitted to finish
@@ -951,64 +595,24 @@ impl AgentPort for DevAgentPort {
         *self.open.read()
     }
 
-    fn read(&self, query: ReadQuery) -> Result<AgentAnswer<Tree>, AgentFault> {
-        self.admit(|agent| agent.read_command(query))
-    }
-
-    fn act(&self, request: ActionRequest) -> Result<AgentAnswer<()>, AgentFault> {
-        self.admit(|agent| agent.action_command(request))
-    }
-
-    fn act_and_read(
-        &self,
-        request: ActionRequest,
-        snapshot: Snapshot,
-    ) -> Result<AgentAnswer<ActOutcome>, AgentFault> {
-        self.admit(|agent| agent.action_read_command(request, snapshot))
-    }
-
-    fn locate(&self, params: LocateParams) -> Result<AgentAnswer<Matches>, AgentFault> {
-        self.admit(|agent| agent.locate_command(params))
-    }
-
-    fn wait(&self, params: WaitParams) -> Result<AgentAnswer<WaitOutcome>, AgentFault> {
-        self.admit(|agent| agent.wait_command(params))
-    }
-
-    fn inspect(
-        &self,
-        target: InspectTarget,
-        params: InspectParams,
-    ) -> Result<AgentAnswer<InspectReading>, AgentFault> {
-        self.admit(|agent| agent.inspect_command(target, params))
-    }
-
-    fn subscribe(&self, filters: Vec<EventFilter>) -> Result<AgentAnswer<AgentEvents>, AgentFault> {
-        self.admit(|agent| {
-            let (command, answer) = agent.subscribe_command(filters);
-            (command, EventsAnswer(answer))
+    fn call(&self, call: WindowCall) -> Result<(), ErrorObject> {
+        self.admit(UiCommand::Agent {
+            presentation_id: self.sender.presentation_id,
+            call,
         })
     }
 
-    fn actionability(
+    fn subscribe(
         &self,
-        params: ActionabilityParams,
-    ) -> Result<AgentAnswer<Actionability>, AgentFault> {
-        self.admit(|agent| agent.actionability_command(params))
-    }
-
-    fn motion(
-        &self,
-        request: flui_protocol::MotionRequest,
-    ) -> Result<AgentAnswer<flui_protocol::MotionState>, AgentFault> {
-        self.admit(|agent| agent.motion_command(request))
-    }
-
-    fn announcements(
-        &self,
-        params: AnnouncementsParams,
-    ) -> Result<AgentAnswer<AnnouncementJournal>, AgentFault> {
-        self.admit(|agent| agent.announcements_command(params))
+        filters: Vec<EventFilter>,
+    ) -> Result<AgentAnswer<AgentEvents>, ErrorObject> {
+        let (reply, answer) = flui_view::__runtime::reply_pair();
+        self.admit(UiCommand::AgentSubscribe {
+            presentation_id: self.sender.presentation_id,
+            filters,
+            reply,
+        })?;
+        Ok(answer)
     }
 }
 
@@ -1017,30 +621,40 @@ impl Drop for DevAgentSlot {
     /// now on, even through a port a call still holds, and nothing is
     /// enqueued for the closed window after this returns.
     fn drop(&mut self) {
-        self.agent.close();
+        self.port.close();
     }
 }
 
 impl DevAgentSlot {
     pub(crate) fn withdraw(&self) {
-        self.agent.close();
+        self.port.close();
     }
 }
 
-/// Sends `result` to an agent that may have stopped waiting. A receiver that
-/// is gone is traced by the element and code alone: the answer can carry
-/// labels and values, which stay out of the log.
+/// Sends `result` to an agent that may have stopped waiting: an answer's element handles are
+/// recorded first, and an error becomes the protocol's error object. A receiver that is gone is
+/// traced by the element and code alone: the answer can carry labels and values, which stay out
+/// of the log.
 pub(super) fn send_reply<T>(
     reply: &ReplySender<T>,
     element: Option<ElementId>,
     result: Result<T, AgentError>,
 ) {
     let code = result.as_ref().err().map(AgentError::code);
-    if let Err(TrySendError::Disconnected(_) | TrySendError::Full(_)) = reply.try_send(result) {
+    // The element a failure names is traced even where the caller named none.
+    let element = element.or_else(|| result.as_ref().err().and_then(AgentError::element));
+    let answer = match result {
+        Ok(value) => {
+            (reply.record)(&value, &mut reply.issued.borrow_mut());
+            Ok(value)
+        }
+        Err(error) => Err(error.into_error(reply.window)),
+    };
+    if !reply.reply.send(answer) {
         tracing::trace!(
             element = element.map(ElementId::get),
             code = code.map(ErrorCode::name),
-            "dropping a semantics agent reply nobody waits for"
+            "dropping a development agent reply nobody waits for"
         );
     }
 }
@@ -1091,58 +705,207 @@ impl PendingActRead {
     }
 }
 
-impl UiRuntime {
-    /// A capability to read `presentation`'s semantics tree and act on its
-    /// elements, or `None` when this UI runtime does not host it.
-    ///
-    /// Vending one turns semantics collection on for the presentation and
-    /// requests a frame, which builds the first tree; until it commits, a
-    /// read answers [`AgentError::NoTreeYet`].
-    #[must_use]
-    pub fn semantics_agent(&self, presentation: PresentationId) -> Option<SemanticsAgent> {
-        let state = self.presentations.get(presentation)?;
-        let handle = state.semantics_host().ensure_semantics();
-        self.request_redraw_for(state);
-        Some(self.agent_for(presentation, Some(Arc::new(handle))))
-    }
+/// How `state` places its semantics on the wire: its device pixel ratio, and `window`.
+fn placement_of(state: &PresentationState, window: WindowId) -> Placement {
+    state.pipeline().with(|pipeline| {
+        let ratio = DevicePixelRatio::try_new(pipeline.device_pixel_ratio())
+            .unwrap_or(DevicePixelRatio::ONE);
+        Placement::new(ratio, window)
+    })
+}
 
-    fn agent_for(
-        &self,
-        presentation: PresentationId,
-        semantics: Option<Arc<SemanticsHandle>>,
-    ) -> SemanticsAgent {
-        let mut sender = self.sender_prototype.clone();
-        sender.presentation_id = presentation;
-        SemanticsAgent {
-            sender,
-            _semantics: semantics,
-            issued: Arc::new(Mutex::new(IssuedHandles::default())),
+/// The owner half of `semantics.read`: the committed tree as wire nodes.
+pub(super) fn read_tree(
+    state: &PresentationState,
+    window: WindowId,
+    query: &ReadQuery,
+    issued: bool,
+) -> Result<Tree, AgentError> {
+    let placement = placement_of(state, window);
+    state.pipeline().with(|pipeline| {
+        pipeline
+            .semantics_owner()
+            .ok_or(AgentError::NoTreeYet)?
+            .read_wire(query, placement)
+            .map_err(|error| AgentError::from_read(error, issued))
+    })
+}
+
+/// The owner half of `semantics.locate`: every match in the committed tree, or the ones `pick`
+/// and `max_matches` leave.
+pub(super) fn locate(
+    state: &PresentationState,
+    window: WindowId,
+    params: &LocateParams,
+) -> Result<Matches, AgentError> {
+    let placement = placement_of(state, window);
+    state.pipeline().with(|pipeline| {
+        pipeline
+            .semantics_owner()
+            .ok_or(AgentError::NoTreeYet)?
+            .locate_wire(params, placement)
+            .map_err(AgentError::from_locate)
+    })
+}
+
+/// The owner half of `element.actionability`.
+///
+/// Three steps, none inside another's borrow. The semantics owner says where the pointer would
+/// land; the render tree's hit-test runs there, outside every semantics borrow because render
+/// objects are user code; then the owner reads the facts against the path the hit-test found. A
+/// render object that panics in the hit-test leaves its payload in `hit_panic`, for the caller to
+/// answer and resume.
+pub(super) fn actionability(
+    state: &PresentationState,
+    window: WindowId,
+    params: &ActionabilityParams,
+    hit_panic: &mut Option<Box<dyn std::any::Any + Send>>,
+) -> Result<Actionability, AgentError> {
+    let placement = placement_of(state, window);
+    let point = state.pipeline().with(|pipeline| {
+        pipeline
+            .semantics_owner()
+            .ok_or(AgentError::NoTreeYet)?
+            .actionability_point(params.element, params.point, placement)
+            .map_err(AgentError::from_unscoped_read)
+    })?;
+
+    let mut hit = Vec::new();
+    if let Some(point) = point {
+        let mut result = flui_interaction::pointer::HitTestResult::new();
+        // No physical contact: the check asks about the element, not
+        // about the reach of a finger or a stylus.
+        match state.renderer().hit_test_in_view(
+            &mut result,
+            flui_foundation::geometry::Offset::new(point.x, point.y),
+            flui_interaction::events::PointerKind::Virtual,
+            0,
+        ) {
+            ViewHitTest::Answered {
+                panic: Some(payload),
+            } => {
+                *hit_panic = Some(payload);
+                return Err(AgentError::HitTestPanicked {
+                    element: params.element.element,
+                });
+            }
+            ViewHitTest::Answered { panic: None } => {}
+            ViewHitTest::TreeBusy => return Err(AgentError::RenderTreeBusy),
         }
+        hit.extend(result.path().iter().map(|entry| entry.target));
     }
 
+    let read = |previous| {
+        state.pipeline().with(|pipeline| {
+            pipeline
+                .semantics_owner()
+                .ok_or(AgentError::NoTreeYet)?
+                .actionability_wire(params.element, point, previous, &hit, placement)
+                .map_err(AgentError::from_unscoped_read)
+        })
+    };
+    let facts = read(None)?;
+    let previous = state.agent_stability.borrow_mut().observe(
+        params.element,
+        state.tree_revision(),
+        !state.has_pending_work_snapshot(),
+        facts.rect,
+    );
+    match previous {
+        Some(_) => read(previous),
+        None => Ok(facts),
+    }
+}
+
+/// The owner half of `semantics.act` once its target is an element: the tree the action starts
+/// on is read first (for a delta), then the action is resolved against the committed tree and
+/// its handler invoked through the path an assistive technology's action takes. A panic is the
+/// caller's to contain; `if_panics` says how far the action got.
+pub(super) fn act(
+    state: &PresentationState,
+    window: WindowId,
+    request: &ActionRequest,
+    snapshot: Snapshot,
+    issued: bool,
+    if_panics: &PanicAnswer,
+) -> Result<Served, AgentError> {
+    let before = if snapshot == Snapshot::Delta {
+        let placement = placement_of(state, window);
+        Some(state.pipeline().with(|pipeline| {
+            pipeline
+                .semantics_owner()
+                .ok_or(AgentError::NoTreeYet)?
+                .snapshot_wire(placement)
+                .map_err(AgentError::from_unscoped_read)
+        })?)
+    } else {
+        None
+    };
+    let resolved = state.pipeline().with(|pipeline| {
+        pipeline
+            .semantics_owner()
+            .ok_or(AgentError::NoTreeYet)?
+            .resolve_wire_action(request)
+            .map_err(|error| AgentError::from_act(error, issued))
+    })?;
+    let element = request.element;
+    if_panics.set(AgentError::HandlerPanicked { element });
+    state
+        .dispatch_semantics_action(resolved)
+        .map_err(|error| match error {
+            SemanticsActionError::PresentationClosed => AgentError::PresentationGone,
+            SemanticsActionError::SemanticsUnavailable => AgentError::NoTreeYet,
+            SemanticsActionError::UnsupportedAction { .. } => AgentError::ActionUnsupported {
+                element,
+                action: request.action,
+            },
+            SemanticsActionError::Disabled { .. } => AgentError::Disabled { element },
+            _ => AgentError::NodeNotFound { element, issued },
+        })?;
+    let mut outcome = ActOutcome::new(InputPath::Semantic, Effect::new(EffectKind::Ran));
+    outcome.element = Some(ElementRef::new(window, element));
+    Ok(match snapshot {
+        Snapshot::Delta | Snapshot::Full => Served::Reading(ReadingOwed {
+            outcome,
+            snapshot,
+            before,
+        }),
+        _ => Served::Answered(outcome),
+    })
+}
+
+impl UiRuntime {
     /// The development agent's window for `presentation`, or `None` when this
     /// UI runtime does not host it.
     ///
-    /// The presentation keeps one [`SemanticsAgent`] for the development
-    /// agent, so every window handle shares one record of issued element
-    /// handles. The returned [`AgentWindow`] holds that agent weakly: closing
-    /// the presentation drops it, and every call on the window answers
-    /// `gone`. It holds the presentation's semantics handle strongly: while
-    /// any window handle is alive the presentation collects semantics, and
-    /// once the hook has dropped them all collection stops on the next
-    /// frame. A call made while none is alive turns collection back on and
-    /// requests a frame, as [`Self::semantics_agent`] does.
+    /// The presentation keeps one port for the development agent, so every
+    /// window handle shares one record of issued element handles. The
+    /// returned [`AgentWindow`] holds that port weakly: closing the
+    /// presentation drops it, and every call on the window answers `gone`.
+    /// It holds the presentation's semantics handle strongly: while any
+    /// window handle is alive the presentation collects semantics, and once
+    /// the hook has dropped them all collection stops on the next frame.
+    /// Vending one while none is alive turns collection back on and requests
+    /// a frame, which builds the tree; until it commits, a read answers
+    /// `busy`.
     #[must_use]
     pub fn dev_agent_window(&self, presentation: PresentationId) -> Option<AgentWindow> {
         let state = self.presentations.get(presentation)?;
-        let (agent, collecting, fresh) = {
+        let window = window_of(presentation);
+        let (port, collecting, fresh) = {
             let mut slot = state.dev_agent.borrow_mut();
-            let slot = slot.get_or_insert_with(|| DevAgentSlot {
-                agent: Arc::new(DevAgentPort {
-                    agent: self.agent_for(presentation, None),
-                    open: RwLock::new(true),
-                }),
-                collecting: Weak::new(),
+            let slot = slot.get_or_insert_with(|| {
+                let mut sender = self.sender_prototype.clone();
+                sender.presentation_id = presentation;
+                DevAgentSlot {
+                    port: Arc::new(DevAgentPort {
+                        sender,
+                        window,
+                        open: RwLock::new(true),
+                    }),
+                    collecting: Weak::new(),
+                    issued: Rc::default(),
+                }
             });
             let kept = slot.collecting.upgrade();
             let fresh = kept.is_none();
@@ -1151,200 +914,24 @@ impl UiRuntime {
                 slot.collecting = Arc::downgrade(&handle);
                 handle
             });
-            (Arc::clone(&slot.agent), collecting, fresh)
+            (Arc::clone(&slot.port), collecting, fresh)
         };
         if fresh {
             self.request_redraw_for(state);
         }
-        let window = WindowId::from_u64(presentation.as_u64())
-            .expect("BUG: a presentation id packs a non-zero generation");
-        let port: Weak<dyn AgentPort> = Arc::downgrade(&agent) as _;
+        let port: Weak<dyn AgentPort> = Arc::downgrade(&port) as _;
         Some(flui_view::__runtime::agent_window(window, port, collecting))
-    }
-
-    /// The owner half of [`SemanticsAgent::read`].
-    pub(super) fn serve_semantics_read(
-        &self,
-        presentation: PresentationId,
-        query: &ReadQuery,
-        issued: bool,
-    ) -> Result<Tree, AgentError> {
-        let state = self
-            .presentations
-            .get(presentation)
-            .ok_or(AgentError::PresentationGone)?;
-        let window = WindowId::from_u64(presentation.as_u64())
-            .expect("BUG: a presentation id packs a non-zero generation");
-        state.pipeline().with(|pipeline| {
-            let ratio = DevicePixelRatio::try_new(pipeline.device_pixel_ratio())
-                .unwrap_or(DevicePixelRatio::ONE);
-            pipeline
-                .semantics_owner()
-                .ok_or(AgentError::NoTreeYet)?
-                .read_wire(query, Placement::new(ratio, window))
-                .map_err(|error| AgentError::from_read(error, issued))
-        })
-    }
-
-    /// The owner half of [`SemanticsAgent::locate`].
-    pub(super) fn serve_semantics_locate(
-        &self,
-        presentation: PresentationId,
-        params: &LocateParams,
-    ) -> Result<Matches, AgentError> {
-        let state = self
-            .presentations
-            .get(presentation)
-            .ok_or(AgentError::PresentationGone)?;
-        let window = WindowId::from_u64(presentation.as_u64())
-            .expect("BUG: a presentation id packs a non-zero generation");
-        state.pipeline().with(|pipeline| {
-            let ratio = DevicePixelRatio::try_new(pipeline.device_pixel_ratio())
-                .unwrap_or(DevicePixelRatio::ONE);
-            pipeline
-                .semantics_owner()
-                .ok_or(AgentError::NoTreeYet)?
-                .locate_wire(params, Placement::new(ratio, window))
-                .map_err(AgentError::from_locate)
-        })
-    }
-
-    /// The owner half of [`SemanticsAgent::actionability`].
-    ///
-    /// Three steps, none inside another's borrow. The semantics owner says
-    /// where the pointer would land; the render tree's hit-test runs there,
-    /// outside every semantics borrow because render objects are user code;
-    /// then the owner reads the facts against the path the hit-test found.
-    /// A render object that panics in the hit-test leaves its payload in
-    /// `hit_panic`, for the caller to answer and resume.
-    pub(super) fn serve_element_actionability(
-        &self,
-        presentation: PresentationId,
-        params: &ActionabilityParams,
-        hit_panic: &mut Option<Box<dyn std::any::Any + Send>>,
-    ) -> Result<Actionability, AgentError> {
-        let state = self
-            .presentations
-            .get(presentation)
-            .ok_or(AgentError::PresentationGone)?;
-        let window = WindowId::from_u64(presentation.as_u64())
-            .expect("BUG: a presentation id packs a non-zero generation");
-        let (placement, point) = state.pipeline().with(|pipeline| {
-            let ratio = DevicePixelRatio::try_new(pipeline.device_pixel_ratio())
-                .unwrap_or(DevicePixelRatio::ONE);
-            let placement = Placement::new(ratio, window);
-            let point = pipeline
-                .semantics_owner()
-                .ok_or(AgentError::NoTreeYet)?
-                .actionability_point(params.element, params.point, placement)
-                .map_err(AgentError::from_unscoped_read)?;
-            Ok::<_, AgentError>((placement, point))
-        })?;
-
-        let mut hit = Vec::new();
-        if let Some(point) = point {
-            let mut result = flui_interaction::pointer::HitTestResult::new();
-            // No physical contact: the check asks about the element, not
-            // about the reach of a finger or a stylus.
-            match state.renderer().hit_test_in_view(
-                &mut result,
-                flui_foundation::geometry::Offset::new(point.x, point.y),
-                flui_interaction::events::PointerKind::Virtual,
-                0,
-            ) {
-                ViewHitTest::Answered {
-                    panic: Some(payload),
-                } => {
-                    *hit_panic = Some(payload);
-                    return Err(AgentError::HitTestPanicked {
-                        element: params.element.element,
-                    });
-                }
-                ViewHitTest::Answered { panic: None } => {}
-                ViewHitTest::TreeBusy => return Err(AgentError::RenderTreeBusy),
-            }
-            hit.extend(result.path().iter().map(|entry| entry.target));
-        }
-
-        let read = |previous| {
-            state.pipeline().with(|pipeline| {
-                pipeline
-                    .semantics_owner()
-                    .ok_or(AgentError::NoTreeYet)?
-                    .actionability_wire(params.element, point, previous, &hit, placement)
-                    .map_err(AgentError::from_unscoped_read)
-            })
-        };
-        let facts = read(None)?;
-        let previous = state.agent_stability.borrow_mut().observe(
-            params.element,
-            state.tree_revision(),
-            !state.has_pending_work_snapshot(),
-            facts.rect,
-        );
-        match previous {
-            Some(_) => read(previous),
-            None => Ok(facts),
-        }
-    }
-
-    /// The owner half of [`SemanticsAgent::act_and_read`]: the tree the
-    /// action starts on is read first (for a delta), then the action is
-    /// served as [`SemanticsAgent::act`] is. A caller contains a panic as it
-    /// does for an action.
-    pub(super) fn serve_semantics_act_read(
-        &self,
-        presentation: PresentationId,
-        request: &ActionRequest,
-        snapshot: Snapshot,
-        issued: bool,
-        reached_handler: &Cell<bool>,
-    ) -> Result<Served, AgentError> {
-        let state = self
-            .presentations
-            .get(presentation)
-            .ok_or(AgentError::PresentationGone)?;
-        let window = WindowId::from_u64(presentation.as_u64())
-            .expect("BUG: a presentation id packs a non-zero generation");
-        let before = if snapshot == Snapshot::Delta {
-            Some(state.pipeline().with(|pipeline| {
-                let ratio = DevicePixelRatio::try_new(pipeline.device_pixel_ratio())
-                    .unwrap_or(DevicePixelRatio::ONE);
-                pipeline
-                    .semantics_owner()
-                    .ok_or(AgentError::NoTreeYet)?
-                    .snapshot_wire(Placement::new(ratio, window))
-                    .map_err(AgentError::from_unscoped_read)
-            })?)
-        } else {
-            None
-        };
-        self.serve_semantics_act(presentation, request, issued, reached_handler)?;
-        let mut outcome = ActOutcome::new(InputPath::Semantic, Effect::new(EffectKind::Ran));
-        outcome.element = Some(ElementRef::new(window, request.element));
-        Ok(match snapshot {
-            Snapshot::Delta | Snapshot::Full => Served::Reading(ReadingOwed {
-                outcome,
-                snapshot,
-                before,
-            }),
-            _ => Served::Answered(outcome),
-        })
     }
 
     /// Holds an action's reply until a frame has passed, and asks for one, so
     /// the reading comes even when the action dirtied nothing.
     pub(super) fn park_act_read(
         &self,
-        presentation: PresentationId,
+        state: &PresentationState,
         owed: ReadingOwed,
         reply: ReplySender<ActOutcome>,
     ) {
         let pending = PendingActRead { owed, reply };
-        let Some(state) = self.presentations.get(presentation) else {
-            pending.abandon();
-            return;
-        };
         let displaced = {
             let mut parked = state.agent_reads.borrow_mut();
             parked.push(pending);
@@ -1359,18 +946,12 @@ impl UiRuntime {
     /// Takes the readings the presentation owes, now that a frame has passed
     /// since the actions that owe them ran: the committed tree, as the frame
     /// left it, against the tree each action started on.
-    pub(super) fn complete_agent_reads(state: &crate::presentation::PresentationState) {
+    pub(super) fn complete_agent_reads(state: &PresentationState) {
         let owed = std::mem::take(&mut *state.agent_reads.borrow_mut());
         if owed.is_empty() {
             return;
         }
-        let window = WindowId::from_u64(state.id().as_u64())
-            .expect("BUG: a presentation id packs a non-zero generation");
-        let placement = state.pipeline().with(|pipeline| {
-            let ratio = DevicePixelRatio::try_new(pipeline.device_pixel_ratio())
-                .unwrap_or(DevicePixelRatio::ONE);
-            Placement::new(ratio, window)
-        });
+        let placement = placement_of(state, window_of(state.id()));
         let now = state.pipeline().with(|pipeline| {
             pipeline
                 .semantics_owner()
@@ -1406,64 +987,6 @@ impl UiRuntime {
             let element = outcome.element.map(|element| element.element);
             send_reply(&reply, element, Ok(outcome));
         }
-    }
-
-    /// The owner half of [`SemanticsAgent::announcements`]. With
-    /// accessibility off there is no owner and nothing was delivered.
-    pub(super) fn serve_semantics_announcements(
-        &self,
-        presentation: PresentationId,
-        params: &AnnouncementsParams,
-    ) -> Result<AnnouncementJournal, AgentError> {
-        let state = self
-            .presentations
-            .get(presentation)
-            .ok_or(AgentError::PresentationGone)?;
-        Ok(state.pipeline().with(|pipeline| {
-            pipeline
-                .semantics_owner()
-                .map(|owner| owner.announcement_journal(params))
-                .unwrap_or_default()
-        }))
-    }
-
-    /// The owner half of [`SemanticsAgent::act`]: resolves the wire action
-    /// against the committed tree, then invokes the handler through the path
-    /// an assistive technology's action takes. The caller contains a panic;
-    /// `reached_handler` is set just before the handler is invoked, so the
-    /// caller can tell a handler's panic from one while resolving.
-    pub(super) fn serve_semantics_act(
-        &self,
-        presentation: PresentationId,
-        request: &ActionRequest,
-        issued: bool,
-        reached_handler: &Cell<bool>,
-    ) -> Result<(), AgentError> {
-        let state = self
-            .presentations
-            .get(presentation)
-            .ok_or(AgentError::PresentationGone)?;
-        let resolved = state.pipeline().with(|pipeline| {
-            pipeline
-                .semantics_owner()
-                .ok_or(AgentError::NoTreeYet)?
-                .resolve_wire_action(request)
-                .map_err(|error| AgentError::from_act(error, issued))
-        })?;
-        let element = request.element;
-        reached_handler.set(true);
-        state
-            .dispatch_semantics_action(resolved)
-            .map_err(|error| match error {
-                SemanticsActionError::PresentationClosed => AgentError::PresentationGone,
-                SemanticsActionError::SemanticsUnavailable => AgentError::NoTreeYet,
-                SemanticsActionError::UnsupportedAction { .. } => AgentError::ActionUnsupported {
-                    element,
-                    action: request.action,
-                },
-                SemanticsActionError::Disabled { .. } => AgentError::Disabled { element },
-                _ => AgentError::NodeNotFound { element, issued },
-            })
     }
 }
 

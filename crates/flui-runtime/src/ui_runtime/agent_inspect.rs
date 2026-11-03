@@ -26,7 +26,6 @@ use flui_protocol::{
     InspectField, InspectLevel, InspectNode, InspectParams, InspectReading, InspectUnit,
     InspectValue, LogicalRect, NonFinite,
 };
-use flui_view::dev_agent::InspectTarget;
 
 use super::UiRuntime;
 use super::agent::{AgentError, ReplySender, send_reply};
@@ -51,51 +50,51 @@ impl PendingLayerRead {
     }
 }
 
-impl UiRuntime {
-    /// The owner half of [`SemanticsAgent::inspect`](super::SemanticsAgent::inspect) for the
-    /// element and render trees.
-    pub(super) fn serve_agent_inspect(
-        &self,
-        presentation: PresentationId,
-        target: InspectTarget,
-        params: &InspectParams,
-    ) -> Result<InspectReading, AgentError> {
-        let state = self
-            .presentations
-            .get(presentation)
-            .ok_or(AgentError::PresentationGone)?;
-        let query = query_of(params, presentation, target)?;
-        let taken = match target {
-            InspectTarget::Widgets => state.widgets().inspect_elements(query),
-            InspectTarget::Render => state.pipeline().inspect_render(query),
-            _ => {
-                return Err(AgentError::InvalidArgument {
-                    reason: "this tree is not read at the owner's turn",
-                });
-            }
-        };
-        reading_from(taken)
-    }
+/// Which of a window's trees an inspection reads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum InspectTarget {
+    /// The element tree (`inspect.widgets`, ids `v3.2`).
+    Widgets,
+    /// The render tree (`inspect.render`, ids `r12`).
+    Render,
+    /// The layers of the next scene the window shows (`inspect.layers`, ids `l4.37`).
+    Layers,
+}
 
+/// The owner half of `inspect.widgets` and `inspect.render`, read at the owner's turn.
+pub(super) fn inspect(
+    state: &PresentationState,
+    target: InspectTarget,
+    params: &InspectParams,
+) -> Result<InspectReading, AgentError> {
+    let query = query_of(params, state.id(), target)?;
+    let taken = match target {
+        InspectTarget::Widgets => state.widgets().inspect_elements(query),
+        InspectTarget::Render => state.pipeline().inspect_render(query),
+        InspectTarget::Layers => {
+            return Err(AgentError::InvalidArgument {
+                reason: "this tree is not read at the owner's turn",
+            });
+        }
+    };
+    reading_from(taken)
+}
+
+impl UiRuntime {
     /// The owner half of a read of the layer tree: parks it for the window's next scene and asks
     /// for a repaint, so a window with nothing dirty shows one. Answers at once what cannot wait:
     /// a root that is not a layer handle, a reference to another window, a full parking list.
-    /// Returns whether the presentation was still open.
     pub(super) fn park_agent_layer_read(
         &self,
-        presentation: PresentationId,
+        state: &PresentationState,
         params: &InspectParams,
         reply: ReplySender<InspectReading>,
-    ) -> bool {
-        let Some(state) = self.presentations.get(presentation) else {
-            send_reply(&reply, None, Err(AgentError::PresentationGone));
-            return false;
-        };
-        let query = match query_of(params, presentation, InspectTarget::Layers) {
+    ) {
+        let query = match query_of(params, state.id(), InspectTarget::Layers) {
             Ok(query) => query,
             Err(error) => {
                 send_reply(&reply, None, Err(error));
-                return true;
+                return;
             }
         };
         {
@@ -110,7 +109,7 @@ impl UiRuntime {
                         "the window parks as many layer reads as it admits",
                     )),
                 );
-                return true;
+                return;
             }
             parked.push(PendingLayerRead { query, reply });
         }
@@ -120,7 +119,6 @@ impl UiRuntime {
             }
         });
         self.request_redraw_for(state);
-        true
     }
 }
 
@@ -265,7 +263,9 @@ fn root_of(
     let link = if text.contains('/') {
         let reference = text.parse::<NodeRef>().map_err(|_| NOT_A_NODE)?;
         if reference.presentation != presentation {
-            return Err(AgentError::UnknownPresentation);
+            return Err(AgentError::UnknownPresentation {
+                window: super::agent::window_of(reference.presentation),
+            });
         }
         reference.link
     } else {

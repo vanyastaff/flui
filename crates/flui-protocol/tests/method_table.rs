@@ -148,3 +148,77 @@ fn the_ops_protocol_0_5_renamed_are_methods_now() {
         assert!(method::find(old).is_none(), "`{old}` is no method");
     }
 }
+
+#[test]
+fn every_method_the_agent_serves_is_a_window_method_but_the_apps_own() {
+    macro_rules! names {
+        ($($ty:ident = $name:literal, $effect:ident, $tier:ident, $params:ty => $output:ty;)+) => {
+            [$($name),+]
+        };
+    }
+    let window_methods: &[&str] = &flui_protocol::for_each_window_method!(names);
+    let apps_own = ["events.subscribe", "events.unsubscribe", "windows.list"];
+    let expected: Vec<&str> = METHODS
+        .iter()
+        .filter(|row| row.served_by == ServedBy::Agent && !apps_own.contains(&row.name))
+        .map(|row| row.name)
+        .collect();
+    assert_eq!(window_methods, expected.as_slice());
+}
+
+#[test]
+fn a_window_methods_parameters_name_the_window_they_address() {
+    use std::time::Duration;
+
+    use flui_protocol::{
+        ActParams, ActionName, Addressed, Condition, ElementId, ElementRef, LocateParams, Locator,
+        LogicalPoint, Target, WaitParams, WindowId,
+    };
+
+    let window = WindowId::from_u64(3).expect("non-zero");
+    let element = ElementRef::new(window, ElementId::from_u64(9).expect("non-zero"));
+    let act = |target| ActParams::new(target, ActionName::Invoke);
+    let mut named = Locator::default();
+    named.window = Some(window);
+    let table: &[(&str, &dyn Addressed, Option<WindowId>)] = &[
+        ("an element", &act(Target::Element(element)), Some(window)),
+        (
+            "a point",
+            &act(Target::Point {
+                window,
+                at: LogicalPoint::new(1.0, 2.0),
+            }),
+            Some(window),
+        ),
+        (
+            "a locator naming none",
+            &act(Target::Locator(Locator::default())),
+            None,
+        ),
+        (
+            "a locator naming one",
+            &LocateParams::new(named),
+            Some(window),
+        ),
+        (
+            "a wait",
+            &WaitParams::new(window, Condition::Settled),
+            Some(window),
+        ),
+    ];
+    for (case, params, expected) in table {
+        assert_eq!(params.window(), *expected, "{case}");
+    }
+    assert_eq!(
+        WaitParams::new(window, Condition::Settled)
+            .with_timeout_ms(250)
+            .holds_for(),
+        Duration::from_millis(250),
+        "a wait holds for its timeout"
+    );
+    assert_eq!(
+        LocateParams::new(Locator::default()).holds_for(),
+        Duration::ZERO,
+        "a locate answers at the drain"
+    );
+}

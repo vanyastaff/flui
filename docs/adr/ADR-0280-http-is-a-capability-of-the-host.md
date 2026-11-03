@@ -74,9 +74,9 @@ lets a test hand every layer the same scripted client.
 2. **The client drives its requests.** `send`'s future and a body's chunks need no runtime of the
    caller's; dropping either abandons the request.
 3. **Providers.** `flui-app` registers the built-in provider behind its `http` feature (on by
-   default): on Linux, macOS and iOS `reqwest` on the run's IO lane, one connection pool per run.
-   The caller's future waits on a channel; the exchange on the lane stops when the channel closes.
-   On lanes an embedder injects, which may run no Tokio drivers, it spawns nothing and answers
+   default): on Linux `reqwest` on the run's IO lane, one connection pool per run. The caller's
+   future waits on a channel; the exchange on the lane stops when the channel closes. On lanes an
+   embedder injects, which may run no Tokio drivers, it spawns nothing and answers
    `NotYetOnThisHost { host: EmbedderExecutors }`. On the web the page's `fetch` sends
    (`flui_native::http::FetchClient`, a task of the page answering through a channel), and each
    exchange holds a slot of the IO lane from the request until its body ends or is dropped, so the
@@ -96,7 +96,14 @@ lets a test hand every layer the same scripted client.
    it, so an abort closes the request handle only while no call is inside WinHTTP on it, never
    leaving a call to run on a closed handle whose value may name another request's. The session
    takes the system's automatic proxy and trust store; an error code maps by its meaning, a failed
-   secure check naming what failed, else by the stage that failed. Without the feature the
+   secure check naming what failed, else by the stage that failed. macOS and iOS send through an
+   ephemeral `NSURLSession` of the client's own (`flui_native::http::UrlSessionClient`), on the
+   same request-per-thread model and held on the IO lane the same way: the session's delegate
+   hands each task's response, data and end to the request's thread, a body buffered past 256 KiB
+   suspends the task until the reader drains it below 64 KiB, and a dropped request or body or a
+   passed deadline cancels the task. An `NSError` in `NSURLErrorDomain` is mapped by its code
+   (TLS, timeout, failed lookup or connection, bad URL); the delegate's methods are OS entries
+   (ADR-0151 §16). An embedder's executors need no Tokio on these hosts. Without the feature the
    capability is not registered.
 4. **The kit's client.** `flui_platform::testing::ScriptedHttp` answers what a test scripted per
    URL, holds and releases requests, counts them and the abandoned ones, and fails an unscripted URL
@@ -127,8 +134,8 @@ lets a test hand every layer the same scripted client.
   and no test opens a socket.
 - Good, because `flui-assets` links no TLS stack, and an application without network can drop
   `reqwest` with one feature.
-- Bad, because embedders' executors have no client yet: their network images
-  fail with a typed gap until a system stack that needs no Tokio lands there.
+- Bad, because an embedder's executors on Linux have no client yet: their network
+  images fail with a typed gap until a system stack that needs no Tokio lands there.
 - Neutral, because each provider owns its own connection pool, so two runs do not share
   connections.
 
@@ -141,12 +148,12 @@ lets a test hand every layer the same scripted client.
   `a_request_left_or_past_its_deadline_aborts_the_fetch` and
   `the_pages_fetch_answers_from_the_test_server` (`flui-native`, headless Chrome): the web's client;
   `a_held_exchange_takes_an_io_slot_until_its_body_lets_go` (`flui-app`): its IO slot, which
-  Android's client holds too.
+  Android's, Windows' and Apple's clients hold too.
 - `a_request_on_its_own_thread_answers_its_head_and_body`,
   `a_body_left_unread_holds_the_download_until_it_is_dropped` and
   `a_request_left_or_past_its_deadline_aborts_its_connection` (`flui-native`, Linux): Android's
-  request-per-thread model over a scripted stack; its JNI exchange is type-checked, not yet run on a
-  device.
+  request-per-thread model over a scripted stack, which Windows, macOS and iOS share; the JNI
+  exchange and the `NSURLSession` delegate are type-checked, not yet run on a device.
 - `an_abort_inside_a_call_closes_the_handle_as_it_returns`,
   `an_abort_while_waiting_closes_the_handle_and_ends_the_wait`,
   `a_completion_ends_the_wait_even_from_inside_the_start`,

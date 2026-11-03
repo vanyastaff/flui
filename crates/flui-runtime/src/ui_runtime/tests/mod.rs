@@ -287,7 +287,7 @@ pub(crate) fn dropping_ui_runtime_a_cannot_wake_ui_runtime_b() {
 }
 
 // ========================================================================
-// `SemanticsAgent`: an agent's wire read of, and actions on, a
+// `AgentWindow`: an agent's wire read of, and actions on, a
 // presentation's committed semantics tree through the owner inbox
 // (ADR-0095 §3).
 // ========================================================================

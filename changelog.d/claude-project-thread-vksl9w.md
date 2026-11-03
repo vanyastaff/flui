@@ -26,6 +26,17 @@
   request carries no `id` instead of `"id": null`.
 - **`flui mcp` reads past events and late answers** on its connection, and treats an error
   that answers no request as its current request's.
+- **One typed call per window method** (`flui-view`'s development-agent seam):
+  `AgentWindow::call::<M>(params)` takes any `M: flui_protocol::WindowMethod` and answers
+  `AgentAnswer<M::Output>`, replacing the per-method `read`, `act`, `act_and_read`, `locate`,
+  `actionability`, `wait`, `inspect`, `motion` and `announcements`; `subscribe` stays. Every
+  failure is a `flui_protocol::ErrorObject`, and params that address another window are refused
+  `invalid_argument`.
+- **`semantics.act` by locator resolves and acts in one owner turn**, so the element acted on is
+  the one the locator matched on the tree the action starts on; no match answers `not_found`
+  and a strict pick that matches several answers `ambiguous` with its candidates.
+- **The driver agent advertises only the methods its app serves**: a window method the runtime
+  does not answer is left out of `capabilities.methods` and refused `not_supported`.
 
 ### Added
 
@@ -44,8 +55,15 @@
   `FramingError::LineTooLong`.
 - **The facade's `driver` and `devtools` features**: `driver` keeps the agent in a release
   build; `devtools` re-exports `flui-devtools` as `flui::devtools`.
+- **`flui_protocol::WindowMethod` and `Addressed`**: the methods of the table marked
+  `Agent(window)`, and the window their params address; `for_each_window_method!` walks those
+  rows, so a server's dispatch is generated from the one table.
 
 ### Removed
 
 - **`flui-devtools`' `agent` feature and `AgentServer`**, and the facade's `dev-agent` feature:
   the driver agent is `flui-app`'s. `flui create` templates no longer install a hook.
+- **`flui_runtime::ui_runtime::SemanticsAgent`, `AgentReply`, `AgentError` and
+  `UiRuntime::semantics_agent`**: an agent reaches a window through
+  `UiRuntime::dev_agent_window`. `flui_view::dev_agent::{AgentFault, HandleKind,
+  InspectTarget}` go with the per-method calls.

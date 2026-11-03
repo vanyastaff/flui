@@ -14,11 +14,11 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use flui_foundation::PresentationId;
 use flui_protocol::{
     Event, EventFilter, EventKind, FrameEvent, GapEvent, SemanticsEvent, WindowEvent, WindowId,
 };
 use flui_view::__runtime::EventSource;
+use flui_view::dev_agent::AgentEvents;
 use parking_lot::{Condvar, Mutex};
 
 use super::UiRuntime;
@@ -92,10 +92,8 @@ impl Queue {
     }
 }
 
-/// The reading half of a subscription: what [`SemanticsAgent::subscribe`] answers with. Dropping
+/// The reading half of a subscription: what a window's `subscribe` answers with. Dropping
 /// it ends the subscription.
-///
-/// [`SemanticsAgent::subscribe`]: super::SemanticsAgent::subscribe
 pub struct EventStream {
     queue: Arc<Queue>,
 }
@@ -306,19 +304,14 @@ impl PresentationState {
 }
 
 impl UiRuntime {
-    /// The owner half of [`SemanticsAgent::subscribe`](super::SemanticsAgent::subscribe):
-    /// registers the subscription and answers with its stream. Returns whether the presentation
-    /// was still open.
+    /// The owner half of `AgentWindow::subscribe`: registers the subscription and answers with
+    /// its stream.
     pub(super) fn subscribe_agent_events(
         &self,
-        presentation: PresentationId,
+        state: &PresentationState,
         filters: Vec<EventFilter>,
-        reply: &ReplySender<EventStream>,
-    ) -> bool {
-        let Some(state) = self.presentations.get(presentation) else {
-            send_reply(reply, None, Err(AgentError::PresentationGone));
-            return false;
-        };
+        reply: &ReplySender<AgentEvents>,
+    ) {
         let semantics = filters
             .iter()
             .any(|filter| filter.kind == EventKind::Semantics)
@@ -330,12 +323,11 @@ impl UiRuntime {
             .subscribe(filters, semantics);
         let subscribed = wants_tree && result.is_ok();
         // Answered first: the redraw below reaches the platform's wake, which is user code.
-        send_reply(reply, None, result);
+        send_reply(reply, None, result.map(flui_view::__runtime::agent_events));
         if subscribed {
             // Collection starts at the next frame: ask for one, as vending an agent does.
             self.request_redraw_for(state);
         }
-        true
     }
 
     /// Emits what the frame the owner just ran left to report, in every presentation.
