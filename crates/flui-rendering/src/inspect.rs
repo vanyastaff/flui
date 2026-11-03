@@ -11,7 +11,7 @@
 
 use flui_foundation::geometry::{Offset, Rect};
 use flui_foundation::inspect::{
-    Fields, Inspect, InspectId, InspectTree, Level, Link, Links, NodeView, Unit, Value,
+    Fields, Inspect, InspectId, InspectTree, Level, Link, Links, NodeView, Unit, Untyped, Value,
 };
 use flui_foundation::{RenderId, SemanticsId};
 use rustc_hash::FxHashMap;
@@ -152,11 +152,19 @@ impl InspectTree for RenderInspect<'_> {
                 // `Value`; a typed split would rename the `geometry` fact that sliver assertions
                 // read, so both stay described by their `Debug`.
                 if let Some(constraints) = entry.state().constraints() {
-                    out.value("constraints", Value::Debug(constraints))
+                    #[expect(
+                        deprecated,
+                        reason = "SliverConstraints is a twelve-field record with no single typed value"
+                    )]
+                    out.value("constraints", Value::Debug(Untyped::new(constraints)))
                         .level(Level::Detail);
                 }
                 if let Some(geometry) = entry.state().geometry() {
-                    out.value("geometry", Value::Debug(&geometry));
+                    #[expect(
+                        deprecated,
+                        reason = "SliverGeometry is a twelve-field record with no single typed value"
+                    )]
+                    out.value("geometry", Value::Debug(Untyped::new(&geometry)));
                 }
             }
         }

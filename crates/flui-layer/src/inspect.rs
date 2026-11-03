@@ -16,7 +16,7 @@ use core::fmt::{self, Write as _};
 use flui_foundation::LayerId;
 use flui_foundation::inspect::{
     Fields, Inspect, InspectId, InspectTree, Level, Link, Links, NodeView, SceneLayer, Shared,
-    Unit, Value,
+    Unit, Untyped, Value,
 };
 use std::hash::{DefaultHasher, Hasher};
 
@@ -48,15 +48,21 @@ impl Inspect for Layer {
                 out.field("clip_behavior", &layer.clip_behavior());
             }
             Layer::ClipRRect(layer) => {
-                out.value("clip_rrect", Value::Debug(layer.clip_rrect()));
+                #[expect(deprecated, reason = "a rounded rectangle has no typed value")]
+                out.value("clip_rrect", Value::Debug(Untyped::new(layer.clip_rrect())));
                 out.field("clip_behavior", &layer.clip_behavior());
             }
             Layer::ClipPath(layer) => {
-                out.value("clip_path", Value::Debug(layer.clip_path()));
+                #[expect(deprecated, reason = "a path has no typed value")]
+                out.value("clip_path", Value::Debug(Untyped::new(layer.clip_path())));
                 out.field("clip_behavior", &layer.clip_behavior());
             }
             Layer::ClipSuperellipse(layer) => {
-                out.value("clip_superellipse", Value::Debug(layer.clip_superellipse()));
+                #[expect(deprecated, reason = "a superellipse has no typed value")]
+                out.value(
+                    "clip_superellipse",
+                    Value::Debug(Untyped::new(layer.clip_superellipse())),
+                );
                 out.field("clip_behavior", &layer.clip_behavior());
             }
             Layer::Picture(layer) => {
@@ -86,18 +92,25 @@ impl Inspect for Layer {
                     .level(Level::Detail);
             }
             Layer::ColorFilter(layer) => {
-                out.value("color_filter", Value::Debug(&layer.color_filter()));
+                #[expect(deprecated, reason = "ColorFilter is a composite with no typed value")]
+                out.value(
+                    "color_filter",
+                    Value::Debug(Untyped::new(&layer.color_filter())),
+                );
             }
             Layer::ImageFilter(layer) => {
-                out.value("filter", Value::Debug(layer.filter()));
+                #[expect(deprecated, reason = "ImageFilter is a composite with no typed value")]
+                out.value("filter", Value::Debug(Untyped::new(layer.filter())));
                 out.field("offset", &layer.offset()).unit(Unit::LogicalPx);
             }
             Layer::ShaderMask(layer) => {
-                out.value("shader", Value::Debug(layer.shader()));
+                #[expect(deprecated, reason = "a shader is a composite with no typed value")]
+                out.value("shader", Value::Debug(Untyped::new(layer.shader())));
                 out.field("blend_mode", &layer.blend_mode());
             }
             Layer::BackdropFilter(layer) => {
-                out.value("filter", Value::Debug(layer.filter()));
+                #[expect(deprecated, reason = "ImageFilter is a composite with no typed value")]
+                out.value("filter", Value::Debug(Untyped::new(layer.filter())));
                 out.field("blend_mode", &layer.blend_mode());
                 out.value(
                     "group",
@@ -126,7 +139,11 @@ impl Inspect for Layer {
                 // The payload is type-erased: it reports its `Debug` text, and which value it is
                 // by a number that regions sharing one `Arc` share.
                 let value = layer.value();
-                out.value("value", Value::Debug(value));
+                #[expect(
+                    deprecated,
+                    reason = "the region payload is type-erased: only its `Debug` text is known"
+                )]
+                out.value("value", Value::Debug(Untyped::new(value)));
                 out.value(
                     "instance",
                     Value::Shared(Shared::arc(value.type_name(), value.erased())),

@@ -1,7 +1,7 @@
 //! A single icon glyph and its square share one admitted logical size.
 
 use flui_foundation::geometry::{Offset, Size};
-use flui_foundation::inspect::{Fields, Inspect, Unit, Value};
+use flui_foundation::inspect::{Fields, Inspect, Unit, Untyped, Value};
 use flui_foundation::{Leaf, TextScaleProfile, TextSize, TextSizeRequest, TextSizingIntent};
 use flui_painting::typography::{InlineSpan, TextDirection, TextSpan, TextStyle};
 use flui_painting::{TextBaseline as PainterBaseline, TextPainter, TextResolvedSize, TextSizing};
@@ -144,7 +144,11 @@ impl Inspect for RenderIcon {
         if let Some(glyph) = self.glyph {
             out.field("text", &*glyph.encode_utf8(&mut [0; 4]));
         }
-        out.value("style", Value::Debug(&self.style));
+        #[expect(
+            deprecated,
+            reason = "TextStyle is a many-field record with no typed value"
+        )]
+        out.value("style", Value::Debug(Untyped::new(&self.style)));
     }
 }
 

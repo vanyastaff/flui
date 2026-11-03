@@ -1,0 +1,11 @@
+error: use of deprecated associated function `flui_sdk::flui_foundation::inspect::Untyped::<'a>::new`: map the field to a typed `Value` (ADR-0242); a site that cannot yet carries `#[expect(deprecated, reason = "…")]` (ADR-0303 §7)
+  --> tests/ui/inspect_untyped_is_deprecated.rs:20:51
+   |
+20 |         out.value("opaque", Value::Debug(Untyped::new(&self.opaque)));
+   |                                                   ^^^
+   |
+note: the lint level is defined here
+  --> tests/ui/inspect_untyped_is_deprecated.rs:3:9
+   |
+ 3 | #![deny(deprecated)]
+   |         ^^^^^^^^^^

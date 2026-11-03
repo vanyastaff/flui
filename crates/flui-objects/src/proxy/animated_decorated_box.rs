@@ -85,9 +85,15 @@ impl flui_foundation::inspect::Inspect for RenderAnimatedDecoratedBox {
         // `BoxDecoration` has no typed mapping; it is described by its `Debug`.
         // The sample is read where it is cached: describing it clones nothing.
         self.decoration.with(|decoration| {
+            #[expect(
+                deprecated,
+                reason = "the interpolated BoxDecoration is a composite with no typed value"
+            )]
             out.value(
                 "decoration",
-                flui_foundation::inspect::Value::Debug(decoration),
+                flui_foundation::inspect::Value::Debug(flui_foundation::inspect::Untyped::new(
+                    decoration,
+                )),
             );
         });
         out.field("position", &self.position)

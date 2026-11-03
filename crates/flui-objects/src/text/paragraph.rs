@@ -25,7 +25,7 @@ pub use links::{ShownLinksListener, TextLinkFocus, TextLinkKey, TextLinkRoute};
 
 use flui_foundation::Leaf;
 use flui_foundation::geometry::{Matrix4, Offset, Rect, Size};
-use flui_foundation::inspect::{FieldValue, Fields, Inspect, Payload, Seq, Value};
+use flui_foundation::inspect::{FieldValue, Fields, Inspect, Payload, Seq, Untyped, Value};
 use flui_interaction::CursorIcon;
 use flui_painting::styling::Color;
 use flui_painting::text_boundaries;
@@ -680,7 +680,11 @@ impl Inspect for RenderParagraph {
                 }
                 InlineSpan::Placeholder(_) => {}
             }
-            out.value("style", Value::Debug(&span.style()));
+            #[expect(
+                deprecated,
+                reason = "TextStyle is a many-field record with no typed value"
+            )]
+            out.value("style", Value::Debug(Untyped::new(&span.style())));
         }
     }
 }

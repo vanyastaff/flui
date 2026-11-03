@@ -383,7 +383,7 @@ fn field_calls(
                 if generic {
                     bounds.push(quote!(#ty: ::core::fmt::Debug));
                 }
-                quote_spanned!(field.span=> out.value(#name, #runtime::Value::Debug(#access)))
+                quote_spanned!(field.span=> out.value(#name, #runtime::Value::Debug(#runtime::Untyped::new(#access))))
             } else {
                 if generic {
                     bounds.push(quote!(#ty: #runtime::FieldValue));
@@ -423,9 +423,17 @@ fn field_calls(
                     (Some(quote!(let #binding: #ty = #value;)), Some(call))
                 }
             };
+            // `#[inspect(debug)]` is the field's opt-in to the untyped escape hatch, so the
+            // deprecated constructor it reaches is allowed here (ADR-0303 §7).
+            let opt_in = field.attrs.debug.then(|| {
+                quote!(#[allow(
+                    deprecated,
+                    reason = "`#[inspect(debug)]` opts this field into the untyped escape hatch"
+                )])
+            });
             quote! {
                 #default_let
-                #start #level #unit #default_call;
+                #opt_in #start #level #unit #default_call;
             }
         })
         .collect()

@@ -1,9 +1,8 @@
 # ADR-0303: A rule takes the first rung that states it, and an xtask gate is the last
 
 - **Status:** Accepted (2026-11-03). §§1–3 and §5 apply to each new command, rule and
-  exception; §4 and §8 are implemented. Not implemented: §6 (the `catch_unwind` entry and its site
-  expectations) and §7 (the deprecated constructor of `inspect`'s escape hatch) land in their own
-  changes, and the gates move as Migration lists.
+  exception; §4, §7 and §8 are implemented. Not implemented: §6 (the `catch_unwind` entry and its
+  site expectations) lands in its own change, and the other gates move as Migration lists.
 - **Date:** 2026-11-03
 - **Supersedes in part:** [ADR-0078](ADR-0078-rules-live-in-types-and-lints.md) §4, the last
   clause of condition 3: a gate's self-test runs in `cargo test -p xtask`, not in
@@ -261,7 +260,7 @@ own change; a gate that would only be removed is removed after the owner's decis
 |---|---|---|
 | `workspace`, `reach`, `globals`, `send-impls`, `send-positions`, `try-new`, `file-length`, `testing`, `toolchain`, `docs-links`, `docs-paths`, `changelog` | 5 | stays; `try-new` has no stock lint, since `clippy::new_ret_no_self` accepts `Result<Self, _>` |
 | `panic-messages` | 5 (§8) | stays |
-| `inspect-debug` | 2 (§7) | replaced by the deprecated constructor |
+| `inspect-debug` | 2 (§7) | replaced by the deprecated constructor, gate deleted |
 | hand-written `catch_unwind` | 2 (§6) | a `clippy.toml` entry, no gate |
 | `panic-boundary` | 4 (`flui-native`) | moves into `flui-native`'s tests |
 | `wgsl` | 4 (`flui-engine`'s shaders) | moves into `flui-engine`'s tests |

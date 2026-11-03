@@ -10,9 +10,8 @@ use anyhow::bail;
 use super::exec::{Cmd, Runner, installed, parsed};
 use crate::{
     android_dex, change_scope, changelog, docs_links, docs_paths, file_length, fonts, globals,
-    icon_import, inspect_debug, key_vocabulary, markers, module_dag, panic_boundary,
-    panic_messages, platform_floor, recording_vocabulary, send_impls, testing, toolchain, try_new,
-    wgsl, workspace,
+    icon_import, key_vocabulary, markers, module_dag, panic_boundary, panic_messages,
+    platform_floor, recording_vocabulary, send_impls, testing, toolchain, try_new, wgsl, workspace,
 };
 
 /// A formatter or linter that is a binary of its own, not a cargo step.
@@ -105,7 +104,7 @@ type InProcess = fn(&[&str]) -> anyhow::Result<ExitCode>;
 /// `--self-test` is not here: it is a test of this crate
 /// (`every_self_test_reports_exactly_its_planted_findings`), so
 /// `cargo test -p xtask` runs it (ADR-0303 §4).
-fn in_process(strict: bool) -> [(&'static str, InProcess); 24] {
+fn in_process(strict: bool) -> [(&'static str, InProcess); 23] {
     [
         (
             if strict {
@@ -129,9 +128,6 @@ fn in_process(strict: bool) -> [(&'static str, InProcess); 24] {
         ("try-new", |args| try_new::try_new(&parsed(args)?)),
         ("panic-messages", |args| {
             panic_messages::panic_messages(&parsed(args)?)
-        }),
-        ("inspect-debug", |args| {
-            inspect_debug::inspect_debug(&parsed(args)?)
         }),
         ("paths-filter", |args| {
             change_scope::paths_filter(&parsed(args)?)
@@ -269,7 +265,6 @@ mod tests {
                 "send-impls",
                 "try-new",
                 "panic-messages",
-                "inspect-debug",
                 "paths-filter",
                 "font-assets --package-list",
                 "icon-import material",

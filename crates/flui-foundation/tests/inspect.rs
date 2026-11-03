@@ -14,7 +14,7 @@ use flui_foundation::inspect::{
     Change, DiffOptions, Field, FieldError, Fields, INSPECT_FAILED, Inspect, InspectId,
     InspectTree, Level, Link, Links, MatchError, Meta, NodePath, NodeView, OwnedValue, Plain, Rgba,
     SceneLayer, Seq, Shared, Sink, SnapshotError, SnapshotNode, SnapshotQuery, ToValue, Unit,
-    Value, Variant, diff, kind_args_of, kind_of, render, snapshot,
+    Untyped, Value, Variant, diff, kind_args_of, kind_of, render, snapshot,
 };
 use flui_foundation::{ElementId, LayerId, RenderId, SemanticsId};
 
@@ -231,9 +231,13 @@ fn values_compare_by_value_and_debug_equals_nothing() {
     );
     assert_eq!(Value::Str("a"), String::from("a").to_value());
     let text = "same";
+    #[expect(
+        deprecated,
+        reason = "the test checks that an untyped value equals nothing"
+    )]
+    let untyped = Value::Debug(Untyped::new(&text));
     assert_ne!(
-        Value::Debug(&text),
-        Value::Debug(&text),
+        untyped, untyped,
         "an untyped value cannot be shown equal, even to itself"
     );
 }
@@ -832,7 +836,8 @@ fn a_snapshot_counts_untyped_fields_and_keeps_sequences() {
         }
 
         fn inspect(&self, out: &mut Fields<'_>) {
-            out.value("opaque", Value::Debug(&"x"));
+            #[expect(deprecated, reason = "the test describes a field by its `Debug` text")]
+            out.value("opaque", Value::Debug(Untyped::new(&"x")));
             out.field("stops", &vec![0.0_f64, 0.5, 1.0]);
         }
     }
