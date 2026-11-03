@@ -760,7 +760,29 @@ fn malformed_unknown_and_unserved_requests() {
     let mut owner = Owner::new(agent);
     let at = address.address;
     owner.drive(move |_| {
-        let mut client = Client::hello(&at);
+        let (mut client, welcome) = Client::greeted(&at);
+        // The hello lists exactly what the app serves: an agent method it leaves out is
+        // refused `not_supported`, and one it lists reaches its parameters' check.
+        let listed: Vec<String> =
+            serde_json::from_value(welcome["hello"]["capabilities"]["methods"].clone())
+                .expect("the hello lists methods");
+        for method in flui_protocol::METHODS
+            .iter()
+            .filter(|method| method.served_by == flui_protocol::ServedBy::Agent)
+        {
+            let reply = client.call(method.name, json!({}));
+            let refused = reply["error"]["code"] == "not_supported";
+            assert_eq!(
+                refused,
+                !listed.iter().any(|name| name == method.name),
+                "{}: {reply}",
+                method.name
+            );
+            if refused {
+                assert_eq!(reply["error"]["capability"], method.name, "{reply}");
+            }
+        }
+
         client
             .send_bytes(b"this is not json\n")
             .expect("the line is written");
