@@ -67,6 +67,8 @@ mod persist;
 mod production_reconcile_emits;
 #[path = "reconcile_capture.rs"]
 mod reconcile_capture;
+#[path = "recovered_panic_context.rs"]
+mod recovered_panic_context;
 #[path = "recovered_panics.rs"]
 mod recovered_panics;
 #[path = "runtime_seam.rs"]

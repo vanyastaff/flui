@@ -1660,6 +1660,34 @@ impl ElementTree {
         self.resolve_index(id).is_some()
     }
 
+    /// Where `id` is in the element tree, as an error names it: the element, then its parents up
+    /// to [`TREE_CONTEXT_DEPTH`](flui_foundation::TREE_CONTEXT_DEPTH), each by its view's kind as
+    /// the inspector shows it and its id, with where the element's view was created. Empty for an
+    /// id that is not a current node.
+    ///
+    /// An element that is building is held out of its slot and has no kind to show: it is left
+    /// out of the path (and gives no site when it is `id` itself), while the walk goes on through
+    /// its parent.
+    #[must_use]
+    pub fn tree_context(&self, id: ElementId) -> flui_foundation::TreeContext {
+        let Some(node) = self.get(id) else {
+            return flui_foundation::TreeContext::default();
+        };
+        let site = node
+            .element_opt()
+            .map_or_else(flui_foundation::CreationSite::unknown, |element| {
+                element.creation_site()
+            });
+        let path = std::iter::successors(Some(id), |&at| self.get(at)?.parent()).filter_map(|at| {
+            let element = self.get(at)?.element_opt()?;
+            Some(flui_foundation::PathEntry::new(
+                flui_foundation::inspect::kind_of(element.view_type_name()),
+                flui_foundation::inspect::InspectId::from(at),
+            ))
+        });
+        flui_foundation::TreeContext::new(path, site)
+    }
+
     /// Extract the element out of node `id`'s slot, leaving a transient
     /// `None` hole (see [`ElementNode::element`]).
     ///
@@ -1720,14 +1748,20 @@ impl ElementTree {
             return;
         };
         let node = &self.nodes[index];
-        owner.record_hook_panic(
-            Some(id),
-            node.parent(),
+        let mut panic = crate::RecoveredPanic::from_payload(
+            crate::RecoveredAt::Element {
+                element: id,
+                parent: node.parent(),
+            },
             node.element().view_type_id(),
             crate::LifecycleHook::Dispose,
             payload.as_ref(),
             "running an unmount hook",
-        );
+        )
+        .with_site(node.element().creation_site());
+        // The element is freed right after its hooks run; read its path while it is a node.
+        panic.locate_in(self);
+        owner.push_recovered_panic(panic);
         flui_foundation::panic::discard_payload(payload);
     }
     /// Release every inherited edge and lifecycle marker on permanent teardown.
