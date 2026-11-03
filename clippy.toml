@@ -22,4 +22,8 @@ disallowed-macros = [
 ]
 disallowed-methods = [
     { path = "android_activity::AndroidApp::sdk_version", reason = "ADR-0244: ask the platform's `AndroidApi` for a `Gate` in flui-native's version::gate" },
+    # ADR-0303 §6: a site that still catches by hand carries
+    # `#[expect(clippy::disallowed_methods, reason = "ADR-0287: <why>")]` on its statement or
+    # function, never on a file or module; test code is exempt at the crate root (ADR-0303 §5).
+    { path = "std::panic::catch_unwind", reason = "ADR-0287: run user code through flui_foundation::panic (commit, FirstPanic), an OS entry through owner::panic_boundary::os_entry (ADR-0151 §16)" },
 ]

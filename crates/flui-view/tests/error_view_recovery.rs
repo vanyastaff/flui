@@ -15,6 +15,10 @@
 //! caught — that stderr noise is expected; the test process must NOT
 //! abort and the assertions below must hold.
 
+#![allow(
+    clippy::disallowed_methods,
+    reason = "test code catches a panic to assert on it (ADR-0303 §5)"
+)]
 // Target-level lint relaxations — crate-level allows don't reach this
 // target. `unwrap` in test/example code: a panic IS the failure report
 // (docs/PANIC-POLICY.md); style items here are ship-wave debt.

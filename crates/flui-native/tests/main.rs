@@ -17,6 +17,10 @@
 //! asserts the AppKit main thread, which a bare `cargo test` cannot host
 //! unbundled (ADR-0039; unbundled NSWindow construction aborts the process).
 
+#![allow(
+    clippy::disallowed_methods,
+    reason = "test code catches a panic to assert on it (ADR-0303 §5)"
+)]
 #[path = "absent.rs"]
 mod absent;
 #[path = "android_exit_path.rs"]

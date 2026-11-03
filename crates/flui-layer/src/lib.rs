@@ -47,6 +47,13 @@
 //! assert_eq!(scene.tree().len(), 2);
 //! ```
 
+#![cfg_attr(
+    test,
+    allow(
+        clippy::disallowed_methods,
+        reason = "test code catches a panic to assert on it (ADR-0303 §5)"
+    )
+)]
 // Lint levels come from `[workspace.lints]`. Every public item is documented,
 // and a consuming builder that returns `Self` is `#[must_use]`.
 #![deny(missing_docs)]

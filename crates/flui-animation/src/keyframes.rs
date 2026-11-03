@@ -528,6 +528,10 @@ fn reject<T: TwoWayConverter>(
 
 /// Drops `value`; a payload from a panicking destructor is dropped too.
 fn discard<V>(value: V) {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "ADR-0287: a keyframe value's drop runs contained so the rest still drop"
+    )]
     if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(value))) {
         flui_foundation::panic::discard_payload(payload);
     }

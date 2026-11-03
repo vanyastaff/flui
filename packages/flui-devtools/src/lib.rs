@@ -62,6 +62,13 @@
 //!   observation).
 //! - `full`: all of the above, as one name for feature-matrix runs.
 
+#![cfg_attr(
+    test,
+    allow(
+        clippy::disallowed_methods,
+        reason = "test code catches a panic to assert on it (ADR-0303 §5)"
+    )
+)]
 // Every public item is documented; keep it that way.
 #![deny(missing_docs)]
 #![warn(missing_debug_implementations)]

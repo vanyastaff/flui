@@ -120,6 +120,13 @@
 //! - ✅ Clear separation of concerns (SOLID principles)
 //! - ✅ Smaller compile times and dependencies
 
+#![cfg_attr(
+    test,
+    allow(
+        clippy::disallowed_methods,
+        reason = "test code catches a panic to assert on it (ADR-0303 §5)"
+    )
+)]
 // Public items keep their contract documentation at the API boundary.
 #![deny(missing_docs)]
 

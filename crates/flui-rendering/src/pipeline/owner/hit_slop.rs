@@ -136,6 +136,10 @@ impl HitWalk {
     /// too; the first failure stays the one reported (ADR-0281).
     pub(super) fn discard(&mut self, entries: impl IntoIterator<Item = HitTestEntry>) {
         for entry in entries {
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "ADR-0287: an entry's metadata drop runs contained; the first failure stays"
+            )]
             if let Err(payload) =
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(entry)))
             {

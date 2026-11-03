@@ -1929,6 +1929,10 @@ impl PresentationState {
         // Every stage runs to the end whatever an earlier one did: a reply goes to a receiver
         // whose drop or trace is user code, and a job left unanswered here is never answered.
         // The first panic resumes after all of them.
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: every end-of-agent stage runs; the first panic resumes after all"
+        )]
         let ended = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             self.end_agent_events();
         }))
@@ -2572,6 +2576,10 @@ impl<'a> PresentationCloseRecovery<'a> {
         let _ = self.invoke_with(callback);
     }
     fn invoke_with<T>(&mut self, callback: impl FnOnce() -> T) -> Option<T> {
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: a close callback's panic is held so later callbacks still run"
+        )]
         match std::panic::catch_unwind(std::panic::AssertUnwindSafe(callback)) {
             Ok(value) => Some(value),
             Err(payload) => {

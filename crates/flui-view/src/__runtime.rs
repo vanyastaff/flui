@@ -234,9 +234,17 @@ impl WakeSlot {
     /// serves (ADR-0288 §3).
     pub fn wake(&self) {
         let woken = self.0.lock().take();
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: a kept waker's wake runs contained so the owner never unwinds"
+        )]
         if let Some(waker) = woken
             && let Err(payload) = catch_unwind(AssertUnwindSafe(|| waker.wake()))
         {
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "ADR-0287: a waker's panic report runs contained; its own panic is discarded"
+            )]
             let reported = catch_unwind(AssertUnwindSafe(|| {
                 tracing::error!(
                     panic = flui_foundation::panic::payload_text(payload.as_ref()),

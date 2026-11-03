@@ -71,6 +71,10 @@ impl<A, R> Slot<A, R> {
     /// panicked. The panic resumes to the window, which contains it.
     fn call(&self, argument: A) -> Option<R> {
         let mut route = self.0.borrow_mut().take()?;
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: a route's panic is held until the displaced route is settled"
+        )]
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| route(argument)));
         let displaced = {
             let mut slot = self.0.borrow_mut();
@@ -89,6 +93,10 @@ impl<A, R> Slot<A, R> {
             Err(payload) => {
                 // Destroyed under containment; the route's failure stays the
                 // one resumed (ADR-0281 §3).
+                #[expect(
+                    clippy::disallowed_methods,
+                    reason = "ADR-0287: a displaced route's drop runs contained; the route's failure stays"
+                )]
                 if let Err(later) =
                     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(displaced)))
                 {
@@ -282,6 +290,10 @@ impl WindowHandler for WindowRoutes {
         // A frame is the one method whose failure is not terminal: the
         // platform counts it as a frame that ran, and the next one is asked
         // for as any frame is (ADR-0258 §4).
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: a frame's panic is contained: the platform counts it as run (ADR-0258)"
+        )]
         let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             if self.frame_requested.call(request).is_some() {
                 return FrameOutcome::Produced;

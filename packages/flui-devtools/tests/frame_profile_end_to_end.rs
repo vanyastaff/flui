@@ -7,6 +7,10 @@
 //! runners run, and reads the profile back. If the scheduler stops opening
 //! the `frame` span, or the pipeline renames a phase span, this is the test
 //! that fails — the unit tests cannot.
+#![allow(
+    clippy::disallowed_methods,
+    reason = "test code catches a panic to assert on it (ADR-0303 §5)"
+)]
 #![cfg(feature = "profiling")]
 
 use std::sync::Arc;

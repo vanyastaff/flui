@@ -2359,6 +2359,10 @@ fn contain_node(
 ) -> bool {
     let mark = result.len();
     let slop = walk.mark();
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "ADR-0287: a hit-test visit runs contained so ancestors still decide"
+    )]
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| visit(result, walk))) {
         Ok(hit) => hit,
         Err(payload) => {

@@ -224,6 +224,10 @@ impl TapState {
         self.delivering.set(false);
         if !self.queue.borrow().is_empty() {
             let wake = Arc::clone(&self.wake);
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "ADR-0287: a tap's wake runs contained and is reported"
+            )]
             if let Err(payload) = catch_unwind(AssertUnwindSafe(|| wake())) {
                 self.report(payload, TapFailureSite::Wake);
             }
@@ -278,6 +282,10 @@ impl TapState {
     /// retired by it, and its destructor's failure must not come first.
     fn call(&self, record: &InputRecord, site: TapFailureSite) -> Option<bool> {
         let tap = self.current_tap()?;
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: a tap's record call runs contained so delivery continues"
+        )]
         let delivered = catch_unwind(AssertUnwindSafe(|| tap.record(record)));
         let returned = delivered.is_ok();
         if let Err(payload) = delivered {
@@ -300,6 +308,10 @@ impl TapState {
         let Some(tap) = tap else {
             return;
         };
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: a retired tap's drop runs contained and is reported"
+        )]
         if let Err(payload) = catch_unwind(AssertUnwindSafe(|| drop(tap))) {
             self.report(payload, TapFailureSite::Retire);
         }
@@ -324,6 +336,10 @@ impl TapState {
         let failure = message
             .as_deref()
             .unwrap_or("a panic without a text payload");
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: a tracing subscriber's panic must not replace the first tap failure"
+        )]
         let traced = catch_unwind(AssertUnwindSafe(|| {
             if first {
                 tracing::error!(target: INPUT_TAP_TARGET, ?site, failure, "contained the first input tap failure");

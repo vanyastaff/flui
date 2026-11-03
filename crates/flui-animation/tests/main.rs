@@ -5,6 +5,10 @@
 //! counting `#[global_allocator]`.
 
 #![allow(
+    clippy::disallowed_methods,
+    reason = "test code catches a panic to assert on it (ADR-0303 §5)"
+)]
+#![allow(
     clippy::unwrap_used,
     reason = "scenario functions are rows of the contract tables, so clippy no longer sees them as test functions"
 )]

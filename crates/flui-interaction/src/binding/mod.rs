@@ -541,6 +541,10 @@ impl GestureBinding {
         let hold = observers.hold();
         let frozen = self.is_hover_frozen();
         self.close.enter();
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: a dispatch body runs contained so observers and cleanup still run"
+        )]
         let outcome = catch_unwind(AssertUnwindSafe(|| {
             let value = body();
             // A verdict the body reached hands its continuing contact over.
@@ -555,6 +559,10 @@ impl GestureBinding {
         // Ending a latch schedules no frame of its own, so ask for one, also
         // when the dispatch that ended it failed.
         if frozen && !self.is_hover_frozen() {
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "ADR-0287: the hover refresh wake runs contained; the first failure wins"
+            )]
             let woken = catch_unwind(AssertUnwindSafe(|| self.request_hover_refresh()));
             if let Err(payload) = woken {
                 if outcome.is_err() || later_failure.is_some() {
@@ -606,6 +614,10 @@ impl GestureBinding {
             };
             // The drain is a dispatch too: a close it causes waits for this loop.
             self.close.enter();
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "ADR-0287: the close drain runs contained so close state is always left"
+            )]
             let retired = catch_unwind(AssertUnwindSafe(|| self.retire_closed(mode)));
             self.close.leave();
             if let Err(payload) = retired {

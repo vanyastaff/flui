@@ -6,6 +6,13 @@
 //!
 //! stdout carries the MCP protocol; logs go to stderr (`RUST_LOG` filters).
 
+#![cfg_attr(
+    test,
+    allow(
+        clippy::disallowed_methods,
+        reason = "test code catches a panic to assert on it (ADR-0303 §5)"
+    )
+)]
 mod a11y;
 mod cache;
 mod capture;

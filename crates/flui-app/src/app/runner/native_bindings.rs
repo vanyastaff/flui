@@ -46,14 +46,26 @@ impl Drop for PreparedNativeWindow {
         if let Some(sizing) = &sizing {
             sizing.fence();
         }
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: a dropped frame driver's panic is kept as the first failure"
+        )]
         let mut first =
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(frame))).err();
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: a dropped close handler's panic is kept as a failure, not lost"
+        )]
         let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(close))).err();
         crate::app::lifecycle_state::preserve_first_lifecycle_panic(
             &mut first,
             failure,
             "unpublished native window",
         );
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: a dropped sizing owner's panic is kept as a failure, not lost"
+        )]
         let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(sizing))).err();
         crate::app::lifecycle_state::preserve_first_lifecycle_panic(
             &mut first,

@@ -844,6 +844,10 @@ impl X11Drag {
             // A fetch has a deadline the loop may not be waiting for.
             (self.wake)();
         }
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: a handler's panic still lets accepted requests be answered"
+        )]
         let dispatched = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             if let Some((target, event)) = after.dispatch {
                 target
@@ -858,6 +862,10 @@ impl X11Drag {
         // contained too: a subscriber is user code.
         let mut failure = dispatched.err();
         let mut contain = |step: &mut dyn FnMut()| {
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "ADR-0287: a waker's panic leaves the remaining completions answered"
+            )]
             if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(step)) {
                 if failure.is_none() {
                     failure = Some(payload);

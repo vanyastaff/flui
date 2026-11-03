@@ -505,6 +505,10 @@ impl OwnerEffects for HostState {
 }
 
 pub(super) fn contain(first: &mut Failure, run: impl FnOnce()) {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "ADR-0287: a host completion's panic is kept as the first failure"
+    )]
     let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(run)).err();
     preserve_first_lifecycle_panic(first, failure, "native host completion");
 }

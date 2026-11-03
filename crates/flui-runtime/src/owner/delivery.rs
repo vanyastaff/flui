@@ -320,6 +320,10 @@ impl OwnerHost {
             )
         };
         self.core.retired.borrow_mut().extend(retired);
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: retire_host runs contained so queued work is still retired"
+        )]
         let mut first_failure = catch_unwind(AssertUnwindSafe(|| {
             effects.retire_host(&presentations, RecoveryState::current(&None));
         }))
@@ -327,6 +331,10 @@ impl OwnerHost {
         for work in queued {
             match work {
                 OwnerWork::CommitInstall(token) => {
+                    #[expect(
+                        clippy::disallowed_methods,
+                        reason = "ADR-0287: cancel_install host code runs contained so the rest are cancelled"
+                    )]
                     let failure = catch_unwind(AssertUnwindSafe(|| {
                         effects.cancel_install(token, RecoveryState::current(&first_failure));
                     }))
@@ -400,6 +408,10 @@ impl RuntimeLease {
             .expect("BUG: returning lease owns its runtime");
         // Grants a platform entry queued while the runtime was out of its
         // slot run before it goes back (ADR-0142 item 6).
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: the checkout anchor runs contained so the lease is returned"
+        )]
         let anchored = catch_unwind(AssertUnwindSafe(|| runtime.finish_checkout())).err();
         preserve_first_lifecycle_panic(first, anchored, "owner turn commit anchor");
         let state = if first.is_some() {
@@ -407,6 +419,10 @@ impl RuntimeLease {
         } else {
             incoming
         };
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: deadline refresh runs contained so the lease is returned"
+        )]
         let refresh = catch_unwind(AssertUnwindSafe(|| {
             runtime.refresh_deadline_observations(state);
         }))
@@ -414,6 +430,10 @@ impl RuntimeLease {
         preserve_first_lifecycle_panic(first, refresh, "owner scheduling observation");
         let reports = runtime.take_pending_sampling_reports();
         drop(self);
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: sampling reports deliver contained after the lease is released"
+        )]
         let delivery = catch_unwind(AssertUnwindSafe(|| reports.deliver())).err();
         preserve_first_lifecycle_panic(first, delivery, "owner scheduling reports");
     }
@@ -503,6 +523,10 @@ impl OwnerCore {
             let Ok(lease) = RuntimeLease::checkout_runtime(self, id) else {
                 continue;
             };
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "ADR-0287: a runtime's take runs contained so the others still run"
+            )]
             let taken = catch_unwind(AssertUnwindSafe(|| {
                 lease
                     .runtime
@@ -528,6 +552,10 @@ impl OwnerCore {
             let Ok(lease) = RuntimeLease::checkout_runtime(self, id) else {
                 continue;
             };
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "ADR-0287: a runtime's notification runs contained so the others still run"
+            )]
             let told = catch_unwind(AssertUnwindSafe(|| {
                 lease
                     .runtime
@@ -601,6 +629,10 @@ impl OwnerCore {
             if delivered == demand {
                 continue;
             }
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "ADR-0287: a frame-rate demand change runs contained so delivery continues"
+            )]
             let outcome = catch_unwind(AssertUnwindSafe(|| {
                 effects.frame_rate_demand_changed(address, demand);
             }));
@@ -634,6 +666,10 @@ impl OwnerCore {
         if delivered != Some(crate::frame_rate_demand::FrameRateDemand::Active) {
             return;
         }
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: a frame-rate demand release runs contained so the claim is released"
+        )]
         let released = catch_unwind(AssertUnwindSafe(|| {
             effects.frame_rate_demand_changed(
                 address,
@@ -694,6 +730,10 @@ impl OwnerCore {
                                 .as_deref()
                                 .expect("BUG: stop owns runtime lease"),
                         );
+                        #[expect(
+                            clippy::disallowed_methods,
+                            reason = "ADR-0287: stopping runtime work runs contained so the lease is returned"
+                        )]
                         let mut failure = catch_unwind(AssertUnwindSafe(|| {
                             work.run(
                                 self,
@@ -724,6 +764,10 @@ impl OwnerCore {
                             "runtime stop notification",
                         );
                     }
+                    #[expect(
+                        clippy::disallowed_methods,
+                        reason = "ADR-0287: the runtimes-stopped notification runs contained after the stop"
+                    )]
                     let failure = catch_unwind(AssertUnwindSafe(|| {
                         effects.runtimes_stopped(RecoveryState::current(&first));
                     }))
@@ -736,6 +780,10 @@ impl OwnerCore {
                 }
                 OwnerWork::CommitInstall(token) => {
                     self.state.borrow_mut().claim = DeliveryClaim::Completing;
+                    #[expect(
+                        clippy::disallowed_methods,
+                        reason = "ADR-0287: commit_install host code runs contained so the first failure is kept"
+                    )]
                     let committed = catch_unwind(AssertUnwindSafe(|| {
                         effects.commit_install(token, RecoveryState::current(&first_failure))
                     }));
@@ -749,6 +797,10 @@ impl OwnerCore {
                             let mut first = None;
                             let outcome = match RuntimeLease::checkout(self, &work) {
                                 Ok(mut lease) => {
+                                    #[expect(
+                                        clippy::disallowed_methods,
+                                        reason = "ADR-0287: initial runtime work runs contained so the lease is returned"
+                                    )]
                                     let result = catch_unwind(AssertUnwindSafe(|| {
                                         work.run(
                                             self,
@@ -788,6 +840,10 @@ impl OwnerCore {
                             } else {
                                 RecoveryState::current(&first_failure)
                             };
+                            #[expect(
+                                clippy::disallowed_methods,
+                                reason = "ADR-0287: finish_install host code runs contained so the lease is returned"
+                            )]
                             let failure = catch_unwind(AssertUnwindSafe(|| {
                                 effects.finish_install(address, outcome, recovery);
                             }))
@@ -816,6 +872,10 @@ impl OwnerCore {
                             .as_deref()
                             .expect("BUG: active lease owns runtime"),
                     );
+                    #[expect(
+                        clippy::disallowed_methods,
+                        reason = "ADR-0287: queued runtime work runs contained so the lease is returned"
+                    )]
                     let mut failure = catch_unwind(AssertUnwindSafe(|| {
                         work.run(
                             self,
@@ -860,6 +920,10 @@ impl OwnerCore {
                         if failure.is_some()
                             || self.state.borrow().authorizer(frontier.address()).is_err()
                         {
+                            #[expect(
+                                clippy::disallowed_methods,
+                                reason = "ADR-0287: a dropped sizing frontier runs contained so the first failure is kept"
+                            )]
                             let retired = catch_unwind(AssertUnwindSafe(|| drop(frontier))).err();
                             preserve_first_lifecycle_panic(
                                 &mut failure,
@@ -868,6 +932,10 @@ impl OwnerCore {
                             );
                             continue;
                         }
+                        #[expect(
+                            clippy::disallowed_methods,
+                            reason = "ADR-0287: a text-sizing delivery runs contained so the claim is released"
+                        )]
                         let delivery = catch_unwind(AssertUnwindSafe(|| {
                             if let Some(frontier) = effects
                                 .text_sizing(frontier, RecoveryState::current(&first_failure))
@@ -896,6 +964,10 @@ impl OwnerCore {
             preserve_first_lifecycle_panic(&mut first_failure, failure, "owner operation");
             self.state.borrow_mut().claim = DeliveryClaim::Completing;
             self.drain_retired(&mut first_failure);
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "ADR-0287: after_turn host code runs contained so the turn still ends"
+            )]
             let failure = catch_unwind(AssertUnwindSafe(|| {
                 effects.after_turn(RecoveryState::current(&first_failure));
             }))
@@ -932,6 +1004,10 @@ impl OwnerCore {
             state.continuation = Some(sequence);
             sequence
         };
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: a host's continuation request runs contained; a failed post is refused"
+        )]
         let posted = catch_unwind(AssertUnwindSafe(|| effects.request_continuation()));
         if !matches!(posted, Ok(true)) {
             let mut state = self.state.borrow_mut();

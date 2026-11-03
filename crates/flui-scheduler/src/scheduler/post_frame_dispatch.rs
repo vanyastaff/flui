@@ -25,6 +25,10 @@ impl UpdateScheduler {
         };
         callbacks.sort_unstable();
         let mut callbacks = callbacks.into_iter();
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: post-frame callbacks run contained so the remaining ones are kept"
+        )]
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             tracing::debug!(
                 total_callbacks = callbacks.len(),

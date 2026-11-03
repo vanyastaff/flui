@@ -149,6 +149,10 @@ impl UiRuntime {
             // NOT re-established by unwinding is named honestly in
             // ADR-0048's consistency audit; nothing here claims full
             // transactionality of mid-segment mutations.
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "ADR-0287: a segment's panic is contained so premises are re-established"
+            )]
             let attempt = catch_unwind(AssertUnwindSafe(|| {
                 // A subscriber that panics here fails the segment, which is contained below.
                 let _segment = presentation_span(presentation.id()).entered();
@@ -190,6 +194,10 @@ impl UiRuntime {
             // that may never come). A subscriber that panics replaces neither
             // the frame's outcome nor its error; what it left unreported goes
             // back to the pipeline for the next frame.
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "ADR-0287: a diagnostics subscriber's panic must not replace the frame outcome"
+            )]
             if let Err(payload) = catch_unwind(AssertUnwindSafe(|| {
                 presentation.pipeline().report_semantics_diagnostics();
             })) {
@@ -405,6 +413,10 @@ impl UiRuntime {
         // A callback that panics after the frame presented unwinds out of the drive, but the
         // frame happened: what an agent is owed for it is still delivered below, and the panic
         // continues after.
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: a callback's panic after the presented frame is held and resumed"
+        )]
         let driven = catch_unwind(AssertUnwindSafe(|| {
             self.owner_frame.drive_frame(
                 now,
@@ -427,6 +439,10 @@ impl UiRuntime {
         if result.is_some() || frames_seen() != seen_before {
             // Contained: the platform's wake is user code, and the drive's own failure, when
             // there is one, is the one that continues.
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "ADR-0287: the platform's wake runs contained after the drive"
+            )]
             let reported = catch_unwind(AssertUnwindSafe(|| {
                 for presentation in self.presentations.iter() {
                     Self::complete_agent_reads(presentation);
@@ -467,6 +483,10 @@ impl UiRuntime {
                 paid = false;
                 continue;
             }
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "ADR-0287: deferred text-input grants run contained so others still run"
+            )]
             let ran = catch_unwind(AssertUnwindSafe(|| {
                 let _ran = presentation.text_input().run_deferred_grants();
             }))
@@ -667,6 +687,10 @@ impl UiRuntime {
         );
         // The scene is already accepted, so the commit happens whatever a subscriber does with the
         // span: a failure to open it is held, the commit runs, and the first failure resumes after.
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: a subscriber's panic opening the span is held; the commit runs"
+        )]
         let opened = catch_unwind(AssertUnwindSafe(|| {
             let scope = presentation_span(presentation.id()).entered();
             let commit = tracing::debug_span!(target: "flui.frame", "commit").entered();
@@ -678,6 +702,10 @@ impl UiRuntime {
         };
         let committed_revision = presentation.commit_tree_revision();
         presentation.publish_input_regions();
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: a commit event subscriber's panic is held; the commit completes"
+        )]
         let event = catch_unwind(AssertUnwindSafe(|| {
             tracing::trace!(
                 target: "flui.frame",
@@ -691,6 +719,10 @@ impl UiRuntime {
         .err();
         super::input::preserve_first_input_panic(&mut subscriber_panic, event, "commit event");
         // The commit span exits before the presentation span it nests in.
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: the commit span's drop runs contained so the commit completes"
+        )]
         let closed = catch_unwind(AssertUnwindSafe(|| {
             drop(commit_span);
             drop(scope_span);
@@ -789,6 +821,10 @@ impl UiRuntime {
             presentation.watch_redraw_requests();
         }
         for presentation in self.presentations.iter() {
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "ADR-0287: deferred arena resolutions run contained for each presentation"
+            )]
             let deferred = catch_unwind(AssertUnwindSafe(|| {
                 presentation.gestures().drain_deferred_arena_resolutions();
             }))
@@ -804,6 +840,10 @@ impl UiRuntime {
                 .frame_request
                 .take()
                 .map(|request| request.vsync);
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "ADR-0287: gesture motion runs contained so the frame's obligations run"
+            )]
             let motion = catch_unwind(AssertUnwindSafe(|| {
                 let gestures = presentation.gestures();
                 if gestures.is_resampling_enabled() {
@@ -909,6 +949,10 @@ impl UiRuntime {
             // The verdict is kept apart from the span's teardown: a subscriber that panics when
             // the `submit` span exits must not lose a verdict the sink already returned.
             let mut submitted = None;
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "ADR-0287: a subscriber's panic at span exit must not lose the sink's verdict"
+            )]
             let span_outcome = catch_unwind(AssertUnwindSafe(|| {
                 let _presentation = presentation_span(producer.id()).entered();
                 let _submit = tracing::debug_span!(target: "flui.frame", "submit").entered();
@@ -931,6 +975,10 @@ impl UiRuntime {
                 // owed before the first failure resumes, and a later failure of theirs yields to it.
                 (None, Err(payload)) => {
                     producer.restore_staged_agent_layer_reads();
+                    #[expect(
+                        clippy::disallowed_methods,
+                        reason = "ADR-0287: the repaint and wake owed after a sink panic run contained"
+                    )]
                     let owed = catch_unwind(AssertUnwindSafe(|| {
                         self.mark_needs_full_repaint_for(producer);
                         self.wake_frame();
@@ -957,6 +1005,10 @@ impl UiRuntime {
             );
             // The first panic of the work that follows the submit is kept beside a layer read's
             // reply panic (`hover_panic`), so neither replaces the other.
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "ADR-0287: post-submit work runs contained beside a layer read's panic"
+            )]
             let post_submit = catch_unwind(AssertUnwindSafe(|| {
                 // Telemetry: sampled AFTER the submit returns, never before
                 // it -- a `Presented` verdict means the backend called
@@ -1223,6 +1275,10 @@ impl UiRuntime {
             .filter(|presentation| !presentation.gestures().is_hover_frozen())
         {
             let hit_panic = std::cell::Cell::new(None);
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "ADR-0287: hover refresh runs contained so the frame's obligations run"
+            )]
             let refresh = catch_unwind(AssertUnwindSafe(|| {
                 presentation
                     .gestures()
@@ -1271,6 +1327,10 @@ impl UiRuntime {
         // What the verdict owes (the retry, or the rendered mark) runs before a held failure of the
         // layer-read reply or of the sink's own span resumes; the work is contained so that it
         // cannot replace that failure.
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: the verdict's debt runs contained so it cannot replace a failure"
+        )]
         let settle_panic = catch_unwind(AssertUnwindSafe(|| {
             tracing::trace!(
                 target: "flui.pace",
@@ -1400,6 +1460,10 @@ impl UiRuntime {
         // obligations; this frame's mark_rendered must not erase accepted
         // sampling debt either, so the wakes still run before it resumes.
         let delivery_panic = if deliver_overlay_style {
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "ADR-0287: a chrome callback's panic is held so the frame's obligations run"
+            )]
             catch_unwind(AssertUnwindSafe(|| {
                 producer.with_window(|window| producer.overlay_style.deliver(window));
             }))
@@ -1455,6 +1519,10 @@ impl UiRuntime {
         let mut first = None;
         for presentation in self.presentations.iter() {
             if presentation.gestures().has_pending_pointer_samples() {
+                #[expect(
+                    clippy::disallowed_methods,
+                    reason = "ADR-0287: a redraw request runs contained so the other presentations run"
+                )]
                 let wake =
                     catch_unwind(AssertUnwindSafe(|| self.request_redraw_for(presentation))).err();
                 super::input::preserve_first_input_panic(

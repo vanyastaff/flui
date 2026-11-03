@@ -83,6 +83,10 @@ impl PipelineOwner<Compositing> {
         // staged, because those nodes have already cleared their bits-update
         // flag and will not stage it again; the unvisited ones keep theirs.
         let mut actions = CompositingWalkActions::default();
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: the walk runs user code; staged compositing actions still apply"
+        )]
         let walked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             for node in self.scheduler.compositing_queue_as_slice() {
                 self.update_subtree_compositing_bits(node.id, &mut actions);

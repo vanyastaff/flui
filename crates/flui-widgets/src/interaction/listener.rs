@@ -449,6 +449,10 @@ impl Listener {
         // The event KIND is the same in both spaces, so the routing match
         // reads the local one and each callback receives the whole pair.
         move |dispatch: PointerDispatch<'_>| {
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "ADR-0287: a pointer callback's panic must not stop the recognizers"
+            )]
             let raw = catch_unwind(AssertUnwindSafe(|| {
                 let callback = match dispatch.local {
                     PointerEvent::Down(_) => &on_down,
@@ -472,6 +476,10 @@ impl Listener {
                     writer.write(|cx| callback(cx, dispatch));
                 }
             }));
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "ADR-0287: a recognizer's panic must not skip the pointer callbacks' result"
+            )]
             let recognized = catch_unwind(AssertUnwindSafe(|| {
                 if recognizer_input.admits(dispatch.local) {
                     recognizers.dispatch(dispatch);

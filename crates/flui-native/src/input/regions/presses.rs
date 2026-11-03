@@ -27,6 +27,13 @@ pub(crate) const DOUBLE_CLICK_SLOP: f64 = 4.0;
 
 /// The thickness, in logical pixels, of the band along a frameless window's
 /// edges a press resizes it from.
+#[cfg_attr(
+    not(any(test, winit_host, x11_host)),
+    expect(
+        dead_code,
+        reason = "the Wayland host resizes from its own frame's margins; winit and X11 take the band"
+    )
+)]
 pub(crate) const RESIZE_BAND: f64 = 6.0;
 
 /// Which button pressed.
@@ -66,6 +73,13 @@ impl ResizeBand {
     /// The band of a window of `size` device pixels at `scale`, or `None` for one
     /// that cannot be resized by the user now: not `resizable`, maximized, full
     /// screen, or a scale that is no positive finite number.
+    #[cfg_attr(
+        not(any(test, winit_host, x11_host)),
+        expect(
+            dead_code,
+            reason = "the Wayland host resizes from its own frame's margins; winit and X11 take the band"
+        )
+    )]
     pub(crate) fn of(size: DeviceSize, scale: f64, resizable_now: bool) -> Option<Self> {
         let thickness = (RESIZE_BAND * scale).ceil();
         (resizable_now && thickness.is_finite() && thickness >= 1.0).then(|| Self {
