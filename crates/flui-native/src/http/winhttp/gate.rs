@@ -203,6 +203,7 @@ impl Gate {
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, mpsc};
+    use std::time::Duration;
 
     use super::*;
 
@@ -216,6 +217,26 @@ mod tests {
 
     fn closes(handle: usize) -> usize {
         CLOSED[handle].load(Ordering::SeqCst)
+    }
+
+    /// Where `run` on `gate`, on a thread of its own, answers its outcome;
+    /// [`ended`] fails when that wait does not end within ten seconds.
+    fn within(
+        gate: &Arc<Gate>,
+        start: impl FnOnce(&Gate) -> Result<(), u32> + Send + 'static,
+    ) -> mpsc::Receiver<Outcome> {
+        let (answer, outcome) = mpsc::channel();
+        let gate = Arc::clone(gate);
+        std::thread::spawn(move || {
+            let _ = answer.send(gate.run(|_| start(&gate)));
+        });
+        outcome
+    }
+
+    fn ended(outcome: &mpsc::Receiver<Outcome>) -> Outcome {
+        outcome
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the wait ends")
     }
 
     /// An abort while the request's thread is inside a call closes the
@@ -250,20 +271,15 @@ mod tests {
     fn an_abort_while_waiting_closes_the_handle_and_ends_the_wait() {
         let gate = Arc::new(Gate::new(2, close));
         let (started, waiting) = mpsc::channel();
-        let thread = {
-            let gate = Arc::clone(&gate);
-            std::thread::spawn(move || {
-                gate.run(|_| {
-                    let _ = started.send(());
-                    Ok(())
-                })
-            })
-        };
+        let outcome = within(&gate, move |_| {
+            let _ = started.send(());
+            Ok(())
+        });
         waiting.recv().expect("the operation started");
         // Whether the thread is still leaving the call or already waits,
         // the abort closes the handle once and ends the wait.
         gate.abort();
-        assert_eq!(thread.join().expect("the thread returns"), Outcome::Aborted);
+        assert_eq!(ended(&outcome), Outcome::Aborted);
         assert_eq!(closes(2), 1);
         gate.complete(Err(12017));
         assert_eq!(closes(2), 1);
@@ -277,21 +293,21 @@ mod tests {
     /// completion delivered inside it is lost and the wait never ends).
     #[test]
     fn a_completion_ends_the_wait_even_from_inside_the_start() {
-        let gate = Gate::new(3, close);
-        assert_eq!(
-            gate.run(|_| {
-                gate.complete(Ok(512));
+        let gate = Arc::new(Gate::new(3, close));
+        let inline = |result: Result<u32, u32>| {
+            within(&gate, move |gate| {
+                gate.complete(result);
                 Ok(())
-            }),
-            Outcome::Completed(512)
+            })
+        };
+        assert_eq!(ended(&inline(Ok(512))), Outcome::Completed(512));
+        assert_eq!(
+            ended(&within(&gate, |_| Err(12029))),
+            Outcome::Failed(12029)
         );
-        assert_eq!(gate.run(|_| Err(12029)), Outcome::Failed(12029));
         gate.complete(Ok(7));
         assert_eq!(
-            gate.run(|_| {
-                gate.complete(Err(12002));
-                Ok(())
-            }),
+            ended(&inline(Err(12002))),
             Outcome::Failed(12002),
             "a completion with no operation pending is not kept"
         );
