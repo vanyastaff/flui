@@ -20,7 +20,7 @@ use crate::{
     OpenWindowError, OpenedWindow, PendingWindow, PlatformError, ProxySendError,
     WakeRegistrationError, WindowRequest, platform::Platform,
 };
-use flui_foundation::{ClaimSlot, claim_slot};
+use flui_foundation::{ClaimSlot, claim_slot, panic::FirstPanic};
 use parking_lot::Mutex;
 use std::collections::VecDeque;
 use std::sync::{Arc, Weak};
@@ -459,22 +459,23 @@ impl OwnerSignal {
 /// already holds, stays open as it would for an open on the owner itself.
 fn open_requested(platform: &dyn Platform, request: WindowRequest) -> OpenWindowResult {
     let (options, handler) = request.build_on_owner()?;
-    let opened = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        platform.open_window(options, handler)
-    }));
-    let window = match opened {
-        Ok(opened) => opened?,
-        Err(payload) => {
-            let message = format!(
-                "opening the window panicked: {}",
-                flui_foundation::panic::payload_text(&*payload)
-                    .unwrap_or("non-string panic payload")
-            );
-            contain_owner_callback(|| tracing::error!("{message}"));
+    let mut caught = FirstPanic::new();
+    let Some(opened) = caught.contain(|| platform.open_window(options, handler)) else {
+        let payload = caught.into_payload();
+        let message = format!(
+            "opening the window panicked: {}",
+            payload
+                .as_deref()
+                .and_then(flui_foundation::panic::payload_text)
+                .unwrap_or("non-string panic payload")
+        );
+        if let Some(payload) = payload {
             flui_foundation::panic::discard_payload(payload);
-            return Err(OpenWindowError::Backend { message });
         }
+        contain_owner_callback(|| tracing::error!("{message}"));
+        return Err(OpenWindowError::Backend { message });
     };
+    let window = opened?;
     let id = OpenedWindow::new(&window);
     contain_owner_callback(|| drop(window));
     Ok(id)
