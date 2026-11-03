@@ -548,7 +548,16 @@ impl MacOSWindow {
                 content_rect.size.height as f64,
             );
 
-            self.state.lock().bounds.size = new_size;
+            let moved_controls = {
+                let mut state = self.state.lock();
+                state.bounds.size = new_size;
+                state.moves_system_controls()
+            };
+            // AppKit lays the traffic lights out again as it resizes the
+            // window, and as it leaves full screen.
+            if moved_controls {
+                self.place_system_controls();
+            }
             self.publish_state();
 
             tracing::debug!("Window resized to {}x{}", new_size.width, new_size.height);

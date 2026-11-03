@@ -115,14 +115,15 @@ pub(crate) const fn appkit_window_capabilities(owner_is_main: bool) -> WindowCap
     capabilities.observes_position = Native;
     capabilities.observes_minimized = Native;
     capabilities.places_at_open = Native;
+    // A title bar of the application's is drawn under the system's, made
+    // transparent (`fullSizeContentView`), with the traffic lights over it.
+    capabilities.app_title_bar = Native;
     if owner_is_main {
         capabilities.material = Native;
     } else {
         capabilities = capabilities.unavailable(&MATERIAL, CapabilityAbsence::NotYetOnThisHost);
     }
-    // The traffic lights over a title bar of the application's
-    // (`fullSizeContentView`) are not yet driven.
-    capabilities.without_app_title_bar(CapabilityAbsence::NotYetOnThisHost)
+    capabilities
 }
 
 /// `NSView.displayLink` (macOS 14), whose `preferredFrameRateRange` a
@@ -265,6 +266,16 @@ mod tests {
             .then(|| capabilities.refusal(&MATERIAL))
     }
 
+    /// How a window's capabilities refuse a title bar of the application's;
+    /// `None` where it takes one.
+    fn app_title_bar(capabilities: &WindowCapabilities) -> Option<CapabilityAbsence> {
+        let command = flui_platform::WindowCommand::SetFrame(
+            flui_platform::WindowFrame::AppTitleBar(flui_platform::AppTitleBar::new()),
+        );
+        (capabilities.availability(&command) == Availability::Unavailable)
+            .then(|| capabilities.refusal(&command))
+    }
+
     /// Why a window's capabilities report no presentation; `None` where they
     /// report one.
     fn presentation(capabilities: &WindowCapabilities) -> Option<CapabilityAbsence> {
@@ -307,7 +318,7 @@ mod tests {
         let ios = AppleVersion::new;
         let macos = MacOSVersion::new;
         let api = AndroidApi::from_level;
-        let rows: [(&str, Option<CapabilityAbsence>, Option<CapabilityAbsence>); 23] = [
+        let rows: [(&str, Option<CapabilityAbsence>, Option<CapabilityAbsence>); 24] = [
             (
                 "UIKit material",
                 material(&scene_capabilities()),
@@ -337,6 +348,11 @@ mod tests {
                 "AppKit material off the main lane",
                 material(&appkit_window_capabilities(false)),
                 Some(NotYetOnThisHost),
+            ),
+            (
+                "AppKit title bar of the application's",
+                app_title_bar(&appkit_window_capabilities(true)),
+                None,
             ),
             (
                 "AppKit frame rate on macOS 13",

@@ -53,12 +53,16 @@ pub const fn windows(direct_manipulation: bool) -> InputCapabilities {
 }
 
 /// The native AppKit backend: phased precise scrolling and magnify/rotate
-/// gestures; tablet events are not translated yet.
+/// gestures, and a left press on a move area of a title bar the application
+/// draws moves the window (`performWindowDragWithEvent:`). AppKit keeps the
+/// resize borders and draws the caption buttons itself, so their regions are
+/// not honoured. Tablet events are not translated yet.
 #[must_use]
 pub const fn macos() -> InputCapabilities {
     InputCapabilities::builder()
         .precise_scroll(Native)
         .trackpad_gestures(Native)
+        .window_move(Native)
         .build()
 }
 
