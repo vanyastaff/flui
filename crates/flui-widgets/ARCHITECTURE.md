@@ -932,7 +932,7 @@ stagger delay for its index. Rows `a_removed_item_plays_its_exit_and_then_drops`
 `ReorderableList` moves nothing itself. A row's move is a drag-and-drop session
 that stays in the window (`DragReach::Window`), carrying the row's list and its
 model key. Every row is a `DropTarget` that accepts only drags of its own list,
-so the row under the pointer is where a drop lands. The drop reports one
+so the row under the pointer says where a drop lands. The drop reports one
 `Reorder` with `to` counted after the item leaves `from`, and the app moves the
 item and rebuilds. Rows are keyed by the model key, so the element, the state
 and the focus follow the item.
@@ -977,6 +977,38 @@ axis (ADR-0208 rule 1). The default handle sits in a band above the tile's conte
 `the_grid_moves_go_along_a_row_and_by_a_row`,
 `the_row_moves_follow_the_rows_the_grid_lays_out` and the matrix row `reorderable_grid` pin
 these.
+
+### A drag's rows make room, and its item lands
+
+While a drag runs, the list shows its rows in a second order: the order of the model
+with the first running drag's item moved to where a drop would put it. That item's row
+stays mounted and laid out as the gap, painted at zero opacity through a wrapper every
+row has, so a row keeps its element and state when it becomes the gap and when it lands.
+A row under the pointer puts the item at its own place in that order, and the rows
+between make room. The row that just moved is not heard again until another row reports,
+because it slides away under a pointer that stays still; a move over the space after the
+last row keeps the gap where it is, and a drop there takes it.
+
+Every slide is one FLIP placement (`flui_objects::Placement`, as `SliverAnimatedList`
+uses it): a placement record per item, kept by key across builds, one 250 ms clock for
+the list, and a generation the list advances whenever the order shown changes, a drop or
+command included. A row whose laid-out place changed is painted from where it was and
+slides to where it is. A drop or cancel adds one push to the dragged item's record
+(`PlacementSlot::displace`): the distance from the row's painted place to where the
+proxy was let go, read before the end is laid out, so the row lands from there on the
+same clock. The proxy is the drag's feedback, dressed by `proxy_decorator` with a 150 ms
+lift (elevation 6 and 102 % by default); it lifts from the row's box, not from the
+handle, because `Draggable`'s feedback frame adds the handle's place in the row to the
+grab. `on_reorder` runs at once on a drop, before the landing, and the landing follows the
+item's key, so the app's rebuild carries the same row. Every clock binds to the
+presentation's frame registry, so under reduced motion the lift, the room, the landing
+and a command's slide land on their next frame. A list that unmounts disposes its clocks,
+and the drag's own unmount takes the proxy with it in the same frame. Rows
+`a_dragged_row_lifts_and_the_rows_make_room`,
+`a_dropped_row_lands_from_where_it_was_let_go`,
+`a_cancelled_drag_returns_the_row_to_its_place`, `a_move_command_slides_the_rows`,
+`reduced_motion_moves_the_rows_at_once`, `a_drag_that_does_not_drop_moves_nothing` and
+`a_dragged_tile_makes_room_across_the_rows` pin these.
 
 ### Programmatic scroll replacement preserves the published velocity
 

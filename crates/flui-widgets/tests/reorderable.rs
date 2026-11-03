@@ -49,6 +49,9 @@ fn row_at(index: usize, x: f64) -> (f64, f64) {
     (x, top + ROW / 2.0)
 }
 
+/// A lift the list handed its proxy decorator.
+type Lift = Rc<dyn flui_animation::Animation<f64>>;
+
 /// What the shelf's moves recorded.
 #[derive(Default)]
 struct Log {
@@ -63,6 +66,10 @@ struct Log {
     /// Whether the list has a feedback builder, and the rows it built.
     with_feedback: std::cell::Cell<bool>,
     fed: RefCell<Vec<usize>>,
+    /// Whether the list dresses its proxy itself, and the lifts it was given
+    /// with the dragged row's index.
+    decorated: std::cell::Cell<bool>,
+    lifts: RefCell<Vec<(usize, Lift)>>,
     /// Whether the rows have no label.
     unlabelled: std::cell::Cell<bool>,
 }
@@ -278,6 +285,15 @@ impl ViewState<ShelfList> for ShelfListState {
         } else {
             list
         };
+        let list = if shelf.log.decorated.get() {
+            let log = Rc::clone(&shelf.log);
+            list.proxy_decorator(move |proxy, index, lift| {
+                log.lifts.borrow_mut().push((index, lift));
+                proxy
+            })
+        } else {
+            list
+        };
         let list = if shelf.log.unlabelled.get() {
             list
         } else {
@@ -287,8 +303,9 @@ impl ViewState<ShelfList> for ShelfListState {
     }
 }
 
+/// Pump past every motion a move starts: the rows' 250 ms slides.
 fn settle(laid: &mut LaidOut) {
-    for _ in 0..8 {
+    for _ in 0..24 {
         laid.pump_for(Duration::from_millis(16));
     }
 }
@@ -484,18 +501,24 @@ pub(crate) fn a_drag_that_does_not_drop_moves_nothing() {
 
     mouse_drag(&laid, row_at(0, HANDLE_X), row_at(2, HANDLE_X));
     laid.pump();
+    assert_eq!(laid.find_all_text("a").len(), 2, "the row and its proxy");
     shelf.shown.update(|shown| *shown = false);
     laid.pump();
+    assert!(
+        laid.find_all_text("a").is_empty(),
+        "the proxy leaves with the list, in the same frame"
+    );
     laid.dispatch_pointer_up(row_at(2, HANDLE_X).0, row_at(2, HANDLE_X).1);
     settle(&mut laid);
     assert_eq!(shelf.moves(), [], "an unmounted list drops nothing");
     assert_eq!(shelf.items(), strings(&["a", "b", "c", "d"]));
 }
 
-/// While a drag runs, the preview reports each row it moves over, once per
-/// change, from the dragged item's index: none between two rows, "over none"
-/// over the list's space after its last row or once the drag leaves the list,
-/// and once more when a drag ends over a row.
+/// While a drag runs, the preview reports where a drop would put the row,
+/// once per change, from the dragged item's index: the position of the row
+/// it moves over, none between two rows, the same position over the list's
+/// space after its last row, "over none" once the drag leaves the list, and
+/// once more when a drag ends over a row.
 pub(crate) fn the_preview_follows_the_drag_over_the_rows() {
     let shelf = Shelf::new(&["a", "b", "c", "d"]);
     let seen = || -> Vec<(usize, Option<usize>)> {
@@ -540,7 +563,8 @@ pub(crate) fn the_preview_follows_the_drag_over_the_rows() {
     );
     assert_eq!(shelf.moves(), []);
 
-    // Two rows fill half the list: the space after them is over no row.
+    // Two rows fill half the list: the space after them keeps the gap where
+    // the drag last was, and a drop there lands in it.
     let short = Shelf::new(&["a", "b"]);
     let mut laid = short.mount();
     mouse_drag(&laid, row_at(0, HANDLE_X), row_at(1, HANDLE_X));
@@ -556,26 +580,43 @@ pub(crate) fn the_preview_follows_the_drag_over_the_rows() {
         .collect::<Vec<_>>();
     assert_eq!(
         previews,
-        [Some(0), Some(1), None],
-        "the list below its last row is over no row"
+        [Some(0), Some(1)],
+        "the list below its last row keeps the gap"
     );
-    press(&laid, &SingleActivator::named(NamedKey::Escape));
     laid.dispatch_pointer_up(HANDLE_X, 3.0 * ROW);
     settle(&mut laid);
+    assert_eq!(short.moves(), [(0, 1, ReorderCause::Drag)]);
 }
 
 /// A drag shows the list's feedback under the pointer, the row's label by
-/// default; the item builder builds each row once, so what a row owns alone
-/// (a field's focus node, a controller) is never mounted twice.
+/// default, and never a second copy of the row's content: what a row owns
+/// alone (a field's focus node, a controller) is never mounted twice.
 pub(crate) fn a_drag_shows_the_feedback_and_never_a_second_copy_of_the_row() {
-    let built = |shelf: &Shelf| shelf.log.built.borrow().iter().filter(|i| **i == 0).count();
+    fn content_boxes(laid: &LaidOut, id: RenderId, found: &mut usize) {
+        // The content beside the 44-wide default handle.
+        if laid.try_size(id) == Some(Size::new(356.0, ROW)) {
+            *found += 1;
+        }
+        for child in laid.children(id) {
+            content_boxes(laid, child, found);
+        }
+    }
+    let copies = |laid: &mut LaidOut| {
+        let mut found = 0;
+        content_boxes(laid, laid.current_root(), &mut found);
+        found
+    };
     let shelf = Shelf::new(&["a", "b", "c", "d"]);
     let mut laid = shelf.mount();
-    let before = built(&shelf);
-    assert_eq!(before, 1, "a row is built once");
+    let before = copies(&mut laid);
+    assert!(before > 0, "the rows' content is laid out");
     mouse_drag(&laid, row_at(0, HANDLE_X), row_at(2, HANDLE_X));
     laid.pump();
-    assert_eq!(built(&shelf), before, "the drag builds no copy of the row");
+    assert_eq!(
+        copies(&mut laid),
+        before,
+        "the drag mounts no copy of the row"
+    );
     laid.dispatch_pointer_up(row_at(2, HANDLE_X).0, row_at(2, HANDLE_X).1);
     settle(&mut laid);
 
@@ -834,4 +875,255 @@ pub(crate) fn reorderable_list() {
             })
         },
     ));
+}
+
+/// Where row `name`'s text is painted; with a feedback builder only the rows
+/// show text.
+fn text_at(laid: &LaidOut, name: &str) -> Offset {
+    laid.absolute_offset(laid.find_text(name).expect("the row is laid out"))
+}
+
+/// Where the proxy the shelf's feedback builder makes is painted, while a
+/// drag shows it.
+fn proxy_at(laid: &mut LaidOut) -> Option<Offset> {
+    fn find(laid: &LaidOut, id: RenderId) -> Option<RenderId> {
+        if laid.try_size(id) == Some(Size::new(120.0, ROW)) {
+            return Some(id);
+        }
+        laid.children(id)
+            .into_iter()
+            .find_map(|child| find(laid, child))
+    }
+    let root = laid.current_root();
+    find(laid, root).map(|id| laid.absolute_offset(id))
+}
+
+/// The elevation of the default proxy decorator's physical model.
+fn lift_elevation(laid: &LaidOut) -> f64 {
+    let ids = laid.find_all_by_render_type("RenderPhysicalModel");
+    let [id] = ids[..] else {
+        panic!("one lifted proxy, found {}", ids.len());
+    };
+    let node = laid.render_node(id);
+    match node.field("elevation").map(|field| &field.value) {
+        Some(flui_foundation::inspect::OwnedValue::Float(elevation)) => *elevation,
+        other => panic!("the proxy's elevation, not {other:?}"),
+    }
+}
+
+/// Whether `value` lies strictly between `a` and `b`.
+fn strictly_between(value: f64, a: f64, b: f64) -> bool {
+    value > a.min(b) && value < a.max(b)
+}
+
+/// Whether two painted points match to a tenth of a pixel.
+fn near(a: Offset, b: Offset) -> bool {
+    (a.dx - b.dx).abs() < 0.1 && (a.dy - b.dy).abs() < 0.1
+}
+
+/// The text of a row rests beside its 44-wide default handle.
+const TEXT_X: f64 = 44.0;
+
+/// A drag lifts a proxy from the row's place: it keeps the content's offset
+/// from the pointer, rises to elevation 6 over 150 ms, and the dragged row
+/// becomes the gap the rows between make room for, each sliding one row
+/// over 250 ms as the drag's target changes.
+pub(crate) fn a_dragged_row_lifts_and_the_rows_make_room() {
+    let shelf = Shelf::new(&["a", "b", "c", "d"]);
+    shelf.log.with_feedback.set(true);
+    let mut laid = shelf.mount();
+    let pointer = row_at(2, HANDLE_X);
+    mouse_drag(&laid, row_at(0, HANDLE_X), pointer);
+    laid.pump();
+    // The row was at (0, 0) when its handle was pressed at (24, 25): the
+    // proxy keeps that offset from the pointer.
+    let proxy = proxy_at(&mut laid).expect("the drag shows its proxy");
+    assert!(
+        near(
+            proxy,
+            Offset::new(pointer.0 - HANDLE_X, pointer.1 - ROW / 2.0)
+        ),
+        "the proxy lifts from the row's place: {proxy:?}"
+    );
+    laid.pump_for(Duration::from_millis(75));
+    let mid = lift_elevation(&laid);
+    assert!(strictly_between(mid, 0.0, 6.0), "halfway lifted: {mid}");
+    laid.pump_for(Duration::from_millis(50));
+    let (b, c) = (text_at(&laid, "b").dy, text_at(&laid, "c").dy);
+    assert!(strictly_between(b, ROW, 0.0), "b makes room: {b}");
+    assert!(strictly_between(c, 2.0 * ROW, ROW), "c makes room: {c}");
+    settle(&mut laid);
+    assert_eq!(lift_elevation(&laid), 6.0, "lifted");
+    assert_eq!(text_at(&laid, "b"), Offset::new(TEXT_X, 0.0));
+    assert_eq!(text_at(&laid, "c"), Offset::new(TEXT_X, ROW));
+    assert_eq!(
+        text_at(&laid, "a"),
+        Offset::new(TEXT_X, 2.0 * ROW),
+        "the gap"
+    );
+    assert_eq!(text_at(&laid, "d"), Offset::new(TEXT_X, 3.0 * ROW));
+    assert_eq!(shelf.moves(), [], "nothing moves before the drop");
+    laid.dispatch_pointer_up(pointer.0, pointer.1);
+    settle(&mut laid);
+}
+
+/// A drop reports the move once, at once, with `to` counted after removal,
+/// and the row lands in its new place from where the proxy was let go, over
+/// 250 ms; the app's model, moved in `on_reorder`, keeps the same row.
+pub(crate) fn a_dropped_row_lands_from_where_it_was_let_go() {
+    let shelf = Shelf::new(&["a", "b", "c", "d"]);
+    shelf.log.with_feedback.set(true);
+    let mut laid = shelf.mount();
+    mouse_drag(&laid, row_at(0, HANDLE_X), row_at(2, HANDLE_X));
+    laid.pump();
+    let (x, y) = (HANDLE_X + 30.0, row_at(2, HANDLE_X).1 + 10.0);
+    laid.dispatch_pointer_move(x, y);
+    settle(&mut laid);
+    // The proxy shows the row, whose text sits beside the handle.
+    let proxy = proxy_at(&mut laid).expect("the drag shows its proxy") + Offset::new(TEXT_X, 0.0);
+    laid.dispatch_pointer_up(x, y);
+    assert_eq!(
+        shelf.moves(),
+        [(0, 2, ReorderCause::Drag)],
+        "reported at once"
+    );
+    laid.pump();
+    assert!(proxy_at(&mut laid).is_none(), "the proxy is gone");
+    let start = text_at(&laid, "a");
+    assert!(near(start, proxy), "{start:?} lands from {proxy:?}");
+    halfway(&mut laid);
+    let mid = text_at(&laid, "a");
+    assert!(
+        strictly_between(mid.dx, proxy.dx, TEXT_X) && strictly_between(mid.dy, proxy.dy, 2.0 * ROW),
+        "on its way: {mid:?}"
+    );
+    settle(&mut laid);
+    assert_eq!(text_at(&laid, "a"), Offset::new(TEXT_X, 2.0 * ROW));
+    assert_eq!(shelf.items(), strings(&["b", "c", "a", "d"]));
+    assert_eq!(shelf.moves().len(), 1, "once");
+
+    // Down the other way: `to` is where the row lands.
+    mouse_drag(&laid, row_at(3, HANDLE_X), row_at(1, HANDLE_X));
+    laid.pump();
+    laid.dispatch_pointer_up(row_at(1, HANDLE_X).0, row_at(1, HANDLE_X).1);
+    settle(&mut laid);
+    assert_eq!(shelf.moves()[1], (3, 1, ReorderCause::Drag));
+    assert_eq!(shelf.items(), strings(&["b", "d", "c", "a"]));
+    assert_eq!(text_at(&laid, "d"), Offset::new(TEXT_X, ROW));
+}
+
+/// Escape cancels a drag: nothing is reported, the row returns to its place
+/// from where the proxy was with the same motion, and the rows that made
+/// room slide back.
+pub(crate) fn a_cancelled_drag_returns_the_row_to_its_place() {
+    let shelf = Shelf::new(&["a", "b", "c", "d"]);
+    shelf.log.with_feedback.set(true);
+    let mut laid = shelf.mount();
+    mouse_drag(&laid, row_at(0, HANDLE_X), row_at(2, HANDLE_X));
+    settle(&mut laid);
+    // The proxy shows the row, whose text sits beside the handle.
+    let proxy = proxy_at(&mut laid).expect("the drag shows its proxy") + Offset::new(TEXT_X, 0.0);
+    press(&laid, &SingleActivator::named(NamedKey::Escape));
+    laid.pump();
+    assert!(
+        near(text_at(&laid, "a"), proxy),
+        "it returns from the proxy"
+    );
+    halfway(&mut laid);
+    let (a, b) = (text_at(&laid, "a").dy, text_at(&laid, "b").dy);
+    assert!(strictly_between(a, proxy.dy, 0.0), "a on its way back: {a}");
+    assert!(strictly_between(b, 0.0, ROW), "b on its way back: {b}");
+    laid.dispatch_pointer_up(row_at(2, HANDLE_X).0, row_at(2, HANDLE_X).1);
+    settle(&mut laid);
+    assert_eq!(shelf.moves(), []);
+    for (index, name) in ["a", "b", "c", "d"].into_iter().enumerate() {
+        #[expect(clippy::cast_precision_loss, reason = "four rows")]
+        let top = index as f64 * ROW;
+        assert_eq!(text_at(&laid, name), Offset::new(TEXT_X, top), "{name}");
+    }
+}
+
+/// A move command slides the row and its neighbour to their new places with
+/// the motion a drag's rows use.
+pub(crate) fn a_move_command_slides_the_rows() {
+    let shelf = Shelf::new(&["a", "b", "c", "d"]);
+    let mut laid = shelf.mount();
+    laid.enable_semantics();
+    laid.pump();
+    focus_row(&mut laid, "b", "Move down");
+    settle(&mut laid);
+    press(&laid, &SingleActivator::named(NamedKey::ArrowDown).alt());
+    assert_eq!(shelf.moves(), [(1, 2, ReorderCause::Command)]);
+    laid.pump();
+    let b_text = |laid: &LaidOut| {
+        laid.find_all_text("b")
+            .into_iter()
+            .map(|id| laid.absolute_offset(id).dy)
+            .find(|y| *y < 4.0 * ROW)
+            .expect("row b is laid out")
+    };
+    assert_eq!(b_text(&laid), ROW, "b starts where it was");
+    halfway(&mut laid);
+    let b = b_text(&laid);
+    assert!(strictly_between(b, ROW, 2.0 * ROW), "b on its way: {b}");
+    settle(&mut laid);
+    assert_eq!(b_text(&laid), 2.0 * ROW);
+}
+
+/// Under reduced motion the proxy shows lifted and the rows make room, land
+/// and slide on their next frame; the app's decorator gets the dragged row's
+/// index and the lift.
+pub(crate) fn reduced_motion_moves_the_rows_at_once() {
+    let shelf = Shelf::new(&["a", "b", "c", "d"]);
+    shelf.log.with_feedback.set(true);
+    let mut laid = shelf.mount();
+    laid.set_motion_override(flui_animation::MotionOverride::Reduce);
+    laid.pump();
+    mouse_drag(&laid, row_at(0, HANDLE_X), row_at(2, HANDLE_X));
+    laid.pump();
+    laid.pump_for(Duration::from_millis(16));
+    assert_eq!(lift_elevation(&laid), 6.0, "lifted at once");
+    assert_eq!(
+        text_at(&laid, "b"),
+        Offset::new(TEXT_X, 0.0),
+        "room at once"
+    );
+    laid.dispatch_pointer_move(HANDLE_X + 30.0, row_at(2, HANDLE_X).1);
+    laid.pump();
+    laid.dispatch_pointer_up(HANDLE_X + 30.0, row_at(2, HANDLE_X).1);
+    laid.pump();
+    laid.pump_for(Duration::from_millis(16));
+    assert_eq!(
+        text_at(&laid, "a"),
+        Offset::new(TEXT_X, 2.0 * ROW),
+        "landed at once"
+    );
+
+    let shelf = Shelf::new(&["a", "b", "c", "d"]);
+    shelf.log.with_feedback.set(true);
+    shelf.log.decorated.set(true);
+    let mut laid = shelf.mount();
+    mouse_drag(&laid, row_at(1, HANDLE_X), row_at(3, HANDLE_X));
+    laid.pump();
+    let (index, lift) = shelf.log.lifts.borrow().last().cloned().expect("decorated");
+    assert_eq!(index, 1);
+    assert!(lift.value() < 1.0, "the lift starts");
+    laid.pump_for(Duration::from_millis(75));
+    assert!(strictly_between(lift.value(), 0.0, 1.0), "halfway");
+    settle(&mut laid);
+    assert_eq!(lift.value(), 1.0);
+    assert!(
+        laid.find_all_by_render_type("RenderPhysicalModel")
+            .is_empty(),
+        "the app's decorator replaces the default"
+    );
+    laid.dispatch_pointer_up(row_at(3, HANDLE_X).0, row_at(3, HANDLE_X).1);
+    settle(&mut laid);
+}
+
+/// Run a slide that started on the last frame to its middle: its clock takes
+/// its first tick on the next frame, then 125 ms of its 250.
+fn halfway(laid: &mut LaidOut) {
+    laid.pump_for(Duration::from_millis(16));
+    laid.pump_for(Duration::from_millis(125));
 }

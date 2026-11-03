@@ -575,6 +575,16 @@ unchanged-placement no-op and the unarmed resize; the widgets row
 `an_item_entering_the_band_takes_its_place_without_sliding` pins the band rule
 through a mounted list.
 
+An owner can push one item without a reorder: `PlacementSlot::displace` records a
+physical offset tagged with the roster generation it comes with. The first armed pass
+of that generation turns it into the sliver's axes (the main axis against the paint
+direction when the sliver is not the right way up), adds it to the item's displacement
+and restarts the run, so a reorderable list's dropped item lands from where it was let
+go on the clock its neighbours slide on. A push no armed pass of its generation carries,
+because the item was not laid out or the change was already applied, lands at once; the
+list applies the cross-axis displacement too, so a landing moves on both axes.
+`harness_sliver_list_placement_displace_slides_an_item_home` pins it.
+
 ### Lazy slivers lay out a pinned child outside the band
 
 `RenderSliverList`, `RenderSliverFixedExtentList`, `RenderSliverGrid` and
