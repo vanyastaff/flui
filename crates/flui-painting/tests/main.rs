@@ -730,6 +730,10 @@ fn text_contract() {
                 text_overflow_unit::root_recolor_keeps_the_shaped_buffer_and_span_recolor_reshapes_once,
             ),
             (
+                "every_style_and_span_field_is_classified_by_what_the_shaped_paragraph_holds",
+                text_overflow_unit::every_style_and_span_field_is_classified_by_what_the_shaped_paragraph_holds,
+            ),
+            (
                 "bidirectional_text_lays_out",
                 rich_text_example::example_bidirectional_text,
             ),
