@@ -116,9 +116,10 @@
   own, installs the launch in each top-level document before the app's module runs, and carries
   every `flui mcp` connection to the session's usual local endpoint on to a connection of the
   page's; a reload ends them, and the client connects again. Firefox is driven over WebDriver
-  BiDi and the Chromium family over the DevTools protocol, with no driver binary. `--headless`
-  runs the browser without a window; Safari is refused (`docs/gaps.md` entry 42).
-  `run.agent.ready` carries `relayed` in a browser.
+  BiDi and the Chromium family over the DevTools protocol, with no driver binary; a browser has
+  60 s to start and answer the link's first commands. `--headless` runs the browser without a
+  window; Safari is refused (`docs/gaps.md` entry 42). `run.agent.ready` carries `relayed` in a
+  browser.
 - **`flui_protocol::launch::PAGE_LAUNCH_GLOBAL` and `PAGE_EXPORT_VERSION`**: the global a
   driver installs a page's launch under, and the version of the export it connects through.
 - **The driver agent injects input** (`input.inject`, `input.release`, ADR-0288 §9): a pointer,

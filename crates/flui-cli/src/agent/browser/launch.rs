@@ -17,8 +17,10 @@ use super::cdp::Cdp;
 use super::socket::Socket;
 use super::{BrowserLink, Dialect, LinkError};
 
-/// How long the browser has to start listening.
-const START_TIMEOUT: Duration = Duration::from_secs(30);
+/// How long the browser has to start: to say where it listens and answer the link's first
+/// commands. A cold start in a fresh profile on a busy machine takes tens of seconds, and
+/// Firefox answers `session.new` only once its first window is up.
+const START_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// How long connecting to the browser's WebSocket may take.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -33,6 +35,9 @@ pub(crate) enum LaunchError {
     Start(std::io::Error),
     /// The browser exited, or never said where it listens.
     Silent(String),
+    /// The browser said where it listens but did not answer the link before the start's
+    /// deadline.
+    NotReady,
     /// The browser's protocol failed.
     Link(LinkError),
 }
@@ -42,7 +47,23 @@ impl std::fmt::Display for LaunchError {
         match self {
             Self::Start(error) => write!(f, "could not start the browser: {error}"),
             Self::Silent(why) => write!(f, "the browser opened no remote protocol: {why}"),
+            Self::NotReady => write!(
+                f,
+                "the browser was not ready within {} s of starting",
+                START_TIMEOUT.as_secs()
+            ),
             Self::Link(error) => error.fmt(f),
+        }
+    }
+}
+
+impl LaunchError {
+    /// A failure of the link while the browser starts: a command it did not answer in time
+    /// ran out the start's deadline.
+    fn linking(error: LinkError) -> Self {
+        match error {
+            LinkError::Timeout => Self::NotReady,
+            error => Self::Link(error),
         }
     }
 }
@@ -75,6 +96,7 @@ impl LaunchedBrowser {
             .stdout(Stdio::null())
             .stderr(Stdio::piped());
         let child = command.spawn().map_err(LaunchError::Start)?;
+        let ready_by = Instant::now() + START_TIMEOUT;
         let mut browser = Self { child, profile };
         let stderr = browser.child.stderr.take();
         let (listening, said) = mpsc::channel::<String>();
@@ -91,12 +113,9 @@ impl LaunchedBrowser {
                 })
                 .map_err(LaunchError::Start)?;
         }
-        let url = browser.wait_for_url(dialect, &said)?;
+        let url = browser.wait_for_url(dialect, &said, ready_by)?;
         let socket = Socket::connect(&url, CONNECT_TIMEOUT).map_err(LaunchError::Link)?;
-        let link: Box<dyn BrowserLink> = match dialect {
-            Dialect::Bidi => Box::new(Bidi::attach(socket).map_err(LaunchError::Link)?),
-            Dialect::Cdp => Box::new(Cdp::attach(socket).map_err(LaunchError::Link)?),
-        };
+        let link = attach(dialect, socket, ready_by).map_err(LaunchError::linking)?;
         Ok((browser, link))
     }
 
@@ -111,8 +130,8 @@ impl LaunchedBrowser {
         &mut self,
         dialect: Dialect,
         said: &mpsc::Receiver<String>,
+        deadline: Instant,
     ) -> Result<String, LaunchError> {
-        let deadline = Instant::now() + START_TIMEOUT;
         loop {
             match said.recv_timeout(Duration::from_millis(50)) {
                 Ok(url) => return Ok(url),
@@ -154,6 +173,19 @@ impl Drop for LaunchedBrowser {
             }
         }
     }
+}
+
+/// Links to the browser on `socket`, which speaks `dialect`. The browser is still starting, so
+/// each of its answers may take until `ready_by`.
+fn attach(
+    dialect: Dialect,
+    socket: Socket,
+    ready_by: Instant,
+) -> Result<Box<dyn BrowserLink>, LinkError> {
+    Ok(match dialect {
+        Dialect::Bidi => Box::new(Bidi::attach(socket, ready_by)?),
+        Dialect::Cdp => Box::new(Cdp::attach(socket, ready_by)?),
+    })
 }
 
 /// The browser's command line: its remote protocol on a port it picks, a profile of its own
@@ -332,5 +364,101 @@ mod tests {
         drop(LaunchedBrowser { child, profile });
         helpers.join().expect("the helpers end");
         assert!(!path.exists(), "the profile outlived its browser");
+    }
+}
+
+#[cfg(test)]
+mod linking {
+    use std::net::TcpListener;
+
+    use serde_json::{Value, json};
+    use tungstenite::Message;
+
+    use super::super::COMMAND_TIMEOUT;
+    use super::*;
+
+    /// A browser's WebSocket on the loopback that answers its first command `first_after` it
+    /// came (never when `None`), as Firefox answers `session.new` once its window is up, and
+    /// every later one at once. Returns its URL.
+    fn starting_browser(first_after: Option<Duration>) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("a loopback port");
+        let url = format!(
+            "ws://{}/session",
+            listener.local_addr().expect("the port's address")
+        );
+        thread::spawn(move || {
+            let Ok((stream, _)) = listener.accept() else {
+                return;
+            };
+            let Ok(mut ws) = tungstenite::accept(stream) else {
+                return;
+            };
+            let mut delay = first_after;
+            // Ends once the link goes and its socket with it.
+            while let Ok(message) = ws.read() {
+                let Message::Text(text) = message else {
+                    continue;
+                };
+                let Some(after) = delay else {
+                    continue;
+                };
+                thread::sleep(after);
+                delay = Some(Duration::ZERO);
+                let command = serde_json::from_str::<Value>(&text).expect("a command is JSON");
+                let result = match command["method"].as_str() {
+                    Some("browsingContext.getTree") => {
+                        json!({ "contexts": [{ "context": "tab" }] })
+                    }
+                    Some("Target.getTargets") => {
+                        json!({ "targetInfos": [{ "type": "page", "targetId": "tab" }] })
+                    }
+                    Some("Target.attachToTarget") => json!({ "sessionId": "session" }),
+                    _ => json!({}),
+                };
+                let answer = json!({ "id": command["id"], "type": "success", "result": result });
+                if ws.send(Message::text(answer.to_string())).is_err() {
+                    return;
+                }
+            }
+        });
+        url
+    }
+
+    fn link(
+        dialect: Dialect,
+        first_after: Option<Duration>,
+        ready_by: Instant,
+    ) -> Result<(), LinkError> {
+        let socket = Socket::connect(&starting_browser(first_after), CONNECT_TIMEOUT)
+            .expect("the browser's socket is reached");
+        attach(dialect, socket, ready_by).map(drop)
+    }
+
+    #[test]
+    fn a_browser_still_starting_has_until_the_start_deadline_to_answer() {
+        let late = COMMAND_TIMEOUT + Duration::from_millis(500);
+        thread::scope(|scope| {
+            for dialect in [Dialect::Bidi, Dialect::Cdp] {
+                scope.spawn(move || {
+                    // Slower than a command may take, within the start's deadline.
+                    let linked = link(dialect, Some(late), Instant::now() + late * 2);
+                    assert!(linked.is_ok(), "{dialect:?}: {linked:?}");
+
+                    // Silent past the start's deadline, which ends the wait however long a
+                    // command may take.
+                    let start = Instant::now();
+                    let silent = link(dialect, None, start + Duration::from_millis(300))
+                        .expect_err("a silent browser is not linked");
+                    assert!(
+                        start.elapsed() < COMMAND_TIMEOUT / 2,
+                        "{dialect:?} waited on"
+                    );
+                    assert!(
+                        matches!(LaunchError::linking(silent.clone()), LaunchError::NotReady),
+                        "{dialect:?}: {silent:?}"
+                    );
+                });
+            }
+        });
     }
 }
