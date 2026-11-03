@@ -494,7 +494,10 @@ jobs:
         with:
           cache-bin: false
           cache-on-failure: true
-          shared-key: workspace-nested-v1
+          # v2: the job builds only the packages that hold the nested-cargo
+          # group (`cargo xtask test --nested --nested-group native`), so the
+          # v1 entry (~4 GB of every test binary's dependencies) is not reused.
+          shared-key: workspace-nested-v2
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Install cargo-nextest
