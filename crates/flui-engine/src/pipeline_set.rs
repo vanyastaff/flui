@@ -72,6 +72,7 @@ use crate::{
     mode::ModePipeline,
     morphology::MorphologyPipeline,
     pipeline_cache::{PipelineCache, blend_state_for},
+    resample::ResamplePipeline,
     ssaa::SsaaDownsamplePipeline,
 };
 
@@ -199,6 +200,9 @@ pub(crate) struct PipelineSet {
     /// Format-matched to `surface_format` at construction time; shared across
     /// every `apply_morphology` call for this painter.
     pub(crate) morphology: MorphologyPipeline,
+
+    /// Affine resample pipeline a transform image filter lowers to.
+    pub(crate) resample: ResamplePipeline,
 
     // ── ColorFilter::Mode blend pipeline ─────────────────────────────────────
     /// Porter-Duff / W3C blend of a solid filter color over each layer pixel,
@@ -444,6 +448,7 @@ impl PipelineSet {
         );
         let color_matrix = ColorMatrixPipeline::new(device, surface_format);
         let morphology = MorphologyPipeline::new(device, surface_format);
+        let resample = ResamplePipeline::new(device, surface_format);
         let blur = BlurPipeline::new(device, surface_format);
         let mode = ModePipeline::new(device, surface_format);
         let gamma = GammaPipeline::new(device, surface_format);
@@ -480,6 +485,7 @@ impl PipelineSet {
             advanced_blend,
             color_matrix,
             morphology,
+            resample,
             blur,
             mode,
             gamma,

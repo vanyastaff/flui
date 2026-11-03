@@ -1167,9 +1167,21 @@ pub(crate) enum DrawItem {
 pub(crate) enum BackdropEffect {
     /// A separable Gaussian blur with these sigmas.
     Blur([f32; 2]),
-    /// The backdrop resampled through an axis-aligned map: the output pixel
-    /// at `p` shows the backdrop at `scale * p + offset`, read bilinearly.
-    Resample { scale: [f64; 2], offset: [f64; 2] },
+    /// The backdrop resampled through an affine map: the output pixel
+    /// centred at `p` shows the backdrop at `map · p`, read through `filter`.
+    Resample {
+        map: glam::DAffine2,
+        filter: ResampleFilter,
+    },
+}
+
+/// How a backdrop resample reads between texels.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ResampleFilter {
+    /// The texel the sample point falls in.
+    Nearest,
+    /// Bilinear interpolation between the four texels around it.
+    Linear,
 }
 
 /// Backdrop input is independent of the output clip and damage write region.

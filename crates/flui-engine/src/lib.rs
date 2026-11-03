@@ -343,6 +343,10 @@ mod renderer;
 /// `texture_batch` scratch, all six segment-flush phases, the top-level
 /// `submit` dispatch loop, and `flush_opacity_layer` recursion.
 pub(crate) mod replay;
+/// Affine resample pass: [`resample::apply_resample`] shows a texture through
+/// an affine map, read nearest or bilinearly, for a transform image filter.
+/// [`resample::ResamplePipeline`] owns the pipeline.
+pub(crate) mod resample;
 pub(crate) mod resources;
 mod retained_target;
 /// naga_oil shader composition helper: resolves `#import` directives
