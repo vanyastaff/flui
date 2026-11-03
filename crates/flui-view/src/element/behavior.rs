@@ -1114,6 +1114,12 @@ where
                 // leaking it.
                 self.render_id = Some(render_id);
 
+                // The node reports where its view was created when an error
+                // names it.
+                if let Some(node) = pipeline_owner.render_tree_mut().get_mut(render_id) {
+                    node.set_creation_site(core.creation_site());
+                }
+
                 // Handle parent relationship. `adopt_child` writes the
                 // child's parent link and the parent's child-list entry in
                 // one call — the two directions can never be written

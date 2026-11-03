@@ -54,6 +54,7 @@ pub(crate) fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
         .push(parse_quote!(Self: #runtime::StatefulView));
 
     let inspect = crate::derive_stateless::inspect_method(input)?;
+    let site = crate::derive_stateless::site_method(input)?;
 
     Ok(quote! {
         #[automatically_derived]
@@ -65,6 +66,8 @@ pub(crate) fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
             }
 
             #inspect
+
+            #site
         }
     })
 }

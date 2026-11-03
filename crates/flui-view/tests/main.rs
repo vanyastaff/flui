@@ -21,6 +21,8 @@ mod binding_observer_retirement;
 mod build_owner_tests;
 #[path = "support/child_payload_recovery.rs"]
 mod child_payload_recovery;
+#[path = "creation_site.rs"]
+mod creation_site;
 #[path = "dense_reconcile_containment.rs"]
 mod dense_reconcile_containment;
 #[path = "dense_update_containment.rs"]

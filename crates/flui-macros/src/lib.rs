@@ -101,6 +101,28 @@ use syn::{DeriveInput, parse_macro_input};
 ///
 /// `StatefulView` takes the same attribute.
 ///
+/// # Creation sites
+///
+/// A field of type `CreationSite` marked `#[view(site)]` is the view's creation site
+/// (`View::creation_site`). Its `#[track_caller]` constructor fills it with
+/// `CreationSite::here()`, and the element copies it at mount.
+///
+/// ```rust,ignore
+/// #[derive(Clone, StatelessView)]
+/// struct Badge {
+///     label: String,
+///     #[view(site)]
+///     site: CreationSite,
+/// }
+///
+/// impl Badge {
+///     #[track_caller]
+///     fn new(label: impl Into<String>) -> Self {
+///         Self { label: label.into(), site: CreationSite::here() }
+///     }
+/// }
+/// ```
+///
 /// # Keyed widgets
 ///
 /// The default `View::key()` returns `None`. Authors who need a

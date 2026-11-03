@@ -222,13 +222,17 @@ impl PipelineCell {
     ///
     /// # Errors
     ///
-    /// The frame's first [`RenderError`](crate::error::RenderError).
+    /// The frame's first [`RenderError`](crate::error::RenderError), with the path to the node it
+    /// names when it names one ([`PipelineOwner::tree_context`]).
     ///
     /// # Panics
     ///
     /// As [`Self::with_mut`]: when a `with`/`with_mut` borrow from this cell
     /// is live.
-    pub fn run_frame(&self) -> crate::error::RenderResult<Option<flui_layer::LayerTree>> {
+    pub fn run_frame(
+        &self,
+    ) -> Result<Option<flui_layer::LayerTree>, flui_foundation::TreeError<crate::error::RenderError>>
+    {
         self.with_mut(|owner| {
             let (idle, result) = owner.take_idle().run_frame();
             *owner = idle;

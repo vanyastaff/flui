@@ -148,6 +148,10 @@ where
         self.behavior.debug_kind()
     }
 
+    fn creation_site(&self) -> flui_foundation::CreationSite {
+        self.core.creation_site()
+    }
+
     fn inspect_view(&self, out: &mut flui_foundation::inspect::Fields<'_>) {
         View::inspect(self.core.view(), out);
     }
@@ -398,6 +402,8 @@ where
         slot: usize,
         owner: &mut crate::ElementOwner<'_>,
     ) {
+        self.core
+            .set_creation_site(View::creation_site(self.core.view()));
         self.core.mount(parent, slot, owner);
         self.behavior.on_mount(&mut self.core, owner);
     }

@@ -482,7 +482,10 @@ fn rejected_text_scale_recovers(scale: f64) {
         let (next, result) = owner.run_frame();
         owner = next;
         assert!(
-            matches!(result, Err(RenderError::TextLayout(_))),
+            matches!(
+                result.as_ref().map_err(flui_foundation::TreeError::error),
+                Err(RenderError::TextLayout(_))
+            ),
             "attempt {attempt}: {result:?}"
         );
         assert!(
@@ -561,7 +564,10 @@ fn rejected_viewport_text_preserves_committed_metrics(shrink_wrap: bool) {
     );
     owner.apply_render_update_impact(paragraph, impact);
     let (mut owner, result) = owner.run_frame();
-    assert!(matches!(result, Err(RenderError::TextLayout(_))));
+    assert!(matches!(
+        result.as_ref().map_err(flui_foundation::TreeError::error),
+        Err(RenderError::TextLayout(_))
+    ));
     assert_eq!(
         metrics(&owner),
         committed,
@@ -617,7 +623,10 @@ fn rejected_root_text_preserves_the_published_view_size() {
     );
     owner.apply_render_update_impact(paragraph, impact);
     let (mut owner, result) = owner.run_frame();
-    assert!(matches!(result, Err(RenderError::TextLayout(_))));
+    assert!(matches!(
+        result.as_ref().map_err(flui_foundation::TreeError::error),
+        Err(RenderError::TextLayout(_))
+    ));
     assert_eq!(published_size(&owner), committed);
     assert_eq!(inspect::box_geometry(&owner, root), Some(committed));
     let impact = flui_rendering::testing::edit_render_object::<RenderParagraph, _, _>(
@@ -679,7 +688,10 @@ fn page_resize_survives_text_failure(resize_cross_axis: bool) {
     );
     owner.apply_render_update_impact(paragraph, impact);
     let (mut owner, result) = owner.run_frame();
-    assert!(matches!(result, Err(RenderError::TextLayout(_))));
+    assert!(matches!(
+        result.as_ref().map_err(flui_foundation::TreeError::error),
+        Err(RenderError::TextLayout(_))
+    ));
     assert_eq!(position.viewport_dimension(), 600.0);
     assert_eq!(
         position.pixels(),
@@ -767,7 +779,10 @@ fn rejected_tight_text_layout_does_not_stop_the_size_controller() {
     );
     owner.apply_render_update_impact(paragraph, impact);
     let (mut owner, result) = owner.run_frame();
-    assert!(matches!(result, Err(RenderError::TextLayout(_))));
+    assert!(matches!(
+        result.as_ref().map_err(flui_foundation::TreeError::error),
+        Err(RenderError::TextLayout(_))
+    ));
     assert_eq!(inspect::box_geometry(&owner, root), committed);
     registry.tick_all(&clock.frame(Duration::from_millis(40)));
     assert!(
@@ -1302,7 +1317,10 @@ fn rejected_correction_preserves_scroll_metrics(shrink_wrap: bool, shrunk_extent
     owner.mark_needs_layout(content);
     let (mut owner, result) = owner.run_frame();
     assert!(
-        matches!(result, Err(RenderError::TextLayout(_))),
+        matches!(
+            result.as_ref().map_err(flui_foundation::TreeError::error),
+            Err(RenderError::TextLayout(_))
+        ),
         "the second pass must reach rejected text measurement: {result:?}"
     );
     assert_eq!(
@@ -1389,7 +1407,10 @@ fn scroll_input_during_layout_is_retried(shrink_wrap: bool) {
     owner.mark_needs_layout(content);
     let (owner, result) = owner.run_frame();
     assert!(
-        matches!(result, Err(RenderError::ViewportOffsetChanged)),
+        matches!(
+            result.as_ref().map_err(flui_foundation::TreeError::error),
+            Err(RenderError::ViewportOffsetChanged)
+        ),
         "stale layout must be refused: {result:?}"
     );
     assert_eq!(
@@ -1481,7 +1502,10 @@ fn text_failure_retains_independent_pending_layout() {
         "the failure and pending content must occupy independent queued boundaries"
     );
     let (mut owner, result) = owner.run_frame();
-    assert!(matches!(result, Err(RenderError::TextLayout(_))));
+    assert!(matches!(
+        result.as_ref().map_err(flui_foundation::TreeError::error),
+        Err(RenderError::TextLayout(_))
+    ));
     assert_eq!(
         position.max_scroll_extent(),
         900.0,

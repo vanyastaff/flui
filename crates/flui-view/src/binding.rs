@@ -1316,7 +1316,10 @@ impl WidgetsBinding {
     pub fn run_frame_with_layout_builders(
         &self,
         pipeline: &PipelineCell,
-    ) -> flui_rendering::error::RenderResult<Option<flui_rendering::layer::LayerTree>> {
+    ) -> Result<
+        Option<flui_rendering::layer::LayerTree>,
+        flui_foundation::TreeError<flui_rendering::error::RenderError>,
+    > {
         let mut inner = self.inner.write_in(TreePhase::Building);
         let WidgetsBindingInner {
             ref mut build_owner,
@@ -1337,7 +1340,7 @@ impl WidgetsBinding {
     pub fn settle_layout_with_builders(
         &self,
         pipeline: &PipelineCell,
-    ) -> flui_rendering::error::RenderResult<()> {
+    ) -> Result<(), flui_foundation::TreeError<flui_rendering::error::RenderError>> {
         let mut inner = self.inner.write_in(TreePhase::Building);
         let WidgetsBindingInner {
             ref mut build_owner,
