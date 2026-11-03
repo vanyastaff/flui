@@ -27,8 +27,11 @@ code, in this order:
 5. **Plan** — the dependency-ordered steps, each one shippable.
 
 Put the record where the change is: an ADR under `docs/adr/` for a protocol-level or cross-crate
-contract, a `## Mapping decisions` entry in the crate's `ARCHITECTURE.md` for a local one. A
-design document with no code, and a code change with no record, are both incomplete.
+contract, the crate's `ARCHITECTURE.md` for a local one. Either way the record states the current
+rule: a change to an existing decision rewrites its entry rather than adding a new one below it,
+and a change that replaces a form removes the old form and what documents it (`AGENTS.md`,
+"Working here"). A design document with no code, and a code change with no record, are both
+incomplete.
 
 ## Git Hygiene
 
