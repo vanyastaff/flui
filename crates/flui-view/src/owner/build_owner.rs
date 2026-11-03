@@ -1559,10 +1559,13 @@ impl BuildOwner {
         failed: ElementId,
         replacement_location: (ElementId, usize),
         dirty: DirtyElement,
-        staged: StagedRecoveredPanic,
+        mut staged: StagedRecoveredPanic,
         payload: Box<dyn Any + Send>,
     ) {
         let (parent, slot) = replacement_location;
+        // The failed element is replaced below, after which the drain could not find it: read its
+        // path while it is a node.
+        staged.locate_in(tree);
         let error = crate::view::FrameworkError::from_panic(
             payload.as_ref(),
             "running a stateful lifecycle hook during rebuild",

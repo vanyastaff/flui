@@ -609,6 +609,12 @@ impl WidgetsBinding {
     /// the same underlying `BuildOwner::take_recovered_panics` directly for
     /// tests that want the drain without a UI runtime in the loop.
     ///
+    /// Each record's [`context`](RecoveredPanic::context) path is read here
+    /// from the live element tree when its seam left none: from the panicked
+    /// element when it is still a node, else from the parent the record
+    /// names, else from a lazy delegate's host. The site the seam recorded
+    /// is kept.
+    ///
     /// # Examples
     ///
     /// ```
@@ -620,7 +626,12 @@ impl WidgetsBinding {
     /// ```
     #[must_use = "discarding the drain loses lifecycle-panic diagnostics"]
     pub fn take_recovered_panics(&self) -> Vec<RecoveredPanic> {
-        self.inner.write().build_owner.take_recovered_panics()
+        let mut inner = self.inner.write();
+        let mut recovered = inner.build_owner.take_recovered_panics();
+        for panic in &mut recovered {
+            panic.locate_in(&inner.element_tree);
+        }
+        recovered
     }
 
     /// Atomic seeded observer install (ADR-0040 §3): under ONE `inner`
