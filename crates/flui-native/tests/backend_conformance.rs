@@ -13,6 +13,7 @@
 //! Each row of the table also fails against a deliberately broken backend
 //! ([`Fault`]), so a row that cannot fail is caught.
 
+use std::cell::RefCell;
 use std::num::NonZeroU64;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -42,6 +43,11 @@ use flui_native::input::linux::x11::decode as x11;
 use flui_native::input::linux::xkb as x11_keys;
 use flui_native::input::linux::xkb::{key_of, keysym as xkb_keysym};
 use flui_native::input::web::keys::key_composition;
+#[cfg(all(target_os = "linux", any(feature = "wayland", feature = "x11")))]
+use flui_native::text::conformance::TextInputV3;
+use flui_native::text::conformance::{
+    AndroidMirror, AppKitClient, TsfDocument, WebEditContext, WebTextarea,
+};
 use flui_native::{HeadlessPlatform, HostWindow, MockWindow, OwnerPlatform, Platform as _};
 use flui_platform::Availability;
 use flui_platform::EventTime;
@@ -57,6 +63,7 @@ use flui_platform::pointer::{
     CancelReason, PenTool, PointerButton, PointerEvent, PointerId, PointerInfo, PointerKind,
     PointerPosition, PointerRole, ScrollDelta, ScrollEvent, ScrollPrecision, ScrollUnit,
 };
+use flui_platform::text_store::{LockGrant, LockTiming, TextStore, Utf16Offset, Utf16Range};
 use flui_platform::{DeviceId, HapticFeedback, PlatformHaptics, Unsupported, UnsupportedReason};
 
 /// What a table answers for a request its actuator cannot play: this device
@@ -66,9 +73,9 @@ const NO_ACTUATOR: HapticOutcome =
 use flui_platform::PlatformInput;
 use flui_testing::backend_conformance::HostInput;
 use flui_testing::backend_conformance::{
-    BackendUnderTest, ClockProfile, ContactAction, ContactStep, KeyStep, PanStep, PinchChange,
-    PinchStep, RowOutcome, Stamp, Step, StepKey, StepPhase, assert_backend_conforms,
-    run_backend_conformance,
+    BackendUnderTest, ClockProfile, CompositionStep, ContactAction, ContactStep, GapEntry, KeyStep,
+    PanStep, PinchChange, PinchStep, RowOutcome, Stamp, Step, StepKey, StepPhase, TextInputPath,
+    assert_backend_conforms, run_backend_conformance,
 };
 
 const PEN: PointerKind = PointerKind::Pen { tool: PenTool::Tip };
@@ -107,6 +114,8 @@ struct Profile {
     drag: Option<OsDragStart>,
     /// The shared key decoder its OS layer feeds, for a backend that has one.
     keys: Option<KeyDecoder>,
+    /// The input method path its IME rows drive.
+    ime: Ime,
 }
 
 /// A shared key decoder: Win32's virtual-key table, AppKit's key-code
@@ -121,6 +130,314 @@ enum KeyDecoder {
     Android,
 }
 
+/// The input method path a backend's IME rows drive (ADR-0090): its
+/// platform's events for each composition step, into the edits the backend's
+/// client makes of them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Ime {
+    /// `zwp_text_input_v3`'s events into the Linux hosts' client: Wayland's
+    /// own, and X11's IBus, Fcitx5 and XIM contexts, which the X11 host
+    /// translates into the same events (`text::linux::x11`).
+    TextInputV3,
+    /// AppKit's `NSTextInputClient` verbs into the Apple client: a commit
+    /// inserts the committed text.
+    AppKit,
+    /// UIKit's `UITextInput` verbs into the same client: a commit unmarks the
+    /// text it marked last.
+    UiKit,
+    /// `InputConnection`'s edits of `FluiView`'s editor, which the view reports
+    /// and the owner replays into the store through the mirror.
+    Android,
+    /// The browser's `EditContext` on the canvas: a `textupdate` for each
+    /// change of the composing text, then `compositionend`.
+    WebEditContext,
+    /// A hidden `<textarea>` where the browser has no `EditContext`: an
+    /// `input` for each change of its value, then `compositionend`.
+    WebTextarea,
+    /// A TSF text service's edits of the Windows host's document: each step
+    /// under one read-write lock, `SetText` and the composition sink.
+    Tsf,
+    /// A path whose pure half the table does not reach yet: winit's, whose
+    /// `ImeEvent`s reach the field through the application's handler:
+    /// [`IME_ORDER_GAP`].
+    Undriven,
+    /// No input method, and why.
+    None(&'static str),
+}
+
+/// `docs/gaps.md` entry 1, which lists the input method paths the IME rows
+/// do not drive yet.
+const IME_ORDER_GAP: GapEntry = GapEntry(1);
+
+/// The field a backend's input method path edits.
+enum ImeField {
+    #[cfg(all(target_os = "linux", any(feature = "wayland", feature = "x11")))]
+    TextInputV3(TextInputV3),
+    Apple(AppKitClient),
+    Android(AndroidMirror, Editable),
+    Tsf(TsfDocument, Editable),
+    WebEditContext(WebEditContext, Editable),
+    WebTextarea(WebTextarea, Editable),
+}
+
+/// A backend's input method path and the field it focused.
+struct ImeDriver {
+    path: Ime,
+    fault: Option<Fault>,
+    field: Option<ImeField>,
+    /// The composing text the last preedit step named.
+    preedit: &'static str,
+}
+
+impl ImeDriver {
+    const fn new(path: Ime, fault: Option<Fault>) -> Self {
+        Self {
+            path,
+            fault,
+            field: None,
+            preedit: "",
+        }
+    }
+
+    fn restart(&mut self) {
+        self.field = None;
+        self.preedit = "";
+    }
+
+    fn focus(&mut self, store: Rc<dyn TextStore>) -> TextInputPath {
+        self.restart();
+        let field = match self.path {
+            #[cfg(all(target_os = "linux", any(feature = "wayland", feature = "x11")))]
+            Ime::TextInputV3 => ImeField::TextInputV3(TextInputV3::focus(store)),
+            #[cfg(not(all(target_os = "linux", any(feature = "wayland", feature = "x11"))))]
+            Ime::TextInputV3 => return TextInputPath::None("built without a Linux host"),
+            Ime::AppKit | Ime::UiKit => ImeField::Apple(AppKitClient::focus(store)),
+            Ime::Android => {
+                let mirror = AndroidMirror::focus(store);
+                let editable = Editable::holding(mirror.text());
+                ImeField::Android(mirror, editable)
+            }
+            Ime::Tsf => {
+                let editable = Editable::reading(&store);
+                ImeField::Tsf(TsfDocument::focus(store), editable)
+            }
+            Ime::WebEditContext => {
+                let editable = Editable::reading(&store);
+                ImeField::WebEditContext(WebEditContext::focus(store), editable)
+            }
+            Ime::WebTextarea => {
+                let editable = Editable::reading(&store);
+                ImeField::WebTextarea(WebTextarea::focus(store), editable)
+            }
+            Ime::Undriven => return TextInputPath::Gap(IME_ORDER_GAP),
+            Ime::None(why) => return TextInputPath::None(why),
+        };
+        self.field = Some(field);
+        TextInputPath::Focused
+    }
+
+    /// `step`'s reading, once a field is focused.
+    fn reading(&self, step: CompositionStep) -> Option<CompositionStep> {
+        self.field.is_some().then_some(step)
+    }
+
+    /// Send the focused field's client the events `step` is on the path.
+    fn apply(&mut self, step: CompositionStep) {
+        let fault = self.fault;
+        let preedit = self.preedit;
+        if let CompositionStep::Preedit { text, .. } = step {
+            self.preedit = text;
+        }
+        match (self.field.as_mut(), self.path) {
+            #[cfg(all(target_os = "linux", any(feature = "wayland", feature = "x11")))]
+            (Some(ImeField::TextInputV3(field)), _) => match step {
+                CompositionStep::Preedit { text, caret } => {
+                    if fault == Some(Fault::ImeStepInTwoEdits) {
+                        field.done();
+                    }
+                    let cursor = i32::try_from(byte_offset(text, caret)).expect("a short preedit");
+                    field.preedit_string(Some(text), cursor, cursor);
+                    field.done();
+                }
+                CompositionStep::Commit { text } => {
+                    field.commit_string(Some(text));
+                    if fault == Some(Fault::ImeCommitKeepsComposing) {
+                        field.preedit_string(Some(text), 0, 0);
+                    }
+                    field.done();
+                }
+                _ => field.done(),
+            },
+            (Some(ImeField::Apple(field)), path) => match step {
+                CompositionStep::Preedit { text, caret } => {
+                    field.set_marked_text(text, caret..caret, None);
+                }
+                CompositionStep::Commit { text } if path == Ime::UiKit => {
+                    if text != preedit {
+                        let end = text.encode_utf16().count();
+                        field.set_marked_text(text, end..end, None);
+                    }
+                    field.unmark_text();
+                }
+                CompositionStep::Commit { text } => field.insert_text(text, None),
+                _ if fault == Some(Fault::ImeCancelCommits) => field.insert_text(preedit, None),
+                _ => field.set_marked_text("", 0..0, None),
+            },
+            (Some(ImeField::Android(mirror, editable)), _) => {
+                let _ = editable.compose(step);
+                mirror.report(
+                    &editable.text(),
+                    (editable.caret, editable.caret),
+                    editable.composing,
+                );
+            }
+            (Some(ImeField::Tsf(document, editable)), _) => {
+                let (start, end) = editable
+                    .composing
+                    .unwrap_or((editable.caret, editable.caret));
+                let text = editable.compose(step);
+                let (caret, composing) = (editable.caret, editable.composing);
+                let ends = !matches!(step, CompositionStep::Preedit { .. });
+                document.edit(move |session| {
+                    // A commit of the composing text replaces nothing.
+                    if !(ends && text == preedit) {
+                        session.set_text(start, end, text);
+                    }
+                    match composing {
+                        Some((start, end)) => session.update_composition(start, end),
+                        None if fault != Some(Fault::ImeEndLost) => session.end_composition(),
+                        None => {}
+                    }
+                    session.set_caret(caret);
+                });
+            }
+            (Some(ImeField::WebEditContext(context, editable)), _) => {
+                let (start, end) = editable
+                    .composing
+                    .unwrap_or((editable.caret, editable.caret));
+                let text = editable.compose(step);
+                // The browser updates the text only when the step changes it.
+                if !matches!(step, CompositionStep::Commit { text } if text == preedit) {
+                    let caret = editable.caret;
+                    context.text_update(start..end, text, caret..caret, true);
+                }
+                if !matches!(step, CompositionStep::Preedit { .. })
+                    && fault != Some(Fault::ImeEndLost)
+                {
+                    context.composition_end();
+                }
+            }
+            (Some(ImeField::WebTextarea(area, editable)), _) => {
+                let _ = editable.compose(step);
+                let (value, caret) = (editable.text(), editable.caret);
+                area.input(&value, caret..caret, true);
+                if !matches!(step, CompositionStep::Preedit { .. })
+                    && fault != Some(Fault::ImeEndLost)
+                {
+                    area.input(&value, caret..caret, false);
+                }
+            }
+            (None, _) => {}
+        }
+    }
+}
+
+/// `FluiView`'s editor as `BaseInputConnection` edits it, in UTF-16 code
+/// units: `setComposingText` replaces the composing span (the caret when
+/// none) and composes what it put there, `commitText` replaces it and ends
+/// the composition.
+struct Editable {
+    units: Vec<u16>,
+    composing: Option<(usize, usize)>,
+    caret: usize,
+}
+
+impl Editable {
+    fn holding(text: &str) -> Self {
+        let units: Vec<u16> = text.encode_utf16().collect();
+        Self {
+            caret: units.len(),
+            units,
+            composing: None,
+        }
+    }
+
+    /// The editor holding `store`'s text, the caret at its end.
+    fn reading(store: &Rc<dyn TextStore>) -> Self {
+        let text = Rc::new(RefCell::new(String::new()));
+        let out = Rc::clone(&text);
+        let _granted = store
+            .request_lock(
+                LockGrant::read(move |session| {
+                    let all = Utf16Range::try_new(Utf16Offset::new(0), session.document_len())
+                        .expect("a document starts at 0");
+                    *out.borrow_mut() = session.text(all).expect("the whole document reads");
+                }),
+                LockTiming::Sync,
+            )
+            .expect("a free store grants a sync read");
+        let text = text.take();
+        Self::holding(&text)
+    }
+
+    /// Edit the editor as the input method's `step` does; the text the step
+    /// puts in the composing span's place.
+    fn compose(&mut self, step: CompositionStep) -> &'static str {
+        match step {
+            CompositionStep::Preedit { text, caret } => {
+                self.set_composing_text(text, caret);
+                text
+            }
+            CompositionStep::Commit { text } => {
+                self.commit_text(text);
+                text
+            }
+            _ => {
+                self.set_composing_text("", 0);
+                ""
+            }
+        }
+    }
+
+    fn text(&self) -> String {
+        String::from_utf16(&self.units).expect("the editor holds whole scalars")
+    }
+
+    fn replace_composing(&mut self, text: &str) -> usize {
+        let (start, end) = self.composing.unwrap_or((self.caret, self.caret));
+        let inserted: Vec<u16> = text.encode_utf16().collect();
+        let len = inserted.len();
+        self.units.splice(start..end, inserted);
+        self.caret = start + len;
+        start
+    }
+
+    fn set_composing_text(&mut self, text: &str, caret: usize) {
+        let start = self.replace_composing(text);
+        let len = text.encode_utf16().count();
+        self.composing = (len > 0).then_some((start, start + len));
+        self.caret = start + caret;
+    }
+
+    fn commit_text(&mut self, text: &str) {
+        self.replace_composing(text);
+        self.composing = None;
+    }
+}
+
+#[cfg(all(target_os = "linux", any(feature = "wayland", feature = "x11")))]
+/// The byte offset of the UTF-16 offset `units` into `text`.
+fn byte_offset(text: &str, units: usize) -> usize {
+    let mut counted = 0;
+    for (at, scalar) in text.char_indices() {
+        if counted >= units {
+            return at;
+        }
+        counted += scalar.len_utf16();
+    }
+    text.len()
+}
+
 const ALL_KINDS: &[PointerKind] = &[PointerKind::Touch, PointerKind::Mouse, PEN];
 
 fn win32() -> Profile {
@@ -132,6 +449,7 @@ fn win32() -> Profile {
         haptics: Some(HapticsTable::Win32 { pen: false }),
         drag: Some(input_availability::DESKTOP_DRAG_START),
         keys: Some(KeyDecoder::Win32),
+        ime: Ime::Tsf,
     }
 }
 
@@ -152,6 +470,7 @@ fn appkit() -> Profile {
         haptics: Some(HapticsTable::AppKit),
         drag: None,
         keys: Some(KeyDecoder::AppKit),
+        ime: Ime::AppKit,
     }
 }
 
@@ -164,6 +483,7 @@ fn uikit() -> Profile {
         haptics: Some(HapticsTable::UiKit),
         drag: None,
         keys: None,
+        ime: Ime::UiKit,
     }
 }
 
@@ -180,6 +500,7 @@ fn android() -> Profile {
         haptics: Some(HapticsTable::Android),
         drag: Some(input_availability::DESKTOP_DRAG_START),
         keys: Some(KeyDecoder::Android),
+        ime: Ime::Android,
     }
 }
 
@@ -215,6 +536,16 @@ fn web() -> Profile {
         haptics: Some(HapticsTable::Web),
         drag: Some(input_availability::WEB_DRAG_START),
         keys: Some(KeyDecoder::Web),
+        ime: Ime::WebEditContext,
+    }
+}
+
+/// A browser with no `EditContext`: the field's store
+/// is served through a hidden textarea.
+fn web_textarea() -> Profile {
+    Profile {
+        ime: Ime::WebTextarea,
+        ..web()
     }
 }
 
@@ -228,6 +559,8 @@ fn x11() -> Profile {
         haptics: Some(HapticsTable::Web),
         drag: None,
         keys: None,
+        // winit's input method on X11.
+        ime: Ime::Undriven,
     }
 }
 
@@ -247,6 +580,7 @@ fn wayland() -> Profile {
         haptics: None,
         drag: None,
         keys: Some(KeyDecoder::Xkb),
+        ime: Ime::TextInputV3,
     }
 }
 
@@ -320,6 +654,15 @@ enum Fault {
     OverclaimedDrag,
     /// The drag source starts its sessions at the other moment than the backend declares.
     WrongDragTiming,
+    /// A commit sends the preedit again, so the composition stays.
+    ImeCommitKeepsComposing,
+    /// A cancel commits the composing text.
+    ImeCancelCommits,
+    /// A preedit reaches the field as two edits: the old one cleared, then
+    /// the new one.
+    ImeStepInTwoEdits,
+    /// `compositionend` never reaches the field, so the composition stays.
+    ImeEndLost,
 }
 
 /// The degradation table a backend's window actuator plays by.
@@ -455,6 +798,8 @@ enum Reading {
     ComposingKey {
         key: NamedKey,
     },
+    /// A composition step, as the backend's input method path sends it.
+    Composition(CompositionStep),
     Scroll {
         reading: ScrollReading,
         time: ReadingTime,
@@ -468,6 +813,7 @@ struct SharedAssembly {
     fault: Option<Fault>,
     contacts: ContactRegistry,
     scrolling: ScrollPhases,
+    ime: ImeDriver,
 }
 
 impl SharedAssembly {
@@ -477,12 +823,14 @@ impl SharedAssembly {
             fault: None,
             contacts: ContactRegistry::new(native_clock(profile.clock)),
             scrolling: ScrollPhases::default(),
+            ime: ImeDriver::new(profile.ime, None),
         }
     }
 
     fn broken(profile: Profile, fault: Fault) -> Self {
         Self {
             fault: Some(fault),
+            ime: ImeDriver::new(profile.ime, Some(fault)),
             ..Self::new(profile)
         }
     }
@@ -654,6 +1002,7 @@ impl SharedAssembly {
                 .then_some(Reading::ComposingKey {
                     key: NamedKey::Escape,
                 }),
+            Step::Composition(step) => self.ime.reading(step).map(Reading::Composition),
             _ => None,
         }
     }
@@ -728,6 +1077,10 @@ impl SharedAssembly {
 
     fn decode_reading(&mut self, reading: Reading) -> Vec<PlatformInput> {
         match reading {
+            Reading::Composition(step) => {
+                self.ime.apply(step);
+                Vec::new()
+            }
             Reading::Key { key, shift } => {
                 let modifiers = if shift {
                     Modifiers::SHIFT
@@ -823,6 +1176,7 @@ impl SharedAssembly {
     fn restart(&mut self) {
         self.contacts = ContactRegistry::new(native_clock(self.profile.clock));
         self.scrolling = ScrollPhases::default();
+        self.ime.restart();
     }
 }
 
@@ -909,6 +1263,10 @@ impl BackendUnderTest for SharedAssembly {
     fn drag_start(&self) -> OsDragStart {
         self.profile.drag.unwrap_or(OsDragStart::OnLeavingWindow)
     }
+
+    fn focus_text_store(&mut self, store: Rc<dyn TextStore>) -> TextInputPath {
+        self.ime.focus(store)
+    }
 }
 
 /// A drag source that only declares when it starts: the decoders have no OS behind them.
@@ -970,6 +1328,7 @@ impl Headless {
             haptics: Some(HapticsTable::Win32 { pen: false }),
             drag: None,
             keys: None,
+            ime: Ime::None("the headless backend has no input method"),
         };
         Self {
             assembly: SharedAssembly::new(profile),
@@ -1033,6 +1392,10 @@ impl BackendUnderTest for Headless {
 
     fn drag_start(&self) -> OsDragStart {
         input_availability::DESKTOP_DRAG_START
+    }
+
+    fn focus_text_store(&mut self, store: Rc<dyn TextStore>) -> TextInputPath {
+        self.assembly.focus_text_store(store)
     }
 }
 
@@ -1114,6 +1477,10 @@ impl BackendUnderTest for Win32Window {
     fn drag_start(&self) -> OsDragStart {
         input_availability::DESKTOP_DRAG_START
     }
+
+    fn focus_text_store(&mut self, store: Rc<dyn TextStore>) -> TextInputPath {
+        self.assembly.focus_text_store(store)
+    }
 }
 
 /// What the native X11 host's decoder reads: the server's device list, or
@@ -1128,6 +1495,8 @@ enum X11Reading {
     },
     /// The window lost the focus (a core `FocusOut`).
     FocusOut(EventTime),
+    /// A composition step of the window's input context.
+    Composition(CompositionStep),
 }
 
 /// The native X11 host's decoder (`input::linux::x11::decode`): each step as
@@ -1140,6 +1509,9 @@ struct X11Decoder {
     devices: Vec<x11::DeviceDescription>,
     /// The pinch's scale since it began, which XInput 2.4 reports.
     pinch_scale: f64,
+    /// The window's input context: IBus, Fcitx5 or XIM, translated into
+    /// `zwp_text_input_v3`'s events.
+    ime: ImeDriver,
 }
 
 impl X11Decoder {
@@ -1153,6 +1525,7 @@ impl X11Decoder {
             pointers: x11::X11Pointers::new(Self::clock()),
             devices: Vec::new(),
             pinch_scale: 1.0,
+            ime: ImeDriver::new(Ime::TextInputV3, None),
         };
         decoder.restart();
         decoder
@@ -1172,6 +1545,7 @@ impl X11Decoder {
 
     fn restart(&mut self) {
         self.pointers = x11::X11Pointers::new(Self::clock());
+        self.ime.restart();
         self.devices = vec![
             x11::DeviceDescription {
                 master: true,
@@ -1337,6 +1711,10 @@ impl BackendUnderTest for X11Decoder {
         input_availability::DESKTOP_DRAG_START
     }
 
+    fn focus_text_store(&mut self, store: Rc<dyn TextStore>) -> TextInputPath {
+        self.ime.focus(store)
+    }
+
     fn clock(&self) -> ClockProfile {
         ClockProfile::coarse(Duration::from_millis(1))
             .wrapping_after(Duration::from_millis(1 << 32))
@@ -1351,6 +1729,10 @@ impl BackendUnderTest for X11Decoder {
             Step::Pinch(step) => Some(self.pinch(step)),
             Step::Contact(step) => self.contact(step, true),
             Step::Undecodable(step) => self.contact(step, false),
+            Step::Composition(step) => self
+                .ime
+                .reading(step)
+                .map(|step| vec![X11Reading::Composition(step)]),
             Step::Key(step) => {
                 // `keysymdef.h`: Menu, F10.
                 let keysym = match step.key {
@@ -1380,6 +1762,7 @@ impl BackendUnderTest for X11Decoder {
                 X11Reading::Event(event) => {
                     inputs.extend(self.pointers.event(NativeSurface(1), 1.0, &event).inputs);
                 }
+                X11Reading::Composition(step) => self.ime.apply(step),
                 X11Reading::FocusOut(time) => inputs.extend(self.pointers.cancel_surface(
                     NativeSurface(1),
                     NativeCancel::FocusLost,
@@ -1547,6 +1930,54 @@ fn every_backend_passes_the_conformance_table() {
     );
 }
 
+/// The IME rows run on every input method path the table drives, and report
+/// the others as their `docs/gaps.md` entry, never as passed or not
+/// applicable: closing the gap means driving the path here.
+#[test]
+fn each_input_method_path_holds_the_ime_rows_or_names_its_gap() {
+    const ROWS: [&str; 3] = [
+        "a_composition_reaches_the_field_in_order",
+        "a_cancelled_composition_leaves_the_field_as_it_was",
+        "each_composition_step_is_one_edit_of_the_field",
+    ];
+    let driven = if cfg!(all(
+        target_os = "linux",
+        any(feature = "wayland", feature = "x11")
+    )) {
+        RowOutcome::Held
+    } else {
+        RowOutcome::NotApplicable("built without a Linux host")
+    };
+    let backends: [(&str, Profile, RowOutcome); 8] = [
+        ("win32", win32(), RowOutcome::Held),
+        ("appkit", appkit(), RowOutcome::Held),
+        ("uikit", uikit(), RowOutcome::Held),
+        ("android", android(), RowOutcome::Held),
+        ("web", web(), RowOutcome::Held),
+        ("web through a textarea", web_textarea(), RowOutcome::Held),
+        ("x11 through winit", x11(), RowOutcome::Gap(IME_ORDER_GAP)),
+        ("wayland", wayland(), driven.clone()),
+    ];
+    let mut wrong = Vec::new();
+    for (name, profile, expected) in backends {
+        let report = run_backend_conformance(&mut SharedAssembly::new(profile));
+        for row in ROWS {
+            let outcome = report.outcome(row);
+            if outcome != Some(&expected) {
+                wrong.push(format!("{name}: {row} is {outcome:?}, not {expected:?}"));
+            }
+        }
+    }
+    let report = run_backend_conformance(&mut X11Decoder::new());
+    for row in ROWS {
+        let outcome = report.outcome(row);
+        if outcome != Some(&driven) {
+            wrong.push(format!("native x11: {row} is {outcome:?}, not {driven:?}"));
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
 /// A row, the fault that breaks it and the backend profile it applies to.
 type BrokenRow = (&'static str, Fault, fn() -> Profile);
 
@@ -1698,6 +2129,42 @@ const BROKEN: &[BrokenRow] = &[
         "a_key_during_composition_is_the_input_methods",
         Fault::ComposingKeyFromEventOnly,
         android,
+    ),
+    (
+        "a_composition_reaches_the_field_in_order",
+        Fault::ImeCommitKeepsComposing,
+        wayland,
+    ),
+    (
+        "a_cancelled_composition_leaves_the_field_as_it_was",
+        Fault::ImeCancelCommits,
+        appkit,
+    ),
+    // UIKit's cancel goes through the same client.
+    (
+        "a_cancelled_composition_leaves_the_field_as_it_was",
+        Fault::ImeCancelCommits,
+        uikit,
+    ),
+    (
+        "each_composition_step_is_one_edit_of_the_field",
+        Fault::ImeStepInTwoEdits,
+        wayland,
+    ),
+    (
+        "a_composition_reaches_the_field_in_order",
+        Fault::ImeEndLost,
+        web,
+    ),
+    (
+        "a_composition_reaches_the_field_in_order",
+        Fault::ImeEndLost,
+        web_textarea,
+    ),
+    (
+        "a_composition_reaches_the_field_in_order",
+        Fault::ImeEndLost,
+        win32,
     ),
     (
         "outgoing_drag_is_delivered_as_claimed",

@@ -127,7 +127,7 @@ cargo xtask ci
 It runs, in order (`tools/xtask/src/tasks.rs` is the authority):
 
 ```bash
-cargo xtask checks                        # fmt, typos, taplo, markdown links (docs-links: lychee, offline), the paths, packages and llms.txt links the docs name (docs-paths), workspace (tiers, layers, manifests, test reachability, ADR numbers), reach (what each crate's resolved graph may contain, and the hot-reload facts), module-dag (import direction between a crate's modules), toolchain, wgsl, globals (process-global state, ADR-0097), panic-boundary (every OS entry into `flui-native` goes through `owner::panic_boundary::os_entry`, ADR-0151 §16), send-impls (every `unsafe impl Send`/`Sync` is listed and the list only shrinks, ADR-0136), try-new (every `new` returning `Result` or `Option` is listed and the list only shrinks: such a constructor is `try_new`), panic-messages (every production `expect` and `panic!` names its invariant with `BUG: ` or its `try_` twin; the per-file counts of the ones that do not only go down), inspect-debug (every `Value::Debug(` site of `flui_foundation::inspect` is counted per file and the counts only go down, ADR-0242), the docs-only allowlist, font assets, file-length, markers and changelog fragments (each with its self-test); builds only xtask
+cargo xtask checks                        # fmt, typos, taplo, markdown links (docs-links: lychee, offline), the paths, packages and llms.txt links the docs name (docs-paths), workspace (tiers, layers, manifests, test reachability, ADR numbers), reach (what each crate's resolved graph may contain, and the hot-reload facts), module-dag (import direction between a crate's modules), toolchain, wgsl, globals (process-global state, ADR-0097), panic-boundary (every OS entry into `flui-native` goes through `owner::panic_boundary::os_entry`, ADR-0151 §16), send-impls (every `unsafe impl Send`/`Sync` is listed and the list only shrinks, ADR-0136), try-new (every `new` returning `Result` or `Option` is listed and the list only shrinks: such a constructor is `try_new`), panic-messages (every production `expect` and `panic!` names its invariant with `BUG: ` or its `try_` twin; the per-file counts of the ones that do not only go down), the docs-only allowlist, font assets, file-length, markers and changelog fragments; builds only xtask (each gate's self-test runs in `cargo test -p xtask`, ADR-0303 §4)
 cargo xtask lint                          # clippy -D warnings, as the CI clippy job runs it: the workspace, then flui-engine's `testing` code
 cargo xtask doc-strict                    # cargo doc --workspace --no-deps --locked --document-private-items with every workspace `testing` feature on
 cargo xtask test                          # nextest over the local scope, flui-native headless, then the nested-cargo group (see "What `cargo xtask test` runs")
@@ -169,12 +169,11 @@ cover) runs only against a sway started by hand. On Windows the Win32 window
 tests and the contract's share the desktop's foreground and run one at a time
 (test group `desktop-foreground`).
 
-`cargo xtask inspect-debug` counts the `Value::Debug(` sites of `flui_foundation::inspect`, the
-untyped escape hatch (R50), per file in `crates/`, `packages/` and `src/`, leaving out
-`flui-foundation`'s `inspect/` module, `flui-macros` and any `/tests/` path. The counts in
-`tools/xtask/allowlists/inspect-debug.toml` are exact, each with its reason and an ADR exit: a
-file above its count ("grew"), below it ("lower it") or gone is a finding. `--seed` prints the
-list.
+`flui_foundation::inspect::Untyped::new`, the untyped escape hatch that describes a field by its
+`Debug` text, is deprecated: each site outside a derive carries
+`#[expect(deprecated, reason = "…")]`, and a field of a `#[derive(Inspect)]` type opts in with
+`#[inspect(debug)]` (ADR-0303 §7). A site that gains a typed value drops its call, and the
+compiler reports the expectation left behind.
 
 xtask does not schedule its commands. On a host shared by several agents and
 checkouts, [heli](https://github.com/vanyastaff/heli) does: every cargo, the
@@ -533,7 +532,7 @@ cargo nextest run -p flui-widgets --test perf   # the budget assertions alone
 cargo xtask perf                                # advisory: prints differences, exits 0
 cargo xtask perf --check                        # any difference fails
 cargo xtask perf --bless                        # rewrite the baseline from this run
-cargo xtask perf --self-test                    # the comparison on planted fixtures (part of `checks`)
+cargo xtask perf --self-test                    # the comparison on planted fixtures (part of `cargo test -p xtask`)
 ```
 
 The comparison is exact: a count that rose is a regression, and one that fell

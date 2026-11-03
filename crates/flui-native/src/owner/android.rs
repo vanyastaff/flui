@@ -249,6 +249,7 @@ mod hooks {
 /// (`nativeImeState`): the text it holds and the raw offsets of `Selection`
 /// and the composing span (`-1` for none), as Java counts them, in UTF-16 code
 /// units.
+#[cfg(target_os = "android")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct EditorState {
     /// The view's text.

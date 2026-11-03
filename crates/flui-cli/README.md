@@ -197,8 +197,9 @@ the app): `flui run --scene --scene-crate <crate> --package <android.package>`.
 ## Driving an app from an agent
 
 ```bash
-flui run --agent                  # debug build, on this desktop
-flui run --agent --release        # release build with the `driver` feature
+flui run --agent                         # debug build, on this desktop
+flui run --agent --release               # release build with the `driver` feature
+flui run --agent --device emulator-5554  # debug build, on an Android device
 ```
 
 `flui run --agent` gives the app a private local endpoint (a Unix socket in a
@@ -206,9 +207,13 @@ flui run --agent --release        # release build with the `driver` feature
 writes both to `target/flui-agent.json`. Every debug FLUI app serves its
 driver agent there with no code of its own (ADR-0239); an optimized build
 gets the `driver` feature of `flui` (or of `flui-app` for an app that names the
-runtime crate), under the key the app names it by. It refuses a device other
-than this desktop. With `--json` it emits `run.agent.ready {endpoint, session}`;
-the token stays out of the stream.
+runtime crate), under the key the app names it by. On an Android device the
+app binds an abstract socket (`@flui-agent-…`), which `am start` names in the
+intent's extras with the token, and the session file names the loopback port
+that `adb forward` carries to it; the forward is removed when the run ends. It
+refuses a browser and the iOS Simulator. With `--json` it emits
+`run.agent.ready {endpoint, session}`, with `forwarded` (the port's address)
+on Android; the token stays out of the stream.
 
 The agent's client launches `flui mcp` in the same project, for example in an
 MCP client's configuration:
@@ -328,7 +333,7 @@ object with an `event` field; human text, if any, goes to stderr.
 | `create.start`, `create.file`, `create.done` | `create` (also with `--dry-run`) |
 | `run.start`, `run.build.start`, `run.build.done`, `run.app.start`, `run.app.log`, `run.app.exit`, `run.change`, `run.reload`, `run.app.stop`, `run.stop` | `run` |
 | `run.web.serve {url, dir}`, `run.web.open {browser, url}`, `run.reload {kind: "page"}` | `run --device browser:…` |
-| `run.agent.ready {endpoint, session}` | `run --agent` |
+| `run.agent.ready {endpoint, session, forwarded?}` | `run --agent` (`forwarded` on Android) |
 | `build.start`, `build.phase`, `build.done` | `build` |
 | `test.start`, `test.done`, `analyze.done`, `format.done` | `test`, `analyze`, `format` |
 | `clean.removed`, `clean.done` | `clean` |

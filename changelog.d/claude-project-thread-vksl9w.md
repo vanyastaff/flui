@@ -92,6 +92,11 @@
   with `flui_platform::LaunchKey`: the value the process was launched with under a dotted key,
   the launching intent's string extra on Android and the environment variable the key spells
   elsewhere. `flui_native::current_user_id` on Linux and Android.
+- **`flui run --agent` on an Android device**: the app is started with the agent's endpoint
+  (an abstract socket) and token as `am start` extras, and `flui mcp` reaches it through the
+  loopback port of an `adb forward` the run holds and removes when it ends. A release build
+  gets the `driver` feature. The session file's `endpoint` is now typed: `{"local": …}` or
+  `{"forwarded": "127.0.0.1:<port>"}`, and `run.agent.ready` carries `forwarded` on Android.
 
 ### Removed
 

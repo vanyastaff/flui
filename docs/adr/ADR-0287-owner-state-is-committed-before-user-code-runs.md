@@ -4,6 +4,9 @@
   the capability seam's `Completion` and `Persisted` use them; each other seam moves to them in
   its own change (see Migration).
 - **Date:** 2026-11-03
+- **Superseded-by:** [ADR-0303](ADR-0303-a-rule-takes-the-first-rung-that-states-it-and-an-xtask-gate-is-the-last.md) §6 for the last bullet of Confirmation
+  only: the hand-written `catch_unwind` calls are a `clippy.toml` entry with an expectation at
+  each site, not a counting `cargo xtask` gate.
 - **Related:** [ADR-0281](ADR-0281-a-destructor-that-panics-during-an-unwind-aborts-as-in-std.md)
   (what a destructor that panics costs, and the containment after a caught failure);
   [ADR-0258](ADR-0258-owner-turn-panic-boundary-and-terminal-exit.md) (where a contained user panic

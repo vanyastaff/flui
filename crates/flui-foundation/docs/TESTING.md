@@ -65,7 +65,7 @@ fields are the description.
 | `#[inspect(unit = logical_px)]` / `.unit(Unit::LogicalPx)` | What a number measures |
 | `#[inspect(level = detail)]` | Hide the field from summaries |
 | `#[inspect(with = path)]` | Map a field with a `fn(&T) -> Value<'_>` |
-| `#[inspect(debug)]` / `out.value(name, Value::Debug(&v))` | Describe by `Debug`, counted as untyped |
+| `#[inspect(debug)]` / `out.value(name, Value::Debug(Untyped::new(&v)))` under `#[expect(deprecated, reason = "…")]` | Describe by `Debug`, counted as untyped |
 
 ### Example — render object self-description
 

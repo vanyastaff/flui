@@ -4,12 +4,16 @@
   `input` and `uinput` commands, not instrumentation; §1 amended (2026-10-19): pointer input held
   for a commit is recorded where it is dispatched or discarded; §4 amended (2026-10-29): the native
   recording's schema is `flui-protocol`'s `native_recording`, so a reader such as the driver reads
-  a recording without the core, and its codec is `flui-native`'s `journal`. §1–§6 are implemented;
+  a recording without the core, and its codec is `flui-native`'s `journal`; §7 amended
+  (2026-11-03): a backend focuses a field for the IME rows (`focus_text_store`, no default, so a
+  backend names its input method path, a `docs/gaps.md` entry for one not driven yet, or its absence
+  by design), and decoding a composition step edits that field. §1–§6 are implemented;
   §4's native codec is in `crates/flui-native/src/journal/`, its goldens in
   `crates/flui-native/tests/native_recording/`, with the `native-capture` feature to record on a
   native host. §7 is implemented for pointer assembly, clocks, the scroll grammar, undecodable
-  readings, availability and ownership (`flui_testing::backend_conformance`), with its DnD,
-  haptics and IME rows pending (`docs/plans/specs/flui-interaction/completeness/tasks.md`). §5's `--keep-text`
+  readings, availability, ownership, DnD, haptics and keys (`flui_testing::backend_conformance`),
+  and for the IME event order on the Linux, Windows, Apple, Android and Web input method paths;
+  winit reports the IME rows as `docs/gaps.md` entry 1. §5's `--keep-text`
   is the API's `Privacy::KeepText`; the command-line flag arrives with a recording tool. §8 is
   implemented on Windows: [`cargo xtask device windows-input`](https://github.com/vanyastaff/flui/blob/e8a42673ad23a2e88614940a266cd01224dcb25f/tools/xtask/src/device.rs) injects touch and pen
   (`InjectSyntheticPointerInput`) and mouse and wheel (`SendInput`) into a real window, records
@@ -169,6 +173,13 @@ and put `serde` on the Stable contract crate.
    and is never `dyn`. Rows run through `run_table`: pointer assembly, clocks (per-device and
    per-sequence clock choice, QPC on Win32, monotonic order, counter wrap), the `Scroll` and
    `PanZoom` grammar, DnD, haptics and IME event order. Each feature adds its own rows.
+   The IME rows take a field: `fn focus_text_store(&mut self, store: Rc<dyn TextStore>) ->
+   TextInputPath` has no default body, and answers `Focused`, `Gap(GapEntry)` for an input
+   method path FLUI has not driven through the table yet (reported as `RowOutcome::Gap`, never
+   as passed) or `None` for a backend with no input method by design. A `Step::Composition`
+   reading decodes into the edits the path makes of the field; one scenario (a preedit that
+   grows, a picked candidate, a commit, and a cancelled composition) leaves the same text,
+   composing range and caret on every path, each step as one read-write session.
 8. **Native injection.** [`cargo xtask device <os>-input`](https://github.com/vanyastaff/flui/blob/e8a42673ad23a2e88614940a266cd01224dcb25f/tools/xtask/src/device.rs) exists for every OS: `SendInput` and
    `InjectSyntheticPointerInput` on Windows, `CGEvent` on macOS, XCUITest on iOS, the shell's
    `input` and `uinput` commands on Android, uinput/libei on Linux, WebDriver BiDi on the web.
@@ -205,7 +216,9 @@ vocabulary evolves without a wire freeze, at the cost of a DTO layer kept in ste
   each of Win32, AppKit, UIKit, Android and the web feeds, with that backend's clock shape,
   contact kinds and availability table (`every_backend_passes_the_conformance_table` in
   `flui-native`); each row also fails against a backend broken for it
-  (`each_conformance_row_fails_against_a_broken_backend`). The OS translation in front of the
+  (`each_conformance_row_fails_against_a_broken_backend`). The IME rows drive each input method
+  path's client through `flui_native::text::conformance`, and every backend either holds them or
+  names its gap (`each_input_method_path_holds_the_ime_rows_or_names_its_gap`). The OS translation in front of the
   decoders runs on a native host or device only, as do all [`xtask device` checks](https://github.com/vanyastaff/flui/blob/e8a42673ad23a2e88614940a266cd01224dcb25f/tools/xtask/src/device.rs).
 
 ## Alternatives rejected

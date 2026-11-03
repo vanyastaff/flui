@@ -460,9 +460,15 @@ impl flui_foundation::inspect::Inspect for RenderContainer {
         out.field("margin", &self.margin);
         out.field("color", &self.color);
         if let Some(decoration) = &self.decoration {
+            #[expect(
+                deprecated,
+                reason = "BoxDecoration is a composite with no typed value"
+            )]
             out.value(
                 "decoration",
-                flui_foundation::inspect::Value::Debug(decoration),
+                flui_foundation::inspect::Value::Debug(flui_foundation::inspect::Untyped::new(
+                    decoration,
+                )),
             );
         }
         out.field("hasConstraints", &self.additional_constraints.is_some());

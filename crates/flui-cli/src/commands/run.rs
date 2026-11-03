@@ -124,7 +124,7 @@ fn run_session(
                 reason: "the host/worker split targets the desktop; use `flui run --scene` for Android scene reload".into(),
             });
         }
-        let mut strategy = AndroidSession::new(device.clone(), release, hot_reload)?;
+        let mut strategy = AndroidSession::new(device.clone(), release, hot_reload, agent)?;
         return dev_loop(&mut strategy);
     }
     if let Target::Browser(browser) = target {
@@ -173,20 +173,24 @@ fn run_session(
     Ok(())
 }
 
-/// What `--agent` needs before anything is built: a desktop target and an
-/// application. Then the session (endpoint, token, session file) it will
-/// launch the app with. A debug build serves the agent as it is; a profile
-/// without debug assertions builds with the `driver` feature.
+/// What `--agent` needs before anything is built: this desktop or an Android
+/// device, and an application. Then the session (endpoint, token, session
+/// file) it will launch the app with; an Android app's endpoint is an
+/// abstract socket that `adb forward` carries a loopback port to. A debug
+/// build serves the agent as it is; a profile without debug assertions
+/// builds with the `driver` feature.
 fn start_agent_session(
     project: &Project,
     target: &Target,
     release: bool,
     profile: Option<&str>,
 ) -> CliResult<Session> {
-    if !matches!(target, Target::Host) {
+    if !matches!(target, Target::Host | Target::Android(_)) {
         return Err(CliError::Unsupported {
             what: format!("`flui run --agent` on {}", target.label()),
-            reason: "the agent endpoint is a local socket or pipe; run it on this desktop".into(),
+            reason: "the agent endpoint is a local socket, a pipe or an Android abstract socket; \
+                     run it on this desktop or an Android device"
+                .into(),
         });
     }
     let host = match project {
@@ -217,7 +221,16 @@ fn start_agent_session(
     let start = std::env::current_dir().context("could not read current directory")?;
     let workspace = find_workspace_root(&start);
     let target_dir = agent::target_dir_override();
-    let mut session = Session::create(&start, workspace.as_deref(), target_dir.as_deref())?;
+    let mut session = match target {
+        Target::Android(device) => Session::create_forwarded(
+            &start,
+            workspace.as_deref(),
+            target_dir.as_deref(),
+            &find_adb()?,
+            &device.serial,
+        )?,
+        _ => Session::create(&start, workspace.as_deref(), target_dir.as_deref())?,
+    };
     if let Some(feature) = driver_feature {
         session = session.with_driver_feature(feature);
     }
@@ -225,13 +238,14 @@ fn start_agent_session(
         "Agent session: {} (connect with `flui mcp`)",
         style(session.file().display()).cyan()
     ))?;
-    ui::emit(
-        "run.agent.ready",
-        &serde_json::json!({
-            "endpoint": session.credentials().endpoint,
-            "session": session.file(),
-        }),
-    );
+    let mut ready = serde_json::json!({
+        "endpoint": session.app_endpoint(),
+        "session": session.file(),
+    });
+    if let agent::Endpoint::Forwarded(address) = &session.credentials().endpoint {
+        ready["forwarded"] = serde_json::json!(address);
+    }
+    ui::emit("run.agent.ready", &ready);
     Ok(session)
 }
 
@@ -1391,22 +1405,36 @@ struct AndroidSession {
     /// The application id `flui platform add android` wrote into the manifest.
     package: String,
     runtime: tokio::runtime::Runtime,
+    /// `--agent`: the app is built (with the `driver` feature for a release
+    /// build) and started with the session's endpoint and token as intent
+    /// extras. Dropped after the app is stopped, removing the forward.
+    agent: Option<Session>,
 }
 
 /// What Android launches: the Activity the generated manifest names.
 const ANDROID_ACTIVITY: &str = crate::build::android_manifest::ACTIVITY;
 
+/// The `adb` of the Android SDK this host has.
+fn find_adb() -> CliResult<PathBuf> {
+    super::devices::find_android_tool("adb", "platform-tools").ok_or_else(|| {
+        CliError::ToolNotFound {
+            tool: "adb".into(),
+            suggestion:
+                "install Android SDK platform-tools and put `adb` on PATH, or set ANDROID_HOME"
+                    .into(),
+        }
+    })
+}
+
 impl AndroidSession {
-    fn new(device: AndroidDevice, release: bool, hot_reload: bool) -> CliResult<Self> {
+    fn new(
+        device: AndroidDevice,
+        release: bool,
+        hot_reload: bool,
+        agent: Option<Session>,
+    ) -> CliResult<Self> {
         let root = std::env::current_dir()?;
-        let adb = super::devices::find_android_tool("adb", "platform-tools").ok_or_else(|| {
-            CliError::ToolNotFound {
-                tool: "adb".into(),
-                suggestion:
-                    "install Android SDK platform-tools and put `adb` on PATH, or set ANDROID_HOME"
-                        .into(),
-            }
-        })?;
+        let adb = find_adb()?;
         let config = FluiConfig::load_from(&root.join("flui.toml"))
             .context("flui.toml names the Android package (`[app] id`)")?;
         Ok(Self {
@@ -1417,6 +1445,7 @@ impl AndroidSession {
             adb,
             package: config.app.id.android_package().to_owned(),
             runtime: tokio::runtime::Runtime::new().context("start the build runtime")?,
+            agent,
         })
     }
 
@@ -1428,7 +1457,11 @@ impl AndroidSession {
 
     /// Run one bounded `adb` command that must succeed.
     fn adb_ok(&self, args: &[&str], timeout: Duration) -> CliResult<std::process::Output> {
-        let rendered = format!("adb -s {} {}", self.device.serial, args.join(" "));
+        let mut rendered = format!("adb -s {} {}", self.device.serial, args.join(" "));
+        // The agent's launch token never reaches the output or the event stream.
+        if let Some(session) = &self.agent {
+            rendered = rendered.replace(&session.credentials().token, "<token>");
+        }
         let output = crate::proc::output_with_timeout(self.adb().args(args), timeout)
             .with_context(|| rendered.clone())?;
         if output.status.success() {
@@ -1472,8 +1505,14 @@ impl AndroidSession {
             .validate_environment(abi)
             .map_err(environment_error)?;
         let floors = crate::config::project_floors(&self.root)?;
+        let driver_feature = self
+            .agent
+            .as_ref()
+            .and_then(Session::driver_feature)
+            .map(str::to_owned);
         let ctx = BuilderContextBuilder::new(self.root.clone())
             .with_floors(floors)
+            .with_features(driver_feature)
             .with_platform(Platform::Android {
                 targets: vec![abi.to_owned()],
             })
@@ -1523,10 +1562,11 @@ impl AndroidSession {
             .args(["shell", "am", "force-stop", &self.package])
             .output();
         let component = format!("{}/{ANDROID_ACTIVITY}", self.package);
-        self.adb_ok(
-            &["shell", "am", "start", "-W", "-n", &component],
-            Duration::from_secs(60),
-        )?;
+        let mut start = vec!["shell", "am", "start", "-W", "-n", &component];
+        if let Some(session) = &self.agent {
+            start.extend(session.intent_extras());
+        }
+        self.adb_ok(&start, Duration::from_secs(60))?;
         let pid = self.wait_for_pid()?;
         ui::emit(
             "run.android.start",
