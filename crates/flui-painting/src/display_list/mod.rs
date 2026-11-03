@@ -12,10 +12,12 @@ use std::ops::Index;
 use flui_foundation::geometry::Rect;
 use flui_foundation::inspect::{Fields, Inspect, Unit};
 
+mod blur;
 pub mod command;
 pub mod command_ops;
 pub mod paragraph;
 
+pub use blur::BlurSigma;
 pub use command::{DrawCommand, DrawOp};
 pub use command_ops::DamageExtent;
 pub use paragraph::{FontBlob, FontFace, ShapedGlyph, ShapedParagraph, ShapedRun};

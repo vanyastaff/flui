@@ -271,6 +271,7 @@ pub mod interaction {
 /// operations; no package names it outside its tests.
 pub mod painting {
     pub use flui_painting::Alignment;
+    pub use flui_painting::BlurSigma;
     pub use flui_painting::Canvas;
     pub use flui_painting::DrawOp;
     pub use flui_painting::TextSizing;
@@ -291,6 +292,7 @@ pub mod painting {
     pub use flui_painting::styling::BoxDecoration;
     pub use flui_painting::styling::BoxShadow;
     pub use flui_painting::styling::Color;
+    pub use flui_painting::styling::Shadow;
     pub use flui_painting::typography::FontWeight;
     pub use flui_painting::typography::TextDirection;
     pub use flui_painting::typography::TextStyle;

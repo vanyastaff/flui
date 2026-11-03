@@ -92,6 +92,19 @@ pub(crate) trait CommandRenderer {
         transform: &Matrix4,
     );
 
+    /// Render the shadow a shaped paragraph casts, its top-left at `offset`:
+    /// every glyph's coverage in `color`, blurred by `sigma` logical pixels
+    /// (ADR-0309 §3). A blur the renderer cannot draw falls back to a sharp
+    /// shadow, never to an error.
+    fn render_paragraph_shadow(
+        &mut self,
+        paragraph: &Arc<flui_painting::ShapedParagraph>,
+        offset: Offset<f64>,
+        color: Color,
+        sigma: flui_painting::BlurSigma,
+        transform: &Matrix4,
+    );
+
     // ===== Images =====
 
     /// Render an image to destination rectangle

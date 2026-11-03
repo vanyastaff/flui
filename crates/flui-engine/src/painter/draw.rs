@@ -248,7 +248,53 @@ impl super::WgpuPainter {
             &paragraph,
             position,
             color,
+            crate::batches::GlyphInk::Text,
         );
+    }
+
+    /// Draws the shadow `paragraph`'s glyphs cast, the paragraph's top-left
+    /// at `position` (the shadow's offset included): every glyph's coverage
+    /// in `color`, a colour glyph's too, blurred by `sigma` logical pixels
+    /// (ADR-0309 §3).
+    ///
+    /// The blur is a layer image filter of `sigma` times the transform's
+    /// largest scale, clamped to [`MAX_TEXT_SHADOW_DEVICE_SIGMA`]; a sigma the
+    /// filter cannot weigh draws the shadow sharp. The layer opens and closes
+    /// around the glyphs within this call, and the shadow never records an
+    /// error.
+    pub(crate) fn draw_paragraph_shadow(
+        &mut self,
+        paragraph: &flui_painting::ShapedParagraph,
+        position: flui_foundation::geometry::Point<f64>,
+        color: flui_painting::styling::Color,
+        sigma: flui_painting::BlurSigma,
+    ) {
+        tracing::trace!(
+            lines = paragraph.line_count(),
+            ?position,
+            ?color,
+            sigma = sigma.get(),
+            "WgpuPainter::draw_paragraph_shadow"
+        );
+        let blur = text_shadow_blur(sigma, self.state.max_scale());
+        if let Some(spec) = blur.clone() {
+            self.save_layer_with_image_filter(spec);
+        }
+        let opacity = self.compositor.current_opacity();
+        crate::batches::DrawBatcher::draw_paragraph(
+            &mut self.current_segment,
+            &mut self.draw_order,
+            &self.state,
+            &mut self.glyph_atlas,
+            opacity,
+            paragraph,
+            position,
+            color,
+            crate::batches::GlyphInk::Silhouette,
+        );
+        if blur.is_some() {
+            self.restore_layer();
+        }
     }
 
     /// Draw an arbitrary path.
@@ -693,6 +739,40 @@ impl super::WgpuPainter {
                 opacity,
             ),
             Err(error) => self.current_segment.record_external_error(error),
+        }
+    }
+}
+
+/// The largest device-pixel sigma a text shadow's blur is drawn with
+/// (ADR-0309 §3).
+///
+/// The blur samples `2·⌈√3·σ⌉ + 1` texels per pixel and pass at full
+/// resolution, over the text's box grown by that radius, against the
+/// frame's effect budget. At 64 a full-width line of a 4K window costs
+/// about 6·10⁸ of the budget's 10⁹; a logical sigma of 32 is exact at a
+/// device pixel ratio of 2. A downsampled blur would lift the cap.
+const MAX_TEXT_SHADOW_DEVICE_SIGMA: f32 = 64.0;
+
+/// The layer filter that blurs a text shadow of `sigma` logical pixels under
+/// a transform whose largest scale is `scale`, or `None` when the shadow is
+/// drawn sharp: a zero sigma, or one the filter cannot weigh after scaling.
+fn text_shadow_blur(
+    sigma: flui_painting::BlurSigma,
+    scale: f32,
+) -> Option<crate::command_ir::ImageFilterSpec> {
+    let device = (sigma.get() * scale).min(MAX_TEXT_SHADOW_DEVICE_SIGMA);
+    if !(device > 0.0 && (device * device).is_normal()) {
+        return None;
+    }
+    let spec = crate::command_ir::ImageFilterSpec::Blur {
+        sigma_x: device,
+        sigma_y: device,
+    };
+    match spec.validate() {
+        Ok(()) => Some(spec),
+        Err(error) => {
+            tracing::warn!(?error, "a text shadow's blur is drawn sharp");
+            None
         }
     }
 }

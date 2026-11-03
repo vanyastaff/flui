@@ -14,7 +14,7 @@ use crate::{
 };
 use flui_foundation::geometry::{Matrix4, Offset, Point, RRect, RSuperellipse, Rect};
 
-use super::ShapedParagraph;
+use super::{BlurSigma, ShapedParagraph};
 use super::{ColorFilter, ImageRepeat};
 use crate::display_list::{BlendMode, Clip, ClipOp, FilterQuality, Paint, PointMode, TextureId};
 
@@ -169,6 +169,24 @@ pub enum DrawOp {
         offset: Offset<f64>,
         /// The colour of every glyph that has no span colour of its own.
         color: Color,
+    },
+
+    /// Draw the shadow a paragraph's glyphs cast (ADR-0309 §3): every
+    /// glyph's coverage in `color`, a colour glyph's included and span
+    /// colours ignored, blurred by `sigma`.
+    ///
+    /// `paragraph` holds the glyphs of the spans that cast this shadow,
+    /// taken from the layout that measured the text; `offset` is the
+    /// paragraph's top-left moved by the shadow's offset.
+    ParagraphShadow {
+        /// The glyphs that cast the shadow.
+        paragraph: Arc<ShapedParagraph>,
+        /// Top-left of the paragraph's box, moved by the shadow's offset.
+        offset: Offset<f64>,
+        /// The shadow's colour.
+        color: Color,
+        /// The blur, in logical pixels; zero is sharp.
+        sigma: BlurSigma,
     },
 
     // === Image ===

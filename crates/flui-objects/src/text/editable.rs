@@ -753,7 +753,7 @@ impl RenderEditable {
         self.painter
             .text()
             .and_then(InlineSpan::style)
-            .and_then(|style| style.foreground.or(style.color))
+            .and_then(|style| style.color)
             .unwrap_or(Color::BLACK)
     }
 

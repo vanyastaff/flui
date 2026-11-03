@@ -2,8 +2,7 @@
 
 use std::fmt;
 
-use flui_painting::styling::Color;
-use flui_painting::typography::TextShadow;
+use flui_painting::styling::{Color, Shadow};
 use flui_view::prelude::*;
 use flui_view::{BoxedView, InheritedView, impl_inherited_view};
 
@@ -39,9 +38,9 @@ pub struct IconThemeData {
     /// Opacity multiplier applied to `color` (and to a caller-supplied
     /// [`Icon::color`](crate::Icon::color) override).
     ///
-    /// **Deferred:** [`Icon`](crate::Icon)'s `build` does not yet fold this
-    /// into the resolved color; the field is carried for forward
-    /// compatibility with that follow-up.
+    /// [`Icon`](crate::Icon) multiplies the resolved colour's alpha by it,
+    /// clamped to `0.0..=1.0`; a non-finite opacity leaves the colour as it
+    /// is.
     pub opacity: Option<f64>,
 
     /// `FILL` font-variation axis (`0.0` unfilled .. `1.0` filled). No effect
@@ -61,7 +60,7 @@ pub struct IconThemeData {
     pub optical_size: Option<f64>,
 
     /// Shadows painted underneath the icon.
-    pub shadows: Option<Vec<TextShadow>>,
+    pub shadows: Option<Vec<Shadow<f64>>>,
 
     /// Whether to scale `size` by the ambient `MediaQuery` text-scale
     /// factor.
@@ -147,7 +146,7 @@ impl IconThemeData {
 
     /// Sets the `shadows` field.
     #[must_use]
-    pub fn shadows(mut self, shadows: Vec<TextShadow>) -> Self {
+    pub fn shadows(mut self, shadows: Vec<Shadow<f64>>) -> Self {
         self.shadows = Some(shadows);
         self
     }

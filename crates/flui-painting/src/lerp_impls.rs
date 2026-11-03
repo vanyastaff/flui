@@ -74,19 +74,21 @@ impl Lerp for crate::typography::TextStyle {
         let scalar = |a: &f64, b: &f64| a.lerp_to(b, t);
         let colour = |a: &Color, b: &Color| a.lerp_to(b, t);
         let near = if t < 0.5 { self } else { other };
-        let shadows = if self.shadows.len() == other.shadows.len() {
-            self.shadows
-                .iter()
-                .zip(&other.shadows)
-                .map(|(a, b)| crate::typography::TextShadow {
-                    color: a.color.lerp_to(&b.color, t),
-                    offset_x: scalar(&a.offset_x, &b.offset_x),
-                    offset_y: scalar(&a.offset_y, &b.offset_y),
-                    blur_radius: scalar(&a.blur_radius, &b.blur_radius).max(0.0),
-                })
-                .collect()
-        } else {
-            near.shadows.clone()
+        let shadows = match (&self.shadows, &other.shadows) {
+            (Some(from), Some(to)) if from.len() == to.len() => Some(
+                from.iter()
+                    .zip(to)
+                    .map(|(a, b)| crate::styling::Shadow {
+                        color: a.color.lerp_to(&b.color, t),
+                        offset: flui_foundation::geometry::Offset::new(
+                            scalar(&a.offset.dx, &b.offset.dx),
+                            scalar(&a.offset.dy, &b.offset.dy),
+                        ),
+                        blur_radius: scalar(&a.blur_radius, &b.blur_radius).max(0.0),
+                    })
+                    .collect::<Vec<crate::styling::Shadow<f64>>>(),
+            ),
+            _ => near.shadows.clone(),
         };
         let font_size = both(
             self.font_size.as_ref(),
@@ -117,18 +119,6 @@ impl Lerp for crate::typography::TextStyle {
             background_color: both(
                 self.background_color.as_ref(),
                 other.background_color.as_ref(),
-                t,
-                colour,
-            ),
-            foreground: both(
-                self.foreground.as_ref(),
-                other.foreground.as_ref(),
-                t,
-                colour,
-            ),
-            background: both(
-                self.background.as_ref(),
-                other.background.as_ref(),
                 t,
                 colour,
             ),
