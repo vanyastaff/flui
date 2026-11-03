@@ -57,7 +57,11 @@ pub(super) fn end() {
 }
 
 /// Whether a hook of the loop running on this thread serves.
-#[cfg(test)]
+// The desktop loop's tests read it.
+#[cfg(all(
+    test,
+    not(any(target_os = "android", target_os = "ios", target_arch = "wasm32"))
+))]
 pub(super) fn is_serving() -> bool {
     APP_RUNTIME.with(|slot| slot.borrow().loop_dev_agent.is_serving())
 }
