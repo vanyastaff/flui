@@ -396,6 +396,10 @@ pub fn run_backend_conformance<B: BackendUnderTest>(backend: &mut B) -> Conforma
         .into_iter()
         .map(|row| {
             backend.restart();
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "ADR-0287: the kit reports a row's panic as that row's failure"
+            )]
             let outcome = match catch_unwind(AssertUnwindSafe(|| (row.check)(backend))) {
                 Ok(Ok(outcome)) => outcome,
                 Ok(Err(message)) => RowOutcome::Failed(message),

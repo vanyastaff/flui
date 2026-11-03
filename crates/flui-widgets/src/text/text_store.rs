@@ -508,6 +508,7 @@ impl EditableTextStore {
                     calls,
                     &mut |calls| {
                         *self.publication.borrow_mut() = Publication::Idle;
+                        #[expect(clippy::disallowed_methods, reason = "ADR-0287: a notification flush runs contained so publication state resets")]
                         let prepared =
                             catch_unwind(AssertUnwindSafe(|| self.flush_notifications(calls)));
                         *self.publication.borrow_mut() = Publication::Settling;
@@ -521,6 +522,10 @@ impl EditableTextStore {
                     },
                 );
             };
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "ADR-0287: an observer's publish_change runs contained so settling completes"
+            )]
             let result = catch_unwind(AssertUnwindSafe(|| {
                 observer.publish_change(change, &mut publish, calls);
             }));

@@ -322,6 +322,10 @@ impl UiRuntime {
         }
         let mut first_failure = None;
         for presentation in self.presentations.iter() {
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "ADR-0287: a presentation's motion policy runs contained so the others are refreshed"
+            )]
             let failure = catch_unwind(AssertUnwindSafe(|| {
                 let policy = presentation.motion_policy();
                 presentation.media_query.update(|data| data.motion = policy);
@@ -332,6 +336,10 @@ impl UiRuntime {
                 failure,
                 "application motion publication",
             );
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "ADR-0287: a redraw request runs contained so other presentations are refreshed"
+            )]
             let failure =
                 catch_unwind(AssertUnwindSafe(|| self.request_redraw_for(presentation))).err();
             crate::lifecycle_state::preserve_first_lifecycle_panic(
@@ -468,6 +476,10 @@ impl UiRuntime {
             if !due || !turn.admit(presentation.id()) {
                 continue;
             }
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "ADR-0287: a presentation's refresh runs contained so the others are refreshed"
+            )]
             let failure = catch_unwind(AssertUnwindSafe(|| {
                 refresh(
                     presentation,
@@ -530,6 +542,10 @@ impl UiRuntime {
         }
         let mut first_failure = None;
         for presentation in self.presentations.iter() {
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "ADR-0287: a presentation's refresh runs contained so the others are refreshed"
+            )]
             if let Err(failure) = catch_unwind(AssertUnwindSafe(|| {
                 refresh(presentation, &snapshot.values, self.clock.now(), true);
             })) {
@@ -540,6 +556,10 @@ impl UiRuntime {
                 );
             }
             if motion_changed {
+                #[expect(
+                    clippy::disallowed_methods,
+                    reason = "ADR-0287: a redraw request runs contained so other presentations are refreshed"
+                )]
                 let failure =
                     catch_unwind(AssertUnwindSafe(|| self.request_redraw_for(presentation))).err();
                 crate::lifecycle_state::preserve_first_lifecycle_panic(

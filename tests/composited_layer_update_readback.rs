@@ -13,6 +13,10 @@
 //! on both — adding a wgpu dev-dependency to `flui-rendering` just to reach
 //! the renderer would pull the whole GPU stack into that crate's test build.
 
+#![allow(
+    clippy::disallowed_methods,
+    reason = "test code catches a panic to assert on it (ADR-0303 §5)"
+)]
 use flui_engine::HeadlessRenderer;
 use flui_foundation::geometry::{Matrix4, Size};
 use flui_objects::{

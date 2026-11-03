@@ -23,6 +23,10 @@
 //! exactly one case, and it sets the child's environment only on the spawned
 //! command.
 
+#![allow(
+    clippy::disallowed_methods,
+    reason = "test code catches a panic to assert on it (ADR-0303 §5)"
+)]
 #[path = "a11y_query.rs"]
 mod a11y_query;
 #[path = "async_driver.rs"]

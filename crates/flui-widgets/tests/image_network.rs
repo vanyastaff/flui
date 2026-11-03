@@ -1,5 +1,9 @@
 //! `NetworkImage` end-to-end tests (`asset-images` feature), fetched with a
 //! scripted HTTP client: no test reaches the network.
+#![allow(
+    clippy::disallowed_methods,
+    reason = "test code catches a panic to assert on it (ADR-0303 §5)"
+)]
 #![cfg(feature = "asset-images")]
 
 #[path = "common/cases.rs"]

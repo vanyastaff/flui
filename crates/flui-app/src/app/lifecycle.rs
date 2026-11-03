@@ -156,6 +156,10 @@ impl<F: Future + Unpin> Future for CatchUnwind<F> {
                 .as_mut()
                 .expect("BUG: completed future polled again"),
         );
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: a polled future's panic becomes an error value, not an unwind"
+        )]
         match std::panic::catch_unwind(AssertUnwindSafe(|| inner.poll(context))) {
             Ok(Poll::Ready(value)) => Poll::Ready(Ok(value)),
             Ok(Poll::Pending) => Poll::Pending,
@@ -174,6 +178,10 @@ impl<F: Future + Unpin> Future for CatchUnwind<F> {
 // Diagnostics are user code too. A reporting failure cannot erase completion
 // evidence or strand a worker's accepted tail.
 pub(crate) fn contain_lifecycle_diagnostic(report: impl FnOnce()) {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "ADR-0287: a diagnostic's panic must not erase completion evidence"
+    )]
     if let Err(payload) = std::panic::catch_unwind(AssertUnwindSafe(report)) {
         flui_foundation::panic::discard_payload(payload);
     }
@@ -390,6 +398,10 @@ impl TaskSpawner {
             let context = TaskContext {
                 signal: task_signal,
             };
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "ADR-0287: a task job's panic is reported as an outcome, not unwound"
+            )]
             match std::panic::catch_unwind(AssertUnwindSafe(|| job(&context))) {
                 Ok(value) => {
                     let _ = report.try_send(TaskOutcome::Completed(value));
@@ -644,6 +656,10 @@ where
                 );
             });
         }
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: a refused value's drop runs contained; the failure stays first"
+        )]
         if let Err(payload) = std::panic::catch_unwind(AssertUnwindSafe(|| drop(replaced))) {
             // The refused value is still destroyed, under containment; the
             // retirement failure stays the one resumed (ADR-0281 §3).
@@ -708,12 +724,20 @@ where
             let context = TaskContext {
                 signal: signal.clone(),
             };
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "ADR-0287: a worker body's panic is reported; the worker keeps its queue"
+            )]
             let output =
                 std::panic::catch_unwind(AssertUnwindSafe(|| (shared.run.lock())(input, &context)));
             match output {
                 Ok(output) => {
                     let replaced = shared.latest.lock().replace((generation, output));
                     if let Some((stale, retired)) = replaced {
+                        #[expect(
+                            clippy::disallowed_methods,
+                            reason = "ADR-0287: a retired worker output's drop runs contained after the swap"
+                        )]
                         let retirement =
                             std::panic::catch_unwind(AssertUnwindSafe(|| drop(retired)));
                         if let Err(payload) = retirement {
@@ -1347,6 +1371,10 @@ impl ServiceAdmission {
         // become a typed start failure, never an unwind through the
         // bootstrap (or through whatever non-bootstrap caller starts a
         // service later).
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: a service factory's panic becomes a typed start failure"
+        )]
         let future = match std::panic::catch_unwind(AssertUnwindSafe(|| (definition.run)(context)))
         {
             Ok(future) => future,

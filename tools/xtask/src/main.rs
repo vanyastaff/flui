@@ -4,6 +4,13 @@
 //! so it runs the same on every host and is checked by the same compiler and
 //! lints as the framework. Each module owns one command family.
 
+#![cfg_attr(
+    test,
+    allow(
+        clippy::disallowed_methods,
+        reason = "test code catches a panic to assert on it (ADR-0303 §5)"
+    )
+)]
 mod util;
 
 #[cfg(test)]

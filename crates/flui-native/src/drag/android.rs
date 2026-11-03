@@ -870,6 +870,10 @@ fn serve(
     provider: &mut flui_platform::drag::OsDragProvider,
     index: u16,
 ) -> Option<TransferPayload> {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "ADR-0287: a drag provider's panic fails the transfer instead of crossing the JNI"
+    )]
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         provider(RepresentationIndex(index)).ok()
     }))

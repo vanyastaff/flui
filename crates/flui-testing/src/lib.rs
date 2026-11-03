@@ -110,6 +110,13 @@
 //! assert!(fired.get());
 //! ```
 
+#![cfg_attr(
+    test,
+    allow(
+        clippy::disallowed_methods,
+        reason = "test code catches a panic to assert on it (ADR-0303 §5)"
+    )
+)]
 // Every public item is documented; keep it that way.
 #![deny(missing_docs)]
 
@@ -401,8 +408,16 @@ impl HeadlessBinding {
         let _ = self
             .lifecycle
             .commit_terminal(flui_view::AppLifecycleState::Detached);
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: lifecycle listeners run contained so the close cleanup still runs"
+        )]
         let notification =
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.lifecycle.drain()));
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: the close cleanup runs contained even if the notification panics"
+        )]
         let cleanup = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             self.lifecycle.finish_close();
         }));
@@ -676,9 +691,17 @@ impl HeadlessBinding {
     /// A failed installation still retires the outgoing owner, preserving the first failure.
     fn complete_driver_replacement<T>(vsync: &Vsync, request: std::rc::Rc<dyn Fn()>, outgoing: T) {
         use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: frame requester installation runs contained so the outgoing owner retires"
+        )]
         let installation = catch_unwind(AssertUnwindSafe(|| {
             vsync.set_frame_requester(Some(request));
         }));
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: the outgoing owner's drop runs contained; the first failure stays"
+        )]
         let retirement = catch_unwind(AssertUnwindSafe(|| drop(outgoing)));
         if let Err(first) = installation {
             if let Err(later) = retirement {
@@ -946,11 +969,13 @@ impl HeadlessBinding {
         hit_test: impl FnOnce(Offset<f64>) -> HitTestResult,
     ) {
         self.interaction_lane.enter(|| {
+            #[expect(clippy::disallowed_methods, reason = "ADR-0287: the kit holds the routing panic so deferred resolution still runs")]
             let route_panic = catch_unwind(AssertUnwindSafe(|| {
                 self.gestures.handle_pointer_event(event, hit_test);
                 self.gestures.flush_pending_moves();
             }))
             .err();
+            #[expect(clippy::disallowed_methods, reason = "ADR-0287: the kit holds the deferred-resolution panic until routing is reported")]
             let deferred_panic = catch_unwind(AssertUnwindSafe(|| {
                 self.gestures.drain_deferred_arena_resolutions();
             }))

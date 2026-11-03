@@ -165,6 +165,13 @@
 //! delivered before the open returns, then as changes in order with the input
 //! around them.
 
+#![cfg_attr(
+    test,
+    allow(
+        clippy::disallowed_methods,
+        reason = "test code catches a panic to assert on it (ADR-0303 §5)"
+    )
+)]
 // Platform FFI is the sanctioned `unsafe` boundary of the workspace (Win32 /
 // AppKit / UIKit / Android NDK / wasm-bindgen — `headless` has none). The
 // crate does not opt the whole tree out of `unsafe_code = "warn"`: each FFI

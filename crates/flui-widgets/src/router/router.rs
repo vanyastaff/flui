@@ -574,6 +574,10 @@ impl<R: Routable> RouterShared<R> {
         // Spawning wakes the frame hook, which may panic; the task is then
         // cancelled, and nothing stays queued, so the next announcement tries
         // again. While a panic already unwinds, the hook's is kept, not raised.
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: the frame hook woken by spawn runs contained; nothing stays queued"
+        )]
         let spawned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             driver.spawn_local(Box::pin(async move { deliver(&shared) }))
         }));

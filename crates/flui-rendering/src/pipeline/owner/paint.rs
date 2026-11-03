@@ -109,6 +109,10 @@ impl PipelineOwner<PaintPhase> {
         // visual-update callback) leaves the paint queue as the error arm
         // does, for the retry to run on; the phase is left before it resumes,
         // so the next frame does not route its marks as mid-paint ones.
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: the paint pass leaves its phase and keeps the queue on a panic"
+        )]
         match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.paint_in_phase())) {
             Ok(result) => result,
             Err(payload) => {
@@ -589,6 +593,10 @@ impl PipelineOwner<PaintPhase> {
             // repaint calls this same `paint_effects` on the same node and
             // would panic a second time, so the poison must surface once,
             // not be laundered into an infinite retry loop.
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "ADR-0287: paint_effects runs contained; a panic poisons without a retry loop"
+            )]
             let fresh = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 own_effect_layers(node.paint_effects(), slots.origin)
             }))
@@ -786,6 +794,10 @@ impl PipelineOwner<PaintPhase> {
         let debug_name = render_node.debug_name();
         let mut recorder = FragmentRecorder::new(origin, self.device_pixel_ratio)
             .with_paint_anchor(anchor.map(|frame| frame.at(origin)));
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: a render object's paint runs contained; a panic poisons the node"
+        )]
         let own_effects = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             render_node.paint_raw(&mut recorder, child_ids.len());
             own_effect_layers(render_node.paint_effects(), origin)

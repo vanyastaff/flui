@@ -117,6 +117,10 @@ impl Disconnect {
         }
         // Traced once the quit is asked: a subscriber is user code, and one
         // that panics must not keep the app running past its driver.
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: a subscriber's panic must not keep the app past its driver"
+        )]
         let traced = std::panic::catch_unwind(|| {
             tracing::info!("the driver disconnected; the app exits");
         });

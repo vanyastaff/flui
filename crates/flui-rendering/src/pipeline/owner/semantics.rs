@@ -111,6 +111,10 @@ impl PipelineOwner<Semantics> {
         // Assembly runs authored code (configurations, Flow delegates). Every
         // return leaves the phase itself; an unwind leaves it here, so a host
         // that catches the panic keeps an owner routing marks normally.
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: semantics assembly runs authored code; the phase is left on a panic"
+        )]
         match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             self.run_semantics_in_phase()
         })) {

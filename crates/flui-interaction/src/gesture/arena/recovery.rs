@@ -85,6 +85,10 @@ impl ArenaRecovery {
         action: impl FnOnce(&mut RecoveryScope<'_>),
     ) -> bool {
         self.drain(scope);
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: a recognizer callback runs contained so recovery receipts drain"
+        )]
         let outcome = catch_unwind(AssertUnwindSafe(|| action(scope)));
         self.drain(scope);
         let returned = outcome.is_ok();

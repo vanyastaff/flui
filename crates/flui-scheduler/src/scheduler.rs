@@ -1508,6 +1508,10 @@ impl UpdateScheduler {
             // below and leave the scheduler stuck at `PostFrameCallbacks`
             // with `current_vsync_time` still set, reachable through
             // `drive_frame`'s `Ok` arm rather than its `Err` one.
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "ADR-0287: frame-completion wakers run contained before the phase reset"
+            )]
             let notify_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 self.notify_frame_completion(
                     FrameOutcome::Completed { timing },
@@ -2650,11 +2654,19 @@ impl UpdateScheduler {
         let mut first = None;
         let custody = observer_delivery::FailureCustody::new(self);
         for callback in callbacks {
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "ADR-0287: a timings callback runs contained; delivery to the rest goes on"
+            )]
             observer_delivery::preserve_first_failure(
                 &custody,
                 &mut first,
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| callback(&timings))),
             );
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "ADR-0287: a timings callback's drop runs contained; the first failure stays"
+            )]
             observer_delivery::preserve_first_failure(
                 &custody,
                 &mut first,

@@ -657,6 +657,10 @@ impl WindowRequest {
         self,
     ) -> Result<(WindowOptions, Rc<dyn WindowHandler>), OpenWindowError> {
         let Self { options, handler } = self;
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: a window builder's panic becomes a typed open error"
+        )]
         match std::panic::catch_unwind(std::panic::AssertUnwindSafe(handler)) {
             Ok(handler) => Ok((options, handler)),
             Err(payload) => {

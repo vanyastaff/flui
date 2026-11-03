@@ -334,6 +334,10 @@ impl MainController {
             return;
         }
         let host = APP_RUNTIME.with(|slot| slot.borrow().main_host_lifecycle);
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: an installer's panic is held so the window install is cancelled"
+        )]
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             (self
                 .installer
@@ -477,6 +481,10 @@ impl MainController {
             contain(|| drop(old));
             let _ = self.ingress.quit_now();
         } else if let Some(mut observer) = self.error.take() {
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "ADR-0287: an error observer's panic is contained and the observer dropped"
+            )]
             let observed =
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| observer(&error)));
             match observed {
@@ -542,6 +550,10 @@ pub(super) fn drive_main_window() {
         .controller
         .as_mut()
         .expect("BUG: controller lease is populated until Drop");
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "ADR-0287: the owner turn records a frame's panic and exits (ADR-0258)"
+    )]
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| controller.drive()));
     if let Err(payload) = result {
         let message = flui_runtime::frame_failure::panic_text(
@@ -848,6 +860,10 @@ where
     };
     // A panic out of the platform's own loop is terminal (ADR-0258 §3): held
     // for the exit's end, and the teardown runs as after any other end.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "ADR-0287: the platform loop's panic is held so the teardown still runs (ADR-0258)"
+    )]
     let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         platform.run(crate::app::runner::app_handler(move |owner| {
             let Application {
@@ -909,6 +925,10 @@ where
             let identity = APP_RUNTIME.with(|slot| Arc::clone(&slot.borrow().loop_identity));
             let factory_identity = Arc::clone(&identity);
             let installer = Box::new(move |handle: &AppHandle, window, host| {
+                #[expect(
+                    clippy::disallowed_methods,
+                    reason = "ADR-0287: a root factory's panic becomes a window install error"
+                )]
                 let root =
                     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| factory(handle)))
                         .map_err(|payload| {
@@ -962,6 +982,10 @@ where
                     return Ok(());
                 }
             }
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "ADR-0287: a ready callback's panic is discarded so startup carries on"
+            )]
             if let Some(ready) = ready
                 && let Err(payload) =
                     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| ready(&handle)))

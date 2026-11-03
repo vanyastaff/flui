@@ -132,6 +132,13 @@
 //!
 //! [`web_time`]: https://docs.rs/web-time
 
+#![cfg_attr(
+    test,
+    allow(
+        clippy::disallowed_methods,
+        reason = "test code catches a panic to assert on it (ADR-0303 §5)"
+    )
+)]
 // `[workspace.lints]` supplies the baseline; this crate already holds the
 // stricter missing-docs bar.
 #![deny(missing_docs)]

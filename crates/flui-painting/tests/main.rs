@@ -14,6 +14,10 @@
 //! flui-painting's integration tests do: the crate keeps no process-global
 //! font state.
 
+#![allow(
+    clippy::disallowed_methods,
+    reason = "test code catches a panic to assert on it (ADR-0303 §5)"
+)]
 #[path = "caret_contract.rs"]
 mod caret_contract;
 

@@ -2,6 +2,10 @@
 //! that writes process-global state keeps its own `[[test]]` target instead (see
 //! `Cargo.toml`).
 
+#![allow(
+    clippy::disallowed_methods,
+    reason = "test code catches a panic to assert on it (ADR-0303 §5)"
+)]
 mod cases;
 
 mod memory_trim;

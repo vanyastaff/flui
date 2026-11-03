@@ -133,6 +133,10 @@ impl ClosePanic {
 
     /// Required quiescence may run during recovery; its ownership stays outside this catch.
     pub(crate) fn invoke<T>(&mut self, run: impl FnOnce() -> T) -> Option<T> {
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: required quiescence runs contained; the first failure is kept"
+        )]
         match catch_unwind(AssertUnwindSafe(run)) {
             Ok(value) => Some(value),
             Err(payload) => {

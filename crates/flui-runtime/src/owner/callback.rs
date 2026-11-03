@@ -99,6 +99,10 @@ impl Drop for OwnerCallback<'_> {
             self.core.state.borrow_mut().callback_remaining = 0;
             None
         } else {
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "ADR-0287: the owner turn records a callback's panic and exits (ADR-0258)"
+            )]
             catch_unwind(AssertUnwindSafe(|| self.core.continue_work(self.effects))).err()
         };
         self.core

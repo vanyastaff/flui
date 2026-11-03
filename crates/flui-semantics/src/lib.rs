@@ -29,6 +29,13 @@
 //! The rules that are not visible in the types live in the crate's
 //! `ARCHITECTURE.md`; the cross-crate ones in ADR-0203, ADR-0205 and ADR-0206.
 
+#![cfg_attr(
+    test,
+    allow(
+        clippy::disallowed_methods,
+        reason = "test code catches a panic to assert on it (ADR-0303 §5)"
+    )
+)]
 // Lint levels come from `[workspace.lints]` (Cargo.toml `[lints] workspace = true`).
 #![deny(missing_docs)]
 

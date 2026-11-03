@@ -47,7 +47,10 @@ layer's `panic_payload_message` is a fallback-applying wrapper over it). A
 new `catch_unwind` boundary that needs either calls these — never a local
 `downcast_ref` on the payload, a `Debug` print of the boxed payload (which
 renders `Any { .. }` for every panic), or a local `starts_with("BUG:")`
-check.
+check. A new boundary is rare: `std::panic::catch_unwind` is a disallowed
+method (ADR-0303 §6), user code runs through `commit` and `FirstPanic`
+(ADR-0287), and a site that still catches by hand carries
+`#[expect(clippy::disallowed_methods, reason = "ADR-0287: …")]`.
 
 Panics inside `unsafe` contexts deserve extra scrutiny: an `expect()` whose
 failure would leave a raw-pointer structure half-updated must either be

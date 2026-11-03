@@ -160,6 +160,10 @@ impl Case {
     ///
     /// The [`CaseFailure`] saying what did not hold.
     pub fn run(&self, fixture: &mut dyn TextStoreFixture) -> Result<(), CaseFailure> {
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: the kit reports a case's panic as its failure"
+        )]
         let outcome = catch_unwind(AssertUnwindSafe(|| (self.check)(fixture)));
         let message = match outcome {
             Ok(Ok(())) => return Ok(()),
