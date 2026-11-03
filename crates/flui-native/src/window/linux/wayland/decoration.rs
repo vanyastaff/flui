@@ -83,6 +83,10 @@ impl Decoration {
     /// title bar of the application's (`app_title_bar`, which asks the
     /// compositor for no frame): where it can draw them and the
     /// compositor draws none.
+    #[cfg_attr(
+        not(wayland_host),
+        allow(dead_code, reason = "read by the Wayland host's window alone")
+    )]
     pub(crate) const fn app_margins(self, app_title_bar: bool) -> bool {
         app_title_bar && self.draws_own && matches!(self.drawn(), Drawn::Nobody)
     }
@@ -91,6 +95,10 @@ impl Decoration {
     /// `None` where it can: it draws the margins of its own frame around
     /// it, with the subsurfaces and shared memory a frame is drawn with,
     /// where the compositor leaves the frame to it.
+    #[cfg_attr(
+        not(wayland_host),
+        allow(dead_code, reason = "read by the Wayland host's window alone")
+    )]
     pub(crate) const fn app_title_bar_absence(self) -> Option<CapabilityAbsence> {
         if self.draws_own {
             self.absence()
