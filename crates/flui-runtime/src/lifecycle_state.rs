@@ -101,9 +101,9 @@ pub(crate) fn lifecycle_ladder(
 }
 
 /// Keep the first panic of a multi-step lifecycle teardown: a later
-/// `candidate` payload is leaked rather than dropped (its destructor could
-/// panic again) and only logged, under `phase`, so the caller resumes the
-/// first failure once every step has run.
+/// `candidate` payload is logged under `phase` and then discarded under
+/// containment (ADR-0281 §2), so the caller resumes the first failure once
+/// every step has run.
 pub fn preserve_first_lifecycle_panic(
     first: &mut Option<Box<dyn std::any::Any + Send>>,
     candidate: Option<Box<dyn std::any::Any + Send>>,
@@ -115,16 +115,17 @@ pub fn preserve_first_lifecycle_panic(
     if first.is_none() {
         *first = Some(candidate);
     } else {
-        // Arbitrary payload destruction or diagnostics must not replace the first failure.
-        std::mem::forget(candidate);
+        // A tracing subscriber is user code: a panic it raises must not
+        // replace the first failure.
         if let Err(payload) = std::panic::catch_unwind(|| {
             tracing::error!(
                 phase,
                 "lifecycle phase panicked after an earlier phase; only the first panic is resumed"
             );
         }) {
-            std::mem::forget(payload);
+            flui_foundation::panic::discard_payload(payload);
         }
+        flui_foundation::panic::discard_payload(candidate);
     }
 }
 

@@ -115,15 +115,6 @@ struct VerdictMember {
     panic_on_drop: bool,
     panic_on_notify: bool,
     reenter: RefCell<Option<Box<dyn FnOnce()>>>,
-    _drop_capture: Option<VerdictDropFailure>,
-}
-
-struct VerdictDropFailure;
-
-impl Drop for VerdictDropFailure {
-    fn drop(&mut self) {
-        panic!("opaque arena member capture retirement");
-    }
 }
 
 impl VerdictMember {
@@ -674,13 +665,13 @@ fn retry_failure_preserves_retirement_even_when_reentry_supersedes_observation()
     assert!(owner.borrow().is_none());
     assert_eq!(
         drops.get(),
-        0,
-        "caught retry failure retains final opaque ownership"
+        1,
+        "the final opaque owner is destroyed after the caught retry failure"
     );
     assert_eq!(
         flui_interaction::__runtime::next_deadline_snapshot(&binding),
         None,
-        "retained ownership is not scheduling authority"
+        "a destroyed member leaves no scheduling authority"
     );
     assert_eq!(update.refresh(), Err(GestureDeadlineError::Retired));
 }
@@ -724,65 +715,47 @@ fn disarm_wake_cannot_make_an_old_up_retire_a_replacement_contact() {
     );
 }
 
-fn a_wake_failure_retains_the_last_backend_owner_before_unwind() {
-    const CHILD: &str = "FLUI_DEADLINE_WAKE_CHILD";
-    if std::env::var_os(CHILD).is_some() {
-        let clock = ManualClock::new();
-        let binding = GestureBinding::with_clock(Arc::new(clock.clone()));
-        let drops = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let window: Rc<dyn flui_platform::PlatformWindow> = Rc::new(WakeWindow {
-            drops: Arc::clone(&drops),
-            panic_on_drop: true,
-        });
-        flui_interaction::__runtime::set_pointer_capture_wake(&binding, Rc::downgrade(&window));
-        let owner = Rc::new(RefCell::new(Some(window)));
-        let released = Rc::clone(&owner);
-        WAKE_ACTION.with(|action| {
-            *action.borrow_mut() = Some(Box::new(move || {
-                drop(released.borrow_mut().take());
-                panic!("wake delivery first failure");
-            }));
-        });
-        let member = DeadlineMember::new(at(&clock));
-        let erased: Rc<dyn GestureArenaMember> = member;
-        let registration = binding
-            .arena()
-            .register_deadline_member(pointer(1), &erased)
-            .expect("source");
-        let caught = std::panic::catch_unwind(AssertUnwindSafe(|| {
-            registration.update_handle().publish(Some(at(&clock)))
+fn a_wake_failure_destroys_the_last_backend_owner_before_unwind() {
+    let clock = ManualClock::new();
+    let binding = GestureBinding::with_clock(Arc::new(clock.clone()));
+    let drops = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let window: Rc<dyn flui_platform::PlatformWindow> = Rc::new(WakeWindow {
+        drops: Arc::clone(&drops),
+        panic_on_drop: true,
+    });
+    flui_interaction::__runtime::set_pointer_capture_wake(&binding, Rc::downgrade(&window));
+    let owner = Rc::new(RefCell::new(Some(window)));
+    let released = Rc::clone(&owner);
+    WAKE_ACTION.with(|action| {
+        *action.borrow_mut() = Some(Box::new(move || {
+            drop(released.borrow_mut().take());
+            panic!("wake delivery first failure");
         }));
-        let payload = caught.expect_err("wake delivery fails after deadline commit");
-        assert_eq!(
-            flui_foundation::panic::payload_text(payload.as_ref()),
-            Some("wake delivery first failure")
-        );
-        assert_eq!(
-            drops.load(std::sync::atomic::Ordering::Relaxed),
-            0,
-            "last backend ownership retained before propagation"
-        );
-        assert!(owner.borrow().is_none());
-        assert_eq!(
-            flui_interaction::__runtime::next_deadline_snapshot(&binding),
-            Some(at(&clock)),
-            "failed wake cannot erase accepted timing"
-        );
-        return;
-    }
-    let output = std::process::Command::new(std::env::current_exe().expect("test binary"))
-        .args([
-            "--exact",
-            "deadline_recovery::owner_deadline_recovery_matrix",
-            "--nocapture",
-        ])
-        .env(CHILD, "1")
-        .output()
-        .expect("isolated wake failure process");
-    assert!(
-        output.status.success(),
-        "wake failure child failed: {}",
-        String::from_utf8_lossy(&output.stderr)
+    });
+    let member = DeadlineMember::new(at(&clock));
+    let erased: Rc<dyn GestureArenaMember> = member;
+    let registration = binding
+        .arena()
+        .register_deadline_member(pointer(1), &erased)
+        .expect("source");
+    let caught = std::panic::catch_unwind(AssertUnwindSafe(|| {
+        registration.update_handle().publish(Some(at(&clock)))
+    }));
+    let payload = caught.expect_err("wake delivery fails after deadline commit");
+    assert_eq!(
+        flui_foundation::panic::payload_text(payload.as_ref()),
+        Some("wake delivery first failure")
+    );
+    assert_eq!(
+        drops.load(std::sync::atomic::Ordering::Relaxed),
+        1,
+        "the last backend owner is destroyed under containment, its failure discarded"
+    );
+    assert!(owner.borrow().is_none());
+    assert_eq!(
+        flui_interaction::__runtime::next_deadline_snapshot(&binding),
+        Some(at(&clock)),
+        "failed wake cannot erase accepted timing"
     );
 }
 
@@ -930,7 +903,6 @@ fn builtin_deadline_verdict_retirement(kind: &str, incoming_failure: bool, fault
         panic_on_drop: fault != VerdictFault::None,
         panic_on_notify: fault == VerdictFault::NotificationAndRetirement,
         reenter: RefCell::new(None),
-        _drop_capture: std::env::var_os("FLUI_DEADLINE_VERDICT_CHILD").map(|_| VerdictDropFailure),
     });
     let _entry = binding.arena().add(pointer(1), &member);
     *owner.borrow_mut() = Some(member);
@@ -974,8 +946,8 @@ fn builtin_deadline_verdict_retirement(kind: &str, incoming_failure: bool, fault
     if incoming_failure {
         assert_eq!(
             drops.get(),
-            0,
-            "{kind} inherits first-failure retirement custody"
+            1,
+            "{kind} destroys its member after the incoming failure"
         );
         assert_eq!(
             recovery.first_failure_class(),
@@ -989,11 +961,15 @@ fn builtin_deadline_verdict_retirement(kind: &str, incoming_failure: bool, fault
     } else if fault == VerdictFault::NotificationAndRetirement {
         assert_eq!(
             drops.get(),
-            0,
-            "{kind} callback failure protects final ownership"
+            1,
+            "{kind} destroys its member after the callback failure, discarding the destructor's"
         );
         assert_eq!(recovery.first_failure_class(), Some(FailureClass::Delivery));
-        assert_eq!(recovery.blocking_failure_class(), None);
+        assert_eq!(
+            recovery.blocking_failure_class(),
+            Some(FailureClass::Unknown),
+            "{kind}: the discarded destructor failure still marks the owner's state unknown"
+        );
         let failure = recovery.into_failure().expect("verdict callback failure");
         assert_eq!(
             flui_foundation::panic::payload_text(failure.payload()),
@@ -1012,15 +988,15 @@ fn builtin_deadline_verdict_retirement(kind: &str, incoming_failure: bool, fault
     }
 }
 
-fn long_press_verdict_inherits_incoming_retirement_custody() {
+fn long_press_verdict_destroys_its_member_after_an_incoming_failure() {
     builtin_deadline_verdict_retirement("long press", true, VerdictFault::None);
 }
 
-fn double_tap_verdict_inherits_incoming_retirement_custody() {
+fn double_tap_verdict_destroys_its_member_after_an_incoming_failure() {
     builtin_deadline_verdict_retirement("double tap", true, VerdictFault::None);
 }
 
-fn multi_tap_verdict_inherits_incoming_retirement_custody() {
+fn multi_tap_verdict_destroys_its_member_after_an_incoming_failure() {
     builtin_deadline_verdict_retirement("multi tap", true, VerdictFault::None);
 }
 
@@ -1048,26 +1024,10 @@ fn builtin_verdict_callback_failure_protects_competing_retirement() {
     }
 }
 
-fn builtin_incoming_verdict_retains_double_panicking_aggregate() {
-    const CHILD: &str = "FLUI_DEADLINE_VERDICT_CHILD";
-    if std::env::var_os(CHILD).is_some() {
-        builtin_deadline_verdict_retirement("long press", true, VerdictFault::Retirement);
-        return;
+fn builtin_incoming_verdict_discards_a_failing_member_destructor() {
+    for kind in ["long press", "double tap", "multi tap"] {
+        builtin_deadline_verdict_retirement(kind, true, VerdictFault::Retirement);
     }
-    let output = std::process::Command::new(std::env::current_exe().expect("test binary"))
-        .args([
-            "--exact",
-            "deadline_recovery::owner_deadline_recovery_matrix",
-            "--nocapture",
-        ])
-        .env(CHILD, "1")
-        .output()
-        .expect("isolated verdict retirement process");
-    assert!(
-        output.status.success(),
-        "incoming verdict retirement child failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1112,7 +1072,6 @@ fn nested_public_verdict_operation(
         panic_on_drop: fault != NestedVerdictFault::None,
         panic_on_notify: false,
         reenter: RefCell::new(None),
-        _drop_capture: None,
     });
     let child_entry = binding.arena().add(pointer(2), &child);
     *child_owner.borrow_mut() = Some(child);
@@ -1138,7 +1097,6 @@ fn nested_public_verdict_operation(
             }
             NestedVerdictAction::HeldRelease => child_entry.release(),
         }))),
-        _drop_capture: None,
     });
     let _outer_entry = binding.arena().add(pointer(1), &outer);
     *outer_owner.borrow_mut() = Some(outer);
@@ -1158,9 +1116,11 @@ fn nested_public_verdict_operation(
         &mut recovery.scope(),
     );
     let child_released = child_owner.borrow().is_none();
-    if !child_released {
-        // A failed fixture assertion must not run the leftover opaque destructor.
-        std::mem::forget(child_owner.borrow_mut().take());
+    // A failed fixture assertion must not unwind through a leftover panicking
+    // destructor: destroy it here, under containment.
+    let leftover = child_owner.borrow_mut().take();
+    if let Err(payload) = std::panic::catch_unwind(AssertUnwindSafe(|| drop(leftover))) {
+        flui_foundation::panic::discard_payload(payload);
     }
     assert_eq!(child_notices.get(), 1);
     assert!(child_released);
@@ -1168,10 +1128,10 @@ fn nested_public_verdict_operation(
     if incoming {
         assert_eq!(
             child_drops.get(),
-            0,
-            "nested public {action:?} inherits custody"
+            1,
+            "nested public {action:?} destroys its member after the incoming failure"
         );
-        assert_eq!(outer_drops.get(), 0);
+        assert_eq!(outer_drops.get(), 1);
         assert_eq!(
             recovery.first_failure_class(),
             Some(FailureClass::Computation)
@@ -1189,8 +1149,8 @@ fn nested_public_verdict_operation(
         assert_eq!(child_drops.get(), 1);
         assert_eq!(
             outer_drops.get(),
-            0,
-            "nested {action:?} failure protects the outer notification snapshot"
+            1,
+            "the outer notification snapshot is destroyed after the nested {action:?} failure"
         );
         assert_eq!(recovery.first_failure_class(), Some(FailureClass::Unknown));
         assert_eq!(
@@ -1217,7 +1177,6 @@ fn nested_public_verdict_operation(
         panic_on_drop: false,
         panic_on_notify: false,
         reenter: RefCell::new(None),
-        _drop_capture: None,
     });
     let fresh_entry = binding.arena().add(pointer(3), &fresh);
     *owner.borrow_mut() = Some(fresh);
@@ -1243,11 +1202,11 @@ fn nested_public_verdict_operation(
     assert_eq!(
         drops.get(),
         1,
-        "custody belongs to one operation, not the arena lifetime"
+        "the next operation destroys its own member once"
     );
 }
 
-fn nested_public_abandon_inherits_custody_then_retires_normally_next_operation() {
+fn nested_public_abandon_destroys_after_an_incoming_failure_then_retires_normally_next_operation() {
     nested_public_verdict_operation(NestedVerdictAction::Abandon, true, NestedVerdictFault::None);
 }
 
@@ -1277,7 +1236,7 @@ fn nested_public_verdict_healthy_retirement_remains() {
     }
 }
 
-fn nested_public_resolve_inherits_custody_then_retires_normally_next_operation() {
+fn nested_public_resolve_destroys_after_an_incoming_failure_then_retires_normally_next_operation() {
     for fault in [
         NestedVerdictFault::None,
         NestedVerdictFault::RetirementThenCallback,
@@ -1302,7 +1261,8 @@ fn nested_public_resolve_retirement_precedes_later_callback_failure() {
     );
 }
 
-fn nested_public_held_release_inherits_custody_then_retires_normally_next_operation() {
+fn nested_public_held_release_destroys_after_an_incoming_failure_then_retires_normally_next_operation()
+ {
     for fault in [
         NestedVerdictFault::None,
         NestedVerdictFault::RetirementThenCallback,
@@ -1371,7 +1331,6 @@ fn open_deadline_poll_with_nested_retirement(panic_after_retirement: bool) {
         panic_on_drop: true,
         panic_on_notify: false,
         reenter: RefCell::new(None),
-        _drop_capture: None,
     });
     let _child_entry = binding.arena().add(pointer(2), &child);
     *child_owner.borrow_mut() = Some(child);
@@ -1382,9 +1341,11 @@ fn open_deadline_poll_with_nested_retirement(panic_after_retirement: bool) {
         &mut recovery.scope(),
     );
     let child_released = child_owner.borrow().is_none();
-    if !child_released {
-        // Keep the original failed observation while protecting assertion unwind.
-        std::mem::forget(child_owner.borrow_mut().take());
+    // A failed fixture assertion must not unwind through a leftover panicking
+    // destructor: destroy it here, under containment.
+    let leftover = child_owner.borrow_mut().take();
+    if let Err(payload) = std::panic::catch_unwind(AssertUnwindSafe(|| drop(leftover))) {
+        flui_foundation::panic::discard_payload(payload);
     }
     assert_eq!(child_notices.get(), 1);
     assert_eq!(child_drops.get(), 1);
@@ -1432,7 +1393,6 @@ fn open_deadline_poll_with_nested_retirement(panic_after_retirement: bool) {
         panic_on_drop: false,
         panic_on_notify: false,
         reenter: RefCell::new(None),
-        _drop_capture: None,
     });
     let _fresh_entry = binding.arena().add(pointer(3), &fresh);
     *owner.borrow_mut() = Some(fresh);
@@ -1460,14 +1420,6 @@ fn a_returning_open_deadline_poll_contains_its_distinct_nested_failure() {
 
 #[test]
 fn owner_deadline_recovery_matrix() {
-    if std::env::var_os("FLUI_DEADLINE_WAKE_CHILD").is_some() {
-        a_wake_failure_retains_the_last_backend_owner_before_unwind();
-        return;
-    }
-    if std::env::var_os("FLUI_DEADLINE_VERDICT_CHILD").is_some() {
-        builtin_incoming_verdict_retains_double_panicking_aggregate();
-        return;
-    }
     let mut first_failure = None;
     for (name, case) in [
         (
@@ -1519,8 +1471,8 @@ fn owner_deadline_recovery_matrix() {
             disarm_wake_cannot_make_an_old_up_retire_a_replacement_contact as fn(),
         ),
         (
-            "a_wake_failure_retains_the_last_backend_owner_before_unwind",
-            a_wake_failure_retains_the_last_backend_owner_before_unwind as fn(),
+            "a_wake_failure_destroys_the_last_backend_owner_before_unwind",
+            a_wake_failure_destroys_the_last_backend_owner_before_unwind as fn(),
         ),
         (
             "an_earlier_producer_failure_does_not_leak_a_healthy_callback_owner",
@@ -1539,16 +1491,16 @@ fn owner_deadline_recovery_matrix() {
             cancel_all_withdraws_every_batch_before_first_rejection as fn(),
         ),
         (
-            "long_press_verdict_inherits_incoming_retirement_custody",
-            long_press_verdict_inherits_incoming_retirement_custody as fn(),
+            "long_press_verdict_destroys_its_member_after_an_incoming_failure",
+            long_press_verdict_destroys_its_member_after_an_incoming_failure as fn(),
         ),
         (
-            "double_tap_verdict_inherits_incoming_retirement_custody",
-            double_tap_verdict_inherits_incoming_retirement_custody as fn(),
+            "double_tap_verdict_destroys_its_member_after_an_incoming_failure",
+            double_tap_verdict_destroys_its_member_after_an_incoming_failure as fn(),
         ),
         (
-            "multi_tap_verdict_inherits_incoming_retirement_custody",
-            multi_tap_verdict_inherits_incoming_retirement_custody as fn(),
+            "multi_tap_verdict_destroys_its_member_after_an_incoming_failure",
+            multi_tap_verdict_destroys_its_member_after_an_incoming_failure as fn(),
         ),
         (
             "long_press_opaque_retirement_is_unknown",
@@ -1571,12 +1523,12 @@ fn owner_deadline_recovery_matrix() {
             builtin_verdict_callback_failure_protects_competing_retirement as fn(),
         ),
         (
-            "builtin_incoming_verdict_retains_double_panicking_aggregate",
-            builtin_incoming_verdict_retains_double_panicking_aggregate as fn(),
+            "builtin_incoming_verdict_discards_a_failing_member_destructor",
+            builtin_incoming_verdict_discards_a_failing_member_destructor as fn(),
         ),
         (
-            "nested_public_abandon_inherits_custody_then_retires_normally_next_operation",
-            nested_public_abandon_inherits_custody_then_retires_normally_next_operation as fn(),
+            "nested_public_abandon_destroys_after_an_incoming_failure_then_retires_normally_next_operation",
+            nested_public_abandon_destroys_after_an_incoming_failure_then_retires_normally_next_operation as fn(),
         ),
         (
             "nested_public_retirement_keeps_unknown_provenance",
@@ -1591,8 +1543,8 @@ fn owner_deadline_recovery_matrix() {
             nested_public_verdict_healthy_retirement_remains as fn(),
         ),
         (
-            "nested_public_resolve_inherits_custody_then_retires_normally_next_operation",
-            nested_public_resolve_inherits_custody_then_retires_normally_next_operation as fn(),
+            "nested_public_resolve_destroys_after_an_incoming_failure_then_retires_normally_next_operation",
+            nested_public_resolve_destroys_after_an_incoming_failure_then_retires_normally_next_operation as fn(),
         ),
         (
             "nested_public_resolve_retirement_keeps_unknown_provenance",
@@ -1603,8 +1555,8 @@ fn owner_deadline_recovery_matrix() {
             nested_public_resolve_retirement_precedes_later_callback_failure as fn(),
         ),
         (
-            "nested_public_held_release_inherits_custody_then_retires_normally_next_operation",
-            nested_public_held_release_inherits_custody_then_retires_normally_next_operation
+            "nested_public_held_release_destroys_after_an_incoming_failure_then_retires_normally_next_operation",
+            nested_public_held_release_destroys_after_an_incoming_failure_then_retires_normally_next_operation
                 as fn(),
         ),
         (

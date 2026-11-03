@@ -148,7 +148,7 @@ impl Drop for InstallationWindow {
         }
         if let Some(first) = first {
             if std::thread::panicking() {
-                std::mem::forget(first);
+                flui_foundation::panic::discard_payload(first);
             } else {
                 std::panic::resume_unwind(first);
             }

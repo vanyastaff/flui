@@ -558,7 +558,7 @@ use windows_core::{ComObject, HSTRING};
 use crate::{
     drag::offers::OfferTable,
     owner::modal_pace::MODAL_FRAME_PACE_MS,
-    owner::panic_boundary::{contain_owner_callback, owner_callback_panicked},
+    owner::panic_boundary::contain_owner_callback,
     owner::slot::OwnerSlot,
     owner::windows::control::{OwnerMessages, OwnerPost, OwnerWindow},
     owner::windows::{CreatedWindow, DropTarget, HostDrag, WindowMessages, WindowRef, WindowTable},
@@ -643,22 +643,15 @@ impl Drop for OwnerDrag {
 }
 
 /// End a session that never started: it is told `Cancelled`, then its
-/// provider goes. Both are user code: during an unwind neither runs, and
-/// after `on_end` panics the provider is retained (ADR-0127 §2).
+/// provider goes. Both are user code, each contained, after a failure too
+/// (ADR-0281).
 #[cfg(windows)]
 fn cancel_unstarted(request: OsDragRequest) {
-    if std::thread::panicking() {
-        std::mem::forget(request);
-        return;
-    }
     let OsDragRequest {
         provider, on_end, ..
     } = request;
-    if owner_callback_panicked(|| on_end(OsDragEnd::Cancelled)) {
-        std::mem::forget(provider);
-    } else {
-        contain_owner_callback(|| drop(provider));
-    }
+    contain_owner_callback(|| on_end(OsDragEnd::Cancelled));
+    contain_owner_callback(|| drop(provider));
 }
 
 /// The platform's OLE drag-and-drop transport (see the module doc).

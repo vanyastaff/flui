@@ -79,8 +79,8 @@ pub enum TapFailureSite {
 }
 
 /// The first failure a tap registry contained: where it happened and the
-/// panic's message. The payload itself is retained, never dropped, because
-/// its destructor is user code.
+/// panic's message. The payload itself is discarded under containment, because
+/// its destructor is user code (ADR-0281 §2).
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct TapFailure {
@@ -306,7 +306,7 @@ impl TapState {
     }
 
     /// Keep the first failure's record, committed before diagnostics run,
-    /// then report it; the payload is retained, never dropped.
+    /// then report it; the payload is discarded under containment.
     fn report(&self, payload: Box<dyn Any + Send>, site: TapFailureSite) {
         let message = payload_text(payload.as_ref()).map(str::to_owned);
         let first = {

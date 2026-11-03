@@ -303,7 +303,7 @@ fn assert_delivery_recovers(
         || failure
             .downcast_ref::<&str>()
             .is_some_and(|message| message.contains("delivery failed before acceptance"));
-    std::mem::forget(failure);
+    flui_foundation::panic::discard_payload(failure);
     assert!(
         is_delivery_failure,
         "the original delivery failure remains authoritative"
@@ -378,7 +378,7 @@ fn failed_incremental_delivery_preserves_retry_and_progress() {
     for &(name, run) in cases {
         if let Err(payload) = catch_unwind(run) {
             failures.push(name);
-            std::mem::forget(payload);
+            flui_foundation::panic::discard_payload(payload);
         }
     }
     assert!(
@@ -535,7 +535,7 @@ fn numeric_setters_are_checked_against_the_current_range() {
     for &(name, run) in cases {
         if let Err(payload) = catch_unwind(run) {
             failures.push(name);
-            std::mem::forget(payload);
+            flui_foundation::panic::discard_payload(payload);
         }
     }
     assert!(
@@ -703,8 +703,8 @@ fn reveal_first_body_failure_keeps_live_outer_progress_and_recovery() {
         drop(fixture);
         assert_eq!(
             retired.load(Ordering::SeqCst),
-            0,
-            "failed snapshot retains captures after final owner release"
+            2,
+            "a failed snapshot destroys its captures with the final owner"
         );
     }
 }
@@ -731,8 +731,8 @@ fn reveal_healthy_capture_retirement_and_failed_retirement_keep_authority() {
     );
     assert_eq!(
         fixture.retired.load(Ordering::SeqCst),
-        1,
-        "first retirement failure retains the remaining callback"
+        2,
+        "a retirement failure still destroys the remaining callback"
     );
 }
 
@@ -889,7 +889,7 @@ fn descendant_reveal_snapshots_preserve_identity_failure_and_recovery() {
     for &(name, run) in cases {
         if let Err(payload) = catch_unwind(run) {
             failures.push(name);
-            std::mem::forget(payload);
+            flui_foundation::panic::discard_payload(payload);
         }
     }
     assert!(
@@ -2139,7 +2139,7 @@ fn a_failed_publication_admits_only_what_both_nodes_offer() {
     for &(name, run) in cases {
         if let Err(payload) = catch_unwind(run) {
             failures.push(name);
-            std::mem::forget(payload);
+            flui_foundation::panic::discard_payload(payload);
         }
     }
     assert!(

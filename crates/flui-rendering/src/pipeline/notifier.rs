@@ -56,31 +56,6 @@ impl DeferredVisualUpdate {
     }
 }
 
-impl Drop for DeferredVisualUpdate {
-    fn drop(&mut self) {
-        if std::thread::panicking() {
-            std::mem::forget(self.0.take());
-        }
-    }
-}
-
-/// Independently retired event envelopes, after their physical owner is empty.
-struct RetiringCallbacks {
-    visual: Option<SharedCallback>,
-    others: [Option<Callback>; 2],
-}
-
-impl Drop for RetiringCallbacks {
-    fn drop(&mut self) {
-        if std::thread::panicking() {
-            std::mem::forget(self.visual.take());
-            for callback in &mut self.others {
-                std::mem::forget(callback.take());
-            }
-        }
-    }
-}
-
 /// Holds the three pipeline-event callbacks that `PipelineOwner` exposes
 /// to its embedding application.
 ///
@@ -90,31 +65,13 @@ impl Drop for RetiringCallbacks {
 /// pipeline-owner trait bound.
 ///
 /// Dropping the notifier drops the visual-update, created, then disposed
-/// captures; once one of them panics, or if the thread is already panicking,
-/// the rest are retained (ADR-0127).
+/// captures in that order, as std drops fields: if one panics the rest are
+/// still dropped, and one that panics during that unwind aborts (ADR-0281).
 #[derive(Default)]
 pub struct VisualUpdateNotifier {
     need_visual_update: Option<SharedCallback>,
     semantics_owner_created: Option<Callback>,
     semantics_owner_disposed: Option<Callback>,
-}
-
-impl Drop for VisualUpdateNotifier {
-    fn drop(&mut self) {
-        let mut retiring = RetiringCallbacks {
-            visual: self.need_visual_update.take(),
-            others: [
-                self.semantics_owner_created.take(),
-                self.semantics_owner_disposed.take(),
-            ],
-        };
-        if !std::thread::panicking() {
-            drop(retiring.visual.take());
-            for callback in &mut retiring.others {
-                drop(callback.take());
-            }
-        }
-    }
 }
 
 impl std::fmt::Debug for VisualUpdateNotifier {

@@ -62,6 +62,17 @@ pub fn discard_payload(payload: Box<dyn Any + Send>) {
     }
 }
 
+/// Destroy `value` after a caught failure that stays the first one: its
+/// destructor runs contained and a panic it raises is discarded with
+/// [`discard_payload`] (ADR-0281 §3).
+pub fn drop_contained<T>(value: T) {
+    if let Err(payload) =
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || drop(value)))
+    {
+        discard_payload(payload);
+    }
+}
+
 /// The first panic of a run of callbacks, kept while the rest still run.
 ///
 /// Delivery to several receivers must not stop at the first that panics, and
@@ -123,10 +134,17 @@ impl FirstPanic {
         self.0.take()
     }
 
-    /// Raise the held panic, if there is one.
+    /// Raise the held panic, if there is one. Called while the thread is
+    /// already unwinding (from a `Drop` an earlier failure runs), the
+    /// unwinding failure is the first one: the held panic is discarded
+    /// instead of raised, where raising it would abort (ADR-0281 §4).
     pub fn resume(mut self) {
         if let Some(payload) = self.0.take() {
-            std::panic::resume_unwind(payload);
+            if std::thread::panicking() {
+                discard_payload(payload);
+            } else {
+                std::panic::resume_unwind(payload);
+            }
         }
     }
 }

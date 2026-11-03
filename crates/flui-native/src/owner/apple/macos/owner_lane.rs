@@ -249,13 +249,14 @@ pub(crate) fn run_cleanup_guarded(body: impl FnOnce()) -> bool {
 }
 
 pub(super) fn report_contained_panic(payload: Box<dyn std::any::Any + Send>) {
-    std::mem::forget(payload);
     // Diagnostics must not introduce a second unwind if an installed subscriber
-    // also panics during teardown. Never inspect or destroy arbitrary payloads.
+    // also panics during teardown; both payloads are destroyed under
+    // containment (ADR-0281).
+    flui_foundation::panic::discard_payload(payload);
     if let Err(payload) = std::panic::catch_unwind(|| {
         tracing::error!("contained panic in AppKit lifecycle callback or cleanup");
     }) {
-        std::mem::forget(payload);
+        flui_foundation::panic::discard_payload(payload);
     }
 }
 

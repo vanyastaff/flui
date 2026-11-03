@@ -1451,9 +1451,7 @@ unsafe fn layout_subtree_borrowed_impl(
             let geometry = match unwind_result {
                 Ok(inner) => inner?,
                 Err(payload) => {
-                    // As in the leaf boundary, retain opaque destruction before diagnostics.
-                    let payload = std::mem::ManuallyDrop::new(payload);
-                    let msg = payload_text(&**payload).unwrap_or("(non-string panic payload)");
+                    let msg = payload_text(&*payload).unwrap_or("(non-string panic payload)");
                     if let Err(reporting_payload) =
                         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                             tracing::error!(
@@ -1468,9 +1466,7 @@ unsafe fn layout_subtree_borrowed_impl(
                         // Reporting is secondary; do not retire its opaque failure or report it again.
                         flui_foundation::panic::discard_payload(reporting_payload);
                     }
-                    flui_foundation::panic::discard_payload(std::mem::ManuallyDrop::into_inner(
-                        payload,
-                    ));
+                    flui_foundation::panic::discard_payload(payload);
                     return Err(crate::error::RenderError::poisoned(
                         debug_name,
                         crate::error::PoisonPhase::Layout,
@@ -2148,9 +2144,7 @@ unsafe fn layout_sliver_subtree_borrowed_impl(
         let geometry = match unwind_result {
             Ok(inner) => inner?,
             Err(payload) => {
-                // As in the leaf boundary, retain opaque destruction before diagnostics.
-                let payload = std::mem::ManuallyDrop::new(payload);
-                let msg = payload_text(&**payload).unwrap_or("(non-string panic payload)");
+                let msg = payload_text(&*payload).unwrap_or("(non-string panic payload)");
                 if let Err(reporting_payload) =
                     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                         tracing::error!(
@@ -2164,9 +2158,7 @@ unsafe fn layout_sliver_subtree_borrowed_impl(
                     // Reporting is secondary; do not retire its opaque failure or report it again.
                     flui_foundation::panic::discard_payload(reporting_payload);
                 }
-                flui_foundation::panic::discard_payload(std::mem::ManuallyDrop::into_inner(
-                    payload,
-                ));
+                flui_foundation::panic::discard_payload(payload);
                 return Err(crate::error::RenderError::poisoned(
                     debug_name,
                     crate::error::PoisonPhase::Layout,

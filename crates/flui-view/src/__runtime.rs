@@ -281,8 +281,7 @@ mod sealed {
 }
 
 /// One GlobalKey claim withdrawn from a closing owner. Dropping it retires
-/// the key; while the thread is panicking the key is retained instead
-/// (ADR-0127).
+/// the key, during an unwind too (ADR-0281).
 pub struct WithdrawnKey(
     #[expect(dead_code, reason = "held only so dropping it retires the key")]
     crate::owner::ScopedKeyOwner,

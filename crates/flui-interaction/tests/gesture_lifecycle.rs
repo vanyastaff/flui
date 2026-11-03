@@ -2481,8 +2481,8 @@ impl Drop for PanicsOnDrop {
 
 /// Two callback captures that are their last owners and both panic while
 /// dropped: disposal releases them one at a time, so the process survives,
-/// the first failure surfaces, and the second capture is retained instead of
-/// panicking during the first unwind (an abort).
+/// the first failure surfaces, and the second capture is destroyed under
+/// containment with its failure discarded (ADR-0281).
 fn dispose_retires_two_panicking_captures_one_at_a_time() {
     let lane = Lane::new();
     let first = PanicsOnDrop("on_tap");
@@ -2701,8 +2701,8 @@ fn arena_retirement_preserves_the_first_failure_and_recovers() {
         );
         assert_eq!(
             retired.get(),
-            u32::from(!rejection_panics),
-            "successful callback retires its last owner, even if Drop fails; failed callback retains it"
+            1,
+            "the last owner is destroyed once, whether the callback or its Drop fails"
         );
         assert!(
             owner.borrow().is_none(),

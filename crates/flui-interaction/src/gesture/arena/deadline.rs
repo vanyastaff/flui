@@ -14,7 +14,6 @@ use flui_platform::EventTime;
 
 use super::{ArenaGeneration, GestureArenaMember, recovery::ArenaRecovery};
 use crate::gesture::observer::{GestureContest, GestureObservation, ObservedMember, ObserverHub};
-use crate::retain::Retain;
 
 /// An explicit deadline authority could not be admitted or updated.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
@@ -351,12 +350,8 @@ impl DeadlineRegistry {
                 self.recovery.invoke(FailureClass::Delivery, scope, |_| {
                     window.request_redraw();
                 });
-                if scope.has_failure() || self.recovery.preserving() {
-                    std::mem::forget(window);
-                } else {
-                    self.recovery
-                        .invoke(FailureClass::Unknown, scope, |_| drop(window));
-                }
+                self.recovery
+                    .invoke(FailureClass::Unknown, scope, |_| drop(window));
             });
         }
     }
@@ -481,7 +476,6 @@ impl DeadlineRegistry {
             };
             let revision = source.revision.get();
             let observation = source.observation.get();
-            let mut preserving = recovery.has_failure();
             // Registered sources cache timing across unrelated owner work.
             // Legacy arena slots have no publisher and follow owner activity.
             let query = matches!(observation, Observation::Unobserved)
@@ -491,7 +485,7 @@ impl DeadlineRegistry {
                 let mut result = None;
                 let success = if retry {
                     // This existing obligation already reported its first fault.
-                    // A failed re-probe retains its payload without repeating it.
+                    // A failed re-probe discards its payload without repeating it.
                     let mut probe = PanicRecovery::new();
                     if self.recovery.preserving() {
                         probe.inherit_failure();
@@ -505,7 +499,6 @@ impl DeadlineRegistry {
                         result = Some(member.deadline());
                     })
                 };
-                preserving |= retry && !success;
                 if source.is_current(revision) {
                     source.observation.set(if success {
                         Observation::Observed(
@@ -554,21 +547,8 @@ impl DeadlineRegistry {
                     }
                 }
             }
-            if recovery.has_failure()
-                || self.recovery.preserving()
-                || preserving
-                || matches!(source.observation.get(), Observation::Parked)
-            {
-                if Rc::strong_count(&member) == 1 {
-                    // Exceptional custody keeps the opaque final owner, but
-                    // does not re-admit a member its application already released.
-                    source.active.set(false);
-                }
-                member.retain();
-            } else {
-                self.recovery
-                    .invoke(FailureClass::Unknown, recovery, |_| drop(member));
-            }
+            self.recovery
+                .invoke(FailureClass::Unknown, recovery, |_| drop(member));
         }
     }
 

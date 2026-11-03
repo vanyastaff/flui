@@ -931,7 +931,7 @@ fn run_pending_bootstrap() -> bool {
             return false;
         }
         Err(payload) => {
-            std::mem::forget(payload);
+            flui_foundation::panic::discard_payload(payload);
             platform.finish_quit();
             return false;
         }

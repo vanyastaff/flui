@@ -208,8 +208,8 @@ impl PointerRouter {
     /// The routes are detached before their captures are destroyed, so a
     /// destructor can reenter this router and register the next route. A capture
     /// destructor panic propagates after removal; the registry remains usable.
-    /// Once retirement fails, remaining captures are retained. During an active
-    /// unwind all removed captures are retained without running their destructors.
+    /// Every removed capture is destroyed; after the first failure the rest are
+    /// destroyed under containment (ADR-0281 §3).
     pub fn remove_all_routes(&self, pointer: PointerId) {
         let removed = self.routes.borrow_mut().remove(&pointer);
         let had_routes = removed.is_some();
@@ -285,8 +285,8 @@ impl PointerRouter {
     /// Clear all global handlers.
     ///
     /// Captures retire outside registry borrows, independently. The first
-    /// destructor panic propagates; subsequent captures are retained. During
-    /// an active unwind all removed captures are retained.
+    /// destructor panic propagates; subsequent captures are still destroyed,
+    /// under containment (ADR-0281 §3).
     pub fn clear_global_handlers(&self) {
         let removed = std::mem::take(&mut *self.global_handlers.borrow_mut());
         Self::retire_handlers(removed);
@@ -362,7 +362,7 @@ impl PointerRouter {
             // Removing a callback during dispatch can leave the snapshot as
             // its final owner. Capture that destructor independently so the
             // rest of the already-snapshotted router transaction still runs.
-            let snapshot_cleanup = self.release_snapshot(handler);
+            let snapshot_cleanup = RoutePanic::capture(|| drop(handler));
             RoutePanic::preserve_first(
                 &mut first_panic,
                 snapshot_cleanup,
@@ -377,7 +377,7 @@ impl PointerRouter {
                 RoutePanic::preserve_first(&mut first_panic, delivered, "global router callback");
             }
 
-            let snapshot_cleanup = self.release_snapshot(handler);
+            let snapshot_cleanup = RoutePanic::capture(|| drop(handler));
             RoutePanic::preserve_first(
                 &mut first_panic,
                 snapshot_cleanup,
@@ -386,18 +386,6 @@ impl PointerRouter {
         }
 
         first_panic
-    }
-
-    /// Drop a dispatch snapshot. A preserving close during this dispatch
-    /// released the router's own clone, which can leave the snapshot as the
-    /// callback's last owner: it then follows that close's retention.
-    fn release_snapshot(&self, handler: PointerRouteHandler) -> Option<RoutePanic> {
-        if self.closed.get() && self.close_mode.preserved() {
-            crate::retain::Retain::retain(handler);
-            None
-        } else {
-            RoutePanic::capture(|| drop(handler))
-        }
     }
 
     /// Whether a snapshotted per-pointer callback is still registered.
@@ -450,27 +438,27 @@ impl PointerRouter {
     }
 
     /// Callback handles are independent framework-owned values. Retire them
-    /// individually, without letting Vec drop glue combine competing failures.
+    /// individually, without letting Vec drop glue combine competing failures:
+    /// each one is destroyed, under containment after the first failure
+    /// (ADR-0281 §3). While the thread unwinds the first failure is discarded,
+    /// since raising it there would abort.
     fn retire_handlers(handlers: impl IntoIterator<Item = RouteRegistration>) {
+        let incoming_failure = std::thread::panicking();
         let mut first_panic = None;
         for registration in handlers {
-            let handler = registration.handler;
-            if first_panic.is_some() || std::thread::panicking() {
-                // This callback's opaque capture may contain several hostile
-                // destructors. After failure, do not start another retirement;
-                // a clone some other owner still holds is released normally.
-                crate::retain::Retain::retain(handler);
-            } else {
-                let retirement = RoutePanic::capture(|| drop(handler));
-                RoutePanic::preserve_first(
-                    &mut first_panic,
-                    retirement,
-                    "pointer router callback retirement",
-                );
-            }
+            let retirement = RoutePanic::capture(|| drop(registration.handler));
+            RoutePanic::preserve_first(
+                &mut first_panic,
+                retirement,
+                "pointer router callback retirement",
+            );
         }
         if let Some(panic) = first_panic {
-            panic.resume();
+            if incoming_failure {
+                panic.discard();
+            } else {
+                panic.resume();
+            }
         }
     }
 }

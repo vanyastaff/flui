@@ -234,13 +234,13 @@ fn observer_failures_protect_nested_retirement() {
             assert_eq!(failure.downcast_ref::<&str>(), Some(&"observer failure"));
             assert_eq!(
                 drops.get(),
-                0,
-                "{timings}/{mode}: nested cleanup must retain opaque captures after containment"
+                2,
+                "{timings}/{mode}: nested cleanup destroys both opaque captures behind the first failure"
             );
             let capture = Capture(Rc::clone(&drops));
             let id = scheduler.schedule_frame_callback(Box::new(move |_| drop(capture)));
             assert!(scheduler.cancel_frame_callback(id));
-            assert_eq!(drops.get(), 1, "healthy next operation retires normally");
+            assert_eq!(drops.get(), 3, "healthy next operation retires normally");
         }
     }
 }
@@ -311,8 +311,8 @@ fn observer_failure_custody_follows_a_replacement_owner() {
         assert_eq!(failure.downcast_ref::<&str>(), Some(&"observer failure"));
         assert_eq!(
             drops.get(),
-            0,
-            "{timings}: outgoing and replacement task captures inherit custody"
+            2,
+            "{timings}: outgoing and replacement task captures are destroyed behind the first failure"
         );
         let capture = Capture(Rc::clone(&drops));
         let healthy = owner
@@ -327,7 +327,7 @@ fn observer_failure_custody_follows_a_replacement_owner() {
         healthy.cancel();
         assert_eq!(
             drops.get(),
-            1,
+            3,
             "the replacement's next healthy cancellation retires normally"
         );
     }

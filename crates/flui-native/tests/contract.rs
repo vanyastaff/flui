@@ -288,8 +288,8 @@ mod native_windows {
             deadline_hidden_window_declining_its_frames_does_not_spin,
         ),
         (
-            "deadline_query_unwind_retains_hostile_captures",
-            deadline_query_unwind_retains_hostile_captures,
+            "deadline_query_unwind_destroys_hostile_captures",
+            deadline_query_unwind_destroys_hostile_captures,
         ),
         (
             "deadline_reaches_minimized_window",
@@ -1151,7 +1151,7 @@ mod native_windows {
         result.load(Ordering::SeqCst)
     }
 
-    fn deadline_query_unwind_retains_hostile_captures() {
+    fn deadline_query_unwind_destroys_hostile_captures() {
         struct Bomb(Arc<AtomicUsize>);
         impl Drop for Bomb {
             fn drop(&mut self) {
@@ -1161,7 +1161,9 @@ mod native_windows {
         }
 
         let drops = Arc::new(AtomicUsize::new(0));
-        let captures = (Bomb(Arc::clone(&drops)), Bomb(Arc::clone(&drops)));
+        // One hostile capture: a second panicking during that unwind aborts,
+        // as in std (ADR-0281).
+        let captures = Bomb(Arc::clone(&drops));
         let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             Box::new(WindowsPlatform::try_new().expect("native Windows platform"))
                 .run(crate::app::with_log(move |log, _| {
@@ -1180,10 +1182,10 @@ mod native_windows {
         );
         assert_eq!(
             drops.load(Ordering::SeqCst),
-            0,
-            "the failed handler's captures are retained, not dropped into the unwind"
+            1,
+            "the failed handler's capture is destroyed, its panic contained"
         );
-        drop(failure);
+        flui_foundation::panic::discard_payload(failure);
         let platform =
             WindowsPlatform::try_new().expect("independent native owner after failed query");
         let window = open(&platform, true);

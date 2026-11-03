@@ -359,10 +359,7 @@ impl Drop for FlightInner {
         let builder = self.shuttle_builder.withdraw();
 
         // Every owner is withdrawn before listener retirement can invoke user
-        // destruction. Incoming unwind retains the whole outgoing ownership.
-        if std::thread::panicking() {
-            return;
-        }
+        // destruction; each runs under this owner's recovery (ADR-0281).
         let mut recovery = flui_foundation::panic::PanicRecovery::new();
         let mut status_subscription = Terminal::new(subscriptions.borrow_mut().take());
         if let Some(subscription) = status_subscription.as_mut() {
@@ -2000,7 +1997,9 @@ mod terminal_tests {
         }));
         if incoming {
             assert_failure(result.expect_err("incoming panic"), "incoming failure");
-            assert!(drops.iter().all(|count| count.load(Ordering::SeqCst) == 0));
+            // The incoming unwind destroys every capture, each under the
+            // flight's containment (ADR-0281).
+            assert!(drops.iter().all(|count| count.load(Ordering::SeqCst) == 1));
         } else if failure {
             assert_failure(
                 result.expect_err("subscription panic"),
@@ -2011,7 +2010,8 @@ mod terminal_tests {
                 assert!(
                     retired_drops
                         .iter()
-                        .all(|count| count.load(Ordering::SeqCst) == 0)
+                        .all(|count| count.load(Ordering::SeqCst) == 1),
+                    "retired flights are destroyed after the first failure"
                 );
             }
         } else if factory_failure {

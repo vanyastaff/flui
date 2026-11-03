@@ -31,7 +31,6 @@ const READ: usize = 1;
 const TOGGLE: usize = 2;
 const INSERT_EQUAL: usize = 3;
 const REPLACE: usize = 4;
-const DROP_AND_PANIC: usize = 5;
 const DROP_ONLY: usize = 6;
 const FAIL_EQ: usize = 7;
 const REPLACE_NEIGHBOR: usize = 8;
@@ -46,31 +45,17 @@ struct Control {
     hash_read: AtomicBool,
     fail_hash: AtomicBool,
     fail_scope: AtomicBool,
-    aggregate_scope: AtomicBool,
     forbidden_callbacks: AtomicBool,
     forbidden_scoped: AtomicBool,
     fail_local_admission: AtomicBool,
     clone_compete: AtomicBool,
     events: Events,
 }
-struct Part {
-    scoped: bool,
-    control: Arc<Control>,
-}
-impl Drop for Part {
-    fn drop(&mut self) {
-        assert!(
-            !self.scoped || !self.control.aggregate_scope.load(Ordering::SeqCst),
-            "later scoped aggregate destroyed"
-        );
-    }
-}
 struct Key {
     id: u64,
     hash: u64,
     ordinal: usize,
     control: Arc<Control>,
-    _parts: (Part, Part),
 }
 impl Key {
     fn new(id: u64, hash: u64, events: &Events) -> Arc<Self> {
@@ -83,7 +68,6 @@ impl Key {
             hash_read: AtomicBool::new(false),
             fail_hash: AtomicBool::new(false),
             fail_scope: AtomicBool::new(false),
-            aggregate_scope: AtomicBool::new(false),
             forbidden_callbacks: AtomicBool::new(false),
             forbidden_scoped: AtomicBool::new(false),
             fail_local_admission: AtomicBool::new(false),
@@ -97,16 +81,6 @@ impl Key {
             id,
             hash,
             ordinal,
-            _parts: (
-                Part {
-                    scoped: ordinal == 2,
-                    control: Arc::clone(&control),
-                },
-                Part {
-                    scoped: ordinal == 2,
-                    control: Arc::clone(&control),
-                },
-            ),
             control,
         }
     }
@@ -120,7 +94,6 @@ impl Key {
         self.control.hash_read.store(false, Ordering::SeqCst);
         self.control.fail_hash.store(false, Ordering::SeqCst);
         self.control.fail_scope.store(false, Ordering::SeqCst);
-        self.control.aggregate_scope.store(false, Ordering::SeqCst);
         self.control
             .forbidden_callbacks
             .store(false, Ordering::SeqCst);
@@ -198,7 +171,7 @@ fn action(key: &Key, other: &dyn ViewKey) {
             peer.unregister_global_key(declared.as_ref());
             peer.register_global_key(other, element(94));
         }),
-        REPLACE | DROP_AND_PANIC | DROP_ONLY => {
+        REPLACE | DROP_ONLY => {
             let peers = PEERS.with(|slot| std::mem::take(&mut *slot.borrow_mut()));
             drop(peers);
             if mode == REPLACE {
@@ -216,8 +189,6 @@ fn action(key: &Key, other: &dyn ViewKey) {
                         )),
                     ));
                 });
-            } else if mode == DROP_AND_PANIC {
-                panic!("first equality failure");
             }
         }
         FAIL_EQ => panic!("first equality failure"),
@@ -447,22 +418,12 @@ fn retirement(kind: &str) {
     if kind != "healthy" {
         a.control
             .fail_scope
-            .store(kind != "second", Ordering::SeqCst);
-        b.control
-            .aggregate_scope
-            .store(kind == "caught", Ordering::SeqCst);
+            .store(kind == "first", Ordering::SeqCst);
         b.control
             .fail_scope
-            .store(matches!(kind, "eq" | "second"), Ordering::SeqCst);
+            .store(kind == "second", Ordering::SeqCst);
     }
-    a.arm(
-        if kind == "eq" {
-            DROP_AND_PANIC
-        } else {
-            DROP_ONLY
-        },
-        1,
-    );
+    a.arm(DROP_ONLY, 1);
     let c = Key::new(3, 7, &events);
     let mut incoming = owner(&shared);
     let result = catch_unwind(AssertUnwindSafe(|| {
@@ -482,11 +443,7 @@ fn retirement(kind: &str) {
     } else {
         assert_eq!(
             text(result.expect_err("retirement must fail").as_ref()),
-            if kind == "eq" {
-                "first equality failure"
-            } else {
-                "first scoped retirement failure"
-            }
+            "first scoped retirement failure"
         );
         assert_eq!(incoming.element_for_global_key(c.as_ref()), None);
         assert_eq!(shared.claim_count(), 0);
@@ -494,11 +451,8 @@ fn retirement(kind: &str) {
         assert!(observed.contains(&(1, 1)) && observed.contains(&(2, 1)));
         assert_eq!(
             observed.iter().filter(|(_, role)| *role == 2).count(),
-            if kind == "second" {
-                2
-            } else {
-                usize::from(kind != "eq")
-            }
+            3,
+            "every scoped key owner is destroyed; the first failure is raised"
         );
     }
     next(&shared, &events);
@@ -696,7 +650,6 @@ fn incoming_release() {
     let mut original = owner(&shared);
     original.register_global_key(a.as_ref(), element(1));
     a.control.hash_read.store(true, Ordering::SeqCst);
-    a.control.fail_scope.store(true, Ordering::SeqCst);
     events.lock().expect("events").clear();
     struct Release<'a>(&'a mut BuildOwner, &'a Key);
     impl Drop for Release<'_> {
@@ -715,7 +668,11 @@ fn incoming_release() {
     a.disarm();
     assert_eq!(original.element_for_global_key(a.as_ref()), None);
     assert_eq!(shared.claim_count(), 0);
-    assert!(events.lock().expect("events").is_empty());
+    assert_eq!(
+        *events.lock().expect("events"),
+        [(1, 1), (1, 2)],
+        "the withdrawn key owners are destroyed during the unwind"
+    );
     next(&shared, &events);
     clear();
 }
@@ -806,8 +763,6 @@ pub(crate) fn dispatch_child(kind: &str) {
         "insert-equivalent" => mutation("equivalent"),
         "replace-owner" => mutation("replacement"),
         "same-length-replacement" => mutation("same-length"),
-        "eq-drop-competition" => retirement("eq"),
-        "caught-drop-competition" => retirement("caught"),
         "first-snapshot-drop" => retirement("first"),
         "second-snapshot-drop" => retirement("second"),
         "healthy-drop-order" => retirement("healthy"),
@@ -847,13 +802,7 @@ pub(crate) fn replaced_owner_claim_invalidates_snapshot_identity() {
 pub(crate) fn equal_length_replacement_invalidates_surviving_snapshot_marker() {
     bounded("same-length-replacement");
 }
-pub(crate) fn equality_failure_retains_two_retired_snapshot_keys() {
-    bounded("eq-drop-competition");
-}
-pub(crate) fn caught_snapshot_retirement_retains_later_aggregate() {
-    bounded("caught-drop-competition");
-}
-pub(crate) fn first_snapshot_retirement_failure_retains_independent_tail() {
+pub(crate) fn first_snapshot_retirement_failure_destroys_independent_tail() {
     bounded("first-snapshot-drop");
 }
 pub(crate) fn second_snapshot_retirement_failure_preserves_completed_first() {
@@ -883,7 +832,7 @@ pub(crate) fn missing_local_release_revalidates_scope_callback_mutation() {
 pub(crate) fn losing_clone_retirement_preserves_competing_claim_authority() {
     bounded("losing-clone");
 }
-pub(crate) fn incoming_release_withdraws_authority_before_retaining_key_owners() {
+pub(crate) fn incoming_release_withdraws_authority_before_destroying_key_owners() {
     bounded("incoming-release");
 }
 pub(crate) fn mounted_colliding_keys_support_scope_callback_reentry() {

@@ -54,16 +54,17 @@
 //!
 //! Executor clone and retirement run outside locks. Wake invokes borrowed
 //! envelopes, preserving the first caught failure and still waking the task
-//! after a failed abandonment callback. During an existing unwind, additional
-//! failures are retained rather than replacing it. A caught failure retains
-//! opaque executor/shared-state ownership to avoid running arbitrary aggregate
-//! drop glue during continuation. Ordinary successful retirement still runs
-//! destructors; an aggregate that double-panics before catch regains control
-//! keeps Rust's abort semantics.
+//! after a failed abandonment callback. The withdrawn waker is destroyed
+//! after its wake under containment, so a destructor panic competes and the
+//! first failure is raised; during an existing unwind every later failure is
+//! discarded instead. A destructor that panics while the thread is already
+//! unwinding aborts, as in std (ADR-0281).
 
 use std::fmt;
 use std::future::Future;
 use std::panic::{AssertUnwindSafe, catch_unwind};
+
+use crate::panic::FirstPanic;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -127,7 +128,11 @@ impl<T> Inner<T> {
     /// `notify_abandoned`) from every transition that changes what a poll
     /// would observe: delivery, requester abandonment, and owner
     /// disconnection.
-    fn wake_task(&self, preserve_failure: bool) -> Result<(), Payload> {
+    ///
+    /// The withdrawn waker is destroyed even when its wake panicked: its
+    /// destructor is executor code and runs contained, and the wake's panic
+    /// stays the one returned (ADR-0281 §3).
+    fn wake_task(&self) -> Result<(), Payload> {
         // `if let Some(w) = self.waker.lock().take() { w.wake() }` holds the
         // `MutexGuard` — a temporary of the `if let` scrutinee — for the
         // whole arm body, not just the `.take()` call: this exact shape is
@@ -138,18 +143,12 @@ impl<T> Inner<T> {
         // first ends the guard's scope at that statement's `;`, before
         // `wake()` ever runs.
         let woken = self.waker.lock().take();
+        let mut first = FirstPanic::new();
         if let Some(waker) = woken {
-            if let Err(payload) = catch_unwind(AssertUnwindSafe(|| waker.wake_by_ref())) {
-                std::mem::forget(waker);
-                return Err(payload);
-            }
-            if preserve_failure {
-                std::mem::forget(waker);
-            } else {
-                catch_unwind(AssertUnwindSafe(|| drop(waker)))?;
-            }
+            first.contain(|| waker.wake_by_ref());
+            first.contain(|| drop(waker));
         }
-        Ok(())
+        first.into_payload().map_or(Ok(()), Err)
     }
 
     /// Test-only probe: `true` if `waker` is currently free to lock.
@@ -163,12 +162,10 @@ impl<T> Inner<T> {
     }
 }
 
-fn finish_delivery<T>(inner: &Arc<Inner<T>>, failure: Option<Payload>, unwinding: bool) {
-    if unwinding || failure.is_some() {
-        // Final Inner destruction could retire T, the owner callback's captures,
-        // or an executor envelope while the authoritative failure unwinds.
-        std::mem::forget(Arc::clone(inner));
-    }
+/// Raise a transition's first failure, or discard it when the transition ran
+/// from a destructor while the thread was already unwinding: the incoming
+/// panic is the one that propagates.
+fn finish_delivery(failure: Option<Payload>, unwinding: bool) {
     if let Some(payload) = failure {
         if unwinding {
             crate::panic::discard_payload(payload);
@@ -177,7 +174,6 @@ fn finish_delivery<T>(inner: &Arc<Inner<T>>, failure: Option<Payload>, unwinding
         }
     }
 }
-
 /// Owner-side handle: produces the request's result and, after delivery,
 /// can be polled for a late abandonment to unwind.
 pub struct ClaimSlot<T> {
@@ -254,8 +250,8 @@ impl<T> ClaimSlot<T> {
                 drop(state);
                 self.inner.delivered.notify_one();
                 let unwinding = std::thread::panicking();
-                let failure = self.inner.wake_task(unwinding).err();
-                finish_delivery(&self.inner, failure, unwinding);
+                let failure = self.inner.wake_task().err();
+                finish_delivery(failure, unwinding);
                 Ok(())
             }
             SlotState::Abandoned(None) => {
@@ -320,11 +316,11 @@ impl<T> Drop for ClaimSlot<T> {
         }; // lock released here — notify/wake must never run under it.
         let failure = if became_owner_gone {
             self.inner.delivered.notify_all();
-            self.inner.wake_task(unwinding).err()
+            self.inner.wake_task().err()
         } else {
             None
         };
-        finish_delivery(&self.inner, failure, unwinding);
+        finish_delivery(failure, unwinding);
     }
 }
 
@@ -556,15 +552,9 @@ impl<T> Drop for ClaimHandle<T> {
             failure = self.inner.notify_abandoned().err();
             // A stored executor registration may remain after cancellation.
             // Drain it even if the owner callback failed, outside both locks.
-            if let Err(payload) = self.inner.wake_task(unwinding || failure.is_some()) {
-                if failure.is_some() {
-                    crate::panic::discard_payload(payload);
-                } else {
-                    failure = Some(payload);
-                }
-            }
+            FirstPanic::fold(&mut failure, self.inner.wake_task().err());
         }
-        finish_delivery(&self.inner, failure, unwinding);
+        finish_delivery(failure, unwinding);
     }
 }
 

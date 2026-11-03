@@ -32,17 +32,6 @@ fn next_hook_generation(counter: &AtomicU64) -> u64 {
         .expect("BUG: rebuild hook generation capacity exhausted")
 }
 
-/// Incoming captures remain in custody if generation admission fails.
-struct PendingRebuildHook(Option<RebuildHook>);
-
-impl Drop for PendingRebuildHook {
-    fn drop(&mut self) {
-        if std::thread::panicking() {
-            std::mem::forget(self.0.take());
-        }
-    }
-}
-
 /// RAII ownership of the currently installed host rebuild hook.
 ///
 /// Dropping a registration removes its hook only when it is still current.
@@ -64,14 +53,10 @@ impl Drop for RebuildHookRegistration {
                 .flatten()
         };
         // A captured closure may own arbitrary user state whose destructor
-        // re-enters this registry. Never run that destructor under the slot
-        // mutex, and never while unwinding: a second panic would abort, so the
-        // withdrawn hook is retained instead (ADR-0127).
-        if std::thread::panicking() {
-            std::mem::forget(detached);
-        } else {
-            drop(detached);
-        }
+        // re-enters this registry: never run that destructor under the slot
+        // mutex. It runs during an unwind too; one that panics there aborts,
+        // as in std (ADR-0281).
+        drop(detached);
     }
 }
 
@@ -86,12 +71,10 @@ impl Drop for RebuildHookRegistration {
 ///
 /// Panics after the final nonzero generation has been admitted. Exhaustion is
 /// permanent, including after a caught panic or removal of a registration.
-/// The rejected hook is retained before this capacity panic so its captures'
-/// destructors cannot replace the failure; accepted hooks keep their ordinary
-/// lifetime policy.
+/// The rejected hook is dropped while that panic unwinds (ADR-0281).
 ///
 /// Propagates a panic from the replaced hook's captured state. The new hook is
-/// then withdrawn and retained rather than left installed without a guard.
+/// then withdrawn and dropped rather than left installed without a guard.
 pub fn register_request_rebuild(
     hook: impl Fn() + Send + Sync + 'static,
 ) -> RebuildHookRegistration {
@@ -102,13 +85,12 @@ fn register_request_rebuild_with_counter(
     hook: impl Fn() + Send + Sync + 'static,
     counter: &AtomicU64,
 ) -> RebuildHookRegistration {
-    let mut hook = PendingRebuildHook(Some(Arc::new(hook)));
+    let hook: RebuildHook = Arc::new(hook);
     let generation = next_hook_generation(counter);
     let replaced = {
         let mut slot = REQUEST_REBUILD.lock();
         slot.generation = generation;
-        slot.hook
-            .replace(hook.0.take().expect("BUG: pending rebuild hook is owned"))
+        slot.hook.replace(hook)
     };
     // The installed hook is owned before the outgoing one is destroyed: if
     // that destructor panics, unwinding drops this guard, which withdraws the
@@ -176,11 +158,10 @@ mod tests {
 
     #[test]
     fn hook_generation_exhaustion_preserves_current_registration() {
-        struct DropBomb(Arc<AtomicUsize>);
-        impl Drop for DropBomb {
+        struct DropCount(Arc<AtomicUsize>);
+        impl Drop for DropCount {
             fn drop(&mut self) {
                 self.0.fetch_add(1, Ordering::Relaxed);
-                panic!("rejected capture destruction");
             }
         }
         let _registry = REBUILD_HOOK_TEST_LOCK.lock();
@@ -211,7 +192,7 @@ mod tests {
         );
 
         let drops = Arc::new(AtomicUsize::new(0));
-        let captures = (DropBomb(Arc::clone(&drops)), DropBomb(Arc::clone(&drops)));
+        let captures = (DropCount(Arc::clone(&drops)), DropCount(Arc::clone(&drops)));
         let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
             register_request_rebuild_with_counter(
                 move || {
@@ -220,7 +201,7 @@ mod tests {
                 &counter,
             )
         }))
-        .expect_err("hostile rejected hook is refused");
+        .expect_err("rejected hook is refused");
         assert!(
             flui_foundation::panic::payload_text(failure.as_ref()).is_some_and(|message| {
                 message.starts_with("BUG: rebuild hook generation capacity exhausted")
@@ -229,8 +210,8 @@ mod tests {
         flui_foundation::panic::discard_payload(failure);
         assert_eq!(
             drops.load(Ordering::Relaxed),
-            0,
-            "rejected captures retained before Drop"
+            2,
+            "rejected captures are destroyed once each"
         );
         request_rebuild();
         assert_eq!(calls.load(Ordering::Relaxed), 2);
@@ -304,8 +285,8 @@ mod tests {
         assert_eq!(calls.load(Ordering::Relaxed), 0);
         assert_eq!(
             drops.load(Ordering::Relaxed),
-            0,
-            "withdrawn hook retained while unwinding"
+            1,
+            "withdrawn hook is destroyed while unwinding"
         );
         drop(outgoing);
     }

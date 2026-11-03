@@ -111,41 +111,17 @@ pub struct RenderEntry<P: Protocol> {
     site: flui_foundation::CreationSite,
 }
 
-/// Custody for the user-owned render object and parent data.
-///
-/// While the thread is panicking both are retained rather than dropped
-/// (ADR-0127); the entry's framework-owned state still drops normally. A
-/// `RenderTree` relies on this: its slab drops entries in slot order, and an
-/// entry dropped after an earlier one failed retains its user values.
-struct RetiringEntry<P: Protocol> {
-    object: Option<Box<dyn RenderObject<P>>>,
-    parent_data: Option<Box<dyn crate::parent_data::ParentData>>,
-}
-
-impl<P: Protocol> Drop for RetiringEntry<P> {
-    fn drop(&mut self) {
-        if std::thread::panicking() {
-            std::mem::forget(self.object.take());
-            std::mem::forget(self.parent_data.take());
-        }
-    }
-}
-
 impl<P: Protocol> Drop for RenderEntry<P> {
     fn drop(&mut self) {
         if let Some(handle) = self.local_invalidation.take() {
             handle.withdraw();
         }
-        let mut retiring = RetiringEntry {
-            object: self.render_object.take(),
-            parent_data: self.state.take_parent_data(),
-        };
-        if !std::thread::panicking() {
-            // Object before parent data. If the object's destructor panics,
-            // the guard retains the parent data on unwind.
-            drop(retiring.object.take());
-            drop(retiring.parent_data.take());
-        }
+        // The render object before its parent data. A destructor that panics
+        // while the thread is already unwinding aborts, as in std (ADR-0281).
+        let object = self.render_object.take();
+        let parent_data = self.state.take_parent_data();
+        drop(object);
+        drop(parent_data);
     }
 }
 
@@ -515,10 +491,7 @@ impl<P: Protocol> RenderEntry<P> {
                     // `unwrap()` in user widget code), Poisoned is the
                     // catch-all bucket for "we don't know more".
                     Err(payload) => {
-                        // Reporting can call a subscriber; retain opaque destruction
-                        // before that foreign call as well as on ordinary return.
-                        let payload = std::mem::ManuallyDrop::new(payload);
-                        let msg = payload_text(&**payload).unwrap_or("(non-string panic payload)");
+                        let msg = payload_text(&*payload).unwrap_or("(non-string panic payload)");
                         if let Err(reporting_payload) =
                             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                                 tracing::error!(
@@ -531,11 +504,8 @@ impl<P: Protocol> RenderEntry<P> {
                             // Reporting is secondary; do not retire its opaque failure or report it again.
                             flui_foundation::panic::discard_payload(reporting_payload);
                         }
-                        // The reporting borrow has ended. Release known text
-                        // payloads; arbitrary destruction remains retained.
-                        flui_foundation::panic::discard_payload(
-                            std::mem::ManuallyDrop::into_inner(payload),
-                        );
+                        // The reporting borrow has ended (ADR-0281 §2).
+                        flui_foundation::panic::discard_payload(payload);
                         Err(crate::error::RenderError::poisoned(
                             debug_name,
                             crate::error::PoisonPhase::Layout,

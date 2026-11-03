@@ -252,12 +252,6 @@ impl std::fmt::Debug for HitMetadata {
     }
 }
 
-impl crate::retain::Retain for HitMetadata {
-    fn retain(self) {
-        crate::retain::Retain::retain(self.0);
-    }
-}
-
 /// Base hit test entry.
 ///
 /// Executable pointer callbacks live in the owner-local interaction lane and
@@ -299,11 +293,11 @@ pub struct HitTestEntry {
     /// would need the pipeline itself, and would be reading a tree that may
     /// have moved on.
     ///
-    /// Healthy retirement releases the payload. During unwind it is retained,
-    /// so a later entry's destructor cannot replace the first failure. This
-    /// guards ownership between entries; it cannot contain competing panics
-    /// inside one opaque payload's destructor. Use [`Option::take`] to move the
-    /// payload out of an owned entry.
+    /// After dispatch the framework destroys each entry's payload on its own,
+    /// under containment, so a later entry's destructor cannot replace the
+    /// first failure. A payload destructor that panics while the thread is
+    /// already unwinding aborts, as in std (ADR-0281). Use [`Option::take`] to
+    /// move the payload out of an owned entry.
     pub metadata: Option<HitMetadata>,
 
     /// Data-plane identity of this target's owner-local scroll handler.
@@ -321,17 +315,6 @@ pub struct HitTestEntry {
     /// Mouse-tracker annotation contributed by this target, if it wants
     /// enter/exit/hover tracking.
     pub mouse_annotation: Option<MouseTrackerAnnotation>,
-}
-
-impl Drop for HitTestEntry {
-    fn drop(&mut self) {
-        let metadata = self.metadata.take();
-        if std::thread::panicking() {
-            crate::retain::Retain::retain(metadata);
-        } else {
-            drop(metadata);
-        }
-    }
 }
 
 impl std::fmt::Debug for HitTestEntry {
@@ -493,21 +476,41 @@ impl TransformPart {
     }
 }
 
+impl Drop for HitTestResult {
+    /// A path that is simply dropped, such as a replaced queued hover packet,
+    /// still destroys its payloads one at a time: dropping the `Vec` would run
+    /// a second failing payload destructor inside the first one's unwind and
+    /// abort. The first failure propagates; while the thread is already
+    /// unwinding it is discarded instead of starting a second panic.
+    fn drop(&mut self) {
+        let mut first = None;
+        self.retire_entries(&mut first);
+        if let Some(failure) = first {
+            if std::thread::panicking() {
+                failure.discard();
+            } else {
+                failure.resume();
+            }
+        }
+    }
+}
+
 impl HitTestResult {
     /// Retire framework-owned entries individually after dispatch, outside any
     /// binding borrow. An opaque payload's destructor may reenter or fail.
     pub(crate) fn retire_metadata(mut self, first: &mut Option<RoutePanic>) {
-        let unwinding = std::thread::panicking();
+        self.retire_entries(first);
+    }
+
+    /// Destroy each entry's payload on its own, under containment, keeping
+    /// the first failure.
+    fn retire_entries(&mut self, first: &mut Option<RoutePanic>) {
         for entry in &mut self.path {
             let Some(metadata) = entry.metadata.take() else {
                 continue;
             };
-            if unwinding || first.is_some() {
-                crate::retain::Retain::retain(metadata);
-            } else {
-                let retired = RoutePanic::capture(|| drop(metadata));
-                RoutePanic::preserve_first(first, retired, "hover hit-test metadata retirement");
-            }
+            let retired = RoutePanic::capture(|| drop(metadata));
+            RoutePanic::preserve_first(first, retired, "hover hit-test metadata retirement");
         }
     }
 

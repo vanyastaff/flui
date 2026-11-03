@@ -86,7 +86,8 @@
 //! Hover paths retire opaque metadata individually after delivery, preserving
 //! an already caught first failure while the remaining accepted frame peers
 //! run. Replacing a queued hover commits the newer packet before retiring its
-//! outgoing path. Entries retain metadata during unwind (ADR-0127).
+//! outgoing path. A metadata destructor that panics during an unwind aborts,
+//! as in std (ADR-0281).
 //! `binding_input_contract_matrix` covers these boundaries and fresh recovery.
 //!
 //! # Example
@@ -894,7 +895,7 @@ impl GestureBinding {
     {
         if self.close.is_closed() {
             let mut failure = ClosePanic::for_rejection(self.close.tombstone().mode());
-            failure.retire(crate::retain::Owned(hit_test_fn));
+            failure.retire(hit_test_fn);
             failure.finish();
             return;
         }
@@ -1286,7 +1287,7 @@ impl GestureBinding {
             .collect();
         for (_, ticket) in native_tickets {
             failure.run(|| (ticket.0)());
-            failure.retire(crate::retain::Owned(ticket.0));
+            failure.retire(ticket.0);
         }
         let arena_mode = if failure.preserving() {
             CloseMode::PreservingFailure
@@ -1307,10 +1308,10 @@ impl GestureBinding {
             {
                 let _ = handle.release_route_for_close(token, &mut failure);
             }
-            failure.retire(crate::retain::Owned(route));
+            failure.retire(route);
         }
         for (_, event) in moves {
-            failure.retire(crate::retain::Owned(event));
+            failure.retire(event);
         }
         if failure.preserving() {
             failure.invoke(|| self.arena.drain(CloseMode::PreservingFailure));
@@ -2611,22 +2612,18 @@ impl GestureBinding {
                 Ok(failure) => failure,
                 Err(failure) => Some(failure),
             };
-            if first_panic.is_some() {
-                crate::retain::Retain::retain(crate::retain::Owned(prior));
-                crate::retain::Retain::retain(crate::retain::Owned(replaced));
-            } else {
-                let retired = RoutePanic::capture(|| drop(prior));
-                RoutePanic::preserve_first(
-                    &mut first_panic,
-                    retired,
-                    "older metadata packet retirement",
-                );
-                if first_panic.is_some() {
-                    crate::retain::Retain::retain(crate::retain::Owned(replaced));
-                } else {
-                    first_panic = RoutePanic::capture(|| drop(replaced));
-                }
-            }
+            let retired = RoutePanic::capture(|| drop(prior));
+            RoutePanic::preserve_first(
+                &mut first_panic,
+                retired,
+                "older metadata packet retirement",
+            );
+            let retired = RoutePanic::capture(|| drop(replaced));
+            RoutePanic::preserve_first(
+                &mut first_panic,
+                retired,
+                "replaced metadata packet retirement",
+            );
             if let Some(failure) = first_panic {
                 failure.resume();
             }

@@ -106,26 +106,24 @@ impl Drop for FailureScope<'_> {
     }
 }
 
-/// Whether a value refused under `slot` falls to failure custody: the thread
-/// is unwinding, or the owner turn it belongs to holds a caught failure. Such
-/// a value is retained, never run or destroyed.
-pub(crate) fn execution_failure_held(slot: &RefCell<Option<Weak<FailureSignal>>>) -> bool {
-    std::thread::panicking()
-        || slot
-            .borrow()
-            .as_ref()
-            .and_then(Weak::upgrade)
-            .is_some_and(|signal| signal.get())
-}
-
+/// Destroy a value refused or withdrawn under `slot` outside every guard, its
+/// destructor contained. A panic it raises is the first failure unless the
+/// thread was already unwinding or the owner turn it belongs to already held
+/// one before the destructor ran; then it is discarded and the earlier failure
+/// stays first (ADR-0281). The check is taken before the destructor, so a
+/// failure that destructor's own nested retirement raised and propagated is
+/// not mistaken for an earlier one.
 pub(crate) fn retire_with_execution_custody<T>(
     slot: &RefCell<Option<Weak<FailureSignal>>>,
     value: T,
 ) {
     let signal = slot.borrow().as_ref().and_then(Weak::upgrade);
-    if std::thread::panicking() || signal.as_ref().is_some_and(|signal| signal.get()) {
-        std::mem::forget(value);
-    } else if let Err(payload) = catch_unwind(AssertUnwindSafe(|| drop(value))) {
+    let held = std::thread::panicking() || signal.as_ref().is_some_and(|signal| signal.get());
+    if let Err(payload) = catch_unwind(AssertUnwindSafe(|| drop(value))) {
+        if held {
+            flui_foundation::panic::discard_payload(payload);
+            return;
+        }
         if let Some(signal) = signal {
             signal.set(true);
         }
@@ -173,11 +171,9 @@ impl<'a> Recovery<'a> {
     }
 
     fn retire<T>(&mut self, value: T) {
-        if self.owner.preserving_execution_failure() || std::thread::panicking() {
-            std::mem::forget(value);
-        } else {
-            self.attempt(|| drop(value));
-        }
+        // Contained: a destructor panic competes, and the first failure stays
+        // the one raised (ADR-0281).
+        self.attempt(|| drop(value));
     }
 
     fn release_scheduler(&mut self, scheduler: UpdateScheduler) {
@@ -326,15 +322,15 @@ impl OwnerFrame {
     ///
     /// # Errors
     /// Refuses recursive, retired or closed execution before invoking the
-    /// preparation or pipeline. Rejected envelopes retire separately, or are
-    /// retained while preserving an incoming failure.
+    /// preparation or pipeline. Rejected envelopes are destroyed under
+    /// containment.
     ///
     /// # Panics
     /// Propagates the first invocation or cleanup failure after closing an
-    /// opened frame. A produced result is retained if later cleanup fails.
-    /// An opaque aggregate whose own destructor double-panics remains subject
-    /// to Rust's abort semantics. A rejected envelope's destructor can likewise
-    /// panic instead of returning a typed refusal.
+    /// opened frame. A produced result is destroyed under containment if later
+    /// cleanup fails. A destructor that panics while the thread is already
+    /// unwinding aborts, as in std (ADR-0281); a rejected envelope's destructor
+    /// can panic instead of returning a typed refusal.
     pub fn drive_frame<R>(
         &self,
         timestamp: Instant,
@@ -410,7 +406,7 @@ impl OwnerFrame {
                 && (scheduler.inner.frame.current_frame.borrow().is_some()
                     || scheduler.phase() != SchedulerPhase::Idle)
             {
-                recovery.attempt(|| scheduler.abort_frame_impl(true));
+                recovery.attempt(|| scheduler.abort_frame_impl());
             }
             // Begin can fail before installing a FrameTiming (for example on
             // identity exhaustion). Such an attempt owes no completion but
@@ -434,7 +430,7 @@ impl OwnerFrame {
         if recovery.first.is_some()
             && let Some(value) = output.take()
         {
-            std::mem::forget(value);
+            recovery.retire(value);
         }
         drop(failure_scope);
         recovery.finish();
@@ -456,7 +452,7 @@ impl OwnerFrame {
     ///
     /// # Panics
     /// Propagates the first preparation, poll or cleanup failure. Opaque
-    /// callable ownership is retained once failure custody begins.
+    /// callable ownership is destroyed under containment (ADR-0281).
     pub fn pump_background(&self, mut prepare: impl FnMut()) -> Result<usize, ExecutionError> {
         let permit = match self.cleanup.execution.enter() {
             Ok(permit) => permit,

@@ -297,9 +297,9 @@ fn run(
         Err(payload) => {
             let message =
                 crate::owner::panic_boundary::panic_payload_message(payload.as_ref()).to_owned();
-            // The payload may own anything; it is kept rather than dropped
-            // here, where a panicking `Drop` would end the thread twice over.
-            std::mem::forget(payload);
+            // The payload may own anything; it is destroyed under containment
+            // (ADR-0281).
+            flui_foundation::panic::discard_payload(payload);
             Some(format!("the display thread panicked: {message}"))
         }
     };

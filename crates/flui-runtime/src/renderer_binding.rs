@@ -57,42 +57,6 @@ struct SemanticsListenerStorage {
     entries: RwLock<Vec<SemanticsEnabledListener>>,
 }
 
-impl Drop for SemanticsListenerStorage {
-    fn drop(&mut self) {
-        // Exclusive physical ownership needs no infrastructure lock guard.
-        RetiringSemanticsListeners(std::mem::take(self.entries.get_mut())).retire();
-    }
-}
-
-/// A callback snapshot is also an owner after reentrant registration removal.
-struct RetiringSemanticsListeners(Vec<SemanticsEnabledListener>);
-
-impl RetiringSemanticsListeners {
-    fn retire(mut self) {
-        if !std::thread::panicking() {
-            self.0.reverse();
-            while let Some(listener) = self.0.pop() {
-                drop(listener);
-            }
-        }
-    }
-}
-
-impl Drop for RetiringSemanticsListeners {
-    fn drop(&mut self) {
-        if std::thread::panicking() {
-            // Preserve the incoming or first propagated failure without
-            // invoking independent, potentially hostile capture destructors
-            // (ADR-0127). The envelopes are thread-shared, so no clone can be
-            // proven non-last: another thread may release its own at any
-            // moment. Every clone is retained.
-            for listener in std::mem::take(&mut self.0) {
-                std::mem::forget(listener);
-            }
-        }
-    }
-}
-
 /// Shared body for [`RenderingBinding::redirty_root_for_represent`]:
 /// operates on the bare [`PipelineCell`] (rather than requiring a full
 /// `RenderingBinding` reference) so a caller that only holds that
@@ -516,13 +480,9 @@ impl RenderingBinding {
     /// [`Self::add_semantics_enabled_listener`] and calls
     /// `SemanticsHost::set_platform_semantics_enabled` from that listener.
     ///
-    /// A callback panic propagates unchanged. During that unwind the owned
-    /// snapshot retains its envelope clones instead of dropping them
-    /// (ADR-0127): a thread-shared clone cannot be proven non-last, so the
-    /// captures of the listeners in that snapshot are never freed.
-    /// Healthy snapshot retirement follows registration order, with the same
-    /// rule after the first capture-destructor panic. This cannot protect
-    /// competing destructors inside one opaque callback's capture aggregate.
+    /// A callback panic propagates unchanged. The owned snapshot is dropped
+    /// in registration order, during that unwind too; a capture destructor
+    /// that panics while the thread unwinds aborts, as in std (ADR-0281).
     pub fn set_semantics_enabled(&self, enabled: bool) {
         let was_enabled = self.semantics_enabled.swap(enabled, Ordering::Relaxed);
         if was_enabled != enabled {
@@ -533,12 +493,12 @@ impl RenderingBinding {
             // write lock while this thread still held the read guard and
             // deadlock (same read-then-write reentrancy `PaintingBinding`'s
             // `notify_listeners` guards against).
-            let listeners =
-                RetiringSemanticsListeners(self.semantics_listeners.entries.read().clone());
-            for listener in &listeners.0 {
+            let listeners: Vec<SemanticsEnabledListener> =
+                self.semantics_listeners.entries.read().clone();
+            for listener in &listeners {
                 listener(enabled);
             }
-            listeners.retire();
+            drop(listeners);
         }
     }
 }

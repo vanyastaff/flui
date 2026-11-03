@@ -13,7 +13,7 @@
 //! | the caller's grant when an earlier queued grant fails: queued if asynchronous, retained if synchronous | `LockArbiter::request` (`lock.rs`) |
 //! | queued grants dropped unrun, by a detach or with the store | `LockArbiter::clear`, `Drop for LockArbiter` (`lock.rs`) |
 //! | the gate a store follows, replaced outside the borrow | `LockArbiter::set_gate` (`lock.rs`) |
-//! | a parked failure no owner took when the gate's last clone goes | `CommitGate`'s failure cell (`lock.rs`), which retains it as a scope does |
+//! | a parked failure no owner took when the gate's last clone goes | `CommitGate`'s failure cell (`lock.rs`), which discards it as a scope does |
 //! | the in-memory owner listener, and its snapshot | `InMemoryTextStore::settle` (`in_memory.rs`) |
 //! | a replaced in-memory owner listener or observer, and both when the store goes | `InMemoryTextStore::set_owner_listener`, `set_observer`, `Drop` (`in_memory.rs`) |
 //! | observer notifications and the observer snapshot, in the caller's scope (a settle's included) | `InMemoryTextStore::flush_notifications` (`in_memory.rs`), `EditableTextStore::flush_notifications`, `notify` (`flui-widgets` `text/text_store.rs`) |
@@ -42,8 +42,8 @@
 //!
 //! Presentation close (`TextInputOwner::close_with_mode` and its `Drop`)
 //! keeps its close-mode containment (ADR-0123), which retires the same
-//! values under the same retention rule; it takes a failure parked for its
-//! next turn too, ahead of its own, raised by an ordinary close and retained
+//! values the same way, under containment; it takes a failure parked for its
+//! next turn too, ahead of its own, raised by an ordinary close and discarded
 //! by a preserving one or by `Drop`. Its platform and host calls and each
 //! client owner it retires run through [`OwnerCalls::run_parking`] first
 //! (`close_host_call`), so a failure one of them parked while its own panic
@@ -66,8 +66,8 @@
 //!   or move the store to another presentation.
 //! - **Every call is contained, and the first failure is authoritative.**
 //!   Owner code after a failed call still runs (an observer still hears of
-//!   an edit the owner made before it panicked); a later failure is retained
-//!   (ADR-0127), never dropped and never reported in its place.
+//!   an edit the owner made before it panicked); a later failure is discarded
+//!   under containment (ADR-0281), never reported in its place.
 //! - **A failure parked in a gate before a call's own panic came first**, so
 //!   [`OwnerCalls::run_parking`] and [`OwnerCalls::retire_parking`] take
 //!   what the call parked before keeping that panic; a failure the gate
@@ -86,76 +86,21 @@
 //!   session the owner's later code opens, whose own settle parks there too,
 //!   cannot overtake it.
 //! - **A snapshot retires inside the scope** ([`OwnerCalls::retire`]): dropped,
-//!   contained, while the scope is healthy; retained once it has failed or
-//!   while the thread unwinds (ADR-0127), so a capture whose `Drop` panics
-//!   can neither replace the first failure nor panic during an unwind.
+//!   contained, a failed scope's or an unwinding thread's too; a panic from
+//!   its destructor is kept behind the first failure (ADR-0281). One that
+//!   panics while the thread is already unwinding aborts, as in std.
 
 use std::any::Any;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
-use std::rc::Rc;
-use std::sync::Arc;
 
-use super::lock::{CommitGate, LockGrant, Parked};
-
-/// A value whose destruction may run owner code, which a failed
-/// [`OwnerCalls`] retains instead of destroying (ADR-0127).
-pub trait RetainOnFailure {
-    /// Forget whatever dropping `self` would destroy; release the rest.
-    fn retain(self);
-}
-
-impl<T: ?Sized> RetainOnFailure for Rc<T> {
-    /// A clone that is not the last owner runs no owner code when dropped,
-    /// so only the last one is forgotten.
-    fn retain(self) {
-        if Rc::strong_count(&self) == 1 {
-            std::mem::forget(self);
-        }
-    }
-}
-
-impl<T: ?Sized> RetainOnFailure for Arc<T> {
-    /// Always forgotten: another thread may release its clone after any
-    /// count check, which would make this drop the last one.
-    fn retain(self) {
-        std::mem::forget(self);
-    }
-}
-
-impl<T: ?Sized> RetainOnFailure for Box<T> {
-    fn retain(self) {
-        std::mem::forget(self);
-    }
-}
-
-impl<T: RetainOnFailure> RetainOnFailure for Option<T> {
-    fn retain(self) {
-        if let Some(value) = self {
-            value.retain();
-        }
-    }
-}
-
-impl<T: RetainOnFailure> RetainOnFailure for Vec<T> {
-    fn retain(self) {
-        for value in self {
-            value.retain();
-        }
-    }
-}
-
-impl RetainOnFailure for LockGrant {
-    fn retain(self) {
-        std::mem::forget(self);
-    }
-}
+use super::lock::{CommitGate, Parked};
 
 /// One operation's containment of owner code: runs each call, retires each
 /// snapshot, and keeps the first failure for the caller to resume or park.
 ///
 /// See the module doc for the points that use it and the rules it keeps.
-/// Dropping a scope that still holds a failure retains the failure's payload
-/// (ADR-0119): a caller resumes it with [`Self::resume`] or hands it on with
+/// Dropping a scope that still holds a failure discards the failure's payload
+/// under containment (ADR-0281): a caller resumes it with [`Self::resume`] or hands it on with
 /// [`Self::into_failure`].
 #[derive(Default)]
 #[must_use = "a scope holds the first failure until it is resumed or handed on"]
@@ -322,12 +267,10 @@ impl OwnerCalls {
     }
 
     /// Retire `value`, a snapshot or a withdrawn value whose destruction may
-    /// run owner code: dropped, contained, while this scope is healthy;
-    /// retained once it has failed or while the thread unwinds.
-    pub fn retire<T: RetainOnFailure>(&mut self, value: T) {
-        if self.failed() || std::thread::panicking() {
-            value.retain();
-        } else if let Err(payload) = catch_unwind(AssertUnwindSafe(move || drop(value))) {
+    /// run owner code: dropped, contained, after a failure too. A panic from
+    /// its destructor is kept behind any earlier failure (ADR-0281).
+    pub fn retire<T>(&mut self, value: T) {
+        if let Err(payload) = catch_unwind(AssertUnwindSafe(move || drop(value))) {
             self.keep(payload);
         }
     }
@@ -335,24 +278,8 @@ impl OwnerCalls {
     /// [`Self::retire`], for a value whose destruction may request grants of
     /// stores behind `gate`: what they park there during it is taken, as
     /// for [`Self::run_parking`].
-    pub fn retire_parking<T: RetainOnFailure>(&mut self, gate: &CommitGate, value: T) {
-        if self.failed() || std::thread::panicking() {
-            value.retain();
-            return;
-        }
-        let held = gate.holds_failure();
-        match catch_unwind(AssertUnwindSafe(move || drop(value))) {
-            Ok(()) => {
-                if !held {
-                    self.take_parked(gate);
-                }
-            }
-            Err(payload) => {
-                let parked = if held { None } else { gate.take_parked() };
-                // Retiring begins outside an unwind (checked above).
-                self.keep_in_order(payload, parked, false);
-            }
-        }
+    pub fn retire_parking<T>(&mut self, gate: &CommitGate, value: T) {
+        self.run_parking(gate, move || drop(value));
     }
 
     /// The first failure, for a caller that parks or wraps it.

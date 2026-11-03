@@ -1,7 +1,7 @@
 //! Runs one in-crate test body in a child process of the test binary.
 //!
 //! For a case whose failure mode is a process abort (a destructor panicking
-//! during capacity unwind, ADR-0127) or one that spends a process-global
+//! while the thread unwinds, ADR-0281) or one that spends a process-global
 //! identity counter. Each case is its own `#[test]` so the runner schedules
 //! the children independently; the child re-executes this binary, not cargo.
 

@@ -119,8 +119,8 @@ pub(crate) fn serve(
 /// Installs the host's answer for `tag`, unless the order is already for
 /// it. Returns whether the owner has to be told: the order changed, or the
 /// install panicked part way. A panic is contained here, so a later request
-/// is still served; its payload is leaked rather than dropped, since its
-/// destructor is the query's code too.
+/// is still served; its payload is discarded under containment, since its
+/// destructor is the query's code too (ADR-0281 §2).
 fn install(order: &mut FallbackOrder, tag: &str, ask: &AskHost) -> bool {
     if order.locale() == tag {
         return false;
@@ -133,14 +133,14 @@ fn install(order: &mut FallbackOrder, tag: &str, ask: &AskHost) -> bool {
 }
 
 /// Runs `f`, containing a panic in it: the panic is logged as `what` and its
-/// payload is leaked rather than dropped, since the payload's destructor is
-/// the panicking code's too and could panic again outside any catch.
+/// payload is discarded under containment, since the payload's destructor is
+/// the panicking code's too (ADR-0281 §2).
 pub(crate) fn contained<T>(what: &str, f: impl FnOnce() -> T) -> Option<T> {
     match catch_unwind(AssertUnwindSafe(f)) {
         Ok(value) => Some(value),
         Err(payload) => {
             tracing::error!("{what} panicked");
-            std::mem::forget(payload);
+            flui_foundation::panic::discard_payload(payload);
             None
         }
     }

@@ -1,7 +1,6 @@
 //! Runner for table-driven tests: each row is a named scenario, and a failing
 //! row is reported under its name.
 
-use std::any::Any;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
 /// Runs every `(name, scenario)` row, then panics once naming each failing row.
@@ -19,7 +18,7 @@ pub(crate) fn run_cases(cases: &[(&str, fn())]) {
                 })
                 .unwrap_or_else(|| "non-string panic payload".to_owned());
             failures.push(format!("case `{name}` failed: {message}"));
-            drop_contained(payload);
+            flui_foundation::panic::discard_payload(payload);
         }
     }
     assert!(
@@ -30,24 +29,6 @@ pub(crate) fn run_cases(cases: &[(&str, fn())]) {
 "
         )
     );
-}
-
-/// Drops a panic payload without letting a panicking destructor escape the
-/// runner: the failure already recorded stays authoritative and later rows
-/// still run. A destructor that keeps panicking is leaked after a few rounds.
-fn drop_contained(payload: Box<dyn Any + Send>) {
-    let mut payload = Some(payload);
-    for _ in 0..8 {
-        let Some(current) = payload.take() else {
-            return;
-        };
-        if let Err(next) = catch_unwind(AssertUnwindSafe(move || drop(current))) {
-            payload = Some(next);
-        }
-    }
-    if let Some(leaked) = payload {
-        std::mem::forget(leaked);
-    }
 }
 
 #[cfg(test)]

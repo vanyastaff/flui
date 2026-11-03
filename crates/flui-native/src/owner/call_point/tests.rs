@@ -143,10 +143,11 @@ fn a_panicking_handler_keeps_its_place_and_its_payload() {
 }
 
 /// After a handler panics, the handler it was displaced by stays and the
-/// one that ran is retained: its destructor, which would fail a second time,
-/// never runs, and the first failure is the one reported.
+/// one that ran is destroyed outside the lock, under containment: its
+/// destructor fails a second time, and the first failure is still the one
+/// reported (ADR-0281 §3).
 #[test]
-fn a_failing_call_retains_the_handler_it_displaced() {
+fn a_failing_call_destroys_the_handler_it_displaced() {
     let state = Arc::new(Mutex::new(State::default()));
     let (capture, observed) = witness(&state, true);
     let inner = Arc::clone(&state);
@@ -161,7 +162,8 @@ fn a_failing_call_retains_the_handler_it_displaced() {
         flui_foundation::panic::payload_text(&*failure),
         Some("first failure")
     );
-    assert!(!observed.dropped.load(Ordering::SeqCst), "retained");
+    assert!(observed.dropped.load(Ordering::SeqCst), "destroyed");
+    assert!(!observed.dropped_under_lock.load(Ordering::SeqCst));
     assert_eq!(call(&slot(&state), |handler| handler()).or_resume(0), 2);
 }
 
@@ -193,9 +195,11 @@ fn a_closed_slot_does_not_take_its_handler_back() {
     assert!(state.lock().handler.is_none());
 }
 
-/// While the thread is already unwinding, a retired value is retained.
+/// While the thread is already unwinding, a retired value is still
+/// destroyed, under containment: its destructor's panic is discarded and the
+/// unwinding failure is the one caught (ADR-0281 §3).
 #[test]
-fn retiring_during_an_unwind_retains_the_value() {
+fn retiring_during_an_unwind_destroys_the_value() {
     let state = Arc::new(Mutex::new(State::default()));
     let (capture, observed) = witness(&state, true);
     struct RetireOnDrop(Option<Witness>);
@@ -213,5 +217,5 @@ fn retiring_during_an_unwind_retains_the_value() {
         flui_foundation::panic::payload_text(&*failure),
         Some("unrelated failure")
     );
-    assert!(!observed.dropped.load(Ordering::SeqCst));
+    assert!(observed.dropped.load(Ordering::SeqCst));
 }

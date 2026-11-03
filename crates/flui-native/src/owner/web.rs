@@ -545,8 +545,8 @@ impl WebLoop {
                         panic = ?flui_foundation::panic::payload_text(payload.as_ref()),
                         "the window's state callback panicked on a wake"
                     );
-                    // An arbitrary payload's drop may panic again.
-                    std::mem::forget(payload);
+                    // Destroyed under containment (ADR-0281).
+                    flui_foundation::panic::discard_payload(payload);
                 }
                 if let Some(owner) = owner {
                     // A frame request wakes the owner: the loop runs again.

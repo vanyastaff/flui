@@ -611,7 +611,7 @@ impl<T: Clone> Registered<T> {
     }
 }
 
-impl<T: crate::retain::Retain> Registered<T> {
+impl<T> Registered<T> {
     /// Write `value` (`None` clears) and return the write's generation. The
     /// value it replaces is retired with no borrow held; on a closed `node`,
     /// `value` itself is.
@@ -2553,14 +2553,6 @@ pub enum ResolvedStep {
     None,
     /// Re-resolve the step in the enclosing scope.
     RetryInParent,
-}
-
-impl crate::retain::Retain for ResolvedStep {
-    fn retain(self) {
-        if let Self::Focus(node) = self {
-            crate::retain::Retain::retain(node);
-        }
-    }
 }
 
 impl std::fmt::Debug for ResolvedStep {

@@ -606,9 +606,12 @@ impl UiCommandSender {
                 // Backpressure must retry its debt after admission locks retire.
                 let wake = catch_unwind(AssertUnwindSafe(|| self.retry_wake_debt()));
                 if let Err(wake_payload) = wake {
-                    // Retain the opaque rejected envelope once delivery failed;
-                    // competing capture destructors cannot replace that failure.
-                    std::mem::forget(rejected);
+                    // The rejected envelope is destroyed under containment; a
+                    // destructor that panics does not replace the wake failure
+                    // (ADR-0281 §3).
+                    if let Err(dropped) = catch_unwind(AssertUnwindSafe(|| drop(rejected))) {
+                        flui_foundation::panic::discard_payload(dropped);
+                    }
                     resume_unwind(wake_payload);
                 }
                 Err(CommandSendError::ChannelFull { capacity, rejected })
@@ -1103,24 +1106,23 @@ impl UiRuntime {
                         }));
                         report.dropped_stale += 1;
                         if let Err(payload) = diagnosed {
-                            // Diagnostics failed before the opaque envelope
-                            // could be retired. Retain it so aggregate drop
-                            // glue cannot replace that panic.
-                            std::mem::forget(apply);
+                            // Diagnostics failed: the envelope is destroyed
+                            // under containment before the failure resumes
+                            // (ADR-0281 §3).
+                            flui_foundation::panic::drop_contained(apply);
                             self.rearm_after_command_panic(payload);
                         }
 
                         // The stale envelope can contain several hostile
                         // captured destructors. Ensure an already-queued FIFO
                         // tail has a future owner turn before its opaque drop
-                        // glue runs; two field panics cannot be contained by
-                        // an outer catch in Rust.
+                        // glue runs.
                         if self.has_queued_work()
                             && let Err(payload) = catch_unwind(AssertUnwindSafe(|| {
                                 self.sender_prototype.wake_owner();
                             }))
                         {
-                            std::mem::forget(apply);
+                            flui_foundation::panic::drop_contained(apply);
                             self.rearm_after_command_panic(payload);
                         }
                         if let Err(payload) = catch_unwind(AssertUnwindSafe(|| drop(apply))) {
@@ -1158,11 +1160,9 @@ impl UiRuntime {
                     self.redraw_pending.store(true, Ordering::Release);
                     let command_panic = match outcome {
                         Err(payload) => {
-                            // Once the callback has panicked, destroying an
-                            // opaque aggregate capture bundle can abort inside
-                            // generated drop glue before any outer catch
-                            // regains control.
-                            std::mem::forget(apply);
+                            // The envelope is destroyed under containment
+                            // after the callback failed too (ADR-0281 §3).
+                            flui_foundation::panic::drop_contained(apply);
                             Some(payload)
                         }
                         Ok(()) => catch_unwind(AssertUnwindSafe(|| drop(apply))).err(),

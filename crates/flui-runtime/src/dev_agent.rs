@@ -263,12 +263,12 @@ impl Drop for DevAgentAttachment {
 }
 
 /// Run `body`: its value, or `None` when it panicked. The panic's payload is
-/// forgotten rather than dropped, because its `Drop` may panic too.
+/// discarded under containment (ADR-0281 §2).
 fn contained<R>(body: impl FnOnce() -> R) -> Option<R> {
     match catch_unwind(AssertUnwindSafe(body)) {
         Ok(value) => Some(value),
         Err(payload) => {
-            std::mem::forget(payload);
+            flui_foundation::panic::discard_payload(payload);
             None
         }
     }

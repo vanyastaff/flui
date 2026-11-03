@@ -19,7 +19,7 @@ fn report(payload: &(dyn Any + Send), context: &'static str) {
     }
 }
 
-pub(crate) fn retain_reported(payload: Payload, context: &'static str) {
+pub(crate) fn discard_reported(payload: Payload, context: &'static str) {
     report(payload.as_ref(), context);
     flui_foundation::panic::discard_payload(payload);
 }
@@ -27,29 +27,25 @@ pub(crate) fn retain_reported(payload: Payload, context: &'static str) {
 pub(crate) struct WakeBatch<'a> {
     first: Option<Payload>,
     context: &'static str,
-    preserve_failure: bool,
     failure_signal: Option<&'a FailureSignal>,
 }
 
 impl<'a> WakeBatch<'a> {
-    pub(crate) const fn new(context: &'static str, preserve_failure: bool) -> Self {
+    pub(crate) const fn new(context: &'static str) -> Self {
         Self {
             first: None,
             context,
-            preserve_failure,
             failure_signal: None,
         }
     }
 
     pub(crate) const fn with_failure_signal(
         context: &'static str,
-        preserve_failure: bool,
         failure_signal: &'a FailureSignal,
     ) -> Self {
         Self {
             first: None,
             context,
-            preserve_failure,
             failure_signal: Some(failure_signal),
         }
     }
@@ -70,19 +66,13 @@ impl<'a> WakeBatch<'a> {
         self.first
     }
 
+    /// Wake through the borrowed executor envelope, then destroy it; both run
+    /// contained, and a failure of either competes for first (ADR-0281).
     pub(crate) fn wake(&mut self, waker: Waker) {
-        let called = catch_unwind(AssertUnwindSafe(|| waker.wake_by_ref()));
-        if let Err(payload) = called {
-            // Keep the owning opaque executor envelope outside the invocation.
-            std::mem::forget(waker);
+        if let Err(payload) = catch_unwind(AssertUnwindSafe(|| waker.wake_by_ref())) {
             self.failed(payload);
-        } else if self.preserve_failure
-            || self.first.is_some()
-            || self.failure_signal.is_some_and(FailureSignal::get)
-            || std::thread::panicking()
-        {
-            std::mem::forget(waker);
-        } else if let Err(payload) = catch_unwind(AssertUnwindSafe(|| drop(waker))) {
+        }
+        if let Err(payload) = catch_unwind(AssertUnwindSafe(|| drop(waker))) {
             self.failed(payload);
         }
     }
