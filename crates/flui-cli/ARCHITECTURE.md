@@ -74,6 +74,14 @@ application's. Rust links statically, so no per-SDK privacy bundle exists and th
 manifest carries the union. `flui-native` declares `systemUptime` (`35F9.1`) and file timestamps
 (`C617.1`), `flui-assets` file timestamps (`publication_contract`).
 
+`flui doctor` reads the same declarations for a manifest the CLI does not write
+(`declarations/verify.rs`, `commands/doctor/project.rs`): the project's hand-written Android
+manifest and each `--manifest` path, an `AndroidManifest.xml` or an XML `PrivacyInfo.xcprivacy`,
+named by its root element. Each missing entry is listed with the crates that declare it and the
+line to add, under the stable ids `project.declarations`, `project.android-manifest` and
+`project.manifest`. The merger is not run: an Android file that is not Gradle's merged manifest
+carries a note saying so (`doctor_lists_what_a_manifest_lacks_of_the_crates_declarations`).
+
 ### Local source dependencies are explicit Cargo paths
 
 `flui create NAME --local` selects the current working directory as the source

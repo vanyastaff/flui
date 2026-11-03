@@ -23,6 +23,8 @@ use serde::Deserialize;
 
 use crate::build::error::{BuildError, BuildResult};
 
+pub(crate) mod verify;
+
 /// The newest `schema` this CLI reads.
 pub(crate) const SCHEMA: u32 = 1;
 

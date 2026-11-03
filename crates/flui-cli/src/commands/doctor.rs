@@ -19,11 +19,13 @@ use std::path::PathBuf;
 use std::process::{Command, Output};
 use std::time::Duration;
 
+mod project;
+
 /// The budget for `rustup target add`, which downloads a component.
 const FIX_TIMEOUT: Duration = Duration::from_mins(10);
 
 /// Options of `flui doctor`.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 pub(crate) struct DoctorOptions {
     /// Show paths and full version strings.
     pub(crate) verbose: bool,
@@ -36,6 +38,10 @@ pub(crate) struct DoctorOptions {
     /// Run automatable fixes (currently: missing `rustup` targets), then
     /// re-check.
     pub(crate) fix: bool,
+    /// Manifests FLUI does not write (an embedding project's
+    /// `AndroidManifest.xml` or `PrivacyInfo.xcprivacy`) to check against what
+    /// the crates of the project in the current directory declare.
+    pub(crate) manifests: Vec<PathBuf>,
 }
 
 /// Severity of one [`Check`].
@@ -91,6 +97,8 @@ struct Check {
     /// A fix for this check, if one exists.
     fix: Option<Fix>,
     path: Option<PathBuf>,
+    /// What the check could not see, such as entries a manifest merger adds.
+    note: Option<&'static str>,
 }
 
 impl Check {
@@ -103,11 +111,17 @@ impl Check {
             detail,
             fix: None,
             path: None,
+            note: None,
         }
     }
 
     fn with_path(mut self, path: Option<PathBuf>) -> Self {
         self.path = path;
+        self
+    }
+
+    fn with_note(mut self, note: &'static str) -> Self {
+        self.note = Some(note);
         self
     }
 
@@ -128,6 +142,7 @@ impl Check {
             detail,
             fix,
             path: None,
+            note: None,
         }
     }
 
@@ -148,6 +163,7 @@ struct CheckEvent<'a> {
     detail: &'a str,
     fix: Option<String>,
     path: &'a Option<PathBuf>,
+    note: Option<&'a str>,
 }
 
 impl<'a> From<&'a Check> for CheckEvent<'a> {
@@ -160,6 +176,7 @@ impl<'a> From<&'a Check> for CheckEvent<'a> {
             detail: &check.detail,
             fix: check.fix.as_ref().map(Fix::rendered),
             path: &check.path,
+            note: check.note,
         }
     }
 }
@@ -251,6 +268,7 @@ fn run_checks(options: &DoctorOptions) -> Vec<Check> {
         ios,
         web,
         fix: _,
+        ref manifests,
     } = *options;
 
     let installed_targets = rustup_installed_targets();
@@ -273,6 +291,19 @@ fn run_checks(options: &DoctorOptions) -> Vec<Check> {
 
     if web || check_all {
         checks.extend(web_checks(verbose, web, installed_targets.as_deref()));
+    }
+
+    match std::env::current_dir() {
+        Ok(dir) => checks.extend(project::project_checks(&dir, manifests)),
+        Err(error) if !manifests.is_empty() => checks.push(Check::failing(
+            "project.manifest",
+            "project",
+            "Manifest",
+            Status::Error,
+            format!("cannot read the current directory: {error}"),
+            None,
+        )),
+        Err(_) => {}
     }
 
     checks
@@ -1001,6 +1032,9 @@ fn render_report(checks: &[Check]) -> String {
         if let Some(fix) = &check.fix {
             let _ = writeln!(report, "    {}", style(fix.rendered()).dim());
         }
+        if let Some(note) = check.note {
+            let _ = writeln!(report, "    {}", style(format!("note: {note}")).dim());
+        }
     }
 
     report.trim_end().to_string()
@@ -1012,6 +1046,7 @@ fn section_heading(section: &str) -> &'static str {
         "android" => "Android",
         "ios" => "iOS",
         "web" => "Web",
+        "project" => "Project",
         _ => "Other",
     }
 }

@@ -346,7 +346,7 @@ impl AndroidBuilder {
             .map_err(|error| {
             BuildError::Other(format!("flui.toml names the package: {error}"))
         })?;
-        self.write_manifest(ctx, &config, &android_dir)?;
+        self.write_manifest(ctx, &config)?;
 
         // A Gradle wrapper in the project means the app has grown a Java or
         // Kotlin side and Gradle owns the APK; without one, the SDK's own
@@ -425,7 +425,6 @@ impl AndroidBuilder {
         &self,
         ctx: &BuilderContext,
         config: &crate::config::FluiConfig,
-        android_dir: &Path,
     ) -> BuildResult<()> {
         let crate::build::platform::Platform::Android { targets } = &ctx.platform else {
             return Err(BuildError::InvalidPlatform {
@@ -445,11 +444,7 @@ impl AndroidBuilder {
                 )
             })?;
         super::android_manifest::write(
-            &android_dir
-                .join("app")
-                .join("src")
-                .join("main")
-                .join("AndroidManifest.xml"),
+            &super::android_manifest::path_in(&self.workspace_root),
             &super::android_manifest::ManifestFacts {
                 label: &config.app.name,
                 lib_name: &lib_name,
@@ -465,14 +460,7 @@ impl AndroidBuilder {
         config: &crate::config::FluiConfig,
     ) -> BuildResult<FinalArtifacts> {
         let package = config.app.id.android_package();
-        let manifest = self
-            .workspace_root
-            .join("platforms")
-            .join("android")
-            .join("app")
-            .join("src")
-            .join("main")
-            .join("AndroidManifest.xml");
+        let manifest = super::android_manifest::path_in(&self.workspace_root);
         let native_libs: Vec<(String, PathBuf)> = artifacts
             .rust_libs
             .iter()
