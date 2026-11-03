@@ -25,7 +25,7 @@ use flui_view::{BoxedView, Child, RenderView, View, ViewExt, impl_render_view};
 use super::SelectionModel;
 use crate::interaction::{DragSlot, GestureDetector};
 use crate::overlay::{InsertPosition, OverlayEntry, OverlayHandle};
-use crate::text::MenuHost;
+use crate::text::{MagnifierInfo, MenuHost, SelectionMagnifier};
 use crate::{Container, Positioned, Stack};
 
 /// Which end of a selection a handle moves, in reading order.
@@ -146,6 +146,9 @@ pub(super) struct HandleState {
     watches: RefCell<Vec<LeaderWatch>>,
     /// Where a handle drag holds the end, relative to the contact.
     pub(super) grip: Cell<Option<(HandleSide, Offset<f64>)>>,
+    /// What a handle drag shows over the dragged end, resolved at the
+    /// area's last build.
+    magnifier: RefCell<Option<Rc<dyn SelectionMagnifier>>>,
     /// The area's selection menu, whose toolbar shows over shown handles.
     pub(super) menu: Rc<MenuHost>,
     /// Whether the missing overlay was already reported.
@@ -162,6 +165,7 @@ impl Default for HandleState {
             look: RefCell::new(None),
             watches: RefCell::new(Vec::new()),
             grip: Cell::new(None),
+            magnifier: RefCell::new(None),
             menu: Rc::new(MenuHost::default()),
             warned: Cell::new(false),
         }
@@ -229,6 +233,30 @@ impl HandleState {
         }
     }
 
+    /// Rebuilds the handles when a drag shows a magnifier, which comes or
+    /// goes with the drag; a wake that fails is held in `failure`.
+    pub(super) fn refresh_magnifier(&self, failure: &mut FirstPanic) {
+        if self.magnifier.borrow().is_some() {
+            self.refresh(failure);
+        }
+    }
+
+    /// Sets what a handle drag shows over its end, rebuilding the handles
+    /// when a drag shows another one now.
+    pub(super) fn set_magnifier(&self, magnifier: Option<Rc<dyn SelectionMagnifier>>) {
+        let old = self.magnifier.replace(magnifier);
+        let same = match (&old, &*self.magnifier.borrow()) {
+            (Some(old), Some(new)) => Rc::ptr_eq(old, new),
+            (None, None) => true,
+            _ => false,
+        };
+        if !same && self.grip.get().is_some() {
+            let mut failure = FirstPanic::new();
+            self.refresh(&mut failure);
+            failure.resume();
+        }
+    }
+
     /// Rebuilds the handles, whose line height may have changed; a wake
     /// that fails is held in `failure`.
     pub(super) fn refresh(&self, failure: &mut FirstPanic) {
@@ -268,6 +296,7 @@ impl StatelessView for HandlesView {
                     .into_iter()
                     .zip(heights)
                     .filter_map(|(side, height)| handle(&model, side, height?, ctx))
+                    .chain(drag_magnifier(&model, ctx))
                     .chain(
                         model
                             .handles
@@ -339,6 +368,20 @@ impl SelectionModel {
     }
 }
 
+/// The magnifier over the end a handle drag holds, if the area shows one.
+fn drag_magnifier(model: &Rc<SelectionModel>, ctx: &dyn BuildContext) -> Option<BoxedView> {
+    let (side, _) = model.handles.grip.get()?;
+    let look = model.handles.magnifier.borrow().clone()?;
+    let line_height = model.end_line_height(side)?;
+    let info = MagnifierInfo::new(side, model.text_direction(), line_height);
+    Some(crate::text::magnifier(
+        look.as_ref(),
+        &info,
+        model.handles.link(side),
+        ctx,
+    ))
+}
+
 /// `side`'s handle, under its end on a line `line_height` tall, which a
 /// drag moves.
 fn handle(
@@ -393,6 +436,8 @@ fn handle(
                             .is_some_and(|(gripped, _)| gripped == side)
                         {
                             model.handles.grip.set(None);
+                            // The magnifier goes with the drag.
+                            model.handles.refresh_magnifier(&mut failure);
                             failure.contain(|| model.handle_released());
                         }
                         failure.resume();
@@ -439,6 +484,16 @@ impl LinkFollower {
         Self {
             anchors: (Alignment::TOP_LEFT, Alignment::TOP_LEFT),
             offset,
+            ..Self::new(link, child)
+        }
+    }
+
+    /// The child's bottom centre `gap` above the leader's top-left corner:
+    /// over the line of the end the leader marks.
+    pub(crate) fn above(link: LayerLink, gap: f64, child: impl IntoView) -> Self {
+        Self {
+            anchors: (Alignment::TOP_LEFT, Alignment::BOTTOM_CENTER),
+            offset: Offset::new(0.0, -gap),
             ..Self::new(link, child)
         }
     }

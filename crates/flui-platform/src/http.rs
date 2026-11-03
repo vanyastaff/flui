@@ -622,8 +622,6 @@ pub enum HttpHost {
     EmbedderExecutors,
     /// Android, until its provider sets up the platform's trust store.
     Android,
-    /// The web, until its provider sends requests with `fetch`.
-    Web,
 }
 
 impl fmt::Display for HttpHost {
@@ -631,7 +629,6 @@ impl fmt::Display for HttpHost {
         f.write_str(match self {
             Self::EmbedderExecutors => "a host on its embedder's executors",
             Self::Android => "Android",
-            Self::Web => "the web",
         })
     }
 }

@@ -327,11 +327,11 @@ pub use swipe::{
 pub use text::{
     AnimatedDefaultTextStyle, CaretHandle, DefaultSelectionControls, DefaultSelectionStyle,
     DefaultTextStyle, DotHandles, EditableText, EditableTextState, HandleInfo, HandleSide,
-    PopupOrigin, RawTextField, RawTextFieldState, RichText, SelectError, SelectedText,
-    SelectionArea, SelectionChange, SelectionChangeCause, SelectionContainer, SelectionController,
-    SelectionHandles, SelectionInput, SelectionMenu, SelectionMenuPolicy, SelectionPopup,
-    SelectionStyle, SubmitCallback, Text, TextEditingController, ToolbarItems,
-    ToolbarItemsController, ToolbarItemsState,
+    MagnifierInfo, PlainMagnifier, PopupOrigin, RawTextField, RawTextFieldState, RichText,
+    SelectError, SelectedText, SelectionArea, SelectionChange, SelectionChangeCause,
+    SelectionContainer, SelectionController, SelectionHandles, SelectionInput, SelectionMagnifier,
+    SelectionMenu, SelectionMenuPolicy, SelectionPopup, SelectionStyle, SubmitCallback, Text,
+    TextEditingController, ToolbarItems, ToolbarItemsController, ToolbarItemsState,
 };
 pub use transitions::{
     AlignTransition, AlignTransitionState, AnimatedBuilder, AnimatedBuilderState,

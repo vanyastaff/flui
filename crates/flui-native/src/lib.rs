@@ -196,6 +196,7 @@ pub mod executor;
 pub mod fonts;
 #[doc(hidden)]
 pub mod haptics;
+pub mod http;
 // Reachable so a crate outside can show that a table missing a position does
 // not compile (`tests/ui/host_table_names_every_position.rs`); not an embedding
 // API: nothing outside the crate can build a `HostPlatform`.

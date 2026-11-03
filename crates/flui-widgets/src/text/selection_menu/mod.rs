@@ -11,10 +11,14 @@
 //! [`SelectionMenuPolicy`] says which touches show the toolbar.
 
 mod host;
+mod magnifier;
 mod toolbar;
 mod toolbar_items;
 
 pub(crate) use self::host::{MenuHost, MenuSettings, ShowSelectionMenu, show_menu_action};
+use self::magnifier::MagnifierChoice;
+pub(crate) use self::magnifier::magnifier;
+pub use self::magnifier::{MagnifierInfo, PlainMagnifier, SelectionMagnifier};
 pub(crate) use self::toolbar::{ToolbarAnchors, toolbar};
 pub use self::toolbar_items::{ToolbarItems, ToolbarItemsController, ToolbarItemsState};
 
@@ -228,6 +232,8 @@ pub(crate) struct SelectionControls {
     /// `Some(MenuChoice::Hide)` turns the menu off.
     menu: Option<MenuChoice>,
     policy: Option<SelectionMenuPolicy>,
+    /// `Some(MagnifierChoice::Hide)` turns the magnifier off.
+    magnifier: Option<MagnifierChoice>,
     commands: Rc<[GestureCommand]>,
 }
 
@@ -240,6 +246,7 @@ impl SelectionControls {
             caret_handle: self.caret_handle.or(outer.caret_handle),
             menu: self.menu.clone().or_else(|| outer.menu.clone()),
             policy: self.policy.or(outer.policy),
+            magnifier: self.magnifier.clone().or_else(|| outer.magnifier.clone()),
             commands: outer
                 .commands
                 .iter()
@@ -272,6 +279,17 @@ impl SelectionControls {
 
     pub(crate) fn policy(&self) -> Option<SelectionMenuPolicy> {
         self.policy
+    }
+
+    /// The magnifier of a handle drag: the one a scope set, none where a
+    /// scope turned it off, else the platform's ([`PlainMagnifier::for_platform`]).
+    pub(crate) fn magnifier(controls: Option<&Self>) -> Option<Rc<dyn SelectionMagnifier>> {
+        match controls.and_then(|controls| controls.magnifier.as_ref()) {
+            Some(MagnifierChoice::Show(magnifier)) => Some(Rc::clone(magnifier)),
+            Some(MagnifierChoice::Hide) => None,
+            None => PlainMagnifier::for_platform(TargetPlatform::current())
+                .map(|plain| Rc::new(plain) as Rc<dyn SelectionMagnifier>),
+        }
     }
 
     pub(crate) fn commands(&self) -> &[GestureCommand] {
@@ -343,6 +361,21 @@ impl DefaultSelectionControls {
         self
     }
 
+    /// The magnifier a handle drag beneath shows, in place of the
+    /// platform's ([`PlainMagnifier::for_platform`]).
+    #[must_use]
+    pub fn magnifier(mut self, magnifier: impl SelectionMagnifier) -> Self {
+        self.own.magnifier = Some(MagnifierChoice::Show(Rc::new(magnifier)));
+        self
+    }
+
+    /// No magnifier beneath, though the platform shows one.
+    #[must_use]
+    pub fn no_magnifier(mut self) -> Self {
+        self.own.magnifier = Some(MagnifierChoice::Hide);
+        self
+    }
+
     /// Also offer `command` in the menu, after the standard commands
     /// ("Translate", "Share"). Its intent is performed through the
     /// [`Actions`](crate::Actions) chain where the field or area is mounted.
@@ -368,6 +401,12 @@ impl DefaultSelectionControls {
     /// dependency on it.
     pub fn caret_handle_of(ctx: &dyn BuildContext) -> Option<CaretHandle> {
         Self::controls_of(ctx).and_then(|controls| controls.caret_handle())
+    }
+
+    /// The magnifier a handle drag under `ctx` shows, registering a
+    /// dependency on the scopes above.
+    pub(crate) fn magnifier_of(ctx: &dyn BuildContext) -> Option<Rc<dyn SelectionMagnifier>> {
+        SelectionControls::magnifier(Self::controls_of(ctx).as_deref())
     }
 
     /// Everything the scopes above `ctx` set, registering a dependency.

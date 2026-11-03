@@ -27,12 +27,13 @@ pub use selection_area::{
     SelectionInput,
 };
 pub use selection_menu::{
-    DefaultSelectionControls, PopupOrigin, SelectionMenu, SelectionMenuPolicy, SelectionPopup,
-    ToolbarItems, ToolbarItemsController, ToolbarItemsState,
+    DefaultSelectionControls, MagnifierInfo, PlainMagnifier, PopupOrigin, SelectionMagnifier,
+    SelectionMenu, SelectionMenuPolicy, SelectionPopup, ToolbarItems, ToolbarItemsController,
+    ToolbarItemsState,
 };
 pub(crate) use selection_menu::{
-    MenuHost, MenuSettings, ShowSelectionMenu, ToolbarAnchors, editing_commands, reading_commands,
-    show_menu_action, toolbar,
+    MenuHost, MenuSettings, ShowSelectionMenu, ToolbarAnchors, editing_commands, magnifier,
+    reading_commands, show_menu_action, toolbar,
 };
 pub use selection_style::{DefaultSelectionStyle, SelectionStyle};
 pub use text::Text;

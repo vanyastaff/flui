@@ -889,6 +889,7 @@ features = [
     "window",
     "input",
     "fonts",
+    "http",
 ]
 platforms = ["windows", "apple", "android", "web", "linux", "winit", "headless"]
 groups = { apple = ["macos", "ios"], linux = ["wayland", "x11"] }
