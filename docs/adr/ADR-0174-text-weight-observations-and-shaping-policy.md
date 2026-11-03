@@ -1,23 +1,9 @@
 # ADR-0174: Text-weight observations and shaping policy
 
-- **Status:** Accepted (2026-11-03). `SystemPreferences::text_weight()` returns an optional
-  `TextWeightPreference` (`crates/flui-platform/src/preferences.rs:18`, `:346`), the runtime
-  projects it to `MediaQueryData::font_weight_adjustment`
-  (`crates/flui-runtime/src/ui_runtime/preferences.rs:266`), and the shaping policy is pinned by
-  `bold_text_changes_the_painted_glyphs`
-  (`crates/flui-runtime/tests/contracts/owner_metrics.rs:1067`) and
-  `text_weight_adjustment_shapes_once_and_restores_authored_weights`
-  (`crates/flui-painting/tests/text_painter_unit.rs:212`). Android reads
-  `Configuration.fontWeightAdjustment` and ran a live change on a Galaxy S21
-  (`docs/platform-parity.md:327`, `:342`); its query admission is pinned by
-  `android_text_weight_query_contract` (`crates/flui-native/src/preferences/android.rs:791`).
-  Not implemented: nothing in the decision; Windows, macOS, Wayland, X11 and the web leave text
-  weight unavailable, as "Native sources" decides. Not run: the UIKit source
-  (`crates/flui-native/src/preferences/apple/ios.rs`) is type-checked only and has not run on
-  an iOS device or simulator (`docs/platform-parity.md:327`).
+- **Status:** Accepted (2026-11-03). Not run: the UIKit source on an iOS device or simulator ([`docs/platform-parity.md`, System preferences](../platform-parity.md#system-preferences))
 - **Date:** 2026-10-08
-- **Amended:** 2026-11-03 — Android native execution ran on a Galaxy S21 (`docs/platform-parity.md:342`).
-- **Amended:** 2026-10-11 — motion consumer integration is implemented independently under ADR-0195; native text-weight execution limits remain.
+- **Revised:** 2026-11-03 — Android native execution ran on a Galaxy S21 (`docs/platform-parity.md:342`).
+- **Revised:** 2026-10-11 — motion consumer integration is implemented independently under ADR-0195; native text-weight execution limits remain.
 - **Related:** [ADR-0172](ADR-0172-host-owned-system-preferences.md),
   [ADR-0092](ADR-0092-per-realm-text-over-parley.md).
 

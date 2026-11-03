@@ -1,8 +1,9 @@
 # ADR-0281: A destructor that panics during an unwind aborts, as in std
 
-- **Status:** Accepted (2026-10-31). Implemented (2026-11-02): no crate retains a user-owned value or a panic payload on a failed path; see Migration.
+- **Status:** Accepted (2026-10-31)
 - **Date:** 2026-10-31
-- **Supersedes:** [ADR-0127](ADR-0127-exceptional-path-retention.md) §2–§4 (retaining user-owned values after a caught failure or while unwinding) and its hit-test metadata retention; [ADR-0119](ADR-0119-inert-panic-payload-retirement.md) in full (retaining opaque payloads); [ADR-0104](ADR-0104-borrowed-notification-and-opaque-panic-retention.md) §2–§4 only where they retain the callback snapshot, the payload or the remaining envelopes; [ADR-0262](ADR-0262-persisted-documents-over-a-byte-storage-capability.md) §4, [ADR-0272](ADR-0272-widgets-run-background-work-through-a-capability.md) §3–§4 only where they retain a payload, a capture or a failed future; [ADR-0166](ADR-0166-combined-viewer-gestures.md) only where native ticket callbacks and captures are retained after a failure or during a preserving close.
+- **Supersedes:** [ADR-0127](ADR-0127-exceptional-path-retention.md) §2–§4 (retaining user-owned values after a caught failure or while unwinding) and its hit-test metadata retention; [ADR-0119](ADR-0119-inert-panic-payload-retirement.md) in full (retaining opaque payloads); [ADR-0104](ADR-0104-borrowed-notification-and-opaque-panic-retention.md) §2–§4 only where they retain the callback snapshot, the payload or the remaining envelopes; [ADR-0262](ADR-0262-persisted-documents-over-a-byte-storage-capability.md) §4, [ADR-0272](ADR-0272-widgets-run-background-work-through-a-capability.md) §3–§4 only where they retain a payload, a capture or a failed future; [ADR-0166](ADR-0166-combined-viewer-gestures.md) only where native ticket callbacks and captures are retained after a failure or during a preserving close; [ADR-0106](ADR-0106-ticker-continuation-ownership-and-terminal-waiters.md) decisions 4–5 only where they retain exceptional envelopes, secondary payloads and captures; [ADR-0109](ADR-0109-notification-channel-surface.md) decisions 3–4 only where they retain the failed snapshot, the remaining envelopes and a discarded payload (`retain_opaque_payload`); [ADR-0117](ADR-0117-async-snapshot-publication-retirement.md) only its sentence retaining a competing wake payload without its destructor; [ADR-0123](ADR-0123-exceptional-presentation-close.md) only preserving mode's retention of the closing presentation's user-owned values; [ADR-0135](ADR-0135-win32-text-services-hold-the-text-store-on-the-owner-thread.md) §4 only its clause retaining the completed store once the scope has failed; [ADR-0136](ADR-0136-owner-local-ui-surfaces.md) §2 only where teardown retains later panics and, during an unwind, the values; [ADR-0175](ADR-0175-owner-local-scheduling-and-animation.md) only where an earlier failure or an unwind retains the outgoing registry or opaque captures; [ADR-0178](ADR-0178-notification-first-failure-custody.md) only where opaque payloads, custody and outgoing ownership are retained after a failure; [ADR-0182](ADR-0182-complete-owner-execution.md) only where cleanup retains the produced frame result after a failure, and its paragraph calling exceptional retention deliberate leakage; [ADR-0258](ADR-0258-owner-turn-panic-boundary-and-terminal-exit.md) §1, §2 and §5 only where they retain a payload whose destructor panics, what a non-terminal close has not destroyed, a later or opaque terminal payload, and a user `Drop` during an unwind; [ADR-0142](ADR-0142-text-store-commit-gate-and-owner-code-containment.md) items 2 and 8 and its consequences only where they retain a later failure or a failed scope's values; [ADR-0158](ADR-0158-hit-path-cursor-and-offset-admission.md), [ADR-0159](ADR-0159-gesture-arena-owner-delivery.md), [ADR-0161](ADR-0161-immutable-owner-local-gesture-recognizers.md), [ADR-0168](ADR-0168-descendant-reveal-through-scroll-ancestors.md), [ADR-0177](ADR-0177-controller-ordered-delivery.md), [ADR-0195](ADR-0195-presentation-motion-policy.md) and [ADR-0223](ADR-0223-authored-semantics-regions.md) only where they retain captures, callback ownership, payloads, snapshots or callback owners after a failure under ADR-0127.
+- **Revised:** 2026-11-03 — the Supersedes list reaches every record that prescribed retention; the Migration section is gone, since no retention site is left, and Confirmation names the lint that keeps it so.
 - **Related:** [ADR-0258](ADR-0258-owner-turn-panic-boundary-and-terminal-exit.md) (the boundary where a contained user panic ends up)
 
 ## Context and problem statement
@@ -94,6 +95,11 @@ the owner-turn boundary of ADR-0258.
 ### Confirmation
 
 - `flui_foundation::panic::retain_opaque_payload` no longer exists, so a caller does not compile.
+- No crate retains a user-owned value or a panic payload on a failed path, and clippy's
+  `mem_forget` (`[workspace.lints.clippy]`) keeps it so: every `mem::forget` carries
+  `#[expect(clippy::mem_forget, reason = "…")]` naming why that leak is deliberate (an OS that
+  still owns the memory, a destructor that would recurse), so a forgotten payload or capture is a
+  lint finding.
 - `PanicRecovery::retire` and `RecoveryScope::retire` have no `mem::forget`. The table test
   `recovery_preserves_provenance_and_owned_failure` in `flui-foundation` (row "retirement
   after a caught failure") drops a retired value after a caught failure and keeps the first
@@ -128,20 +134,6 @@ the owner-turn boundary of ADR-0258.
 - Good, because the payload is the one value FLUI drops on every failure path.
 - Bad, because it keeps `retain_opaque_payload` and a leak per failure for a case std does not
   defend either, and captures get the same treatment as option 2 anyway.
-
-## Migration
-
-The decision is the rule now. A crate-local retention site that has not been removed yet only
-leaks on a path that already failed: it is redundant, not a second defect. The sites are removed
-one crate at a time, from the bottom of the tiers up:
-
-1. `flui-foundation::panic`: delete `retain_opaque_payload`, make `FirstPanic::fold` drop and
-   make the three `retire` methods contain the destructor. Each caller of `retain_opaque_payload`
-   drops its payload instead.
-2. Each crate removes the `thread::panicking()` branches that skip a destructor and its
-   `mem::forget` of user-owned values in the same change that deletes its child-process
-   double-panic tests.
-3. `docs/PANIC-POLICY.md` loses the retention paragraph once the last crate is done.
 
 ## More information
 

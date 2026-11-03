@@ -4,6 +4,9 @@
 - **Date:** 2026-10-09
 - **Superseded-by:** [ADR-0192](ADR-0192-accessible-loading-motion.md), loading indicator behavior only;
   [ADR-0218](ADR-0218-motion-override-name.md), the application setting's name only.
+- **Superseded-by:** [ADR-0281](ADR-0281-a-destructor-that-panics-during-an-unwind-aborts-as-in-std.md),
+  only where a listener failure retains outgoing user ownership instead of invoking its
+  destructor: the destructor runs under the delivery's containment.
 - **Related:** [ADR-0172](ADR-0172-host-owned-system-preferences.md),
   [ADR-0176](ADR-0176-presentation-animation-playback.md),
   [ADR-0179](ADR-0179-controller-registration-ownership.md)

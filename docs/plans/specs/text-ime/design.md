@@ -231,7 +231,7 @@ pub enum TextStoreHostError {
 
 `LockArbiter` (там же): `request(grant, timing, open, settle: &mut dyn FnMut())` и
 `run_deferred(open, settle)`; `CommitGate::defer_failure(Box<dyn Any + Send>)` /
-`take_failure()` (первый отказ сохраняется, следующие удерживаются по ADR-0127).
+`take_failure()` (первый отказ сохраняется, следующие уходят в `discard_payload`, ADR-0281 §2).
 
 `flui-platform`: `OwnerPlatform::text_store_host(&self, window: &Arc<dyn HostWindow>) ->
 Option<Rc<dyn TextStoreHost>>` — временное место до `OwnerWindow` (ADR-0082 §4 шаг 2);

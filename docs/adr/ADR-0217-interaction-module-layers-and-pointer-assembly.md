@@ -1,9 +1,6 @@
 # ADR-0217: `flui-interaction` is layered into modules, pointer assembly is shared by every backend, and input regions are collected from layout
 
-- **Status:** Accepted (2026-10-13); implementation pending
-  (`docs/plans/specs/flui-interaction/completeness/tasks.md`). Until it merges, `main` follows
-  ADR-0143 and the current code: unlayered `flui-interaction` modules, per-backend pointer
-  assembly, and a `PanZoomTransform` that carries pan.
+- **Status:** Accepted (2026-10-13)
 - **Date:** 2026-10-13
 - **Amended:** 2026-10-19 — the layer table follows the implemented manifest: DnD sessions are
   the `drag` module beside `gesture`, and `haptics` is layer 5, below `__runtime` and `testing`.

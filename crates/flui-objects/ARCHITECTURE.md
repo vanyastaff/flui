@@ -152,7 +152,8 @@ another shared owner of the offset. Callback activity is revoked before invoking
 user cancellation. A replacement commits its offset first, then independently
 cancels, subscribes and retires outgoing ownership through `PanicRecovery`.
 Since callback identity is available before registration, even an unacknowledged
-registration can attempt cancellation. Failed opaque retirement follows ADR-0127.
+registration can attempt cancellation. After a failure, outgoing ownership is
+destroyed under the same `PanicRecovery` containment (ADR-0281 §3).
 `harness_viewport_owner_release_cancels_offset_callbacks` and
 `harness_viewport_replacement_finishes_subscription_migration_after_failure`
 cover both viewport types, competing failures, stale callbacks and recovery.
@@ -174,8 +175,10 @@ are separate contained operations. If one fails, the committed update is
 admitted through the invalidation handle before the first failure resumes:
 an unwinding setter cannot return its impact to the normal caller.
 
-Healthy ownership is destroyed normally. Failed opaque ownership follows
-[ADR-0127](../../docs/adr/ADR-0127-exceptional-path-retention.md). A source that
+Healthy ownership is destroyed normally; after a failure it is destroyed under
+the operation's containment
+([ADR-0281](../../docs/adr/ADR-0281-a-destructor-that-panics-during-an-unwind-aborts-as-in-std.md)
+§3). A source that
 registers then panics without returning an ID supplies no cancellation
 capability; its relay is revoked and ownership retained. An upstream
 cancellation that panics likewise cannot prove removal, although the relay is

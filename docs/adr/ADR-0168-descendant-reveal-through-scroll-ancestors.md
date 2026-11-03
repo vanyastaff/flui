@@ -4,6 +4,10 @@
 - **Date:** 2026-10-07
 - **Superseded-by:** [ADR-0206](ADR-0206-typed-semantics-attributes.md), in part: the
   cross-thread handoff is the published AccessKit `TreeUpdate`; `SemanticsSnapshot` is removed.
+- **Superseded-by:** [ADR-0281](ADR-0281-a-destructor-that-panics-during-an-unwind-aborts-as-in-std.md),
+  only where failed callback ownership, remaining captures and later panic payloads are retained
+  according to ADR-0127: payloads go to `discard_payload`, and the rest is destroyed under the
+  reveal's containment.
 - **Related:** [ADR-0043](ADR-0043-presentation-bundled-trees-and-realm-globalkey-scope.md),
   [ADR-0054](ADR-0054-the-viewport-commits-one-result.md),
   [ADR-0127](ADR-0127-exceptional-path-retention.md)

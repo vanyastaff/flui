@@ -11,16 +11,13 @@
 - **Date:** 2026-10-28
 - **Superseded-by:** [ADR-0281](ADR-0281-a-destructor-that-panics-during-an-unwind-aborts-as-in-std.md),
   §4's retention of the codec's panic payload only: the payload is dropped.
-- **Supersedes (on acceptance):** [ADR-0093](ADR-0093-router-is-the-primary-navigation-api.md)
-  step 8, its "stack restoration as a list of paths" only (§6 here); web history, query and
-  fragment stay in step 8.
 - **Related:** [ADR-0259](ADR-0259-close-guard-close-reasons-and-flush-registry.md) (the flush
   registry every write goes through, and the close guard a document holds),
   [ADR-0260](ADR-0260-session-end-flushes-before-it-tears-down.md) (the registry is written inline
   at a session end), [ADR-0258](ADR-0258-owner-turn-panic-boundary-and-terminal-exit.md) (the exit
   flush), [ADR-0152](ADR-0152-capability-seam-revised.md) (storage becomes a built-in capability and
-  `LifecycleContext::storage` is removed), [ADR-0127](ADR-0127-exceptional-path-retention.md) (a
-  codec panic's payload is retained), [ADR-0089](ADR-0089-upstream-types-in-stable-signatures.md)
+  `LifecycleContext::storage` is removed), [ADR-0127](ADR-0127-exceptional-path-retention.md) (an
+  exceptional path's operation boundaries), [ADR-0089](ADR-0089-upstream-types-in-stable-signatures.md)
   §2 (no `serde` in a Stable signature), [ADR-0097](ADR-0097-no-process-global-state-gate.md) (no
   `static`), [ADR-0093](ADR-0093-router-is-the-primary-navigation-api.md) step 8 (stack
   restoration, decided here; web history stays there)
@@ -33,6 +30,9 @@
   `packages/flutter/lib/src/services/restoration.dart` (restoration keyed by widget identity)
 
 ## Context and problem statement
+
+Once accepted, §6 here would replace ADR-0093 step 8's "stack restoration as a list of paths"
+only; web history, query and fragment stay in that step.
 
 An application that keeps a list of notes and the screen the user was on needs both back after a
 restart, a crash, a log-off, a full disk or a second running instance. Without framework support

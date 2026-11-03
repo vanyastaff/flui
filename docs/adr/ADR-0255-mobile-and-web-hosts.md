@@ -1,13 +1,6 @@
 # ADR-0255: How Android, iOS and the Web host FLUI
 
-- **Status:** Accepted (2026-10-20). Implemented in part: Android decisions 1, 4, 5 and 7, of
-  decision 2 the queue with `onTrimMemory` (the other entries come with their consumers), and of
-  decision 6 the Activity, `hasCode`, `singleTop`, the back flag and `configChanges` (the dex is a
-  declaration of `flui-native`, ADR-0307 version 2; the handshake is
-  `owner::android::java_host`), and the Gradle path of the build table: the crates' sources through
-  `flui.javaSources` and their R8 rules (`dev.flui.**` kept) through `flui.proguardFiles`. The
-  rest lands as separate PRs, and a platform's row in `docs/platform-parity.md` moves only after a
-  run on that platform (Confirmation).
+- **Status:** Accepted (2026-10-20). Not implemented: [`docs/gaps.md` entry 43, ADR-0255](../gaps.md#43-accepted-adr-sections-not-built-yet)
 - **Date:** 2026-10-20
 - **Amended:** 2026-11-03 — decision 9 matches the platform: `InputLatency::Low` on Android does
   not need a Java touch path, since `ViewRootImpl` batches ahead of the native input queue and

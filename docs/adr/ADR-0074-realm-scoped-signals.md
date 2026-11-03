@@ -1,19 +1,21 @@
 # ADR-0074: Runtime-scoped signals as the canonical application-state layer
 
-- **Status:** Accepted — for `Signal<T>` and the reader registry, always compiled (the `signals`
-  feature was removed by ADR-0085 §5). Derived values and effects (`Computed<T>`, `Effect`) are
-  not part of this decision; they are designed in [ADR-0075](ADR-0075-derived-state-and-effects.md).
+- **Status:** Accepted (2026-09-22)
 - **Date:** 2026-09-22
 - **Revised:** 2026-09-28 — read, update and cross-thread command callbacks are retained
   `FnMut` values invoked at most once. Their opaque capture bundles are destroyed after successful
-  framework finalization but deliberately leaked after callback panic, because aggregate drop glue
-  cannot be made safe by an outer unwind boundary.
+  framework finalization.
 - **Revised:** 2026-10-21 — §5.2: the build-time refusal holds across the presentations of one UI
   runtime, through a shared `BuildInProgress` cell.
+- **Revised:** 2026-11-03 — after a callback panic, and when another panic already has priority
+  (§5.3), a capture bundle or retired value is destroyed under containment instead of leaked
+  (ADR-0281 §2–§3).
+- **Related:** [ADR-0075](ADR-0075-derived-state-and-effects.md) (derived values and effects,
+  `Computed<T>` and `Effect`, which this decision does not cover)
 - **Supersedes:** the signals clause of [FOUNDATIONS](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/FOUNDATIONS.md) C1 (now §7's wording) and ADR-0008's
   "signals-as-default are rejected" (ADR-0008 has since been retired).
-- **Amended-by:** [ADR-0085](ADR-0085-reactive-core-placement-and-phase-subscribers.md)
-  (Proposed; its §1, §2 and §5 ship ahead of acceptance) — its §1 routes a cross-thread write by
+- **Amended-by:** [ADR-0085](ADR-0085-reactive-core-placement-and-phase-subscribers.md) — its
+  §1 routes a cross-thread write by
   the slot's graph and replaces §5.8's `SignalWrite` command shape; its §2 moves the handles and
   the read parameter into `flui_foundation::read_scope` (reads take any `&S` where
   `S: ReadScope + ?Sized`, which `BuildContext` is, instead of `&dyn BuildContext`, and writes
@@ -212,8 +214,9 @@ signal.set(v)                         // owner thread, outside build
   outside the equality comparison's unwind boundary. Thus the chronologically first phase panic
   keeps priority and a committed replacement remains observable. Rust cannot generically
   recover when two fields panic inside one aggregate's generated drop glue; the framework instead
-  completes its own loan/invalidation protocol before such opaque destruction begins, and retains
-  opaque values when another panic already has priority.
+  completes its own loan/invalidation protocol before such opaque destruction begins, and
+  destroys opaque values under containment when another panic already has priority, that panic
+  staying first (ADR-0281 §3).
 - Writes during a drain (e.g. from `did_update_view`) fall into the mid-drain absorb path.
 
 ### 5.4 Effects

@@ -1,25 +1,17 @@
 # ADR-0095: flui-protocol is the typed schema shared by tests, devtools and agents
 
-- **Status:** Accepted in part (2026-09-26, extended 2026-09-29): §1 as far as the crate
-  itself goes (tier C, `stable`, `serde` and `schemars` behind features, no upstream type),
-  and §1's schema for handles, nodes, the tree, the read query, the action request, the error
-  codes and the protocol version; from §2 the lift of the wire `Role`, `ActionName` and
-  `Checked` out of the desktop server, the move of `SemanticsRole` and `SemanticsAction` into
-  the crate (with ADR-0089 §3's `ALL` rule), and the semantics-to-wire mapping, amended below
-  to live in `flui-semantics`; from §3 the UI runtime half of the in-process backend (a
-  window handle that reads and acts through the UI runtime's owner inbox), and the in-process
-  server in `flui-devtools` with its local endpoint (a named pipe or Unix socket, a launch
-  token, debug builds only), amended below; the CLI half of §3 (`flui run --agent`, `flui mcp`). Still Proposed: §1's finder criteria, handle kinds
-  beyond elements and windows, `effect` as a schema type, widget catalog and event-log shapes;
-  the `flui-mcp` library; `flui-testing`'s query types; the handle table
-  across windows; and §§4–5.
+- **Status:** Accepted (2026-09-29) for §1's crate and its schema (handles, nodes, the tree, the
+  read query, the action request, the error codes and the protocol version), §2 and §3; §1's
+  finder criteria, handle kinds beyond elements and windows, `effect` as a schema type, the
+  widget catalog and event-log shapes, the `flui-mcp` library, `flui-testing`'s query types,
+  the handle table across windows, and §§4–5 are Proposed
 - **Date:** 2026-09-25
-- **Amended:** 2026-10-11 — the FLUI schema was 0.2 under ADR-0176; negotiated MCP versions are a separate protocol.
-- **Amended:** 2026-10-12 — schema 0.3 adds the `heading` wire role (ADR-0203).
-- **Amended:** 2026-10-13 — the current FLUI schema is 0.4, which adds a node's optional `description`.
-- **Amended:** 2026-10-18 — the Android runner drives the hook as the desktop and iOS runners do.
-- **Amended:** 2026-10-19 — `flui run --agent` and `flui mcp` are built in `flui-cli` (see "The CLI half" in §3): `flui mcp` is a stdio proxy written in the CLI over the endpoint's framing, with no `flui-mcp` library and no cross-window handle table.
-- **Amended:** 2026-11-03 — an `AgentAnswer` and an `AgentEvents` wake a registered waker when they can be read, the conversation over them is `flui-runtime`'s, and the event loop that starts first takes the hook and owns it ([ADR-0288](ADR-0288-the-development-agent-is-one-sans-io-service.md)).
+- **Revised:** 2026-10-11 — the FLUI schema was 0.2 under ADR-0176; negotiated MCP versions are a separate protocol.
+- **Revised:** 2026-10-12 — schema 0.3 adds the `heading` wire role (ADR-0203).
+- **Revised:** 2026-10-13 — the current FLUI schema is 0.4, which adds a node's optional `description`.
+- **Revised:** 2026-10-18 — the Android runner drives the hook as the desktop and iOS runners do.
+- **Revised:** 2026-10-19 — `flui run --agent` and `flui mcp` are built in `flui-cli` (see "The CLI half" in §3): `flui mcp` is a stdio proxy written in the CLI over the endpoint's framing, with no `flui-mcp` library and no cross-window handle table.
+- **Revised:** 2026-11-03 — an `AgentAnswer` and an `AgentEvents` wake a registered waker when they can be read, the conversation over them is `flui-runtime`'s, and the event loop that starts first takes the hook and owns it ([ADR-0288](ADR-0288-the-development-agent-is-one-sans-io-service.md)).
 - **Amends:** [ADR-0080](ADR-0080-agent-protocol-desktop-contract.md) (settles its "Not
   decided here" in-process transport; the wire contract is unchanged)
 - **Superseded in part by:** [ADR-0124](ADR-0124-controlled-numeric-and-disclosure-actions.md):

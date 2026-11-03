@@ -73,10 +73,7 @@ panic payloads to prevent it
 
 A panic in application code is contained where the framework can still go
 on, and ends the process only when nothing is left to continue. The rule is
-[ADR-0258](adr/ADR-0258-owner-turn-panic-boundary-and-terminal-exit.md),
-accepted and not yet implemented: today a caught callback panic is reported
-and then resumed, and on Win32, AppKit and UIKit it reaches the OS entry's
-boundary, which aborts.
+[ADR-0258](adr/ADR-0258-owner-turn-panic-boundary-and-terminal-exit.md).
 
 The boundary for application code is `flui-app`'s owner dispatch, not the OS
 entry. Every application operation runs under its own catch there, and the

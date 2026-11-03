@@ -1517,23 +1517,20 @@ hundredth and remain unchanged. The objects consumer `family_sizing` checks a
 large finite requested width under a different finite parent maximum, and
 ordinary hundredth rounding; this pins actual geometry rather than a getter.
 
-### Layout reporting retains opaque failure payloads
+### Layout reporting discards failure payloads after reading them
 
 A custom layout may panic with an opaque payload whose destructors also
-panic. The leaf, nonleaf Box, and nonleaf Sliver boundaries retain that payload
-before borrowing its text or invoking tracing subscribers. A reporting panic
-is secondary: its payload is retained without another diagnostic, preserving
-the original layout `Poisoned` error. Exceptional retention does not execute
-user `Drop`; payload custody follows ADR-0104/0119. Outgoing user-owned render
-objects and callback envelopes separately follow
-[ADR-0127](../../docs/adr/ADR-0127-exceptional-path-retention.md): authority is
-withdrawn before callouts, healthy destruction remains ordinary, and an operation
-holding a failure retains its remaining opaque owners. These are scoped retirement
-rules, not a process-global failure boundary.
-After reporting has finished borrowing the payload, the shared foundation
-operation releases exact static-string and owned-string payloads under
-[ADR-0119](../../docs/adr/ADR-0119-inert-panic-payload-retirement.md). Arbitrary
-source and secondary payloads remain retained. The Miri-running
+panic. The leaf, nonleaf Box, and nonleaf Sliver boundaries keep that payload
+while they borrow its text and invoke tracing subscribers. A reporting panic
+is secondary: its payload is discarded without another diagnostic, preserving
+the original layout `Poisoned` error. Once the reporting borrow ends, the
+source payload goes to `flui_foundation::panic::discard_payload`, which runs
+its destructor under containment
+([ADR-0281](../../docs/adr/ADR-0281-a-destructor-that-panics-during-an-unwind-aborts-as-in-std.md)
+§2). Outgoing user-owned render objects and callback envelopes are withdrawn
+before callouts and destroyed under the operation's containment after a
+failure (ADR-0281 §3). These are scoped retirement rules, not a process-global
+failure boundary. The Miri-running
 `frame_panic_containment_matrix` exercises both text forms through the leaf,
 recursive Box and recursive Sliver boundaries without disabling leak checking.
 Recursive rows register actual children and then lay out a healthy replacement

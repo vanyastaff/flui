@@ -1,9 +1,6 @@
 # ADR-0154: Capability crates carry their own OS code
 
-- **Status:** Accepted (2026-10-20). In progress: the workspace rule (the `capability` kind in
-  `cargo xtask workspace` and `cargo xtask reach`) and `flui-system`'s contract, plugin and kit have
-  landed, and its Linux provider over the desktop portal; the other platforms' providers and the
-  `flui-cli` support follow.
+- **Status:** Accepted (2026-10-20). Not implemented: [`docs/gaps.md` entry 7, ADR-0154 §11](../gaps.md#7-file-dialogs-open-url-reveal-trash-message-box-and-share-exist-on-windows-only-or-nowhere)
 - **Date:** 2026-10-06
 - **Revised:** 2026-10-20 — after reading how Tauri, Flutter, Capacitor, Expo, Bevy and the Rust
   mobile crates ship platform services (sources below): the carve-out for handles that framework

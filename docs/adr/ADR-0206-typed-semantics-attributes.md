@@ -1,6 +1,6 @@
 # ADR-0206: Semantics are one typed attribute model with one AccessKit translation
 
-- **Status:** Accepted (2026-10-12); implemented by the semantics-model works W2–W3
+- **Status:** Accepted (2026-10-12)
 - **Date:** 2026-10-12
 - **Replaces:** `crates/flui-semantics/ARCHITECTURE.md` mapping decisions 1 and 2 (the role
   cascade over flags), with the role precedence in decision 4 below.

@@ -173,7 +173,8 @@ tail survival, registration FIFO, and consumption of the failed entry.
 resume a failure. Each retires its post-frame callbacks and tasks first, under its own catch, so
 the queues its fields still reference are empty when the failure unwinds through the drop glue:
 no application capture is destroyed inside that unwind (#1165). During an unwind already running,
-the failure is retained instead of raised.
+the failure goes to `discard_payload` instead of being raised, since resuming it from a destructor
+would abort (ADR-0281 §2).
 
 ### One recovery boundary closes phase/completion state before any pre-pipeline panic propagates
 

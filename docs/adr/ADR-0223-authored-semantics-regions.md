@@ -3,6 +3,9 @@
 - **Status:** Accepted
 - **Date:** 2026-10-16
 - **Supersedes:** [ADR-0204](ADR-0204-synthetic-semantics-nodes.md), §1 for identity authority and authored-region action routing
+- **Superseded-by:** [ADR-0281](ADR-0281-a-destructor-that-panics-during-an-unwind-aborts-as-in-std.md),
+  only where a rejected configuration retains unproven callback owners without running their
+  destructors: they are destroyed under the containment of the caller's recovery scope.
 - **Related:** [ADR-0206](ADR-0206-typed-semantics-attributes.md)
 
 ## Context

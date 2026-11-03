@@ -1,9 +1,6 @@
 # ADR-0260: A session end consults the close guards, writes the flush registry inline, and tears down only with time to spare
 
-- **Status:** Accepted (2026-10-28). Not implemented: the platform delivers the session end to
-  `AppHandler::session_end`, and `flui-app` answers it from the notice subscribers alone
-  (`answer_session_end`, `crates/flui-app/src/app/runner/host.rs`); no guard is consulted, nothing is
-  flushed and nothing is torn down when the session ends.
+- **Status:** Accepted (2026-10-28)
 - **Date:** 2026-10-28
 - **Related:** [ADR-0237](ADR-0237-window-state-and-host-notices.md) decision 8 (a session end can
   be held where the OS allows it; this record adds the close guard as a second holder, and the

@@ -2,6 +2,9 @@
 
 - **Status:** Accepted
 - **Date:** 2026-10-07
+- **Superseded-by:** [ADR-0281](ADR-0281-a-destructor-that-panics-during-an-unwind-aborts-as-in-std.md),
+  only where remaining user ownership follows ADR-0127's retention after the first failure: it is
+  destroyed under the delivery's containment.
 - **Related:** [ADR-0027](ADR-0027-owner-affine-ui-realms.md),
   [ADR-0127](ADR-0127-exceptional-path-retention.md)
 

@@ -2,6 +2,9 @@
 
 - **Status:** Accepted
 - **Date:** 2026-10-04
+- **Superseded-by:** [ADR-0281](ADR-0281-a-destructor-that-panics-during-an-unwind-aborts-as-in-std.md),
+  only the sentence retaining a competing wake payload without running its destructor: the
+  payload is discarded under containment (`discard_payload`).
 - **Related:** ADR-0018 (async builders), ADR-0109 (notification ownership)
 
 ## Context

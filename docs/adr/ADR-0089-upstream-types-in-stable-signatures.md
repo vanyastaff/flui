@@ -1,27 +1,17 @@
 # ADR-0089: Stable signatures carry no upstream type except raw-window-handle
 
-- **Status:** Accepted (2026-11-03). §1, §2, §3 as ADR-0203 narrows it, §4, §5 and §6 are the
-  rule: CI runs `cargo xtask api-closure` and its `--self-test` in the `api-contracts` job
-  (`.github/workflows/ci.yml:719-725`), and `AGENTS.md:95` cites §2 as a rule. Not implemented:
-  §5's moves. `flui::testing::a11y` still re-exports `accesskit`
-  (`crates/flui-testing/src/a11y.rs:34`, reached through `src/testing.rs:11` behind the
-  `testing` feature, `Cargo.toml:834`), and `flui::android_activity` is still a facade item on
-  Android (`src/lib.rs:313`); `flui-sdk` has no `gpu` module (`crates/flui-sdk/src/lib.rs:31-34`,
-  `:49-330`), so `pub use ::wgpu` stays in the internal `flui-engine`
-  (`crates/flui-engine/src/lib.rs:231`), which no Stable crate re-exports. `cargo xtask
-  api-closure` builds each Stable package once, on the host with its default features
-  (`tools/xtask/src/api_closure.rs:175-180`, `:529-530`, `Cargo.toml:840`), so the `testing`
-  re-export and the Android item are outside what CI checks.
+- **Status:** Accepted (2026-11-03). Not implemented: [`docs/gaps.md` entry 43, ADR-0089 §5
+  and §6](../gaps.md#43-accepted-adr-sections-not-built-yet)
 - **Superseded-by:** [ADR-0203](ADR-0203-semantics-vocabulary.md) for §3's narrower semantics
   vocabulary and its flags only (FLUI's roles and actions now cover ARIA 1.2 where AccessKit has
   a counterpart, and role-bearing flags are roles). The rule that stable signatures carry no
   upstream type stands.
-- **Amended:** 2026-10-30 — §6's loader also feeds `cargo xtask send-positions`, the list of
+- **Revised:** 2026-10-30 — §6's loader also feeds `cargo xtask send-positions`, the list of
   `Send` and `Sync` positions in the facade's API (ADR-0136); synthetic auto-trait impls are not
   positions.
-- **Amended:** 2026-10-21 — §6's gate is `cargo xtask api-closure`; its first run moved the
+- **Revised:** 2026-10-21 — §6's gate is `cargo xtask api-closure`; its first run moved the
   contract's two `bitflags` sets into the contract's own type (ADR-0151 §5).
-- **Amended:** 2026-10-11 — verification distinguishes implemented vocabulary checks from the still-proposed API-closure migration.
+- **Revised:** 2026-10-11 — verification distinguishes implemented vocabulary checks from the still-proposed API-closure migration.
 - **Date:** 2026-09-25
 - **Related:** [ADR-0030](ADR-0030-platform-text-input-ime-capability.md) §1 (`ImeEvent` mirrors
   winit but is our own type), [ADR-0031](ADR-0031-platform-haptics-capability-and-system-chrome-deferral.md) §1,

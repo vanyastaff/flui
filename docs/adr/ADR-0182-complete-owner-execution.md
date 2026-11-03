@@ -3,6 +3,10 @@
 - **Status:** Accepted
 - **Date:** 2026-10-10
 - **Supersedes:** ADR-0136's scheduler frame-entry API and ADR-0083's raw background execution sequence; ADR-0175's statement that scheduler frame entry points accept an owner argument.
+- **Superseded-by:** [ADR-0281](ADR-0281-a-destructor-that-panics-during-an-unwind-aborts-as-in-std.md),
+  only where cleanup retains the produced frame result, refused envelopes and wakers after a
+  failure, and the paragraph calling ADR-0127's exceptional retention deliberate leakage: they
+  are destroyed under the turn's containment.
 - **Related:** [ADR-0083](ADR-0083-one-frame-transaction-in-flui-runtime.md), [ADR-0127](ADR-0127-exceptional-path-retention.md), [ADR-0175](ADR-0175-owner-local-scheduling-and-animation.md), [ADR-0178](ADR-0178-notification-first-failure-custody.md).
 
 ## Decision

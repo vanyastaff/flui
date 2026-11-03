@@ -7,13 +7,13 @@ ellipsis. One shaper, one font door, and a shaped paragraph on the wire make
 
 ---
 
-- **Status:** Accepted (parts 1 and 2 landed 2026-09-18)
+- **Status:** Accepted (2026-09-18)
 - **Amended by:** [ADR-0092](ADR-0092-per-realm-text-over-parley.md) (part 1: the process-wide
   font doors became a per-UI runtime context over one collection; part 2: the `Paragraph` payload is
   a `ShapedParagraph`)
 - **Date:** 2026-09-18
-- **Amended:** 2026-10-11 — original font-system doors are explicitly historical; live font registration and paragraph authority remain ADR-0092.
-- **Amended:** 2026-11-03 — a span recolour rebuilds the paragraph from the measuring layout
+- **Revised:** 2026-10-11 — original font-system doors are explicitly historical; live font registration and paragraph authority remain ADR-0092.
+- **Revised:** 2026-11-03 — a span recolour rebuilds the paragraph from the measuring layout
   without shaping (Part 2).
 - **Superseded-by:** [ADR-0309](ADR-0309-every-text-paint-attribute-crosses-the-display-list.md)
   for Part 2's "one `Paragraph` op on the wire" only: a paragraph also crosses as the shadows

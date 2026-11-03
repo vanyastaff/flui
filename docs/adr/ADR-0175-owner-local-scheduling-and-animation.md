@@ -3,6 +3,10 @@
 - **Status:** Accepted
 - **Date:** 2026-10-08
 - **Superseded-by:** [ADR-0182](ADR-0182-complete-owner-execution.md) for scheduler execution authority and complete-turn entry points; [ADR-0191](ADR-0191-single-parent-animation-registries.md) for shared descendant topology.
+- **Superseded-by:** [ADR-0281](ADR-0281-a-destructor-that-panics-during-an-unwind-aborts-as-in-std.md),
+  only where an earlier cancellation failure retains the outgoing registry, and where an incoming
+  unwind or a caught failure retains opaque captures: they are destroyed under the same
+  first-failure containment.
 - **Supersedes:** ADR-0136's transitional statement that `UpdateScheduler`
   remains `Send`, and its transitional split post-frame queues.
 - **Supersedes:** ADR-0064's scheduler ticker surface and explicit-disposal

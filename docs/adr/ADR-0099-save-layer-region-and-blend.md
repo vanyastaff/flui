@@ -1,14 +1,7 @@
 # ADR-0099: A save layer composites its whole region with its recorded blend mode
 
-- **Status:** Accepted (2026-11-03). The engine composites a save layer's whole region with its
-  recorded mode (`a_layer_composites_its_whole_region_with_its_mode`,
-  `crates/flui-engine/src/layer_blend_tests.rs:443`) and the damage producers report that region
-  (`a_bounded_save_layer_extent_is_its_mapped_bounds`,
-  `crates/flui-painting/tests/damage_extent.rs:298`). Not implemented: nothing in §1–§4. The
-  items under "Limits" no longer hold: a layer's bounds join its composite clip expression under
-  their captured transform (`crates/flui-engine/src/painter/layer.rs:510-544`), so a bounded
-  layer always composites, and the edge mix is ADR-0102 §5's. Mapping decision 19 in
-  `crates/flui-engine/ARCHITECTURE.md:1065` is the implementation detail.
+- **Status:** Accepted (2026-11-03)
+- **Revised:** 2026-11-03 — "Limits" states that the engine's three limits are gone.
 - **Superseded-by:** [ADR-0102](ADR-0102-immutable-geometric-clip-composition.md) for §1–§4
   (§6 of ADR-0102 restates the region, the whole-region blend, the damage and the shader-mask
   rule; this record keeps its text as the reasoning).
@@ -75,14 +68,11 @@ covers.
 
 ## Limits
 
-The `wgpu` engine has three, recorded as Open items in `crates/flui-engine/ARCHITECTURE.md`:
-
-- Under a rotation or skew inside a rounded clip, a destination-replacing layer's region is
-  the bounding box of the mapped bounds within that clip (the composite carries one clip).
-- An axis-aligned opaque `SrcOver` layer has nothing to apply at the composite, so its
-  content is spliced into the parent and cut by the clip alone, not by its bounds.
-- In the anti-aliased edge of a rounded clip, a destination-replacing mode scales the
-  destination by the edge's coverage instead of mixing it.
+The `wgpu` engine has none left in (1)–(3). A layer's bounds join its composite clip expression
+under their captured transform (`crates/flui-engine/src/painter/layer.rs`), so a bounded layer
+always composites and its region is the exact quad under a rotation or skew inside a rounded
+clip, and the mix in the anti-aliased edge of a clip is ADR-0102 §5's. Engine mapping decision
+19 in `crates/flui-engine/ARCHITECTURE.md` is the implementation detail.
 
 The engine implements (4) through an isolated group and a terminal shader draw
 with the requested mode (engine mapping decision 21). Unsupported shader variants

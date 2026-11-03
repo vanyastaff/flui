@@ -1,25 +1,16 @@
 # ADR-0097: Process-global state is gated: one trampoline cell, everything else UI runtime-owned
 
-- **Status:** Accepted in part (2026-09-26): §1–§4, the gate (`cargo xtask globals`) and its
-  seeded allowlist; removing each global remains with its exit ADR. Of the entries whose exit
-  is this ADR, the asset `REGISTRY` is removed (`AssetRegistry::global` is deleted; an
-  application builds and owns its registry). The asset `INTERNER` is also removed:
-  ADR-0121 makes each name owned shared data instead of a process-wide arena.
-  `TIME_DILATION` is removed: ADR-0176 places playback on presentation clocks.
-  The decoded-image `CACHE` is removed: each `flui_assets::AssetRegistry` keeps the decoded
-  images of the loads it bridges, which the application owns and registers for memory
-  reclaim. `ERROR_VIEW_BUILDER` is removed: the error view factory is UI runtime configuration
-  (`AppConfig::with_error_view_builder`), applied to every presentation's `BuildOwner`.
+- **Status:** Accepted (2026-09-26)
 - **Date:** 2026-09-25
-- **Amended:** 2026-10-11 — completed clock/font-global removal is distinguished from the remaining proposed removals.
-- **Amended:** 2026-10-19 — the decoded-image cache moved into the asset registry.
-- **Amended:** 2026-10-21 — the error view builder moved into UI runtime configuration.
-- **Amended:** 2026-10-22 — following [ADR-0151](ADR-0151-platform-layer-boundary-and-names.md)
+- **Revised:** 2026-10-11 — completed clock/font-global removal is distinguished from the remaining proposed removals.
+- **Revised:** 2026-10-19 — the decoded-image cache moved into the asset registry.
+- **Revised:** 2026-10-21 — the error view builder moved into UI runtime configuration.
+- **Revised:** 2026-10-22 — following [ADR-0151](ADR-0151-platform-layer-boundary-and-names.md)
   §10, which moves each platform's loop into `crates/flui-native/src/owner/`: a platform's one
   trampoline may sit in its loop's module there as well as in its backend module (§2, "OS-callback
   trampolines"), still one per platform, and none in a group's own module (`owner/apple.rs`); the
   context's cited files name their current places.
-- **Amended:** 2026-10-22 — `flui-native`'s backend modules (its `platforms` module) are gone
+- **Revised:** 2026-10-22 — `flui-native`'s backend modules (its `platforms` module) are gone
   (ADR-0151 §10): a platform's one trampoline sits in its loop's module under `owner/` only.
 - **Amends:** [ADR-0027](ADR-0027-owner-affine-ui-realms.md) (its open question "the runner's
   thread-local `AppRuntime` slot is the sanctioned transitional form" becomes a named,
