@@ -9,8 +9,8 @@ use flui_objects::{
 use flui_painting::typography::TextBaseline;
 use flui_painting::typography::TextDirection;
 use flui_rendering::protocol::BoxProtocol;
-use flui_view::BoxedView;
 use flui_view::seq::ViewSeq;
+use flui_view::{BoxedView, CreationSite};
 
 use crate::localization::Directionality;
 use crate::support::generic_render_view_element;
@@ -146,15 +146,18 @@ pub struct Flex<C = Vec<BoxedView>> {
     direction: FlexDirection,
     style: FlexStyle,
     children: C,
+    site: CreationSite,
 }
 
 impl<C> Flex<C> {
     /// A flex laid out along `direction` with the given children.
+    #[track_caller]
     pub fn new(direction: FlexDirection, children: C) -> Self {
         Self {
             direction,
             style: FlexStyle::default(),
             children,
+            site: CreationSite::here(),
         }
     }
 
@@ -167,7 +170,7 @@ impl<C: ViewSeq> fmt::Debug for Flex<C> {
             .field("direction", &self.direction)
             .field("style", &self.style)
             .field("children", &self.children.len())
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -177,6 +180,10 @@ where
 {
     fn create_element(&self) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::stateless(self)
+    }
+
+    fn creation_site(&self) -> flui_view::CreationSite {
+        self.site
     }
 }
 
@@ -205,14 +212,17 @@ where
 pub struct Row<C = Vec<BoxedView>> {
     style: FlexStyle,
     children: C,
+    site: CreationSite,
 }
 
 impl<C> Row<C> {
     /// A horizontal row of the given children.
+    #[track_caller]
     pub fn new(children: C) -> Self {
         Self {
             style: FlexStyle::default(),
             children,
+            site: CreationSite::here(),
         }
     }
 
@@ -224,7 +234,7 @@ impl<C: ViewSeq> fmt::Debug for Row<C> {
         f.debug_struct("Row")
             .field("style", &self.style)
             .field("children", &self.children.len())
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -234,6 +244,10 @@ where
 {
     fn create_element(&self) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::stateless(self)
+    }
+
+    fn creation_site(&self) -> flui_view::CreationSite {
+        self.site
     }
 }
 
@@ -257,14 +271,17 @@ where
 pub struct Column<C = Vec<BoxedView>> {
     style: FlexStyle,
     children: C,
+    site: CreationSite,
 }
 
 impl<C> Column<C> {
     /// A vertical column of the given children.
+    #[track_caller]
     pub fn new(children: C) -> Self {
         Self {
             style: FlexStyle::default(),
             children,
+            site: CreationSite::here(),
         }
     }
 
@@ -276,7 +293,7 @@ impl<C: ViewSeq> fmt::Debug for Column<C> {
         f.debug_struct("Column")
             .field("style", &self.style)
             .field("children", &self.children.len())
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -286,6 +303,10 @@ where
 {
     fn create_element(&self) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::stateless(self)
+    }
+
+    fn creation_site(&self) -> flui_view::CreationSite {
+        self.site
     }
 }
 

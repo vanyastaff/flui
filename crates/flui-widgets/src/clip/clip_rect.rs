@@ -4,7 +4,7 @@ use flui_foundation::geometry::Rect;
 use flui_objects::RenderClipRect;
 use flui_painting::paint::Clip;
 use flui_rendering::protocol::BoxProtocol;
-use flui_view::{Child, IntoView, RenderView, impl_render_view};
+use flui_view::{Child, CreationSite, IntoView, RenderView, impl_render_view};
 
 /// Clips its child to this widget's rectangular bounds.
 ///
@@ -15,22 +15,30 @@ pub struct ClipRect {
     clip_behavior: Clip,
     clip_shape: Option<Rect<f64>>,
     child: Child,
+    site: CreationSite,
 }
 
 impl Default for ClipRect {
     fn default() -> Self {
-        Self {
-            clip_behavior: Clip::HardEdge,
-            clip_shape: None,
-            child: Child::empty(),
-        }
+        // A trait fn cannot be `#[track_caller]`: the site is this line.
+        Self::at(CreationSite::here())
     }
 }
 
 impl ClipRect {
+    fn at(site: CreationSite) -> Self {
+        Self {
+            clip_behavior: Clip::HardEdge,
+            clip_shape: None,
+            child: Child::empty(),
+            site,
+        }
+    }
+
     /// Create a rectangular clip with the default `HardEdge` behavior.
+    #[track_caller]
     pub fn new() -> Self {
-        Self::default()
+        Self::at(CreationSite::here())
     }
 
     /// Set the clip behavior (anti-aliasing / save-layer policy).
@@ -88,4 +96,4 @@ impl RenderView for ClipRect {
     flui_view::single_child_view_children!();
 }
 
-impl_render_view!(ClipRect);
+impl_render_view!(ClipRect, site = site);

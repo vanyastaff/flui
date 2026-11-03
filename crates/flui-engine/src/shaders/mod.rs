@@ -37,8 +37,10 @@ pub(crate) use composed_wgsl;
 // The pieces are the same in every assembly and in the same order: the clip
 // block, the `ShadedFragment` contract, the module's own vertex stage and
 // `shadeFragment`, and finally one of the three entry points. The module
-// supplies `VertexOutput` and `shadeFragment`; `common/coverage.wgsl` and the
-// entry-point files supply everything else.
+// supplies `VertexOutput`, `shadeFragment` and `vertexStage`, a plain function
+// that both `vs_main` and `vs_isolation` call (WGSL forbids calling an entry
+// point); `common/coverage.wgsl` and the entry-point files supply everything
+// else.
 
 /// Assemble the three variants of one coverage-correct shader from the module's
 /// own source.
@@ -110,25 +112,25 @@ macro_rules! coverage_correct_shader {
 /// the same either way.
 pub(crate) const SHAPE: crate::pipeline_cache::CoverageShaderSources = coverage_correct_shader!(
     "shape.wgsl",
-    "@vertex fn vs_isolation(input: VertexInput) -> VertexOutput { return isolateVertex(vs_main(input)); }\n"
+    "@vertex fn vs_isolation(input: VertexInput) -> VertexOutput { return isolateVertex(vertexStage(input)); }\n"
 );
 
 /// Instanced linear gradient shader — folded, dual-source and isolation assemblies.
 pub(crate) const LINEAR_GRADIENT: crate::pipeline_cache::CoverageShaderSources = coverage_correct_shader!(
     gradient "gradients/linear.wgsl",
-    "@vertex fn vs_isolation(input: VertexInput, instance: InstanceInput) -> VertexOutput { return isolateVertex(vs_main(input, instance)); }\n"
+    "@vertex fn vs_isolation(input: VertexInput, instance: InstanceInput) -> VertexOutput { return isolateVertex(vertexStage(input, instance)); }\n"
 );
 
 /// Instanced radial gradient shader — folded, dual-source and isolation assemblies.
 pub(crate) const RADIAL_GRADIENT: crate::pipeline_cache::CoverageShaderSources = coverage_correct_shader!(
     gradient "gradients/radial.wgsl",
-    "@vertex fn vs_isolation(input: VertexInput, instance: InstanceInput) -> VertexOutput { return isolateVertex(vs_main(input, instance)); }\n"
+    "@vertex fn vs_isolation(input: VertexInput, instance: InstanceInput) -> VertexOutput { return isolateVertex(vertexStage(input, instance)); }\n"
 );
 
 /// Instanced sweep gradient shader — folded, dual-source and isolation assemblies.
 pub(crate) const SWEEP_GRADIENT: crate::pipeline_cache::CoverageShaderSources = coverage_correct_shader!(
     gradient "gradients/sweep.wgsl",
-    "@vertex fn vs_isolation(input: VertexInput, instance: InstanceInput) -> VertexOutput { return isolateVertex(vs_main(input, instance)); }\n"
+    "@vertex fn vs_isolation(input: VertexInput, instance: InstanceInput) -> VertexOutput { return isolateVertex(vertexStage(input, instance)); }\n"
 );
 
 // Instanced rendering

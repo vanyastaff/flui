@@ -101,8 +101,8 @@ fn service(limits: Limits, on_driver_gone: Option<Box<dyn Fn() + Send + Sync>>) 
 
 /// A host showing [`Counter`] whose window `service` serves.
 fn shown(service: &Service) -> (HeadlessHost, HeadlessDevAgent, Arc<AtomicU32>) {
-    let agent = HeadlessDevAgent::attach(Served(service.clone()));
-    let mut host = HeadlessHost::new(HeadlessWindow::new(200, 200)).with_dev_agent(&agent);
+    let mut agent = HeadlessDevAgent::attach(Served(service.clone()));
+    let mut host = HeadlessHost::new(HeadlessWindow::new(200, 200)).with_dev_agent(&mut agent);
     let presses = Arc::new(AtomicU32::new(0));
     host.attach(&Counter {
         presses: Arc::clone(&presses),

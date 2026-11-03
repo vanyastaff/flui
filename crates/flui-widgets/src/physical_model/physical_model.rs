@@ -7,7 +7,7 @@ use flui_painting::paint::Clip;
 use flui_painting::styling::BorderRadius;
 use flui_painting::styling::Color;
 use flui_rendering::protocol::BoxProtocol;
-use flui_view::{Child, IntoView, RenderView, impl_render_view};
+use flui_view::{Child, CreationSite, IntoView, RenderView, impl_render_view};
 
 /// A physical layer that clips its child to a [`BoxShape`] (optionally
 /// rounded via `border_radius` when the shape is
@@ -31,6 +31,7 @@ pub struct PhysicalModel {
     color: Color,
     shadow_color: Color,
     child: Child,
+    site: CreationSite,
 }
 
 impl PhysicalModel {
@@ -38,6 +39,7 @@ impl PhysicalModel {
     /// rectangular, unclipped (`Clip::None`) surface filled with `color`
     /// and an opaque-black shadow color.
     #[must_use]
+    #[track_caller]
     pub fn new(color: Color) -> Self {
         Self {
             shape: BoxShape::Rectangle,
@@ -47,6 +49,7 @@ impl PhysicalModel {
             color,
             shadow_color: Color::BLACK,
             child: Child::empty(),
+            site: CreationSite::here(),
         }
     }
 
@@ -140,4 +143,4 @@ impl RenderView for PhysicalModel {
     flui_view::single_child_view_children!();
 }
 
-impl_render_view!(PhysicalModel);
+impl_render_view!(PhysicalModel, site = site);

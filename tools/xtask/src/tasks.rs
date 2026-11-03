@@ -308,6 +308,36 @@ fn cli_test_plan() -> Vec<Step> {
 /// builder fixtures and facade consumers (group `nested-cargo`).
 const NESTED: &str = "group(nested-cargo) | group(trybuild)";
 
+/// The packages whose test binaries hold the `nested-cargo` group: the
+/// `binary_id` packages of its filter in .config/nextest.toml, which a test
+/// keeps equal to this list.
+const NESTED_CARGO_PACKAGES: [&str; 2] = ["flui", "flui-cli"];
+
+/// The `nested-cargo` group alone (CI's `test-nested` job), built from the
+/// packages that hold it. Over [`TEST_SCOPE`] nextest builds and links every
+/// test binary of the workspace, about a hundred, to run the group's fourteen
+/// tests; their nested builds have target directories of their own and do not
+/// reuse the outer build. The features are [`TEST_FEATURES`], so the facade the
+/// tests link is the one the full run links.
+fn nested_cargo_nextest() -> Cmd {
+    NESTED_CARGO_PACKAGES
+        .iter()
+        .fold(Cmd::cargo(["nextest", "run"]), |command, package| {
+            command.args(["-p", package])
+        })
+        .args([
+            "--locked",
+            "--no-fail-fast",
+            "--lib",
+            "--bins",
+            "--tests",
+            "--features",
+            TEST_FEATURES,
+            "-E",
+            NestedGroup::Native.filterset(),
+        ])
+}
+
 /// `cargo nextest run` over [`TEST_SCOPE`] with `filterset`, the only `-E`: a
 /// second one would be ORed with it, not intersected.
 fn scoped_nextest(host: Host, filterset: &str) -> Cmd {
@@ -387,13 +417,11 @@ fn test_plan(host: Host, stages: Stages) -> Vec<Step> {
                 "test --fast: SKIPPED the nested tests (trybuild compile_fail suites, flui-cli cli_create::generated_* and ios_cargo_artifact_fixtures, flui::facade_consumer; groups in .config/nextest.toml). Run them with: cargo xtask test --nested".to_owned(),
             )]),
         Stages::Nested => vec![nested.into(), platform_compiler_tests().into()],
-        Stages::NestedGroup(group) => {
-            let mut steps = vec![scoped_nextest(host, group.filterset()).into()];
-            if group == NestedGroup::Trybuild {
-                steps.push(platform_compiler_tests().into());
-            }
-            steps
-        }
+        Stages::NestedGroup(NestedGroup::Native) => vec![nested_cargo_nextest().into()],
+        Stages::NestedGroup(NestedGroup::Trybuild) => vec![
+            scoped_nextest(host, NestedGroup::Trybuild.filterset()).into(),
+            platform_compiler_tests().into(),
+        ],
         Stages::NoTrybuild => with_platform(vec![
             scoped_nextest(host, "group(nested-cargo)").into(),
             Step::Note(
@@ -1302,19 +1330,27 @@ mod tests {
                     .to_owned(),
             ]
         );
-        for (group, filter) in [
-            (NestedGroup::Native, "group(nested-cargo)"),
-            (NestedGroup::Trybuild, "group(trybuild)"),
-        ] {
-            let mut expected = vec![format!("$ cargo nextest run {SCOPE} -E '{filter}'")];
-            if group == NestedGroup::Trybuild {
-                expected.push("$ cargo nextest run -p flui-native --test compiler_guards --locked --no-fail-fast".to_owned());
-            }
-            assert_eq!(
-                lines(&test_plan(Host::Linux, Stages::NestedGroup(group))),
-                expected
-            );
-        }
+        assert_eq!(
+            lines(&test_plan(
+                Host::Linux,
+                Stages::NestedGroup(NestedGroup::Trybuild)
+            )),
+            [
+                format!("$ cargo nextest run {SCOPE} -E 'group(trybuild)'"),
+                "$ cargo nextest run -p flui-native --test compiler_guards --locked --no-fail-fast"
+                    .to_owned(),
+            ]
+        );
+        // The native group builds only the packages that hold it.
+        assert_eq!(
+            lines(&test_plan(
+                Host::Linux,
+                Stages::NestedGroup(NestedGroup::Native)
+            )),
+            [format!(
+                "$ cargo nextest run -p flui -p flui-cli --locked --no-fail-fast --lib --bins --tests --features {TEST_FEATURES} -E 'group(nested-cargo)'"
+            )]
+        );
         // CI's Windows job: the host-specific nested group, not trybuild
         let windows = lines(&test_plan(Host::Windows, Stages::NoTrybuild));
         assert_eq!(windows.len(), 6);
@@ -1342,6 +1378,56 @@ mod tests {
             )]
         );
         assert!(SCOPE.ends_with(&format!("--features {TEST_FEATURES}")));
+    }
+
+    /// A new `nested-cargo` test in another package would otherwise never be
+    /// built by `--nested-group native`, and so never run.
+    fn nested_cargo_packages_are_the_groups_binary_packages() {
+        let path = crate::util::repo_root().join(".config/nextest.toml");
+        let text = std::fs::read_to_string(&path)
+            .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+        let config = text
+            .parse::<toml::Table>()
+            .unwrap_or_else(|error| panic!("parse {}: {error}", path.display()));
+        let overrides = config["profile"]["default"]["overrides"]
+            .as_array()
+            .expect("BUG: nextest.toml has profile.default.overrides");
+        let filters: Vec<&str> = overrides
+            .iter()
+            .filter(|entry| {
+                entry.get("test-group").and_then(toml::Value::as_str) == Some("nested-cargo")
+            })
+            .map(|entry| {
+                entry["filter"]
+                    .as_str()
+                    .expect("BUG: a nextest override's filter is a string")
+            })
+            .collect();
+        assert_eq!(
+            filters.len(),
+            1,
+            "one override sets nested-cargo: {filters:?}"
+        );
+        let filter = filters[0];
+        let mut packages: Vec<&str> = filter
+            .split("binary_id(")
+            .skip(1)
+            .map(|rest| {
+                rest.split("::")
+                    .next()
+                    .expect("BUG: split yields at least one piece")
+            })
+            .collect();
+        packages.sort_unstable();
+        packages.dedup();
+        // A clause without a binary_id could select a test in any package.
+        assert!(
+            filter
+                .split(" | ")
+                .all(|clause| clause.contains("binary_id(")),
+            "{filter}"
+        );
+        assert_eq!(packages, NESTED_CARGO_PACKAGES, "{filter}");
     }
 
     fn nested_group_requires_nested_and_preserves_existing_modes() {
@@ -1440,6 +1526,10 @@ mod tests {
                 (
                     "platform_compiler_checks_follow_each_host_and_stage",
                     platform_compiler_checks_follow_each_host_and_stage as fn(),
+                ),
+                (
+                    "nested_cargo_packages_are_the_groups_binary_packages",
+                    nested_cargo_packages_are_the_groups_binary_packages as fn(),
                 ),
                 (
                     "nested_group_requires_nested_and_preserves_existing_modes",

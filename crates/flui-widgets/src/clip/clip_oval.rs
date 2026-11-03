@@ -3,7 +3,7 @@
 use flui_objects::{Oval, RenderClipOval};
 use flui_painting::paint::Clip;
 use flui_rendering::protocol::BoxProtocol;
-use flui_view::{Child, IntoView, RenderView, impl_render_view};
+use flui_view::{Child, CreationSite, IntoView, RenderView, impl_render_view};
 
 /// Clips its child to the axis-aligned oval inscribed in this widget's bounds
 /// (a circle when the bounds are square — the common avatar case).
@@ -15,22 +15,30 @@ pub struct ClipOval {
     clip_behavior: Clip,
     clip_shape: Option<Oval>,
     child: Child,
+    site: CreationSite,
 }
 
 impl Default for ClipOval {
     fn default() -> Self {
-        Self {
-            clip_behavior: Clip::AntiAlias,
-            clip_shape: None,
-            child: Child::empty(),
-        }
+        // A trait fn cannot be `#[track_caller]`: the site is this line.
+        Self::at(CreationSite::here())
     }
 }
 
 impl ClipOval {
+    fn at(site: CreationSite) -> Self {
+        Self {
+            clip_behavior: Clip::AntiAlias,
+            clip_shape: None,
+            child: Child::empty(),
+            site,
+        }
+    }
+
     /// Create an oval clip with the default `AntiAlias` behavior.
+    #[track_caller]
     pub fn new() -> Self {
-        Self::default()
+        Self::at(CreationSite::here())
     }
 
     /// Set the clip behavior (anti-aliasing / save-layer policy).
@@ -86,4 +94,4 @@ impl RenderView for ClipOval {
     flui_view::single_child_view_children!();
 }
 
-impl_render_view!(ClipOval);
+impl_render_view!(ClipOval, site = site);
