@@ -1,8 +1,8 @@
 //! Names the build that serves the driver agent (ADR-0239, ADR-0288 §7) once:
 //! `cfg(driver_agent)` is a debug build, or one with the `driver` feature, on a
 //! system whose transport is built (a local socket: a pipe on Windows, a Unix
-//! socket elsewhere, Android's abstract one included; the web transport is not
-//! built yet). The sites that compile the agent name this one cfg instead of
+//! socket elsewhere, Android's abstract one included; a page export on
+//! wasm32). The sites that compile the agent name this one cfg instead of
 //! spelling the condition again.
 //!
 //! Read from what Cargo tells a build script about the target: it sets
@@ -18,8 +18,9 @@ fn main() {
     let local_socket = families
         .split(',')
         .any(|family| family == "unix" || family == "windows");
+    let page = std::env::var("CARGO_CFG_TARGET_ARCH").is_ok_and(|arch| arch == "wasm32");
     let built = set("CARGO_CFG_DEBUG_ASSERTIONS") || set("CARGO_FEATURE_DRIVER");
-    if built && local_socket {
+    if built && (local_socket || page) {
         println!("cargo::rustc-cfg=driver_agent");
     }
 }

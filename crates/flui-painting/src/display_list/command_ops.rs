@@ -190,6 +190,9 @@ impl DrawOp {
     ///   unbounded when a face gives no bounds to take them from;
     /// - a shadow reaches [`SHADOW_REACH`] elevations past its path in every
     ///   direction of the target, a spread;
+    /// - a paragraph's shadow covers what the paragraph would at its offset,
+    ///   spread by three sigmas of its blur plus one pixel for the
+    ///   renderer's whole-pixel kernel;
     /// - a full-canvas fill (`Color`, `Paint`), an unbounded `SaveLayer` and
     ///   a filtered image (whose filter can spread arbitrarily) are
     ///   [`DamageExtent::Unbounded`].
@@ -237,6 +240,26 @@ impl DrawOp {
                 let layout_box = Rect::from_xywh(offset.dx, offset.dy, size.width, size.height);
                 match paragraph.ink_bounds() {
                     Some(ink) => bounded(layout_box.union(&ink.translate_offset(*offset))),
+                    None => Some(DamageExtent::Unbounded),
+                }
+            }
+            DrawOp::ParagraphShadow {
+                paragraph,
+                offset,
+                sigma,
+                ..
+            } => {
+                let size = paragraph.size();
+                let layout_box = Rect::from_xywh(offset.dx, offset.dy, size.width, size.height);
+                let sigma = f64::from(sigma.get());
+                match paragraph.ink_bounds() {
+                    Some(ink) if sigma == 0.0 => {
+                        bounded(layout_box.union(&ink.translate_offset(*offset)))
+                    }
+                    Some(ink) => Some(DamageExtent::Bounded {
+                        rect: layout_box.union(&ink.translate_offset(*offset)),
+                        spread: 3.0 * sigma + 1.0,
+                    }),
                     None => Some(DamageExtent::Unbounded),
                 }
             }
@@ -348,7 +371,11 @@ impl DrawOp {
             // object reports. A text op that contributed nothing here would
             // silently drop visible text from every bounds computation built
             // on this.
+            // A shadow's box is the paragraph's at the shadow's offset.
             DrawOp::Paragraph {
+                paragraph, offset, ..
+            }
+            | DrawOp::ParagraphShadow {
                 paragraph, offset, ..
             } => {
                 let size = paragraph.size();

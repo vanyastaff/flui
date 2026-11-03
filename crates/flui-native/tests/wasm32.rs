@@ -17,6 +17,8 @@ use wasm_bindgen_test::wasm_bindgen_test;
 use flui_native::testing::app;
 #[path = "wasm32/display.rs"]
 mod display;
+#[path = "wasm32/page_export.rs"]
+mod page_export;
 #[path = "wasm32/page_store.rs"]
 mod page_store;
 #[path = "wasm32/web_page_lifecycle.rs"]

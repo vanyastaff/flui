@@ -87,6 +87,9 @@ pub(crate) mod notices;
 // loop's module rather than in it, which is Windows' alone.
 #[cfg(any(windows, test))]
 pub(crate) mod hwnd_affinity;
+// The web host's launch values: pure, so `test` checks them on every host.
+#[cfg(any(target_arch = "wasm32", test))]
+pub(crate) mod page_launch;
 pub(crate) mod panic_boundary;
 #[cfg(any(test, target_os = "android"))]
 pub(crate) mod redraw_poll;

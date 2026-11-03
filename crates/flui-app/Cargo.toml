@@ -133,8 +133,8 @@ flui-protocol = { workspace = true }
 tokio-util = { workspace = true }
 
 # The driver agent's endpoint (ADR-0239): a named pipe or a Unix socket.
-# `interprocess` builds for Windows and Unix only; the web transport is a
-# function the web runner exports instead.
+# `interprocess` builds for Windows and Unix only; the web transport is
+# flui-native's page export instead.
 [target.'cfg(any(unix, windows))'.dependencies]
 interprocess = { workspace = true }
 

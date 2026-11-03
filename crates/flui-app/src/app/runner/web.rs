@@ -31,6 +31,18 @@ where
         crate::app::LaunchError::from_platform(error)
     })?;
 
+    // The driver agent (ADR-0239), beside the application's own hooks, when
+    // the page's launch object named an export (ADR-0288 §7), which the
+    // platform took off the page as it was made. A driver that goes under
+    // `EXIT_ON_DISCONNECT` quits the loop; the driver closes the tab.
+    let disconnect = Arc::new(crate::app::agent::Disconnect::default());
+    let mut config = config;
+    crate::app::agent::install_from_launch(
+        &mut config,
+        |key| platform.launch_value(key),
+        &disconnect,
+    );
+
     /// The actual web bootstrap: canvas window, renderer, UI runtime, and
     /// callback wiring. Runs once, synchronously, inside `on_ready` —
     /// `WebPlatform::run` invokes it before starting the RAF loop
@@ -161,13 +173,19 @@ where
     // ownership hook is deferred until the platform exposes a callback
     // whose lifetime encloses the RAF registration.
     let result = platform.run(crate::app::runner::app_handler(move |owner| {
+        let quit = owner.proxy();
+        disconnect.arm(move || {
+            let _ = quit.request_quit();
+        });
         install_owner_platform(owner)?;
         super::host::install_configured_executors(&config);
         super::host::install_host_storage(&config);
         // Started before the page's one window opens, as a desktop loop starts
         // before its first; a failed bootstrap ends them, which detaches the
-        // hooks. The loop they serve is the page's, which never ends while the
-        // page lives (the host stays resident for the same reason, above).
+        // hooks. The loop they serve is the page's, which ends only with a
+        // quit (a driver's going under `EXIT_ON_DISCONNECT`): the quit ends
+        // them, so a served page's export goes and its connections close.
+        super::host::route_quit(super::dev_agents::end);
         super::dev_agents::start(&config);
         let bootstrapped = bootstrap_web(root, config);
         if bootstrapped.is_err() {

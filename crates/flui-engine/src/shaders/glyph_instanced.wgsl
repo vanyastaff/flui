@@ -2,10 +2,12 @@
 //
 // One quad per rasterised glyph, sampled from the glyph atlas: a coverage
 // page (R8, tinted by the instance colour) and a colour page (RGBA8, emoji
-// and colour bitmap faces, drawn as-is under the instance alpha). The atlas
-// texel origin arrives in texels and is normalised here against the bound
-// page's dimensions, so an atlas that grew after the instance was recorded
-// still samples the right texels (allocations keep their place on a grow).
+// and colour bitmap faces, drawn as-is under the instance alpha, or as a
+// silhouette: their alpha tinted by the instance colour, for a text shadow).
+// The atlas texel origin arrives in texels and is normalised here against
+// the bound page's dimensions, so an atlas that grew after the instance was
+// recorded still samples the right texels (allocations keep their place on a
+// grow).
 //
 // Sampling is bilinear. Under a uniform CTM a glyph is drawn 1:1 on integer
 // device pixels, where bilinear and nearest agree texel for texel; under a
@@ -20,7 +22,7 @@ struct VertexInput {
 
 struct InstanceInput {
     @location(2) dst_rect: vec4<f32>,             // [x, y, width, height] in device pixels
-    @location(3) atlas: vec4<f32>,                // [u, v, page (0 mask / 1 colour), _]
+    @location(3) atlas: vec4<f32>,                // [u, v, page (0 mask / 1 colour / 2 colour as coverage), _]
     @location(4) color: vec4<f32>,                // straight-alpha [r, g, b, a]
     @location(5) transform: vec4<f32>,            // 2×2 linear part [a, b, c, d], column-major
     @location(6) origin: vec4<f32>,               // device translation [tx, ty, 0, 0]
@@ -106,9 +108,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     if (in.page == 0u) {
         let coverage = textureSampleLevel(mask_page, atlas_sampler, in.uv, 0.0).r;
         color = vec4<f32>(in.color.rgb, in.color.a * coverage);
-    } else {
+    } else if (in.page == 1u) {
         let texel = textureSampleLevel(color_page, atlas_sampler, in.uv, 0.0);
         color = vec4<f32>(texel.rgb, texel.a * in.color.a);
+    } else {
+        // A silhouette: the colour glyph's coverage in the instance colour.
+        let texel = textureSampleLevel(color_page, atlas_sampler, in.uv, 0.0);
+        color = vec4<f32>(in.color.rgb, in.color.a * texel.a);
     }
 
     let clip_alpha = clipAlpha(

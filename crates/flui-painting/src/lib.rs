@@ -106,7 +106,9 @@ pub use alignment::{Alignment, AlignmentDirectional, AlignmentGeometry};
 pub use box_fit::{BoxFit, BoxShape, FittedSizes};
 pub use canvas::Canvas;
 pub use decoration::{DecorationPaintOptions, box_decoration_hit_test, paint_box_decoration};
-pub use display_list::{DamageExtent, DisplayList, DrawCommand, DrawOp, ShapedParagraph};
+pub use display_list::{
+    BlurSigma, DamageExtent, DisplayList, DrawCommand, DrawOp, ShapedParagraph,
+};
 pub use error::RegisterFontError;
 pub use glyphs::{
     GlyphContent, GlyphImage, GlyphImageError, GlyphKey, GlyphRasterizer, PlacedGlyph,

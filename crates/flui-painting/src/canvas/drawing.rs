@@ -24,11 +24,11 @@ use crate::{
 use flui_foundation::geometry::{Matrix4, Offset, Point, RRect, Rect};
 
 use super::Canvas;
-use crate::display_list::ShapedParagraph;
 use crate::display_list::{
     BlendMode, ColorFilter, DisplayList, DrawCommand, DrawOp, FilterQuality, ImageRepeat, Paint,
     PointMode, TextureId,
 };
+use crate::display_list::{BlurSigma, ShapedParagraph};
 
 impl Canvas {
     // ===== Drawing Primitives =====
@@ -102,6 +102,30 @@ impl Canvas {
             paragraph: Arc::clone(paragraph),
             offset,
             color,
+        });
+    }
+
+    /// Draws the shadow `paragraph`'s glyphs cast, with the paragraph's
+    /// top-left at `offset` (the shadow's offset included): every glyph's
+    /// coverage in `color`, blurred by `sigma` (ADR-0309 §3).
+    ///
+    /// `TextPainter::paint` records one per shadow of a span, before the
+    /// paragraph itself. A non-finite `offset` records nothing.
+    pub fn draw_paragraph_shadow(
+        &mut self,
+        paragraph: &Arc<ShapedParagraph>,
+        offset: Offset<f64>,
+        color: Color,
+        sigma: BlurSigma,
+    ) {
+        if !(offset.dx.is_finite() && offset.dy.is_finite()) {
+            return;
+        }
+        self.record(DrawOp::ParagraphShadow {
+            paragraph: Arc::clone(paragraph),
+            offset,
+            color,
+            sigma,
         });
     }
 
