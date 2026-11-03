@@ -115,7 +115,13 @@ impl PipelineOwner<Compositing> {
         }
         if let Err(payload) = walked {
             // The queue stays for the retry: an entry the walk finished is
-            // skipped by its clear bits-update flag.
+            // skipped by its clear bits-update flag. The committed paint is
+            // still announced; the walk's panic is the first failure, so a
+            // wake that panics after it is discarded (ADR-0281 §2).
+            if paint_queued {
+                flui_foundation::panic::FirstPanic::new()
+                    .contain(|| self.scheduler.notify_visual_update());
+            }
             std::panic::resume_unwind(payload);
         }
 

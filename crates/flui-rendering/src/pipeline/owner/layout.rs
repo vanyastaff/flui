@@ -55,12 +55,26 @@ impl PipelineOwner<Layout> {
         // and announced by one wake once the batches are back in the scheduler:
         // a wake is user code, so it runs only after the state it reports is
         // committed (ADR-0287).
+        //
+        // The wake goes out on every exit, an error or a panic included. When
+        // the pass already failed, that failure is the first one: a wake that
+        // panics after it is discarded (ADR-0281 §2).
         let mut paint_queued = false;
-        let outcome = self.run_layout_batches(&mut paint_queued);
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.run_layout_batches(&mut paint_queued)
+        }));
         if paint_queued {
-            self.scheduler.notify_visual_update();
+            if matches!(outcome, Ok(Ok(()))) {
+                self.scheduler.notify_visual_update();
+            } else {
+                flui_foundation::panic::FirstPanic::new()
+                    .contain(|| self.scheduler.notify_visual_update());
+            }
         }
-        outcome
+        match outcome {
+            Ok(result) => result,
+            Err(payload) => std::panic::resume_unwind(payload),
+        }
     }
 
     /// Runs layout batches until no layout work is left, handing each batch
@@ -257,11 +271,16 @@ impl PipelineOwner<Layout> {
                 node = dirty_node.id.as_u64(),
             )
             .entered();
-            match self.layout_relayout_root(dirty_node.id, constraints, paint_queued) {
+            let (laid_out, reports) =
+                self.layout_relayout_root(dirty_node.id, constraints, paint_queued);
+            match laid_out {
                 Ok(_) => {
                     self.layout_poison.note_success(dirty_node.id);
                 }
                 Err(e) => {
+                    // The root's error is the walk's first failure; a poison
+                    // report that panicked after it is discarded.
+                    drop(reports);
                     if e.is_recoverable_layout_error() {
                         let wait_for_input = matches!(
                             e,
@@ -345,9 +364,11 @@ impl PipelineOwner<Layout> {
                 .scheduler
                 .commit_needs_paint(&self.render_tree, dirty_node.id);
 
-            // The span closes once the root's work is committed. A subscriber
-            // that panics as it closes leaves this entry queued, and the retry
-            // skips it because its layout flag is clear.
+            // A poison report that panicked goes on only now, with the root's
+            // own success recorded and its paint committed. The span closes
+            // after that too. Either panic leaves this entry queued, and the
+            // retry skips it because its layout flag is clear.
+            reports.resume();
             drop(root_span);
         }
         *next = dirty_nodes.len();
@@ -551,22 +572,56 @@ impl PipelineOwner<Layout> {
         id: RenderId,
         constraints: BoxConstraints,
     ) -> crate::error::RenderResult<Size> {
+        // The wake goes out on every exit. The first failure is the one that
+        // goes on: the walk's error or panic, then a poison report's panic,
+        // then the wake's; a later one is discarded (ADR-0281 §2).
         let mut queued = false;
-        let laid_out = self.layout_relayout_root(id, constraints, &mut queued);
+        let mut first = flui_foundation::panic::FirstPanic::new();
+        let laid_out = first
+            .contain(|| self.layout_relayout_root(id, constraints, &mut queued))
+            .map(|(laid_out, reports)| {
+                if let Some(payload) = reports.into_payload() {
+                    first.record(payload);
+                }
+                laid_out
+            });
         if queued {
-            self.scheduler.notify_visual_update();
+            first.contain(|| self.scheduler.notify_visual_update());
         }
-        laid_out
+        match laid_out {
+            Some(Ok(size)) => {
+                first.resume();
+                Ok(size)
+            }
+            // Dropping `first` discards a panic that came after the error.
+            Some(Err(error)) => Err(error),
+            None => std::panic::resume_unwind(
+                first
+                    .into_payload()
+                    .expect("BUG: a walk that unwound holds its panic"),
+            ),
+        }
     }
 
     /// [`Self::layout_dirty_root`] without its wake: a new paint or semantics
     /// queue entry sets `queued`, and the caller announces the work once.
+    ///
+    /// The walk's poison reports have run when this returns; a panic out of
+    /// one is held in the returned [`FirstPanic`], for the caller to resume
+    /// once it has recorded the dirty root's own result. A panic out of the
+    /// walk itself goes on from here, after everything the walk finished is
+    /// committed and the reports have run.
+    ///
+    /// [`FirstPanic`]: flui_foundation::panic::FirstPanic
     fn layout_relayout_root(
         &mut self,
         id: RenderId,
         constraints: BoxConstraints,
         queued: &mut bool,
-    ) -> crate::error::RenderResult<Size> {
+    ) -> (
+        crate::error::RenderResult<Size>,
+        flui_foundation::panic::FirstPanic,
+    ) {
         // Layout clears flags and fills caches under any stamped walk path.
         self.scheduler.forget_layout_walks();
         // Steps 1–2: lease the tree and wrap the lease in a SubtreeArena, which
@@ -578,14 +633,17 @@ impl PipelineOwner<Layout> {
         // One `Rc` clone per dirty root; the walk borrows the cell once per
         // measurement, never across a child's layout.
         let text = self.text_handle();
-        let arena = SubtreeArena::from_tree(
+        let arena = match SubtreeArena::from_tree(
             &mut self.render_tree,
             id,
             &self.layout_poison,
             crate::pipeline::TextLender::new(text.cell(), &self.text_measurers, &self.text_sizing),
             #[cfg(any(test, feature = "testing"))]
             &self.parent_data_seeds,
-        )?;
+        ) {
+            Ok(arena) => arena,
+            Err(error) => return (Err(error), flui_foundation::panic::FirstPanic::new()),
+        };
 
         // Step 4: recursive walk via the safe arena API.  Internally the arena
         // reborrows one NodePtr per call level (distinct slots; parent ≠ child
@@ -645,12 +703,18 @@ impl PipelineOwner<Layout> {
         for succeeded in layout_successes {
             self.layout_poison.note_success(succeeded);
         }
+        // A panic below the dirty root is caught by its parent's containment,
+        // so a walk that unwound did so from the root's own frame, which may
+        // not have finished. The root keeps its flag then, and the retry lays
+        // it out again; every other parent finished its frame.
+        let unwound = walked.is_err();
         let poison_reports = self.layout_poison.note_failures(layout_failures);
         for &(parent, failed, _, _) in &poison_reports {
             if let Some(node) = self.render_tree.get(failed) {
                 node.clear_needs_layout();
             }
             if parent != failed
+                && !(unwound && parent == id)
                 && let Some(node) = self.render_tree.get(parent)
             {
                 node.clear_needs_layout();
@@ -695,10 +759,7 @@ impl PipelineOwner<Layout> {
             reports.contain(|| report_layout_poison(parent, failed, kind, first_report));
         }
         match walked {
-            Ok(result) => {
-                reports.resume();
-                result
-            }
+            Ok(result) => (result, reports),
             // The walk's panic came first; dropping `reports` discards a
             // later one under containment (ADR-0281 §2).
             Err(payload) => {

@@ -174,10 +174,10 @@ impl PluginPipeline {
             // it's called: the
             // host expects a new opaque pointer.
             //
-            // `run_frame` returns
-            // `(PipelineOwner<Idle>, RenderResult<Option<LayerTree>>)`. On
-            // error we log and emit an empty Scene so the host's opaque
-            // pointer stays valid.
+            // `run_frame_in_place` keeps the owner in its slot on every
+            // exit, a panic included, and returns the frame's
+            // `Option<LayerTree>` or its error. On error we log and emit an
+            // empty Scene so the host's opaque pointer stays valid.
             let layer_tree = pipeline_owner.with_mut(|guard| {
                 if let Some(root_id) = guard.root_id() {
                     guard.mark_needs_paint(root_id);
