@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 use flui_protocol::{
     Event, EventFilter, EventKind, FrameEvent, GapEvent, SemanticsEvent, WindowEvent, WindowId,
 };
-use flui_view::__runtime::EventSource;
+use flui_view::__runtime::{EventSource, WakeSlot};
 use flui_view::dev_agent::AgentEvents;
 use parking_lot::{Condvar, Mutex};
 
@@ -48,17 +48,21 @@ struct QueueState {
 struct Queue {
     state: Mutex<QueueState>,
     arrived: Condvar,
+    /// The reader's waker, woken by the hub's caller once the hub is let go.
+    wake: WakeSlot,
 }
 
 impl Queue {
-    fn push(&self, event: Event) {
+    /// Queue `event`; whether the reader is to be woken.
+    #[must_use]
+    fn push(&self, event: Event) -> bool {
         let mut state = self.state.lock();
         if state.ended {
-            return;
+            return false;
         }
         if state.events.len() >= QUEUE_EVENTS {
             state.missed = state.missed.saturating_add(1);
-            return;
+            return false;
         }
         if state.missed > 0 {
             let missed = std::mem::take(&mut state.missed);
@@ -68,12 +72,13 @@ impl Queue {
                 state.missed = 1;
                 drop(state);
                 self.arrived.notify_one();
-                return;
+                return true;
             }
         }
         state.events.push_back(event);
         drop(state);
         self.arrived.notify_one();
+        true
     }
 
     /// The window closed. A gap still owed, and the event that says so, are queued past the
@@ -89,6 +94,14 @@ impl Queue {
         state.ended = true;
         drop(state);
         self.arrived.notify_all();
+    }
+}
+
+/// Wakes each queue's reader. Called once the hub is let go: a waker is the
+/// reader's code.
+fn wake_readers(queues: Vec<Arc<Queue>>) {
+    for queue in queues {
+        queue.wake.wake();
     }
 }
 
@@ -159,6 +172,10 @@ impl EventSource for EventStream {
     fn is_finished(&self) -> bool {
         Self::is_finished(self)
     }
+
+    fn register(&mut self, waker: &std::task::Waker) {
+        self.queue.wake.register(waker);
+    }
 }
 
 struct Subscriber {
@@ -219,21 +236,31 @@ impl EventHub {
         Ok(EventStream { queue })
     }
 
-    fn publish(&mut self, window: WindowId, event: &Event) {
+    /// Queues `event` for the streams that select it; the queues whose readers are to be
+    /// woken, once the hub is let go.
+    #[must_use]
+    fn publish(&mut self, window: WindowId, event: &Event) -> Vec<Arc<Queue>> {
         self.prune();
+        let mut woken = Vec::new();
         for subscriber in &self.subscribers {
-            if subscriber.selects(window, event) {
-                subscriber.queue.push(event.clone());
+            if subscriber.selects(window, event) && subscriber.queue.push(event.clone()) {
+                woken.push(Arc::clone(&subscriber.queue));
             }
         }
+        woken
     }
 
-    /// Ends every stream; `last` goes to the ones that select it, past their bound.
-    fn end(&mut self, window: WindowId, last: &Event) {
+    /// Ends every stream; `last` goes to the ones that select it, past their bound. The
+    /// queues whose readers are to be woken, once the hub is let go.
+    #[must_use]
+    fn end(&mut self, window: WindowId, last: &Event) -> Vec<Arc<Queue>> {
+        let mut woken = Vec::with_capacity(self.subscribers.len());
         for subscriber in self.subscribers.drain(..) {
             let last = subscriber.selects(window, last).then(|| last.clone());
             subscriber.queue.end(last);
+            woken.push(subscriber.queue);
         }
+        woken
     }
 }
 
@@ -248,9 +275,11 @@ impl PresentationState {
         for wait in self.agent_waits.borrow_mut().iter_mut() {
             wait.note_event(event.kind());
         }
-        self.agent_events
+        let woken = self
+            .agent_events
             .borrow_mut()
             .publish(self.agent_window(), &event);
+        wake_readers(woken);
     }
 
     /// Emits what a frame left to report: the frames presented or skipped since the last report,
@@ -299,7 +328,8 @@ impl PresentationState {
         for wait in self.agent_waits.borrow_mut().iter_mut() {
             wait.note_event(closed.kind());
         }
-        self.agent_events.borrow_mut().end(window, &closed);
+        let woken = self.agent_events.borrow_mut().end(window, &closed);
+        wake_readers(woken);
     }
 }
 

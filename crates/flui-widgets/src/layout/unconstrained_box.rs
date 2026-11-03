@@ -6,7 +6,7 @@ use flui_objects::RenderConstraintsTransformBox;
 use flui_painting::Alignment;
 use flui_painting::paint::Clip;
 use flui_rendering::protocol::BoxProtocol;
-use flui_view::{Child, IntoView, RenderView, impl_render_view};
+use flui_view::{Child, CreationSite, IntoView, RenderView, impl_render_view};
 
 /// Removes the constraints imposed on `child` — on both axes, or, when
 /// `constrained_axis` is set, on every axis *except* that one (the named
@@ -38,18 +38,21 @@ pub struct UnconstrainedBox {
     constrained_axis: Option<Axis>,
     clip_behavior: Clip,
     child: Child,
+    site: CreationSite,
 }
 
 impl UnconstrainedBox {
     /// A center-aligned, unclipped box removing constraints on both axes —
     /// with every other parameter left at its default.
     #[must_use]
+    #[track_caller]
     pub fn new() -> Self {
         Self {
             alignment: Alignment::CENTER,
             constrained_axis: None,
             clip_behavior: Clip::None,
             child: Child::empty(),
+            site: CreationSite::here(),
         }
     }
 
@@ -95,6 +98,7 @@ impl UnconstrainedBox {
 
 impl Default for UnconstrainedBox {
     fn default() -> Self {
+        // A trait fn cannot be `#[track_caller]`: the site is this line.
         Self::new()
     }
 }
@@ -125,4 +129,4 @@ impl RenderView for UnconstrainedBox {
     flui_view::single_child_view_children!();
 }
 
-impl_render_view!(UnconstrainedBox);
+impl_render_view!(UnconstrainedBox, site = site);

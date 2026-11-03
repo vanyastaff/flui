@@ -8,6 +8,9 @@
   build rule (`debug_assertions` or the `driver` feature). Unchanged: the owner-inbox execution,
   local endpoints only, the token (at least 32 bytes, constant-time compare, current-user pipe,
   `0700` socket directory), bounded waits and `may_have_run` on a timed-out action.
+- **Superseded in part by:** [ADR-0288](ADR-0288-the-development-agent-is-one-sans-io-service.md):
+  the conversation (§1) is `flui-runtime`'s sans-IO service, which `flui-app`'s transports drive,
+  and no endpoint thread waits for an answer (§6): a session is woken when one arrives.
 - **Related:** [ADR-0238](ADR-0238-flui-driver-protocol.md),
   [ADR-0083](ADR-0083-one-frame-transaction-in-flui-runtime.md),
   [ADR-0088](ADR-0088-official-packages-sdk-and-facade.md),

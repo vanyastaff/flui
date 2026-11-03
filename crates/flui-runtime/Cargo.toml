@@ -42,8 +42,12 @@ flui-layer = { path = "../flui-layer", version = "=0.2.0-dev" }
 # `Assertiveness`/`SemanticsEvent`, what the semantics host delivers, and the
 # wire projection a semantics agent reads through.
 flui-semantics = { path = "../flui-semantics", version = "=0.2.0-dev" }
-# The agent-protocol schema a semantics agent reads and acts in (ADR-0095).
-flui-protocol = { workspace = true }
+# The agent-protocol schema a semantics agent reads and acts in (ADR-0095), and
+# the JSON lines the agent service speaks (ADR-0288): always compiled, so an
+# app that never starts the agent pays only for the code.
+flui-protocol = { workspace = true, features = ["serde"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
 # `PlatformWindow` and its capability traits, the window contract a
 # presentation drives; no backend (ADR-0082).
 flui-platform = { workspace = true }

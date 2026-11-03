@@ -82,6 +82,21 @@ pub(crate) enum BuildError {
         reason: String,
     },
 
+    /// A 64-bit Android library with a loadable segment aligned below 16 KB,
+    /// which a 16 KB-page device cannot map and Google Play refuses
+    #[error(
+        "{} has a loadable segment aligned to {alignment} bytes; 16 KB-page devices need 16384. \
+         Link with NDK r28 or later, or add `-C link-arg=-Wl,-z,max-page-size=16384` to the \
+         target's rustflags",
+        .library.display()
+    )]
+    PageAlignment {
+        /// The library
+        library: PathBuf,
+        /// The smallest `p_align` of its `PT_LOAD` segments
+        alignment: u64,
+    },
+
     /// I/O error occurred
     #[error("I/O error")]
     Io(#[from] std::io::Error),

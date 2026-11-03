@@ -3316,11 +3316,11 @@ graph LR
   `layoutDirection` не объявлены: хост Android не читает языки, а цепочка резервных шрифтов
   выбирается по локали один раз при скане шрифтов среды; они входят в список вместе с этим
   чтением. Упаковщик без
-  Gradle отказывает `android.jar` ниже API 31 (флаг `fontWeightAdjustment`). Ночной режим хост
+  Gradle отказывает `android.jar` ниже `targetSdk` (не ниже API 31 из-за флага `fontWeightAdjustment`). Ночной режим хост
   читает из Java `Configuration.uiMode`: нативный `AConfiguration` android-activity после
   изменения на месте остаётся прежним. Прогон на Galaxy S21 (Android 15, проба `flui create
   --local`): тема в обе стороны, `font_scale` 1.3, `font_weight_adjustment` 300, `wm density`
-  480, поворот — один `android_main`, значения в `MediaQuery`. Остаток LY63: `targetSdk` из `platform-support.toml`, путь
+  480, поворот — один `android_main`, значения в `MediaQuery`. `targetSdk` закреплён в `platform-support.toml` (`android.target-sdk = 36`; упаковщик без Gradle и `flui.targetSdk` в `gradle.properties`, 2026-11-03). Остаток LY63: путь
   Gradle, правила R8, `windowSoftInputMode`, golden манифеста и `build.gradle.kts`, список в
   генерируемом манифесте `FluiActivity` (LY62).
 - [x] **LY46** — ветка `platform/surface-target`, от `main` @ `136947eff` (LY43, LY44), слит `main`

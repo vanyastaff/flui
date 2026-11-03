@@ -8,6 +8,8 @@
   not need a Java touch path, since `ViewRootImpl` batches ahead of the native input queue and
   honours `View.requestUnbufferedDispatch(int)` (API 30) for `NativeActivity`; native views remain
   the one trigger to leave it.
+- **Amended:** 2026-11-03 — decision 7 starts `targetSdk` at 36, the level Google Play requires
+  of new apps and updates from 2026-08-31, and states what that level changes for a FLUI app.
 - **Supersedes:** [ADR-0247](ADR-0247-android-java-view.md) in three places: item 1, where it embeds
   the dex in the native library with `include_bytes!` and has every packager ship that copy (the
   sources, the checked-in dex, the digest gate and "no JDK, no build script" stand); item 2, except
@@ -245,12 +247,19 @@ text-input paths its platform requires.
 
 7. **`targetSdk` is pinned, next to the floor.** `platform-support.toml` gains an Android `targetSdk`
    beside `api`, reaching the packagers the way `minSdk` does under ADR-0244 decisions 2 and 10, and
-   `android_package.rs` uses it instead of the newest installed platform. It starts at 35, the
-   value the Gradle template already declares
-   (`crates/flui-cli/templates/platforms/android/build.gradle.kts:13`), so the SDK-tools path
-   and the Gradle path agree from the first day. Raising it is a reviewed change that carries the
-   targetSdk 36 behaviours of decisions 3 and 6. ADR-0244's floors and gates are unchanged;
-   `targetSdk` is a packaging value, not a floor.
+   `android_package.rs` uses it instead of the newest installed platform; the Gradle template
+   reads it from `gradle.properties` as `flui.targetSdk`, which `flui build` writes like
+   `flui.minSdk`, so the SDK-tools path and the Gradle path agree. It is also the lowest
+   `compileSdk` either path accepts. It starts at 36, the level Google Play requires of new apps
+   and updates from 2026-08-31
+   ([target API level requirements](https://support.google.com/googleplay/android-developer/answer/11926878)).
+   What 36 changes for a FLUI app: back arrives only as predictive back, and with no
+   `OnBackInvokedCallback` registered the system handles it, which decision 3 asks for while
+   nothing can pop (no host registration exists yet: the producer of "can pop" is the navigator);
+   edge-to-edge has no opt-out, which the host never took; on a display 600 dp wide or more the
+   system ignores orientation and resizability limits, which the manifest does not declare.
+   Raising it again is a reviewed change that states the new level's behaviour changes the same
+   way. ADR-0244's floors and gates are unchanged; `targetSdk` is a packaging value, not a floor.
 
 8. **The host bridge.** A capability crate reaches the host through the provider context
    (ADR-0152), which gives it `owner()` and the window first. On Android the bridge is

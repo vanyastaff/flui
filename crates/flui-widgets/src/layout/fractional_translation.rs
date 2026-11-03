@@ -3,7 +3,7 @@
 
 use flui_objects::{RenderFractionalTranslation, TranslationFraction};
 use flui_rendering::protocol::BoxProtocol;
-use flui_view::{Child, IntoView, RenderView, impl_render_view};
+use flui_view::{Child, CreationSite, IntoView, RenderView, impl_render_view};
 
 /// Translates its child by `(dx, dy)` × the child's size before painting (e.g.
 /// `dx = -0.5` shifts the child left by half its width). Layout is unaffected.
@@ -16,16 +16,19 @@ pub struct FractionalTranslation {
     dy: f64,
     transform_hit_tests: bool,
     child: Child,
+    site: CreationSite,
 }
 
 impl FractionalTranslation {
     /// Translate by `(dx, dy)` fractions of the child's size.
+    #[track_caller]
     pub fn new(dx: f64, dy: f64) -> Self {
         Self {
             dx,
             dy,
             transform_hit_tests: true,
             child: Child::empty(),
+            site: CreationSite::here(),
         }
     }
 
@@ -74,4 +77,4 @@ impl RenderView for FractionalTranslation {
     flui_view::single_child_view_children!();
 }
 
-impl_render_view!(FractionalTranslation);
+impl_render_view!(FractionalTranslation, site = site);
