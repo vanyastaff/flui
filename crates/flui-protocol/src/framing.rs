@@ -96,10 +96,85 @@ impl BlobHeader {
     }
 }
 
-/// Why a frame header was refused.
+/// Splits a byte stream into the protocol's lines, with no I/O of its own: a transport
+/// [pushes](Self::push) what each read returned and [takes](Self::next_line) the whole lines.
+///
+/// A line ends at `\n`; a `\r` before it is dropped. A line longer than the reader's limit,
+/// without its newline, is refused as soon as the buffer shows it, without waiting for its end.
+/// After that the stream cannot be framed again: the transport closes it.
+#[derive(Debug, Clone)]
+pub struct LineReader {
+    buffer: Vec<u8>,
+    /// How much of the buffer is known to hold no newline.
+    scanned: usize,
+    max_len: usize,
+}
+
+impl LineReader {
+    /// A reader that takes lines of at most `max_len` bytes, such as [`MAX_LINE`].
+    #[must_use]
+    pub const fn new(max_len: usize) -> Self {
+        Self {
+            buffer: Vec::new(),
+            scanned: 0,
+            max_len,
+        }
+    }
+
+    /// Adds what the transport read.
+    pub fn push(&mut self, bytes: &[u8]) {
+        self.buffer.extend_from_slice(bytes);
+    }
+
+    /// The next whole line without its newline, or `None` while the buffer holds no whole line.
+    ///
+    /// # Errors
+    ///
+    /// [`FramingError::LineTooLong`] once the line being read is longer than the limit.
+    pub fn next_line(&mut self) -> Result<Option<Vec<u8>>, FramingError> {
+        let too_long = FramingError::LineTooLong {
+            max_len: self.max_len,
+        };
+        let Some(found) = self.buffer[self.scanned..]
+            .iter()
+            .position(|byte| *byte == b'\n')
+        else {
+            self.scanned = self.buffer.len();
+            return if self.buffer.len() > self.max_len {
+                Err(too_long)
+            } else {
+                Ok(None)
+            };
+        };
+        let end = self.scanned + found;
+        if end > self.max_len {
+            return Err(too_long);
+        }
+        let mut line: Vec<u8> = self.buffer.drain(..=end).collect();
+        self.scanned = 0;
+        line.pop();
+        if line.last() == Some(&b'\r') {
+            line.pop();
+        }
+        Ok(Some(line))
+    }
+
+    /// How many bytes are buffered and not yet taken as a line.
+    #[must_use]
+    pub fn buffered(&self) -> usize {
+        self.buffer.len()
+    }
+}
+
+/// Why a line or a frame header was refused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum FramingError {
+    /// A line ran past the reader's limit before its newline.
+    LineTooLong {
+        /// The reader's limit, in bytes.
+        max_len: usize,
+    },
     /// The header announced a payload longer than the reader takes.
     PayloadTooLong {
         /// The announced length.
@@ -114,6 +189,9 @@ pub enum FramingError {
 impl fmt::Display for FramingError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::LineTooLong { max_len } => {
+                write!(f, "a line is longer than the limit of {max_len} bytes")
+            }
             Self::PayloadTooLong { len, max_len } => {
                 write!(f, "a payload of {len} bytes is over the limit of {max_len}")
             }

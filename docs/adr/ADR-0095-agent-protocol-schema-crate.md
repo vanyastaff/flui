@@ -26,7 +26,7 @@
   handler, and a numeric `set_value` keeps its number; the double-toggle race stated below
   remains only for a node that registers neither discrete action
 - **Superseded in part by:** [ADR-0239](ADR-0239-every-debug-app-hosts-the-driver-agent.md)
-  for §3: the server is `flui-app`'s, installed by the host from the launch, in protocol 0.8;
+  for §3: the server is `flui-app`'s, installed by the host from the launch, in the current protocol;
   `flui-devtools` has no `agent` feature and the facade no `dev-agent` feature, and
   `flui run --agent` needs no feature of the application. What §3 says below of the
   `flui-devtools` server, its `op` framing and its `agent_endpoint` tests is history.

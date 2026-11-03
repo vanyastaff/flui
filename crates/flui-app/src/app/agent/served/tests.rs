@@ -11,7 +11,7 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use flui_protocol::framing::MAX_LINE;
-use flui_protocol::version::PROTOCOL_VERSION;
+use flui_protocol::version::{PROTOCOL_VERSION, ProtocolVersion};
 use flui_protocol::{ActParams, ActionName, AppInfo, Condition, Locator, Node, Target, Tree};
 use flui_testing::{HeadlessDevAgent, HeadlessHost, HeadlessWindow};
 use flui_view::prelude::*;
@@ -622,6 +622,39 @@ fn a_connection_without_the_right_hello_is_refused() {
         assert_eq!(refusal["error"]["code"], "version", "{refusal}");
         assert_eq!(refusal["error"]["client"], "0.4", "{refusal}");
         assert!(matches!(old.recv(RECV), Recv::Closed), "then it closes");
+
+        // An older client no break separates from the app is served, in the app's version.
+        let older = ProtocolVersion::new(PROTOCOL_VERSION.major, PROTOCOL_VERSION.minor - 1);
+        let mut earlier = Client::connect(&at);
+        earlier.send(&json!({ "hello": { "token": TOKEN, "protocol": older.to_string() } }));
+        let Recv::Line(welcome) = earlier.recv(RECV) else {
+            panic!("an older client is greeted");
+        };
+        assert_eq!(
+            welcome["hello"]["protocol"],
+            json!(PROTOCOL_VERSION.to_string()),
+            "{welcome}"
+        );
+        assert_eq!(earlier.windows().len(), 1, "and served");
+        drop(earlier);
+
+        // A newer one is told the app's version, to say hello again in it.
+        let newer = ProtocolVersion::new(PROTOCOL_VERSION.major, PROTOCOL_VERSION.minor + 1);
+        let mut later = Client::connect(&at);
+        later.send(&json!({ "hello": { "token": TOKEN, "protocol": newer.to_string() } }));
+        let Recv::Line(refusal) = later.recv(RECV) else {
+            panic!("a newer client is answered");
+        };
+        assert_eq!(refusal["error"]["code"], "version", "{refusal}");
+        assert_eq!(
+            refusal["error"]["app"],
+            json!(PROTOCOL_VERSION.to_string()),
+            "{refusal}"
+        );
+        assert!(
+            refusal.get("id").is_none(),
+            "it answers no request: {refusal}"
+        );
 
         let mut client = Client::hello(&at);
         assert_eq!(client.windows().len(), 1, "a right client is served next");
