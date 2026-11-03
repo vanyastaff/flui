@@ -85,8 +85,13 @@ pub(crate) struct Disconnect {
 
 impl Disconnect {
     /// Ask the loop to quit with `quit` when the driver goes.
+    // The served agent's tests arm it on iOS too.
     #[cfg_attr(
-        any(target_arch = "wasm32", target_os = "android", target_os = "ios"),
+        any(
+            target_arch = "wasm32",
+            target_os = "android",
+            all(target_os = "ios", not(test))
+        ),
         expect(dead_code, reason = "only the desktop loop exits when its driver goes")
     )]
     pub(crate) fn arm(&self, quit: impl Fn() + Send + Sync + 'static) {
