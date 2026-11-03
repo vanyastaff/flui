@@ -117,9 +117,14 @@ mod wayland {
             Arc::new(SeatClipboard::new(last_input, devices))
         }
 
-        /// Drops on the windows, which the seats' data devices hear.
-        fn drag(devices: DataDevices, wake: Box<dyn Fn() + Send + Sync>) -> Arc<dyn WaylandDrag> {
-            SeatDrag::new(&devices, wake)
+        /// Drops on the windows, which the seats' data devices hear, and the
+        /// sessions the windows start from them.
+        fn drag(
+            devices: DataDevices,
+            last_input: LastInput,
+            wake: Box<dyn Fn() + Send + Sync>,
+        ) -> Arc<dyn WaylandDrag> {
+            SeatDrag::new(&devices, last_input, wake)
         }
 
         fn notices(app: &Arc<AppDelivery>) -> Arc<dyn NoticeChannel> {
