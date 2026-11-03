@@ -400,6 +400,9 @@ x11rb = { workspace = true, optional = true, features = [
 # the keymap, the keyboard state and compose, which both Linux hosts read
 # through `input::linux::xkb`.
 xkbcommon-dl = { version = "0.4", optional = true, features = ["x11"] }
+# COMPOUND_TEXT for the X Input Method client of the X11 host's text input,
+# used where no input method answers on D-Bus (`text::linux::x11::xim`).
+xim-ctext = { workspace = true, optional = true }
 # The native Wayland host's protocol clients, also the display source's, and
 # the descriptor primitives both Linux hosts wait on, behind the `wayland` and
 # `x11` features (`desktop` and `winit-backend` enable both).
@@ -418,7 +421,8 @@ wayland-cursor = { version = "0.31", optional = true }
 accesskit_unix = { version = "0.24" }
 zbus = { workspace = true }
 futures-util = { workspace = true }
-tokio = { workspace = true, features = ["macros"] }
+# `net`: the readiness of the XIM client's X connection (`AsyncFd`).
+tokio = { workspace = true, features = ["macros", "net"] }
 
 # iOS native backend (UIKit + Metal). `objc2` is the maintained Objective-C
 # binding stack — the `objc` crate the macOS backend still uses has not
@@ -616,7 +620,7 @@ winit-backend = [
 # disabling it changes nothing observable. Kept as a forward-compatible name
 # for downstream `Cargo.toml`s, mirroring `desktop`.
 web = []
-x11 = ["dep:x11rb", "dep:rustix", "dep:xkbcommon-dl"]
+x11 = ["dep:x11rb", "dep:rustix", "dep:xkbcommon-dl", "dep:xim-ctext"]
 
 # Debug builds only: `journal::capture` journals every pointer registry call
 # on a thread as a native recording (ADR-0215 §4), for turning a session on a
@@ -885,6 +889,7 @@ features = [
     "window",
     "input",
     "fonts",
+    "http",
 ]
 platforms = ["windows", "apple", "android", "web", "linux", "winit", "headless"]
 groups = { apple = ["macos", "ios"], linux = ["wayland", "x11"] }

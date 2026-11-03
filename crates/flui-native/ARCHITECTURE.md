@@ -29,7 +29,7 @@ trait depends on `flui-platform` instead.
   tables (`hosts/`), the owner thread and each platform's loop (`owner/`), the
   OS versions (`version/`), the storage position's vocabulary (`storage/`) and
   one directory per feature of the closed list: `window`, `input`, `text`,
-  `display`, `clipboard`, `drag`, `accessibility`, `haptics`, `fonts`, `preferences`,
+  `display`, `clipboard`, `drag`, `accessibility`, `haptics`, `fonts`, `http`, `preferences`,
   `lifecycle`. There is no directory of code shared across features and no
   directory per platform: what two platforms of a feature share is that
   feature's model, and each platform is a file (or, where one OS object or the
