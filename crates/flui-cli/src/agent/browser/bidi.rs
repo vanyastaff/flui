@@ -27,14 +27,20 @@ pub(super) struct Bidi {
 }
 
 impl Bidi {
-    /// Starts a session on `socket` and takes the browser's first tab.
-    pub(super) fn attach(socket: Socket) -> Result<Self, LinkError> {
+    /// Starts a session on `socket` and takes the browser's first tab. A browser still starting
+    /// answers late (Firefox answers `session.new` once its first window is up), so every step
+    /// may take until `ready_by`.
+    pub(super) fn attach(socket: Socket, ready_by: Instant) -> Result<Self, LinkError> {
         let mut link = Self {
             socket,
             context: String::new(),
         };
-        link.command("session.new", json!({ "capabilities": {} }))?;
-        let tree = link.command("browsingContext.getTree", json!({ "maxDepth": 0 }))?;
+        link.command_by("session.new", json!({ "capabilities": {} }), ready_by)?;
+        let tree = link.command_by(
+            "browsingContext.getTree",
+            json!({ "maxDepth": 0 }),
+            ready_by,
+        )?;
         let first = tree
             .get("contexts")
             .and_then(Value::as_array)
@@ -45,24 +51,32 @@ impl Bidi {
         link.context = match first {
             Some(context) => context,
             None => link
-                .command("browsingContext.create", json!({ "type": "tab" }))?
+                .command_by("browsingContext.create", json!({ "type": "tab" }), ready_by)?
                 .get("context")
                 .and_then(Value::as_str)
                 .map(str::to_owned)
                 .ok_or_else(|| LinkError::Refused("the browser opened no tab".into()))?,
         };
-        link.command("session.subscribe", json!({ "events": EVENTS }))?;
+        link.command_by("session.subscribe", json!({ "events": EVENTS }), ready_by)?;
         Ok(link)
     }
 
     /// Sends `method` and returns its result.
     fn command(&mut self, method: &str, params: Value) -> Result<Value, LinkError> {
+        self.command_by(method, params, Instant::now() + COMMAND_TIMEOUT)
+    }
+
+    /// Sends `method` and returns its result, waiting for it no later than `deadline`.
+    fn command_by(
+        &mut self,
+        method: &str,
+        params: Value,
+        deadline: Instant,
+    ) -> Result<Value, LinkError> {
         let mut message = Map::new();
         message.insert("method".into(), Value::from(method));
         message.insert("params".into(), params);
-        let mut answer = self
-            .socket
-            .request(message, Instant::now() + COMMAND_TIMEOUT)?;
+        let mut answer = self.socket.request(message, deadline)?;
         if answer.get("type").and_then(Value::as_str) == Some("success") {
             return Ok(answer
                 .get_mut("result")

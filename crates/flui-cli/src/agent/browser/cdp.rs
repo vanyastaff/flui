@@ -12,9 +12,6 @@ use super::{BrowserLink, COMMAND_TIMEOUT, LinkError, LinkEvent, Remote};
 /// The page's function that reports to the link.
 const BINDING: &str = "__flui_agent_report";
 
-/// How long the browser has to open its first tab.
-const FIRST_TAB_WAIT: Duration = Duration::from_secs(10);
-
 /// A tab of a browser that speaks the DevTools protocol.
 pub(super) struct Cdp {
     socket: Socket,
@@ -23,11 +20,11 @@ pub(super) struct Cdp {
 }
 
 impl Cdp {
-    /// Attaches to the first tab the browser on `socket` opens.
-    pub(super) fn attach(mut socket: Socket) -> Result<Self, LinkError> {
-        let opened = Instant::now() + FIRST_TAB_WAIT;
+    /// Attaches to the first tab the browser on `socket` opens. A browser still starting
+    /// answers late, so every step may take until `ready_by`.
+    pub(super) fn attach(mut socket: Socket, ready_by: Instant) -> Result<Self, LinkError> {
         let target = loop {
-            let targets = command(&mut socket, None, "Target.getTargets", json!({}))?;
+            let targets = command(&mut socket, None, "Target.getTargets", json!({}), ready_by)?;
             let page = targets
                 .get("targetInfos")
                 .and_then(Value::as_array)
@@ -42,7 +39,7 @@ impl Cdp {
             if let Some(page) = page {
                 break page;
             }
-            if Instant::now() >= opened {
+            if Instant::now() >= ready_by {
                 return Err(LinkError::Refused("the browser opened no tab".into()));
             }
             std::thread::sleep(Duration::from_millis(100));
@@ -52,21 +49,32 @@ impl Cdp {
             None,
             "Target.attachToTarget",
             json!({ "targetId": target, "flatten": true }),
+            ready_by,
         )?;
         let session = attached
             .get("sessionId")
             .and_then(Value::as_str)
             .map(str::to_owned)
             .ok_or_else(|| LinkError::Refused("Target.attachToTarget named no session".into()))?;
-        let mut link = Self { socket, session };
-        link.command("Page.enable", json!({}))?;
-        link.command("Runtime.enable", json!({}))?;
-        link.command("Runtime.addBinding", json!({ "name": BINDING }))?;
-        Ok(link)
+        for (method, params) in [
+            ("Page.enable", json!({})),
+            ("Runtime.enable", json!({})),
+            ("Runtime.addBinding", json!({ "name": BINDING })),
+        ] {
+            command(&mut socket, Some(&session), method, params, ready_by)?;
+        }
+        Ok(Self { socket, session })
     }
 
     fn command(&mut self, method: &str, params: Value) -> Result<Value, LinkError> {
-        command(&mut self.socket, Some(&self.session), method, params)
+        let deadline = Instant::now() + COMMAND_TIMEOUT;
+        command(
+            &mut self.socket,
+            Some(&self.session),
+            method,
+            params,
+            deadline,
+        )
     }
 
     /// What a `Runtime` evaluation gave, or what it threw.
@@ -86,12 +94,14 @@ impl Cdp {
     }
 }
 
-/// Sends `method` on `session` (the browser's own when `None`) and returns its result.
+/// Sends `method` on `session` (the browser's own when `None`) and returns its result, waiting
+/// for it no later than `deadline`.
 fn command(
     socket: &mut Socket,
     session: Option<&str>,
     method: &str,
     params: Value,
+    deadline: Instant,
 ) -> Result<Value, LinkError> {
     let mut message = Map::new();
     message.insert("method".into(), Value::from(method));
@@ -99,7 +109,7 @@ fn command(
     if let Some(session) = session {
         message.insert("sessionId".into(), Value::from(session));
     }
-    let mut answer = socket.request(message, Instant::now() + COMMAND_TIMEOUT)?;
+    let mut answer = socket.request(message, deadline)?;
     if let Some(error) = answer.get("error") {
         let text = error
             .get("message")
