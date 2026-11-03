@@ -40,11 +40,11 @@ use wayland_protocols::wp::primary_selection::zv1::client::{
 };
 use web_time::Instant;
 
-use super::{MAX_WRITERS, Shared, TRANSFER_TIMEOUT, transfer};
+use super::{MAX_WRITERS, Shared, TRANSFER_TIMEOUT};
 use crate::clipboard::linux::offered::{SelectionText, answer_with, ask, drop_retired};
 use crate::clipboard::text::TextForm;
 use crate::owner::linux::wayland::WaylandState;
-use crate::transfer::linux::wayland::OfferData;
+use crate::transfer::linux::wayland::{OfferData, pipe};
 
 /// The primary selection's part of the clipboard's state, reached on the
 /// owner thread.
@@ -329,8 +329,8 @@ impl super::SeatClipboard {
                 let spawned = std::thread::Builder::new()
                     .name("flui-wayland-primary".to_owned())
                     .spawn(move || {
-                        let text = transfer::read(reader, Instant::now() + TRANSFER_TIMEOUT)
-                            .and_then(|bytes| form.answer(bytes));
+                        let text =
+                            super::read_selection(reader).and_then(|bytes| form.answer(bytes));
                         let _ = answer.resolve(text);
                     });
                 if let Err(error) = spawned {
@@ -375,7 +375,7 @@ impl super::SeatClipboard {
         // A place among the writers is taken before the selection is asked
         // or encoded, so requests past them cost nothing: their descriptors
         // close here, which ends their readers' reads.
-        let sends: Vec<(Request, transfer::Permit)> = sends
+        let sends: Vec<(Request, pipe::Permit)> = sends
             .into_iter()
             .filter(|send| send.source == current)
             .map_while(|send| Some((send, self.shared.writers.permit()?)))
@@ -399,7 +399,7 @@ impl super::SeatClipboard {
             let spawned = std::thread::Builder::new()
                 .name("flui-wayland-primary".to_owned())
                 .spawn(move || {
-                    transfer::write(fd, &bytes, Instant::now() + TRANSFER_TIMEOUT);
+                    pipe::write(fd, &bytes, Instant::now() + TRANSFER_TIMEOUT);
                     drop(permit);
                 });
             if let Err(error) = spawned {

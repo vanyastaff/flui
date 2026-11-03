@@ -372,8 +372,9 @@ trait depends on `flui-platform` instead.
   pointers, keys, wheel and gestures, registered into the same
   registration, which answer the key route the window hands its text input,
   `CanvasKeys`),
-  `WinitHost::clipboard`, `WinitHost::drag` (`FileDrops`) and
-  `WinitHost::input` (`LoopInput`: the session's pointers and keys as the
+  `WinitHost::clipboard`, `WinitHost::drag` (`FileDrops`), `WaylandHost::drag`
+  (`WaylandDrag`: the drops on the windows, which the seats' data devices hear)
+  and `WinitHost::input` (`LoopInput`: the session's pointers and keys as the
   loop's events and turns bring them), `AndroidHost::clipboard`,
   `AndroidHost::transfer` (`ViewTransfer`, made for `FluiView`) and
   `AndroidHost::input` (`ActivityInput`: the native queue's motion and key

@@ -78,10 +78,10 @@ use x11rb::protocol::xproto::{
 use x11rb::wrapper::ConnectionExt as _;
 use x11rb::{COPY_FROM_PARENT, CURRENT_TIME, NONE};
 
-use crate::drag::offers::OfferTable;
+use crate::drag::offers::{Kind, OfferTable, representations, too_large};
 use crate::owner::linux::x11::{InputTarget, LoopDrag, WindowRef, X11Connection};
 use crate::owner::slot::OwnerCell;
-use model::{Kind, Message, MessageAtoms};
+use model::{Message, MessageAtoms};
 
 /// How long a fetch waits for the source between answers.
 const TRANSFER_TIMEOUT: Duration = Duration::from_secs(5);
@@ -109,14 +109,9 @@ const MAX_ACTIONS: u32 = 16;
 /// The protocol, its actions and its types, with no server call: plain
 /// functions over atoms and bytes.
 pub(crate) mod model {
-    use flui_platform::data_transfer::{
-        Mime, TransferActions, TransferError, TransferFormat, TransferPayload,
-    };
+    use flui_platform::data_transfer::{TransferActions, TransferFormat};
     use x11rb::NONE;
     use x11rb::protocol::xproto::{Atom, Timestamp, Window};
-
-    use crate::clipboard::text::TextForm;
-    use crate::drag::offers::{format_of, payload_of_bytes};
 
     /// The XDND version the windows speak, which `XdndAware` names.
     pub(crate) const VERSION: u32 = 5;
@@ -267,143 +262,6 @@ pub(crate) mod model {
         }
     }
 
-    /// What a representation's bytes are read as.
-    #[derive(Debug, Clone, PartialEq)]
-    pub(crate) enum Kind {
-        /// Text in one of its forms.
-        Text(TextForm),
-        /// HTML markup, UTF-8 or UTF-16 behind its byte-order mark.
-        Html,
-        /// The bytes of a media type, as the source wrote them.
-        Bytes(TransferFormat),
-    }
-
-    impl Kind {
-        /// The format the representation announces.
-        pub(crate) fn format(&self) -> TransferFormat {
-            match self {
-                Self::Text(_) => TransferFormat::Text,
-                Self::Html => TransferFormat::Html,
-                Self::Bytes(format) => format.clone(),
-            }
-        }
-
-        /// The payload `bytes` of this kind carry.
-        pub(crate) fn payload(&self, mut bytes: Vec<u8>) -> TransferPayload {
-            match self {
-                Self::Text(form) => TransferPayload::Text(form.decode(bytes)),
-                Self::Html => TransferPayload::Html(html(bytes)),
-                Self::Bytes(TransferFormat::UriList) => {
-                    // A list some sources end with a NUL.
-                    if bytes.last() == Some(&0) {
-                        bytes.pop();
-                    }
-                    TransferPayload::Custom {
-                        mime: Mime::new("text/uri-list"),
-                        bytes: bytes.into(),
-                    }
-                }
-                Self::Bytes(format) => payload_of_bytes(format, bytes),
-            }
-        }
-    }
-
-    impl Kind {
-        /// How many bytes the payload [`payload`](Self::payload) makes of
-        /// `bytes` holds, measured without making it: a fetch refuses text
-        /// past its limit before ill-formed or wider text grows as it
-        /// decodes.
-        pub(crate) fn decoded_len(&self, bytes: &[u8]) -> usize {
-            match self {
-                Self::Text(form) => form.decoded_len(bytes),
-                Self::Html => {
-                    let utf16 = |pairs: &[u8], unit: fn([u8; 2]) -> u16| {
-                        let units = pairs.as_chunks::<2>().0.iter().map(|pair| unit(*pair));
-                        let (len, last) = char::decode_utf16(units)
-                            .map(|unit| unit.unwrap_or(char::REPLACEMENT_CHARACTER))
-                            .fold((0, None), |(len, _), char| {
-                                (len + char.len_utf8(), Some(char))
-                            });
-                        // A trailing NUL is dropped.
-                        len - usize::from(last == Some('\0'))
-                    };
-                    match bytes {
-                        [0xFF, 0xFE, rest @ ..] => utf16(rest, u16::from_le_bytes),
-                        [0xFE, 0xFF, rest @ ..] => utf16(rest, u16::from_be_bytes),
-                        _ => TextForm::Utf8String.decoded_len(bytes),
-                    }
-                }
-                // A URI list's trailing NUL is dropped.
-                Self::Bytes(TransferFormat::UriList) => {
-                    bytes.strip_suffix(&[0]).unwrap_or(bytes).len()
-                }
-                Self::Bytes(_) => bytes.len(),
-            }
-        }
-    }
-
-    /// HTML markup: UTF-16 behind a byte-order mark, as Firefox writes it,
-    /// UTF-8 otherwise, with any ill-formed sequence replaced and a
-    /// trailing NUL dropped.
-    fn html(bytes: Vec<u8>) -> String {
-        let utf16 = |pairs: &[u8], unit: fn([u8; 2]) -> u16| {
-            let units = pairs.as_chunks::<2>().0.iter().map(|pair| unit(*pair));
-            char::decode_utf16(units)
-                .map(|unit| unit.unwrap_or(char::REPLACEMENT_CHARACTER))
-                .collect::<String>()
-        };
-        let mut text = match bytes.as_slice() {
-            [0xFF, 0xFE, rest @ ..] => utf16(rest, u16::from_le_bytes),
-            [0xFE, 0xFF, rest @ ..] => utf16(rest, u16::from_be_bytes),
-            _ => match String::from_utf8(bytes) {
-                Ok(text) => text,
-                Err(error) => String::from_utf8_lossy(error.as_bytes()).into_owned(),
-            },
-        };
-        if text.ends_with('\0') {
-            text.pop();
-        }
-        text
-    }
-
-    /// The representations a drag's `types` (each an atom and its name)
-    /// offer, each with the type it is converted to, in the source's order:
-    /// text once, in the form a reader prefers, where the first text form
-    /// stood; HTML; every other media type as named. A type that names no
-    /// media type (`TARGETS`, `COMPOUND_TEXT`, a toolkit's private name) is
-    /// left out, as is a second one of a format.
-    pub(crate) fn representations(types: &[(Atom, &str)]) -> Vec<(Atom, Kind)> {
-        let text = TextForm::preferred(types.iter().map(|(_, name)| *name)).and_then(|form| {
-            let (atom, _) = types
-                .iter()
-                .find(|(_, name)| TextForm::named(name) == Some(form))?;
-            Some((*atom, Kind::Text(form)))
-        });
-        let mut offered: Vec<(Atom, Kind)> = Vec::new();
-        for (atom, name) in types {
-            let kind = if TextForm::named(name).is_some() {
-                match &text {
-                    Some(text) => text.clone(),
-                    None => continue,
-                }
-            } else if name.split(';').next().map(str::trim) == Some("text/html") {
-                (*atom, Kind::Html)
-            } else {
-                match format_of(name) {
-                    Some(format) => (*atom, Kind::Bytes(format)),
-                    None => continue,
-                }
-            };
-            if offered
-                .iter()
-                .all(|(_, held)| held.format() != kind.1.format())
-            {
-                offered.push(kind);
-            }
-        }
-        offered
-    }
-
     /// `XdndEnter`'s data from `source`, speaking `version` (the lower of
     /// [`VERSION`] and the target's, as XDND asks) and offering `types`: the
     /// first three in the message, all of them in `XdndTypeList` when there
@@ -523,21 +381,6 @@ pub(crate) mod model {
                 vec![mime.as_str().to_owned()]
             }
         }
-    }
-
-    /// The bytes `payload` is written as: text and HTML in UTF-8, any other
-    /// payload as it is.
-    pub(crate) fn bytes_of(payload: TransferPayload) -> Vec<u8> {
-        match payload {
-            TransferPayload::Text(text) | TransferPayload::Html(text) => text.into_bytes(),
-            TransferPayload::Custom { bytes, .. } => bytes.to_vec(),
-        }
-    }
-
-    /// The error a payload of `len` bytes past `limit` is refused with.
-    pub(crate) fn too_large(len: usize, limit: u64) -> Option<TransferError> {
-        let actual = u64::try_from(len).unwrap_or(u64::MAX);
-        (actual > limit).then_some(TransferError::TooLarge { actual, limit })
     }
 }
 
@@ -1185,7 +1028,7 @@ impl X11Drag {
             .iter()
             .filter_map(|atom| Some((*atom, state.names.get(atom)?.as_deref()?)))
             .collect();
-        let offered: Arc<[(xproto::Atom, Kind)]> = model::representations(&named).into();
+        let offered: Arc<[(xproto::Atom, Kind)]> = representations(&named).into();
         if let Some(hover) = state.hover.as_mut().filter(|hover| hover.source == source) {
             hover.types = offered;
         }
@@ -1464,7 +1307,7 @@ impl X11Drag {
             let outcome = match read {
                 Err(error) => Some(Err(error)),
                 Ok(Read::Incremental(announced)) => {
-                    if let Some(error) = model::too_large(announced, limit) {
+                    if let Some(error) = too_large(announced, limit) {
                         Some(Err(error))
                     } else {
                         // What a source announces is reserved only up to a
@@ -1479,9 +1322,7 @@ impl X11Drag {
                         .incremental
                         .as_mut()
                         .expect("BUG: a chunk is read only of an INCR fetch");
-                    if let Some(error) =
-                        model::too_large(bytes.len().saturating_add(chunk.len()), limit)
-                    {
+                    if let Some(error) = too_large(bytes.len().saturating_add(chunk.len()), limit) {
                         Some(Err(error))
                     } else {
                         bytes.extend_from_slice(&chunk);
@@ -1495,7 +1336,7 @@ impl X11Drag {
                     // the bytes read.
                     let len = fetch.wanted.kind.decoded_len(&bytes);
                     Some(
-                        model::too_large(len, limit)
+                        too_large(len, limit)
                             .map_or_else(|| Ok(fetch.wanted.kind.payload(bytes)), Err),
                     )
                 }
@@ -1597,10 +1438,10 @@ impl X11Drag {
             .unwrap_or(usize::MAX)
             .saturating_add(reply.value.len())
             .saturating_add(held);
-        if reply.bytes_after != 0 || model::too_large(len, limit).is_some() {
+        if reply.bytes_after != 0 || too_large(len, limit).is_some() {
             // The server deletes a property only once it is read whole.
             drop(xcb.delete_property(requestor, property));
-            return Err(model::too_large(len, limit).unwrap_or(TransferError::SourceGone));
+            return Err(too_large(len, limit).unwrap_or(TransferError::SourceGone));
         }
         let bytes = reply.value;
         Ok(if first || bytes.is_empty() {
