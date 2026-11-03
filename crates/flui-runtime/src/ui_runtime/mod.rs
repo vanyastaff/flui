@@ -110,6 +110,7 @@ mod agent;
 mod agent_events;
 mod agent_input;
 mod agent_inspect;
+mod agent_journal;
 mod agent_serve;
 mod agent_stability;
 mod agent_wait;

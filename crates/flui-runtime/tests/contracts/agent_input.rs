@@ -6,11 +6,19 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use flui_protocol::method::{InputInject, InputRelease};
+use flui_foundation::geometry::Offset;
+use flui_interaction::events::{
+    Code, InputValueError, PointerEvent, PointerKind, make_down_event, make_move_event,
+    make_up_event,
+};
+use flui_interaction::testing::input::KeyEventBuilder;
+use flui_platform::PlatformInput;
+use flui_protocol::method::{self, InputInject, InputRelease};
 use flui_protocol::{
-    ActOutcome, ActionSequence, EffectKind, EffectUnit, ErrorCode, ErrorObject, InputParams,
-    InputPath, InputPolicy, InputSource, KeyAction, LogicalPoint, PointerAction, PointerButton,
-    PointerDevice, Released, TrackpadAction, WindowParams,
+    ActOutcome, ActionSequence, DeviceClass, EffectKind, EffectUnit, ErrorCode, ErrorObject, Event,
+    EventFilter, EventKind, InputKind, InputParams, InputPath, InputPolicy, InputSource, Journal,
+    JournalEntry, JournalParams, JournalSpan, KeyAction, LogicalPoint, PointerAction,
+    PointerButton, PointerDevice, Released, TrackpadAction, WindowParams,
 };
 use flui_rendering::hit_testing::HitTestBehavior;
 use flui_testing::{HeadlessDevAgent, HeadlessHost, HeadlessWindow};
@@ -407,4 +415,145 @@ fn a_closing_window_answers_its_queued_input_gone() {
         .expect("the closing window answered")
         .expect_err("it closed first");
     assert_eq!(gone.code, ErrorCode::Gone, "{gone:?}");
+}
+
+fn read_journal(
+    host: &mut HeadlessHost,
+    window: &AgentWindow,
+    since: Option<u64>,
+    max_entries: Option<u32>,
+) -> Journal {
+    let mut params = JournalParams::new(window.id());
+    params.since = since;
+    params.max_entries = max_entries;
+    let mut read = window
+        .call::<method::InputJournal>(params)
+        .expect("the inbox has room");
+    answered(host, &mut read, 2).0.expect("the journal is read")
+}
+
+fn native(event: Result<PointerEvent, InputValueError>) -> PlatformInput {
+    PlatformInput::Pointer(event.expect("a valid pointer event"))
+}
+
+/// What one entry says, without its sequence number and time.
+fn step(entry: &JournalEntry) -> (DeviceClass, InputKind, Option<(f64, f64)>, bool) {
+    (
+        entry.device,
+        entry.kind,
+        entry.at.map(|at| (at.x, at.y)),
+        entry.injected,
+    )
+}
+
+/// The journal lists the input the window was delivered, the platform's and the agent's alike,
+/// in order, each with the next sequence number; the agent's are marked injected, and an
+/// injection's answer names the entries it made.
+#[test]
+fn the_journal_lists_what_the_window_was_delivered_and_an_injection_names_its_entries() {
+    let (mut host, _agent, window, _seen) = shown();
+    let at = Offset::new(20.0, 30.0);
+    host.dispatch(native(make_down_event(at, PointerKind::Mouse)));
+    host.dispatch(native(make_up_event(at, PointerKind::Mouse)));
+    host.dispatch(PlatformInput::Keyboard(
+        KeyEventBuilder::new(Code::KeyA).build(),
+    ));
+    let lease = window
+        .input_lease()
+        .expect("an open window leases its input");
+    let mut tap = inject(&lease, vec![pointer(vec![to(50.0, 50.0), down(), up()])]);
+    let outcome = answered(&mut host, &mut tap, 10).0.expect("the tap plays");
+
+    let journal = read_journal(&mut host, &window, None, None);
+    let mouse = Some((20.0, 30.0));
+    let finger = Some((50.0, 50.0));
+    assert_eq!(
+        journal.entries.iter().map(step).collect::<Vec<_>>(),
+        [
+            (DeviceClass::Mouse, InputKind::PointerDown, mouse, false),
+            (DeviceClass::Mouse, InputKind::PointerUp, mouse, false),
+            (DeviceClass::Keyboard, InputKind::KeyDown, None, false),
+            (DeviceClass::Touch, InputKind::PointerDown, finger, true),
+            (DeviceClass::Touch, InputKind::PointerUp, finger, true),
+        ],
+        "{journal:?}"
+    );
+    assert_eq!(
+        journal
+            .entries
+            .iter()
+            .map(|entry| entry.seq)
+            .collect::<Vec<u64>>(),
+        [1, 2, 3, 4, 5]
+    );
+    assert_eq!(journal.span, Some(JournalSpan { from: 1, to: 5 }));
+    assert_eq!(journal.dropped, 0);
+    assert_eq!(
+        outcome.observed,
+        Some(JournalSpan { from: 4, to: 5 }),
+        "the injection names the entries its ticks made"
+    );
+}
+
+/// Each entry goes out to a subscriber as an `input` event as the journal takes it.
+#[test]
+fn each_journal_entry_goes_out_as_an_input_event() {
+    let (mut host, _agent, window, _seen) = shown();
+    let mut subscribed = window
+        .subscribe(vec![EventFilter::new(EventKind::Input)])
+        .expect("the inbox has room");
+    let mut events = answered(&mut host, &mut subscribed, 2)
+        .0
+        .expect("subscribed");
+    let lease = window
+        .input_lease()
+        .expect("an open window leases its input");
+    let mut tap = inject(&lease, vec![pointer(vec![to(50.0, 50.0), down(), up()])]);
+    answered(&mut host, &mut tap, 10).0.expect("the tap plays");
+    host.dispatch(PlatformInput::Keyboard(
+        KeyEventBuilder::new(Code::KeyA).build(),
+    ));
+
+    let streamed: Vec<JournalEntry> = std::iter::from_fn(|| events.try_next())
+        .map(|event| match event {
+            Event::Input(input) => {
+                assert_eq!(input.window, window.id());
+                input.entry
+            }
+            other => panic!("only input was asked for: {other:?}"),
+        })
+        .collect();
+    let journal = read_journal(&mut host, &window, None, None);
+    assert_eq!(streamed, journal.entries);
+    assert_eq!(streamed.len(), 3, "{streamed:?}");
+}
+
+/// The journal holds its latest 4096 entries; a read after `since` counts the ones after it the
+/// journal let go, and takes at most `max_entries`, oldest first.
+#[test]
+fn the_journal_keeps_its_latest_entries_and_counts_the_ones_it_let_go() {
+    let (mut host, _agent, window, _seen) = shown();
+    for step in 0..4099_u32 {
+        let at = Offset::new(f64::from(step % 100), 10.0);
+        host.dispatch(native(make_move_event(at, PointerKind::Mouse)));
+    }
+
+    // (since, max_entries) → the entries' span, how many, dropped
+    let span = |from, to| Some(JournalSpan { from, to });
+    let cases = [
+        ((None, None), (span(4, 4099), 4096, 3)),
+        ((Some(0), Some(2)), (span(4, 5), 2, 3)),
+        ((Some(2), None), (span(4, 4099), 4096, 1)),
+        ((Some(3), Some(1)), (span(4, 4), 1, 0)),
+        ((Some(4000), Some(10)), (span(4001, 4010), 10, 0)),
+        ((Some(4099), None), (None, 0, 0)),
+    ];
+    for ((since, max_entries), expected) in cases {
+        let journal = read_journal(&mut host, &window, since, max_entries);
+        assert_eq!(
+            (journal.span, journal.entries.len(), journal.dropped),
+            expected,
+            "since {since:?}, at most {max_entries:?}"
+        );
+    }
 }

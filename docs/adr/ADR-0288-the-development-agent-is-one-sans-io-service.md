@@ -1,6 +1,6 @@
 # ADR-0288: The development agent is one sans-IO service; transports only move lines
 
-- **Status:** Accepted (2026-11-03). Implemented: §§1–9, the desktop, Android and web
+- **Status:** Accepted (2026-11-03). Implemented: §§1–10, the desktop, Android and web
   transports, each driven by `flui run --agent`.
 - **Date:** 2026-11-03
 - **Supersedes in part:** [ADR-0239](ADR-0239-every-debug-app-hosts-the-driver-agent.md) §1,
@@ -214,6 +214,19 @@ that is neither a W3C key name nor the text of one, a point or pressure out of r
 (`invalid_argument`), or a trackpad gesture (`not_supported`). A window keeps at most 64 queued
 injections and releases, and answers one past that `busy`, retry `soon`.
 
+§10. **A window journals the input it is delivered.** Once an agent has been handed a window,
+every input routed to it is journaled where it is routed, the platform's and the agent's on one
+path, the agent's marked `injected`; a key is journaled on the active window it goes to. An entry
+is journaled before the app handles it, so a handler that panics does not keep its input out,
+and goes out at once as an `input` event. Entries take sequence numbers from 1; the journal
+keeps the last 4096, and `input.journal` answers the entries after `since`, at most
+`max_entries`, oldest first, with `dropped` counting the ones after `since` it let go. A step a
+driver plays is an entry: a press, move, release, cancel, scroll or trackpad gesture, a key down
+or up, committed text, a composition step. A pointer entering or leaving, a device change,
+drag-and-drop and a capability change are not. A pointer the protocol has no class for (one with
+no physical contact, or one the platform did not name) is `other`. `input.inject` answers
+`observed`, the span of the named window's entries its ticks made.
+
 ### Consequences
 
 - Good, because a headless run, the web runner and the desktop serve one conversation, and a
@@ -309,6 +322,12 @@ injections and releases, and answers one past that `busy`, retry `soon`.
   finds it cancelled. Each fails with its rule removed: the answer sent at the last tick, the
   release applied before the drain's commands, a call taken without a lease, the queued input
   dropped unanswered at close, and a lease the session never drops.
+- The input journal (§10) is pinned in the same file:
+  `the_journal_lists_what_the_window_was_delivered_and_an_injection_names_its_entries`,
+  `each_journal_entry_goes_out_as_an_input_event` and
+  `the_journal_keeps_its_latest_entries_and_counts_the_ones_it_let_go`. Each fails with its rule
+  removed: the agent's input not marked, no `input` event, a journal that holds one entry more,
+  and an answer without `observed`.
 
 ## Pros and cons of the options
 
@@ -348,4 +367,5 @@ loopback port `adb forward` holds instead of the app's own endpoint, which only 
 reaches. The web transport came after it (§6, with the page's launch object, §7), and then
 `flui run --agent` in a browser: the browser started with its remote protocol on, the launch
 installed by a preload, and the session's endpoint carried to the page. Held input per
-connection came after it (§9): a lease the session owns, released when it is dropped.
+connection came after it (§9): a lease the session owns, released when it is dropped. The input
+journal came next (§10).

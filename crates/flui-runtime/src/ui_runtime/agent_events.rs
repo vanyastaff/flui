@@ -1,14 +1,16 @@
 //! The events an agent streams from a window (ADR-0238 §2, R19).
 //!
 //! A subscription is registered on its presentation by the owner and filled by it: a frame the
-//! window presented or skipped, a tree it published at a new revision, its close. Each
-//! subscriber has a bounded queue, so a reader that falls behind costs the window nothing but
-//! its own events: the ones that do not fit are counted, and the next event that fits is
-//! preceded by a `gap` saying how many were missed. The same events feed the waits parked on the
-//! window, so a wait on an event and a subscription to it see the same stream.
+//! window presented or skipped, an input it was delivered, a tree it published at a new
+//! revision, its close. Each subscriber has a bounded queue, so a reader that falls behind costs
+//! the window nothing but its own events: the ones that do not fit are counted, and the next
+//! event that fits is preceded by a `gap` saying how many were missed. The same events feed the
+//! waits parked on the window, so a wait on an event and a subscription to it see the same
+//! stream.
 //!
-//! Input and announcement events are accepted as filters and not emitted yet: the input journal
-//! and the announcement fan-out are what they come from.
+//! An `input` event goes out as the window's input journal takes the entry (`agent_journal`).
+//! Announcement events are accepted as filters and not emitted yet: the announcement fan-out is
+//! what they come from.
 
 use std::collections::VecDeque;
 use std::sync::Arc;

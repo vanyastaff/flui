@@ -910,18 +910,32 @@ owed reading `readback_failed` with the effect `ran`, since the action was deliv
 without one (ADR-0288 §9). `agent_input.rs` turns the sequence into a plan of ticks before
 anything plays (`plan`, which refuses the whole sequence) and queues it on the presentation
 (`agent_input`, at most 64 jobs, then `InputQueueFull`). `drive_frame` advances the queue once per
-frame boundary, after the commit anchor: a tick's input goes in through `handle_input_on`, the
-path the platform's input takes, each event contained so one handler's panic does not keep the
-rest out, and the first panic continues once all went in. What a lease holds (contacts down,
-keys pressed) is kept per lease; a release cancels the contacts and lifts the keys, the latest
-first. A lease the agent drops is recorded on the port (`DevAgentPort::release`, which wakes the
-owner) and released by the drain, which counts the dropped leases before it reads its commands
-and releases them after: a call asked through a lease was enqueued before the lease was dropped,
-so it is taken first, and work still queued through the lease is answered `LeaseReleased`
-(`gone`). The last tick parks the reply as an act's reading (`ReadingOwed`), so it is answered
-once a frame has passed since that input. A failure part of the way answers `InputPartial`, the
-failure's code with a `partial` effect counting ticks. A window that closes answers its queued
-input `gone`. Pinned by `tests/contracts/agent_input.rs` and `agent_service.rs`.
+frame boundary, after the commit anchor: a tick's input goes in through `handle_input_from`, the
+path the platform's input takes (`handle_input_on`), marked as the agent's; each event is
+contained so one handler's panic does not keep the rest out, and the first panic continues once
+all went in. What a lease holds (contacts down, keys pressed) is kept per lease; a release
+cancels the contacts and lifts the keys, the latest first. A lease the agent drops is recorded on
+the port (`DevAgentPort::release`, which wakes the owner) and released by the drain, which counts
+the dropped leases before it reads its commands and releases them after: a call asked through a
+lease was enqueued before the lease was dropped, so it is taken first, and work still queued
+through the lease is answered `LeaseReleased` (`gone`). The last tick parks the reply as an act's
+reading (`ReadingOwed`), so it is answered once a frame has passed since that input, with
+`observed`, the window's journal entries its ticks made. A failure part of the way answers
+`InputPartial`, the failure's code with a `partial` effect counting ticks. A window that closes
+answers its queued input `gone`. Pinned by `tests/contracts/agent_input.rs` and `agent_service.rs`.
+
+**Input journal.** Once `dev_agent_window` has made the presentation's agent slot, every input
+routed to the presentation is journaled in the slot (`agent_journal.rs`): the platform's and the
+agent's alike, the agent's marked `injected`, on the presentation the input is routed to (a key
+on the active one). `journal_and_route` notes the entries just before `route_platform_input`,
+after the input survived the lifecycle and press-commit drops, so held pointer input is journaled
+once, when it is taken, and a handler that panics does not keep its input out. Each entry takes
+the next sequence number, from 1, and is emitted as an `input` event at once. The journal keeps
+the last 4096 entries; `input.journal` reads the ones after `since` and counts in `dropped` those
+it no longer holds. Input that is not a step a driver plays (enter, leave, a revision, a device
+change, drag-and-drop, capabilities, an input method turning on or off) is routed without an
+entry. An injection's answer carries `observed`, the span of the window's entries its ticks made,
+measured around each batch it sent. Pinned by `tests/contracts/agent_input.rs`.
 
 **Waits.** `wait.until` parks a condition on the presentation
 (`agent_waits`) instead of polling it. The owner evaluates it when it arrives, so one that holds
@@ -955,8 +969,8 @@ overflow counted, and the next event that fits is preceded by `gap { missed }`; 
 ends owing a gap queues it past the bound, so a stream never ends shorter than it says. A
 presentation admits 64 live subscriptions and refuses the next with `TooManySubscriptions`
 (`busy`, retry `soon`); a subscription with no filter is `invalid_argument`. Only events after
-the registration are delivered, never a replay. `input` and `announcement` are accepted as
-filters and not emitted yet (they come from the input journal and the announcement fan-out);
+the registration are delivered, never a replay. `input` comes from the input journal (above);
+`announcement` is accepted as a filter and not emitted yet (it comes from the announcement fan-out);
 `frame.time_us` is not filled yet. Pinned by `src/ui_runtime/tests/agent_events.rs`.
 
 **Inspect.** `inspect.widgets` and `inspect.render` answer at the owner with the typed

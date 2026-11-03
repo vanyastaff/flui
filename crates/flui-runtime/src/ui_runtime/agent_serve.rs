@@ -18,9 +18,9 @@ use flui_foundation::PresentationId;
 use flui_protocol::method::{self, Method, WindowMethod};
 use flui_protocol::{
     ActOutcome, ActParams, ActionRequest, ActionabilityParams, AnnouncementJournal,
-    AnnouncementsParams, InputParams, InputPath, InspectParams, InspectReading, LocateParams,
-    Locator, Matches, MotionParams, MotionState, Pick, ReadParams, Released, Target, Tree,
-    WaitOutcome, WaitParams, WindowId, WindowParams,
+    AnnouncementsParams, InputParams, InputPath, InspectParams, InspectReading, Journal,
+    JournalParams, LocateParams, Locator, Matches, MotionParams, MotionState, Pick, ReadParams,
+    Released, Target, Tree, WaitOutcome, WaitParams, WindowId, WindowParams,
 };
 use flui_view::__runtime::{LeaseId, Reply, WindowCall};
 
@@ -31,6 +31,7 @@ use super::agent::{
 };
 use super::agent_input;
 use super::agent_inspect::InspectTarget;
+use super::agent_journal;
 use super::commands::DrainReport;
 use crate::presentation::PresentationState;
 
@@ -256,7 +257,6 @@ not_answered!(
     AuditA11y,
     CapturePresented,
     CaptureRendered,
-    InputJournal,
     PerfStart,
     PerfStop,
     WaitFrames,
@@ -514,5 +514,11 @@ impl Serve for method::SemanticsAnnouncements {
                 .map(|owner| owner.announcement_journal(&params))
                 .unwrap_or_default()
         })))
+    }
+}
+
+impl Serve for method::InputJournal {
+    fn serve(cx: &mut ServeCx<'_, Journal>, params: JournalParams) -> Answer<Journal> {
+        Answer::Now(Ok(agent_journal::read(cx.state, &params)))
     }
 }

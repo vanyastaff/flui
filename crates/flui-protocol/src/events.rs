@@ -129,6 +129,14 @@ pub struct InputEvent {
     pub entry: JournalEntry,
 }
 
+impl InputEvent {
+    /// `window` was delivered `entry`.
+    #[must_use]
+    pub const fn new(window: WindowId, entry: JournalEntry) -> Self {
+        Self { window, entry }
+    }
+}
+
 /// `semantics`: the tree was published at a new revision.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]

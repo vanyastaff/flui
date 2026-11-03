@@ -395,9 +395,9 @@ impl AgentWindow {
     /// another window selects nothing here. The answer is the stream once the owner has
     /// registered it; events emitted after that reach it.
     ///
-    /// The window emits `frame`, `semantics` and `window` events. `input` and `announcement` are
-    /// accepted as filters but not emitted yet, so a stream that selects only those stays silent
-    /// until the window closes, and a wait on them runs to its timeout.
+    /// The window emits `frame`, `input`, `semantics` and `window` events. `announcement` is
+    /// accepted as a filter but not emitted yet, so a stream that selects only it stays silent
+    /// until the window closes, and a wait on it runs to its timeout.
     ///
     /// # Errors
     ///
