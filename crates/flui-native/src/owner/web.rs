@@ -21,6 +21,7 @@ compile_error!(
 
 pub(crate) mod event;
 mod executor;
+mod launch;
 pub(crate) mod listener;
 
 use std::cell::{Cell, RefCell};
@@ -480,6 +481,8 @@ pub struct WebLoop {
     /// The running animation-frame loop: its closure, and whether it stopped
     /// for want of a request.
     raf: RefCell<Option<(RafClosureSlot, Rc<Cell<bool>>)>>,
+    /// The launch values the page was started with, taken off it as the loop was made.
+    launch: crate::owner::page_launch::PageLaunch,
 }
 
 pub(crate) struct WebState {
@@ -508,6 +511,9 @@ impl std::fmt::Debug for WebLoop {
 impl WebLoop {
     pub(crate) fn try_new<H: WebHost>() -> Result<Self, PlatformError> {
         console_error_panic_hook::set_once();
+        // First, before the loop runs any of the application's code: a script the page loads
+        // later must not find the launch values (the driver's token among them).
+        let launch = launch::take()?;
 
         let state = WebState {
             background_executor: Arc::new(WebExecutor::new()),
@@ -572,6 +578,7 @@ impl WebLoop {
             page_observers: RefCell::new(None),
             frames: Arc::default(),
             raf: RefCell::new(None),
+            launch,
         })
     }
 
@@ -792,10 +799,8 @@ impl host::Loop for WebLoop {
 }
 
 impl host::Services for WebLoop {
-    // The page's preload is read by the web transport, the first that needs it.
     fn launch_value(&self, key: flui_platform::LaunchKey) -> Option<String> {
-        let _ = key;
-        None
+        self.launch.value(key)
     }
 
     fn background_executor(&self) -> Arc<dyn PlatformExecutor> {

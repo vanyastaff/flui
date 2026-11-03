@@ -219,7 +219,72 @@ impl ParagraphLayout {
     /// same offsets and cluster advances are used by the caret queries.
     #[must_use]
     pub fn to_shaped(&self, root: Option<Color>) -> ShapedParagraph {
-        self.shaped_with(root, &self.run_colors)
+        self.shaped_with(root, &self.run_colors, None)
+    }
+
+    /// The glyphs of the paragraph spans `casts` names, as the shadow they
+    /// cast draws them (ADR-0309 §3): every run colour cleared. A glyph
+    /// belongs to the span its cluster starts in, so spans that share a
+    /// Parley run (they differ only in paint) still cast apart. `None` when
+    /// no kept glyph is cast.
+    pub(crate) fn silhouette(&self, casts: &dyn Fn(usize) -> bool) -> Option<ShapedParagraph> {
+        let paragraph = self.shaped_with(None, &[], Some(casts));
+        (!paragraph.glyphs.is_empty()).then_some(paragraph)
+    }
+
+    /// The span backgrounds over the kept lines, the ellipsis included: one
+    /// rectangle per stretch of adjacent clusters on one line whose
+    /// paragraph span `fill` gives the same colour, as tall as the line box
+    /// (ADR-0309 §2). A hard break paints nothing.
+    pub(crate) fn backgrounds(
+        &self,
+        fill: &dyn Fn(usize) -> Option<Color>,
+    ) -> Vec<(Rect<f64>, Color)> {
+        let sources = SpanSourceMap::of(&self.spans);
+        let mut out: Vec<(Rect<f64>, Color)> = Vec::new();
+        for line in self.layout.lines().take(self.kept()) {
+            let metrics = line.metrics();
+            let (top, bottom) = (metrics.block_min_coord, metrics.block_max_coord);
+            let mut x = metrics.offset + metrics.inline_min_coord;
+            let mut open: Option<(f32, f32, Color)> = None;
+            let mut close = |open: &mut Option<(f32, f32, Color)>| {
+                if let Some((left, right, color)) = open.take() {
+                    out.push((
+                        Rect::from_ltrb(
+                            f64::from(left),
+                            f64::from(top),
+                            f64::from(right),
+                            f64::from(bottom),
+                        ),
+                        color,
+                    ));
+                }
+            };
+            for run in line.runs() {
+                for cluster in run.visual_clusters() {
+                    let (left, right) = (x, x + cluster.advance());
+                    x = right;
+                    let color = (!cluster.is_hard_line_break())
+                        .then(|| sources.at(cluster.text_range().start))
+                        .flatten()
+                        .and_then(fill);
+                    match (&mut open, color) {
+                        (Some((_, open_right, open_color)), Some(color))
+                            if *open_color == color && (*open_right - left).abs() < 1e-3 =>
+                        {
+                            *open_right = right;
+                        }
+                        (_, Some(color)) => {
+                            close(&mut open);
+                            open = Some((left, right, color));
+                        }
+                        (_, None) => close(&mut open),
+                    }
+                }
+            }
+            close(&mut open);
+        }
+        out
     }
 
     /// The paint runs' colours when the paragraph's spans, in the order it
@@ -260,7 +325,7 @@ impl ParagraphLayout {
         colors: &[Option<Color>],
     ) -> Option<ShapedParagraph> {
         let runs = self.recolored_runs(colors)?;
-        let paragraph = self.shaped_with(root, &runs);
+        let paragraph = self.shaped_with(root, &runs, None);
         self.run_colors = runs;
         Some(paragraph)
     }
@@ -277,14 +342,21 @@ impl ParagraphLayout {
         true
     }
 
-    /// The paragraph with its paint runs coloured `runs`.
-    fn shaped_with(&self, root: Option<Color>, runs: &[Option<Color>]) -> ShapedParagraph {
+    /// The paragraph with its paint runs coloured `runs`; with `casts`, only
+    /// the glyphs whose cluster starts in a paragraph span it names.
+    fn shaped_with(
+        &self,
+        root: Option<Color>,
+        runs: &[Option<Color>],
+        casts: Option<&dyn Fn(usize) -> bool>,
+    ) -> ShapedParagraph {
         let run_color = |run: usize| {
             runs.get(run)
                 .copied()
                 .flatten()
                 .filter(|color| Some(*color) != root)
         };
+        let sources = casts.map(|_| SpanSourceMap::of(&self.spans));
         let metrics = self.metrics();
         let mut faces: Vec<FontFace> = Vec::new();
         let mut face_index: HashMap<(u64, u32), u32> = HashMap::new();
@@ -294,14 +366,37 @@ impl ParagraphLayout {
         let mut coords = Vec::new();
         let mut baselines = Vec::new();
         let mut ink = InkBounds::default();
-        for line in self.layout.lines().take(self.kept()) {
+        // For `casts`: the line item the glyph runs come from, the byte its
+        // clusters start at for each of its glyphs in glyph order, and how
+        // many of those the item's earlier glyph runs took.
+        let mut item: Option<(usize, std::ops::Range<usize>)> = None;
+        let mut starts: Vec<usize> = Vec::new();
+        let mut taken = 0_usize;
+        for (line_index, line) in self.layout.lines().take(self.kept()).enumerate() {
             let line_metrics = line.metrics();
             baselines.push(line_metrics.baseline);
-            for item in line.items() {
-                let PositionedLayoutItem::GlyphRun(glyph_run) = item else {
+            for line_item in line.items() {
+                let PositionedLayoutItem::GlyphRun(glyph_run) = line_item else {
                     continue;
                 };
                 let run = glyph_run.run();
+                let first = if casts.is_some() {
+                    let key = (line_index, run.text_range());
+                    if item.as_ref() != Some(&key) {
+                        starts.clear();
+                        starts.extend(run.visual_clusters().flat_map(|cluster| {
+                            let start = cluster.text_range().start;
+                            cluster.glyphs().map(move |_| start)
+                        }));
+                        taken = 0;
+                        item = Some(key);
+                    }
+                    let first = taken;
+                    taken += glyph_run.glyphs().count();
+                    first
+                } else {
+                    0
+                };
                 let font = run.font();
                 let face = *face_index
                     .entry((font.data.id(), font.index))
@@ -316,7 +411,16 @@ impl ParagraphLayout {
                 coords.extend_from_slice(run.normalized_coords());
                 let glyph_start = glyphs.len();
                 let baseline = glyph_run.baseline();
-                for glyph in glyph_run.positioned_glyphs() {
+                for (index, glyph) in glyph_run.positioned_glyphs().enumerate() {
+                    if let (Some(casts), Some(sources)) = (casts, sources.as_ref()) {
+                        let cast = starts
+                            .get(first + index)
+                            .and_then(|&start| sources.at(start))
+                            .is_some_and(casts);
+                        if !cast {
+                            continue;
+                        }
+                    }
                     let Ok(id) = u16::try_from(glyph.id) else {
                         warn_glyph_id(glyph.id);
                         continue;
@@ -331,6 +435,11 @@ impl ParagraphLayout {
                         synthesis,
                     );
                     glyphs.push(ShapedGlyph { id, x, dy });
+                }
+                if casts.is_some() && glyphs.len() == glyph_start {
+                    // Nothing of this run casts the shadow.
+                    coords.truncate(coords_start);
+                    continue;
                 }
                 runs.push(RunData {
                     face,
@@ -359,6 +468,36 @@ impl ParagraphLayout {
             coords: coords.into(),
             spans,
         }
+    }
+}
+
+/// The paragraph span a byte of the shaped text belongs to: the shaped
+/// spans' ends, in order, and the paragraph span each stands for (an
+/// ellipsis stands for the span whose style it takes).
+struct SpanSourceMap {
+    ends: Vec<usize>,
+    sources: Vec<usize>,
+}
+
+impl SpanSourceMap {
+    fn of(spans: &[SpanInfo]) -> Self {
+        let mut end = 0_usize;
+        let ends = spans
+            .iter()
+            .map(|span| {
+                end = end.saturating_add(span.len);
+                end
+            })
+            .collect::<Vec<usize>>();
+        let sources = spans.iter().map(|span| span.source).collect::<Vec<usize>>();
+        Self { ends, sources }
+    }
+
+    /// The paragraph span byte `byte` of the shaped text belongs to.
+    fn at(&self, byte: usize) -> Option<usize> {
+        self.sources
+            .get(self.ends.partition_point(|&end| end <= byte))
+            .copied()
     }
 }
 

@@ -20,7 +20,8 @@ use std::collections::VecDeque;
     wayland_host,
     x11_host,
     target_arch = "wasm32",
-    test
+    test,
+    feature = "testing"
 ))]
 use std::rc::Rc;
 
@@ -31,7 +32,8 @@ use std::rc::Rc;
     wayland_host,
     x11_host,
     target_arch = "wasm32",
-    test
+    test,
+    feature = "testing"
 ))]
 use flui_platform::text_store::TextStore;
 
@@ -141,7 +143,8 @@ impl<Op> HostQueue<Op> {
     wayland_host,
     x11_host,
     target_arch = "wasm32",
-    test
+    test,
+    feature = "testing"
 ))]
 /// A request of a host that mirrors one field to the platform (Android's
 /// view, the browser's surface).
@@ -160,7 +163,8 @@ pub(crate) enum MirrorHostOp {
     wayland_host,
     x11_host,
     target_arch = "wasm32",
-    test
+    test,
+    feature = "testing"
 ))]
 impl HostQueue<MirrorHostOp> {
     /// The store focused once the queue has run: the newest queued focus

@@ -426,10 +426,13 @@ pub trait Platform: sealed::Sealed + Send + Sync + 'static {
     /// The value the process was launched with under `key` (ADR-0288 §7): on Android the
     /// launching intent's string extra of that name; elsewhere the environment variable
     /// [`LaunchKey::environment_variable`](flui_platform::LaunchKey::environment_variable)
-    /// spells, which on the iOS Simulator is what `simctl launch` passed as `SIMCTL_CHILD_`.
-    /// The web reads none yet. `None` when the launch did not give it or gave it empty.
+    /// spells, which on the iOS Simulator is what `simctl launch` passed as `SIMCTL_CHILD_`;
+    /// on the web the string property of that name of the page's launch object
+    /// ([`PAGE_LAUNCH_GLOBAL`](flui_platform::PAGE_LAUNCH_GLOBAL)), which the platform took off
+    /// the page as it was made. `None` when the launch did not give it or gave it empty.
     ///
-    /// Any thread may ask, and each ask reads the launch again.
+    /// Any thread may ask. Each ask reads the launch again, except on the web, where it reads
+    /// the platform's copy.
     fn launch_value(&self, key: flui_platform::LaunchKey) -> Option<String>;
 
     /// Where the application `app` keeps its data on this platform, or `None`

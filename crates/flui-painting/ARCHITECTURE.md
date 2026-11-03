@@ -19,7 +19,7 @@ Design decisions are recorded under [Mapping decisions](#mapping-decisions).
 | Concern | Files | What lives there |
 |---|---|---|
 | Recorder | `canvas/{mod,state,transform,clipping,drawing,scoped}.rs` | `Canvas`: the `dart:ui` surface, save/restore, transforms, clips, `draw_*`, and the `with_*` helpers that pair a save with its restore |
-| Wire vocabulary | `display_list/{mod,command,command_ops,paragraph}.rs` | `DisplayList` (commands + cached bounds), `DrawCommand` (the closed enum `flui-engine` matches exhaustively), `DrawCommand::bounds`, `ShapedParagraph` (the shaped text `DrawOp::Paragraph` carries, decision 18) |
+| Wire vocabulary | `display_list/{mod,command,command_ops,paragraph}.rs` | `DisplayList` (commands + cached bounds), `DrawCommand` (the closed enum `flui-engine` matches exhaustively), `DrawCommand::bounds`, `ShapedParagraph` (the shaped text `DrawOp::Paragraph` and `DrawOp::ParagraphShadow` carry, decision 18), `BlurSigma` (a text shadow's bounded blur) |
 | Text | `text_layout/{host,fallback_chain,fallback_tables,font_resolve}.rs`, `text_painter/{mod,measure,paint,baseline}.rs` | `TextPainter`; `HostFonts` (the one host font scan a collection is fed from), the per-platform fallback lists and the order a fed collection falls back in, family resolution |
 | Per-UI runtime text context | `text_layout/context.rs` | `FontCollection` (the app's shared, add-only fontique collection), `HostFontFeed` (the host's faces, added off the owner thread) and `TextContext` (one UI runtime's Parley font and layout contexts over it, used through `&mut`); constructed by the runtime, one context per UI runtime; every `TextPainter` measurement shapes on it |
 | Parley shaping | `parley_text/{shape,caret}.rs` | `TextContext::shape`: a `ParagraphSpec` (styled spans, width, line height, direction, `max_lines`, ellipsis) to a `ParagraphLayout` whose `metrics()` read the laid-out lines, whose `to_shaped()` is the paragraph paint records, and whose caret, hit-test, selection, line and word queries `TextPainter` answers from (decision 15) |
@@ -126,6 +126,20 @@ glyph ids and logical positions with each run's face, size, variation
 coordinates, synthesis and colour (decision 18). Truncation keeps the lines
 the metrics keep; an ellipsis is shaped into the last kept line, text dropped
 from its end until the line and the ellipsis fit the width.
+
+A span's background and shadows paint around that op (ADR-0309).
+`TextPainter::paint` records a filled rectangle per line box of each span with
+a background (the ellipsis under the span whose style it takes), then, for each
+distinct shadow list in span order, one `DrawOp::ParagraphShadow` per shadow,
+then the paragraph. A shadow's paragraph is built from the measured layout
+without shaping (`ParagraphLayout::silhouette`): the glyphs whose cluster starts
+in a casting span, attributed by byte offset since spans that differ only in
+paint share a run, with every run colour cleared. `SpanPaint::of` destructures
+every paint field of a style with no `..`, the twin of `layout_affecting_eq`. A
+blur is a `BlurSigma`, finite, non-negative and at most 128 logical pixels; a
+shadow with a non-finite radius or offset, or a transparent colour, records
+nothing. A paint-only `set_text` replaces the backgrounds and shadows with the
+layout kept. `text_paint_attributes_contract` pins each rule.
 
 Carets, selection boxes, word boundaries, line metrics and hit-testing read
 the same `ParagraphLayout`, which the cache keeps beside the paragraph

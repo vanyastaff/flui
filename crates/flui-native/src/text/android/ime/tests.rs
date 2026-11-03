@@ -7,14 +7,13 @@
 use std::rc::Rc;
 
 use super::{
-    CharacterBounds, FLAG_HAS_VISIBLE_REGION, IME_ACTION_DONE, IME_ACTION_NEXT,
+    CharacterBounds, EditorReport, FLAG_HAS_VISIBLE_REGION, IME_ACTION_DONE, IME_ACTION_NEXT,
     IME_ACTION_PREVIOUS, IME_ACTION_SEARCH, IME_FLAG_NO_ENTER_ACTION, ImeEdit,
     MAX_CHARACTER_BOUNDS, Mirror, Replayed, Snapshot, TYPE_CLASS_NUMBER, TYPE_CLASS_PHONE,
     TYPE_CLASS_TEXT, TYPE_TEXT_FLAG_MULTI_LINE, TYPE_TEXT_VARIATION_EMAIL_ADDRESS,
     TYPE_TEXT_VARIATION_PASSWORD, TYPE_TEXT_VARIATION_URI, character_bounds, cursor_anchor,
     editor_action_key, editor_info, replay_current, starts_handwriting,
 };
-use crate::owner::android::EditorState;
 use crate::text::ime::PROTECTED_UNIT;
 use flui_foundation::geometry::{Bounds, Point, Size};
 use flui_platform::keyboard::NamedKey;
@@ -34,9 +33,9 @@ fn range(start: usize, end: usize) -> Utf16Range {
 
 /// What the view reports: its text, a caret or selection, and a composing
 /// span (`None` for none).
-fn state(text: &str, selection: (i32, i32), composition: Option<(i32, i32)>) -> EditorState {
+fn state(text: &str, selection: (i32, i32), composition: Option<(i32, i32)>) -> EditorReport {
     let (composition_start, composition_end) = composition.unwrap_or((-1, -1));
-    EditorState {
+    EditorReport {
         text: text.to_owned(),
         selection_start: selection.0,
         selection_end: selection.1,

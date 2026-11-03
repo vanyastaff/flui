@@ -20,6 +20,7 @@ use crate::display_list::ShapedParagraph;
 use crate::parley_text::ParagraphLayout;
 
 pub mod baseline;
+mod decor;
 pub mod measure;
 mod measurement;
 pub mod paint;
@@ -130,6 +131,10 @@ pub(super) struct TextLayoutCache {
     /// The layout that measured and painted, which carets, selection, line
     /// metrics, hit-testing and word boundaries read.
     pub(super) layout: ParagraphLayout,
+    /// The span backgrounds and shadows `paint` records under the paragraph,
+    /// for the current text: a paint-only `set_text` replaces them with the
+    /// layout kept. `None` when the text paints neither.
+    pub(super) decor: Option<decor::SpanDecor>,
 
     /// Precomputed min intrinsic width (narrowest unbreakable run).
     /// Computed once during `layout()` — O(1) access for intrinsics queries.
@@ -308,15 +313,16 @@ impl TextPainter {
         }
         let recolor = match (&self.text, &text) {
             (Some(old), Some(new)) if old.layout_affecting_eq(new) => {
+                let spans = measure::collect_authored_spans(new);
                 let root = new.style().and_then(crate::text_layout::paint_color);
-                let colors = Self::span_paint_colors(new);
+                let colors = Self::paint_colors_of(new, &spans);
                 let old_root = old.style().and_then(crate::text_layout::paint_color);
                 // The cached paragraph paints each span in its own colour or,
                 // where that is the root's, in the command's: it already
                 // paints `new` when the colours agree relative to each root.
                 let painted = Self::relative_to_root(&Self::span_paint_colors(old), old_root)
                     == Self::relative_to_root(&colors, root);
-                Some((root, colors, painted))
+                Some((root, colors, painted, decor::SpanDecor::of(&spans)))
             }
             // Appearing/disappearing text, or new geometry, is a layout change.
             _ => None,
@@ -324,17 +330,19 @@ impl TextPainter {
         // Computed before anything is committed; `recolor` replaces the
         // layout's run colours only once the paragraph is built.
         let invalidation = match (recolor, self.layout_cache.as_mut()) {
-            (Some((_, colors, true)), Some(cache)) => {
+            (Some((_, colors, true, decor)), Some(cache)) => {
                 if cache.layout.recolor_runs(&colors) {
+                    cache.decor = decor;
                     Invalidation::Paint
                 } else {
                     Invalidation::Layout
                 }
             }
-            (Some((root, colors, false)), Some(cache)) => {
+            (Some((root, colors, false, decor)), Some(cache)) => {
                 match cache.layout.recolor(root, &colors) {
                     Some(paragraph) => {
                         cache.paragraph = Arc::new(paragraph);
+                        cache.decor = decor;
                         Invalidation::Paint
                     }
                     // Spans that shared a paint run now differ: only a new
@@ -342,7 +350,7 @@ impl TextPainter {
                     None => Invalidation::Layout,
                 }
             }
-            (Some((_, _, true)), None) => Invalidation::Paint,
+            (Some((_, _, true, _)), None) => Invalidation::Paint,
             _ => Invalidation::Layout,
         };
         self.text = text;

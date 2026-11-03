@@ -191,6 +191,8 @@ mod text_context;
 mod text_layout_pipeline;
 #[path = "text_overflow_unit.rs"]
 mod text_overflow_unit;
+#[path = "text_paint_attributes.rs"]
+mod text_paint_attributes;
 #[path = "text_painter_unit.rs"]
 mod text_painter_unit;
 #[path = "values.rs"]
@@ -794,6 +796,42 @@ fn text_context_contract() {
             (
                 "a_face_registered_after_the_fork_shapes_in_every_ui_runtime",
                 text_context::a_face_registered_after_the_fork_shapes_in_every_ui_runtime,
+            ),
+        ],
+    );
+}
+
+/// Backgrounds, shadows and their blur reach the display list as a
+/// paragraph paints them (ADR-0309).
+#[test]
+fn text_paint_attributes_contract() {
+    use text_paint_attributes as tpa;
+    run_cases(
+        "text_paint_attributes",
+        &[
+            (
+                "span_shadows_and_backgrounds_reach_the_display_list",
+                tpa::span_shadows_and_backgrounds_reach_the_display_list,
+            ),
+            (
+                "an_ellipsis_takes_its_spans_shadow_and_background",
+                tpa::an_ellipsis_takes_its_spans_shadow_and_background,
+            ),
+            (
+                "a_shadow_only_change_repaints_without_relayout",
+                tpa::a_shadow_only_change_repaints_without_relayout,
+            ),
+            (
+                "refused_shadows_are_dropped_and_the_rest_painted",
+                tpa::refused_shadows_are_dropped_and_the_rest_painted,
+            ),
+            (
+                "blur_sigma_converts_and_bounds_a_blur_radius",
+                tpa::blur_sigma_converts_and_bounds_a_blur_radius,
+            ),
+            (
+                "a_text_shadow_extent_covers_its_blur",
+                tpa::a_text_shadow_extent_covers_its_blur,
             ),
         ],
     );

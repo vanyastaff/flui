@@ -281,6 +281,9 @@ impl AndroidBuilder {
             if let Some(profile_flag) = ctx.profile.cargo_flag() {
                 args.push(profile_flag);
             }
+            for feature in &ctx.features {
+                args.extend(["--features", feature.as_str()]);
+            }
 
             process::run(
                 Command::new("cargo")

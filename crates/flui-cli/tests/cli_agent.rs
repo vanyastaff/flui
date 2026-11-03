@@ -331,3 +331,73 @@ fn an_agent_reads_and_taps_the_app_run_with_agent_through_mcp() {
     assert!(acted.contains(r#""target":{"element":"w1/e1"}"#), "{acted}");
     assert!(!session.exists(), "the session file goes with the run");
 }
+
+/// `flui mcp` reaches an Android app through the loopback port `adb forward` holds: the session
+/// file names the port, and the conversation is the same as over a local endpoint. The test's
+/// listener stands in for `adb`, which carries each connection to the app's abstract socket.
+#[test]
+fn mcp_reaches_an_android_app_through_its_forwarded_port() {
+    use std::io::{BufRead as _, BufReader};
+    use std::net::TcpListener;
+
+    let tmp = TempDir::new().unwrap();
+    let forwarded = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = forwarded.local_addr().unwrap().port();
+    let token = "a5".repeat(32);
+    let session = tmp.path().join("flui-agent.json");
+    std::fs::write(
+        &session,
+        serde_json::json!({
+            "endpoint": { "forwarded": format!("127.0.0.1:{port}") },
+            "token": token,
+            "pid": 1,
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    let protocol = PROTOCOL_VERSION.to_string();
+    let app = std::thread::spawn(move || {
+        let (stream, _) = forwarded.accept().unwrap();
+        let mut writer = stream.try_clone().unwrap();
+        let mut lines = BufReader::new(stream).lines();
+        let hello = lines.next().unwrap().unwrap();
+        assert!(hello.contains(&token), "the hello carries the token");
+        writeln!(writer, r#"{{"hello":{{"protocol":"{protocol}"}}}}"#).unwrap();
+        let request: serde_json::Value =
+            serde_json::from_str(&lines.next().unwrap().unwrap()).unwrap();
+        assert_eq!(request["method"], "windows.list");
+        writeln!(
+            writer,
+            r#"{{"id":{},"result":{{"windows":["w1"]}}}}"#,
+            request["id"]
+        )
+        .unwrap();
+    });
+
+    let mut mcp = flui()
+        .current_dir(tmp.path())
+        .env_remove("FLUI_AGENT_ENDPOINT")
+        .env_remove("FLUI_AGENT_TOKEN")
+        .arg("mcp")
+        .arg("--session")
+        .arg(&session)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stdin = mcp.stdin.take().unwrap();
+    writeln!(
+        stdin,
+        r#"{{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{{"name":"flui_windows"}}}}"#
+    )
+    .unwrap();
+    drop(stdin);
+    let output = mcp.wait_with_output().unwrap();
+    app.join().expect("the app answered");
+    let reply: serde_json::Value =
+        serde_json::from_slice(output.stdout.split(|b| *b == b'\n').next().unwrap()).unwrap();
+    assert_eq!(reply["result"]["isError"], false, "{reply}");
+    let text = reply["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(text.contains("w1"), "{text}");
+}

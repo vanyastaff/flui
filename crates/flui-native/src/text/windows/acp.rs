@@ -25,8 +25,8 @@ use std::cell::Cell;
 use std::rc::Rc;
 
 use flui_platform::text_store::{
-    LockGrant, LockKind, LockOutcome, LockTiming, OffsetError, PointMode, Selection, TextChange,
-    TextStore, TextStoreEdit, TextStoreError, TextStoreRead, Utf16Offset, Utf16Range,
+    Composition, LockGrant, LockKind, LockOutcome, LockTiming, OffsetError, PointMode, Selection,
+    TextChange, TextStore, TextStoreEdit, TextStoreError, TextStoreRead, Utf16Offset, Utf16Range,
 };
 
 /// An HRESULT, as the number TSF reads.
@@ -320,6 +320,21 @@ pub(crate) fn replace(
         .replace(span, text)
         .map(text_change)
         .map_err(store_error)
+}
+
+/// A composition change TSF reported (`OnStartComposition`,
+/// `OnUpdateComposition` with the composition's `span`, `OnEndComposition`
+/// with none), which it does from inside a read-write session.
+///
+/// # Errors
+///
+/// `TS_E_NOLOCK` outside a read-write session, and the store's refusal.
+pub(crate) fn set_composition(slot: &SessionSlot, span: Option<Utf16Range>) -> Result<(), Hresult> {
+    let composition = span.map(|range| Composition {
+        range,
+        hides_caret: false,
+    });
+    slot.write(|session| session.set_composition(composition).map_err(store_error))
 }
 
 /// What `InsertTextAtSelection` answers.

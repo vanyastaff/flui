@@ -8,8 +8,8 @@ use flui_protocol::AppInfo;
 use flui_view::dev_agent::{AgentWindow, DevAgentHook};
 
 use super::super::Disconnect;
-use super::endpoint::{self, Running};
 use super::launch::Launch;
+use super::transport::{self, Running};
 
 /// The driver agent: a [`DevAgentHook`] that serves the windows the host
 /// hands it over the endpoint its [`Launch`] names. See the
@@ -46,7 +46,7 @@ impl DriverAgent {
 impl DevAgentHook for DriverAgent {
     fn attach(&mut self) -> bool {
         self.stop();
-        match endpoint::listen(&self.launch, self.app.clone(), self.disconnect.clone()) {
+        match transport::listen(&self.launch, self.app.clone(), self.disconnect.clone()) {
             Ok(running) => {
                 tracing::info!("driver agent listening");
                 self.running = Some(running);
