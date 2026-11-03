@@ -66,7 +66,7 @@ use std::time::Duration;
 use flui_protocol::method::{Addressed, WindowMethod};
 use flui_protocol::{ErrorCode, ErrorObject, Event, EventFilter, HandleKind, Retry, WindowId};
 
-use crate::__runtime::{AgentPort, EventSource, WakeSlot, WindowCall};
+use crate::__runtime::{AgentPort, EventSource, LeaseId, WakeSlot, WindowCall};
 
 /// A development tool that serves the application's windows to an agent,
 /// installed by the application and called by the host on the owner thread.
@@ -329,7 +329,9 @@ impl AgentWindow {
     ///
     /// Element handles in the answer are this window's. A method the
     /// window does not answer in this build answers `not_supported` naming
-    /// it.
+    /// it. Synthetic input is asked through an [`InputLease`]
+    /// ([`Self::input_lease`]): `input.inject` and `input.release` asked
+    /// here answer `invalid_argument`.
     ///
     /// # Errors
     ///
@@ -341,6 +343,31 @@ impl AgentWindow {
     pub fn call<M: WindowMethod>(
         &self,
         params: M::Params,
+    ) -> Result<AgentAnswer<M::Output>, ErrorObject> {
+        self.ask::<M>(params, None)
+    }
+
+    /// A lease on this window's synthetic input: `input.inject` and
+    /// `input.release` are asked through it ([`InputLease::call`]), and
+    /// what it injected is released when it is dropped.
+    ///
+    /// # Errors
+    ///
+    /// `gone` (kind `window`) once the window has closed; `busy` when the
+    /// window has handed out every lease it can.
+    pub fn input_lease(&self) -> Result<InputLease, ErrorObject> {
+        let port = self.open_port().ok_or_else(|| window_gone(self.id))?;
+        let lease = port.lease()?;
+        Ok(InputLease {
+            window: self.clone(),
+            lease,
+        })
+    }
+
+    fn ask<M: WindowMethod>(
+        &self,
+        params: M::Params,
+        lease: Option<LeaseId>,
     ) -> Result<AgentAnswer<M::Output>, ErrorObject> {
         if let Some(named) = params.window()
             && named != self.id
@@ -356,6 +383,10 @@ impl AgentWindow {
         }
         let port = self.open_port().ok_or_else(|| window_gone(self.id))?;
         let (call, answer) = WindowCall::new::<M>(params);
+        let call = match lease {
+            Some(lease) => call.through(lease),
+            None => call,
+        };
         port.call(call)?;
         Ok(answer)
     }
@@ -379,6 +410,80 @@ impl AgentWindow {
         self.open_port()
             .ok_or_else(|| window_gone(self.id))?
             .subscribe(filters)
+    }
+}
+
+/// A lease on one window's synthetic input, from
+/// [`AgentWindow::input_lease`].
+///
+/// `input.inject` asked through the lease presses and moves the window's
+/// input as the platform's would, and what it leaves held (a contact down,
+/// a key pressed) stays the lease's: `input.release` through the lease lets
+/// it go, and so does dropping the lease, at the owner's next drain, the
+/// latest first: calls asked through it before it was dropped are taken
+/// first, and the ones still queued then are answered `gone`. A connection
+/// that holds one lease per window it injects into leaves nothing held when
+/// it goes, and two connections never release each other's input. The
+/// window asks `input.inject` and `input.release` through a lease only:
+/// [`AgentWindow::call`] answers them `invalid_argument`.
+///
+/// Not `Clone`: one holder, one release.
+pub struct InputLease {
+    window: AgentWindow,
+    lease: LeaseId,
+}
+
+// As `AgentWindow::call`: a refusal is the protocol's error object.
+#[cfg_attr(
+    target_pointer_width = "64",
+    expect(
+        clippy::result_large_err,
+        reason = "the error object is the answer, returned once per call"
+    )
+)]
+impl InputLease {
+    /// Whether the lease's window is still open: once it has closed, the lease holds nothing.
+    #[must_use]
+    pub fn is_open(&self) -> bool {
+        self.window.is_open()
+    }
+
+    /// The window the lease holds input on.
+    #[must_use]
+    pub fn window(&self) -> WindowId {
+        self.window.id
+    }
+
+    /// Ask the window `M` with `params` through this lease, as
+    /// [`AgentWindow::call`] does: input it injects is held under the lease.
+    ///
+    /// # Errors
+    ///
+    /// As [`AgentWindow::call`].
+    pub fn call<M: WindowMethod>(
+        &self,
+        params: M::Params,
+    ) -> Result<AgentAnswer<M::Output>, ErrorObject> {
+        self.window.ask::<M>(params, Some(self.lease))
+    }
+}
+
+impl Drop for InputLease {
+    /// Releases what the lease holds, at the owner's next drain. A closed
+    /// window released it already.
+    fn drop(&mut self) {
+        if let Some(port) = self.window.port.upgrade() {
+            port.release(self.lease);
+        }
+    }
+}
+
+impl fmt::Debug for InputLease {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("InputLease")
+            .field("window", &self.window.id)
+            .field("lease", &self.lease.get())
+            .finish()
     }
 }
 
@@ -429,6 +534,12 @@ mod tests {
         fn subscribe(&self, _: Vec<EventFilter>) -> Result<AgentAnswer<AgentEvents>, ErrorObject> {
             Err(window_gone(WindowId::from_u64(1).expect("non-zero")))
         }
+
+        fn lease(&self) -> Result<LeaseId, ErrorObject> {
+            Err(window_gone(WindowId::from_u64(1).expect("non-zero")))
+        }
+
+        fn release(&self, _: LeaseId) {}
     }
 
     #[test]
@@ -484,6 +595,70 @@ mod tests {
         assert!(gone.effect.is_none());
         drop(window);
         assert_eq!(Arc::strong_count(&collecting), 1, "dropping lets go");
+    }
+
+    /// Mints leases from 1 and records the lease each call came through and each release.
+    #[derive(Default)]
+    struct Leasing {
+        next: std::sync::atomic::AtomicU64,
+        asked: parking_lot::Mutex<Vec<Option<LeaseId>>>,
+        released: parking_lot::Mutex<Vec<LeaseId>>,
+    }
+
+    impl AgentPort for Leasing {
+        fn is_open(&self) -> bool {
+            true
+        }
+
+        fn call(&self, call: WindowCall) -> Result<(), ErrorObject> {
+            self.asked.lock().push(call.lease());
+            Ok(())
+        }
+
+        fn subscribe(&self, _: Vec<EventFilter>) -> Result<AgentAnswer<AgentEvents>, ErrorObject> {
+            Err(window_gone(WindowId::from_u64(1).expect("non-zero")))
+        }
+
+        fn lease(&self) -> Result<LeaseId, ErrorObject> {
+            let next = self.next.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+            Ok(LeaseId::new(
+                std::num::NonZeroU64::new(next).expect("from 1"),
+            ))
+        }
+
+        fn release(&self, lease: LeaseId) {
+            self.released.lock().push(lease);
+        }
+    }
+
+    /// A call through a lease carries it to the port and a plain call carries none; each lease
+    /// is released once, when it is dropped, and a window gone mints none.
+    #[test]
+    fn an_input_lease_carries_its_calls_and_is_released_when_dropped() {
+        let id = WindowId::from_u64(3).expect("non-zero");
+        let port = Arc::new(Leasing::default());
+        let dyn_port: Arc<dyn AgentPort> = Arc::clone(&port) as _;
+        let window = crate::__runtime::agent_window(id, Arc::downgrade(&dyn_port), Arc::new(()));
+        let first = window.input_lease().expect("the window is open");
+        let second = window.input_lease().expect("the window is open");
+        assert_eq!(first.window(), id);
+        drop(first.call::<SemanticsRead>(ReadParams::new(id)));
+        drop(window.call::<SemanticsRead>(ReadParams::new(id)));
+        drop(second.call::<SemanticsRead>(ReadParams::new(id)));
+        let lease = |value: u64| LeaseId::new(std::num::NonZeroU64::new(value).expect("non-zero"));
+        assert_eq!(
+            *port.asked.lock(),
+            [Some(lease(1)), None, Some(lease(2))],
+            "a call names the lease it came through"
+        );
+        assert!(port.released.lock().is_empty(), "held while the lease is");
+        drop(second);
+        drop(first);
+        assert_eq!(*port.released.lock(), [lease(2), lease(1)]);
+        drop(dyn_port);
+        drop(port);
+        let gone = window.input_lease().expect_err("closed");
+        assert_eq!(gone.code, ErrorCode::Gone);
     }
 
     /// A queued call's `Debug` names its method and leaves its parameters out, so a value an

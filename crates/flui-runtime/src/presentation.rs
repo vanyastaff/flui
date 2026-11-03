@@ -441,6 +441,10 @@ pub struct PresentationState {
     /// passed. Answered by `UiRuntime::complete_agent_reads` after a frame,
     /// and as failed when the presentation closes first. Owner thread only.
     pub(crate) agent_reads: RefCell<Vec<crate::ui_runtime::PendingActRead>>,
+    /// The synthetic input an agent injects: what each input lease holds, and the injections
+    /// and releases queued. Advanced at each frame boundary; its queued work is answered `gone`
+    /// when the presentation closes. Owner thread only.
+    pub(crate) agent_input: RefCell<crate::ui_runtime::AgentInput>,
     /// Waits an agent parked: conditions held out for until a frame makes them hold or
     /// their deadline passes. Answered `gone` when the presentation closes first. Owner
     /// thread only.
@@ -1074,6 +1078,7 @@ impl PresentationState {
             dev_agent: RefCell::new(None),
             agent_stability: RefCell::default(),
             agent_reads: RefCell::default(),
+            agent_input: RefCell::default(),
             agent_waits: RefCell::default(),
             agent_layer_reads: RefCell::default(),
             agent_layer_staged: RefCell::default(),
@@ -1206,6 +1211,7 @@ impl PresentationState {
             dev_agent: RefCell::new(None),
             agent_stability: RefCell::default(),
             agent_reads: RefCell::default(),
+            agent_input: RefCell::default(),
             agent_waits: RefCell::default(),
             agent_layer_reads: RefCell::default(),
             agent_layer_staged: RefCell::default(),
@@ -1939,10 +1945,12 @@ impl PresentationState {
         .err();
         let owed = std::mem::take(&mut *self.agent_reads.borrow_mut());
         let reads = deliver_each(owed, crate::ui_runtime::PendingActRead::abandon);
+        let injected = self.agent_input.borrow_mut().abandon();
+        let inputs = deliver_each(injected, crate::ui_runtime::AbandonedInput::answer);
         let waits = std::mem::take(&mut *self.agent_waits.borrow_mut());
         let waited = deliver_each(waits, crate::ui_runtime::PendingWait::abandon);
         let layers = self.abandon_agent_layer_reads();
-        if let Some(payload) = first_panic_of([ended, reads, waited, layers]) {
+        if let Some(payload) = first_panic_of([ended, reads, inputs, waited, layers]) {
             std::panic::resume_unwind(payload);
         }
     }

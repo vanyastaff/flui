@@ -6,6 +6,8 @@
 //! sources: every source's n-th action shares tick n, and a `pause` keeps a source in step
 //! while another acts.
 
+use std::time::Duration;
+
 use crate::act::JournalSpan;
 use crate::geometry::LogicalPoint;
 use crate::locator::Target;
@@ -422,6 +424,87 @@ impl ActionSequence {
     #[must_use]
     pub fn new(sources: Vec<InputSource>) -> Self {
         Self { sources }
+    }
+
+    /// How many ticks the sequence plays: its longest source's.
+    #[must_use]
+    pub fn ticks(&self) -> usize {
+        self.sources
+            .iter()
+            .map(InputSource::ticks)
+            .max()
+            .unwrap_or(0)
+    }
+
+    /// How long playing the sequence takes: the ticks play one after another, and each lasts as
+    /// long as its longest pause or move. Saturates at [`Duration::MAX`]. Linear in the number of
+    /// actions, however many sources the ticks are spread over.
+    #[must_use]
+    pub fn span(&self) -> Duration {
+        let mut lasts = vec![Duration::ZERO; self.ticks()];
+        for source in &self.sources {
+            source.lasting(&mut lasts);
+        }
+        lasts
+            .into_iter()
+            .fold(Duration::ZERO, Duration::saturating_add)
+    }
+}
+
+impl InputSource {
+    /// How many ticks the source has: one per action, and one for committed text.
+    fn ticks(&self) -> usize {
+        match self {
+            Self::Pointer { actions, .. } => actions.len(),
+            Self::Wheel { actions, .. } => actions.len(),
+            Self::Keys { actions, .. } => actions.len(),
+            Self::Text { .. } => 1,
+            Self::Ime { actions } => actions.len(),
+            Self::Trackpad { actions, .. } => actions.len(),
+        }
+    }
+
+    /// Raise each tick's entry of `lasts` to the duration of the source's action at that tick:
+    /// a pause's or a move's.
+    fn lasting(&self, lasts: &mut [Duration]) {
+        fn note(lasts: &mut [Duration], tick: usize, duration_ms: u64) {
+            if let Some(lasting) = lasts.get_mut(tick) {
+                *lasting = (*lasting).max(Duration::from_millis(duration_ms));
+            }
+        }
+        match self {
+            Self::Pointer { actions, .. } => {
+                for (tick, action) in actions.iter().enumerate() {
+                    if let PointerAction::Move { duration_ms, .. }
+                    | PointerAction::Pause { duration_ms } = action
+                    {
+                        note(lasts, tick, *duration_ms);
+                    }
+                }
+            }
+            Self::Wheel { actions, .. } => {
+                for (tick, action) in actions.iter().enumerate() {
+                    if let WheelAction::Pause { duration_ms } = action {
+                        note(lasts, tick, *duration_ms);
+                    }
+                }
+            }
+            Self::Keys { actions, .. } => {
+                for (tick, action) in actions.iter().enumerate() {
+                    if let KeyAction::Pause { duration_ms } = action {
+                        note(lasts, tick, *duration_ms);
+                    }
+                }
+            }
+            Self::Trackpad { actions, .. } => {
+                for (tick, action) in actions.iter().enumerate() {
+                    if let TrackpadAction::Pause { duration_ms } = action {
+                        note(lasts, tick, *duration_ms);
+                    }
+                }
+            }
+            Self::Text { .. } | Self::Ime { .. } => {}
+        }
     }
 }
 

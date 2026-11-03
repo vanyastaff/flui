@@ -24,6 +24,7 @@
 use std::any::{Any, TypeId};
 use std::cell::Cell;
 use std::fmt;
+use std::num::NonZeroU64;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::mpsc::SyncSender;
 use std::sync::{Arc, Weak};
@@ -79,6 +80,38 @@ pub trait AgentPort: Send + Sync {
     /// When the request cannot be enqueued.
     fn subscribe(&self, filters: Vec<EventFilter>)
     -> Result<AgentAnswer<AgentEvents>, ErrorObject>;
+
+    /// A lease on the window's synthetic input: a fresh id, never reused within this port
+    /// (see [`InputLease`](crate::dev_agent::InputLease)).
+    ///
+    /// # Errors
+    ///
+    /// `gone` once the window has closed; `busy` once the port has minted every id.
+    fn lease(&self) -> Result<LeaseId, ErrorObject>;
+
+    /// The lease's holder let it go: what `lease` holds is released at the owner's next
+    /// drain. Never refused: the release is recorded before the owner is woken, and a
+    /// window that closed released everything already.
+    fn release(&self, lease: LeaseId);
+}
+
+/// One input lease of a window, minted by its [`AgentPort`]: the synthetic input injected
+/// through the lease is held under it, and released with it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct LeaseId(NonZeroU64);
+
+impl LeaseId {
+    /// The lease `value`.
+    #[must_use]
+    pub const fn new(value: NonZeroU64) -> Self {
+        Self(value)
+    }
+
+    /// The lease's value.
+    #[must_use]
+    pub const fn get(self) -> NonZeroU64 {
+        self.0
+    }
 }
 
 /// One window method's call on its way to the window's owner: the method,
@@ -92,6 +125,8 @@ pub struct WindowCall {
     name: &'static str,
     params: Box<dyn Any + Send>,
     reply: Box<dyn Any + Send>,
+    /// The input lease the call was asked through.
+    lease: Option<LeaseId>,
 }
 
 impl WindowCall {
@@ -103,8 +138,21 @@ impl WindowCall {
             name: M::NAME,
             params: Box::new(params),
             reply: Box::new(reply),
+            lease: None,
         };
         (call, answer)
+    }
+
+    /// The input lease the call was asked through, if any.
+    #[must_use]
+    pub fn lease(&self) -> Option<LeaseId> {
+        self.lease
+    }
+
+    /// The call, asked through `lease`.
+    pub(crate) fn through(mut self, lease: LeaseId) -> Self {
+        self.lease = Some(lease);
+        self
     }
 
     /// The method's wire name, for traces.
