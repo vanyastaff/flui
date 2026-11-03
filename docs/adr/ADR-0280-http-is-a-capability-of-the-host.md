@@ -74,9 +74,9 @@ lets a test hand every layer the same scripted client.
 2. **The client drives its requests.** `send`'s future and a body's chunks need no runtime of the
    caller's; dropping either abandons the request.
 3. **Providers.** `flui-app` registers the built-in provider behind its `http` feature (on by
-   default): `reqwest` on the run's IO lane, one connection pool per run. The caller's future waits
-   on a channel; the exchange on the lane stops when the channel closes. On lanes an embedder
-   injects, which may run no Tokio drivers, it spawns nothing and answers
+   default): on Linux, macOS and iOS `reqwest` on the run's IO lane, one connection pool per run.
+   The caller's future waits on a channel; the exchange on the lane stops when the channel closes.
+   On lanes an embedder injects, which may run no Tokio drivers, it spawns nothing and answers
    `NotYetOnThisHost { host: EmbedderExecutors }`. On the web the page's `fetch` sends
    (`flui_native::http::FetchClient`, a task of the page answering through a channel), and each
    exchange holds a slot of the IO lane from the request until its body ends or is dropped, so the
@@ -89,8 +89,15 @@ lets a test hand every layer the same scripted client.
    system classes are called and nothing calls back into Rust, so the provider needs no class of
    FLUI's dex. A Java exception is mapped by its class (TLS, socket timeout, failed lookup or
    connection, malformed URL), else by the stage that threw it, and a failure of the bridge itself
-   is `HttpError::Host`; no JNI failure panics. Without the feature the capability is not
-   registered.
+   is `HttpError::Host`; no JNI failure panics. Windows sends through WinHTTP
+   (`flui_native::http::WinHttpClient`) in the same request-per-thread model, held on the IO lane
+   the same way, so an embedder's executors on Windows send too. WinHTTP runs in asynchronous
+   mode: the request's thread starts each operation and waits for the status callback to complete
+   it, so an abort closes the request handle only while no call is inside WinHTTP on it, never
+   leaving a call to run on a closed handle whose value may name another request's. The session
+   takes the system's automatic proxy and trust store; an error code maps by its meaning, a failed
+   secure check naming what failed, else by the stage that failed. Without the feature the
+   capability is not registered.
 4. **The kit's client.** `flui_platform::testing::ScriptedHttp` answers what a test scripted per
    URL, holds and releases requests, counts them and the abandoned ones, and fails an unscripted URL
    with `Connect`. `HeadlessHost` registers it among its built-ins (`HeadlessHost::http`).
@@ -140,6 +147,13 @@ lets a test hand every layer the same scripted client.
   `a_request_left_or_past_its_deadline_aborts_its_connection` (`flui-native`, Linux): Android's
   request-per-thread model over a scripted stack; its JNI exchange is type-checked, not yet run on a
   device.
+- `an_abort_inside_a_call_closes_the_handle_as_it_returns`,
+  `an_abort_while_waiting_closes_the_handle_and_ends_the_wait`,
+  `a_completion_ends_the_wait_even_from_inside_the_start`,
+  `winhttp_errors_map_to_what_the_caller_can_act_on`, `headers_keep_their_bytes_both_ways` and
+  `the_object_name_drops_the_fragment` (`flui-native`, Linux): WinHTTP's gate between the request's
+  thread, the status callback and an abort, and its header, URL and error translation; the WinHTTP
+  exchange is type-checked, not yet run on Windows.
 - `network_loads_fetch_with_the_callers_client_and_recover_after_errors` and
   `an_image_request_lives_exactly_as_long_as_someone_waits_for_it` (`flui-assets`).
 - `network_image_loads_with_the_hosts_http_client` (`flui-widgets`): `Image::network` on the
