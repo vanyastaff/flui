@@ -127,7 +127,7 @@ cargo xtask ci
 It runs, in order (`tools/xtask/src/tasks.rs` is the authority):
 
 ```bash
-cargo xtask checks                        # fmt, typos, taplo, markdown links (docs-links: lychee, offline), the paths, packages and llms.txt links the docs name (docs-paths), workspace (tiers, layers, manifests, test reachability, ADR numbers), reach (what each crate's resolved graph may contain, and the hot-reload facts), module-dag (import direction between a crate's modules), toolchain, wgsl, globals (process-global state, ADR-0097), panic-boundary (every OS entry into `flui-native` goes through `owner::panic_boundary::os_entry`, ADR-0151 §16), send-impls (every `unsafe impl Send`/`Sync` is listed and the list only shrinks, ADR-0136), try-new (every `new` returning `Result` or `Option` is listed and the list only shrinks: such a constructor is `try_new`), inspect-debug (every `Value::Debug(` site of `flui_foundation::inspect` is counted per file and the counts only go down, ADR-0242), the docs-only allowlist, font assets, file-length, markers and changelog fragments (each with its self-test); builds only xtask
+cargo xtask checks                        # fmt, typos, taplo, markdown links (docs-links: lychee, offline), the paths, packages and llms.txt links the docs name (docs-paths), workspace (tiers, layers, manifests, test reachability, ADR numbers), reach (what each crate's resolved graph may contain, and the hot-reload facts), module-dag (import direction between a crate's modules), toolchain, wgsl, globals (process-global state, ADR-0097), panic-boundary (every OS entry into `flui-native` goes through `owner::panic_boundary::os_entry`, ADR-0151 §16), send-impls (every `unsafe impl Send`/`Sync` is listed and the list only shrinks, ADR-0136), try-new (every `new` returning `Result` or `Option` is listed and the list only shrinks: such a constructor is `try_new`), inspect-debug (every `Value::Debug(` site of `flui_foundation::inspect` is counted per file and the counts only go down, ADR-0242), catch-unwind (every hand-written `catch_unwind` in production code is counted per file and the counts only go down, ADR-0287), the docs-only allowlist, font assets, file-length, markers and changelog fragments (each with its self-test); builds only xtask
 cargo xtask lint                          # clippy -D warnings, as the CI clippy job runs it: the workspace, then flui-engine's `testing` code
 cargo xtask doc-strict                    # cargo doc --workspace --no-deps --locked --document-private-items with every workspace `testing` feature on
 cargo xtask test                          # nextest over the local scope, flui-native headless, then the nested-cargo group (see "What `cargo xtask test` runs")
@@ -175,6 +175,16 @@ untyped escape hatch (R50), per file in `crates/`, `packages/` and `src/`, leavi
 `tools/xtask/allowlists/inspect-debug.toml` are exact, each with its reason and an ADR exit: a
 file above its count ("grew"), below it ("lower it") or gone is a finding. `--seed` prints the
 list.
+
+`cargo xtask catch-unwind` counts the hand-written `catch_unwind` sites of production code per
+file (ADR-0287): every call or value whose path ends in `catch_unwind`, a `.catch_unwind()`
+method call, and the name inside a macro's tokens, in the module trees of the targets a non-test
+build compiles under `crates/`, `packages/` and `src/`. Test code (`#[cfg(test)]`, `#[test]`, an
+item behind a `testing` feature), the kits, and the places where catching is the job
+(`flui_foundation::panic` and `flui-native`'s `owner::panic_boundary`) are left out. The counts in
+`tools/xtask/allowlists/catch-unwind.toml` are exact, under one reason and the ADR-0287 exit: a new
+site is a finding until its owner goes through `commit` or `FirstPanic`, and a migrated seam lowers
+its count in the same change. `--seed` prints the list.
 
 xtask does not schedule its commands. On a host shared by several agents and
 checkouts, [heli](https://github.com/vanyastaff/heli) does: every cargo, the

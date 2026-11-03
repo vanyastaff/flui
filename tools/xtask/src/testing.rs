@@ -44,7 +44,7 @@ pub(crate) const ALLOWLIST: &str = "tools/xtask/allowlists/testing.toml";
 const OLD_FEATURES: [&str; 2] = ["test-support", "test-utils"];
 
 /// Feature names read as "the testing feature" when deciding whether an item is test code.
-const TESTING_FEATURES: [&str; 3] = ["testing", "test-support", "test-utils"];
+pub(crate) const TESTING_FEATURES: [&str; 3] = ["testing", "test-support", "test-utils"];
 
 /// Function names that drive time or frames by hand.
 const PUMP_NAMES: [&str; 3] = ["pump", "advance", "tick"];
@@ -233,7 +233,7 @@ fn collect_sources(
 }
 
 /// `path` relative to `root`, `/`-separated.
-fn relative(root: &Path, path: &Path) -> String {
+pub(crate) fn relative(root: &Path, path: &Path) -> String {
     path.strip_prefix(root)
         .unwrap_or(path)
         .components()
@@ -262,7 +262,7 @@ fn package_source_rest<'a>(root: &Path, rel: &'a str) -> Option<&'a str> {
 
 /// Whether the whole file is a kit: the `flui-testing` crate or a `testing` module in the `src/`
 /// of a package.
-fn in_kit_file(root: &Path, rel: &str) -> bool {
+pub(crate) fn in_kit_file(root: &Path, rel: &str) -> bool {
     rel.starts_with("crates/flui-testing/")
         || package_source_rest(root, rel)
             .is_some_and(|rest| rest == "testing.rs" || rest.starts_with("testing/"))
@@ -421,7 +421,7 @@ fn is_double_name(name: &str) -> bool {
 }
 
 /// Whether one of `attrs` is a `cfg` that holds only in test builds or with a testing feature.
-fn implies_testing_attrs(attrs: &[Attribute]) -> bool {
+pub(crate) fn implies_testing_attrs(attrs: &[Attribute]) -> bool {
     is_test_only(attrs)
         || attrs.iter().any(|attr| {
             is_test_function_attr(attr.path())

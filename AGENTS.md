@@ -98,6 +98,7 @@ host change needs `cargo heli nextest run -p flui-native` by hand.
 | A value crosses a thread because the compiler proves it may: every `unsafe impl Send`/`Sync` is listed and the list only shrinks; `send_wrapper`-style crates are banned; every `Send`/`Sync` position an author wrote in the facade's API is listed and the list only shrinks (ADR-0136) | `xtask send-impls`, `deny.toml`, `xtask send-positions` (CI `api-contracts` job, nightly rustdoc JSON) |
 | Test support is named `testing`; a hand-written `pump`/`advance`/`tick` or a `Mock*`/`Fake*`/`Scripted*`/`Recording*`/`Probe*` type in test code is in a kit or counted in the allowlist (ADR-0243) | `xtask testing` |
 | A constructor that can fail is `try_new`: every `new` returning `Result` or `Option` is listed and the list only shrinks | `xtask try-new` |
+| An owner changes its state and calls user code through `flui_foundation::panic::commit` and contains a fan-out with `FirstPanic`: every hand-written `catch_unwind` in production code is counted per file and the counts only go down (ADR-0287) | `xtask catch-unwind` |
 
 ## ADR Policy
 

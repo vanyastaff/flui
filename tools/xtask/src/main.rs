@@ -16,6 +16,7 @@ mod source_tree;
 mod android_dex;
 mod api_closure;
 mod bench;
+mod catch_unwind;
 mod change_scope;
 mod changelog;
 mod doc_strict;
@@ -126,6 +127,9 @@ enum Command {
     /// Check that every `Value::Debug(` site of `flui_foundation::inspect` is counted per file
     /// and the counts only go down (R50, ADR-0242).
     InspectDebug(inspect_debug::InspectDebugArgs),
+    /// Check that every hand-written `catch_unwind` in production code is counted per file and
+    /// the counts only go down (ADR-0287).
+    CatchUnwind(catch_unwind::CatchUnwindArgs),
     /// Check that every `new` returning `Result` or `Option` is listed and the list only
     /// shrinks: such a constructor is `try_new` (AGENTS.md).
     TryNew(try_new::TryNewArgs),
@@ -213,6 +217,7 @@ fn main() -> ExitCode {
         Command::SendImpls(args) => send_impls::send_impls(&args),
         Command::SendPositions(args) => send_positions::send_positions(&args),
         Command::TryNew(args) => try_new::try_new(&args),
+        Command::CatchUnwind(args) => catch_unwind::catch_unwind(&args),
         Command::InspectDebug(args) => inspect_debug::inspect_debug(&args),
         Command::WasmImports(args) => wasm::wasm_imports(&args),
         Command::WasmTestCrates(args) => wasm::wasm_test_crates(&args),

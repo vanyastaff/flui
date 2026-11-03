@@ -1,0 +1,526 @@
+# Hand-written `catch_unwind` in production code (ADR-0287), written by
+# `cargo xtask catch-unwind --seed`. Counts are exact and only go down: the scan fails when a
+# file gains a site, loses one (lower its count), or loses its last (remove the entry).
+# `reason` and `exit` apply to every entry.
+reason = "written before the commit-then-call primitives: each owner moves its ordering to `flui_foundation::panic::commit` and its fan-out to `FirstPanic`, one seam per change"
+exit = "ADR-0287"
+
+[[allow]]
+path = "crates/flui-animation/src/curve/split.rs"
+count = 1
+
+[[allow]]
+path = "crates/flui-animation/src/keyframes.rs"
+count = 1
+
+[[allow]]
+path = "crates/flui-animation/src/run_future.rs"
+count = 3
+
+[[allow]]
+path = "crates/flui-app/src/app/agent/mod.rs"
+count = 1
+
+[[allow]]
+path = "crates/flui-app/src/app/agent/served.rs"
+count = 1
+
+[[allow]]
+path = "crates/flui-app/src/app/agent/served/session.rs"
+count = 1
+
+[[allow]]
+path = "crates/flui-app/src/app/application_control.rs"
+count = 2
+
+[[allow]]
+path = "crates/flui-app/src/app/close_request.rs"
+count = 2
+
+[[allow]]
+path = "crates/flui-app/src/app/hot_reload.rs"
+count = 3
+
+[[allow]]
+path = "crates/flui-app/src/app/lifecycle.rs"
+count = 7
+
+[[allow]]
+path = "crates/flui-app/src/app/runner/desktop.rs"
+count = 1
+
+[[allow]]
+path = "crates/flui-app/src/app/runner/frame_driver.rs"
+count = 1
+
+[[allow]]
+path = "crates/flui-app/src/app/runner/host.rs"
+count = 1
+
+[[allow]]
+path = "crates/flui-app/src/app/runner/installed_host.rs"
+count = 1
+
+[[allow]]
+path = "crates/flui-app/src/app/runner/main_window.rs"
+count = 6
+
+[[allow]]
+path = "crates/flui-app/src/app/runner/native_bindings.rs"
+count = 3
+
+[[allow]]
+path = "crates/flui-app/src/app/runner/native_retirement.rs"
+count = 1
+
+[[allow]]
+path = "crates/flui-app/src/app/runner/owner_dispatch.rs"
+count = 12
+
+[[allow]]
+path = "crates/flui-app/src/app/runner/secondary_window.rs"
+count = 13
+
+[[allow]]
+path = "crates/flui-app/src/app/runner/session_controller.rs"
+count = 1
+
+[[allow]]
+path = "crates/flui-app/src/app/runner/terminal.rs"
+count = 4
+
+[[allow]]
+path = "crates/flui-app/src/app/runner/window_install.rs"
+count = 3
+
+[[allow]]
+path = "crates/flui-app/src/app/runner/window_routes.rs"
+count = 3
+
+[[allow]]
+path = "crates/flui-app/src/app/runtime/fallback_rescan.rs"
+count = 1
+
+[[allow]]
+path = "crates/flui-assets/src/registry/images.rs"
+count = 1
+
+[[allow]]
+path = "crates/flui-cli/src/build/ios_package.rs"
+count = 2
+
+[[allow]]
+path = "crates/flui-engine/src/device_domain.rs"
+count = 4
+
+[[allow]]
+path = "crates/flui-foundation/src/claim_slot.rs"
+count = 1
+
+[[allow]]
+path = "crates/flui-foundation/src/inspect/snapshot.rs"
+count = 1
+
+[[allow]]
+path = "crates/flui-foundation/src/notifier_generic.rs"
+count = 1
+
+[[allow]]
+path = "crates/flui-foundation/src/read_scope.rs"
+count = 4
+
+[[allow]]
+path = "crates/flui-interaction/src/binding/mod.rs"
+count = 3
+
+[[allow]]
+path = "crates/flui-interaction/src/close.rs"
+count = 1
+
+[[allow]]
+path = "crates/flui-interaction/src/containment.rs"
+count = 1
+
+[[allow]]
+path = "crates/flui-interaction/src/drag/item.rs"
+count = 1
+
+[[allow]]
+path = "crates/flui-interaction/src/gesture/arena/mod.rs"
+count = 1
+
+[[allow]]
+path = "crates/flui-interaction/src/gesture/arena/recovery.rs"
+count = 1
+
+[[allow]]
+path = "crates/flui-interaction/src/gesture/observer.rs"
+count = 5
+
+[[allow]]
+path = "crates/flui-interaction/src/haptics.rs"
+count = 1
+
+[[allow]]
+path = "crates/flui-interaction/src/text_input/arbiter.rs"
+count = 2
+
+[[allow]]
+path = "crates/flui-native/src/clipboard/linux/offered.rs"
+count = 2
+
+[[allow]]
+path = "crates/flui-native/src/clipboard/linux/x11/selection.rs"
+count = 3
+
+[[allow]]
+path = "crates/flui-native/src/display/linux/source.rs"
+count = 1
+
+[[allow]]
+path = "crates/flui-native/src/drag/android.rs"
+count = 1
+
+[[allow]]
+path = "crates/flui-native/src/drag/headless.rs"
+count = 1
+
+[[allow]]
+path = "crates/flui-native/src/drag/web.rs"
+count = 1
+
+[[allow]]
+path = "crates/flui-native/src/drag/x11.rs"
+count = 2
+
+[[allow]]
+path = "crates/flui-native/src/input/linux/x11.rs"
+count = 1
+
+[[allow]]
+path = "crates/flui-native/src/owner/apple/ios.rs"
+count = 1
+
+[[allow]]
+path = "crates/flui-native/src/owner/apple/macos/loop_control.rs"
+count = 1
+
+[[allow]]
+path = "crates/flui-native/src/owner/apple/macos/owner_lane.rs"
+count = 3
+
+[[allow]]
+path = "crates/flui-native/src/owner/call_point.rs"
+count = 1
+
+[[allow]]
+path = "crates/flui-native/src/owner/mod.rs"
+count = 1
+
+[[allow]]
+path = "crates/flui-native/src/owner/web.rs"
+count = 1
+
+[[allow]]
+path = "crates/flui-native/src/owner/window_delivery.rs"
+count = 1
+
+[[allow]]
+path = "crates/flui-native/src/owner/winit.rs"
+count = 2
+
+[[allow]]
+path = "crates/flui-native/src/text/apple/client.rs"
+count = 1
+
+[[allow]]
+path = "crates/flui-native/src/text/windows/tsf/document.rs"
+count = 1
+
+[[allow]]
+path = "crates/flui-native/src/text/windows/tsf/mod.rs"
+count = 4
+
+[[allow]]
+path = "crates/flui-painting/src/text_layout/context.rs"
+count = 1
+
+[[allow]]
+path = "crates/flui-painting/src/text_layout/system_fallback.rs"
+count = 1
+
+[[allow]]
+path = "crates/flui-platform/src/capability/runtime_local.rs"
+count = 1
+
+[[allow]]
+path = "crates/flui-platform/src/host_notice.rs"
+count = 1
+
+[[allow]]
+path = "crates/flui-platform/src/text_store/owner_calls.rs"
+count = 4
+
+[[allow]]
+path = "crates/flui-rendering/src/pipeline/owner/accessors.rs"
+count = 1
+
+[[allow]]
+path = "crates/flui-rendering/src/pipeline/owner/hit_slop.rs"
+count = 1
+
+[[allow]]
+path = "crates/flui-rendering/src/pipeline/owner/layout.rs"
+count = 2
+
+[[allow]]
+path = "crates/flui-rendering/src/pipeline/owner/paint.rs"
+count = 2
+
+[[allow]]
+path = "crates/flui-rendering/src/pipeline/owner/semantics.rs"
+count = 1
+
+[[allow]]
+path = "crates/flui-rendering/src/pipeline/owner/subtree_arena.rs"
+count = 4
+
+[[allow]]
+path = "crates/flui-rendering/src/storage/entry.rs"
+count = 2
+
+[[allow]]
+path = "crates/flui-runtime/src/capability.rs"
+count = 1
+
+[[allow]]
+path = "crates/flui-runtime/src/dev_agent.rs"
+count = 1
+
+[[allow]]
+path = "crates/flui-runtime/src/input_tap.rs"
+count = 4
+
+[[allow]]
+path = "crates/flui-runtime/src/lifecycle_state.rs"
+count = 1
+
+[[allow]]
+path = "crates/flui-runtime/src/overlay_style.rs"
+count = 1
+
+[[allow]]
+path = "crates/flui-runtime/src/owner.rs"
+count = 4
+
+[[allow]]
+path = "crates/flui-runtime/src/owner/callback.rs"
+count = 1
+
+[[allow]]
+path = "crates/flui-runtime/src/owner/close.rs"
+count = 2
+
+[[allow]]
+path = "crates/flui-runtime/src/owner/delivery.rs"
+count = 19
+
+[[allow]]
+path = "crates/flui-runtime/src/owner/presentation_dispatch.rs"
+count = 6
+
+[[allow]]
+path = "crates/flui-runtime/src/presentation.rs"
+count = 2
+
+[[allow]]
+path = "crates/flui-runtime/src/renderer_binding.rs"
+count = 2
+
+[[allow]]
+path = "crates/flui-runtime/src/ui_runtime/agent_inspect.rs"
+count = 1
+
+[[allow]]
+path = "crates/flui-runtime/src/ui_runtime/agent_serve.rs"
+count = 1
+
+[[allow]]
+path = "crates/flui-runtime/src/ui_runtime/agent_wait.rs"
+count = 1
+
+[[allow]]
+path = "crates/flui-runtime/src/ui_runtime/commands.rs"
+count = 16
+
+[[allow]]
+path = "crates/flui-runtime/src/ui_runtime/construct.rs"
+count = 5
+
+[[allow]]
+path = "crates/flui-runtime/src/ui_runtime/frame.rs"
+count = 17
+
+[[allow]]
+path = "crates/flui-runtime/src/ui_runtime/frame_clock.rs"
+count = 2
+
+[[allow]]
+path = "crates/flui-runtime/src/ui_runtime/input.rs"
+count = 17
+
+[[allow]]
+path = "crates/flui-runtime/src/ui_runtime/mod.rs"
+count = 5
+
+[[allow]]
+path = "crates/flui-runtime/src/ui_runtime/preferences.rs"
+count = 5
+
+[[allow]]
+path = "crates/flui-runtime/src/ui_runtime/presentation_lifecycle.rs"
+count = 11
+
+[[allow]]
+path = "crates/flui-runtime/src/ui_runtime/presentations.rs"
+count = 8
+
+[[allow]]
+path = "crates/flui-runtime/src/ui_runtime/pump.rs"
+count = 8
+
+[[allow]]
+path = "crates/flui-scheduler/src/async_driver.rs"
+count = 6
+
+[[allow]]
+path = "crates/flui-scheduler/src/completion_wake.rs"
+count = 3
+
+[[allow]]
+path = "crates/flui-scheduler/src/post_frame.rs"
+count = 2
+
+[[allow]]
+path = "crates/flui-scheduler/src/scheduler.rs"
+count = 3
+
+[[allow]]
+path = "crates/flui-scheduler/src/scheduler/execution.rs"
+count = 2
+
+[[allow]]
+path = "crates/flui-scheduler/src/scheduler/observer_delivery.rs"
+count = 3
+
+[[allow]]
+path = "crates/flui-scheduler/src/scheduler/post_frame_dispatch.rs"
+count = 1
+
+[[allow]]
+path = "crates/flui-scheduler/src/scheduler/teardown.rs"
+count = 1
+
+[[allow]]
+path = "crates/flui-scheduler/src/wake_delivery.rs"
+count = 2
+
+[[allow]]
+path = "crates/flui-semantics/src/agent.rs"
+count = 1
+
+[[allow]]
+path = "crates/flui-semantics/src/owner.rs"
+count = 2
+
+[[allow]]
+path = "crates/flui-view/src/background.rs"
+count = 3
+
+[[allow]]
+path = "crates/flui-view/src/binding.rs"
+count = 4
+
+[[allow]]
+path = "crates/flui-view/src/element/async_slot.rs"
+count = 2
+
+[[allow]]
+path = "crates/flui-view/src/element/behavior.rs"
+count = 8
+
+[[allow]]
+path = "crates/flui-view/src/element/behavior_commons.rs"
+count = 2
+
+[[allow]]
+path = "crates/flui-view/src/element/sparse_children.rs"
+count = 2
+
+[[allow]]
+path = "crates/flui-view/src/lifecycle.rs"
+count = 1
+
+[[allow]]
+path = "crates/flui-view/src/observation.rs"
+count = 2
+
+[[allow]]
+path = "crates/flui-view/src/owner/build_owner.rs"
+count = 6
+
+[[allow]]
+path = "crates/flui-view/src/owner/element_owner.rs"
+count = 2
+
+[[allow]]
+path = "crates/flui-view/src/owner/external_build_inbox.rs"
+count = 3
+
+[[allow]]
+path = "crates/flui-view/src/owner/global_key_scope.rs"
+count = 2
+
+[[allow]]
+path = "crates/flui-view/src/owner/mod.rs"
+count = 2
+
+[[allow]]
+path = "crates/flui-view/src/owner/unmount_hooks.rs"
+count = 1
+
+[[allow]]
+path = "crates/flui-view/src/persist/persisted.rs"
+count = 9
+
+[[allow]]
+path = "crates/flui-view/src/reactive/mod.rs"
+count = 17
+
+[[allow]]
+path = "crates/flui-view/src/tree/element_tree.rs"
+count = 7
+
+[[allow]]
+path = "crates/flui-widgets/src/interaction/listener.rs"
+count = 2
+
+[[allow]]
+path = "crates/flui-widgets/src/interaction/raw_gesture_detector.rs"
+count = 2
+
+[[allow]]
+path = "crates/flui-widgets/src/router/router.rs"
+count = 1
+
+[[allow]]
+path = "crates/flui-widgets/src/text/text_store.rs"
+count = 2
+
+[[allow]]
+path = "packages/flui-devtools/src/capture.rs"
+count = 2
+
+[[allow]]
+path = "packages/flui-material/src/scaffold_messenger.rs"
+count = 5

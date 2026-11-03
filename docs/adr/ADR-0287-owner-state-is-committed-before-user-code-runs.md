@@ -1,8 +1,9 @@
 # ADR-0287: Owner state is committed before user code runs
 
 - **Status:** Accepted (2026-11-03). Partly implemented: `flui-foundation` has the primitives, and
-  the capability seam's `Completion` and `Persisted` use them; each other seam moves to them in
-  its own change (see Migration).
+  the capability seam's `Completion` and `Persisted` use them, and `cargo xtask catch-unwind`
+  counts the hand-written catching left; each other seam moves to them in its own change (see
+  Migration).
 - **Date:** 2026-11-03
 - **Related:** [ADR-0281](ADR-0281-a-destructor-that-panics-during-an-unwind-aborts-as-in-std.md)
   (what a destructor that panics costs, and the containment after a caught failure);
@@ -25,9 +26,9 @@ classes that come from that order:
 | Accepted work or an obligation is lost on a failure path | ~8% | a re-arm only when the inbox was not empty; a flag cleared before the delivery that failed |
 | A late answer is taken for the answer to a newer request | part of ~12% | a read issued after a write joins the read issued before it |
 
-Each fix closed one call site, and the next review found its neighbour. The workspace has about
-670 hand-written `catch_unwind` calls outside tests, most of them in owners that order this
-themselves.
+Each fix closed one call site, and the next review found its neighbour. The workspace's production
+code has about 400 hand-written `catch_unwind` calls in 130 files, most of them in owners that
+order this themselves.
 
 How does an owner change its state and call user code so that the four classes cannot be
 written?
@@ -122,9 +123,13 @@ kinds of request apart at compile time.
   `commit` panics with `BUG:`, an obligation dropped by a panic is put back and one raised during
   a delivery survives `discharge`, a redeemed ticket is not accepted twice and an invalidated one
   is stale.
-- Each migrated seam deletes its hand-written ordering in the same change. Once the first seam
-  has moved, a `cargo xtask` gate counts the remaining `catch_unwind` calls in owner code, and the
-  count only goes down.
+- Each migrated seam deletes its hand-written ordering in the same change and lowers its count in
+  `cargo xtask catch-unwind`, which counts the hand-written `catch_unwind` calls of production code
+  per file (`tools/xtask/allowlists/catch-unwind.toml`, part of `cargo xtask checks`). The counts
+  are exact and only go down, so an owner that starts catching by hand fails the gate until it
+  goes through `commit` or `FirstPanic`, or the allowlist's diff says why it cannot. The
+  primitives in `flui_foundation::panic` and `flui-native`'s OS entry (ADR-0151 §16) are where
+  catching is the job, and are not counted.
 
 ## Pros and cons of the options
 
@@ -168,6 +173,11 @@ is the one that propagates; its refresh queues the release of a close hold, the 
 watch and the listeners' delivery, so a release that panics no longer leaves the watch unstarted.
 Work whose failure the owner must observe itself (a spawn whose refusal resets `watching`) keeps
 its own `catch_unwind` inside the queued call.
+
+`SelectionArea` already contains its fan-out with `FirstPanic` and has no hand-written
+`catch_unwind` left. Its state is spread over the separate cells of its model, so `commit` reaches
+it only once that model is one cell; until then the gate has nothing of it to count. The next
+seams are the ones the gate counts most of.
 
 ## More information
 
