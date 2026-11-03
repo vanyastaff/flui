@@ -509,6 +509,8 @@ fn frame_pacing_and_pump_matrix() {
             ("presentation_text_input::a_press_outside_the_field_commits_the_composition_before_its_handlers", presentation_text_input::a_press_outside_the_field_commits_the_composition_before_its_handlers as fn()),
             ("overlay_style::each_style_change_is_delivered_once", overlay_style::each_style_change_is_delivered_once as fn()),
             ("external_textures::a_fed_frame_repaints_and_reaches_the_raster_side", external_textures::a_fed_frame_repaints_and_reaches_the_raster_side as fn()),
+            ("external_textures::a_fed_frame_damages_only_the_texture", external_textures::a_fed_frame_damages_only_the_texture as fn()),
+            ("external_textures::a_hidden_texture_stops_painting_after_one_frame", external_textures::a_hidden_texture_stops_painting_after_one_frame as fn()),
             ("external_textures::unmounting_the_owner_retires_its_texture", external_textures::unmounting_the_owner_retires_its_texture as fn()),
             ("overlay_style::a_refused_frame_announces_nothing", overlay_style::a_refused_frame_announces_nothing as fn()),
             ("overlay_style::a_detached_presentation_resends_its_style", overlay_style::a_detached_presentation_resends_its_style as fn()),

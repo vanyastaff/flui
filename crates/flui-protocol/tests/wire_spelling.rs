@@ -9,12 +9,12 @@ use std::fmt::Debug;
 use flui_protocol::method::{MethodEffect, ServedBy, Tier};
 use flui_protocol::{
     ActOutcome, ActParams, ActionName, Actionability, ActionabilityCheck, AuditReport, AuditRule,
-    CaptureMeta, CaptureSource, ChangedField, Condition, DeviceClass, Direction, EffectKind,
-    EffectUnit, ElementRef, ErrorCode, ErrorObject, Event, EventKind, FramePhase, HandleKind,
-    Hello, InputKind, InputParams, InputPath, Isolation, Journal, LocateParams, Locator, Matches,
-    PerfExpectParams, PerfReport, PointerButton, PointerDevice, PressKeysParams, ProtocolVersion,
-    Role, ScrollUnit, Snapshot, SwipeParams, TapParams, Target, TextMatch, UnsettledReason,
-    Verdict, WaitOutcome, WaitParams,
+    CaptureMeta, CaptureSource, ChangedField, ClientRole, Condition, DeviceClass, Direction,
+    EffectKind, EffectUnit, ElementRef, ErrorCode, ErrorObject, Event, EventKind, FramePhase,
+    HandleKind, Hello, InputKind, InputParams, InputPath, Isolation, Journal, LocateParams,
+    Locator, Matches, PerfExpectParams, PerfReport, PointerButton, PointerDevice, PressKeysParams,
+    ProtocolVersion, Role, ScrollUnit, Snapshot, SwipeParams, TapParams, Target, TextMatch,
+    UnsettledReason, Verdict, WaitOutcome, WaitParams,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -55,6 +55,7 @@ fn every_vocabulary_enum_is_spelled_as_it_is_named() {
     spelled_as_named(AuditRule::ALL, AuditRule::name);
     spelled_as_named(CaptureSource::ALL, CaptureSource::name);
     spelled_as_named(ChangedField::ALL, ChangedField::name);
+    spelled_as_named(ClientRole::ALL, ClientRole::name);
     spelled_as_named(DeviceClass::ALL, DeviceClass::name);
     spelled_as_named(Direction::ALL, Direction::name);
     spelled_as_named(EffectKind::ALL, EffectKind::name);
@@ -474,4 +475,36 @@ fn a_hello_names_the_token_version_and_client() {
         "client": "flui-driver/0.1.0",
     }));
     assert_eq!(hello.protocol, ProtocolVersion::new(0, 5));
+}
+
+#[test]
+fn a_hello_names_its_role_only_when_it_observes() {
+    let observer: Hello = round_trips(json!({
+        "token": "secret",
+        "protocol": "0.9",
+        "role": "observer",
+    }));
+    assert_eq!(observer.role, ClientRole::Observer);
+    let driver: Hello = round_trips(json!({"token": "secret", "protocol": "0.9"}));
+    assert_eq!(
+        driver.role,
+        ClientRole::Driver,
+        "a hello naming no role drives"
+    );
+    assert_eq!(
+        serde_json::from_value::<Hello>(json!({
+            "token": "secret", "protocol": "0.9", "role": "driver",
+        }))
+        .map(|hello| hello.role)
+        .ok(),
+        Some(ClientRole::Driver),
+        "a hello may name the driver's role too"
+    );
+    assert!(
+        serde_json::from_value::<Hello>(json!({
+            "token": "secret", "protocol": "0.9", "role": "admin",
+        }))
+        .is_err(),
+        "a role the app does not know is refused, never read as another"
+    );
 }

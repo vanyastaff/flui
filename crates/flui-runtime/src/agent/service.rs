@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use flui_protocol::AppInfo;
 use flui_view::dev_agent::AgentWindow;
+use parking_lot::Mutex;
 use web_time::Instant;
 
 use super::registry::{self, Registry};
@@ -50,8 +51,9 @@ pub struct ServiceConfig {
     pub app: AppInfo,
     /// The bounds the service serves within.
     pub limits: Limits,
-    /// Runs once when the app's driver goes: the first conversation past its hello ends while
-    /// the service is not stopped. `None` claims no driver. It runs on the transport's thread,
+    /// Runs once when the app's driver goes: the conversation admitted as its driver ends while
+    /// the service is not stopped, and no other driver is admitted after it (ADR-0288 §8).
+    /// `None`: the driver's going frees the seat for the next. It runs on the transport's thread,
     /// with no lock of the service held, and a panic in it is contained.
     pub on_driver_gone: Option<Box<dyn Fn() + Send + Sync>>,
 }
@@ -98,6 +100,26 @@ pub struct Service {
     shared: Arc<Shared>,
 }
 
+/// The app's driver seat (ADR-0288 §8): one conversation drives the app at a time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Seat {
+    /// No conversation drives the app; the next driver's hello takes the seat.
+    Free,
+    /// A conversation drives the app.
+    Held,
+    /// The driver went and its obligation ran: the app is ending, and admits no other driver.
+    Ended,
+}
+
+/// Why a driver's hello found the seat taken.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Taken {
+    /// Another conversation drives the app.
+    Held,
+    /// The driver went and the app is ending.
+    Ended,
+}
+
 /// What the conversations of one service share.
 pub(super) struct Shared {
     pub(super) registry: Registry,
@@ -105,8 +127,9 @@ pub(super) struct Shared {
     pub(super) limits: Limits,
     pub(super) app: AppInfo,
     on_driver_gone: Option<Box<dyn Fn() + Send + Sync>>,
-    /// Set by the first conversation past its hello when a driver is claimed.
-    driver_claimed: AtomicBool,
+    /// Taken by the conversation admitted as the driver, and given back when it ends. Locked
+    /// only to read or swap the state, never across user code.
+    driver: Mutex<Seat>,
     stopped: AtomicBool,
     /// Conversations accepted and not yet dropped.
     live: AtomicUsize,
@@ -118,19 +141,34 @@ impl Shared {
         self.stopped.load(Ordering::SeqCst)
     }
 
-    /// Claims the driver for a conversation just past its hello: `true` for the first, when
-    /// the service has a driver to claim.
-    pub(super) fn claim_driver(&self) -> bool {
-        self.on_driver_gone.is_some() && !self.driver_claimed.swap(true, Ordering::SeqCst)
+    /// Takes the driver's seat for a conversation whose hello asks to drive.
+    ///
+    /// # Errors
+    ///
+    /// [`Taken::Held`] while another conversation drives the app, and [`Taken::Ended`] once the
+    /// driver went and the app is ending.
+    pub(super) fn claim_driver(&self) -> Result<(), Taken> {
+        let mut seat = self.driver.lock();
+        match *seat {
+            Seat::Free => {
+                *seat = Seat::Held;
+                Ok(())
+            }
+            Seat::Held => Err(Taken::Held),
+            Seat::Ended => Err(Taken::Ended),
+        }
     }
 
-    /// The driver's conversation ended: runs the obligation, contained, unless the service
-    /// stopped.
+    /// The driver's conversation ended. Unless the service stopped, its obligation runs,
+    /// contained, and the seat stays ended; with no obligation, the seat is free again.
     pub(super) fn driver_gone(&self) {
-        if self.is_stopped() {
-            return;
-        }
-        if let Some(gone) = &self.on_driver_gone {
+        let gone = self.on_driver_gone.as_ref().filter(|_| !self.is_stopped());
+        *self.driver.lock() = if gone.is_some() {
+            Seat::Ended
+        } else {
+            Seat::Free
+        };
+        if let Some(gone) = gone {
             let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(gone));
             if let Err(payload) = ran {
                 let text = flui_foundation::panic::payload_text(payload.as_ref());
@@ -166,7 +204,7 @@ impl Service {
                 limits,
                 app,
                 on_driver_gone,
-                driver_claimed: AtomicBool::new(false),
+                driver: Mutex::new(Seat::Free),
                 stopped: AtomicBool::new(false),
                 live: AtomicUsize::new(0),
                 next_conversation: AtomicU64::new(0),

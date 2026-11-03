@@ -102,6 +102,163 @@ pub(crate) fn a_panicking_semantics_callback_leaves_the_phase() {
     );
 }
 
+/// A semantics lifecycle hook, the wake after it, or the owner's teardown
+/// panics: the transition is already committed, so the root's first assembly
+/// is queued and announced, the disposed event still goes out, and the first
+/// panic reaches the caller.
+pub(crate) fn a_failing_semantics_lifecycle_hook_keeps_the_transition() {
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+    /// Panics as it is destroyed while armed.
+    struct PanicsOnDrop(Arc<AtomicBool>);
+    impl Drop for PanicsOnDrop {
+        fn drop(&mut self) {
+            if self.0.swap(false, Ordering::SeqCst) {
+                std::panic::panic_any("teardown failed");
+            }
+        }
+    }
+
+    /// A leaf whose tap action captures a value that panics as it is
+    /// destroyed while `armed`.
+    #[derive(Debug)]
+    struct ActionLeaf(Arc<AtomicBool>);
+    impl flui_foundation::inspect::Inspect for ActionLeaf {
+        fn kind(&self) -> &'static str {
+            "ActionLeaf"
+        }
+
+        fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+    }
+    impl RenderBox for ActionLeaf {
+        type Arity = Leaf;
+        type ParentData = BoxParentData;
+        fn perform_layout(
+            &mut self,
+            ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>,
+        ) -> flui_rendering::RenderResult<Size> {
+            Ok(ctx.constraints().constrain(Size::new(20.0, 20.0)))
+        }
+        fn describe_semantics_configuration(&self, config: &mut SemanticsConfiguration) {
+            config.set_label("root");
+            let capture = PanicsOnDrop(Arc::clone(&self.0));
+            config.add_action(
+                SemanticsAction::Click,
+                std::rc::Rc::new(move |_| {
+                    let _ = &capture;
+                }),
+            );
+        }
+    }
+
+    /// An owner that painted one frame with semantics off and has nothing
+    /// left to do, publishing its semantics updates' sizes into the returned
+    /// list.
+    fn painted(
+        teardown: &Arc<AtomicBool>,
+    ) -> (flui_rendering::PipelineOwner, Arc<Mutex<Vec<usize>>>) {
+        let published = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::clone(&published);
+        let mut owner =
+            flui_rendering::PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
+        owner.set_semantics_update_callback(Arc::new(
+            move |update: &flui_semantics::TreeUpdate| {
+                sink.lock()
+                    .expect("the list is not poisoned")
+                    .push(update.nodes.len());
+            },
+        ));
+        owner.set_root_render_object(Box::new(ActionLeaf(Arc::clone(teardown))));
+        owner.set_root_constraints(Some(constraints()));
+        let (owner, frame) = owner.run_frame();
+        frame.expect("the first frame paints");
+        assert!(
+            !owner.has_dirty_nodes(),
+            "the first frame left nothing to do"
+        );
+        (owner, published)
+    }
+
+    fn counter(
+        owner: &mut flui_rendering::PipelineOwner,
+        panics: Option<&'static str>,
+    ) -> Arc<AtomicUsize> {
+        let count = Arc::new(AtomicUsize::new(0));
+        let counted = Arc::clone(&count);
+        owner.set_on_need_visual_update(move || {
+            counted.fetch_add(1, Ordering::SeqCst);
+            if let Some(message) = panics {
+                std::panic::panic_any(message);
+            }
+        });
+        count
+    }
+
+    for wake_panics in [false, true] {
+        let (mut owner, published) = painted(&Arc::new(AtomicBool::new(false)));
+        let wakes = counter(&mut owner, wake_panics.then_some("wake failed"));
+        owner.set_on_semantics_owner_created(|| std::panic::panic_any("created hook failed"));
+        let payload = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            owner.set_semantics_enabled(true);
+        }))
+        .expect_err("the hook's panic reaches the caller");
+        assert_eq!(
+            flui_foundation::panic::payload_text(payload.as_ref()),
+            Some("created hook failed"),
+            "the first panic is the one that goes on"
+        );
+        assert!(owner.semantics_enabled(), "semantics stays enabled");
+        assert!(
+            owner.has_dirty_nodes(),
+            "the root's first assembly is queued before the hook runs"
+        );
+        assert_eq!(
+            wakes.load(Ordering::SeqCst),
+            1,
+            "the queued assembly is announced"
+        );
+
+        let _ = counter(&mut owner, None);
+        let (_, frame) = owner.run_frame();
+        frame.expect("the next frame runs");
+        assert!(
+            published
+                .lock()
+                .expect("the list is not poisoned")
+                .last()
+                .is_some_and(|nodes| *nodes > 0),
+            "the next frame publishes the first semantics tree"
+        );
+    }
+
+    let teardown = Arc::new(AtomicBool::new(false));
+    let (mut owner, _) = painted(&teardown);
+    owner.set_semantics_enabled(true);
+    let (mut owner, frame) = owner.run_frame();
+    frame.expect("the frame assembles semantics");
+    let disposed = Arc::new(AtomicUsize::new(0));
+    let counted = Arc::clone(&disposed);
+    owner.set_on_semantics_owner_disposed(move || {
+        counted.fetch_add(1, Ordering::SeqCst);
+    });
+    teardown.store(true, Ordering::SeqCst);
+    let payload = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        owner.set_semantics_enabled(false);
+    }))
+    .expect_err("the teardown's panic reaches the caller");
+    assert_eq!(
+        flui_foundation::panic::payload_text(payload.as_ref()),
+        Some("teardown failed")
+    );
+    assert!(!owner.semantics_enabled(), "semantics stays disabled");
+    assert_eq!(
+        disposed.load(Ordering::SeqCst),
+        1,
+        "the disposed event goes out after a teardown that panicked"
+    );
+}
+
 /// A fixed-size leaf that reports a configurable `SemanticsConfiguration`.
 ///
 /// Stands in for a `Semantics`/button-like leaf widget — the real

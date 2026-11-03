@@ -56,6 +56,9 @@ fn lifecycle_matrix() {
         ("attach_detach_lifecycle::a_relocated_subtree_takes_its_new_depth", crate::attach_detach_lifecycle::a_relocated_subtree_takes_its_new_depth),
         ("dispose_eviction::removing_a_subtree_evicts_its_dirty_entries", crate::dispose_eviction::removing_a_subtree_evicts_its_dirty_entries),
         ("dispose_eviction::render_tree_retirement_preserves_independent_envelopes", crate::dispose_eviction::render_tree_retirement_preserves_independent_envelopes),
+        ("dispose_eviction::an_exhausted_render_slot_retires_and_its_last_id_never_resolves_again", crate::dispose_eviction::an_exhausted_render_slot_retires_and_its_last_id_never_resolves_again),
+        ("dispose_eviction::a_clear_whose_destructor_panics_leaves_every_old_id_stale", crate::dispose_eviction::a_clear_whose_destructor_panics_leaves_every_old_id_stale),
+        ("dispose_eviction::a_destructor_that_panics_during_removal_still_commits_the_owner", crate::dispose_eviction::a_destructor_that_panics_during_removal_still_commits_the_owner),
         ("pipeline_scenarios::repeated_churn_cycles_stay_clean_and_generations_protect_every_round", crate::pipeline_scenarios::repeated_churn_cycles_stay_clean_and_generations_protect_every_round),
         ("structural_invalidation::pure_reorder_marks_layout_only", crate::structural_invalidation::pure_reorder_marks_layout_only),
     ];
@@ -78,6 +81,7 @@ fn semantics_assembly_matrix() {
         ("semantics_assembly::nonfinite_reading_order_is_refused_before_publication", crate::semantics_assembly::nonfinite_reading_order_is_refused_before_publication),
         ("semantics_assembly::re_assembling_marked_subtrees_refuses_like_the_whole_tree", crate::semantics_assembly::re_assembling_marked_subtrees_refuses_like_the_whole_tree),
         ("semantics_assembly::a_panicking_semantics_callback_leaves_the_phase", crate::semantics_assembly::a_panicking_semantics_callback_leaves_the_phase),
+        ("semantics_assembly::a_failing_semantics_lifecycle_hook_keeps_the_transition", crate::semantics_assembly::a_failing_semantics_lifecycle_hook_keeps_the_transition),
         ("semantics_assembly::excludes_semantics_subtree_drops_descendant_content", crate::semantics_assembly::excludes_semantics_subtree_drops_descendant_content),
         ("semantics_assembly::explicit_child_nodes_forms_direct_contributors", crate::semantics_assembly::explicit_child_nodes_forms_direct_contributors),
         ("semantics_assembly::merge_semantics_boundary_collapses_plain_children_into_one_node", crate::semantics_assembly::merge_semantics_boundary_collapses_plain_children_into_one_node),

@@ -9,7 +9,7 @@ use crate::version::ProtocolVersion;
 vocabulary! {
     /// Why a call failed: one fixed code an agent branches on, the message
     /// beside it being for people. ADR-0080 fixed the list and its spelling,
-    /// and ADR-0238 added four; a new code is additive.
+    /// ADR-0238 added four and ADR-0288 one; a new code is additive.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
     #[cfg_attr(
         feature = "serde",
@@ -58,6 +58,9 @@ vocabulary! {
         Stale => "stale",
         /// Client and app share no protocol version; `app` and `client` say which each speaks.
         Version => "version",
+        /// The call needs the app's driver (ADR-0288 §8): a driver's hello while the app has
+        /// one, retried `soon`, or a call that acts from an observer.
+        NotDriver => "not_driver",
         /// The platform failed in a way no other code names. A code a newer
         /// schema added reads as this one.
         #[cfg_attr(feature = "serde", serde(other))]
@@ -300,7 +303,8 @@ impl std::error::Error for ErrorObject {}
 mod tests {
     use super::*;
 
-    /// ADR-0080's "Errors" list in its order, then ADR-0238's four, the catch-all last.
+    /// ADR-0080's "Errors" list in its order, then ADR-0238's four and ADR-0288's one, the
+    /// catch-all last.
     /// A code renamed, dropped or added without an ADR changing fails here.
     #[test]
     fn the_error_codes_are_adr_0080s() {
@@ -326,6 +330,7 @@ mod tests {
                 "not_actionable",
                 "stale",
                 "version",
+                "not_driver",
                 "platform",
             ],
         );

@@ -31,7 +31,10 @@ use flui_rendering::{
 };
 
 /// Callback capture retirement can deadlock against the retained node sender,
-/// so every setter/failure row runs in a bounded public consumer process.
+/// so every setter/failure row runs in a bounded public consumer process. The
+/// `inflight` rows replace a callback while a worker's wake is running: the
+/// setter must not wait for it, and the wake in flight retires the capture it
+/// took.
 #[test]
 fn pipeline_callback_replacement_reentry() {
     use flui_rendering::pipeline::{PipelineOwner, RenderInvalidationHandle};
@@ -67,6 +70,9 @@ fn pipeline_callback_replacement_reentry() {
             }
         }
         let (event, failure) = case.split_once('-').expect("event/failure case");
+        if failure == "inflight" {
+            replace_during_a_wake_in_flight(event, install);
+        }
         assert!(matches!(failure, "healthy" | "drop"));
         let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
         let id = owner.set_root_render_object(Box::new(RenderColoredBox::red(10.0, 10.0)));
@@ -163,10 +169,13 @@ fn pipeline_callback_replacement_reentry() {
     let failures: Vec<String> = [
         "visual-healthy",
         "visual-drop",
+        "visual-inflight",
         "created-healthy",
         "created-drop",
+        "created-inflight",
         "disposed-healthy",
         "disposed-drop",
+        "disposed-inflight",
     ]
     .into_iter()
     .filter_map(|case| {
@@ -179,6 +188,86 @@ fn pipeline_callback_replacement_reentry() {
     })
     .collect();
     assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// A worker's handle mark runs the visual-update wake, which holds until the
+/// owner thread has replaced the `event` callback. The replacement must not wait
+/// for the wake, and for the visual callback the wake that took the displaced
+/// capture is the one that destroys it.
+fn replace_during_a_wake_in_flight(
+    event: &str,
+    install: fn(&mut flui_rendering::pipeline::PipelineOwner, &str, Box<dyn Fn() + Send + Sync>),
+) -> ! {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Mutex, mpsc};
+    use std::thread::{self, ThreadId};
+    use std::time::Duration;
+
+    /// Records the thread that destroys the capture.
+    struct DestroyedOn(Arc<Mutex<Option<ThreadId>>>);
+    impl Drop for DestroyedOn {
+        fn drop(&mut self) {
+            *self.0.lock().expect("the record is not poisoned") = Some(thread::current().id());
+        }
+    }
+
+    let mut owner = flui_rendering::pipeline::PipelineOwner::new(
+        flui_rendering::TextContextHandle::standalone(),
+    );
+    let id = owner.set_root_render_object(Box::new(RenderColoredBox::red(10.0, 10.0)));
+    let handle = owner
+        .render_invalidation_handle(id)
+        .expect("attached public node sender");
+    let (entered_tx, entered_rx) = mpsc::channel::<()>();
+    let (release_tx, release_rx) = mpsc::channel::<()>();
+    let release_rx = Mutex::new(release_rx);
+    let armed = Arc::new(AtomicBool::new(false));
+    let stalled = Arc::new(AtomicBool::new(false));
+    let destroyed_on = Arc::new(Mutex::new(None));
+    let capture = DestroyedOn(Arc::clone(&destroyed_on));
+    let (wake_armed, wake_stalled) = (Arc::clone(&armed), Arc::clone(&stalled));
+    owner.set_on_need_visual_update(move || {
+        let _ = &capture;
+        if wake_armed.swap(false, Ordering::SeqCst) {
+            entered_tx
+                .send(())
+                .expect("the owner thread waits for the wake");
+            let released = release_rx
+                .lock()
+                .expect("one wake waits at a time")
+                .recv_timeout(Duration::from_secs(3));
+            if released.is_err() {
+                wake_stalled.store(true, Ordering::SeqCst);
+            }
+        }
+    });
+    // Armed only now: the setter itself wakes when local work is pending.
+    armed.store(true, Ordering::SeqCst);
+    let worker = thread::spawn(move || handle.mark_needs_paint());
+    let worker_id = worker.thread().id();
+    entered_rx.recv().expect("the wake starts on the worker");
+    install(&mut owner, event, Box::new(|| {}));
+    let _ = release_tx.send(());
+    worker
+        .join()
+        .expect("the worker's wake returns")
+        .expect("the request is accepted");
+    assert!(
+        !stalled.load(Ordering::SeqCst),
+        "a callback setter waited for a wake in flight on another thread"
+    );
+    assert!(
+        owner.has_pending_invalidations(),
+        "the worker's request is queued"
+    );
+    if event == "visual" {
+        assert_eq!(
+            *destroyed_on.lock().expect("the record is not poisoned"),
+            Some(worker_id),
+            "the wake in flight destroys the capture it took"
+        );
+    }
+    crate::common::isolated_case_passed()
 }
 
 /// Loose `0..=hi x 0..=hi` constraints (children settle at natural size).

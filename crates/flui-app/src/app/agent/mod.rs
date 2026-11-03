@@ -29,7 +29,7 @@
 //! # Exit on disconnect
 //!
 //! A launch with [`EXIT_ON_DISCONNECT_ENV`](flui_protocol::launch::EXIT_ON_DISCONNECT_ENV)
-//! makes the first connection that passed its hello the app's driver: when it
+//! makes the connection admitted as the app's driver (ADR-0288 §8) the one it exits with: when it
 //! closes, the app quits, past every close guard, and the process exits with
 //! [`EXIT_DISCONNECTED`](flui_protocol::launch::EXIT_DISCONNECTED) once the
 //! teardown has written what the application persisted.

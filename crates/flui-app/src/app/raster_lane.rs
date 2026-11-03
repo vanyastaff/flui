@@ -59,7 +59,9 @@ use std::sync::Arc;
 use crossbeam_channel::Receiver;
 use flui_engine::{EngineError, PresentDisposition, RasterBackend};
 #[cfg(not(target_arch = "wasm32"))]
-use flui_engine::{FrameDropReason, PumpOutcome, RasterAck, RasterHandle, RasterOwner};
+use flui_engine::{
+    FrameDropReason, PumpOutcome, RasterAck, RasterHandle, RasterOwner, RasterSubmitError,
+};
 #[cfg(not(target_arch = "wasm32"))]
 use flui_foundation::{FrameEpoch, FrameStamp, GpuResourceGeneration, PresentationAddress};
 use flui_layer::Scene;
@@ -359,11 +361,18 @@ impl<B: RasterBackend> RasterLane<B> {
         let damage = self.damage.diff(&scene, surface.physical_size);
         let snapshot = SceneSnapshot::new(stamp, damage, scene);
         if let Err(error) = self.handle.submit(snapshot) {
-            // Inline, the owner lives in this very struct, so
-            // `OwnerGone`/`ShuttingDown` can only mean teardown is already
-            // underway and `AddressMismatch` cannot happen (the stamp above
-            // is built from this lane's own bound address).
-            tracing::error!(%error, "raster lane: frame submit refused");
+            match error {
+                // Inline, the owner lives in this very struct, so a refusal
+                // can only mean teardown is already underway.
+                RasterSubmitError::ShuttingDown | RasterSubmitError::OwnerGone => {
+                    tracing::error!(%error, "raster lane: frame submit refused");
+                }
+                // The stamp above is built from this lane's own bound
+                // address, so the owner cannot refuse it on address.
+                RasterSubmitError::AddressMismatch { .. } => {
+                    tracing::error!(%error, "BUG: raster lane: own frame refused on address");
+                }
+            }
             self.drain_acks();
             return SubmitVerdict::Failed;
         }
@@ -429,11 +438,10 @@ impl<B: RasterBackend> RasterLane<B> {
             // `Idle`/`ShutdownComplete`: an accepted inline submit is
             // pumped by the very next call on this same thread, so
             // observing no frame means the mailbox protocol was violated.
-            // The wildcard also absorbs any future `#[non_exhaustive]`
-            // variant, which this lane must classify deliberately before
-            // relying on it — `Failed` (no retry armed) is the conservative
-            // default until then.
-            PumpOutcome::Idle | PumpOutcome::ShutdownComplete | _ => {
+            // `PumpOutcome` is closed, so a new outcome stops compiling here
+            // and is classified on purpose: `Failed` drains the epochs and
+            // arms no repaint, so it is never a default.
+            PumpOutcome::Idle | PumpOutcome::ShutdownComplete => {
                 tracing::error!(
                     ?outcome,
                     "raster lane: unclassified pump outcome right after an accepted submit"

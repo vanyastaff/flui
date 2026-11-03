@@ -55,7 +55,7 @@ use crate::{constraints::BoxConstraints, storage::RenderTree};
 
 use super::{
     handle::{DirtyRequest, DirtySender},
-    notifier::VisualUpdateNotifier,
+    notifier::SharedNotifier,
     phase::{Idle, PipelinePhase},
     scheduler::{DirtyTracker, LayoutStamp},
 };
@@ -164,14 +164,15 @@ pub struct PipelineOwner<Phase: PipelinePhase = Idle> {
     /// The root render object ID of this pipeline.
     root_id: Option<RenderId>,
 
-    /// Consolidated visual-update + semantics-owner-lifecycle callback
-    /// notifier. Replaces three previously-separate `Box<dyn Fn() + Send +
-    /// Sync>` fields. See [`VisualUpdateNotifier`].
+    /// The visual-update and semantics-owner-lifecycle callbacks
+    /// ([`crate::pipeline::VisualUpdateNotifier`]), shared through
+    /// [`SharedNotifier`]: callers take owned snapshots and deliver them with
+    /// no guard held.
     ///
-    /// The owner keeps its own Arc clone for the `set_on_*` callback setters;
-    /// `scheduler` holds a second clone pointing at the same allocation for
-    /// the wake-on-mark path.
-    notifier: std::sync::Arc<parking_lot::RwLock<VisualUpdateNotifier>>,
+    /// The owner keeps its own clone for the `set_on_*` callback setters;
+    /// `scheduler`, the local inbox and the dirty channel's sender hold
+    /// clones of the same notifier for the wake-on-mark paths.
+    notifier: SharedNotifier,
 
     /// Dirty-work scheduling subsystem: dirty sets, mid-phase side queue,
     /// phase-guard flags, and the wake-on-mark notifier clone.
@@ -202,8 +203,8 @@ pub struct PipelineOwner<Phase: PipelinePhase = Idle> {
 
     /// The semantics tree owner (flui-semantics ARCHITECTURE.md, semantics assembly). `None` until semantics is enabled via
     /// [`Self::set_semantics_enabled`]`(true)`, which lazily creates it and
-    /// fires `fire_semantics_owner_created`; disposed (firing
-    /// `fire_semantics_owner_disposed`) on the next `false` transition.
+    /// then delivers the semantics-owner-created callback; disposed on the
+    /// next `false` transition, which then delivers the disposed callback.
     /// `Semantics::run_semantics` (`pipeline/owner/semantics.rs`) is the
     /// sole writer of its tree contents.
     semantics_owner: Option<SemanticsOwner>,

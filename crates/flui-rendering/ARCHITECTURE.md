@@ -239,25 +239,38 @@ bounds, while widget row
 `show_on_screen_reveals_offscreen_targets_on_both_axes_and_reverse` exercises
 actual viewport addressability, advertised native actions and visible output.
 
-### Render storage and pipeline callbacks retain user values on failure
+### Render storage and pipeline callbacks drop as std drops
 
 Dropping a render entry drops its render object, then its parent data; a
 render tree drops its entries in slot order, and a `VisualUpdateNotifier` its
-visual-update, created, then disposed callbacks. Once one of those destructors
-panics, or when the drop begins while the thread is already panicking, the
-remaining render objects, parent data and callback captures are retained, not
-dropped, and the first panic propagates (ADR-0127). Framework-owned entry
-state (geometry, links, layout cache) still drops normally. Semantic `dispose`
-is not invoked by physical destruction. Pinned by
+references to the visual-update, created, then disposed callbacks. If one of
+those destructors panics the rest are still dropped and the first panic
+propagates; one that panics while the thread is already unwinding aborts, as
+in std (ADR-0281, which supersedes ADR-0127). Framework-owned entry state
+(geometry, links, layout cache) drops normally. Semantic `dispose` is not
+invoked by physical destruction. Pinned by
 `render_tree_retirement_preserves_independent_envelopes`.
 
-### Callback replacement retires captures after unlocking
+### Pipeline callbacks run with no notifier guard held
 
-Pipeline callback setters install the new callback under the notifier write
-guard and drop the displaced one after releasing it, so a displaced capture's
-destructor can mark a node dirty and wake the pipeline. A panic in that
-destructor propagates and leaves the new callback installed. Pinned by
+The pipeline shares one notifier through `SharedNotifier`, whose lock never
+leaves `notifier.rs`: every wake site and lifecycle event takes an owned
+snapshot of its callback, releases the lock, and only then runs it (ADR-0287).
+A wake on a worker thread, from a `RenderInvalidationHandle`, may therefore
+re-enter a handle or wait for the owner thread while that thread replaces the
+callback. A setter commits its replacement for every wake that starts after
+it returns; a wake already in flight finishes with the callback it took, and
+when it holds the last reference its thread destroys the displaced capture.
+Setters retire the displaced callback after the lock is released, so its
+destructor can mark a node dirty and wake the pipeline; a panic in it
+propagates and leaves the new callback installed. Pinned by
 `pipeline_callback_replacement_reentry`.
+
+`set_semantics_enabled` commits the transition (the flag, the owner, the
+root's semantics seed, and on disable the owner's teardown) before the
+lifecycle callback and the visual-update wake run. Each of them runs even when
+an earlier one panics, and the first panic is resumed at the end. Pinned by
+`a_failing_semantics_lifecycle_hook_keeps_the_transition`.
 
 ### Caught hit-test panics do not change sibling coordinates
 
@@ -928,8 +941,9 @@ capture when it is absent from the FULL queue (a composited-layer update counts,
 since a patched graft changes pixels) and has a capture; otherwise it mints a
 new token. The capture stores its token (`RetainedSubtree::content`), so every
 eviction path drops the token with it, and a graft that served a layer update
-writes the new token back with its patches. The root is never captured, so its
-token lives in `PipelineOwner::root_content` under the same rule. Minted tokens
+writes the new token back with its patches. A root that is a repaint boundary is
+captured and replayed like any other (ADR-0253 §4); its token lives in
+`PipelineOwner::root_content` under the same rule. Minted tokens
 commit with the frame; an errored frame drops them, and the retry, still
 queued, mints again. Nested boundaries keep their stamp (token included)
 through an enclosing boundary's graft.
@@ -944,7 +958,7 @@ keeps both its token and its own pictures
 
 **Accepted trade-off:** a clean node that paints differently breaks this rule
 exactly as it already breaks grafting. A boundary whose capture was refused
-(it holds a leader or follower) mints every frame and is always damaged.
+(it holds a follower) mints every frame and is always damaged.
 Tests: `tests/boundary_content_tokens.rs`.
 
 ### Paint reports the offset to the nearest paint anchor
@@ -988,7 +1002,7 @@ layout and nothing else.
 is the literal reading — rejected on two counts. It is redundant: the arena walks the
 subtree of the dirty root, so every node that laid out is already under it, and `try_graft_pass`
 re-assembles a marked node's whole subtree. And it is expensive in a way that is easy to miss:
-each `add_node_needing_semantics` fires `fire_need_visual_update`, whose production callback asks
+each `add_node_needing_semantics` delivers the visual-update wake, whose production callback asks
 the platform to redraw, and the graft resolves every marked node by walking its ancestor chain —
 so an N-node relayout would cost N redraw requests and O(N·depth) graft work.
 
@@ -1053,7 +1067,7 @@ they were removed rather than adapted: they could not fail for a reason a user w
 
 ### Render-tree storage uses a `NodeSlab` with generational `RenderId` keys
 
-**Amended by [ADR-0252](../../docs/adr/ADR-0252-layout-walk-leases-nodes-on-demand.md):** the tree stores nodes in its own `NodeSlab` (`storage/node_slab.rs`), a `Vec` of slots with a free list. Each slot carries an in-flight bit and the parent link, its only copy, outside the `UnsafeCell` that holds the node, and a layout walk takes one `TreeLease` and acquires nodes on demand. The paragraphs below describe the original `Slab<RenderNode>` choice; the reasons for an arena with generational ids still stand.
+**Amended by [ADR-0252](../../docs/adr/ADR-0252-layout-walk-leases-nodes-on-demand.md):** the tree stores nodes in its own `NodeSlab` (`storage/node_slab.rs`), a `Vec` of slots with a free list. Each slot carries its generation, an in-flight bit and the parent link, its only copy, outside the `UnsafeCell` that holds the node, and a layout walk takes one `TreeLease` and acquires nodes on demand. The slab mints every `RenderId`: emptying a slot advances its generation, and a slot that runs out of generations retires instead of issuing one again. Removal takes the nodes out before any destructor runs, so a destructor that panics finds the tree and the owner already committed. The paragraphs below describe the original `Slab<RenderNode>` choice; the reasons for an arena with generational ids still stand.
 
 **Rule:** strategy clause "Behavior as floor, everything else designed for Rust"; constitution Anti-Patterns list ("`Arc<Mutex<>>` for tree structures — use arena/slotmap"); the ID-offset pattern documented in [`docs/architecture.md`](../../docs/architecture.md).
 
@@ -1261,6 +1275,10 @@ per live watch per painted frame and nothing while the value holds: a steady lay
 delivery and requests no frame (`leader_watch::a_watch_hears_only_changes`). A per-frame
 post-frame check would request frames itself; a value each render object reports from
 `perform_layout` needs an opt-in per object and a flush hook beside it.
+
+A leader replayed from its boundary's capture is indexed by `LayerTree::push_child` like a
+painted one, so a boundary that moves without repainting still publishes the leader where it now
+stands (`a_boundary_holding_a_leader_is_replayed_where_it_now_stands`).
 
 **Lag and coalescing.** A change is known once paint commits, so a follower that rebuilds from it
 shows the new value one frame later; that frame paints the same value and queues nothing. The

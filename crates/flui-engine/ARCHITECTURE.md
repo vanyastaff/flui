@@ -1301,6 +1301,18 @@ scene through headless capture. With feature `testing` and
 named direct/mask, full/partial, scaled/rebased and follower-state PNG witnesses.
 Screenshots complement the numerical readbacks; they do not replace them.
 
+### 22. The raster seam's outcome enums are closed
+
+`PresentDisposition`, `PumpOutcome`, `FrameDropReason` and `RasterSubmitError` carry
+no enum-level `#[non_exhaustive]`, for ADR-0068 §2's reason: the raster lane in
+`flui-app` turns each into a frame verdict, and a variant added later must stop
+compiling at that match instead of falling into a default that drops owed work.
+`PumpOutcome`'s struct variants keep their variant-level `#[non_exhaustive]`, so a
+new field stays additive. `FrameDropReason::requires_retry` is the one place a drop
+reason is classified for `RasterCompletion::retry_required` (ADR-0101); `false` is
+terminal for the frame. Each enum's doc example matches it from outside the crate
+with no wildcard arm, so marking it `#[non_exhaustive]` again fails that example.
+
 
 ### Reflected and scaled primitive bounds remain local
 
