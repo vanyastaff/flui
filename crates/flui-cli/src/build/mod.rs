@@ -34,6 +34,9 @@ pub(crate) mod app_floor;
 
 mod gradle_project;
 
+/// The generated `AndroidManifest.xml`
+pub(crate) mod android_manifest;
+
 pub(crate) mod platform;
 /// Platform scaffolding for new projects
 pub(crate) mod scaffold;
