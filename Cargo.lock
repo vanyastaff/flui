@@ -2078,7 +2078,6 @@ dependencies = [
  "accesskit_unix",
  "accesskit_windows",
  "android-activity",
- "anyhow",
  "async-io",
  "atspi",
  "block2 0.6.2",
