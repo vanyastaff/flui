@@ -1065,6 +1065,9 @@ impl host::Loop for X11Loop {
         let preferences = (self.start_preferences)(&self.background_executor, &self.signal);
         self.portal.set(Some(&preferences));
         guard.preferences = Some(preferences);
+        // A window the bootstrap opens starts in the portal's colour scheme,
+        // not in the light one it would otherwise wait a turn to leave.
+        self.deliver_appearance();
         self.app
             .ready(OwnerPlatform::new(
                 Arc::clone(&platform),
@@ -1136,6 +1139,14 @@ impl host::Preferences<X11Loop> for X11Loop {
             return Err(PlatformError::Preferences {
                 message: "the system's preferences are read on the X11 platform's owner thread"
                     .into(),
+            });
+        }
+        // A loop that stopped admitting work answers no read: the callbacks
+        // it retires as it ends, and code after `run`, see it closed, as on
+        // the Wayland host.
+        if !owner.signal.accepting() {
+            return Err(PlatformError::Preferences {
+                message: "the system's preferences require the live X11 loop".into(),
             });
         }
         owner

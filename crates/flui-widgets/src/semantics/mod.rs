@@ -48,8 +48,8 @@ use flui_rendering::{
     },
 };
 use flui_view::{
-    Child, EventCx, EventOutcome, IntoView, RenderObjectContext, RenderObjectContextError,
-    RenderView, WriterSource, impl_render_view,
+    Child, CreationSite, EventCx, EventOutcome, IntoView, RenderObjectContext,
+    RenderObjectContextError, RenderView, WriterSource, impl_render_view,
 };
 
 use crate::support::{ValueCallback, event_callback, ref_callback, value_callback};
@@ -246,6 +246,7 @@ pub struct Semantics {
         flui_foundation::geometry::AxisDirection,
     )>,
     child: Child,
+    site: CreationSite,
 }
 
 impl std::fmt::Debug for Semantics {
@@ -257,37 +258,41 @@ impl std::fmt::Debug for Semantics {
             .field("refresh_sources", &self.refresh.len())
             .field("options", &self.options)
             .field("child", &self.child)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
 impl Default for Semantics {
     fn default() -> Self {
+        // A trait fn cannot be `#[track_caller]`: the site is this line.
+        Self::at(SemanticsConfiguration::new(), CreationSite::here())
+    }
+}
+
+impl Semantics {
+    fn at(configuration: SemanticsConfiguration, site: CreationSite) -> Self {
         Self {
-            configuration: SemanticsConfiguration::new(),
+            configuration,
             event_actions: EventActions::default(),
             refresh: Vec::new(),
             options: SemanticsOptions::default(),
             scroll: None,
             child: Child::empty(),
+            site,
         }
     }
-}
 
-impl Semantics {
     /// Creates an empty semantics annotation.
+    #[track_caller]
     pub fn new() -> Self {
-        Self::default()
+        Self::at(SemanticsConfiguration::new(), CreationSite::here())
     }
 
     /// Creates a semantics annotation from a ready configuration.
+    #[track_caller]
     pub fn from_configuration(configuration: SemanticsConfiguration) -> Self {
-        Self {
-            configuration,
-            ..Self::default()
-        }
+        Self::at(configuration, CreationSite::here())
     }
-
     pub(crate) fn scroll_source(
         mut self,
         position: flui_rendering::view::ScrollPosition,
@@ -1452,32 +1457,47 @@ impl RenderView for Semantics {
     flui_view::single_child_view_children!();
 }
 
-impl_render_view!(Semantics);
+impl_render_view!(Semantics, site = site);
 
 /// Annotates an entire sliver subtree while retaining the sliver protocol.
 /// Use [`Semantics`] for individual box children. A supplied configuration may
 /// carry ordinary typed actions, collection metadata, relations or sort keys.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct SliverSemantics {
     configuration: SemanticsConfiguration,
     exclude_descendants: bool,
     child: Child,
+    site: CreationSite,
+}
+
+impl Default for SliverSemantics {
+    fn default() -> Self {
+        // A trait fn cannot be `#[track_caller]`: the site is this line.
+        Self::at(SemanticsConfiguration::default(), CreationSite::here())
+    }
 }
 
 impl SliverSemantics {
-    /// Creates an empty sliver annotation.
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Creates an annotation from a complete configuration.
-    pub fn from_configuration(configuration: SemanticsConfiguration) -> Self {
+    fn at(configuration: SemanticsConfiguration, site: CreationSite) -> Self {
         Self {
             configuration,
-            ..Self::default()
+            exclude_descendants: false,
+            child: Child::empty(),
+            site,
         }
     }
 
+    /// Creates an empty sliver annotation.
+    #[track_caller]
+    pub fn new() -> Self {
+        Self::at(SemanticsConfiguration::default(), CreationSite::here())
+    }
+
+    /// Creates an annotation from a complete configuration.
+    #[track_caller]
+    pub fn from_configuration(configuration: SemanticsConfiguration) -> Self {
+        Self::at(configuration, CreationSite::here())
+    }
     /// Supplies the accessible label.
     #[must_use]
     pub fn label(mut self, label: impl Into<flui_rendering::semantics::AttributedString>) -> Self {
@@ -1537,19 +1557,36 @@ impl RenderView for SliverSemantics {
     flui_view::single_child_view_children!();
 }
 
-impl_render_view!(SliverSemantics);
+impl_render_view!(SliverSemantics, site = site);
 
 /// Merges the semantics of all descendants into a single node.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct MergeSemantics {
     identifier: Option<std::sync::Arc<str>>,
     child: Child,
+    site: CreationSite,
+}
+
+impl Default for MergeSemantics {
+    fn default() -> Self {
+        // A trait fn cannot be `#[track_caller]`: the site is this line.
+        Self::at(CreationSite::here())
+    }
 }
 
 impl MergeSemantics {
+    fn at(site: CreationSite) -> Self {
+        Self {
+            identifier: None,
+            child: Child::empty(),
+            site,
+        }
+    }
+
     /// Creates a merge-semantics widget.
+    #[track_caller]
     pub fn new() -> Self {
-        Self::default()
+        Self::at(CreationSite::here())
     }
 
     /// Set the merged node's stable identifier for tests and automation
@@ -1601,7 +1638,7 @@ impl RenderView for MergeSemantics {
     flui_view::single_child_view_children!();
 }
 
-impl_render_view!(MergeSemantics);
+impl_render_view!(MergeSemantics, site = site);
 
 /// Annotates its child's semantics node with a zero-based index among its
 /// siblings.
@@ -1616,20 +1653,34 @@ impl_render_view!(MergeSemantics);
 ///
 /// The index is zero-based, as AccessKit's `position_in_set` is; the platform
 /// adapters add one when they hand it to a screen reader.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct IndexedSemantics {
     index: usize,
     child: Child,
+    site: CreationSite,
+}
+
+impl Default for IndexedSemantics {
+    fn default() -> Self {
+        // A trait fn cannot be `#[track_caller]`: the site is this line.
+        Self::at(0, CreationSite::here())
+    }
 }
 
 impl IndexedSemantics {
-    /// Creates an indexed-semantics widget for a zero-based `index`.
-    #[must_use]
-    pub fn new(index: usize) -> Self {
+    fn at(index: usize, site: CreationSite) -> Self {
         Self {
             index,
             child: Child::empty(),
+            site,
         }
+    }
+
+    /// Creates an indexed-semantics widget for a zero-based `index`.
+    #[must_use]
+    #[track_caller]
+    pub fn new(index: usize) -> Self {
+        Self::at(index, CreationSite::here())
     }
 
     /// Set the child.
@@ -1662,28 +1713,36 @@ impl RenderView for IndexedSemantics {
     flui_view::single_child_view_children!();
 }
 
-impl_render_view!(IndexedSemantics);
+impl_render_view!(IndexedSemantics, site = site);
 
 /// Drops descendant semantics while keeping layout, paint, and hit testing.
 #[derive(Clone, Debug)]
 pub struct ExcludeSemantics {
     excluding: bool,
     child: Child,
+    site: CreationSite,
 }
 
 impl Default for ExcludeSemantics {
     fn default() -> Self {
-        Self {
-            excluding: true,
-            child: Child::empty(),
-        }
+        // A trait fn cannot be `#[track_caller]`: the site is this line.
+        Self::at(CreationSite::here())
     }
 }
 
 impl ExcludeSemantics {
+    fn at(site: CreationSite) -> Self {
+        Self {
+            excluding: true,
+            child: Child::empty(),
+            site,
+        }
+    }
+
     /// Creates an exclude-semantics widget.
+    #[track_caller]
     pub fn new() -> Self {
-        Self::default()
+        Self::at(CreationSite::here())
     }
 
     /// Set whether descendants are excluded from semantics.
@@ -1725,4 +1784,4 @@ impl RenderView for ExcludeSemantics {
     flui_view::single_child_view_children!();
 }
 
-impl_render_view!(ExcludeSemantics);
+impl_render_view!(ExcludeSemantics, site = site);
