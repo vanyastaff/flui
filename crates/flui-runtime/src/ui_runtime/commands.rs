@@ -5,7 +5,6 @@ use super::input::preserve_first_input_panic;
 use crossbeam_channel::{Sender, TrySendError};
 use flui_foundation::PresentationId;
 use flui_scheduler::SchedulerPhase;
-use flui_widgets::NavigatorCommand;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -50,7 +49,7 @@ pub enum CommandSendError {
 ///   presentation incarnation within it (the eventual element-forest case)
 ///   and a sender may have been vended for a presentation that no longer
 ///   owns this UI runtime's inbox.
-/// - **Runtime-scoped** commands (`HotReload`, [`Self::Navigation`])
+/// - **Runtime-scoped** commands (`HotReload`)
 ///   carry no stamp of their own and stay bound by channel identity alone:
 ///   a recreated UI runtime mints new channels, and a sender into the dead UI runtime
 ///   already gets `OwnerGone` at send — re-stamping UI runtime identity on top of
@@ -103,8 +102,6 @@ pub enum UiCommand {
         /// Where the stream goes.
         reply: flui_view::__runtime::Reply<flui_view::dev_agent::AgentEvents>,
     },
-    /// Apply a typed navigator mutation on the owner thread.
-    Navigation(NavigatorCommand),
     /// Run a write against the reactive graph that minted `target` (ADR-0074
     /// §5.8, routed per ADR-0085 §1) on the owner thread: the cross-thread
     /// way to write a signal. Readers it marks land in the owning
@@ -162,10 +159,6 @@ impl std::fmt::Debug for UiCommand {
                 .field("presentation_id", presentation_id)
                 .field("filters", filters)
                 .finish_non_exhaustive(),
-            UiCommand::Navigation(command) => f
-                .debug_tuple("UiCommand::Navigation")
-                .field(command)
-                .finish(),
             UiCommand::SignalWrite { target, .. } => f
                 .debug_struct("UiCommand::SignalWrite")
                 .field("target", target)
@@ -327,30 +320,6 @@ impl UiCommandSender {
             presentation_id: self.presentation_id,
             node,
         })
-    }
-
-    /// Enqueue a typed navigation command for owner-thread application.
-    ///
-    /// This is the ADR-0027 cross-thread navigation ingress. The sender only
-    /// accepts the closed [`NavigatorCommand`] vocabulary; it does not expose a
-    /// generic "run this closure on the UI thread" API.
-    ///
-    /// # Errors
-    ///
-    /// [`CommandSendError::ChannelFull`] under backpressure,
-    /// [`CommandSendError::OwnerGone`] once the runtime is dropped.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "typed navigation command sender is wired before public runtime vending"
-        )
-    )]
-    pub(crate) fn send_navigation(
-        &self,
-        command: NavigatorCommand,
-    ) -> Result<(), CommandSendError> {
-        self.send(UiCommand::Navigation(command))
     }
 
     /// Enqueue a signal write for the owner thread (ADR-0074 §5.8). At the
@@ -716,18 +685,6 @@ impl UiRuntime {
                     self.subscribe_agent_events(state, filters, &reply);
                     report.invoked += 1;
                 }
-                UiCommand::Navigation(command) => match command.apply_on_owner() {
-                    Ok(_) => {
-                        report.invoked += 1;
-                    }
-                    Err(error) => {
-                        tracing::trace!(
-                            ?error,
-                            "dropping navigation command that no longer reaches its owner"
-                        );
-                        report.dropped_stale += 1;
-                    }
-                },
                 UiCommand::SignalWrite { target, mut apply } => {
                     let Some((presentation, source)) = self.signal_writer_for(target) else {
                         #[expect(
