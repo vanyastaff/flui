@@ -27,12 +27,20 @@ mod weston_x11;
 
 #[cfg(target_os = "linux")]
 mod cases {
+    use std::cell::Cell;
+    use std::num::{NonZeroU32, NonZeroU64};
     use std::rc::Rc;
+    use std::sync::Arc;
     use std::time::{Duration, Instant};
 
     use cursor_icon::CursorIcon;
+    use flui_foundation::{DragSessionId, UiRuntimeId};
     use flui_native::testing::wayland::{cursor_report, last_input_serial, present, run_for};
     use flui_native::{HostWindow, Platform as _, WaylandPlatform};
+    use flui_platform::data_transfer::{
+        RepresentationDescriptor, TransferActions, TransferFormat, TransferPayload,
+    };
+    use flui_platform::drag::{DragSessionKey, OsDragEnd, OsDragRequest, ProcessNonce};
     use flui_platform::keyboard::{Code, Key, KeyState};
     use flui_platform::pointer::{PointerButton, PointerEvent, PointerKind, ScrollUnit};
     use flui_platform::{Availability, PlatformInput, WindowOptions};
@@ -59,20 +67,34 @@ mod cases {
             .with_max_level(tracing::Level::INFO)
             .with_writer(std::io::stderr)
             .try_init();
-        let arguments = libtest_mimic::Arguments::from_args();
-        let session = (!arguments.list)
-            .then(|| Session::start("kiosk-shell.so", OUTPUT, "flui-wayland-input"))
-            .flatten();
-        let trials = vec![libtest_mimic::Trial::test(
-            "a_compositor_seat_reaches_the_window",
-            move || {
-                match &session {
-                    Some(session) => a_compositor_seat_reaches_the_window(session),
+        let mut arguments = libtest_mimic::Arguments::from_args();
+        // The trials share one Weston and its seat.
+        arguments.test_threads = Some(1);
+        let session = Arc::new(
+            (!arguments.list)
+                .then(|| Session::start("kiosk-shell.so", OUTPUT, "flui-wayland-input"))
+                .flatten(),
+        );
+        let trial = |name: &'static str, case: fn(&Session)| {
+            let session = Arc::clone(&session);
+            libtest_mimic::Trial::test(name, move || {
+                match session.as_ref() {
+                    Some(session) => case(session),
                     None => eprintln!("skipped: no Xvfb or Weston to run against"),
                 }
                 Ok(())
-            },
-        )];
+            })
+        };
+        let trials = vec![
+            trial(
+                "a_compositor_seat_reaches_the_window",
+                a_compositor_seat_reaches_the_window,
+            ),
+            trial(
+                "a_drag_the_compositor_ignores_ends_cancelled",
+                a_drag_the_compositor_ignores_ends_cancelled,
+            ),
+        ];
         libtest_mimic::run(&arguments, trials).exit();
     }
 
@@ -339,6 +361,83 @@ mod cases {
                 "/tests/native_recording/wayland_weston_mouse_wheel.jsonl"
             );
             std::fs::write(path, out).expect("the recording is written");
+        }
+    }
+
+    /// A drag started under a press the compositor already saw released,
+    /// before the window heard the release, ends cancelled: Weston cancels
+    /// the source of a drag it refuses, and a compositor that says nothing
+    /// has the session end as the release reaches the window.
+    fn a_drag_the_compositor_ignores_ends_cancelled(session: &Session) {
+        let platform = WaylandPlatform::try_new().expect("the harness's Weston answers");
+        let handler = RecordingWindowHandler::new();
+        let window = platform
+            .open_window(
+                WindowOptions::default().with_title("drag"),
+                Rc::clone(&handler) as _,
+            )
+            .expect("a Wayland window opens");
+        turn_until(
+            &platform,
+            &window,
+            &handler,
+            "the window on the output",
+            |_| window.state().visible && window.state().focused,
+        );
+        let screen = session.screen();
+        let (x, root, origin) = (&screen.connection, screen.root, screen.origin);
+        let fake = |kind: u8, detail: u8, at: Option<(i16, i16)>| {
+            let (px, py) = at.unwrap_or((0, 0));
+            x.xtest_fake_input(kind, detail, x11rb::CURRENT_TIME, root, px, py, 0)
+                .expect("request");
+            x.flush().expect("flush");
+        };
+        fake(
+            MOTION_NOTIFY_EVENT,
+            0,
+            Some((origin.0 + 200, origin.1 + 160)),
+        );
+        fake(BUTTON_PRESS_EVENT, 1, None);
+        turn_until(&platform, &window, &handler, "the press", |_| {
+            pointer_events(&handler)
+                .iter()
+                .any(|event| matches!(event, PointerEvent::Down(_)))
+        });
+        fake(BUTTON_RELEASE_EVENT, 1, None);
+        // Weston reads the release from the X server while the window does
+        // not turn, so it has the release before the start.
+        std::thread::sleep(Duration::from_millis(300));
+        let ended = Rc::new(Cell::new(None));
+        let drag = window
+            .drag_source()
+            .expect("a Wayland window starts sessions");
+        drag.start(session_request(&ended))
+            .expect("the window has heard no release yet");
+        turn_until(&platform, &window, &handler, "the session to end", |_| {
+            ended.get().is_some()
+        });
+        assert_eq!(ended.get(), Some(OsDragEnd::Cancelled));
+        window.close_for_cleanup();
+    }
+
+    /// A session offering text, telling `ended` how it ended.
+    fn session_request(ended: &Rc<Cell<Option<OsDragEnd>>>) -> OsDragRequest {
+        let key = DragSessionKey::new(
+            ProcessNonce::from_raw(NonZeroU64::new(0xF1A1).expect("non-zero")),
+            UiRuntimeId::new_gen(3, NonZeroU32::new(2).expect("non-zero")),
+            DragSessionId::from_wire(NonZeroU64::new(7).expect("non-zero")),
+        );
+        let ended = Rc::clone(ended);
+        OsDragRequest {
+            key,
+            pointer: None,
+            representations: vec![RepresentationDescriptor {
+                format: TransferFormat::Text,
+                declared_len: None,
+            }],
+            allowed: TransferActions::COPY,
+            provider: Box::new(|_| Ok(TransferPayload::Text("dragged".to_owned()))),
+            on_end: Box::new(move |end| ended.set(Some(end))),
         }
     }
 }

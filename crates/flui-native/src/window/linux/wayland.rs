@@ -2829,9 +2829,10 @@ mod toplevel {
             Some(Arc::clone(&self.facets.chrome))
         }
 
-        /// No drag session starts from a Wayland window yet (`wl_data_device`).
+        /// Sessions start from the window under the pointer grab it holds
+        /// (`wl_data_source`).
         fn drag_source(&self) -> Option<Arc<dyn flui_platform::drag::PlatformDragSource>> {
-            None
+            Some(Arc::clone(&self.drag).source(self.id))
         }
     }
 

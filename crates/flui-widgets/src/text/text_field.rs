@@ -33,6 +33,7 @@ use flui_interaction::FocusNode;
 use flui_painting::styling::Color;
 use flui_painting::styling::{Border, BorderSide, BorderStyle, BoxDecoration};
 use flui_platform::text_store::TextInputPurpose;
+use flui_view::CreationSite;
 use flui_view::prelude::*;
 
 use crate::interaction::Listener;
@@ -92,6 +93,7 @@ pub struct RawTextField {
     /// Forwarded to [`EditableText::on_submitted`] — see
     /// [`Self::on_submitted`].
     on_submitted: Option<SubmitCallback>,
+    site: CreationSite,
 }
 
 // Hand-written rather than derived: `on_submitted`'s `Rc<dyn Fn(&str)>` has
@@ -113,13 +115,14 @@ impl std::fmt::Debug for RawTextField {
             .field("identifier", &self.identifier)
             .field("on_changed", &self.on_changed.is_some())
             .field("on_submitted", &self.on_submitted.is_some())
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
 impl RawTextField {
     /// Create a `RawTextField` driven by `controller`.
     #[must_use]
+    #[track_caller]
     pub fn new(controller: TextEditingController) -> Self {
         Self {
             controller,
@@ -135,6 +138,7 @@ impl RawTextField {
             identifier: None,
             on_changed: None,
             on_submitted: None,
+            site: CreationSite::here(),
         }
     }
 
@@ -250,6 +254,10 @@ impl RawTextField {
 impl View for RawTextField {
     fn create_element(&self) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::stateful(self)
+    }
+
+    fn creation_site(&self) -> CreationSite {
+        self.site
     }
 }
 

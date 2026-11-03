@@ -29,7 +29,7 @@ use flui_objects::SubtreeAnchor;
 use flui_platform::TargetPlatform;
 use flui_rendering::pipeline::PipelineCell;
 use flui_view::prelude::*;
-use flui_view::{BoxedView, InheritedView, View, ViewExt, impl_inherited_view};
+use flui_view::{BoxedView, CreationSite, InheritedView, View, ViewExt, impl_inherited_view};
 
 use crate::interaction::{
     CopySelectionTextIntent, GestureCommand, MenuItem, MenuPresenter, PasteTextIntent,
@@ -221,6 +221,7 @@ impl Default for SelectionMenuPolicy {
 pub struct DefaultSelectionControls {
     own: SelectionControls,
     child: BoxedView,
+    site: CreationSite,
 }
 
 /// What a [`DefaultSelectionControls`] sets; `None` leaves a control to the
@@ -329,10 +330,12 @@ impl fmt::Debug for DefaultSelectionControls {
 
 impl DefaultSelectionControls {
     /// A scope over `child` that sets nothing yet.
+    #[track_caller]
     pub fn new(child: impl IntoView) -> Self {
         Self {
             own: SelectionControls::default(),
             child: child.into_view().boxed(),
+            site: CreationSite::here(),
         }
     }
 
@@ -448,6 +451,10 @@ impl DefaultSelectionControls {
 impl View for DefaultSelectionControls {
     fn create_element(&self) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::stateless(self)
+    }
+
+    fn creation_site(&self) -> CreationSite {
+        self.site
     }
 }
 

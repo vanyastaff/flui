@@ -143,9 +143,26 @@ pub(crate) fn representations<K: Copy>(types: &[(K, &str)]) -> Vec<(K, Kind)> {
     offered
 }
 
+/// The type names a representation of `format` is offered under, the most
+/// precise first: text in UTF-8 under the names every toolkit reads, every
+/// other format under its media type.
+pub(crate) fn names_of(format: &TransferFormat) -> Vec<String> {
+    match format {
+        TransferFormat::Text => vec![
+            "UTF8_STRING".to_owned(),
+            "text/plain;charset=utf-8".to_owned(),
+            "text/plain".to_owned(),
+        ],
+        TransferFormat::Html => vec!["text/html".to_owned()],
+        TransferFormat::UriList => vec!["text/uri-list".to_owned()],
+        TransferFormat::Image { mime } | TransferFormat::Custom { mime } => {
+            vec![mime.as_str().to_owned()]
+        }
+    }
+}
+
 /// The bytes `payload` is written as: text and HTML in UTF-8, any other
 /// payload as it is.
-#[cfg(x11_host)]
 pub(crate) fn bytes_of(payload: TransferPayload) -> Vec<u8> {
     match payload {
         TransferPayload::Text(text) | TransferPayload::Html(text) => text.into_bytes(),

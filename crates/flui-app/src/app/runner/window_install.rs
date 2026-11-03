@@ -78,10 +78,9 @@ pub(super) struct InstallationWindow {
     window: Option<Rc<dyn PlatformWindow>>,
     closed: Arc<AtomicBool>,
     published: bool,
-    agent: Option<(
-        crate::app::dev_agent::DevAgent,
-        flui_view::dev_agent::AgentWindow,
-    )>,
+    /// The window's agent, vended before the install, handed to the loop's
+    /// hooks once it commits.
+    agent: Option<flui_view::dev_agent::AgentWindow>,
 }
 
 impl InstallationWindow {
@@ -111,8 +110,8 @@ impl InstallationWindow {
     }
 
     pub(super) fn notify_opened(&mut self) {
-        if let Some((agent, window)) = self.agent.take() {
-            agent.window_opened(window);
+        if let Some(window) = self.agent.take() {
+            super::dev_agents::window_opened(window);
         }
     }
 }
@@ -216,13 +215,7 @@ impl WindowInstall {
         self.native.text_sizing = Some(sizing);
     }
 
-    pub(super) fn dev_agent(
-        &mut self,
-        agent: Option<(
-            crate::app::dev_agent::DevAgent,
-            flui_view::dev_agent::AgentWindow,
-        )>,
-    ) {
+    pub(super) fn dev_agent(&mut self, agent: Option<flui_view::dev_agent::AgentWindow>) {
         self.window.agent = agent;
     }
 

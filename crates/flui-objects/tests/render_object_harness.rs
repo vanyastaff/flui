@@ -2099,8 +2099,7 @@ fn harness_icon_pending_layout_withdraws_old_glyph_geometry() {
             0,
         )
     });
-    let (owner, result) = run.owner_mut().take_idle().run_frame();
-    *run.owner_mut() = owner;
+    let result = run.owner_mut().run_frame_in_place();
     assert!(matches!(
         result.map_err(flui_foundation::TreeError::into_error),
         Err(flui_rendering::RenderError::TextPreparationPending(_))
@@ -6212,9 +6211,7 @@ fn harness_rejected_semantics_drafts_preserve_the_error_and_destroy_the_callback
         let root = run.root();
         run.owner_mut().mark_needs_semantics(root);
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let (owner, result) = run.owner_mut().take_idle().run_frame();
-            *run.owner_mut() = owner;
-            result
+            run.owner_mut().run_frame_in_place()
         }));
         assert!(
             outcome.is_ok(),
@@ -6512,8 +6509,7 @@ fn harness_custom_paint_region_failure_keeps_all_anchors_and_retries() {
         run.owner_mut().mark_needs_semantics(id);
     }
     // Use the fallible public frame entry instead of the harness's success-only pump.
-    let (owner, result) = run.owner_mut().take_idle().run_frame();
-    *run.owner_mut() = owner;
+    let result = run.owner_mut().run_frame_in_place();
     let error = result.expect_err("duplicate keys refuse the complete pass");
     assert!(
         error.to_string().contains("duplicate semantics region key"),
@@ -6543,8 +6539,7 @@ fn harness_custom_paint_region_failure_keeps_all_anchors_and_retries() {
         let id = run.id(label);
         run.owner_mut().mark_needs_semantics(id);
     }
-    let (owner, result) = run.owner_mut().take_idle().run_frame();
-    *run.owner_mut() = owner;
+    let result = run.owner_mut().run_frame_in_place();
     assert!(result.is_err());
     assert_eq!(semantics_content(&run), updated);
     lists[0].borrow_mut().pop();
@@ -11201,8 +11196,7 @@ fn harness_flow_keeps_hitting_its_last_presentation_after_a_failed_repaint() {
     fail.set(true);
     let root = run.root();
     run.mark_needs_paint(root);
-    let (owner, frame) = run.owner_mut().take_idle().run_frame();
-    *run.owner_mut() = owner;
+    let frame = run.owner_mut().run_frame_in_place();
     assert!(frame.is_err(), "the repaint fails");
     assert!(
         run.hit(25.0, 20.0).contains(&second),

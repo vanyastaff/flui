@@ -588,17 +588,11 @@ impl PipelineCache {
 
     pub(crate) fn ensure_isolation(&mut self, device: &wgpu::Device, key: PipelineKey) {
         if self.isolation_shader.is_none() {
-            self.isolation_shader = Some(
-                device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            self.isolation_shader =
+                Some(device.create_shader_module(wgpu::ShaderModuleDescriptor {
                     label: Some("Shape isolation shader"),
-                    source: wgpu::ShaderSource::Wgsl(
-                        self.isolation_source
-                            .replace("@vertex", "")
-                            .replace("fn vs_isolation", "@vertex fn vs_isolation")
-                            .into(),
-                    ),
-                }),
-            );
+                    source: wgpu::ShaderSource::Wgsl(self.isolation_source.into()),
+                }));
         }
         if !self.isolation_cache.contains_key(&key.msaa_samples()) {
             let pipeline = self.create_pipeline_inner(device, key, true);
