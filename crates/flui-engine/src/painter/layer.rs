@@ -323,7 +323,6 @@ impl WgpuPainter {
             || !segment.sweep_gradient_batch.is_empty()
             || !segment.cached_images.is_empty()
             || !segment.external_images.is_empty()
-            || !segment.glyph_batch.is_empty()
         {
             return None;
         }
@@ -458,7 +457,24 @@ impl WgpuPainter {
             union_pt!(center_x + half_x, center_y + half_y);
         }
 
-        // ── 5. (Shadow / gradient / image kinds) ─────────────────────────────
+        // ── 5. GlyphInstance ─────────────────────────────────────────────────
+        //
+        // A quad covers its glyph's whole bitmap: `dst_rect` mapped by the
+        // linear part `transform` (column-major) and moved by `origin`, the
+        // mapping `glyph_instanced.wgsl` applies. Its four corners bound it.
+        // Without this a filtered paragraph (a blurred text shadow, text under
+        // an image filter) sized its framebuffer to the viewport.
+        for instance in &segment.glyph_batch.instances {
+            let [lx, ly, lw, lh] = instance.dst_rect;
+            let [a, b, c, d] = instance.transform;
+            let [tx, ty, _, _] = instance.origin;
+            let corners = [(lx, ly), (lx + lw, ly), (lx + lw, ly + lh), (lx, ly + lh)];
+            for (cx, cy) in corners {
+                union_pt!(a * cx + c * cy + tx, b * cx + d * cy + ty);
+            }
+        }
+
+        // ── 6. (Shadow / gradient / image kinds) ─────────────────────────────
         //
         // These kinds are excluded by the early-return gate above.  If any of
         // them is non-empty, `None` has already been returned, so none of these

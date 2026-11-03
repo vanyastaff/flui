@@ -9,6 +9,9 @@
   [ADR-0271](ADR-0271-the-host-feed-asks-the-platform-which-faces-fall-back.md) for §7's
   clause that FLUI's tables are the whole fallback order: the host's own answer comes first,
   and the tables follow it.
+  [ADR-0309](ADR-0309-every-text-paint-attribute-crosses-the-display-list.md) for §4's clause
+  "with span colour and decoration as today": a run carries its colour alone, and a span's
+  shadows and background cross as ops of their own.
 - **Status:** Accepted. Every gate (§8) is met: gate 1 by a prototype on 2026-09-26, gates 2, 6
   and 7 on 2026-09-30 (see Context). Every step of §10 landed. Two things this record leaves to
   others: the bidi base direction (Parley 0.11.1 takes it from the first strong character;

@@ -348,6 +348,20 @@ impl CommandRenderer for LayerDispatcher<'_> {
         });
     }
 
+    fn render_paragraph_shadow(
+        &mut self,
+        paragraph: &Arc<flui_painting::ShapedParagraph>,
+        offset: Offset<f64>,
+        color: Color,
+        sigma: flui_painting::BlurSigma,
+        transform: &Matrix4,
+    ) {
+        let position = Point::new(offset.dx, offset.dy);
+        self.with_transform(transform, |painter| {
+            painter.draw_paragraph_shadow(paragraph, position, color, sigma);
+        });
+    }
+
     fn render_image(
         &mut self,
         image: &Image,

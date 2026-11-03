@@ -979,3 +979,265 @@ fn performance_overlay_labels_read_back() {
         "performance_overlay_labels_read_back: failing rows: {failed:?}"
     );
 }
+
+/// A pixel a red shadow tinted: red leads green and blue. The black text and
+/// the white target are untinted.
+fn tinted(p: [u8; 4]) -> bool {
+    p[0] > p[1].saturating_add(8) && p[0] > p[2].saturating_add(8)
+}
+
+/// A pixel the black text inked: dark and untinted.
+fn text_ink(p: [u8; 4]) -> bool {
+    inked(p) && !tinted(p)
+}
+
+/// The device box `(left, top, right, bottom)`, inclusive, of the pixels
+/// passing `test`.
+fn ink_box(pixels: &[u8], test: fn([u8; 4]) -> bool) -> Option<(u32, u32, u32, u32)> {
+    ink_in(pixels, 0.0..f64::from(WIDE.1), everywhere(), test)
+        .into_iter()
+        .fold(None, |found, (x, y)| {
+            Some(
+                found.map_or((x, y, x, y), |(l, t, r, b): (u32, u32, u32, u32)| {
+                    (l.min(x), t.min(y), r.max(x), b.max(y))
+                }),
+            )
+        })
+}
+
+/// How far a shadow is moved from the text it is cast by, in logical pixels.
+const SHADOW_SHIFT: f64 = 48.0;
+
+/// A black `H` casting a red shadow of `radius` [`SHADOW_SHIFT`] to its
+/// right, painted at [`ORIGIN`] under `scale`.
+fn shadowed_h(renderer: &crate::headless::HeadlessRenderer, radius: f64, scale: f64) -> Vec<u8> {
+    let fonts = FontCollection::new();
+    let shadow =
+        flui_painting::styling::Shadow::new(Color::RED, Offset::new(SHADOW_SHIFT, 0.0), radius);
+    let painter = laid_out(
+        &fonts,
+        "H",
+        black(32.0).with_shadow(shadow),
+        TextDirection::Ltr,
+        f64::INFINITY,
+    );
+    read_back(renderer, &painter, scale)
+}
+
+/// The strongest red a shadow left: red over green.
+fn redness(pixels: &[u8]) -> u8 {
+    ink_in(pixels, 0.0..f64::from(WIDE.1), everywhere(), tinted)
+        .into_iter()
+        .map(|(x, y)| {
+            let p = pixel(pixels, x, y);
+            p[0].saturating_sub(p[1])
+        })
+        .max()
+        .unwrap_or(0)
+}
+
+/// A sharp shadow is the glyph's silhouette in the shadow colour, at its
+/// offset; a blurred one reaches past that silhouette by its sigma, in
+/// device pixels, so twice as far at 2x; the text over it stays sharp.
+fn a_blurred_text_shadow_inks_outside_the_silhouette(renderer: &crate::headless::HeadlessRenderer) {
+    let radius = 8.0;
+    let sigma = flui_painting::BlurSigma::from_blur_radius(radius)
+        .expect("finite radius")
+        .get();
+    let mut reaches = Vec::new();
+    for scale in [1.0, 2.0] {
+        let sharp = shadowed_h(renderer, 0.0, scale);
+        let text = ink_box(&sharp, text_ink).expect("the H is inked");
+        let silhouette = ink_box(&sharp, tinted).expect("a sharp shadow paints in its colour");
+        let shift = SHADOW_SHIFT * scale;
+        assert!(
+            (f64::from(silhouette.0) - f64::from(text.0) - shift).abs() <= 1.5
+                && silhouette.1.abs_diff(text.1) <= 1
+                && silhouette.3.abs_diff(text.3) <= 1,
+            "at {scale}x the sharp shadow {silhouette:?} is the text {text:?} moved by {shift}"
+        );
+        assert!(
+            redness(&sharp) > 200,
+            "at {scale}x the silhouette is filled with the shadow colour, \
+             strongest red over green {}",
+            redness(&sharp)
+        );
+
+        let blurred = shadowed_h(renderer, radius, scale);
+        let reach_box = ink_box(&blurred, tinted).expect("a blurred shadow paints");
+        let reach = f64::from(silhouette.0) - f64::from(reach_box.0);
+        let device_sigma = f64::from(sigma) * scale;
+        assert!(
+            reach >= 0.75 * device_sigma
+                && f64::from(silhouette.1) - f64::from(reach_box.1) >= 0.75 * device_sigma,
+            "at {scale}x the blurred shadow {reach_box:?} reaches {reach} px past the \
+             silhouette {silhouette:?}, sigma {device_sigma} device px"
+        );
+        assert!(
+            redness(&blurred) + 20 < redness(&sharp),
+            "at {scale}x the blur spreads the silhouette's ink: strongest red {} vs {}",
+            redness(&blurred),
+            redness(&sharp)
+        );
+        assert_eq!(
+            ink_box(&blurred, text_ink),
+            Some(text),
+            "at {scale}x the text over a blurred shadow stays sharp"
+        );
+        reaches.push(reach);
+    }
+    assert!(
+        reaches[1] >= 1.5 * reaches[0],
+        "the blur is in logical pixels: it reaches {} device px at 1x and {} at 2x",
+        reaches[0],
+        reaches[1]
+    );
+}
+
+/// A blur radius far past the maximum is clamped, at every scale, and a
+/// sigma whose square the filter cannot weigh is drawn sharp: the frame
+/// renders and the text paints.
+fn a_huge_text_shadow_blur_does_not_fail_the_frame(renderer: &crate::headless::HeadlessRenderer) {
+    for radius in [1e6, f64::MAX] {
+        for scale in [1.0, 2.0, 4.0] {
+            let pixels = shadowed_h(renderer, radius, scale);
+            assert!(
+                ink_box(&pixels, text_ink).is_some(),
+                "radius {radius} at {scale}x: the text paints"
+            );
+        }
+    }
+    let fonts = FontCollection::new();
+    // A window far larger than the text: the blurred layer is the text's box
+    // grown by the kernel, not the window's, or its sampling exceeds the
+    // frame's effect budget.
+    let huge =
+        flui_painting::styling::Shadow::new(Color::RED, Offset::new(SHADOW_SHIFT, 0.0), f64::MAX);
+    let shadowed = laid_out(
+        &fonts,
+        "H",
+        black(32.0).with_shadow(huge),
+        TextDirection::Ltr,
+        f64::INFINITY,
+    );
+    let mut canvas = Canvas::new();
+    // At 4x the clamped sigma is the device cap: past it the kernel outgrows
+    // the budget even over the text's box.
+    canvas.scale(4.0, 4.0);
+    // Away from the window's edges, so no edge cuts the layer short.
+    shadowed.paint(&mut canvas, Offset::new(240.0, 120.0));
+    let mut builder = SceneBuilder::new();
+    builder.add_picture(canvas.finish());
+    renderer
+        .render_layer_tree(&builder.build(), (2048, 1024))
+        .expect("a shadow's blur layer is sized to its text, not the window");
+
+    let painter = laid_out(&fonts, "H", black(32.0), TextDirection::Ltr, f64::INFINITY);
+    let tiny = flui_painting::BlurSigma::try_new(1e-30).expect("a tiny sigma is in range");
+    let mut canvas = Canvas::new();
+    canvas.draw_paragraph_shadow(
+        &recorded(&painter),
+        Offset::new(ORIGIN.dx + SHADOW_SHIFT, ORIGIN.dy),
+        Color::RED,
+        tiny,
+    );
+    painter.paint(&mut canvas, ORIGIN);
+    let mut builder = SceneBuilder::new();
+    builder.add_picture(canvas.finish());
+    let pixels = renderer
+        .render_layer_tree(&builder.build(), WIDE)
+        .expect("a sigma too small to weigh does not fail the frame");
+    assert!(
+        redness(&pixels) > 200,
+        "a sigma too small to weigh draws the shadow sharp"
+    );
+}
+
+/// A pixel a blue shadow inked: blue leads red and green.
+fn bluish(p: [u8; 4]) -> bool {
+    p[2] > p[0].saturating_add(40) && p[2] > p[1].saturating_add(40)
+}
+
+/// A pixel neither white nor blue: what a colour glyph painted in its own
+/// colours leaves.
+fn not_blue_ink(p: [u8; 4]) -> bool {
+    inked(p) && !(p[2] >= p[0] && p[2] >= p[1])
+}
+
+/// A colour emoji's shadow is its silhouette filled with the shadow colour,
+/// as CSS draws it, while the emoji itself keeps its colours. Skipped where
+/// the host has no colour emoji face.
+fn a_colour_emoji_casts_a_silhouette(renderer: &crate::headless::HeadlessRenderer) {
+    let fonts = FontCollection::with_host_fonts(&flui_painting::HostFonts::scan());
+    let shadow =
+        flui_painting::styling::Shadow::new(Color::BLUE, Offset::new(SHADOW_SHIFT, 0.0), 0.0);
+    let painter = laid_out(
+        &fonts,
+        "\u{1F600}",
+        black(32.0).with_shadow(shadow),
+        TextDirection::Ltr,
+        f64::INFINITY,
+    );
+    if !colour_covered(&painter) {
+        println!("a_colour_emoji_casts_a_silhouette: skipped, no host colour emoji face");
+        return;
+    }
+    assert!(
+        painter.width() < SHADOW_SHIFT,
+        "the fixture keeps the shadow clear of the emoji: width {}",
+        painter.width()
+    );
+    let pixels = read_back(renderer, &painter, 1.0);
+    let rows = ORIGIN.dy..ORIGIN.dy + painter.height();
+    let emoji = ORIGIN.dx..ORIGIN.dx + painter.width();
+    let cast = emoji.start + SHADOW_SHIFT..emoji.end + SHADOW_SHIFT;
+    assert!(
+        !ink_in(&pixels, rows.clone(), emoji, saturated).is_empty(),
+        "the emoji paints in its colours"
+    );
+    assert!(
+        !ink_in(&pixels, rows.clone(), cast.clone(), bluish).is_empty(),
+        "the emoji casts a shadow"
+    );
+    let stray = ink_in(&pixels, rows, cast, not_blue_ink);
+    assert!(
+        stray.is_empty(),
+        "the shadow is the silhouette in blue, not the emoji's colours: {} pixels, first {:?}",
+        stray.len(),
+        stray.first().map(|(x, y)| pixel(&pixels, *x, *y))
+    );
+}
+
+/// Text shadows read back as ADR-0309 §3 specifies.
+#[test]
+fn text_shadows_read_back() {
+    let Some(renderer) = crate::test_support::renderer_or_skip() else {
+        return;
+    };
+    type Row = (&'static str, fn(&crate::headless::HeadlessRenderer));
+    let rows: [Row; 3] = [
+        (
+            "a_blurred_text_shadow_inks_outside_the_silhouette",
+            a_blurred_text_shadow_inks_outside_the_silhouette,
+        ),
+        (
+            "a_huge_text_shadow_blur_does_not_fail_the_frame",
+            a_huge_text_shadow_blur_does_not_fail_the_frame,
+        ),
+        (
+            "a_colour_emoji_casts_a_silhouette",
+            a_colour_emoji_casts_a_silhouette,
+        ),
+    ];
+    let failed: Vec<&str> = rows
+        .iter()
+        .filter(|(_, row)| {
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| row(&renderer))).is_err()
+        })
+        .map(|(name, _)| *name)
+        .collect();
+    assert!(
+        failed.is_empty(),
+        "text_shadows_read_back: failing rows: {failed:?}"
+    );
+}

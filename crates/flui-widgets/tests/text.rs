@@ -503,6 +503,75 @@ fn scale_text(laid: &mut crate::common::LaidOut, scale: f64) {
     laid.tick();
 }
 
+/// An icon theme's shadows paint under the glyph, and its opacity scales the
+/// icon colour's alpha: half of an explicit colour's, half of the default
+/// black's, none when out of range or not finite (ADR-0309 §1, §5).
+pub(crate) fn an_icon_theme_shadow_and_opacity_paint() {
+    use flui_foundation::geometry::Offset;
+    use flui_painting::display_list::DrawOp;
+    use flui_painting::styling::{Color, Shadow};
+    use flui_view::ViewExt;
+    use flui_widgets::{Icon, IconData, IconTheme, IconThemeData};
+
+    let shadow = Shadow::new(Color::RED, Offset::new(2.0, 3.0), 4.0);
+    let half_blue = Color::rgba(0, 0, 255, 64);
+    let rows: [(Option<Color>, Option<f64>, f32); 6] = [
+        (Some(Color::BLUE), None, 1.0),
+        (Some(Color::BLUE), Some(0.5), 0.5),
+        (Some(half_blue), Some(0.5), half_blue.opacity() * 0.5),
+        (None, Some(0.5), 0.5),
+        (Some(Color::BLUE), Some(-1.0), 0.0),
+        (Some(Color::BLUE), Some(f64::NAN), 1.0),
+    ];
+    for (color, opacity, alpha) in rows {
+        let mut theme = IconThemeData::default();
+        theme.color = color;
+        theme.opacity = opacity;
+        theme.shadows = Some(vec![shadow]);
+        let view = IconTheme::new(
+            theme,
+            crate::media_query_fields::StaticChild {
+                inner: Icon::new(IconData::new(0xe88a).with_font_family("Material Icons")).boxed(),
+            },
+        );
+        let laid = lay_out(view, loose(100.0));
+        let ops = laid.draw_ops();
+        let shadows = ops
+            .iter()
+            .filter_map(|command| match &command.op {
+                DrawOp::ParagraphShadow { offset, color, .. } => Some((*offset, *color)),
+                _ => None,
+            })
+            .collect::<Vec<(Offset<f64>, Color)>>();
+        let glyph = ops
+            .iter()
+            .position(|command| matches!(command.op, DrawOp::Paragraph { .. }))
+            .expect("the icon paints its glyph");
+        let first_shadow = ops
+            .iter()
+            .position(|command| matches!(command.op, DrawOp::ParagraphShadow { .. }));
+        assert!(
+            first_shadow.is_some_and(|at| at < glyph) && shadows.len() == 1,
+            "theme {color:?}/{opacity:?}: one shadow under the glyph: {shadows:?}"
+        );
+        assert_eq!(shadows[0].1, Color::RED, "the shadow keeps its own colour");
+        let DrawOp::Paragraph { color: painted, .. } = &ops[glyph].op else {
+            unreachable!("found by position above");
+        };
+        assert!(
+            (painted.opacity() - alpha).abs() < 0.01,
+            "theme {color:?}/{opacity:?}: glyph alpha {} instead of {alpha}",
+            painted.opacity()
+        );
+        let base = color.unwrap_or(Color::BLACK);
+        assert_eq!(
+            painted.with_opacity(1.0),
+            base.with_opacity(1.0),
+            "opacity scales the alpha alone"
+        );
+    }
+}
+
 /// A tap on a link's glyphs calls `on_link` with that link; a tap on the
 /// text around it calls nothing. Both hold after the system text scale
 /// doubles the glyphs, because the paragraph answers from the layout it

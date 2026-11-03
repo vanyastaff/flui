@@ -68,6 +68,14 @@ pub(crate) fn dispatch_command<R: CommandRenderer + ?Sized>(
         } => {
             renderer.render_paragraph(paragraph, *offset, *color, transform);
         }
+        DrawOp::ParagraphShadow {
+            paragraph,
+            offset,
+            color,
+            sigma,
+        } => {
+            renderer.render_paragraph_shadow(paragraph, *offset, *color, *sigma, transform);
+        }
         DrawOp::ImageRegion {
             image,
             src,
