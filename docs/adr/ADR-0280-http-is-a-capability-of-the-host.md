@@ -74,10 +74,10 @@ lets a test hand every layer the same scripted client.
 2. **The client drives its requests.** `send`'s future and a body's chunks need no runtime of the
    caller's; dropping either abandons the request.
 3. **Providers.** `flui-app` registers the built-in provider behind its `http` feature (on by
-   default): `reqwest` on the run's IO lane, one connection pool per run. The caller's future waits
-   on a channel; the exchange on the lane stops when the channel closes. On lanes an embedder
-   injects, which may run no Tokio drivers, it spawns nothing and answers
-   `NotYetOnThisHost { host: EmbedderExecutors }`. On the web the page's `fetch` sends
+   default): every host sends through a stack of its own, which needs no Tokio, so an embedder's
+   executors send as the host's own lanes do. The caller's future waits on a channel, and each
+   exchange holds a slot of the run's IO lane until its body ends, fails or is dropped; a lane that
+   shuts down under an exchange ends it with `Cancelled`. On the web the page's `fetch` sends
    (`flui_native::http::FetchClient`, a task of the page answering through a channel), and each
    exchange holds a slot of the IO lane from the request until its body ends or is dropped, so the
    lane admits and refuses it as on a native host. Android sends through the system's
@@ -89,8 +89,31 @@ lets a test hand every layer the same scripted client.
    system classes are called and nothing calls back into Rust, so the provider needs no class of
    FLUI's dex. A Java exception is mapped by its class (TLS, socket timeout, failed lookup or
    connection, malformed URL), else by the stage that threw it, and a failure of the bridge itself
-   is `HttpError::Host`; no JNI failure panics. Without the feature the capability is not
-   registered.
+   is `HttpError::Host`; no JNI failure panics. Windows sends through WinHTTP
+   (`flui_native::http::WinHttpClient`) in the same request-per-thread model, held on the IO lane
+   the same way, so an embedder's executors on Windows send too. WinHTTP runs in asynchronous
+   mode: the request's thread starts each operation and waits for the status callback to complete
+   it, so an abort closes the request handle only while no call is inside WinHTTP on it, never
+   leaving a call to run on a closed handle whose value may name another request's. The session
+   takes the system's automatic proxy and trust store; an error code maps by its meaning, a failed
+   secure check naming what failed, else by the stage that failed. macOS and iOS send through an
+   ephemeral `NSURLSession` of the client's own (`flui_native::http::UrlSessionClient`), on the
+   same request-per-thread model and held on the IO lane the same way: the session's delegate
+   hands each task's response, data and end to the request's thread, a body buffered past 256 KiB
+   suspends the task until the reader drains it below 64 KiB, and a dropped request or body or a
+   passed deadline cancels the task. An `NSError` in `NSURLErrorDomain` is mapped by its code
+   (TLS, timeout, failed lookup or connection, bad URL); the delegate's methods are OS entries
+   (ADR-0151 §16). Linux and the BSDs, which have no system stack, send through `ureq`
+   (`flui_native::http::UreqClient`, `flui-native`'s `http` feature, which `flui-app`'s turns on)
+   in the same model, held on the IO lane the same way, over rustls with the platform's verifier
+   and the proxy the environment names. `ureq` interrupts an agent, not a request:
+   `Agent::shutdown` closes the agent's connection under a blocked handshake, send or read, so
+   each request runs on an agent of its own, and that shutdown is its abort. An agent whose body
+   ended goes back to a pool of eight idle agents, matched by origin, so the next request there
+   reuses its connection; the abort and the return each take the agent out of the request's slot
+   under one lock, so an abort that comes after the return reaches no later request, and an
+   aborted agent never goes back. Without the feature the
+   capability is not registered.
 4. **The kit's client.** `flui_platform::testing::ScriptedHttp` answers what a test scripted per
    URL, holds and releases requests, counts them and the abandoned ones, and fails an unscripted URL
    with `Connect`. `HeadlessHost` registers it among its built-ins (`HeadlessHost::http`).
@@ -118,28 +141,40 @@ lets a test hand every layer the same scripted client.
 
 - Good, because `Image::network` loads on every host with a client, the headless host included,
   and no test opens a socket.
-- Good, because `flui-assets` links no TLS stack, and an application without network can drop
-  `reqwest` with one feature.
-- Bad, because embedders' executors have no client yet: their network images
-  fail with a typed gap until a system stack that needs no Tokio lands there.
-- Neutral, because each provider owns its own connection pool, so two runs do not share
-  connections.
+- Good, because `flui-assets` links no TLS stack, and an application without network drops every
+  HTTP stack, `ureq` and its TLS stack on Linux included, with one feature.
+- Bad, because each host's provider is code of its own over a system API, and WinHTTP, the JNI
+  exchange and `NSURLSession` are type-checked until a device runs them.
+- Neutral, because each provider owns its own connection pool (`ureq`'s is a pool of idle agents),
+  so two runs do not share connections.
 
 ### Confirmation
 
 - `requests_on_the_runs_lanes_answer_without_a_runtime_of_the_callers` and
   `dropping_a_request_or_its_body_closes_the_connection` (`flui-app`): the built-in provider against
-  a loopback server, polled without a runtime, the embedder-executor gap and refusal.
+  a loopback server, polled without a runtime, through `ureq` held on the IO lane on Linux, an
+  embedder's executors sending too, a lane shut down under a body ending it, and refusal.
+- `an_agent_goes_back_to_the_pool_only_when_its_body_ended_unaborted`,
+  `a_request_carries_its_parts_and_any_status_answers` and
+  `ureq_errors_map_to_what_the_caller_can_act_on` (`flui-native`, Linux): the `ureq` stack's pool
+  against a late abort, what a request carries and answers, and its error mapping.
 - `a_request_through_fetch_answers_its_head_and_body`,
   `a_request_left_or_past_its_deadline_aborts_the_fetch` and
   `the_pages_fetch_answers_from_the_test_server` (`flui-native`, headless Chrome): the web's client;
   `a_held_exchange_takes_an_io_slot_until_its_body_lets_go` (`flui-app`): its IO slot, which
-  Android's client holds too.
+  Android's, Windows' and Apple's clients hold too.
 - `a_request_on_its_own_thread_answers_its_head_and_body`,
   `a_body_left_unread_holds_the_download_until_it_is_dropped` and
   `a_request_left_or_past_its_deadline_aborts_its_connection` (`flui-native`, Linux): Android's
-  request-per-thread model over a scripted stack; its JNI exchange is type-checked, not yet run on a
-  device.
+  request-per-thread model over a scripted stack, which Windows, macOS and iOS share; the JNI
+  exchange and the `NSURLSession` delegate are type-checked, not yet run on a device.
+- `an_abort_inside_a_call_closes_the_handle_as_it_returns`,
+  `an_abort_while_waiting_closes_the_handle_and_ends_the_wait`,
+  `a_completion_ends_the_wait_even_from_inside_the_start`,
+  `winhttp_errors_map_to_what_the_caller_can_act_on`, `headers_keep_their_bytes_both_ways` and
+  `the_object_name_drops_the_fragment` (`flui-native`, Linux): WinHTTP's gate between the request's
+  thread, the status callback and an abort, and its header, URL and error translation; the WinHTTP
+  exchange is type-checked, not yet run on Windows.
 - `network_loads_fetch_with_the_callers_client_and_recover_after_errors` and
   `an_image_request_lives_exactly_as_long_as_someone_waits_for_it` (`flui-assets`).
 - `network_image_loads_with_the_hosts_http_client` (`flui-widgets`): `Image::network` on the
@@ -170,6 +205,7 @@ lets a test hand every layer the same scripted client.
 
 ## More information
 
-The system stacks (NSURLSession on Apple, WinHTTP on Windows, OkHttp or Cronet on Android, `fetch`
-on the web) are later providers behind the same trait; each removes a `NotYetOnThisHost` host or
-replaces `reqwest` where the system's proxy and trust settings matter.
+Every host now sends through a stack of its own (NSURLSession on Apple, WinHTTP on Windows,
+`HttpURLConnection` on Android, `fetch` on the web, `ureq` on Linux and the BSDs), so no host
+answers `NotYetOnThisHost` today; the variant stays for a host whose provider has not landed.
+OkHttp or Cronet on Android would be a later provider behind the same trait.

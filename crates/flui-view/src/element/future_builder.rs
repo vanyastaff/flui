@@ -592,17 +592,9 @@ mod tests {
 
     #[test]
     fn future_builder_matrix() {
-        if std::env::var_os("FLUI_SNAPSHOT_GUARD_CHILD").is_some() {
-            super::super::async_slot::tests::guard_child();
-            return;
-        }
         crate::table_test::run_table(
             "future_builder_matrix",
             &[
-                (
-                    "accepted_publication_guard_retains_incoming_after_caller_disposal",
-                    super::super::async_slot::tests::accepted_publication_guard_retains_incoming_after_caller_disposal as fn(),
-                ),
                 (
                     "future_builder_pending_future_waits_then_completes_with_data",
                     future_builder_pending_future_waits_then_completes_with_data as fn(),

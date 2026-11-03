@@ -8,7 +8,9 @@
 use flui_foundation::RenderId;
 use flui_foundation::geometry::{Matrix4, Point, Rect, Size};
 
-use crate::input_regions::{InputRegion, InputRegionSink, UnmappableRegion, map_rect};
+use crate::input_regions::{
+    InputRegion, InputRegionKind, InputRegionSink, Presses, UnmappableRegion, map_rect,
+};
 use crate::pipeline::phase::PipelinePhase;
 use crate::storage::RenderNode;
 
@@ -46,6 +48,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
             sink: InputRegionSink::default(),
             window,
             regions: &mut regions,
+            scope: MoveScope::Outside,
         };
         self.collect_input_regions(root, &mut walk);
         regions
@@ -81,10 +84,58 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
                 .render_object()
                 .describe_input_regions(size, &mut walk.sink),
         }
+        // A move area starts cutting out below it. A caption button or a resize border is
+        // chrome of its own: the button that draws it takes its presses through the system,
+        // so nothing below it is cut out of the move area it lies in. Read before this
+        // node's cut-out or move region joins its own.
+        let starts_move = walk
+            .sink
+            .reports(|kind| kind == InputRegionKind::WindowMove);
+        let ends_move = walk.sink.reports(|kind| {
+            matches!(
+                kind,
+                InputRegionKind::CaptionButton(_) | InputRegionKind::WindowResize(_)
+            )
+        });
+        // A node is inside the move area of the nearest ancestor that reported one, unless
+        // a nearer one passed presses through: a press-claiming node there is cut out, and a
+        // node passing presses through inside a cut-out moves the window again.
+        let scope = walk.scope;
+        let own_box = Rect::from_origin_size(Point::ZERO, size);
+        let claimed_parts = walk.sink.take_claimed_parts();
+        let child_scope = match (walk.sink.take_presses(), scope) {
+            (Presses::Claimed, MoveScope::InMove) => {
+                walk.sink.add(InputRegionKind::WindowContent, own_box);
+                MoveScope::CutOut
+            }
+            (Presses::Unclaimed, MoveScope::InMove) => {
+                for part in claimed_parts {
+                    walk.sink.add(InputRegionKind::WindowContent, part);
+                }
+                scope
+            }
+            (Presses::PassedThrough, MoveScope::CutOut) => {
+                walk.sink.add(InputRegionKind::WindowMove, own_box);
+                MoveScope::PassedThrough
+            }
+            (Presses::PassedThrough, MoveScope::InMove | MoveScope::PassedThrough) => {
+                MoveScope::PassedThrough
+            }
+            (Presses::PassedThrough, MoveScope::Outside)
+            | (Presses::Claimed | Presses::Unclaimed, _) => scope,
+        };
+        let child_scope = if starts_move {
+            MoveScope::InMove
+        } else if ends_move {
+            MoveScope::Outside
+        } else {
+            child_scope
+        };
         if !walk.sink.is_empty() {
             self.map_reported_regions(id, walk);
         }
 
+        walk.scope = child_scope;
         let generation = node.layout_generation();
         // Children in the order the last paint put them down, so a child painted over a
         // sibling reports its regions after it.
@@ -106,6 +157,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
             self.collect_input_regions(child_id, walk);
             walk.path.pop();
         }
+        walk.scope = scope;
     }
 
     /// Maps the regions `id` just reported into window coordinates.
@@ -212,6 +264,8 @@ struct RegionWalk<'a> {
     /// The root's box: the window in window-logical coordinates.
     window: Rect,
     regions: &'a mut Vec<InputRegion>,
+    /// Whether the node being visited lies in a move area.
+    scope: MoveScope,
 }
 
 /// `size` is the node's laid-out size, the committed box size or the sliver's
@@ -232,4 +286,19 @@ fn approximate_paint_clip(node: &RenderNode, slot: usize, size: Size) -> Option<
             .render_object()
             .describe_approximate_paint_clip(slot, size),
     }
+}
+
+/// Whether the node being visited lies in a move area an ancestor reported.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MoveScope {
+    /// No ancestor reported a move area, or a caption button or resize border lies nearer.
+    Outside,
+    /// The nearest ancestor that said anything reported a move area: press-claiming nodes
+    /// are cut out of it.
+    InMove,
+    /// Below a press-claiming node cut out of a move area: the cut-out covers its
+    /// descendants, and a node passing presses through moves the window again.
+    CutOut,
+    /// The nearest ancestor that said anything passed presses through to the move area.
+    PassedThrough,
 }

@@ -7,7 +7,7 @@
   `Checked` out of the desktop server, the move of `SemanticsRole` and `SemanticsAction` into
   the crate (with ADR-0089 §3's `ALL` rule), and the semantics-to-wire mapping, amended below
   to live in `flui-semantics`; from §3 the UI runtime half of the in-process backend (a
-  `SemanticsAgent` that reads and acts through the UI runtime's owner inbox), and the in-process
+  window handle that reads and acts through the UI runtime's owner inbox), and the in-process
   server in `flui-devtools` with its local endpoint (a named pipe or Unix socket, a launch
   token, debug builds only), amended below; the CLI half of §3 (`flui run --agent`, `flui mcp`). Still Proposed: §1's finder criteria, handle kinds
   beyond elements and windows, `effect` as a schema type, widget catalog and event-log shapes;
@@ -25,8 +25,11 @@
   `expand` and `collapse` reach FLUI's discrete `Expand`/`Collapse` actions rather than the tap
   handler, and a numeric `set_value` keeps its number; the double-toggle race stated below
   remains only for a node that registers neither discrete action
-- **Superseded in part by (Proposed):** [ADR-0239](ADR-0239-every-debug-app-hosts-the-driver-agent.md)
-  for §3 (the server moves to `flui-app` and every host drives it);
+- **Superseded in part by:** [ADR-0239](ADR-0239-every-debug-app-hosts-the-driver-agent.md)
+  for §3: the server is `flui-app`'s, installed by the host from the launch, in the current protocol;
+  `flui-devtools` has no `agent` feature and the facade no `dev-agent` feature, and
+  `flui run --agent` needs no feature of the application. What §3 says below of the
+  `flui-devtools` server, its `op` framing and its `agent_endpoint` tests is history.
   [ADR-0238](ADR-0238-flui-driver-protocol.md) settles the still-Proposed items of §§1, 3 and 5
 - **Related:** [ADR-0040](ADR-0040-tree-observation-seam.md),
   [ADR-0079](ADR-0079-keyboard-activation-and-focus-for-assistive-technology.md),
@@ -42,7 +45,8 @@ The accepted part added `crates/flui-protocol` (tier C, order 2, `stable`), move
 action need (`ElementId`, `WindowId`, `Node`, `Tree`, `ReadQuery`, `ActionRequest`,
 `ErrorCode`, `Retry`, `outline`, `PROTOCOL_VERSION`), the semantics-to-wire projection in
 `flui-semantics` (`SemanticsOwner::read_wire` and `resolve_wire_action`), and
-`flui_runtime::SemanticsAgent`. `flui-app` now vends it through the development-agent hook
+a per-window agent handle (`UiRuntime::dev_agent_window`, whose `AgentWindow::call` takes any
+window method of the protocol's table). `flui-app` now vends it through the development-agent hook
 (`flui_view::dev_agent::DevAgentHook`), and `flui-devtools`' `agent` feature serves it over a
 local endpoint. Line citations in Context are to `d7007f547`, before those changes.
 
@@ -129,7 +133,7 @@ This settles ADR-0080's open item:
 - `flui mcp` is an MCP server over stdio that proxies to that endpoint. The agent sees one MCP
   server whether it drives a FLUI app in-process or any app through the OS.
 - The handle table belongs to the backend, not to the MCP session, which keeps the design
-  compatible with a stateless MCP transport. The UI runtime's `SemanticsAgent` reports render
+  compatible with a stateless MCP transport. The UI runtime's agent window reports render
   identities scoped to one presentation (another window can report the same `e<n>`); the
   backend's table maps them when a session spans windows.
 

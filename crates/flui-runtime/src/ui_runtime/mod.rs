@@ -109,6 +109,7 @@ const MAX_NOT_SHOWN_RETRIES: u32 = 128;
 mod agent;
 mod agent_events;
 mod agent_inspect;
+mod agent_serve;
 mod agent_stability;
 mod agent_wait;
 mod attach;
@@ -123,11 +124,11 @@ mod recording;
 mod sampling;
 
 pub use crate::runtime_services::RuntimeHostServices;
-pub use agent::{AgentError, AgentReply, SemanticsAgent};
+pub(crate) use agent::AgentError;
 pub(crate) use agent::{DevAgentSlot, PendingActRead};
 pub(crate) use agent_events::EventHub;
-pub use agent_events::EventStream;
 pub(crate) use agent_inspect::{PendingLayerRead, StagedLayerRead, deliver_each, first_panic_of};
+pub use agent_serve::window_answers;
 pub(crate) use agent_stability::AgentStability;
 pub(crate) use agent_wait::PendingWait;
 pub use commands::{CommandSendError, DrainReport, UiCommand, UiCommandSender};
@@ -430,19 +431,17 @@ impl Drop for UiRuntime {
             );
         }
         for key in keys {
-            if first.is_some() || std::thread::panicking() {
-                std::mem::forget(key);
-            } else {
-                let failure =
-                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(key))).err();
-                crate::lifecycle_state::preserve_first_lifecycle_panic(
-                    &mut first,
-                    failure,
-                    "ui_runtime key retirement",
-                );
-            }
+            let failure =
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(key))).err();
+            crate::lifecycle_state::preserve_first_lifecycle_panic(
+                &mut first,
+                failure,
+                "ui_runtime key retirement",
+            );
         }
         for presentation in &presentations {
+            // An incoming unwind is a held failure: optional callbacks are
+            // skipped, values are still destroyed (ADR-0281 §3).
             let mode = if first.is_some() || std::thread::panicking() {
                 flui_interaction::__runtime::CloseMode::PreservingFailure
             } else {
@@ -458,31 +457,16 @@ impl Drop for UiRuntime {
                 "ui_runtime presentation shutdown",
             );
         }
+        // Each presentation is destroyed under containment, after a failure
+        // too; the first failure stays the one resumed (ADR-0281 §3).
         for presentation in presentations {
-            if first.is_some() || std::thread::panicking() || presentation.preserving_close() {
-                let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    presentation.close_with_mode_in(
-                        flui_interaction::__runtime::CloseMode::PreservingFailure,
-                        &self.interaction_lane,
-                    );
-                }))
-                .err();
-                crate::lifecycle_state::preserve_first_lifecycle_panic(
-                    &mut first,
-                    failure,
-                    "ui_runtime presentation withdrawal",
-                );
-                std::mem::forget(presentation);
-            } else {
-                let failure =
-                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(presentation)))
-                        .err();
-                crate::lifecycle_state::preserve_first_lifecycle_panic(
-                    &mut first,
-                    failure,
-                    "ui_runtime presentation retirement",
-                );
-            }
+            let failure =
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(presentation))).err();
+            crate::lifecycle_state::preserve_first_lifecycle_panic(
+                &mut first,
+                failure,
+                "ui_runtime presentation retirement",
+            );
         }
         // The ui_runtime is the only strong owner of its owner-local post-frame
         // callbacks and async tasks: retire them here, on the owner thread,
@@ -510,10 +494,11 @@ impl Drop for UiRuntime {
         // that failed in that glue would be a second panic in one unwind, and
         // abort (#1165). Queued commands carry cross-thread signal writes'
         // closures; the frame-failure handler is the embedder's. After a
-        // failure they are retained, as every other application value here.
+        // failure they are destroyed too, each under its own catch, and the
+        // first failure stays the one resumed (ADR-0281 §3).
         //
         // The inbox closes before any of them runs: a destructor that sends
-        // through a retained sender is refused with `OwnerGone` instead of
+        // through a surviving sender is refused with `OwnerGone` instead of
         // queueing a capture that only the drop glue would reach. A command a
         // worker thread queued between the drain and the close is dropped
         // with the receiver, under the same catch.
@@ -529,24 +514,17 @@ impl Drop for UiRuntime {
         // The capability providers are application values too: the last
         // registry clone is usually this one.
         let capabilities = std::mem::take(&mut self.capabilities);
-        let preserving = first.is_some() || std::thread::panicking();
-        if preserving {
-            std::mem::forget(commands);
-            std::mem::forget(handler);
-            std::mem::forget(capabilities);
-        } else {
-            let mut retired = flui_foundation::panic::FirstPanic::new();
-            for command in commands {
-                retired.contain(|| drop(command));
-            }
-            retired.contain(|| drop(handler));
-            retired.contain(|| drop(capabilities));
-            crate::lifecycle_state::preserve_first_lifecycle_panic(
-                &mut first,
-                retired.into_payload(),
-                "ui_runtime application value retirement",
-            );
+        let mut retired = flui_foundation::panic::FirstPanic::new();
+        for command in commands {
+            retired.contain(|| drop(command));
         }
+        retired.contain(|| drop(handler));
+        retired.contain(|| drop(capabilities));
+        crate::lifecycle_state::preserve_first_lifecycle_panic(
+            &mut first,
+            retired.into_payload(),
+            "ui_runtime application value retirement",
+        );
         if let Some(payload) = first {
             if std::thread::panicking() {
                 flui_foundation::panic::discard_payload(payload);

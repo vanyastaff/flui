@@ -49,6 +49,25 @@ pub struct Hello {
     pub client: Option<String>,
 }
 
+impl Hello {
+    /// A hello presenting `token` in `protocol`, naming no client.
+    #[must_use]
+    pub fn new(token: impl Into<String>, protocol: ProtocolVersion) -> Self {
+        Self {
+            token: token.into(),
+            protocol,
+            client: None,
+        }
+    }
+
+    /// Naming the client, such as `flui-driver/0.1.0`.
+    #[must_use]
+    pub fn with_client(mut self, client: impl Into<String>) -> Self {
+        self.client = Some(client.into());
+        self
+    }
+}
+
 /// Who answered a hello.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -65,6 +84,25 @@ pub struct AppInfo {
     pub pid: Option<u32>,
     /// The target it runs on, such as `windows`, `android` or `headless`.
     pub target: String,
+}
+
+impl AppInfo {
+    /// The app `name`, running on `target`.
+    #[must_use]
+    pub fn new(name: impl Into<String>, target: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            pid: None,
+            target: target.into(),
+        }
+    }
+
+    /// With its process id.
+    #[must_use]
+    pub const fn with_pid(mut self, pid: u32) -> Self {
+        self.pid = Some(pid);
+        self
+    }
 }
 
 /// What an app answers a hello with.
@@ -87,6 +125,32 @@ pub struct HelloReply {
         serde(default, skip_serializing_if = "Option::is_none")
     )]
     pub capabilities: Option<Capabilities>,
+}
+
+impl HelloReply {
+    /// A reply in `protocol`, naming neither the app nor what it can do.
+    #[must_use]
+    pub const fn new(protocol: ProtocolVersion) -> Self {
+        Self {
+            protocol,
+            app: None,
+            capabilities: None,
+        }
+    }
+
+    /// Naming the app.
+    #[must_use]
+    pub fn with_app(mut self, app: AppInfo) -> Self {
+        self.app = Some(app);
+        self
+    }
+
+    /// Saying what it can do.
+    #[must_use]
+    pub fn with_capabilities(mut self, capabilities: Capabilities) -> Self {
+        self.capabilities = Some(capabilities);
+        self
+    }
 }
 
 vocabulary! {

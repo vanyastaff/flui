@@ -79,7 +79,7 @@ pub(crate) fn deliver_on_remove(
             continue;
         };
         match post_frame.schedule_or_return(callback, |callback, _timing| callback()) {
-            Ok(()) | Err(flui_scheduler::PostFrameRejection::Retained) => {}
+            Ok(()) => {}
             Err(flui_scheduler::PostFrameRejection::Returned(callback)) => {
                 recovery.run(|| callback());
                 recovery.retire(callback);

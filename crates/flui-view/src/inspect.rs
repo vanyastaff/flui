@@ -102,5 +102,9 @@ impl InspectTree for ElementTree {
             .default(&false);
         out.field("depth", &node.depth()).level(Level::Debug);
         out.field("slot", &node.slot()).level(Level::Debug);
+        if let Some(site) = element.creation_site().location() {
+            out.field("created_at", &site.to_string())
+                .level(Level::Debug);
+        }
     }
 }

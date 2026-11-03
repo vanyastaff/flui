@@ -148,8 +148,8 @@ pub(crate) fn dispatch_child(kind: &str) {
     });
     assert_eq!(
         original_drops.load(Ordering::SeqCst),
-        usize::from(!factory),
-        "the recorded payload is dropped; a failing factory still retains it"
+        1,
+        "the original payload is dropped, also when the recovery factory fails"
     );
     assert_eq!(report_drops.load(Ordering::SeqCst), usize::from(telemetry));
     if factory {
@@ -216,7 +216,7 @@ pub(crate) fn dispatch_child(kind: &str) {
         TypeId::of::<Subject>()
     );
     assert!(owner.take_recovered_panics().is_empty());
-    assert_eq!(original_drops.load(Ordering::SeqCst), usize::from(!factory));
+    assert_eq!(original_drops.load(Ordering::SeqCst), 1);
 }
 
 pub(super) fn run_child(variable: &str, kind: &str) {

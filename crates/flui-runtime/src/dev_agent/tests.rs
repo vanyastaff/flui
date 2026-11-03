@@ -9,7 +9,7 @@
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use flui_protocol::ReadQuery;
+use flui_protocol::{ReadParams, method};
 
 use super::*;
 use crate::testing::ScriptedSink;
@@ -344,7 +344,9 @@ fn a_new_loop_attaches_and_publishes_again() {
         "the handle is the presentation's"
     );
     assert!(
-        window.read(ReadQuery::new()).is_ok(),
+        window
+            .call::<method::SemanticsRead>(ReadParams::new(window.id()))
+            .is_ok(),
         "the window reads while open"
     );
 }

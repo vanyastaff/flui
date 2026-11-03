@@ -12,6 +12,10 @@
 //! audits, review and reports, devices and exploration.
 
 use std::fmt;
+use std::time::Duration;
+
+use crate::locator::Target;
+use crate::tree::WindowId;
 
 vocabulary! {
     /// Which side answers a method.
@@ -120,6 +124,83 @@ pub trait Method: sealed::Sealed + 'static {
     type Output: fmt::Debug + Clone + 'static;
 }
 
+/// A method one window of the app answers: the agent asks the window its parameters address
+/// ([`Addressed::window`]), or the app's only window when they name none. Marked
+/// `Agent(window)` in the table, and only there.
+///
+/// Its parameters and output cross from the agent's threads to the window's owner and back.
+pub trait WindowMethod: Method<Params: Addressed + Send, Output: Send> {}
+
+/// Parameters that address one window of the app.
+pub trait Addressed {
+    /// The window they name; `None` for a locator that names none, which searches the app's
+    /// only window.
+    fn window(&self) -> Option<WindowId>;
+
+    /// How long the window may hold the request before it answers, past the time it takes to
+    /// serve: a wait's timeout. A server bounding the reply adds it.
+    fn holds_for(&self) -> Duration {
+        Duration::ZERO
+    }
+}
+
+macro_rules! addressed_by_window_field {
+    ($($params:ty),+ $(,)?) => {$(
+        impl Addressed for $params {
+            fn window(&self) -> Option<WindowId> {
+                Some(self.window)
+            }
+        }
+    )+};
+}
+
+addressed_by_window_field!(
+    crate::audit::AuditParams,
+    crate::capture::CaptureParams,
+    crate::input::InputParams,
+    crate::input::JournalParams,
+    crate::inspect::InspectParams,
+    crate::motion::MotionParams,
+    crate::perf::PerfStartParams,
+    crate::events::AnnouncementsParams,
+    crate::session::WindowParams,
+    crate::tree::ReadParams,
+    crate::wait::FramesParams,
+    crate::wait::SettledParams,
+);
+
+impl Addressed for crate::act::ActionabilityParams {
+    fn window(&self) -> Option<WindowId> {
+        Some(self.element.window)
+    }
+}
+
+impl Addressed for crate::act::ActParams {
+    fn window(&self) -> Option<WindowId> {
+        match &self.target {
+            Target::Element(element) => Some(element.window),
+            Target::Locator(locator) => locator.window,
+            Target::Point { window, .. } => Some(*window),
+        }
+    }
+}
+
+impl Addressed for crate::locator::LocateParams {
+    fn window(&self) -> Option<WindowId> {
+        self.locator.window
+    }
+}
+
+impl Addressed for crate::wait::WaitParams {
+    fn window(&self) -> Option<WindowId> {
+        Some(self.window)
+    }
+
+    fn holds_for(&self) -> Duration {
+        Duration::from_millis(self.effective_timeout_ms())
+    }
+}
+
 /// A method as data: one row of [`METHODS`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
@@ -179,32 +260,90 @@ pub fn find(name: &str) -> Option<&'static MethodInfo> {
 /// name:
 ///
 /// ```text
-/// $(#[doc = "…"])* Type = "group.verb", ServedBy, MethodEffect, Tier, Params => Output;
+/// $(#[doc = "…"])* Type = "group.verb", ServedBy $((window))?, MethodEffect, Tier, Params => Output;
 /// ```
 ///
 /// `Type` names [`flui_protocol::method::Type`](crate::method), and the three middle words
-/// are variants of [`ServedBy`], [`MethodEffect`] and [`Tier`]. `Params` and `Output` are full
-/// paths, so a dispatcher can deserialize them and a schema writer can describe them without a
-/// generic bound naming serde or schemars in this crate's signatures (ADR-0089 §2).
+/// are variants of [`ServedBy`], [`MethodEffect`] and [`Tier`]. `Agent(window)` marks a
+/// [`WindowMethod`]. `Params` and `Output` are full paths, so a dispatcher can deserialize them
+/// and a schema writer can describe them without a generic bound naming serde or schemars in
+/// this crate's signatures (ADR-0089 §2).
 #[macro_export]
 macro_rules! for_each_method {
     ($callback:ident) => {
-        $callback! {
+        $crate::__method_table! { [$callback] }
+    };
+}
+
+/// Hands the window methods ([`WindowMethod`]) to a macro, as
+/// [`for_each_method!`](crate::for_each_method) hands every method: `for_each_window_method!(rows)`
+/// expands to `rows! { … }` with one entry per window method, sorted by wire name:
+///
+/// ```text
+/// Type = "group.verb", MethodEffect, Tier, Params => Output;
+/// ```
+///
+/// A host that answers window methods generates its dispatch from it, so a window method the
+/// table gains is one the host's build refuses to compile without.
+#[macro_export]
+macro_rules! for_each_window_method {
+    ($callback:ident) => {
+        $crate::__method_table! { [$crate::__window_rows] @rows $callback [] }
+    };
+}
+
+/// Keeps the window methods of the table, one row at a time, and hands them on.
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __window_rows {
+    (@rows $callback:ident [$($kept:tt)*]) => {
+        $callback! { $($kept)* }
+    };
+    (
+        @rows $callback:ident [$($kept:tt)*]
+        $(#[$meta:meta])*
+        $ty:ident = $name:literal, Agent(window), $effect:ident, $tier:ident,
+            $params:ty => $output:ty;
+        $($rest:tt)*
+    ) => {
+        $crate::__window_rows! {
+            @rows $callback [$($kept)* $ty = $name, $effect, $tier, $params => $output;]
+            $($rest)*
+        }
+    };
+    (
+        @rows $callback:ident [$($kept:tt)*]
+        $(#[$meta:meta])*
+        $ty:ident = $name:literal, $served:ident, $effect:ident, $tier:ident,
+            $params:ty => $output:ty;
+        $($rest:tt)*
+    ) => {
+        $crate::__window_rows! { @rows $callback [$($kept)*] $($rest)* }
+    };
+}
+
+/// The table itself, handed to `$callback` after `$prefix`.
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __method_table {
+    ([$($callback:tt)+] $($prefix:tt)*) => {
+        $($callback)+! {
+            $($prefix)*
             /// Accessibility rules over a window's published tree.
-            AuditA11y = "audit.a11y", Agent, ReadOnly, Audit,
+            AuditA11y = "audit.a11y", Agent(window), ReadOnly, Audit,
                 $crate::audit::AuditParams => $crate::audit::AuditReport;
             /// The screen audit: every rule this build applies, saying what was checked and
             /// what was not.
             AuditScreen = "audit.screen", Driver, ReadOnly, Core,
                 $crate::audit::AuditParams => $crate::audit::AuditReport;
             /// The pixels the window last put on screen.
-            CapturePresented = "capture.presented", Agent, ReadOnly, Core,
+            CapturePresented = "capture.presented", Agent(window), ReadOnly, Core,
                 $crate::capture::CaptureParams => $crate::capture::CaptureMeta;
             /// The committed layer tree rendered again offscreen.
-            CaptureRendered = "capture.rendered", Agent, ReadOnly, Pixels,
+            CaptureRendered = "capture.rendered", Agent(window), ReadOnly, Pixels,
                 $crate::capture::CaptureParams => $crate::capture::CaptureMeta;
             /// Attached, visible, stable, enabled and receives, from one frame.
-            ElementActionability = "element.actionability", Agent, ReadOnly, Input,
+            ElementActionability = "element.actionability", Agent(window), ReadOnly, Input,
                 $crate::act::ActionabilityParams => $crate::act::Actionability;
             /// Two taps, close enough to count as one double tap.
             ElementDoubleTap = "element.double_tap", Driver, Acts, Input,
@@ -243,49 +382,49 @@ macro_rules! for_each_method {
             EventsUnsubscribe = "events.unsubscribe", Agent, ReadOnly, Record,
                 $crate::events::Subscription => $crate::session::Empty;
             /// Synthetic input into the window's own input path.
-            InputInject = "input.inject", Agent, Acts, Input,
+            InputInject = "input.inject", Agent(window), Acts, Input,
                 $crate::input::InputParams => $crate::act::ActOutcome;
             /// The input delivered since a sequence number.
-            InputJournal = "input.journal", Agent, ReadOnly, Input,
+            InputJournal = "input.journal", Agent(window), ReadOnly, Input,
                 $crate::input::JournalParams => $crate::input::Journal;
             /// Input by the path the policy chooses.
             InputPerform = "input.perform", Driver, Acts, Input,
                 $crate::input::InputParams => $crate::act::ActOutcome;
             /// Release every contact and key the agent holds.
-            InputRelease = "input.release", Agent, Acts, Input,
+            InputRelease = "input.release", Agent(window), Acts, Input,
                 $crate::session::WindowParams => $crate::input::Released;
             /// The layer tree.
-            InspectLayers = "inspect.layers", Agent, ReadOnly, Inspect,
+            InspectLayers = "inspect.layers", Agent(window), ReadOnly, Inspect,
                 $crate::inspect::InspectParams => $crate::inspect::InspectReading;
             /// The render tree.
-            InspectRender = "inspect.render", Agent, ReadOnly, Inspect,
+            InspectRender = "inspect.render", Agent(window), ReadOnly, Inspect,
                 $crate::inspect::InspectParams => $crate::inspect::InspectReading;
             /// The widget (element) tree.
-            InspectWidgets = "inspect.widgets", Agent, ReadOnly, Inspect,
+            InspectWidgets = "inspect.widgets", Agent(window), ReadOnly, Inspect,
                 $crate::inspect::InspectParams => $crate::inspect::InspectReading;
             /// Change, step or read the animation clock (ADR-0176).
-            MotionSet = "motion.set", Agent, Acts, Session,
+            MotionSet = "motion.set", Agent(window), Acts, Session,
                 $crate::motion::MotionParams => $crate::motion::MotionState;
             /// Judge runs against a target's budget.
             PerfExpect = "perf.expect", Driver, ReadOnly, Perf,
                 $crate::perf::PerfExpectParams => $crate::perf::PerfVerdict;
             /// Begin keeping frame samples.
-            PerfStart = "perf.start", Agent, ReadOnly, Perf,
+            PerfStart = "perf.start", Agent(window), ReadOnly, Perf,
                 $crate::perf::PerfStartParams => $crate::session::Empty;
             /// End the span and report it.
-            PerfStop = "perf.stop", Agent, ReadOnly, Perf,
+            PerfStop = "perf.stop", Agent(window), ReadOnly, Perf,
                 $crate::session::WindowParams => $crate::perf::PerfReport;
             /// One semantics action on one element.
-            SemanticsAct = "semantics.act", Agent, Acts, Core,
+            SemanticsAct = "semantics.act", Agent(window), Acts, Core,
                 $crate::act::ActParams => $crate::act::ActOutcome;
             /// The announcements spoken since a sequence number.
-            SemanticsAnnouncements = "semantics.announcements", Agent, ReadOnly, Record,
+            SemanticsAnnouncements = "semantics.announcements", Agent(window), ReadOnly, Record,
                 $crate::events::AnnouncementsParams => $crate::events::AnnouncementJournal;
             /// The elements a locator matches now.
-            SemanticsLocate = "semantics.locate", Agent, ReadOnly, Core,
+            SemanticsLocate = "semantics.locate", Agent(window), ReadOnly, Core,
                 $crate::locator::LocateParams => $crate::locator::Matches;
             /// A window's semantics tree.
-            SemanticsRead = "semantics.read", Agent, ReadOnly, Core,
+            SemanticsRead = "semantics.read", Agent(window), ReadOnly, Core,
                 $crate::tree::ReadParams => $crate::tree::Tree;
             /// Connect to an app already running with the agent.
             SessionAttach = "session.attach", Driver, Acts, Session,
@@ -300,16 +439,16 @@ macro_rules! for_each_method {
             SessionLaunch = "session.launch", Driver, Acts, Core,
                 $crate::session::LaunchParams => $crate::session::SessionInfo;
             /// Hold out until a window presents more frames.
-            WaitFrames = "wait.frames", Agent, ReadOnly, Session,
+            WaitFrames = "wait.frames", Agent(window), ReadOnly, Session,
                 $crate::wait::FramesParams => $crate::wait::WaitOutcome;
             /// Hold out until a window settles.
-            WaitSettled = "wait.settled", Agent, ReadOnly, Session,
+            WaitSettled = "wait.settled", Agent(window), ReadOnly, Session,
                 $crate::wait::SettledParams => $crate::wait::WaitOutcome;
             /// Hold out for a condition on the frame and event timeline.
-            WaitUntil = "wait.until", Agent, ReadOnly, Core,
+            WaitUntil = "wait.until", Agent(window), ReadOnly, Core,
                 $crate::wait::WaitParams => $crate::wait::WaitOutcome;
             /// A window's size, scale, position and focus.
-            WindowPlacement = "window.placement", Agent, ReadOnly, Session,
+            WindowPlacement = "window.placement", Agent(window), ReadOnly, Session,
                 $crate::session::WindowParams => $crate::session::Placement;
             /// The app's windows.
             WindowsList = "windows.list", Agent, ReadOnly, Core,
@@ -318,12 +457,21 @@ macro_rules! for_each_method {
     };
 }
 
+/// A row's scope: `Agent(window)` declares a [`WindowMethod`]; any other marker, or one on a
+/// method the agent does not serve, does not compile.
+macro_rules! scoped {
+    ($ty:ident, $served:ident) => {};
+    ($ty:ident, Agent, window) => {
+        impl WindowMethod for $ty {}
+    };
+}
+
 macro_rules! declare_methods {
     (
         $(
             $(#[$meta:meta])*
-            $ty:ident = $name:literal, $served:ident, $effect:ident, $tier:ident,
-                $params:ty => $output:ty;
+            $ty:ident = $name:literal, $served:ident $(($scope:ident))?, $effect:ident,
+                $tier:ident, $params:ty => $output:ty;
         )+
     ) => {
         $(
@@ -341,6 +489,8 @@ macro_rules! declare_methods {
                 type Params = $params;
                 type Output = $output;
             }
+
+            scoped!($ty, $served $(, $scope)?);
         )+
 
         /// Every method, sorted by wire name: the order MCP lists tools in.

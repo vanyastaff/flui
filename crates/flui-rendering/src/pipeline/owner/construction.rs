@@ -185,7 +185,7 @@ impl PipelineOwner<Idle> {
         self,
     ) -> (
         PipelineOwner<Idle>,
-        crate::error::RenderResult<Option<LayerTree>>,
+        Result<Option<LayerTree>, flui_foundation::TreeError<crate::error::RenderError>>,
     ) {
         self.run_frame_impl()
     }
@@ -194,7 +194,7 @@ impl PipelineOwner<Idle> {
         mut self,
     ) -> (
         PipelineOwner<Idle>,
-        crate::error::RenderResult<Option<LayerTree>>,
+        Result<Option<LayerTree>, flui_foundation::TreeError<crate::error::RenderError>>,
     ) {
         // Observe node-bound cross-thread invalidation before any phase runs — an
         // async decode that finished while the app idled lands in this
@@ -204,18 +204,21 @@ impl PipelineOwner<Idle> {
         // Layout
         let mut owner = self.into_layout();
         if let Err(e) = owner.run_layout() {
+            let e = owner.in_tree(e);
             return (owner.into_idle(), Err(e));
         }
 
         // Compositing
         let mut owner = owner.into_compositing();
         if let Err(e) = owner.run_compositing() {
+            let e = owner.in_tree(e);
             return (owner.into_idle(), Err(e));
         }
 
         // Paint
         let mut owner = owner.into_paint();
         if let Err(e) = owner.run_paint() {
+            let e = owner.in_tree(e);
             return (owner.into_idle(), Err(e));
         }
 
@@ -234,6 +237,7 @@ impl PipelineOwner<Idle> {
             // owner for the error path. The painted tree remains in
             // `last_layer_tree`; this failed call returns no tree, while a
             // retry can reuse the retained visual result.
+            let e = owner.in_tree(e);
             return (owner.finish(), Err(e));
         }
 

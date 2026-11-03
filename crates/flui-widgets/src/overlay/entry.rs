@@ -172,9 +172,8 @@ impl OverlayEntry {
     /// Panics if the process has exhausted all nonzero entry identities. Once
     /// exhausted, further construction is permanently refused rather than
     /// reusing an identity held by an existing entry or reconciliation key.
-    /// The rejected builder is retained before the capacity panic so its captures'
-    /// destructors cannot replace the failure. Accepted builders keep their
-    /// ordinary lifetime policy.
+    /// The rejected builder is destroyed by the capacity panic's unwind
+    /// (ADR-0281). Accepted builders keep their ordinary lifetime policy.
     #[must_use]
     pub fn new(builder: impl Fn(&dyn BuildContext) -> BoxedView + 'static) -> Self {
         Self::new_allocated(builder, OverlayEntryId::next)
@@ -193,12 +192,11 @@ impl OverlayEntry {
         builder: impl Fn(&dyn BuildContext) -> BoxedView + 'static,
         allocate_id: impl FnOnce() -> OverlayEntryId,
     ) -> Self {
-        let mut builder = crate::support::retirement::Terminal::new(builder);
         let id = allocate_id();
         Self {
             inner: Arc::new(EntryInner {
                 id,
-                builder: crate::support::retirement::Terminal::new(Rc::new(builder.take_value())),
+                builder: crate::support::retirement::Terminal::new(Rc::new(builder)),
                 rebuild: Mutex::new(None),
                 opaque: AtomicBool::new(false),
                 maintain_state: AtomicBool::new(false),
@@ -482,7 +480,7 @@ pub(super) fn overlay_entry_identity_exhaustion_preserves_existing_entries() {
         "last admitted entries cannot share a reconciliation key"
     );
     let rejected_drops = Rc::new(Cell::new(0));
-    for _ in 0..4 {
+    for attempt in 1..=4 {
         let capture = BuilderCapture(Rc::clone(&rejected_drops));
         let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             OverlayEntry::new_allocated(
@@ -501,8 +499,8 @@ pub(super) fn overlay_entry_identity_exhaustion_preserves_existing_entries() {
         );
         assert_eq!(
             rejected_drops.get(),
-            0,
-            "rejected builder captures remain retained during capacity unwind"
+            attempt,
+            "each rejected builder capture is destroyed during the capacity unwind"
         );
         assert_eq!(
             overlay.ids_bottom_to_top(),

@@ -132,15 +132,11 @@ fn clone_failure_preserves_registration() {
     assert_text(&mut request, "survived");
     next_request();
 }
-fn wake_failure_retains_aggregate_and_delivery() {
+fn wake_failure_destroys_the_waker_and_keeps_delivery() {
     let (mut request, completer) = TransferRequest::pending();
     let drops = Arc::new(AtomicUsize::new(0));
     let calls = Arc::new(AtomicUsize::new(0));
-    let waker = executor(
-        &calls,
-        true,
-        vec![Bomb(Arc::clone(&drops)), Bomb(Arc::clone(&drops))],
-    );
+    let waker = executor(&calls, true, vec![Bomb(Arc::clone(&drops))]);
     assert!(poll(&mut request, &waker).is_pending());
     drop(waker);
     retain_failure(
@@ -150,19 +146,18 @@ fn wake_failure_retains_aggregate_and_delivery() {
         "wake secondary",
     );
     assert_eq!(calls.load(Ordering::SeqCst), 1);
-    assert_eq!(drops.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        drops.load(Ordering::SeqCst),
+        1,
+        "the waker is destroyed after the caught failure"
+    );
     assert_text(&mut request, "durable");
     next_request();
 }
 fn owner_disconnect_during_unwind_preserves_primary() {
     let (mut request, completer) = TransferRequest::pending();
-    let drops = Arc::new(AtomicUsize::new(0));
     let calls = Arc::new(AtomicUsize::new(0));
-    let waker = executor(
-        &calls,
-        true,
-        vec![Bomb(Arc::clone(&drops)), Bomb(Arc::clone(&drops))],
-    );
+    let waker = executor(&calls, true, vec![]);
     assert!(poll(&mut request, &waker).is_pending());
     drop(waker);
     retain_failure(
@@ -173,7 +168,6 @@ fn owner_disconnect_during_unwind_preserves_primary() {
         "producer primary",
     );
     assert_eq!(calls.load(Ordering::SeqCst), 1);
-    assert_eq!(drops.load(Ordering::SeqCst), 0);
     assert!(matches!(
         poll(&mut request, Waker::noop()),
         Poll::Ready(Err(TransferError::SourceGone))
@@ -182,13 +176,8 @@ fn owner_disconnect_during_unwind_preserves_primary() {
 }
 fn cancellation_during_unwind_preserves_primary() {
     let (mut request, completer) = TransferRequest::pending();
-    let drops = Arc::new(AtomicUsize::new(0));
     let calls = Arc::new(AtomicUsize::new(0));
-    let waker = executor(
-        &calls,
-        true,
-        vec![Bomb(Arc::clone(&drops)), Bomb(Arc::clone(&drops))],
-    );
+    let waker = executor(&calls, true, vec![]);
     assert!(poll(&mut request, &waker).is_pending());
     drop(waker);
     retain_failure(
@@ -199,7 +188,6 @@ fn cancellation_during_unwind_preserves_primary() {
         "consumer primary",
     );
     assert!(completer.is_cancelled());
-    assert_eq!(drops.load(Ordering::SeqCst), 0);
     completer.complete(Ok(TransferPayload::Text("discarded".into())));
     next_request();
 }
@@ -207,11 +195,7 @@ fn cancellation_wake_failure_preserves_cancelled_state() {
     let (mut request, completer) = TransferRequest::pending();
     let drops = Arc::new(AtomicUsize::new(0));
     let calls = Arc::new(AtomicUsize::new(0));
-    let waker = executor(
-        &calls,
-        true,
-        vec![Bomb(Arc::clone(&drops)), Bomb(Arc::clone(&drops))],
-    );
+    let waker = executor(&calls, true, vec![Bomb(Arc::clone(&drops))]);
     assert!(poll(&mut request, &waker).is_pending());
     drop(waker);
     retain_failure(
@@ -220,7 +204,11 @@ fn cancellation_wake_failure_preserves_cancelled_state() {
     );
     assert!(completer.is_cancelled());
     assert_eq!(calls.load(Ordering::SeqCst), 1);
-    assert_eq!(drops.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        drops.load(Ordering::SeqCst),
+        1,
+        "the waker is destroyed after the caught failure"
+    );
     completer.complete(Ok(TransferPayload::Text("discarded".into())));
     next_request();
 }
@@ -308,8 +296,8 @@ fn transfer_request_recovery() {
             clone_failure_preserves_registration,
         ),
         (
-            "wake failure retains aggregate and delivery",
-            wake_failure_retains_aggregate_and_delivery,
+            "wake failure destroys the waker and keeps delivery",
+            wake_failure_destroys_the_waker_and_keeps_delivery,
         ),
         (
             "owner disconnect during unwind",

@@ -322,3 +322,5 @@ pub mod prelude {
         },
     };
 }
+
+pub(crate) use flui_foundation::panic::drop_contained;

@@ -8,6 +8,7 @@ mod listener;
 mod meta_data;
 mod mouse_region;
 mod offstage;
+mod press_pass_through;
 
 pub use absorb_pointer::*;
 pub use content_shape::*;
@@ -19,3 +20,4 @@ pub use listener::*;
 pub use meta_data::*;
 pub use mouse_region::*;
 pub use offstage::*;
+pub use press_pass_through::*;

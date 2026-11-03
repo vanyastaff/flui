@@ -191,6 +191,17 @@ pub trait View: Downcast + DynClone + 'static {
         None
     }
 
+    /// Where this view was created: the caller of the `#[track_caller]` constructor that made
+    /// it. The element copies it at mount, and the inspector, errors and traces show it as
+    /// `file:line:col`.
+    ///
+    /// Unknown by default and for a view built by struct literal. A view type with a
+    /// [`CreationSite`](flui_foundation::CreationSite) field marks it `#[view(site)]` in its
+    /// derive, which implements this method.
+    fn creation_site(&self) -> flui_foundation::CreationSite {
+        flui_foundation::CreationSite::unknown()
+    }
+
     /// Writes this view's configuration for inspection (ADR-0242): what the element tree's
     /// snapshot keeps as the node's fields, apart from the element's own facts. Writes nothing by
     /// default.
@@ -239,6 +250,12 @@ pub trait ElementBase: Downcast + 'static {
     /// `RenderObjectElement`.
     fn debug_kind(&self) -> &'static str {
         "Element"
+    }
+
+    /// Where the view this element was mounted for was created, copied at mount. Unknown for an
+    /// element that was never mounted, or whose view records no site.
+    fn creation_site(&self) -> flui_foundation::CreationSite {
+        flui_foundation::CreationSite::unknown()
     }
 
     /// Writes the held view's [`View::inspect`] fields.

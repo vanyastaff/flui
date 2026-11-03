@@ -161,19 +161,15 @@ destructors. The public `try_with`/`with`/`peek` reader is therefore `FnMut`, al
 it is called at most once. This deliberately rejects an `FnOnce` reader that consumes
 a capture: `call_once` would transfer the captures into the caught invocation, where a
 panicking capture destructor could abort the process while the reader panic unwinds,
-before containment regains control. After a reader or graph panic, the retained opaque
-callback envelope and any later opaque result or panic payload are deliberately leaked:
-Rust drop glue can destroy a second captured field while the first field's destructor is
-unwinding, so no generic `catch_unwind` wrapper can safely retire that aggregate. Normal
-reads still destroy the callback and result normally. The typed adapter records the
+before containment regains control. After a reader or graph panic, the callback envelope,
+any later result and any later panic payload are destroyed under containment, and a panic
+from their destructors is discarded so the first failure propagates (ADR-0281). The typed
+adapter records the
 original reader payload outside the graph invocation, then propagates a destructor-free
 unit unwind marker through the erased reader. This makes failure visible to the graph
 before it finalizes a released loan while preserving the original payload's priority
 over graph cleanup and subscription failures. The released-read subprocess rows in
 `flui-view`'s `signal_read_and_write_matrix` cover that actual cross-crate bridge.
-This exceptional-path leak is the
-strongest continuation-safe contract available without constraining public callback and
-result types to destructor-free values.
 
 **Why here.** An item added to this module re-checks every crate above foundation, so the module
 stays small and changes rarely; the graph, which changes often, stays in `flui-view` (ADR-0085 §6
@@ -316,7 +312,7 @@ cloneable values, copying the value while sharing the listener channel.
 The public `notifier_ownership_and_recovery` family includes a non-Clone owned
 value's mutation/extraction sequence and clone compatibility.
 
-`ValueNotifier<T>` implements `Drop` to order and retain its owned parts, so borrowed data inside `T` must
+`ValueNotifier<T>` implements `Drop` to order its owned parts, so borrowed data inside `T` must
 outlive the notifier; this is a drop-check requirement, not a `T: 'static`
 bound.
 
@@ -331,38 +327,33 @@ The ADR-0039 claim-slot state machine remains the authority for ownership of a
 reply. Executor cloning and displaced-waker destruction run outside the slot's
 locks; a clone can synchronously deliver, and the subsequent state check must
 observe that outcome. Delivery and owner disconnection publish their terminal
-state before notifying blocked or asynchronous requesters. Abandonment retains
+state before notifying blocked or asynchronous requesters. Abandonment keeps
 the reply for the owner to reclaim even when its wake callback fails, and still
 attempts the task wake.
 
-Wake invocation borrows an owning executor envelope held outside catch_unwind.
-The first caught wake or retirement failure propagates during ordinary calls;
-later failures and failures during an existing unwind are retained. After a
-caught failure or during active unwind, shared state and opaque envelopes are
-retained so reply or callback captures cannot introduce a competing destructor
-failure. Successful ordinary retirement still runs destructors, and an
-individual aggregate that double-panics before containment regains control can
-abort. This is exceptional-path retention, not a guarantee against arbitrary
-destruction inside user callbacks.
+Wake invocation borrows the withdrawn executor envelope, then destroys it; both
+run contained. The first caught wake or destructor failure propagates during
+ordinary calls; later failures, and every failure during an existing unwind,
+are discarded with `panic::discard_payload`. Shared state and envelopes are
+destroyed normally on every path: a destructor that panics while the thread is
+already unwinding aborts, as in std (ADR-0281).
 
 The public subprocess family `claim_slot_executor_and_owner_recovery` covers
 clone reentry, failed clone and replacement retirement, committed delivery
 followed by wake or retirement failure, owner disconnection during unwind,
 owner/task failure competition on abandonment, and reclamation of an unclaimed
-reply after failure. Each scenario also checks the next request.
+reply after failure. Each scenario counts the destroyed captures and checks the
+next request.
 
-### Borrow arguments and retain exceptional notification obligations
+### Borrow arguments and destroy withdrawn notification obligations
 
 Clearing, disposal and final-owner destruction take the listener map out of
 its borrow, then drop callbacks one at a time in registration order; surviving
 notifier clones keep the map alive. `ValueNotifier` drops its value, then its
-channel; `into_value` disposes the channel before returning the value. After
-the first destructor panic in one of these operations, or when one starts while
-the thread is already panicking, the remaining captures and the value are
-retained (ADR-0127). A `ValueNotifier`'s channel handle is a shared clone, so
-it is released even then; the last owner's storage retains the captures. A failure a caller caught earlier is not visible through
-`thread::panicking()`, so that caller retains its own failed value. Pinned by
-`notifier_ownership_and_recovery`.
+channel; `into_value` disposes the channel before returning the value. If a
+destructor panics, the remaining captures are still dropped and the first panic
+propagates; a destructor that panics while the thread is already unwinding
+aborts, as in std (ADR-0281). Pinned by `notifier_ownership_and_recovery`.
 
 Typed notification callbacks borrow their argument and do not require Clone.
 The first callback failure resumes after the healthy tail; removing a listener
@@ -376,9 +367,9 @@ catches a failure, including before returning to its parent. Channel depth owns
 signal reset; nested completion cannot clear an enclosing failed delivery.
 Signal links borrow their enclosing stack frames and channel-local atomics;
 wrapper depth does not grow a heap collection or retain channel storage.
-The recovery decisions also retain independent scopes: exact inert-payload release
-is [ADR-0119](../../docs/adr/ADR-0119-inert-panic-payload-retirement.md), exceptional
-user-ownership retirement is [ADR-0127](../../docs/adr/ADR-0127-exceptional-path-retention.md),
+The recovery decisions also keep independent scopes: destruction of caught
+payloads and withdrawn values is
+[ADR-0281](../../docs/adr/ADR-0281-a-destructor-that-panics-during-an-unwind-aborts-as-in-std.md),
 and live notification membership plus borrowed first-failure custody is
 [ADR-0178](../../docs/adr/ADR-0178-notification-first-failure-custody.md). An enclosing
 operation owns recovery; this map does not join independent runtime or platform
@@ -386,15 +377,14 @@ operations into one global failure boundary.
 
 The notifier's owned snapshot prevents a removed callback from disappearing
 while it runs. After a caught listener failure, the recovery owns the original
-payload until completing delivery, and exceptional outgoing opaque custody
-follows ADR-0127. Arbitrary capture or panic-payload aggregates can double-panic
-during drop before catch_unwind regains control. Healthy live listeners and later
+payload until completing delivery, and outgoing callback envelopes retire one
+at a time under its containment (ADR-0281 §3). Healthy live listeners and later
 notification rounds still progress. Reporting borrows the original payload behind a separate
 unwind boundary; a panicking tracing subscriber cannot interrupt notification,
-and its secondary payload follows the exact inert/opaque distinction below. Normal success retires callback
-envelopes one at a time in registration order; a retirement failure propagates
-after retaining the remaining envelopes. An individual aggregate double-panic
-during ordinary successful-round retirement keeps Rust's abort behavior.
+and its secondary payload is discarded under containment. Normal success retires callback
+envelopes one at a time in registration order; the first retirement failure
+propagates after the remaining envelopes are retired. A capture aggregate that
+panics again while one of its own fields unwinds aborts, as in std.
 
 The public subprocess table `notifier_ownership_and_recovery` checks borrowed
 non-Clone arguments, hostile payloads and self-removal captures, tracing failure
@@ -408,6 +398,22 @@ are not propagated are dropped where the decision is made
 a payload or capture whose destructor panics while the thread unwinds aborts,
 as in std.
 
+
+### Owners commit state before running user code
+
+[ADR-0287](../../docs/adr/ADR-0287-owner-state-is-committed-before-user-code-runs.md).
+`panic::commit` borrows an owner's `RefCell` for one mutation and hands it the
+state and an `Outbox`, never the cell; `Outbox` has no public constructor. User
+code the change owes is queued there (`call`, `wake`, `release`) and runs after
+the borrow ends, in order, each item contained, the first panic resumed once
+every item ran. A call is an `FnMut` called at most once, so its captures are
+destroyed after it, contained, and never by its own unwind (ADR-0281 §3). A
+mutation that panics runs none of its calls but still wakes
+its wakers. `commit_into` does the same inside an operation's `PanicRecovery`.
+`panic::Obligation` claims an owed flag and sets it again unless the delivery
+discharges it. `TicketSource<K>` issues opaque `Ticket<K>`s from an `IdMint`
+and accepts an answer only for the current ticket, once. Pinned by
+`commit_then_call_contract`.
 
 ## `Matrix4::lerp` decomposes in `f64` and borrows orientation for a collapsed axis
 

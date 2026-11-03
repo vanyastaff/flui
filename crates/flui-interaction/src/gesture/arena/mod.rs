@@ -75,7 +75,6 @@ use tracing::instrument;
 
 use crate::close::{CloseMode, ClosePanic, CloseTombstone};
 use crate::ids::PointerId;
-use crate::retain::Retain;
 use flui_foundation::{
     IdMint, InputSequenceId, MonotonicClock, SystemClock,
     panic::{FailureClass, RecoveryScope},
@@ -2016,11 +2015,7 @@ impl GestureArena {
         recovery: &mut RecoveryScope<'_>,
     ) {
         context.drain(recovery);
-        if recovery.has_failure() || context.preserving() {
-            member.retain();
-        } else {
-            context.invoke(FailureClass::Unknown, recovery, |_| drop(member));
-        }
+        context.invoke(FailureClass::Unknown, recovery, |_| drop(member));
     }
 
     /// Internal method: resolve an entry with given disposition.
@@ -2050,7 +2045,7 @@ impl GestureArena {
         let vote = vote.into();
         if self.shared.owner_closed.get() {
             if self.shared.close_mode.mode() == CloseMode::PreservingFailure {
-                member.retain();
+                crate::containment::drop_contained(member);
             } else {
                 Self::retire_member_with_recovery(&self.shared.recovery, member, recovery);
             }
@@ -2441,7 +2436,7 @@ impl GestureArena {
     }
 
     /// Reject the members of generations [`Self::withdraw_owner`] detached,
-    /// or retain them under a preserving close.
+    /// or destroy them unnotified under a preserving close.
     pub(crate) fn retire_owner(&self, batches: Vec<DetachedArenaBatch>, mode: CloseMode) {
         fn notify(failure: &mut ClosePanic, verdicts: impl IntoIterator<Item = ContestVerdict>) {
             for (member, disposition, contest) in verdicts {
@@ -2458,13 +2453,13 @@ impl GestureArena {
         let mut failure = ClosePanic::for_close(mode, self.shared.close_mode.clone());
         for batch in batches {
             // Carried successors hold only weak identities; a preserving close
-            // has nothing of theirs to retain.
+            // notifies none of them.
             if !failure.preserving() {
                 notify(&mut failure, batch.carried);
             }
             for slot in batch.slots {
                 if failure.preserving() {
-                    failure.retire(crate::retain::Owned(slot));
+                    failure.retire(slot);
                     continue;
                 }
                 let contest = slot.contest();
@@ -2475,7 +2470,7 @@ impl GestureArena {
                         .into_iter()
                         .map(|(member, disposition)| (member, disposition, contest)),
                 );
-                failure.retire(crate::retain::Owned(slot));
+                failure.retire(slot);
             }
         }
         failure.finish();

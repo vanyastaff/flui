@@ -840,8 +840,8 @@ trait depends on `flui-platform` instead.
   platform. A handler's panic is the call's `Failure`: the caller resumes it
   where a Rust frame waits (headless, winit, a window's FIFO) or contains it
   where the operating system called (Win32's exit policy and session end,
-  AppKit, UIKit); a handler displaced during a failed call is retained, never
-  dropped into a second failure (ADR-0127 §2). `AppDelivery` and
+  AppKit, UIKit); a handler displaced during a failed call is dropped,
+  contained, its panic discarded (ADR-0281). `AppDelivery` and
   `WindowDelivery` call only through it. Tests: `owner::call_point::tests`;
   the public-API tables in `tests/handler_reentry.rs` (headless, Win32 and
   winit, each case on a worker thread so that a regression fails as a deadlock
@@ -895,7 +895,7 @@ trait depends on `flui-platform` instead.
   unannounced, out of an `extern "C-unwind"` one unwind through AppKit's or
   libdispatch's frames; `os_entry` logs it with its text, under the entry's
   name and with `args` (what the OS called with, `Copy + Debug`: a message
-  and its window, the delegate), contains the log, retains the payload, then
+  and its window, the delegate), contains the log, discards the payload (ADR-0281 §2), then
   answers what `AfterPanic` says: `Answer(fn(A) -> R)`, a failure the OS
   understands made from the arguments only after a panic and capturing
   nothing (a broadcast receiver grants a session-end query it could not
@@ -2269,7 +2269,7 @@ frame for (no window, a window that has let go of its handler, or a handler
 that answers `FrameOutcome::Declined`, visible or hidden) is not counted, so
 a delivery that reaches no frame cannot spin.
 Questions run outside every borrow. A handler whose answer unwinds out of the
-loop is retained, never dropped into the unwind, so hostile captures cannot
+loop is dropped contained, so a hostile capture whose destructor panics cannot
 replace the first failure.
 
 The bounded native rows `deadline_rearms_independent_windows_without_input`,
@@ -2279,7 +2279,7 @@ The bounded native rows `deadline_rearms_independent_windows_without_input`,
 `deadline_no_frame_can_service_does_not_spin`,
 `deadline_window_declining_its_frames_does_not_spin`,
 `deadline_hidden_window_declining_its_frames_does_not_spin`, and
-`deadline_query_unwind_retains_hostile_captures` belong to
+`deadline_query_unwind_destroys_hostile_captures` belong to
 `test_window_lifecycle_contract`. They exercise the native wait and paint
 producer, cancellation, independent windows and recovery. They do
 not establish GPU presentation, UIA timing or other platform backends.
@@ -2482,13 +2482,13 @@ concern, not proved by sending `terminate:` in a probe.
 Shutdown first closes admission, clears callback cycles and closes remaining
 windows on main, then invokes quit once outside locks. Cleanup also runs on
 bootstrap error/unwind. User callback/destructor panics are contained per cleanup
-step and logged; exceptional panic payloads are deliberately leaked rather than
-risk a second panic during unwinding. Resource cleanup after such a panic is
+step and logged; caught panic payloads are destroyed under containment
+(ADR-0281). Resource cleanup after such a panic is
 best effort, while the guard still detaches its own delegate.
 
 Native window release now executes inline on its owner, including after the
 loop returns, through the same panic boundary used by lifecycle cleanup: a
-panic payload whose destructor also panics is retained without destruction
+panic payload is destroyed under containment (ADR-0281)
 while ordinary local resource destructors still execute. `windowWillClose:` pins its receiver with an extra retain transferred
 to the surrounding autorelease pool before callbacks can drop the final wrapper.
 That prevents deallocation under the native close stack. Worker drops remain

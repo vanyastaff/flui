@@ -115,14 +115,15 @@ pub(crate) const fn appkit_window_capabilities(owner_is_main: bool) -> WindowCap
     capabilities.observes_position = Native;
     capabilities.observes_minimized = Native;
     capabilities.places_at_open = Native;
+    // A title bar of the application's is drawn under the system's, made
+    // transparent (`fullSizeContentView`), with the traffic lights over it.
+    capabilities.app_title_bar = Native;
     if owner_is_main {
         capabilities.material = Native;
     } else {
         capabilities = capabilities.unavailable(&MATERIAL, CapabilityAbsence::NotYetOnThisHost);
     }
-    // The traffic lights over a title bar of the application's
-    // (`fullSizeContentView`) are not yet driven.
-    capabilities.without_app_title_bar(CapabilityAbsence::NotYetOnThisHost)
+    capabilities
 }
 
 /// `NSView.displayLink` (macOS 14), whose `preferredFrameRateRange` a
@@ -226,6 +227,46 @@ impl crate::version::gate::Gate for WindowColorMode {
     const SINCE: u64 = 26;
 }
 
+/// `View.requestUnbufferedDispatch(int)` (API 30): the input sources a view
+/// takes as soon as the system has them instead of once per frame. The request
+/// rides up to the window's `ViewRootImpl`, which batches input ahead of the
+/// native input queue, so a `NativeActivity` honours it too.
+#[cfg(any(target_os = "android", test))]
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct UnbufferedDispatch;
+
+#[cfg(any(target_os = "android", test))]
+impl crate::version::gate::Gate for UnbufferedDispatch {
+    type Version = AndroidApi;
+    const SINCE: u64 = 30;
+}
+
+/// The `InputDevice.SOURCE_CLASS_*` mask an Activity's decor view asks for
+/// unbuffered dispatch to deliver `latency`: the pointer class for
+/// [`InputLatency::Low`](flui_platform::InputLatency::Low), none otherwise, so
+/// a window reopened on the same Activity drops an earlier request. `None`
+/// below API 30, where the system has no such request and batches every
+/// source.
+#[cfg(any(target_os = "android", test))]
+pub(crate) fn unbuffered_input_sources(
+    latency: flui_platform::InputLatency,
+    api: AndroidApi,
+) -> Option<i32> {
+    use flui_platform::InputLatency;
+
+    /// `InputDevice.SOURCE_CLASS_NONE`.
+    const SOURCE_CLASS_NONE: i32 = 0;
+    /// `InputDevice.SOURCE_CLASS_POINTER`: touch, stylus and mouse.
+    const SOURCE_CLASS_POINTER: i32 = 0x2;
+    api.since::<UnbufferedDispatch>()?;
+    Some(match latency {
+        InputLatency::Low => SOURCE_CLASS_POINTER,
+        // `Balanced`, and a latency the contract adds later, keep the
+        // system's per-frame batches.
+        _ => SOURCE_CLASS_NONE,
+    })
+}
+
 /// The `ActivityInfo.COLOR_MODE_*` value an Activity's window asks for to
 /// show `mode`; `None` for the default, which the window has without asking.
 #[cfg(any(target_os = "android", test))]
@@ -251,9 +292,10 @@ mod tests {
     use flui_platform::{Availability, CapabilityAbsence, WindowCapabilities};
 
     use super::{
-        ActivityFacts, AppleVersion, MATERIAL, MacOSVersion, PointerInteraction, ViewDisplayLink,
-        WindowColorMode, activity_capabilities, activity_color_mode, appkit_window_capabilities,
-        frame_rate_absence, pointer_absence, pointer_icon_absence, scene_capabilities,
+        ActivityFacts, AppleVersion, MATERIAL, MacOSVersion, PointerInteraction,
+        UnbufferedDispatch, ViewDisplayLink, WindowColorMode, activity_capabilities,
+        activity_color_mode, appkit_window_capabilities, frame_rate_absence, pointer_absence,
+        pointer_icon_absence, scene_capabilities, unbuffered_input_sources,
     };
     use crate::version::gate::android::AndroidApi;
     use crate::version::gate::testing::row;
@@ -263,6 +305,16 @@ mod tests {
     fn material(capabilities: &WindowCapabilities) -> Option<CapabilityAbsence> {
         (capabilities.availability(&MATERIAL) == Availability::Unavailable)
             .then(|| capabilities.refusal(&MATERIAL))
+    }
+
+    /// How a window's capabilities refuse a title bar of the application's;
+    /// `None` where it takes one.
+    fn app_title_bar(capabilities: &WindowCapabilities) -> Option<CapabilityAbsence> {
+        let command = flui_platform::WindowCommand::SetFrame(
+            flui_platform::WindowFrame::AppTitleBar(flui_platform::AppTitleBar::new()),
+        );
+        (capabilities.availability(&command) == Availability::Unavailable)
+            .then(|| capabilities.refusal(&command))
     }
 
     /// Why a window's capabilities report no presentation; `None` where they
@@ -307,7 +359,7 @@ mod tests {
         let ios = AppleVersion::new;
         let macos = MacOSVersion::new;
         let api = AndroidApi::from_level;
-        let rows: [(&str, Option<CapabilityAbsence>, Option<CapabilityAbsence>); 23] = [
+        let rows: [(&str, Option<CapabilityAbsence>, Option<CapabilityAbsence>); 24] = [
             (
                 "UIKit material",
                 material(&scene_capabilities()),
@@ -337,6 +389,11 @@ mod tests {
                 "AppKit material off the main lane",
                 material(&appkit_window_capabilities(false)),
                 Some(NotYetOnThisHost),
+            ),
+            (
+                "AppKit title bar of the application's",
+                app_title_bar(&appkit_window_capabilities(true)),
+                None,
             ),
             (
                 "AppKit frame rate on macOS 13",
@@ -470,6 +527,52 @@ mod tests {
             AndroidApi::from_level(26),
             AndroidApi::UNKNOWN,
         ));
+        failures.extend(row::<UnbufferedDispatch>(
+            "UnbufferedDispatch",
+            AndroidApi::from_level(29),
+            AndroidApi::from_level(30),
+            AndroidApi::UNKNOWN,
+        ));
+        assert!(failures.is_empty(), "{failures:#?}");
+    }
+
+    /// A window asks its decor view for unbuffered pointer input when the
+    /// application wants low latency, withdraws the request otherwise, and
+    /// asks nothing where the system has no such request.
+    #[test]
+    fn an_activity_asks_for_unbuffered_pointer_input() {
+        use flui_platform::InputLatency::{Balanced, Low};
+
+        let api = AndroidApi::from_level;
+        let rows = [
+            (
+                "low, API 30",
+                unbuffered_input_sources(Low, api(30)),
+                Some(0x2),
+            ),
+            (
+                "low, API 35",
+                unbuffered_input_sources(Low, api(35)),
+                Some(0x2),
+            ),
+            (
+                "balanced, API 30",
+                unbuffered_input_sources(Balanced, api(30)),
+                Some(0),
+            ),
+            ("low, API 29", unbuffered_input_sources(Low, api(29)), None),
+            (
+                "balanced, API 24",
+                unbuffered_input_sources(Balanced, api(24)),
+                None,
+            ),
+            (
+                "low, unknown API",
+                unbuffered_input_sources(Low, AndroidApi::UNKNOWN),
+                None,
+            ),
+        ];
+        let failures: Vec<_> = rows.iter().filter(|(_, got, want)| got != want).collect();
         assert!(failures.is_empty(), "{failures:#?}");
     }
 

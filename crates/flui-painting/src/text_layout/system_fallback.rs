@@ -161,8 +161,8 @@ impl SystemFallback {
 ///
 /// The query is the platform layer's code calling the operating system; a
 /// panic in it must not take the scanned faces and FLUI's tables with it
-/// (ADR-0271 §3). The panic is logged; its payload is leaked rather than
-/// dropped here, since its destructor is code of the query's too.
+/// (ADR-0271 §3). The panic is logged; its payload is then discarded under
+/// containment, since its destructor is code of the query's too (ADR-0281).
 pub(crate) fn ask_contained(
     ask: impl FnOnce(&str) -> SystemFallback,
     locale: &str,
@@ -179,7 +179,7 @@ pub(crate) fn ask_contained(
                 locale,
                 "the host's fallback query panicked; FLUI's tables alone"
             );
-            std::mem::forget(payload);
+            flui_foundation::panic::discard_payload(payload);
             SystemFallback::none(locale)
         }
     }

@@ -179,9 +179,9 @@ impl Task {
     /// Panics when the process-wide task counter exhausts identities
     /// `1..usize::MAX`. `usize::MAX` is reserved for permanent exhaustion;
     /// catching the panic never permits another admission through that counter.
-    /// On exhausted admission, the rejected callback is retained without running
-    /// its destructor, preserving the capacity failure. This policy applies only
-    /// to rejected admission; accepted callbacks retain their ordinary lifetime.
+    /// On exhausted admission, the rejected callback is destroyed under
+    /// containment and the capacity failure is raised; a panic from its
+    /// destructor is discarded (ADR-0281).
     pub fn new<F>(priority: Priority, callback: F) -> Self
     where
         F: FnOnce() + 'static,
@@ -198,7 +198,7 @@ impl Task {
         F: FnOnce() + 'static,
     {
         let Some(id) = allocate() else {
-            std::mem::forget(callback);
+            flui_foundation::panic::drop_contained(callback);
             panic!("Task identities exhausted; refusing identity reuse");
         };
         Self {
@@ -555,7 +555,11 @@ mod tests {
             );
             assert_eq!(queue.len(), 2);
         }
-        assert_eq!(rejected_drops.load(AtomicOrdering::Relaxed), 0);
+        assert_eq!(
+            rejected_drops.load(AtomicOrdering::Relaxed),
+            8,
+            "each refused callback is destroyed"
+        );
         assert_eq!(queue.execute_until(Priority::Build), 2);
         assert_eq!(*ran.borrow(), vec![1, 2]);
         assert!(queue.is_empty());

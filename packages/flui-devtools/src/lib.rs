@@ -15,16 +15,12 @@
 //!   those contests over the app, and [`inspector::InspectorCounters`], a counting
 //!   `TreeObserver` over the ADR-0040 observation seam: mounts, moves,
 //!   rebuilds per cause, unmounts.
-//! - **`agent`** (off by default) — `agent::AgentServer`, a
-//!   `DevAgentHook` that serves the application's semantics tree to an agent
-//!   over a local endpoint: a named pipe or Unix socket with a launch token,
-//!   in debug builds only (ADR-0095 §3). It reads and acts through each
-//!   window's owner inbox, the way assistive technology does.
 //!
 //! # What this crate is not
 //!
 //! Its one on-screen tool is the gesture overlay; it has no widget-tree
-//! inspector UI and is not a hot-reload tool: it opens no TCP port, walks no
+//! inspector UI and is not a hot-reload tool or a driver agent (that is
+//! `flui-app`'s, ADR-0239): it opens no endpoint, walks no
 //! tree itself, and watches no files (the source watcher lives in the `flui`
 //! CLI). It has no network monitor, memory profiler or remote-debug protocol.
 //!
@@ -64,16 +60,12 @@
 //! - `inspector`: [`inspector`] (`flui_sdk::foundation::observe` for the
 //!   seam), [`gesture_overlay`] (`flui_sdk::widgets`) and [`gesture_inspector`] (`flui_sdk::interaction`'s arena
 //!   observation).
-//! - `agent`: the `agent` module (`flui-protocol` for the wire schema, `interprocess`
-//!   for the endpoint). Off by default.
 //! - `full`: all of the above, as one name for feature-matrix runs.
 
 // Every public item is documented; keep it that way.
 #![deny(missing_docs)]
 #![warn(missing_debug_implementations)]
 
-#[cfg(feature = "agent")]
-pub mod agent;
 /// The one capture of frame spans every profiling tool reads.
 #[cfg(feature = "profiling")]
 pub mod capture;

@@ -43,7 +43,7 @@ pub use lock::{
     CommitGate, DEFERRED_LOCK_CAPACITY, LockGrant, LockKind, LockOutcome, LockTiming,
     TextStoreError,
 };
-pub use owner_calls::{OwnerCalls, RetainOnFailure};
+pub use owner_calls::OwnerCalls;
 pub use projection::project_ime_event;
 pub use session::{
     Composition, PointMode, RangeRect, Selection, TextChange, TextInputPurpose, TextStoreEdit,

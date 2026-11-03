@@ -21,21 +21,20 @@
 //! part of the binding's public surface either: they resolve only where the
 //! trait is imported.
 
-use std::any::Any;
+use std::any::{Any, TypeId};
 use std::cell::Cell;
+use std::fmt;
+use std::sync::mpsc::SyncSender;
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
-use flui_protocol::{
-    ActOutcome, ActionRequest, Actionability, ActionabilityParams, Event, EventFilter,
-    InspectParams, InspectReading, LocateParams, Matches, ReadQuery, Snapshot, Tree, WaitOutcome,
-    WaitParams, WindowId,
-};
+use flui_protocol::method::WindowMethod;
+use flui_protocol::{ErrorObject, Event, EventFilter, WindowId};
 use flui_scheduler::AppLifecycleState;
 
 use crate::WidgetsBinding;
 pub use crate::close_guard::{CloseGuardSource, SettledClose};
-use crate::dev_agent::{AgentAnswer, AgentEvents, AgentFault, AgentWindow, InspectTarget};
+use crate::dev_agent::{AgentAnswer, AgentEvents, AgentWindow};
 pub use crate::flush_registry::{
     FlushChanged, FlushHost, FlushPublisher, FlushRegistry, FlushReport, FlushState, FlushWrite,
     FlushWriter, SESSION_END_BUDGET,
@@ -44,64 +43,31 @@ pub use crate::lifecycle::{CloseDelivery, LifecycleCloseWindow, LifecycleSource}
 pub use crate::owner_notify::{LifecycleEvent, OwnerNotify, Undeliverable};
 pub use crate::window_handle::WindowSource;
 
-/// What an [`AgentWindow`] calls: one window's read and act, enqueued on its
-/// owner. The runtime's semantics agent is the implementation.
+/// What an [`AgentWindow`] calls: one window's requests, enqueued on its
+/// owner. The runtime's development-agent port is the implementation.
+// A refusal is the protocol's error object itself, which the window answers with.
+// The error object is under the lint's size only where a pointer is 32 bits.
+#[cfg_attr(
+    target_pointer_width = "64",
+    expect(
+        clippy::result_large_err,
+        reason = "the error object is the answer, returned once per call"
+    )
+)]
 pub trait AgentPort: Send + Sync {
     /// Whether the window is still open. A port a call still holds outlives
     /// its window's close, so this, not the port's lifetime, says whether
     /// the next call may be enqueued.
     fn is_open(&self) -> bool;
 
-    /// Enqueue a read of the window's committed semantics tree.
+    /// Enqueue `call` on the window's owner, which answers it through the
+    /// call's reply.
     ///
     /// # Errors
     ///
-    /// When the request cannot be enqueued.
-    fn read(&self, query: ReadQuery) -> Result<AgentAnswer<Tree>, AgentFault>;
-
-    /// Enqueue an action on one of the window's elements.
-    ///
-    /// # Errors
-    ///
-    /// When the request cannot be enqueued.
-    fn act(&self, request: ActionRequest) -> Result<AgentAnswer<()>, AgentFault>;
-
-    /// Enqueue an action on one of the window's elements, and a reading of
-    /// the tree once its effect has settled.
-    ///
-    /// # Errors
-    ///
-    /// When the request cannot be enqueued.
-    fn act_and_read(
-        &self,
-        request: ActionRequest,
-        snapshot: Snapshot,
-    ) -> Result<AgentAnswer<ActOutcome>, AgentFault>;
-
-    /// Enqueue a locator resolution over the window's committed semantics tree.
-    ///
-    /// # Errors
-    ///
-    /// When the request cannot be enqueued.
-    fn locate(&self, params: LocateParams) -> Result<AgentAnswer<Matches>, AgentFault>;
-
-    /// Enqueue a read of the facts that decide whether input reaches an element.
-    ///
-    /// # Errors
-    ///
-    /// When the request cannot be enqueued.
-    fn actionability(
-        &self,
-        params: ActionabilityParams,
-    ) -> Result<AgentAnswer<Actionability>, AgentFault>;
-
-    /// Enqueue a wait for a condition on the window: the owner answers once a frame makes it
-    /// hold or its timeout passes.
-    ///
-    /// # Errors
-    ///
-    /// When the request cannot be enqueued.
-    fn wait(&self, params: WaitParams) -> Result<AgentAnswer<WaitOutcome>, AgentFault>;
+    /// When the call cannot be enqueued: the call, and with it its reply, is
+    /// dropped.
+    fn call(&self, call: WindowCall) -> Result<(), ErrorObject>;
 
     /// Enqueue a subscription to the window's events: the owner registers it at its next drain
     /// and answers with the stream.
@@ -109,37 +75,123 @@ pub trait AgentPort: Send + Sync {
     /// # Errors
     ///
     /// When the request cannot be enqueued.
-    fn subscribe(&self, filters: Vec<EventFilter>) -> Result<AgentAnswer<AgentEvents>, AgentFault>;
+    fn subscribe(&self, filters: Vec<EventFilter>)
+    -> Result<AgentAnswer<AgentEvents>, ErrorObject>;
+}
 
-    /// Enqueue a snapshot of one of the window's trees: the owner takes it at its next drain.
+/// One window method's call on its way to the window's owner: the method,
+/// its parameters and the reply its answer goes to, with the method's types
+/// erased so one port method and one command carry every method.
+///
+/// Only [`AgentWindow::call`] makes one for `M`, and the owner opens it as
+/// the method it is ([`Self::open`]), so the types inside always are `M`'s.
+pub struct WindowCall {
+    method: TypeId,
+    name: &'static str,
+    params: Box<dyn Any + Send>,
+    reply: Box<dyn Any + Send>,
+}
+
+impl WindowCall {
+    /// A call of `M` with `params`, and the answer its reply fills.
+    pub(crate) fn new<M: WindowMethod>(params: M::Params) -> (Self, AgentAnswer<M::Output>) {
+        let (reply, answer) = reply_pair::<M::Output>();
+        let call = Self {
+            method: TypeId::of::<M>(),
+            name: M::NAME,
+            params: Box::new(params),
+            reply: Box::new(reply),
+        };
+        (call, answer)
+    }
+
+    /// The method's wire name, for traces.
+    #[must_use]
+    pub fn name(&self) -> &'static str {
+        self.name
+    }
+
+    /// The parameters and reply of a call of `M`, or the call back when it
+    /// is another method's.
     ///
     /// # Errors
     ///
-    /// When the request cannot be enqueued.
-    fn inspect(
-        &self,
-        target: InspectTarget,
-        params: InspectParams,
-    ) -> Result<AgentAnswer<InspectReading>, AgentFault>;
+    /// The call itself, untouched, when it is not `M`'s.
+    pub fn open<M: WindowMethod>(self) -> Result<(M::Params, Reply<M::Output>), Self> {
+        if self.method != TypeId::of::<M>() {
+            return Err(self);
+        }
+        let params = self
+            .params
+            .downcast::<M::Params>()
+            .expect("BUG: a window call carries its own method's parameters");
+        let reply = self
+            .reply
+            .downcast::<Reply<M::Output>>()
+            .expect("BUG: a window call carries its own method's reply");
+        Ok((*params, *reply))
+    }
+}
 
-    /// Enqueue a playback request for this exact window's animation clock.
-    ///
-    /// # Errors
-    /// Returns the same admission faults as [`Self::read`].
-    fn motion(
-        &self,
-        request: flui_protocol::MotionRequest,
-    ) -> Result<AgentAnswer<flui_protocol::MotionState>, AgentFault>;
+impl fmt::Debug for WindowCall {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("WindowCall")
+            .field("method", &self.name)
+            .finish_non_exhaustive()
+    }
+}
 
-    /// Enqueue a read of the announcements the window delivered to assistive
-    /// technology.
-    ///
-    /// # Errors
-    /// Returns the same admission faults as [`Self::read`].
-    fn announcements(
-        &self,
-        params: flui_protocol::AnnouncementsParams,
-    ) -> Result<AgentAnswer<flui_protocol::AnnouncementJournal>, AgentFault>;
+/// Where the owner sends one call's answer. `Clone`, so an owner that keeps
+/// a request can still answer it if serving it panics; the first answer
+/// sent is the one taken.
+pub struct Reply<T> {
+    tx: SyncSender<Result<T, ErrorObject>>,
+    /// The asker's answer holds the other end: once it is dropped nobody
+    /// takes the answer.
+    asker: Weak<()>,
+}
+
+impl<T> Clone for Reply<T> {
+    fn clone(&self) -> Self {
+        Self {
+            tx: self.tx.clone(),
+            asker: Weak::clone(&self.asker),
+        }
+    }
+}
+
+impl<T> Reply<T> {
+    /// Send the answer. `false` when nobody takes it: the asker dropped its
+    /// answer, or an answer was sent already. The value is then dropped here.
+    pub fn send(&self, answer: Result<T, ErrorObject>) -> bool {
+        self.tx.try_send(answer).is_ok()
+    }
+
+    /// Whether anyone can still take the answer.
+    #[must_use]
+    pub fn is_awaited(&self) -> bool {
+        self.asker.strong_count() > 0
+    }
+}
+
+impl<T> fmt::Debug for Reply<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Reply")
+            .field("awaited", &self.is_awaited())
+            .finish_non_exhaustive()
+    }
+}
+
+/// A reply and the answer it fills, for a request the runtime answers that
+/// is not a window method (a subscription).
+pub fn reply_pair<T>() -> (Reply<T>, AgentAnswer<T>) {
+    let (tx, rx) = std::sync::mpsc::sync_channel(1);
+    let asker = Arc::new(());
+    let reply = Reply {
+        tx,
+        asker: Arc::downgrade(&asker),
+    };
+    (reply, AgentAnswer::new(rx, asker))
 }
 
 /// The queue behind an [`AgentEvents`], which the runtime fills.
@@ -159,16 +211,6 @@ pub fn agent_events(source: impl EventSource + 'static) -> AgentEvents {
     AgentEvents::new(Box::new(source))
 }
 
-/// The pending half of an [`AgentAnswer`].
-pub trait PendingAnswer<T>: Send {
-    /// The answer if it has come; `None` while it has not, and once taken.
-    fn try_take(&mut self) -> Option<Result<T, AgentFault>>;
-
-    /// The answer, waiting up to `timeout`; `None` if it has not come by then,
-    /// and once taken.
-    fn recv_timeout(&mut self, timeout: Duration) -> Option<Result<T, AgentFault>>;
-}
-
 /// The [`AgentWindow`] for window `id`, answering through `port` while the
 /// port is alive and `gone` after, and holding `collecting` (the window's
 /// semantics handle) while any clone of it is alive.
@@ -179,11 +221,6 @@ pub fn agent_window(
     collecting: Arc<dyn Any + Send + Sync>,
 ) -> AgentWindow {
     AgentWindow::new(id, port, collecting)
-}
-
-/// Wrap a pending answer.
-pub fn agent_answer<T>(pending: impl PendingAnswer<T> + 'static) -> AgentAnswer<T> {
-    AgentAnswer::new(Box::new(pending))
 }
 
 /// Data-only phase cell shared with an internal frame composition driver.
@@ -281,8 +318,7 @@ mod sealed {
 }
 
 /// One GlobalKey claim withdrawn from a closing owner. Dropping it retires
-/// the key; while the thread is panicking the key is retained instead
-/// (ADR-0127).
+/// the key, during an unwind too (ADR-0281).
 pub struct WithdrawnKey(
     #[expect(dead_code, reason = "held only so dropping it retires the key")]
     crate::owner::ScopedKeyOwner,

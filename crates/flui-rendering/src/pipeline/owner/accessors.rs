@@ -443,6 +443,40 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         }
     }
 
+    /// Where `id` is in the render tree, as an error names it: the node, then its parents up to
+    /// [`TREE_CONTEXT_DEPTH`](flui_foundation::TREE_CONTEXT_DEPTH), each by its render object's
+    /// debug name and id, with where the node's view was created. Empty for an id that is not a
+    /// current node.
+    #[must_use]
+    pub fn tree_context(&self, id: flui_foundation::RenderId) -> flui_foundation::TreeContext {
+        let tree = &self.render_tree;
+        let Some(node) = tree.get(id) else {
+            return flui_foundation::TreeContext::default();
+        };
+        let site = node.creation_site();
+        let path = std::iter::successors(Some(id), |&at| tree.parent(at)).filter_map(|at| {
+            tree.get(at).map(|node| {
+                flui_foundation::PathEntry::new(
+                    node.debug_name(),
+                    flui_foundation::inspect::InspectId::from(at),
+                )
+            })
+        });
+        flui_foundation::TreeContext::new(path, site)
+    }
+
+    /// `error` with the context of the node it names, when it names one.
+    pub(super) fn in_tree(
+        &self,
+        error: crate::error::RenderError,
+    ) -> flui_foundation::TreeError<crate::error::RenderError> {
+        let context = error
+            .node()
+            .map(|id| self.tree_context(id))
+            .unwrap_or_default();
+        flui_foundation::TreeError::new(error, context)
+    }
+
     /// Returns a reference to the render tree.
     pub fn render_tree(&self) -> &crate::storage::RenderTree {
         &self.render_tree
@@ -2287,7 +2321,7 @@ fn no_op_semantics_update_callback() -> flui_semantics::SemanticsUpdateCallback 
 /// Every hook the walk calls on a node — `hit_test_transform`, the expanded
 /// area, `hit_test` itself (path clippers, flow delegates), the entry's
 /// targets — is user code. A panic in any of them makes the node a miss: what
-/// its subtree added to the path is taken off it and retained (driver and context scopes restore
+/// its subtree added to the path is taken off it and destroyed under containment (driver and context scopes restore
 /// their transforms on unwind), it blocks nothing below, and the payload waits
 /// in `walk` until the path is complete. A descendant's panic is contained at
 /// the descendant, so its ancestors still decide for themselves.
@@ -2301,12 +2335,11 @@ fn contain_node(
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| visit(result, walk))) {
         Ok(hit) => hit,
         Err(payload) => {
-            // The payload is held before anything else runs. The discarded
-            // entries are retained, not dropped: their metadata is user data
-            // whose destructor may panic too, and `thread::panicking()` is
-            // false here, so a drop would replace the failure being reported.
+            // The payload is held before anything else runs, so a discarded
+            // entry whose metadata destructor panics too cannot replace the
+            // failure being reported (ADR-0281).
             walk.contain_panic(payload);
-            std::mem::forget(result.path_mut().split_off(mark));
+            walk.discard(result.path_mut().split_off(mark));
             // Nor does the failed subtree keep a say in expanded areas: a
             // barrier it hit, or a candidate it recorded, is no longer there.
             walk.roll_back(slop);

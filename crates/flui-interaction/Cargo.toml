@@ -148,7 +148,6 @@ layers = [
     [
         "events",
         "ids",
-        "retain",
     ],
     [
         "close",

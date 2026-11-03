@@ -368,9 +368,9 @@ fn submit_and_track<T>(
     }
     match (result, registration) {
         (Err(primary), Err(secondary)) => {
-            // A foreign panic payload's Drop can itself panic. Preserve the first
-            // fault; only this competing-fault emergency intentionally forgets it.
-            std::mem::forget(secondary);
+            // The first fault propagates; the competing payload is destroyed
+            // under containment (ADR-0281).
+            flui_foundation::panic::discard_payload(secondary);
             resume_unwind(primary)
         }
         (Err(primary), Ok(())) | (Ok(_), Err(primary)) => resume_unwind(primary),
@@ -606,7 +606,7 @@ impl DeviceDomain {
         })) {
             quarantine(&self.ledger, &self.quarantine, hold);
             // This method runs from allocation Drop: never start a second unwind.
-            std::mem::forget(payload);
+            flui_foundation::panic::discard_payload(payload);
         } else {
             hold.arm();
         }
@@ -614,10 +614,10 @@ impl DeviceDomain {
 }
 
 // A final poll can invoke trusted embedder callbacks. Drop must not start a
-// second unwind; foreign payload destruction is unsafe at this boundary too.
+// second unwind; the payload is destroyed under containment (ADR-0281).
 fn contain_final_progress(progress: impl FnOnce()) {
     if let Err(payload) = catch_unwind(AssertUnwindSafe(progress)) {
-        std::mem::forget(payload);
+        flui_foundation::panic::discard_payload(payload);
     }
 }
 

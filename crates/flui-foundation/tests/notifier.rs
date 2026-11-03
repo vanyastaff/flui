@@ -148,19 +148,21 @@ fn retirement_competition() {
     assert_eq!(later.load(Ordering::SeqCst), 1);
 }
 
-fn install_retirement_bombs(notifier: &Notifier<()>, drops: &Arc<AtomicUsize>) -> ListenerId {
-    let mut first = None;
-    for message in ["first terminal retirement", "second terminal retirement"] {
-        let capture = Bomb {
-            drops: Arc::clone(drops),
-            message,
-        };
-        let id = notifier.add(std::rc::Rc::new(move |&()| {
-            let _capture = &capture;
-        }));
-        first.get_or_insert(id);
-    }
-    first.expect("two installed callbacks")
+/// One panicking capture, then one that only counts: a second destructor that
+/// panicked while the first unwinds would abort, as in std (ADR-0281).
+fn install_retirement_captures(notifier: &Notifier<()>, drops: &Arc<AtomicUsize>) -> ListenerId {
+    let capture = Bomb {
+        drops: Arc::clone(drops),
+        message: "first terminal retirement",
+    };
+    let first = notifier.add(std::rc::Rc::new(move |&()| {
+        let _capture = &capture;
+    }));
+    let capture = Counted(Arc::clone(drops));
+    notifier.add(std::rc::Rc::new(move |&()| {
+        let _capture = &capture;
+    }));
+    first
 }
 
 fn assert_first_terminal_failure(failure: Box<dyn std::any::Any + Send>, drops: &AtomicUsize) {
@@ -170,8 +172,8 @@ fn assert_first_terminal_failure(failure: Box<dyn std::any::Any + Send>, drops: 
     );
     assert_eq!(
         drops.load(Ordering::SeqCst),
-        1,
-        "the later envelope is retained"
+        2,
+        "the later envelope is still destroyed"
     );
     flui_foundation::panic::discard_payload(failure);
 }
@@ -179,22 +181,24 @@ fn assert_first_terminal_failure(failure: Box<dyn std::any::Any + Send>, drops: 
 fn terminal_retirement_competition() {
     let notifier = Notifier::<()>::new();
     let drops = Arc::new(AtomicUsize::new(0));
-    install_retirement_bombs(&notifier, &drops);
+    install_retirement_captures(&notifier, &drops);
     let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(notifier)))
         .expect_err("final physical owner propagates first retirement failure");
     assert_first_terminal_failure(failure, &drops);
 
     let notifier = ChangeNotifier::new();
     let drops = Arc::new(AtomicUsize::new(0));
-    for message in ["first terminal retirement", "second terminal retirement"] {
-        let capture = Bomb {
-            drops: Arc::clone(&drops),
-            message,
-        };
-        notifier.add_listener(std::rc::Rc::new(move || {
-            let _capture = &capture;
-        }));
-    }
+    let capture = Bomb {
+        drops: Arc::clone(&drops),
+        message: "first terminal retirement",
+    };
+    notifier.add_listener(std::rc::Rc::new(move || {
+        let _capture = &capture;
+    }));
+    let capture = Counted(Arc::clone(&drops));
+    notifier.add_listener(std::rc::Rc::new(move || {
+        let _capture = &capture;
+    }));
     let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(notifier)))
         .expect_err("ChangeNotifier delegates final ownership retirement");
     assert_first_terminal_failure(failure, &drops);
@@ -202,7 +206,7 @@ fn terminal_retirement_competition() {
     for dispose in [false, true] {
         let notifier = Notifier::<()>::new();
         let drops = Arc::new(AtomicUsize::new(0));
-        install_retirement_bombs(&notifier, &drops);
+        install_retirement_captures(&notifier, &drops);
         let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             if dispose {
                 notifier.dispose();
@@ -228,7 +232,7 @@ fn terminal_retirement_competition() {
     }
 }
 
-fn terminal_retirement_preserves_incoming_unwind() {
+fn terminal_retirement_during_unwind_destroys_captures() {
     enum Cleanup {
         FinalOwner,
         Clear,
@@ -252,7 +256,15 @@ fn terminal_retirement_preserves_incoming_unwind() {
     for operation in 0..4 {
         let notifier = Notifier::<()>::new();
         let drops = Arc::new(AtomicUsize::new(0));
-        let first = install_retirement_bombs(&notifier, &drops);
+        let mut first = None;
+        for _ in 0..2 {
+            let capture = Counted(Arc::clone(&drops));
+            let id = notifier.add(std::rc::Rc::new(move |&()| {
+                let _capture = &capture;
+            }));
+            first.get_or_insert(id);
+        }
+        let first = first.expect("two installed callbacks");
         let cleanup = match operation {
             0 => Cleanup::FinalOwner,
             1 => Cleanup::Clear,
@@ -271,8 +283,8 @@ fn terminal_retirement_preserves_incoming_unwind() {
         );
         assert_eq!(
             drops.load(Ordering::SeqCst),
-            0,
-            "opaque captures remain retained"
+            2,
+            "captures are destroyed during the incoming unwind"
         );
         flui_foundation::panic::discard_payload(failure);
     }
@@ -306,17 +318,33 @@ fn healthy_terminal_retirement_waits_for_the_last_owner() {
     assert_eq!(*order.lock().expect("drop order"), [0, 1, 2]);
 }
 
+/// Counts its destruction, and panics with `fails` when it is set. Only one
+/// destructor of a test panics: a second one panicking during that unwind
+/// would abort, as in std (ADR-0281).
+struct Fuse {
+    drops: Arc<AtomicUsize>,
+    fails: Option<&'static str>,
+}
+impl Drop for Fuse {
+    fn drop(&mut self) {
+        self.drops.fetch_add(1, Ordering::SeqCst);
+        if let Some(message) = self.fails {
+            panic!("{message}");
+        }
+    }
+}
+
 fn value_terminal_retirement_preserves_the_first_failure() {
     for extract in [false, true] {
         let value_drops = Arc::new(AtomicUsize::new(0));
         let listener_drops = Arc::new(AtomicUsize::new(0));
-        let notifier = ValueNotifier::new(Bomb {
+        let notifier = ValueNotifier::new(Fuse {
             drops: Arc::clone(&value_drops),
-            message: "value retirement failure",
+            fails: (!extract).then_some("value retirement failure"),
         });
-        let capture = Bomb {
+        let capture = Fuse {
             drops: Arc::clone(&listener_drops),
-            message: "listener retirement failure",
+            fails: extract.then_some("listener retirement failure"),
         };
         notifier.add_listener(std::rc::Rc::new(move || {
             let _capture = &capture;
@@ -337,8 +365,16 @@ fn value_terminal_retirement_preserves_the_first_failure() {
                 "value retirement failure"
             })
         );
-        assert_eq!(value_drops.load(Ordering::SeqCst), usize::from(!extract));
-        assert_eq!(listener_drops.load(Ordering::SeqCst), usize::from(extract));
+        assert_eq!(
+            value_drops.load(Ordering::SeqCst),
+            1,
+            "the value is destroyed"
+        );
+        assert_eq!(
+            listener_drops.load(Ordering::SeqCst),
+            1,
+            "the listener capture is destroyed"
+        );
         flui_foundation::panic::discard_payload(failure);
     }
 }
@@ -390,17 +426,11 @@ impl Drop for Counted {
     }
 }
 
-fn value_terminal_retirement_preserves_incoming_unwind() {
+fn value_terminal_retirement_during_unwind_destroys_both() {
     let value_drops = Arc::new(AtomicUsize::new(0));
     let listener_drops = Arc::new(AtomicUsize::new(0));
-    let notifier = ValueNotifier::new(Bomb {
-        drops: Arc::clone(&value_drops),
-        message: "value retirement failure",
-    });
-    let capture = Bomb {
-        drops: Arc::clone(&listener_drops),
-        message: "listener retirement failure",
-    };
+    let notifier = ValueNotifier::new(Counted(Arc::clone(&value_drops)));
+    let capture = Counted(Arc::clone(&listener_drops));
     notifier.add_listener(std::rc::Rc::new(move || {
         let _capture = &capture;
     }));
@@ -408,13 +438,13 @@ fn value_terminal_retirement_preserves_incoming_unwind() {
         let _notifier = notifier;
         panic!("incoming value-owner failure");
     }))
-    .expect_err("incoming failure escapes without callback or value retirement");
+    .expect_err("incoming failure escapes unchanged");
     assert_eq!(
         flui_foundation::panic::payload_text(&*failure),
         Some("incoming value-owner failure")
     );
-    assert_eq!(value_drops.load(Ordering::SeqCst), 0);
-    assert_eq!(listener_drops.load(Ordering::SeqCst), 0);
+    assert_eq!(value_drops.load(Ordering::SeqCst), 1);
+    assert_eq!(listener_drops.load(Ordering::SeqCst), 1);
     flui_foundation::panic::discard_payload(failure);
 }
 
@@ -684,8 +714,8 @@ fn notifier_ownership_and_recovery() {
             }
             "retirement_competition" => retirement_competition(),
             "terminal_retirement_competition" => terminal_retirement_competition(),
-            "terminal_retirement_preserves_incoming_unwind" => {
-                terminal_retirement_preserves_incoming_unwind();
+            "terminal_retirement_during_unwind_destroys_captures" => {
+                terminal_retirement_during_unwind_destroys_captures();
             }
             "healthy_terminal_retirement_waits_for_the_last_owner" => {
                 healthy_terminal_retirement_waits_for_the_last_owner();
@@ -696,8 +726,8 @@ fn notifier_ownership_and_recovery() {
             "value_retirement_failure_releases_the_shared_channel" => {
                 value_retirement_failure_releases_the_shared_channel();
             }
-            "value_terminal_retirement_preserves_incoming_unwind" => {
-                value_terminal_retirement_preserves_incoming_unwind();
+            "value_terminal_retirement_during_unwind_destroys_both" => {
+                value_terminal_retirement_during_unwind_destroys_both();
             }
             "healthy_value_extraction_preserves_reentry_and_shared_channel_disposal" => {
                 healthy_value_extraction_preserves_reentry_and_shared_channel_disposal();
@@ -719,11 +749,11 @@ fn notifier_ownership_and_recovery() {
         "cloneable_values_keep_independent_values_and_shared_listeners",
         "retirement_competition",
         "terminal_retirement_competition",
-        "terminal_retirement_preserves_incoming_unwind",
+        "terminal_retirement_during_unwind_destroys_captures",
         "healthy_terminal_retirement_waits_for_the_last_owner",
         "value_terminal_retirement_preserves_the_first_failure",
         "value_retirement_failure_releases_the_shared_channel",
-        "value_terminal_retirement_preserves_incoming_unwind",
+        "value_terminal_retirement_during_unwind_destroys_both",
         "healthy_value_extraction_preserves_reentry_and_shared_channel_disposal",
     ] {
         let mut child =

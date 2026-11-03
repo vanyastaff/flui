@@ -307,9 +307,8 @@ impl LongPressGestureRecognizer {
                 self.contact.accept_with_recovery(scope);
             });
         }
-        let preserving = recovery.has_failure();
         arena.invoke_with_recovery(FailureClass::Delivery, recovery, |_| {
-            let mut notices = CallbackSequence::preserving_failure(preserving);
+            let mut notices = CallbackSequence::new();
             if self.contact.is_current(contact.id) {
                 notices.call(self.callbacks.on_long_press.clone(), |callback| callback());
             }
@@ -544,7 +543,7 @@ impl GestureRecognizer for LongPressGestureRecognizer {
                     velocity,
                     kind: contact.kind,
                 };
-                let mut notices = CallbackSequence::preserving_failure(first.is_some());
+                let mut notices = CallbackSequence::new();
                 if started {
                     notices.call(self.callbacks.on_long_press_up.clone(), |callback| {
                         callback(details.clone());

@@ -3,58 +3,64 @@
 //! of every stream when the window closes.
 
 use flui_foundation::ManualClock;
+use flui_protocol::method;
 use flui_protocol::{
-    ActionName, ActionRequest, Condition, ErrorCode, Event, EventFilter, EventKind, Retry,
+    ActionName, Condition, ErrorCode, ErrorObject, Event, EventFilter, EventKind, Retry,
     WaitOutcome, WaitParams, WindowId,
 };
+use flui_view::dev_agent::{AgentAnswer, AgentEvents, AgentWindow};
 
-use super::agent_semantics::{counter, find, frame, read};
+use super::agent_semantics::{act_params, counter, find, frame, read};
 use super::pump_transaction::manual_clock_ui_runtime;
 use super::*;
 
-static_assertions::assert_impl_all!(AgentReply<EventStream>: Send);
-static_assertions::assert_impl_all!(EventStream: Send);
+static_assertions::assert_impl_all!(AgentAnswer<AgentEvents>: Send);
+static_assertions::assert_impl_all!(AgentEvents: Send);
 
-fn window(ui_runtime: &UiRuntime) -> WindowId {
+fn window_id(ui_runtime: &UiRuntime) -> WindowId {
     WindowId::from_u64(ui_runtime.presentation_id().as_u64())
         .expect("a presentation id packs a non-zero generation")
 }
 
 /// A counter on a manual clock, one frame in, and the agent that listens to it.
-fn shown() -> (UiRuntime, SemanticsAgent, ScriptedSink) {
+fn shown() -> (UiRuntime, AgentWindow, ScriptedSink) {
     let clock = ManualClock::new();
     let ui_runtime = manual_clock_ui_runtime(&clock);
     let _presses = counter(&ui_runtime, None);
-    let agent = ui_runtime
-        .semantics_agent(ui_runtime.presentation_id())
+    let window = ui_runtime
+        .dev_agent_window(ui_runtime.presentation_id())
         .expect("the ui_runtime hosts its primary presentation");
     let mut sink = ScriptedSink::always_presents();
     frame(&ui_runtime, &mut sink);
-    (ui_runtime, agent, sink)
+    (ui_runtime, window, sink)
 }
 
+#[expect(
+    clippy::result_large_err,
+    reason = "the protocol's error object is the answer under test"
+)]
 fn subscribe(
     ui_runtime: &UiRuntime,
-    agent: &SemanticsAgent,
+    window: &AgentWindow,
     kinds: &[EventKind],
-) -> Result<EventStream, AgentError> {
+) -> Result<AgentEvents, ErrorObject> {
     let filters: Vec<EventFilter> = kinds.iter().copied().map(EventFilter::new).collect();
-    let mut reply = agent.subscribe(filters).expect("the inbox has room");
+    let mut reply = window.subscribe(filters).expect("the inbox has room");
     let _report = ui_runtime.drain_commands();
     reply.try_take().expect("the owner answered at the drain")
 }
 
 /// Taps the counter's button, so the next frame publishes a new tree.
-fn tap(ui_runtime: &UiRuntime, agent: &SemanticsAgent) {
-    let button = find(&read(ui_runtime, agent), "Increment").id;
-    let tap = agent
-        .act(ActionRequest::new(button, ActionName::Invoke))
+fn tap(ui_runtime: &UiRuntime, window: &AgentWindow) {
+    let button = find(&read(ui_runtime, window), "Increment").id;
+    let tap = window
+        .call::<method::SemanticsAct>(act_params(window, button, ActionName::Invoke))
         .expect("the inbox has room");
     let _report = ui_runtime.drain_commands();
     drop(tap);
 }
 
-fn drain(stream: &mut EventStream) -> Vec<Event> {
+fn drain(stream: &mut AgentEvents) -> Vec<Event> {
     std::iter::from_fn(|| stream.try_next()).collect()
 }
 
@@ -64,10 +70,10 @@ fn kinds(events: &[Event]) -> Vec<EventKind> {
 
 #[test]
 fn a_subscriber_hears_a_frame_then_the_tree_it_published() {
-    let (ui_runtime, agent, mut sink) = shown();
+    let (ui_runtime, window, mut sink) = shown();
     let mut stream = subscribe(
         &ui_runtime,
-        &agent,
+        &window,
         &[EventKind::Frame, EventKind::Semantics],
     )
     .expect("the window admits it");
@@ -76,19 +82,19 @@ fn a_subscriber_hears_a_frame_then_the_tree_it_published() {
         "what happened before the subscription is not replayed"
     );
 
-    tap(&ui_runtime, &agent);
+    tap(&ui_runtime, &window);
     frame(&ui_runtime, &mut sink);
     let events = drain(&mut stream);
     assert_eq!(kinds(&events), [EventKind::Frame, EventKind::Semantics]);
     let Event::Frame(frame_event) = &events[0] else {
         panic!("a frame event first: {events:?}");
     };
-    assert_eq!(frame_event.window, window(&ui_runtime));
+    assert_eq!(frame_event.window, window_id(&ui_runtime));
     assert!(frame_event.presented);
     let Event::Semantics(published) = &events[1] else {
         panic!("a semantics event second: {events:?}");
     };
-    assert_eq!(published.window, window(&ui_runtime));
+    assert_eq!(published.window, window_id(&ui_runtime));
 
     frame(&ui_runtime, &mut sink);
     assert!(
@@ -99,14 +105,15 @@ fn a_subscriber_hears_a_frame_then_the_tree_it_published() {
 
 #[test]
 fn a_filter_selects_the_kinds_and_the_window_it_names() {
-    let (ui_runtime, agent, mut sink) = shown();
+    let (ui_runtime, window, mut sink) = shown();
     let mut trees =
-        subscribe(&ui_runtime, &agent, &[EventKind::Semantics]).expect("the window admits it");
+        subscribe(&ui_runtime, &window, &[EventKind::Semantics]).expect("the window admits it");
     let mut other = {
         let mut filter = EventFilter::new(EventKind::Frame);
-        filter.window =
-            Some(WindowId::from_u64(window(&ui_runtime).get() + 1).expect("another window number"));
-        let mut reply = agent.subscribe(vec![filter]).expect("the inbox has room");
+        filter.window = Some(
+            WindowId::from_u64(window_id(&ui_runtime).get() + 1).expect("another window number"),
+        );
+        let mut reply = window.subscribe(vec![filter]).expect("the inbox has room");
         let _report = ui_runtime.drain_commands();
         reply
             .try_take()
@@ -114,7 +121,7 @@ fn a_filter_selects_the_kinds_and_the_window_it_names() {
             .expect("the window admits it")
     };
 
-    tap(&ui_runtime, &agent);
+    tap(&ui_runtime, &window);
     frame(&ui_runtime, &mut sink);
     assert_eq!(kinds(&drain(&mut trees)), [EventKind::Semantics]);
     assert!(
@@ -125,18 +132,18 @@ fn a_filter_selects_the_kinds_and_the_window_it_names() {
 
 #[test]
 fn a_subscription_names_at_least_one_event() {
-    let (ui_runtime, agent, _sink) = shown();
-    let error = subscribe(&ui_runtime, &agent, &[]).expect_err("nothing to stream");
-    assert_eq!(error.code(), ErrorCode::InvalidArgument);
+    let (ui_runtime, window, _sink) = shown();
+    let error = subscribe(&ui_runtime, &window, &[]).expect_err("nothing to stream");
+    assert_eq!(error.code, ErrorCode::InvalidArgument);
 }
 
 #[test]
 fn a_reader_that_falls_behind_is_told_how_many_events_it_missed() {
-    let (ui_runtime, agent, mut sink) = shown();
+    let (ui_runtime, window, mut sink) = shown();
     let mut stream =
-        subscribe(&ui_runtime, &agent, &[EventKind::Frame]).expect("the window admits it");
+        subscribe(&ui_runtime, &window, &[EventKind::Frame]).expect("the window admits it");
     for _ in 0..300 {
-        tap(&ui_runtime, &agent);
+        tap(&ui_runtime, &window);
         frame(&ui_runtime, &mut sink);
     }
 
@@ -144,7 +151,7 @@ fn a_reader_that_falls_behind_is_told_how_many_events_it_missed() {
     assert_eq!(queued.len(), 256, "the queue holds 256 events");
     assert!(queued.iter().all(|event| event.kind() == EventKind::Frame));
 
-    tap(&ui_runtime, &agent);
+    tap(&ui_runtime, &window);
     frame(&ui_runtime, &mut sink);
     let next = drain(&mut stream);
     assert_eq!(
@@ -168,19 +175,23 @@ fn a_reader_that_falls_behind_is_told_how_many_events_it_missed() {
 
 #[test]
 fn a_window_admits_a_bounded_number_of_subscriptions_and_a_dropped_stream_frees_its_place() {
-    let (ui_runtime, agent, _sink) = shown();
+    let (ui_runtime, window, _sink) = shown();
     let mut streams: Vec<_> = (0..64)
-        .map(|_| subscribe(&ui_runtime, &agent, &[EventKind::Frame]).expect("within the cap"))
+        .map(|_| subscribe(&ui_runtime, &window, &[EventKind::Frame]).expect("within the cap"))
         .collect();
 
     let error =
-        subscribe(&ui_runtime, &agent, &[EventKind::Frame]).expect_err("the 65th is past the cap");
-    assert_eq!(error, AgentError::TooManySubscriptions);
-    assert_eq!(error.code(), ErrorCode::Busy);
-    assert_eq!(error.retry(), Retry::Soon);
+        subscribe(&ui_runtime, &window, &[EventKind::Frame]).expect_err("the 65th is past the cap");
+    assert!(
+        error.message.contains("event subscriptions"),
+        "busy because the cap is reached: {}",
+        error.message
+    );
+    assert_eq!(error.code, ErrorCode::Busy);
+    assert_eq!(error.retry, Retry::Soon);
 
     drop(streams.pop());
-    let again = subscribe(&ui_runtime, &agent, &[EventKind::Frame]);
+    let again = subscribe(&ui_runtime, &window, &[EventKind::Frame]);
     assert!(again.is_ok(), "a dropped stream frees its place: {again:?}");
 }
 
@@ -188,10 +199,10 @@ fn a_window_admits_a_bounded_number_of_subscriptions_and_a_dropped_stream_frees_
 fn a_closing_window_ends_every_stream_after_a_last_window_event() {
     let mut ui_runtime = UiRuntime::for_test();
     let second = ui_runtime.install_second_presentation_for_test();
-    let agent = ui_runtime
-        .semantics_agent(second)
+    let window = ui_runtime
+        .dev_agent_window(second)
         .expect("the ui_runtime hosts the second presentation");
-    let mut reply = agent
+    let mut reply = window
         .subscribe(vec![EventFilter::new(EventKind::Window)])
         .expect("the inbox has room");
     let _report = ui_runtime.drain_commands();
@@ -213,11 +224,13 @@ fn a_closing_window_ends_every_stream_after_a_last_window_event() {
 
 #[test]
 fn a_wait_on_an_event_is_satisfied_by_the_next_one_the_window_emits() {
-    let (ui_runtime, agent, mut sink) = shown();
+    let (ui_runtime, window, mut sink) = shown();
     let wait = |condition: Condition| {
-        let mut params = WaitParams::new(window(&ui_runtime), condition);
+        let mut params = WaitParams::new(window_id(&ui_runtime), condition);
         params.timeout_ms = Some(60_000);
-        let reply = agent.wait(params).expect("the inbox has room");
+        let reply = window
+            .call::<method::WaitUntil>(params)
+            .expect("the inbox has room");
         let _report = ui_runtime.drain_commands();
         reply
     };
@@ -234,7 +247,7 @@ fn a_wait_on_an_event_is_satisfied_by_the_next_one_the_window_emits() {
         "a frame that changed nothing publishes no revision"
     );
 
-    tap(&ui_runtime, &agent);
+    tap(&ui_runtime, &window);
     frame(&ui_runtime, &mut sink);
     let outcome: WaitOutcome = on_tree
         .try_take()
@@ -251,10 +264,10 @@ fn a_wait_on_an_event_is_satisfied_by_the_next_one_the_window_emits() {
 fn a_reader_that_fell_behind_still_sees_the_window_close() {
     let mut ui_runtime = UiRuntime::for_test();
     let second = ui_runtime.install_second_presentation_for_test();
-    let agent = ui_runtime
-        .semantics_agent(second)
+    let window = ui_runtime
+        .dev_agent_window(second)
         .expect("the ui_runtime hosts the second presentation");
-    let mut stream = subscribe_to(&ui_runtime, &agent, &[EventKind::Frame, EventKind::Window]);
+    let mut stream = subscribe_to(&ui_runtime, &window, &[EventKind::Frame, EventKind::Window]);
     let state = ui_runtime
         .presentations
         .get(second)
@@ -282,10 +295,10 @@ fn a_reader_that_fell_behind_still_sees_the_window_close() {
 fn a_window_that_has_published_no_tree_reports_none() {
     let clock = ManualClock::new();
     let ui_runtime = manual_clock_ui_runtime(&clock);
-    let agent = ui_runtime
-        .semantics_agent(ui_runtime.presentation_id())
+    let window = ui_runtime
+        .dev_agent_window(ui_runtime.presentation_id())
         .expect("the ui_runtime hosts its primary presentation");
-    let mut stream = subscribe_to(&ui_runtime, &agent, &[EventKind::Semantics]);
+    let mut stream = subscribe_to(&ui_runtime, &window, &[EventKind::Semantics]);
 
     frame(&ui_runtime, &mut ScriptedSink::always_presents());
     assert!(
@@ -296,9 +309,9 @@ fn a_window_that_has_published_no_tree_reports_none() {
 
 #[test]
 fn a_subscription_to_semantics_keeps_the_window_collecting_them() {
-    let (ui_runtime, agent, mut sink) = shown();
-    let stream = subscribe_to(&ui_runtime, &agent, &[EventKind::Semantics]);
-    drop(agent);
+    let (ui_runtime, window, mut sink) = shown();
+    let stream = subscribe_to(&ui_runtime, &window, &[EventKind::Semantics]);
+    drop(window);
     let collecting = || {
         ui_runtime
             .presentations
@@ -320,9 +333,9 @@ fn a_subscription_to_semantics_keeps_the_window_collecting_them() {
 
 #[test]
 fn a_frame_that_unwound_in_a_callback_is_still_reported() {
-    let (ui_runtime, agent, mut sink) = shown();
-    let mut stream = subscribe_to(&ui_runtime, &agent, &[EventKind::Frame]);
-    tap(&ui_runtime, &agent);
+    let (ui_runtime, window, mut sink) = shown();
+    let mut stream = subscribe_to(&ui_runtime, &window, &[EventKind::Frame]);
+    tap(&ui_runtime, &window);
     ui_runtime
         .scheduler()
         .add_post_frame_callback(Box::new(|_| panic!("a post-frame callback panics")));
@@ -339,20 +352,18 @@ fn a_frame_that_unwound_in_a_callback_is_still_reported() {
     );
 }
 
-fn subscribe_to(
-    ui_runtime: &UiRuntime,
-    agent: &SemanticsAgent,
-    kinds: &[EventKind],
-) -> EventStream {
-    subscribe(ui_runtime, agent, kinds).expect("the window admits it")
+fn subscribe_to(ui_runtime: &UiRuntime, window: &AgentWindow, kinds: &[EventKind]) -> AgentEvents {
+    subscribe(ui_runtime, window, kinds).expect("the window admits it")
 }
 
 #[test]
 fn a_frame_that_unwound_before_the_pipeline_counts_for_no_wait() {
-    let (ui_runtime, agent, mut sink) = shown();
-    let mut params = WaitParams::new(window(&ui_runtime), Condition::Frames(1));
+    let (ui_runtime, window, mut sink) = shown();
+    let mut params = WaitParams::new(window_id(&ui_runtime), Condition::Frames(1));
     params.timeout_ms = Some(60_000);
-    let mut parked = agent.wait(params).expect("the inbox has room");
+    let mut parked = window
+        .call::<method::WaitUntil>(params)
+        .expect("the inbox has room");
     let _report = ui_runtime.drain_commands();
     assert!(parked.try_take().is_none(), "no frame has come since");
     ui_runtime
@@ -380,10 +391,10 @@ fn a_subscription_is_answered_before_the_platform_wake_runs() {
         assert!(!gate.load(Ordering::Acquire), "wake probe");
     }))
     .expect("a runtime");
-    let agent = ui_runtime
-        .semantics_agent(ui_runtime.presentation_id())
+    let window = ui_runtime
+        .dev_agent_window(ui_runtime.presentation_id())
         .expect("the ui_runtime hosts its primary presentation");
-    let mut reply = agent
+    let mut reply = window
         .subscribe(vec![EventFilter::new(EventKind::Semantics)])
         .expect("the inbox has room");
     panic_on_wake.store(true, Ordering::Release);
@@ -412,17 +423,19 @@ fn a_wake_that_panics_while_a_frame_is_reported_does_not_replace_the_frames_fail
     }))
     .expect("a runtime");
     let _presses = counter(&ui_runtime, None);
-    let agent = ui_runtime
-        .semantics_agent(ui_runtime.presentation_id())
+    let window = ui_runtime
+        .dev_agent_window(ui_runtime.presentation_id())
         .expect("the ui_runtime hosts its primary presentation");
     let mut sink = ScriptedSink::always_presents();
     frame(&ui_runtime, &mut sink);
     // A wait that outlives the frame: evaluating it asks the platform for another one.
-    let mut params = WaitParams::new(window(&ui_runtime), Condition::Frames(5));
+    let mut params = WaitParams::new(window_id(&ui_runtime), Condition::Frames(5));
     params.timeout_ms = Some(60_000);
-    let _parked = agent.wait(params).expect("the inbox has room");
+    let _parked = window
+        .call::<method::WaitUntil>(params)
+        .expect("the inbox has room");
     let _report = ui_runtime.drain_commands();
-    tap(&ui_runtime, &agent);
+    tap(&ui_runtime, &window);
     ui_runtime
         .scheduler()
         .add_post_frame_callback(Box::new(|_| panic!("the frame's own failure")));

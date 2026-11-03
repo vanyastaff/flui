@@ -31,13 +31,17 @@ pub enum WinitSession {
 /// DirectManipulation viewport initialised (`direct_manipulation`) delivers
 /// the precision touchpad's phased scrolling and pinch; without one, wheel
 /// messages have no phases and there are no trackpad gestures. Every window
-/// starts OS drag sessions through OLE (`DoDragDrop`). Input regions are not
-/// wired yet.
+/// starts OS drag sessions through OLE (`DoDragDrop`). The chrome regions
+/// answer `WM_NCHITTEST` (ADR-0286); Windows starts its edge swipes whatever a
+/// window says, so gesture exclusion is not honoured.
 #[must_use]
 pub const fn windows(direct_manipulation: bool) -> InputCapabilities {
     let builder = InputCapabilities::builder()
         .pen(Native)
-        .outgoing_drag(Native);
+        .outgoing_drag(Native)
+        .window_move(Native)
+        .window_resize(Native)
+        .caption_buttons(Native);
     if direct_manipulation {
         builder
             .precise_scroll(Native)
@@ -49,12 +53,16 @@ pub const fn windows(direct_manipulation: bool) -> InputCapabilities {
 }
 
 /// The native AppKit backend: phased precise scrolling and magnify/rotate
-/// gestures; tablet events are not translated yet.
+/// gestures, and a left press on a move area of a title bar the application
+/// draws moves the window (`performWindowDragWithEvent:`). AppKit keeps the
+/// resize borders and draws the caption buttons itself, so their regions are
+/// not honoured. Tablet events are not translated yet.
 #[must_use]
 pub const fn macos() -> InputCapabilities {
     InputCapabilities::builder()
         .precise_scroll(Native)
         .trackpad_gestures(Native)
+        .window_move(Native)
         .build()
 }
 

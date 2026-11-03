@@ -641,6 +641,19 @@ impl RenderNode {
     // producer. Root paint bounds for the engine live on
     // `RenderView::physical_paint_bounds`.
 
+    /// Where the view that made this node was created; unknown for a node no view made.
+    #[inline]
+    #[must_use]
+    pub fn creation_site(&self) -> flui_foundation::CreationSite {
+        with_entry!(self, entry => entry.creation_site())
+    }
+
+    /// Records where the view that made this node was created.
+    #[inline]
+    pub fn set_creation_site(&mut self, site: flui_foundation::CreationSite) {
+        with_entry!(self, entry => entry.set_creation_site(site));
+    }
+
     /// Stable debug name for the stored render object.
     #[inline]
     pub fn debug_name(&self) -> &'static str {

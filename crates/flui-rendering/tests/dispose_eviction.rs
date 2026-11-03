@@ -86,30 +86,17 @@ fn retirement_child(mode: &str) {
     use flui_rendering::{pipeline::PipelineCell, storage::RenderTree};
     let log = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
     let mut tree = RenderTree::new();
-    let mut detached_id = None;
     let vacant = (mode == "sparse")
         .then(|| tree.insert_box(Box::new(RenderColoredBox::red(1.0, 1.0)) as BoxedRenderObject));
     for (object, data, index) in [("object-a", "data-a", 0), ("object-b", "data-b", 1)] {
-        if mode == "detached-incoming" && index == 1 {
-            break;
-        }
-        let object_fails = matches!(
-            mode,
-            "object" | "both" | "pipeline" | "incoming" | "detached-incoming"
-        ) && index == 0
-            || mode == "second-object" && index == 1
-            || matches!(mode, "both" | "data-next") && index == 1;
-        let data_fails = matches!(
-            mode,
-            "data" | "both" | "data-next" | "incoming" | "detached-incoming"
-        ) && index == 0
-            || mode == "second-data" && index == 1;
+        let object_fails = matches!(mode, "object" | "pipeline") && index == 0
+            || mode == "second-object" && index == 1;
+        let data_fails = mode == "data" && index == 0 || mode == "second-data" && index == 1;
         let id = tree.insert_box(Box::new(RetirementProbe {
             label: object,
             fail: object_fails,
             log: log.clone(),
         }));
-        detached_id = Some(id);
         tree.get_mut(id)
             .expect("inserted node")
             .as_box_mut()
@@ -124,16 +111,15 @@ fn retirement_child(mode: &str) {
     if let Some(vacant) = vacant {
         drop(tree.remove_shallow(vacant).expect("remove initial slot"));
     }
+    // A destructor that panics leaves the rest of the tree to drop during the
+    // unwind, as std drops a `Vec` (ADR-0281): every value is destroyed.
+    let all = vec!["object-a", "data-a", "object-b", "data-b"];
     let expected = match mode {
-        "object" | "both" | "pipeline" => (Some("object-a"), vec!["object-a"]),
-        "data" | "data-next" => (Some("data-a"), vec!["object-a", "data-a"]),
-        "second-object" => (Some("object-b"), vec!["object-a", "data-a", "object-b"]),
-        "second-data" => (
-            Some("data-b"),
-            vec!["object-a", "data-a", "object-b", "data-b"],
-        ),
-        "incoming" | "detached-incoming" => (Some("outer failure"), vec![]),
-        "healthy" | "shared" | "sparse" => (None, vec!["object-a", "data-a", "object-b", "data-b"]),
+        "object" | "pipeline" => (Some("object-a"), all),
+        "data" => (Some("data-a"), all),
+        "second-object" => (Some("object-b"), all),
+        "second-data" => (Some("data-b"), all),
+        "healthy" | "shared" | "sparse" => (None, all),
         _ => panic!("unknown retirement mode {mode}"),
     };
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -153,23 +139,6 @@ fn retirement_child(mode: &str) {
             } else {
                 drop(cell);
             }
-        } else if mode == "detached-incoming" {
-            struct UnwindNode {
-                _node: flui_rendering::storage::RenderNode,
-            }
-            let node = tree
-                .remove_shallow(detached_id.expect("inserted detached node"))
-                .expect("extract detached node");
-            assert!(tree.is_empty());
-            drop(tree);
-            let _guard = UnwindNode { _node: node };
-            std::panic::panic_any("outer failure");
-        } else if mode == "incoming" {
-            struct UnwindTree {
-                _tree: RenderTree,
-            }
-            let _guard = UnwindTree { _tree: tree };
-            std::panic::panic_any("outer failure");
         } else {
             drop(tree);
         }
@@ -263,10 +232,7 @@ fn visual_notifier_retirement_child(mode: &str) {
     let mut notifier = VisualUpdateNotifier::new();
     let visual = RetirementProbe {
         label: "visual",
-        fail: matches!(
-            mode,
-            "visual" | "visual-created" | "visual-disposed" | "incoming"
-        ),
+        fail: mode == "visual",
         log: Arc::clone(&log),
     };
     notifier.set_need_visual_update(move || {
@@ -274,10 +240,7 @@ fn visual_notifier_retirement_child(mode: &str) {
     });
     let created = RetirementProbe {
         label: "created",
-        fail: matches!(
-            mode,
-            "created" | "visual-created" | "created-disposed" | "incoming"
-        ),
+        fail: mode == "created",
         log: Arc::clone(&log),
     };
     notifier.set_semantics_owner_created(move || {
@@ -285,10 +248,7 @@ fn visual_notifier_retirement_child(mode: &str) {
     });
     let disposed = RetirementProbe {
         label: "disposed",
-        fail: matches!(
-            mode,
-            "disposed" | "visual-disposed" | "created-disposed" | "incoming"
-        ),
+        fail: mode == "disposed",
         log: Arc::clone(&log),
     };
     notifier.set_semantics_owner_disposed(move || {
@@ -296,17 +256,13 @@ fn visual_notifier_retirement_child(mode: &str) {
     });
     let expected = match mode {
         "healthy" | "shared" => (None, vec!["visual", "created", "disposed"]),
-        "visual" | "visual-created" | "visual-disposed" => (Some("visual"), vec!["visual"]),
-        "created" | "created-disposed" => (Some("created"), vec!["visual", "created"]),
+        "visual" => (Some("visual"), vec!["visual", "created", "disposed"]),
+        "created" => (Some("created"), vec!["visual", "created", "disposed"]),
         "disposed" => (Some("disposed"), vec!["visual", "created", "disposed"]),
-        "incoming" => (Some("incoming notifier failure"), vec![]),
         _ => panic!("unknown visual notifier retirement mode {mode}"),
     };
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        if mode == "incoming" {
-            let _notifier = notifier;
-            std::panic::panic_any("incoming notifier failure");
-        } else if mode == "shared" {
+        if mode == "shared" {
             let shared = Arc::new(notifier);
             let alias = Arc::clone(&shared);
             drop(shared);
@@ -330,7 +286,7 @@ fn visual_notifier_retirement_child(mode: &str) {
     assert_eq!(
         *log.lock().expect("probe log"),
         expected.1,
-        "retirement order and retained tail"
+        "retirement order: every capture is destroyed"
     );
 
     // The actual public event producer works again after the contained failure.
@@ -359,20 +315,16 @@ fn render_tree_retirement_case() {
     }
 }
 
-/// Each row runs in a bounded child process: a container that drops its
-/// remaining values after a failure aborts before an outer catch could
-/// report the first one (ADR-0127).
+/// Each row runs in a bounded child process, so a panicking probe never
+/// shares a process with another row. One failing destructor leaves the rest
+/// to drop during the unwind, as std does (ADR-0281).
 pub(crate) fn render_tree_retirement_preserves_independent_envelopes() {
     let failures: Vec<String> = [
         "healthy",
         "object",
         "data",
-        "both",
-        "data-next",
         "second-object",
         "second-data",
-        "incoming",
-        "detached-incoming",
         "pipeline",
         "shared",
         "sparse",
@@ -380,10 +332,6 @@ pub(crate) fn render_tree_retirement_preserves_independent_envelopes() {
         "visual-visual",
         "visual-created",
         "visual-disposed",
-        "visual-visual-created",
-        "visual-visual-disposed",
-        "visual-created-disposed",
-        "visual-incoming",
         "visual-shared",
         "visual-reentry",
     ]

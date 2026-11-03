@@ -113,11 +113,6 @@ impl ElementTree {
                 staged,
                 payload,
             }) => {
-                // A caught payload may own several panicking destructors. Keep
-                // it out of unwind cleanup before retiring nodes or calling the
-                // recovery factory; successful recovery releases only known-safe
-                // string payloads through the shared containment helper below.
-                let payload = std::mem::ManuallyDrop::new(payload);
                 let stranded = match inserted {
                     Some(InsertedChild::Minted(id)) => {
                         self.discard_unannounced(id, owner);
@@ -169,9 +164,7 @@ impl ElementTree {
                     );
                     owner.push_recovered_panic(panic);
                 }
-                flui_foundation::panic::discard_payload(std::mem::ManuallyDrop::into_inner(
-                    payload,
-                ));
+                flui_foundation::panic::discard_payload(payload);
                 substitute_id
             }
         }
@@ -228,7 +221,6 @@ impl ElementTree {
             ..
         }: ChildHookPanic,
     ) -> ElementId {
-        let payload = std::mem::ManuallyDrop::new(payload);
         // Read the parent BEFORE `remove_subtree` wipes the node —
         // there is nowhere else left to ask once it is gone. The
         // caller supplies the authoritative target slot because a
@@ -274,7 +266,7 @@ impl ElementTree {
             );
             owner.push_recovered_panic(panic);
         }
-        flui_foundation::panic::discard_payload(std::mem::ManuallyDrop::into_inner(payload));
+        flui_foundation::panic::discard_payload(payload);
         substitute_id
     }
 }

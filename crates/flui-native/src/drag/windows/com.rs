@@ -220,10 +220,10 @@ impl SourceData {
         };
         let Some(served) = contain_os_entry("a drag's provider", || provider(entry.representation))
         else {
-            // A provider that panicked is neither called again nor dropped:
-            // it is retained and the slot stays empty, so every later fetch
-            // is refused (ADR-0127 §2).
-            std::mem::forget(provider);
+            // A provider that panicked is not called again: it is dropped,
+            // contained, and the slot stays empty, so every later fetch is
+            // refused (ADR-0281).
+            crate::owner::panic_boundary::contain_owner_callback(|| drop(provider));
             return Err(E_UNEXPECTED.into());
         };
         // Nothing refills the slot while the provider is leased out.

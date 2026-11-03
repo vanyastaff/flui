@@ -5,7 +5,7 @@
 //! pins subsequent consumer additions and removals, plus `painting::DrawOp`,
 //! which the design systems' paint tests read, `view::dev_reload`, the
 //! hook `flui-hot-reload`'s host drivers implement (ADR-0094 §1), and
-//! `view::dev_agent`, the hook `flui-devtools`' agent server implements
+//! `view::dev_agent`, the hook a package's development tool implements
 //! (ADR-0095 §3), and `view::FrameWaker`, the one scheduler capability a
 //! package hands a worker thread (ADR-0136 §2). The input-completeness surface
 //! the spec places in the SDK follows: arena observation, the per-kind gesture
@@ -150,7 +150,7 @@ mod measured {
     };
     use flui_sdk::view::LifecycleContextExt as _;
     use flui_sdk::view::dev_agent::{
-        AgentAnswer as _, AgentFault as _, AgentWindow as _, DevAgentHook as _, HandleKind as _,
+        AgentAnswer as _, AgentEvents as _, AgentWindow as _, DevAgentHook as _,
     };
     use flui_sdk::view::dev_reload::{DevReloadHook as _, ReloadEvent as _, ReloadWake as _};
     use flui_sdk::view::element::ElementKind as _;

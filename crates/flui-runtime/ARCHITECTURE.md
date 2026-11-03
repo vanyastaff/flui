@@ -803,8 +803,9 @@ demand to the primary or wakes an unrelated sibling.
 
 The `SignalWrite` command callback is `FnMut`, although it is invoked at most
 once. Its envelope stays owned outside the caught invocation. Redraw demand is
-durable before a successful callback's captures are destroyed; a callback
-panic retains the opaque envelope. A stale command likewise rearms an existing
+durable before a successful callback's captures are destroyed; after a callback
+panic the envelope is destroyed under containment and the callback's panic is
+the one resumed (ADR-0281 §3). A stale command likewise rearms an existing
 FIFO tail before destroying its envelope. If a tail arrives concurrently while
 that destruction is blocked and its ingress wake fails, a caught destructor
 panic retries the shared delivery debt before it resumes. This prevents framework
@@ -850,10 +851,18 @@ Runtime and scheduling topology, including background execution
 
 ### Agents read the committed tree through the owner inbox
 
-**Rule.** `UiRuntime::semantics_agent` vends a `SemanticsAgent` (`Clone + Send + Sync`) for one
-presentation. Its `read` and `act` enqueue `UiCommand::SemanticsRead` and
-`UiCommand::SemanticsAgentAction` on the UI runtime's bounded inbox and return an `AgentReply` the
-owner fills at its next drain, a frame boundary. A read projects the pipeline's semantics owner
+**Rule.** `UiRuntime::dev_agent_window` vends a `flui_view::dev_agent::AgentWindow`
+(`Clone + Send + Sync`) for one presentation. `AgentWindow::call::<M>` takes any window method of
+the protocol's one method table (`flui_protocol::WindowMethod`, the rows marked `Agent(window)`),
+enqueues it as one `UiCommand::Agent` on the UI runtime's bounded inbox and returns an
+`AgentAnswer` the owner fills at its next drain, a frame boundary. The owner opens the call by its
+method's type (`serve_window_call`, generated from the same table) and serves it through that
+method's `Serve` impl in `agent_serve.rs`, which answers now or parks the reply and answers later.
+`run_window_method` does what every method shares: the presentation lookup, panic containment,
+the record of issued handles and the conversion of an `AgentError` to the protocol's
+`ErrorObject` with its handle. A table method this runtime does not serve answers
+`not_supported`, and `window_answers` lists the ones it does, so a session advertises only what
+it serves; a method added to the table without a `Serve` impl does not compile. A read projects the pipeline's semantics owner
 as it stands after the last committed frame (`flui_semantics::SemanticsOwner::read_wire`); an
 action is resolved against that same tree and dispatched through
 `PresentationState::dispatch_semantics_action`, the path an assistive technology's action
@@ -867,10 +876,13 @@ reported per render slot, so it is bounded by the slots the presentation has use
 many elements came and went. Element handles are render identities, scoped to the one
 presentation; a server that spans windows keeps its own table over them (ADR-0095 §3).
 
-**Locate and actionability.** `locate` and `actionability` are owner jobs like `read`
-(`UiCommand::SemanticsLocate`, `UiCommand::ElementActionability`). A locate resolves the locator
-over the committed tree (`SemanticsOwner::locate_wire`) and records the handles it reports like
-a read. An actionability job runs three steps, none inside another's borrow: the semantics owner
+**Locate and actionability.** `semantics.locate` and `element.actionability` are served like
+`semantics.read`. A locate resolves the locator over the committed tree
+(`SemanticsOwner::locate_wire`) and records the handles it reports like a read. A
+`semantics.act` whose target is a locator resolves it in the same owner turn that runs the
+action, so the element acted on is the one the locator matched on the tree the action starts on:
+no match is `not_found` (retry when it appears), and a strict pick that matches several is
+`ambiguous` with the outlines of up to 10 candidates. An actionability job runs three steps, none inside another's borrow: the semantics owner
 says where the pointer would land (`actionability_point`), the render tree's pointer hit-test runs
 there (render objects are user code, so never under a semantics borrow), and the owner reads the
 facts against the path found (`actionability_wire`). A hit-test the render tree cannot serve
@@ -883,8 +895,8 @@ has no work pending that could still move the element. The first call for an ele
 made in the frame of the call before it with work pending, answer unstable. Pinned by
 `src/ui_runtime/tests/agent_locate.rs` and `agent_stability.rs`.
 
-**Act and read.** `act_and_read` (`UiCommand::SemanticsAgentActionRead`) takes the committed tree
-as the before-snapshot (`SemanticsOwner::snapshot_wire`), serves the action as `act` does, parks
+**Act and read.** `semantics.act` with a `snapshot` takes the committed tree
+as the before-snapshot (`SemanticsOwner::snapshot_wire`), serves the action as one without it, parks
 the reply on the presentation (`agent_reads`, at most 256) and requests a redraw. The reply
 completes in `drive_frame`, right after the frame the effect landed in (before the commit anchor), by diffing
 the new tree against the snapshot (`TreeSnapshot::delta_to`): appeared, gone and changed nodes
@@ -893,7 +905,7 @@ appeared, capped at 256 entries with `truncated`. A presentation that closes fir
 owed reading `readback_failed` with the effect `ran`, since the action was delivered. Pinned by
 `src/ui_runtime/tests/agent_act_read.rs` and `crates/flui-semantics/tests/delta.rs`.
 
-**Waits.** `wait` (`UiCommand::SemanticsAgentWait`) parks a condition on the presentation
+**Waits.** `wait.until` parks a condition on the presentation
 (`agent_waits`) instead of polling it. The owner evaluates it when it arrives, so one that holds
 already answers at the drain; after each frame `drive_frame` ran, which also counts that frame
 for `Frames`; and at every owner wake that ran none (`drain_owner_inbox`), so a deadline or a
@@ -912,7 +924,7 @@ condition on an event holds once the window emitted an event of that kind after 
 images. Pinned by `src/ui_runtime/tests/agent_wait.rs` and
 `crates/flui-semantics/tests/wait.rs`.
 
-**Events.** `subscribe` (`UiCommand::SemanticsAgentSubscribe`) registers a subscriber on the
+**Events.** `AgentWindow::subscribe` (`UiCommand::AgentSubscribe`) registers a subscriber on the
 presentation (`agent_events`, an `EventHub`) and answers with an `EventStream`; dropping the
 stream ends the subscription (the hub sees that it holds the queue's last `Arc`). After each
 frame `drive_frame` ran, the presentation emits what the frame left: a `frame` event per frame
@@ -929,16 +941,16 @@ the registration are delivered, never a replay. `input` and `announcement` are a
 filters and not emitted yet (they come from the input journal and the announcement fan-out);
 `frame.time_us` is not filled yet. Pinned by `src/ui_runtime/tests/agent_events.rs`.
 
-**Inspect.** `inspect` (`UiCommand::SemanticsAgentInspect`) answers at the owner with the typed
+**Inspect.** `inspect.widgets` and `inspect.render` answer at the owner with the typed
 snapshot a tree describes itself with (`flui_foundation::inspect`): `inspect_elements` for
-`Widgets`, `inspect_render` for `Render`. The snapshot becomes the protocol's owned
+widgets, `inspect_render` for render objects. The snapshot becomes the protocol's owned
 `InspectNode` tree in `agent_inspect.rs` (the protocol crate has no foundation edge), with an
 iterative walk so a deep chain costs no Rust stack; at most 4096 nodes are reported whatever the
 caller asks. Ids on the wire are the tree's own handles (`v3.2`, `r12`); a `root` may be a
 `NodeRef` (`p3/v3.2`), which must name this presentation: a reference to another or a closed
 window is `UnknownPresentation` (`unknown_handle`, kind window) and is never looked up here, and
 a handle of another tree is `invalid_argument`. A root that left its tree is `NodeGone`
-(`gone`); a tree a frame holds is `TreeBusy` (`busy`, retry `soon`). `Layers` is read from
+(`gone`); a tree a frame holds is `TreeBusy` (`busy`, retry `soon`). `inspect.layers` is read from
 the next scene the window shows: the sink takes the scene a frame paints and the window keeps no
 copy, so the read parks on the presentation (at most 16, then `TreeBusy` with the reason),
 the root render object is marked for paint and a frame is requested. The frame reads the scene before
@@ -951,11 +963,11 @@ object or view that panics while the tree is read (`debug_name`, `inspect`) answ
 `InspectPanicked` (`platform`) first and then continues on the owner thread, as an action does;
 pinned by `a_render_object_that_panics_while_read_answers_platform_before_the_owner_resumes`.
 
-**Enablement.** Every clone of an agent shares one `SemanticsHandle`, so semantics are
+**Enablement.** Every window handle shares one `SemanticsHandle`, so semantics are
 collected while any clone lives, whatever assistive technology does; the tree an agent reads is
 the one published to assistive technology. Vending requests a frame, and until the first
 semantics frame commits a read answers `NoTreeYet` (`busy`, retry `soon`). Dropping the last
-clone lets the next frame's reconcile stop collection; an unanswered `AgentReply` holds only the
+clone lets the next frame's reconcile stop collection; an unanswered `AgentAnswer` holds only the
 record of handles, not the semantics handle.
 
 **Failure.** A panic while the owner serves an agent's action answers that action first, then
@@ -984,9 +996,9 @@ verify that later calls answer `gone`. The windows hold the presentation's seman
 cost lasts exactly as long as the hook keeps a window: a hook that does not serve is handed none,
 and one that detaches or panics drops its windows, and collection stops on the next frame. `flui-app`'s desktop and iOS runners
 and `flui_testing::HeadlessDevAgent` drive the hook through `dev_agent::DevAgentHost`; the
-endpoint that serves it is `flui-devtools`' `agent` feature. Pinned by
+driver agent that serves it is `flui-app`'s (ADR-0239), one host per hook. Pinned by
 `an_agent_for_a_closed_presentation_answers_gone`, `dev_agent_host_contains_its_hook` and
-`flui-devtools`' `the_endpoint_contains_every_failure`.
+`flui-app`'s `the_driver_agent_contains_every_failure`.
 
 ### The development agent host lives in the runtime
 
@@ -1079,9 +1091,8 @@ is retained before recovery or diagnostics can run. The typed report owns only
 framework values and strings. Diagnostics and the registered handler run under
 separate boundaries: subscriber failure cannot suppress callback delivery, and
 neither can replace the presentation's original failure or stop sibling frames.
-A failed callback's owning envelope is retained before secondary payload handling;
-ordinary successful-envelope retirement still runs under its own boundary. Rust
-cannot contain two panicking fields in an aggregate's first ordinary destruction.
+A failed callback's owning envelope is destroyed under its own boundary, as a
+successful one is, and a panic from its destructor is discarded (ADR-0281 §3).
 
 `frame_failure_containment_matrix` isolates aggregate payload and callback-capture
 cases in subprocesses: producer alone, handler alone, diagnostics alone, competing
@@ -1170,16 +1181,16 @@ media-query field carries the period: nothing in animation reads it from there.
 
 ## Exceptional terminal presentation ownership
 
-A presentation close that holds a failure, or runs inside an unwind, is in
-preserving mode ([ADR-0123](../../docs/adr/ADR-0123-exceptional-presentation-close.md)).
-The close first withdraws the presentation's authority: its lane targets and
-cached routes, signal graph, writers, rebuild handles, local and UI runtime
-GlobalKeys and agent ports refuse further use, while siblings stay live. It then
-retains the values the presentation still owns (its trees and their callbacks)
-instead of dropping them, and skips optional disposal
-([ADR-0127](../../docs/adr/ADR-0127-exceptional-path-retention.md)). The platform
-window and the accessibility bridge are framework-owned and are released in
-either mode. A healthy close drops everything normally, and a lifecycle drain
+A presentation close that holds a failure is in preserving mode
+([ADR-0123](../../docs/adr/ADR-0123-exceptional-presentation-close.md)); an
+unwind alone is no reason for it (ADR-0281 §1). The close first withdraws the
+presentation's authority: its lane targets and cached routes, signal graph,
+writers, rebuild handles, local and UI runtime GlobalKeys and agent ports refuse
+further use, while siblings stay live. It then skips optional disposal, and the
+values it withdrew, the removed presentation included, are destroyed under the
+close's containment, the first failure kept
+([ADR-0281](../../docs/adr/ADR-0281-a-destructor-that-panics-during-an-unwind-aborts-as-in-std.md) §3).
+The platform window and the accessibility bridge are released in either mode. A healthy close drops everything normally, and a lifecycle drain
 still runs every eligible callback before propagating its first failure. Tested
 by `presentation_close_retirement_failures_preserve_focus_ime_and_siblings`.
 
@@ -1205,9 +1216,8 @@ lock, so a callback may add or remove listeners or toggle the state again. Both
 the storage (when the binding drops) and each snapshot retire their envelopes
 in registration order. A panic from a callback or a capture destructor
 propagates with the committed semantics state intact; while it unwinds, the
-retiring container retains every envelope clone it holds, since a thread-shared
-clone cannot be proven non-last (ADR-0127). Competing destructors inside one callback's capture, and the
-binding's other fields, are outside this contract.
+snapshot is dropped as a `Vec` is, and a capture destructor that panics there
+aborts, as in std (ADR-0281).
 
 ### A dropping UI runtime destroys its application values before it raises a failure
 
@@ -1220,15 +1230,15 @@ follows; a capture whose destructor panics there is a second panic in one unwind
 queued commands (a cross-thread signal write carries the application's closure) and the
 frame-failure handler, closes the command inbox, and only then destroys them under the same catch,
 first failure kept: a destructor that sends through a sender it kept is refused with `OwnerGone`
-rather than queueing a capture only the drop glue would reach. Once a failure
-is held, or the thread is already unwinding, it retains them instead (ADR-0127). Every other field
+rather than queueing a capture only the drop glue would reach. After a held failure, and while the
+thread unwinds, they are destroyed the same way, each under its own catch (ADR-0281 §3). Every other field
 holds framework values, or values already contained where they run: the input tap's calls and
 retirement, and the presentations' trees, whose `dispose` and pending futures are contained per
 element so the rest of the tree still disposes; the first of those is then the presentation's
 close failure, since no frame follows to report it (ADR-0258 §2). Tested by
 `a_queued_command_outliving_a_teardown_failure_does_not_abort`,
 `a_handler_capture_sending_on_drop_is_refused`, `a_failing_dispose_and_future_drop_do_not_abort`
-and `user_drop_panic_inside_an_unwind_is_retained`,
+and `a_runtime_dropped_inside_an_unwind_destroys_its_values`,
 each run in a child process because the broken shape aborts.
 
 ### A presentation's frame-rate demand is decided here and delivered as an owner effect

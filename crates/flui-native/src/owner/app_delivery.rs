@@ -117,7 +117,7 @@ pub(crate) struct AppDelivery {
 /// handler stays bound while one of its methods runs and may be called again
 /// from inside it. Only a clone that turns out to be the last, because the
 /// run released its handler meanwhile, goes back to the call point, which
-/// drops it outside every lock, or retains it when the method failed.
+/// drops it outside every lock under containment, after a failed method too.
 struct Resident<'a>(&'a AppDelivery);
 
 impl HandlerSlot for Resident<'_> {

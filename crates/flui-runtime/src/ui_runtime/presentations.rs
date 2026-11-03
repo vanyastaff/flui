@@ -800,31 +800,24 @@ impl UiRuntime {
         .err();
         // Membership removal must complete even when an observer or disposer panics.
         let removed = self.presentations.remove(id);
-        let preserving = first_panic.is_some()
-            || std::thread::panicking()
-            || removed
-                .as_ref()
-                .is_some_and(crate::presentation::PresentationState::preserving_close);
-        let failure = if preserving {
-            // The closed envelope keeps generic field Drop out of a recovery
-            // transaction whose first payload already belongs to the caller.
-            if let Some(presentation) = &removed {
-                let failure = catch_unwind(AssertUnwindSafe(|| {
-                    presentation
-                        .close_with_mode(flui_interaction::__runtime::CloseMode::PreservingFailure);
-                }))
-                .err();
-                crate::lifecycle_state::preserve_first_lifecycle_panic(
-                    &mut first_panic,
-                    failure,
-                    "removed presentation withdrawal",
-                );
-            }
-            std::mem::forget(removed);
-            None
-        } else {
-            catch_unwind(AssertUnwindSafe(|| drop(removed))).err()
-        };
+        if first_panic.is_some()
+            && let Some(presentation) = &removed
+        {
+            // A close that already owes a failure omits optional callbacks.
+            let failure = catch_unwind(AssertUnwindSafe(|| {
+                presentation
+                    .close_with_mode(flui_interaction::__runtime::CloseMode::PreservingFailure);
+            }))
+            .err();
+            crate::lifecycle_state::preserve_first_lifecycle_panic(
+                &mut first_panic,
+                failure,
+                "removed presentation withdrawal",
+            );
+        }
+        // The removed presentation is destroyed under containment, after a
+        // failure too; the first failure stays the one resumed (ADR-0281 §3).
+        let failure = catch_unwind(AssertUnwindSafe(|| drop(removed))).err();
         crate::lifecycle_state::preserve_first_lifecycle_panic(
             &mut first_panic,
             failure,

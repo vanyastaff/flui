@@ -359,7 +359,7 @@ fn competing_reentrant_failures_preserve_the_first_panic() {
     );
 }
 
-fn a_panicking_self_uninstalled_hook_retains_its_captures() {
+fn a_panicking_self_uninstalled_hook_destroys_its_captures() {
     struct Capture(Arc<AtomicUsize>);
     impl Drop for Capture {
         fn drop(&mut self) {
@@ -388,8 +388,8 @@ fn a_panicking_self_uninstalled_hook_retains_its_captures() {
     );
     assert_eq!(
         drops.load(Ordering::Relaxed),
-        0,
-        "opaque hook captures must not drop during the original unwind"
+        1,
+        "the hook's captures are destroyed after the unwind, behind its failure"
     );
     let delivered = Arc::new(AtomicUsize::new(0));
     let hook_delivered = Arc::clone(&delivered);
@@ -528,7 +528,7 @@ fn assert_reentrant_hook_replacement_after_failure(use_driver: bool) {
     OWNER_DRIVER.with(|owner| owner.borrow_mut().take());
 }
 
-fn initial_hook_retirement_retains_the_compensating_envelope_on_failure() {
+fn initial_hook_retirement_destroys_the_compensating_envelope_on_failure() {
     struct Capture {
         drops: Arc<AtomicUsize>,
         failure: &'static str,
@@ -586,7 +586,7 @@ fn initial_hook_retirement_retains_the_compensating_envelope_on_failure() {
         Some("initial envelope retirement")
     );
     assert_eq!(initial_drops.load(Ordering::Relaxed), 1);
-    assert_eq!(replacement_drops.load(Ordering::Relaxed), 0);
+    assert_eq!(replacement_drops.load(Ordering::Relaxed), 1);
     assert_eq!(replacement_calls.load(Ordering::Relaxed), 1);
     let next_calls = Arc::new(AtomicUsize::new(0));
     let hook_next_calls = Arc::clone(&next_calls);
@@ -604,8 +604,8 @@ fn coalesced_wake_delivery_recovery() {
         "coalesced_wake_delivery_recovery",
         &[
             (
-                "initial_hook_retirement_retains_the_compensating_envelope_on_failure",
-                initial_hook_retirement_retains_the_compensating_envelope_on_failure as fn(),
+                "initial_hook_retirement_destroys_the_compensating_envelope_on_failure",
+                initial_hook_retirement_destroys_the_compensating_envelope_on_failure as fn(),
             ),
             (
                 "reentrant_hook_replacement_delivers_the_current_hook_after_failure",
@@ -616,8 +616,8 @@ fn coalesced_wake_delivery_recovery() {
                 perpetual_reentrant_demand_is_bounded_and_retained as fn(),
             ),
             (
-                "a_panicking_self_uninstalled_hook_retains_its_captures",
-                a_panicking_self_uninstalled_hook_retains_its_captures as fn(),
+                "a_panicking_self_uninstalled_hook_destroys_its_captures",
+                a_panicking_self_uninstalled_hook_destroys_its_captures as fn(),
             ),
             (
                 "scheduled_async_wake_retries_both_delivery_layers",

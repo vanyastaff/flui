@@ -140,8 +140,7 @@ impl DevReload {
                 Lent::Returned(value)
             }
             Err(payload) => {
-                // The payload's own `Drop` may panic; never run it.
-                std::mem::forget(payload);
+                flui_foundation::panic::discard_payload(payload);
                 disable(what, hook);
                 Lent::Panicked
             }
@@ -180,13 +179,13 @@ fn disable(what: &'static str, hook: Box<dyn DevReloadHook>) {
     contain(|| drop(hook));
 }
 
-/// Run `body`, swallowing a panic without running its payload's `Drop`,
-/// which may panic too. (`application_control::contain` does the same, but
-/// is not compiled for Android.)
+/// Run `body`, swallowing a panic and discarding its payload under
+/// containment (ADR-0281 §2). (`application_control::contain` does the same,
+/// but is not compiled for Android.)
 #[cfg(not(target_arch = "wasm32"))]
 fn contain(body: impl FnOnce()) {
     if let Err(payload) = catch_unwind(AssertUnwindSafe(body)) {
-        std::mem::forget(payload);
+        flui_foundation::panic::discard_payload(payload);
     }
 }
 

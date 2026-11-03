@@ -560,9 +560,8 @@ impl GestureArenaMember for MultiTapGestureRecognizer {
                     contact.entry.release_with_recovery(scope);
                 });
             }
-            let preserving = recovery.has_failure();
             arena.invoke_with_recovery(FailureClass::Delivery, recovery, |_| {
-                let mut notices = CallbackSequence::preserving_failure(preserving);
+                let mut notices = CallbackSequence::new();
                 notices.call(self.callbacks.on_multi_tap_cancel.clone(), |callback| {
                     callback(details);
                 });

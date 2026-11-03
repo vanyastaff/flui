@@ -14,16 +14,13 @@
 //! [`install`] replaces a handler and retires the one it displaces the same
 //! way, and [`retire`] drops any other user-owned value outside the locks.
 //!
-//! A handler's panic is the operation's first failure: the slot is settled
-//! without running user code a second time (a handler displaced during a call
-//! that failed is retained, not dropped, ADR-0127 §2), and the payload comes
-//! back as a [`Failure`] for the caller to resume or contain. Nothing here
-//! reads `std::thread::panicking()` to learn about that failure: it is false
-//! once the panic is caught.
+//! A handler's panic is the operation's first failure: the slot is settled,
+//! a handler displaced during the call is dropped contained and its own panic
+//! logged and discarded (ADR-0281), and the payload comes back as a
+//! [`Failure`] for the caller to resume or contain.
 
 use std::any::Any;
 use std::cell::RefCell;
-use std::mem::ManuallyDrop;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 
 use parking_lot::Mutex;
@@ -99,21 +96,25 @@ impl<R> Called<R> {
 
 /// A handler's panic, caught by [`call`].
 ///
-/// Dropping it retains the payload rather than destroying it: an opaque
-/// payload's destructor is user code too (ADR-0119).
-pub(crate) struct Failure(ManuallyDrop<Box<dyn Any + Send>>);
+/// Dropping it discards the payload under containment: an opaque payload's
+/// destructor is user code too (ADR-0281).
+pub(crate) struct Failure(Option<Box<dyn Any + Send>>);
 
 impl Failure {
-    /// Resume the handler's unwind with its own payload.
-    pub(crate) fn resume(self) -> ! {
-        let Self(payload) = self;
-        resume_unwind(ManuallyDrop::into_inner(payload))
+    fn take(&mut self) -> Box<dyn Any + Send> {
+        self.0
+            .take()
+            .expect("BUG: a failure holds its payload until consumed")
     }
 
-    /// Log the panic under `handler` and retain its payload.
-    pub(crate) fn contain(self, handler: &'static str) {
-        let Self(payload) = self;
-        let payload = ManuallyDrop::into_inner(payload);
+    /// Resume the handler's unwind with its own payload.
+    pub(crate) fn resume(mut self) -> ! {
+        resume_unwind(self.take())
+    }
+
+    /// Log the panic under `handler` and discard its payload.
+    pub(crate) fn contain(mut self, handler: &'static str) {
+        let payload = self.take();
         contain_owner_callback(|| {
             tracing::error!(
                 handler,
@@ -126,10 +127,23 @@ impl Failure {
     }
 }
 
+impl Drop for Failure {
+    fn drop(&mut self) {
+        if let Some(payload) = self.0.take() {
+            flui_foundation::panic::discard_payload(payload);
+        }
+    }
+}
+
 impl std::fmt::Debug for Failure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_tuple("Failure")
-            .field(&flui_foundation::panic::payload_text(&**self.0))
+            .field(
+                &self
+                    .0
+                    .as_deref()
+                    .and_then(flui_foundation::panic::payload_text),
+            )
             .finish()
     }
 }
@@ -139,10 +153,9 @@ impl std::fmt::Debug for Failure {
 ///
 /// Afterwards the handler goes back to its slot, unless one was installed
 /// while it ran (by the handler itself or by anything it called): the newer
-/// one stays, and the one that ran is dropped here, its destructor contained.
-/// When the handler panicked, that displaced handler is retained instead, and
-/// the payload is returned as the call's [`Failure`]. Called while the thread
-/// is already unwinding, nothing is dropped.
+/// one stays, and the one that ran is dropped here, its destructor contained,
+/// after a panic too (ADR-0281). The handler's panic is returned as the
+/// call's [`Failure`]; a panic of that destructor is logged and discarded.
 pub(crate) fn call<S, R>(slot: &S, body: impl FnOnce(&mut S::Handler) -> R) -> Called<R>
 where
     S: HandlerSlot + ?Sized,
@@ -152,17 +165,10 @@ where
     };
     let outcome = catch_unwind(AssertUnwindSafe(|| body(&mut handler)));
     let displaced = slot.restore(handler);
+    retire(displaced);
     match outcome {
-        Ok(value) => {
-            retire(displaced);
-            Called::Returned(value)
-        }
-        Err(payload) => {
-            // The operation already failed: the displaced handler's captures
-            // stay out of it (ADR-0127 §2).
-            std::mem::forget(displaced);
-            Called::Panicked(Failure(ManuallyDrop::new(payload)))
-        }
+        Ok(value) => Called::Returned(value),
+        Err(payload) => Called::Panicked(Failure(Some(payload))),
     }
 }
 
@@ -176,14 +182,10 @@ where
 }
 
 /// Drop `value`, whose destructor is user code, outside every lock: its
-/// panic is contained, and while the thread is already unwinding the value is
-/// retained instead (ADR-0127 §2). The caller holds no lock or borrow.
+/// panic is contained and logged (ADR-0281). The caller holds no lock or
+/// borrow.
 pub(crate) fn retire<T>(value: T) {
-    if std::thread::panicking() {
-        std::mem::forget(value);
-    } else {
-        contain_owner_callback(|| drop(value));
-    }
+    contain_owner_callback(|| drop(value));
 }
 
 /// State behind a lock or a `RefCell`, reached for the length of one closure:

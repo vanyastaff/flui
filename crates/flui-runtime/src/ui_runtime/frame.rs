@@ -193,8 +193,7 @@ impl UiRuntime {
             if let Err(payload) = catch_unwind(AssertUnwindSafe(|| {
                 presentation.pipeline().report_semantics_diagnostics();
             })) {
-                // Forgotten, not dropped: its `Drop` may panic too.
-                std::mem::forget(payload);
+                flui_foundation::panic::discard_payload(payload);
                 // What it left unreported went back to the pipeline, which
                 // no pending-work check counts: schedule the frame that
                 // retries it.
@@ -222,7 +221,7 @@ impl UiRuntime {
                     outcome
                 }
                 Ok(Err(error)) => {
-                    if let flui_rendering::RenderError::TextPreparationPending(frontier) = &error {
+                    if let flui_rendering::RenderError::TextPreparationPending(frontier) = &*error {
                         if super::text_preparation::pending(presentation, frontier.clone()) {
                             // Native preparation retains its logical segment;
                             // no scene, tree revision or failure streak is published.
@@ -233,7 +232,7 @@ impl UiRuntime {
                         super::text_preparation::finish(presentation);
                     }
                     if matches!(
-                        error,
+                        *error,
                         flui_rendering::RenderError::TextPreparationPending(_)
                     ) {
                         // An unresolved source has no producer to advance this
@@ -243,7 +242,7 @@ impl UiRuntime {
                             .with_mut(PipelineOwner::defer_layout_until_input);
                     }
                     let waits_for_input = matches!(
-                        error,
+                        *error,
                         flui_rendering::RenderError::TextLayout(_)
                             | flui_rendering::RenderError::TextContextBusy
                             | flui_rendering::RenderError::TextPreparationPending(_)
@@ -553,7 +552,7 @@ impl UiRuntime {
         presentation: &PresentationState,
         constraints: BoxConstraints,
         text: &flui_rendering::TextContextHandle,
-    ) -> Result<FramePaintOutcome, flui_rendering::RenderError> {
+    ) -> Result<FramePaintOutcome, flui_foundation::TreeError<flui_rendering::RenderError>> {
         Self::draw_prepared_frame_for_presentation(presentation, constraints, text, true)
     }
 
@@ -562,7 +561,7 @@ impl UiRuntime {
         constraints: BoxConstraints,
         text: &flui_rendering::TextContextHandle,
         fresh: bool,
-    ) -> Result<FramePaintOutcome, flui_rendering::RenderError> {
+    ) -> Result<FramePaintOutcome, flui_foundation::TreeError<flui_rendering::RenderError>> {
         presentation.enter_segment_phase(SegmentPhase::Build);
         let mut phases = PhaseStopwatch::start(presentation);
 

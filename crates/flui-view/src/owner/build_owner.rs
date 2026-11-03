@@ -6,10 +6,6 @@
 //! - Managing GlobalKey registry
 //! - Coordinating InheritedElement lookups
 
-#[path = "retirement_slots.rs"]
-mod retirement_slots;
-use retirement_slots::{OwnerBuildScheduledSlot, OwnerReactive, OwnerTreeObserverSlot};
-
 use std::{
     any::Any,
     cell::Cell,
@@ -416,7 +412,7 @@ pub struct BuildOwner {
     /// ADR-0074: the UI runtime's reactive graph. Constructed with the owner,
     /// re-pointed at the external inbox whenever the frame-request callback
     /// changes (`set_on_build_scheduled`).
-    reactive: OwnerReactive,
+    reactive: crate::reactive::Reactive,
 
     /// Keep-alive holds on lazy sliver children — which children band eviction
     /// must skip. Presentation-scoped like every other lifecycle capability,
@@ -430,7 +426,7 @@ pub struct BuildOwner {
     /// The UI runtime's tree-observer slot (ADR-0040). `None` = observation off
     /// (one branch per emission site). `pub(crate)` for the
     /// [`ElementOwner`](super::ElementOwner) split-borrow.
-    pub(crate) tree_observer: OwnerTreeObserverSlot,
+    pub(crate) tree_observer: Option<Arc<dyn flui_foundation::observe::TreeObserver>>,
 
     /// Lifecycle-hook panics caught and contained by a per-child
     /// containment seam this frame, waiting to be drained by
@@ -458,7 +454,7 @@ pub struct BuildOwner {
     /// re-borrowing the owner. Stored as `Arc` (not `Box`) so an
     /// `ExternalBuildScheduler` captured by an animation listener can clone
     /// and fire it as a frame request from outside a frame.
-    pub(crate) on_build_scheduled: OwnerBuildScheduledSlot,
+    pub(crate) on_build_scheduled: Option<Arc<dyn Fn() + Send + Sync>>,
 
     /// Inbox of element ids and causes scheduled through an
     /// `ExternalBuildScheduler` handle — typically an animation/listenable
@@ -727,17 +723,17 @@ impl BuildOwner {
             inactive_elements: Vec::new(),
             pending_dependency_changes: std::collections::HashSet::new(),
             inherited_dependencies: InheritedDependencies::default(),
-            reactive: OwnerReactive(Some(crate::reactive::Reactive::new())),
+            reactive: crate::reactive::Reactive::new(),
             keep_alive: super::KeepAliveHolds::default(),
             unmount_hooks: super::UnmountHooks::default(),
-            tree_observer: OwnerTreeObserverSlot(None),
+            tree_observer: None,
             recovered_panics: Vec::new(),
             lifecycle_panic_handoff: Cell::new(LifecyclePanicHandoff::Disarmed),
             #[cfg(debug_assertions)]
             building: false,
             #[cfg(debug_assertions)]
             scope_depth: 0,
-            on_build_scheduled: OwnerBuildScheduledSlot(None),
+            on_build_scheduled: None,
             external_inbox: Arc::new(ExternalBuildInbox::default()),
             mid_drain_absorbs_left: MAX_MID_DRAIN_ABSORBS,
             mid_drain_cap_streak: false,
@@ -949,7 +945,7 @@ impl BuildOwner {
     where
         F: Fn() + Send + Sync + 'static,
     {
-        *self.on_build_scheduled = Some(Arc::new(callback));
+        self.on_build_scheduled = Some(Arc::new(callback));
         self.reactive.set_scheduler(self.external_scheduler());
     }
 
@@ -2959,8 +2955,8 @@ impl Drop for BuildOwner {
     /// once: an observer already cleared or replaced was told then. It is
     /// called through its own `Arc`, with nothing of this owner borrowed,
     /// and the slot keeps the observer until the fields drop, so its
-    /// destructor runs in field order as before. During an unwind it is not
-    /// called: the slot's own drop retains it instead.
+    /// destructor runs in field order. During an unwind `detached()` is not
+    /// called; the observer is still destroyed with the slot (ADR-0281).
     fn drop(&mut self) {
         if let Some(scope) = &self.global_key_scope {
             scope.reclaim_owner(self.owner_tag);
@@ -3004,7 +3000,7 @@ fn notify_detached(observer: Arc<dyn flui_foundation::observe::TreeObserver>) {
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| observer.detached()))
     {
         flui_foundation::panic::discard_payload(payload);
-        std::mem::forget(observer);
+        crate::drop_contained(observer);
         let reported = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             tracing::error!("TreeObserver::detached() panicked; ignored");
         }));

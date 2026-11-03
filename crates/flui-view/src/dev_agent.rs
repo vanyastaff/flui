@@ -1,14 +1,19 @@
 //! The development-agent seam (ADR-0095 §3).
 //!
-//! A development tool that serves the application's semantics tree to an
-//! agent — `flui-devtools`' `agent` server today — implements
-//! [`DevAgentHook`]; the application installs the instance on its
-//! configuration (`flui_app::AppConfig::with_dev_agent`), and the host hands
-//! it an [`AgentWindow`] for each window that has content to read. The trait
-//! lives here, below the runtime, so the host never names the tool and the
-//! tool never names the runtime: `flui-app` has no edge to any devtools
-//! crate, and a package reaches this module through `flui-sdk`
+//! A development tool that serves the application's windows to an agent —
+//! `flui-app`'s driver agent (ADR-0239) — implements [`DevAgentHook`]; the
+//! host or the application installs the instance on its configuration
+//! (`flui_app::AppConfig::with_dev_agent`), and the host hands it an
+//! [`AgentWindow`] for each window that has content to read. The trait lives
+//! here, below the runtime, so the host never names the tool and the tool
+//! never names the runtime: `flui-app` has no edge to any devtools crate, and
+//! a package reaches this module through `flui-sdk`
 //! (`flui_sdk::view::dev_agent`).
+//!
+//! An [`AgentWindow`] answers the protocol's window methods
+//! ([`WindowMethod`]): [`AgentWindow::call`] takes a method's typed
+//! parameters and answers its typed output, or the protocol's
+//! [`ErrorObject`], so a tool adds nothing per method.
 //!
 //! # What the host promises
 //!
@@ -52,16 +57,14 @@
 
 use std::any::Any;
 use std::fmt;
+use std::sync::mpsc::{Receiver, RecvTimeoutError, TryRecvError};
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
-use flui_protocol::{
-    ActOutcome, ActionRequest, Actionability, ActionabilityParams, ErrorCode, Event, EventFilter,
-    InspectParams, InspectReading, LocateParams, Matches, ReadQuery, Retry, Snapshot, Tree,
-    WaitOutcome, WaitParams, WindowId,
-};
+use flui_protocol::method::{Addressed, WindowMethod};
+use flui_protocol::{ErrorCode, ErrorObject, Event, EventFilter, HandleKind, Retry, WindowId};
 
-use crate::__runtime::{AgentPort, EventSource, PendingAnswer};
+use crate::__runtime::{AgentPort, EventSource, WindowCall};
 
 /// A development tool that serves the application's windows to an agent,
 /// installed by the application and called by the host on the owner thread.
@@ -115,164 +118,83 @@ pub trait DevAgentHook: Send + 'static {
     fn window_opened(&mut self, window: AgentWindow);
 }
 
-/// Which of a window's trees an inspection reads.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[non_exhaustive]
-pub enum InspectTarget {
-    /// The element tree (`inspect.widgets`, ids `v3.2`).
-    Widgets,
-    /// The render tree (`inspect.render`, ids `r12`).
-    Render,
-    /// The layers of the next scene the window shows (`inspect.layers`, ids `l4.37`).
-    Layers,
-}
-
-/// The kind of handle a `gone` or `unknown_handle` fault names.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[non_exhaustive]
-pub enum HandleKind {
-    /// An element handle, `e<n>`.
-    Element,
-    /// A window handle, `w<n>`.
-    Window,
-}
-
-impl HandleKind {
-    /// The name ADR-0080's error envelope carries.
-    #[must_use]
-    pub const fn name(self) -> &'static str {
-        match self {
-            Self::Element => "element",
-            Self::Window => "window",
-        }
-    }
-}
-
-impl fmt::Display for HandleKind {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.name())
-    }
-}
-
-/// Why an agent's read or action failed, in ADR-0080's terms: a fixed code,
-/// retry advice, whether part of the action may have reached the
-/// application, and the kind of handle a `gone` or `unknown_handle` names.
+/// The answer to one call on an [`AgentWindow`], filled by the window's
+/// owner at its next drain, or later for a request the window holds (a wait,
+/// an action's reading, a read of the next scene's layers).
 ///
-/// The message is for people and carries element and window ids only, never
-/// a label or a value.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AgentFault {
-    code: ErrorCode,
-    retry: Retry,
-    may_have_run: bool,
-    kind: Option<HandleKind>,
-    message: String,
-}
-
-impl AgentFault {
-    /// A fault with `code`, `retry` advice and a message for people.
-    #[must_use]
-    pub fn new(code: ErrorCode, retry: Retry, message: impl Into<String>) -> Self {
-        Self {
-            code,
-            retry,
-            may_have_run: false,
-            kind: None,
-            message: message.into(),
-        }
-    }
-
-    /// The fault every call on a closed window answers.
-    #[must_use]
-    pub fn window_gone() -> Self {
-        Self::new(ErrorCode::Gone, Retry::Never, "the window has closed")
-            .with_kind(HandleKind::Window)
-    }
-
-    /// Name the kind of handle the fault is about.
-    #[must_use]
-    pub fn with_kind(mut self, kind: HandleKind) -> Self {
-        self.kind = Some(kind);
-        self
-    }
-
-    /// Say whether part of the action may have reached the application
-    /// (ADR-0080's `may_have_run` effect).
-    #[must_use]
-    pub fn with_may_have_run(mut self, may_have_run: bool) -> Self {
-        self.may_have_run = may_have_run;
-        self
-    }
-
-    /// The ADR-0080 code an agent branches on.
-    #[must_use]
-    pub fn code(&self) -> ErrorCode {
-        self.code
-    }
-
-    /// Whether the same call can succeed later.
-    #[must_use]
-    pub fn retry(&self) -> Retry {
-        self.retry
-    }
-
-    /// Whether part of the action may have reached the application.
-    #[must_use]
-    pub fn may_have_run(&self) -> bool {
-        self.may_have_run
-    }
-
-    /// The kind of handle a `gone` or `unknown_handle` names.
-    #[must_use]
-    pub fn kind(&self) -> Option<HandleKind> {
-        self.kind
-    }
-
-    /// The message, for people.
-    #[must_use]
-    pub fn message(&self) -> &str {
-        &self.message
-    }
-}
-
-impl fmt::Display for AgentFault {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}: {}", self.code, self.message)
-    }
-}
-
-impl std::error::Error for AgentFault {}
-
-/// The answer to one [`AgentWindow::read`] or [`AgentWindow::act`], filled by
-/// the window's owner at its next drain.
+/// Dropping it tells the owner nobody takes the answer: a request the window
+/// holds is let go at its next look.
 ///
 /// Never wait on it on the owner thread, or inside a [`DevAgentHook`] method:
 /// the owner answers only at its drain.
-#[must_use = "an answer carries the result of the read or action"]
-pub struct AgentAnswer<T>(Box<dyn PendingAnswer<T>>);
+#[must_use = "an answer carries the result of the call"]
+pub struct AgentAnswer<T> {
+    rx: Receiver<Result<T, ErrorObject>>,
+    /// Held while someone can take the answer; the owner's reply holds it
+    /// weakly.
+    _asker: Arc<()>,
+    taken: bool,
+}
 
 impl<T> AgentAnswer<T> {
-    pub(crate) fn new(pending: Box<dyn PendingAnswer<T>>) -> Self {
-        Self(pending)
+    pub(crate) fn new(rx: Receiver<Result<T, ErrorObject>>, asker: Arc<()>) -> Self {
+        Self {
+            rx,
+            _asker: asker,
+            taken: false,
+        }
     }
 
     /// The answer, if the owner has sent it; `None` while it has not, and
     /// after the answer has been taken once.
-    pub fn try_take(&mut self) -> Option<Result<T, AgentFault>> {
-        self.0.try_take()
+    ///
+    /// An owner that went without answering answers `shutting_down`.
+    pub fn try_take(&mut self) -> Option<Result<T, ErrorObject>> {
+        if self.taken {
+            return None;
+        }
+        let answer = match self.rx.try_recv() {
+            Ok(answer) => answer,
+            Err(TryRecvError::Empty) => return None,
+            Err(TryRecvError::Disconnected) => Err(owner_gone()),
+        };
+        self.taken = true;
+        Some(answer)
     }
 
     /// The answer, waiting up to `timeout` for it; `None` if it has not come
     /// by then, and after the answer has been taken once.
-    pub fn recv_timeout(&mut self, timeout: Duration) -> Option<Result<T, AgentFault>> {
-        self.0.recv_timeout(timeout)
+    ///
+    /// An owner that went without answering answers `shutting_down`.
+    pub fn recv_timeout(&mut self, timeout: Duration) -> Option<Result<T, ErrorObject>> {
+        if self.taken {
+            return None;
+        }
+        let answer = match self.rx.recv_timeout(timeout) {
+            Ok(answer) => answer,
+            Err(RecvTimeoutError::Timeout) => return None,
+            Err(RecvTimeoutError::Disconnected) => Err(owner_gone()),
+        };
+        self.taken = true;
+        Some(answer)
     }
 }
 
 impl<T> fmt::Debug for AgentAnswer<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("AgentAnswer").finish_non_exhaustive()
+        f.debug_struct("AgentAnswer")
+            .field("taken", &self.taken)
+            .finish_non_exhaustive()
     }
+}
+
+/// What an answer is when the owner dropped the request unanswered: it shut
+/// down, or its UI runtime went.
+fn owner_gone() -> ErrorObject {
+    ErrorObject::new(
+        ErrorCode::ShuttingDown,
+        "the window's owner went without answering",
+    )
 }
 
 /// The events one subscription selects, in the order the window emitted them. Dropping it ends
@@ -332,6 +254,16 @@ pub struct AgentWindow {
     _collecting: Arc<dyn Any + Send + Sync>,
 }
 
+// A refusal is the protocol's error object itself, which the caller answers with: boxing it
+// would add an allocation to each refusal to save moving a few hundred bytes.
+// The error object is under the lint's size only where a pointer is 32 bits.
+#[cfg_attr(
+    target_pointer_width = "64",
+    expect(
+        clippy::result_large_err,
+        reason = "the error object is the answer, returned once per call"
+    )
+)]
 impl AgentWindow {
     pub(crate) fn new(
         id: WindowId,
@@ -365,122 +297,42 @@ impl AgentWindow {
         self.port.upgrade().filter(|port| port.is_open())
     }
 
-    /// Read the window's semantics tree as ADR-0080 wire nodes, as of the
-    /// last committed frame.
+    /// Ask this window `M` with `params`: the owner answers at its next
+    /// drain, or later for a request the window holds (`wait.until`, an
+    /// action's reading, `inspect.layers`). What each method answers is the
+    /// protocol's, documented on its type in [`flui_protocol::method`].
+    ///
+    /// Element handles in the answer are this window's. A method the
+    /// window does not answer in this build answers `not_supported` naming
+    /// it.
     ///
     /// # Errors
     ///
-    /// `gone` (kind `window`) once the window has closed; `busy` when the
-    /// owner's inbox is full; `shutting_down` when the owner has gone. The
-    /// answer carries the rest.
-    pub fn read(&self, query: ReadQuery) -> Result<AgentAnswer<Tree>, AgentFault> {
-        self.open_port()
-            .ok_or_else(AgentFault::window_gone)?
-            .read(query)
-    }
-
-    /// Perform `request` on its element, checked against the element as the
-    /// last committed frame shows it. An `Ok` answer means the action was
-    /// delivered to the element's handler, not that its effect has happened:
-    /// read the tree for the effect rather than acting again.
-    ///
-    /// # Errors
-    ///
-    /// As [`Self::read`]; the answer carries the rest.
-    pub fn act(&self, request: ActionRequest) -> Result<AgentAnswer<()>, AgentFault> {
-        self.open_port()
-            .ok_or_else(AgentFault::window_gone)?
-            .act(request)
-    }
-
-    /// As [`Self::act`], and read the window's tree back as `snapshot` asks
-    /// once the action's effect has settled: the frame it ran in, or the next
-    /// one. The outcome says the action ran on the `semantic` path; a tree
-    /// that cannot be read back afterwards is `readback_failed` on an outcome
-    /// that still says it ran.
-    ///
-    /// # Errors
-    ///
-    /// As [`Self::read`]; the answer carries the rest.
-    pub fn act_and_read(
+    /// The protocol's error object when the call cannot be asked:
+    /// `invalid_argument` when `params` name another window; `gone` (kind
+    /// `window`) once the window has closed; `busy` when the owner's inbox is
+    /// full; `shutting_down` when the owner has gone. The answer carries the
+    /// rest.
+    pub fn call<M: WindowMethod>(
         &self,
-        request: ActionRequest,
-        snapshot: Snapshot,
-    ) -> Result<AgentAnswer<ActOutcome>, AgentFault> {
-        self.open_port()
-            .ok_or_else(AgentFault::window_gone)?
-            .act_and_read(request, snapshot)
-    }
-
-    /// Resolve `params.locator` over the window's committed semantics tree.
-    /// Every match is listed, or the ones `pick` and `max_matches` leave; no
-    /// match is an empty list, not a fault. The answer's matches carry the
-    /// tree revision they were made on.
-    ///
-    /// # Errors
-    ///
-    /// As [`Self::read`]; the answer carries the rest.
-    pub fn locate(&self, params: LocateParams) -> Result<AgentAnswer<Matches>, AgentFault> {
-        self.open_port()
-            .ok_or_else(AgentFault::window_gone)?
-            .locate(params)
-    }
-
-    /// The facts about one element that decide whether input reaches it,
-    /// all read in the one owner turn: the tree's, and the render hit-test's
-    /// at the point the action would land.
-    ///
-    /// `stable` compares the element's bounds with those the previous call
-    /// saw on an earlier frame, so the first call answers unstable and asks
-    /// for a frame. A caller that needs a stable element calls again after
-    /// the next frame.
-    ///
-    /// # Errors
-    ///
-    /// As [`Self::read`]; the answer carries the rest.
-    pub fn actionability(
-        &self,
-        params: ActionabilityParams,
-    ) -> Result<AgentAnswer<Actionability>, AgentFault> {
-        self.open_port()
-            .ok_or_else(AgentFault::window_gone)?
-            .actionability(params)
-    }
-
-    /// Hold out for `params.condition` in this window without polling: the owner evaluates it
-    /// as the request arrives, after each frame it presents and when the timeout passes. A
-    /// wait that runs out is an answer with `satisfied: false`, the last observation and why
-    /// the window had not settled; a fault means the window answered nothing. `params.window`
-    /// is the caller's own bookkeeping: the wait is this window's.
-    ///
-    /// # Errors
-    ///
-    /// As [`Self::read`]; the answer carries the rest, among them `busy` when the window
-    /// already holds as many waits as it admits.
-    pub fn wait(&self, params: WaitParams) -> Result<AgentAnswer<WaitOutcome>, AgentFault> {
-        self.open_port()
-            .ok_or_else(AgentFault::window_gone)?
-            .wait(params)
-    }
-
-    /// Read one of this window's trees as the typed snapshot it describes itself with, or the
-    /// subtree under `params.root` (a tree-local handle such as `v3.2`, or a `p3/v3.2` reference
-    /// that must name this window). `params.window` is the caller's own bookkeeping: the read is
-    /// this window's.
-    ///
-    /// # Errors
-    ///
-    /// As [`Self::read`]; the answer carries the rest, among them `unknown_handle` (a window)
-    /// for a reference to another window, `gone` for a root that is no longer in its tree, and
-    /// `busy` while a frame holds the tree.
-    pub fn inspect(
-        &self,
-        target: InspectTarget,
-        params: InspectParams,
-    ) -> Result<AgentAnswer<InspectReading>, AgentFault> {
-        self.open_port()
-            .ok_or_else(AgentFault::window_gone)?
-            .inspect(target, params)
+        params: M::Params,
+    ) -> Result<AgentAnswer<M::Output>, ErrorObject> {
+        if let Some(named) = params.window()
+            && named != self.id
+        {
+            return Err(ErrorObject::new(
+                ErrorCode::InvalidArgument,
+                format!(
+                    "{}'s parameters name window {named}; this is window {}",
+                    M::NAME,
+                    self.id
+                ),
+            ));
+        }
+        let port = self.open_port().ok_or_else(|| window_gone(self.id))?;
+        let (call, answer) = WindowCall::new::<M>(params);
+        port.call(call)?;
+        Ok(answer)
     }
 
     /// Subscribe to this window's events: `filters` select the kinds, and a filter that names
@@ -493,45 +345,23 @@ impl AgentWindow {
     ///
     /// # Errors
     ///
-    /// As [`Self::read`]; the answer carries the rest, among them `busy` when the window already
+    /// As [`Self::call`]; the answer carries the rest, among them `busy` when the window already
     /// holds as many subscriptions as it admits.
     pub fn subscribe(
         &self,
         filters: Vec<EventFilter>,
-    ) -> Result<AgentAnswer<AgentEvents>, AgentFault> {
+    ) -> Result<AgentAnswer<AgentEvents>, ErrorObject> {
         self.open_port()
-            .ok_or_else(AgentFault::window_gone)?
+            .ok_or_else(|| window_gone(self.id))?
             .subscribe(filters)
     }
+}
 
-    /// Read or change this window's animation playback through its owner inbox.
-    /// Rate and step are applied together only after validation.
-    ///
-    /// # Errors
-    /// As [`Self::read`]; an invalid rate is reported in the answer.
-    pub fn motion(
-        &self,
-        request: flui_protocol::MotionRequest,
-    ) -> Result<AgentAnswer<flui_protocol::MotionState>, AgentFault> {
-        self.open_port()
-            .ok_or_else(AgentFault::window_gone)?
-            .motion(request)
-    }
-
-    /// The announcements this window delivered to assistive technology after
-    /// `params.since`, oldest first. A read leaves out the announcer nodes
-    /// that carry them; this is where an agent hears them.
-    ///
-    /// # Errors
-    /// As [`Self::read`].
-    pub fn announcements(
-        &self,
-        params: flui_protocol::AnnouncementsParams,
-    ) -> Result<AgentAnswer<flui_protocol::AnnouncementJournal>, AgentFault> {
-        self.open_port()
-            .ok_or_else(AgentFault::window_gone)?
-            .announcements(params)
-    }
+/// What every call on a closed window answers.
+fn window_gone(window: WindowId) -> ErrorObject {
+    ErrorObject::new(ErrorCode::Gone, "the window has closed")
+        .with_retry(Retry::Never)
+        .with_handle(HandleKind::Window, window.to_string())
 }
 
 impl fmt::Debug for AgentWindow {
@@ -547,112 +377,65 @@ impl fmt::Debug for AgentWindow {
 mod tests {
     use std::sync::Arc;
 
+    use flui_protocol::method::{SemanticsAct, SemanticsLocate, SemanticsRead};
+    use flui_protocol::{LocateParams, Locator, ReadParams, Tree};
+
     use super::*;
 
     static_assertions::assert_impl_all!(AgentWindow: Send, Sync, Clone);
     static_assertions::assert_impl_all!(AgentAnswer<Tree>: Send);
 
+    /// Answers every read with an empty tree and leaves every other call
+    /// unanswered.
     struct Answering;
-
-    struct Ready<T>(Option<T>);
-
-    impl<T: Send> PendingAnswer<T> for Ready<T> {
-        fn try_take(&mut self) -> Option<Result<T, AgentFault>> {
-            self.0.take().map(Ok)
-        }
-
-        fn recv_timeout(&mut self, _timeout: Duration) -> Option<Result<T, AgentFault>> {
-            self.try_take()
-        }
-    }
 
     impl AgentPort for Answering {
         fn is_open(&self) -> bool {
             true
         }
 
-        fn read(&self, _query: ReadQuery) -> Result<AgentAnswer<Tree>, AgentFault> {
-            Ok(crate::__runtime::agent_answer(Ready(Some(Tree::new(
-                Vec::new(),
-                false,
-            )))))
+        fn call(&self, call: WindowCall) -> Result<(), ErrorObject> {
+            if let Ok((_, reply)) = call.open::<SemanticsRead>() {
+                reply.send(Ok(Tree::new(Vec::new(), false)));
+            }
+            Ok(())
         }
 
-        fn act(&self, _request: ActionRequest) -> Result<AgentAnswer<()>, AgentFault> {
-            Ok(crate::__runtime::agent_answer(Ready(Some(()))))
-        }
-
-        fn act_and_read(
-            &self,
-            _request: ActionRequest,
-            _snapshot: Snapshot,
-        ) -> Result<AgentAnswer<ActOutcome>, AgentFault> {
-            Err(AgentFault::window_gone())
-        }
-
-        fn locate(&self, _params: LocateParams) -> Result<AgentAnswer<Matches>, AgentFault> {
-            Ok(crate::__runtime::agent_answer(Ready(Some(Matches::new(
-                Vec::new(),
-            )))))
-        }
-
-        fn actionability(
-            &self,
-            _params: ActionabilityParams,
-        ) -> Result<AgentAnswer<Actionability>, AgentFault> {
-            Err(AgentFault::window_gone())
-        }
-
-        fn wait(&self, _params: WaitParams) -> Result<AgentAnswer<WaitOutcome>, AgentFault> {
-            Err(AgentFault::window_gone())
-        }
-
-        fn subscribe(
-            &self,
-            _filters: Vec<EventFilter>,
-        ) -> Result<AgentAnswer<AgentEvents>, AgentFault> {
-            Err(AgentFault::window_gone())
-        }
-
-        fn inspect(
-            &self,
-            _target: InspectTarget,
-            _params: InspectParams,
-        ) -> Result<AgentAnswer<InspectReading>, AgentFault> {
-            Err(AgentFault::window_gone())
-        }
-
-        fn motion(
-            &self,
-            _request: flui_protocol::MotionRequest,
-        ) -> Result<AgentAnswer<flui_protocol::MotionState>, AgentFault> {
-            Ok(crate::__runtime::agent_answer(Ready(Some(
-                flui_protocol::MotionState::new(1.0, 0.0),
-            ))))
-        }
-
-        fn announcements(
-            &self,
-            _params: flui_protocol::AnnouncementsParams,
-        ) -> Result<AgentAnswer<flui_protocol::AnnouncementJournal>, AgentFault> {
-            Ok(crate::__runtime::agent_answer(Ready(Some(
-                flui_protocol::AnnouncementJournal::default(),
-            ))))
+        fn subscribe(&self, _: Vec<EventFilter>) -> Result<AgentAnswer<AgentEvents>, ErrorObject> {
+            Err(window_gone(WindowId::from_u64(1).expect("non-zero")))
         }
     }
 
     #[test]
     fn a_window_answers_through_its_port_until_the_port_is_gone() {
         let id = WindowId::from_u64(3).expect("non-zero");
+        let other = WindowId::from_u64(4).expect("non-zero");
         let port: Arc<dyn AgentPort> = Arc::new(Answering);
         let collecting: Arc<dyn std::any::Any + Send + Sync> = Arc::new(());
         let window =
             crate::__runtime::agent_window(id, Arc::downgrade(&port), Arc::clone(&collecting));
         assert_eq!(Arc::strong_count(&collecting), 2, "the window holds it");
         assert!(window.is_open());
-        let mut answer = window.read(ReadQuery::new()).expect("the port is alive");
+        let mut answer = window
+            .call::<SemanticsRead>(ReadParams::new(id))
+            .expect("the port is alive");
         assert!(matches!(answer.try_take(), Some(Ok(_))));
         assert!(answer.try_take().is_none(), "an answer is taken once");
+
+        // A call the port dropped unanswered reads as the owner gone.
+        let mut dropped = window
+            .call::<SemanticsLocate>(LocateParams::new(Locator::default()))
+            .expect("the port is alive");
+        let error = dropped
+            .try_take()
+            .expect("a dropped reply answers")
+            .expect_err("nobody answered");
+        assert_eq!(error.code, ErrorCode::ShuttingDown);
+
+        let elsewhere = window
+            .call::<SemanticsRead>(ReadParams::new(other))
+            .expect_err("the parameters name another window");
+        assert_eq!(elsewhere.code, ErrorCode::InvalidArgument);
 
         drop(port);
         assert!(!window.is_open());
@@ -661,23 +444,42 @@ mod tests {
             2,
             "a closed window still holds it until dropped"
         );
-        let element = flui_protocol::ElementId::from_u64(1).expect("non-zero");
-        for fault in [
-            window.read(ReadQuery::new()).expect_err("closed"),
-            window
-                .act(ActionRequest::new(
-                    element,
-                    flui_protocol::ActionName::Invoke,
-                ))
-                .expect_err("closed"),
-        ] {
-            assert_eq!(
-                (fault.code(), fault.retry(), fault.kind()),
-                (ErrorCode::Gone, Retry::Never, Some(HandleKind::Window))
-            );
-            assert!(!fault.may_have_run());
-        }
+        let gone = window
+            .call::<SemanticsRead>(ReadParams::new(id))
+            .expect_err("closed");
+        assert_eq!(
+            (gone.code, gone.retry, gone.kind, gone.handle.as_deref()),
+            (
+                ErrorCode::Gone,
+                Retry::Never,
+                Some(HandleKind::Window),
+                Some("w3")
+            )
+        );
+        assert!(gone.effect.is_none());
         drop(window);
         assert_eq!(Arc::strong_count(&collecting), 1, "dropping lets go");
+    }
+
+    /// A queued call's `Debug` names its method and leaves its parameters out, so a value an
+    /// agent sets never reaches a log, and the call opens only as the method it was made for.
+    #[test]
+    fn a_window_call_shows_only_its_method_and_opens_only_as_it() {
+        const VALUE: &str = "correct horse battery staple";
+        let element = flui_protocol::ElementRef::new(
+            WindowId::from_u64(3).expect("non-zero"),
+            flui_protocol::ElementId::from_u64(7).expect("non-zero"),
+        );
+        let (call, _answer) =
+            WindowCall::new::<SemanticsAct>(flui_protocol::ActParams::set_value(element, VALUE));
+        let shown = format!("{call:?}");
+        assert!(shown.contains("semantics.act"), "{shown}");
+        assert!(!shown.contains(VALUE), "a value reached Debug: {shown}");
+
+        let call = call
+            .open::<SemanticsRead>()
+            .expect_err("an act is not a read");
+        let (params, _reply) = call.open::<SemanticsAct>().expect("an act opens as one");
+        assert_eq!(params.value.as_deref(), Some(VALUE));
     }
 }

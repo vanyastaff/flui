@@ -358,75 +358,25 @@ pub struct WidgetsBinding {
     debug_building_dirty_elements: AtomicBool,
 }
 
-// Each physical registry member and notification snapshot owns its own envelope.
-// Ordinary destruction is unchanged; an existing unwind retains independent
-// observers instead of invoking another opaque user destructor.
-struct BindingObserverOwner(Option<Arc<dyn WidgetsBindingObserver>>);
+// Each physical registry member and notification snapshot owns its own
+// reference; it is destroyed normally (ADR-0281).
+#[derive(Clone)]
+struct BindingObserverOwner(Arc<dyn WidgetsBindingObserver>);
 
 impl BindingObserverOwner {
     fn new(observer: Arc<dyn WidgetsBindingObserver>) -> Self {
-        Self(Some(observer))
+        Self(observer)
     }
 
     fn as_arc(&self) -> &Arc<dyn WidgetsBindingObserver> {
-        self.0
-            .as_ref()
-            .expect("BUG: observer ownership accessed after retirement")
-    }
-}
-
-impl Clone for BindingObserverOwner {
-    fn clone(&self) -> Self {
-        Self::new(Arc::clone(self.as_arc()))
+        &self.0
     }
 }
 
 impl std::ops::Deref for BindingObserverOwner {
     type Target = dyn WidgetsBindingObserver;
     fn deref(&self) -> &Self::Target {
-        self.as_arc().as_ref()
-    }
-}
-
-impl Drop for BindingObserverOwner {
-    fn drop(&mut self) {
-        if let Some(observer) = self.0.take() {
-            if std::thread::panicking() {
-                std::mem::forget(observer);
-            } else {
-                drop(observer);
-            }
-        }
-    }
-}
-
-type BindingRouteFuture<'a> = Pin<Box<dyn Future<Output = bool> + Send + 'a>>;
-
-// The current observer, remaining snapshot and returned response future are
-// separate owners in a suspended dispatch. Fence the response independently.
-struct BindingRouteResponse<'a>(Option<BindingRouteFuture<'a>>);
-
-impl Future for BindingRouteResponse<'_> {
-    type Output = bool;
-    fn poll(self: Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<bool> {
-        self.get_mut()
-            .0
-            .as_mut()
-            .expect("BUG: route response polled after retirement")
-            .as_mut()
-            .poll(cx)
-    }
-}
-
-impl Drop for BindingRouteResponse<'_> {
-    fn drop(&mut self) {
-        if let Some(future) = self.0.take() {
-            if std::thread::panicking() {
-                std::mem::forget(future);
-            } else {
-                drop(future);
-            }
-        }
+        self.0.as_ref()
     }
 }
 
@@ -924,8 +874,9 @@ impl WidgetsBinding {
         };
         let mut first = None;
         for key in keys {
-            if preserving || first.is_some() || std::thread::panicking() {
-                std::mem::forget(key);
+            if preserving {
+                // The host already owns the failure this close preserves.
+                crate::drop_contained(key);
             } else {
                 crate::lifecycle::preserve(
                     &mut first,
@@ -1316,7 +1267,10 @@ impl WidgetsBinding {
     pub fn run_frame_with_layout_builders(
         &self,
         pipeline: &PipelineCell,
-    ) -> flui_rendering::error::RenderResult<Option<flui_rendering::layer::LayerTree>> {
+    ) -> Result<
+        Option<flui_rendering::layer::LayerTree>,
+        flui_foundation::TreeError<flui_rendering::error::RenderError>,
+    > {
         let mut inner = self.inner.write_in(TreePhase::Building);
         let WidgetsBindingInner {
             ref mut build_owner,
@@ -1337,7 +1291,7 @@ impl WidgetsBinding {
     pub fn settle_layout_with_builders(
         &self,
         pipeline: &PipelineCell,
-    ) -> flui_rendering::error::RenderResult<()> {
+    ) -> Result<(), flui_foundation::TreeError<flui_rendering::error::RenderError>> {
         let mut inner = self.inner.write_in(TreePhase::Building);
         let WidgetsBindingInner {
             ref mut build_owner,
@@ -1484,7 +1438,7 @@ impl WidgetsBinding {
     pub async fn handle_pop_route(&self) -> bool {
         let observers: Vec<_> = self.inner.read().observers.clone();
         for observer in observers {
-            if BindingRouteResponse(Some(observer.did_pop_route())).await {
+            if observer.did_pop_route().await {
                 return true;
             }
         }
@@ -1496,7 +1450,7 @@ impl WidgetsBinding {
     pub async fn handle_push_route(&self, route: &RouteInformation) -> bool {
         let observers: Vec<_> = self.inner.read().observers.clone();
         for observer in observers {
-            if BindingRouteResponse(Some(observer.did_push_route_information(route))).await {
+            if observer.did_push_route_information(route).await {
                 return true;
             }
         }

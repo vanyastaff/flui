@@ -12,11 +12,11 @@ shape.
 
 ## Mapping decisions
 
-### Rejected drafts retain executable ownership rather than inert metadata
+### Rejected drafts destroy executable ownership under the caller's containment
 
 `SemanticsConfiguration::retire` lends each action handler to the caller's
 existing `RecoveryScope`. Configuration attributes and storage buffers are
-ordinary destruction; opaque handler ownership follows ADR-0127. Rendering
+ordinary destruction; handler destructors run under that scope (ADR-0281). Rendering
 uses this operation after a draft validation failure, whose typed error stays
 authoritative. `harness_rejected_semantics_drafts_preserve_the_error_and_destroy_the_callbacks`
 in flui-objects checks single and competing capture risks, forced merge, overwritten

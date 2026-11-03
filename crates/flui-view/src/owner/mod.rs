@@ -84,10 +84,9 @@ pub(crate) fn emit_observation(
         return;
     };
     if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(observer))) {
-        // Retain both opaque obligations before reporting: either one's drop
-        // glue may contain several panicking fields.
+        // Destroy both before reporting, each under containment (ADR-0281).
         flui_foundation::panic::discard_payload(payload);
-        std::mem::forget(slot.take());
+        crate::drop_contained(slot.take());
         let reported = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             tracing::error!(
                 "TreeObserver panicked during emission; observer detached (no detached() call)"

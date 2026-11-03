@@ -1,6 +1,11 @@
-//! The private close seam exercises a host wake re-entering the real public port.
+//! The private close seam exercises a host wake re-entering the real public port, and a closed
+//! port refusing a call that still holds it.
 use super::*;
 use std::sync::atomic::{AtomicUsize, Ordering};
+
+use flui_protocol::method;
+use flui_protocol::{ActParams, EventKind, HandleKind, MotionParams, ReadParams};
+use parking_lot::Mutex;
 
 fn run_child(action: bool) {
     let target = Arc::new(Mutex::new(Weak::<DevAgentPort>::new()));
@@ -24,23 +29,26 @@ fn run_child(action: bool) {
             .get(ui_runtime.presentation_id())
             .expect("presentation");
         let slot = state.dev_agent.borrow();
-        Arc::clone(&slot.as_ref().expect("vended port").agent)
+        Arc::clone(&slot.as_ref().expect("vended port").port)
     };
     *target.lock() = Arc::downgrade(&port);
     let request = || {
-        ActionRequest::new(
-            ElementId::from_u64(1).expect("non-zero"),
+        ActParams::new(
+            ElementRef::new(window.id(), ElementId::from_u64(1).expect("non-zero")),
             ActionName::Invoke,
         )
     };
+    let read = || ReadParams::new(window.id());
     if action {
-        let mut answer = window.act(request()).expect("accepted before close");
+        let mut answer = window
+            .call::<method::SemanticsAct>(request())
+            .expect("accepted before close");
         assert!(answer.try_take().is_none());
         assert_eq!(ui_runtime.drain_commands().invoked, 1);
         assert!(answer.try_take().expect("owner answered").is_err());
     } else {
         let mut answer = window
-            .read(ReadQuery::new())
+            .call::<method::SemanticsRead>(read())
             .expect("accepted before close");
         assert!(answer.try_take().is_none());
         assert_eq!(ui_runtime.drain_commands().invoked, 1);
@@ -49,11 +57,17 @@ fn run_child(action: bool) {
     assert!(!window.is_open());
     assert_eq!(closed.load(Ordering::Relaxed), 1);
     assert_eq!(
-        window.read(ReadQuery::new()).expect_err("closed").code(),
+        window
+            .call::<method::SemanticsRead>(read())
+            .expect_err("closed")
+            .code,
         ErrorCode::Gone
     );
     assert_eq!(
-        window.act(request()).expect_err("closed").code(),
+        window
+            .call::<method::SemanticsAct>(request())
+            .expect_err("closed")
+            .code,
         ErrorCode::Gone
     );
     assert_eq!(
@@ -124,6 +138,10 @@ fn agent_port_admission_matrix() {
                 "action_wake_can_close_admission",
                 action_wake_can_close_admission as fn(),
             ),
+            (
+                "a_closed_port_admits_no_subscription",
+                a_closed_port_admits_no_subscription as fn(),
+            ),
         ],
     );
 }
@@ -134,9 +152,13 @@ fn agent_motion_sets_rate_and_steps_a_paused_window() {
     let window = runtime
         .dev_agent_window(runtime.presentation_id())
         .expect("window");
-    let mut paused = window
-        .motion(MotionRequest::new().with_rate(0.0))
-        .expect("enqueued");
+    #[expect(
+        clippy::result_large_err,
+        reason = "the protocol's error object is the answer under test"
+    )]
+    let motion =
+        |request| window.call::<method::MotionSet>(MotionParams::new(window.id(), request));
+    let mut paused = motion(MotionRequest::new().with_rate(0.0)).expect("enqueued");
     assert!(
         paused.try_take().is_none(),
         "a worker cannot mutate the clock inline"
@@ -147,9 +169,7 @@ fn agent_motion_sets_rate_and_steps_a_paused_window() {
         .expect("owner answered")
         .expect("valid motion request");
     assert_eq!(state.rate, 0.0);
-    let mut stepped = window
-        .motion(MotionRequest::new().with_step_ms(100))
-        .expect("enqueued");
+    let mut stepped = motion(MotionRequest::new().with_step_ms(100)).expect("enqueued");
     assert_eq!(runtime.drain_commands().invoked, 1);
     let next = stepped
         .try_take()
@@ -158,20 +178,19 @@ fn agent_motion_sets_rate_and_steps_a_paused_window() {
     assert_eq!(next.rate, 0.0);
     assert!((next.time_ms - state.time_ms - 100.0).abs() < 1e-9);
     for rate in [-1.0, f64::NAN, f64::INFINITY] {
-        let mut refused = window
-            .motion(MotionRequest::new().with_rate(rate).with_step_ms(500))
-            .expect("enqueued");
+        let mut refused =
+            motion(MotionRequest::new().with_rate(rate).with_step_ms(500)).expect("enqueued");
         assert_eq!(runtime.drain_commands().invoked, 1);
         assert_eq!(
             refused
                 .try_take()
                 .expect("answered")
                 .expect_err("invalid rate")
-                .code(),
+                .code,
             ErrorCode::InvalidArgument
         );
     }
-    let mut observed = window.motion(MotionRequest::new()).expect("enqueued");
+    let mut observed = motion(MotionRequest::new()).expect("enqueued");
     assert_eq!(runtime.drain_commands().invoked, 1);
     assert_eq!(
         observed.try_take().expect("answered").expect("snapshot"),
@@ -180,10 +199,42 @@ fn agent_motion_sets_rate_and_steps_a_paused_window() {
     );
     drop(runtime);
     assert_eq!(
-        window
-            .motion(MotionRequest::new())
-            .expect_err("closed")
-            .code(),
+        motion(MotionRequest::new()).expect_err("closed").code,
         ErrorCode::Gone
+    );
+}
+
+fn a_closed_port_admits_no_subscription() {
+    let mut ui_runtime = UiRuntime::for_test();
+    let second = ui_runtime.install_second_presentation_for_test();
+    let window = ui_runtime
+        .dev_agent_window(second)
+        .expect("the ui_runtime hosts the second presentation");
+    // A call on another thread that upgraded the window's port and is still
+    // enqueueing when the presentation closes.
+    let in_flight = {
+        let state = ui_runtime
+            .presentations
+            .get(second)
+            .expect("the ui_runtime hosts the second presentation");
+        let slot = state.dev_agent.borrow();
+        Arc::clone(&slot.as_ref().expect("a window was vended").port)
+    };
+    assert!(ui_runtime.close_presentation_entered(second));
+    assert!(
+        !window.is_open(),
+        "closed, though the in-flight call still holds the port"
+    );
+    let refused = in_flight
+        .subscribe(vec![flui_protocol::EventFilter::new(EventKind::Frame)])
+        .expect_err("a closed port admits no subscription");
+    assert_eq!(
+        (refused.code, refused.kind),
+        (ErrorCode::Gone, Some(HandleKind::Window))
+    );
+    assert_eq!(
+        ui_runtime.drain_commands(),
+        super::super::DrainReport::default(),
+        "nothing was enqueued"
     );
 }

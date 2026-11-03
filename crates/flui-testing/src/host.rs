@@ -97,6 +97,9 @@ pub struct HeadlessWindow {
     /// Whether the simulated platform reports when frames reached the screen
     /// ([`HeadlessWindow::with_presentation_reports`]).
     reports_presentation: bool,
+    /// The frame and mode the window was set to and the close requests it received,
+    /// through its `WindowHandle` or a command applied to it.
+    chrome: Mutex<KitChrome>,
 }
 
 impl std::fmt::Debug for HeadlessWindow {
@@ -149,6 +152,62 @@ impl SentInputRegions {
     }
 }
 
+/// What of a [`HeadlessWindow`]'s frame its widgets change: its frame and mode, as the
+/// window commands it honours set them, and the close requests it received.
+#[derive(Debug, Default)]
+struct KitChrome {
+    frame: flui_platform::WindowFrame,
+    mode: flui_platform::WindowMode,
+    close_requests: usize,
+    /// Whether the state changed since the host last told the UI runtime.
+    unobserved: bool,
+}
+
+impl HeadlessWindow {
+    /// The commands the window honours: its frame and its mode, which have no window
+    /// system to refuse them.
+    fn capabilities(&self) -> flui_platform::WindowCapabilities {
+        let mut capabilities = flui_platform::WindowCapabilities::NONE;
+        capabilities.sets_frame = flui_platform::Availability::Native;
+        capabilities.app_title_bar = flui_platform::Availability::Native;
+        capabilities.minimizes = flui_platform::Availability::Native;
+        capabilities.maximizes = flui_platform::Availability::Native;
+        if self.reports_presentation {
+            capabilities.reports_presentation = flui_platform::Availability::Native;
+        }
+        capabilities
+    }
+
+    /// Carry out an admitted `command`: a frame or a mode is taken at once, and the
+    /// host tells the UI runtime at its next pump.
+    fn take(&self, command: flui_platform::WindowCommand) {
+        let mut chrome = self.chrome.lock();
+        match command {
+            flui_platform::WindowCommand::SetFrame(frame) => chrome.frame = frame,
+            flui_platform::WindowCommand::SetMode(mode) => chrome.mode = mode,
+            _ => return,
+        }
+        chrome.unobserved = true;
+        drop(chrome);
+        let mut revision = self.revision.lock();
+        *revision = revision
+            .next()
+            .expect("BUG: a test changes a window far fewer than u64::MAX times");
+    }
+
+    /// Whether the window changed since the host last told the UI runtime, forgotten.
+    fn take_unobserved(&self) -> bool {
+        std::mem::take(&mut self.chrome.lock().unobserved)
+    }
+
+    /// How many times the window was asked to close through its `WindowHandle`. The
+    /// window has no close-request handler of its own: a test closes it with
+    /// [`LaidOut::request_close`](crate::widgets::LaidOut::request_close).
+    #[must_use]
+    pub fn close_requests(&self) -> usize {
+        self.chrome.lock().close_requests
+    }
+}
 impl HeadlessWindow {
     /// A window of `width` × `height` logical (and physical) pixels.
     #[must_use]
@@ -168,6 +227,7 @@ impl HeadlessWindow {
             haptics: Arc::new(flui_platform::testing::FakeHaptics::new()),
             os_drags: Arc::new(HeadlessOsDrags::default()),
             reports_presentation: false,
+            chrome: Mutex::default(),
         }
     }
 
@@ -347,8 +407,9 @@ impl PlatformWindow for HeadlessWindow {
     /// Shown and focused, with no position (as on Wayland), its logical size
     /// at its scale, the display it was
     /// [moved to](HeadlessHost::move_to_display), and a revision each move
-    /// advances. The host's window is always shown: there is no window
-    /// manager to raise it, and it honours no command.
+    /// advances, and the frame and mode its commands set. The host's window is always
+    /// shown: there is no window
+    /// manager to raise it, and it honours no other command.
     fn state(&self) -> flui_platform::WindowState {
         let size = self.size;
         let mut state =
@@ -363,11 +424,11 @@ impl PlatformWindow for HeadlessWindow {
                     )
                     .ok(),
                 );
-        if self.reports_presentation {
-            let mut capabilities = flui_platform::WindowCapabilities::NONE;
-            capabilities.reports_presentation = flui_platform::Availability::Native;
-            state = state.with_capabilities(capabilities);
-        }
+        state = state.with_capabilities(self.capabilities());
+        let chrome = self.chrome.lock();
+        state.frame = chrome.frame;
+        state.mode = chrome.mode;
+        drop(chrome);
         state.revision = *self.revision.lock();
         state
     }
@@ -376,7 +437,8 @@ impl PlatformWindow for HeadlessWindow {
         &self,
         command: flui_platform::AdmittedCommand,
     ) -> Result<(), flui_platform::ApplyError> {
-        command.against(&flui_platform::WindowCapabilities::NONE)?;
+        let command = command.against(&self.capabilities())?;
+        self.take(command);
         Ok(())
     }
 }
@@ -1022,6 +1084,16 @@ impl HeadlessHost {
         // Background work runs before the frame, so an answer it posts
         // settles in this pump.
         self.scripted.background.drain_unless_held();
+        // A frame or mode a widget set reaches the UI runtime before the frame, as a
+        // window system's state notice does.
+        for presentation in self.presentation_ids() {
+            if self
+                .window_of(HeadlessWindowId(presentation))
+                .take_unobserved()
+            {
+                self.observe(presentation, flui_runtime::owner::WindowObservation::State);
+            }
+        }
         // The frame is delivered as `HostInput::Frame` would be: every
         // window's vsync is the clock's reading, on the event timeline, so a
         // recording sees the frame where its deadlines fire.
@@ -1054,10 +1126,9 @@ impl HeadlessHost {
                     "a panic unwound out of the pump after a contained frame failure; the \
                      contained failure is raised and the later panic is discarded"
                 );
-                // The payload is an arbitrary user value whose destructor may
-                // itself panic; dropping it here could replace or abort the
-                // unwind of the first failure, so it is leaked instead.
-                std::mem::forget(payload);
+                // The contained failure is raised; the later payload is
+                // destroyed under containment (ADR-0281).
+                flui_foundation::panic::discard_payload(payload);
                 panic!("{failure}")
             }
         }
@@ -1116,7 +1187,7 @@ impl HeadlessHost {
                         "flushing queued pointer moves panicked after the input dispatch \
                          panicked; only the first panic is resumed"
                     );
-                    std::mem::forget(later);
+                    flui_foundation::panic::discard_payload(later);
                     resume_unwind(first);
                 }
                 (Err(payload), Ok(())) | (Ok(()), Err(payload)) => resume_unwind(payload),
@@ -1873,7 +1944,8 @@ impl HeadlessHost {
             && (runtime.needs_redraw()
                 || runtime.scheduler().is_frame_scheduled()
                 || runtime.has_pending_work()
-                || self.background_runs_next_pump())
+                || self.background_runs_next_pump()
+                || self.observations_pending())
         {
             return Some(Duration::ZERO);
         }
@@ -1908,6 +1980,17 @@ impl HeadlessHost {
     #[must_use]
     pub fn pending_background(&self) -> usize {
         self.scripted.background.pending()
+    }
+
+    /// Whether a window changed since the host last told the UI runtime: the next pump
+    /// delivers the change, so the host is not settled.
+    fn observations_pending(&self) -> bool {
+        self.presentation_ids().into_iter().any(|presentation| {
+            self.window_of(HeadlessWindowId(presentation))
+                .chrome
+                .lock()
+                .unobserved
+        })
     }
 
     /// Whether the next pump runs background work: a parked future waits
@@ -1948,6 +2031,7 @@ impl HeadlessHost {
                 && !runtime.scheduler().is_frame_scheduled()
                 && !runtime.has_pending_work()
                 && self.pending_background() == 0
+                && !self.observations_pending()
                 && runtime.next_wake().is_none()
             {
                 return Ok(frames);
@@ -2129,7 +2213,7 @@ pub struct HeadlessWindowId(PresentationId);
 
 /// The host's control of a [`HeadlessWindow`], behind the `WindowHandle` its
 /// widgets reach through `LifecycleContext::window`, as a runner installs one
-/// for each window it opens. The double honours no window command.
+/// for each window it opens. The double honours its frame and mode commands, at once.
 struct HeadlessWindowControl(Rc<HeadlessWindow>);
 
 impl flui_platform::WindowControl for HeadlessWindowControl {
@@ -2141,13 +2225,17 @@ impl flui_platform::WindowControl for HeadlessWindowControl {
         &self,
         command: flui_platform::WindowCommand,
     ) -> Result<(), flui_platform::SubmitError> {
-        command
-            .admit(&flui_platform::WindowCapabilities::NONE)
-            .map(drop)?;
+        let admitted = command.admit(&self.0.capabilities())?;
+        let command = admitted
+            .against(&self.0.capabilities())
+            .expect("BUG: the double's capabilities never move");
+        self.0.take(command);
         Ok(())
     }
 
-    fn request_close(&self) {}
+    fn request_close(&self) {
+        self.0.chrome.lock().close_requests += 1;
+    }
 }
 
 /// Attach the host's control of `window` to `presentation`, before its root

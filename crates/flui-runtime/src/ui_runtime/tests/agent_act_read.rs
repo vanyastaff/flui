@@ -5,45 +5,49 @@
 use std::rc::Rc;
 use std::sync::atomic::AtomicU32;
 
+use flui_protocol::method;
 use flui_protocol::{
-    ActOutcome, ActionName, ActionRequest, ChangedField, EffectKind, InputPath, Snapshot,
-    SnapshotReading,
+    ActOutcome, ActionName, ChangedField, EffectKind, InputPath, Snapshot, SnapshotReading,
 };
 use flui_semantics::{
     AccessibilityNodeId, SemanticsAction, SemanticsNode, SemanticsOwner, SemanticsRole,
 };
 
-use super::agent_semantics::{counter, find, frame, read};
+use flui_view::dev_agent::{AgentAnswer, AgentWindow};
+
+use super::agent_semantics::{act_params, counter, find, frame, read};
 use super::*;
 
-static_assertions::assert_impl_all!(AgentReply<ActOutcome>: Send);
+static_assertions::assert_impl_all!(AgentAnswer<ActOutcome>: Send);
 
-fn shown() -> (UiRuntime, Arc<AtomicU32>, SemanticsAgent, ScriptedSink) {
+fn shown() -> (UiRuntime, Arc<AtomicU32>, AgentWindow, ScriptedSink) {
     let ui_runtime = UiRuntime::for_test();
     let presses = counter(&ui_runtime, None);
-    let agent = ui_runtime
-        .semantics_agent(ui_runtime.presentation_id())
+    let window = ui_runtime
+        .dev_agent_window(ui_runtime.presentation_id())
         .expect("the ui_runtime hosts its primary presentation");
     let mut sink = ScriptedSink::always_presents();
     frame(&ui_runtime, &mut sink);
-    (ui_runtime, presses, agent, sink)
+    (ui_runtime, presses, window, sink)
 }
 
 fn tap_and_read(
     ui_runtime: &UiRuntime,
-    agent: &SemanticsAgent,
+    window: &AgentWindow,
     snapshot: Snapshot,
-) -> AgentReply<ActOutcome> {
-    let button = find(&read(ui_runtime, agent), "Increment").id;
-    agent
-        .act_and_read(ActionRequest::new(button, ActionName::Invoke), snapshot)
+) -> AgentAnswer<ActOutcome> {
+    let button = find(&read(ui_runtime, window), "Increment").id;
+    window
+        .call::<method::SemanticsAct>(
+            act_params(window, button, ActionName::Invoke).with_snapshot(snapshot),
+        )
         .expect("the inbox has room")
 }
 
 #[test]
 fn a_delta_is_read_after_the_frame_the_actions_effect_landed_in() {
-    let (ui_runtime, presses, agent, mut sink) = shown();
-    let mut reply = tap_and_read(&ui_runtime, &agent, Snapshot::Delta);
+    let (ui_runtime, presses, window, mut sink) = shown();
+    let mut reply = tap_and_read(&ui_runtime, &window, Snapshot::Delta);
 
     let _report = ui_runtime.drain_commands();
     assert_eq!(
@@ -75,8 +79,8 @@ fn a_delta_is_read_after_the_frame_the_actions_effect_landed_in() {
 
 #[test]
 fn a_full_reading_is_the_tree_the_frame_left() {
-    let (ui_runtime, _presses, agent, mut sink) = shown();
-    let mut reply = tap_and_read(&ui_runtime, &agent, Snapshot::Full);
+    let (ui_runtime, _presses, window, mut sink) = shown();
+    let mut reply = tap_and_read(&ui_runtime, &window, Snapshot::Full);
     let _report = ui_runtime.drain_commands();
     frame(&ui_runtime, &mut sink);
 
@@ -92,8 +96,8 @@ fn a_full_reading_is_the_tree_the_frame_left() {
 
 #[test]
 fn no_reading_answers_at_the_drain() {
-    let (ui_runtime, presses, agent, _sink) = shown();
-    let mut reply = tap_and_read(&ui_runtime, &agent, Snapshot::None);
+    let (ui_runtime, presses, window, _sink) = shown();
+    let mut reply = tap_and_read(&ui_runtime, &window, Snapshot::None);
     let _report = ui_runtime.drain_commands();
 
     let outcome = reply
@@ -120,18 +124,17 @@ fn an_action_that_dirtied_nothing_still_reads_back_after_a_frame() {
     ui_runtime
         .pipeline_for_test()
         .with_mut(|pipeline| pipeline.set_semantics_owner(Some(owner)));
-    let agent = ui_runtime
-        .semantics_agent(ui_runtime.presentation_id())
+    let window = ui_runtime
+        .dev_agent_window(ui_runtime.presentation_id())
         .expect("the ui_runtime hosts its primary presentation");
     let element = flui_protocol::ElementId::from_u64(AccessibilityNodeId::from(render_id).as_u64())
         .expect("an accessibility id is non-zero");
 
     let presentation = ui_runtime.presentation_id();
     let _ = ui_runtime.take_redraw_pending_for_test(presentation);
-    let mut reply = agent
-        .act_and_read(
-            ActionRequest::new(element, ActionName::Invoke),
-            Snapshot::Delta,
+    let mut reply = window
+        .call::<method::SemanticsAct>(
+            act_params(&window, element, ActionName::Invoke).with_snapshot(Snapshot::Delta),
         )
         .expect("the inbox has room");
     let _report = ui_runtime.drain_commands();
@@ -173,15 +176,14 @@ fn a_window_that_closes_first_leaves_an_outcome_that_ran_without_a_reading() {
         .expect("the ui_runtime hosts the second presentation")
         .pipeline()
         .with_mut(|pipeline| pipeline.set_semantics_owner(Some(owner)));
-    let agent = ui_runtime
-        .semantics_agent(second)
+    let window = ui_runtime
+        .dev_agent_window(second)
         .expect("the ui_runtime hosts the second presentation");
     let element = flui_protocol::ElementId::from_u64(AccessibilityNodeId::from(render_id).as_u64())
         .expect("an accessibility id is non-zero");
-    let mut reply = agent
-        .act_and_read(
-            ActionRequest::new(element, ActionName::Invoke),
-            Snapshot::Delta,
+    let mut reply = window
+        .call::<method::SemanticsAct>(
+            act_params(&window, element, ActionName::Invoke).with_snapshot(Snapshot::Delta),
         )
         .expect("the inbox has room");
     let _report = ui_runtime.drain_commands();

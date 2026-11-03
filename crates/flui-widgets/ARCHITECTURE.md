@@ -64,8 +64,8 @@ both current and outgoing entries before retiring either collection.
 `outgoing_switcher_retirement_preserves_independent_captures` exercises an actual
 mounted cross-fade, outgoing-child destruction and a subsequent healthy switch.
 The private `switcher_entry_retirement_preserves_logical_cleanup` matrix isolates
-physical entry destruction: healthy, child and transition failure, competing
-destructors, incoming unwind and independent entry tails. It also verifies every
+physical entry destruction: healthy, a first entry's child or transition failure,
+an incoming unwind and the entry tail, each destroyed once. It also verifies every
 registry seat and run future is cancelled, followed by healthy retirement.
 
 Dismissible restores its shared collapse owner before publishing that same
@@ -169,7 +169,7 @@ and subsequent landing. `hero_registry_matching_preserves_authority_under_reentr
 uses the private registration seam for same-length replacement, repeated mutation,
 hash/equality failure, passive release, formatting reentry and snapshot retirement.
 Its physical last-release cases cover aliases, healthy destruction, an incoming
-unwind, first failure and competing key destructors under terminal ownership.
+unwind and a first key failure, destroying every key once (ADR-0281).
 
 Nested visibility snapshots sources before resolving them. Traversal retains
 owning registry identities and visits each once, preserving local-first matching
@@ -192,8 +192,8 @@ Attachment commits its replacement before releasing outgoing navigator handles.
 third attachment or fails. It verifies the committed replacement, independent
 handle lifetime and the next healthy detach/attach. The private
 `hero_controller_terminal_retirement` matrix additionally covers recording
-aliases, healthy destruction, first and competing failures, incoming unwind
-and a manifest tail that must remain retained after failure.
+aliases, healthy destruction, a first failure and an incoming unwind, with
+every manifest and capture destroyed once (ADR-0281).
 
 ## Hero placeholders belong to logical flights
 
@@ -211,7 +211,7 @@ ordering and verifies the subsequent drain cannot refreeze the restored Hero.
 
 `hero_flight_terminal_retirement` launches actual replacement flights through
 the private subscription-cancellation seam, both during cleanup and before it.
-It verifies abort, both terminal statuses, first and competing failures, and a
+It verifies abort, both terminal statuses, first and later failures, and a
 fresh flight after recovery. Moving cleanup before callouts alone cannot protect
 the replacement already admitted before cleanup; allocation identity also avoids
 a wrapping generation counter. Placeholder borrows contain only framework-owned
@@ -278,10 +278,10 @@ calling out. Subscription cancellation, overlay removal and each placeholder
 restoration share one first-failure context with registry retirement. Controller
 detachment completes the remaining flights before resuming a cancellation
 failure. `hero_flight_terminal_retirement` uses the private cancellation seam
-to pin single and competing failures, peer restoration and fresh admission.
+to pin first and later contained failures, peer restoration and fresh admission.
 Physical last
-release withdraws owned fields before the same cleanup protocol; incoming unwind
-retains opaque owners under the navigator's existing policy. ADR-0178 governs
+release withdraws owned fields before the same cleanup protocol; an incoming unwind
+destroys them under the same containment (ADR-0281). ADR-0178 governs
 the cancellation bridge to the animation and foundation layers.
 
 Reversing a flight between the same heroes retains its rect factory and evaluates
@@ -293,11 +293,10 @@ a third hero and subsequent landing through a mounted navigator.
 
 The factory snapshot and its returned mapping use the navigator's terminal
 ownership policy. Healthy reads retire both normally; after evaluation fails,
-the opaque mapping is retained during unwind so its destructor cannot replace
-the first failure. `hero_rect_mapping_failures_preserve_recovery` covers factory,
-evaluation and destruction failures, competing evaluation/destruction, healthy
-destruction, and a fresh read and landing through the same flight. A destructor
-that already double-panics within its own aggregate remains outside this policy.
+the mapping is destroyed by the unwind and the evaluation failure is the one
+raised (ADR-0281). `hero_rect_mapping_failures_preserve_recovery` covers
+factory, evaluation and destruction failures, healthy destruction, and a fresh
+read and landing through the same flight.
 
 ## Gesture release retains the painted position
 
@@ -490,8 +489,8 @@ asserting the child's accessibility label and unchanged allocated size.
 
 Overlay entry allocation admits the final nonzero identity once and then refuses
 construction permanently, so an entry's removal authority and its consumer view
-key are never shared with a later entry. The rejected builder is retained
-rather than dropped (ADR-0127).
+key are never shared with a later entry. The rejected builder is destroyed by
+the refusal's unwind (ADR-0281).
 
 ## Terminal navigation ownership
 
@@ -528,7 +527,7 @@ not keep a modal page alive.
 Route and navigator command identities never wrap: the integer maximum
 permanently refuses allocation, so a caught capacity failure cannot reissue an
 identity held by history or a command target. A rejected route and its
-replacement result are retained rather than dropped (ADR-0127).
+replacement result are destroyed by the refusal's unwind (ADR-0281).
 
 An admission reserves every identity it spends, route and overlay entry alike,
 before its first observable side effect: a recorded Router page, a filled
@@ -537,17 +536,18 @@ reserves before it pops), a hero frozen as a placeholder. Batch replacement
 reserves for every member before preparing any. Exhaustion therefore fails the
 whole operation with nothing changed, and caller-owned values carried across
 the reservation (a named request's arguments, a result, a predicate, a
-Router's unseeded initial values) are retained on refusal. Spent reservations
+Router's unseeded initial values) are destroyed on refusal. Spent reservations
 are not returned.
 
 Route, router, overlay, modal and hero owners withdraw each owned value from
 shared state before dropping it, so no destructor runs under an internal lock.
-After the first destructor failure in a retirement, or while the thread is
-already panicking, the remaining values are retained rather than dropped
-([ADR-0127](../../docs/adr/ADR-0127-exceptional-path-retention.md)); the first
-failure propagates. Router parser inputs and partially built router clones are
-owned before any user code runs, so a failure there drops or retains them under
-the same rule. A route result and the waker waiting for it are retired
+After the first destructor failure in a retirement the remaining values are
+still destroyed, each under containment, and the first failure propagates; a
+retirement during an incoming unwind destroys them too, and a destructor that
+panics while the thread is already unwinding aborts, as in std
+([ADR-0281](../../docs/adr/ADR-0281-a-destructor-that-panics-during-an-unwind-aborts-as-in-std.md)).
+Router parser inputs and partially built router clones are owned before any
+user code runs, so a failure there destroys them under the same rule. A route result and the waker waiting for it are retired
 separately. Tested by `delivered_route_results_remain_completed` and
 `terminal_binding_authority_is_closed_before_route_retirement`.
 
@@ -1198,11 +1198,12 @@ Router mutations commit the navigator history and typed route stack before
 delivering observer callbacks. A reentrant pop therefore sees the admitted
 route. `go` recomputes its shared prefix after popup dismissal, which can itself
 reenter navigation. Outgoing and temporary route values retire outside stack
-borrows; after a failure, remaining opaque owners are retained to preserve that
-failure. This implements ADR-0093's single navigation authority.
+borrows; after a failure the remaining owners are still destroyed, each under
+containment, and the first failure is the one raised (ADR-0281). This implements
+ADR-0093's single navigation authority.
 `router_and_widgets_app` covers reentrant push/replace/go, popup-prefix changes,
-observer failure and next navigation; `router_observer_failure_and_retirement_competition`
-covers competing observer and route-destructor failures.
+observer failure and next navigation; `router_observer_failure_and_terminal_retirement`
+covers an observer failure followed by route-value and terminal retirement.
 
 ### Route locations preserve segment identity
 

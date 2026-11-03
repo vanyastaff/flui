@@ -220,10 +220,10 @@ enum Commands {
         #[arg(long)]
         no_open: bool,
 
-        /// Serve the app to an AI agent (debug builds, this desktop): starts
-        /// it with the `dev-agent` feature, a local endpoint and a launch
-        /// token, then `flui mcp` connects to it
-        #[arg(long, conflicts_with_all = ["release", "scene"])]
+        /// Serve the app to an AI agent (this desktop): starts it with a local
+        /// endpoint and a launch token (a release build with the `driver`
+        /// feature), then `flui mcp` connects to it
+        #[arg(long, conflicts_with = "scene")]
         agent: bool,
     },
 

@@ -251,8 +251,7 @@ impl CommitGate {
 
     /// Hold `payload`, a panic caught after a grant had already run, for
     /// the owner to report. The first failure is kept until it is taken;
-    /// a later one is retained unreported (ADR-0127): it is never dropped
-    /// here, since dropping an opaque payload can run user code.
+    /// a later one is discarded unreported, under containment (ADR-0281).
     ///
     /// The gate records whether the thread was unwinding when the failure
     /// was parked: one parked by the cleanup of a panic is ordered behind
@@ -305,7 +304,7 @@ pub(crate) struct Parked {
 
 /// The failure a gate holds for its owner. A payload no owner took before
 /// the last clone of the gate went (the presentation closed first) is
-/// retained, not dropped (ADR-0119, ADR-0127): its destructor is user code.
+/// discarded under containment (ADR-0281): its destructor is user code.
 #[derive(Default)]
 struct ParkedFailure(RefCell<Option<Parked>>);
 
