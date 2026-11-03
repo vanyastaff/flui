@@ -255,21 +255,27 @@ mod tests {
     #[test]
     fn headers_keep_their_bytes_both_ways() {
         let mut headers = Headers::new();
-        for (name, value) in [("Accept", b"*/*".as_slice()), ("X-Name", b"caf\xe9")] {
+        for (name, value) in [("Accept", b"*/*".as_slice()), ("X-Name", b"\xe9t\xe9")] {
             headers.append(
                 HeaderName::try_new(name).expect("a token"),
                 HeaderValue::try_new(value).expect("a value"),
             );
         }
         let block = request_headers(&headers).expect("two headers");
-        let mut expected = wide("accept: */*\r\nx-name: caf");
-        expected.extend([0xe9, u16::from(b'\r'), u16::from(b'\n')]);
+        let mut expected = wide("accept: */*\r\nx-name: ");
+        expected.extend([
+            0xe9,
+            u16::from(b't'),
+            0xe9,
+            u16::from(b'\r'),
+            u16::from(b'\n'),
+        ]);
         assert_eq!(block, expected);
         assert_eq!(request_headers(&Headers::new()), None);
 
         let mut raw = wide("HTTP/1.1 200 OK\r\nContent-Length: 5\r\nSet-Cookie: a=1\r\n");
-        raw.extend(wide("Set-Cookie:b=2 \r\nX-Name: caf"));
-        raw.extend([0xe9]);
+        raw.extend(wide("Set-Cookie:b=2 \r\nX-Name: "));
+        raw.extend([0xe9, u16::from(b't'), 0xe9]);
         raw.extend(wide("\r\n\r\n"));
         let parsed = response_headers(&raw).expect("a whole head");
         let pairs: Vec<(String, Vec<u8>)> = parsed
@@ -282,7 +288,7 @@ mod tests {
                 ("content-length".to_owned(), b"5".to_vec()),
                 ("set-cookie".to_owned(), b"a=1".to_vec()),
                 ("set-cookie".to_owned(), b"b=2".to_vec()),
-                ("x-name".to_owned(), b"caf\xe9".to_vec()),
+                ("x-name".to_owned(), b"\xe9t\xe9".to_vec()),
             ]
         );
         assert!(matches!(
