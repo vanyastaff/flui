@@ -66,7 +66,7 @@ use crate::owner::windows::{
 };
 use crate::owner::windows::{get_x_lparam, get_y_lparam};
 use crate::window::config::WindowConfiguration;
-use crate::window::state::{ReportedFacts, WindowStateCell, mode_of, system_frame_or_none};
+use crate::window::state::{ReportedFacts, WindowStateCell, mode_of, reported_frame};
 
 /// Posted to a window nothing paints, so its frame still runs: a hidden window
 /// never receives `WM_PAINT`.
@@ -1514,19 +1514,6 @@ const fn edges(rect: RECT) -> super::chrome::Edges {
         top: rect.top,
         right: rect.right,
         bottom: rect.bottom,
-    }
-}
-
-/// The frame a window reports: one with a caption has the system's title bar
-/// unless the application asked to draw its own, which then reads back as it
-/// was asked for.
-fn reported_frame(
-    captioned: bool,
-    asked: flui_platform::WindowFrame,
-) -> flui_platform::WindowFrame {
-    match asked {
-        flui_platform::WindowFrame::AppTitleBar(_) if captioned => asked,
-        _ => system_frame_or_none(captioned),
     }
 }
 

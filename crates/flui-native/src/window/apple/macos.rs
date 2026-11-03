@@ -62,6 +62,7 @@ use crate::window::apple::geometry::{
         content_limits_of_constraints, globalize, top_left_of_frame,
     },
     mode::{ANIMATION_LIMIT, FixedSize, ModeSequence, ModeStep, WindowFlags, capabilities_of},
+    title_bar::{ControlsLayout, FrameStyle},
 };
 use crate::window::capabilities::{appkit_window_capabilities, frame_rate_absence};
 use parking_lot::Mutex;
@@ -99,7 +100,7 @@ use crate::{
     owner::OpenWindowError,
     owner::slot::OwnerWeak,
     owner::window_delivery::{Retirement, WindowDelivery},
-    window::state::{ReportedFacts, WindowStateCell, mode_of, system_frame_or_none},
+    window::state::{ReportedFacts, WindowStateCell, mode_of, reported_frame},
 };
 use flui_platform::{
     CursorError, DisplayId, PlatformWindow, RedrawRequester, SurfaceTarget, WindowHandler,
@@ -238,6 +239,26 @@ struct MacOSWindowState {
     /// transparent window is composited normally, so the first frame
     /// presents into it, and nothing is on screen until it has.
     first_reveal_pending: bool,
+
+    /// The frame last asked for, at open or by `SetFrame`: AppKit's style mask
+    /// tells a system title bar from none, and only this tells a title bar of
+    /// the application's apart.
+    frame: WindowFrame,
+
+    /// Where the system lays the traffic lights out, read the first time the
+    /// window had them and before anything moved them; `None` until then.
+    system_controls: Option<ControlsLayout>,
+}
+
+impl MacOSWindowState {
+    /// Whether the window's frame moves the traffic lights from where AppKit
+    /// lays them out.
+    fn moves_system_controls(&self) -> bool {
+        matches!(
+            FrameStyle::of(self.frame).controls,
+            Some(flui_platform::SystemControls::Offset(_))
+        )
+    }
 }
 
 impl std::fmt::Debug for MacOSWindow {
@@ -386,7 +407,7 @@ impl MacOSWindow {
 
     fn new_inner(
         _main: MainThreadMarker,
-        options: WindowOptions,
+        mut options: WindowOptions,
         handler: Rc<dyn WindowHandler>,
         windows_map: WindowRegistry,
         windows: &MacOSWindows,
@@ -398,6 +419,10 @@ impl MacOSWindow {
         // the window is made on.
         let owner = crate::owner::apple::macos::owner_queue();
         let owner_is_main = true;
+        options.frame = options
+            .frame
+            .at_open(&appkit_window_capabilities(owner_is_main));
+        let style = FrameStyle::of(options.frame);
         // SAFETY: AppKit makes and configures an NSWindow only on the main
         // thread, which the `MainThreadMarker` this takes proves this is; all
         // messaged objects are alive: the freshly allocated NSWindow is
@@ -412,10 +437,14 @@ impl MacOSWindow {
             // Build window style mask
             let mut style_mask = NSWindowStyleMask::Closable | NSWindowStyleMask::Miniaturizable;
 
-            // No title bar of the application's here yet: one asked for opens
-            // with the system's frame.
-            if options.frame != WindowFrame::None {
+            // A title bar of the application's keeps the system's, under the
+            // content: the frame, its shadow and its traffic lights stay
+            // AppKit's, and the content size is the whole window's.
+            if style.titled {
                 style_mask |= NSWindowStyleMask::Titled;
+            }
+            if style.app_title_bar {
+                style_mask |= NSWindowStyleMask::FullSizeContentView;
             }
 
             if options.resizable {
@@ -474,6 +503,7 @@ impl MacOSWindow {
             // Set window title
             let title = NSString::from_str(&options.title);
             let _: () = msg_send![ns_window, setTitle: &*title];
+            style_title_bar(ns_window, style.app_title_bar);
 
             // The limits are on the content size, like `options.size`, and the
             // same pair is read back into the state.
@@ -612,6 +642,8 @@ impl MacOSWindow {
                     sequence: ModeSequence::default(),
                     occlusion_visible: true,
                     first_reveal_pending,
+                    frame: options.frame,
+                    system_controls: None,
                 }),
                 windows_map: Arc::clone(&windows_map),
                 delivery,
@@ -627,7 +659,7 @@ impl MacOSWindow {
                         .with_title(Some(options.title.clone()))
                         .with_constraints(SizeConstraints::new(options.min_size, options.max_size))
                         .with_resizable(options.resizable)
-                        .with_frame(system_frame_or_none(options.frame != WindowFrame::None)),
+                        .with_frame(options.frame),
                 )),
             });
 
@@ -645,6 +677,10 @@ impl MacOSWindow {
             window
                 .delivery
                 .publish_through_owner(&window, Self::read_state);
+
+            // The traffic lights over a title bar of the application's, hidden
+            // or moved as it asked.
+            window.place_system_controls();
 
             // Enable mouse tracking for mouse moved events
             content_view::enable_mouse_tracking(window.view_ptr());
@@ -1232,6 +1268,30 @@ fn window_class() -> &'static Class {
     AnyClass::get(c"FLUIWindow").expect("BUG: FLUIWindow was registered by the Once block above")
 }
 
+/// Make the title bar of `ns_window` transparent with its title hidden, for a
+/// title bar of the application's drawn under it, or the system's again.
+///
+/// # Safety
+///
+/// `ns_window` must be a live `NSWindow*`, on the main thread.
+unsafe fn style_title_bar(ns_window: ObjcId, app_title_bar: bool) {
+    /// `NSWindowTitleVisible` and `NSWindowTitleHidden`.
+    const TITLE_VISIBLE: isize = 0;
+    const TITLE_HIDDEN: isize = 1;
+    let (transparent, visibility) = if app_title_bar {
+        (YES, TITLE_HIDDEN)
+    } else {
+        (NO, TITLE_VISIBLE)
+    };
+    // SAFETY: per the contract `ns_window` is a live NSWindow on the main
+    // thread; both setters take a value (BOOL, NSInteger) and have been
+    // NSWindow's since macOS 10.10.
+    unsafe {
+        let _: () = msg_send![ns_window, setTitlebarAppearsTransparent: transparent];
+        let _: () = msg_send![ns_window, setTitleVisibility: visibility];
+    }
+}
+
 /// How much larger a titled, closable, miniaturizable and resizable window's
 /// frame is than its content, in points: the title bar. Asked of the class, so
 /// it is known before any window exists. The marker is the proof that the
@@ -1343,9 +1403,7 @@ impl PlatformWindow for MacOSWindow {
             WindowCommand::SetResizable(on) => {
                 self.set_style_bit(NSWindowStyleMask::Resizable, on)?;
             }
-            WindowCommand::SetFrame(frame) => {
-                self.set_style_bit(NSWindowStyleMask::Titled, frame.has_system_title_bar())?;
-            }
+            WindowCommand::SetFrame(frame) => self.set_frame(frame)?,
             WindowCommand::SetMode(mode) => self.change_mode(mode)?,
             WindowCommand::Show => self.show_window()?,
             WindowCommand::Hide => self.hide()?,
@@ -1396,17 +1454,18 @@ impl PlatformWindow for MacOSWindow {
         Err(absence.into())
     }
 
-    /// The input regions keep the system's edge gestures out of a region
-    /// (`InputRegionKind::SystemGestureExclusion`), and AppKit lets no window
-    /// keep the system's trackpad gestures out; `ignoresMouseEvents` and a
-    /// hit-test override decide where a window takes input, which is not that.
+    /// The content view answers a left press from the move areas of a title
+    /// bar the application draws (ADR-0286 §7). AppKit keeps the resize
+    /// borders and draws the caption buttons itself, and lets no window keep
+    /// the system's trackpad gestures out, so the other kinds are not honoured
+    /// (`input::availability::macos`).
     fn set_input_regions(
         &self,
-        _regions: &[flui_platform::input_regions::InputRegion],
+        regions: &[flui_platform::input_regions::InputRegion],
     ) -> Result<(), flui_platform::Unsupported> {
-        Err(flui_platform::Unsupported::new(
-            flui_platform::UnsupportedReason::NotOnThisPlatform,
-        ))
+        let scale = self.state.lock().scale_factor;
+        content_view::set_input_regions(&self.view, regions, scale);
+        Ok(())
     }
 
     // The explicit `arrowCursor` list below is intentional documentation of
@@ -1625,7 +1684,7 @@ impl MacOSWindow {
 
     /// The window as AppKit reports it now.
     fn sample_state(&self) -> WindowState {
-        let (display, normal, scale, occlusion_visible, heading) = {
+        let (display, normal, scale, occlusion_visible, heading, asked_frame) = {
             let state = self.state.lock();
             (
                 state.display,
@@ -1633,6 +1692,7 @@ impl MacOSWindow {
                 state.scale_factor,
                 state.occlusion_visible,
                 state.sequence.heading(std::time::Instant::now()),
+                state.frame,
             )
         };
         let hovered = self.delivery.hovered();
@@ -1679,8 +1739,9 @@ impl MacOSWindow {
             .with_focused(focused)
             .with_title(Some(title))
             .with_resizable(flags.resizable)
-            .with_frame(system_frame_or_none(
+            .with_frame(reported_frame(
                 mask.contains(NSWindowStyleMask::Titled),
+                asked_frame,
             ))
             .with_constraints(constraints_of_content_limits(
                 Size::new(min.width, min.height),
@@ -1874,9 +1935,19 @@ impl MacOSWindow {
                 }
             }
             let wanted = if on { mask | bit } else { mask - bit };
-            if wanted == mask {
-                return Ok(());
-            }
+            self.restyle(mask, wanted);
+        }
+        Ok(())
+    }
+
+    /// Give the window the style mask `wanted` in place of `mask`, keeping the
+    /// content area where it is, and ask for a frame.
+    fn restyle(&self, mask: NSWindowStyleMask, wanted: NSWindowStyleMask) {
+        if wanted == mask {
+            return;
+        }
+        // SAFETY: see the note above these bodies.
+        unsafe {
             let frame: NSRect = msg_send![self.ns_window, frame];
             let content: NSRect = msg_send![self.ns_window, contentRectForFrameRect: frame];
             let _: () = msg_send![self.ns_window, setStyleMask: wanted];
@@ -1887,7 +1958,111 @@ impl MacOSWindow {
             let _: () = msg_send![self.ns_window, setFrame: restyled, display: NO];
         }
         self.redraw().request_redraw();
+    }
+
+    /// Give the window `frame`: the system's title bar, one of the
+    /// application's drawn under the system's made transparent
+    /// (`fullSizeContentView`), or none, keeping the content area where it is,
+    /// and lay the traffic lights out as the frame asks.
+    fn set_frame(&self, frame: WindowFrame) -> Result<(), ApplyError> {
+        let style = FrameStyle::of(frame);
+        // SAFETY: see the note above these bodies.
+        unsafe {
+            let mask: NSWindowStyleMask = msg_send![self.ns_window, styleMask];
+            if mask.contains(NSWindowStyleMask::FullScreen) {
+                return Err(ApplyError::failed(
+                    "AppKit does not restyle a window while it is full screen".into(),
+                ));
+            }
+            let with = |mask: NSWindowStyleMask, bit, on: bool| {
+                if on { mask | bit } else { mask - bit }
+            };
+            let wanted = with(
+                with(mask, NSWindowStyleMask::Titled, style.titled),
+                NSWindowStyleMask::FullSizeContentView,
+                style.app_title_bar,
+            );
+            self.state.lock().frame = frame;
+            self.restyle(mask, wanted);
+            style_title_bar(self.ns_window, style.app_title_bar);
+        }
+        self.place_system_controls();
         Ok(())
+    }
+
+    /// Lay the traffic lights out as the window's frame asks: hidden or moved
+    /// over a title bar of the application's, where the system puts them
+    /// otherwise. A window without a title bar has none.
+    ///
+    /// AppKit lays the buttons out from the bottom edge of the title bar's
+    /// container, so moving them down grows the container
+    /// ([`ControlsLayout::moved`]); it lays them out again when the window
+    /// resizes or leaves full screen, so `windowDidResize:` asks this again.
+    fn place_system_controls(&self) {
+        /// `NSWindowCloseButton`, `NSWindowMiniaturizeButton`,
+        /// `NSWindowZoomButton`.
+        const BUTTONS: [usize; 3] = [0, 1, 2];
+        /// `NSUserInterfaceLayoutDirectionRightToLeft`.
+        const RIGHT_TO_LEFT: isize = 1;
+        // SAFETY: see the note above these bodies. `standardWindowButton:`
+        // answers a button the window owns or nil; its superview is the title
+        // bar view and that one's superview the title bar's container, both
+        // the window's for as long as it is titled. Each setter takes a value.
+        unsafe {
+            let mask: NSWindowStyleMask = msg_send![self.ns_window, styleMask];
+            if !mask.contains(NSWindowStyleMask::Titled)
+                || mask.contains(NSWindowStyleMask::FullScreen)
+            {
+                return;
+            }
+            let buttons: [ObjcId; 3] =
+                BUTTONS.map(|kind| msg_send![self.ns_window, standardWindowButton: kind]);
+            if buttons.iter().any(|button| button.is_null()) {
+                return;
+            }
+            let bar: ObjcId = msg_send![buttons[0], superview];
+            let container: ObjcId = if bar.is_null() {
+                NIL
+            } else {
+                msg_send![bar, superview]
+            };
+            if container.is_null() {
+                return;
+            }
+            let (system, frame) = {
+                let mut state = self.state.lock();
+                let system = *state.system_controls.get_or_insert_with(|| {
+                    let bar: NSRect = msg_send![container, frame];
+                    ControlsLayout {
+                        bar_height: bar.size.height,
+                        buttons: buttons.map(|button| {
+                            let frame: NSRect = msg_send![button, frame];
+                            Point::new(frame.origin.x, frame.origin.y)
+                        }),
+                    }
+                });
+                (system, state.frame)
+            };
+            let direction: isize = msg_send![self.ns_window, windowTitlebarLayoutDirection];
+            let controls = FrameStyle::of(frame)
+                .controls
+                .unwrap_or(flui_platform::SystemControls::Shown);
+            let layout = system.for_controls(controls, direction == RIGHT_TO_LEFT);
+            for button in buttons {
+                let _: () = msg_send![button, setHidden: Bool::new(layout.is_none())];
+            }
+            let Some(layout) = layout else {
+                return;
+            };
+            let window: NSRect = msg_send![self.ns_window, frame];
+            let mut bar: NSRect = msg_send![container, frame];
+            bar.origin.y = layout.bar_bottom(window.size.height);
+            bar.size.height = layout.bar_height;
+            let _: () = msg_send![container, setFrame: bar];
+            for (button, origin) in buttons.into_iter().zip(layout.buttons) {
+                let _: () = msg_send![button, setFrameOrigin: NSPoint::new(origin.x, origin.y)];
+            }
+        }
     }
 
     /// Order the window out. A full-screen window is refused: ordering it out
