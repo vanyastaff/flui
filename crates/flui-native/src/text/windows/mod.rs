@@ -7,7 +7,7 @@
 //!   calls over the field's store: positions, locks and error codes;
 //! - `tsf`: each window's TSF connection, its documents and their store, the
 //!   window's `TextStoreHost`;
-//! - [`Tsf`]: the text services' hook on FLUI's window class and the table's
+//! - `Tsf`: the text services' hook on FLUI's window class and the table's
 //!   text position, which activates each new window's connection and keeps it
 //!   by the window's identity until the window closes.
 //!
@@ -171,7 +171,7 @@ pub(crate) mod geometry {
     mod tests;
 }
 
-#[cfg(any(windows, test))]
+#[cfg(any(windows, test, feature = "testing"))]
 pub(crate) mod acp;
 
 #[cfg(windows)]

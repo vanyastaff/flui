@@ -205,6 +205,10 @@ impl WakeShared {
     /// owner's execution as failed, and leaves the demand pending, so the next
     /// wake retries it.
     fn request_frame_from_waker(&self, fresh: bool) {
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: a task wake never unwinds into the executor thread that ran it"
+        )]
         let delivery =
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.request_frame(fresh)));
         if let Err(payload) = delivery {
@@ -347,6 +351,10 @@ impl TaskStore {
         let waker = self.new_waker(id, &flags);
         let mut cx = Context::from_waker(&waker);
 
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: a task's first poll runs contained; the future stays owned outside"
+        )]
         let outcome = catch_unwind(AssertUnwindSafe(|| future.as_mut().poll(&mut cx)));
         let outcome = match outcome {
             Ok(outcome) => outcome,
@@ -471,6 +479,10 @@ impl TaskStore {
             let mut cx = Context::from_waker(&waker);
             // Borrow the future into the recovery boundary: it must remain
             // owned outside the closure so poll unwinding cannot drop it.
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "ADR-0287: a task's poll runs contained; the future stays owned outside"
+            )]
             let outcome = catch_unwind(AssertUnwindSafe(|| future.as_mut().poll(&mut cx)));
             let outcome = match outcome {
                 Ok(outcome) => outcome,
@@ -963,6 +975,10 @@ impl AsyncDriver {
 /// Release an opaque owned value — a future or a hook, whose drop glue is
 /// user code — under a catch, handing the panic back, if any (ADR-0281).
 fn release_opaque<T>(value: T) -> Result<(), RetirePanic> {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "ADR-0287: an opaque value's drop glue is user code, released contained"
+    )]
     catch_unwind(AssertUnwindSafe(move || drop(value)))
 }
 
@@ -979,12 +995,20 @@ fn refuse(
 ) -> TaskToken {
     let token = TaskToken::refused();
     let released = if let Some(slot) = failure_slot {
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: a refused future's retirement runs contained; the payload is handed back"
+        )]
         catch_unwind(AssertUnwindSafe(|| {
             crate::scheduler::execution::retire_with_execution_custody(slot, future);
         }))
     } else {
         release_opaque(future)
     };
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "ADR-0287: the refusal diagnostic runs tracing subscribers, contained"
+    )]
     let diagnostic = catch_unwind(|| {
         tracing::warn!(
             "AsyncDriver: the ui_runtime that owned this driver is gone; dropping the spawned future"

@@ -424,6 +424,15 @@ pub trait Platform: sealed::Sealed + Send + Sync + 'static {
     /// [`PlatformError::AppPath`] when the backend's own lookup fails.
     fn app_path(&self) -> Result<PathBuf, PlatformError>;
 
+    /// The value the process was launched with under `key` (ADR-0288 §7): on Android the
+    /// launching intent's string extra of that name; elsewhere the environment variable
+    /// [`LaunchKey::environment_variable`](flui_platform::LaunchKey::environment_variable)
+    /// spells, which on the iOS Simulator is what `simctl launch` passed as `SIMCTL_CHILD_`.
+    /// The web reads none yet. `None` when the launch did not give it or gave it empty.
+    ///
+    /// Any thread may ask, and each ask reads the launch again.
+    fn launch_value(&self, key: flui_platform::LaunchKey) -> Option<String>;
+
     /// Where the application `app` keeps its data on this platform, or `None`
     /// when it has nowhere to keep it.
     ///
@@ -553,6 +562,18 @@ impl<H: Host> HostPlatform<H> {
         &self.window_shared
     }
 
+    /// Run the loop as [`Platform::run`] does, on a platform the caller keeps
+    /// a handle on, to read the system or quit from another thread while the
+    /// loop runs.
+    ///
+    /// # Errors
+    /// Same contract as [`Platform::run`].
+    pub fn run_shared(self: Arc<Self>, handler: Rc<dyn AppHandler>) -> Result<(), PlatformError> {
+        let owner = self.shared_owner();
+        let platform: Arc<dyn Platform> = self;
+        owner.run(platform, handler)
+    }
+
     /// A handle on the host's loop, for a host whose loop runs as an `Arc`.
     pub(crate) fn shared_owner(&self) -> Arc<H::Loop> {
         Arc::clone(&self.owner)
@@ -580,9 +601,7 @@ impl<H: Host> Platform for HostPlatform<H> {
     }
 
     fn run(self: Box<Self>, handler: Rc<dyn AppHandler>) -> Result<(), PlatformError> {
-        let owner = self.shared_owner();
-        let platform: Arc<dyn Platform> = Arc::<Self>::from(self);
-        owner.run(platform, handler)
+        Arc::<Self>::from(self).run_shared(handler)
     }
 
     fn quit(&self) {
@@ -704,6 +723,10 @@ impl<H: Host> Platform for HostPlatform<H> {
 
     fn app_path(&self) -> Result<PathBuf, PlatformError> {
         self.owner.app_path()
+    }
+
+    fn launch_value(&self, key: flui_platform::LaunchKey) -> Option<String> {
+        self.owner.launch_value(key)
     }
 
     fn data_store(&self, app: &AppDataDir) -> Option<DataStore> {

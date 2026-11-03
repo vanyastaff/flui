@@ -1971,6 +1971,10 @@ mod live {
     fn deliver(deliveries: Vec<(Arc<WindowDelivery>, Delivery)>) {
         let mut first = None;
         for (delivery, item) in deliveries {
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "ADR-0287: one handler's panic leaves the remaining deliveries delivered"
+            )]
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match item {
                 Delivery::Input(input) => {
                     delivery.dispatch_input(input);

@@ -134,6 +134,10 @@ impl UiRuntime {
             caught: None,
             wake_after: false,
         };
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: a method's serve runs contained so its caller is answered"
+        )]
         let served = catch_unwind(AssertUnwindSafe(|| M::serve(&mut cx, params)));
         let ServeCx {
             reply,

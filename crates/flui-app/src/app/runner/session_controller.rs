@@ -2,7 +2,6 @@
 use super::host::APP_RUNTIME;
 use super::installed_host::Installation;
 use super::owner_dispatch::{PresentationDispatcher, close_this_window};
-use crate::app::dev_agent::DevAgentAttachments;
 use crate::app::hot_reload::WorkerWatcherGuard;
 use flui_native::HostWindow;
 use flui_native::WindowInstallation;
@@ -13,6 +12,10 @@ use std::{
 };
 
 pub(super) fn contain(body: impl FnOnce()) {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "ADR-0287: a session body's panic is discarded so the controller keeps running"
+    )]
     if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(body)) {
         flui_foundation::panic::discard_payload(payload);
     }
@@ -59,21 +62,16 @@ pub(in crate::app) struct SessionController<K: Eq + Hash> {
     installer: Option<SessionInstaller>,
     sessions: HashMap<K, SessionState>,
     watcher: Option<WorkerWatcherGuard>,
-    /// The loop's development agent attachment; dropping it detaches the
-    /// hook.
-    agent: Option<DevAgentAttachments>,
 }
 impl<K: Eq + Hash + Clone> SessionController<K> {
     pub(super) fn new(
         installer: impl FnMut(Rc<dyn HostWindow>) -> anyhow::Result<Installation> + 'static,
         watcher: Option<WorkerWatcherGuard>,
-        agent: Option<DevAgentAttachments>,
     ) -> Self {
         Self {
             installer: Some(Box::new(installer)),
             sessions: HashMap::new(),
             watcher,
-            agent,
         }
     }
 
@@ -234,10 +232,8 @@ impl<K: Eq + Hash> Drop for SessionController<K> {
         }
         let installer = self.installer.take();
         let watcher = self.watcher.take();
-        let agent = self.agent.take();
         contain(|| drop(installer));
         contain(|| drop(watcher));
-        contain(|| drop(agent));
     }
 }
 
@@ -360,7 +356,6 @@ mod tests {
                 let window: Rc<dyn flui_platform::PlatformWindow> = window;
                 Ok(prepare_ui_runtime_alongside(ui_runtime, window).submit())
             },
-            None,
             None,
         );
         let saved = Rc::new(RefCell::new(None));
@@ -513,7 +508,6 @@ mod tests {
                         constructed.set(Some(installation.address));
                         Ok(installation)
                     },
-                    None,
                     None,
                 )));
                 let (initial, initial_native) = WindowInstallation::channel(owner.proxy());

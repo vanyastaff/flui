@@ -4,6 +4,13 @@
 //! so it runs the same on every host and is checked by the same compiler and
 //! lints as the framework. Each module owns one command family.
 
+#![cfg_attr(
+    test,
+    allow(
+        clippy::disallowed_methods,
+        reason = "test code catches a panic to assert on it (ADR-0303 §5)"
+    )
+)]
 mod util;
 
 #[cfg(test)]
@@ -16,7 +23,6 @@ mod source_tree;
 mod android_dex;
 mod api_closure;
 mod bench;
-mod catch_unwind;
 mod change_scope;
 mod changelog;
 mod doc_strict;
@@ -27,11 +33,11 @@ mod file_length;
 mod fonts;
 mod globals;
 mod icon_import;
-mod inspect_debug;
 mod key_vocabulary;
 mod markers;
 mod module_dag;
 mod panic_boundary;
+mod panic_messages;
 mod perf;
 mod platform_floor;
 mod ratchet;
@@ -124,15 +130,12 @@ enum Command {
     /// Check that every place the public API names `Send` or `Sync` is listed and the list
     /// only shrinks (ADR-0136).
     SendPositions(send_positions::SendPositionsArgs),
-    /// Check that every `Value::Debug(` site of `flui_foundation::inspect` is counted per file
-    /// and the counts only go down (R50, ADR-0242).
-    InspectDebug(inspect_debug::InspectDebugArgs),
-    /// Check that every hand-written `catch_unwind` in production code is counted per file and
-    /// the counts only go down (ADR-0287).
-    CatchUnwind(catch_unwind::CatchUnwindArgs),
     /// Check that every `new` returning `Result` or `Option` is listed and the list only
     /// shrinks: such a constructor is `try_new` (AGENTS.md).
     TryNew(try_new::TryNewArgs),
+    /// Check that every production `expect` and `panic!` names its invariant (`BUG: `) or its
+    /// `try_` twin; the counts of the ones that do not only go down (docs/PANIC-POLICY.md).
+    PanicMessages(panic_messages::PanicMessagesArgs),
     /// Check a linked wasm module's imports against the allowlist.
     WasmImports(wasm::WasmImportsArgs),
     /// Print the crates whose tests run on wasm32.
@@ -217,8 +220,7 @@ fn main() -> ExitCode {
         Command::SendImpls(args) => send_impls::send_impls(&args),
         Command::SendPositions(args) => send_positions::send_positions(&args),
         Command::TryNew(args) => try_new::try_new(&args),
-        Command::CatchUnwind(args) => catch_unwind::catch_unwind(&args),
-        Command::InspectDebug(args) => inspect_debug::inspect_debug(&args),
+        Command::PanicMessages(args) => panic_messages::panic_messages(&args),
         Command::WasmImports(args) => wasm::wasm_imports(&args),
         Command::WasmTestCrates(args) => wasm::wasm_test_crates(&args),
         Command::LockedVersion(args) => wasm::locked_version(&args),

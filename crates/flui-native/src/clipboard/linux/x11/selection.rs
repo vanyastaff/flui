@@ -1369,9 +1369,17 @@ impl Selections {
 /// What ended the thread is reported after the abandonment, so a report
 /// that fails cannot skip it.
 pub(super) fn run(mut selections: Selections, commands: Receiver<Command>, bell: &OwnedFd) {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "ADR-0287: a panic ends the clipboard thread but abandons its reads first"
+    )]
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         steps(&mut selections, &commands, bell)
     }));
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "ADR-0287: pending reads are abandoned even when the thread's body panicked"
+    )]
     let abandoned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let mut failure = FirstPanic::new();
         failure.contain(|| selections.abandon());
@@ -1411,6 +1419,10 @@ fn contained(payload: Box<dyn std::any::Any + Send>) {
 
 /// Run a diagnostic: a subscriber that panics is contained, its payload discarded.
 fn report(diagnostic: impl FnOnce()) {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "ADR-0287: a diagnostic subscriber's panic is discarded, not propagated"
+    )]
     if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(diagnostic)) {
         flui_foundation::panic::discard_payload(payload);
     }

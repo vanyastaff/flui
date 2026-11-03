@@ -2,6 +2,11 @@
 
 - **Status:** Accepted
 - **Date:** 2026-10-21
+- **Amended:** 2026-11-03 — §6: only a follower's region is refused a capture; a leader is
+  replayed and re-indexed by the layer tree
+- **Superseded-by:** [ADR-0304](ADR-0304-the-scene-is-retained-and-damage-is-the-footprint-of-its-patch.md)
+  for §2 and §6 only (a replay that mints every clean boundary's nodes into a new layer tree each
+  frame, and that per-frame tree with its eviction of boundaries that hold a follower)
 - **Amends:** `crates/flui-layer/ARCHITECTURE.md` (retained paint, item 3) and the
   "A composited-layer update patches the enclosing capture" entry of
   `crates/flui-rendering/ARCHITECTURE.md`
@@ -77,10 +82,11 @@ the repeated copies of the same layers (memory is O(depth x layers)).
    by it); a patch now touches the one capture that owns the node, so the "served here, stale
    there" hazard has no path.
 
-6. **Unchanged:** the layer tree a frame emits (shape, stamps, tokens), `Leader`/`Follower`
-   eviction (per boundary: one that holds a link layer in its own region is not retained and
-   repaints), damage pairing, and the cost of re-composing the output tree, which stays
-   O(layers) of `Arc` clones. Persisting the layer tree across frames is a separate change.
+6. **Unchanged:** the layer tree a frame emits (shape, stamps, tokens), `Follower` eviction
+   (per boundary: one that holds a follower layer in its own region is not retained and repaints;
+   a leader is replayed, and `LayerTree::push_child` re-indexes it), damage pairing, and the
+   cost of re-composing the output tree, which stays O(layers) of `Arc` clones. Persisting the
+   layer tree across frames is a separate change.
 
 ## Diagram
 

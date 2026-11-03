@@ -122,7 +122,9 @@ fn every_backend_states_its_availability() {
 
 /// Win32 answers the system's hit test from every chrome region and AppKit
 /// moves the window from a move area (ADR-0286 §7, §8), and winit moves and
-/// resizes a window without decorations from them (§9); the others leave them
+/// resizes a window without decorations from them (§9), as the native X11 host
+/// does through its window manager (§10) and the native Wayland host through
+/// its compositor (§11); the others leave them
 /// `Unavailable` until they do.
 #[test]
 fn the_desktop_hosts_honour_the_chrome_regions_they_answer() {
@@ -147,6 +149,12 @@ fn the_desktop_hosts_honour_the_chrome_regions_they_answer() {
         ("ios", table::ios(), none),
         ("android", android, none),
         ("web", table::web(true), none),
+        ("x11", table::x11(false), move_and_resize),
+        (
+            "wayland",
+            table::wayland(table::WaylandInputGlobals::default()),
+            move_and_resize,
+        ),
         (
             "winit x11",
             table::winit(WinitSession::X11),

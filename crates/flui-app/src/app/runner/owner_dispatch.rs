@@ -280,6 +280,10 @@ impl RuntimeEvent {
     pub(in crate::app) fn deliver_each(events: Vec<Self>, mut deliver: impl FnMut(Self)) {
         let mut first = None;
         for event in events {
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "ADR-0287: each event's delivery is contained; the first panic resumes last"
+            )]
             let failure =
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| deliver(event))).err();
             crate::app::lifecycle_state::preserve_first_lifecycle_panic(
@@ -967,11 +971,19 @@ pub(super) fn drain_quit_notification() {
         return;
     }
     let mut first_panic = None;
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "ADR-0287: pending window cancellation is contained; the first failure is kept"
+    )]
     let cancel = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
         super::secondary_window::cancel_pending_secondary_windows,
     ))
     .err();
     preserve_first_lifecycle_panic(&mut first_panic, cancel, "pending window cancellation");
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "ADR-0287: runtime stop cleanup is contained; the exit's first failure is kept"
+    )]
     let notification =
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(stop_installed_ui_runtimes)).err();
     preserve_first_lifecycle_panic(&mut first_panic, notification, "runtime stop cleanup");
@@ -1081,6 +1093,7 @@ impl ExitWatchdog {
                         "the exit did not end within its watchdog; ending the process"
                     );
                 });
+                #[expect(clippy::disallowed_methods, reason = "ADR-0287: the watchdog's final flush is contained before the process ends")]
                 if let Some(flush) = flush
                     && let Err(payload) =
                         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -1122,11 +1135,19 @@ fn retire_installed_host(first_panic: &mut Option<Box<dyn std::any::Any + Send>>
             super::InstalledHost::new(),
         )
     });
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "ADR-0287: a displaced host's shutdown runs contained after the swap"
+    )]
     let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         displaced.shutdown();
     }))
     .err();
     preserve_first_lifecycle_panic(first_panic, failure, "installed host retirement");
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "ADR-0287: a displaced host's drop runs contained after the swap"
+    )]
     let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(displaced))).err();
     preserve_first_lifecycle_panic(first_panic, failure, "installed host retirement");
 }
@@ -1165,6 +1186,10 @@ pub(super) fn end_session_teardown(tear_down: bool) {
     // service shutdown still closes execution admission and the pools before
     // the platform may end the process.
     let now = std::time::Instant::now();
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "ADR-0287: service shutdown is contained so the session-end steps all run"
+    )]
     let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         APP_RUNTIME.with(|slot| {
             if let Ok(mut state) = slot.try_borrow_mut() {
@@ -1174,6 +1199,10 @@ pub(super) fn end_session_teardown(tear_down: bool) {
     }))
     .err();
     preserve_first_lifecycle_panic(&mut first_panic, failure, "session-end service shutdown");
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "ADR-0287: pool shutdown is contained so the session-end steps all run"
+    )]
     let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         APP_RUNTIME.with(|slot| {
             if let Ok(mut state) = slot.try_borrow_mut() {
@@ -1252,6 +1281,10 @@ pub(super) fn teardown_platform_ui_runtime_logged(log: &mut dyn FnMut(TeardownSt
     // registry is written first, whether or not a failure is held: the
     // services and the pools after it may abandon the IO pool's writes.
     let exit = ExitDeadline::start(std::time::Instant::now());
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "ADR-0287: the flush step is contained; the exit's first failure is kept"
+    )]
     let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let flush = APP_RUNTIME.with(|slot| slot.borrow().flush_host.clone());
         if let Some(flush) = flush {
@@ -1276,6 +1309,10 @@ pub(super) fn teardown_platform_ui_runtime_logged(log: &mut dyn FnMut(TeardownSt
     // execution shutdown below cancels the pools' root token and
     // hard-drops any future still running at its next await point, so a
     // service joined AFTER that would lose its flush window every time.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "ADR-0287: service shutdown is contained; the exit's first failure is kept"
+    )]
     let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let report =
             APP_RUNTIME.with(|slot| slot.borrow_mut().shutdown_lifecycles(exit.services()));
@@ -1315,6 +1352,10 @@ pub(super) fn teardown_platform_ui_runtime_logged(log: &mut dyn FnMut(TeardownSt
     // ui_runtime keeps its pools. A teardown path that skips this (panic
     // mid-teardown) still tears the pools down non-blockingly via
     // `ExecutionServices`' own `Drop`.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "ADR-0287: pool shutdown is contained; the exit's first failure is kept"
+    )]
     let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         APP_RUNTIME.with(|slot| {
             slot.borrow_mut().shutdown_execution(exit.end());
@@ -1332,6 +1373,10 @@ pub(super) fn teardown_platform_ui_runtime_logged(log: &mut dyn FnMut(TeardownSt
     // process's life. `Drop for AppRuntime` is the last-resort third clear
     // if this explicit path is ever skipped (a panic mid-teardown, for
     // instance) — see that impl's doc.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "ADR-0287: the clipboard release is contained; the exit's first failure is kept"
+    )]
     let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let released = APP_RUNTIME.with(|slot| {
             let mut state = slot.borrow_mut();

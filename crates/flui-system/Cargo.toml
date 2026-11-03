@@ -32,6 +32,8 @@ zruntime = { version = "0.2", default-features = false, features = ["runtime", "
 flui-platform = { workspace = true, features = ["testing"] }
 flui-sdk = { workspace = true }
 flui-testing = { workspace = true }
+# Reads the crate's own `[package.metadata.flui.capability]` in a test.
+toml = { workspace = true }
 
 # The stand-in desktop portal the Linux providers' tests serve on a private
 # bus.
@@ -63,3 +65,9 @@ layer = 6
 tier = "pkg"
 tier-kind = "capability"
 order = 5
+
+# How an application registers the crate (ADR-0307 §5): `flui add system`
+# prints `.plugin(flui::services::system::SystemPlugin::default())`. The path
+# is checked by `the_declared_plugin_is_the_crates_default_plugin`.
+[package.metadata.flui.capability]
+plugin = "SystemPlugin"

@@ -36,8 +36,9 @@ let span = TextSpan::new("Hello, World!").with_style(style);
 ```
 
 `TextStyle::merge` combines two styles, the argument taking precedence; `layout_affecting_eq`
-compares only the fields that change glyph geometry, so a text engine can keep its shaped
-layout when only paint attributes differ.
+compares only the fields that change glyph geometry. FLUI's `TextPainter` also compares the
+span colours its shaped runs carry, so it keeps the shaped layout when only the root colour or
+a field shaping does not read (background, shadows) differs.
 
 ## Font weights
 

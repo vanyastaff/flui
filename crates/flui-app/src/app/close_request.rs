@@ -512,6 +512,10 @@ impl CloseRequestRouter {
         };
 
         let request = CloseRequest { address, reason };
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: a close handler's panic keeps the window open and is reported"
+        )]
         let answered =
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| handler.call(&request)));
         if let (Ok(CloseResponse::KeepOpen), Some(guard)) = (&answered, &guard) {
@@ -558,6 +562,10 @@ impl CloseRequestRouter {
         }
         if let Some(handler) = handler {
             let request = CloseRequest { address, reason };
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "ADR-0287: a close handler's panic keeps the window open and is reported"
+            )]
             match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| handler.call(&request)))
             {
                 Ok(CloseResponse::KeepOpen) => {

@@ -6,6 +6,12 @@
   sentence "this decision does not introduce a timeout that silently drops owed content", for a
   lost device only: the owed frame of a device whose rebuild was given up is held, reported, and
   drawn again only after the application asks for a rebuild.
+- **Amended:** 2026-11-03 — by
+  [ADR-0305](ADR-0305-one-gpu-context-serves-every-surface-through-a-raster-executor.md) §8: the
+  rebuild is the `GpuContext`'s, once per context for every window, run where the raster executor
+  runs; it keeps the instance and the surfaces. After `Abandoned` nothing retries on its own; the
+  application's request to try again is the executor's `RetryDevice` command, which runs the
+  backend probe again in fresh instances. The backoff, the ceiling and the states are unchanged.
 - **Related:** [ADR-0258](ADR-0258-owner-turn-panic-boundary-and-terminal-exit.md) §6 (the
   dropped-frame backoff a device-lost frame now takes), [ADR-0083](ADR-0083-one-frame-transaction-in-flui-runtime.md)
   (no GPU edge in `flui-runtime`, which is why the rebuild is reported in the runtime's own terms),

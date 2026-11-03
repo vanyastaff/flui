@@ -18,7 +18,7 @@ Citations below name symbols, not line numbers.
 | `ClipRectLayer`, `ClipRRectLayer`, `ClipRSuperellipseLayer`, `ClipPathLayer` | `clip_rect.rs`, `clip_rrect.rs`, `clip_superellipse.rs`, `clip_path.rs` | `Clip::None` is accepted by all four and lowered as "no clip" by the engine. |
 | `ColorFilterLayer`, `ImageFilterLayer`, `ShaderMaskLayer`, `BackdropFilterLayer` | `color_filter.rs`, `image_filter.rs`, `shader_mask.rs`, `backdrop_filter.rs` | |
 | `LayerLink`, `LeaderLayer`, `FollowerLayer`, `LeaderClip` | [`src/link.rs`](src/link.rs) `LayerLink` + `resolve_follower_transform`; `leader.rs`; `follower.rs` | The leader index lives on the tree, not on the link (decision 2); the anchor math lives on the follower layer (decision 4). |
-| `AnnotatedRegionLayer<T>` | `annotated_region.rs` | Writer half only; see [Producers](#producers). |
+| `AnnotatedRegionLayer` | `annotated_region.rs` | Carries an `AnnotationValue`; written by `RenderAnnotatedRegion`, read by `LayerTree::find_annotations` (`src/tree/annotations.rs`); see [Producers](#producers). |
 | `SceneBuilder` push/pop | [`src/compositor/builder.rs`](src/compositor/builder.rs) `SceneBuilder` | Hand-authored scenes only; the production frame is built through the tree (decision 5). |
 | `Scene` | [`src/scene.rs`](src/scene.rs) `Scene` | A frozen `LayerTree` (decision 6). |
 | Retained layers across frames | none | The engine rebuilds every frame from the tree. Cross-frame reuse of painted output is `flui-rendering`'s (`FragmentComposer::capture`/`graft`, keyed on the boundary's `RenderId`); cross-frame damage is `LayerDiffer`'s comparison of boundary stamps (`RenderId` plus `ContentToken`, decision 8), not a retained engine layer. |
@@ -176,8 +176,7 @@ the granularity is one boundary's own region, not a layer. `damage_diff` bench: 
 ### Deleted, with the reason
 
 `LayerHandle<T>` (no engine-layer lifecycle exists here); `LayerBounds` trait
-(one impl per type, no generic consumer); annotation search (no reader after the writer lost its
-producer); composition callbacks (see the module map); the `needs_add_to_scene` dirty-bit
+(one impl per type, no generic consumer); composition callbacks (see the module map); the `needs_add_to_scene` dirty-bit
 protocol (it fed retained-layer reuse, which this architecture does not have); `LayerNode::offset` (a second
 way to say "translate" that no production tree ever set); the 57 generated `is_*/as_*/as_*_mut`
 accessors bar the four with callers (`as_leader`, `as_follower`, `as_performance_overlay`); the
@@ -191,11 +190,32 @@ feature's `LayerSpec`/`LayerTester` DSL (a third builder with no consumer); `pre
 ## Producers
 
 Five variants have no production producer today: `Canvas`, `Texture`, `PlatformView`,
-`ClipSuperellipse`, `AnnotatedRegion` (the composer emits the other fourteen; `flui-runtime`
-adds `PerformanceOverlay`). `Texture` and `PlatformView` carry real contracts (`freeze`,
-`hit_test_behavior`) awaiting the platform layer; `AnnotatedRegion`'s reader half was deleted
-with annotation search and a producer would bring it back as one change; `Canvas` is a recorder
-inside the output vocabulary that `PictureLayer` already covers. Whether each is "not wired yet" or
+`ColorFilter`, `ImageFilter`. The other fourteen are built in production, all but one by
+`flui-rendering`'s paint composer (`crates/flui-rendering/src/pipeline/owner/paint.rs`):
+
+- `scope_layer` and `clip_layer` turn a recorded `FragmentScope` or `PaintClip` into `Opacity`,
+  `ClipRect`, `ClipRRect`, `ClipSuperellipse`, `ClipPath`, `ShaderMask`, `BackdropFilter`,
+  `AnnotatedRegion`, `Leader` and `Follower`. `ClipSuperellipse` comes from
+  `PaintClip::RSuperellipse`, which `RenderClipRSuperellipse` (`flui-objects`, behind the
+  `ClipRSuperellipse` widget) records; `AnnotatedRegion` comes from `PaintCx::with_annotated_region`,
+  which `RenderAnnotatedRegion` calls;
+- `FragmentComposer` builds `Offset` (the root at a device pixel ratio of 1, and each
+  repaint-boundary child in `place_boundary_impl`), `Transform` (the root's device-pixel-ratio
+  scale, and a node's own paint transform in `own_effect_layers`) and `Picture` (each sealed
+  recording, `seal_picture`);
+- `flui-runtime` adds `PerformanceOverlay` (`PerformanceOverlayLayer::record` in
+  `crates/flui-runtime/src/presentation.rs`).
+
+`Texture` and `PlatformView` carry real contracts (`freeze`, `hit_test_behavior`) awaiting the
+platform layer. External textures reach the GPU without the layer: `RenderTexture`
+(`flui-objects`) records a `DrawOp::Texture` into its picture, and the host hands each frame's
+`TextureRegistry` updates to the backend before it renders. `Canvas` is a recorder inside the output
+vocabulary that `PictureLayer` already covers, built only by tests and benches. `ColorFilter` and
+`ImageFilter` are lowered by `flui-engine` (`layer_render.rs`), but no `FragmentScope` produces
+them: a widget's color filter reaches the GPU as a draw command (`DrawOp::ImageFiltered` in
+`flui-painting`) inside a picture. `AnnotatedRegion` has both halves: the writer above and the
+reader `LayerTree::find_annotations` (`src/tree/annotations.rs`, tested in `tests/annotations.rs`),
+which no production path calls yet. Whether each unproduced variant is "not wired yet" or
 "never" is a roadmap decision, not a crate one — recorded here so it is not re-derived.
 
 ---
@@ -210,6 +230,8 @@ inside the output vocabulary that `PictureLayer` already covers. Whether each is
 | `LayerLink::new` | `static AtomicU64`, `Relaxed` | Identity only; the RMW is atomic under every ordering and publishes nothing else |
 | `ContentToken` | `Arc<()>`, compared by `Arc::ptr_eq` | Identity only; no data behind the pointer, no `static` |
 | `LayerDiffer` | owned records of one frame | Single owner (the host's raster lane); no lock |
+| `TextureRegistry` | `Arc` of a `parking_lot::Mutex` over the registry state, plus `Arc<dyn Fn() + Send + Sync>` wake and listeners | Shared by one presentation with frame producers on any thread (`src/texture_registry.rs`) |
 
-No `unsafe`, no `Arc<Mutex<_>>`, no interior mutability in the crate. The one `dyn` is
-`AnnotationValue = Arc<dyn Any + Send + Sync>`.
+No `unsafe` in the crate. Its one lock is `TextureRegistry`'s; its `dyn`s are that registry's
+wake and listener callbacks and the `Arc<dyn Any + Send + Sync>` inside `AnnotationValue`
+(`src/layer/annotated_region.rs`).

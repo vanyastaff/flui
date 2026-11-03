@@ -9,6 +9,7 @@
 //!   reconciler (FR-035)
 
 mod containment;
+mod context;
 mod element_tree;
 pub(crate) mod id_reconcile;
 pub mod reconcile_event;

@@ -1,14 +1,37 @@
 # ADR-0098: Geometry values are FLUI-owned `f64` structs; flui-geometry and flui-types dissolve
 
-- **Status:** Proposed. The owner chose the direction on 2026-09-28: drop `px()` and the scalar
-  unit types, and keep FLUI's own value types over kurbo and glam rather than exposing either.
-  Acceptance waits on the review of this record.
+- **Status:** Accepted (2026-11-03). §1–§8 are the rule. The values are in
+  `crates/flui-foundation/src/geometry/`, neither `flui-geometry` nor `flui-types` is in the
+  workspace, and the compile-fail suite `crates/flui-painting/tests/compile_fail/` pins §5's
+  separation. Not implemented: (a) half-open containment (§3): `Rect::contains`
+  (`crates/flui-foundation/src/geometry/rect.rs:469-474`), `Rect<f64>::contains_offset`
+  (`rect.rs:514-519`), `Size::contains` (`size.rs:257-264`) and `Bounds::contains`
+  (`bounds.rs:309-314`) are inclusive, and hit testing reaches the first through the clip
+  render objects (`crates/flui-objects/src/proxy/clip.rs:316`), `HitShape::contains`
+  (`crates/flui-objects/src/interaction/content_shape.rs:45`) and `BoxHitTestCtx::is_hit`
+  (`crates/flui-rendering/src/protocol/box_protocol.rs:1737-1739`); (b) the continuous device
+  space of §5: `snap_edges` and `cover` take the logical `Rect`
+  (`crates/flui-foundation/src/geometry/snap.rs:82`, `:94`) and the engine's device bounds are
+  `Rect<f64>` (`crates/flui-engine/src/state_stack.rs:477-485`);
+  (c) §6's content snapping, layout-time stroke widths (`resolve_stroke_width`, `snap.rs:143`,
+  has no caller outside its module) and text baseline snapping; (d) §5's Wayland buffer size
+  in integers from the n/120 numerator: the native host turns the numerator into an `f64`
+  ratio (`crates/flui-native/src/window/linux/wayland.rs:1137-1139`), while the Windows
+  (`crates/flui-native/src/window/windows/proc.rs:1582-1586`) and web
+  (`crates/flui-native/src/window/web.rs:1012-1016`) rules are in place; (e) §7's gradient
+  interpolation colour and alpha spaces: `LinearGradient` carries neither
+  (`crates/flui-painting/src/styling/gradient.rs:67-86`); (f) pruning `Vec2`, `Bounds` and
+  `Circle` (`vector.rs:48`, `bounds.rs:64`, `circle.rs:33`).
 - **Date:** 2026-09-28
+- **Amended:** 2026-11-03 — containment is half-open for every axis-aligned box (§3, "Containment"),
+  and a space is a scalar type, the set of scalars is sealed, and continuous device coordinates
+  have their own scalar `DeviceF64` (§5, "Spaces are scalars"). §1's list no longer deletes the
+  `Unit`, `NumericUnit` and `FloatUnit` traits: they carry the space.
 - **Amended:** 2026-10-11 — implemented empty-union/touching-intersection behavior is distinguished from pending containment policy; the NaN comparison explanation is corrected.
-- **Superseded-by:** [ADR-0149](ADR-0149-interpolation-contracts.md), in part: §7's `Color::lerp`
-  bullet (colour now interpolates in Oklab, premultiplied)
-  and [ADR-0194](ADR-0194-continuous-color-and-opacity.md), the implementation-status
-  deferral of normalized `Color` storage only.
+- **Superseded-by:** [ADR-0149](ADR-0149-interpolation-contracts.md) for §7's `Color::lerp`
+  bullet only (colour now interpolates in Oklab, premultiplied).
+- **Superseded-by:** [ADR-0194](ADR-0194-continuous-color-and-opacity.md) for the
+  implementation-status deferral of normalized `Color` storage only.
 - **Related:** [ADR-0089](ADR-0089-upstream-types-in-stable-signatures.md) (kept as is: this
   record needs no exception to it), [ADR-0092](ADR-0092-per-realm-text-over-parley.md),
   [ADR-0081](ADR-0081-workspace-tiers-and-reach-facts.md),
@@ -59,12 +82,15 @@ The following are deleted, together with their operator impls and compile-fail s
 
 - `Pixels`, `DevicePixels`, `PixelDelta`, `Rems`, `Percentage`;
 - the `Length`/`DefiniteLength`/`AbsoluteLength` family, `ScaleFactor`, `Radians`;
-- the `Unit`/`NumericUnit`/`FloatUnit` traits;
 - `px()` and `device_px()`.
+
+The `Unit`, `NumericUnit` and `FloatUnit` traits stay: they are the bound on a geometry type's
+scalar (`crates/flui-foundation/src/geometry/traits.rs:22`, `:39`, `:51`), and §5 makes `Unit`
+the sealed set of spaces.
 
 A logical length is a plain number: `10.0` is ten logical pixels, as in Flutter, SwiftUI, egui
 and Xilem. A newtype survives only where it enforces an invariant beyond "is a length", and its
-doc comment names the invariant (§5's `DevicePixelRatio` is one).
+doc comment names the invariant (§5's `DevicePixelRatio` and `DeviceF64` are two).
 
 ### 2. One scalar: `f64`, narrowed once
 
@@ -105,8 +131,33 @@ Rules:
   are FLUI's.
 - **Semantics are chosen on their merits**, not copied from Flutter or from an upstream crate.
   Each rule is pinned by a test:
-  - `Rect::contains` is half-open (`left <= x < right`), so a point on an edge shared by two
-    rectangles hits exactly one of them. Today's inclusive version hits both.
+  - **Containment is half-open for every axis-aligned box:** `min <= p < max` on each axis, so
+    a point on an edge shared by two rectangles lies in exactly one of them, and an empty
+    rectangle contains nothing. Two rules exist today. A box's own-size hit test is half-open:
+    `HitTestContext::is_within_size` tests `0 <= x < width`
+    (`crates/flui-rendering/src/context/hit_test.rs:378-381`), and so does `RenderContainer`'s
+    inner-box test (`crates/flui-objects/src/layout/container.rs:752-755`, `:764-771`, whose
+    comment records that `Rect::contains` would hit a pixel the stack misses). The value types
+    are inclusive on `max`: `Rect::contains`
+    (`crates/flui-foundation/src/geometry/rect.rs:469-474`), `Rect<f64>::contains_offset`
+    (`rect.rs:514-519`), `Size::contains` (`size.rs:257-264`) and `Bounds::contains`
+    (`bounds.rs:309-314`), which `RRect::contains` and `RSuperellipse::contains` inherit through
+    `Rect::contains` (`rrect.rs:499-501`, `rsuperellipse.rs:400-402`), and which the clip render
+    objects (`crates/flui-objects/src/proxy/clip.rs:316`, `:345`, `:385`, called from their
+    hit test at `:923`), `HitShape::contains`
+    (`crates/flui-objects/src/interaction/content_shape.rs:45`), `BoxHitTestCtx::is_hit`
+    (`crates/flui-rendering/src/protocol/box_protocol.rs:1737-1739`) and the layer annotation
+    search (`crates/flui-layer/src/tree/annotations.rs:81-85`) call. The half-open rule wins, so every
+    box shape (`Rect`, `Size`, `Bounds`, the rounded shapes' straight edges) takes it. For the
+    integer device grid it is the pixel convention: `DeviceRect` contains the pixels
+    `min..max`. `Circle::contains` stays a closed disc (`<= radius`, with `contains_strict`
+    beside it): a disc has no edge shared with a neighbour. `contains_rect` is unchanged, since
+    a half-open box contains another iff `other.min >= min && other.max <= max`;
+    `Bounds::is_contained_within` is rewritten on that rule, because testing the far corner with
+    `contains` would reject a coincident box. A NaN coordinate is contained by nothing,
+    because every comparison with NaN is false. Not implemented: the inclusive methods above;
+    a follow-up code change aligns them and the one doc comment that already claims the half-open
+    rule (`rsuperellipse.rs:396`).
   - `expand_to_include` counts empty rectangles, so a zero-size node still contributes its
     position to bounds.
   - `intersect` returns `Option<Rect>`, with `Some` for touching rectangles.
@@ -142,7 +193,57 @@ Rules:
     (signed extents, so a clamp to the attachment is a subtraction that cannot wrap);
   - `DevicePixelRatio`, a newtype whose constructor rejects non-finite, zero and negative values.
 
-  Continuous physical coordinates (the engine's device-space maths) are private to `flui-engine`.
+  Continuous physical coordinates (the engine's device-space maths) have their own scalar,
+  `DeviceF64`, below.
+- **Spaces are scalars.** The space a geometry value is in is its scalar type, and the set of
+  scalars is closed. A further space is a further scalar, never a marker parameter on `Point`,
+  `Size`, `Rect` or `Offset`: a phantom field would end the struct literals that §3 "Layout"'s
+  `pub` fields allow, and it rebuilds euclid's typed units, whose escape hatches "Alternatives
+  considered" rejects.
+
+  | Scalar | Space | Where it appears |
+  |---|---|---|
+  | `f64` | logical pixels | every framework value (§2) |
+  | `i32` | the device-pixel grid | `DevicePoint`, `DeviceSize`, `DeviceRect` |
+  | `DeviceF64` | continuous device coordinates of a raster target | snapping, covering bounds and the engine's device-space maths (§6) |
+  | `f32` | GPU data, below the narrowing point of §2 | not a framework space; no production geometry value is built on it today |
+
+  ```rust
+  mod sealed { pub trait Sealed {} }
+  impl sealed::Sealed for f64 {}
+  impl sealed::Sealed for i32 {}
+  impl sealed::Sealed for f32 {}
+  impl sealed::Sealed for DeviceF64 {}
+
+  /// The scalar a geometry type is built from; a downstream crate cannot add a space.
+  pub trait Unit: sealed::Sealed + Copy + Clone + Debug + Default + PartialEq + PartialOrd { /* … */ }
+
+  /// A coordinate on a raster target's pixel lattice, not yet rounded to a pixel. Arithmetic with
+  /// `f64` does not compile; the only ways in are `DevicePixelRatio::to_device` and
+  /// `DeviceF64::from_raw`, the named entry for a coordinate already mapped through a composed
+  /// transform.
+  #[repr(transparent)]
+  #[derive(Clone, Copy, Debug, Default, PartialEq, PartialOrd)]
+  pub struct DeviceF64(f64);
+  impl DeviceF64 { pub const fn from_raw(value: f64) -> Self; pub const fn get(self) -> f64; }
+  impl NumericUnit for DeviceF64 { /* same-space Add, Sub, abs, min, max */ }
+
+  impl DevicePixelRatio {
+      pub fn to_device(self, logical: f64) -> DeviceF64;
+      pub fn to_logical(self, device: DeviceF64) -> f64;
+  }
+  pub fn snap_edges(rect: Rect<DeviceF64>) -> Rect<DeviceF64>;
+  pub fn cover(rect: Rect<DeviceF64>) -> Rect<DeviceF64>;
+  ```
+
+  `device_rect_covering` keeps its signature (a logical `Rect` and a ratio in, a `DeviceRect`
+  out): it is the one place a logical rectangle becomes a device one, and it goes through
+  `DeviceF64` inside. `DeviceF64` does not require finite input, because a transform of a NaN
+  coordinate is NaN; the crossing to `i32` is the existing saturating conversion, which maps NaN
+  to 0 and out-of-range values to the `i32` limits (`snap.rs:103-111`), so no non-finite or
+  overflowing value reaches a `DeviceRect`. Today `to_device` returns a bare `f64`
+  (`snap.rs:47`), `snap_edges` and `cover` take the logical `Rect`, and `Unit` is an open trait
+  (`traits.rs:22`); the shape above is not implemented.
 - **Each platform keeps its own source of truth:**
   - Windows reports the physical client size, and the logical size is `physical / ratio`, never
     rounded back.
@@ -286,10 +387,14 @@ What is deferred, each with its reason:
 - **Platform sizing formulas** (Windows physical-first, Wayland n/120, the web's
   `devicePixelContentBoxSize`). Backend changes that only the Linux path runs in CI; each needs
   its platform's smoke run.
-- **§3's remaining semantic change**: half-open `Rect::contains` remains proposed and
-  changes hit-testing across the widget catalog. Empty rectangles are already counted by
-  `expand_to_include`, and `intersect` already returns `Option` with `Some` for touching
-  rectangles; those implemented portions are no longer pending migrations.
+- **§3's half-open containment** is decided and not implemented (§3, "Containment"). A box's
+  own-size test is already half-open; the change reaches hit testing where a clip, a hit shape
+  or the layer annotation search calls the inclusive `Rect::contains`, so a point on a clip's
+  far edge stops reaching the clipped child. Empty rectangles are
+  already counted by `expand_to_include`, and `intersect` already returns `Option` with `Some`
+  for touching rectangles; those implemented portions are no longer pending migrations.
+- **§5's `DeviceF64` and the sealed `Unit`** are decided and not implemented. Until they land,
+  the engine's device-space maths and `snap_edges`/`cover` are typed as logical `Rect`.
 - **`Color` in `f32` storage behind the `color` crate, and gradient interpolation spaces**
   (Oklab, premultiplied). `Color` stays four `u8` channels, which are already lawfully
   `Eq + Hash`; wide-gamut and gradient-space work change the engine's shaders and belong
@@ -297,7 +402,7 @@ What is deferred, each with its reason:
   is implemented independently of wide-gamut support. Wide-gamut and alternative
   gradient-space work remain deferred. peniko is not added: the display list stores
   no peniko type.
-- **Pruning `Vec2`, `Bounds`, `Circle`** and the scalar traits to their consumers.
+- **Pruning `Vec2`, `Bounds`, `Circle`** to their consumers. The scalar traits stay (§1).
 
 ## Alternatives considered
 
@@ -368,6 +473,22 @@ Lands with the steps of §9:
   - a `Size` passed where an `Offset` is expected;
   - a `DevicePoint` passed where a `Point` is expected;
   - `DevicePixelRatio` constructed from a literal without the checked constructor.
+
+  These four exist as `point_plus_point.rs`, `size_as_offset.rs`, `device_point_as_point.rs` and
+  `device_pixel_ratio_literal.rs` in `crates/flui-painting/tests/compile_fail/`, beside
+  `mixed_point_offset.rs` and `mixed_rect_ops.rs`. To be added with §5's spaces:
+  `device_f64_as_logical.rs` (a `Rect<DeviceF64>` passed where a `Rect` is expected, and
+  `DeviceF64 + f64`) and `unit_is_sealed.rs` (a downstream `impl Unit for` a new type).
+- **Containment (to be added).** A table test `rect_containment_is_half_open` in
+  `crates/flui-foundation/tests/geometry/scalar.rs` covers `Rect`, `contains_offset`, `Size`,
+  `Bounds` and `DeviceRect`: a point on `min` is inside, a point on `max` is outside, two
+  abutting boxes share no point, an empty box contains nothing, NaN is contained by nothing, and
+  `Bounds::is_contained_within` accepts a coincident box. A `render_object_harness` row
+  `harness_clip_rect_far_edge_is_outside` (to be added, in
+  `crates/flui-objects/tests/render_object_harness.rs`) gives a 100 × 100 `RenderClipRect` the
+  clip shape of its left half (`with_clip_shape`) and asserts that a pointer at x = 50 does not
+  reach the child. Both fail on `main`, where `max` is inside; a box's own-size test is already
+  half-open, so the hit-test row goes through a clip, not two abutting plain boxes.
 - **Scroll precision.** A sliver list scrolled to 5e7 px places children at their exact offsets
   and responds to a 0.3 px delta.
 - **Snapping, at DPR 1.25, 1.5, 1.75 and 2.625:**

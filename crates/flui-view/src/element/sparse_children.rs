@@ -613,6 +613,10 @@ fn try_build_item(
     builder: &dyn Fn(usize) -> Option<BoxedView>,
     index: usize,
 ) -> Result<Option<BoxedView>, Box<dyn Any + Send>> {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "ADR-0287: a user item builder's panic is handed back to be recorded once"
+    )]
     std::panic::catch_unwind(AssertUnwindSafe(|| builder(index)))
 }
 
@@ -700,6 +704,10 @@ fn find_index_or_none(
     host_view_type_id: TypeId,
     owner: &mut ElementOwner<'_>,
 ) -> Option<usize> {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "ADR-0287: a user key finder's panic is recorded and the lookup yields none"
+    )]
     match std::panic::catch_unwind(AssertUnwindSafe(|| find(key))) {
         Ok(index) => index,
         Err(payload) => {

@@ -32,7 +32,7 @@ use flui_foundation::Variable;
 use flui_foundation::inspect::{Fields, Inspect, Unit};
 
 use flui_rendering::{
-    constraints::{SliverGeometry, child_paint_offset},
+    constraints::{SliverGeometry, child_paint_offset, grid_child_paint_offset},
     context::{PaintCx, SliverHitTestContext, SliverLayoutContext},
     parent_data::SliverMultiBoxAdaptorParentData,
     pipeline::LocalRenderInvalidationHandle,
@@ -327,10 +327,10 @@ impl RenderSliver for RenderSliverList {
         if self.placement.is_active() {
             let settled = !requested && geometry.scroll_offset_correction.is_none();
             self.placement
-                .place(&self.placed, settled, |child, main, _cross| {
+                .place(&self.placed, settled, &constraints, |child, main, cross| {
                     ctx.position_child(
                         child.slot,
-                        child_paint_offset(&constraints, &geometry, main, child.extent),
+                        grid_child_paint_offset(&constraints, &geometry, main, child.extent, cross),
                     );
                 });
         }

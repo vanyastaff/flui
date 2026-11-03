@@ -6,7 +6,9 @@ use flui_painting::paint::{FilterQuality, TextureId};
 use flui_rendering::layer::{TextureListener, TextureRegistry};
 use flui_rendering::protocol::BoxProtocol;
 use flui_view::prelude::{BuildContext, LifecycleContext, StatefulView, ViewState};
-use flui_view::{IntoView, RebuildHandle, RebuildReason, RenderView, impl_render_view};
+use flui_view::{
+    CreationSite, IntoView, RebuildHandle, RebuildReason, RenderView, impl_render_view,
+};
 
 /// Shows the newest frame of an external texture over its whole box.
 ///
@@ -14,20 +16,26 @@ use flui_view::{IntoView, RebuildHandle, RebuildReason, RenderView, impl_render_
 /// [`LifecycleContext::texture_registry`]
 /// and feed it with
 /// [`TextureRegistration::submit_frame`](flui_rendering::layer::TextureRegistration::submit_frame),
-/// from any thread. Every frame repaints this widget alone; the box takes the
-/// largest size its constraints allow.
+/// from any thread. The widget isolates the texture in a repaint boundary, so
+/// a frame it receives repaints the texture alone and the content around it
+/// is replayed from its retained output, unless an enclosing boundary cannot
+/// keep its output. The box takes the largest size its constraints allow.
 #[derive(Clone, Debug, StatefulView)]
 pub struct Texture {
     id: TextureId,
     filter_quality: FilterQuality,
+    #[view(site)]
+    site: CreationSite,
 }
 
 impl Texture {
     /// Shows texture `id`, sampled linearly.
+    #[track_caller]
     pub fn new(id: TextureId) -> Self {
         Self {
             id,
             filter_quality: FilterQuality::Low,
+            site: CreationSite::here(),
         }
     }
 
@@ -96,7 +104,12 @@ impl ViewState<Texture> for TextureState {
     }
 
     fn build(&self, view: &Texture, _ctx: &dyn BuildContext) -> impl IntoView {
-        RawTexture {
+        // A texture changes on its producer's clock, so it gets a layer of its
+        // own and its frames stop re-recording the content around it. The
+        // boundary sits above the leaf, not on it: while an ancestor hides the
+        // texture, the leaf's unreached paint flag absorbs the producer's later
+        // frames, where a boundary on the leaf would be queued again for each.
+        crate::paint::RepaintBoundary::new().child(RawTexture {
             id: view.id,
             filter_quality: view.filter_quality,
             revision: self
@@ -104,7 +117,7 @@ impl ViewState<Texture> for TextureState {
                 .as_ref()
                 .and_then(|registry| registry.revision(view.id))
                 .unwrap_or(0),
-        }
+        })
     }
 
     fn dispose(&mut self) {

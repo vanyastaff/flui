@@ -32,6 +32,8 @@ pub(crate) mod frame_clock;
 #[cfg(target_os = "android")]
 pub(crate) mod java_view;
 #[cfg(target_os = "android")]
+mod launch;
+#[cfg(target_os = "android")]
 mod looper;
 pub(crate) mod ndk;
 pub(crate) mod poll;
@@ -244,6 +246,7 @@ mod hooks {
 /// (`nativeImeState`): the text it holds and the raw offsets of `Selection`
 /// and the composing span (`-1` for none), as Java counts them, in UTF-16 code
 /// units.
+#[cfg(target_os = "android")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct EditorState {
     /// The view's text.

@@ -70,10 +70,13 @@ impl GpuReplay {
         // Freeze the composite in its attachment coordinate system. A managed
         // resize can leave the recorder's viewport different from this target.
         let previous_uniform_size = std::mem::replace(&mut self.uniform_size, viewport_size);
+        // A group's chain already holds its inherited scissor (the damage
+        // among it) as a leaf, so the chain's own bounds crop this mask.
         let binding = self.prepare_clip_binding(
             context,
             chain,
             false,
+            super::clip::MaskFootprint::of_scissor(None, viewport_size, self.attachment_origin),
             viewport_size,
             device,
             pipelines,
@@ -87,9 +90,7 @@ impl GpuReplay {
         // coverage into source alpha. Binary masks instead discard the outside
         // and use fixed-function blending, including on view-only targets.
         let reads_destination = mode.is_advanced()
-            || (chain.has_antialias()
-                && (mode == BlendMode::Plus
-                    || crate::pipeline_cache::destination_alpha_scale_for(mode).is_some()));
+            || (chain.has_antialias() && crate::pipeline_cache::coverage_must_not_fold(mode));
         if reads_destination {
             let destination = target
                 .texture

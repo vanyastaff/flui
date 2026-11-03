@@ -621,6 +621,10 @@ fn control_error(error: flui_native::ProxySendError<()>) -> AppControlError {
     }
 }
 pub(crate) fn contain(body: impl FnOnce()) {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "ADR-0287: a capture or callback panic is contained; cleanup panics too"
+    )]
     if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(body)) {
         flui_foundation::panic::discard_payload(payload);
         if let Err(payload) = std::panic::catch_unwind(|| {

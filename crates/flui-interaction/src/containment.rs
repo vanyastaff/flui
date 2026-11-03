@@ -29,6 +29,10 @@ impl RoutePanic {
     /// Run one synchronous dispatch phase and retain its return value unless it
     /// unwinds.
     pub(crate) fn try_run<T>(run: impl FnOnce() -> T) -> Result<T, Self> {
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: a dispatch phase's panic is captured to resume after cleanup"
+        )]
         catch_unwind(AssertUnwindSafe(run)).map_err(|payload| Self { payload })
     }
 

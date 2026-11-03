@@ -535,6 +535,10 @@ impl WebLoop {
                 // the turn sees the display in the window's snapshot.
                 // Contained, as the session-end hook is: a state callback
                 // that panics must not cost the owner its turn.
+                #[expect(
+                    clippy::disallowed_methods,
+                    reason = "ADR-0287: a window state callback's panic must not cost the owner its turn"
+                )]
                 if let Some(window) = window
                     && let Err(payload) =
                         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -792,6 +796,12 @@ impl host::Loop for WebLoop {
 }
 
 impl host::Services for WebLoop {
+    // The page's preload is read by the web transport, the first that needs it.
+    fn launch_value(&self, key: flui_platform::LaunchKey) -> Option<String> {
+        let _ = key;
+        None
+    }
+
     fn background_executor(&self) -> Arc<dyn PlatformExecutor> {
         self.with_state(|s| s.background_executor.clone())
     }

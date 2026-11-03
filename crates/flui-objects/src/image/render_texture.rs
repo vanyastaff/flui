@@ -19,6 +19,10 @@ use flui_rendering::{
 /// `revision` is the number of frames the texture has received; a new one
 /// repaints, so the frame the backend just uploaded reaches the screen even
 /// when nothing else changed.
+///
+/// Not a repaint boundary itself: the `Texture` widget wraps it in one, so a
+/// new revision repaints only the texture, while a texture that an ancestor
+/// hides absorbs later revisions in its pending paint flag.
 #[derive(Debug, Clone)]
 pub struct RenderTexture {
     texture: TextureId,

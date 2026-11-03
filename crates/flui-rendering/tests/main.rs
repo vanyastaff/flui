@@ -5,6 +5,10 @@
 //! Files stay in place so relative data paths keep working. Scaffolding
 //! shared across the modules lives in [`common`].
 
+#![allow(
+    clippy::disallowed_methods,
+    reason = "test code catches a panic to assert on it (ADR-0303 §5)"
+)]
 mod common;
 mod contract_matrices;
 
@@ -30,6 +34,9 @@ mod layout_cycle_guard;
 mod layout_dirty_root;
 #[path = "subscriber_panics.rs"]
 mod subscriber_panics;
+
+#[path = "frame_unwind.rs"]
+mod frame_unwind;
 
 #[path = "leader_watch.rs"]
 mod leader_watch;

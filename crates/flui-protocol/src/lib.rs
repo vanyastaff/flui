@@ -123,8 +123,8 @@ pub use perf::{
 };
 pub use semantics::{SemanticsAction, SemanticsRole};
 pub use session::{
-    AppInfo, AttachParams, Capabilities, CloseParams, Closed, Empty, Hello, HelloReply, Isolation,
-    LaunchParams, Placement, SessionInfo, WindowList, WindowParams,
+    AppInfo, AttachParams, Capabilities, ClientRole, CloseParams, Closed, Empty, Hello, HelloReply,
+    Isolation, LaunchParams, Placement, SessionInfo, WindowList, WindowParams,
 };
 pub use snapshot::{ChangedField, NodeChange, Snapshot, SnapshotDelta, SnapshotReading};
 pub use tree::{

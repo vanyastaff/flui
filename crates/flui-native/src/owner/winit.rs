@@ -1276,6 +1276,10 @@ fn native_batch(
 fn dispatch_native_inputs(inputs: Vec<(Rc<dyn LoopWindow>, NativeDispatch)>) {
     let mut first = None;
     for (window, input) in inputs {
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: one handler's panic leaves the remaining inputs delivered"
+        )]
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match input {
             NativeDispatch::Input(input) => {
                 window.delivery().dispatch_input(input);
@@ -1299,6 +1303,10 @@ fn dispatch_native_inputs(inputs: Vec<(Rc<dyn LoopWindow>, NativeDispatch)>) {
         // Callback reentry can close the window and release its final other
         // owner: its captures retire here, contained, after a failure too;
         // the first failure goes on (ADR-0281).
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: the window's final drop runs contained after the first failure"
+        )]
         if let Err(payload) =
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(window)))
         {
@@ -2650,6 +2658,10 @@ impl host::Loop for WinitLoop {
 }
 
 impl host::Services for WinitLoop {
+    fn launch_value(&self, key: flui_platform::LaunchKey) -> Option<String> {
+        host::environment_launch_value(key)
+    }
+
     fn background_executor(&self) -> Arc<dyn PlatformExecutor> {
         self.with_state(|state| state.background_executor.clone())
     }

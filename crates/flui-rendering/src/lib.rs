@@ -53,6 +53,13 @@
 //! }
 //! ```
 
+#![cfg_attr(
+    test,
+    allow(
+        clippy::disallowed_methods,
+        reason = "test code catches a panic to assert on it (ADR-0303 §5)"
+    )
+)]
 // Lint levels come from `[workspace.lints]` (Cargo.toml `[lints] workspace = true`).
 // Crate-specific relaxations:
 // Rendering crate uses complex generic types for type-safe protocols
@@ -206,6 +213,7 @@ pub use pipeline::{
     LayoutPremise, PipelineCell, PipelineOwner, TextContextHandle, TextCx, TextSource,
 };
 pub use protocol::{
+    BoxChildSize,
     // Concrete capabilities
     BoxHitTest,
     BoxLayout,

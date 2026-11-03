@@ -11,7 +11,9 @@ What the code doesn't tell you about FLUI, an open-source declarative UI framewo
   differs from Flutter is usually deliberate (ADR-0027). Other frameworks (Flutter, Compose,
   SwiftUI, egui, Xilem, GPUI, …) are a checklist of edge cases, read with `gh` or a shallow
   clone into the gitignored `.flutter/` / `.gpui/`.
-- **Rules are types:** the compiler first, a clippy lint next, a grep last.
+- **Rules are types:** the compiler first, a clippy lint next, then a tool CI already runs or a
+  test of the owning crate; an `xtask` gate is the last rung, admitted by its ADR (ADR-0303). An
+  exception is `#[expect(lint, reason = "…")]` at the site.
 - **The frame path is synchronous:** no `async` in build/layout/paint, no lock on per-node state
   touched in `perform_layout`/`paint`, none in a public signature.
 - **Layers, not micro-crates:** a feature inside a layer is a module; shared code moves down.
@@ -98,7 +100,8 @@ host change needs `cargo heli nextest run -p flui-native` by hand.
 | A value crosses a thread because the compiler proves it may: every `unsafe impl Send`/`Sync` is listed and the list only shrinks; `send_wrapper`-style crates are banned; every `Send`/`Sync` position an author wrote in the facade's API is listed and the list only shrinks (ADR-0136) | `xtask send-impls`, `deny.toml`, `xtask send-positions` (CI `api-contracts` job, nightly rustdoc JSON) |
 | Test support is named `testing`; a hand-written `pump`/`advance`/`tick` or a `Mock*`/`Fake*`/`Scripted*`/`Recording*`/`Probe*` type in test code is in a kit or counted in the allowlist (ADR-0243) | `xtask testing` |
 | A constructor that can fail is `try_new`: every `new` returning `Result` or `Option` is listed and the list only shrinks | `xtask try-new` |
-| An owner changes its state and calls user code through `flui_foundation::panic::commit` and contains a fan-out with `FirstPanic`: every hand-written `catch_unwind` in production code is counted per file and the counts only go down (ADR-0287) | `xtask catch-unwind` |
+| A production `expect` or `panic!` names its invariant (`BUG: `) or its `try_` twin; the per-file counts of the ones that do not only go down | `xtask panic-messages` |
+| User code runs through `flui_foundation::panic` (`commit`, `FirstPanic`) and an OS entry through `os_entry`: `std::panic::catch_unwind` is a disallowed method, and a site that still catches by hand carries `#[expect(clippy::disallowed_methods, reason = "ADR-0287: …")]` on its statement or function (ADR-0303 §6) | clippy (`disallowed-methods`) |
 
 ## ADR Policy
 

@@ -110,9 +110,14 @@ impl ElementTree {
             Err(ChildHookPanic {
                 inserted,
                 hook,
-                staged,
+                mut staged,
                 payload,
             }) => {
+                // A staged record names an element of the subtree removed below, which the drain
+                // could no longer find: read its path while it is a node.
+                if let Some(staged) = staged.as_mut() {
+                    staged.locate_in(self);
+                }
                 let stranded = match inserted {
                     Some(InsertedChild::Minted(id)) => {
                         self.discard_unannounced(id, owner);
@@ -161,7 +166,8 @@ impl ElementTree {
                         hook,
                         payload.as_ref(),
                         error,
-                    );
+                    )
+                    .with_site(view.creation_site());
                     owner.push_recovered_panic(panic);
                 }
                 flui_foundation::panic::discard_payload(payload);
@@ -216,11 +222,14 @@ impl ElementTree {
         context: impl Into<String>,
         ChildHookPanic {
             hook,
-            staged,
+            mut staged,
             payload,
             ..
         }: ChildHookPanic,
     ) -> ElementId {
+        if let Some(staged) = staged.as_mut() {
+            staged.locate_in(self);
+        }
         // Read the parent BEFORE `remove_subtree` wipes the node —
         // there is nowhere else left to ask once it is gone. The
         // caller supplies the authoritative target slot because a
@@ -263,7 +272,8 @@ impl ElementTree {
                 hook,
                 payload.as_ref(),
                 error,
-            );
+            )
+            .with_site(view.creation_site());
             owner.push_recovered_panic(panic);
         }
         flui_foundation::panic::discard_payload(payload);

@@ -138,6 +138,24 @@ impl LayoutPoison {
         })
     }
 
+    /// True when the layout walk serves `id` its stand-in geometry under
+    /// `attempt` instead of laying it out: the node is poisoned, and its
+    /// last failure came from a layout under these same constraints or from
+    /// an intrinsic query alone. A poisoned node under different constraints
+    /// earns one fresh attempt, so it is not served a stand-in.
+    ///
+    /// The walk's skip and the callbacks that report a substituted size
+    /// (`BoxChildSize::StandIn`) both ask this, so they agree on which sizes
+    /// the walk made up.
+    pub(super) fn serves_stand_in(&self, id: RenderId, attempt: ErasedConstraints) -> bool {
+        self.is_poisoned(id)
+            && match self.failed_attempt(id) {
+                Some(FailedAttempt::Layout(failed)) => failed == attempt,
+                Some(FailedAttempt::IntrinsicOnly) => true,
+                None => false,
+            }
+    }
+
     /// True when `id` has open (not yet poisoned) failures on record. Used
     /// by the walk's success bookkeeping: a poisoned node is skipped rather
     /// than laid out, so an `Ok` for it must not be read as a recovery.

@@ -156,6 +156,13 @@
 //! - `images` - Enable image loading (PNG, JPEG, GIF, WebP)
 //! - `full` - Enable all stable features
 
+#![cfg_attr(
+    test,
+    allow(
+        clippy::disallowed_methods,
+        reason = "test code catches a panic to assert on it (ADR-0303 §5)"
+    )
+)]
 // Ship bar: crate is doc-complete — keep it that way.
 #![deny(missing_docs)]
 

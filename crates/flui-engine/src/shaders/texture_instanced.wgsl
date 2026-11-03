@@ -92,8 +92,7 @@ var texture_sampler: sampler;
 @group(1) @binding(1)
 var texture_view: texture_2d<f32>;
 
-@vertex
-fn vs_main(
+fn vertexStage(
     vertex: VertexInput,
     instance: InstanceInput,
 ) -> VertexOutput {
@@ -207,4 +206,9 @@ fn folded_image(in: VertexOutput) -> vec4<f32> {
     }
 
     return tex_color;
+}
+
+@vertex
+fn vs_main(vertex: VertexInput, instance: InstanceInput) -> VertexOutput {
+    return vertexStage(vertex, instance);
 }

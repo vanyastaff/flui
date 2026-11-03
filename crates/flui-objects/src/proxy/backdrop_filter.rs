@@ -167,10 +167,12 @@ impl flui_foundation::inspect::Inspect for RenderBackdropFilter {
     }
 
     fn inspect(&self, out: &mut flui_foundation::inspect::Fields<'_>) {
-        use flui_foundation::inspect::Value;
-        // `ImageFilter` is a composite of blur, matrix and compose variants with no typed value;
-        // it is described by its `Debug`.
-        out.value("filter", Value::Debug(&self.filter));
+        use flui_foundation::inspect::{Untyped, Value};
+        #[expect(
+            deprecated,
+            reason = "ImageFilter is a composite of blur, matrix and compose variants with no typed value"
+        )]
+        out.value("filter", Value::Debug(Untyped::new(&self.filter)));
         out.field("blend_mode", &self.blend_mode);
         out.field("enabled", &self.enabled).default(&true);
     }

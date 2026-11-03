@@ -18,7 +18,7 @@
 mod caret;
 mod shape;
 
-pub(crate) use shape::SpanBrush;
 #[cfg(test)]
 pub(crate) use shape::holds_exactly;
 pub use shape::{ParagraphLayout, ParagraphSpec};
+pub(crate) use shape::{SpanBrush, span_paint_color};

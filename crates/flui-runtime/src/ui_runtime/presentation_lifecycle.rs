@@ -30,6 +30,10 @@ fn forget_pressed_keys(
     presentation: &crate::presentation::PresentationState,
     first: &mut Option<Box<dyn std::any::Any + Send>>,
 ) {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "ADR-0287: forgetting pressed keys runs contained so the first failure is kept"
+    )]
     let failure = catch_unwind(AssertUnwindSafe(|| {
         presentation.focus_manager().forget_pressed_keys();
     }))
@@ -262,6 +266,10 @@ impl UiRuntime {
         let mut closes = SettledCloses::default();
         for (id, settled) in settled {
             for waker in settled.wake {
+                #[expect(
+                    clippy::disallowed_methods,
+                    reason = "ADR-0287: a settled close's waker runs contained so the others are woken"
+                )]
                 if let Err(payload) = catch_unwind(AssertUnwindSafe(|| waker.wake())) {
                     self.report_contained_panic(
                         flui_foundation::PresentationAddress {
@@ -595,6 +603,10 @@ impl UiRuntime {
                 {
                     continue;
                 }
+                #[expect(
+                    clippy::disallowed_methods,
+                    reason = "ADR-0287: cancelling pointer sequences runs contained so others are cancelled"
+                )]
                 let failure =
                     catch_unwind(AssertUnwindSafe(|| self.cancel_pointer_sequences_for(id))).err();
                 self.record_lifecycle_failure(
@@ -613,6 +625,10 @@ impl UiRuntime {
                     // Focus loss still delivers Cancel and preserves hovering.
                     // Suspension also discards motion queued before the pause;
                     // this phase must run even when Cancel delivery panicked.
+                    #[expect(
+                        clippy::disallowed_methods,
+                        reason = "ADR-0287: the pause handler runs contained so later phases still run"
+                    )]
                     let failure = catch_unwind(AssertUnwindSafe(|| {
                         presentation.gestures().handle_lifecycle_pause();
                     }))
@@ -645,6 +661,10 @@ impl UiRuntime {
             let aggregate = self.aggregate_lifecycle();
             if self.scheduler().lifecycle_state() != aggregate {
                 let step = aggregate;
+                #[expect(
+                    clippy::disallowed_methods,
+                    reason = "ADR-0287: the scheduler's lifecycle handler runs contained so the rest run"
+                )]
                 let failure = catch_unwind(AssertUnwindSafe(|| {
                     self.scheduler().handle_app_lifecycle_state_change(step);
                 }))
@@ -656,6 +676,10 @@ impl UiRuntime {
                 );
             }
             for presentation in restored {
+                #[expect(
+                    clippy::disallowed_methods,
+                    reason = "ADR-0287: re-dirtying a pipeline root runs contained for each presentation"
+                )]
                 let failure = catch_unwind(AssertUnwindSafe(|| {
                     crate::renderer_binding::redirty_pipeline_root(
                         presentation.renderer().root_pipeline_owner(),
@@ -684,6 +708,10 @@ impl UiRuntime {
                             == flui_interaction::__runtime::CloseMode::PreservingFailure
                 };
                 if step == AppLifecycleState::Detached && !preserving(first_panic.is_some()) {
+                    #[expect(
+                        clippy::disallowed_methods,
+                        reason = "ADR-0287: completing a composition runs contained on detach"
+                    )]
                     let failure = catch_unwind(AssertUnwindSafe(|| {
                         presentation.text_input().complete_composition();
                     }))
@@ -695,6 +723,10 @@ impl UiRuntime {
                     );
                 }
                 if preserving(first_panic.is_some()) {
+                    #[expect(
+                        clippy::disallowed_methods,
+                        reason = "ADR-0287: lifecycle cleanup runs contained so the other steps run"
+                    )]
                     let failure = catch_unwind(AssertUnwindSafe(|| {
                         presentation
                             .widgets()
@@ -711,6 +743,10 @@ impl UiRuntime {
                     );
                     continue;
                 }
+                #[expect(
+                    clippy::disallowed_methods,
+                    reason = "ADR-0287: lifecycle notification runs contained so the other steps run"
+                )]
                 let failure = catch_unwind(AssertUnwindSafe(|| {
                     presentation.widgets().notify_committed_lifecycle(step);
                 }))
@@ -730,6 +766,10 @@ impl UiRuntime {
             .filter(|p| p.closing_requested.get())
         {
             let mode = terminal_close_mode(first_panic.is_some());
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "ADR-0287: a presentation's close runs contained so the others still close"
+            )]
             let failure = catch_unwind(AssertUnwindSafe(|| {
                 presentation
                     .widgets()
@@ -743,6 +783,10 @@ impl UiRuntime {
                 "lifecycle subscription close",
             );
             let mode = terminal_close_mode(first_panic.is_some());
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "ADR-0287: a presentation's close runs contained so the others still close"
+            )]
             let failure =
                 catch_unwind(AssertUnwindSafe(|| presentation.close_with_mode(mode))).err();
             self.record_lifecycle_failure(

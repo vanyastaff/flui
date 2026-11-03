@@ -37,7 +37,7 @@ use std::{
 
 use std::any::{Any, TypeId};
 
-use flui_foundation::{ElementId, RenderId, ViewKey};
+use flui_foundation::{CreationSite, ElementId, RenderId, ViewKey};
 use flui_interaction::FocusManager;
 use parking_lot::Mutex;
 
@@ -629,6 +629,10 @@ impl ElementOwner<'_> {
             .recovered_panics
             .last()
             .expect("BUG: just recorded a recovered panic");
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: a tracing subscriber's panic must not lose the recorded panic"
+        )]
         if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             tracing::error!(
                 at = ?panic.at,
@@ -648,6 +652,10 @@ impl ElementOwner<'_> {
     /// Reporting is transaction-neutral and cannot discard the staged token.
     /// The containing seam commits it only after the replacement succeeds.
     fn stage_recovered_panic(panic: RecoveredPanic) -> StagedRecoveredPanic {
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: a tracing subscriber's panic must not discard the staged token"
+        )]
         if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             tracing::error!(
                 at = ?panic.at,
@@ -673,13 +681,16 @@ impl ElementOwner<'_> {
     /// hand-rolled element that bypassed `ElementTree::insert` (test
     /// fixtures only) — there is no slab id to attach a record to, so this
     /// logs the one `tracing::error!` and pushes nothing. `Some`
-    /// builds a [`RecoveredAt::Element`] and pushes through
+    /// builds a [`RecoveredAt::Element`] with no parent, since these hooks
+    /// know the element through its core, and pushes through
     /// [`Self::push_recovered_panic`] (which logs at error level itself, so
-    /// this never double-logs).
+    /// this never double-logs). `site` is where the element's view was
+    /// created, kept on the record because the element may be gone by the
+    /// time it is drained.
     pub(crate) fn record_hook_panic(
         &mut self,
         element: Option<ElementId>,
-        parent: Option<ElementId>,
+        site: CreationSite,
         view_type_id: TypeId,
         hook: LifecycleHook,
         payload: &(dyn Any + Send),
@@ -694,13 +705,19 @@ impl ElementOwner<'_> {
             );
             return;
         };
-        self.push_recovered_panic(RecoveredPanic::from_payload(
-            RecoveredAt::Element { element, parent },
-            view_type_id,
-            hook,
-            payload,
-            context,
-        ));
+        self.push_recovered_panic(
+            RecoveredPanic::from_payload(
+                RecoveredAt::Element {
+                    element,
+                    parent: None,
+                },
+                view_type_id,
+                hook,
+                payload,
+                context,
+            )
+            .with_site(site),
+        );
     }
 
     /// Stage a lifecycle panic only while its containing tree-level seam owns
@@ -713,10 +730,12 @@ impl ElementOwner<'_> {
     /// record untouched. An armed call with `element == None` stages nothing,
     /// allowing the outer seam to emit its coarser recovery record. The
     /// staged record's single trace is transaction-neutral because the
-    /// containing seam has not yet committed its substitute.
+    /// containing seam has not yet committed its substitute. `site` is where
+    /// the element's view was created.
     pub(crate) fn record_armed_lifecycle_panic(
         &mut self,
         element: Option<ElementId>,
+        site: CreationSite,
         view_type_id: TypeId,
         hook: LifecycleHook,
         payload: &(dyn Any + Send),
@@ -730,16 +749,19 @@ impl ElementOwner<'_> {
         let Some(element) = element else {
             return;
         };
-        let staged = Self::stage_recovered_panic(RecoveredPanic::from_payload(
-            RecoveredAt::Element {
-                element,
-                parent: None,
-            },
-            view_type_id,
-            hook,
-            payload,
-            context,
-        ));
+        let staged = Self::stage_recovered_panic(
+            RecoveredPanic::from_payload(
+                RecoveredAt::Element {
+                    element,
+                    parent: None,
+                },
+                view_type_id,
+                hook,
+                payload,
+                context,
+            )
+            .with_site(site),
+        );
         self.lifecycle_panic_handoff
             .set(LifecyclePanicHandoff::Staged(staged));
     }
@@ -895,6 +917,7 @@ mod tests {
 
         handle.record_armed_lifecycle_panic(
             Some(element),
+            CreationSite::unknown(),
             TypeId::of::<()>(),
             LifecycleHook::Activate,
             payload.as_ref(),
@@ -909,6 +932,7 @@ mod tests {
         handle.arm_lifecycle_panic_handoff();
         handle.record_armed_lifecycle_panic(
             None,
+            CreationSite::unknown(),
             TypeId::of::<()>(),
             LifecycleHook::Activate,
             payload.as_ref(),
@@ -923,6 +947,7 @@ mod tests {
         handle.arm_lifecycle_panic_handoff();
         handle.record_armed_lifecycle_panic(
             Some(element),
+            CreationSite::unknown(),
             TypeId::of::<()>(),
             LifecycleHook::Activate,
             payload.as_ref(),
@@ -930,6 +955,7 @@ mod tests {
         );
         handle.record_armed_lifecycle_panic(
             Some(ElementId::new(2)),
+            CreationSite::unknown(),
             TypeId::of::<String>(),
             LifecycleHook::Activate,
             payload.as_ref(),

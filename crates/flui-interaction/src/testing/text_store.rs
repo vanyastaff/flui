@@ -327,6 +327,7 @@ impl InMemoryTextStore {
                         calls,
                         &mut |calls| {
                             *self.publication.borrow_mut() = Publication::Idle;
+                            #[expect(clippy::disallowed_methods, reason = "ADR-0287: the kit keeps a flush panic and restores its publication state")]
                             let prepared =
                                 catch_unwind(AssertUnwindSafe(|| self.flush_notifications(calls)));
                             *self.publication.borrow_mut() = Publication::Settling;
@@ -340,6 +341,10 @@ impl InMemoryTextStore {
                         },
                     );
                 };
+                #[expect(
+                    clippy::disallowed_methods,
+                    reason = "ADR-0287: the kit keeps an observer's panic for the owner to resume"
+                )]
                 let result = catch_unwind(AssertUnwindSafe(|| {
                     observer.publish_change(change, &mut publish, calls);
                 }));

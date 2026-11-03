@@ -1,5 +1,9 @@
 //! Consumer contracts share one native integration test binary.
 
+#![allow(
+    clippy::disallowed_methods,
+    reason = "test code catches a panic to assert on it (ADR-0303 §5)"
+)]
 #[path = "notifier.rs"]
 mod notifier;
 

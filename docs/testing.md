@@ -127,7 +127,7 @@ cargo xtask ci
 It runs, in order (`tools/xtask/src/tasks.rs` is the authority):
 
 ```bash
-cargo xtask checks                        # fmt, typos, taplo, markdown links (docs-links: lychee, offline), the paths, packages and llms.txt links the docs name (docs-paths), workspace (tiers, layers, manifests, test reachability, ADR numbers), reach (what each crate's resolved graph may contain, and the hot-reload facts), module-dag (import direction between a crate's modules), toolchain, wgsl, globals (process-global state, ADR-0097), panic-boundary (every OS entry into `flui-native` goes through `owner::panic_boundary::os_entry`, ADR-0151 §16), send-impls (every `unsafe impl Send`/`Sync` is listed and the list only shrinks, ADR-0136), try-new (every `new` returning `Result` or `Option` is listed and the list only shrinks: such a constructor is `try_new`), inspect-debug (every `Value::Debug(` site of `flui_foundation::inspect` is counted per file and the counts only go down, ADR-0242), catch-unwind (every hand-written `catch_unwind` in production code is counted per file and the counts only go down, ADR-0287), the docs-only allowlist, font assets, file-length, markers and changelog fragments (each with its self-test); builds only xtask
+cargo xtask checks                        # fmt, typos, taplo, markdown links (docs-links: lychee, offline), the paths, packages and llms.txt links the docs name (docs-paths), workspace (tiers, layers, manifests, test reachability, ADR numbers), reach (what each crate's resolved graph may contain, and the hot-reload facts), module-dag (import direction between a crate's modules), toolchain, wgsl, globals (process-global state, ADR-0097), panic-boundary (every OS entry into `flui-native` goes through `owner::panic_boundary::os_entry`, ADR-0151 §16), send-impls (every `unsafe impl Send`/`Sync` is listed and the list only shrinks, ADR-0136), try-new (every `new` returning `Result` or `Option` is listed and the list only shrinks: such a constructor is `try_new`), panic-messages (every production `expect` and `panic!` names its invariant with `BUG: ` or its `try_` twin; the per-file counts of the ones that do not only go down), the docs-only allowlist, font assets, file-length, markers and changelog fragments; builds only xtask (each gate's self-test runs in `cargo test -p xtask`, ADR-0303 §4)
 cargo xtask lint                          # clippy -D warnings, as the CI clippy job runs it: the workspace, then flui-engine's `testing` code
 cargo xtask doc-strict                    # cargo doc --workspace --no-deps --locked --document-private-items with every workspace `testing` feature on
 cargo xtask test                          # nextest over the local scope, flui-native headless, then the nested-cargo group (see "What `cargo xtask test` runs")
@@ -169,22 +169,20 @@ cover) runs only against a sway started by hand. On Windows the Win32 window
 tests and the contract's share the desktop's foreground and run one at a time
 (test group `desktop-foreground`).
 
-`cargo xtask inspect-debug` counts the `Value::Debug(` sites of `flui_foundation::inspect`, the
-untyped escape hatch (R50), per file in `crates/`, `packages/` and `src/`, leaving out
-`flui-foundation`'s `inspect/` module, `flui-macros` and any `/tests/` path. The counts in
-`tools/xtask/allowlists/inspect-debug.toml` are exact, each with its reason and an ADR exit: a
-file above its count ("grew"), below it ("lower it") or gone is a finding. `--seed` prints the
-list.
+`flui_foundation::inspect::Untyped::new`, the untyped escape hatch that describes a field by its
+`Debug` text, is deprecated: each site outside a derive carries
+`#[expect(deprecated, reason = "…")]`, and a field of a `#[derive(Inspect)]` type opts in with
+`#[inspect(debug)]` (ADR-0303 §7). A site that gains a typed value drops its call, and the
+compiler reports the expectation left behind.
 
-`cargo xtask catch-unwind` counts the hand-written `catch_unwind` sites of production code per
-file (ADR-0287): every call or value whose path ends in `catch_unwind`, a `.catch_unwind()`
-method call, and the name inside a macro's tokens, in the module trees of the targets a non-test
-build compiles under `crates/`, `packages/` and `src/`. Test code (`#[cfg(test)]`, `#[test]`, an
-item behind a `testing` feature), the kits, and the places where catching is the job
-(`flui_foundation::panic` and `flui-native`'s `owner::panic_boundary`) are left out. The counts in
-`tools/xtask/allowlists/catch-unwind.toml` are exact, under one reason and the ADR-0287 exit: a new
-site is a finding until its owner goes through `commit` or `FirstPanic`, and a migrated seam lowers
-its count in the same change. `--seed` prints the list.
+`std::panic::catch_unwind` is a disallowed method in `clippy.toml` (ADR-0303 §6): user code runs
+through `flui_foundation::panic` (`commit`, `FirstPanic`, ADR-0287) and an OS entry through
+`owner::panic_boundary::os_entry`. A production site that still catches by hand carries
+`#[expect(clippy::disallowed_methods, reason = "ADR-0287: …")]` on its `let` or expression
+statement, or on its function, never on a file or module; the primitives carry one that names them
+as the boundary. Test code is exempt per crate, by `#![cfg_attr(test, allow(..))]` on the crate
+root and `#![allow(..)]` on `tests/main.rs` (ADR-0303 §5). A site that moves to a primitive drops
+its call, and the compiler reports the expectation left behind.
 
 xtask does not schedule its commands. On a host shared by several agents and
 checkouts, [heli](https://github.com/vanyastaff/heli) does: every cargo, the
@@ -543,7 +541,7 @@ cargo nextest run -p flui-widgets --test perf   # the budget assertions alone
 cargo xtask perf                                # advisory: prints differences, exits 0
 cargo xtask perf --check                        # any difference fails
 cargo xtask perf --bless                        # rewrite the baseline from this run
-cargo xtask perf --self-test                    # the comparison on planted fixtures (part of `checks`)
+cargo xtask perf --self-test                    # the comparison on planted fixtures (part of `cargo test -p xtask`)
 ```
 
 The comparison is exact: a count that rose is a regression, and one that fell
@@ -966,7 +964,7 @@ check; all cargo commands run `--locked`; actions are SHA-pinned and the
 workflow files themselves are linted:
 
 ```bash
-cargo xtask checks --strict                                   # fmt, taplo, typos, markdown links, workspace layers, module-dag, toolchain, wgsl, globals, panic-boundary, send-impls, try-new, changelog fragments, ...; a missing tool fails
+cargo xtask checks --strict                                   # fmt, taplo, typos, markdown links, workspace layers, module-dag, toolchain, wgsl, globals, panic-boundary, send-impls, try-new, panic-messages, changelog fragments, ...; a missing tool fails
 cargo test -p xtask --locked                                  # xtask's own tests, lane classification included
 actionlint                                                    # workflow semantics
 zizmor .                                                      # workflow security audit
@@ -1007,8 +1005,8 @@ runs `checks`, `plan` and the `ci` aggregator:
 |---|---|---|
 | `docs` | a pull request that changes only documentation | nothing |
 | `tooling` | a pull request that changes only repository tooling | `deps` |
-| `wide` | a pull request that compiles anything | `deps` and the pull-request gate (`HEAVY_JOBS`: `clippy`, `cross-typecheck`, `test`, `test-nested`, `doc`, `api-contracts`, `wasm-check`, `test-features`) over the whole workspace |
-| `full` | a push to `main`, the merge queue, a manual `workflow_dispatch` run | `wide` plus `FULL_JOBS`: `feature-matrix`, `miri`, `doc-test`, `test-trybuild` (all Linux) |
+| `wide` | a pull request that compiles anything | `deps` and the pull-request gate (`HEAVY_JOBS`: `clippy`, `cross-typecheck`, `test`, `test-nested`, `doc`, `wasm-check`, `test-features`) over the whole workspace |
+| `full` | a push to `main`, the merge queue, a manual `workflow_dispatch` run | `wide` plus `FULL_JOBS`: `feature-matrix`, `miri`, `doc-test`, `test-trybuild`, `api-contracts` (all Linux); in `clippy` and `test` it also turns on the `native-features` and `gpu-test --backend gl` steps |
 
 - **Wide lane**: every pull request that compiles anything runs every Linux
   job, in parallel, over the whole workspace. One serial job over the
@@ -1071,8 +1069,8 @@ what it needs. One row per job in `.github/workflows/ci.yml`:
 |---|---|---|
 | `checks` | `cargo xtask checks` + `cargo test -p xtask`, then `actionlint` and `zizmor .` (`ci-full` runs both, skipping one that is not installed) | CI passes `--strict`: a missing typos, taplo or lychee fails there instead of being skipped with a message |
 | `plan` | `cargo xtask affected --worktree` | decides the lane and the affected packages; CI passes `--event` and the PR's base SHA, the local run diffs against `origin/main` (or `--base`) and `--worktree` adds uncommitted files |
-| `clippy` | `cargo xtask lint` (in `gate`), then `cargo xtask native-features` | `native-features` lints flui-native with default features off, once each for none, `x11`, `wayland`, `winit-backend` and `testing`, with and without `--all-targets`: the part of `feature-matrix` that pull requests run; from a Windows or macOS checkout pass `--target x86_64-unknown-linux-gnu` |
-| `test` | `cargo xtask test --fast`, `cargo xtask gpu-test --backend vulkan`, `cargo xtask gpu-test --backend gl`, then `cargo xtask build-all-targets` | the same commands; the gpu-test steps render on Mesa's lavapipe and llvmpipe, which the job installs; the all-targets build uses the test scope's packages and features, so it links the examples and benches without rebuilding the rest (a target whose `required-features` it leaves off is compiled by `feature-matrix`, not linked) (the facade's default feature set is linted by `feature-matrix`, not built here); the flui-native leg needs `xvfb-run` (Linux) and also links flui-native's examples, which the all-targets build leaves out with the rest of flui-native |
+| `clippy` | `cargo xtask lint` (in `gate`), then, on main only, `cargo xtask native-features` | `native-features` lints flui-native with default features off, once each for none, `x11`, `wayland`, `winit-backend` and `testing`, with and without `--all-targets`: part of `feature-matrix`; from a Windows or macOS checkout pass `--target x86_64-unknown-linux-gnu` |
+| `test` | `cargo xtask test --fast`, `cargo xtask gpu-test --backend vulkan`, `cargo xtask gpu-test --backend gl` (main only), then `cargo xtask build-all-targets` | the same commands; the gpu-test steps render on Mesa's lavapipe and llvmpipe, which the job installs; the all-targets build uses the test scope's packages and features, so it links the examples and benches without rebuilding the rest (a target whose `required-features` it leaves off is compiled by `feature-matrix`, not linked) (the facade's default feature set is linted by `feature-matrix`, not built here); the flui-native leg needs `xvfb-run` (Linux) and also links flui-native's examples, which the all-targets build leaves out with the rest of flui-native |
 | `test-nested` | `cargo xtask test --nested --nested-group native` | generated projects and facade consumers, beside `test` and `test-trybuild` |
 | `test-trybuild` | `cargo xtask test --nested --nested-group trybuild` | compile-fail suites; plain `--nested` still runs both groups |
 | `test-features` | the job's `cargo nextest run` lines (`ci-full` runs them) | — |

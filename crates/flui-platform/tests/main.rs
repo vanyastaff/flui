@@ -1,5 +1,9 @@
 //! flui-platform's integration tests, compiled as modules of one binary.
 
+#![allow(
+    clippy::disallowed_methods,
+    reason = "test code catches a panic to assert on it (ADR-0303 §5)"
+)]
 #[path = "drag_plan.rs"]
 mod drag_plan;
 
@@ -63,3 +67,6 @@ mod window_insets;
 
 #[path = "window_chrome_regions.rs"]
 mod window_chrome_regions;
+
+#[path = "launch_key.rs"]
+mod launch_key;

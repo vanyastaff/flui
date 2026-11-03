@@ -149,6 +149,10 @@ fn retire_queued(queued: VecDeque<OwnerWork>, first_failure: &mut Failure) {
 }
 
 fn retire_work(work: OwnerWork, first_failure: &mut Failure) {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "ADR-0287: queued work's drop runs contained so retirement completes"
+    )]
     let failure = catch_unwind(AssertUnwindSafe(|| drop(work))).err();
     preserve_first_lifecycle_panic(first_failure, failure, "queued owner work retirement");
 }
@@ -161,6 +165,10 @@ fn retire_value(retired: RetiredRuntime, first_failure: &mut Failure) {
 }
 
 fn retire_runtime(runtime: Box<UiRuntime>, first_failure: &mut Failure) {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "ADR-0287: a runtime's drop runs contained so retirement completes"
+    )]
     let failure = catch_unwind(AssertUnwindSafe(|| drop(runtime))).err();
     preserve_first_lifecycle_panic(first_failure, failure, "owner runtime retirement");
 }
@@ -174,6 +182,10 @@ fn retire_entry(
     if let Residence::Resident(runtime) = residence {
         retire_runtime(runtime, first_failure);
     }
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "ADR-0287: a factory's drop runs contained so retirement completes"
+    )]
     let failure = catch_unwind(AssertUnwindSafe(|| drop(factory))).err();
     preserve_first_lifecycle_panic(first_failure, failure, "assembly capability retirement");
 }
@@ -228,6 +240,10 @@ impl PreparedInstall {
 impl Drop for PreparedInstall {
     fn drop(&mut self) {
         let mut first_failure = None;
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: a presentation's drop runs contained so the first failure is kept"
+        )]
         match self.payload.take() {
             Some(InstallPayload::Runtime(entry)) => retire_entry(*entry, &mut first_failure),
             Some(InstallPayload::Presentation { presentation, .. }) => {

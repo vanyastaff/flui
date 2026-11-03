@@ -619,9 +619,15 @@ impl flui_foundation::inspect::Inspect for RenderTable {
             "default_vertical_alignment",
             &self.default_vertical_alignment,
         );
+        #[expect(
+            deprecated,
+            reason = "TableColumnWidth carries fractions and nested widths, with no single typed value"
+        )]
         out.value(
             "default_column_width",
-            flui_foundation::inspect::Value::Debug(&self.default_column_width),
+            flui_foundation::inspect::Value::Debug(flui_foundation::inspect::Untyped::new(
+                &self.default_column_width,
+            )),
         );
         out.field("has_border", &self.border.is_some());
     }

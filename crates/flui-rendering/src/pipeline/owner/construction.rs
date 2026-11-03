@@ -16,7 +16,7 @@ use crate::storage::RenderTree;
 use crate::pipeline::{
     PipelinePhase, TextContextHandle,
     handle::DirtySender,
-    notifier::VisualUpdateNotifier,
+    notifier::SharedNotifier,
     phase::{Idle, Layout},
     scheduler::DirtyTracker,
 };
@@ -55,13 +55,11 @@ impl PipelineOwner<Idle> {
     /// [`Self::new`]). Use this when the default 256 doesn't match the
     /// producer profile.
     pub fn new_with_capacity(dirty_channel_capacity: usize, text: TextContextHandle) -> Self {
-        let notifier = std::sync::Arc::new(parking_lot::RwLock::new(VisualUpdateNotifier::new()));
+        let notifier = SharedNotifier::default();
         let (dirty_sender, dirty_rx) =
-            DirtySender::new_pair(dirty_channel_capacity, std::sync::Arc::clone(&notifier));
-        let scheduler = DirtyTracker::new(std::sync::Arc::clone(&notifier));
-        let local_dirty = super::super::local_invalidation::LocalDirtyInbox::new(
-            std::sync::Arc::clone(&notifier),
-        );
+            DirtySender::new_pair(dirty_channel_capacity, notifier.clone());
+        let scheduler = DirtyTracker::new(notifier.clone());
+        let local_dirty = super::super::local_invalidation::LocalDirtyInbox::new(notifier.clone());
         Self {
             // A context lent while a pipeline is built is a measurement
             // building one: seed zero, and the first drain after the loan
@@ -110,20 +108,6 @@ impl PipelineOwner<Idle> {
             counters: super::PipelineCounters::default(),
             _phase: PhantomData,
         }
-    }
-
-    /// Moves this owner out, leaving an empty one in its place that measures
-    /// through the same text context.
-    ///
-    /// For a caller that holds the owner behind `&mut` and must pass it by
-    /// value through a typestate transition (`run_frame`, `into_layout`),
-    /// then put the result back. The placeholder is what the slot holds if
-    /// that transition unwinds, so it keeps the pipeline's text context
-    /// rather than a context of its own.
-    #[must_use = "the taken owner holds the render tree; put it back"]
-    pub fn take_idle(&mut self) -> Self {
-        let placeholder = Self::new(self.text.clone());
-        std::mem::replace(self, placeholder)
     }
 
     /// Records harness parent metadata for `child_id`, cloned into the
@@ -178,8 +162,16 @@ impl PipelineOwner<Idle> {
     /// the tuple is `Err(...)`. A paint tree already committed before a
     /// semantics error remains in the owner's `last_layer_tree`; it is not
     /// returned from this failed call, but a retry can repaint or submit the
-    /// retained visual result. The owner is **always** usable for a
-    /// subsequent frame on the success and error paths alike.
+    /// retained visual result.
+    ///
+    /// # Panics
+    ///
+    /// A panic that unwinds out of a phase (a `tracing` subscriber, a
+    /// visual-update callback) leaves that phase with its unfinished work
+    /// still queued, and then resumes — taking this by-value owner with it.
+    /// A caller that keeps the owner in a slot runs
+    /// [`run_frame_in_place`](Self::run_frame_in_place) instead, which puts
+    /// the owner back before the panic continues.
     #[must_use = "dropping the returned PipelineOwner<Idle> discards the pipeline handle; thread it back into the next frame"]
     pub fn run_frame(
         self,
@@ -187,66 +179,165 @@ impl PipelineOwner<Idle> {
         PipelineOwner<Idle>,
         Result<Option<LayerTree>, flui_foundation::TreeError<crate::error::RenderError>>,
     ) {
-        self.run_frame_impl()
+        let (owner, ended) = self.run_frame_contained();
+        match ended {
+            Ok(result) => (owner, result),
+            Err(payload) => {
+                // The owner goes with the unwind; its render objects are user
+                // values destroyed after a caught failure (ADR-0281 §3).
+                flui_foundation::panic::drop_contained(owner);
+                std::panic::resume_unwind(payload)
+            }
+        }
     }
 
-    fn run_frame_impl(
-        mut self,
-    ) -> (
-        PipelineOwner<Idle>,
-        Result<Option<LayerTree>, flui_foundation::TreeError<crate::error::RenderError>>,
-    ) {
+    /// Runs a full frame on the owner in place: [`run_frame`](Self::run_frame)
+    /// for a caller that holds the owner behind `&mut` (a [`PipelineCell`],
+    /// a test harness).
+    ///
+    /// The same owner is in `self` on every exit. A panic that unwinds out of
+    /// a phase resumes only after the owner, its render tree and its queued
+    /// work are back in place, so the frame that retries finds them.
+    ///
+    /// # Errors
+    ///
+    /// The frame's first [`RenderError`](crate::error::RenderError), with the
+    /// path to the node it names when it names one.
+    ///
+    /// [`PipelineCell`]: crate::pipeline::PipelineCell
+    pub fn run_frame_in_place(
+        &mut self,
+    ) -> Result<Option<LayerTree>, flui_foundation::TreeError<crate::error::RenderError>> {
+        // Drained on `&mut self`, so a callback that unwinds here leaves the
+        // owner where it is; the drain keeps every request it accepted.
+        self.drain_pending_dirty();
+        self.in_place(Self::run_frame_contained)
+    }
+
+    /// Drains the dirty channel and runs the layout phase alone, on the owner
+    /// in place: the layout pass of the build-during-layout fixpoint
+    /// (ADR-0017). As with [`run_frame_in_place`](Self::run_frame_in_place),
+    /// the owner is in `self` on every exit, an unwind included.
+    pub(crate) fn run_layout_in_place(
+        &mut self,
+    ) -> Result<(), flui_foundation::TreeError<crate::error::RenderError>> {
+        self.drain_pending_dirty();
+        self.in_place(|owner| {
+            let mut layout = owner.into_layout();
+            let ended = contain_phase(&mut layout, PipelineOwner::run_layout);
+            (layout.into_idle(), ended)
+        })
+    }
+
+    /// Runs `frame` on this owner moved out by value, and puts the owner it
+    /// returns back before anything else happens — before a caught panic
+    /// resumes.
+    ///
+    /// The only place an owner leaves its slot. While `frame` runs the slot
+    /// holds an empty placeholder over the same text context; it is dropped
+    /// once the owner is back, and runs no user code (an empty tree, a
+    /// notifier with no callbacks, a fresh channel).
+    fn in_place<R>(&mut self, frame: impl FnOnce(Self) -> (Self, Result<R, Unwind>)) -> R {
+        let placeholder = Self::new(self.text.clone());
+        let (owner, ended) = frame(std::mem::replace(self, placeholder));
+        drop(std::mem::replace(self, owner));
+        ended.unwrap_or_else(|payload| std::panic::resume_unwind(payload))
+    }
+
+    /// The frame's phases, each contained: a phase that returns an error or
+    /// unwinds ends the frame, and the owner comes back at [`Idle`] either
+    /// way.
+    ///
+    /// Total by construction: between the contained phase calls there are
+    /// only typestate moves, `Option::take` and a counter, none of which can
+    /// panic. Anything that can (user code, `tracing`) runs inside a
+    /// contained phase.
+    fn run_frame_contained(mut self) -> (Self, Result<FrameAnswer, Unwind>) {
         // Observe node-bound cross-thread invalidation before any phase runs — an
         // async decode that finished while the app idled lands in this
         // frame, not never.
-        self.drain_pending_dirty();
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: the pending-dirty drain runs contained; the owner exits the frame"
+        )]
+        if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.drain_pending_dirty();
+        })) {
+            return (self, Err(payload));
+        }
 
         // Layout
         let mut owner = self.into_layout();
-        if let Err(e) = owner.run_layout() {
-            let e = owner.in_tree(e);
-            return (owner.into_idle(), Err(e));
+        match contain_phase(&mut owner, PipelineOwner::run_layout) {
+            Ok(Ok(())) => {}
+            ended => return (owner.into_idle(), ended.map(|r| r.map(|()| None))),
         }
 
         // Compositing
         let mut owner = owner.into_compositing();
-        if let Err(e) = owner.run_compositing() {
-            let e = owner.in_tree(e);
-            return (owner.into_idle(), Err(e));
+        match contain_phase(&mut owner, PipelineOwner::run_compositing) {
+            Ok(Ok(())) => {}
+            ended => return (owner.into_idle(), ended.map(|r| r.map(|()| None))),
         }
 
         // Paint
         let mut owner = owner.into_paint();
-        if let Err(e) = owner.run_paint() {
-            let e = owner.in_tree(e);
-            return (owner.into_idle(), Err(e));
+        match contain_phase(&mut owner, PipelineOwner::run_paint) {
+            Ok(Ok(())) => {}
+            ended => return (owner.into_idle(), ended.map(|r| r.map(|()| None))),
         }
 
-        // Semantics
+        // Semantics. The phase has no `into_idle`: the transition to <Idle>
+        // goes via `finish`. On an error the painted tree remains in
+        // `last_layer_tree`; this failed call returns no tree, while a retry
+        // can reuse the retained visual result.
         let mut owner = owner.into_semantics();
         #[cfg(any(test, feature = "testing"))]
-        let semantics_result = match owner.semantics_error_once_for_test.take() {
+        let injected = owner.semantics_error_once_for_test.take();
+        #[cfg(not(any(test, feature = "testing")))]
+        let injected: Option<crate::error::RenderError> = None;
+        let semantics = contain_phase(&mut owner, |owner| match injected {
             Some(error) => Err(error),
             None => owner.run_semantics(),
-        };
-        #[cfg(not(any(test, feature = "testing")))]
-        let semantics_result = owner.run_semantics();
-        if let Err(e) = semantics_result {
-            // Semantics phase has no `into_idle` because the transition
-            // to <Idle> goes via `finish`. Use `finish` to recover the
-            // owner for the error path. The painted tree remains in
-            // `last_layer_tree`; this failed call returns no tree, while a
-            // retry can reuse the retained visual result.
-            let e = owner.in_tree(e);
-            return (owner.finish(), Err(e));
+        });
+        match semantics {
+            Ok(Ok(())) => {}
+            ended => return (owner.finish(), ended.map(|r| r.map(|()| None))),
         }
 
         let layer_tree = owner.take_layer_tree();
         if layer_tree.is_some() {
             owner.counters.frames_produced += 1;
         }
-        (owner.finish(), Ok(layer_tree))
+        (owner.finish(), Ok(Ok(layer_tree)))
     }
+}
+
+/// The payload of a panic a contained phase caught, resumed once the owner is
+/// back in its slot.
+type Unwind = Box<dyn std::any::Any + Send>;
+
+/// What a frame answers when no phase unwinds.
+type FrameAnswer = Result<Option<LayerTree>, flui_foundation::TreeError<crate::error::RenderError>>;
+
+/// Runs one phase under containment: its error is placed in the tree (the
+/// path to the node it names, whose `debug_name` is user code, so inside the
+/// containment too), and a panic that unwinds out of it is caught and handed
+/// back for the caller to resume once the owner is safe.
+///
+/// Each phase leaves its own phase and keeps its unfinished work before the
+/// unwind reaches here; this only keeps the owner.
+fn contain_phase<P: PipelinePhase>(
+    owner: &mut PipelineOwner<P>,
+    run: impl FnOnce(&mut PipelineOwner<P>) -> crate::error::RenderResult<()>,
+) -> Result<Result<(), flui_foundation::TreeError<crate::error::RenderError>>, Unwind> {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "ADR-0287: a frame phase runs contained so the owner is kept (ADR-0258)"
+    )]
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        run(&mut *owner).map_err(|error| owner.in_tree(error))
+    }))
 }
 
 impl<Phase: PipelinePhase> PipelineOwner<Phase> {

@@ -215,6 +215,10 @@ mod mapping {
             let Ok(index) = u16::try_from(index) else {
                 break;
             };
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "ADR-0287: a drag provider's panic is reported as a failed transfer"
+            )]
             let served = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 provider(RepresentationIndex(index))
             }));

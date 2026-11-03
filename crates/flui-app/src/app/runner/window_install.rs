@@ -78,10 +78,9 @@ pub(super) struct InstallationWindow {
     window: Option<Rc<dyn PlatformWindow>>,
     closed: Arc<AtomicBool>,
     published: bool,
-    agent: Option<(
-        crate::app::dev_agent::DevAgent,
-        flui_view::dev_agent::AgentWindow,
-    )>,
+    /// The window's agent, vended before the install, handed to the loop's
+    /// hooks once it commits.
+    agent: Option<flui_view::dev_agent::AgentWindow>,
 }
 
 impl InstallationWindow {
@@ -111,8 +110,8 @@ impl InstallationWindow {
     }
 
     pub(super) fn notify_opened(&mut self) {
-        if let Some((agent, window)) = self.agent.take() {
-            agent.window_opened(window);
+        if let Some(window) = self.agent.take() {
+            super::dev_agents::window_opened(window);
         }
     }
 }
@@ -123,6 +122,10 @@ impl Drop for InstallationWindow {
             return;
         };
         let mut first = None;
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: an unpublished window's discard is contained; first failure kept"
+        )]
         if !self.published {
             self.closed.store(true, Ordering::Release);
             first = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -130,6 +133,10 @@ impl Drop for InstallationWindow {
             }))
             .err();
         }
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: a retired window's drop runs contained; the first failure is kept"
+        )]
         let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(window))).err();
         crate::app::lifecycle_state::preserve_first_lifecycle_panic(
             &mut first,
@@ -138,6 +145,10 @@ impl Drop for InstallationWindow {
         );
         {
             let agent = self.agent.take();
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "ADR-0287: a retired window agent's drop runs contained; first failure kept"
+            )]
             let failure =
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(agent))).err();
             crate::app::lifecycle_state::preserve_first_lifecycle_panic(
@@ -216,13 +227,7 @@ impl WindowInstall {
         self.native.text_sizing = Some(sizing);
     }
 
-    pub(super) fn dev_agent(
-        &mut self,
-        agent: Option<(
-            crate::app::dev_agent::DevAgent,
-            flui_view::dev_agent::AgentWindow,
-        )>,
-    ) {
+    pub(super) fn dev_agent(&mut self, agent: Option<flui_view::dev_agent::AgentWindow>) {
         self.window.agent = agent;
     }
 

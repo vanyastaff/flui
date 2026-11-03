@@ -41,6 +41,16 @@
   a session per connection that do no I/O, so every transport serves the same protocol and
   limits. The desktop transport keeps no worker thread and waits on no answer: an owner's answer
   or event is written as soon as it arrives, and an idle Unix connection never wakes.
+- **The event loop owns its development-agent hooks** (ADR-0288 §7): the first loop that starts
+  with a configuration takes its hooks, so a clone of that configuration starting another loop
+  finds none, and the loop detaches and drops them when it ends. A hook is called with nothing
+  locked, and one that panics is dropped alone. `flui_runtime::dev_agent::DevAgentHost::attach`
+  takes the hooks and its calls take `&mut self`; `HeadlessHost::with_dev_agent` takes the
+  `HeadlessDevAgent` by `&mut`.
+- **The driver agent admits one driver at a time** (ADR-0288 §8): a second connection whose
+  hello asks to drive, as one naming no role does, is refused `not_driver` (retry `soon`) until
+  the first goes. Under `FLUI_AGENT_EXIT_ON_DISCONNECT` the app exits with the connection admitted
+  as its driver, and a later driver is refused `shutting_down`.
 
 ### Added
 
@@ -68,6 +78,25 @@
 - **`AgentAnswer::register` and `AgentEvents::register`** (`flui-view`'s development-agent
   seam): the last waker registered is woken once when the answer or an event can be read, and
   when the owner goes.
+- **`flui_protocol::ClientRole` and `Hello::role`**: a hello names `driver` (the default) or
+  `observer`; an observer reads and subscribes beside the driver, its hello lists only the
+  methods that read, and a call of its that acts is refused with the new
+  `ErrorCode::NotDriver`. `flui mcp` says when another client drives the app.
+- **The driver agent on Android** (ADR-0288 §6): a debug app started with the intent extras
+  `flui.agent.endpoint` (`@name`), `flui.agent.token` and `flui.agent.exit_on_disconnect` serves
+  its window over the abstract socket `name`, which a driver reaches through
+  `adb forward tcp:0 localabstract:name`. A connection whose peer is not the app's user, root or
+  the shell is closed unread. On Linux an endpoint `@name` is an abstract socket that admits
+  the app's user and root.
+- **`Platform::launch_value(LaunchKey)`** and `SharedPlatform::launch_value` (`flui-native`),
+  with `flui_platform::LaunchKey`: the value the process was launched with under a dotted key,
+  the launching intent's string extra on Android and the environment variable the key spells
+  elsewhere. `flui_native::current_user_id` on Linux and Android.
+- **`flui run --agent` on an Android device**: the app is started with the agent's endpoint
+  (an abstract socket) and token as `am start` extras, and `flui mcp` reaches it through the
+  loopback port of an `adb forward` the run holds and removes when it ends. A release build
+  gets the `driver` feature. The session file's `endpoint` is now typed: `{"local": …}` or
+  `{"forwarded": "127.0.0.1:<port>"}`, and `run.agent.ready` carries `forwarded` on Android.
 
 ### Removed
 
@@ -77,3 +106,6 @@
   `UiRuntime::semantics_agent`**: an agent reaches a window through
   `UiRuntime::dev_agent_window`. `flui_view::dev_agent::{AgentFault, HandleKind,
   InspectTarget}` go with the per-method calls.
+- **`flui_runtime::dev_agent::DevAgentAttachment`, `DevAgentHost::new` and
+  `DevAgentHost::is_attached`**: `DevAgentHost::attach(hooks)` builds a host that serves until it
+  is dropped, and `DevAgentHost::is_serving` says whether any of its hooks serves.

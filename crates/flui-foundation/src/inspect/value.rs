@@ -56,9 +56,36 @@ pub enum Value<'a> {
     Shared(Shared<'a>),
     /// A type that only has `Debug`. Snapshots count these fields, so the number of untyped
     /// fields is visible and can be driven down.
-    Debug(&'a dyn fmt::Debug),
+    Debug(Untyped<'a>),
     /// No value: an absent `Option`.
     None,
+}
+
+/// A field described only by its `Debug` text: the escape hatch for a type that has no typed
+/// [`Value`] yet (ADR-0242).
+///
+/// Its constructor is deprecated, so each site that still describes a field this way carries an
+/// `#[expect(deprecated, reason = "…")]` that names why, and the compiler reports the
+/// expectation once the site is gone (ADR-0303 §7). A field of a `#[derive(Inspect)]` type opts in
+/// with `#[inspect(debug)]` instead.
+#[derive(Clone, Copy)]
+pub struct Untyped<'a>(pub(super) &'a dyn fmt::Debug);
+
+impl<'a> Untyped<'a> {
+    /// Describes `value` by its `Debug` text.
+    #[deprecated(
+        note = "map the field to a typed `Value` (ADR-0242); a site that cannot yet carries `#[expect(deprecated, reason = \"…\")]` (ADR-0303 §7)"
+    )]
+    #[must_use]
+    pub const fn new(value: &'a dyn fmt::Debug) -> Self {
+        Self(value)
+    }
+}
+
+impl fmt::Debug for Untyped<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
 }
 
 impl Value<'_> {

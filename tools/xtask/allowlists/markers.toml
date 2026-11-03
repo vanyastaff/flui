@@ -75,16 +75,6 @@ class = "phase-letter"
 count = 2
 
 [[allow]]
-path = "crates/flui-engine/src/pipeline_cache.rs"
-class = "pr-label"
-count = 1
-
-[[allow]]
-path = "crates/flui-engine/src/pipeline_cache.rs"
-class = "tracker-h"
-count = 1
-
-[[allow]]
 path = "crates/flui-engine/src/renderer.rs"
 class = "pr-label"
 count = 1
@@ -103,11 +93,6 @@ count = 3
 path = "crates/flui-engine/src/shaders/arc_instanced.wgsl"
 class = "pr-label"
 count = 1
-
-[[allow]]
-path = "crates/flui-engine/src/ssaa.rs"
-class = "pr-label"
-count = 3
 
 [[allow]]
 path = "crates/flui-foundation/src/lib.rs"

@@ -61,6 +61,7 @@ use std::time::{Duration, Instant};
 use cursor_icon::CursorIcon;
 use flui_foundation::geometry::{Point, Size, WindowMetrics};
 use flui_foundation::panic::FirstPanic;
+use flui_platform::input_regions::ResizeEdge;
 use flui_platform::{
     AdmittedCommand, ApplyError, CloseDecision, CursorError, DisplaySnapshot, PlatformTextInput,
     PlatformWindow, SizeConstraints, Unsupported, UnsupportedReason, WindowAppearance,
@@ -92,6 +93,10 @@ use super::placement::{
 use super::support::{SupportAtoms, WindowManagerSupport, capabilities};
 use crate::host::{self, WindowFacets, WindowPositions};
 use crate::host_window::HostWindow;
+use crate::input::regions::ProjectedInputRegions;
+use crate::input::regions::presses::{
+    ChromePress, ChromePresses, PressButton, ResizeBand, device_point,
+};
 use crate::owner::OpenWindowError;
 use crate::owner::handlers::OpenWindows;
 use crate::owner::linux::x11::{
@@ -103,9 +108,7 @@ use crate::owner::wake_deadline::FrameCount;
 use crate::owner::window_delivery::{Publication, Retirement, WindowDelivery};
 use crate::text::WindowTextInput;
 use crate::window::plan::{FrameInset, OpenPlan, PlacementDisplay, WindowShell};
-use crate::window::state::{
-    ReportedFacts, WindowStateCell, mode_of, not_carried_out, system_frame_or_none,
-};
+use crate::window::state::{ReportedFacts, WindowStateCell, mode_of, not_carried_out};
 
 /// `_NET_WM_STATE` and `WM_STATE` are read this far, in 4-byte units.
 const PROPERTY_READ_LENGTH: u32 = 64;
@@ -149,6 +152,9 @@ pub(crate) struct WindowAtoms {
     net_wm_window_type: xproto::Atom,
     net_wm_window_type_normal: xproto::Atom,
     motif_wm_hints: xproto::Atom,
+    /// The request a window manager moves or resizes a window by, from a press
+    /// on a title bar or border the application draws.
+    net_wm_moveresize: xproto::Atom,
 }
 
 impl WindowAtoms {
@@ -159,7 +165,7 @@ impl WindowAtoms {
     /// [`PlatformError::Init`](crate::PlatformError::Init) when the server
     /// does not answer.
     pub(crate) fn intern(connection: &X11Connection) -> Result<Self, crate::PlatformError> {
-        const NAMES: [&[u8]; 20] = [
+        const NAMES: [&[u8]; 21] = [
             b"WM_PROTOCOLS",
             b"WM_DELETE_WINDOW",
             b"WM_STATE",
@@ -180,6 +186,7 @@ impl WindowAtoms {
             b"_NET_WM_WINDOW_TYPE",
             b"_NET_WM_WINDOW_TYPE_NORMAL",
             b"_MOTIF_WM_HINTS",
+            b"_NET_WM_MOVERESIZE",
         ];
         let failed = |error: &dyn std::fmt::Display| crate::PlatformError::Init {
             message: format!("cannot intern the X11 window atoms: {error}"),
@@ -215,6 +222,7 @@ impl WindowAtoms {
             net_wm_window_type,
             net_wm_window_type_normal,
             motif_wm_hints,
+            net_wm_moveresize,
         ] = atoms;
         Ok(Self {
             wm_protocols,
@@ -239,6 +247,7 @@ impl WindowAtoms {
             net_wm_window_type,
             net_wm_window_type_normal,
             motif_wm_hints,
+            net_wm_moveresize,
         })
     }
 
@@ -248,6 +257,7 @@ impl WindowAtoms {
             maximized_horz: self.states.maximized_horz,
             maximized_vert: self.states.maximized_vert,
             fullscreen: self.states.fullscreen,
+            moveresize: self.net_wm_moveresize,
         }
     }
 
@@ -264,6 +274,41 @@ impl WindowAtoms {
     }
 }
 
+/// What a press on a window's chrome is answered from (ADR-0286 §10).
+#[derive(Debug, Default)]
+struct Chrome {
+    /// The regions of the last composited frame, in device pixels.
+    projected: ProjectedInputRegions,
+    /// The last press on the bar, and one armed to move the window.
+    presses: ChromePresses,
+    /// The button of the press the window took, whose release it takes too.
+    held: Option<u32>,
+}
+
+/// The `_NET_WM_MOVERESIZE` direction that moves a window.
+const MOVERESIZE_MOVE: u32 = 8;
+
+/// The `_NET_WM_MOVERESIZE` direction that resizes a window from `edge`, `None`
+/// for an edge it names none for.
+const fn moveresize_direction(edge: ResizeEdge) -> Option<u32> {
+    Some(match edge {
+        ResizeEdge::TopLeft => 0,
+        ResizeEdge::Top => 1,
+        ResizeEdge::TopRight => 2,
+        ResizeEdge::Right => 3,
+        ResizeEdge::BottomRight => 4,
+        ResizeEdge::Bottom => 5,
+        ResizeEdge::BottomLeft => 6,
+        ResizeEdge::Left => 7,
+        _ => return None,
+    })
+}
+
+/// An XInput 2 fixed-point coordinate.
+fn fp1616(value: i32) -> f64 {
+    f64::from(value) / 65536.0
+}
+
 /// What a window keeps of what it was asked, which the server does not hold
 /// in a form it reads back.
 #[derive(Debug)]
@@ -271,7 +316,9 @@ struct Record {
     title: String,
     constraints: SizeConstraints,
     resizable: bool,
-    decorated: bool,
+    /// The frame the window was last asked for: the window manager's
+    /// decorations are on for the system's alone.
+    frame: WindowFrame,
     /// The application wants the window shown: mapped, or waiting for its
     /// first frame to be.
     shown: bool,
@@ -331,6 +378,9 @@ pub struct X11Window {
     /// The scale the input reads this window's positions at.
     input_scale: WindowScale,
     record: RefCell<Record>,
+    /// The chrome regions a press is answered from, and the window's presses
+    /// on them (ADR-0286 §10).
+    chrome: RefCell<Chrome>,
     closed: Cell<bool>,
     /// Where the X window is in its end.
     native: Cell<NativeWindow>,
@@ -472,7 +522,7 @@ impl X11Window {
             _ => record.normal_geometry,
         };
         if mode == WindowMode::Normal
-            && record.decorated
+            && record.frame.has_system_title_bar()
             && let Some(windows) = self.windows.upgrade()
         {
             windows.frame_inset.record(read.frame.added());
@@ -486,7 +536,7 @@ impl X11Window {
             .with_title(Some(record.title.clone()))
             .with_constraints(record.constraints)
             .with_resizable(record.resizable)
-            .with_frame(system_frame_or_none(record.decorated))
+            .with_frame(record.frame)
             .with_display(display.map(|display| display.id));
         ReportedFacts {
             metrics,
@@ -633,6 +683,150 @@ impl X11Window {
         }
     }
 
+    /// An XInput 2 pointer event over the window's chrome: whether the window
+    /// took it from the input (ADR-0286 §10). A primary press on a move region
+    /// arms a move the window manager starts once the pointer travels, a
+    /// second one soon after toggles maximize, a press on the resize band or a
+    /// resize region hands the window manager a resize; the release of a taken
+    /// press is taken too. The window manager is asked with nothing borrowed.
+    fn chrome_event(&self, event: &Event) -> bool {
+        match event {
+            Event::XinputButtonPress(press) => self.chrome_press(press),
+            Event::XinputMotion(motion) => {
+                self.chrome_motion(motion);
+                false
+            }
+            Event::XinputButtonRelease(release) => {
+                let mut chrome = self.chrome.borrow_mut();
+                if chrome.held != Some(release.detail) {
+                    return false;
+                }
+                chrome.held = None;
+                chrome.presses.released();
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn chrome_press(&self, press: &x11rb::protocol::xinput::ButtonPressEvent) -> bool {
+        use x11rb::protocol::xinput::PointerEventFlags;
+
+        if self.closed.get() {
+            return false;
+        }
+        let emulated = u32::from(press.flags) & u32::from(PointerEventFlags::POINTER_EMULATED) != 0;
+        let button = match press.detail {
+            1 => PressButton::Primary,
+            3 => PressButton::Secondary,
+            _ => return false,
+        };
+        // A touch's emulated pointer is the application's: touches reach it as
+        // their own.
+        if emulated {
+            return false;
+        }
+        let Some(point) = device_point(fp1616(press.event_x), fp1616(press.event_y)) else {
+            return false;
+        };
+        let (frame, scale, content, resizable) = {
+            let record = self.record.borrow();
+            (record.frame, record.scale, record.content, record.resizable)
+        };
+        let normal = self.cell.published().mode == WindowMode::Normal;
+        let band = match frame {
+            WindowFrame::AppTitleBar(_) => {
+                content.and_then(|size| ResizeBand::of(size, scale, resizable && normal))
+            }
+            // One with no frame draws its own resize areas, and one with the
+            // window manager's has its title bar there.
+            WindowFrame::None => None,
+            _ => return false,
+        };
+        let answer = {
+            let mut chrome = self.chrome.borrow_mut();
+            chrome.held = None;
+            let Chrome {
+                projected, presses, ..
+            } = &mut *chrome;
+            presses.press(projected.sent(), point, button, band, Instant::now(), scale)
+        };
+        match answer {
+            // The window manager's menu is asked for with a message only some
+            // window managers take (`_GTK_SHOW_WINDOW_MENU`); the press stays
+            // the application's.
+            ChromePress::App | ChromePress::WindowMenu => return false,
+            ChromePress::Move => {}
+            ChromePress::Resize(edge) => {
+                let Some(direction) = moveresize_direction(edge) else {
+                    return false;
+                };
+                self.move_resize(direction, press);
+            }
+            ChromePress::ToggleMaximize => {
+                let mode = match self.cell.published().mode {
+                    WindowMode::Maximized => WindowMode::Normal,
+                    _ => WindowMode::Maximized,
+                };
+                if let Err(error) = self.enter_mode(mode) {
+                    tracing::debug!(%error, "cannot toggle an X11 window's maximize");
+                }
+                if let Err(error) = self.xcb().flush() {
+                    tracing::debug!(%error, "cannot toggle an X11 window's maximize");
+                }
+                self.refresh_state();
+            }
+        }
+        self.chrome.borrow_mut().held = Some(press.detail);
+        true
+    }
+
+    /// The pointer moved with a taken press on the bar held: the window manager
+    /// moves the window once it has travelled far enough.
+    fn chrome_motion(&self, motion: &x11rb::protocol::xinput::ButtonPressEvent) {
+        let Some(point) = device_point(fp1616(motion.event_x), fp1616(motion.event_y)) else {
+            return;
+        };
+        let scale = self.record.borrow().scale;
+        let starts = {
+            let mut chrome = self.chrome.borrow_mut();
+            chrome.held == Some(1) && chrome.presses.moved(point, scale)
+        };
+        if starts {
+            self.move_resize(MOVERESIZE_MOVE, motion);
+        }
+    }
+
+    /// Hand the window manager a move or a resize in `direction`, from the
+    /// pointer where `event` saw it: the pointer's grab is let go of first,
+    /// so the window manager can take it.
+    fn move_resize(&self, direction: u32, event: &x11rb::protocol::xinput::ButtonPressEvent) {
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "a root coordinate of the X server fits the i16 range it came from"
+        )]
+        let root = |value: i32| fp1616(value).round() as i32;
+        if let Err(error) = self.xcb().ungrab_pointer(x11rb::CURRENT_TIME) {
+            tracing::debug!(%error, "cannot let go of the pointer for the window manager");
+        }
+        self.send_to_root(ClientMessageEvent::new(
+            32,
+            self.xid,
+            self.atoms.net_wm_moveresize,
+            [
+                root(event.root_x).cast_unsigned(),
+                root(event.root_y).cast_unsigned(),
+                direction,
+                event.detail,
+                // A request of an application.
+                1,
+            ],
+        ));
+        if let Err(error) = self.xcb().flush() {
+            tracing::debug!(%error, "cannot ask the window manager to move the window");
+        }
+    }
+
     /// Whether the window is unmapped and waits to be shown: the window
     /// manager does not manage it, and reads a mode from its properties when
     /// it maps it.
@@ -772,7 +966,7 @@ impl X11Window {
             return;
         };
         if windows.frame_inset.is_known()
-            || !self.record.borrow().decorated
+            || !self.record.borrow().frame.has_system_title_bar()
             || !self.support().managed
         {
             return;
@@ -1316,7 +1510,7 @@ impl PlatformWindow for X11Window {
             }
             WindowCommand::SetFrame(frame) => {
                 let decorated = frame.has_system_title_bar();
-                self.record.borrow_mut().decorated = decorated;
+                self.record.borrow_mut().frame = frame;
                 self.write_decorations(decorated);
             }
             WindowCommand::SetMode(mode) => self.enter_mode(mode)?,
@@ -1366,13 +1560,20 @@ impl PlatformWindow for X11Window {
         Err(Unsupported::new(UnsupportedReason::NotOnThisPlatform))
     }
 
-    /// The input regions are the system's edge gestures a region keeps out,
-    /// and X11 has none.
+    /// The chrome regions a press on a window without decorations is answered
+    /// from (ADR-0286 §10), projected at the window's scale. X11 has no system
+    /// edge gestures, so those regions are kept and never read.
     fn set_input_regions(
         &self,
-        _regions: &[flui_platform::input_regions::InputRegion],
+        regions: &[flui_platform::input_regions::InputRegion],
     ) -> Result<(), Unsupported> {
-        Err(Unsupported::new(UnsupportedReason::NotOnThisPlatform))
+        let scale = self.record.borrow().scale;
+        // Projected with nothing borrowed: a dropped region is reported
+        // through `tracing`, whose subscriber is the application's code.
+        let mut projected = std::mem::take(&mut self.chrome.borrow_mut().projected);
+        let _changed = projected.update(regions, scale, None);
+        self.chrome.borrow_mut().projected = projected;
+        Ok(())
     }
 
     fn text_input(&self) -> Option<Arc<dyn PlatformTextInput>> {
@@ -1577,7 +1778,8 @@ impl X11Windows {
         let id = self.mint_id()?;
         let support = *self.support.lock();
         // A title bar of the application's opens with the window manager's frame
-        // until this host takes one, so the plan takes that frame's inset.
+        // where the window manager cannot move one, so the plan takes that
+        // frame's inset.
         let frame = options.frame.at_open(&capabilities(support));
         let options = options.with_frame(frame);
         let snapshot = owner.displays().snapshot().ok();
@@ -1674,7 +1876,7 @@ impl X11Windows {
                 resizable: options.resizable,
                 // No title bar of the application's here yet: one asked for
                 // opens with the system's frame.
-                decorated: options.frame != WindowFrame::None,
+                frame: options.frame,
                 shown: options.visible,
                 reveal_pending: plan.hidden_until_first_frame,
                 minimize_on_map: false,
@@ -1690,6 +1892,7 @@ impl X11Windows {
                 scale,
             }),
             closed: Cell::new(false),
+            chrome: RefCell::default(),
             native: Cell::new(NativeWindow::Live),
         });
         owner.notices().mark_stale_on_wake(&window.cell);
@@ -1784,7 +1987,7 @@ impl X11Window {
         let atoms = &self.atoms;
         let (title, decorated) = {
             let record = self.record.borrow();
-            (record.title.clone(), record.decorated)
+            (record.title.clone(), record.frame.has_system_title_bar())
         };
         let class = std::env::current_exe()
             .ok()
@@ -1845,6 +2048,17 @@ impl OpenWindows for X11Windows {
 impl LoopWindows for X11Windows {
     fn event(&self, event: &Event) {
         self.route(event);
+    }
+
+    fn chrome_event(&self, event: &Event) -> bool {
+        let xid = match event {
+            Event::XinputButtonPress(event)
+            | Event::XinputButtonRelease(event)
+            | Event::XinputMotion(event) => event.event,
+            _ => return false,
+        };
+        self.window_of(xid)
+            .is_some_and(|window| window.chrome_event(event))
     }
 
     fn deliver_frames(&self) {

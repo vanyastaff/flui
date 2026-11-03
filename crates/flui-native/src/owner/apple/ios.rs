@@ -799,6 +799,10 @@ impl host::Loop for IOSLoop {
 }
 
 impl host::Services for IOSLoop {
+    fn launch_value(&self, key: flui_platform::LaunchKey) -> Option<String> {
+        host::environment_launch_value(key)
+    }
+
     fn background_executor(&self) -> Arc<dyn PlatformExecutor> {
         self.background_executor.clone()
     }
@@ -915,6 +919,10 @@ fn run_pending_bootstrap() -> bool {
     platform.app.resume_through_signal(&platform.signal);
     DELEGATE_STATE.with(|state| state.borrow_mut().hooks = Some(Arc::clone(&hooks)));
     // The bootstrap's panic is caught here: UIKit's callback cannot unwind.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "ADR-0287: UIKit's callback cannot unwind, so the bootstrap panic is caught here"
+    )]
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         platform
             .app

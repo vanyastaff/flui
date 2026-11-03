@@ -7,10 +7,14 @@
 //! extras `am start` carried. A web app has neither: the driver's preload script installs the
 //! token before the module starts, and no URL carries it.
 //!
+//! Each variable is its extra's name in the environment's spelling, uppercase with `_` for `.`,
+//! so an app reads both under one key (ADR-0288 §7).
+//!
 //! With no endpoint, the app's agent creates nothing: no thread, no socket, no tap.
 
 /// The environment variable that names the agent's endpoint: a pipe name on Windows
-/// (`flui-agent-1234` or `\\.\pipe\flui-agent-1234`), a socket path elsewhere.
+/// (`flui-agent-1234` or `\\.\pipe\flui-agent-1234`), a socket path elsewhere, and on Linux
+/// `@name` for the abstract socket `name`.
 pub const ENDPOINT_ENV: &str = "FLUI_AGENT_ENDPOINT";
 
 /// The environment variable that carries the token a client presents in its hello.
@@ -21,8 +25,9 @@ pub const TOKEN_ENV: &str = "FLUI_AGENT_TOKEN";
 /// running app never sets it.
 pub const EXIT_ON_DISCONNECT_ENV: &str = "FLUI_AGENT_EXIT_ON_DISCONNECT";
 
-/// The Android intent extra that carries [`ENDPOINT_ENV`]'s value: the name of an abstract
-/// Unix socket.
+/// The Android intent extra that carries [`ENDPOINT_ENV`]'s value: `@name`, the abstract
+/// socket `name` (`@flui-agent-1234`), which a driver reaches through
+/// `adb forward tcp:0 localabstract:name`.
 pub const ENDPOINT_EXTRA: &str = "flui.agent.endpoint";
 
 /// The Android intent extra that carries [`TOKEN_ENV`]'s value.

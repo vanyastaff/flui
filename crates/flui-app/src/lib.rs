@@ -35,6 +35,13 @@
 //! naming the configuration and capabilities; the runner constructs and owns
 //! the UI ui_runtime.
 
+#![cfg_attr(
+    test,
+    allow(
+        clippy::disallowed_methods,
+        reason = "test code catches a panic to assert on it (ADR-0303 §5)"
+    )
+)]
 // Proving `flui_engine::Renderer: Send` (for the `Send` frame
 // callbacks that capture it) descends through wgpu-core past the default
 // recursion limit under the next-generation trait solver; see the matching

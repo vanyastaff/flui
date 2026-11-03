@@ -1,5 +1,9 @@
 //! Contracts exercised through the runtime's host interface.
 
+#![allow(
+    clippy::disallowed_methods,
+    reason = "test code catches a panic to assert on it (ADR-0303 §5)"
+)]
 #[path = "contracts/drag_drop.rs"]
 mod drag_drop;
 
@@ -129,6 +133,8 @@ mod owner_publication;
 mod owner_registry;
 #[path = "contracts/owner_sampling.rs"]
 mod owner_sampling;
+#[path = "contracts/recovered_panic_context.rs"]
+mod recovered_panic_context;
 #[path = "contracts/render_view_lending.rs"]
 mod render_view_lending;
 #[path = "../src/table_test.rs"]

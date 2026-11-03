@@ -181,6 +181,10 @@ impl OwnerCalls {
 
     /// Run `call`, owner code, contained; `None` when it panicked.
     pub fn run<R>(&mut self, call: impl FnOnce() -> R) -> Option<R> {
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: owner code runs contained; its panic is kept for the owner turn"
+        )]
         match catch_unwind(AssertUnwindSafe(call)) {
             Ok(value) => Some(value),
             Err(payload) => {
@@ -198,6 +202,10 @@ impl OwnerCalls {
     pub fn run_parking<R>(&mut self, gate: &CommitGate, call: impl FnOnce() -> R) -> Option<R> {
         let held = gate.holds_failure();
         let unwinding = std::thread::panicking();
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: owner code runs contained; its panic is kept behind parked work"
+        )]
         match catch_unwind(AssertUnwindSafe(call)) {
             Ok(value) => {
                 if !held {
@@ -256,6 +264,10 @@ impl OwnerCalls {
         call: impl FnOnce() -> R,
     ) -> Option<R> {
         let unwinding = std::thread::panicking();
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: owner code runs contained; its panic is kept and parked work stays"
+        )]
         match catch_unwind(AssertUnwindSafe(call)) {
             Ok(value) => Some(value),
             Err(payload) => {
@@ -270,6 +282,10 @@ impl OwnerCalls {
     /// run owner code: dropped, contained, after a failure too. A panic from
     /// its destructor is kept behind any earlier failure (ADR-0281).
     pub fn retire<T>(&mut self, value: T) {
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: a retired value's drop runs contained behind any earlier failure"
+        )]
         if let Err(payload) = catch_unwind(AssertUnwindSafe(move || drop(value))) {
             self.keep(payload);
         }

@@ -6,6 +6,10 @@
 //! `use crate::common;` -- a per-suite `mod common;` would load
 //! `tests/common/mod.rs` once per suite (`clippy::duplicate_mod`).
 
+#![allow(
+    clippy::disallowed_methods,
+    reason = "test code catches a panic to assert on it (ADR-0303 §5)"
+)]
 mod common;
 
 #[path = "animated_icons.rs"]

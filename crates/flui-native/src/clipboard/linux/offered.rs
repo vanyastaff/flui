@@ -44,10 +44,18 @@ pub(crate) fn ask(text: SelectionText) -> Option<String> {
 /// failure goes on; a second failure there is discarded and the first one
 /// stays the one that goes on (ADR-0281 §2).
 pub(crate) fn answer_with(text: SelectionText, answer: Resolver<ClipboardRead>) {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "ADR-0287: a closure's panic still answers the read before it continues"
+    )]
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| ask(text))) {
         // An owner that retired has nobody left to answer.
         Ok(text) => drop(answer.resolve(text.map_or(Ok(None), host_text))),
         Err(failure) => {
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "ADR-0287: the empty answer posts contained so the closure's failure stays first"
+            )]
             let settled =
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| answer.resolve(Ok(None))));
             if let Err(second) = settled {

@@ -12,6 +12,7 @@
 
 use std::collections::HashMap;
 
+use flui_painting::paint::CoverageClass;
 use flui_painting::{BlendMode, Paint};
 use wgpu::RenderPipeline;
 
@@ -102,12 +103,12 @@ impl PipelineKey {
 ///
 /// `SrcOver` is exactly [`wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING`].
 ///
-/// Advanced (separable/non-separable, dst-reading) modes are *not* handled here:
-/// shape records divert to `DrawItem::AdvancedShape` before a pipeline key is
-/// built (see `DrawBatcher::add_tessellated_with_key`), and
+/// Advanced (separable/non-separable, dst-reading) modes have no fixed-function
+/// blend state: shape records divert to `DrawItem::AdvancedShape` before a
+/// pipeline key is built (see `DrawBatcher::add_tessellated_with_key`), and
 /// [`PipelineCache::get_or_create`] debug-asserts that no advanced key reaches the
-/// cache. The defensive `_` arm below maps any stray advanced mode to `SrcOver`
-/// in release rather than panicking — but that path is a routing logic error.
+/// cache. Their arm below names them and maps a stray one to `SrcOver` in
+/// release rather than panicking, but that path is a routing logic error.
 pub(crate) fn blend_state_for(mode: BlendMode) -> wgpu::BlendState {
     use wgpu::{BlendComponent, BlendFactor, BlendOperation, BlendState};
 
@@ -157,7 +158,21 @@ pub(crate) fn blend_state_for(mode: BlendMode) -> wgpu::BlendState {
         },
         // Advanced modes never reach here (mapped to SrcOver upstream). Fall
         // back defensively rather than panicking.
-        _ => BlendState::PREMULTIPLIED_ALPHA_BLENDING,
+        BlendMode::Screen
+        | BlendMode::Overlay
+        | BlendMode::Darken
+        | BlendMode::Lighten
+        | BlendMode::ColorDodge
+        | BlendMode::ColorBurn
+        | BlendMode::HardLight
+        | BlendMode::SoftLight
+        | BlendMode::Difference
+        | BlendMode::Exclusion
+        | BlendMode::Multiply
+        | BlendMode::Hue
+        | BlendMode::Saturation
+        | BlendMode::Color
+        | BlendMode::Luminosity => BlendState::PREMULTIPLIED_ALPHA_BLENDING,
     }
 }
 
@@ -187,12 +202,13 @@ pub(crate) fn blend_state_for(mode: BlendMode) -> wgpu::BlendState {
 /// which holds exactly when `D` has the absorbing form `1 - k*srcAlpha` (or is
 /// `One`). Those modes return `None` here and need no correction.
 ///
-/// The rest have `D = k * srcAlpha`, and `k` is what this returns:
+/// The rest have `D = k * srcAlpha`, and `k` is what this returns. They are
+/// the `Replacing` and `Masking` classes of [`BlendMode::coverage_class`]:
 ///
-/// | `k`   | destination factor | modes                                     |
-/// |-------|--------------------|-------------------------------------------|
-/// | `0.0` | `Zero`             | `Clear`, `Src`, `SrcIn`, `SrcOut`, `Modulate` |
-/// | `1.0` | `SrcAlpha`         | `DstIn`, `DstATop`                        |
+/// | `k`   | destination factor | class       | modes                                     |
+/// |-------|--------------------|-------------|-------------------------------------------|
+/// | `0.0` | `Zero`             | `Replacing` | `Clear`, `Src`, `SrcIn`, `SrcOut`, `Modulate` |
+/// | `1.0` | `SrcAlpha`         | `Masking`   | `DstIn`, `DstATop`                        |
 ///
 /// Note `DstOut` is in neither list: it is the erase-by-alpha mode one would
 /// expect to break alongside `Clear`, and its `(Zero, OneMinusSrcAlpha)` pair
@@ -204,16 +220,27 @@ pub(crate) fn blend_state_for(mode: BlendMode) -> wgpu::BlendState {
 /// [`coverage_blend_state_for`] pairs that with `dst_factor = OneMinusSrc1`.
 ///
 /// Advanced (dst-reading) modes never reach a fixed-function blend state and
-/// return `None`.
+/// return `None`, as does `Plus`, whose saturation no blend factor corrects.
 pub(crate) fn destination_alpha_scale_for(mode: BlendMode) -> Option<f32> {
-    match mode {
-        BlendMode::Clear
-        | BlendMode::Src
-        | BlendMode::SrcIn
-        | BlendMode::SrcOut
-        | BlendMode::Modulate => Some(0.0),
-        BlendMode::DstIn | BlendMode::DstATop => Some(1.0),
-        _ => None,
+    match mode.coverage_class() {
+        CoverageClass::Replacing => Some(0.0),
+        CoverageClass::Masking => Some(1.0),
+        CoverageClass::Absorbing | CoverageClass::Saturating | CoverageClass::Advanced => None,
+    }
+}
+
+/// Whether folding partial coverage into the source alpha gives a wrong
+/// result for `mode`, so an anti-aliased edge must composite
+/// `mix(destination, blend(source, destination), coverage)` with the coverage
+/// kept apart from the source: the `Saturating`, `Replacing` and `Masking`
+/// classes of [`BlendMode::coverage_class`].
+///
+/// `Absorbing` modes fold exactly. `Advanced` modes fold exactly too, and
+/// composite through a destination read of their own.
+pub(crate) fn coverage_must_not_fold(mode: BlendMode) -> bool {
+    match mode.coverage_class() {
+        CoverageClass::Saturating | CoverageClass::Replacing | CoverageClass::Masking => true,
+        CoverageClass::Absorbing | CoverageClass::Advanced => false,
     }
 }
 
@@ -267,26 +294,30 @@ pub(crate) fn coverage_blend_state_for(mode: BlendMode) -> wgpu::BlendState {
 /// | SrcIn     | dst_a·0 + 0·dst = 0               | ✗         |
 /// | DstIn     | 0 + src_a(=0)·dst = 0             | ✗         |
 /// | SrcOut    | (1-dst_a)·0 + 0·dst = 0           | ✗         |
-/// | DstATop   | dst_a·0 + src_a(=0)·dst = 0       | ✗         |
-/// | Modulate  | dst·0 + dst·src_a(=0) = 0         | ✗         |
+/// | DstATop   | (1-dst_a)·0 + src_a(=0)·dst = 0   | ✗         |
+/// | Modulate  | dst·0 + 0·dst = 0                 | ✗         |
 ///
-/// (Rows where a dst-factor depends on `src_a` — DstIn, DstATop, Modulate —
-/// vanish only *because* `src_a = 0` here; they are state-dependent factors, not
-/// the constant `Zero`. No test ties the partition to `Color::blend`, so this
-/// hand-derivation is the only record of it.)
+/// (The `DstIn` and `DstATop` rows vanish only *because* `src_a = 0` here:
+/// their destination factor is `SrcAlpha`, not the constant `Zero`.) The
+/// tile-safe rows are the `Absorbing` and `Saturating` classes of
+/// [`BlendMode::coverage_class`]; the rest are `Replacing` and `Masking`.
+/// `coverage_class_names_the_destination_factor_blend_state_for_uses` (in this
+/// module) and `every_blend_mode_is_classified_by_its_cpu_blend` (in
+/// `flui-painting`) tie the classes to these factors and to `Color::blend`.
 ///
 /// Plus preserves transparent padding, but clamping its full blend before
 /// coverage interpolation requires an independent coverage plane and backdrop
 /// read at SSAA replay; tile-safe does not imply a fixed-function composite.
 ///
-/// Advanced (dst-read) modes are NOT tile-safe by this definition, but they are
-/// handled separately via `flush_advanced_layer` (not fixed-function blend).
-/// Use `blend.is_advanced()` to detect them before calling this function.
+/// Advanced modes keep the destination under a transparent source as well,
+/// but no fixed-function blend state composites them, so they answer `false`
+/// here and composite through `flush_advanced_layer`. Use
+/// `blend.is_advanced()` to detect them before calling this function.
 ///
 /// ## Coverage-destructive exception set
 ///
-/// The following modes are NOT tile-safe and NOT advanced (Porter-Duff modes
-/// that destroy the destination where the SSAA tile is transparent):
+/// The `Replacing` and `Masking` modes are neither tile-safe nor advanced:
+/// they destroy the destination where the SSAA tile is transparent.
 ///
 ///   Clear, Src, SrcIn, DstIn, SrcOut, DstATop, Modulate
 ///
@@ -294,19 +325,14 @@ pub(crate) fn coverage_blend_state_for(mode: BlendMode) -> wgpu::BlendState {
 /// This is an explicit, justified exception: routing them through the SSAA tile
 /// would apply the blend to the transparent padding, incorrectly writing zeros
 /// to destination pixels outside the shape's geometric boundary.
-/// The aliased result is COMPLETE and CORRECT in coverage region — only the
-/// 1px edge band is aliased, which is the same quality as the pre-PR-3 engine.
+/// The aliased result is COMPLETE and CORRECT in coverage region: only the
+/// 1px edge band is aliased, as on the tessellated path every other mode
+/// leaves below the SSAA area threshold.
 pub(crate) fn is_tile_safe_for_ssaa(mode: BlendMode) -> bool {
-    matches!(
-        mode,
-        BlendMode::SrcOver
-            | BlendMode::Dst
-            | BlendMode::DstOver
-            | BlendMode::DstOut
-            | BlendMode::SrcATop
-            | BlendMode::Xor
-            | BlendMode::Plus
-    )
+    match mode.coverage_class() {
+        CoverageClass::Absorbing | CoverageClass::Saturating => true,
+        CoverageClass::Replacing | CoverageClass::Masking | CoverageClass::Advanced => false,
+    }
 }
 
 /// Minimum device-pixel² area a shape must have before SSAA is eligible.
@@ -562,17 +588,11 @@ impl PipelineCache {
 
     pub(crate) fn ensure_isolation(&mut self, device: &wgpu::Device, key: PipelineKey) {
         if self.isolation_shader.is_none() {
-            self.isolation_shader = Some(
-                device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            self.isolation_shader =
+                Some(device.create_shader_module(wgpu::ShaderModuleDescriptor {
                     label: Some("Shape isolation shader"),
-                    source: wgpu::ShaderSource::Wgsl(
-                        self.isolation_source
-                            .replace("@vertex", "")
-                            .replace("fn vs_isolation", "@vertex fn vs_isolation")
-                            .into(),
-                    ),
-                }),
-            );
+                    source: wgpu::ShaderSource::Wgsl(self.isolation_source.into()),
+                }));
         }
         if !self.isolation_cache.contains_key(&key.msaa_samples()) {
             let pipeline = self.create_pipeline_inner(device, key, true);
@@ -837,7 +857,112 @@ mod blend_logic {
         crate::pipeline_set::premultiplied_source_override_matches_the_shader();
     }
 
-    // =========================================================================
-    // H1: ssaa_eligible_for() behaviour tests
-    // =========================================================================
+    /// Every mode's class names the destination factor `blend_state_for`
+    /// gives it, and that blend state computes what `Color::blend` does: the
+    /// classification, the fixed-function table and the CPU blend cannot
+    /// drift apart. Needs no GPU device.
+    #[test]
+    fn coverage_class_names_the_destination_factor_blend_state_for_uses() {
+        use crate::blend_oracle::{blend, premultiplied};
+        use flui_painting::styling::Color;
+        use wgpu::BlendFactor;
+
+        // Non-saturating pairs, so `Plus`'s clamp agrees with the factors.
+        let pairs = [
+            (
+                Color::rgba(200, 60, 40, 160),
+                Color::rgba(40, 180, 120, 200),
+            ),
+            (Color::rgba(30, 90, 150, 100), Color::rgba(120, 60, 30, 255)),
+        ];
+        let close = |a: [f32; 4], b: [f32; 4], tolerance: f32| {
+            a.iter().zip(b).all(|(a, b)| (a - b).abs() <= tolerance)
+        };
+        // The fixed-function blend into a unorm target, which saturates.
+        let fixed_function = |mode: BlendMode, source: Color, destination: Color| {
+            blend(
+                mode,
+                premultiplied(source, 1.0),
+                premultiplied(destination, 1.0),
+            )
+            .map(|channel| channel.clamp(0.0, 1.0))
+        };
+        let destination = premultiplied(pairs[0].1, 1.0);
+
+        for &mode in flui_painting::testing::EVERY_BLEND_MODE {
+            let class = mode.coverage_class();
+            let state = blend_state_for(mode);
+            // The destination factors the class allows, and the
+            // `destination_alpha_scale_for` it implies.
+            let expected = match class {
+                CoverageClass::Absorbing => Some((
+                    [BlendFactor::One, BlendFactor::OneMinusSrcAlpha].as_slice(),
+                    None,
+                )),
+                CoverageClass::Saturating => Some(([BlendFactor::One].as_slice(), None)),
+                CoverageClass::Replacing => Some(([BlendFactor::Zero].as_slice(), Some(0.0))),
+                CoverageClass::Masking => Some(([BlendFactor::SrcAlpha].as_slice(), Some(1.0))),
+                CoverageClass::Advanced => None,
+            };
+            match expected {
+                None => {
+                    assert_eq!(
+                        state,
+                        wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING,
+                        "{mode:?} has no fixed-function state and falls back to SrcOver"
+                    );
+                    // The fallback is not the mode: a mode classified
+                    // Advanced by mistake would pass the arm above, so the
+                    // CPU blend must tell them apart.
+                    let (source, destination) = pairs[0];
+                    let fallback = fixed_function(mode, source, destination);
+                    let exact = premultiplied(source.blend(destination, mode), 1.0);
+                    assert!(
+                        !close(fallback, exact, 2.0 / 255.0),
+                        "{mode:?}: SrcOver {fallback:?} should differ from the mode's {exact:?}"
+                    );
+                }
+                Some((factors, scale)) => {
+                    assert!(
+                        factors.contains(&state.color.dst_factor)
+                            && factors.contains(&state.alpha.dst_factor),
+                        "{mode:?} is {class:?}, but blend_state_for gives destination \
+                         factors {:?} / {:?}",
+                        state.color.dst_factor,
+                        state.alpha.dst_factor
+                    );
+                    assert_eq!(destination_alpha_scale_for(mode), scale, "{mode:?}");
+                    for (source, destination) in pairs {
+                        let fixed = fixed_function(mode, source, destination);
+                        let exact = premultiplied(source.blend(destination, mode), 1.0);
+                        assert!(
+                            close(fixed, exact, 1e-4),
+                            "{mode:?}: blend_state_for gives {fixed:?}, Color::blend {exact:?}"
+                        );
+                    }
+                }
+            }
+
+            assert_eq!(
+                is_tile_safe_for_ssaa(mode),
+                matches!(class, CoverageClass::Absorbing | CoverageClass::Saturating),
+                "{mode:?}"
+            );
+            assert_eq!(
+                coverage_must_not_fold(mode),
+                matches!(
+                    class,
+                    CoverageClass::Saturating | CoverageClass::Replacing | CoverageClass::Masking
+                ),
+                "{mode:?}"
+            );
+            if !mode.is_advanced() {
+                assert_eq!(
+                    blend(mode, [0.0; 4], destination) == destination,
+                    mode.keeps_destination_under_transparent_source(),
+                    "{mode:?}: a transparent source and the class disagree"
+                );
+            }
+        }
+    }
 }

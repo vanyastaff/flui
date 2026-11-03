@@ -9,6 +9,8 @@ use std::path::Path;
 use crate::build::error::{BuildError, BuildResult};
 use crate::build::platform::{BuildArtifacts, BuilderContext, FinalArtifacts};
 use crate::build::util::cargo;
+#[cfg(target_os = "macos")]
+use crate::build::util::xml::xml_escape;
 
 /// Builder for desktop platforms (Windows, macOS, Linux)
 #[derive(Debug, Default)]
@@ -289,29 +291,6 @@ fn validate_bundle_name(name: &str) -> BuildResult<()> {
     Ok(())
 }
 
-/// Escape the five XML metacharacters in a plist `<string>` value.
-///
-/// `Info.plist` is XML: an app name like `R&D` interpolated raw
-/// (`<string>R&D</string>`) is malformed, and Launch Services can reject or
-/// misread the staged `.app`. Escaping the interpolated values keeps any
-/// human-readable name valid; the `&` must be escaped first so the entities
-/// this function introduces are not escaped a second time.
-#[cfg(target_os = "macos")]
-fn xml_escape(value: &str) -> String {
-    let mut out = String::with_capacity(value.len());
-    for ch in value.chars() {
-        match ch {
-            '&' => out.push_str("&amp;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            '"' => out.push_str("&quot;"),
-            '\'' => out.push_str("&apos;"),
-            other => out.push(other),
-        }
-    }
-    out
-}
-
 /// Total size of every file under `dir`, recursively.
 ///
 /// Used to report a staged macOS `.app`'s on-disk size to the caller; gated
@@ -329,17 +308,4 @@ fn calculate_dir_size(dir: &Path) -> BuildResult<u64> {
         }
     }
     Ok(total)
-}
-
-#[cfg(all(test, target_os = "macos"))]
-mod xml_escape_tests {
-    use super::xml_escape;
-
-    #[test]
-    fn metacharacters_are_escaped_so_the_plist_stays_well_formed() {
-        assert_eq!(xml_escape("R&D"), "R&amp;D");
-        assert_eq!(xml_escape("a<b>c"), "a&lt;b&gt;c");
-        assert_eq!(xml_escape("\"quoted\""), "&quot;quoted&quot;");
-        assert_eq!(xml_escape("it's"), "it&apos;s");
-    }
 }

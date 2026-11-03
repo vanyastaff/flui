@@ -1,7 +1,7 @@
 # ADR-0013: Render objects that drive their own pipeline work get a self-dirty handle on attach
 
 - **Status:** Accepted
-- **Superseded-by:** [ADR-0190](ADR-0190-owner-local-render-invalidation.md) for the attach capability and UI subscription delivery. The lifecycle rules remain.
+- **Superseded-by:** [ADR-0190](ADR-0190-owner-local-render-invalidation.md) in full: the attach capability and UI subscription delivery are replaced there, and the lifecycle rules that remain true are restated under its "Attachment lifecycle". The rule that `flui-rendering` takes no dependency on `flui-scheduler` is not carried over.
 - **Date:** 2026-07-01
 
 ## Context

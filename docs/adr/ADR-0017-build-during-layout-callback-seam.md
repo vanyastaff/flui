@@ -5,6 +5,8 @@
 - **Amended:** 2026-10-11 — the implemented between-pass boundary uses `PipelineCell` checkout, not the former shared pipeline lock; fixpoint semantics remain unchanged.
 - **Revised:** 2026-09-26 (a LayoutCallbackScope spike; the decision stands)
 - **Amended:** 2026-09-30 — the R1/R2 landing conditions no longer ask for `## Mapping decisions` entries; FLUI records no divergence from Flutter as such ([`AGENTS.md`](../../AGENTS.md) Design stance). The decision is unchanged.
+- **Superseded-by:** [ADR-0308](ADR-0308-layout-build-fixpoint-charges-only-passes-without-progress.md)
+  for §7 only (the convergence bound and its debug panic) and the §8 sentence on the `BUG:` bound
 - **Related:** ADR-0003 (lazy slivers use the same fixpoint)
 
 ## Context
@@ -71,17 +73,13 @@ reconcile the prepared build targets through the ordinary owner path.
 The owner is threaded **through `PipelineCell`**. An element reaches the same cell when
 mounting render objects. Building inside a `with_mut` checkout would reenter that cell
 the moment a builder mounts a child. Each pass in `run_frame_with_layout_builders`
-therefore restores the idle pipeline before servicing builders:
+therefore restores the idle pipeline before servicing builders. `PipelineCell::run_layout`
+drains the dirty channel, lays out, and leaves the same owner in the cell on every exit, a
+panic included:
 
 ```rust
 drive_fixpoint(|| {
-    pipeline.with_mut(|pipeline_owner| {
-        pipeline_owner.drain_pending_dirty();
-        let mut layout = pipeline_owner.take_idle().into_layout();
-        let result = layout.run_layout();
-        *pipeline_owner = layout.into_idle(); // restored on the error path too
-        result
-    })?;
+    pipeline.run_layout()?; // the owner stays in the cell on every exit
     Ok(owner.service_layout_builders(tree, pipeline)) // builds with the cell free
 })
 ```

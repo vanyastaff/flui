@@ -20,6 +20,10 @@ use super::haptic_rows::{
     a_backend_never_queues, a_stale_source_plays_on_the_window_actuator,
     capabilities_match_what_plays, semantic_feedback_reports_a_tier_one_outcome,
 };
+use super::ime_rows::{
+    a_cancelled_composition_leaves_the_field_as_it_was, a_composition_reaches_the_field_in_order,
+    each_composition_step_is_one_edit_of_the_field,
+};
 use super::key_rows::{
     a_key_during_composition_is_the_input_methods, menu_keys_arrive_as_the_bindings_name_them,
 };
@@ -97,6 +101,9 @@ pub(super) fn rows<B: BackendUnderTest>() -> Vec<Row<B>> {
         row!(Haptics, capabilities_match_what_plays),
         row!(Keys, menu_keys_arrive_as_the_bindings_name_them),
         row!(Ime, a_key_during_composition_is_the_input_methods),
+        row!(Ime, a_composition_reaches_the_field_in_order),
+        row!(Ime, a_cancelled_composition_leaves_the_field_as_it_was),
+        row!(Ime, each_composition_step_is_one_edit_of_the_field),
     ]
 }
 

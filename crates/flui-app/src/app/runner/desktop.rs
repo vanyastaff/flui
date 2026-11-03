@@ -64,15 +64,6 @@ pub(super) fn rendered_window_options(config: &AppConfig) -> flui_platform::Wind
     options
 }
 
-/// The development agents a window is handed to: the ones its loop attached
-/// (the application's and the driver agent), whatever configuration the
-/// application opened the window with; `config`'s own outside a loop.
-pub(super) fn window_dev_agent(config: &AppConfig) -> Option<crate::app::dev_agent::DevAgent> {
-    APP_RUNTIME
-        .with(|slot| slot.borrow().loop_dev_agent.clone())
-        .or_else(|| config.dev_agent.clone())
-}
-
 pub(super) fn install_desktop_window<V>(
     root: V,
     config: &AppConfig,
@@ -178,11 +169,9 @@ where
     });
     // The development agent's window is vended while the ui_runtime is still
     // ours: if the installation below fails, the ui_runtime drops it, and the
-    // hook is handed only a window that finished installing.
-    let dev_agent = window_dev_agent(config);
-    let agent_window = dev_agent
-        .as_ref()
-        .and_then(|agent| agent.vend(&ui_runtime, ui_runtime.presentation_id()));
+    // hooks are handed only a window that finished installing, whatever
+    // configuration the application opened it with.
+    let agent_window = super::dev_agents::vend(&ui_runtime, ui_runtime.presentation_id());
 
     // 3c. Construct the per-window owner and its bounded command inbox.
     // The wake is the existing chain: `wake_frame` sets
@@ -265,7 +254,7 @@ where
     install_input_wiring(owner_dispatch, window.as_ref());
 
     // Install frame resources once; native deliveries carry only their binding.
-    installation.dev_agent(dev_agent.zip(agent_window));
+    installation.dev_agent(agent_window);
     let frame = installation
         .frame_driver(super::frame_driver::FrameDriver::Desktop(
             DesktopFrameDriver {
@@ -321,6 +310,10 @@ where
         tracing::info!("Window closed");
         super::placement::finish(owner_dispatch.address);
         super::main_window::main_window_closing(owner_dispatch.address);
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: the window-close callback's panic is held; the pin still releases"
+        )]
         let closed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             close_this_window(owner_dispatch);
         }));

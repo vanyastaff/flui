@@ -1738,6 +1738,10 @@ impl SemanticsOwner {
             && let Some(routes) = routes
         {
             self.routes.commit(routes.next);
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "ADR-0287: the adapter's route sink is foreign code; its panic is contained"
+            )]
             if let (Some(change), Some(sink)) = (routes.change, self.route_change_sink.clone())
                 && let Err(payload) =
                     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| sink(change)))
@@ -1951,6 +1955,10 @@ impl SemanticsOwner {
         };
         // The delivered tree passed the full publish's shape checks; a
         // consumer panic here is a defect the adapter meets first.
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: accesskit_consumer panics on a broken tree; the update is skipped"
+        )]
         let Ok(tree) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             accesskit_consumer::Tree::new(update, true)
         })) else {

@@ -107,6 +107,8 @@ pub use box_protocol::{
 // CAPABILITY EXPORTS
 // ============================================================================
 pub use capabilities::{
+    // A box child's size as its sliver parent sees it (see `measure_box_child`)
+    BoxChildSize,
     // Request-strategy child-build outcome (see `request_child_build`)
     ChildLayout,
     // Capability traits

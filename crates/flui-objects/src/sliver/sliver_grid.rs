@@ -647,13 +647,17 @@ impl RenderSliver for RenderSliverGrid {
         ctx.emit_retain_band(first_in_window, last_in_window + 1);
 
         if self.placement.is_active() {
-            self.placement
-                .place(&self.placed, !requested, |tile, main, cross| {
+            self.placement.place(
+                &self.placed,
+                !requested,
+                &constraints,
+                |tile, main, cross| {
                     ctx.position_child(
                         tile.slot,
                         grid_child_paint_offset(&constraints, &geometry, main, tile.extent, cross),
                     );
-                });
+                },
+            );
         }
 
         // Pinned tiles go to their own cell, row and column, after the window.

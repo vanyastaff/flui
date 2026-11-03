@@ -46,7 +46,7 @@ use flui_platform::{
 };
 use flui_platform::{SessionEndAnswer, SessionEndPhase, TextStoreHost};
 use flui_rendering::layer::{LayerTree, Scene};
-use flui_runtime::dev_agent::{DevAgentAttachment, DevAgentHost};
+use flui_runtime::dev_agent::DevAgentHost;
 use flui_runtime::frame_failure::{
     FailureDisposition, FrameFailureDetail, FrameFailureHandler, FrameFailureKind,
     FrameFailureReport,
@@ -675,22 +675,23 @@ impl FrameSink for HeadlessSink {
 /// the UI runtimes keep pumping.
 pub struct HeadlessDevAgent {
     host: DevAgentHost,
-    attachment: Option<DevAgentAttachment>,
 }
 
 impl HeadlessDevAgent {
     /// Take `hook` and attach it, as a runner does when its loop starts.
     #[must_use]
     pub fn attach(hook: impl DevAgentHook) -> Self {
-        let host = DevAgentHost::new(hook);
-        let attachment = host.attach();
-        Self { host, attachment }
+        let hook: Box<dyn DevAgentHook> = Box::new(hook);
+        Self {
+            host: DevAgentHost::attach([hook]),
+        }
     }
 
-    /// Whether the hook is attached: it did not panic in `attach` or since.
+    /// Whether the hook is attached: it served and did not panic in `attach`
+    /// or since.
     #[must_use]
     pub fn is_attached(&self) -> bool {
-        self.attachment.is_some() && self.host.is_attached()
+        self.host.is_serving()
     }
 }
 
@@ -698,7 +699,7 @@ impl std::fmt::Debug for HeadlessDevAgent {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("HeadlessDevAgent")
             .field("host", &self.host)
-            .finish_non_exhaustive()
+            .finish()
     }
 }
 /// How long [`HeadlessHost::end_session`]'s `Ending` phase writes what the
@@ -1033,7 +1034,7 @@ impl HeadlessHost {
     ///
     /// Does nothing when the hook is not attached.
     #[must_use]
-    pub fn with_dev_agent(self, agent: &HeadlessDevAgent) -> Self {
+    pub fn with_dev_agent(self, agent: &mut HeadlessDevAgent) -> Self {
         agent
             .host
             .publish(&self.ui_runtime, self.ui_runtime.presentation_id());
@@ -1109,6 +1110,10 @@ impl HeadlessHost {
         let Self {
             ui_runtime, sink, ..
         } = self;
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: the kit keeps a pump's panic to settle failures before resuming"
+        )]
         let attempt = catch_unwind(AssertUnwindSafe(|| ui_runtime.pump(&mut frame_clock, sink)));
         let first_failure = {
             let mut failures = self.failures.lock();
@@ -1172,9 +1177,17 @@ impl HeadlessHost {
         input: PlatformInput,
     ) {
         self.ui_runtime.enter(|ui_runtime| {
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "ADR-0287: the kit keeps the input panic so the flush still runs"
+            )]
             let delivered = catch_unwind(AssertUnwindSafe(|| {
                 ui_runtime.handle_input_on(presentation, surface, input);
             }));
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "ADR-0287: the kit keeps the flush panic so later input steps still run"
+            )]
             let flushed = catch_unwind(AssertUnwindSafe(|| {
                 if !ui_runtime.gestures().is_resampling_enabled() {
                     ui_runtime.gestures().flush_pending_moves();

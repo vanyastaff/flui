@@ -7,7 +7,7 @@ use flui_foundation::geometry::Size;
 use flui_objects::{ClipSourceToken, RenderClipPath};
 use flui_painting::paint::{Clip, Path};
 use flui_rendering::protocol::BoxProtocol;
-use flui_view::{Child, IntoView, RenderView, impl_render_view};
+use flui_view::{Child, CreationSite, IntoView, RenderView, impl_render_view};
 
 /// The user-supplied clip-shape function: maps the laid-out box size to the
 /// [`Path`] to clip against. It is owner-local under ADR-0027; render storage
@@ -25,6 +25,7 @@ pub struct ClipPath {
     clip_source_token: ClipSourceToken,
     clip_behavior: Clip,
     child: Child,
+    site: CreationSite,
 }
 
 impl ClipPath {
@@ -54,6 +55,7 @@ impl ClipPath {
     ///
     /// The caller has to decide this, so the decision is made visible at the
     /// call site.
+    #[track_caller]
     pub fn new(clipper: impl Fn(Size) -> Path + 'static) -> Self {
         Self::with_source(ClipSourceToken::fresh(), clipper)
     }
@@ -63,12 +65,14 @@ impl ClipPath {
     /// Supplying the same token across rebuilds tells the render object the
     /// clip is unchanged, so nothing is invalidated. Supplying a fresh one
     /// says it changed. See [`new`](Self::new)'s *Clip identity* section.
+    #[track_caller]
     pub fn with_source(source: ClipSourceToken, clipper: impl Fn(Size) -> Path + 'static) -> Self {
         Self {
             clipper: Rc::new(clipper),
             clip_source_token: source,
             clip_behavior: Clip::AntiAlias,
             child: Child::empty(),
+            site: CreationSite::here(),
         }
     }
 
@@ -190,4 +194,4 @@ impl RenderView for ClipPath {
     flui_view::single_child_view_children!();
 }
 
-impl_render_view!(ClipPath);
+impl_render_view!(ClipPath, site = site);

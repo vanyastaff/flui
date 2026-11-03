@@ -135,7 +135,7 @@ fn check(root: &Path, metadata: &Metadata) -> anyhow::Result<(Vec<String>, Strin
 }
 
 /// The keys a member's `[package.metadata.flui]` may set.
-const FLUI_KEYS: [&str; 13] = [
+const FLUI_KEYS: [&str; 15] = [
     "tier",
     "tier-kind",
     "order",
@@ -149,6 +149,8 @@ const FLUI_KEYS: [&str; 13] = [
     "globals",
     "modules",
     "api-closure",
+    "declares",
+    "capability",
 ];
 
 /// A workspace package as the checks see it, before its

@@ -2,6 +2,10 @@
 //! that writes process-global state keeps its own `[[test]]` target instead (see
 //! `Cargo.toml`).
 
+#![allow(
+    clippy::disallowed_methods,
+    reason = "test code catches a panic to assert on it (ADR-0303 §5)"
+)]
 // `Application` is the desktop entry point.
 #[cfg(all(
     not(target_os = "android"),
@@ -88,4 +92,35 @@ fn capability_registration() {
             ),
         ],
     );
+}
+
+// An application on Linux runs on the native host of its session.
+#[cfg(target_os = "linux")]
+#[path = "native_linux.rs"]
+mod native_linux;
+
+#[cfg(target_os = "linux")]
+#[test]
+fn native_linux() {
+    run_table(
+        "native_linux",
+        &[
+            (
+                "native_linux::an_app_runs_on_the_native_wayland_host",
+                native_linux::an_app_runs_on_the_native_wayland_host as fn(),
+            ),
+            (
+                "native_linux::an_app_runs_on_the_native_x11_host",
+                native_linux::an_app_runs_on_the_native_x11_host as fn(),
+            ),
+        ],
+    );
+}
+
+/// The application `native_linux` runs in a child process of this binary;
+/// a no-op unless that case started it.
+#[cfg(target_os = "linux")]
+#[test]
+fn native_linux_child() {
+    native_linux::child();
 }

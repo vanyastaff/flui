@@ -473,7 +473,5 @@ mod tests;
 
 #[cfg(any(x11_host, wayland_host))]
 mod kind;
-#[cfg(x11_host)]
-pub(crate) use kind::bytes_of;
 #[cfg(any(x11_host, wayland_host))]
-pub(crate) use kind::{Kind, representations, too_large};
+pub(crate) use kind::{Kind, bytes_of, names_of, representations, too_large};

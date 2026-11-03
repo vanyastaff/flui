@@ -4,6 +4,8 @@
 - **Date:** 2026-09-23
 - **Superseded-by:** [ADR-0152](ADR-0152-capability-seam-revised.md) for the last sentence of §1
   only: a platform capability is reached through the seam, not as a method on `LifecycleContext`.
+- **Superseded-by:** [ADR-0303](ADR-0303-a-rule-takes-the-first-rung-that-states-it-and-an-xtask-gate-is-the-last.md) for the last clause of §4 condition 3
+  only: a gate's self-test runs in `cargo test -p xtask`, not in `cargo xtask checks`.
 - **Amended:** 2026-10-31 — `LifecycleContext::on_unmount` hands a state its element's unmount; see
   [Amendment (2026-10-31)](#amendment-2026-10-31-a-state-hands-its-unmount-to-what-it-opens).
 - **Amended:** 2026-10-11 — the lifecycle example uses the single owner-local post-frame handle; geometry checks name the current trybuild suite.

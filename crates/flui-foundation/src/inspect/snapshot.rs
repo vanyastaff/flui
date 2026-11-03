@@ -115,7 +115,7 @@ impl OwnedValue {
             Self::Link(link) => Value::Link(*link),
             Self::Shared { ty, number } => Value::Shared(Shared::numbered(ty, *number)),
             // The text, so it prints as written rather than quoted.
-            Self::Debug(text) => Value::Debug(text),
+            Self::Debug(text) => Value::Debug(super::value::Untyped(text)),
             Self::None => Value::None,
             Self::Seq(_) => return None,
         })
@@ -327,6 +327,10 @@ fn take<T: InspectTree + ?Sized>(
     tree.facts(id, &mut Fields::new(&mut sink));
     let mut facts = core::mem::take(&mut sink.fields);
     // An object's `inspect` is user code; its panic is this node's, not the snapshot's.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "ADR-0287: an object's inspect panic is recorded on its node, not the snapshot"
+    )]
     let inspected = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         view.object.inspect(&mut Fields::new(&mut sink));
     }));

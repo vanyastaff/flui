@@ -165,6 +165,13 @@
 //! delivered before the open returns, then as changes in order with the input
 //! around them.
 
+#![cfg_attr(
+    test,
+    allow(
+        clippy::disallowed_methods,
+        reason = "test code catches a panic to assert on it (ADR-0303 §5)"
+    )
+)]
 // Platform FFI is the sanctioned `unsafe` boundary of the workspace (Win32 /
 // AppKit / UIKit / Android NDK / wasm-bindgen — `headless` has none). The
 // crate does not opt the whole tree out of `unsafe_code = "warn"`: each FFI
@@ -309,6 +316,8 @@ pub use task::{Task, TaskLabel};
 // Each has this one path (ADR-0151 §9).
 pub use host_window::HostWindow;
 pub use platform::{AppHandler, ExitAnswer, PathPromptOptions, Platform, PlatformExecutor};
+#[cfg(any(target_os = "linux", target_os = "android"))]
+pub use process::current_user_id;
 #[cfg(windows)]
 pub use process::current_user_sid;
 #[cfg(any(windows, unix))]
@@ -342,8 +351,7 @@ pub use owner::{
 ///    - Selection order (first match wins):
 ///      - `cfg(windows)` → `WindowsPlatform`
 ///      - `cfg(target_os = "macos")` → `MacOSPlatform`
-///      - `cfg(target_os = "linux")` → chosen at run time: `WinitPlatform`
-///        while the `winit-backend` feature is built, else `WaylandPlatform`
+///      - `cfg(target_os = "linux")` → chosen at run time: `WaylandPlatform`
 ///        for a Wayland session and `X11Platform` for an X11 one
 ///      - `cfg(target_os = "android")` → an error: the Android host starts
 ///        over the Activity `android_main` is handed (`android_platform`)
@@ -364,11 +372,10 @@ pub use owner::{
 /// - **Windows**: Returns `WindowsPlatform` - fully implemented with Win32 API
 /// - **macOS**: Returns `MacOSPlatform` - the native AppKit backend: windows,
 ///   input, clipboard, IME, displays, and a vsync-paced frame loop
-/// - **Linux**: Returns `WinitPlatform` while the `winit-backend` feature is
-///   built (`flui-app` builds it on Linux until the native hosts carry input,
-///   ADR-0151 section 11); otherwise `WaylandPlatform` when `WAYLAND_DISPLAY`
-///   names a compositor, `X11Platform` when `DISPLAY` names an X server, and
-///   an error for no session.
+/// - **Linux**: Returns `WaylandPlatform` when `WAYLAND_DISPLAY` names a
+///   compositor, `X11Platform` when `DISPLAY` names an X server, and an error
+///   for no session (ADR-0151 section 11). The `winit-backend` feature still
+///   builds `WinitPlatform`, which this function never returns on Linux.
 /// - **Android**: Returns an error: the host needs the Activity, which the
 ///   system hands only to `android_main`; `android_platform(app)` starts it
 /// - **iOS**: Returns `IOSPlatform` - the native UIKit backend: windows, touch
@@ -383,7 +390,7 @@ pub use owner::{
 /// |----------|--------|---------|----------|
 /// | Windows | ✅ Production | 10/10 | Full featured; no executing coverage in CI (lint-only via `cross-typecheck`) |
 /// | macOS | ✅ Native AppKit | 9/10 | Windowing, input, clipboard, IME, displays, vsync-paced frame loop; lint-only + bundled probes locally, no CI test job |
-/// | Linux | 🪟 winit fallback (`winit-backend`) | 5/10 | Windowing + input; the native Wayland and X11 hosts have windows, displays, preferences, lifecycle and AT-SPI, no input yet |
+/// | Linux | ✅ Native Wayland and X11 | 7/10 | Windowing, input, IME, clipboard, drag and drop, displays, preferences, lifecycle and AT-SPI; run on Weston, sway and Xvfb in CI, not yet on GNOME or KDE |
 /// | Android | 📋 Stub | 2/10 | Roadmap complete |
 /// | iOS | ✅ Native UIKit | 7/10 | Windowing, touch, clipboard, displays, `CADisplayLink` frame source; lint-only in CI (simulator verified) |
 /// | Web | 📋 Stub | 2/10 | Roadmap complete |
@@ -395,8 +402,8 @@ pub use owner::{
 /// - Platform is not supported (should not happen with cfg guards)
 /// - It is called on Android, whose host starts over the Activity
 ///   (`android_platform`)
-/// - Linux is reached without `winit-backend` and with no display server its
-///   native hosts can connect to
+/// - Linux is reached with no display server its native hosts can connect
+///   to, or with the session's host not built
 ///
 /// # Examples
 ///
@@ -451,14 +458,15 @@ pub fn current_platform() -> Result<Box<dyn Platform>, PlatformError> {
         let built = LinuxHosts {
             wayland: cfg!(feature = "wayland"),
             x11: cfg!(feature = "x11"),
-            winit: cfg!(feature = "winit-backend"),
         };
-        match choose_linux_host(&display::linux::protocol::Environment::current(), built) {
-            Ok(LinuxHost::Winit) => start_winit(),
-            Ok(LinuxHost::Wayland) => start_wayland(),
-            Ok(LinuxHost::X11) => start_x11(),
-            Err(message) => Err(PlatformError::Init { message }),
-        }
+        let platform =
+            match choose_linux_host(&display::linux::protocol::Environment::current(), built) {
+                Ok(LinuxHost::Wayland) => start_wayland(),
+                Ok(LinuxHost::X11) => start_x11(),
+                Err(message) => Err(PlatformError::Init { message }),
+            }?;
+        tracing::info!(host = platform.name(), "the session's native host started");
+        Ok(platform)
     }
 
     #[cfg(all(
@@ -518,23 +526,6 @@ pub fn current_platform() -> Result<Box<dyn Platform>, PlatformError> {
     }
 }
 
-/// The winit host, as [`current_platform`] starts it on Linux, after the
-/// display server it will open is checked against Linux's floor: winit's own
-/// connection never reports a missing `xdg_wm_base` or RandR 1.5 as one.
-#[cfg(all(target_os = "linux", feature = "winit-backend"))]
-fn start_winit() -> Result<Box<dyn Platform>, PlatformError> {
-    display::linux::floor::probe(&display::linux::protocol::Environment::current())?;
-    Ok(Box::new(WinitPlatform::new()))
-}
-
-/// A build without the winit host never chooses it.
-#[cfg(all(target_os = "linux", not(feature = "winit-backend")))]
-fn start_winit() -> Result<Box<dyn Platform>, PlatformError> {
-    Err(PlatformError::Init {
-        message: "the winit host is not built".to_owned(),
-    })
-}
-
 /// The native Wayland host, as [`current_platform`] starts it.
 #[cfg(all(target_os = "linux", feature = "wayland"))]
 fn start_wayland() -> Result<Box<dyn Platform>, PlatformError> {
@@ -571,8 +562,6 @@ struct LinuxHosts {
     wayland: bool,
     /// The native X11 host (`x11`).
     x11: bool,
-    /// The winit host (`winit-backend`).
-    winit: bool,
 }
 
 /// A Linux host [`current_platform`] can start.
@@ -583,8 +572,6 @@ enum LinuxHost {
     Wayland,
     /// The native X11 host.
     X11,
-    /// The winit host.
-    Winit,
 }
 
 /// The host [`current_platform`] starts on Linux, chosen at run time from the
@@ -592,12 +579,10 @@ enum LinuxHost {
 /// compositor follows (`display::linux::protocol`), and the hosts the build
 /// carries.
 ///
-/// The winit host is chosen whenever it is built: the native Wayland host
-/// carries pointer and key input but no text input, clipboard or drag and
-/// drop yet, the native X11 host no input at all, and `flui-app` builds winit
-/// on Linux until they do (ADR-0151 §11). Without it, a Wayland session gets the native Wayland
-/// host and an X11 session the native X11 host; a Wayland session that also
-/// names an X server gets the X11 host when only that one is built.
+/// A Wayland session gets the native Wayland host and an X11 session the
+/// native X11 host; a Wayland session that also names an X server gets the
+/// X11 host when only that one is built. The winit host is never chosen, even
+/// when it is built (ADR-0151 §11).
 #[cfg(any(target_os = "linux", test))]
 fn choose_linux_host(
     environment: &display::linux::protocol::Environment,
@@ -605,9 +590,6 @@ fn choose_linux_host(
 ) -> Result<LinuxHost, String> {
     use display::linux::protocol::Protocol;
 
-    if built.winit {
-        return Ok(LinuxHost::Winit);
-    }
     let set = |value: &Option<String>| value.as_deref().is_some_and(|text| !text.is_empty());
     match Protocol::from_environment(environment) {
         Some(Protocol::Wayland) if built.wayland => Ok(LinuxHost::Wayland),
@@ -700,24 +682,19 @@ mod linux_host_tests {
         }
     }
 
-    /// The Linux host is chosen at run time from the session: winit while it
-    /// is built, otherwise the native host of the session's protocol (the X11
-    /// host for a Wayland session that names an X server too, when only that
-    /// one is built), and an error that says what is missing where none fits.
-    /// An inherited descriptor (`WAYLAND_SOCKET`) is no socket the host and
-    /// its display source can both connect to.
+    /// The Linux host is chosen at run time from the session: the native host
+    /// of the session's protocol (the X11 host for a Wayland session that
+    /// names an X server too, when only that one is built), and an error that
+    /// says what is missing where none fits. An inherited descriptor
+    /// (`WAYLAND_SOCKET`) is no socket the host and its display source can
+    /// both connect to.
     #[test]
     fn the_linux_host_follows_the_session() {
-        let hosts = |wayland, x11, winit| LinuxHosts {
-            wayland,
-            x11,
-            winit,
-        };
-        let native = hosts(true, true, false);
-        let only_wayland = hosts(true, false, false);
-        let only_x11 = hosts(false, true, false);
-        let all = hosts(true, true, true);
-        let none = hosts(false, false, false);
+        let hosts = |wayland, x11| LinuxHosts { wayland, x11 };
+        let native = hosts(true, true);
+        let only_wayland = hosts(true, false);
+        let only_x11 = hosts(false, true);
+        let none = hosts(false, false);
         let wayland = session("wayland-0", "", ":0");
         let wayland_alone = session("wayland-0", "", "");
         let x11 = session("", "", ":0");
@@ -731,13 +708,6 @@ mod linux_host_tests {
             ),
             ("X11", &x11, native, LinuxHost::X11),
             ("X11, X11 alone built", &x11, only_x11, LinuxHost::X11),
-            ("winit built", &wayland, all, LinuxHost::Winit),
-            (
-                "winit built, no session",
-                &session("", "", ""),
-                all,
-                LinuxHost::Winit,
-            ),
         ] {
             assert_eq!(choose_linux_host(environment, built), Ok(chosen), "{case}");
         }

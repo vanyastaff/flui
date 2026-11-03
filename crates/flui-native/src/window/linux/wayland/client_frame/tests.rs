@@ -17,6 +17,7 @@ fn framed(states: ToplevelStates) -> Frame {
         states,
         resizable: true,
         offers: EVERYTHING,
+        title_bar: true,
     }
 }
 
@@ -515,4 +516,96 @@ fn a_title_is_shaped_and_rasterized() {
     assert!(text.mask("", 300.0, 1.0).is_none());
     assert!(text.mask("x", 0.0, 1.0).is_none());
     assert_eq!(text.generation(), fonts.generation());
+}
+
+/// Over a frame without its title bar, a primary press on a move region is
+/// the window's: the pointer's travel starts the move, a second press soon
+/// after and near maximizes, a secondary press asks for the window menu where
+/// the compositor shows one, and the release of a taken press is taken too.
+/// A press anywhere else, or over a frame with its own title bar, or none, is
+/// the application's.
+#[test]
+fn a_press_on_the_applications_bar_is_the_windows() {
+    use std::time::{Duration, Instant};
+
+    use flui_platform::input_regions::{InputRegion, InputRegionKind};
+
+    use ContentAnswer::{App, Taken};
+
+    let bare = Frame {
+        title_bar: false,
+        ..floating()
+    };
+    let mut chrome = ContentChrome {
+        scale: 1.0,
+        ..ContentChrome::default()
+    };
+    let _changed = chrome.projected.update(
+        &[InputRegion::new(
+            InputRegionKind::WindowMove,
+            flui_foundation::geometry::Rect::from_ltrb(0.0, 0.0, 400.0, 32.0),
+        )],
+        1.0,
+        None,
+    );
+    let at = Instant::now();
+
+    assert_eq!(chrome.moved(200.0, 16.0), None, "no press held");
+    assert_eq!(chrome.button(Some(&bare), BTN_LEFT, true, at), Taken(None));
+    assert_eq!(chrome.moved(202.0, 17.0), None, "within the slop");
+    assert_eq!(chrome.moved(220.0, 30.0), Some(Action::Move));
+    assert_eq!(chrome.moved(240.0, 30.0), None, "one move a press");
+    assert_eq!(chrome.button(Some(&bare), BTN_LEFT, false, at), Taken(None));
+
+    let later = at + Duration::from_secs(2);
+    chrome.moved(100.0, 10.0);
+    assert_eq!(
+        chrome.button(Some(&bare), BTN_LEFT, true, later),
+        Taken(None)
+    );
+    assert_eq!(
+        chrome.button(Some(&bare), BTN_LEFT, false, later),
+        Taken(None)
+    );
+    assert_eq!(
+        chrome.button(
+            Some(&bare),
+            BTN_LEFT,
+            true,
+            later + Duration::from_millis(100)
+        ),
+        Taken(Some(Action::Maximize)),
+        "a double-click"
+    );
+    assert_eq!(
+        chrome.button(Some(&bare), BTN_LEFT, false, later),
+        Taken(None)
+    );
+    assert_eq!(
+        chrome.button(Some(&bare), BTN_RIGHT, true, later),
+        Taken(Some(Action::Menu { x: 100, y: 10 }))
+    );
+    let no_menu = Frame {
+        offers: Offers {
+            window_menu: false,
+            ..EVERYTHING
+        },
+        ..bare
+    };
+    assert_eq!(chrome.button(Some(&no_menu), BTN_RIGHT, true, later), App);
+
+    chrome.moved(100.0, 200.0);
+    assert_eq!(
+        chrome.button(Some(&bare), BTN_LEFT, true, later),
+        App,
+        "the content"
+    );
+    assert_eq!(chrome.button(Some(&bare), BTN_LEFT, false, later), App);
+    chrome.moved(100.0, 10.0);
+    assert_eq!(
+        chrome.button(Some(&floating()), BTN_LEFT, true, later),
+        App,
+        "the frame's own title bar"
+    );
+    assert_eq!(chrome.button(None, BTN_LEFT, true, later), App, "no frame");
 }

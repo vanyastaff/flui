@@ -1,10 +1,14 @@
 # ADR-0287: Owner state is committed before user code runs
 
 - **Status:** Accepted (2026-11-03). Partly implemented: `flui-foundation` has the primitives, and
-  the capability seam's `Completion` and `Persisted` use them, and `cargo xtask catch-unwind`
-  counts the hand-written catching left; each other seam moves to them in its own change (see
-  Migration).
+  the capability seam's `Completion` and `Persisted` use them; each other seam moves to them in
+  its own change (see Migration). Every hand-written `catch_unwind` left carries an
+  `ADR-0287:` expectation of `clippy::disallowed_methods` (ADR-0303 §6), so those expectations are
+  the migration's remaining count.
 - **Date:** 2026-11-03
+- **Superseded-by:** [ADR-0303](ADR-0303-a-rule-takes-the-first-rung-that-states-it-and-an-xtask-gate-is-the-last.md) §6 for the last bullet of Confirmation
+  only: the hand-written `catch_unwind` calls are a `clippy.toml` entry with an expectation at
+  each site, not a counting `cargo xtask` gate.
 - **Related:** [ADR-0281](ADR-0281-a-destructor-that-panics-during-an-unwind-aborts-as-in-std.md)
   (what a destructor that panics costs, and the containment after a caught failure);
   [ADR-0258](ADR-0258-owner-turn-panic-boundary-and-terminal-exit.md) (where a contained user panic
@@ -27,8 +31,8 @@ classes that come from that order:
 | A late answer is taken for the answer to a newer request | part of ~12% | a read issued after a write joins the read issued before it |
 
 Each fix closed one call site, and the next review found its neighbour. The workspace's production
-code has about 400 hand-written `catch_unwind` calls in about 130 files, most of them in owners that
-order this themselves.
+code has about 420 hand-written `catch_unwind` calls in about 140 files, most of them in owners
+that order this themselves.
 
 How does an owner change its state and call user code so that the four classes cannot be
 written?
@@ -123,13 +127,9 @@ kinds of request apart at compile time.
   `commit` panics with `BUG:`, an obligation dropped by a panic is put back and one raised during
   a delivery survives `discharge`, a redeemed ticket is not accepted twice and an invalidated one
   is stale.
-- Each migrated seam deletes its hand-written ordering in the same change and lowers its count in
-  `cargo xtask catch-unwind`, which counts the hand-written `catch_unwind` calls of production code
-  per file (`tools/xtask/allowlists/catch-unwind.toml`, part of `cargo xtask checks`). The counts
-  are exact and only go down, so an owner that starts catching by hand fails the gate until it
-  goes through `commit` or `FirstPanic`, or the allowlist's diff says why it cannot. The
-  primitives in `flui_foundation::panic` and `flui-native`'s OS entry (ADR-0151 §16) are where
-  catching is the job, and are not counted.
+- Each migrated seam deletes its hand-written ordering in the same change. Once the first seam
+  has moved, a `cargo xtask` gate counts the remaining `catch_unwind` calls in owner code, and the
+  count only goes down.
 
 ## Pros and cons of the options
 
@@ -176,8 +176,8 @@ its own `catch_unwind` inside the queued call.
 
 `SelectionArea` already contains its fan-out with `FirstPanic` and has no hand-written
 `catch_unwind` left. Its state is spread over the separate cells of its model, so `commit` reaches
-it only once that model is one cell; until then the gate has nothing of it to count. The next
-seams are the ones the gate counts most of.
+it only once that model is one cell. The next seams are the owners with the most `ADR-0287:`
+expectations.
 
 ## More information
 

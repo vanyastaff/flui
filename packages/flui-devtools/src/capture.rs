@@ -268,6 +268,10 @@ type Payload = Box<dyn std::any::Any + Send>;
 fn deliver_contained<T>(capture: &Capture, sinks: Vec<Sink<T>>, value: &T) -> Option<Payload> {
     let mut first_panic = None;
     for sink in sinks {
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: a sink's panic must not stop the remaining sinks"
+        )]
         if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             sink(capture, value);
         })) {
@@ -291,6 +295,10 @@ fn deliver<T>(capture: &Capture, sinks: Vec<Sink<T>>, value: &T) {
             .unwrap_or("a non-text panic payload")
             .to_owned();
         // A subscriber is user code too.
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: a subscriber's panic while reporting must not unwind the capture"
+        )]
         if let Err(failed) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             tracing::error!(target: "flui.devtools", "a capture sink panicked: {text}");
         })) {

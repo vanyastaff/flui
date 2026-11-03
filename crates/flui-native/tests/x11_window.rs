@@ -10,6 +10,10 @@
 //! belongs to the thread that builds it, so each case builds its platform on
 //! the harness's one thread.
 
+#![allow(
+    clippy::disallowed_methods,
+    reason = "test code catches a panic to assert on it (ADR-0303 §5)"
+)]
 fn main() {
     #[cfg(target_os = "linux")]
     cases::main();
@@ -67,6 +71,10 @@ mod cases {
         (
             "a_window_destroyed_by_another_client_closes_and_lets_go",
             a_window_destroyed_by_another_client_closes_and_lets_go,
+        ),
+        (
+            "a_covered_window_reads_occluded_and_shown",
+            a_covered_window_reads_occluded_and_shown,
         ),
         (
             "a_frame_asked_for_on_another_thread_wakes_the_loop",
@@ -358,14 +366,22 @@ mod cases {
             title: &str,
             handler: Rc<dyn flui_platform::WindowHandler>,
         ) -> Self {
+            Self::open_with_options(
+                WindowOptions::default()
+                    .with_title(title)
+                    .with_size(Size::new(400.0, 300.0)),
+                handler,
+            )
+        }
+
+        /// A window opened with `options`, delivering to `handler`.
+        pub(crate) fn open_with_options(
+            options: WindowOptions,
+            handler: Rc<dyn flui_platform::WindowHandler>,
+        ) -> Self {
             let platform = X11Platform::try_new().expect("the X11 platform");
             let window = platform
-                .open_window(
-                    WindowOptions::default()
-                        .with_title(title)
-                        .with_size(Size::new(400.0, 300.0)),
-                    handler,
-                )
+                .open_window(options, handler)
                 .expect("an X11 window opens");
             let xid = xid_of(window.as_ref());
             let server = RustConnection::connect(None)
@@ -505,9 +521,10 @@ mod cases {
             true
         }
 
-        /// An X11 window takes no input region: its input capabilities say so.
+        /// An X11 window takes the chrome regions (ADR-0286 §10), as its input
+        /// capabilities say.
         fn input_capabilities(&self) -> flui_platform::input_capabilities::InputCapabilities {
-            flui_platform::input_capabilities::InputCapabilities::UNAVAILABLE
+            flui_native::input::availability::x11(false)
         }
 
         fn has_native_surface(&self) -> bool {
@@ -732,6 +749,63 @@ mod cases {
             handler.take_calls().is_empty(),
             "a destroyed window delivers nothing more"
         );
+    }
+
+    /// A window another client covers whole reads occluded and still shown,
+    /// and reads unoccluded once the cover goes: the server's
+    /// `VisibilityNotify`, not a guess from the mode.
+    fn a_covered_window_reads_occluded_and_shown() {
+        let platform = X11Platform::try_new().expect("the X11 platform");
+        let server = RustConnection::connect(None)
+            .expect("the X server answers")
+            .0;
+        let handler = RecordingWindowHandler::new();
+        let window = platform
+            .open_window(WindowOptions::default(), Rc::clone(&handler) as _)
+            .expect("an X11 window opens");
+        let settle = |what: &str, done: &dyn Fn() -> bool| {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while !done() {
+                assert!(Instant::now() < deadline, "timed out waiting for {what}");
+                run_for(&platform, Duration::from_millis(20)).expect("the loop turns");
+            }
+        };
+        settle("the window shown and uncovered", &|| {
+            let state = window.state();
+            state.visible && !state.occluded
+        });
+
+        // Override-redirect, so the window manager neither frames nor places
+        // it: it lies over the whole screen.
+        let screen = &server.setup().roots[0];
+        let cover = server.generate_id().expect("an id");
+        server
+            .create_window(
+                screen.root_depth,
+                cover,
+                screen.root,
+                0,
+                0,
+                screen.width_in_pixels,
+                screen.height_in_pixels,
+                0,
+                WindowClass::INPUT_OUTPUT,
+                0,
+                &CreateWindowAux::new()
+                    .override_redirect(1)
+                    .background_pixel(screen.black_pixel),
+            )
+            .expect("request");
+        server.map_window(cover).expect("request");
+        server.flush().expect("flush");
+        settle("the window covered", &|| window.state().occluded);
+        assert!(window.state().visible, "a covered window is still shown");
+
+        server.destroy_window(cover).expect("request");
+        server.flush().expect("flush");
+        settle("the window uncovered", &|| !window.state().occluded);
+        window.close_for_cleanup();
+        run_for(&platform, Duration::from_millis(100)).expect("the loop turns");
     }
 
     /// A frame asked for on another thread wakes a loop that waits with no

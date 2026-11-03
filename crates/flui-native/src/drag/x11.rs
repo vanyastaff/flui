@@ -109,7 +109,7 @@ const MAX_ACTIONS: u32 = 16;
 /// The protocol, its actions and its types, with no server call: plain
 /// functions over atoms and bytes.
 pub(crate) mod model {
-    use flui_platform::data_transfer::{TransferActions, TransferFormat};
+    use flui_platform::data_transfer::TransferActions;
     use x11rb::NONE;
     use x11rb::protocol::xproto::{Atom, Timestamp, Window};
 
@@ -361,24 +361,6 @@ pub(crate) mod model {
                 Some(Self::Finished { target, action })
             } else {
                 None
-            }
-        }
-    }
-
-    /// The type names a representation of `format` is offered under, the
-    /// most precise first: text in UTF-8 under the names every toolkit
-    /// reads, every other format under its media type.
-    pub(crate) fn names_of(format: &TransferFormat) -> Vec<String> {
-        match format {
-            TransferFormat::Text => vec![
-                "UTF8_STRING".to_owned(),
-                "text/plain;charset=utf-8".to_owned(),
-                "text/plain".to_owned(),
-            ],
-            TransferFormat::Html => vec!["text/html".to_owned()],
-            TransferFormat::UriList => vec!["text/uri-list".to_owned()],
-            TransferFormat::Image { mime } | TransferFormat::Custom { mime } => {
-                vec![mime.as_str().to_owned()]
             }
         }
     }
@@ -862,6 +844,10 @@ impl X11Drag {
             // A fetch has a deadline the loop may not be waiting for.
             (self.wake)();
         }
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: a handler's panic still lets accepted requests be answered"
+        )]
         let dispatched = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             if let Some((target, event)) = after.dispatch {
                 target
@@ -876,6 +862,10 @@ impl X11Drag {
         // contained too: a subscriber is user code.
         let mut failure = dispatched.err();
         let mut contain = |step: &mut dyn FnMut()| {
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "ADR-0287: a waker's panic leaves the remaining completions answered"
+            )]
             if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(step)) {
                 if failure.is_none() {
                     failure = Some(payload);

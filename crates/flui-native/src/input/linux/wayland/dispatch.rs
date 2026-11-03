@@ -358,23 +358,50 @@ impl Shared {
     /// the next activation token names. Called by a dispatch with no cell of
     /// the input borrowed.
     fn record_input(&self, seat: SeatKey, serial: u32, surface: WlSurface) {
-        let seat = self
-            .objects
-            .with(|objects| {
-                objects
-                    .seats
-                    .iter()
-                    .find(|held| held.key == seat)
-                    .map(|held| held.seat.clone())
-            })
-            .flatten();
-        if let Some(seat) = seat {
+        if let Some(seat) = self.seat_of(seat) {
             self.last_input.record(UserInput {
                 seat,
                 serial,
                 surface,
             });
         }
+    }
+
+    /// A button of `seat`'s pointer went down (`serial`, on `surface`) or
+    /// up (`None`): the grab a drag starts under. Called by a dispatch with
+    /// no cell of the input borrowed.
+    fn record_button(&self, seat: SeatKey, press: Option<(u32, WlSurface)>) {
+        let Some(seat) = self.seat_of(seat) else {
+            return;
+        };
+        match press {
+            Some((serial, surface)) => self.last_input.pressed(UserInput {
+                seat,
+                serial,
+                surface,
+            }),
+            None => self.last_input.released(&seat),
+        }
+    }
+
+    /// `seat`'s pointer left its window, ending the grab it held.
+    fn record_leave(&self, seat: SeatKey) {
+        if let Some(seat) = self.seat_of(seat) {
+            self.last_input.left(&seat);
+        }
+    }
+
+    /// The seat `key` names.
+    fn seat_of(&self, key: SeatKey) -> Option<WlSeat> {
+        self.objects
+            .with(|objects| {
+                objects
+                    .seats
+                    .iter()
+                    .find(|held| held.key == key)
+                    .map(|held| held.seat.clone())
+            })
+            .flatten()
     }
 
     /// `seat`'s keyboard entered `surface`, a window's, or left (`None`).
@@ -435,6 +462,30 @@ impl Shared {
                             Arc::clone(&window.scale),
                         )
                     })
+            })
+            .flatten()
+    }
+
+    /// The frame of the window whose own surface `pointer` is over: what a
+    /// press on a title bar of the application's is answered by.
+    fn content_frame(&self, pointer: &WlPointer) -> Option<Arc<dyn FramePointer>> {
+        let key = self
+            .objects
+            .with(|objects| {
+                objects
+                    .seats
+                    .iter()
+                    .filter_map(|seat| seat.pointer.as_ref())
+                    .find(|held| held.pointer == *pointer)
+                    .and_then(|held| held.focus.map(|(key, _)| key))
+            })
+            .flatten()?;
+        self.windows
+            .with(|windows| {
+                windows
+                    .iter()
+                    .find(|window| surface_key(window.id) == key)
+                    .map(|window| Arc::clone(&window.frame))
             })
             .flatten()
     }
@@ -2010,6 +2061,9 @@ impl Dispatch<WlPointer, PointerData> for WaylandState {
                     }
                     show_cursor(&shared, objects, key, cursor, scale);
                 });
+                if let Some(frame) = shared.content_frame(pointer) {
+                    frame.content_moved(surface_x, surface_y);
+                }
                 (
                     arrival(None),
                     PointerWire::Enter {
@@ -2031,19 +2085,25 @@ impl Dispatch<WlPointer, PointerData> for WaylandState {
                         held.focus_surface = None;
                     }
                 });
+                shared.record_leave(data.seat);
                 (arrival(None), PointerWire::Leave)
             }
             wl_pointer::Event::Motion {
                 time,
                 surface_x,
                 surface_y,
-            } => (
-                arrival(Some(time)),
-                PointerWire::Motion {
-                    x: surface_x,
-                    y: surface_y,
-                },
-            ),
+            } => {
+                if let Some(frame) = shared.content_frame(pointer) {
+                    frame.content_moved(surface_x, surface_y);
+                }
+                (
+                    arrival(Some(time)),
+                    PointerWire::Motion {
+                        x: surface_x,
+                        y: surface_y,
+                    },
+                )
+            }
             wl_pointer::Event::Button {
                 serial,
                 time,
@@ -2064,8 +2124,28 @@ impl Dispatch<WlPointer, PointerData> for WaylandState {
                         })
                         .flatten();
                     if let Some(surface) = surface {
-                        shared.record_input(data.seat, serial, surface);
+                        shared.record_input(data.seat, serial, surface.clone());
+                        shared.record_button(data.seat, Some((serial, surface)));
                     }
+                } else {
+                    shared.record_button(data.seat, None);
+                }
+                // A press on a title bar of the application's, and the
+                // release of one, is the window's, not its input's.
+                let seat = shared
+                    .objects
+                    .with(|objects| {
+                        objects
+                            .seats
+                            .iter()
+                            .find(|held| held.key == data.seat)
+                            .map(|held| held.seat.clone())
+                    })
+                    .flatten();
+                if let (Some(frame), Some(seat)) = (shared.content_frame(pointer), seat)
+                    && frame.content_button(&seat, serial, button, pressed)
+                {
+                    return;
                 }
                 (
                     arrival(Some(time)),

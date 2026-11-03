@@ -2,7 +2,7 @@
 //! written once for every transport.
 //!
 //! A [`Service`] owns what every connection shares: the windows the host handed it, the token a
-//! driver presents, the [`Limits`], the app's introduction and the driver's claim. A [`Session`]
+//! driver presents, the [`Limits`], the app's introduction and the driver's seat. A [`Session`]
 //! is one conversation, and it does no I/O: a transport hands it the bytes it read and the
 //! current instant, writes the lines it [transmits](Session::transmit), and
 //! [polls](Session::poll) it again when the waker it passed is woken or the
@@ -44,10 +44,16 @@
 //!
 //! # The driver
 //!
-//! A service given an `on_driver_gone` obligation makes the first conversation past its hello
-//! the app's driver. When that conversation ends while the service is not stopped (its client
-//! closed it, broke it, or it was closed for a fault of the client's), the obligation runs once,
-//! contained.
+//! A hello names its role (ADR-0288 §8). One conversation drives the app at a time: a hello that
+//! asks to drive, as one naming no role does, takes the driver's seat, and while another holds
+//! it the hello is answered `not_driver`, retry `soon`, and closed. An observer
+//! (`"role":"observer"`) reads and subscribes beside the driver; a call of its that acts is
+//! answered `not_driver`, and its hello lists only the methods it may call.
+//!
+//! When the driver's conversation ends (its client closed it, broke it, or it was closed for a
+//! fault of the client's), the seat is free for the next driver. A service given an
+//! `on_driver_gone` obligation runs it instead, once and contained, unless the service stopped:
+//! the app is ending, so a later driver's hello is answered `shutting_down`.
 
 mod dispatch;
 mod registry;
@@ -60,6 +66,10 @@ pub use self::session::{Session, Status};
 /// Emits what `event` traces, contained: a subscriber is user code, and one that panics must not
 /// take down the transport the conversation runs on, nor the work it accepted.
 fn trace(event: impl FnOnce()) {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "ADR-0287: a tracing subscriber's panic must not stop the transport"
+    )]
     let traced = std::panic::catch_unwind(std::panic::AssertUnwindSafe(event));
     if let Err(payload) = traced {
         flui_foundation::panic::discard_payload(payload);

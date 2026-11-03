@@ -78,6 +78,6 @@ pub use node::RenderNode;
 pub use state::RenderState;
 pub use state::{BoxLayoutCache, IntrinsicDimension, ProtocolLayoutCache};
 // Type aliases for convenience
+pub(crate) use node_slab::TreeLease;
 pub use state::{BoxRenderState, SliverRenderState};
-pub(crate) use tree::TreeLease;
 pub use tree::{ChildrenUpdate, RenderTree};

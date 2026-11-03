@@ -401,6 +401,12 @@ impl SharedPlatform {
         self.platform.app_path()
     }
 
+    /// The value the process was launched with under `key`; see [`Platform::launch_value`].
+    #[must_use]
+    pub fn launch_value(&self, key: flui_platform::LaunchKey) -> Option<String> {
+        self.platform.launch_value(key)
+    }
+
     /// Where the application `app` keeps its data, or `None` when this
     /// platform has nowhere to keep it.
     #[must_use]
@@ -651,6 +657,10 @@ impl WindowRequest {
         self,
     ) -> Result<(WindowOptions, Rc<dyn WindowHandler>), OpenWindowError> {
         let Self { options, handler } = self;
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: a window builder's panic becomes a typed open error"
+        )]
         match std::panic::catch_unwind(std::panic::AssertUnwindSafe(handler)) {
             Ok(handler) => Ok((options, handler)),
             Err(payload) => {

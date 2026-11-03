@@ -94,7 +94,8 @@ it. Inside the FLUI checkout, generate against the local source instead:
 | `flui analyze` | `cargo clippy --workspace --all-targets -D warnings` (`--pedantic`, `--fix`). |
 | `flui format` | `cargo fmt --all` (`--check` exits 4 when unformatted). |
 | `flui clean` | Cargo artifacts and every platform's build output; `--platform <android\|ios\|web\|desktop>` cleans one platform's output instead, and `--deep` adds what platform build tools write in `platforms/`. A directory given to `flui build --output` is yours to clean. |
-| `flui doctor` | Environment checks with fix hints; `--fix` installs missing `rustup` targets. |
+| `flui add <capability>` | Link a capability crate (`flui add system`): enables its facade feature, prints the `.plugin(…)` line that registers it and what it declares for the manifests. |
+| `flui doctor` | Environment and project checks with fix hints; `--fix` installs missing `rustup` targets, `--manifest` checks a manifest FLUI does not write. |
 | `flui devices` | Desktop, Android (`adb`), iOS simulators and browsers, with the ids `--device` takes. |
 | `flui emulators list|launch` | List and start Android AVDs and iOS simulators. |
 | `flui platform add|remove|list` | Manage the platforms declared in `flui.toml` (`remove --yes` for scripts). |
@@ -196,8 +197,9 @@ the app): `flui run --scene --scene-crate <crate> --package <android.package>`.
 ## Driving an app from an agent
 
 ```bash
-flui run --agent                  # debug build, on this desktop
-flui run --agent --release        # release build with the `driver` feature
+flui run --agent                         # debug build, on this desktop
+flui run --agent --release               # release build with the `driver` feature
+flui run --agent --device emulator-5554  # debug build, on an Android device
 ```
 
 `flui run --agent` gives the app a private local endpoint (a Unix socket in a
@@ -205,9 +207,13 @@ flui run --agent --release        # release build with the `driver` feature
 writes both to `target/flui-agent.json`. Every debug FLUI app serves its
 driver agent there with no code of its own (ADR-0239); an optimized build
 gets the `driver` feature of `flui` (or of `flui-app` for an app that names the
-runtime crate), under the key the app names it by. It refuses a device other
-than this desktop. With `--json` it emits `run.agent.ready {endpoint, session}`;
-the token stays out of the stream.
+runtime crate), under the key the app names it by. On an Android device the
+app binds an abstract socket (`@flui-agent-…`), which `am start` names in the
+intent's extras with the token, and the session file names the loopback port
+that `adb forward` carries to it; the forward is removed when the run ends. It
+refuses a browser and the iOS Simulator. With `--json` it emits
+`run.agent.ready {endpoint, session}`, with `forwarded` (the port's address)
+on Android; the token stays out of the stream.
 
 The agent's client launches `flui mcp` in the same project, for example in an
 MCP client's configuration:
@@ -278,6 +284,23 @@ only warn unless you select them explicitly with `--android`, `--ios` or
 reported, never waited on. Java's macOS stub (which prints "Unable to locate a
 Java Runtime") is detected as missing, not as installed.
 
+Inside a FLUI project a Project section follows. `project.declarations` reads
+what the crates the app links declare for its manifests
+(`[package.metadata.flui.declares]`, ADR-0307) and fails on a malformed table,
+as `flui build` would. `project.android-manifest` fails when
+`<project>/platforms/android/app/src/main/AndroidManifest.xml` was not written by
+`flui build`, listing what it lacks. `--manifest PATH`, repeatable, checks a
+manifest FLUI does not write, such as an embedding project's
+`AndroidManifest.xml` or `PrivacyInfo.xcprivacy` (XML form), against the
+crates of the project in the current directory: one `project.manifest` check
+per path, failing with each missing entry, the crates that declare it and the
+lines to add. An Android file that is not Gradle's merged manifest carries a
+`note` saying entries merged in from libraries are not seen.
+
+```bash
+flui doctor --json --manifest ../host/app/src/main/AndroidManifest.xml
+```
+
 ## Devices and emulators
 
 ```bash
@@ -310,7 +333,7 @@ object with an `event` field; human text, if any, goes to stderr.
 | `create.start`, `create.file`, `create.done` | `create` (also with `--dry-run`) |
 | `run.start`, `run.build.start`, `run.build.done`, `run.app.start`, `run.app.log`, `run.app.exit`, `run.change`, `run.reload`, `run.app.stop`, `run.stop` | `run` |
 | `run.web.serve {url, dir}`, `run.web.open {browser, url}`, `run.reload {kind: "page"}` | `run --device browser:…` |
-| `run.agent.ready {endpoint, session}` | `run --agent` |
+| `run.agent.ready {endpoint, session, forwarded?}` | `run --agent` (`forwarded` on Android) |
 | `build.start`, `build.phase`, `build.done` | `build` |
 | `test.start`, `test.done`, `analyze.done`, `format.done` | `test`, `analyze`, `format` |
 | `clean.removed`, `clean.done` | `clean` |

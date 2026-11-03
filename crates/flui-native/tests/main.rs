@@ -17,6 +17,10 @@
 //! asserts the AppKit main thread, which a bare `cargo test` cannot host
 //! unbundled (ADR-0039; unbundled NSWindow construction aborts the process).
 
+#![allow(
+    clippy::disallowed_methods,
+    reason = "test code catches a panic to assert on it (ADR-0303 §5)"
+)]
 #[path = "absent.rs"]
 mod absent;
 #[path = "android_exit_path.rs"]
@@ -52,6 +56,9 @@ mod headless_redraw;
 mod input_capabilities;
 #[path = "input_regions.rs"]
 mod input_regions;
+#[cfg(not(target_arch = "wasm32"))]
+#[path = "launch_values.rs"]
+mod launch_values;
 #[path = "native_recording/mod.rs"]
 mod native_recording;
 #[path = "preferences.rs"]

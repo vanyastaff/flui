@@ -1,6 +1,7 @@
 //! Native library delivery without a consumer Xcode project.
 use crate::build::error::{BuildError, BuildResult};
 use crate::build::{BuildArtifacts, BuilderContext, FinalArtifacts, Platform};
+use crate::declarations::Declarations;
 use std::{
     collections::{BTreeMap, BTreeSet},
     ffi::OsString,
@@ -210,6 +211,10 @@ impl Drop for Work {
             let path = self.preserve();
             // Cleanup uncertainty must never delete files a surviving child can
             // still access, including when the worker itself unwinds.
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "ADR-0287: Work::drop reports unconfirmed cleanup without unwinding further"
+            )]
             if let Err(payload) = std::panic::catch_unwind(|| {
                 let _ = crate::ui::error(format!(
                     "child termination unconfirmed; retained the iOS packaging scratch at {}",
@@ -220,6 +225,10 @@ impl Drop for Work {
                 // discard_payload` does (ADR-0281).
                 let mut pending = Some(payload);
                 while let Some(payload) = pending.take() {
+                    #[expect(
+                        clippy::disallowed_methods,
+                        reason = "ADR-0287: a payload's drop runs contained inside Work::drop"
+                    )]
                     if let Err(next) =
                         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(payload)))
                     {
@@ -497,6 +506,7 @@ pub(crate) async fn package_application(
         .join("platforms")
         .join("ios")
         .join(PRIVACY_MANIFEST);
+    let app_dir = ctx.workspace_root.clone();
     let cancel = Arc::new(AtomicU8::new(RUNNING));
     let _guard = CancelOnDrop(Arc::clone(&cancel));
     tokio::task::spawn_blocking(move || {
@@ -506,6 +516,7 @@ pub(crate) async fn package_application(
             "x86_64-apple-ios" => ("x86_64", "IOSSIMULATOR"),
             _ => return Err(invalid(format!("unsupported application target {triple}"))),
         };
+        let declarations = Declarations::collect(&app_dir, &[triple.as_str()])?;
         let filename = format!("{}.app", bundle.name);
         let destination = output.join(&filename);
         no_symlink_destination(&destination)?;
@@ -572,7 +583,7 @@ pub(crate) async fn package_application(
         let privacy = staged.join(PRIVACY_MANIFEST);
         fs::write(
             &privacy,
-            serde_json::to_vec(&privacy_manifest(declared)?)
+            serde_json::to_vec(&privacy_manifest(declared, &declarations)?)
                 .map_err(|error| invalid(error.to_string()))?,
         )?;
         work.command(
@@ -593,27 +604,18 @@ pub(crate) async fn package_application(
 /// `platforms/ios/` when the application declares its own.
 const PRIVACY_MANIFEST: &str = "PrivacyInfo.xcprivacy";
 
-/// The privacy-sensitive APIs FLUI's own code calls on iOS, each with Apple's
-/// approved reason (App Store Connect refuses an upload whose binary calls
-/// one undeclared):
-///
-/// - system boot time, `NSProcessInfo.systemUptime`, read to place UIKit
-///   event timestamps on the frame clock (`35F9.1`: time elapsed between
-///   events within the app);
-/// - file timestamps, `stat`/`fstat`, which `std::fs` calls for every file
-///   read and `flui-assets` for asset metadata (`C617.1`: files inside the
-///   app's container).
-const FLUI_ACCESSED_APIS: [(&str, &str); 2] = [
-    ("NSPrivacyAccessedAPICategorySystemBootTime", "35F9.1"),
-    ("NSPrivacyAccessedAPICategoryFileTimestamp", "C617.1"),
-];
-
-/// The bundle's `PrivacyInfo.xcprivacy`: FLUI's accessed APIs, joined with
-/// the application's own `platforms/ios/PrivacyInfo.xcprivacy` when it has
-/// one. Tracking and collected data are the application's to declare: its
-/// values stand, and without them the manifest declares none. Accessed APIs
-/// are joined per category, the reasons of both kept.
-fn privacy_manifest(app: Option<serde_json::Value>) -> BuildResult<serde_json::Value> {
+/// The bundle's `PrivacyInfo.xcprivacy`: the required-reason APIs the linked
+/// crates declare (`apple.privacy.accessed-apis` of their
+/// `[package.metadata.flui.declares]`, ADR-0307), joined with the
+/// application's own `platforms/ios/PrivacyInfo.xcprivacy` when it has one
+/// (App Store Connect refuses an upload whose binary calls one undeclared).
+/// Tracking and collected data are the application's to declare: its values
+/// stand, and without them the manifest declares none. Accessed APIs are
+/// joined per category, the reasons of both kept.
+fn privacy_manifest(
+    app: Option<serde_json::Value>,
+    declarations: &Declarations,
+) -> BuildResult<serde_json::Value> {
     use serde_json::{Map, Value};
     let mut manifest = match app {
         None => Map::new(),
@@ -633,11 +635,11 @@ fn privacy_manifest(app: Option<serde_json::Value>) -> BuildResult<serde_json::V
             .or_insert_with(|| Value::Array(Vec::new()));
     }
     let mut reasons: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-    for (category, reason) in FLUI_ACCESSED_APIS {
+    for (category, declared) in declarations.apple_accessed_apis() {
         reasons
-            .entry(category.to_owned())
+            .entry(category.as_str().to_owned())
             .or_default()
-            .insert(reason.to_owned());
+            .extend(declared.keys().map(|reason| reason.as_str().to_owned()));
     }
     let declared = match manifest.remove("NSPrivacyAccessedAPITypes") {
         None => Vec::new(),
@@ -885,8 +887,16 @@ mod tests {
             })
             .collect()
     }
+    /// What FLUI's own workspace declares for a device build: `flui-native`
+    /// reads `systemUptime` for UIKit event times (`35F9.1`), and it and
+    /// `flui-assets` read file timestamps in the app's container (`C617.1`).
+    fn framework_declarations() -> Declarations {
+        let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        Declarations::collect(&workspace, &["aarch64-apple-ios"])
+            .expect("the workspace's declarations")
+    }
     fn privacy_manifest_declares_what_flui_calls() {
-        let manifest = privacy_manifest(None).expect("manifest");
+        let manifest = privacy_manifest(None, &framework_declarations()).expect("manifest");
         assert_eq!(
             manifest["NSPrivacyTracking"],
             serde_json::Value::Bool(false)
@@ -925,7 +935,7 @@ mod tests {
                 },
             ],
         });
-        let manifest = privacy_manifest(Some(app)).expect("manifest");
+        let manifest = privacy_manifest(Some(app), &framework_declarations()).expect("manifest");
         assert_eq!(manifest["NSPrivacyTracking"], serde_json::Value::Bool(true));
         assert_eq!(
             manifest["NSPrivacyTrackingDomains"],
@@ -961,7 +971,7 @@ mod tests {
             ]}),
         ] {
             assert!(
-                privacy_manifest(Some(malformed.clone())).is_err(),
+                privacy_manifest(Some(malformed.clone()), &Declarations::default()).is_err(),
                 "{malformed} was accepted"
             );
         }

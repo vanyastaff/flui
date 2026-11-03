@@ -11,6 +11,10 @@
 //! error-view builder) live in their own [[test]] target instead —
 //! process isolation beats opt-in locking. See error_view_recovery.
 
+#![allow(
+    clippy::disallowed_methods,
+    reason = "test code catches a panic to assert on it (ADR-0303 §5)"
+)]
 #[path = "agent_wake.rs"]
 mod agent_wake;
 #[path = "ancestor_finders.rs"]
@@ -67,6 +71,8 @@ mod persist;
 mod production_reconcile_emits;
 #[path = "reconcile_capture.rs"]
 mod reconcile_capture;
+#[path = "recovered_panic_context.rs"]
+mod recovered_panic_context;
 #[path = "recovered_panics.rs"]
 mod recovered_panics;
 #[path = "runtime_seam.rs"]

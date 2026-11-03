@@ -1114,6 +1114,10 @@ impl host::Loop for AndroidLoop {
 }
 
 impl host::Services for AndroidLoop {
+    fn launch_value(&self, key: flui_platform::LaunchKey) -> Option<String> {
+        super::launch::string_extra(&self.app, key)
+    }
+
     fn background_executor(&self) -> Arc<dyn PlatformExecutor> {
         self.background_executor.clone()
     }

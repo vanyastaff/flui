@@ -13,6 +13,9 @@
   gain `capability`) and §2 in part (the reach table gains its row);
   [ADR-0088](ADR-0088-official-packages-sdk-and-facade.md) in part (official packages keep their
   rules; capability crates are a second kind of package with rules of their own).
+- **Superseded-by:** [ADR-0307](ADR-0307-platform-declarations-are-crate-metadata.md) for §7
+  (declarations: a versioned `[package.metadata.flui.declares]` in any crate) and for §8's step
+  of `flui add` that writes declarations (the crate states its plugin instead)
 - **Related:** [ADR-0152](ADR-0152-capability-seam-revised.md) (the seam this record builds on),
   [ADR-0153](ADR-0153-release-train-and-capability-crates.md) (capability crates ship in lockstep
   with the train until the contract has its own version),

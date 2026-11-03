@@ -653,6 +653,10 @@ impl Drop for LoopOwnership {
         // A callback destructor can panic as well as a callback body. Keep
         // detachment outside the shield so even bootstrap unwinding cannot
         // leave AppKit pointing at the delegate that this guard will drop.
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: loop detachment finishes and the phase is set even if finish panics"
+        )]
         let cleanup =
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.control.finish()));
         self.control.state.lock().phase = Phase::Stopped;

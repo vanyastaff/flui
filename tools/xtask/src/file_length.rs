@@ -44,7 +44,7 @@ const LIMIT: usize = 3000;
 pub(crate) const ALLOWLIST: &str = "tools/xtask/allowlists/file-length.toml";
 
 /// Target kinds whose code a non-test build compiles.
-pub(crate) const PRODUCTION_KINDS: [&str; 8] = [
+const PRODUCTION_KINDS: [&str; 8] = [
     "lib",
     "rlib",
     "dylib",

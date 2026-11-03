@@ -10,8 +10,8 @@ use std::time::Duration;
 use flui_protocol::framing::{LineReader, MAX_LINE};
 use flui_protocol::version::PROTOCOL_VERSION;
 use flui_protocol::{
-    Capabilities, ErrorCode, ErrorObject, Greeting, Hello, HelloReply, InputPath, Request,
-    RequestId, ServerLine,
+    Capabilities, ClientRole, ErrorCode, ErrorObject, Greeting, Hello, HelloReply, InputPath,
+    Request, RequestId, ServerLine,
 };
 use flui_view::__runtime::WakeSlot;
 use serde::Serialize;
@@ -19,7 +19,7 @@ use serde_json::Value;
 use web_time::Instant;
 
 use super::dispatch::{self, Admitted, Running, Subscriptions};
-use super::service::Shared;
+use super::service::{Shared, Taken};
 
 /// What the service writes: a result is the method's output as a JSON value.
 type Line = ServerLine<Value>;
@@ -105,8 +105,8 @@ pub struct Session {
     unsent_answers: usize,
     /// When a window too busy to give a stream is asked again.
     retry_at: Option<Instant>,
-    /// This conversation claimed the app's driver.
-    driver: bool,
+    /// The role its hello was admitted with; `None` before.
+    role: Option<ClientRole>,
 }
 
 impl Session {
@@ -126,7 +126,7 @@ impl Session {
             outgoing: VecDeque::new(),
             unsent_answers: 0,
             retry_at: None,
-            driver: false,
+            role: None,
         }
     }
 
@@ -338,7 +338,7 @@ impl Session {
         }
         let mut capabilities = Capabilities::default();
         capabilities.paths = vec![InputPath::Semantic];
-        capabilities.methods = dispatch::served();
+        capabilities.methods = dispatch::served(hello.role);
         let welcome = HelloReply::new(PROTOCOL_VERSION)
             .with_app(self.shared.app.clone())
             .with_capabilities(capabilities);
@@ -346,9 +346,29 @@ impl Session {
             self.close();
             return;
         };
+        // One driver at a time (ADR-0288 §8): a second driver's hello is refused before it is
+        // answered, so the client never holds a conversation it may not act on. The seat is the
+        // last thing taken, so a conversation that holds it is always answered.
+        if hello.role.is_driver()
+            && let Err(taken) = self.shared.claim_driver()
+        {
+            let error = match taken {
+                Taken::Ended => ErrorObject::new(
+                    ErrorCode::ShuttingDown,
+                    "the app's driver went and the app is ending",
+                ),
+                Taken::Held => ErrorObject::new(
+                    ErrorCode::NotDriver,
+                    "the app has a driver; connect as an observer, or once it goes",
+                )
+                .with_retry(flui_protocol::Retry::Soon),
+            };
+            self.refuse_and_close(&Line::refusal(error), now);
+            return;
+        }
+        self.role = Some(hello.role);
         self.push(bytes, false);
         self.phase = Phase::Open;
-        self.driver = self.shared.claim_driver();
     }
 
     /// Queue the request on `line`, or the line refusing it.
@@ -372,6 +392,14 @@ impl Session {
         };
         if !dispatch::serves(method) {
             self.refuse(&Line::answer(id, Err(dispatch::not_supported(method))));
+            return;
+        }
+        // An observer reads and subscribes; acting is the driver's (ADR-0288 §8).
+        if !self
+            .role
+            .is_some_and(|role| dispatch::may_call(role, method))
+        {
+            self.refuse(&Line::answer(id, Err(dispatch::not_driver(method))));
             return;
         }
         let held = self.waiting.len() + usize::from(self.running.is_some()) + self.unsent_answers;
@@ -473,7 +501,7 @@ impl Session {
 impl Drop for Session {
     fn drop(&mut self) {
         self.shared.release(self.conversation);
-        if self.driver {
+        if self.role.is_some_and(|role| role.is_driver()) {
             self.shared.driver_gone();
         }
     }
@@ -487,7 +515,7 @@ impl fmt::Debug for Session {
             .field("waiting", &self.waiting.len())
             .field("running", &self.running.is_some())
             .field("unsent", &self.outgoing.len())
-            .field("driver", &self.driver)
+            .field("role", &self.role)
             .finish_non_exhaustive()
     }
 }

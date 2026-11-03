@@ -126,6 +126,9 @@ fn reactivity_and_dependencies() {
             ("localizations::the_global_delegate_makes_an_rtl_locale_subtree_rtl", crate::localizations::the_global_delegate_makes_an_rtl_locale_subtree_rtl),
             ("hot_reload_state::perform_reassemble_rebuilds_in_place_and_preserves_state", crate::hot_reload_state::perform_reassemble_rebuilds_in_place_and_preserves_state),
             ("layout_builder::layout_builder_constraint_change_rebuilds_in_the_same_frame", crate::layout_builder::layout_builder_constraint_change_rebuilds_in_the_same_frame),
+            ("layout_builder::nested_layout_builders_settle_on_their_first_frame", crate::layout_builder::nested_layout_builders_settle_on_their_first_frame),
+            ("layout_builder::nested_constraint_dependent_layout_builders_settle_after_a_resize", crate::layout_builder::nested_constraint_dependent_layout_builders_settle_after_a_resize),
+            ("layout_builder::a_layout_builder_feeding_its_own_constraints_paints_without_panicking", crate::layout_builder::a_layout_builder_feeding_its_own_constraints_paints_without_panicking),
         ],
     );
 }
@@ -211,6 +214,26 @@ fn reorderable_list() {
                 "reorderable::moving_a_row_to_the_end_of_a_long_list_keeps_its_focus",
                 crate::reorderable::moving_a_row_to_the_end_of_a_long_list_keeps_its_focus,
             ),
+            (
+                "reorderable::a_dragged_row_lifts_and_the_rows_make_room",
+                crate::reorderable::a_dragged_row_lifts_and_the_rows_make_room,
+            ),
+            (
+                "reorderable::a_dropped_row_lands_from_where_it_was_let_go",
+                crate::reorderable::a_dropped_row_lands_from_where_it_was_let_go,
+            ),
+            (
+                "reorderable::a_cancelled_drag_returns_the_row_to_its_place",
+                crate::reorderable::a_cancelled_drag_returns_the_row_to_its_place,
+            ),
+            (
+                "reorderable::a_move_command_slides_the_rows",
+                crate::reorderable::a_move_command_slides_the_rows,
+            ),
+            (
+                "reorderable::reduced_motion_moves_the_rows_at_once",
+                crate::reorderable::reduced_motion_moves_the_rows_at_once,
+            ),
         ],
     );
 }
@@ -227,6 +250,10 @@ fn reorderable_grid() {
                 "reorderable_grid::a_tile_dragged_by_its_handle_moves_onto_another_tile",
                 crate::reorderable_grid::a_tile_dragged_by_its_handle_moves_onto_another_tile
                     as fn(),
+            ),
+            (
+                "reorderable_grid::a_dragged_tile_makes_room_across_the_rows",
+                crate::reorderable_grid::a_dragged_tile_makes_room_across_the_rows,
             ),
             (
                 "reorderable_grid::the_grid_moves_go_along_a_row_and_by_a_row",
@@ -1090,6 +1117,7 @@ fn lazy_slivers() {
             ("lazy_list::lazy_list_view_builder_exhausted_pass_budget_defers_the_rest_to_the_next_frame", crate::lazy_list::lazy_list_view_builder_exhausted_pass_budget_defers_the_rest_to_the_next_frame),
             ("lazy_list::lazy_list_view_builder_keyed_row_moving_with_the_viewport_keeps_state", crate::lazy_list::lazy_list_view_builder_keyed_row_moving_with_the_viewport_keeps_state),
             ("lazy_list::lazy_list_view_builder_pathological_extents_defer_instead_of_panicking", crate::lazy_list::lazy_list_view_builder_pathological_extents_defer_instead_of_panicking),
+            ("lazy_list::lazy_list_view_builder_pathological_extents_under_nested_layout_builders_defer_instead_of_panicking", crate::lazy_list::lazy_list_view_builder_pathological_extents_under_nested_layout_builders_defer_instead_of_panicking),
             ("lazy_list::lazy_list_view_builder_stateful_items_init_and_dispose_with_the_band", crate::lazy_list::lazy_list_view_builder_stateful_items_init_and_dispose_with_the_band),
             ("lazy_list::replacing_nested_lazy_hosts_disposes_every_resident_once", crate::lazy_list::replacing_nested_lazy_hosts_disposes_every_resident_once),
             ("lazy_grid::lazy_grid_view_builder_places_tiles_at_oracle_positions", crate::lazy_grid::lazy_grid_view_builder_places_tiles_at_oracle_positions),

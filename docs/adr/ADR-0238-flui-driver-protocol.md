@@ -17,6 +17,9 @@
   [ADR-0081](ADR-0081-workspace-tiers-and-reach-facts.md),
   [ADR-0082](ADR-0082-platform-api-contract-crate.md)
 - **Spec:** [flui-driver](../plans/specs/flui-driver/design.md)
+- **Amended:** 2026-11-03 — a hello names its role, `driver` or `observer`, one driver is
+  admitted at a time, and a fifth code, `not_driver`, refuses another driver and an observer's
+  act ([ADR-0288](ADR-0288-the-development-agent-is-one-sans-io-service.md) §8).
 
 ## Context
 
