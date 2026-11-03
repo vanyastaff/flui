@@ -71,7 +71,14 @@ pub(crate) mod ime;
 pub(crate) mod linux;
 pub(crate) mod sizing;
 pub(crate) mod web;
-#[cfg(any(windows, test))]
+#[cfg(any(windows, test, feature = "testing"))]
+#[cfg_attr(
+    not(any(windows, test)),
+    allow(
+        dead_code,
+        reason = "off Windows only the conformance table's TSF document reaches it"
+    )
+)]
 pub(crate) mod windows;
 #[cfg(all(
     feature = "winit-backend",

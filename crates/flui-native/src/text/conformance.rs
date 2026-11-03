@@ -7,6 +7,9 @@
 //! - [`TextInputV3`]: `zwp_text_input_v3`'s events on Wayland, which the X11
 //!   host's IBus, Fcitx5 and XIM contexts are translated into as well;
 //! - [`AppKitClient`]: `NSTextInputClient`'s verbs on macOS, and UIKit's on iOS;
+//! - [`TsfDocument`]: what a TSF text service does under one read-write lock
+//!   of the Windows host's document (`ITextStoreACP` and the composition
+//!   sink);
 //! - [`WebEditContext`] and [`WebTextarea`]: what the browser tells the web
 //!   backend of an `EditContext`'s text, or of a hidden textarea's value;
 //! - [`AndroidMirror`]: what `FluiView` reports of its editor after each
@@ -395,5 +398,114 @@ impl std::fmt::Debug for WebEditContext {
 impl std::fmt::Debug for WebTextarea {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("WebTextarea").finish_non_exhaustive()
+    }
+}
+
+/// A field focused on the Windows host's TSF document: a text service edits
+/// it under a lock it requests, through `ITextStoreACP` and the context
+/// owner's composition sink.
+pub struct TsfDocument {
+    store: Rc<dyn TextStore>,
+    slot: Rc<crate::text::windows::acp::SessionSlot>,
+}
+
+/// What a text service does inside one granted lock.
+pub struct TsfSession<'a> {
+    slot: &'a crate::text::windows::acp::SessionSlot,
+}
+
+impl TsfDocument {
+    /// The document serving `store`.
+    #[must_use]
+    pub fn focus(store: Rc<dyn TextStore>) -> Self {
+        Self {
+            store,
+            slot: Rc::default(),
+        }
+    }
+
+    /// `RequestLock(TS_LF_READWRITE)`, `edit` running in `OnLockGranted`.
+    pub fn edit(&self, edit: impl FnOnce(&TsfSession<'_>) + 'static) {
+        use crate::text::windows::acp;
+
+        let slot = Rc::clone(&self.slot);
+        let answer = acp::request_lock(&*self.store, acp::TS_LF_READWRITE, move |session, _| {
+            slot.with_open(session, || edit(&TsfSession { slot: &slot }));
+            acp::Hresult::S_OK
+        });
+        if let Err(error) = answer {
+            tracing::debug!(?error, "the focused store refused the text service's lock");
+        }
+    }
+}
+
+impl TsfSession<'_> {
+    /// `SetText`: the text from `start` to `end` replaced with `text`.
+    pub fn set_text(&self, start: usize, end: usize, text: &str) {
+        use crate::text::windows::acp;
+
+        let (start, end) = (tsf::acp(start), tsf::acp(end));
+        if let Err(error) = self
+            .slot
+            .write(|session| acp::replace(session, start, end, text))
+        {
+            tracing::debug!(?error, "SetText refused");
+        }
+    }
+
+    /// `SetSelection` of a collapsed selection at `caret`.
+    pub fn set_caret(&self, caret: usize) {
+        use crate::text::windows::acp;
+
+        let caret = tsf::acp(caret);
+        let wanted = acp::AcpSelection {
+            start: caret,
+            end: caret,
+            active_at_start: false,
+        };
+        if let Err(error) = self
+            .slot
+            .write(|session| acp::set_selection(session, wanted))
+        {
+            tracing::debug!(?error, "SetSelection refused");
+        }
+    }
+
+    /// `OnStartComposition` or `OnUpdateComposition` with the composition's
+    /// range from `start` to `end`.
+    pub fn update_composition(&self, start: usize, end: usize) {
+        let span = flui_platform::text_store::utf16::Utf16Range::try_new(
+            flui_platform::text_store::utf16::Utf16Offset::new(start),
+            flui_platform::text_store::utf16::Utf16Offset::new(end),
+        )
+        .expect("BUG: the table names ordered ranges");
+        if let Err(error) = crate::text::windows::acp::set_composition(self.slot, Some(span)) {
+            tracing::debug!(?error, "the composition update was refused");
+        }
+    }
+
+    /// `OnEndComposition`.
+    pub fn end_composition(&self) {
+        if let Err(error) = crate::text::windows::acp::set_composition(self.slot, None) {
+            tracing::debug!(?error, "the composition end was refused");
+        }
+    }
+}
+
+mod tsf {
+    pub(super) fn acp(offset: usize) -> i32 {
+        i32::try_from(offset).expect("BUG: the table names short fields")
+    }
+}
+
+impl std::fmt::Debug for TsfDocument {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TsfDocument").finish_non_exhaustive()
+    }
+}
+
+impl std::fmt::Debug for TsfSession<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TsfSession").finish_non_exhaustive()
     }
 }

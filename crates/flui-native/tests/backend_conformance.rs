@@ -45,7 +45,9 @@ use flui_native::input::linux::xkb::{key_of, keysym as xkb_keysym};
 use flui_native::input::web::keys::key_composition;
 #[cfg(all(target_os = "linux", any(feature = "wayland", feature = "x11")))]
 use flui_native::text::conformance::TextInputV3;
-use flui_native::text::conformance::{AndroidMirror, AppKitClient, WebEditContext, WebTextarea};
+use flui_native::text::conformance::{
+    AndroidMirror, AppKitClient, TsfDocument, WebEditContext, WebTextarea,
+};
 use flui_native::{HeadlessPlatform, HostWindow, MockWindow, OwnerPlatform, Platform as _};
 use flui_platform::Availability;
 use flui_platform::EventTime;
@@ -152,7 +154,11 @@ enum Ime {
     /// A hidden `<textarea>` where the browser has no `EditContext`: an
     /// `input` for each change of its value, then `compositionend`.
     WebTextarea,
-    /// A path whose pure half the table does not reach yet (TSF, winit):
+    /// A TSF text service's edits of the Windows host's document: each step
+    /// under one read-write lock, `SetText` and the composition sink.
+    Tsf,
+    /// A path whose pure half the table does not reach yet: winit's, whose
+    /// `ImeEvent`s reach the field through the application's handler:
     /// [`IME_ORDER_GAP`].
     Undriven,
     /// No input method, and why.
@@ -169,6 +175,7 @@ enum ImeField {
     TextInputV3(TextInputV3),
     Apple(AppKitClient),
     Android(AndroidMirror, Editable),
+    Tsf(TsfDocument, Editable),
     WebEditContext(WebEditContext, Editable),
     WebTextarea(WebTextarea, Editable),
 }
@@ -209,6 +216,10 @@ impl ImeDriver {
                 let mirror = AndroidMirror::focus(store);
                 let editable = Editable::holding(mirror.text());
                 ImeField::Android(mirror, editable)
+            }
+            Ime::Tsf => {
+                let editable = Editable::reading(&store);
+                ImeField::Tsf(TsfDocument::focus(store), editable)
             }
             Ime::WebEditContext => {
                 let editable = Editable::reading(&store);
@@ -279,6 +290,26 @@ impl ImeDriver {
                     (editable.caret, editable.caret),
                     editable.composing,
                 );
+            }
+            (Some(ImeField::Tsf(document, editable)), _) => {
+                let (start, end) = editable
+                    .composing
+                    .unwrap_or((editable.caret, editable.caret));
+                let text = editable.compose(step);
+                let (caret, composing) = (editable.caret, editable.composing);
+                let ends = !matches!(step, CompositionStep::Preedit { .. });
+                document.edit(move |session| {
+                    // A commit of the composing text replaces nothing.
+                    if !(ends && text == preedit) {
+                        session.set_text(start, end, text);
+                    }
+                    match composing {
+                        Some((start, end)) => session.update_composition(start, end),
+                        None if fault != Some(Fault::ImeEndLost) => session.end_composition(),
+                        None => {}
+                    }
+                    session.set_caret(caret);
+                });
             }
             (Some(ImeField::WebEditContext(context, editable)), _) => {
                 let (start, end) = editable
@@ -418,7 +449,7 @@ fn win32() -> Profile {
         haptics: Some(HapticsTable::Win32 { pen: false }),
         drag: Some(input_availability::DESKTOP_DRAG_START),
         keys: Some(KeyDecoder::Win32),
-        ime: Ime::Undriven,
+        ime: Ime::Tsf,
     }
 }
 
@@ -1918,7 +1949,7 @@ fn each_input_method_path_holds_the_ime_rows_or_names_its_gap() {
         RowOutcome::NotApplicable("built without a Linux host")
     };
     let backends: [(&str, Profile, RowOutcome); 8] = [
-        ("win32", win32(), RowOutcome::Gap(IME_ORDER_GAP)),
+        ("win32", win32(), RowOutcome::Held),
         ("appkit", appkit(), RowOutcome::Held),
         ("uikit", uikit(), RowOutcome::Held),
         ("android", android(), RowOutcome::Held),
@@ -2129,6 +2160,11 @@ const BROKEN: &[BrokenRow] = &[
         "a_composition_reaches_the_field_in_order",
         Fault::ImeEndLost,
         web_textarea,
+    ),
+    (
+        "a_composition_reaches_the_field_in_order",
+        Fault::ImeEndLost,
+        win32,
     ),
     (
         "outgoing_drag_is_delivered_as_claimed",

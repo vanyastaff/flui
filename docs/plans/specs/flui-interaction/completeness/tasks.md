@@ -127,10 +127,10 @@ T19 были нужны модальность ввода, Back/Dismiss и пр�
 |---|---|---|---|---|
 | T40a–e | macOS: ввод · DnD · haptics · IME-проверка · `CGEvent` и записи | P9, P14, R8 | T12 и ядро функции (T21, T28, T16) | todo |
 | T41a–e | iOS: ввод · DnD · haptics · `UITextInput` · XCUITest и записи | P10, P14, R8 | T12, T09 и ядро функции | todo |
-| T42a–e | Android: ввод · DnD · haptics · `InputConnection` · `adb shell input`, `uinput` и записи (ADR-0215 §8) | P11, P14, R8 | T12, T09 и ядро функции | merged; часть путей не исполнена (V4), таблица порядка IME не построена (V6) |
+| T42a–e | Android: ввод · DnD · haptics · `InputConnection` · `adb shell input`, `uinput` и записи (ADR-0215 §8) | P11, P14, R8 | T12, T09 и ядро функции | merged; часть путей не исполнена (V4), таблица порядка IME построена (V6) |
 | T43a–c | Linux: `composing` и `Unavailable`-пути · uinput/libei и записи · после T43x — перо, планшет, DnD | P12, R8 | T12 | todo |
 | T43x | Подъём winit до 0.31 | P12 | внешний релиз | blocked-external |
-| T44a–e | Web: ввод и синхронный `preventDefault` · HTML DnD · вибрация · IME (`EditContext`/`<textarea>`) · BiDi и записи | P13, P14, P15, R8, Q4 | T12 и ядро функции; спека web-canvas-input-ownership | merged; исполнено только в headless Chrome (V5), таблица порядка IME не построена (V6) |
+| T44a–e | Web: ввод и синхронный `preventDefault` · HTML DnD · вибрация · IME (`EditContext`/`<textarea>`) · BiDi и записи | P13, P14, P15, R8, Q4 | T12 и ядро функции; спека web-canvas-input-ownership | merged; исполнено только в headless Chrome (V5), таблица порядка IME построена (V6) |
 
 ## Не исполнено на железе и не построено
 
@@ -144,7 +144,7 @@ T19 были нужны модальность ввода, Back/Dismiss и пр�
 | V3 | T37 | OLE DnD исполнен в одном процессе с синтетическим вводом (отложенный старт, кадры второго окна, drop в окно FLUI); ни с зажатой настоящей кнопкой мыши, ни с пером или касанием, ни в другое приложение | Ручной прогон перетаскивания мышью в другое приложение и из него |
 | V4 | T42a–e | Envelopes (API 36) и compositions не исполнены (у Galaxy S21 нет primitives); тачпад и стилус — только `uinput` и `input stylus`, без аппаратных; `CursorAnchorInfo`, Gboard и рукописный ввод не исполнены; DnD принят только окном самого probe | Устройство с API 36 и primitives, аппаратные тачпад и стилус, Gboard |
 | V5 | T44a–e | Всё исполнено в headless Chrome: вибрация без мотора, pinch трекпада из сконструированных событий, IME — путь Chrome без IME ОС и экранной клавиатуры; ни Safari, ни Firefox, ни трекпада | Прогоны в Safari и Firefox, с трекпадом, на телефоне с экранной клавиатурой |
-| V6 | T42d, T44d | Таблица порядка событий IME на ОС (P14) построена в `flui_testing::backend_conformance`: сценарий `Step::Composition` (preedit, кандидат, commit, cancel) и три строки — `a_composition_reaches_the_field_in_order`, `a_cancelled_composition_leaves_the_field_as_it_was`, `each_composition_step_is_one_edit_of_the_field`; каждая падает на своей поломке. Пути гоняются через `flui_native::text::conformance`: text-input-v3 (Wayland и X11 IBus/Fcitx5/XIM), AppKit, UIKit, зеркало `FluiView` (`InputConnection`), веб `EditContext` и скрытая `<textarea>`. Не построены строки TSF и winit: они отвечают `RowOutcome::Gap` (gaps №1), `each_input_method_path_holds_the_ime_rows_or_names_its_gap` | Чистая половина TSF, доступная таблице, и её строки; winit |
+| V6 | T42d, T44d | Таблица порядка событий IME на ОС (P14) построена в `flui_testing::backend_conformance`: сценарий `Step::Composition` (preedit, кандидат, commit, cancel) и три строки — `a_composition_reaches_the_field_in_order`, `a_cancelled_composition_leaves_the_field_as_it_was`, `each_composition_step_is_one_edit_of_the_field`; каждая падает на своей поломке. Пути гоняются через `flui_native::text::conformance`: документ TSF, text-input-v3 (Wayland и X11 IBus/Fcitx5/XIM), AppKit, UIKit, зеркало `FluiView` (`InputConnection`), веб `EditContext` и скрытая `<textarea>`. Не построен только winit: его `ImeEvent` доходят до поля через обработчик приложения, и он отвечает `RowOutcome::Gap` (gaps №1), `each_input_method_path_holds_the_ime_rows_or_names_its_gap` | Путь winit через обработчик IME приложения |
 
 ## Ярус 11 — завершение
 
