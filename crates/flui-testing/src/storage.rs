@@ -143,6 +143,10 @@ impl State {
 fn wake_all(wakers: impl IntoIterator<Item = Waker>) {
     let mut first = None;
     for waker in wakers {
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: a waker's panic must not stop the remaining wakers"
+        )]
         if let Err(payload) = catch_unwind(AssertUnwindSafe(|| waker.wake())) {
             if first.is_none() {
                 first = Some(payload);

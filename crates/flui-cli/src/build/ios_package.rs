@@ -211,6 +211,10 @@ impl Drop for Work {
             let path = self.preserve();
             // Cleanup uncertainty must never delete files a surviving child can
             // still access, including when the worker itself unwinds.
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "ADR-0287: Work::drop reports unconfirmed cleanup without unwinding further"
+            )]
             if let Err(payload) = std::panic::catch_unwind(|| {
                 let _ = crate::ui::error(format!(
                     "child termination unconfirmed; retained the iOS packaging scratch at {}",
@@ -221,6 +225,10 @@ impl Drop for Work {
                 // discard_payload` does (ADR-0281).
                 let mut pending = Some(payload);
                 while let Some(payload) = pending.take() {
+                    #[expect(
+                        clippy::disallowed_methods,
+                        reason = "ADR-0287: a payload's drop runs contained inside Work::drop"
+                    )]
                     if let Err(next) =
                         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(payload)))
                     {

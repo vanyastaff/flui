@@ -221,6 +221,10 @@ impl<E: Clone + 'static> Observation<E> {
                 let Some(mut callback) = callback else {
                     continue;
                 };
+                #[expect(
+                    clippy::disallowed_methods,
+                    reason = "ADR-0287: a listener's panic must not stop the remaining listeners"
+                )]
                 preserve(
                     &mut first,
                     catch_unwind(AssertUnwindSafe(|| callback(&event.value))).err(),
@@ -377,6 +381,10 @@ fn retire_rejected_callback<E>(callback: Callback<E>, prior_failure: bool) {
 /// Retire one envelope under containment: the first failure stays in `first`,
 /// a later destructor panic is discarded (ADR-0281 §3).
 fn retire_callback<E>(callback: Option<Callback<E>>, first: &mut Option<Panic>) {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "ADR-0287: a retired callback's drop runs contained; the first panic is kept"
+    )]
     preserve(
         first,
         catch_unwind(AssertUnwindSafe(|| drop(callback))).err(),

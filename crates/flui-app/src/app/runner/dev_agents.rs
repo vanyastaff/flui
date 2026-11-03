@@ -71,6 +71,10 @@ pub(super) fn is_serving() -> bool {
 /// panic of `call` resumes, so the next call finds it.
 fn lend<R>(call: impl FnOnce(&mut DevAgentHost) -> R) -> Option<R> {
     let mut host = APP_RUNTIME.with(|slot| slot.borrow_mut().loop_dev_agent.lend())?;
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "ADR-0287: a dev agent call's panic resumes after the host is restored"
+    )]
     let value = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| call(&mut host)));
     let gone = APP_RUNTIME.with(|slot| slot.borrow_mut().loop_dev_agent.restore(host));
     // The loop ended, or another started, while the host was lent: its hooks

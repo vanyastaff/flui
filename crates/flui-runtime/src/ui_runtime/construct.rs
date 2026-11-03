@@ -480,6 +480,10 @@ impl UiRuntime {
         let consecutive_failures = report.consecutive_failures;
         // Diagnostics are foreign code through tracing subscribers. A failed
         // diagnostic must not prevent the report's callback or sibling frames.
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: a tracing subscriber's panic must not block the report's callback"
+        )]
         if let Err(payload) = catch_unwind(AssertUnwindSafe(|| match &report.kind {
             FrameFailureKind::SamplingPanic {
                 first,
@@ -585,6 +589,10 @@ impl UiRuntime {
         if let Some(handler) = handler {
             // Keep the owning envelope outside the callback's unwind boundary.
             // It may be the final owner after callback-driven unregistration.
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "ADR-0287: a frame failure handler runs contained so frames continue"
+            )]
             let failed = match catch_unwind(AssertUnwindSafe(|| handler.call(&report))) {
                 Ok(()) => match catch_unwind(AssertUnwindSafe(|| drop(handler))) {
                     Ok(()) => false,
@@ -596,6 +604,10 @@ impl UiRuntime {
                 Err(payload) => {
                     // The envelope is destroyed under containment after the
                     // callback failed too (ADR-0281 §3).
+                    #[expect(
+                        clippy::disallowed_methods,
+                        reason = "ADR-0287: the handler envelope drops contained after the callback failed"
+                    )]
                     if let Err(dropped) = catch_unwind(AssertUnwindSafe(|| drop(handler))) {
                         flui_foundation::panic::discard_payload(dropped);
                     }
@@ -603,6 +615,10 @@ impl UiRuntime {
                     true
                 }
             };
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "ADR-0287: a tracing subscriber's panic must not escape the frame failure path"
+            )]
             if failed
                 && let Err(payload) = catch_unwind(AssertUnwindSafe(|| {
                     tracing::error!(

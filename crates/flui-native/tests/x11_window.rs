@@ -10,6 +10,10 @@
 //! belongs to the thread that builds it, so each case builds its platform on
 //! the harness's one thread.
 
+#![allow(
+    clippy::disallowed_methods,
+    reason = "test code catches a panic to assert on it (ADR-0303 §5)"
+)]
 fn main() {
     #[cfg(target_os = "linux")]
     cases::main();

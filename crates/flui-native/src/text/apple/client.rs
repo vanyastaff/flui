@@ -349,6 +349,10 @@ impl TextClient {
         }
         // Keep the caller's ledger through every Did callback. Catch only to
         // restore this stack frame if publication itself unexpectedly unwinds.
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: a publication panic still restores this frame's call ledger"
+        )]
         if let Err(payload) =
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| publish(calls)))
         {

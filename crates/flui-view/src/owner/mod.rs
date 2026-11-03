@@ -83,10 +83,18 @@ pub(crate) fn emit_observation(
     let Some(observer) = slot.as_deref() else {
         return;
     };
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "ADR-0287: a tree observer's emission runs contained; the observer is detached"
+    )]
     if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(observer))) {
         // Destroy both before reporting, each under containment (ADR-0281).
         flui_foundation::panic::discard_payload(payload);
         crate::drop_contained(slot.take());
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: a panicking log is contained and discarded"
+        )]
         let reported = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             tracing::error!(
                 "TreeObserver panicked during emission; observer detached (no detached() call)"

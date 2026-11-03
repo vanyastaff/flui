@@ -420,6 +420,10 @@ impl Drop for UiRuntime {
         // sibling B that has not closed yet (ADR-0123).
         let mut keys = Vec::new();
         for presentation in &presentations {
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "ADR-0287: withdrawing a presentation runs contained so siblings are withdrawn"
+            )]
             let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 keys.extend(presentation.withdraw_for_ui_runtime_close(&self.interaction_lane));
             }))
@@ -431,6 +435,10 @@ impl Drop for UiRuntime {
             );
         }
         for key in keys {
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "ADR-0287: a withdrawn key's drop runs contained at close"
+            )]
             let failure =
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(key))).err();
             crate::lifecycle_state::preserve_first_lifecycle_panic(
@@ -447,6 +455,10 @@ impl Drop for UiRuntime {
             } else {
                 flui_interaction::__runtime::CloseMode::Ordinary
             };
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "ADR-0287: a presentation's close runs contained so siblings still close"
+            )]
             let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 presentation.close_with_mode_in(mode, &self.interaction_lane);
             }))
@@ -460,6 +472,10 @@ impl Drop for UiRuntime {
         // Each presentation is destroyed under containment, after a failure
         // too; the first failure stays the one resumed (ADR-0281 §3).
         for presentation in presentations {
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "ADR-0287: a presentation's drop runs contained at close; the first failure stays"
+            )]
             let failure =
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(presentation))).err();
             crate::lifecycle_state::preserve_first_lifecycle_panic(
@@ -504,6 +520,10 @@ impl Drop for UiRuntime {
         // with the receiver, under the same catch.
         let rx = std::mem::replace(&mut self.rx, crossbeam_channel::never());
         let commands: Vec<UiCommand> = rx.try_iter().collect();
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: the command receiver's drop runs contained at runtime close"
+        )]
         let closed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(rx))).err();
         crate::lifecycle_state::preserve_first_lifecycle_panic(
             &mut first,

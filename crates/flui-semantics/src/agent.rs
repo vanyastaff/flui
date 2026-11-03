@@ -682,6 +682,10 @@ impl SemanticsOwner {
         // duplicate child, a child with no node). The adapter would panic on
         // the same update; a read reports it instead of unwinding through
         // the caller's owner turn.
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: accesskit_consumer panics on a broken tree; a read reports it instead"
+        )]
         let tree = catch_unwind(AssertUnwindSafe(|| {
             accesskit_consumer::Tree::new(update, true)
         }))

@@ -310,6 +310,10 @@ where
         tracing::info!("Window closed");
         super::placement::finish(owner_dispatch.address);
         super::main_window::main_window_closing(owner_dispatch.address);
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: the window-close callback's panic is held; the pin still releases"
+        )]
         let closed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             close_this_window(owner_dispatch);
         }));

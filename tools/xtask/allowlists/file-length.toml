@@ -2,3 +2,21 @@
 # `cargo xtask file-length --seed`. Counts are exact and only go down: the scan
 # fails when a file grows past its entry, shrinks below it, or comes under the
 # limit. `exit` names the ADR whose change removes the entry.
+
+[[allow]]
+path = "crates/flui-interaction/src/binding/mod.rs"
+lines = 3009
+reason = "the ADR-0303 §6 expectations on its hand-written catches pushed it past the limit; each site that moves to a primitive removes its expectation"
+exit = "ADR-0287"
+
+[[allow]]
+path = "crates/flui-view/src/owner/build_owner.rs"
+lines = 3008
+reason = "the ADR-0303 §6 expectations on its hand-written catches pushed it past the limit; each site that moves to a primitive removes its expectation"
+exit = "ADR-0287"
+
+[[allow]]
+path = "crates/flui-view/src/tree/element_tree.rs"
+lines = 3002
+reason = "the ADR-0303 §6 expectations on its hand-written catches pushed it past the limit; each site that moves to a primitive removes its expectation"
+exit = "ADR-0287"

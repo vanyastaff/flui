@@ -985,6 +985,10 @@ impl ElementTree {
         // unwind that follows, the same way the out-parameter it replaces
         // always did.
         let mut inserted: Option<InsertedChild> = None;
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: a view's create_element and mount run contained; inserts get undone"
+        )]
         let mount_result = std::panic::catch_unwind(AssertUnwindSafe(|| -> ElementId {
             let mut element = view.create_element();
 
@@ -2268,6 +2272,10 @@ impl ElementTree {
         let stored_key = view.key().map(ViewKey::clone_key);
         let update_result = {
             let element = node.element_mut();
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "ADR-0287: an element's update panic is recorded and the child is replaced"
+            )]
             std::panic::catch_unwind(AssertUnwindSafe(|| element.update(view, owner)))
         };
         if let Err(payload) = update_result {
@@ -2301,6 +2309,10 @@ impl ElementTree {
 
     /// Activate an element (re-insertion after deactivation).
     pub fn activate(&mut self, id: ElementId, owner: &mut crate::ElementOwner<'_>) {
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: an activated subtree's panic is recorded before it propagates"
+        )]
         if let Err(payload) = std::panic::catch_unwind(AssertUnwindSafe(|| {
             self.activate_subtree(id, owner);
         })) {
@@ -2685,6 +2697,10 @@ fn retake_inactive_global_key(
     // `StatefulBehavior::on_activate`) stages it under its own identity
     // and re-raises, so this still observes the unwind.
     owner.arm_lifecycle_panic_handoff();
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "ADR-0287: a retaken subtree's activate panic is recorded, not unwound"
+    )]
     if let Err(payload) = std::panic::catch_unwind(AssertUnwindSafe(|| {
         tree.activate_subtree(candidate_id, owner);
     })) {
@@ -2716,6 +2732,10 @@ fn retake_inactive_global_key(
         .expect("BUG: a retaken candidate must still be live for its own update");
     let update_result = {
         let element = node.element_mut();
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: a retaken element's update panic is recorded, not unwound"
+        )]
         std::panic::catch_unwind(AssertUnwindSafe(|| element.update(view, owner)))
     };
 
@@ -2890,6 +2910,10 @@ fn retake_active_global_key(
     // own (see `StatefulBehavior::on_activate`) stages it under its own
     // identity and re-raises, so this still observes the unwind.
     owner.arm_lifecycle_panic_handoff();
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "ADR-0287: a retaken subtree's activate panic is recorded, not unwound"
+    )]
     if let Err(payload) = std::panic::catch_unwind(AssertUnwindSafe(|| {
         tree.activate_subtree(candidate_id, owner);
     })) {
@@ -2921,6 +2945,10 @@ fn retake_active_global_key(
         .expect("BUG: a retaken candidate must still be live for its own update");
     let update_result = {
         let element = node.element_mut();
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: a retaken element's update panic is recorded, not unwound"
+        )]
         std::panic::catch_unwind(AssertUnwindSafe(|| element.update(view, owner)))
     };
 

@@ -446,6 +446,10 @@ impl RenderingBinding {
         // back to the pipeline first, with no call out to user code, so a
         // caller that catches the panic gets the frame from the next draw.
         let pipeline = self.root_pipeline_owner();
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: a diagnostics subscriber's panic must not lose the painted tree"
+        )]
         if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             pipeline.report_semantics_diagnostics();
         })) {
@@ -561,6 +565,10 @@ impl RendererBinding for RenderingBinding {
         // A render object's panic surfaces only after the walk completed the
         // path without it (`PipelineOwner::hit_test`); it is caught here so
         // the caller can deliver to that path first.
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: a render object's panic is held until the hit path is delivered"
+        )]
         let walk = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             self.root_pipeline_owner
                 .try_with_layout(|owner| owner.hit_test(position, kind, result))

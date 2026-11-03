@@ -243,12 +243,20 @@ impl ExternalBuildInbox {
         has_fresh_work: bool,
         request_frame: Option<&(dyn Fn() + Send + Sync)>,
     ) {
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: the frame request hook runs contained so the caller is not unwound"
+        )]
         let wake = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             self.request_frame_if_needed(has_fresh_work, request_frame);
         }));
         if let Err(payload) = wake {
             // A panicking log is contained too, so the report never unwinds
             // into the caller either.
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "ADR-0287: a panicking log is contained so the report never unwinds"
+            )]
             let report = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 tracing::error!(
                     panic_message = flui_foundation::panic::payload_text(payload.as_ref())
@@ -300,6 +308,10 @@ impl ExternalBuildInbox {
         let mut first_panic = None;
         let mut may_compensate = true;
         loop {
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "ADR-0287: the frame request hook runs contained so the wake state settles"
+            )]
             let wake = std::panic::catch_unwind(std::panic::AssertUnwindSafe(request_frame));
             let reentered = {
                 let mut state = self.wake_state.lock();

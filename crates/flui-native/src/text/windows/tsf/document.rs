@@ -333,6 +333,10 @@ impl TsfStore {
         }
         let services = state.services.upgrade();
         let entered = services.as_deref().map(TextServices::enter);
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: an application callback's panic poisons the document, not the COM caller"
+        )]
         let result = match catch_unwind(AssertUnwindSafe(|| body(&state))) {
             Ok(result) => result,
             Err(payload) => {

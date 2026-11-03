@@ -438,11 +438,19 @@ impl UiCommandSender {
             Err(CommandSendError::ChannelFull { capacity, rejected }) => {
                 // A failed wake can leave an accepted command in a full inbox.
                 // Backpressure must retry its debt after admission locks retire.
+                #[expect(
+                    clippy::disallowed_methods,
+                    reason = "ADR-0287: the platform wake is user code; a panic must not lose the debt"
+                )]
                 let wake = catch_unwind(AssertUnwindSafe(|| self.retry_wake_debt()));
                 if let Err(wake_payload) = wake {
                     // The rejected envelope is destroyed under containment; a
                     // destructor that panics does not replace the wake failure
                     // (ADR-0281 §3).
+                    #[expect(
+                        clippy::disallowed_methods,
+                        reason = "ADR-0287: a rejected envelope's drop must not replace the wake failure"
+                    )]
                     if let Err(dropped) = catch_unwind(AssertUnwindSafe(|| drop(rejected))) {
                         flui_foundation::panic::discard_payload(dropped);
                     }
@@ -467,6 +475,10 @@ impl UiCommandSender {
     }
 
     fn deliver_wake(&self, token: Arc<AtomicBool>) {
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: the platform wake is user code; a panic clears the pending token"
+        )]
         let outcome = catch_unwind(AssertUnwindSafe(|| (self.wake)()));
         match outcome {
             Ok(()) => WakeDebt::acknowledge(&token),
@@ -524,6 +536,10 @@ impl UiRuntime {
         answer: Result<T, super::AgentError>,
         payload: Box<dyn std::any::Any + Send>,
     ) -> ! {
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: an agent reply's receiver runs contained before the panic resumes"
+        )]
         let answered = catch_unwind(AssertUnwindSafe(|| {
             super::agent::send_reply(reply, element, answer);
         }))
@@ -531,6 +547,10 @@ impl UiRuntime {
         let mut first_panic = Some(payload);
         preserve_first_input_panic(&mut first_panic, answered, "semantics agent reply");
         if self.has_queued_work() {
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "ADR-0287: the owner wake runs contained before the reply panic resumes"
+            )]
             let wake_panic = catch_unwind(AssertUnwindSafe(|| {
                 self.sender_prototype.wake_owner();
             }))
@@ -547,6 +567,10 @@ impl UiRuntime {
     }
 
     fn rearm_after_command_panic(&self, payload: Box<dyn std::any::Any + Send>) -> ! {
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: the owner wake runs contained before the command panic resumes"
+        )]
         let wake_panic = catch_unwind(AssertUnwindSafe(|| {
             self.sender_prototype.wake_owner();
         }))
@@ -599,6 +623,10 @@ impl UiRuntime {
                 UiCommand::HotReload(tier) => {
                     // A failed reassemble may already have changed a tree. Keep
                     // redraw demand and the accepted FIFO tail live before resuming.
+                    #[expect(
+                        clippy::disallowed_methods,
+                        reason = "ADR-0287: a failed hot reload keeps redraw demand and the tail live"
+                    )]
                     let outcome = catch_unwind(AssertUnwindSafe(|| self.apply_hot_reload(tier)));
                     match outcome {
                         Ok(changed) => {
@@ -631,6 +659,10 @@ impl UiRuntime {
                     }
                     // A panicking handler keeps the accepted tail live, as a
                     // failed reassemble does, before resuming.
+                    #[expect(
+                        clippy::disallowed_methods,
+                        reason = "ADR-0287: an accessibility handler's panic keeps the tail live"
+                    )]
                     match catch_unwind(AssertUnwindSafe(|| {
                         self.dispatch_accessibility(presentation_id, &request)
                     })) {
@@ -645,6 +677,10 @@ impl UiRuntime {
                 } => {
                     // A panicking handler keeps the accepted tail live, as an
                     // action's does, before resuming.
+                    #[expect(
+                        clippy::disallowed_methods,
+                        reason = "ADR-0287: an assistive focus handler's panic keeps the tail live"
+                    )]
                     match catch_unwind(AssertUnwindSafe(|| {
                         self.dispatch_assistive_focus(presentation_id, node)
                     })) {
@@ -691,6 +727,10 @@ impl UiRuntime {
                 },
                 UiCommand::SignalWrite { target, mut apply } => {
                     let Some((presentation, source)) = self.signal_writer_for(target) else {
+                        #[expect(
+                            clippy::disallowed_methods,
+                            reason = "ADR-0287: a tracing subscriber's panic must not lose the queued tail"
+                        )]
                         let diagnosed = catch_unwind(AssertUnwindSafe(|| {
                             tracing::warn!(
                                 target: "flui.signals",
@@ -714,6 +754,10 @@ impl UiRuntime {
                         // captured destructors. Ensure an already-queued FIFO
                         // tail has a future owner turn before its opaque drop
                         // glue runs.
+                        #[expect(
+                            clippy::disallowed_methods,
+                            reason = "ADR-0287: the owner wake runs contained before an opaque drop"
+                        )]
                         if self.has_queued_work()
                             && let Err(payload) = catch_unwind(AssertUnwindSafe(|| {
                                 self.sender_prototype.wake_owner();
@@ -722,11 +766,19 @@ impl UiRuntime {
                             flui_foundation::panic::drop_contained(apply);
                             self.rearm_after_command_panic(payload);
                         }
+                        #[expect(
+                            clippy::disallowed_methods,
+                            reason = "ADR-0287: a command envelope's drop runs contained so the tail stays live"
+                        )]
                         if let Err(payload) = catch_unwind(AssertUnwindSafe(|| drop(apply))) {
                             // A producer can enqueue after the empty-inbox
                             // snapshot while opaque destruction is blocked.
                             // If that ingress's wake failed, pay its shared
                             // debt before resuming the destructor panic.
+                            #[expect(
+                                clippy::disallowed_methods,
+                                reason = "ADR-0287: the shared wake debt is paid before the destructor panic resumes"
+                            )]
                             let wake_panic = catch_unwind(AssertUnwindSafe(|| {
                                 self.sender_prototype.retry_wake_debt();
                             }))
@@ -743,6 +795,10 @@ impl UiRuntime {
                         }
                         continue;
                     };
+                    #[expect(
+                        clippy::disallowed_methods,
+                        reason = "ADR-0287: a signal write callback runs contained so the tail stays live"
+                    )]
                     let outcome = catch_unwind(AssertUnwindSafe(|| source.write(|cx| apply(cx))));
                     // Keep the command envelope outside the caught invocation.
                     // Consuming a boxed `FnOnce` there would destroy captures
@@ -755,6 +811,10 @@ impl UiRuntime {
                     // this presentation's readers.
                     presentation.mark_redraw_pending();
                     self.redraw_pending.store(true, Ordering::Release);
+                    #[expect(
+                        clippy::disallowed_methods,
+                        reason = "ADR-0287: a replaced command envelope's drop runs contained after the write"
+                    )]
                     let command_panic = match outcome {
                         Err(payload) => {
                             // The envelope is destroyed under containment
@@ -781,6 +841,10 @@ impl UiRuntime {
         // answered. A panicking closure keeps the queued tail live, as a
         // command's does, before resuming.
         report.invoked += self.owner_jobs.drain(|job, scope| {
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "ADR-0287: an owner job's panic keeps the queued tail live before resuming"
+            )]
             if let Err(payload) = catch_unwind(AssertUnwindSafe(|| job.run(scope))) {
                 self.rearm_after_command_panic(payload);
             }

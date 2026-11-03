@@ -629,6 +629,10 @@ impl ElementOwner<'_> {
             .recovered_panics
             .last()
             .expect("BUG: just recorded a recovered panic");
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: a tracing subscriber's panic must not lose the recorded panic"
+        )]
         if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             tracing::error!(
                 at = ?panic.at,
@@ -648,6 +652,10 @@ impl ElementOwner<'_> {
     /// Reporting is transaction-neutral and cannot discard the staged token.
     /// The containing seam commits it only after the replacement succeeds.
     fn stage_recovered_panic(panic: RecoveredPanic) -> StagedRecoveredPanic {
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: a tracing subscriber's panic must not discard the staged token"
+        )]
         if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             tracing::error!(
                 at = ?panic.at,

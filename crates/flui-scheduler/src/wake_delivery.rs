@@ -99,6 +99,10 @@ impl WakeDelivery {
         let mut compensation_hook: Option<Arc<dyn Fn() + Send + Sync>> = None;
         loop {
             let current_hook = compensation_hook.as_ref().unwrap_or(&hook);
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "ADR-0287: a wake hook runs contained so delivery bookkeeping closes"
+            )]
             let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| current_hook()));
             let succeeded = outcome.is_ok();
             if let Err(payload) = outcome {
@@ -155,6 +159,10 @@ impl WakeDelivery {
                 // a competing failure: the first one stays, and one the owner
                 // turn already held stays first too (ADR-0281).
                 for envelope in [Some(hook), compensation_hook] {
+                    #[expect(
+                        clippy::disallowed_methods,
+                        reason = "ADR-0287: a retired hook envelope's drop runs contained; the first failure stays"
+                    )]
                     if let Err(payload) =
                         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(envelope)))
                     {

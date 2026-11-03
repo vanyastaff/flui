@@ -13,3 +13,9 @@ disallowed-types = [
     { path = "std::sync::Mutex", reason = "the text path takes no FLUI lock (ADR-0092 §3)" },
     { path = "std::sync::RwLock", reason = "the text path takes no FLUI lock (ADR-0092 §3)" },
 ]
+
+# The root's entries, repeated (ADR-0244, ADR-0303 §6).
+disallowed-methods = [
+    { path = "android_activity::AndroidApp::sdk_version", reason = "ADR-0244: ask the platform's `AndroidApi` for a `Gate` in flui-native's version::gate" },
+    { path = "std::panic::catch_unwind", reason = "ADR-0287: run user code through flui_foundation::panic (commit, FirstPanic), an OS entry through owner::panic_boundary::os_entry (ADR-0151 §16)" },
+]

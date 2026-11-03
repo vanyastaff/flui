@@ -138,6 +138,10 @@ pub(crate) fn deliver_each<T>(
 ) -> Option<Box<dyn std::any::Any + Send>> {
     let mut first = None;
     for item in items {
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: a reply receiver's drop or trace runs contained for the next item"
+        )]
         let panicked = catch_unwind(AssertUnwindSafe(|| deliver(item))).err();
         super::input::preserve_first_input_panic(&mut first, panicked, "agent layer read reply");
     }

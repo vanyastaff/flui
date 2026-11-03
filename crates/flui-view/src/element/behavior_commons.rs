@@ -184,6 +184,10 @@ where
     if let Some(id) = building {
         owner.reactive.begin_element_build(id);
     }
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "ADR-0287: a view's build panic is replaced by an ErrorView, not unwound"
+    )]
     match std::panic::catch_unwind(AssertUnwindSafe(build)) {
         Ok(child_view) => {
             if let Some(id) = building {
@@ -201,6 +205,10 @@ where
                     format!("building {behavior_name}"),
                 );
                 flui_foundation::panic::discard_payload(payload);
+                #[expect(
+                    clippy::disallowed_methods,
+                    reason = "ADR-0287: a panicking log is contained so ErrorView substitution proceeds"
+                )]
                 if let Err(payload) = std::panic::catch_unwind(AssertUnwindSafe(|| {
                     tracing::error!(
                         behavior_name,

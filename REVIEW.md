@@ -21,7 +21,9 @@ Important is a defect a user or a later change would hit:
 - `async`, or a lock on per-node state, on the build/layout/paint path;
 - a regression test that still passes with the fix reverted, or new behaviour with no test
   through the public API under `tests/`;
-- a "Review guidelines" item that leads to wrong behaviour.
+- a "Review guidelines" item that leads to wrong behaviour;
+- new code that uses a form from the "Not" column of `AGENTS.md`'s "Current forms", or a
+  replacement or reversal whose old form still has users or records that teach it.
 
 Shape, naming and idiom (a transliterated Dart shape, a setter/getter pair, a grab-bag name, a
 `SAFETY:` comment that restates the operation) are Nit, each with the better shape. Report at
@@ -35,7 +37,8 @@ lints (bare `unwrap()` included), spelling, links, workflow lint, and every rule
 
 These paths get findings only when near-certain and severe:
 
-- `docs/plans/`, archival and kept verbatim;
+- `docs/plans/specs/`, the live specs, whose task IDs and status tables are their purpose: a
+  finding there is a spec that contradicts an accepted ADR or a status the diff makes false;
 - files marked `@generated`, and `Cargo.lock`;
 - `*.snap` files, checked only against the PR body: a regenerated snapshot the PR doesn't
   explain is a finding, the snapshot contents are not.

@@ -58,6 +58,10 @@ pub fn assert_ownership_table() {
     let mut failures = Vec::new();
     for device in [PointerKind::Touch, PointerKind::Mouse] {
         for &(name, row) in ROWS {
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "ADR-0287: the kit reports a row's panic as that row's failure"
+            )]
             if let Err(payload) = catch_unwind(AssertUnwindSafe(|| row(device))) {
                 let message = payload
                     .downcast_ref::<String>()

@@ -28,6 +28,10 @@ pub(crate) use flui_runtime::agent::Limits;
 /// that thread accepted. Used for every trace on the agent's own threads.
 #[cfg(any(unix, windows))]
 pub(super) fn trace(event: impl FnOnce()) {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "ADR-0287: a tracing subscriber's panic must not take down the agent thread"
+    )]
     let traced = std::panic::catch_unwind(std::panic::AssertUnwindSafe(event));
     if let Err(payload) = traced {
         flui_foundation::panic::discard_payload(payload);

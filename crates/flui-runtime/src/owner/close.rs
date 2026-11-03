@@ -39,6 +39,10 @@ impl OwnerCore {
         self.release_frame_rate_demand(effects, address, &mut failure);
         // Withdraw native routing before terminal observers. A caught native
         // failure remains authoritative throughout logical close and retention.
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: native retirement's panic is kept as the first failure"
+        )]
         let retired = catch_unwind(AssertUnwindSafe(|| {
             effects.retire_presentation(address, surviving);
         }))
@@ -48,6 +52,10 @@ impl OwnerCore {
             retired,
             "presentation retirement",
         );
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: terminal observers run contained so close completes"
+        )]
         let failure = catch_unwind(AssertUnwindSafe(|| {
             if surviving.is_some() {
                 runtime.close_presentation_after_failure(address.presentation_id, failure);
