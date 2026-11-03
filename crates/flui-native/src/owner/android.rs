@@ -3,6 +3,8 @@
 //!
 //! - `looper`: `AndroidLoop`, the host's loop over `android-activity`, and the
 //!   positions of the host table that read the loop's own state;
+//! - [`java_host`]: the handshake with FLUI's Java classes in the APK, checked
+//!   before the platform starts (ADR-0255 decision 5);
 //! - `java_view`: `FluiView`, the Java side, and the queue of what it
 //!   reported since the loop's last turn (ADR-0247);
 //! - `activity`: the Activity reached through JNI, which every feature asks
@@ -29,6 +31,7 @@ pub(crate) mod activity;
 pub(crate) mod activity_callbacks;
 pub(crate) mod bridge_slot;
 pub(crate) mod frame_clock;
+pub(crate) mod java_host;
 #[cfg(target_os = "android")]
 pub(crate) mod java_view;
 #[cfg(target_os = "android")]

@@ -1379,7 +1379,7 @@ fn open_browser(browser: &Browser, url: &str) -> CliResult<()> {
 // ============================================================================
 
 /// `flui run --device <serial>`: the APK installed with `adb install -r`,
-/// the `NativeActivity` started, and `adb logcat --pid` of the app kept as
+/// `FluiActivity` started, and `adb logcat --pid` of the app kept as
 /// the loop's child, so its lines are the app's output and its exit means
 /// the app died. A change rebuilds, reinstalls and restarts.
 struct AndroidSession {
@@ -1393,8 +1393,8 @@ struct AndroidSession {
     runtime: tokio::runtime::Runtime,
 }
 
-/// What Android launches; the scaffolded manifest declares exactly this.
-const ANDROID_ACTIVITY: &str = "android.app.NativeActivity";
+/// What Android launches: the Activity the generated manifest names.
+const ANDROID_ACTIVITY: &str = crate::build::android_manifest::ACTIVITY;
 
 impl AndroidSession {
     fn new(device: AndroidDevice, release: bool, hot_reload: bool) -> CliResult<Self> {

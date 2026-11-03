@@ -4,10 +4,15 @@
      Every build writes it again: change flui.toml or the crate instead. -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 {{uses_permissions}}
-    <!-- No resources: the platform's default launcher icon applies. -->
+    <!-- No resources: the platform's default launcher icon applies.
+         `hasCode`: the APK carries FLUI's Java classes, the dex of the crates
+         the app links, which the Activity below is one of (ADR-0255).
+         `enableOnBackInvokedCallback`: back arrives as predictive back, which
+         FLUI handles only while it can pop. -->
     <application
         android:label="{{app_name}}"
-        android:hasCode="false">
+        android:hasCode="true"
+        android:enableOnBackInvokedCallback="true">
         <!-- Android recreates the Activity for a configuration change the app
              does not declare, which restarts `android_main` and loses the
              app's state. FLUI follows these in place: `ConfigChanged` reads the
@@ -15,10 +20,13 @@
              again, and a keyboard or navigation device only delivers input.
              A language change still recreates it: the host does not follow
              the locale yet. `fontWeightAdjustment` needs an API 31 or later
-             platform to link. -->
+             platform to link. `singleTop`: a new intent reaches the running
+             Activity instead of starting a second one with a second Rust
+             runtime. -->
         <activity
-            android:name="android.app.NativeActivity"
+            android:name="{{activity}}"
             android:exported="true"
+            android:launchMode="singleTop"
             android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|density|uiMode|fontScale|fontWeightAdjustment|keyboard|keyboardHidden|navigation"
             android:label="{{app_name}}">
             <meta-data

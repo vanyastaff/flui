@@ -1,8 +1,8 @@
 //! The application's `AndroidManifest.xml`, generated whole (ADR-0255
 //! decision 6, ADR-0307).
 //!
-//! FLUI owns the base (`templates/android/AndroidManifest.xml`: the
-//! Activity, its `configChanges`, the native library); the crates the
+//! FLUI owns the base (`templates/android/AndroidManifest.xml`: `FluiActivity`,
+//! its launch mode and `configChanges`, the native library); the crates the
 //! application links contribute what they declare
 //! ([`Declarations`](crate::declarations::Declarations)); `flui.toml` gives the
 //! label. Every build writes the file again at
@@ -17,9 +17,14 @@ use crate::build::error::{BuildError, BuildResult};
 use crate::build::util::xml::xml_escape;
 use crate::declarations::Declarations;
 
-/// FLUI's base manifest, with `{{app_name}}`, `{{lib_name}}` and
-/// `{{uses_permissions}}` to fill.
+/// FLUI's base manifest, with `{{app_name}}`, `{{lib_name}}`, `{{activity}}`
+/// and `{{uses_permissions}}` to fill.
 const BASE: &str = include_str!("../../templates/android/AndroidManifest.xml");
+
+/// The Activity the base names and `flui run` starts: `flui-native`'s
+/// `NativeActivity` subclass, whose class the APK carries in the dex
+/// `flui-native` declares (ADR-0255 decision 1).
+pub(crate) const ACTIVITY: &str = "dev.flui.platform.FluiActivity";
 
 /// What the base's header says, by which a file `flui build` wrote is told
 /// from one it did not.
@@ -65,6 +70,7 @@ pub(crate) fn render(facts: &ManifestFacts<'_>, declarations: &Declarations) -> 
     BASE.replace("{{uses_permissions}}\n", &uses_permissions)
         .replace("{{app_name}}", &xml_escape(facts.label))
         .replace("{{lib_name}}", &xml_escape(facts.lib_name))
+        .replace("{{activity}}", ACTIVITY)
 }
 
 /// Writes [`render`]'s manifest to `path` unless it already holds it.
@@ -112,7 +118,7 @@ pub(crate) fn write(
 mod tests {
     use std::path::Path;
 
-    use super::{ManifestFacts, render, write};
+    use super::{ACTIVITY, ManifestFacts, render, write};
     use crate::declarations::Declarations;
 
     const FACTS: ManifestFacts<'static> = ManifestFacts {
@@ -132,16 +138,17 @@ mod tests {
     /// needs, because the crate that needs it declares it: `flui-native`'s
     /// haptic patterns the vibrator, `flui-app`'s `http` feature (on by
     /// default) the network for `HttpURLConnection`. The label and library
-    /// are escaped into the base, which keeps its Activity.
+    /// are escaped into the base. The APK carries the dex `flui-native`
+    /// declares, the checked-in one.
     #[test]
     fn the_manifest_declares_what_the_linked_crates_need() {
-        let manifest = render(&FACTS, &framework_declarations());
+        let declarations = framework_declarations();
+        let manifest = render(&FACTS, &declarations);
         for line in [
             "    <uses-permission android:name=\"android.permission.INTERNET\" />\n",
             "    <uses-permission android:name=\"android.permission.VIBRATE\" />\n",
             "android:label=\"R&amp;D &lt;Notes&gt;\"",
             "android:value=\"notes\"",
-            "android:name=\"android.app.NativeActivity\"",
         ] {
             assert!(manifest.contains(line), "{line:?} in\n{manifest}");
         }
@@ -151,6 +158,76 @@ mod tests {
         );
         let without = render(&FACTS, &Declarations::default());
         assert!(!without.contains("<uses-permission"), "{without}");
+
+        let native = Path::new(env!("CARGO_MANIFEST_DIR")).join("../flui-native");
+        let dex: Vec<(&str, &Path)> = declarations.android_dex().collect();
+        assert_eq!(dex.len(), 1, "{dex:?}");
+        assert_eq!(dex[0].0, "flui-native");
+        assert_eq!(
+            std::fs::read(dex[0].1).expect("the declared dex"),
+            std::fs::read(native.join("android/classes.dex")).expect("the checked-in dex"),
+        );
+        let java: Vec<(&str, &Path)> = declarations.android_java().collect();
+        assert_eq!(java.len(), 1, "{java:?}");
+        assert!(
+            java[0]
+                .1
+                .join("dev/flui/platform/FluiActivity.java")
+                .is_file(),
+            "{java:?}"
+        );
+    }
+
+    /// The base names `FluiActivity` and the APK's code (ADR-0255 decision
+    /// 6): `hasCode`, one running Activity for a new intent, predictive back
+    /// on, and every configuration change the host follows in place.
+    #[test]
+    fn the_base_names_flui_activity_with_the_code_it_needs() {
+        let manifest = render(&FACTS, &Declarations::default());
+        let document = roxmltree::Document::parse(&manifest).expect("the manifest is XML");
+        const ANDROID: &str = "http://schemas.android.com/apk/res/android";
+        let element = |name: &str| {
+            document
+                .descendants()
+                .find(|node| node.has_tag_name(name))
+                .unwrap_or_else(|| panic!("<{name}> in\n{manifest}"))
+        };
+        let application = element("application");
+        let activity = element("activity");
+        let attribute = |node: roxmltree::Node<'_, '_>, name: &str| {
+            node.attribute((ANDROID, name)).map(str::to_owned)
+        };
+        let mut failures = Vec::new();
+        for (node, name, expected) in [
+            (application, "hasCode", "true"),
+            (application, "enableOnBackInvokedCallback", "true"),
+            (activity, "name", ACTIVITY),
+            (activity, "launchMode", "singleTop"),
+            (activity, "exported", "true"),
+        ] {
+            if attribute(node, name).as_deref() != Some(expected) {
+                failures.push(format!("{name}: {:?}", attribute(node, name)));
+            }
+        }
+        let changes = attribute(activity, "configChanges").unwrap_or_default();
+        for change in [
+            "orientation",
+            "screenSize",
+            "smallestScreenSize",
+            "screenLayout",
+            "density",
+            "uiMode",
+            "fontScale",
+            "fontWeightAdjustment",
+            "keyboard",
+            "keyboardHidden",
+            "navigation",
+        ] {
+            if !changes.split('|').any(|declared| declared == change) {
+                failures.push(format!("configChanges lacks {change}: {changes}"));
+            }
+        }
+        assert!(failures.is_empty(), "{failures:#?}\n{manifest}");
     }
 
     /// The file is written when missing or stale, left alone when current,
