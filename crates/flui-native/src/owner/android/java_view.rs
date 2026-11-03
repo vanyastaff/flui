@@ -1,15 +1,15 @@
-//! `FluiView`, the Java side of the Android backend (ADR-0247).
+//! `FluiView`, the Java side of the Android backend (ADR-0247, ADR-0255).
 //!
 //! The view's classes are compiled from `crates/flui-native/android/java`
-//! into one dex that is part of this library (`android/classes.dex`, checked
-//! against its sources by `cargo xtask android-dex`). At platform start the
-//! dex is loaded on the Java main thread through a class loader parented to
-//! the Activity's: `InMemoryDexClassLoader` from API 26, a `DexClassLoader`
-//! over a read-only copy in the code cache below it. The view's native
-//! methods are bound with `RegisterNatives` on the class that loader
-//! returned (`FindClass` would search the system loader), and one full-window
-//! `FluiView` is laid over the `NativeActivity`'s content. The manifest stays
-//! `NativeActivity` with `hasCode="false"`.
+//! into one dex (`android/classes.dex`, checked against its sources by
+//! `cargo xtask android-dex`), which `flui build` packs into the APK next to
+//! `FluiActivity`, the Activity the generated manifest names. At platform
+//! start the view class is loaded on the Java main thread through the
+//! Activity's class loader, which reads the APK, after the platform checked
+//! the classes' protocol ([`java_host`](super::java_host)). The view's native
+//! methods are bound with `RegisterNatives` on the class that loader returned
+//! (`FindClass` would search the system loader), and one full-window
+//! `FluiView` is laid over the Activity's content.
 //!
 //! Threads: every call into the view is posted to the Java main thread, and
 //! every native method the view calls only queues a [`ViewEvent`] for the
@@ -40,14 +40,10 @@ use super::EditorState;
 use super::bridge_slot::BridgeSlot;
 use crate::owner::panic_boundary::{AfterPanic, os_entry};
 use crate::owner::signal::OwnerSignal;
-use crate::version::gate::Since;
-use crate::version::gate::android::{AndroidApi, InMemoryDex};
+use crate::version::gate::android::AndroidApi;
 
 use super::{ActivityWindow, ActivityWindowId};
 use crate::owner::android::activity::with_activity;
-
-/// The view's classes, compiled from `android/java` (see the module doc).
-const DEX: &[u8] = include_bytes!("../../../android/classes.dex");
 
 /// The binary name of the view class.
 const VIEW_CLASS: &str = "dev.flui.platform.FluiView";
@@ -295,8 +291,6 @@ struct State {
 /// The bridge between the owner thread and `FluiView` (see the module doc).
 pub(crate) struct JavaView {
     app: AndroidApp,
-    /// The device's API level, which picks the dex loader.
-    api: AndroidApi,
     signal: Weak<OwnerSignal>,
     transfer: Arc<dyn ViewTransfer>,
     /// What answers the input method's calls through the view.
@@ -324,13 +318,11 @@ impl JavaView {
     pub(super) fn start(
         app: AndroidApp,
         signal: Weak<OwnerSignal>,
-        api: AndroidApi,
         input_method: Box<dyn InputMethod>,
         transfer: TransferFor,
     ) -> Arc<Self> {
         let view = Arc::new_cyclic(|this: &Weak<Self>| Self {
             app,
-            api,
             signal,
             transfer: transfer(this.clone()),
             input_method,
@@ -523,15 +515,13 @@ impl JavaView {
         })
     }
 
-    /// Load the dex, bind the native methods and lay the view over the
-    /// Activity's content. Java main thread only.
+    /// Load the view class from the APK, bind the native methods and lay the
+    /// view over the Activity's content. Java main thread only.
     fn install(self: Arc<Self>) {
-        let in_memory = self.api.since::<InMemoryDex>();
         let handle = Box::into_raw(Box::new(Arc::downgrade(&self)));
         let installed = with_activity(&self.app, |env, activity| {
-            install_view(env, activity, handle as jlong, in_memory).map_err(|error| {
+            install_view(env, activity, handle as jlong).inspect_err(|error| {
                 tracing::warn!(target: "flui_native::android", %error, "FluiView was not installed");
-                jni::errors::Error::JniCall(jni::errors::JniError::Unknown)
             })
         });
         let ready = if let Ok(view) = installed {
@@ -561,8 +551,6 @@ impl JavaView {
         tracing::info!(
             target: "flui_native::android",
             ready,
-            api = %self.api,
-            loader = if in_memory.is_some() { "in-memory" } else { "code-cache file" },
             "FluiView installation finished"
         );
         self.push_event(ViewEvent::Installed);
@@ -606,26 +594,16 @@ fn free_handle(handle: *mut Weak<JavaView>) {
     drop(unsafe { Box::from_raw(handle) });
 }
 
-#[derive(Debug, thiserror::Error)]
-enum InstallError {
-    #[error("JNI: {0}")]
-    Jni(#[from] jni::errors::Error),
-    #[error("writing the dex to the code cache: {0}")]
-    Io(#[from] std::io::Error),
-    #[error("the dex in the code cache does not match the library's")]
-    Tampered,
-}
-
-/// Load the view class through a loader parented to the Activity's, bind its
-/// native methods and install the view. With `in_memory` the dex is loaded
-/// from this library's bytes, else from its copy in the code cache.
+/// Load the view class through the Activity's class loader, which reads it
+/// from the APK's dex, bind its native methods and install the view. The
+/// platform checked the classes' protocol before it started
+/// ([`java_host`](super::java_host)).
 fn install_view(
     env: &mut Env<'_>,
     activity: &JObject<'_>,
     handle: jlong,
-    in_memory: Option<Since<InMemoryDex>>,
-) -> Result<Global<JObject<'static>>, InstallError> {
-    let parent = env
+) -> jni::errors::Result<Global<JObject<'static>>> {
+    let loader = env
         .call_method(
             activity,
             jni_str!("getClassLoader"),
@@ -633,55 +611,6 @@ fn install_view(
             &[],
         )?
         .l()?;
-    let loader = if in_memory.is_some() {
-        let bytes = env.byte_array_from_slice(DEX)?;
-        let buffer = env
-            .call_static_method(
-                jni_str!("java/nio/ByteBuffer"),
-                jni_str!("wrap"),
-                jni_sig!("([B)Ljava/nio/ByteBuffer;"),
-                &[JValue::Object(&bytes)],
-            )?
-            .l()?;
-        env.new_object(
-            jni_str!("dalvik/system/InMemoryDexClassLoader"),
-            jni_sig!("(Ljava/nio/ByteBuffer;Ljava/lang/ClassLoader;)V"),
-            &[JValue::Object(&buffer), JValue::Object(&parent)],
-        )?
-    } else {
-        let cache = env
-            .call_method(
-                activity,
-                jni_str!("getCodeCacheDir"),
-                jni_sig!("()Ljava/io/File;"),
-                &[],
-            )?
-            .l()?;
-        let cache = env
-            .call_method(
-                &cache,
-                jni_str!("getAbsolutePath"),
-                jni_sig!("()Ljava/lang/String;"),
-                &[],
-            )?
-            .l()?;
-        let cache = env.cast_local::<JString<'_>>(cache)?.try_to_string(env)?;
-        let path = code_cache_dex(std::path::Path::new(&cache))?;
-        let path = env.new_string(path.to_string_lossy())?;
-        let optimized = env.new_string(&cache)?;
-        env.new_object(
-            jni_str!("dalvik/system/DexClassLoader"),
-            jni_sig!(
-                "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/ClassLoader;)V"
-            ),
-            &[
-                JValue::Object(&path),
-                JValue::Object(&optimized),
-                JValue::Object(&JObject::null()),
-                JValue::Object(&parent),
-            ],
-        )?
-    };
     let name = env.new_string(VIEW_CLASS)?;
     let class = env
         .call_method(
@@ -709,43 +638,9 @@ fn install_view(
             env.exception_clear();
             let _ = env.call_method(&view, jni_str!("detach"), jni_sig!("()V"), &[]);
             env.exception_clear();
-            Err(error.into())
+            Err(error)
         }
     }
-}
-
-/// The dex as a read-only file in the code cache, rewritten when what is
-/// there is not byte for byte the library's. The only dynamically loaded
-/// file the backend writes, below API 26.
-fn code_cache_dex(cache: &std::path::Path) -> Result<std::path::PathBuf, InstallError> {
-    let path = cache.join(format!("flui-view-{:016x}.dex", fingerprint(DEX)));
-    if std::fs::read(&path).ok().as_deref() != Some(DEX) {
-        if path.exists() {
-            let mut writable = std::fs::metadata(&path)?.permissions();
-            #[expect(
-                clippy::permissions_set_readonly_false,
-                reason = "the stale copy is replaced, then made read-only again"
-            )]
-            writable.set_readonly(false);
-            std::fs::set_permissions(&path, writable)?;
-        }
-        std::fs::write(&path, DEX)?;
-        let mut readonly = std::fs::metadata(&path)?.permissions();
-        readonly.set_readonly(true);
-        std::fs::set_permissions(&path, readonly)?;
-    }
-    if std::fs::read(&path)? != DEX {
-        return Err(InstallError::Tampered);
-    }
-    Ok(path)
-}
-
-/// FNV-1a over `bytes`: names the copy, so a library with another dex never
-/// reads this one's file.
-fn fingerprint(bytes: &[u8]) -> u64 {
-    bytes.iter().fold(0xcbf2_9ce4_8422_2325, |hash, byte| {
-        (hash ^ u64::from(*byte)).wrapping_mul(0x0100_0000_01b3)
-    })
 }
 
 #[expect(unsafe_code, reason = "RegisterNatives takes function pointers")]

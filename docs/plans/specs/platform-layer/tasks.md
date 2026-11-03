@@ -3309,6 +3309,22 @@ graph LR
   `applicationShouldTerminate:` на выход из сеанса не изменился — `TerminateGate` отвечает
   `Now` или `Later` после объявления, `Cancel` только обычному выходу
   (`loop_control.rs` `terminate_requested`, `terminate_gate.rs` `terminate_requested`).
+- [ ] **LY62**, часть доставки — ветка `claude/project-thread-op0kt3`, от `main` @ `8c02394ed`.
+  Сделано: `FluiActivity extends NativeActivity` и `FluiHost.PROTOCOL` в dex (пересобран,
+  `--rebuild` воспроизводит побайтно: javac 21.0.12.1, build-tools 35.0.0, android-36). Dex и
+  исходники — декларации `flui-native` (ADR-0307 версия 2: `android.dex`, `android.java`), а не
+  литерал CLI; упаковщик без Gradle кладёт их как `classes.dex`, … по порядку крейтов, Gradle
+  компилирует исходники из `flui.javaSources` (скрипт без чтения свойства отклоняется). `FluiView`
+  грузится загрузчиком Activity; `InMemoryDexClassLoader`, `DexClassLoader`, `code_cache_dex`,
+  `include_bytes!` и ворота `InMemoryDex` удалены, проверка встраивания в `xtask android-dex`
+  снята (её заменяет тест CLI на объявленный dex). `owner::android::java_host` до старта платформы
+  сверяет `PROTOCOL` и класс Activity: `PlatformError::HostProtocol { library, packaged }` или
+  `Init` с найденным. База манифеста: `FluiActivity`, `hasCode="true"`, `singleTop`,
+  `enableOnBackInvokedCallback`; `aapt2 link` против android-36 её принимает. `flui run`
+  запускает `FluiActivity`. Тема запуска и `<queries>` не добавлены: у них нет потребителя в этой
+  серии (тема — с экраном запуска, `<queries>` — с первой возможностью). Остаток LY62: очередь
+  `FluiActivity` (`onActivityResult`, `onTrimMemory` как host notice, `onMultiWindowModeChanged`,
+  `onTopResumedActivityChanged`, `onUserLeaveHint`), буфер до `android_main`, пробуждение owner.
 - [ ] **LY63**, часть `configChanges` — ветка `android/config-changes`. Шаблон `flui create`
   объявляет все изменения, которые хост читает на `ConfigChanged`:
   `orientation|screenSize|smallestScreenSize|screenLayout|density|uiMode|fontScale|fontWeightAdjustment|keyboard|keyboardHidden|navigation`
