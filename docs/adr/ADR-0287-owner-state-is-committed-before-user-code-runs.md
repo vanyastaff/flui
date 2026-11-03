@@ -27,7 +27,7 @@ classes that come from that order:
 | A late answer is taken for the answer to a newer request | part of ~12% | a read issued after a write joins the read issued before it |
 
 Each fix closed one call site, and the next review found its neighbour. The workspace's production
-code has about 400 hand-written `catch_unwind` calls in 130 files, most of them in owners that
+code has about 400 hand-written `catch_unwind` calls in about 130 files, most of them in owners that
 order this themselves.
 
 How does an owner change its state and call user code so that the four classes cannot be

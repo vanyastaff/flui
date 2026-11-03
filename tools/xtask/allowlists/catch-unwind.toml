@@ -26,7 +26,7 @@ path = "crates/flui-app/src/app/agent/served.rs"
 count = 1
 
 [[allow]]
-path = "crates/flui-app/src/app/agent/served/session.rs"
+path = "crates/flui-app/src/app/agent/served/connection.rs"
 count = 1
 
 [[allow]]
@@ -290,6 +290,14 @@ path = "crates/flui-rendering/src/storage/entry.rs"
 count = 2
 
 [[allow]]
+path = "crates/flui-runtime/src/agent/mod.rs"
+count = 1
+
+[[allow]]
+path = "crates/flui-runtime/src/agent/service.rs"
+count = 1
+
+[[allow]]
 path = "crates/flui-runtime/src/capability.rs"
 count = 1
 
@@ -431,6 +439,10 @@ count = 1
 
 [[allow]]
 path = "crates/flui-semantics/src/owner.rs"
+count = 2
+
+[[allow]]
+path = "crates/flui-view/src/__runtime.rs"
 count = 2
 
 [[allow]]
