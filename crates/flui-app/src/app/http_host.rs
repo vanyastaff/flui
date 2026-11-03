@@ -1,26 +1,29 @@
 //! The built-in HTTP capability (ADR-0280).
 //!
-//! On Linux and macOS a request is sent from the run's IO lane, whose default
-//! pool runs inside a Tokio runtime, so `reqwest` drives it there and its
-//! connections stay in one pool per run. On the web the page's `fetch` sends
-//! it, on Android the system's `HttpURLConnection` and on Windows WinHTTP;
-//! there the exchange holds a slot of the IO lane until it ends, so a full or
-//! stopping lane refuses it as it refuses a `reqwest` request. Either way the
+//! Every host but macOS and iOS sends through a stack of its own: the page's
+//! `fetch` on the web, the system's `HttpURLConnection` on Android, WinHTTP
+//! on Windows and `ureq` on Linux and the BSDs, which have no system stack.
+//! Each exchange holds a slot of the run's IO lane until it ends, so a full or
+//! stopping lane refuses it as it refuses any work, and a lane that shuts down
+//! under an exchange ends it. On macOS and iOS a request is sent from the IO
+//! lane, whose default pool runs inside a Tokio runtime, so `reqwest` drives
+//! it there and its connections stay in one pool per run. Either way the
 //! caller's future only waits on a channel: it needs no runtime of its own.
 //! Dropping it, or the response's body, abandons the exchange.
 //!
-//! Where FLUI has no client yet (a Linux or macOS host on its embedder's
-//! executors, where `reqwest` would find no Tokio drivers) a request answers
+//! Where FLUI has no client yet (macOS or iOS on its embedder's executors,
+//! where `reqwest` would find no Tokio drivers) a request answers
 //! [`HttpError::NotYetOnThisHost`]: a gap of FLUI's, reported as such and
 //! never skipped.
 //!
 //! [`HttpError::NotYetOnThisHost`]: flui_platform::http::HttpError::NotYetOnThisHost
 
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 
 use flui_platform::Unsupported;
 use flui_platform::capability::{CapabilityProvider, ProviderContext};
 use flui_platform::http::{Http, HttpCapability};
+use flui_runtime::execution::ExecutionServices;
 
 use super::capability::ExecutionSlot;
 
@@ -28,11 +31,11 @@ use super::capability::ExecutionSlot;
 pub(crate) struct HostHttp {
     slot: ExecutionSlot,
     /// One connection pool per run, built on the first request.
-    #[cfg(not(any(target_os = "android", target_os = "windows", target_arch = "wasm32")))]
+    #[cfg(target_vendor = "apple")]
     client: Arc<std::sync::OnceLock<Result<reqwest::Client, String>>>,
     /// The host's own stack, one authority per run: the page's `fetch`,
-    /// Android's `HttpURLConnection` or WinHTTP.
-    #[cfg(any(target_os = "android", target_os = "windows", target_arch = "wasm32"))]
+    /// Android's `HttpURLConnection`, WinHTTP or `ureq`.
+    #[cfg(not(target_vendor = "apple"))]
     system: Http,
 }
 
@@ -40,11 +43,7 @@ impl HostHttp {
     pub(crate) fn new(slot: ExecutionSlot) -> Self {
         Self {
             slot,
-            #[cfg(not(any(
-                target_os = "android",
-                target_os = "windows",
-                target_arch = "wasm32"
-            )))]
+            #[cfg(target_vendor = "apple")]
             client: Arc::default(),
             #[cfg(target_arch = "wasm32")]
             system: Http::new(Arc::new(flui_native::http::FetchClient::new())),
@@ -52,7 +51,25 @@ impl HostHttp {
             system: Http::new(Arc::new(flui_native::http::UrlConnectionClient::new())),
             #[cfg(target_os = "windows")]
             system: Http::new(Arc::new(flui_native::http::WinHttpClient::new())),
+            #[cfg(not(any(
+                target_arch = "wasm32",
+                target_os = "android",
+                target_os = "windows",
+                target_vendor = "apple"
+            )))]
+            system: Http::new(Arc::new(flui_native::http::UreqClient::new())),
         }
+    }
+
+    /// The client this provider hands out over `services`.
+    fn http(&self, services: Weak<ExecutionServices>) -> Http {
+        #[cfg(target_vendor = "apple")]
+        return Http::new(Arc::new(lanes::LaneHttp::new(
+            services,
+            Arc::clone(&self.client),
+        )));
+        #[cfg(not(target_vendor = "apple"))]
+        Http::new(Arc::new(held::LaneHeld::new(services, self.system.clone())))
     }
 }
 
@@ -62,29 +79,16 @@ impl CapabilityProvider<HttpCapability> for HostHttp {
             // Before the host installs a UI runtime it has no lanes.
             Unsupported::of::<HttpCapability>(flui_platform::UnsupportedReason::Unavailable)
         })?;
-        #[cfg(any(target_os = "android", target_os = "windows", target_arch = "wasm32"))]
-        return Ok(Http::new(Arc::new(held::LaneHeld::new(
-            services,
-            self.system.clone(),
-        ))));
-        #[cfg(not(any(target_os = "android", target_os = "windows", target_arch = "wasm32")))]
-        Ok(Http::new(Arc::new(lanes::LaneHttp::new(
-            services,
-            Arc::clone(&self.client),
-        ))))
+        Ok(self.http(services))
     }
 }
 
 /// A client whose exchanges each hold a slot of the run's IO lane: the host's
-/// own stack (the page's `fetch`, Android's `HttpURLConnection`, WinHTTP)
-/// runs off the lane, and is admitted by it all the same.
-#[cfg(any(
-    target_arch = "wasm32",
-    target_os = "android",
-    target_os = "windows",
-    test
-))]
+/// own stack (the page's `fetch`, Android's `HttpURLConnection`, WinHTTP,
+/// `ureq`) runs off the lane, and is admitted by it all the same.
+#[cfg(any(not(target_vendor = "apple"), test))]
 mod held {
+    use std::future::poll_fn;
     use std::pin::Pin;
     use std::sync::Weak;
     use std::task::{Context, Poll};
@@ -120,20 +124,29 @@ mod held {
                 return refused(SpawnError::ShuttingDown);
             };
             // The slot is the lane's task that waits for the exchange to let
-            // go of `release`; the lane's admission refuses it as any work.
+            // go of `release`; the lane's admission refuses it as any work,
+            // and a lane that shuts down drops it, which ends the exchange.
             let (release, released) = oneshot::channel::<()>();
             if let Err(reason) = services.spawn_io(Box::pin(async move {
                 let _ = released.await;
             })) {
                 return refused(reason);
             }
-            let head = self.client.send(request);
+            let mut head = self.client.send(request);
             Box::pin(async move {
-                let response = head.await?;
+                let mut release = release;
+                let response = poll_fn(|cx| {
+                    if release.poll_closed(cx).is_ready() {
+                        // Dropping `head` abandons the request.
+                        return Poll::Ready(Err(HttpError::Cancelled));
+                    }
+                    head.as_mut().poll(cx)
+                })
+                .await?;
                 let status = response.status();
                 let headers = response.headers().clone();
                 let body = Held {
-                    body: response.into_body(),
+                    body: Some(response.into_body()),
                     release: Some(release),
                 };
                 // The inner body keeps the request's limit.
@@ -152,7 +165,9 @@ mod held {
 
     /// A body that holds its exchange's IO slot until it ends.
     struct Held {
-        body: ResponseBody,
+        /// `None` once the lane shut down under it: dropping it abandoned the
+        /// exchange.
+        body: Option<ResponseBody>,
         /// Dropped at the body's end or failure, or with the body.
         release: Option<oneshot::Sender<()>>,
     }
@@ -162,7 +177,17 @@ mod held {
             mut self: Pin<&mut Self>,
             cx: &mut Context<'_>,
         ) -> Poll<Option<Result<Vec<u8>, HttpError>>> {
-            let chunk = std::task::ready!(self.body.poll_chunk(cx));
+            if let Some(release) = self.release.as_mut()
+                && release.poll_closed(cx).is_ready()
+            {
+                self.release = None;
+                self.body = None;
+                return Poll::Ready(Some(Err(HttpError::Cancelled)));
+            }
+            let Some(body) = self.body.as_mut() else {
+                return Poll::Ready(None);
+            };
+            let chunk = std::task::ready!(body.poll_chunk(cx));
             if !matches!(chunk, Some(Ok(_))) {
                 self.release = None;
             }
@@ -171,7 +196,7 @@ mod held {
     }
 }
 
-#[cfg(not(any(target_os = "android", target_os = "windows", target_arch = "wasm32")))]
+#[cfg(target_vendor = "apple")]
 mod lanes {
     use std::future::{Future, poll_fn};
     use std::pin::{Pin, pin};
@@ -501,7 +526,7 @@ mod tests {
     use std::sync::mpsc;
     use std::time::Duration;
 
-    use flui_platform::http::{Http, HttpError, HttpHost, HttpRequest};
+    use flui_platform::http::{Http, HttpError, HttpRequest};
     use flui_runtime::execution::{DeterministicExecutors, ExecutionServices};
 
     use super::*;
@@ -514,10 +539,7 @@ mod tests {
 
     /// An `Http` over `services`, as the built-in provider hands it out.
     fn http_over(services: &Arc<ExecutionServices>) -> Http {
-        Http::new(Arc::new(lanes::LaneHttp::new(
-            Arc::downgrade(services),
-            Arc::default(),
-        )))
+        HostHttp::new(ExecutionSlot::default()).http(Arc::downgrade(services))
     }
 
     /// A loopback server that answers each connection's request with
@@ -613,18 +635,34 @@ mod tests {
         let embedder = DeterministicExecutors::new();
         let hosted = Arc::new(ExecutionServices::with_host(embedder.host_executors()));
         let pending = http_over(&hosted).send(HttpRequest::get(format!("http://{address}/image")));
-        assert_eq!(
-            embedder.run_until_idle(),
-            0,
-            "nothing reaches an embedder's executor"
-        );
-        assert_eq!(
-            block_on(pending).map(|_| ()),
-            Err(HttpError::NotYetOnThisHost {
-                host: HttpHost::EmbedderExecutors
-            }),
-            "an embedder's executor may run no Tokio drivers: a typed gap, not a panic"
-        );
+        #[cfg(target_vendor = "apple")]
+        {
+            assert_eq!(
+                embedder.run_until_idle(),
+                0,
+                "nothing reaches an embedder's executor"
+            );
+            assert_eq!(
+                block_on(pending).map(|_| ()),
+                Err(HttpError::NotYetOnThisHost {
+                    host: flui_platform::http::HttpHost::EmbedderExecutors
+                }),
+                "an embedder's executor may run no Tokio drivers: a typed gap, not a panic"
+            );
+        }
+        #[cfg(not(target_vendor = "apple"))]
+        {
+            assert_eq!(
+                embedder.run_until_idle(),
+                1,
+                "the exchange holds a slot of the embedder's IO lane"
+            );
+            let response = block_on(pending).expect("an embedder's executors send too");
+            assert_eq!(
+                block_on(response.into_body().into_bytes()).expect("the body arrives"),
+                b"bytes"
+            );
+        }
     }
 
     /// Dropping the request's future, and later the body of an answered one,

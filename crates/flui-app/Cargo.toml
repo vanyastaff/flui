@@ -25,10 +25,12 @@ crate-type = ["rlib"]
 [features]
 default = ["desktop", "http"]
 
-# The built-in HTTP capability (ADR-0280): `reqwest` on the run's IO lane.
-# Without it a widget acquiring `HttpCapability` is refused as not
-# registered, and the application links no TLS stack.
-http = ["dep:reqwest", "dep:rustls"]
+# The built-in HTTP capability (ADR-0280): the system's stack where it has
+# one, ureq on Linux and the BSDs (`flui-native`'s `http` feature), and
+# `reqwest` on the run's IO lane on macOS and iOS. Without it a widget
+# acquiring `HttpCapability` is refused as not registered, and the
+# application links no TLS stack.
+http = ["dep:reqwest", "dep:rustls", "flui-native/http"]
 
 # Accepted and ignored: `UiCommand::SignalWrite` is always compiled (ADR-0085 §5).
 # It stays only because CI's `test-features` job still passes
@@ -145,9 +147,9 @@ interprocess = { workspace = true }
 widestring = { workspace = true }
 
 # The built-in HTTP client (`http` feature, ADR-0280), driven on the run's IO
-# lane. The web, Android and Windows send through the system's own stack
-# (`flui-native::http`).
-[target.'cfg(not(any(target_arch = "wasm32", target_os = "android", target_os = "windows")))'.dependencies]
+# lane, on macOS and iOS. Every other host sends through its own stack
+# (`flui-native::http`): the system's, or ureq where it has none.
+[target.'cfg(target_vendor = "apple")'.dependencies]
 reqwest = { workspace = true, optional = true }
 # Names a failed TLS handshake in reqwest's error chain (`HttpError::Tls`).
 rustls = { workspace = true, optional = true }

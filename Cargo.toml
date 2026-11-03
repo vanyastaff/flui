@@ -469,8 +469,13 @@ moka = { version = "0.12.16", features = ["future"] }
 # charset/http2/system-proxy opt-in. Asset loading only needs binary responses;
 # the provider example enables JSON at its own development dependency.
 reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
-# The TLS stack reqwest runs, to recognise its handshake errors; no features of
-# its own.
+# The blocking HTTP stack of the native hosts without a system one (Linux and
+# the BSDs, flui-native's `http` feature). The TLS backend is rustls with the
+# provider flui-native names and the platform's verifier, so the system's
+# trust store decides; no gzip, which would hide a body's declared length.
+ureq = { version = "3.5", default-features = false, features = ["rustls-no-provider", "platform-verifier"] }
+# The TLS stack reqwest and ureq run, to recognise their handshake errors; a
+# crate that hands it to a client names the provider.
 rustls = { version = "0.23", default-features = false }
 
 # UI EVENTS - Cross-platform input event abstraction (W3C compliant)
