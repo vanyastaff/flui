@@ -18,7 +18,7 @@ pub mod style;
 
 // Re-exports for convenience
 pub use crate::Alignment;
-pub use blend_mode::BlendMode;
+pub use blend_mode::{BlendMode, CoverageClass};
 pub use canvas::{
     BlurStyle, FilterQuality, PaintingStyle, PathFillType, PathOperation, PointMode, StrokeCap,
     StrokeJoin, TextureId, TileMode, VertexMode,

@@ -575,8 +575,12 @@ fn damage_extent_contract() {
                 damage_extent::a_bounded_save_layer_extent_is_its_mapped_bounds,
             ),
             (
-                "transparent_source_and_transparent_black_predicates",
-                damage_extent::transparent_source_and_transparent_black_predicates,
+                "every_blend_mode_is_classified_by_its_cpu_blend",
+                damage_extent::every_blend_mode_is_classified_by_its_cpu_blend,
+            ),
+            (
+                "transparent_black_predicates",
+                damage_extent::transparent_black_predicates,
             ),
         ],
     );
