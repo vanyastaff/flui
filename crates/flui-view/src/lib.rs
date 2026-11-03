@@ -213,7 +213,7 @@ pub use element::{RootElement, RootElementImpl};
 // Behavior types
 pub use element::{StatefulBehavior, StatelessBehavior};
 // Re-export from flui-foundation
-pub use flui_foundation::{ElementId, RenderId};
+pub use flui_foundation::{CreationSite, ElementId, RenderId};
 pub use flui_rendering::RenderUpdateImpact;
 
 // Nameable lifecycle capabilities and callback values for widget authors.
@@ -264,7 +264,7 @@ pub use view::{
 pub mod prelude {
     // Straight from `tracing`. A framework crate emits events and has no
     // opinion about where they go, so nothing here reaches the backend.
-    pub use flui_foundation::{ElementId, RenderId};
+    pub use flui_foundation::{CreationSite, ElementId, RenderId};
     pub use flui_rendering::RenderUpdateImpact;
 
     pub use tracing::{debug, error, info, trace, warn};
