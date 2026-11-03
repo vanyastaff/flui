@@ -17,12 +17,17 @@
 //!   which the scaffolded script adds to its `main` source set: Gradle
 //!   compiles `FluiActivity` and the rest itself, where the packager without
 //!   Gradle packs the checked-in dex.
+//! - The R8 rules of those crates (ADR-0307: `android.proguard`), written as
+//!   `flui.proguardFiles`, which the scaffolded script adds to its release
+//!   build type's rules: a minified release keeps the classes native code
+//!   reaches by name.
 //!
 //! The scaffolded `app/build.gradle.kts` reads each property. A literal
 //! `minSdk` or `applicationId` in the script that differs would be a second
 //! place the value is stated, so the build refuses it, and a script that
 //! does not read `flui.javaSources` would build an APK without the Activity
-//! its manifest names, so the build refuses that too.
+//! its manifest names, so the build refuses that too, as it refuses one
+//! that does not read `flui.proguardFiles`.
 
 use std::fmt::{Display, Write as _};
 use std::path::{Path, PathBuf};
@@ -40,6 +45,9 @@ const APPLICATION_ID_PROPERTY: &str = "flui.applicationId";
 /// The property the scaffolded `app/build.gradle.kts` reads its Java source
 /// directories from.
 const JAVA_SOURCES_PROPERTY: &str = "flui.javaSources";
+/// The property the scaffolded `app/build.gradle.kts` reads the R8 rules of
+/// its release build from.
+const PROGUARD_FILES_PROPERTY: &str = "flui.proguardFiles";
 
 /// What `flui build` states for a Gradle project.
 #[derive(Debug, Clone, Copy)]
@@ -52,6 +60,8 @@ pub(crate) struct GradleFacts<'a> {
     pub(crate) application_id: &'a str,
     /// The directories of Java sources the linked crates declare.
     pub(crate) java_sources: &'a [PathBuf],
+    /// The R8 rules files the linked crates declare.
+    pub(crate) proguard_files: &'a [PathBuf],
 }
 
 /// Writes `facts` into the project's `gradle.properties`, after refusing a
@@ -81,7 +91,8 @@ pub(crate) fn state_project(android_dir: &Path, facts: &GradleFacts<'_>) -> Buil
 
 /// Why the build script `script` cannot be built with `facts`, if it cannot:
 /// the first `minSdk`, then the first `applicationId`, that states another
-/// value or one the build cannot read, then Java sources it does not read.
+/// value or one the build cannot read, then Java sources it does not read,
+/// then R8 rules it does not read.
 fn refusal(script: &str, facts: &GradleFacts<'_>) -> Option<String> {
     let min_sdk = min_sdk_assignments(script)
         .into_iter()
@@ -115,16 +126,25 @@ fn refusal(script: &str, facts: &GradleFacts<'_>) -> Option<String> {
             facts.application_id
         ));
     }
-    let reads_java_sources =
-        without_comments(script).contains(&format!("\"{JAVA_SOURCES_PROPERTY}\""));
-    (!facts.java_sources.is_empty() && !reads_java_sources).then(|| {
-        format!(
+    let script = without_comments(script);
+    let reads = |property: &str| script.contains(&format!("\"{property}\""));
+    if !facts.java_sources.is_empty() && !reads(JAVA_SOURCES_PROPERTY) {
+        return Some(format!(
             "does not read `{JAVA_SOURCES_PROPERTY}`, the Java sources of the crates the app \
              links, so the APK would lack the Activity its manifest names \
              ({}); add them to the main source set: `java.srcDirs(providers.gradleProperty(\
              \"{JAVA_SOURCES_PROPERTY}\").get().split(File.pathSeparator).filter {{ \
              it.isNotEmpty() }})`",
             crate::build::android_manifest::ACTIVITY
+        ));
+    }
+    (!facts.proguard_files.is_empty() && !reads(PROGUARD_FILES_PROPERTY)).then(|| {
+        format!(
+            "does not read `{PROGUARD_FILES_PROPERTY}`, the R8 rules of the crates the app \
+             links, so a minified release would rename or strip the classes their native \
+             code calls by name; add them to the release build type's `proguardFiles(...)`: \
+             `*providers.gradleProperty(\"{PROGUARD_FILES_PROPERTY}\").get()\
+             .split(File.pathSeparator).filter {{ it.isNotEmpty() }}.toTypedArray()`"
         )
     })
 }
@@ -133,27 +153,32 @@ fn refusal(script: &str, facts: &GradleFacts<'_>) -> Option<String> {
 ///
 /// # Errors
 ///
-/// Why the Java source directories cannot be listed in one property: a path
-/// that holds the platform's path separator.
+/// Why the Java source directories or the R8 rules cannot be listed in one
+/// property: a path that holds the platform's path separator.
 fn restate_all(text: &str, facts: &GradleFacts<'_>) -> BuildResult<String> {
     let text = restate(text, PROPERTY, facts.min_sdk);
     let text = restate(&text, TARGET_PROPERTY, facts.target_sdk);
     let text = restate(&text, APPLICATION_ID_PROPERTY, facts.application_id);
-    Ok(restate(
+    let text = restate(
         &text,
         JAVA_SOURCES_PROPERTY,
-        java_sources_value(facts.java_sources)?,
+        paths_value(JAVA_SOURCES_PROPERTY, facts.java_sources)?,
+    );
+    Ok(restate(
+        &text,
+        PROGUARD_FILES_PROPERTY,
+        paths_value(PROGUARD_FILES_PROPERTY, facts.proguard_files)?,
     ))
 }
 
-/// `directories` as one `gradle.properties` value that Kotlin splits on
-/// `File.pathSeparator`: `/`-separated, since a `\` escapes in that format,
-/// and every character outside ASCII as a `\uXXXX` escape, since Gradle reads
-/// the file as ISO 8859-1.
-fn java_sources_value(directories: &[PathBuf]) -> BuildResult<String> {
-    let joined = std::env::join_paths(directories).map_err(|error| {
+/// `paths` as the value of `property`, one `gradle.properties` value that
+/// Kotlin splits on `File.pathSeparator`: `/`-separated, since a `\` escapes
+/// in that format, and every character outside ASCII as a `\uXXXX` escape,
+/// since Gradle reads the file as ISO 8859-1.
+fn paths_value(property: &str, paths: &[PathBuf]) -> BuildResult<String> {
+    let joined = std::env::join_paths(paths).map_err(|error| {
         BuildError::Other(format!(
-            "the Java source directories cannot be listed for Gradle: {error}"
+            "the paths of `{property}` cannot be listed for Gradle: {error}"
         ))
     })?;
     let mut value = String::new();
@@ -395,6 +420,7 @@ mod tests {
         target_sdk: 36,
         application_id: "com.example.notes",
         java_sources: &[],
+        proguard_files: &[],
     };
 
     /// `flui.minSdk`, `flui.targetSdk` and `flui.applicationId` are each
@@ -430,7 +456,7 @@ mod tests {
         ] {
             let found = restate_all(text, &FACTS).expect("restated");
             // No Java sources: the property is stated empty, after the rest.
-            let expected = format!("{expected}flui.javaSources=\n");
+            let expected = format!("{expected}flui.javaSources=\nflui.proguardFiles=\n");
             if found != expected {
                 failures.push(format!("{text:?}: {found:?}"));
             }
@@ -651,7 +677,7 @@ mod tests {
             "flui.javaSources=/deps/flui-native/android/java{separator}\
              /home/\\u0432\\u0430\\u043d\\u044f/other/java\n"
         );
-        assert!(written.ends_with(&expected), "{written}");
+        assert!(written.contains(&format!("\n{expected}")), "{written}");
 
         let template = include_str!("../../templates/platforms/android/build.gradle.kts");
         assert_eq!(refusal(template, &facts), None);
@@ -666,6 +692,43 @@ mod tests {
             refusal(&without, &FACTS),
             None,
             "no sources declared, none to read"
+        );
+    }
+
+    /// The R8 rules the linked crates declare reach Gradle's release build as
+    /// one property, written as the Java sources are; a script that does not
+    /// read them is refused, naming what a minified release would strip, while
+    /// the scaffolded one reads them.
+    #[test]
+    fn a_minified_release_keeps_what_the_crates_rules_keep() {
+        let separator = if cfg!(windows) { ';' } else { ':' };
+        let rules = [
+            PathBuf::from("/deps/flui-native/android/proguard-rules.pro"),
+            PathBuf::from("/deps/other/rules.pro"),
+        ];
+        let facts = GradleFacts {
+            proguard_files: &rules,
+            ..FACTS
+        };
+        let written = restate_all("", &facts).expect("restated");
+        let expected = format!(
+            "\nflui.proguardFiles=/deps/flui-native/android/proguard-rules.pro{separator}\
+             /deps/other/rules.pro\n"
+        );
+        assert!(written.ends_with(&expected), "{written}");
+
+        let template = include_str!("../../templates/platforms/android/build.gradle.kts");
+        assert_eq!(refusal(template, &facts), None);
+        let without = template.replace("\"flui.proguardFiles\"", "\"other.rules\"");
+        let refused = refusal(&without, &facts).expect("a script without the rules");
+        assert!(
+            refused.contains("flui.proguardFiles") && refused.contains("minified"),
+            "{refused}"
+        );
+        assert_eq!(
+            refusal(&without, &FACTS),
+            None,
+            "no rules declared, none to read"
         );
     }
 }

@@ -1833,6 +1833,7 @@ dependencies = [
  "flui-log",
  "flui-protocol",
  "getrandom 0.4.3",
+ "insta",
  "interprocess",
  "notify-debouncer-mini",
  "predicates",

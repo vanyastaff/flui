@@ -376,6 +376,10 @@ impl AndroidBuilder {
                     .android_java()
                     .map(|(_, path)| path.to_path_buf())
                     .collect::<Vec<_>>(),
+                proguard_files: &declarations
+                    .android_proguard()
+                    .map(|(_, path)| path.to_path_buf())
+                    .collect::<Vec<_>>(),
             },
         )?;
         let gradle_task = match ctx.profile {

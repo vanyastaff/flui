@@ -74,7 +74,13 @@ APK as `classes.dex` (then `classes2.dex`, … for further crates), and Gradle c
 sources (`android.java`) from `flui.javaSources`, refusing a build script that does not read it
 (`libraries_and_dex_files_are_appended_where_the_platform_reads_them`,
 `gradle_compiles_the_java_sources_the_crates_declare`). No `javac` or `d8` runs on the SDK-tools
-path. The library checks the classes' protocol before it starts (ADR-0255 decision 5).
+path. The library checks the classes' protocol before it starts (ADR-0255 decision 5). The R8
+rules the crates declare (`android.proguard`; `flui-native` keeps `dev.flui.**`, which only native
+code names) reach a Gradle release as `flui.proguardFiles`, beside the app's own scaffolded
+`proguard-rules.pro`, and a script that does not read them is refused
+(`a_minified_release_keeps_what_the_crates_rules_keep`). The generated manifest and the
+scaffolded script have goldens (`the_generated_manifest_matches_its_golden`,
+`the_scaffolded_gradle_script_matches_its_golden`).
 
 The iOS bundle's `PrivacyInfo.xcprivacy` lists the required-reason APIs the graph of the device or
 simulator target declares (`apple.privacy.accessed-apis`), joined per category with the

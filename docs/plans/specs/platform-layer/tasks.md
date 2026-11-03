@@ -3354,9 +3354,17 @@ graph LR
   читает из Java `Configuration.uiMode`: нативный `AConfiguration` android-activity после
   изменения на месте остаётся прежним. Прогон на Galaxy S21 (Android 15, проба `flui create
   --local`): тема в обе стороны, `font_scale` 1.3, `font_weight_adjustment` 300, `wm density`
-  480, поворот — один `android_main`, значения в `MediaQuery`. `targetSdk` закреплён в `platform-support.toml` (`android.target-sdk = 36`; упаковщик без Gradle и `flui.targetSdk` в `gradle.properties`, 2026-11-03). Остаток LY63: путь
-  Gradle, правила R8, `windowSoftInputMode`, golden манифеста и `build.gradle.kts`, список в
-  генерируемом манифесте `FluiActivity` (LY62).
+  480, поворот — один `android_main`, значения в `MediaQuery`. `targetSdk` закреплён в `platform-support.toml` (`android.target-sdk = 36`; упаковщик без Gradle и `flui.targetSdk` в `gradle.properties`, 2026-11-03). Путь Gradle сделан в LY62
+  (исходники крейтов через `flui.javaSources`), список `configChanges` в генерируемом манифесте
+  `FluiActivity` — там же. Правила R8 (2026-11-03, ветка `claude/project-thread-op0kt3`): ключ
+  `android.proguard` схемы 2, `flui-native` объявляет `android/proguard-rules.pro`
+  (`-keep class dev.flui.** { *; }`), Gradle получает `flui.proguardFiles` в release, скрипт без
+  чтения свойства отклоняется (`a_minified_release_keeps_what_the_crates_rules_keep`); `flui create`
+  кладёт свой `app/proguard-rules.pro`. Golden: `the_generated_manifest_matches_its_golden`,
+  `the_scaffolded_gradle_script_matches_its_golden` (insta). Остаток LY63: `windowSoftInputMode`.
+  `NativeActivity.onCreate` сам ставит окну `stateUnspecified|adjustResize`, поэтому атрибут
+  манифеста ничего не меняет; выбор `adjustNothing` потребует установки в `FluiActivity` после
+  `super.onCreate` и ждёт прогона ADR-0255 (счёт `WindowResized` во время анимации клавиатуры).
 - [x] **LY46** — ветка `platform/surface-target`, от `main` @ `136947eff` (LY43, LY44), слит `main`
   @ `e617f109a` (#1923, #1924, #1925). **Контракт.** `PlatformWindow` без `Send + Sync`; окна
   отдаются как `Rc<dyn HostWindow>`/`Rc<dyn PlatformWindow>`, слабые ссылки — `std::rc::Weak`.
