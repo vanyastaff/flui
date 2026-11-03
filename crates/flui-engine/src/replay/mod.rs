@@ -58,7 +58,7 @@ struct UnclippedBinding {
     binding: wgpu::BindGroup,
 }
 
-#[derive(PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 struct ClipBindingKey {
     // Strong clip identity prevents allocation-pointer ABA during replay.
     clip: crate::clip_chain::ClipChain,
@@ -99,8 +99,11 @@ pub(super) struct GpuReplay {
     // Only reused within one submit. Uniform buffers remain immutable even
     // when offscreen attachments change the viewport or its root-space origin.
     unclipped_binding: Option<UnclippedBinding>,
-    // Every cached mask is produced earlier in the same submit encoder.
-    clip_bindings: std::collections::HashMap<ClipBindingKey, wgpu::BindGroup>,
+    // Every cached mask is produced earlier in the same submit encoder. One
+    // clip can hold masks over different crops; a request reuses any whose
+    // crop contains its own.
+    clip_bindings:
+        std::collections::HashMap<ClipBindingKey, Vec<(clip::MaskCrop, wgpu::BindGroup)>>,
     clip_mask_pipeline: Option<crate::clip_mask::ClipMaskPipeline>,
 
     /// Shared unit-quad vertex buffer (0,0 to 1,1) reused by all instanced

@@ -2681,3 +2681,360 @@ fn a_changed_undersized_performance_overlay_matches_a_full_frame() {
     let stale = mismatches(&partial, &full, 0);
     assert!(stale.is_empty(), "stale pixels at {stale:?}");
 }
+
+/// A partial frame resolves a clip's coverage only over the pixels its draws
+/// can write, which its damage bounds. The clip is a full-window rounded
+/// rectangle repeated as 16 antialiased leaves: over the whole 1024² window
+/// its mask is 1024² × 64 samples × 16 leaves, over the frame's work limit,
+/// while over a 44 px corner of damage it is a few million.
+///
+/// Each row is one kind of draw that reads the mask. It repaints the damaged
+/// corner of a green frame under the clip, and the corner must equal a full
+/// frame of the same draw under one leaf of the clip, whose coverage is the
+/// same (ADR-0102 §3), while the pixels outside the damage keep the green. A
+/// footprint cut short reads no coverage inside the damage, a footprint left
+/// at the whole window is refused, and a draw that ignores its scissor paints
+/// outside the damage.
+#[test]
+fn a_partial_frame_resolves_clip_coverage_only_inside_its_damage() {
+    use flui_foundation::geometry::{Point, RRect};
+    use flui_painting::paint::{Clip, ClipOp, FilterQuality, Image, Shader, TextureId, TileMode};
+
+    const WIDE: u32 = 1024;
+    let Some(renderer) = crate::test_support::renderer_or_skip() else {
+        return;
+    };
+    let window = Rect::from_xywh(0.0, 0.0, f64::from(WIDE), f64::from(WIDE));
+    let damage = Rect::from_ltrb(980.0, 980.0, 1024.0, 1024.0);
+    let at = |pixels: &[u8], x: u32, y: u32| {
+        let i = ((y * WIDE + x) * 4) as usize;
+        [pixels[i], pixels[i + 1], pixels[i + 2], pixels[i + 3]]
+    };
+    let texture = TextureId::new(77);
+    let corner = Rect::from_xywh(960.0, 960.0, 64.0, 64.0);
+    let card = || {
+        Path::from_rrect(RRect::from_rect_circular(
+            Rect::from_xywh(940.0, 940.0, 60.0, 60.0),
+            8.0,
+        ))
+    };
+    let triangle = || {
+        let mut triangle = Path::new();
+        triangle.move_to(Point::new(950.0, 1024.0));
+        triangle.line_to(Point::new(1024.0, 950.0));
+        triangle.line_to(Point::new(1024.0, 1024.0));
+        triangle.close();
+        triangle
+    };
+    let gradient = |shader: Shader| Paint::fill(Color::WHITE).with_shader(shader);
+    let linear = || {
+        Shader::linear_gradient(
+            Offset::new(960.0, 960.0),
+            Offset::new(1024.0, 1024.0),
+            vec![Color::RED, Color::BLUE],
+            None,
+            TileMode::Clamp,
+        )
+    };
+
+    type Draw = Box<dyn Fn(&mut Canvas)>;
+    let rows: Vec<(&str, Draw)> = vec![
+        (
+            "rect",
+            Box::new(move |canvas: &mut Canvas| {
+                canvas.draw_rect(window, &Paint::fill(Color::BLUE));
+            }),
+        ),
+        (
+            "circle",
+            Box::new(|canvas: &mut Canvas| {
+                canvas.draw_circle(Point::new(1000.0, 1000.0), 40.0, &Paint::fill(Color::BLUE));
+            }),
+        ),
+        (
+            "arc",
+            Box::new(move |canvas: &mut Canvas| {
+                canvas.draw_arc(corner, 0.0, 1.5, true, &Paint::fill(Color::BLUE));
+            }),
+        ),
+        (
+            "stroked path (tessellated in the segment)",
+            Box::new(move |canvas: &mut Canvas| {
+                canvas.draw_path(&triangle(), &Paint::stroke(Color::BLUE, 6.0));
+            }),
+        ),
+        (
+            "filled path (a supersampled tile)",
+            Box::new(move |canvas: &mut Canvas| {
+                canvas.draw_path(&triangle(), &Paint::fill(Color::BLUE));
+            }),
+        ),
+        (
+            "linear gradient",
+            Box::new(move |canvas: &mut Canvas| canvas.draw_rect(window, &gradient(linear()))),
+        ),
+        (
+            "radial gradient",
+            Box::new(move |canvas: &mut Canvas| {
+                let shader = Shader::radial_gradient(
+                    Offset::new(1000.0, 1000.0),
+                    40.0,
+                    vec![Color::RED, Color::BLUE],
+                    None,
+                    TileMode::Clamp,
+                    None,
+                    None,
+                );
+                canvas.draw_rect(window, &gradient(shader));
+            }),
+        ),
+        (
+            "sweep gradient",
+            Box::new(move |canvas: &mut Canvas| {
+                let shader = Shader::sweep_gradient(
+                    Offset::new(1000.0, 1000.0),
+                    vec![Color::RED, Color::BLUE],
+                    None,
+                    TileMode::Clamp,
+                    0.0,
+                    std::f64::consts::TAU,
+                );
+                canvas.draw_rect(window, &gradient(shader));
+            }),
+        ),
+        (
+            "linear gradient added (the portable coverage route)",
+            Box::new(move |canvas: &mut Canvas| {
+                // Added onto the white clear it would saturate to white.
+                canvas.draw_rect(window, &Paint::fill(Color::BLACK));
+                canvas.draw_rect(window, &gradient(linear()).with_blend_mode(BlendMode::Plus));
+            }),
+        ),
+        (
+            "text",
+            Box::new(|canvas: &mut Canvas| {
+                let mut painter = TextPainter::new()
+                    .with_text(
+                        TextSpan::new("Wg").with_style(
+                            TextStyle::new()
+                                .with_font_size(24.0)
+                                .with_color(Color::BLACK),
+                        ),
+                    )
+                    .with_text_direction(TextDirection::Ltr);
+                painter
+                    .layout(
+                        &mut flui_painting::TextContext::new(&flui_painting::FontCollection::new()),
+                        0.0,
+                        100.0,
+                    )
+                    .expect("readback fixture has valid layout inputs");
+                painter.paint(canvas, Offset::new(978.0, 984.0));
+            }),
+        ),
+        (
+            "decoded image",
+            Box::new(move |canvas: &mut Canvas| {
+                let image = Image::from_rgba8(2, 2, [RED, BLUE, BLUE, RED].concat());
+                canvas.draw_image(image, corner, None);
+            }),
+        ),
+        (
+            "external image",
+            Box::new(move |canvas: &mut Canvas| {
+                canvas.draw_texture(texture, corner, None, FilterQuality::None, 1.0);
+            }),
+        ),
+        (
+            "analytic shadow",
+            Box::new(move |canvas: &mut Canvas| {
+                let shape = card();
+                assert!(shape.rrect_hint().is_some(), "precondition: analytic path");
+                canvas.draw_shadow(&shape, Color::BLACK, 8.0);
+            }),
+        ),
+        (
+            "one clip read from two segments",
+            Box::new(move |canvas: &mut Canvas| {
+                canvas.draw_shadow(&card(), Color::BLACK, 8.0);
+                let group = Rect::from_xywh(990.0, 990.0, 20.0, 20.0);
+                canvas.save_layer_alpha(Some(group), 128);
+                canvas.draw_rect(group, &Paint::fill(Color::RED));
+                canvas.restore();
+                canvas.draw_rect(window, &Paint::fill(Color::rgba(0, 0, 255, 100)));
+            }),
+        ),
+    ];
+
+    let root = ContentToken::mint();
+    let clipped = |leaves: usize, draw: &Draw| {
+        let paint = |canvas: &mut Canvas| {
+            let rrect = RRect::from_rect_circular(window, 32.0);
+            for _ in 0..leaves {
+                canvas.clip_rrect_ext(rrect, ClipOp::Intersect, Clip::AntiAlias);
+            }
+            draw(canvas);
+        };
+        scene(
+            &root,
+            &[Boundary {
+                id: 2,
+                token: &ContentToken::mint(),
+                at: Offset::ZERO,
+                paint: &paint,
+            }],
+            None,
+        )
+    };
+    let background = |canvas: &mut Canvas| {
+        canvas.draw_rect(window, &Paint::fill(Color::GREEN));
+    };
+    let green = scene(
+        &root,
+        &[Boundary {
+            id: 2,
+            token: &ContentToken::mint(),
+            at: Offset::ZERO,
+            paint: &background,
+        }],
+        None,
+    );
+    let covered = flui_foundation::geometry::cover(damage);
+    let inside = |x: u32, y: u32| {
+        f64::from(x) >= covered.left()
+            && f64::from(x) < covered.right()
+            && f64::from(y) >= covered.top()
+            && f64::from(y) < covered.bottom()
+    };
+
+    let mut failures = Vec::new();
+    for (row, draw) in &rows {
+        let mut partial = renderer
+            .retained_capture((WIDE, WIDE))
+            .expect("capture target");
+        partial.set_solid_texture(texture, RED);
+        partial.mark_full_repaint();
+        partial.render_scene(&green).expect("the green frame");
+        warm(&mut partial, &green);
+        partial.mark_dirty(damage);
+        if let Err(error) = partial.render_scene(&clipped(16, draw)) {
+            failures.push(format!("{row}: the partial frame is refused: {error}"));
+            continue;
+        }
+        if !matches!(partial.last_plan(), Some(FramePlan::RetainedPartial(_))) {
+            failures.push(format!("{row}: plan {:?}", partial.last_plan()));
+            continue;
+        }
+        let pixels = partial.read_rgba().expect("readback");
+
+        let mut full = renderer
+            .retained_capture((WIDE, WIDE))
+            .expect("capture target");
+        full.set_solid_texture(texture, RED);
+        full.mark_full_repaint();
+        full.render_scene(&clipped(1, draw))
+            .expect("one leaf over the whole window is admitted");
+        let reference = full.read_rgba().expect("readback");
+
+        let differing: Vec<_> = (0..WIDE)
+            .flat_map(|y| (0..WIDE).map(move |x| (x, y)))
+            .filter(|&(x, y)| inside(x, y))
+            .filter_map(|(x, y)| {
+                let (p, f) = (at(&pixels, x, y), at(&reference, x, y));
+                (!near(p, f, 2)).then_some((x, y, p, f))
+            })
+            .take(4)
+            .collect();
+        if !differing.is_empty() {
+            failures.push(format!(
+                "{row}: inside the damage (x, y, partial, full): {differing:?}"
+            ));
+        }
+        // The window's corner pixel lies outside the rounded clip: the clear.
+        let painted = (0..WIDE)
+            .flat_map(|y| (0..WIDE).map(move |x| (x, y)))
+            .filter(|&(x, y)| inside(x, y))
+            .any(|(x, y)| at(&reference, x, y) != at(&reference, 1023, 1023));
+        if !painted {
+            failures.push(format!("{row}: precondition: the draw reaches the damage"));
+        }
+        for (x, y) in [(979, 1000), (1000, 979), (512, 512)] {
+            if at(&pixels, x, y) != GREEN {
+                failures.push(format!(
+                    "{row}: ({x}, {y}) outside the damage is {:?}",
+                    at(&pixels, x, y)
+                ));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// An analytic shadow outside a partial frame's damage keeps its pixels: the
+/// shadow draws under the damage's scissor like every other draw, rather than
+/// blending its penumbra a second time over the retained frame.
+#[test]
+fn a_static_shadow_outside_the_damage_is_not_repainted() {
+    use flui_foundation::geometry::RRect;
+
+    let Some(renderer) = crate::test_support::renderer_or_skip() else {
+        return;
+    };
+    let (root, card) = (ContentToken::mint(), ContentToken::mint());
+    let shadowed = |canvas: &mut Canvas| {
+        canvas.draw_rect(
+            Rect::from_xywh(0.0, 0.0, f64::from(SIDE), f64::from(SIDE)),
+            &Paint::fill(Color::WHITE),
+        );
+        let shape = Path::from_rrect(RRect::from_rect_circular(
+            Rect::from_xywh(60.0, 60.0, 40.0, 40.0),
+            6.0,
+        ));
+        assert!(shape.rrect_hint().is_some(), "precondition: analytic path");
+        canvas.draw_shadow(&shape, Color::rgba(0, 0, 0, 160), 6.0);
+    };
+    let shadow = scene(
+        &root,
+        &[Boundary {
+            id: 2,
+            token: &card,
+            at: Offset::ZERO,
+            paint: &shadowed,
+        }],
+        None,
+    );
+    let mut capture = renderer
+        .retained_capture((SIDE, SIDE))
+        .expect("capture target");
+    capture.mark_full_repaint();
+    capture.render_scene(&shadow).expect("the first frame");
+    warm(&mut capture, &shadow);
+    let before = capture.read_retained_rgba().expect("readback");
+    assert_ne!(
+        px(&before, 80, 104),
+        WHITE,
+        "precondition: the penumbra is inked"
+    );
+
+    let damage = Rect::from_ltrb(0.0, 0.0, 8.0, 8.0);
+    capture.mark_dirty(damage);
+    capture.render_scene(&shadow).expect("the partial frame");
+    assert!(matches!(
+        capture.last_plan(),
+        Some(FramePlan::RetainedPartial(_))
+    ));
+    let after = capture.read_retained_rgba().expect("readback");
+    let changed: Vec<_> = (0..SIDE)
+        .flat_map(|y| (0..SIDE).map(move |x| (x, y)))
+        .filter(|&(x, y)| x >= 8 || y >= 8)
+        .filter_map(|(x, y)| {
+            let (now, then) = (px(&after, x, y), px(&before, x, y));
+            (now != then).then_some((x, y, now, then))
+        })
+        .take(8)
+        .collect();
+    assert!(
+        changed.is_empty(),
+        "pixels outside the damage changed (x, y, now, before): {changed:?}"
+    );
+}

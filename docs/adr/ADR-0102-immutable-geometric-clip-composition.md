@@ -96,7 +96,13 @@ GPU payload magnitude at most 2^20, attachment dimensions at most 16384, and
 uses a transform-aware tolerance. Separate uniform bindings fit the portable
 16 KiB uniform baseline without fragment storage buffers.
 
-Mask cropping and per-segment strong-key deduplication bound avoidable work.
+Mask cropping and per-segment strong-key deduplication bound avoidable work. A
+mask is cropped to the clip's bounds mapped into the attachment and to the
+footprint of its consumers: the bounding box of the hardware scissors of the
+draws that read it, clamped to the attachment. Scissors are conservative culling
+bounds (§3), so no fragment outside the footprint reads the mask, and a partial
+frame pays for its damage, not for the clip. A footprint no draw reaches fails
+closed to the empty mask; a cached mask serves only crops it contains.
 A frame-wide mask cache, an atlas and further fast paths need measured workload
 and lifetime evidence. DrawItem container metadata is still outside the recording
 arena allowance; this decision does not claim a complete CPU memory quota.
