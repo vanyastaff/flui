@@ -101,7 +101,11 @@ style's family is resolved by one rule (decision 8).
 with the very `Arc<ShapedParagraph>` its cache holds (ADR-0065, ADR-0092 §4):
 the engine rasterises those runs and shapes nothing. The root colour rides on
 the command; a span's own colour is carried by its runs, so a span recolour is
-a layout change and a root recolour is not. A `ShapedParagraph` names no
+a layout change and a root recolour is not. `TextStyle::layout_affecting_eq` and
+`TextSpan::layout_affecting_eq` destructure every field with no `..`, so a new
+field is classified as shaping or not before it compiles;
+`every_style_and_span_field_is_classified_by_what_the_shaped_paragraph_holds` checks
+each classification against the shaped paragraph. A `ShapedParagraph` names no
 shaper: its text, size, baselines and ink bounds, a face table of
 `FontBlob`s (the font bytes and the blob id keys name them by), and runs of
 glyph ids and logical positions with each run's face, size, variation

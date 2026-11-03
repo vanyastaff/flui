@@ -38,13 +38,13 @@ pub(crate) const DEFAULT_FONT_SIZE: f64 = 14.0;
 
 /// What a property change invalidates — the shaped/paint split.
 ///
-/// A paragraph that cannot update paint attributes in place must re-shape
-/// on a color change. FLUI's [`TextPainter::set_text`] diffs the old and new span trees
-/// ([`InlineSpan::layout_affecting_eq`]) and reports which half
-/// actually changed; a paint-only change KEEPS the shaped layout —
-/// metrics, baselines, and cursor geometry stay valid, and the next
-/// paint re-emits draw commands with the new attributes at zero
-/// reshape cost.
+/// [`TextPainter::set_text`] diffs the old and new span trees
+/// ([`InlineSpan::layout_affecting_eq`] and the span colours the shaped runs
+/// carry) and reports which half actually changed. A paint-only change KEEPS
+/// the shaped layout: metrics, baselines, and cursor geometry stay valid, and
+/// the next paint re-emits draw commands at zero reshape cost. A root colour
+/// change is paint-only; a span's colour is carried by its runs, so a span
+/// recolour is a layout change.
 ///
 /// The variants are ordered by severity, so a prop-diff over several
 /// properties can fold with `max`.
@@ -52,8 +52,9 @@ pub(crate) const DEFAULT_FONT_SIZE: f64 = 14.0;
 pub enum Invalidation {
     /// Nothing observable changed.
     None,
-    /// Only paint attributes changed (colors, shadows): repaint with
-    /// the existing shaped layout.
+    /// Only the root colour, or a field shaping does not read (background,
+    /// shadows, a span's link, cursor or semantics label), changed: repaint
+    /// with the existing shaped layout.
     Paint,
     /// Glyph geometry changed: re-shape before the next paint.
     Layout,
@@ -284,15 +285,17 @@ impl TextPainter {
 
     /// Sets the text to paint and reports what the change invalidates.
     ///
-    /// The shaped/paint split: when the new span tree differs only in
-    /// paint attributes (colors, shadows), the shaped layout is KEPT —
-    /// size, baselines, and cursor geometry remain valid, and the next
-    /// [`paint`](TextPainter::paint) emits the new attributes with zero
-    /// reshape cost. Only a layout-affecting change (text content, font
-    /// selection, sizes, spacing) drops the cache, and only then must
-    /// [`layout`](TextPainter::layout) run again before painting. The
-    /// caller (a render object) routes the returned [`Invalidation`] to
-    /// its mark-needs-layout / mark-needs-paint decision.
+    /// The shaped/paint split: when the new span tree differs only in the
+    /// root colour or in fields shaping does not read (background, shadows,
+    /// links, cursors, semantics labels), the shaped layout is KEPT: size,
+    /// baselines, and cursor geometry remain valid, and the next
+    /// [`paint`](TextPainter::paint) emits the new root colour with zero
+    /// reshape cost. A layout-affecting change (text content, font
+    /// selection, sizes, spacing) drops the cache, and so does a span
+    /// recolour, because a span's colour is carried by its shaped runs
+    /// (ADR-0065); only then must [`layout`](TextPainter::layout) run again
+    /// before painting. The caller (a render object) routes the returned
+    /// [`Invalidation`] to its mark-needs-layout / mark-needs-paint decision.
     pub fn set_text(&mut self, text: Option<InlineSpan>) -> Invalidation {
         if self.text == text {
             return Invalidation::None;

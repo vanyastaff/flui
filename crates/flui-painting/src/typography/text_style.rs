@@ -271,29 +271,50 @@ impl TextStyle {
         Self::default()
     }
 
-    /// Compares only the fields that affect SHAPING/LAYOUT — font
-    /// selection (family/fallback/weight/style/features/variations),
-    /// font size, spacing, and line height.
+    /// Whether the two styles shape the same glyph geometry: the same font
+    /// selection (family, fallback, weight, style, features, variations),
+    /// font size and sizing, spacing and line height.
     ///
-    /// Two styles that differ only in paint attributes (colors,
-    /// foreground/background paints, shadows) produce byte-identical
-    /// glyph geometry, so a text engine may keep its shaped layout and
-    /// only re-emit draw commands. This is the single source of truth
-    /// for that partition: a new `TextStyle` field MUST be classified
-    /// here as layout-affecting or paint-only when it is added.
+    /// Colour is not compared here. A run carries its span's colour, so
+    /// [`TextPainter::set_text`](crate::TextPainter::set_text) compares the
+    /// span colours itself, and only a root recolour keeps the shaped
+    /// layout. Every field is named below, so a field added to `TextStyle`
+    /// does not compile until it is classified here.
     #[must_use]
     pub fn layout_affecting_eq(&self, other: &Self) -> bool {
-        self.font_size == other.font_size
-            && self.sizing == other.sizing
-            && self.font_weight == other.font_weight
-            && self.font_style == other.font_style
-            && self.letter_spacing == other.letter_spacing
-            && self.word_spacing == other.word_spacing
-            && self.height == other.height
-            && self.font_family == other.font_family
-            && self.font_family_fallback == other.font_family_fallback
-            && self.font_features == other.font_features
-            && self.font_variations == other.font_variations
+        let Self {
+            font_size,
+            sizing,
+            font_weight,
+            font_style,
+            letter_spacing,
+            word_spacing,
+            height,
+            font_family,
+            font_family_fallback,
+            font_features,
+            font_variations,
+            // The glyph colour is a run's brush, not geometry; `set_text`
+            // compares the span colours the runs carry. Another attribute
+            // baked into a run's brush must join that comparison.
+            color: _,
+            foreground: _,
+            // Neither shaping nor `TextPainter::paint` reads these.
+            background_color: _,
+            background: _,
+            shadows: _,
+        } = self;
+        *font_size == other.font_size
+            && *sizing == other.sizing
+            && *font_weight == other.font_weight
+            && *font_style == other.font_style
+            && *letter_spacing == other.letter_spacing
+            && *word_spacing == other.word_spacing
+            && *height == other.height
+            && *font_family == other.font_family
+            && *font_family_fallback == other.font_family_fallback
+            && *font_features == other.font_features
+            && *font_variations == other.font_variations
     }
 
     /// Sets the text color.
