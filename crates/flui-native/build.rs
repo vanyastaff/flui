@@ -24,7 +24,8 @@ fn main() {
                     target_arch = "wasm32",
                     target_os = "android",
                     target_os = "windows",
-                    target_vendor = "apple"
+                    target_os = "macos",
+                    target_os = "ios"
                 ))
             )
         },

@@ -270,6 +270,22 @@ dispatch = "0.2"
 # (`fonts::apple`, ADR-0271 §3). Both are in the tree already, through
 # AppKit's and UIKit's bindings.
 [target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
+# The HTTP capability's system stack (`http::apple`, ADR-0280).
+objc2-foundation = { version = "0.3.2", default-features = false, features = [
+    "std",
+    "block2",
+    "NSData",
+    "NSDictionary",
+    "NSArray",
+    "NSError",
+    "NSObject",
+    "NSOperation",
+    "NSString",
+    "NSURL",
+    "NSURLRequest",
+    "NSURLResponse",
+    "NSURLSession",
+] }
 objc2-core-foundation = { version = "0.3.2", default-features = false, features = [
     "std",
     "CFArray",
@@ -309,7 +325,7 @@ tempfile = { workspace = true }
 # The `http` feature's client on the native hosts without a system HTTP stack
 # (`http::UreqClient`). rustls is named here for its provider, aws-lc-rs,
 # which ureq is handed, and to recognise a failed handshake.
-[target.'cfg(not(any(target_arch = "wasm32", target_os = "android", target_os = "windows", target_vendor = "apple")))'.dependencies]
+[target.'cfg(not(any(target_arch = "wasm32", target_os = "android", target_os = "windows", target_os = "macos", target_os = "ios")))'.dependencies]
 ureq = { workspace = true, optional = true }
 rustls = { workspace = true, optional = true, features = ["std", "aws_lc_rs"] }
 
