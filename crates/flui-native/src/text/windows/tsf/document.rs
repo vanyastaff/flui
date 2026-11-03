@@ -21,8 +21,8 @@ use std::rc::{Rc, Weak};
 
 use flui_foundation::geometry::{DevicePixelRatio, DevicePoint};
 use flui_platform::text_store::{
-    Composition, OwnerCalls, TextChange, TextInputPurpose, TextStore, TextStoreError,
-    TextStoreObserver, TextStoreStatus, Utf16Range,
+    OwnerCalls, TextChange, TextInputPurpose, TextStore, TextStoreError, TextStoreObserver,
+    TextStoreStatus, Utf16Range,
 };
 use windows::Win32::{
     Foundation::{
@@ -910,20 +910,15 @@ impl ITfContextOwnerCompositionSink_Impl for TsfStore_Impl {
 /// Apply a composition change TSF reported, which it does from inside a
 /// read-write session; outside one there is nothing to apply it to.
 fn set_composition(state: &DocumentState, span: Option<Utf16Range>) -> windows_core::Result<()> {
-    let composition = span.map(|range| Composition {
-        range,
-        hides_caret: false,
-    });
-    Ok(state
-        .slot
-        .write(|session| session.set_composition(composition).map_err(store_error))
-        .inspect_err(|error| {
+    Ok(
+        acp::set_composition(&state.slot, span).inspect_err(|error| {
             tracing::warn!(
                 target: "flui_native::tsf",
                 ?error,
                 "composition change outside a read-write session"
             );
-        })?)
+        })?,
+    )
 }
 
 /// `cch` UTF-16 units at `text` as a `String`; unpaired surrogates are an

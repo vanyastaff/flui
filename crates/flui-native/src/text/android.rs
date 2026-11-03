@@ -14,7 +14,16 @@
 //! Which key the native queue delivers belongs to the input method is the key
 //! decoding's (`input::android::keys`).
 
-#[cfg(any(target_os = "android", test))]
+// Built on every host with `testing` too, for the conformance table's Android
+// row (`text::conformance`), which reaches only the mirror and its replay.
+#[cfg(any(target_os = "android", test, feature = "testing"))]
+#[cfg_attr(
+    not(any(target_os = "android", test)),
+    allow(
+        dead_code,
+        reason = "off Android only the conformance table's mirror and replay are reached"
+    )
+)]
 pub(crate) mod ime {
     //! The decidable half of the Android backend's input method (ADR-0247,
     //! ADR-0090): how `FluiView`'s mirror and the field's `TextStore` stay one
@@ -35,7 +44,8 @@ pub(crate) mod ime {
     //!
     //! Plain values over UTF-16, built for tests on every host, so Linux CI
     //! pins them; `input` moves them across JNI. What the view reports
-    //! ([`EditorState`]) is the view's own vocabulary, `owner::android`'s.
+    //! ([`EditorReport`]) is the view's own vocabulary, which `owner::android`
+    //! reads from JNI.
 
     #![forbid(unsafe_code)]
 
@@ -46,8 +56,25 @@ pub(crate) mod ime {
         TextStoreStatus, Utf16Offset, Utf16Range,
     };
 
-    use crate::owner::android::EditorState;
     use crate::text::ime::{diff, document_text};
+
+    /// What `FluiView` reports of its editor after an input method edit, as
+    /// `owner::android`'s `EditorState` carries it across JNI, field for field:
+    /// the text it holds and the raw offsets of `Selection` and the composing
+    /// span (`-1` for none), as Java counts them, in UTF-16 code units.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct EditorReport {
+        /// The view's text.
+        pub text: String,
+        /// `Selection.getSelectionStart`: the selection's anchor.
+        pub selection_start: i32,
+        /// `Selection.getSelectionEnd`: the selection's moving end.
+        pub selection_end: i32,
+        /// `BaseInputConnection.getComposingSpanStart`.
+        pub composition_start: i32,
+        /// `BaseInputConnection.getComposingSpanEnd`.
+        pub composition_end: i32,
+    }
 
     /// The focused store as the owner last published it to the view.
     #[derive(Debug, Clone, PartialEq, Eq)]
@@ -201,7 +228,7 @@ pub(crate) mod ime {
         ///
         /// Offsets are clamped into the new text and moved off the middle of a
         /// surrogate pair, which a store refuses.
-        pub fn report(&mut self, generation: u32, state: &EditorState) -> Option<ImeEdit> {
+        pub fn report(&mut self, generation: u32, state: &EditorReport) -> Option<ImeEdit> {
             if generation != self.generation {
                 return None;
             }
@@ -519,7 +546,7 @@ mod input {
     use jni::{JValue, jni_sig, jni_str};
 
     use super::ime::{
-        CharacterBounds, ImeEdit, Mirror, Snapshot, character_bounds, cursor_anchor,
+        CharacterBounds, EditorReport, ImeEdit, Mirror, Snapshot, character_bounds, cursor_anchor,
         editor_action_key, editor_info, replay_current, starts_handwriting,
     };
     use crate::owner::android::EditorState;
@@ -616,7 +643,21 @@ mod input {
         }
 
         fn edited(&self, generation: u32, state: EditorState) -> Option<InputMethodReply> {
-            let edit = self.mirror.lock().report(generation, &state)?;
+            let EditorState {
+                text,
+                selection_start,
+                selection_end,
+                composition_start,
+                composition_end,
+            } = state;
+            let report = EditorReport {
+                text,
+                selection_start,
+                selection_end,
+                composition_start,
+                composition_end,
+            };
+            let edit = self.mirror.lock().report(generation, &report)?;
             let fields = Arc::clone(&self.fields);
             Some(InputMethodReply {
                 composing: Some(edit.composes()),
