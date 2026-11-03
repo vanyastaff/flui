@@ -137,7 +137,7 @@ count = 1
 [[allow]]
 path = "crates/flui-native/src/owner/mod.rs"
 class = "slice"
-count = 4
+count = 3
 
 [[allow]]
 path = "crates/flui-native/src/platform.rs"

@@ -16,8 +16,13 @@
 pub(crate) type WindowWake = Arc<dyn Fn() + Send + Sync>;
 
 use super::panic_boundary::contain_owner_callback;
-use crate::{PlatformError, ProxySendError, WakeRegistrationError};
+use crate::{
+    OpenWindowError, OpenedWindow, PendingWindow, PlatformError, ProxySendError,
+    WakeRegistrationError, WindowRequest, platform::Platform,
+};
+use flui_foundation::{ClaimSlot, claim_slot, panic::FirstPanic};
 use parking_lot::Mutex;
+use std::collections::VecDeque;
 use std::sync::{Arc, Weak};
 use std::thread::ThreadId;
 
@@ -104,6 +109,31 @@ struct State {
     quit: bool,
     /// Windows whose work waits for an owner turn.
     window_wakes: Vec<WindowWake>,
+    /// Window opens other threads asked for, oldest first, waiting for an
+    /// owner turn; at most [`OPEN_LANE_CAPACITY`].
+    opens: VecDeque<QueuedOpen>,
+}
+
+impl State {
+    /// Whether anything waits for an owner turn.
+    fn has_work(&self) -> bool {
+        self.pending || self.quit || !self.window_wakes.is_empty() || !self.opens.is_empty()
+    }
+}
+
+/// The most window opens from other threads the owner holds at once; one
+/// more is refused with [`ProxySendError::Full`].
+pub(crate) const OPEN_LANE_CAPACITY: usize = 64;
+
+/// What an open from another thread resolves to.
+type OpenWindowResult = Result<OpenedWindow, OpenWindowError>;
+
+/// A window open another thread asked for: the request, and the slot its
+/// [`PendingWindow`] waits on. Dropped unresolved, the slot answers
+/// [`OpenWindowError::OwnerGone`].
+struct QueuedOpen {
+    request: WindowRequest,
+    slot: ClaimSlot<OpenWindowResult>,
 }
 
 pub(crate) struct OwnerSignal {
@@ -111,6 +141,9 @@ pub(crate) struct OwnerSignal {
     notify: Notify,
     owner: Mutex<ThreadId>,
     shared: SharedTurnSlot,
+    /// The platform that opens the windows other threads ask for; `None`
+    /// where the owner opens none for them.
+    opener: Mutex<Option<Weak<dyn Platform>>>,
 }
 
 impl OwnerSignal {
@@ -124,11 +157,98 @@ impl OwnerSignal {
                 active: false,
                 quit: false,
                 window_wakes: Vec::new(),
+                opens: VecDeque::new(),
             }),
             notify,
             owner: Mutex::new(std::thread::current().id()),
             shared: SharedTurnSlot::default(),
+            opener: Mutex::new(None),
         })
+    }
+    /// Let the owner open the windows other threads ask for
+    /// ([`PlatformProxy::open_window`](crate::PlatformProxy::open_window))
+    /// through `platform`, whose loop keeps each until it closes, as it keeps
+    /// the windows the owner opens itself.
+    pub(crate) fn open_windows_through(&self, platform: &Arc<dyn Platform>) {
+        *self.opener.lock() = Some(Arc::downgrade(platform));
+    }
+    /// Queue a window open for the owner's next turn.
+    #[expect(
+        clippy::result_large_err,
+        reason = "the rejection hands the caller's request back for a retry; a window open is not a hot path"
+    )]
+    fn enqueue_open(
+        &self,
+        request: WindowRequest,
+    ) -> Result<PendingWindow, ProxySendError<WindowRequest>> {
+        if self.opener.lock().is_none() {
+            return Err(ProxySendError::Unsupported { rejected: request });
+        }
+        // No owner parks on an abandoned request: the drain finds it.
+        let (slot, handle) = claim_slot::<OpenWindowResult>(Arc::new(|| {}));
+        let refused = {
+            let mut state = self.state.lock();
+            if !state.accepting {
+                Err(ProxySendError::OwnerGone { rejected: request })
+            } else if state.opens.len() >= OPEN_LANE_CAPACITY {
+                Err(ProxySendError::Full {
+                    capacity: OPEN_LANE_CAPACITY,
+                    rejected: request,
+                })
+            } else {
+                state.opens.push_back(QueuedOpen { request, slot });
+                match self.post_locked(&mut state) {
+                    Ok(()) => Ok(()),
+                    Err(source) => {
+                        // The request goes back to its sender: nothing of it
+                        // stays queued.
+                        let QueuedOpen { request, slot } = state
+                            .opens
+                            .pop_back()
+                            .expect("BUG: the open queued under this lock is the last one");
+                        drop(state);
+                        drop(slot);
+                        Err(ProxySendError::WakeFailed {
+                            rejected: request,
+                            source,
+                        })
+                    }
+                }
+            }
+        };
+        refused.map(|()| PendingWindow::new(handle, self.owner()))
+    }
+    /// Open the windows other threads asked for, outside the state lock: a
+    /// handler's factory and its window's first delivery are application
+    /// code. Each request is answered: with its window, with why it did not
+    /// open, or, when the owner stops meanwhile, with `OwnerGone`.
+    fn run_opens(&self) {
+        let opens = std::mem::take(&mut self.state.lock().opens);
+        let opener = self.opener.lock().clone();
+        for QueuedOpen { request, slot } in opens {
+            // Each request is answered in its own containment: a requester's
+            // waker that panics on delivery leaves the rest answered and the
+            // turn able to end.
+            contain_owner_callback(|| {
+                let platform = opener
+                    .as_ref()
+                    .and_then(Weak::upgrade)
+                    .filter(|_| self.accepting());
+                match platform {
+                    Some(platform) if !slot.is_abandoned() => {
+                        let result = open_requested(&*platform, request);
+                        if let Err(unclaimed) = slot.deliver(result) {
+                            // Its requester let go meanwhile; an opened window
+                            // stays with the loop until it closes.
+                            drop(unclaimed);
+                        }
+                    }
+                    // Nobody waits for it, or the owner stops: the request goes
+                    // unopened, and a waiting requester hears `OwnerGone`.
+                    _ => drop((request, slot)),
+                }
+            });
+        }
     }
     #[cfg(target_os = "macos")]
     pub(crate) fn fence(&self) {
@@ -210,15 +330,19 @@ impl OwnerSignal {
     }
     fn schedule(&self) -> Result<(), ProxySendError<()>> {
         let mut state = self.state.lock();
-        let work = state.pending || state.quit || !state.window_wakes.is_empty();
-        if state.running && work && !state.queued && !state.active {
+        self.post_locked(&mut state)
+            .map_err(|source| ProxySendError::WakeFailed {
+                rejected: (),
+                source,
+            })
+    }
+    /// Post the owner turn the work in `state` asks for, under its lock.
+    fn post_locked(&self, state: &mut State) -> Result<(), PlatformError> {
+        if state.running && state.has_work() && !state.queued && !state.active {
             // Backend-only nonblocking post, never a user callback. Serialize
             // posting with admission so another sender cannot acknowledge a
             // wake that the first sender has not successfully posted yet.
-            (self.notify)().map_err(|source| ProxySendError::WakeFailed {
-                rejected: (),
-                source,
-            })?;
+            (self.notify)()?;
             state.queued = true;
         }
         Ok(())
@@ -310,19 +434,53 @@ impl OwnerSignal {
     /// Stops admission and scheduling, and drops the callback in the
     /// signal's own shared slot. A slot held by owner-side state is the
     /// owner's to clear.
+    ///
+    /// The window opens still queued are refused: each waiting requester
+    /// hears `OwnerGone`.
     pub(crate) fn close(&self) {
-        let callback = {
+        let (callback, opens) = {
             let mut state = self.state.lock();
             state.accepting = false;
             state.running = false;
             state.pending = false;
             state.queued = false;
             state.quit = false;
-            self.shared.take()
+            (self.shared.take(), std::mem::take(&mut state.opens))
         };
         contain_owner_callback(|| drop(callback));
+        for open in opens {
+            contain_owner_callback(|| drop(open));
+        }
     }
 }
+/// Open the window `request` asks for on the owner thread. A factory that
+/// panics is contained and the open fails with what it said. So does a handler
+/// that panics on its window's first delivery, but that window, which the loop
+/// already holds, stays open as it would for an open on the owner itself.
+fn open_requested(platform: &dyn Platform, request: WindowRequest) -> OpenWindowResult {
+    let (options, handler) = request.build_on_owner()?;
+    let mut caught = FirstPanic::new();
+    let Some(opened) = caught.contain(|| platform.open_window(options, handler)) else {
+        let payload = caught.into_payload();
+        let message = format!(
+            "opening the window panicked: {}",
+            payload
+                .as_deref()
+                .and_then(flui_foundation::panic::payload_text)
+                .unwrap_or("non-string panic payload")
+        );
+        if let Some(payload) = payload {
+            flui_foundation::panic::discard_payload(payload);
+        }
+        contain_owner_callback(|| tracing::error!("{message}"));
+        return Err(OpenWindowError::Backend { message });
+    };
+    let window = opened?;
+    let id = OpenedWindow::new(&window);
+    contain_owner_callback(|| drop(window));
+    Ok(id)
+}
+
 impl Drop for OwnerSignal {
     fn drop(&mut self) {
         self.close();
@@ -362,11 +520,16 @@ impl OwnerTurn<'_> {
                 state.quit = false;
                 return true;
             }
-            if state.accepting && state.running && !state.window_wakes.is_empty() {
-                // A window's work runs in its own turn, before the
-                // application's turn; work it asks for gets a later turn.
+            if state.accepting
+                && state.running
+                && (!state.window_wakes.is_empty() || !state.opens.is_empty())
+            {
+                // Windows other threads asked for open, and a window's work
+                // runs, in a turn of their own, before the application's
+                // turn; work they ask for gets a later turn.
                 state.active = true;
                 drop(state);
+                signal.run_opens();
                 signal.run_window_wakes();
                 signal.state.lock().active = false;
                 signal.rearm();
@@ -426,9 +589,12 @@ impl SignalTransport {
 impl super::ProxyTransport for SignalTransport {
     fn open_window(
         &self,
-        request: crate::WindowRequest,
-    ) -> Result<crate::PendingWindow, ProxySendError<crate::WindowRequest>> {
-        Err(ProxySendError::Unsupported { rejected: request })
+        request: WindowRequest,
+    ) -> Result<PendingWindow, ProxySendError<WindowRequest>> {
+        match self.signal.upgrade() {
+            Some(signal) => signal.enqueue_open(request),
+            None => Err(ProxySendError::OwnerGone { rejected: request }),
+        }
     }
     fn wake(&self) -> Result<(), ProxySendError<()>> {
         self.signal
