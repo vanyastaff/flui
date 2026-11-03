@@ -50,6 +50,12 @@ mod runner_close;
 #[path = "headless_storage.rs"]
 mod headless_storage;
 
+// The driver agent's threads are read from `/proc`; the property is the runner's, the same on
+// every desktop.
+#[cfg(target_os = "linux")]
+#[path = "agent_unlaunched.rs"]
+mod agent_unlaunched;
+
 /// Runs every case even after one fails, then panics listing the failing case names.
 fn run_table(table: &str, cases: &[(&str, fn())]) {
     let failed: Vec<&str> = cases

@@ -1576,6 +1576,10 @@ impl X11Windows {
         }
         let id = self.mint_id()?;
         let support = *self.support.lock();
+        // A title bar of the application's opens with the window manager's frame
+        // until this host takes one, so the plan takes that frame's inset.
+        let frame = options.frame.at_open(&capabilities(support));
+        let options = options.with_frame(frame);
         let snapshot = owner.displays().snapshot().ok();
         let placement = PlacementDisplay::choose(snapshot.as_ref(), options.display);
         let plan = OpenPlan::new(

@@ -49,6 +49,7 @@
 //! - `testing` (with the `testing` feature): a window double and a
 //!   scripted sink for driving a UI runtime headlessly.
 
+pub mod agent;
 pub mod capability;
 pub mod dev_agent;
 pub mod epoch;

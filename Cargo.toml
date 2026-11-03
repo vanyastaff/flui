@@ -361,10 +361,6 @@ wgpu = { version = "30.0", default-features = false, features = ["wgsl", "naga-i
 # GPU profiling — optional, reused by flui-engine behind the `gpu-profiler` feature.
 # Pins wgpu ^30.0, consistent with the workspace pin above. Excluded from wasm32.
 wgpu-profiler = { version = "0.28", default-features = false }
-# Shader module composition — resolves #import directives in WGSL at build-time or
-# pipeline-init time.  Pins naga ^30, consistent with wgpu 30's naga dep.
-# Used by flui-engine to compose blend_helpers.wgsl into mode.wgsl / advanced_blend.wgsl.
-naga_oil = { version = "0.23", default-features = false }
 winit = "0.30.12"
 # Linux display source (flui-native `wayland` / `x11` features): the output
 # list and refresh rate from the compositor, on a connection of its own next to
@@ -434,10 +430,16 @@ cfg_aliases = "0.2"
 
 # === Engine build-script dependencies ===
 # wgsl_bindgen: WGSL → Rust binding codegen, used in flui-engine's build.rs only.
-# Pins naga ^30 (same as wgpu 30) and naga_oil ^0.23 (same as workspace); the
-# build-script context is separate from the compiled output, so the duplicate naga
-# dep does not affect the binary.
+# Pins naga ^30 (same as wgpu 30) and brings naga_oil ^0.23 for its own import
+# resolution, which flui-engine no longer uses: it hands wgsl_bindgen shaders
+# already composed by `wesl`. The build-script context is separate from the
+# compiled output, so neither reaches the binary.
 wgsl_bindgen = { version = "0.23", default-features = false }
+# wesl: the WESL compiler (the community WGSL extension with modules and
+# imports), used in flui-engine's build.rs to resolve shader imports into plain
+# WGSL. It emits text and does not depend on naga, so a wgpu bump never waits
+# on it.
+wesl = { version = "0.6", default-features = false }
 # regex: required by wgsl_bindgen's OverrideTextureFilterability / OverrideSamplerType
 # constructors in build.rs; not compiled into the crate binary.
 regex = "1"

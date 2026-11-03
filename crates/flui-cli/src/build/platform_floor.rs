@@ -18,3 +18,7 @@ pub(crate) const IOS: (u32, u32, u32) = (13, 0, 0);
 
 /// The Android `minSdk`: the lowest API level FLUI supports.
 pub(crate) const ANDROID_MIN_SDK: u32 = 23;
+
+/// The Android `targetSdk` every APK declares (ADR-0255 decision 7). A packaging value,
+/// not a floor: `flui.toml` does not change it.
+pub(crate) const ANDROID_TARGET_SDK: u32 = 36;

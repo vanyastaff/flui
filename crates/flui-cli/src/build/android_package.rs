@@ -7,7 +7,9 @@
 //! 2. The native libraries go in as `lib/<abi>/lib<name>.so`, stored
 //!    uncompressed: with `targetSdk >= 23` the platform maps them straight
 //!    out of the archive instead of extracting, which needs page alignment.
-//! 3. `zipalign -p 4` provides that alignment.
+//! 3. `zipalign -P 16` provides that alignment for 16 KB pages, which Google
+//!    Play requires of 64-bit libraries (a 4 KB alignment fails to map on a
+//!    16 KB device); `-P` needs build-tools 35.
 //! 4. `apksigner` signs with the debug keystore every Android SDK user has
 //!    (`~/.android/debug.keystore`, created with `keytool` when absent).
 //!
@@ -49,15 +51,38 @@ pub(crate) struct BuildTools {
     zipalign: PathBuf,
     apksigner: PathBuf,
     android_jar: PathBuf,
-    /// The API level of `android_jar`, used as the target SDK.
-    api_level: u32,
     /// `JAVA_HOME` for `apksigner` and `keytool`, when known.
     java_home: Option<PathBuf>,
 }
 
-/// The oldest `android.jar` the scaffolded manifest links against: its
-/// `configChanges` names `fontWeightAdjustment`, a flag from API 31.
-const MIN_COMPILE_SDK: u32 = 31;
+/// The `targetSdk` the APK declares: FLUI's pinned one (ADR-0255 decision 7),
+/// never the newest installed platform, whose behaviour changes FLUI may not
+/// meet.
+const TARGET_SDK: u32 = crate::build::platform_floor::ANDROID_TARGET_SDK;
+
+/// The oldest `android.jar` the APK links against: the `targetSdk` it
+/// declares, since a target above the compile SDK names behaviour the
+/// linker never saw.
+const MIN_COMPILE_SDK: u32 = TARGET_SDK;
+
+// The scaffolded manifest's `configChanges` names `fontWeightAdjustment`, a
+// flag from API 31.
+const _: () = assert!(MIN_COMPILE_SDK >= 31);
+
+/// The oldest build-tools whose `zipalign` takes `-P 16` (16 KB pages).
+const MIN_BUILD_TOOLS: u32 = 35;
+
+/// The `zipalign` arguments that page-align `base` into `aligned`: every
+/// uncompressed library at a 16 KB boundary.
+fn zipalign_args(base: &Path, aligned: &Path) -> Vec<std::ffi::OsString> {
+    vec![
+        "-f".into(),
+        "-P".into(),
+        "16".into(),
+        base.as_os_str().to_owned(),
+        aligned.as_os_str().to_owned(),
+    ]
+}
 const DEBUG_ALIAS: &str = "androiddebugkey";
 const DEBUG_PASSWORD: &str = "android";
 
@@ -65,19 +90,24 @@ impl BuildTools {
     /// The highest installed `build-tools` and `platforms` of `sdk_root`.
     pub(crate) fn locate(sdk_root: &Path, java_home: Option<PathBuf>) -> BuildResult<Self> {
         let build_tools = newest_subdir(&sdk_root.join("build-tools"), |name| {
-            name.chars().next().is_some_and(|c| c.is_ascii_digit())
+            name.split(['.', '-'])
+                .next()
+                .and_then(|major| major.parse::<u32>().ok())
+                .is_some_and(|major| major >= MIN_BUILD_TOOLS)
         })
         .ok_or_else(|| BuildError::ToolNotFound {
-            tool: "Android build-tools (aapt2, zipalign, apksigner)".into(),
-            install_hint: "sdkmanager \"build-tools;35.0.0\"".into(),
+            tool: format!(
+                "Android build-tools {MIN_BUILD_TOOLS} or later (aapt2, zipalign, apksigner)"
+            ),
+            install_hint: format!("sdkmanager \"build-tools;{TARGET_SDK}.0.0\""),
         })?;
-        let (platform, api_level) = newest_platform(&sdk_root.join("platforms"))
+        let (platform, _) = newest_platform(&sdk_root.join("platforms"))
             .filter(|(_, level)| *level >= MIN_COMPILE_SDK)
             .ok_or_else(|| BuildError::ToolNotFound {
                 tool: format!(
                     "an Android platform (android.jar) at API {MIN_COMPILE_SDK} or later"
                 ),
-                install_hint: "sdkmanager \"platforms;android-35\"".into(),
+                install_hint: format!("sdkmanager \"platforms;android-{MIN_COMPILE_SDK}\""),
             })?;
         let exe = |name: &str| {
             let candidates = if cfg!(windows) {
@@ -91,7 +121,7 @@ impl BuildTools {
                 .find(|path| path.is_file())
                 .ok_or_else(|| BuildError::ToolNotFound {
                     tool: format!("{name} in {}", build_tools.display()),
-                    install_hint: "sdkmanager \"build-tools;35.0.0\"".into(),
+                    install_hint: format!("sdkmanager \"build-tools;{TARGET_SDK}.0.0\""),
                 })
         };
         Ok(Self {
@@ -99,7 +129,6 @@ impl BuildTools {
             zipalign: exe("zipalign")?,
             apksigner: exe("apksigner")?,
             android_jar: platform.join("android.jar"),
-            api_level,
             java_home,
         })
     }
@@ -122,13 +151,7 @@ impl BuildTools {
         )))
         .await?;
         add_native_libs(&base, spec.native_libs)?;
-        process::run(
-            Command::new(&self.zipalign)
-                .args(["-f", "-p", "4"])
-                .arg(&base)
-                .arg(&aligned),
-        )
-        .await?;
+        process::run(Command::new(&self.zipalign).args(zipalign_args(&base, &aligned))).await?;
 
         let keystore = debug_keystore_path()?;
         if !keystore.is_file() {
@@ -155,7 +178,7 @@ impl BuildTools {
             "--min-sdk-version".into(),
             min_sdk.to_string(),
             "--target-sdk-version".into(),
-            self.api_level.to_string(),
+            TARGET_SDK.to_string(),
             "-o".into(),
             output.display().to_string(),
         ]
@@ -324,36 +347,106 @@ fn newest_platform(platforms: &Path) -> Option<(PathBuf, u32)> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn apk_link_requires_supported_window_insets_api() {
-        let tools = BuildTools {
-            aapt2: PathBuf::new(),
-            zipalign: PathBuf::new(),
-            apksigner: PathBuf::new(),
-            android_jar: PathBuf::from("android.jar"),
-            api_level: 35,
-            java_home: None,
-        };
+    /// An SDK root holding the named `build-tools` (with the three tools) and
+    /// `platforms/android-<N>` (with an `android.jar`).
+    fn sdk(build_tools: &[&str], platforms: &[u32]) -> tempfile::TempDir {
+        let sdk = tempfile::tempdir().expect("temp");
+        for version in build_tools {
+            let dir = sdk.path().join("build-tools").join(version);
+            std::fs::create_dir_all(&dir).expect("build-tools");
+            for tool in ["aapt2", "zipalign", "apksigner"] {
+                let file = if cfg!(windows) {
+                    format!("{tool}.exe")
+                } else {
+                    tool.to_owned()
+                };
+                std::fs::write(dir.join(file), b"").expect("tool");
+            }
+        }
+        for level in platforms {
+            let platform = sdk
+                .path()
+                .join("platforms")
+                .join(format!("android-{level}"));
+            std::fs::create_dir_all(&platform).expect("platform");
+            std::fs::write(platform.join("android.jar"), b"").expect("android.jar");
+        }
+        sdk
+    }
+
+    fn the_link_declares_the_floor_and_the_pinned_target() {
+        let newer = TARGET_SDK + 1;
+        let sdk = sdk(&["36.0.0"], &[TARGET_SDK, newer]);
+        let tools = BuildTools::locate(sdk.path(), None).expect("located");
+        assert!(
+            tools
+                .android_jar
+                .ends_with(format!("android-{newer}/android.jar")),
+            "{}",
+            tools.android_jar.display()
+        );
         let args = tools.link_args(Path::new("AndroidManifest.xml"), Path::new("base.apk"), 26);
+        let target = TARGET_SDK.to_string();
         assert!(
             args.windows(2)
-                .any(|pair| pair == ["--min-sdk-version", "26"])
+                .any(|pair| pair == ["--min-sdk-version", "26"]),
+            "{args:?}"
+        );
+        assert!(
+            args.windows(2)
+                .any(|pair| pair == ["--target-sdk-version", target.as_str()]),
+            "the newest installed platform must not become the target: {args:?}"
         );
     }
 
-    #[test]
-    fn a_platform_older_than_the_manifest_flags_is_refused() {
-        let sdk = tempfile::tempdir().expect("temp");
-        std::fs::create_dir_all(sdk.path().join("build-tools").join("35.0.0"))
-            .expect("build-tools");
-        let platform = sdk.path().join("platforms").join("android-30");
-        std::fs::create_dir_all(&platform).expect("platform");
-        std::fs::write(platform.join("android.jar"), b"").expect("android.jar");
+    fn a_platform_older_than_the_target_is_refused() {
+        let sdk = sdk(&["36.0.0"], &[30, TARGET_SDK - 1]);
+        let Err(BuildError::ToolNotFound { tool, install_hint }) =
+            BuildTools::locate(sdk.path(), None)
+        else {
+            panic!("an android.jar below targetSdk {TARGET_SDK} was accepted");
+        };
+        assert!(tool.contains(&format!("API {TARGET_SDK}")), "{tool}");
+        assert!(
+            install_hint.contains(&format!("platforms;android-{TARGET_SDK}")),
+            "{install_hint}"
+        );
+    }
+
+    fn build_tools_without_16_kb_zipalign_are_refused() {
+        let sdk = sdk(&["34.0.0", "30.0.3"], &[TARGET_SDK]);
         let Err(BuildError::ToolNotFound { tool, .. }) = BuildTools::locate(sdk.path(), None)
         else {
-            panic!("an API 30 android.jar was accepted for the manifest's API 31 flags");
+            panic!("build-tools 34, whose zipalign has no -P, were accepted");
         };
-        assert!(tool.contains("API 31"), "{tool}");
+        assert!(tool.contains("build-tools 35 or later"), "{tool}");
+    }
+
+    fn libraries_are_aligned_for_16_kb_pages() {
+        let args = zipalign_args(Path::new("base.apk"), Path::new("aligned.apk"));
+        assert_eq!(args, ["-f", "-P", "16", "base.apk", "aligned.apk"]);
+    }
+
+    #[test]
+    fn the_apk_meets_the_store_levels() {
+        crate::test_cases::run_cases(&[
+            (
+                "the link declares the floor and the pinned target",
+                the_link_declares_the_floor_and_the_pinned_target,
+            ),
+            (
+                "a platform older than the target is refused",
+                a_platform_older_than_the_target_is_refused,
+            ),
+            (
+                "build-tools without 16 KB zipalign are refused",
+                build_tools_without_16_kb_zipalign_are_refused,
+            ),
+            (
+                "libraries are aligned for 16 KB pages",
+                libraries_are_aligned_for_16_kb_pages,
+            ),
+        ]);
     }
 
     #[test]

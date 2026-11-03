@@ -996,7 +996,8 @@ verify that later calls answer `gone`. The windows hold the presentation's seman
 cost lasts exactly as long as the hook keeps a window: a hook that does not serve is handed none,
 and one that detaches or panics drops its windows, and collection stops on the next frame. `flui-app`'s desktop and iOS runners
 and `flui_testing::HeadlessDevAgent` drive the hook through `dev_agent::DevAgentHost`; the
-driver agent that serves it is `flui-app`'s (ADR-0239), one host per hook. Pinned by
+conversation over it is `agent::Service`'s (ADR-0288), which `flui-app`'s driver agent (ADR-0239)
+drives over its endpoint, one host per hook. Pinned by
 `an_agent_for_a_closed_presentation_answers_gone`, `dev_agent_host_contains_its_hook` and
 `flui-app`'s `the_driver_agent_contains_every_failure`.
 
@@ -1021,6 +1022,33 @@ path the same code. The devtools server cannot name the runtime (an official pac
 `flui-sdk` and the contract crates only), so the hook trait is `flui-view`'s and reaches it
 through the SDK; the runtime holds no transport. Flutter has no counterpart: its service
 extensions are the VM's. Pinned by `dev_agent_host_contains_its_hook` (`src/dev_agent/tests.rs`).
+
+### The agent's conversation is one service, and it does no I/O
+
+**Rule.** `agent::Service` serves the windows a development-agent hook is handed (the hook calls
+`Service::window_opened`) to every conversation it accepts: the token, `Limits`, the app's
+introduction and the driver's claim are the service's, and a `Session` is one conversation. A
+session never reads, writes, sleeps, spawns or reads a clock. A transport hands it what it read
+(`receive`, `peer_closed`) with the current instant, writes what `transmit` gives, and calls
+`poll` again when the waker it passed is woken or `next_deadline` passes; it closes the
+connection once `status` is `Closed`. Framing, the hello, the constant-time token compare, the
+version check, refusals and the linger after one, the queue cap (waiting, running and
+untransmitted answers), timeouts (`reply_timeout` plus a wait's own), subscriptions and the
+dispatch over the protocol's table are the session's. Requests run in order, one at a time.
+Events are taken between answers, in turn from each stream, while fewer than 64 lines wait; past
+1024 waiting lines the client is not reading and the conversation closes. The driver's
+obligation runs once, contained, when the first conversation past its hello is dropped while the
+service is not stopped. A waker the session registers is woken by the seam after the answer or
+event is in place (`flui_view` §"The development-agent hook lives here too"); the registry wakes
+it when a window opens and when the service stops, after its lock is released.
+
+**Why here.** Every host serves the same protocol: the desktop sockets, Android, the web page and a
+headless run. A limit or a refusal written in a transport would hold on one of them only, and the
+web has no thread to block on an answer. Below the transports and above the seam, the runtime is
+the one place all of them reach (ADR-0288). It is always compiled: a feature could not follow
+`debug_assertions`, and an app that starts no agent creates no service, so it pays nothing at run
+time (`flui-app`'s `an_app_launched_without_an_endpoint_starts_no_agent`). Pinned by
+`tests/contracts/agent_service.rs` and `flui-app`'s `the_driver_agent_contains_every_failure`.
 
 ### A font change reaches a UI runtime through its owner turn, on its next frame
 

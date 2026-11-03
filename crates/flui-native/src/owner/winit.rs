@@ -418,6 +418,24 @@ pub(crate) trait LoopWindow: HostWindow {
     /// The winit window behind it.
     fn inner(&self) -> &Arc<winit::window::Window>;
 
+    /// A press of `button` at `position` on the window's chrome, answered from
+    /// its regions: whether the window took it (a resize, a
+    /// maximize, the window menu, or a press on the bar that moves the window
+    /// once the pointer travels), so the press and its release reach no
+    /// handler (ADR-0286 §9).
+    fn press_chrome(
+        &self,
+        position: winit::dpi::PhysicalPosition<f64>,
+        button: winit::event::MouseButton,
+    ) -> bool;
+
+    /// The pointer is at `position` while a press the window took for its
+    /// chrome is held.
+    fn chrome_moved(&self, position: winit::dpi::PhysicalPosition<f64>);
+
+    /// The press the window took for its chrome was released.
+    fn chrome_released(&self);
+
     /// Reads the window again and publishes its state if it changed.
     fn refresh_state(&self);
 
@@ -559,6 +577,9 @@ pub(crate) struct WinitLoopState {
     /// Current cursor position per window (physical)
     cursor_positions: HashMap<WindowId, winit::dpi::PhysicalPosition<f64>>,
 
+    /// The buttons whose press the window system took for a window's chrome.
+    chrome_held: ChromeHeld,
+
     /// Current keyboard modifiers, held in winit's own raw form.
     ///
     /// Not pre-converted: the input translation converts it with the event it
@@ -567,6 +588,42 @@ pub(crate) struct WinitLoopState {
     /// second form that could drift from what `ModifiersChanged` actually
     /// reported.
     current_modifiers: ModifiersState,
+}
+
+/// The buttons whose press the window system took for a window's chrome
+/// (`LoopWindow::press_chrome`), whose release reaches no handler either.
+#[derive(Debug, Default)]
+struct ChromeHeld(Vec<(WindowId, winit::event::MouseButton)>);
+
+impl ChromeHeld {
+    /// `button` pressed on `window`: a taken press of it whose release the
+    /// window system kept (an X11 window manager's move keeps it) is over, so
+    /// the release of this one is not taken for it.
+    fn press(&mut self, window: WindowId, button: winit::event::MouseButton) {
+        self.0.retain(|&held| held != (window, button));
+    }
+
+    /// The window system took the press of `button` on `window`.
+    fn take(&mut self, window: WindowId, button: winit::event::MouseButton) {
+        self.0.push((window, button));
+    }
+
+    /// `button` released on `window`: whether its press was taken, so the
+    /// release is too.
+    fn release(&mut self, window: WindowId, button: winit::event::MouseButton) -> bool {
+        let held = self.0.iter().position(|&held| held == (window, button));
+        held.map(|index| self.0.swap_remove(index)).is_some()
+    }
+
+    /// Whether a taken press of `button` on `window` is held.
+    fn holds(&self, window: WindowId, button: winit::event::MouseButton) -> bool {
+        self.0.contains(&(window, button))
+    }
+
+    /// `window` closed.
+    fn forget_window(&mut self, window: WindowId) {
+        self.0.retain(|(held, _)| *held != window);
+    }
 }
 
 impl WinitLoopState {
@@ -592,6 +649,7 @@ impl WinitLoopState {
                 quit_requested: false,
             },
             cursor_positions: HashMap::new(),
+            chrome_held: ChromeHeld::default(),
             current_modifiers: ModifiersState::empty(),
         }
     }
@@ -1492,6 +1550,22 @@ impl ApplicationHandler for WinitApp {
             if let WinitWindowEvent::MouseWheel { delta, .. } = &event {
                 tracing::debug!(?delta, "MouseWheel");
             }
+            if let WinitWindowEvent::MouseInput { state, button, .. } = &event
+                && self.chrome_took(&window, platform_id, *state, *button)
+            {
+                return;
+            }
+            // A taken press on the bar moves the window once the pointer
+            // travels; the move still reaches the handler as a hover.
+            if let WinitWindowEvent::CursorMoved { position, .. } = &event
+                && self.platform.with_state(|loop_state| {
+                    loop_state
+                        .chrome_held
+                        .holds(platform_id, winit::event::MouseButton::Left)
+                })
+            {
+                window.chrome_moved(*position);
+            }
             let scale = window.inner().scale_factor();
             let mut batch = self.platform.with_state(|state| {
                 if let WinitWindowEvent::CursorMoved { position, .. } = &event {
@@ -1916,6 +1990,45 @@ impl WinitApp {
         }
     }
 
+    /// Whether the window system took this press or release of `button` for
+    /// the window's chrome: a press the window answers from its regions, and
+    /// the release of a press it took. The window is asked with no state
+    /// borrowed, since a maximize it carries out publishes the window's state.
+    fn chrome_took(
+        &self,
+        window: &Rc<dyn LoopWindow>,
+        platform_id: WindowId,
+        state: winit::event::ElementState,
+        button: winit::event::MouseButton,
+    ) -> bool {
+        match state {
+            winit::event::ElementState::Released => {
+                let taken = self
+                    .platform
+                    .with_state(|loop_state| loop_state.chrome_held.release(platform_id, button));
+                if taken {
+                    window.chrome_released();
+                }
+                taken
+            }
+            winit::event::ElementState::Pressed => {
+                let position = self.platform.with_state(|loop_state| {
+                    loop_state.chrome_held.press(platform_id, button);
+                    loop_state.cursor_positions.get(&platform_id).copied()
+                });
+                let Some(position) = position else {
+                    return false;
+                };
+                if !window.press_chrome(position, button) {
+                    return false;
+                }
+                self.platform
+                    .with_state(|loop_state| loop_state.chrome_held.take(platform_id, button));
+                true
+            }
+        }
+    }
+
     /// Deliver the pointer move the translation holds to see whether the next
     /// event replaces it: the loop turn ended, or something else follows.
     fn flush_native_pointer(&self) {
@@ -2150,6 +2263,7 @@ impl WinitApp {
         let window = self.platform.with_state(|state| {
             let window = state.windows.remove(&window_id);
             state.cursor_positions.remove(&window_id);
+            state.chrome_held.forget_window(window_id);
             state.input.focus_lost(window_id);
             state.window_id_map.retain(|_, v| *v != window_id);
             window
@@ -2307,6 +2421,7 @@ impl WinitApp {
             state.window_id_map.retain(|_, v| *v != platform_id);
             state.windows.remove(&platform_id);
             state.cursor_positions.remove(&platform_id);
+            state.chrome_held.forget_window(platform_id);
             state.input.focus_lost(platform_id);
             if state.active_window == Some(platform_id) {
                 state.active_window = None;
@@ -3108,5 +3223,39 @@ mod tests {
                 "wayland {wayland}, awaiting a display {awaiting}"
             );
         }
+    }
+
+    /// A release reaches no handler only when the window system took its press:
+    /// a later press of the button ends a taken one whose release never came,
+    /// and a closed window's taken presses go with it.
+    #[test]
+    fn only_the_release_of_a_taken_press_is_taken() {
+        use flui_platform::WindowId;
+        use winit::event::MouseButton::{Left, Right};
+
+        use super::ChromeHeld;
+
+        let (one, two) = (WindowId(1), WindowId(2));
+        let mut held = ChromeHeld::default();
+        held.press(one, Left);
+        held.take(one, Left);
+        assert!(held.holds(one, Left) && !held.holds(one, Right));
+        assert!(!held.release(one, Right), "another button");
+        assert!(!held.release(two, Left), "another window");
+        assert!(held.release(one, Left), "the taken press's release");
+        assert!(!held.release(one, Left), "taken once");
+        assert!(!held.holds(one, Left));
+
+        // The window manager kept the release; the next press reaches the
+        // application, and so does its release.
+        held.press(one, Left);
+        held.take(one, Left);
+        held.press(one, Left);
+        assert!(!held.release(one, Left));
+
+        held.press(two, Right);
+        held.take(two, Right);
+        held.forget_window(two);
+        assert!(!held.release(two, Right));
     }
 }

@@ -122,11 +122,9 @@ web-time = { workspace = true }
 # The reply channel from the IO pool back to a storage request. Already in
 # the tree through `tokio-util`; `sync` alone builds on wasm32 too.
 tokio = { workspace = true, features = ["sync"] }
-# The driver agent (ADR-0239): the wire schema it speaks, and the JSON lines
-# it reads and writes. Compiled in debug builds and under `driver` only.
-flui-protocol = { workspace = true, features = ["serde"] }
-serde = { workspace = true }
-serde_json = { workspace = true }
+# The driver agent (ADR-0239): the launch's names and the app's introduction.
+# The conversation is flui-runtime's (ADR-0288).
+flui-protocol = { workspace = true }
 
 # `CancellationToken`, which the task/worker/service lifecycle layer
 # (ADR-0049) derives from the execution services' cancellation root. Native
@@ -179,6 +177,8 @@ flui-app = { path = ".", features = ["testing"] }
 static_assertions.workspace = true
 # A throwaway data root for the host storage tests.
 tempfile.workspace = true
+# The driver agent's tests speak the protocol's JSON lines by hand.
+serde_json = { workspace = true }
 # `HeldPointerQueue::append`/`len`, `SemanticsHost::ensure_semantics`,
 # `ExecutionServices::with_limits`/`default_pools_started`, the UI runtime's test
 # constructors and the `testing` doubles, which this crate's tests use and

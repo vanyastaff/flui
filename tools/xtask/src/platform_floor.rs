@@ -26,12 +26,28 @@ const CLI_OUTPUT: &str = "crates/flui-cli/src/build/platform_floor.rs";
 /// The version map.
 const MAP_OUTPUT: &str = "docs/version-map.md";
 /// The Gradle properties `flui platform add android` scaffolds; the scaffolded
-/// `build.gradle.kts` reads its `flui.minSdk`, and `flui build` restates it.
+/// `build.gradle.kts` reads its `flui.minSdk` and `flui.targetSdk`, and `flui build` restates
+/// them.
 const GRADLE_TEMPLATE: &str = "crates/flui-cli/templates/platforms/android/gradle.properties";
 
-static GRADLE_MIN_SDK: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^(\s*flui\.minSdk\s*=\s*)([0-9]+)(\s*)$").expect("BUG: static regex")
+/// A `flui.minSdk = N` or `flui.targetSdk = N` line: the prefix, the key, the value, the rest.
+static GRADLE_SDK_LINE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^(\s*(flui\.(?:minSdk|targetSdk))\s*=\s*)([0-9]+)(\s*)$")
+        .expect("BUG: static regex")
 });
+
+/// Each Gradle property the template states, with the field of `platform-support.toml` it
+/// restates and that field's value.
+fn gradle_properties(floors: &Floors) -> [(&'static str, &'static str, u32); 2] {
+    [
+        ("flui.minSdk", "android.api", floors.android.api),
+        (
+            "flui.targetSdk",
+            "android.target-sdk",
+            floors.android.target_sdk,
+        ),
+    ]
+}
 
 /// Arguments for `cargo xtask platform-floor`.
 #[derive(Debug, clap::Args)]
@@ -51,7 +67,7 @@ pub(crate) fn platform_floor(args: &PlatformFloorArgs) -> anyhow::Result<ExitCod
             std::fs::write(root.join(path), contents).with_context(|| format!("writing {path}"))?;
         }
         let template = read(GRADLE_TEMPLATE)?;
-        let restated = restate_min_sdk(&template, floors.android.api);
+        let restated = restate_gradle_properties(&template, &floors);
         if restated != template {
             std::fs::write(root.join(GRADLE_TEMPLATE), restated)
                 .with_context(|| format!("writing {GRADLE_TEMPLATE}"))?;
@@ -130,6 +146,8 @@ struct Android {
     api: u32,
     release: String,
     set_by: String,
+    /// The `targetSdk` every APK declares (ADR-0255 decision 7): a packaging value, not a floor.
+    target_sdk: u32,
 }
 
 #[derive(Debug, Deserialize)]
@@ -176,6 +194,12 @@ impl Floors {
         ] {
             ensure!(!text.trim().is_empty(), "{SOURCE}: {field} is empty");
         }
+        ensure!(
+            floors.android.target_sdk >= floors.android.api,
+            "{SOURCE}: android.target-sdk = {} is below android.api = {}",
+            floors.android.target_sdk,
+            floors.android.api
+        );
         ensure!(
             !floors.linux.requires.is_empty() && !floors.web.requires.is_empty(),
             "{SOURCE}: linux.requires and web.requires each name at least one requirement"
@@ -263,8 +287,12 @@ fn cli_source(floors: &Floors) -> String {
          pub(crate) const IOS: (u32, u32, u32) = ({ios_major}, {ios_minor}, {ios_patch});\n\
          \n\
          /// The Android `minSdk`: the lowest API level FLUI supports.\n\
-         pub(crate) const ANDROID_MIN_SDK: u32 = {};\n",
-        floors.windows.build, floors.android.api
+         pub(crate) const ANDROID_MIN_SDK: u32 = {};\n\
+         \n\
+         /// The Android `targetSdk` every APK declares (ADR-0255 decision 7). A packaging value,\n\
+         /// not a floor: `flui.toml` does not change it.\n\
+         pub(crate) const ANDROID_TARGET_SDK: u32 = {};\n",
+        floors.windows.build, floors.android.api, floors.android.target_sdk
     )
 }
 
@@ -324,8 +352,10 @@ fn version_map(floors: &Floors) -> String {
     page
 }
 
-/// `text` with every `flui.minSdk = N` line stating `api`, its indentation and line endings kept.
-fn restate_min_sdk(text: &str, api: u32) -> String {
+/// `text` with every `flui.minSdk = N` and `flui.targetSdk = N` line stating the value
+/// `platform-support.toml` gives it, its indentation and line endings kept.
+fn restate_gradle_properties(text: &str, floors: &Floors) -> String {
+    let properties = gradle_properties(floors);
     text.split_inclusive('\n')
         .map(|line| {
             let (body, ending) = match line.strip_suffix("\r\n") {
@@ -335,10 +365,11 @@ fn restate_min_sdk(text: &str, api: u32) -> String {
                     None => (line, ""),
                 },
             };
-            match GRADLE_MIN_SDK.captures(body) {
-                Some(caps) => format!("{}{api}{}{ending}", &caps[1], &caps[3]),
-                None => line.to_owned(),
-            }
+            let stated = GRADLE_SDK_LINE.captures(body).and_then(|caps| {
+                let (_, _, value) = properties.iter().find(|(key, _, _)| *key == &caps[2])?;
+                Some(format!("{}{value}{}{ending}", &caps[1], &caps[4]))
+            });
+            stated.unwrap_or_else(|| line.to_owned())
         })
         .collect()
 }
@@ -363,21 +394,21 @@ fn check(
         }
     }
     for (path, text) in templates {
-        let stated: Vec<u32> = text
-            .lines()
-            .filter_map(|line| GRADLE_MIN_SDK.captures(line))
-            .filter_map(|caps| caps[2].parse().ok())
-            .collect();
-        match stated.as_slice() {
-            [] => findings.push(format!("{path} states no `flui.minSdk = N`")),
-            values => {
-                for value in values {
-                    if *value != floors.android.api {
-                        findings.push(format!(
-                            "{path} states flui.minSdk = {value}, but {SOURCE} has android.api = {}",
-                            floors.android.api
-                        ));
-                    }
+        for (key, field, expected) in gradle_properties(floors) {
+            let stated: Vec<u32> = text
+                .lines()
+                .filter_map(|line| GRADLE_SDK_LINE.captures(line))
+                .filter(|caps| &caps[2] == key)
+                .filter_map(|caps| caps[3].parse::<u32>().ok())
+                .collect();
+            if stated.is_empty() {
+                findings.push(format!("{path} states no `{key} = N`"));
+            }
+            for value in stated {
+                if value != expected {
+                    findings.push(format!(
+                        "{path} states {key} = {value}, but {SOURCE} has {field} = {expected}"
+                    ));
                 }
             }
         }
@@ -399,8 +430,8 @@ mod tests {
         let floors = floors();
         let committed = generate(&floors);
         let gradle = format!(
-            "android.useAndroidX=true\nflui.minSdk={}\n",
-            floors.android.api
+            "android.useAndroidX=true\nflui.minSdk={}\nflui.targetSdk={}\n",
+            floors.android.api, floors.android.target_sdk
         );
         (committed, vec![(GRADLE_TEMPLATE, gradle)])
     }
@@ -472,27 +503,45 @@ mod tests {
 
     fn a_template_floor_that_differs_is_reported() {
         let (committed, _) = agreeing();
-        let drifted = [(GRADLE_TEMPLATE, "flui.minSdk=21\n".to_owned())];
+        let target = floors().android.target_sdk;
+        let drifted = [(
+            GRADLE_TEMPLATE,
+            "flui.minSdk=21\nflui.targetSdk=34\n".to_owned(),
+        )];
         assert_eq!(
             check(&floors(), &committed, &drifted),
-            [format!(
-                "{GRADLE_TEMPLATE} states flui.minSdk = 21, but {SOURCE} has android.api = 23"
-            )]
+            [
+                format!(
+                    "{GRADLE_TEMPLATE} states flui.minSdk = 21, but {SOURCE} has android.api = 23"
+                ),
+                format!(
+                    "{GRADLE_TEMPLATE} states flui.targetSdk = 34, but {SOURCE} has \
+                     android.target-sdk = {target}"
+                ),
+            ]
         );
         let silent = [(GRADLE_TEMPLATE, "android.useAndroidX=true\n".to_owned())];
         assert_eq!(
             check(&floors(), &committed, &silent),
-            [format!("{GRADLE_TEMPLATE} states no `flui.minSdk = N`")]
+            [
+                format!("{GRADLE_TEMPLATE} states no `flui.minSdk = N`"),
+                format!("{GRADLE_TEMPLATE} states no `flui.targetSdk = N`"),
+            ]
         );
     }
 
     fn write_restates_a_template_floor_that_differs() {
         let (committed, _) = agreeing();
-        let drifted = "android.useAndroidX=true\r\nflui.minSdk=21\r\norg.gradle.caching=true";
-        let restated = restate_min_sdk(drifted, floors().android.api);
+        let drifted = "android.useAndroidX=true\r\nflui.minSdk=21\r\nflui.targetSdk = 34\r\n\
+                       org.gradle.caching=true";
+        let restated = restate_gradle_properties(drifted, &floors());
+        let target = floors().android.target_sdk;
         assert_eq!(
             restated,
-            "android.useAndroidX=true\r\nflui.minSdk=23\r\norg.gradle.caching=true"
+            format!(
+                "android.useAndroidX=true\r\nflui.minSdk=23\r\nflui.targetSdk = {target}\r\n\
+                 org.gradle.caching=true"
+            )
         );
         assert_eq!(
             check(&floors(), &committed, &[(GRADLE_TEMPLATE, restated)]),
@@ -505,6 +554,10 @@ mod tests {
             (ROOT.replace("version = \"13.0\"", "version = \"13\""), "ios.version"),
             (ROOT.replace("glibc = \"2.17\"", "glibc = \"2.x\""), "linux.glibc"),
             (ROOT.replace("[web]", "[web]\nmin = 1"), "unknown field"),
+            (
+                ROOT.replace("target-sdk = 36", "target-sdk = 22"),
+                "android.target-sdk = 22 is below android.api = 23",
+            ),
             (
                 ROOT.replace(
                     "set-by = \"UIScene and UIWindowScene, through which the backend gets its window\"",

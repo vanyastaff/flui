@@ -12,6 +12,8 @@
 //
 // Rust side: the generated `ModeUniforms { color: [f32;4], blend_mode: u32,
 // _pad0/_pad1/_pad2: u32 }` (wgsl_bindgen, see mode/generated.rs) = 32 bytes.
+import package::color_filter::filter_mode;
+
 struct ModeUniforms {
     /// Filter color in straight sRGB [r, g, b, a] (SRC for the blend).
     color: vec4<f32>,
@@ -51,8 +53,6 @@ fn vs_main(@builtin(vertex_index) vi: u32) -> VertexOutput {
     out.uv       = vec2<f32>(us[vi], vs[vi]);
     return out;
 }
-
-#import color_filter::filter_mode
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {

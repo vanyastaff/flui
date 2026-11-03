@@ -19,6 +19,7 @@
 - **Amended:** 2026-10-13 — the current FLUI schema is 0.4, which adds a node's optional `description`.
 - **Amended:** 2026-10-18 — the Android runner drives the hook as the desktop and iOS runners do.
 - **Amended:** 2026-10-19 — `flui run --agent` and `flui mcp` are built in `flui-cli` (see "The CLI half" in §3): `flui mcp` is a stdio proxy written in the CLI over the endpoint's framing, with no `flui-mcp` library and no cross-window handle table.
+- **Amended:** 2026-11-03 — an `AgentAnswer` and an `AgentEvents` wake a registered waker when they can be read, and the conversation over them is `flui-runtime`'s ([ADR-0288](ADR-0288-the-development-agent-is-one-sans-io-service.md)).
 - **Amends:** [ADR-0080](ADR-0080-agent-protocol-desktop-contract.md) (settles its "Not
   decided here" in-process transport; the wire contract is unchanged)
 - **Superseded in part by:** [ADR-0124](ADR-0124-controlled-numeric-and-disclosure-actions.md):

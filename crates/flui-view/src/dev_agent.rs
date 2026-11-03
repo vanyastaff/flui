@@ -59,12 +59,13 @@ use std::any::Any;
 use std::fmt;
 use std::sync::mpsc::{Receiver, RecvTimeoutError, TryRecvError};
 use std::sync::{Arc, Weak};
+use std::task::Waker;
 use std::time::Duration;
 
 use flui_protocol::method::{Addressed, WindowMethod};
 use flui_protocol::{ErrorCode, ErrorObject, Event, EventFilter, HandleKind, Retry, WindowId};
 
-use crate::__runtime::{AgentPort, EventSource, WindowCall};
+use crate::__runtime::{AgentPort, EventSource, WakeSlot, WindowCall};
 
 /// A development tool that serves the application's windows to an agent,
 /// installed by the application and called by the host on the owner thread.
@@ -134,15 +135,30 @@ pub struct AgentAnswer<T> {
     /// weakly.
     _asker: Arc<()>,
     taken: bool,
+    /// Woken when the answer can be taken.
+    wake: Arc<WakeSlot>,
 }
 
 impl<T> AgentAnswer<T> {
-    pub(crate) fn new(rx: Receiver<Result<T, ErrorObject>>, asker: Arc<()>) -> Self {
+    pub(crate) fn new(
+        rx: Receiver<Result<T, ErrorObject>>,
+        asker: Arc<()>,
+        wake: Arc<WakeSlot>,
+    ) -> Self {
         Self {
             rx,
             _asker: asker,
             taken: false,
+            wake,
         }
+    }
+
+    /// Wake `waker` once the answer can be taken: when the owner sends it,
+    /// or when the owner goes without answering. Only the waker registered
+    /// last is woken, once; register again for another wake. Take the
+    /// answer after registering, so one that arrived first is not missed.
+    pub fn register(&self, waker: &Waker) {
+        self.wake.register(waker);
     }
 
     /// The answer, if the owner has sent it; `None` while it has not, and
@@ -229,6 +245,13 @@ impl AgentEvents {
     #[must_use]
     pub fn is_finished(&self) -> bool {
         self.0.is_finished()
+    }
+
+    /// Wake `waker` once an event is queued or the stream ends. Only the
+    /// waker registered last is woken, once; register again for another
+    /// wake, and read after registering.
+    pub fn register(&mut self, waker: &Waker) {
+        self.0.register(waker);
     }
 }
 

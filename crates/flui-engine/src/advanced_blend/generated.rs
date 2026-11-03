@@ -11,13 +11,11 @@
 //! - `WgpuBindGroup0` / `WgpuBindGroup0Entries` — typed bind-group helpers.
 //! - `BlendUniforms::new` — pad-free constructor (zero-fills `_pad*` automatically).
 //!
-//! ## `#import blend_helpers`
+//! ## The `blend_helpers` import
 //!
-//! `advanced_blend.wgsl` carries `#import blend_helpers::{…}`.  `wgsl_bindgen`
-//! resolves it at codegen time (`blend_helpers.wgsl` is co-located in `shaders/`,
-//! which is this shader's workspace root) so it can parse the shader and emit
-//! the bindings.  The runtime pipeline still composes the shader module via
-//! `compose_wgsl_shader`.
+//! `advanced_blend.wgsl` imports `package::blend_helpers::{…}` (WESL).
+//! `build.rs` composes it into plain WGSL first; `wgsl_bindgen` reads that
+//! composed copy, and the runtime pipeline includes the same copy.
 //!
 //! ## Byte-identity guarantee
 //!
