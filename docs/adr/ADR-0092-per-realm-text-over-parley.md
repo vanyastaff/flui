@@ -12,28 +12,9 @@
   [ADR-0309](ADR-0309-every-text-paint-attribute-crosses-the-display-list.md) for §4's clause
   "with span colour and decoration as today": a run carries its colour alone, and a span's
   shadows and background cross as ops of their own.
-- **Status:** Accepted. Every gate (§8) is met: gate 1 by a prototype on 2026-09-26, gates 2, 6
-  and 7 on 2026-09-30 (see Context). Every step of §10 landed. Two things this record leaves to
-  others: the bidi base direction (Parley 0.11.1 takes it from the first strong character;
-  flui-painting mapping decision 12), and how a hot-reload plugin's font bytes cross its FFI
-  boundary ([ADR-0094](ADR-0094-hot-reload-through-subsecond.md)). Each UI runtime owns a
-  `TextContext` over the app's one `FontCollection` (one per owner thread, which is one per
-  process while [ADR-0091](ADR-0091-one-owner-thread-isolated-realms-raster-thread.md) fixes one
-  owner thread), lent to every pipeline; Parley measures, paint draws the runs of the layout
-  that measured (`DrawOp::Paragraph` carries a `ShapedParagraph`, the engine's atlas rasterizes
-  through `SwashRasterizer`), and carets, selection boxes, hit-testing, line metrics and word
-  boundaries read that same layout. The performance overlay's labels are shaped through the
-  UI runtime's `TextContext`, so the engine shapes no text. A face registered on the collection
-  reaches measurement, paint and carets together at each pipeline's next frame (§2). The app's
-  shared engine services build the collection with the bundled faces and hand the host's to a
-  feed on a thread of its own, which scans the host once with fontdb (`HostFonts::scan`) and
-  adds its faces with fallback tables FLUI owns; the first frame does not wait for it, and its
-  faces arrive as a registration's do. cosmic-text, `unicode-script` and `FONT_SYSTEM` are
-  gone, and the editor steps through the same ICU4X boundaries the painter clusters by, with no
-  `unicode-segmentation` in any FLUI crate. The supersessions below have taken effect and their
-  back-links are written.
+- **Status:** Accepted (2026-10-01)
 - **Date:** 2026-09-25
-- **Amended:** 2026-10-11 — retired font-stack records retain immutable history links; their surviving clauses are owned here. Current per-painter atlas ownership is distinguished from proposed threaded raster placement.
+- **Revised:** 2026-10-11 — retired font-stack records retain immutable history links; their surviving clauses are owned here. Current per-painter atlas ownership is distinguished from proposed threaded raster placement.
 - **Superseded-by:** ADR-0114 for §10 step 4b's direction-only line alignment; other decisions remain in force.
 - **Superseded-by:** [ADR-0122](ADR-0122-validated-glyph-image.md) for §5's
   `GlyphImage` representation and admission only; the raster trait, font identity,
@@ -73,6 +54,10 @@
   (per-UI runtime fonts)
 
 ## Context
+
+Two things this record leaves to others: the bidi base direction (Parley 0.11.1 takes it from
+the first strong character; flui-painting mapping decision 12), and how a hot-reload plugin's
+font bytes cross its FFI boundary ([ADR-0094](ADR-0094-hot-reload-through-subsecond.md)).
 
 Text was one process-wide, locked object when this record was written (the file and line
 numbers below are of that tree; §10 step 6a removed `text_layout/layout.rs`).

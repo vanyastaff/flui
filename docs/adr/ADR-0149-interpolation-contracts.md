@@ -1,7 +1,6 @@
 # ADR-0149: Interpolation contracts
 
-- **Status:** Accepted (2026-10-06). The owner chose Oklab with premultiplied alpha as the colour
-  default and the collapsed-axis rule for matrices on 2026-10-06.
+- **Status:** Accepted (2026-10-06)
 - **Date:** 2026-10-06
 - **Supersedes:** [ADR-0098](ADR-0098-owned-f64-geometry-values.md) §7, in part: the bullet
   saying `Color::lerp` interpolates premultiplied components (in gamma-encoded sRGB). The rest

@@ -1,17 +1,8 @@
 # ADR-0082: `flui-platform` is the contract crate; OS backends stay in `flui-native`
 
-- **Status:** Accepted in part (2026-09-26): §1 for the items both of §3's changes move; §2's
-  rule that only composition roots depend on `flui-native` (its `allowed-dependents`); §3's
-  first change. §3's second change (`PlatformWindow`'s move with the host-side window subtrait
-  `HostWindow` for `accessibility()`, and the removal of `as_winit`) is accepted on merge,
-  pending the evidence Verification lists as outstanding for it. §4 and the remaining §5
-  backend consolidation remain Proposed. The §5 retirement of `PlatformEmbedder`,
-  `BasicVelocityTracker`, `TimestampProvider` and `SystemTimestamp` is adopted (2026-10-04). §4
-  was revised in place on 2026-09-26, while still Proposed: what step one requires, the
-  precondition for step two, and the order of the headless and Win32 backends. Win32 has
-  completed step one. §2 was amended on 2026-09-26: `PlatformAccessibility` moves to
-  `flui-semantics` and `flui-native` moves from layer 2 to layer 3; that placement is accepted
-  on merge of the UI runtime-core move (ADR-0083 move 4), which ships it.
+- **Status:** Accepted (2026-09-26) for §1, §2, §3 and §5's retirement of `PlatformEmbedder`,
+  `BasicVelocityTracker`, `TimestampProvider` and `SystemTimestamp`; §4 and the rest of §5 are
+  Proposed
 - **Date:** 2026-09-25
 - **Superseded-by:** [ADR-0151](ADR-0151-platform-layer-boundary-and-names.md) for §1 (what the
   contract crate holds), §2 (the crates' names and what the core host keeps) and §5's Linux row
@@ -22,12 +13,12 @@
   unchanged.
 - **Amended by:** [ADR-0213](ADR-0213-input-capabilities.md) (§5: `PlatformCapabilities` is
   replaced by handle-derived availability and `InputCapabilities`)
-- **Amends (on acceptance):** [ADR-0030](ADR-0030-platform-text-input-ime-capability.md) §2,
+- **Amends:** [ADR-0030](ADR-0030-platform-text-input-ime-capability.md) §2,
   [ADR-0031](ADR-0031-platform-haptics-capability-and-system-chrome-deferral.md) §1–§3,
   [ADR-0038](ADR-0038-data-transfer-architecture.md) §4 and §9, and
-  [ADR-0039](ADR-0039-event-loop-affinity-capability.md) §1–§2 (where the traits live, the
-  `Send` bound on registered callbacks, and `capabilities`, which §2 keeps on `Platform` and §5
-  below deletes); [ADR-0037](ADR-0037-presentation-ownership-domains.md)
+  [ADR-0039](ADR-0039-event-loop-affinity-capability.md) §1–§2 (where the traits live; the
+  `Send` bound on registered callbacks and the deletion of `capabilities` are §4's and §5's, which
+  are Proposed); [ADR-0037](ADR-0037-presentation-ownership-domains.md)
   (the `interaction -> platform` edge becomes `interaction -> platform-api`)
 - **Related:** [ADR-0035](ADR-0035-lifecycle-consolidation-and-frames-enabled.md),
   [ADR-0047](ADR-0047-unified-execution-services.md),

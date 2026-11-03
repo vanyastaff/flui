@@ -2,6 +2,9 @@
 
 - **Status:** Accepted
 - **Date:** 2026-10-07
+- **Superseded-by:** [ADR-0281](ADR-0281-a-destructor-that-panics-during-an-unwind-aborts-as-in-std.md),
+  only where later opaque captures are retained after a caught failure: they are destroyed under
+  the operation's containment.
 - **Related:** [ADR-0113](ADR-0113-finite-inverse-hit-admission.md),
   [ADR-0127](ADR-0127-exceptional-path-retention.md)
 - **Design source:** [Interaction patterns](https://github.com/vanyastaff/flui/blob/deb9faea20fe6beb23c9ea0724f5a75e0f42595f/docs/plans/specs/flui-interaction/patterns.md),

@@ -1,14 +1,6 @@
 # ADR-0103: Portable independent primitive coverage
 
-- **Status:** Accepted (2026-11-03). A direct destination-sensitive draw on a device without
-  `DUAL_SOURCE_BLENDING`, and Plus on every device, goes through `PortableCoveragePipeline`
-  (`crates/flui-engine/src/portable_coverage.rs:20`), as `needs_portable` decides
-  (`crates/flui-engine/src/replay/coverage.rs:18-24`), and `WgpuPainter::render_to_texture`
-  takes the backing texture (`crates/flui-engine/src/painter/mod.rs:513`). Pinned by
-  `coverage_blend_reads_back_as_specified`
-  (`crates/flui-engine/src/coverage_blend_readback_tests.rs:793`), which renders each case on a
-  device with `DUAL_SOURCE_BLENDING` withheld (`crates/flui-engine/src/headless.rs:96`). Not
-  implemented: nothing in the decision. Not run: these readbacks on a browser or a mobile GPU.
+- **Status:** Accepted (2026-11-03). Not run on a browser or a mobile GPU: [`docs/gaps.md` entry 42, ADR-0103](../gaps.md#42-accepted-adr-sections-not-built-yet)
 - **Date:** 2026-10-02
 - **Supersedes:** [ADR-0102](ADR-0102-immutable-geometric-clip-composition.md),
   its direct-primitive capability decision only; the geometric expression,

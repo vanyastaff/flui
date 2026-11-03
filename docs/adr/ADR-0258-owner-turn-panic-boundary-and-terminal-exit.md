@@ -1,18 +1,21 @@
 # ADR-0258: A user-code panic is contained at the owner turn, and only a terminal failure ends the process, after the flush
 
-- **Status:** Accepted (2026-10-28). Not implemented: today a caught panic is reported and then
-  resumed, and on Win32 it reaches the window procedure's boundary, which aborts; the exit order
-  has no flush step, no shared deadline and no watchdog, and the frame retry has no backoff.
+- **Status:** Accepted (2026-10-28)
 - **Date:** 2026-10-28
+- **Superseded-by:** [ADR-0281](ADR-0281-a-destructor-that-panics-during-an-unwind-aborts-as-in-std.md),
+  only where §1 retains a payload whose destructor panics, §2 retains what a non-terminal close
+  has not destroyed and a later or opaque terminal payload, and §5 retains a user `Drop` during an
+  unwind: payloads go to `discard_payload` (the terminal slot keeps an opaque payload's text),
+  values are destroyed under containment, and a destructor that panics during an unwind aborts.
 - **Supersedes:** [ADR-0035](ADR-0035-lifecycle-consolidation-and-frames-enabled.md)
   §5, its sentence "the first panic resumes after restoration and notification" only (a quit
   observer's panic is contained by §1 here and resumes only when §2 classifies it terminal); and the
   statement of `crates/flui-runtime/ARCHITECTURE.md` that a callback panic "still leaves the
   dispatch boundary".
-- **Related:** [ADR-0127](ADR-0127-exceptional-path-retention.md) (what is retained on an
-  exceptional path; the first failure stays first),
+- **Related:** [ADR-0127](ADR-0127-exceptional-path-retention.md) (an exceptional path's
+  operation boundaries; the first failure stays first),
   [ADR-0123](ADR-0123-exceptional-presentation-close.md) (a close that holds a failure withdraws
-  authority before it retains ownership),
+  authority before any user code runs),
   [ADR-0151](ADR-0151-platform-layer-boundary-and-names.md) §16 (`os_entry`, the boundary at every OS
   entry), [ADR-0254](ADR-0254-window-contract.md) decision 4 (one handler per window and per
   application; the call point resurfaces a handler's first panic),

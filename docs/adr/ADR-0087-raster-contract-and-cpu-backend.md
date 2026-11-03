@@ -14,17 +14,11 @@
   for §1, §2 and §5 only: wgpu stays the only rasteriser, `RasterBackend` stays in `flui-engine`
   as the raster executor's GPU-free seam, and there is no CPU backend, conformance suite or
   timing for them.
-- **Amends (on acceptance):** [ADR-0006](ADR-0006-c-ir-record-replay-seam.md) §5 (the scene-level backend trait
-  and the GPU-free lowering move to `flui-layer`; the Command IR stays in the engine),
-  [ADR-0061](ADR-0061-damage-needs-layer-identity.md) (names the producer: retained boundary
-  subtrees keyed by `RenderId` and a differ emitting `DamageRegion::Partial`),
-  [ADR-0068](ADR-0068-frame-disposition-replaces-the-presented-bit.md) (`PresentDisposition`
-  moves to `flui-layer`, unchanged), [ADR-0045](ADR-0045-raster-lane.md) §1 (the home of
-  `RasterBackend`)
-- **Supersedes (on acceptance):** the single-rasteriser stance in the introduction of
-  [`crates/flui-engine/ARCHITECTURE.md`](../../crates/flui-engine/ARCHITECTURE.md) ("No other
-  rasteriser … is planned, and nothing here exists to make one pluggable")
-- **Related:** [ADR-0057](ADR-0057-coverage-correct-blending-is-capability-gated.md) (capability
+- **Amends:** [ADR-0061](ADR-0061-damage-needs-layer-identity.md) (§3 names the producer:
+  retained boundary subtrees keyed by `RenderId` and a differ emitting `DamageRegion::Partial`)
+- **Related:** [ADR-0006](ADR-0006-c-ir-record-replay-seam.md) §5,
+  [ADR-0068](ADR-0068-frame-disposition-replaces-the-presented-bit.md) and
+  [ADR-0045](ADR-0045-raster-lane.md) §1 (the rules §1 and §5 would have changed; see Context), [ADR-0057](ADR-0057-coverage-correct-blending-is-capability-gated.md) (capability
   gates and named fallbacks), [ADR-0062](ADR-0062-the-paint-queue-is-the-cross-pass-record.md),
   [ADR-0063](ADR-0063-the-renderer-owns-its-surface-target.md),
   [ADR-0066](ADR-0066-display-list-command-representation.md),
@@ -36,6 +30,13 @@
   in [`report-architecture.ru.md` §4.7](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/2026-09-25-architecture-review/report-architecture.ru.md)
 
 ## Context
+
+§1, §2 and §5 would have moved the scene-level backend trait and the GPU-free lowering of
+ADR-0006 §5 to `flui-layer` (the Command IR staying in the engine), moved `PresentDisposition`
+(ADR-0068) and the home of `RasterBackend` (ADR-0045 §1) there with it, and replaced the
+single-rasteriser stance of `crates/flui-engine/ARCHITECTURE.md` ("No other rasteriser … is
+planned, and nothing here exists to make one pluggable"). They were never accepted; ADR-0305
+keeps wgpu the only rasteriser and `RasterBackend` in `flui-engine`.
 
 ### There is one rasteriser, by stated policy
 

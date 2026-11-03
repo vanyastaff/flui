@@ -2,6 +2,9 @@
 
 - **Status:** Accepted
 - **Superseded-by:** ADR-0175 (run-future placement, names and thread ownership)
+- **Superseded-by:** [ADR-0281](ADR-0281-a-destructor-that-panics-during-an-unwind-aborts-as-in-std.md),
+  decisions 4–5 only where they retain exceptional envelopes, secondary payloads and captures:
+  each is destroyed under the delivery's containment, and the first failure stays first.
 - **Date:** 2026-10-03
 - **Amended:** 2026-10-11 — current run-delivery validation replaces the retired ticker-future test locator; the scoped ADR-0175 replacement remains explicit.
 - **Supersedes:** ADR-0064 sections 3 and 6 only for continuation invocation and waiter delivery policy

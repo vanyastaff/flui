@@ -8,16 +8,10 @@
 - **Superseded-by:** [ADR-0254](ADR-0254-window-contract.md) decision 4, in part: the
   `Platform::on_open_urls` registration named here as a deep link's source is deleted; the
   opened URLs and files reach `AppHandler` with the activation feature.
-- **Superseded-by (on acceptance):**
-  [ADR-0262](ADR-0262-persisted-documents-over-a-byte-storage-capability.md) §6, for step 8's
-  "stack restoration as a list of paths" only: `Router::from_stack` and `RouterHandle::stack` carry
-  the whole typed stack, and the application stores it as paths in its own document. Web history,
-  query and fragment stay in step 8.
-- **Supersedes (on acceptance):** [ADR-0024](ADR-0024-named-routes-seam.md) (string-named
-  routes; `RouteKey<T>` of its §3 carries over)
-- **Supersedes in part (on acceptance):** [ADR-0019](ADR-0019-navigator-routing-seam.md) (the
-  Navigator-first shape; its §1 pure-data history flush and §3 `dyn Any` pop result carry over)
-- **Related:** [ADR-0020](ADR-0020-transition-modal-route-seam.md),
+- **Related:** [ADR-0019](ADR-0019-navigator-routing-seam.md) and
+  [ADR-0024](ADR-0024-named-routes-seam.md) (the navigation records this one would replace; see
+  Context), [ADR-0262](ADR-0262-persisted-documents-over-a-byte-storage-capability.md) §6 (a
+  proposed replacement for step 8's stack restoration), [ADR-0020](ADR-0020-transition-modal-route-seam.md),
   [ADR-0021](ADR-0021-hero-flight-seam.md), [ADR-0025](ADR-0025-local-history-seam.md),
   [ADR-0027](ADR-0027-owner-affine-ui-realms.md) §9 (navigation commands in the closed command
   vocabulary), [ADR-0042](ADR-0042-theming-ownership.md) (`WidgetsApp` owns the navigator),
@@ -34,9 +28,12 @@ This record changed nothing in `crates/` when it was written. Steps one and two 
 
 ## Context
 
-Both navigation ADRs already say they are waiting for this one. ADR-0019's status line says
-the typed Router "will supersede the Navigator-first shape recorded here", and ADR-0024 is
-Deprecated with "`RouteKey<T>` (§3) is the part to carry over". What exists today is the
+This record, once accepted, would replace two navigation records: ADR-0024's string-named routes,
+of which `RouteKey<T>` (its §3) carries over, and ADR-0019's Navigator-first shape, of which its §1
+pure-data history flush and its §3 `dyn Any` pop result carry over. ADR-0262 §6, also proposed,
+would in turn replace step 8's "stack restoration as a list of paths": `Router::from_stack` and
+`RouterHandle::stack` carry the whole typed stack, and the application stores it as paths in its
+own document, while web history, query and fragment stay in step 8. What exists today is the
 Navigator those two records describe:
 
 - **An imperative stack with many front doors.** `NavigatorHandle` carries 19 mutation entry

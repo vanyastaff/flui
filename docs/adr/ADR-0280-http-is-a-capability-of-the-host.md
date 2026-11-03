@@ -3,13 +3,16 @@
 - **Status:** Accepted (2026-10-31)
 - **Date:** 2026-10-31
 - **Supersedes:** [ADR-0279](ADR-0279-image-loads-run-on-the-lanes-their-caller-holds.md) §5 (the
-  network load's reactor check), and §1 only for the shape of what a load is given (lanes alone).
+  network load's reactor check), and §1 only for the shape of what a load is given (lanes alone);
+  [ADR-0118](ADR-0118-network-image-registry-identity.md), the registry's own HTTP client and the
+  registry as the authority of a response only (§5–§6); [ADR-0107](ADR-0107-asset-byte-sources-and-decoding.md),
+  its network bridge only: `NetworkLoader`, `reqwest` and the `network` and `network-images`
+  features (§5).
 - **Related:** [ADR-0152](ADR-0152-capability-seam-revised.md) (the seam the capability travels
   through), [ADR-0047](ADR-0047-unified-execution-services.md) (no runtime outside the lanes),
   [ADR-0243](ADR-0243-one-testing-kit-per-layer.md) (the scripted client lives next to its
   contract), [ADR-0089](ADR-0089-upstream-types-in-stable-signatures.md) §2 (no `http` or `reqwest`
-  type in a contract signature), [ADR-0118](ADR-0118-network-image-registry-identity.md) (amended by
-  §6: the response authority is the client's, not the registry's)
+  type in a contract signature)
 
 ## Context and problem statement
 

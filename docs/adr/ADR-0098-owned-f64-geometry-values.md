@@ -1,33 +1,13 @@
 # ADR-0098: Geometry values are FLUI-owned `f64` structs; flui-geometry and flui-types dissolve
 
-- **Status:** Accepted (2026-11-03). §1–§8 are the rule. The values are in
-  `crates/flui-foundation/src/geometry/`, neither `flui-geometry` nor `flui-types` is in the
-  workspace, and the compile-fail suite `crates/flui-painting/tests/compile_fail/` pins §5's
-  separation. Not implemented: (a) half-open containment (§3): `Rect::contains`
-  (`crates/flui-foundation/src/geometry/rect.rs:469-474`), `Rect<f64>::contains_offset`
-  (`rect.rs:514-519`), `Size::contains` (`size.rs:257-264`) and `Bounds::contains`
-  (`bounds.rs:309-314`) are inclusive, and hit testing reaches the first through the clip
-  render objects (`crates/flui-objects/src/proxy/clip.rs:316`), `HitShape::contains`
-  (`crates/flui-objects/src/interaction/content_shape.rs:45`) and `BoxHitTestCtx::is_hit`
-  (`crates/flui-rendering/src/protocol/box_protocol.rs:1737-1739`); (b) the continuous device
-  space of §5: `snap_edges` and `cover` take the logical `Rect`
-  (`crates/flui-foundation/src/geometry/snap.rs:82`, `:94`) and the engine's device bounds are
-  `Rect<f64>` (`crates/flui-engine/src/state_stack.rs:477-485`);
-  (c) §6's content snapping, layout-time stroke widths (`resolve_stroke_width`, `snap.rs:143`,
-  has no caller outside its module) and text baseline snapping; (d) §5's Wayland buffer size
-  in integers from the n/120 numerator: the native host turns the numerator into an `f64`
-  ratio (`crates/flui-native/src/window/linux/wayland.rs:1137-1139`), while the Windows
-  (`crates/flui-native/src/window/windows/proc.rs:1582-1586`) and web
-  (`crates/flui-native/src/window/web.rs:1012-1016`) rules are in place; (e) §7's gradient
-  interpolation colour and alpha spaces: `LinearGradient` carries neither
-  (`crates/flui-painting/src/styling/gradient.rs:67-86`); (f) pruning `Vec2`, `Bounds` and
-  `Circle` (`vector.rs:48`, `bounds.rs:64`, `circle.rs:33`).
+- **Status:** Accepted (2026-11-03). Not implemented: [`docs/gaps.md` entry 42, ADR-0098 §3 and §5–§8](../gaps.md#42-accepted-adr-sections-not-built-yet)
 - **Date:** 2026-09-28
-- **Amended:** 2026-11-03 — containment is half-open for every axis-aligned box (§3, "Containment"),
+- **Revised:** 2026-11-03 — what is not built moves from the Status line and the "Implementation status" section to [`docs/gaps.md` entry 42](../gaps.md#42-accepted-adr-sections-not-built-yet).
+- **Revised:** 2026-11-03 — containment is half-open for every axis-aligned box (§3, "Containment"),
   and a space is a scalar type, the set of scalars is sealed, and continuous device coordinates
   have their own scalar `DeviceF64` (§5, "Spaces are scalars"). §1's list no longer deletes the
   `Unit`, `NumericUnit` and `FloatUnit` traits: they carry the space.
-- **Amended:** 2026-10-11 — implemented empty-union/touching-intersection behavior is distinguished from pending containment policy; the NaN comparison explanation is corrected.
+- **Revised:** 2026-10-11 — implemented empty-union/touching-intersection behavior is distinguished from pending containment policy; the NaN comparison explanation is corrected.
 - **Superseded-by:** [ADR-0149](ADR-0149-interpolation-contracts.md) for §7's `Color::lerp`
   bullet only (colour now interpolates in Oklab, premultiplied).
 - **Superseded-by:** [ADR-0194](ADR-0194-continuous-color-and-opacity.md) for the
@@ -114,7 +94,7 @@ doc comment names the invariant (§5's `DevicePixelRatio` and `DeviceF64` are tw
 | Type | Fields | Notes |
 |---|---|---|
 | `Point` | `x, y` | a position |
-| `Offset` | `dx, dy` | a displacement; `Point ± Offset = Point`, and there is no `Point + Point`. `Point - Point` yields a `Vec2` until `Vec2` folds into `Offset` (Implementation status) |
+| `Offset` | `dx, dy` | a displacement; `Point ± Offset = Point`, and there is no `Point + Point`. `Point - Point` yields a `Vec2` until `Vec2` folds into `Offset` ([`docs/gaps.md` entry 42](../gaps.md#42-accepted-adr-sections-not-built-yet)) |
 | `Size` | `width, height` | never a displacement |
 | `Rect` | `min: Point, max: Point` | with `left()`, `top()`, `right()`, `bottom()`, `width()`, `height()` and Flutter's constructors (`from_ltwh`, `from_ltrb`, `from_center`, `from_points`) |
 | `EdgeInsets` | `left, top, right, bottom` | inward; the constructor order stays today's `new(top, right, bottom, left)` and `symmetric(vertical, horizontal)` |
@@ -355,55 +335,6 @@ Each step is one PR that builds and passes the pre-PR checks (AGENTS.md, "Checki
 6. §7, then the `flui-types` families by §8, one family per PR. `flui-types` is deleted.
 7. The census reruns with the same commands.
 
-## Implementation status
-
-The migration landed on one branch, in the steps of §9. What shipped:
-
-- **§1–§2.** No unit types, no `px()`; every logical value is `f64`, including scroll and the
-  sliver protocol. Scroll-axis tolerances use `flui_foundation::EPSILON` (1e-10).
-- **§3–§5.** The values live in `flui_foundation::geometry`, with the one `Axis`. Float
-  types are neither `Eq` nor `Hash`; `canonical_bits` covers `f32` and `f64`. `DevicePixelRatio`
-  and the device aliases exist, and the compile-fail suite
-  (`crates/flui-painting/tests/compile_fail/`) rejects `Point + Point`, a `Size` as an
-  `Offset`, a `DevicePoint` as a `Point`, a literal `DevicePixelRatio`, and mixing `f64` with
-  `i32` geometry.
-- **§6.** `geometry::{snap, snap_edges, cover, device_rect_covering, device_size,
-  resolve_stroke_width}`, pinned for negative, half-way and non-finite input. The engine's
-  scissors, damage, backdrop and blend copy regions go through them: a hard rect clip snaps its
-  edges under a translation plus a positive scale, and every bound in front of an SDF or a copy
-  covers (`crates/flui-engine/ARCHITECTURE.md` mapping decision 17).
-- **§7.** `Path` is a kurbo `BezPath` plus a shape hint, with exact winding, tight bounds and
-  arcs built at a fixed tolerance, and one kurbo-to-lyon adapter in the engine. `Color::lerp`
-  is premultiplied (`crates/flui-painting/ARCHITECTURE.md` mapping decision 13).
-- **§8.** Both crates are deleted; the owner table above is what the code does.
-
-What is deferred, each with its reason:
-
-- **Content snapping** (solid, gradient and image quads; animated layers unsnapped), **border
-  and stroke widths resolved in layout** (`resolve_stroke_width` exists, nothing calls it yet)
-  and **text baseline snapping**. Together they move every readback and need the engine to
-  know which layers animate; they land as one change with readbacks that tell a snapped edge
-  from an antialiased one (`crates/flui-engine/ARCHITECTURE.md`, Open items).
-- **Platform sizing formulas** (Windows physical-first, Wayland n/120, the web's
-  `devicePixelContentBoxSize`). Backend changes that only the Linux path runs in CI; each needs
-  its platform's smoke run.
-- **§3's half-open containment** is decided and not implemented (§3, "Containment"). A box's
-  own-size test is already half-open; the change reaches hit testing where a clip, a hit shape
-  or the layer annotation search calls the inclusive `Rect::contains`, so a point on a clip's
-  far edge stops reaching the clipped child. Empty rectangles are
-  already counted by `expand_to_include`, and `intersect` already returns `Option` with `Some`
-  for touching rectangles; those implemented portions are no longer pending migrations.
-- **§5's `DeviceF64` and the sealed `Unit`** are decided and not implemented. Until they land,
-  the engine's device-space maths and `snap_edges`/`cover` are typed as logical `Rect`.
-- **`Color` in `f32` storage behind the `color` crate, and gradient interpolation spaces**
-  (Oklab, premultiplied). `Color` stays four `u8` channels, which are already lawfully
-  `Eq + Hash`; wide-gamut and gradient-space work change the engine's shaders and belong
-  together. This storage deferral is superseded by ADR-0194: normalized sRGB storage
-  is implemented independently of wide-gamut support. Wide-gamut and alternative
-  gradient-space work remain deferred. peniko is not added: the display list stores
-  no peniko type.
-- **Pruning `Vec2`, `Bounds`, `Circle`** to their consumers. The scalar traits stay (§1).
-
 ## Alternatives considered
 
 - **euclid aliases in the Stable facade**, this record's first draft. Rejected: same-named
@@ -449,12 +380,12 @@ What is deferred, each with its reason:
     clock's integer grid).
 
   §3's rectangle semantics, content snapping, layout-time stroke widths and Oklab gradients
-  follow (Implementation status).
+  follow ([`docs/gaps.md` entry 42](../gaps.md#42-accepted-adr-sections-not-built-yet)).
 - **Memory.** Layout values double in size. Paths in `f64` are about twice their current
   memory, and so is the display list until narrowing moves to record time (§2).
 - **Code size.** The target is about 5–6k lines of value code across foundation and painting,
   in place of 33.8k. As shipped, `flui_foundation::geometry` is 14.7k lines and painting's value
-  modules 15.6k, tests included (`cat … | wc -l`); the pruning in Implementation status is what
+  modules 15.6k, tests included (`cat … | wc -l`); the pruning of `Vec2`, `Bounds` and `Circle` is what
   closes the gap.
 - **Dependencies.** No upstream crate enters a Stable signature. Foundation gains `glam`, and
   painting gains `kurbo`.

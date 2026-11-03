@@ -89,7 +89,7 @@ The pipeline is **on-demand**. The platform event loop waits (`ControlFlow::Wait
 
 ### Threading & ownership model
 
-The canonical threading/ownership record is [ADR-0027](adr/ADR-0027-owner-affine-ui-realms.md): a multi-threaded runtime of single-writer ownership domains — independent `UiRuntime` instances (`!Send + !Sync` owners), bounded typed mailboxes committed at Idle, and an owned `SceneSnapshot` handoff to a single-owner raster seam.
+One owner thread hosts every UI runtime ([ADR-0266](adr/ADR-0266-one-owner-thread-ui-runtimes-isolate.md)). A `UiRuntime` is a unit of isolation, not of parallelism: an `!Send + !Sync` single-writer owner of its state, keys and scheduling, run in turn with the others. What crosses a thread is the bounded typed mailboxes committed at Idle and the owned `SceneSnapshot` handed to the raster executor, one per `GpuContext` ([ADR-0091](adr/ADR-0091-one-owner-thread-isolated-realms-raster-thread.md), [ADR-0305](adr/ADR-0305-one-gpu-context-serves-every-surface-through-a-raster-executor.md)); decode, shaping, IO and raster run in parallel outside the UI transaction. The ownership levels are [ADR-0027](adr/ADR-0027-owner-affine-ui-realms.md)'s, and the owner-local surface and its `Send` gates are [ADR-0136](adr/ADR-0136-owner-local-ui-surfaces.md)'s.
 
 ## Type-Safe Children: the Arity System
 

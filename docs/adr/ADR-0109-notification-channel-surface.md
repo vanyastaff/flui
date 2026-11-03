@@ -5,6 +5,10 @@
   for decisions 3–4's listener failure propagation and disposal behavior.
 - **Superseded-by:** [ADR-0119](ADR-0119-inert-panic-payload-retirement.md),
   only the known inert text-payload retirement policy in decisions 3–4.
+- **Superseded-by:** [ADR-0281](ADR-0281-a-destructor-that-panics-during-an-unwind-aborts-as-in-std.md),
+  decisions 3–4 only where they retain the failed snapshot, the remaining envelopes and a
+  discarded payload: `panic::retain_opaque_payload` is deleted, a discarded payload goes to
+  `discard_payload`, and the rest is destroyed under containment.
 - **Date:** 2026-10-04
 - **Supersedes:** [ADR-0104](ADR-0104-borrowed-notification-and-opaque-panic-retention.md)
 

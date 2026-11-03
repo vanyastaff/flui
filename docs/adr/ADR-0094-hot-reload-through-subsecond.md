@@ -8,11 +8,6 @@
   the implemented scene callback's safety contract only.
 - **Revised:** 2026-09-26 (Windows spike failed; see Context and §5); 2026-09-29 (the hook's
   driver half landed ahead of Subsecond and hosts the dlopen paths; see "§1 as implemented")
-- **Supersedes (on acceptance, after the spike below passes):** the three-crate dlopen worker
-  design described in [`docs/hot-reload.md`](../hot-reload.md),
-  [`crates/flui-hot-reload/ARCHITECTURE.md`](../../crates/flui-hot-reload/ARCHITECTURE.md) and
-  [the Flutter-parity hot reload design](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/designs/2026-06-28-hot-reload-runtime-protocol.md). No
-  ADR is superseded.
 - **Related:** [ADR-0027](ADR-0027-owner-affine-ui-realms.md) §9 (owner-queued hot reload stays
   in the closed command vocabulary), [ADR-0039](ADR-0039-event-loop-affinity-capability.md) §6
   (the loop may host another UI runtime, as hot restart does),
@@ -26,6 +21,12 @@
   study in [`design/dynamic-linking.md`](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/design/dynamic-linking.md)
 
 ## Context
+
+Once accepted, and after the spike below passes, this record would replace the three-crate dlopen
+worker design described in [`docs/hot-reload.md`](../hot-reload.md),
+[`crates/flui-hot-reload/ARCHITECTURE.md`](../../crates/flui-hot-reload/ARCHITECTURE.md) and
+[the Flutter-parity hot reload design](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/designs/2026-06-28-hot-reload-runtime-protocol.md);
+it would supersede no ADR.
 
 Hot reload today loads a worker `cdylib` with `dlopen`/`LoadLibrary` and re-runs `build()` in
 a host that owns every element and its state (`docs/hot-reload.md`, "Critical insight"). A

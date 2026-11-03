@@ -1,6 +1,6 @@
 # ADR-0212: Input behavior values resolve OS value, then platform preset, then subtree override, with accessibility timings as floors
 
-- **Status:** Accepted (2026-10-13); implemented (docs/plans/specs/flui-interaction/completeness/tasks.md, T05).
+- **Status:** Accepted (2026-10-13)
 - **Date:** 2026-10-13
 - **Amends:** [ADR-0172](ADR-0172-host-owned-system-preferences.md): adds the haptics preference,
   per-display gesture values, accessibility timing floors and the resolution order. Its

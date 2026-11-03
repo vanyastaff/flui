@@ -3802,7 +3802,7 @@ provider on the owner thread, with no cell borrowed, in one property: a
 payload past one request is refused, since the source writes no `INCR` yet.
 The session lives in an owner-thread cell; its provider and end hook run
 outside it, and the provider is dropped contained, so the hook hears the end
-though a capture fails (ADR-0127 §2).
+though a capture fails (ADR-0281 §3).
 
 Tests of the drag: `drag::x11::tests` holds the model's tables
 (`messages_read_what_the_source_wrote`, `types_offer_each_format_once`,

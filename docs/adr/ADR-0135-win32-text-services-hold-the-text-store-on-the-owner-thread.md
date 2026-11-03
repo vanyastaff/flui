@@ -1,11 +1,13 @@
 # ADR-0135: Win32 text services hold the text store on the owner thread
 
-- **Status:** Accepted (2026-10-06). §1–§3 and the owner's queue in §4 are implemented: every
-  Win32 window activates its text services as it is created and offers them as its host
-  (`WindowsWindow::text_store_host`); the other production backends answer `None` (a headless
-  window offers one only when a test asks).
+- **Status:** Accepted (2026-10-06)
 - **Date:** 2026-10-06
-- **Amended:** 2026-10-22 — following [ADR-0151](ADR-0151-platform-layer-boundary-and-names.md)
+- **Superseded-by:** [ADR-0281](ADR-0281-a-destructor-that-panics-during-an-unwind-aborts-as-in-std.md)
+  for §4's clause that the completed store is retained once the scope has failed: it is retired
+  under containment, as the host clone is
+- **Revised:** 2026-11-03 — §4's failure clause states ADR-0281's rule; which backends serve a
+  text store host is [`docs/platform-parity.md`](../platform-parity.md)'s.
+- **Revised:** 2026-10-22 — following [ADR-0151](ADR-0151-platform-layer-boundary-and-names.md)
   §10: TSF lives in `crates/flui-native/src/text/windows/tsf/`, §6's geometry is the pure
   `geometry` module of `text/windows/mod.rs`, and the text feature's hook on FLUI's window class
   activates a window's connection once its context is installed, keeps it by the window's
@@ -92,9 +94,9 @@ composition must still end somewhere.
    anchor) the presentation's gate is taken before the call and after it; an attach or a detach
    leaves a failure the gate already held for that turn, and an attach parks what its host call
    raised there too, behind it, and returns the token (ADR-0142 item 8). A host operation that
-   panics releases its values and the queue goes on: the completed store is retained once the
-   scope has failed, the host clone (framework-owned) is released, contained, even then; the
-   first failure propagates once the rest (and, at the anchor, the deferred grants) have run. An
+   panics releases its values and the queue goes on: the completed store and the host clone are
+   retired under containment even after the scope has failed, a later failure staying behind the
+   first (ADR-0281 §3); the first failure propagates once the rest (and, at the anchor, the deferred grants) have run. An
    `Abandoned` answer or an error commits the composition in place; a push or storeless owner does that directly. Close applies the
    queued operations in order (a focus change queued before a completion moves the host first,
    so the completion reaches its own store), then tells a host left focused `None`; after a

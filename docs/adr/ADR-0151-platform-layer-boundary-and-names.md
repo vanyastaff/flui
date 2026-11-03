@@ -1,7 +1,6 @@
 # ADR-0151: Platform layer: crates, names, the closed list, contents and the core host's layout
 
-- **Status:** Accepted (2026-10-20); not implemented: the renames, the moves, the gates and the
-  layout land as separate changes, the renames first (section 12)
+- **Status:** Accepted (2026-10-20)
 - **Date:** 2026-10-20
 - **Superseded-by:** [ADR-0264](ADR-0264-platform-test-doubles-live-with-their-contract.md) for
   §7 only (where the test doubles live) and §6 only (its last sentence)

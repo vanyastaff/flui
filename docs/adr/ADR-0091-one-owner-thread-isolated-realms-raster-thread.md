@@ -1,24 +1,21 @@
 # ADR-0091: One owner thread hosts isolated UI runtimes; one raster thread per GpuContext
 
-- **Status:** Accepted (2026-10-30) for §2–§6, as decisions; Verification lists what is still
-  to be built. §1's `!Send` flip has landed (the UI callback surface, `Listenable`,
-  `ListenerCallback` and `RenderView::RenderObject` are owner-local, and `cargo xtask
-  send-positions` holds the remaining `Send` positions).
+- **Status:** Accepted (2026-10-30). Not implemented: [`docs/gaps.md` entry 42, ADR-0091
+  §3–§5](../gaps.md#42-accepted-adr-sections-not-built-yet)
 - **Superseded-by:** [ADR-0266](ADR-0266-one-owner-thread-ui-runtimes-isolate.md) for §1 (one owner
   thread is the model, not a stage before per-runtime threads; the spike and `OwnerExecutor` are
   withdrawn)
 - **Superseded-by:** [ADR-0305](ADR-0305-one-gpu-context-serves-every-surface-through-a-raster-executor.md)
   for §6 only (the optional move of `RasterOwner` into the runtime once ADR-0087 §1 lands: ADR-0087
   §1 is withdrawn, and the raster executor stays in `flui-engine`)
-- **Amended:** 2026-11-03 — §3, §4 and §7, by
-  [ADR-0305](ADR-0305-one-gpu-context-serves-every-surface-through-a-raster-executor.md), which
-  gives them their shape: one raster executor owns the `GpuContext`, inline or on the raster
+- **Amended by:** [ADR-0305](ADR-0305-one-gpu-context-serves-every-surface-through-a-raster-executor.md)
+  for §3, §4 and §7, which it gives their shape: one raster executor owns the `GpuContext`, inline or on the raster
   thread per §5's table; each presentation is a slot of the context, holding what §4 calls its
   raster owner state and §7's external textures; the owner thread keeps a `SurfaceFactory` over
   the context's instance, whose display is the platform's connection rather than the first
   window's; `wgpu::PipelineCache` is used only where the adapter supports it (Vulkan).
 - **Date:** 2026-09-25
-- **Amends (on acceptance):** [ADR-0027](ADR-0027-owner-affine-ui-realms.md) (the verdict and §1: UI runtimes are
+- **Amends:** [ADR-0027](ADR-0027-owner-affine-ui-realms.md) (the verdict and §1: UI runtimes are
   isolated, not concurrent, through H2; §5: one raster thread serves several presentations' raster
   owners), [ADR-0045](ADR-0045-raster-lane.md) (decision 2: one `GpuContext` per application
   instead of GPU services per owner thread, atlases single-owned on the raster thread; the

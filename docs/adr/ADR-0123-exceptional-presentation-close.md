@@ -6,8 +6,13 @@
   its remaining-element disposal policy, during a terminal presentation close
   that holds a failure or runs inside an unwind. Per-element removal and frame
   recovery outside that close are unchanged.
-- **Related:** [ADR-0127](ADR-0127-exceptional-path-retention.md) (which values
-  are retained and which are released on an exceptional path)
+- **Superseded-by:** [ADR-0281](ADR-0281-a-destructor-that-panics-during-an-unwind-aborts-as-in-std.md),
+  only preserving mode's retention of the closing presentation's user-owned values (its trees and
+  the callbacks and captures they hold) and of the window and bridge during an unwind: they are
+  destroyed under the close's containment, the first failure staying first. Authority withdrawal
+  before any user code, and preserving mode's skipped optional disposal, stand.
+- **Related:** [ADR-0127](ADR-0127-exceptional-path-retention.md) (the operation boundaries of an
+  exceptional path)
 
 ## Context
 

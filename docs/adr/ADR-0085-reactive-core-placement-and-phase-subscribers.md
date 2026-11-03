@@ -1,32 +1,16 @@
 # ADR-0085: The reactive graph is UI runtime-owned and stays in `flui-view`; reads go through a `ReadScope` contract in `flui-foundation`
 
 - **Status:** Accepted (2026-11-03) for §1, §2, §5 and the contract of §6 (its first item);
-  §3, §4 and the rest of §6 are Proposed. A signal write is routed by its slot
-  (`UiCommand::SignalWrite`, `crates/flui-runtime/src/ui_runtime/commands.rs:113`, pinned by
-  `a_write_to_a_secondary_presentations_signal_rebuilds_its_reader`,
-  `crates/flui-runtime/src/ui_runtime/tests/signal_write_routing.rs:57`); reads go through
-  `flui_foundation::read_scope::ReadScope`, which `BuildContext` has as a supertrait
-  (`crates/flui-view/src/context/build_context.rs:103`, pinned by
-  `a_read_in_build_subscribes_through_the_production_context`,
-  `crates/flui-view/tests/signal_reads.rs:628`). Not implemented: §5's removal of the feature,
-  since four empty `signals` features remain (`crates/flui-view/Cargo.toml:124`,
-  `crates/flui-widgets/Cargo.toml:186`, `crates/flui-app/Cargo.toml:37`,
-  `crates/flui-testing/Cargo.toml:28`) although no CI step names them
-  (`tools/xtask/src/tasks.rs:459-460`); and §5's skip of the map lookups in a graph no element
-  reads, since `begin_element_build` looks the element up on every build
-  (`crates/flui-view/src/reactive/mod.rs:593-598`). Proposed: §3, §4, and §6's phase readers,
-  seam and first render-phase subscriber, which wait on that subscriber and are removed if none
-  exists by the milestone §6 names; `ElementDriver`, `RenderDriver`, `Reader` and `RebuildSink`
-  do not exist, and `crates/flui-view/src/reactive/mod.rs:96` still imports
-  `owner::ExternalBuildScheduler`.
+  §3, §4 and the rest of §6 are Proposed. Not implemented:
+  [`docs/gaps.md` entry 42, ADR-0085 §5](../gaps.md#42-accepted-adr-sections-not-built-yet).
 - **Date:** 2026-09-25
 - **Revised:** 2026-09-26 (prototype of the read contract; see Context. Then §2 and §5 shipped,
   with the drivers, `RebuildSink`, `ScopeRef::detached` and `SignalError::NoGraph` moved to §6
   step 2 and `SignalWriteExt` sealed)
 - **Revised:** 2026-09-28 — read and graph-routed command callbacks use retained `FnMut`
-  envelopes invoked at most once. Success destroys captures after framework finalization;
-  callback panic retains the opaque bundle because aggregate drop glue cannot be made safe by
-  another unwind boundary.
+  envelopes invoked at most once. Success destroys captures after framework finalization.
+- **Revised:** 2026-11-03 — after a callback panic the opaque bundle is destroyed under
+  containment instead of retained (ADR-0281 §3).
 - **Amends:** [ADR-0074](ADR-0074-realm-scoped-signals.md) — §5.1 ("`Reactive` … lives beside
   `BuildOwner`", "reachable as `cx.reactive()`"), §5.2 (reads take `&dyn BuildContext`; now any
   `&S` where `S: ReadScope`), and the `signals` feature named in its Status line

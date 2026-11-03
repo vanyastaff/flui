@@ -15,24 +15,13 @@
   unblock the hot-reload move (move 4).
 - **Date:** 2026-09-25
 - **Superseded-by:** [ADR-0154](ADR-0154-capability-crates.md) in part: official packages keep their rules; capability crates are a second kind of package with rules of their own.
-- **Amended by (on acceptance):** [ADR-0098](ADR-0098-owned-f64-geometry-values.md) (§8) — `flui-geometry` and
+- **Amended by:** [ADR-0098](ADR-0098-owned-f64-geometry-values.md) (§8) — `flui-geometry` and
   `flui-types` are deleted, so the duplicate-guard list below names two crates that no longer
   exist.
-- **Supersedes in part (on acceptance):** [ADR-0028](ADR-0028-design-system-decoupling-contract.md) — the
-  placement of Material and Cupertino as core-workspace crates, and the exemption set
-  `{flui-app, flui}` that may depend on them (it named `flui-localizations` too until
-  ADR-0081 deleted that crate). Its decoupling rules (shared
-  substrate below both, mechanism goes down, capability seams instead of platform branches, raw
-  primitives, injected selection chrome, no god-widget entry point) stand.
-- **Supersedes in part (on acceptance):** [ADR-0040](ADR-0040-tree-observation-seam.md) §8 —
-  the devtools inspector's `flui-foundation`-only dependency and the observation-seam test's
-  place in `flui-testing`. The inspector reaches the seam through `flui-sdk`, and the test
-  lives in `packages/flui-devtools`; the seam itself, and the rule that no core crate names
-  devtools, stand.
-- **Amends (on acceptance):** the delivery-layer sentence of the product plan (the living plan linked from
-  [`docs/ROADMAP.md`](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/ROADMAP.md)), which puts official packages "in separate repositories,
-  one release train"
-- **Related:** [ADR-0040](ADR-0040-tree-observation-seam.md) (the devtools observation seam),
+- **Related:** [ADR-0028](ADR-0028-design-system-decoupling-contract.md) (the design systems'
+  placement this record would replace; see Context),
+  [ADR-0040](ADR-0040-tree-observation-seam.md) (the devtools observation seam, whose §8 this
+  record would replace; see Context),
   [ADR-0041](ADR-0041-workspace-topology-contract.md) (the manifest-as-source rule, which stands;
   its layer table is superseded in part by ADR-0081), [ADR-0042](ADR-0042-theming-ownership.md) (`MaterialApp` stays in the design
   system), [ADR-0043](ADR-0043-presentation-bundled-trees-and-realm-globalkey-scope.md),
@@ -45,6 +34,20 @@
   [`report-decisions.ru.md` §1, §2, §6](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/2026-09-25-architecture-review/report-decisions.ru.md)
 
 ## Context
+
+Once accepted, this record would replace three things. From
+[ADR-0028](ADR-0028-design-system-decoupling-contract.md): the placement of Material and Cupertino
+as core-workspace crates, and the exemption set `{flui-app, flui}` that may depend on them (it
+named `flui-localizations` too until ADR-0081 deleted that crate); its decoupling rules (shared
+substrate below both, mechanism goes down, capability seams instead of platform branches, raw
+primitives, injected selection chrome, no god-widget entry point) would stand. From
+[ADR-0040](ADR-0040-tree-observation-seam.md) §8: the devtools inspector's
+`flui-foundation`-only dependency and the observation-seam test's place in `flui-testing`; the
+inspector would reach the seam through `flui-sdk` and the test would live in
+`packages/flui-devtools`, while the seam itself, and the rule that no core crate names devtools,
+would stand. And the delivery-layer sentence of the product plan (the living plan linked from
+[`docs/ROADMAP.md`](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/ROADMAP.md)),
+which puts official packages "in separate repositories, one release train".
 
 ### Where the design systems sit today
 

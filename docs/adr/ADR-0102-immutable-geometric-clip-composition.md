@@ -1,14 +1,6 @@
 # ADR-0102: Immutable geometric clips and effect coverage ownership
 
-- **Status:** Accepted (2026-11-03). §1–§7 are the rule: the clip chain is
-  `crates/flui-engine/src/clip_chain.rs:15` (`MAX_CLIP_DEPTH`) over
-  `crates/flui-engine/src/clip_geometry.rs`, the mask limits are
-  `crates/flui-engine/src/clip_mask.rs:244`, and the regions are pinned by the rows under
-  "Pinned by" in [ADR-0099](ADR-0099-save-layer-region-and-blend.md) and by
-  `hard_clip_membership_scales_to_a_full_hd_frame`
-  (`crates/flui-engine/src/clip_layer_readback_tests.rs:1314`). Not implemented: nothing in
-  §1–§7; the portable direct-draw path §5 names is ADR-0103's. Not run: the clip and coverage
-  readbacks on a browser or a mobile GPU.
+- **Status:** Accepted (2026-11-03). Not run on a browser or a mobile GPU: [`docs/gaps.md` entry 42, ADR-0102 §5](../gaps.md#42-accepted-adr-sections-not-built-yet)
 - **Date:** 2026-10-01
 - **Superseded-by:** [ADR-0103](ADR-0103-portable-independent-primitive-coverage.md)
   for §5's direct-primitive capability admission only (the refusal of a direct destructive draw

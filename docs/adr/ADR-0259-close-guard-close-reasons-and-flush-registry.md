@@ -1,14 +1,9 @@
 # ADR-0259: A presentation's close guard records closes by reason, and a host-owned flush registry is the one way persisted state reaches storage
 
-- **Status:** Accepted (2026-10-28). Not implemented: the contract is in place and not wired:
-  `CloseReason`, `CloseGuard`, `CloseHold`, `PendingClose`, `CloseChanged` and `CloseGuardSource`
-  (`crates/flui-view/src/close_guard.rs`), `FlushRegistry`, `FlushPublisher` and `FlushHost`
-  (`crates/flui-view/src/flush_registry.rs`), `OwnerNotify` (`crates/flui-view/src/owner_notify.rs`),
-  the close-delivery claim of `LifecycleSource` (`crates/flui-view/src/lifecycle.rs`) and
-  `CloseRequest::reason` (`crates/flui-app/src/app/close_request.rs`). No presentation hands out a
-  guard, no hold refuses a close, the registry keeps published bytes without writing them, and
-  `FlushHost` is not yet `Clone`.
+- **Status:** Accepted (2026-10-28)
 - **Date:** 2026-10-28
+- **Revised:** 2026-11-03 — §8's containment destroys the payload and the remaining values
+  (ADR-0281 §2–§3) instead of retaining them per ADR-0127.
 - **Superseded-by:** [ADR-0274](ADR-0274-a-flush-publisher-writes-to-the-storage-its-document-acquired.md)
   for §5 only (the registry's storage, `publisher`, `committed`, `state`, `FlushHost::new`, and
   the "edits are one line" clause)
@@ -21,7 +16,9 @@
   in a lifecycle hook), [ADR-0035](ADR-0035-lifecycle-consolidation-and-frames-enabled.md) §4 and §6
   (closing delivers `Detached` while the tree lives; begin-close fences subscriptions),
   [ADR-0123](ADR-0123-exceptional-presentation-close.md) and
-  [ADR-0127](ADR-0127-exceptional-path-retention.md) (what a close that holds a failure retains),
+  [ADR-0127](ADR-0127-exceptional-path-retention.md) (how a close that holds a failure withdraws
+  authority first), [ADR-0281](ADR-0281-a-destructor-that-panics-during-an-unwind-aborts-as-in-std.md)
+  (what it destroys under containment),
   [ADR-0097](ADR-0097-no-process-global-state-gate.md) (the registry is a host value, not a
   `static`), [ADR-0152](ADR-0152-capability-seam-revised.md) (storage reaches a UI runtime through
   the capability seam)
@@ -230,7 +227,8 @@ records what the UI runtime must do in its FIFO, and that runs when the UI runti
 Teardown calls application code at several points: the close handler, `Detached` observers,
 `CloseChanged` wakers, the registry's writer, the destructors of captures. Each is called with no
 lock or `RefCell` borrow held, through one containment helper: the call is caught, the payload and
-the remaining values are retained per ADR-0127, the first failure stays first, and the failure is
+the remaining values are destroyed under that containment (ADR-0281 §2–§3), the first failure
+stays first, and the failure is
 reported as `CallbackPanic` through `UiRuntime::report_contained_panic`. No point writes its own
 catch. The contract leaves room for it: `FlushWriter` hands a refused write back instead of dropping
 it, `CloseGuardSource` takes its `OwnerNotify` and calls it outside its state, and

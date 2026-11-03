@@ -1,9 +1,6 @@
 # ADR-0209: Nested scrolling is one owner-local connection chain over one offset primitive
 
-- **Status:** Accepted (2026-10-13). The channel lives in `flui-widgets` `scroll::nested`, and
-  `Scrollable` is its leaf and participant; `PageView`, `AnchoredDrag`, pull-to-refresh, the
-  collapsing header and `InteractiveViewer` move onto it with their
-  [tasks](../plans/specs/flui-interaction/completeness/tasks.md).
+- **Status:** Accepted (2026-10-13)
 - **Date:** 2026-10-13
 - **Amended:** 2026-10-17 — §8: a new physics value no longer closes the endpoint (it is taken
   in place, as a snap policy is), and a change that does close it on the same position hands the

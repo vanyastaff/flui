@@ -1,6 +1,6 @@
 # ADR-0203: FLUI's semantics vocabulary covers WAI-ARIA 1.2 and follows AccessKit's actions
 
-- **Status:** Accepted (2026-10-12); implemented by the semantics-model work W4
+- **Status:** Accepted (2026-10-12)
 - **Date:** 2026-10-12
 - **Supersedes:** [ADR-0124](ADR-0124-controlled-numeric-and-disclosure-actions.md), in part:
   its action bit assignments (expand, collapse and numeric setters at bits 27–29, bits 23–25
