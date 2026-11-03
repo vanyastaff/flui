@@ -22,9 +22,10 @@ workspace = true
 # Test hooks (`HeldPointerQueue::append`/`len`, the `SemanticsHost` surface
 # that has no production caller yet, and `ExecutionServices::with_limits`/
 # `default_pools_started`), and the `testing` module's `TestWindow` and
-# `ScriptedSink` doubles, for this crate's own tests and for `flui-app`'s,
+# `ScriptedSink` doubles, and decoding a recording's rows (`InputRecord::from_wire`,
+# which names a window by value), for this crate's own tests, `flui-testing`'s and `flui-app`'s,
 # which enable it on their dev edge. Never on a normal edge.
-testing = []
+testing = ["flui-platform/testing"]
 # `reload::ReloadTier`, the development reload the UI runtime applies. Names no
 # hot-reload crate; `flui-app` always turns it on and translates an installed
 # `DevReloadHook`'s event into it (ADR-0094 §1).

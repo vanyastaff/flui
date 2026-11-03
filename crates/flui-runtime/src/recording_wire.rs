@@ -14,7 +14,7 @@
 //! header's pieces have their own functions ([`profiles_to_wire`],
 //! [`device_to_wire`], [`PreferencesRow::to_wire`] and their inverses).
 
-use std::num::{NonZeroU8, NonZeroU32, NonZeroU64};
+use std::num::{NonZeroU8, NonZeroU32};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -47,16 +47,15 @@ use flui_platform::{
     InsetCurve, InsetMotion, KeyboardInset, Locale, MeasurementSystem, MotionPreference,
     NativeMouseGeometry, NativeTouchGeometry, NumberingSystem, PlatformInput, PreferenceParts,
     RegionOverride, RegionalParts, SystemPreferences, TextWeightPreference, Weekday, WheelParts,
-    WheelStep, WindowExecutionState, WindowId, WindowInsets,
+    WheelStep, WindowExecutionState, WindowInsets,
 };
 use flui_protocol::input_recording as rec;
 use flui_protocol::native_recording as wire;
 
 use crate::owner::{InputOutcome, WindowObservation};
-use crate::{
-    DeadlineRow, DecisionRow, HostInput, InputRecord, InputRow, PreferencesRow, RecordedMember,
-    RecordedSequence, RecordedSurface,
-};
+#[cfg(feature = "testing")]
+use crate::{DeadlineRow, DecisionRow, InputRow, RecordedMember, RecordedSequence};
+use crate::{HostInput, InputRecord, PreferencesRow, RecordedSurface};
 
 /// A value the recording's wire form cannot convert in either direction.
 #[derive(Debug, thiserror::Error)]
@@ -152,6 +151,7 @@ impl InputRecord {
     ///
     /// [`WireError::UnknownSpelling`] for a spelling this build does not know
     /// and [`WireError::Invalid`] for a value the vocabulary refuses.
+    #[cfg(feature = "testing")]
     pub fn from_wire(row: rec::Row) -> Result<Self> {
         Self::try_convert(row)
     }
@@ -231,6 +231,7 @@ impl TryConvert<&InputRecord> for rec::Row {
     }
 }
 
+#[cfg(feature = "testing")]
 impl TryConvert<rec::Row> for InputRecord {
     fn try_convert(row: rec::Row) -> Result<Self> {
         Ok(match row {
@@ -390,19 +391,23 @@ impl TryConvert<rec::PlatformInput> for PlatformInput {
 // Pointer
 // ============================================================================
 
-fn nonzero(value: u64, what: &str) -> Result<NonZeroU64> {
-    NonZeroU64::new(value).ok_or_else(|| invalid(format!("{what} 0")))
+#[cfg(feature = "testing")]
+fn nonzero(value: u64, what: &str) -> Result<std::num::NonZeroU64> {
+    std::num::NonZeroU64::new(value).ok_or_else(|| invalid(format!("{what} 0")))
 }
 
+#[cfg(feature = "testing")]
 fn recorded_sequence(value: Option<u64>) -> Result<Option<RecordedSequence>> {
     value
         .map(|value| nonzero(value, "sequence").map(RecordedSequence::new))
         .transpose()
 }
 
-/// The window a row names; 0 is no window any host issued.
-pub(crate) fn window_id(value: u64) -> Result<WindowId> {
-    WindowId::try_from_raw(value).ok_or_else(|| invalid("window id 0"))
+/// The window a row names; 0 is no window any host issued. Decoding a window
+/// id is a recording reader's, behind `testing` as `WindowId::try_from_raw` is.
+#[cfg(feature = "testing")]
+pub(crate) fn window_id(value: u64) -> Result<flui_platform::WindowId> {
+    flui_platform::WindowId::try_from_raw(value).ok_or_else(|| invalid("window id 0"))
 }
 
 fn pointer_id(value: u64) -> Result<PointerId> {
