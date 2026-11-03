@@ -163,29 +163,93 @@ pub enum BlendMode {
     Luminosity,
 }
 
+/// How a blend mode treats the destination where its source is partly or
+/// wholly transparent: the one classification that coverage, compositing and
+/// damage decisions route on.
+///
+/// A renderer reports partial coverage `c` either by folding it into the
+/// source (scaling the premultiplied source by `c`) or by interpolating
+/// `mix(destination, blend(source, destination), c)`. The class says whether
+/// the two agree, and whether a transparent source keeps the destination.
+///
+/// Every variant of [`BlendMode`] is in exactly one class, by an exhaustive
+/// match in [`BlendMode::coverage_class`], so a new mode is classified before
+/// any of these decisions can see it.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub enum CoverageClass {
+    /// The destination factor is `One` or `1 - srcAlpha`: a transparent
+    /// source keeps the destination, and folding coverage is exact.
+    /// `Dst`, `SrcOver`, `DstOver`, `DstOut`, `SrcATop`, `Xor`.
+    Absorbing,
+    /// `Plus`: a transparent source keeps the destination, but the sum
+    /// saturates, so coverage folded in before the clamp differs from
+    /// coverage interpolated after it.
+    Saturating,
+    /// The destination factor is `Zero`: a transparent source clears the
+    /// destination, and folding coverage is wrong.
+    /// `Clear`, `Src`, `SrcIn`, `SrcOut`, `Modulate`.
+    Replacing,
+    /// The destination factor is `srcAlpha`: a transparent source clears the
+    /// destination, and folding coverage is wrong. `DstIn`, `DstATop`.
+    Masking,
+    /// The fifteen separable and non-separable modes, `Screen` through
+    /// `Luminosity`: composited source-over with a blend function of the
+    /// destination colour, which no fixed-function blend state expresses. A
+    /// transparent source keeps the destination, and folding coverage is
+    /// exact, because the composite is linear in source alpha.
+    Advanced,
+}
+
 impl BlendMode {
+    /// The mode's [`CoverageClass`].
+    #[must_use]
+    #[inline]
+    pub const fn coverage_class(self) -> CoverageClass {
+        match self {
+            BlendMode::Dst
+            | BlendMode::SrcOver
+            | BlendMode::DstOver
+            | BlendMode::DstOut
+            | BlendMode::SrcATop
+            | BlendMode::Xor => CoverageClass::Absorbing,
+            BlendMode::Plus => CoverageClass::Saturating,
+            BlendMode::Clear
+            | BlendMode::Src
+            | BlendMode::SrcIn
+            | BlendMode::SrcOut
+            | BlendMode::Modulate => CoverageClass::Replacing,
+            BlendMode::DstIn | BlendMode::DstATop => CoverageClass::Masking,
+            BlendMode::Screen
+            | BlendMode::Overlay
+            | BlendMode::Darken
+            | BlendMode::Lighten
+            | BlendMode::ColorDodge
+            | BlendMode::ColorBurn
+            | BlendMode::HardLight
+            | BlendMode::SoftLight
+            | BlendMode::Difference
+            | BlendMode::Exclusion
+            | BlendMode::Multiply
+            | BlendMode::Hue
+            | BlendMode::Saturation
+            | BlendMode::Color
+            | BlendMode::Luminosity => CoverageClass::Advanced,
+        }
+    }
+
     /// Returns `true` if this is one of the fourteen Porter-Duff compositing
-    /// operators (`Clear` through `Modulate`).
+    /// operators (`Clear` through `Modulate`): every mode whose
+    /// [`coverage_class`](Self::coverage_class) is not `Advanced`.
     #[must_use]
     #[inline]
     pub const fn is_porter_duff(&self) -> bool {
-        matches!(
-            self,
-            BlendMode::Clear
-                | BlendMode::Src
-                | BlendMode::Dst
-                | BlendMode::SrcOver
-                | BlendMode::DstOver
-                | BlendMode::SrcIn
-                | BlendMode::DstIn
-                | BlendMode::SrcOut
-                | BlendMode::DstOut
-                | BlendMode::SrcATop
-                | BlendMode::DstATop
-                | BlendMode::Xor
-                | BlendMode::Plus
-                | BlendMode::Modulate
-        )
+        match self.coverage_class() {
+            CoverageClass::Absorbing
+            | CoverageClass::Saturating
+            | CoverageClass::Replacing
+            | CoverageClass::Masking => true,
+            CoverageClass::Advanced => false,
+        }
     }
 
     /// Returns `true` if the result depends on the destination pixels.
@@ -201,26 +265,19 @@ impl BlendMode {
     /// Returns `true` if a fully transparent source leaves the destination
     /// as it was.
     ///
-    /// Porter-Duff modes whose destination factor is zero where the source
-    /// is transparent (`Clear`, `Src`, `SrcIn`, `DstIn`, `SrcOut`, `DstATop`)
-    /// and `Modulate` (source times destination) change pixels the source
-    /// never covers; every other mode, the advanced ones included, reduces
-    /// to the destination there. A layer composited with a mode for which
-    /// this is `false` changes every pixel of its composite area, not only
-    /// the ones its content inks.
+    /// The `Replacing` and `Masking` classes (`Clear`, `Src`, `SrcIn`,
+    /// `SrcOut`, `Modulate`, `DstIn`, `DstATop`) change pixels the source
+    /// never covers; every other mode, the advanced ones included, reduces to
+    /// the destination there. A layer composited with a mode for which this is
+    /// `false` changes every pixel of its composite area, not only the ones its
+    /// content inks.
     #[must_use]
     #[inline]
     pub const fn keeps_destination_under_transparent_source(&self) -> bool {
-        !matches!(
-            self,
-            BlendMode::Clear
-                | BlendMode::Src
-                | BlendMode::SrcIn
-                | BlendMode::DstIn
-                | BlendMode::SrcOut
-                | BlendMode::DstATop
-                | BlendMode::Modulate
-        )
+        match self.coverage_class() {
+            CoverageClass::Absorbing | CoverageClass::Saturating | CoverageClass::Advanced => true,
+            CoverageClass::Replacing | CoverageClass::Masking => false,
+        }
     }
 
     /// Returns `true` for the advanced (non-Porter-Duff) blend modes, i.e.

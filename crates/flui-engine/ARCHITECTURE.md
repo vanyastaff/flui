@@ -688,6 +688,13 @@ Each logical primitive composites before the next overlapping operation.
 SSAA Plus resolves a separate geometry plane with the same downsample mapping.
 [ADR-0103](../../docs/adr/ADR-0103-portable-independent-primitive-coverage.md)
 replaces the former direct-draw capability decision.
+Every routing predicate here (`destination_alpha_scale_for`,
+`coverage_must_not_fold`, `is_tile_safe_for_ssaa` and the portable-path checks)
+is an exhaustive match on `BlendMode::coverage_class` from `flui-painting`, the one
+classification of the modes, so a new mode is classified once and every path
+follows it. `coverage_class_names_the_destination_factor_blend_state_for_uses`
+ties each class to the destination factor `blend_state_for` gives it and to
+`Color::blend`.
 `coverage_blend_reads_back_as_specified` checks the portable result, including
 transparent Clear, gradient alpha and intrinsic edges, crop ordering and saturated
 SSAA Plus. `WgpuPainter::render_to_texture` creates its own base-mip view from a
