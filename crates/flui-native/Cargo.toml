@@ -998,6 +998,9 @@ permissions = ["android.permission.VIBRATE"]
 # (ADR-0255 decisions 1 and 4).
 dex = "android/classes.dex"
 java = "android/java"
+# What R8 must keep of them in a minified Gradle release: the library reaches
+# them by name through JNI.
+proguard = "android/proguard-rules.pro"
 
 # Apple's required-reason APIs the core calls on iOS and macOS. UIKit event
 # timestamps are placed on the frame clock through `systemUptime`

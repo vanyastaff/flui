@@ -139,7 +139,7 @@ mod tests {
     /// haptic patterns the vibrator, `flui-app`'s `http` feature (on by
     /// default) the network for `HttpURLConnection`. The label and library
     /// are escaped into the base. The APK carries the dex `flui-native`
-    /// declares, the checked-in one.
+    /// declares, the checked-in one, and a minified release keeps its classes.
     #[test]
     fn the_manifest_declares_what_the_linked_crates_need() {
         let declarations = framework_declarations();
@@ -176,6 +176,17 @@ mod tests {
                 .is_file(),
             "{java:?}"
         );
+        let rules: Vec<(&str, &Path)> = declarations.android_proguard().collect();
+        assert_eq!(rules.len(), 1, "{rules:?}");
+        let kept = std::fs::read_to_string(rules[0].1).expect("the declared R8 rules");
+        assert!(kept.contains("-keep class dev.flui.** { *; }"), "{kept}");
+    }
+
+    /// The manifest a FLUI application on Android gets, whole: a change to
+    /// the base or to what the framework's crates declare shows up here.
+    #[test]
+    fn the_generated_manifest_matches_its_golden() {
+        insta::assert_snapshot!(render(&FACTS, &framework_declarations()));
     }
 
     /// The base names `FluiActivity` and the APK's code (ADR-0255 decision

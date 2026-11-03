@@ -13,8 +13,9 @@
 //! `schema` names the version of the keys the crate uses, so a crate written
 //! for a newer CLI is refused by name instead of being half-applied. Keys
 //! arrive with their first consumer: version 1 has `android.permissions` and
-//! `apple.privacy.accessed-apis`, version 2 adds `android.dex` and
-//! `android.java`, the compiled Java classes a crate ships and their sources.
+//! `apple.privacy.accessed-apis`, version 2 adds `android.dex`,
+//! `android.java` and `android.proguard`: the compiled Java classes a crate
+//! ships, their sources and the R8 rules that keep what native code reaches.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{self, Display, Formatter};
@@ -239,6 +240,10 @@ struct AndroidPart {
     /// 2), which a Gradle build compiles itself.
     #[serde(default)]
     java: Option<CratePath>,
+    /// The R8 rules that keep what native code reaches in those classes
+    /// (schema 2), which a minified Gradle release applies.
+    #[serde(default)]
+    proguard: Option<CratePath>,
 }
 
 /// A path inside a crate's directory, as its declarations name it:
@@ -304,6 +309,8 @@ pub(crate) struct Declarations {
     android_dex: BTreeSet<(String, PathBuf)>,
     /// Each directory of Java sources, by crate and then path.
     android_java: BTreeSet<(String, PathBuf)>,
+    /// Each R8 rules file, by crate and then path.
+    android_proguard: BTreeSet<(String, PathBuf)>,
     apple_accessed_apis: BTreeMap<PrivacyCategory, BTreeMap<PrivacyReason, BTreeSet<String>>>,
 }
 
@@ -470,7 +477,17 @@ impl Declarations {
             .parent()
             .map(|dir| dir.as_std_path().to_path_buf())
             .unwrap_or_default();
-        for (key, path, is_dir) in [("dex", &android.dex, false), ("java", &android.java, true)] {
+        let parts = [
+            ("dex", &android.dex, false, &mut self.android_dex),
+            ("java", &android.java, true, &mut self.android_java),
+            (
+                "proguard",
+                &android.proguard,
+                false,
+                &mut self.android_proguard,
+            ),
+        ];
+        for (key, path, is_dir, joined) in parts {
             let Some(path) = path else { continue };
             if schema < 2 {
                 return Err(refused(format!(
@@ -490,11 +507,6 @@ impl Declarations {
                     if is_dir { "directory" } else { "file" }
                 )));
             }
-            let joined = if is_dir {
-                &mut self.android_java
-            } else {
-                &mut self.android_dex
-            };
             joined.insert((crate_name.to_owned(), resolved));
         }
         Ok(())
@@ -509,6 +521,7 @@ impl Declarations {
         }
         self.android_dex.extend(other.android_dex);
         self.android_java.extend(other.android_java);
+        self.android_proguard.extend(other.android_proguard);
         for (category, reasons) in other.apple_accessed_apis {
             let joined = self.apple_accessed_apis.entry(category).or_default();
             for (reason, crates) in reasons {
@@ -537,6 +550,14 @@ impl Declarations {
     /// the crate that ships it.
     pub(crate) fn android_java(&self) -> impl Iterator<Item = (&str, &Path)> {
         self.android_java
+            .iter()
+            .map(|(crate_name, path)| (crate_name.as_str(), path.as_path()))
+    }
+
+    /// Every R8 rules file the linked crates ship, in order, with the crate
+    /// that ships it.
+    pub(crate) fn android_proguard(&self) -> impl Iterator<Item = (&str, &Path)> {
+        self.android_proguard
             .iter()
             .map(|(crate_name, path)| (crate_name.as_str(), path.as_path()))
     }
@@ -754,12 +775,12 @@ mod tests {
         }
     }
 
-    /// Each crate's dex and Java sources reach the APK resolved under that
-    /// crate's own directory, in crate order (the order of `classes.dex`,
-    /// `classes2.dex`, …); a feature's dex counts only when the graph enables
-    /// the feature.
+    /// Each crate's dex, Java sources and R8 rules reach the build resolved
+    /// under that crate's own directory, in crate order (the order of
+    /// `classes.dex`, `classes2.dex`, …); a feature's dex counts only when
+    /// the graph enables the feature.
     #[test]
-    fn a_crates_dex_and_java_sources_resolve_under_the_crate() {
+    fn a_crates_android_code_resolves_under_the_crate() {
         let project = fixture(&[
             (
                 "app",
@@ -775,7 +796,8 @@ mod tests {
                     "zeta",
                     "[package.metadata.flui.declares]\nschema = 2\n\
                      [package.metadata.flui.declares.android]\n\
-                     dex = \"android/classes.dex\"\njava = \"android/java\"\n",
+                     dex = \"android/classes.dex\"\njava = \"android/java\"\n\
+                     proguard = \"android/proguard-rules.pro\"\n",
                 ),
             ),
             (
@@ -794,6 +816,7 @@ mod tests {
         for (path, directory) in [
             ("zeta/android/classes.dex", false),
             ("zeta/android/java", true),
+            ("zeta/android/proguard-rules.pro", false),
             ("alpha/android/classes.dex", false),
         ] {
             let path = project.path().join(path);
@@ -839,6 +862,13 @@ mod tests {
             [(
                 "zeta".to_owned(),
                 Path::new("zeta/android/java").to_path_buf()
+            )]
+        );
+        assert_eq!(
+            relative(android.android_proguard().collect()),
+            [(
+                "zeta".to_owned(),
+                Path::new("zeta/android/proguard-rules.pro").to_path_buf()
             )]
         );
     }

@@ -24,7 +24,13 @@ android {
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
-                "proguard-rules.pro"
+                "proguard-rules.pro",
+                // The rules of the crates the app links, FLUI's own among them: `flui build`
+                // writes their paths into gradle.properties.
+                *providers.gradleProperty("flui.proguardFiles").get()
+                    .split(File.pathSeparator)
+                    .filter { it.isNotEmpty() }
+                    .toTypedArray()
             )
         }
     }
