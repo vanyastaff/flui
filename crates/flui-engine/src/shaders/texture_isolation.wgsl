@@ -9,7 +9,7 @@ struct ImageIsolationMapping {
 
 @vertex
 fn vs_isolation(vertex: VertexInput, instance: InstanceInput) -> VertexOutput {
-    var output = vs_main(vertex, instance);
+    var output = vertexStage(vertex, instance);
     output.position.x = (output.position.x + 1.0) * image_isolation.viewport_size.x / image_isolation.extent.x - 1.0 - 2.0 * image_isolation.origin.x / image_isolation.extent.x;
     output.position.y = (output.position.y - 1.0) * image_isolation.viewport_size.y / image_isolation.extent.y + 1.0 + 2.0 * image_isolation.origin.y / image_isolation.extent.y;
     return output;
