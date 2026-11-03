@@ -93,6 +93,9 @@ struct Declares {
     /// not combine with `flatten`.)
     #[serde(default)]
     android: AndroidPart,
+    /// What the crate needs from Apple's manifests whatever its features.
+    #[serde(default)]
+    apple: ApplePart,
     /// What each feature of the crate adds when it is enabled.
     #[serde(default)]
     features: BTreeMap<String, Part>,
@@ -104,6 +107,116 @@ struct Declares {
 struct Part {
     #[serde(default)]
     android: AndroidPart,
+    #[serde(default)]
+    apple: ApplePart,
+}
+
+/// What a crate needs from Apple's manifests.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ApplePart {
+    /// The privacy manifest (`PrivacyInfo.xcprivacy`).
+    #[serde(default)]
+    privacy: PrivacyPart,
+}
+
+/// What a crate puts in the privacy manifest.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+struct PrivacyPart {
+    /// Each required-reason API the crate's code calls, with its reasons.
+    #[serde(default)]
+    accessed_apis: Vec<AccessedApi>,
+}
+
+/// One `NSPrivacyAccessedAPITypes` entry.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AccessedApi {
+    category: PrivacyCategory,
+    reasons: Vec<PrivacyReason>,
+}
+
+/// A category of Apple's required-reason APIs: an API in one is refused at
+/// upload unless the privacy manifest states why it is called.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize)]
+pub(crate) enum PrivacyCategory {
+    /// `stat`, `fstat`, `getattrlist`, file creation and modification dates.
+    #[serde(rename = "NSPrivacyAccessedAPICategoryFileTimestamp")]
+    FileTimestamp,
+    /// `systemUptime`, `mach_absolute_time`.
+    #[serde(rename = "NSPrivacyAccessedAPICategorySystemBootTime")]
+    SystemBootTime,
+    /// The free or total disk space.
+    #[serde(rename = "NSPrivacyAccessedAPICategoryDiskSpace")]
+    DiskSpace,
+    /// The list of active keyboards.
+    #[serde(rename = "NSPrivacyAccessedAPICategoryActiveKeyboards")]
+    ActiveKeyboards,
+    /// `NSUserDefaults`.
+    #[serde(rename = "NSPrivacyAccessedAPICategoryUserDefaults")]
+    UserDefaults,
+}
+
+impl PrivacyCategory {
+    /// The category's key in the privacy manifest.
+    #[must_use]
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::FileTimestamp => "NSPrivacyAccessedAPICategoryFileTimestamp",
+            Self::SystemBootTime => "NSPrivacyAccessedAPICategorySystemBootTime",
+            Self::DiskSpace => "NSPrivacyAccessedAPICategoryDiskSpace",
+            Self::ActiveKeyboards => "NSPrivacyAccessedAPICategoryActiveKeyboards",
+            Self::UserDefaults => "NSPrivacyAccessedAPICategoryUserDefaults",
+        }
+    }
+}
+
+/// An approved reason code, such as `C617.1`: four upper-case hexadecimal
+/// digits, a `.` and a number.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize)]
+#[serde(try_from = "String")]
+pub(crate) struct PrivacyReason(String);
+
+impl PrivacyReason {
+    /// Parse `code`.
+    ///
+    /// # Errors
+    ///
+    /// Why `code` is not a reason code.
+    pub(crate) fn try_new(code: impl Into<String>) -> Result<Self, String> {
+        let code = code.into();
+        let well_formed = code.split_once('.').is_some_and(|(id, number)| {
+            id.len() == 4
+                && id
+                    .chars()
+                    .all(|c| c.is_ascii_digit() || c.is_ascii_uppercase() && c.is_ascii_hexdigit())
+                && !number.is_empty()
+                && number.chars().all(|c| c.is_ascii_digit())
+        });
+        if well_formed {
+            Ok(Self(code))
+        } else {
+            Err(format!(
+                "`{code}` is not an approved-reason code such as `C617.1`: four upper-case \
+                 hexadecimal digits, `.` and a number"
+            ))
+        }
+    }
+
+    /// The code, as the privacy manifest states it.
+    #[must_use]
+    pub(crate) fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl TryFrom<String> for PrivacyReason {
+    type Error = String;
+
+    fn try_from(code: String) -> Result<Self, String> {
+        Self::try_new(code)
+    }
 }
 
 /// What a crate needs from the Android manifest.
@@ -120,6 +233,7 @@ struct AndroidPart {
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub(crate) struct Declarations {
     android_permissions: BTreeMap<AndroidPermission, BTreeSet<String>>,
+    apple_accessed_apis: BTreeMap<PrivacyCategory, BTreeMap<PrivacyReason, BTreeSet<String>>>,
 }
 
 impl Declarations {
@@ -198,9 +312,33 @@ impl Declarations {
             )));
         }
         self.add_android(name, &declares.android);
+        self.add_apple(name, &declares.apple)?;
         for (feature, part) in &declares.features {
             if features.contains(&feature.as_str()) {
                 self.add_android(name, &part.android);
+                self.add_apple(name, &part.apple)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn add_apple(&mut self, crate_name: &str, apple: &ApplePart) -> BuildResult<()> {
+        for api in &apple.privacy.accessed_apis {
+            if api.reasons.is_empty() {
+                return Err(BuildError::invalid_config(
+                    format!("{crate_name}'s [package.metadata.flui.{KEY}]"),
+                    format!(
+                        "declares {} with no reasons; Apple refuses an accessed API without one",
+                        api.category.as_str()
+                    ),
+                ));
+            }
+            let reasons = self.apple_accessed_apis.entry(api.category).or_default();
+            for reason in &api.reasons {
+                reasons
+                    .entry(reason.clone())
+                    .or_default()
+                    .insert(crate_name.to_owned());
             }
         }
         Ok(())
@@ -222,6 +360,12 @@ impl Declarations {
                 .or_default()
                 .extend(crates);
         }
+        for (category, reasons) in other.apple_accessed_apis {
+            let joined = self.apple_accessed_apis.entry(category).or_default();
+            for (reason, crates) in reasons {
+                joined.entry(reason).or_default().extend(crates);
+            }
+        }
     }
 
     /// Every Android permission declared, in order, with the crates that ask
@@ -231,13 +375,23 @@ impl Declarations {
     ) -> impl Iterator<Item = (&AndroidPermission, &BTreeSet<String>)> {
         self.android_permissions.iter()
     }
+
+    /// Every required-reason API category declared, in order, with each of
+    /// its reasons and the crates that give it.
+    pub(crate) fn apple_accessed_apis(
+        &self,
+    ) -> impl Iterator<Item = (PrivacyCategory, &BTreeMap<PrivacyReason, BTreeSet<String>>)> {
+        self.apple_accessed_apis
+            .iter()
+            .map(|(category, reasons)| (*category, reasons))
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use std::path::Path;
 
-    use super::{AndroidPermission, Declarations};
+    use super::{AndroidPermission, Declarations, PrivacyReason};
 
     /// A fixture project: `members` written as `(directory, Cargo.toml)`
     /// under one temporary directory, with an empty `src/lib.rs` each.
@@ -264,6 +418,25 @@ mod tests {
                 (
                     permission.as_str().to_owned(),
                     crates.iter().cloned().collect(),
+                )
+            })
+            .collect()
+    }
+
+    type Reasons = Vec<(String, Vec<String>)>;
+
+    fn accessed_apis(declarations: &Declarations) -> Vec<(&'static str, Reasons)> {
+        declarations
+            .apple_accessed_apis()
+            .map(|(category, reasons)| {
+                (
+                    category.as_str(),
+                    reasons
+                        .iter()
+                        .map(|(reason, crates)| {
+                            (reason.as_str().to_owned(), crates.iter().cloned().collect())
+                        })
+                        .collect(),
                 )
             })
             .collect()
@@ -301,7 +474,10 @@ mod tests {
                     "leaf",
                     "[package.metadata.flui.declares]\nschema = 1\n\
                      [package.metadata.flui.declares.android]\n\
-                     permissions = [\"android.permission.VIBRATE\"]\n",
+                     permissions = [\"android.permission.VIBRATE\"]\n\
+                     [[package.metadata.flui.declares.apple.privacy.accessed-apis]]\n\
+                     category = \"NSPrivacyAccessedAPICategoryFileTimestamp\"\n\
+                     reasons = [\"C617.1\"]\n",
                 ),
             ),
             (
@@ -314,8 +490,14 @@ mod tests {
                      permissions = [\"android.permission.VIBRATE\"]\n\
                      [package.metadata.flui.declares.features.http.android]\n\
                      permissions = [\"android.permission.INTERNET\"]\n\
+                     [[package.metadata.flui.declares.features.http.apple.privacy.accessed-apis]]\n\
+                     category = \"NSPrivacyAccessedAPICategoryFileTimestamp\"\n\
+                     reasons = [\"0A2A.1\", \"C617.1\"]\n\
                      [package.metadata.flui.declares.features.camera.android]\n\
-                     permissions = [\"android.permission.CAMERA\"]\n",
+                     permissions = [\"android.permission.CAMERA\"]\n\
+                     [[package.metadata.flui.declares.features.camera.apple.privacy.accessed-apis]]\n\
+                     category = \"NSPrivacyAccessedAPICategoryUserDefaults\"\n\
+                     reasons = [\"CA92.1\"]\n",
                 ),
             ),
             ("quiet", &manifest("quiet", "")),
@@ -344,6 +526,20 @@ mod tests {
                 ),
             ]
         );
+        let ios = collect(&app, "aarch64-apple-ios").expect("declarations");
+        assert_eq!(
+            accessed_apis(&ios),
+            [(
+                "NSPrivacyAccessedAPICategoryFileTimestamp",
+                vec![
+                    ("0A2A.1".to_owned(), vec!["http_lib".to_owned()]),
+                    (
+                        "C617.1".to_owned(),
+                        vec!["http_lib".to_owned(), "leaf".to_owned()]
+                    ),
+                ]
+            )]
+        );
         let linux = collect(&app, "x86_64-unknown-linux-gnu").expect("declarations");
         assert!(
             permissions(&linux)
@@ -355,7 +551,9 @@ mod tests {
 
     /// A malformed table is refused naming the crate and what is wrong: an
     /// unknown key, a missing or newer schema, a feature the crate does not
-    /// have, a permission that is not a name.
+    /// have, a permission that is not a name, a required-reason category Apple
+    /// does not define, an accessed API without a reason or with a malformed
+    /// one.
     #[test]
     fn a_malformed_declaration_is_refused_by_crate() {
         let cases = [
@@ -387,6 +585,25 @@ mod tests {
                 "schema = 1\n[package.metadata.flui.declares.android]\n\
                  permissions = [\"a.b\\\"/><x a=\\\"\"]\n",
                 "is not a permission name",
+            ),
+            (
+                "schema = 1\n[[package.metadata.flui.declares.apple.privacy.accessed-apis]]\n\
+                 category = \"NSPrivacyAccessedAPICategoryLocation\"\nreasons = [\"C617.1\"]\n",
+                "unknown variant `NSPrivacyAccessedAPICategoryLocation`",
+            ),
+            (
+                "schema = 1\n[[package.metadata.flui.declares.apple.privacy.accessed-apis]]\n\
+                 category = \"NSPrivacyAccessedAPICategoryDiskSpace\"\nreasons = []\n",
+                "NSPrivacyAccessedAPICategoryDiskSpace with no reasons",
+            ),
+            (
+                "schema = 1\n[[package.metadata.flui.declares.apple.privacy.accessed-apis]]\n\
+                 category = \"NSPrivacyAccessedAPICategoryDiskSpace\"\nreasons = [\"e174.1\"]\n",
+                "`e174.1` is not an approved-reason code",
+            ),
+            (
+                "schema = 1\n[package.metadata.flui.declares.apple.privacy]\naccessed_apis = []\n",
+                "unknown field `accessed_apis`",
             ),
         ];
         let mut failures = Vec::new();
@@ -420,6 +637,24 @@ mod tests {
             ("android.permission.\"x", false),
         ] {
             assert_eq!(AndroidPermission::try_new(name).is_ok(), accepted, "{name}");
+        }
+    }
+
+    #[test]
+    fn a_privacy_reason_is_an_approved_reason_code() {
+        for (code, accepted) in [
+            ("C617.1", true),
+            ("35F9.1", true),
+            ("CA92.12", true),
+            ("c617.1", false),
+            ("C617", false),
+            ("C617.", false),
+            ("C61.1", false),
+            ("C6177.1", false),
+            ("G617.1", false),
+            ("C617.1a", false),
+        ] {
+            assert_eq!(PrivacyReason::try_new(code).is_ok(), accepted, "{code}");
         }
     }
 }

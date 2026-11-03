@@ -992,6 +992,20 @@ schema = 1
 [package.metadata.flui.declares.android]
 permissions = ["android.permission.VIBRATE"]
 
+# Apple's required-reason APIs the core calls on iOS and macOS. UIKit event
+# timestamps are placed on the frame clock through `systemUptime`
+# (`input::apple`; 35F9.1, time between events inside the app); the file
+# store `stat`s its own files and reads their modification time to sweep
+# stale staged writes (`storage::file_store`; C617.1, files inside the app's
+# container).
+[[package.metadata.flui.declares.apple.privacy.accessed-apis]]
+category = "NSPrivacyAccessedAPICategorySystemBootTime"
+reasons = ["35F9.1"]
+
+[[package.metadata.flui.declares.apple.privacy.accessed-apis]]
+category = "NSPrivacyAccessedAPICategoryFileTimestamp"
+reasons = ["C617.1"]
+
 # A window's tree read back by a real AT-SPI client on an accessibility bus of
 # its own: its own harness, because it starts an X server, a session bus and
 # the accessibility bus and names them for the process before anything

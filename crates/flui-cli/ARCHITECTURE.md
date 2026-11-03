@@ -67,6 +67,13 @@ the application's `cdylib`. It is written only when it changed. A file there wit
 generated-file header is refused untouched rather than overwritten
 (`the_manifest_is_rewritten_only_when_flui_wrote_it`).
 
+The iOS bundle's `PrivacyInfo.xcprivacy` lists the required-reason APIs the graph of the device or
+simulator target declares (`apple.privacy.accessed-apis`), joined per category with the
+application's own `<project>/platforms/ios/PrivacyInfo.xcprivacy`; tracking and collected data stay the
+application's. Rust links statically, so no per-SDK privacy bundle exists and the application's
+manifest carries the union. `flui-native` declares `systemUptime` (`35F9.1`) and file timestamps
+(`C617.1`), `flui-assets` file timestamps (`publication_contract`).
+
 ### Local source dependencies are explicit Cargo paths
 
 `flui create NAME --local` selects the current working directory as the source
