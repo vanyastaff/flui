@@ -35,7 +35,7 @@ use flui_native::input::assembly::{
     ScrollReading, decode,
 };
 use flui_native::input::availability::{
-    self as input_availability, AndroidInputApis, WaylandInputGlobals, WinitSession,
+    self as input_availability, AndroidInputApis, WaylandInputGlobals,
 };
 use flui_native::input::keys::vk_to_key;
 use flui_native::input::linux::wayland::wire::WireTime;
@@ -73,8 +73,8 @@ const NO_ACTUATOR: HapticOutcome =
 use flui_platform::PlatformInput;
 use flui_testing::backend_conformance::HostInput;
 use flui_testing::backend_conformance::{
-    BackendUnderTest, ClockProfile, CompositionStep, ContactAction, ContactStep, GapEntry, KeyStep,
-    PanStep, PinchChange, PinchStep, RowOutcome, Stamp, Step, StepKey, StepPhase, TextInputPath,
+    BackendUnderTest, ClockProfile, CompositionStep, ContactAction, ContactStep, KeyStep, PanStep,
+    PinchChange, PinchStep, RowOutcome, Stamp, Step, StepKey, StepPhase, TextInputPath,
     assert_backend_conforms, run_backend_conformance,
 };
 
@@ -157,17 +157,9 @@ enum Ime {
     /// A TSF text service's edits of the Windows host's document: each step
     /// under one read-write lock, `SetText` and the composition sink.
     Tsf,
-    /// A path whose pure half the table does not reach yet: winit's, whose
-    /// `ImeEvent`s reach the field through the application's handler:
-    /// [`IME_ORDER_GAP`].
-    Undriven,
     /// No input method, and why.
     None(&'static str),
 }
-
-/// `docs/gaps.md` entry 1, which lists the input method paths the IME rows
-/// do not drive yet.
-const IME_ORDER_GAP: GapEntry = GapEntry(1);
 
 /// The field a backend's input method path edits.
 enum ImeField {
@@ -229,7 +221,6 @@ impl ImeDriver {
                 let editable = Editable::reading(&store);
                 ImeField::WebTextarea(WebTextarea::focus(store), editable)
             }
-            Ime::Undriven => return TextInputPath::Gap(IME_ORDER_GAP),
             Ime::None(why) => return TextInputPath::None(why),
         };
         self.field = Some(field);
@@ -546,21 +537,6 @@ fn web_textarea() -> Profile {
     Profile {
         ime: Ime::WebTextarea,
         ..web()
-    }
-}
-
-/// An X11 window: winit reports no outgoing drag there.
-fn x11() -> Profile {
-    Profile {
-        clock: ClockShape::Epoch,
-        kinds: &[PointerKind::Mouse],
-        names_devices: false,
-        capabilities: input_availability::winit(WinitSession::X11),
-        haptics: Some(HapticsTable::Web),
-        drag: None,
-        keys: None,
-        // winit's input method on X11.
-        ime: Ime::Undriven,
     }
 }
 
@@ -1892,10 +1868,6 @@ pub(crate) fn wayland_window_conforms() {
     flui_testing::window_commands::AdmitAndApply::close_for_cleanup(&*window);
 }
 
-fn x11_decoders_conform() {
-    assert_backend_conforms(&mut SharedAssembly::new(x11()));
-}
-
 fn uikit_os_drag_conforms() {
     assert_backend_conforms(&mut SharedAssembly::new(uikit_os_drag()));
 }
@@ -1922,7 +1894,6 @@ fn every_backend_passes_the_conformance_table() {
             ("android below API 24", android_api_23_conforms),
             ("android without FluiView", android_without_view_conforms),
             ("web", web_decoders_conform),
-            ("x11", x11_decoders_conform),
             ("wayland", wayland_decoders_conform),
             ("native x11", x11_decoder_conforms),
             ("uikit with OS drag", uikit_os_drag_conforms),
@@ -1930,8 +1901,8 @@ fn every_backend_passes_the_conformance_table() {
     );
 }
 
-/// The IME rows run on every input method path the table drives, and report
-/// the others as their `docs/gaps.md` entry, never as passed or not
+/// The IME rows run on every input method path the table drives. A path the
+/// table cannot drive reports its `docs/gaps.md` entry, never passed or not
 /// applicable: closing the gap means driving the path here.
 #[test]
 fn each_input_method_path_holds_the_ime_rows_or_names_its_gap() {
@@ -1948,14 +1919,13 @@ fn each_input_method_path_holds_the_ime_rows_or_names_its_gap() {
     } else {
         RowOutcome::NotApplicable("built without a Linux host")
     };
-    let backends: [(&str, Profile, RowOutcome); 8] = [
+    let backends: [(&str, Profile, RowOutcome); 7] = [
         ("win32", win32(), RowOutcome::Held),
         ("appkit", appkit(), RowOutcome::Held),
         ("uikit", uikit(), RowOutcome::Held),
         ("android", android(), RowOutcome::Held),
         ("web", web(), RowOutcome::Held),
         ("web through a textarea", web_textarea(), RowOutcome::Held),
-        ("x11 through winit", x11(), RowOutcome::Gap(IME_ORDER_GAP)),
         ("wayland", wayland(), driven.clone()),
     ];
     let mut wrong = Vec::new();
@@ -2087,7 +2057,7 @@ const BROKEN: &[BrokenRow] = &[
     (
         "outgoing_drag_is_delivered_as_claimed",
         Fault::OverclaimedDrag,
-        x11,
+        appkit,
     ),
     (
         "a_drag_source_starts_when_the_backend_declares",
@@ -2208,27 +2178,23 @@ fn each_conformance_row_fails_against_a_broken_backend() {
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
-#[cfg(all(
-    feature = "winit-backend",
-    any(target_os = "windows", target_os = "macos", target_os = "linux")
-))]
 mod cross_backend_physical_key_agreement {
-    //! Cross-checks a curated set of physical keys that the winit, Win32,
-    //! and AppKit conversions all claim to name explicitly (see
+    //! Cross-checks a curated set of physical keys that the Win32 and AppKit
+    //! conversions both claim to name explicitly (see
     //! `flui_native::input::keys::scancode_to_code`'s and
-    //! `flui_native::input::apple::keys::keycode_to_code`'s own module docs), so a
-    //! future edit to any one of the three tables that silently retargets a
-    //! shared physical key is caught here instead of only shipping as a
-    //! per-backend behavior change. Win32/AppKit scancodes and keycodes are
-    //! transcribed directly from those modules' own match arms — read there
-    //! before adding a row, since only the values THOSE tables actually use
-    //! are meaningful cross-checks.
+    //! `flui_native::input::apple::keys::keycode_to_code`'s own module docs)
+    //! against the W3C `code` each row names, so a future edit to either table
+    //! that silently retargets a shared physical key is caught here instead of
+    //! only shipping as a per-backend behavior change. Win32/AppKit scancodes
+    //! and keycodes are transcribed directly from those modules' own match
+    //! arms — read there before adding a row, since only the values THOSE
+    //! tables actually use are meaningful cross-checks.
     //!
     //! Coverage is representative, not exhaustive: only keys where a
-    //! meaning-preserving correspondence between all three native id spaces
-    //! (a winit `KeyCode` variant, a Win32 scancode, an AppKit keycode) is
-    //! unambiguous. Two families are deliberately excluded with a reason
-    //! rather than silently omitted:
+    //! meaning-preserving correspondence between the W3C name and both native
+    //! id spaces (a Win32 scancode, an AppKit keycode) is unambiguous. Two
+    //! families are deliberately excluded with a reason rather than silently
+    //! omitted:
     //! - Win32's `KanaMode` (scancode `0x70`) has no AppKit counterpart —
     //!   the AppKit table maps its Kana key straight to `Lang1` (matching
     //!   Win32's *separate* `Lang1` scancode `0x72`), per the W3C code
@@ -2239,460 +2205,143 @@ mod cross_backend_physical_key_agreement {
     //!   no AppKit table entries at all; those rows carry a Win32
     //!   scancode only.
 
-    use ui_events_winit::keyboard::from_winit_code;
-    use winit::keyboard::{KeyCode, PhysicalKey};
-
     use flui_native::input::apple::keys::keycode_to_code;
     use flui_native::input::keys::scancode_to_code;
 
-    /// `(label, winit KeyCode, Win32 (scancode, extended), AppKit keycode)`.
+    /// `(W3C code, Win32 (scancode, extended), AppKit keycode)`.
     /// `None` means that backend has no table entry for this key.
-    type PhysicalKeyRow = (&'static str, KeyCode, Option<(u16, bool)>, Option<u16>);
+    type PhysicalKeyRow = (&'static str, Option<(u16, bool)>, Option<u16>);
 
     const PHYSICAL_KEYS: &[PhysicalKeyRow] = &[
         // Letters/digits/punctuation (a sample, not all 26+10).
-        ("KeyA", KeyCode::KeyA, Some((0x001E, false)), Some(0x00)),
-        ("Digit1", KeyCode::Digit1, Some((0x0002, false)), Some(0x12)),
-        ("Minus", KeyCode::Minus, Some((0x000C, false)), Some(0x1B)),
-        ("Equal", KeyCode::Equal, Some((0x000D, false)), Some(0x18)),
-        (
-            "BracketLeft",
-            KeyCode::BracketLeft,
-            Some((0x001A, false)),
-            Some(0x21),
-        ),
-        (
-            "BracketRight",
-            KeyCode::BracketRight,
-            Some((0x001B, false)),
-            Some(0x1E),
-        ),
-        (
-            "Semicolon",
-            KeyCode::Semicolon,
-            Some((0x0027, false)),
-            Some(0x29),
-        ),
-        ("Quote", KeyCode::Quote, Some((0x0028, false)), Some(0x27)),
-        (
-            "Backquote",
-            KeyCode::Backquote,
-            Some((0x0029, false)),
-            Some(0x32),
-        ),
-        (
-            "Backslash",
-            KeyCode::Backslash,
-            Some((0x002B, false)),
-            Some(0x2A),
-        ),
-        ("Comma", KeyCode::Comma, Some((0x0033, false)), Some(0x2B)),
-        ("Period", KeyCode::Period, Some((0x0034, false)), Some(0x2F)),
-        ("Slash", KeyCode::Slash, Some((0x0035, false)), Some(0x2C)),
+        ("KeyA", Some((0x001E, false)), Some(0x00)),
+        ("Digit1", Some((0x0002, false)), Some(0x12)),
+        ("Minus", Some((0x000C, false)), Some(0x1B)),
+        ("Equal", Some((0x000D, false)), Some(0x18)),
+        ("BracketLeft", Some((0x001A, false)), Some(0x21)),
+        ("BracketRight", Some((0x001B, false)), Some(0x1E)),
+        ("Semicolon", Some((0x0027, false)), Some(0x29)),
+        ("Quote", Some((0x0028, false)), Some(0x27)),
+        ("Backquote", Some((0x0029, false)), Some(0x32)),
+        ("Backslash", Some((0x002B, false)), Some(0x2A)),
+        ("Comma", Some((0x0033, false)), Some(0x2B)),
+        ("Period", Some((0x0034, false)), Some(0x2F)),
+        ("Slash", Some((0x0035, false)), Some(0x2C)),
         // Editing / whitespace.
-        ("Enter", KeyCode::Enter, Some((0x001C, false)), Some(0x24)),
-        ("Escape", KeyCode::Escape, Some((0x0001, false)), Some(0x35)),
-        ("Tab", KeyCode::Tab, Some((0x000F, false)), Some(0x30)),
-        ("Space", KeyCode::Space, Some((0x0039, false)), Some(0x31)),
-        (
-            "Backspace",
-            KeyCode::Backspace,
-            Some((0x000E, false)),
-            Some(0x33),
-        ),
-        (
-            "CapsLock",
-            KeyCode::CapsLock,
-            Some((0x003A, false)),
-            Some(0x39),
-        ),
+        ("Enter", Some((0x001C, false)), Some(0x24)),
+        ("Escape", Some((0x0001, false)), Some(0x35)),
+        ("Tab", Some((0x000F, false)), Some(0x30)),
+        ("Space", Some((0x0039, false)), Some(0x31)),
+        ("Backspace", Some((0x000E, false)), Some(0x33)),
+        ("CapsLock", Some((0x003A, false)), Some(0x39)),
         // Sided modifiers.
-        (
-            "ShiftLeft",
-            KeyCode::ShiftLeft,
-            Some((0x002A, false)),
-            Some(0x38),
-        ),
-        (
-            "ShiftRight",
-            KeyCode::ShiftRight,
-            Some((0x0036, false)),
-            Some(0x3C),
-        ),
-        (
-            "ControlLeft",
-            KeyCode::ControlLeft,
-            Some((0x001D, false)),
-            Some(0x3B),
-        ),
-        (
-            "ControlRight",
-            KeyCode::ControlRight,
-            Some((0x001D, true)),
-            Some(0x3E),
-        ),
-        (
-            "AltLeft",
-            KeyCode::AltLeft,
-            Some((0x0038, false)),
-            Some(0x3A),
-        ),
-        (
-            "AltRight",
-            KeyCode::AltRight,
-            Some((0x0038, true)),
-            Some(0x3D),
-        ),
-        (
-            "MetaLeft",
-            KeyCode::SuperLeft,
-            Some((0x005B, true)),
-            Some(0x37),
-        ),
-        (
-            "MetaRight",
-            KeyCode::SuperRight,
-            Some((0x005C, true)),
-            Some(0x36),
-        ),
+        ("ShiftLeft", Some((0x002A, false)), Some(0x38)),
+        ("ShiftRight", Some((0x0036, false)), Some(0x3C)),
+        ("ControlLeft", Some((0x001D, false)), Some(0x3B)),
+        ("ControlRight", Some((0x001D, true)), Some(0x3E)),
+        ("AltLeft", Some((0x0038, false)), Some(0x3A)),
+        ("AltRight", Some((0x0038, true)), Some(0x3D)),
+        ("MetaLeft", Some((0x005B, true)), Some(0x37)),
+        ("MetaRight", Some((0x005C, true)), Some(0x36)),
         // Navigation cluster.
-        (
-            "ArrowLeft",
-            KeyCode::ArrowLeft,
-            Some((0x004B, true)),
-            Some(0x7B),
-        ),
-        (
-            "ArrowRight",
-            KeyCode::ArrowRight,
-            Some((0x004D, true)),
-            Some(0x7C),
-        ),
-        (
-            "ArrowUp",
-            KeyCode::ArrowUp,
-            Some((0x0048, true)),
-            Some(0x7E),
-        ),
-        (
-            "ArrowDown",
-            KeyCode::ArrowDown,
-            Some((0x0050, true)),
-            Some(0x7D),
-        ),
-        ("Home", KeyCode::Home, Some((0x0047, true)), Some(0x73)),
-        ("End", KeyCode::End, Some((0x004F, true)), Some(0x77)),
-        ("PageUp", KeyCode::PageUp, Some((0x0049, true)), Some(0x74)),
-        (
-            "PageDown",
-            KeyCode::PageDown,
-            Some((0x0051, true)),
-            Some(0x79),
-        ),
+        ("ArrowLeft", Some((0x004B, true)), Some(0x7B)),
+        ("ArrowRight", Some((0x004D, true)), Some(0x7C)),
+        ("ArrowUp", Some((0x0048, true)), Some(0x7E)),
+        ("ArrowDown", Some((0x0050, true)), Some(0x7D)),
+        ("Home", Some((0x0047, true)), Some(0x73)),
+        ("End", Some((0x004F, true)), Some(0x77)),
+        ("PageUp", Some((0x0049, true)), Some(0x74)),
+        ("PageDown", Some((0x0051, true)), Some(0x79)),
         // Apple's Insert/Delete labeling is a documented cross-platform
         // divergence in position, not in the `Code` value each produces.
-        ("Insert", KeyCode::Insert, Some((0x0052, true)), Some(0x72)),
-        ("Delete", KeyCode::Delete, Some((0x0053, true)), Some(0x75)),
+        ("Insert", Some((0x0052, true)), Some(0x72)),
+        ("Delete", Some((0x0053, true)), Some(0x75)),
         // NumLock: Win32's own key vs. the Mac numpad Clear key.
-        (
-            "NumLock",
-            KeyCode::NumLock,
-            Some((0x0045, true)),
-            Some(0x47),
-        ),
+        ("NumLock", Some((0x0045, true)), Some(0x47)),
         // Numpad cluster.
-        (
-            "Numpad0",
-            KeyCode::Numpad0,
-            Some((0x0052, false)),
-            Some(0x52),
-        ),
-        (
-            "Numpad1",
-            KeyCode::Numpad1,
-            Some((0x004F, false)),
-            Some(0x53),
-        ),
-        (
-            "Numpad2",
-            KeyCode::Numpad2,
-            Some((0x0050, false)),
-            Some(0x54),
-        ),
-        (
-            "Numpad3",
-            KeyCode::Numpad3,
-            Some((0x0051, false)),
-            Some(0x55),
-        ),
-        (
-            "Numpad4",
-            KeyCode::Numpad4,
-            Some((0x004B, false)),
-            Some(0x56),
-        ),
-        (
-            "Numpad5",
-            KeyCode::Numpad5,
-            Some((0x004C, false)),
-            Some(0x57),
-        ),
-        (
-            "Numpad6",
-            KeyCode::Numpad6,
-            Some((0x004D, false)),
-            Some(0x58),
-        ),
-        (
-            "Numpad7",
-            KeyCode::Numpad7,
-            Some((0x0047, false)),
-            Some(0x59),
-        ),
-        (
-            "Numpad8",
-            KeyCode::Numpad8,
-            Some((0x0048, false)),
-            Some(0x5B),
-        ),
-        (
-            "Numpad9",
-            KeyCode::Numpad9,
-            Some((0x0049, false)),
-            Some(0x5C),
-        ),
-        (
-            "NumpadAdd",
-            KeyCode::NumpadAdd,
-            Some((0x004E, false)),
-            Some(0x45),
-        ),
-        (
-            "NumpadSubtract",
-            KeyCode::NumpadSubtract,
-            Some((0x004A, false)),
-            Some(0x4E),
-        ),
-        (
-            "NumpadMultiply",
-            KeyCode::NumpadMultiply,
-            Some((0x0037, false)),
-            Some(0x43),
-        ),
-        (
-            "NumpadDivide",
-            KeyCode::NumpadDivide,
-            Some((0x0035, true)),
-            Some(0x4B),
-        ),
-        (
-            "NumpadDecimal",
-            KeyCode::NumpadDecimal,
-            Some((0x0053, false)),
-            Some(0x41),
-        ),
-        (
-            "NumpadEnter",
-            KeyCode::NumpadEnter,
-            Some((0x001C, true)),
-            Some(0x4C),
-        ),
-        (
-            "NumpadEqual",
-            KeyCode::NumpadEqual,
-            Some((0x0059, false)),
-            Some(0x51),
-        ),
-        (
-            "NumpadComma",
-            KeyCode::NumpadComma,
-            Some((0x007E, false)),
-            Some(0x5F),
-        ),
+        ("Numpad0", Some((0x0052, false)), Some(0x52)),
+        ("Numpad1", Some((0x004F, false)), Some(0x53)),
+        ("Numpad2", Some((0x0050, false)), Some(0x54)),
+        ("Numpad3", Some((0x0051, false)), Some(0x55)),
+        ("Numpad4", Some((0x004B, false)), Some(0x56)),
+        ("Numpad5", Some((0x004C, false)), Some(0x57)),
+        ("Numpad6", Some((0x004D, false)), Some(0x58)),
+        ("Numpad7", Some((0x0047, false)), Some(0x59)),
+        ("Numpad8", Some((0x0048, false)), Some(0x5B)),
+        ("Numpad9", Some((0x0049, false)), Some(0x5C)),
+        ("NumpadAdd", Some((0x004E, false)), Some(0x45)),
+        ("NumpadSubtract", Some((0x004A, false)), Some(0x4E)),
+        ("NumpadMultiply", Some((0x0037, false)), Some(0x43)),
+        ("NumpadDivide", Some((0x0035, true)), Some(0x4B)),
+        ("NumpadDecimal", Some((0x0053, false)), Some(0x41)),
+        ("NumpadEnter", Some((0x001C, true)), Some(0x4C)),
+        ("NumpadEqual", Some((0x0059, false)), Some(0x51)),
+        ("NumpadComma", Some((0x007E, false)), Some(0x5F)),
         // System / IME keys.
-        (
-            "ContextMenu",
-            KeyCode::ContextMenu,
-            Some((0x005D, true)),
-            Some(0x6E),
-        ),
-        ("Lang1", KeyCode::Lang1, Some((0x0072, false)), Some(0x68)),
-        ("Lang2", KeyCode::Lang2, Some((0x0071, false)), Some(0x66)),
-        (
-            "IntlBackslash",
-            KeyCode::IntlBackslash,
-            Some((0x0056, false)),
-            Some(0x0A),
-        ),
-        ("IntlRo", KeyCode::IntlRo, Some((0x0073, false)), Some(0x5E)),
-        (
-            "IntlYen",
-            KeyCode::IntlYen,
-            Some((0x007D, false)),
-            Some(0x5D),
-        ),
+        ("ContextMenu", Some((0x005D, true)), Some(0x6E)),
+        ("Lang1", Some((0x0072, false)), Some(0x68)),
+        ("Lang2", Some((0x0071, false)), Some(0x66)),
+        ("IntlBackslash", Some((0x0056, false)), Some(0x0A)),
+        ("IntlRo", Some((0x0073, false)), Some(0x5E)),
+        ("IntlYen", Some((0x007D, false)), Some(0x5D)),
         // Media keys.
-        (
-            "AudioVolumeUp",
-            KeyCode::AudioVolumeUp,
-            Some((0x0030, true)),
-            Some(0x48),
-        ),
-        (
-            "AudioVolumeDown",
-            KeyCode::AudioVolumeDown,
-            Some((0x002E, true)),
-            Some(0x49),
-        ),
-        (
-            "AudioVolumeMute",
-            KeyCode::AudioVolumeMute,
-            Some((0x0020, true)),
-            Some(0x4A),
-        ),
+        ("AudioVolumeUp", Some((0x0030, true)), Some(0x48)),
+        ("AudioVolumeDown", Some((0x002E, true)), Some(0x49)),
+        ("AudioVolumeMute", Some((0x0020, true)), Some(0x4A)),
         // Function keys, including the F13-F20 band all three tables cover.
-        ("F1", KeyCode::F1, Some((0x003B, false)), Some(0x7A)),
-        ("F12", KeyCode::F12, Some((0x0058, false)), Some(0x6F)),
-        ("F13", KeyCode::F13, Some((0x0064, false)), Some(0x69)),
-        ("F14", KeyCode::F14, Some((0x0065, false)), Some(0x6B)),
-        ("F15", KeyCode::F15, Some((0x0066, false)), Some(0x71)),
-        ("F16", KeyCode::F16, Some((0x0067, false)), Some(0x6A)),
-        ("F17", KeyCode::F17, Some((0x0068, false)), Some(0x40)),
-        ("F18", KeyCode::F18, Some((0x0069, false)), Some(0x4F)),
-        ("F19", KeyCode::F19, Some((0x006A, false)), Some(0x50)),
-        ("F20", KeyCode::F20, Some((0x006B, false)), Some(0x5A)),
+        ("F1", Some((0x003B, false)), Some(0x7A)),
+        ("F12", Some((0x0058, false)), Some(0x6F)),
+        ("F13", Some((0x0064, false)), Some(0x69)),
+        ("F14", Some((0x0065, false)), Some(0x6B)),
+        ("F15", Some((0x0066, false)), Some(0x71)),
+        ("F16", Some((0x0067, false)), Some(0x6A)),
+        ("F17", Some((0x0068, false)), Some(0x40)),
+        ("F18", Some((0x0069, false)), Some(0x4F)),
+        ("F19", Some((0x006A, false)), Some(0x50)),
+        ("F20", Some((0x006B, false)), Some(0x5A)),
         // Win32-only families: no AppKit table entry exists for these.
-        (
-            "ScrollLock",
-            KeyCode::ScrollLock,
-            Some((0x0046, false)),
-            None,
-        ),
-        ("Pause", KeyCode::Pause, Some((0x0045, false)), None),
-        (
-            "PrintScreen",
-            KeyCode::PrintScreen,
-            Some((0x0037, true)),
-            None,
-        ),
-        ("Power", KeyCode::Power, Some((0x005E, true)), None),
-        ("KanaMode", KeyCode::KanaMode, Some((0x0070, false)), None),
-        ("Convert", KeyCode::Convert, Some((0x0079, false)), None),
-        (
-            "NonConvert",
-            KeyCode::NonConvert,
-            Some((0x007B, false)),
-            None,
-        ),
-        ("F21", KeyCode::F21, Some((0x006C, false)), None),
-        ("F24", KeyCode::F24, Some((0x0076, false)), None),
-        (
-            "BrowserBack",
-            KeyCode::BrowserBack,
-            Some((0x006A, true)),
-            None,
-        ),
-        (
-            "BrowserForward",
-            KeyCode::BrowserForward,
-            Some((0x0069, true)),
-            None,
-        ),
-        (
-            "BrowserRefresh",
-            KeyCode::BrowserRefresh,
-            Some((0x0067, true)),
-            None,
-        ),
-        (
-            "BrowserSearch",
-            KeyCode::BrowserSearch,
-            Some((0x0065, true)),
-            None,
-        ),
-        (
-            "BrowserFavorites",
-            KeyCode::BrowserFavorites,
-            Some((0x0066, true)),
-            None,
-        ),
-        (
-            "BrowserStop",
-            KeyCode::BrowserStop,
-            Some((0x0068, true)),
-            None,
-        ),
-        (
-            "BrowserHome",
-            KeyCode::BrowserHome,
-            Some((0x0032, true)),
-            None,
-        ),
-        (
-            "MediaPlayPause",
-            KeyCode::MediaPlayPause,
-            Some((0x0022, true)),
-            None,
-        ),
-        ("MediaStop", KeyCode::MediaStop, Some((0x0024, true)), None),
-        (
-            "MediaTrackNext",
-            KeyCode::MediaTrackNext,
-            Some((0x0019, true)),
-            None,
-        ),
-        (
-            "MediaTrackPrevious",
-            KeyCode::MediaTrackPrevious,
-            Some((0x0010, true)),
-            None,
-        ),
-        (
-            "MediaSelect",
-            KeyCode::MediaSelect,
-            Some((0x006D, true)),
-            None,
-        ),
-        (
-            "LaunchApp1",
-            KeyCode::LaunchApp1,
-            Some((0x006B, true)),
-            None,
-        ),
-        (
-            "LaunchApp2",
-            KeyCode::LaunchApp2,
-            Some((0x0021, true)),
-            None,
-        ),
-        (
-            "LaunchMail",
-            KeyCode::LaunchMail,
-            Some((0x006C, true)),
-            None,
-        ),
+        ("ScrollLock", Some((0x0046, false)), None),
+        ("Pause", Some((0x0045, false)), None),
+        ("PrintScreen", Some((0x0037, true)), None),
+        ("Power", Some((0x005E, true)), None),
+        ("KanaMode", Some((0x0070, false)), None),
+        ("Convert", Some((0x0079, false)), None),
+        ("NonConvert", Some((0x007B, false)), None),
+        ("F21", Some((0x006C, false)), None),
+        ("F24", Some((0x0076, false)), None),
+        ("BrowserBack", Some((0x006A, true)), None),
+        ("BrowserForward", Some((0x0069, true)), None),
+        ("BrowserRefresh", Some((0x0067, true)), None),
+        ("BrowserSearch", Some((0x0065, true)), None),
+        ("BrowserFavorites", Some((0x0066, true)), None),
+        ("BrowserStop", Some((0x0068, true)), None),
+        ("BrowserHome", Some((0x0032, true)), None),
+        ("MediaPlayPause", Some((0x0022, true)), None),
+        ("MediaStop", Some((0x0024, true)), None),
+        ("MediaTrackNext", Some((0x0019, true)), None),
+        ("MediaTrackPrevious", Some((0x0010, true)), None),
+        ("MediaSelect", Some((0x006D, true)), None),
+        ("LaunchApp1", Some((0x006B, true)), None),
+        ("LaunchApp2", Some((0x0021, true)), None),
+        ("LaunchMail", Some((0x006C, true)), None),
     ];
 
-    /// The winit, Win32 and AppKit tables name every shared physical key alike.
+    /// The Win32 and AppKit tables name every shared physical key by its W3C
+    /// `code`.
     #[test]
     fn physical_keys_agree_across_backends() {
         let mut disagreements = Vec::new();
-        for &(label, winit_code, win32, appkit) in PHYSICAL_KEYS {
-            let winit_result = from_winit_code(PhysicalKey::Code(winit_code));
+        for &(code, win32, appkit) in PHYSICAL_KEYS {
             if let Some((scancode, extended)) = win32 {
                 let win32_result = scancode_to_code(scancode, extended);
-                if win32_result.as_str() != winit_result.to_string() {
-                    disagreements.push(format!(
-                        "{label}: winit={winit_result:?} win32={win32_result:?}"
-                    ));
+                if win32_result.as_str() != code {
+                    disagreements.push(format!("{code}: win32={win32_result:?}"));
                 }
             }
             if let Some(keycode) = appkit {
                 let appkit_result = keycode_to_code(keycode);
-                if appkit_result.as_str() != winit_result.to_string() {
-                    disagreements.push(format!(
-                        "{label}: winit={winit_result:?} appkit={appkit_result:?}"
-                    ));
+                if appkit_result.as_str() != code {
+                    disagreements.push(format!("{code}: appkit={appkit_result:?}"));
                 }
             }
         }

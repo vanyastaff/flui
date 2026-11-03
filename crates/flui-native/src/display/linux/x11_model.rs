@@ -20,8 +20,8 @@
 //! - **Scale** is `Xft.dpi / 96`, the value toolkits read; 1 when it is not set.
 //! - **Usable bounds** are the monitor's rectangle cut to the window manager's
 //!   work area (`_NET_WORKAREA` of the current desktop), the bounds without one.
-//! - **Native numbers** are the CRTCs behind the monitor's outputs: a winit
-//!   window on X11 names its monitor by its CRTC.
+//! - **Native numbers** are the CRTCs behind the monitor's outputs: a window
+//!   on X11 that names its monitor names it by its CRTC.
 //! - **Colour** is not read. X has no dynamic-range state; a gamut would come
 //!   from the `_ICC_PROFILE` property a colour manager sets on the root
 //!   window, which this host does not parse yet.
@@ -529,7 +529,7 @@ mod tests {
         assert_eq!(again.displays[1].id, before.displays[1].id);
     }
 
-    fn winit_window_matches_its_output_by_native_id() {
+    fn a_window_matches_its_output_by_native_id() {
         // Two monitors with one rectangle (mirrored by two CRTCs) and a tiled
         // one spanning two CRTCs: a window names its monitor by CRTC alone.
         let registry = DisplayRegistry::new();
@@ -618,8 +618,8 @@ mod tests {
                     x11_screen_change_replaces_outputs,
                 ),
                 (
-                    "winit_window_matches_its_output_by_native_id",
-                    winit_window_matches_its_output_by_native_id,
+                    "a_window_matches_its_output_by_native_id",
+                    a_window_matches_its_output_by_native_id,
                 ),
                 (
                     "scale_and_work_area_come_from_the_server",

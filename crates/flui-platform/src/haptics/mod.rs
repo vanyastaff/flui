@@ -4,7 +4,7 @@
 //! is a capability trait, [`PlatformHaptics`], reached through
 //! [`PlatformWindow::haptics`](crate::PlatformWindow::haptics), a fallible
 //! accessor returning `Option<Arc<dyn _>>`. A backend with no haptic hardware
-//! (desktop winit, Linux) returns `None` instead of every window inheriting a
+//! (desktop Linux) returns `None` instead of every window inheriting a
 //! method it cannot honor.
 //!
 //! # Two tiers, one request, one outcome

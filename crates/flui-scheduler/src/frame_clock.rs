@@ -562,8 +562,8 @@ impl FrameClock {
     /// variant's own doc) on the theory that the compositor only ever
     /// delivers this tick in response to an earlier `request_redraw()`
     /// call already made for a real reason — which is true for a
-    /// self-triggered tick, but FALSE in general: winit also delivers
-    /// `RedrawRequested` for OS-driven signals this clock's caller never
+    /// self-triggered tick, but FALSE in general: a platform also delivers
+    /// a redraw request for OS-driven signals this clock's caller never
     /// asked for (an expose/damage event, a resize-triggered redraw), and
     /// nothing at this call site can tell a self-triggered tick apart
     /// from an unsolicited one. Since this method fires on every

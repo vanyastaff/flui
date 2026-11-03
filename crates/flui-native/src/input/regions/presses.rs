@@ -1,5 +1,5 @@
 //! What a press does on a window whose application draws the title bar, on a
-//! host that keeps no frame around it (ADR-0286 §9 to §11): winit, the native
+//! host that keeps no frame around it (ADR-0286 §9 to §11): the native
 //! X11 host and the native Wayland host, whose window has no decorations then
 //! (on Wayland, only the resize margins of its own frame). The host answers
 //! each press from the chrome regions the last composited frame handed it and
@@ -17,7 +17,7 @@ use flui_foundation::geometry::{DevicePoint, DeviceSize};
 use flui_platform::input_regions::{ChromeHit, DeviceInputRegion, ResizeEdge, chrome_hit};
 
 /// The longest wait between the two presses of a double-click on the bar.
-/// None of winit, X11 and Wayland reads a system setting for it; 500 ms is the
+/// Neither X11 nor Wayland reads a system setting for it; 500 ms is the
 /// default of Windows and GNOME alike.
 pub(crate) const DOUBLE_CLICK_INTERVAL: Duration = Duration::from_millis(500);
 
@@ -28,10 +28,10 @@ pub(crate) const DOUBLE_CLICK_SLOP: f64 = 4.0;
 /// The thickness, in logical pixels, of the band along a frameless window's
 /// edges a press resizes it from.
 #[cfg_attr(
-    not(any(test, winit_host, x11_host)),
+    not(any(test, x11_host)),
     expect(
         dead_code,
-        reason = "the Wayland host resizes from its own frame's margins; winit and X11 take the band"
+        reason = "the Wayland host resizes from its own frame's margins; the X11 host takes the band"
     )
 )]
 pub(crate) const RESIZE_BAND: f64 = 6.0;
@@ -74,10 +74,10 @@ impl ResizeBand {
     /// that cannot be resized by the user now: not `resizable`, maximized, full
     /// screen, or a scale that is no positive finite number.
     #[cfg_attr(
-        not(any(test, winit_host, x11_host)),
+        not(any(test, x11_host)),
         expect(
             dead_code,
-            reason = "the Wayland host resizes from its own frame's margins; winit and X11 take the band"
+            reason = "the Wayland host resizes from its own frame's margins; the X11 host takes the band"
         )
     )]
     pub(crate) fn of(size: DeviceSize, scale: f64, resizable_now: bool) -> Option<Self> {

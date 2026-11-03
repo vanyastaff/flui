@@ -3,7 +3,7 @@
 //! A thin abstraction over platform windows for testability and
 //! flexibility. What a window delivers (its input, state changes, frame and
 //! close requests, surface changes) goes to the [`WindowHandler`] it was
-//! opened with (ADR-0254 §4). It names no OS, winit or AccessKit type
+//! opened with (ADR-0254 §4). It names no OS or AccessKit type
 //! (ADR-0082 §1): the accessibility bridge is reached through
 //! `flui_native::HostWindow`, a host-side subtrait only the composition root
 //! sees.
@@ -67,9 +67,8 @@ pub enum WindowAt {
 /// `flui_native::PlatformProxy`, the recorded cross-thread-to-owner lane
 /// (ADR-0039 §3). Support is operation-specific: signals can support `wake`
 /// and `request_quit` while refusing deferred `open_window` with
-/// `flui_native::ProxySendError::Unsupported`. The winit lane also transports
-/// deferred window creation. Direct backends create windows through their
-/// owner capability; browser signals follow ADR-0196.
+/// `flui_native::ProxySendError::Unsupported`. Direct backends create windows
+/// through their owner capability; browser signals follow ADR-0196.
 ///
 /// A window cannot be sent to another thread:
 ///
@@ -346,9 +345,9 @@ pub trait PlatformWindow {
     /// and runs the same teardown a user's close takes — the handler's
     /// [`closed`](crate::WindowHandler::closed), removal from the backend's window
     /// tracking, cleanup of per-window input state, and the exit-policy consult
-    /// that ends the loop when this was the last window. Win32 and the headless
-    /// double run that teardown before `apply` returns; winit runs it on the
-    /// owner thread's next turn. A window that has already closed answers
+    /// that ends the loop when this was the last window. Win32, X11 and the headless
+    /// double run that teardown before `apply` returns. A window that has
+    /// already closed answers
     /// [`ApplyError::Closed`].
     ///
     /// # Errors

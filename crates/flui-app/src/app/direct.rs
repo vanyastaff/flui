@@ -17,9 +17,9 @@
 //! Window creation, GPU renderer init, and callback wiring all run inside
 //! `on_ready` (ADR-0039 §1), the same reorder `run_desktop` already
 //! received — this function used to open its window *before* starting the
-//! event loop, which failed fast on the winit backend (Linux) instead of
-//! opening anything (winit cannot create a window outside a running loop).
-//! It now runs on every backend, including winit.
+//! event loop, which failed fast on Linux instead of opening anything (a
+//! window could not be created outside a running loop). It now runs on every
+//! backend.
 //!
 //! # Example
 //!
@@ -79,8 +79,8 @@ use super::AppConfig;
 ///
 /// # Platform Support
 ///
-/// Runs on every backend, including winit (Linux) — bootstrap moved inside
-/// `on_ready` (ADR-0039 §1), so the winit backend's requirement of a
+/// Runs on every backend — bootstrap moved inside
+/// `on_ready` (ADR-0039 §1), so a backend's requirement of a
 /// running event loop before window creation is satisfied on every target.
 /// Uses `flui_native::current_platform()` for platform selection.
 ///
@@ -106,9 +106,9 @@ pub fn run_direct(
 
     /// The actual direct-mode bootstrap: window, GPU renderer, and callback
     /// wiring. Runs once, synchronously, inside `on_ready` (ADR-0039
-    /// §1) — the winit backend can only create a window from inside a
-    /// running event loop, so this can no longer run before `run()` starts
-    /// it (which is what made this function fail fast on that backend
+    /// §1) — a backend may create a window only from inside a
+    /// running event loop, so this cannot run before `run()` starts
+    /// it (which is what made this function fail fast on Linux
     /// before this migration).
     ///
     /// Returns `Err` on bootstrap failure — `on_ready` itself is fallible

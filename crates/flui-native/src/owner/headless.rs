@@ -33,10 +33,8 @@ use crate::{
 };
 use flui_platform::{DisplayId, DisplaySnapshot, WindowHandler, WindowId, WindowOptions};
 
-/// The value a deferred (or synchronous) window-open request resolves to —
-/// mirrors the winit backend's own private `OpenWindowResult` alias
-/// (`owner/winit/control.rs`) so both backends complete a
-/// [`ClaimSlot`]/[`PendingWindow`] pair with an identical shape.
+/// The value a deferred (or synchronous) window-open request resolves to,
+/// the reply a [`ClaimSlot`]/[`PendingWindow`] pair completes with.
 type OpenWindowResult = Result<crate::owner::OpenedWindow, OpenWindowError>;
 
 /// Builds the text-store host a headless window offers
@@ -216,8 +214,8 @@ pub(crate) struct HeadlessState {
     /// `Platform::run` installs `HeadlessDeferredOwnerHooks` instead of
     /// `DirectOwnerHooks`, so `OwnerPlatform::open_window` enqueues into
     /// `pending_opens` and returns `WindowOpen::Pending` instead of
-    /// resolving synchronously — exercising the same arm the real winit
-    /// owner lane returns for any call after `on_ready`.
+    /// resolving synchronously — exercising the arm a backend that defers a
+    /// call after `on_ready` would return.
     deferred_window_open: bool,
     /// Requests enqueued by `HeadlessDeferredOwnerHooks::open_owner_window`
     /// while `deferred_window_open` is set, awaiting a manual
@@ -459,8 +457,8 @@ impl<H: Host<Loop = HeadlessLoop>> HostPlatform<H> {
 
     /// Switches this platform's `OwnerPlatform::open_window` behavior from
     /// the default synchronous `Ready` resolution to the deferred
-    /// `Pending` arm the real winit owner lane returns for any call after
-    /// `on_ready` — a test-only seam for exercising Pending-arm completion
+    /// `Pending` arm a backend that defers a call after
+    /// `on_ready` would return — a test-only seam for exercising Pending-arm completion
     /// paths (e.g. `flui-app`'s `open_secondary_window`) without a real
     /// event loop. Must be called before [`Platform::run`]; the returned
     /// [`HeadlessDeferredWindowOpens`] resolves each request in FIFO order,
@@ -512,8 +510,8 @@ impl host::Loop for HeadlessLoop {
         // value is dropped" here, since `run` returns immediately (ADR-0039
         // §1) -- there is no later point on this thread to defer to. Test
         // mode (`enable_deferred_window_open`) opts into the `Pending` arm
-        // instead, so a probe can exercise the same completion path the real
-        // winit owner lane exercises without a real event loop.
+        // instead, so a probe can exercise the completion path of a backend
+        // that defers, without a real event loop.
         let deferred_window_open = state_handle.lock().deferred_window_open;
         let owner_thread = thread::current().id();
 
@@ -635,7 +633,7 @@ const fn default_input_availability() -> flui_platform::input_capabilities::Inpu
 /// (installed by `Platform::run` in place of `DirectOwnerHooks` when
 /// [`HeadlessPlatform::enable_deferred_window_open`](crate::HeadlessPlatform::enable_deferred_window_open) was called first).
 /// Exercises the `WindowOpen::Pending` arm of the owner-lane contract
-/// without needing a real winit event loop: every `open_owner_window` call
+/// without needing a real event loop: every `open_owner_window` call
 /// enqueues a [`ClaimSlot`] request into `HeadlessState::pending_opens`
 /// instead of creating synchronously, and
 /// [`HeadlessDeferredWindowOpens::resolve_next`] completes the oldest one on
@@ -756,7 +754,7 @@ impl HeadlessOwnerTurns {
 /// mock — obtained via [`HeadlessPlatform::exit_reevaluation`](crate::HeadlessPlatform::exit_reevaluation) BEFORE
 /// `Platform::run` consumes the platform. The mock has no event loop of
 /// its own, so the owner-thread half of a re-evaluation request (the
-/// winit backend's `process_control` arm) is driven explicitly by the
+/// owner loop's control arm) is driven explicitly by the
 /// embedding test through [`drive`](Self::drive).
 pub struct HeadlessExitReevaluation {
     state: Weak<Mutex<HeadlessState>>,

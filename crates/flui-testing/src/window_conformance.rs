@@ -83,7 +83,7 @@ pub struct Readback {
     pub visible: bool,
     /// Whether the window system says none of the window reaches the screen
     /// (a cloak, a covering, a suspended toplevel), as it says it; `None`
-    /// where it answers no query for it (X11 and winit report occlusion only
+    /// where it answers no query for it (X11 reports occlusion only
     /// as an event). The checks compare it with the snapshot only for a
     /// shown window in another mode than minimized, which is when the
     /// snapshot keeps it.

@@ -43,7 +43,7 @@ pub enum DragError {
     /// The session already concluded, or its owner is gone.
     #[error("the drag session is closed")]
     SessionClosed,
-    /// This backend cannot start an OS drag session (winit on X11, a window without a
+    /// This backend cannot start an OS drag session (a window without a
     /// drag source), or not for this contact. The session stays in-window.
     #[error("no OS drag session can start: {0}")]
     Unsupported(#[from] Unsupported),
@@ -317,8 +317,8 @@ pub trait PlatformDragSource: Send + Sync {
     ///
     /// # Errors
     ///
-    /// [`DragError::Unsupported`] when the OS refuses or cannot (winit's
-    /// `NotSupported` on X11); the session then stays in-window.
+    /// [`DragError::Unsupported`] when the OS refuses or cannot;
+    /// the session then stays in-window.
     fn start(&self, request: OsDragRequest) -> Result<(), DragError>;
 }
 

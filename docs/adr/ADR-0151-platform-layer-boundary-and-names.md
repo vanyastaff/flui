@@ -8,11 +8,6 @@
 - **Amended:** 2026-10-22 — section 8: the Activity enters the core host through one function,
   `android_platform(app)`; the confirmation checks the core host's paths on every target it builds
   a host for.
-- **Amended:** 2026-10-22 — section 15: the Linux AT-SPI adapter comes with the Linux host. While
-  that host is winit (section 11), `accesskit_unix` rides `winit-backend`, which `flui-app` turns
-  on for every Linux build; it becomes an unconditional Linux dependency together with `zbus` when
-  the native Wayland and X11 host arrives. The Windows and macOS adapters compile always; the
-  confirmation reads the same way.
 - **Amended:** 2026-10-22 — section 16: the boundary every OS entry's body calls is
   `owner::panic_boundary::os_entry` (`crates/flui-native/src/owner/panic_boundary.rs`), and
   `cargo xtask panic-boundary` is the gate. A panic out of an `extern "C"` frame is not undefined
@@ -531,24 +526,24 @@ crates/flui-native/
                             implementation of Platform, and the AppHandler wiring
     host_window.rs          HostWindow (sealed), as_any
     hosts/                  one table per host and its constructor, nothing else:
-                            windows.rs apple.rs android.rs web.rs linux.rs (Wayland and X11) winit.rs headless.rs
+                            windows.rs apple.rs android.rs web.rs linux.rs (Wayland and X11) headless.rs
     owner/                  the owner thread and each platform's loop (std's sys/pal): OwnerPlatform,
                             SharedPlatform, PlatformProxy, the signal and slot, the panic boundary, the one
                             call point for user code, journal/ (ADR-0215 §4, built under the driver feature;
                             its schema is declared in flui-protocol);
-                            windows.rs apple.rs android.rs web.rs linux/{wayland,x11}.rs winit.rs headless.rs
+                            windows.rs apple.rs android.rs web.rs linux/{wayland,x11}.rs headless.rs
     window/                 mod.rs state.rs visibility.rs installation.rs config.rs (system chrome,
                             the Chrome position, is a facet of the window and lives here);
                             windows/{mod,proc,limits,backdrop}.rs;
                             apple/{mod,macos,ios,geometry,liquid_glass}.rs; android.rs web.rs
-                            linux/{wayland,x11}.rs winit.rs headless.rs
+                            linux/{wayland,x11}.rs headless.rs
     input/                  mod.rs assembly/ keys.rs availability.rs regions.rs scroll.rs;
                             windows/{mod,raw,direct_manipulation}.rs
-                            apple.rs android.rs web.rs linux/ winit.rs headless.rs
+                            apple.rs android.rs web.rs linux/ headless.rs
     text/                   mod.rs ime.rs sizing.rs; windows/{mod.rs, tsf/} apple/{macos,ios}.rs
                             android.rs web.rs linux/{wayland,x11}.rs headless.rs
     drag/                   mod.rs offers.rs; windows.rs apple.rs android.rs web.rs
-                            linux/{wayland,x11}.rs winit.rs headless.rs
+                            linux/{wayland,x11}.rs headless.rs
     display/ clipboard/ accessibility/ haptics/ preferences/ lifecycle/
                             the same shape: the feature's model beside one file per platform
     version/                floor.rs gate.rs (ADR-0244)
@@ -558,7 +553,7 @@ crates/flui-native/
 `shared/`, `traits/` and `platforms/` disappear.
 
 - **Names.** The platform vocabulary is std's: `windows`, `apple`, `android`, `web`, `linux`,
-  `winit`, `headless`. `apple/` and `linux/` open into `macos`/`ios` and `wayland`/`x11` only
+  `headless`. `apple/` and `linux/` open into `macos`/`ios` and `wayland`/`x11` only
   where the code differs; otherwise one file. Repeated file names across features are the norm of
   this layout (std carries dozens of `unix.rs`; an IDE labels the tab with its directory, an agent
   edits by path); a mechanism names a file only one level down and only for one OS object
@@ -617,13 +612,13 @@ crates/flui-native/
   `hosts/` and `owner/`, so moving a feature between the core host and a capability crate is
   moving a directory (ADR-0154).
 
-### 11. Native Linux, then winit goes
+### 11. Linux runs on native hosts; winit is not a host
 
-A native Linux host (Wayland and X11) is built after the restructuring, on the live code of
-`crates/flui-platform/src/platforms/linux` (display source, logind notices, AT-SPI adapter). The 274-line
-`LinuxPlatform` stub is deleted with it. When it runs, winit is removed and CI's Linux jobs move
-to the native host. ADR-0082 §5 kept winit for Linux until a native host had a second
-reason to exist; the reason is now the work itself.
+Linux runs on two native hosts, one for Wayland and one for X11, and `current_platform` picks
+between them by the session. winit is not a host of FLUI: it is out of the workspace and
+`deny.toml` bans the crate, so a host that comes back comes back as a native one. ADR-0082 §5
+kept winit for Linux until a native host had a second reason to exist; the reason was the work
+itself.
 
 ### 12. The rename: two pull requests, core host first
 
@@ -674,17 +669,11 @@ AT-SPI adapter brings a D-Bus stack (`crates/flui-app/Cargo.toml:50-56`), and th
 it again (`Cargo.toml:867`). A product that is otherwise ready therefore ships with a semantics
 tree no screen reader can see, because its author did not know a feature existed.
 
-The cost the feature avoids is paid anyway on Linux. The winit fallback already links `zbus`
-(`winit-backend` at `crates/flui-platform/Cargo.toml:441-442`, enabled by `flui-app` on Linux at
-`crates/flui-app/Cargo.toml:137`), and the native Linux host of section 11 needs D-Bus for
-logind notices (`crates/flui-platform/src/platforms/linux/host_notices/logind.rs`) and for portals.
+The cost the feature avoids is paid anyway on Linux: the native Linux hosts of section 11 need
+D-Bus for logind notices, input methods and portals.
 
-*Amended 2026-10-22:* the invariant on Linux is that the AT-SPI adapter comes with the Linux host.
-Until the native host of section 11 exists that host is winit, so `accesskit_unix` is enabled by
-`winit-backend` beside `zbus`, and every application build has it because `flui-app` enables
-`winit-backend` on Linux; a build of the core host without it has no Linux window to make
-accessible. With the native host, `accesskit_unix` and `zbus` become unconditional Linux
-dependencies together.
+On Linux the AT-SPI adapter comes with the Linux host: `accesskit_unix` and `zbus` are
+unconditional Linux dependencies of the core host.
 
 ### 16. Quality bar
 
@@ -796,8 +785,7 @@ directories). They add no area to it.
   `flui_platform` token outside the archival roots and this ADR.
 - No manifest declares an `a11y` feature; `cargo heli xtask cross-typecheck` builds the Windows
   and macOS AccessKit adapters without a flag, and the AT-SPI adapter builds in every build of the
-  Linux host (`winit-backend` until the native host, then every Linux build), where a real-loop
-  test reads it from a window under Xvfb.
+  Linux host, where a real-loop test reads it from a window under Xvfb.
 - The panic-boundary gate fails on a planted `extern "C"` function or OS callback that does not
   pass `panic_boundary` (a `--self-test` case, as the other gates have).
 - Native behaviour is run per platform and recorded in `docs/platform-parity.md` (a cell is marked

@@ -156,6 +156,10 @@ impl BridgeShared {
                 previous,
             };
             listener(active);
+            #[expect(
+                clippy::mem_forget,
+                reason = "disarms the restore guard once the listener returned"
+            )]
             std::mem::forget(restore);
         }
     }

@@ -2249,32 +2249,60 @@ fn harness_editable_publishes_its_selection_ends_for_handles() {
 }
 
 // ------------------------------------------------------------------------
-// Composing-region underline (ADR-0030)
+// Composing-region underline (ADR-0030, ADR-0310)
 // ------------------------------------------------------------------------
 
-/// The composing-region underline paints at exactly the box
-/// `get_boxes_for_selection` reports for that byte range — the byte-offset
-/// agreement pin: a MULTIBYTE (CJK) range specifically catches a char-count
-/// vs byte-count mixup in the composing-range plumbing, which a pure-ASCII
-/// range cannot distinguish (every ASCII char is exactly one byte).
-///
-/// Red-check: write this test before `RenderEditable::paint`'s underline
-/// branch exists (or with `composing_range` never wired in) — it fails
-/// because no `DrawRect` command matches the expected rect at all (only the
-/// `Paragraph` command is present).
-fn harness_editable_composing_underline_paints_at_the_exact_multibyte_box() {
+/// The composing region is underlined exactly as a span underlining the same
+/// bytes is (ADR-0310 §5): where the font puts its underline, as thick as
+/// the font's, under the region alone. A MULTIBYTE (CJK) range catches a
+/// char-count vs byte-count mixup in the composing-range plumbing, which a
+/// pure-ASCII range cannot (every ASCII char is one byte), and the large
+/// font makes the font's underline distinguishable from a one-pixel bar a
+/// pixel under the baseline.
+fn harness_editable_composing_underline_is_the_span_underline_of_its_bytes() {
+    use flui_painting::typography::{TextDecoration, TextStyle};
+    use flui_painting::{DrawOp, FontCollection, TextContext, TextPainter};
+
     // "abc" (3 ASCII bytes) + "你好" (two 3-byte CJK chars = 6 bytes) + "def".
-    let text = "abc你好def";
-    let composing_start = "abc".len();
-    let composing_end = composing_start + "你好".len();
+    let (before, composing, after) = ("abc", "你好", "def");
+    let text = format!("{before}{composing}{after}");
+    let composing_start = before.len();
+    let composing_end = composing_start + composing.len();
+    let style = TextStyle::default().with_font_size(40.0);
 
     let run = RenderTester::mount(box_node(
-        RenderEditable::new(TextSpan::new(text), TextDirection::Ltr)
+        RenderEditable::new(TextSpan::styled(text, style.clone()), TextDirection::Ltr)
             .with_composing_range(Some(composing_start..composing_end))
             .with_show_caret(false),
     ))
     .with_constraints(loose(400.0))
     .run_frame();
+
+    // The same text with the composed bytes underlined as a span.
+    let mut spanned = TextPainter::new()
+        .with_text(
+            TextSpan::styled("", style)
+                .with_child(TextSpan::new(before))
+                .with_child(TextSpan::styled(
+                    composing,
+                    TextStyle::new().with_decoration(TextDecoration::UNDERLINE),
+                ))
+                .with_child(TextSpan::new(after)),
+        )
+        .with_text_direction(TextDirection::Ltr);
+    spanned
+        .layout(&mut TextContext::new(&FontCollection::new()), 0.0, 400.0)
+        .expect("the reference text lays out");
+    let mut canvas = Canvas::new();
+    spanned.paint(&mut canvas, Offset::ZERO);
+    let underline = canvas
+        .finish()
+        .iter()
+        .find_map(|command| match &command.op {
+            DrawOp::Rect { rect, .. } => Some(*rect),
+            _ => None,
+        })
+        .expect("a span underline records a rect");
 
     let editable = run
         .owner()
@@ -2286,41 +2314,44 @@ fn harness_editable_composing_underline_paints_at_the_exact_multibyte_box() {
         .render_object()
         .downcast_ref::<RenderEditable>()
         .expect("root is a RenderEditable");
-
     let boxes = editable
         .painter()
         .get_boxes_for_selection(composing_start, composing_end);
     assert_eq!(
         boxes.len(),
         1,
-        "a single-line contiguous CJK range must produce exactly one box"
+        "one line, one direction, one box: {boxes:?}"
     );
-    let expected_box = boxes[0].rect;
+    let region = boxes[0].rect;
+    assert!(
+        (underline.left() - region.left()).abs() < 1e-3
+            && (underline.right() - region.right()).abs() < 1e-3,
+        "the span underline runs under the composed bytes alone: {underline:?}, {region:?}"
+    );
     let baseline = editable
         .compute_distance_to_actual_baseline(TextBaseline::Alphabetic)
         .expect("a successfully laid-out editable has valid baseline geometry")
         .expect("layout ran, so a baseline must be available");
-    // Mirrors `RenderEditable`'s own private `underline_rect_for_box` clamp —
-    // baseline + 1px gap, clamped inside the box's vertical span.
-    let top = expected_box.top();
-    let max_top = (expected_box.bottom() - 1.0).max(top);
-    let expected_top = (baseline + 1.0).clamp(top, max_top);
-
-    let commands = run.display_commands();
-    let expected_rect_fragment = format!(
-        "rect=({:.2},{:.2} {:.2}x{:.2})",
-        expected_box.left(),
-        expected_top,
-        expected_box.width(),
-        1.0
+    assert!(
+        underline.top() > baseline + 1.0 && underline.height() > 1.5,
+        "at this size the font's underline is not a one-pixel bar a pixel under the \
+         baseline: {underline:?}, baseline {baseline}"
     );
+
+    let expected = format!(
+        "rect=({:.2},{:.2} {:.2}x{:.2})",
+        underline.left(),
+        underline.top(),
+        underline.width(),
+        underline.height()
+    );
+    let commands = run.display_commands();
     assert!(
         commands
             .iter()
-            .any(|c| c.line.contains("DrawRect") && c.line.contains(&expected_rect_fragment)),
-        "the underline must paint exactly at the CJK composing range's box \
-         (byte-offset agreement, not a char-offset mixup); expected fragment \
-         {expected_rect_fragment:?}; commands: {commands:#?}"
+            .any(|c| c.line.contains("DrawRect") && c.line.contains(&expected)),
+        "the composing underline is the span underline of its bytes; expected \
+         {expected:?}; commands: {commands:#?}"
     );
 }
 
@@ -14153,8 +14184,8 @@ fn family_text_and_image() {
                 harness_editable_publishes_its_selection_ends_for_handles,
             ),
             (
-                "editable_composing_underline_paints_at_the_exact_multibyte_box",
-                harness_editable_composing_underline_paints_at_the_exact_multibyte_box,
+                "editable_composing_underline_is_the_span_underline_of_its_bytes",
+                harness_editable_composing_underline_is_the_span_underline_of_its_bytes,
             ),
         ],
     );

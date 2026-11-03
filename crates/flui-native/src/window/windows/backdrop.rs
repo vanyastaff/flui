@@ -51,7 +51,7 @@ use crate::version::gate::Since;
 /// Windows-specific window extensions.
 ///
 /// Implemented for every [`HostWindow`] (ADR-0151 §8). A window of another
-/// host (headless, winit) is not a Win32 window: [`win32`](Self::win32) answers
+/// host (headless, another system's) is not a Win32 window: [`win32`](Self::win32) answers
 /// `None` for it, and nothing is asked of it.
 ///
 /// ```

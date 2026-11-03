@@ -1,6 +1,14 @@
 //! Viewport offset for scroll position tracking.
 
-use std::{cell::RefCell, fmt::Debug, rc::Rc};
+use std::{
+    cell::RefCell,
+    fmt::Debug,
+    rc::{Rc, Weak},
+};
+
+use flui_foundation::{
+    ChangeNotifier, Listenable, ListenerId, notifier_generic::NotificationCallback,
+};
 
 /// The direction of a scroll, relative to the positive scroll offset axis.
 ///
@@ -286,10 +294,54 @@ pub struct ScrollableViewportOffset {
     user_scroll_direction: ScrollDirection,
 
     /// Listeners for change notifications.
-    listeners: RefCell<Vec<Rc<dyn Fn()>>>,
+    listeners: OffsetListeners,
+}
 
-    /// Reentrant notification bookkeeping.
-    notification_state: RefCell<NotificationState>,
+/// The listener set behind [`ViewportOffset::add_listener`]: a [`ChangeNotifier`] whose
+/// subscriptions are found again by the callback's `Rc` identity, which is the trait's removal
+/// contract. Delivery, a panicking listener and removal during delivery follow the notifier's
+/// rules, so one failed listener neither silences the offset nor skips the rest.
+#[derive(Default)]
+pub(crate) struct OffsetListeners {
+    identities: RefCell<Vec<(ListenerId, Weak<dyn Fn()>)>>,
+    notifier: ChangeNotifier,
+}
+
+impl OffsetListeners {
+    pub(crate) fn add(&self, listener: Rc<dyn Fn()>) {
+        let identity = Rc::downgrade(&listener);
+        let id = self.notifier.add_listener(listener);
+        self.identities.borrow_mut().push((id, identity));
+    }
+
+    /// Removes the first subscription of `listener`. Its callback is dropped after the delivery
+    /// in progress, or at once when none is.
+    pub(crate) fn remove(&self, listener: &Rc<dyn Fn()>) {
+        if let Some(id) = self.forget_identity(listener) {
+            self.notifier.remove_listener(id);
+        }
+    }
+
+    /// Withdraws the first subscription of `listener` without dropping its callback, for an
+    /// owner that retires it under the failure of another delivery in progress.
+    #[must_use]
+    pub(crate) fn take(&self, listener: &Rc<dyn Fn()>) -> Option<Rc<NotificationCallback<()>>> {
+        self.forget_identity(listener)
+            .and_then(|id| self.notifier.take_listener(id))
+    }
+
+    fn forget_identity(&self, listener: &Rc<dyn Fn()>) -> Option<ListenerId> {
+        let mut identities = self.identities.borrow_mut();
+        let probe = Rc::downgrade(listener);
+        let index = identities
+            .iter()
+            .position(|(_, identity)| identity.ptr_eq(&probe))?;
+        Some(identities.remove(index).0)
+    }
+
+    pub(crate) fn notifier(&self) -> &ChangeNotifier {
+        &self.notifier
+    }
 }
 
 /// Detached layout proposal for a scrollable position without page mapping.
@@ -326,12 +378,6 @@ impl ViewportLayout for ScrollableViewportLayout {
     }
 }
 
-#[derive(Debug, Default)]
-struct NotificationState {
-    notifying: bool,
-    pending_passes: usize,
-}
-
 impl Debug for ScrollableViewportOffset {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ScrollableViewportOffset")
@@ -341,7 +387,7 @@ impl Debug for ScrollableViewportOffset {
             .field("max_scroll_extent", &self.max_scroll_extent)
             .field("viewport_dimension", &self.viewport_dimension)
             .field("user_scroll_direction", &self.user_scroll_direction)
-            .field("listeners_count", &self.listeners.borrow().len())
+            .field("listeners_count", &self.listeners.notifier().len())
             .finish_non_exhaustive()
     }
 }
@@ -363,8 +409,7 @@ impl ScrollableViewportOffset {
             max_scroll_extent: 0.0,
             viewport_dimension: 0.0,
             user_scroll_direction: ScrollDirection::Idle,
-            listeners: RefCell::new(Vec::new()),
-            notification_state: RefCell::new(NotificationState::default()),
+            listeners: OffsetListeners::default(),
         }
     }
 
@@ -426,39 +471,10 @@ impl ScrollableViewportOffset {
         self.user_scroll_direction = direction;
     }
 
+    /// Tells every listener of a pixels change. A listener that panics does not stop the rest;
+    /// the first panic resumes once all of them have run.
     fn notify_listeners(&self) {
-        {
-            let mut state = self.notification_state.borrow_mut();
-            if state.notifying {
-                state.pending_passes = state.pending_passes.saturating_add(1);
-                return;
-            }
-            state.notifying = true;
-        }
-
-        loop {
-            let listeners = self.listeners.borrow().clone();
-            for listener in listeners {
-                if self.is_listener_registered(&listener) {
-                    listener();
-                }
-            }
-
-            let mut state = self.notification_state.borrow_mut();
-            if state.pending_passes > 0 {
-                state.pending_passes -= 1;
-                continue;
-            }
-            state.notifying = false;
-            break;
-        }
-    }
-
-    fn is_listener_registered(&self, listener: &Rc<dyn Fn()>) -> bool {
-        self.listeners
-            .borrow()
-            .iter()
-            .any(|registered| Rc::ptr_eq(registered, listener))
+        self.listeners.notifier().notify_listeners();
     }
 }
 
@@ -521,10 +537,7 @@ impl ViewportOffset for ScrollableViewportOffset {
     }
 
     fn jump_to(&mut self, pixels: f64) {
-        if (self.pixels - pixels).abs() > f64::EPSILON {
-            self.pixels = pixels;
-            self.notify_listeners();
-        }
+        self.set_pixels(pixels);
     }
 
     fn animate_to(&mut self, to: f64, _duration_ms: u64) {
@@ -537,13 +550,10 @@ impl ViewportOffset for ScrollableViewportOffset {
     }
 
     fn add_listener(&self, listener: Rc<dyn Fn()>) {
-        self.listeners.borrow_mut().push(listener);
+        self.listeners.add(listener);
     }
 
     fn remove_listener(&self, listener: &Rc<dyn Fn()>) {
-        let mut listeners = self.listeners.borrow_mut();
-        if let Some(pos) = listeners.iter().position(|l| Rc::ptr_eq(l, listener)) {
-            listeners.remove(pos);
-        }
+        self.listeners.remove(listener);
     }
 }

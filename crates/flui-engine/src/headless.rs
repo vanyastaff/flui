@@ -1104,7 +1104,15 @@ mod twin_readback_tests {
             if created != 1 {
                 // Leaked, not dropped: dropping two instances' devices is the
                 // teardown that blocks, and the failure should report at once.
+                #[expect(
+                    clippy::mem_forget,
+                    reason = "leaked so a failing check reports before the blocking device teardown"
+                )]
                 std::mem::forget(twin);
+                #[expect(
+                    clippy::mem_forget,
+                    reason = "leaked so a failing check reports before the blocking device teardown"
+                )]
                 std::mem::forget(renderer);
                 panic!("a renderer and its twin must share one wgpu::Instance; created {created}");
             }

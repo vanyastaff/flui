@@ -265,6 +265,10 @@ pub(crate) mod teardown {
         if detached {
             guarded(&mut || drop(view.take()));
         } else {
+            #[expect(
+                clippy::mem_forget,
+                reason = "a hook still attached may reach the view, so it stays alive"
+            )]
             std::mem::forget(view);
         }
     }

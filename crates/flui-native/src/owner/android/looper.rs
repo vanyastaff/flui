@@ -269,7 +269,7 @@ pub struct AndroidLoop {
     pub(crate) window_ids: ActivityWindowIds,
 }
 
-// Opaque on purpose, matching `HeadlessLoop` and `WinitLoop`. A
+// Opaque on purpose, matching `HeadlessLoop`. A
 // derived `Debug` here would format the clipboard, whose contents are the
 // user's, into whatever sink formatted the platform — a log line, a panic
 // message, a bug report. None of the remaining fields are useful to a reader
@@ -716,7 +716,7 @@ impl host::Loop for AndroidLoop {
                 continue;
             }
 
-            // Wall-clock wake (mirrors the winit backend's `about_to_wait`):
+            // Wall-clock wake:
             // ask the application's handler for its deadline fresh on EVERY
             // iteration -- a deadline that fires, a new one getting armed,
             // or every deadline clearing must all be reflected immediately.
@@ -1057,7 +1057,7 @@ impl host::Loop for AndroidLoop {
         // the panic's cause, and a second panic there aborts the process
         // instead of letting `android-activity`'s `catch_unwind` finish the
         // activity. This is where the window this backend tracked is
-        // released, in the order the winit and headless close bodies use:
+        // released, in the order the headless close body uses:
         // the platform's own reference first, then the callback slots.
         //
         // The slots are the platform's only owning path into the embedder's

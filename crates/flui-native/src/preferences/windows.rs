@@ -4,7 +4,7 @@
 //!
 //! The owner keeps the source (`OwnerPreferences`): its broadcast receiver
 //! tells it of setting changes, and a failed read is retried on a
-//! paced owner wake. The winit host on Windows keeps the same source.
+//! paced owner wake.
 
 // WinRT activation and initialization, and the Win32 metric queries. Each
 // `unsafe` block states its invariant.
@@ -54,9 +54,6 @@ mod regional;
 mod retry_tests;
 #[cfg(test)]
 mod tests;
-// The source as the winit host on Windows runs it, on a real winit loop.
-#[cfg(all(test, feature = "winit-backend"))]
-mod winit_tests;
 
 const RETRY_INTERVAL: Duration = Duration::from_millis(100);
 
@@ -120,37 +117,6 @@ impl std::fmt::Debug for PreferenceSource {
         f.debug_struct("PreferenceSource").finish_non_exhaustive()
     }
 }
-
-/// The winit host on Windows starts the same source as it resumes and samples
-/// it on its owner turns.
-#[cfg(feature = "winit-backend")]
-mod winit {
-    use std::rc::Rc;
-    use std::sync::Arc;
-
-    use super::PreferenceSource;
-    use crate::PlatformError;
-    use crate::owner::signal::OwnerSignal;
-    use crate::owner::windows::control::OwnerPreferences;
-    use crate::owner::winit::PreferenceStart;
-
-    /// The system's settings as the winit loop starts them on its owner
-    /// thread.
-    #[derive(Debug)]
-    pub(crate) struct WinitSettings;
-
-    impl PreferenceStart for WinitSettings {
-        fn start(
-            &self,
-            signal: &Arc<OwnerSignal>,
-        ) -> Result<Rc<dyn OwnerPreferences>, PlatformError> {
-            Ok(Rc::new(PreferenceSource::try_new(signal)?))
-        }
-    }
-}
-
-#[cfg(feature = "winit-backend")]
-pub(crate) use winit::WinitSettings;
 
 impl SystemPreferenceSource for PreferenceSource {
     fn sample(&self) -> Result<SystemPreferences, PlatformError> {

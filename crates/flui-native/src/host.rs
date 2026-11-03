@@ -45,7 +45,6 @@ pub(crate) use clipboard::MAX_TEXT;
     target_arch = "wasm32",
     wayland_host,
     x11_host,
-    feature = "winit-backend"
 ))]
 pub(crate) use clipboard::host_text;
 #[cfg(any(target_arch = "wasm32", wayland_host, x11_host))]
@@ -203,17 +202,17 @@ pub trait Window<O> {
     /// What the windows of one platform share beside the loop `O`: what a
     /// window opens with and what the windows keep in common (the Win32
     /// handle map and configuration, the macOS configuration, the UIKit window
-    /// factory, the winit frame inset and window manager's view, the headless
-    /// window model), `()` where the loop keeps it all. The host's constructor
-    /// builds one, hands it to the loop as the hook the loop declares and to
-    /// the platform, which passes it to every call of this position: one
+    /// factory, the headless window model), `()` where the loop keeps it all.
+    /// The host's constructor builds one, hands it to the loop as the hook the
+    /// loop declares and to the platform, which passes it to every call of
+    /// this position: one
     /// instance for both (`HostPlatform::from_parts`). It holds the
     /// [`WindowPositions`] the platform made from the table.
     type Shared: Send + Sync + 'static;
 
     /// The platform's own reference to one of its windows, which the
     /// window-level positions are made for: the Win32 handle with its
-    /// identity, the content view, the winit window, what the Activity's
+    /// identity, the content view, what the Activity's
     /// window is made of.
     type Ref: ?Sized + 'static;
 

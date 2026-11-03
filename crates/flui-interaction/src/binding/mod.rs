@@ -751,8 +751,8 @@ impl GestureBinding {
 
     /// The pointer left the hosting window: fire `on_exit` for every
     /// hovered region, on the window and every surface embedded in it, and
-    /// reset the cursor. The platform's window-leave signal (winit
-    /// `CursorLeft`) routes here; without it a widget hovered at the moment
+    /// reset the cursor. The platform's window-leave signal
+    /// (`CursorLeft`) routes here; without it a widget hovered at the moment
     /// the cursor crosses the window edge stays hovered forever. Must run
     /// inside the owner lane scope, like every other dispatch on this binding.
     ///

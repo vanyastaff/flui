@@ -280,7 +280,7 @@ pub(super) fn source_offset_for_masked_offset(
 /// [`LifecycleContext::text_input_handle`] (acquired in `init_state`, per the
 /// frame-capability rule that method's doc states). The input method reads
 /// the text, selection, composition and geometry in UTF-16 offsets and edits
-/// them under a lock; a push-model [`flui_platform::ImeEvent`] (winit) is
+/// them under a lock; a push-model [`flui_platform::ImeEvent`] is
 /// projected onto the same store, so there is one editing path. On blur and
 /// on dispose the client is detached (the ADR-0030 detach-on-dispose
 /// contract — a field unmounted while still focused must not leave a stale

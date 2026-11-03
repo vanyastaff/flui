@@ -26,7 +26,7 @@
 //!   │
 //!   ├─ window/              - A feature each (ADR-0151 §10): its model beside
 //!   ├─ input/                 one file per platform (windows, apple,
-//!   ├─ text/                  android, web, linux, winit, headless)
+//!   ├─ text/                  android, web, linux, headless)
 //!   ├─ display/
 //!   ├─ clipboard/, drag/
 //!   ├─ accessibility/
@@ -141,10 +141,7 @@
 //! # Feature Flags
 //!
 //! - `default` (`desktop`): the native desktop backend for the target OS, on
-//!   Linux the Wayland and X11 hosts (`wayland`, `x11`). It does not include
-//!   winit.
-//! - `winit-backend`: the winit backend, which `current_platform` picks on
-//!   Linux while it is built. It brings `wayland` and `x11`.
+//!   Linux the Wayland and X11 hosts (`wayland`, `x11`).
 //! - `wayland`: on Linux, the native Wayland host (`WaylandPlatform`) and the
 //!   client the display source reads the compositor's outputs with. `x11`: the
 //!   native X11 host (`X11Platform`) and the display source's RandR client. On
@@ -152,7 +149,7 @@
 //! - `testing`: the `testing` module, test support for a native host's own
 //!   windows (ADR-0243). Not part of the release API.
 //!
-//! Accessibility has no feature: Win32, AppKit, Wayland, X11 and Linux winit
+//! Accessibility has no feature: Win32, AppKit, Wayland and X11
 //! windows always hand out their operating system's AccessKit adapter. The headless testing
 //! platform needs no feature.
 //!
@@ -176,7 +173,7 @@
 // AppKit / UIKit / Android NDK / wasm-bindgen — `headless` has none). The
 // crate does not opt the whole tree out of `unsafe_code = "warn"`: each FFI
 // island carries its own `expect(unsafe_code)` where it is declared — the
-// loops `owner::windows`, `owner::apple`, `owner::web`, `owner::winit` and
+// loops `owner::windows`, `owner::apple`, `owner::web` and
 // `owner::android::java_view`, and the platform files of the features that
 // call the OS directly (`window::windows`, `input::windows`,
 // `text::windows::tsf`, `display::apple::{macos, ios}`, `preferences::windows`
@@ -283,13 +280,6 @@ pub use hosts::WaylandPlatform;
 pub use hosts::WindowsPlatform;
 #[cfg(x11_host)]
 pub use hosts::X11Platform;
-// winit fallback backend — primary on Linux until native Wayland/X11 lands
-// (roadmap Cross.P)
-#[cfg(all(
-    feature = "winit-backend",
-    any(target_os = "windows", target_os = "macos", target_os = "linux")
-))]
-pub use hosts::WinitPlatform;
 // The headless host's test controls and doubles, each its feature's.
 pub use accessibility::headless::FakeAccessibility;
 pub use display::headless::{
@@ -378,8 +368,7 @@ pub use owner::{
 ///   input, clipboard, IME, displays, and a vsync-paced frame loop
 /// - **Linux**: Returns `WaylandPlatform` when `WAYLAND_DISPLAY` names a
 ///   compositor, `X11Platform` when `DISPLAY` names an X server, and an error
-///   for no session (ADR-0151 section 11). The `winit-backend` feature still
-///   builds `WinitPlatform`, which this function never returns on Linux.
+///   for no session (ADR-0151 section 11).
 /// - **Android**: Returns an error: the host needs the Activity, which the
 ///   system hands only to `android_main`; `android_platform(app)` starts it
 /// - **iOS**: Returns `IOSPlatform` - the native UIKit backend: windows, touch
@@ -585,8 +574,7 @@ enum LinuxHost {
 ///
 /// A Wayland session gets the native Wayland host and an X11 session the
 /// native X11 host; a Wayland session that also names an X server gets the
-/// X11 host when only that one is built. The winit host is never chosen, even
-/// when it is built (ADR-0151 §11).
+/// X11 host when only that one is built (ADR-0151 §11).
 #[cfg(any(target_os = "linux", test))]
 fn choose_linux_host(
     environment: &display::linux::protocol::Environment,

@@ -141,7 +141,7 @@ impl Gate for ViewDisplayLink {
 
 /// Why an AppKit window takes no refresh-rate request: below macOS 14 there
 /// is no per-view display link to carry one; from 14 on there is, and this
-/// host paces its frames without it. winit carries none on macOS either, and
+/// host paces its frames without it. winit's macOS backend carries none either, and
 /// answers the same.
 #[cfg(any(target_os = "macos", test))]
 pub(crate) fn frame_rate_absence(version: MacOSVersion) -> CapabilityAbsence {

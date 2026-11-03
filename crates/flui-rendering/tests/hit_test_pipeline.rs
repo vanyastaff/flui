@@ -846,7 +846,10 @@ pub(crate) fn a_rejected_slop_rewalk_retains_its_entries_behind_an_earlier_panic
             .to_owned()
     });
     let targets: Vec<_> = result.path().iter().map(|entry| entry.target).collect();
-    // The kept path's bomb metadata would panic on drop; it is the caller's.
+    #[expect(
+        clippy::mem_forget,
+        reason = "the kept path's bomb metadata would panic on drop"
+    )]
     std::mem::forget(result);
     assert_eq!(panic.as_deref(), Some("first hit test failed"));
     assert_eq!(targets, vec![bomb, root], "the visual path stands");

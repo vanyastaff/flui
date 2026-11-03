@@ -107,7 +107,7 @@ use crate::owner::slot::{OwnerMap, OwnerWeak};
 use crate::owner::wake_deadline::FrameCount;
 use crate::owner::window_delivery::{Publication, Retirement, WindowDelivery};
 use crate::text::WindowTextInput;
-use crate::window::plan::{FrameInset, OpenPlan, PlacementDisplay, WindowShell};
+use crate::window::plan::{FrameInset, OpenPlan, PlacementDisplay};
 use crate::window::state::{ReportedFacts, WindowStateCell, mode_of, not_carried_out};
 
 /// `_NET_WM_STATE` and `WM_STATE` are read this far, in 4-byte units.
@@ -1780,13 +1780,14 @@ impl X11Windows {
         // A title bar of the application's opens with the window manager's frame
         // where the window manager cannot move one, so the plan takes that
         // frame's inset.
-        let frame = options.frame.at_open(&capabilities(support));
+        let window_capabilities = capabilities(support);
+        let frame = options.frame.at_open(&window_capabilities);
         let options = options.with_frame(frame);
         let snapshot = owner.displays().snapshot().ok();
         let placement = PlacementDisplay::choose(snapshot.as_ref(), options.display);
         let plan = OpenPlan::new(
             &options,
-            WindowShell::Desktop,
+            &window_capabilities,
             placement,
             self.frame_inset.logical(placement.scale_factor),
         );

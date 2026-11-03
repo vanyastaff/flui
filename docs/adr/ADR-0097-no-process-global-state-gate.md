@@ -65,7 +65,7 @@ Beside them sit monotonic ID counters (`KEY_COUNTER`, `crates/flui-foundation/sr
 `crates/flui-app/src/app/runtime.rs:190`, and others), warn-once flags
 (`crates/flui-engine/src/batches/gradients.rs:64,77`), and platform cells that OS callbacks read
 to find their owner (`DELEGATE_STATE`, `crates/flui-native/src/owner/apple/ios.rs`;
-`ACTIVE_EVENT_LOOP`, `crates/flui-native/src/owner/winit.rs`;
+`ACTIVE_EVENT_LOOP` in the winit owner, since deleted with that host;
 `ON_OWNER_QUEUE`, `crates/flui-native/src/owner/apple/macos/owner_lane.rs`). This list is
 **not** the inventory: a regex count over `crates/` and `src/` (lines matching an upper-case
 `static` item, and `thread_local!` blocks, outside `*_tests.rs` and `tests/`, crate examples included) finds about 91 and
@@ -200,8 +200,8 @@ runs on the pinned stable toolchain, which dylint does not.
 **Limits the gate does not claim to cover:**
 
 - Environment-variable selection: `FLUI_HEADLESS` (`crates/flui-native/src/lib.rs`),
-  `FLUI_SELF_CLOSE_AFTER_MS` and `FLUI_SELF_CLOSE_ROUTE`
-  (`crates/flui-native/src/owner/winit.rs`), `FLUI_DX12_NO_DCOMP`
+  `FLUI_SELF_CLOSE_AFTER_MS` and `FLUI_SELF_CLOSE_ROUTE` (in the winit owner,
+  since deleted with that host), `FLUI_DX12_NO_DCOMP`
   (`crates/flui-engine/src/renderer.rs`) choose process-wide behavior without any static.
 - Build-script output pulled in through `include!(concat!(env!("OUT_DIR"), …))`, as the six
   `crates/flui-engine/src/*/generated.rs` files do: the scan reads the source tree, not

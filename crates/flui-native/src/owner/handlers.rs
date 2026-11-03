@@ -516,37 +516,6 @@ mod tests {
         signal.close();
     }
 
-    /// A read inside a turn that finds work for the application's turn owes
-    /// it to that turn: the drive runs it, and nothing is posted for it.
-    #[cfg(all(windows, feature = "winit-backend"))]
-    fn a_turn_owed_by_its_read_posts_nothing() {
-        let posts = Arc::new(AtomicUsize::new(0));
-        let recorded = Arc::clone(&posts);
-        let signal = OwnerSignal::new(Arc::new(move || {
-            recorded.fetch_add(1, Ordering::SeqCst);
-            Ok(())
-        }));
-        let calls = Arc::new(AtomicUsize::new(0));
-        let counted = Arc::clone(&calls);
-        signal
-            .register(Box::new(move || {
-                counted.fetch_add(1, Ordering::SeqCst);
-            }))
-            .expect("register");
-        signal.start().expect("start");
-
-        let turn = signal.begin_turn();
-        turn.owe();
-        assert!(!turn.drive());
-        assert_eq!(calls.load(Ordering::SeqCst), 1);
-        assert_eq!(
-            posts.load(Ordering::SeqCst),
-            0,
-            "an owed turn posted a turn of its own"
-        );
-        signal.close();
-    }
-
     /// The owner-thread machinery's contracts: failing callback captures and
     /// payloads are contained (a direct clear drops each capture without
     /// unwinding; an owner callback's own and capture panics never replace an
@@ -583,11 +552,6 @@ mod tests {
             (
                 "an undriven turn",
                 an_undriven_turn_posts_the_next_one,
-            ),
-            #[cfg(all(windows, feature = "winit-backend"))]
-            (
-                "a turn owed by its read",
-                a_turn_owed_by_its_read_posts_nothing,
             ),
             (
                 "off-owner normal diagnostics",

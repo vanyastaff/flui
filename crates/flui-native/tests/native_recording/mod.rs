@@ -1,6 +1,6 @@
 //! Native recordings (ADR-0215 §4): checked-in journals of each backend's
 //! plain readings, replayed through the shared decoder on any host, so
-//! Linux CI exercises Win32, Apple, Android, winit and browser translation.
+//! Linux CI exercises Win32, Apple, Android, X11, Wayland and browser translation.
 
 #[cfg(all(debug_assertions, feature = "native-capture"))]
 pub mod capture;
@@ -557,33 +557,6 @@ fn android_device_recordings_decode_to_their_host_input() {
     );
 }
 
-/// The winit fallback: a mouse chord on a window surface, a touchpad
-/// pressure reading without a position, a cancelled touch, and a pinch
-/// centred on the device's cursor.
-fn winit_recordings_decode_to_their_host_input() {
-    assert_replays(
-        include_str!("winit_mouse_touch_pinch.jsonl"),
-        &[
-            "device+ d1 mouse t=1000000000",
-            "enter p1* mouse d1 t=1000000000",
-            "move p1* mouse d1 [] t=1005000000 (100, 60)",
-            "down p1* mouse d1 b1 [1] t=1010000000 (100, 60)",
-            "press p1* mouse d1 b2 [1, 2] t=1020000000 (100, 60)",
-            "release p1* mouse d1 b2 [1] t=1030000000 (100, 60)",
-            "up p1* mouse d1 b1 [] t=1040000000 (100, 60)",
-            "move p1* mouse d1 [] t=1045000000 (100, 60) pressure=0.500",
-            "leave p1* mouse d1 t=1050000000 (100, 60)",
-            "device+ d2 touch t=1100000000",
-            "down p2* touch d2 b1 [1] t=1100000000 (200, 200)",
-            "move p2* touch d2 [1] t=1110000000 (202, 200)",
-            "cancel p2* touch d2 Platform t=1120000000",
-            "panzoom p3* trackpad d1 start t=1200000000 (100, 60)",
-            "panzoom p3* trackpad d1 update scale=1.500 rotation=0.000 t=1200000000 (100, 60)",
-            "panzoom p3* trackpad d1 end t=1210000000 (100, 60)",
-        ],
-    );
-}
-
 /// A Weston seat (`wayland_input`, Weston's X11 backend driven through
 /// XTest): the cursor's enter and move, a click, and a wheel notch as one
 /// notched step in detents. Weston stamps this backend's events on the X
@@ -687,7 +660,7 @@ fn web_bidi_recording_decodes_to_its_host_input() {
 }
 
 /// Every checked-in recording, by name.
-const RECORDINGS: [(&str, &str); 15] = [
+const RECORDINGS: [(&str, &str); 14] = [
     (
         "wayland_weston_mouse_wheel",
         include_str!("wayland_weston_mouse_wheel.jsonl"),
@@ -731,10 +704,6 @@ const RECORDINGS: [(&str, &str); 15] = [
     (
         "android_touches_and_stylus",
         include_str!("android_touches_and_stylus.jsonl"),
-    ),
-    (
-        "winit_mouse_touch_pinch",
-        include_str!("winit_mouse_touch_pinch.jsonl"),
     ),
     (
         "web_pen_mouse_touch",
@@ -925,10 +894,6 @@ pub(crate) fn contracts() -> Vec<(&'static str, fn())> {
         (
             "x11_recordings_decode_to_their_host_input",
             x11_recordings_decode_to_their_host_input,
-        ),
-        (
-            "winit_recordings_decode_to_their_host_input",
-            winit_recordings_decode_to_their_host_input,
         ),
         (
             "web_recordings_decode_to_their_host_input",

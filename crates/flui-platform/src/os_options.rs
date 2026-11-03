@@ -5,7 +5,7 @@
 //! options of its own, each of that system's type: Windows and Android today. A
 //! cross-platform application sets every system's options it cares about,
 //! without a `cfg` of its own; each host reads only its own system's value,
-//! and another host (headless, winit, another system's) opens the window
+//! and another host (headless, another system's) opens the window
 //! without it. An application sees that its options were not taken where
 //! that system's extension in `flui::native` has no view of the window.
 //!

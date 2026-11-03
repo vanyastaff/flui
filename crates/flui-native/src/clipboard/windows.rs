@@ -45,8 +45,8 @@ use crate::owner::panic_boundary::{AfterPanic, os_entry};
 /// applications.
 ///
 /// Stateless: the clipboard is a process-wide resource, so every instance
-/// opens it under one process-wide lock, shared with the winit backend's
-/// clipboard; instances on different threads never overlap their sessions.
+/// opens it under one process-wide lock, so
+/// instances on different threads never overlap their sessions.
 #[derive(Debug)]
 #[non_exhaustive]
 pub struct WindowsClipboard;
@@ -298,7 +298,7 @@ unsafe fn set_data(format: u32, bytes: &[u8]) -> bool {
 /// clipboard lock. The only way this module opens the clipboard.
 ///
 /// Two guards, for two kinds of opener in this process. FLUI's own sessions
-/// (this backend and the winit backend's `arboard`) serialize on
+/// (every instance of this backend, on any thread) serialize on
 /// [`lock`]. Anyone else is shut out by Win32 itself: the session
 /// opens with [`owner_window`] as the owner, and Win32 refuses a concurrent
 /// `OpenClipboard` from any other owner, `NULL` included. With a `NULL` owner
@@ -333,7 +333,7 @@ impl ClipboardSession {
 /// Another process's `EmptyClipboard` *sends* `WM_DESTROYCLIPBOARD` to the
 /// current owner and blocks until it is handled, so the owner's thread must
 /// always be pumping — which the thread calling into the clipboard (possibly
-/// a worker, possibly a winit loop) cannot promise.
+/// a worker) cannot promise.
 fn owner_window() -> Option<HWND> {
     static OWNER: OnceLock<Option<isize>> = OnceLock::new();
     OWNER

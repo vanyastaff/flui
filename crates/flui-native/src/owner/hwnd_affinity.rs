@@ -223,7 +223,7 @@ pub(crate) fn route_teardown(
 /// further up the same stack. Instead, every borrow holds a guard counted
 /// here, `WM_DESTROY` only [`retire`]s the context after clearing the slot,
 /// and the free happens when the **outermost** guard releases — the same
-/// recursion-deferred user-data reclaim the winit backend's wndproc uses.
+/// recursion-deferred user-data reclaim winit's wndproc uses.
 ///
 /// Single-threaded by contract: every acquire/release/retire happens on the
 /// window's owning thread (enforced by the affinity gates), which is what

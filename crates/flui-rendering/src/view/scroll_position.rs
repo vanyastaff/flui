@@ -28,7 +28,7 @@ use flui_foundation::{ChangeNotifier, Listenable, ListenerCallback, ListenerId};
 use flui_scheduler::PostFrameHandle;
 use std::cell::RefCell;
 
-use super::viewport_offset::{ScrollDirection, ViewportOffset};
+use super::viewport_offset::{OffsetListeners, ScrollDirection, ViewportOffset};
 
 /// The `ViewportOffset` fields today's `ScrollableViewportOffset` tracks —
 /// pixel position plus the viewport/content extents layout reports.
@@ -406,11 +406,9 @@ struct Inner {
     /// `Listenable` sink — what `ScrollController::listenable()` and
     /// `AnimatedBuilder` subscribe to.
     notifier: ChangeNotifier,
-    /// The `ViewportOffset` trait's own ptr-eq listener list, kept separate
-    /// from `notifier` because it has a different identity contract
-    /// (`Rc::ptr_eq` removal, not a `ListenerId`).
-    offset_listeners: RefCell<Vec<(flui_foundation::ListenerId, std::rc::Weak<dyn Fn()>)>>,
-    offset_notifier: ChangeNotifier,
+    /// The `ViewportOffset` trait's own listeners, kept apart from `notifier`
+    /// because they are removed by `Rc` identity, not by `ListenerId`.
+    offset_listeners: OffsetListeners,
     flush: RefCell<FlushState>,
     /// Scroll-activity state — whether a user drag or ballistic fling is
     /// underway, and which way the user last scrolled. Kept apart from
@@ -447,7 +445,8 @@ impl Inner {
         // Accepted pixel geometry must reach render invalidation even when a
         // widget listener failed. Both channels share the first failure and
         // the existing notifier's live-membership and retirement rules.
-        self.offset_notifier
+        self.offset_listeners
+            .notifier()
             .notify_listeners_with_recovery(recovery);
     }
 
@@ -567,8 +566,7 @@ impl ScrollPosition {
                     ..State::zero()
                 }),
                 notifier: ChangeNotifier::new(),
-                offset_listeners: RefCell::new(Vec::new()),
-                offset_notifier: ChangeNotifier::new(),
+                offset_listeners: OffsetListeners::default(),
                 flush: RefCell::new(FlushState::new()),
                 activity: RefCell::new(ActivityState::default()),
                 activity_notifier: ChangeNotifier::new(),
@@ -1021,28 +1019,16 @@ impl ViewportOffset for ScrollPosition {
     }
 
     fn add_listener(&self, listener: Rc<dyn Fn()>) {
-        let identity = Rc::downgrade(&listener);
-        let id = self.inner.offset_notifier.add_listener(listener);
-        self.inner
-            .offset_listeners
-            .borrow_mut()
-            .push((id, identity));
+        self.inner.offset_listeners.add(listener);
     }
 
     fn remove_listener(&self, listener: &Rc<dyn Fn()>) {
-        let removed = {
-            let mut listeners = self.inner.offset_listeners.borrow_mut();
-            listeners
-                .iter()
-                .position(|(_, identity)| identity.ptr_eq(&Rc::downgrade(listener)))
-                .map(|index| listeners.remove(index).0)
-        };
-        if let Some(id) = removed {
-            let callback = self.inner.offset_notifier.take_listener(id);
+        if let Some(callback) = self.inner.offset_listeners.take(listener) {
             let mut recovery = flui_foundation::panic::PanicRecovery::new();
             self.inner.notifier.inherit_failure(&mut recovery.scope());
             self.inner
-                .offset_notifier
+                .offset_listeners
+                .notifier()
                 .inherit_failure(&mut recovery.scope());
             recovery.retire(callback);
             recovery.finish();

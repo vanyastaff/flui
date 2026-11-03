@@ -1,6 +1,6 @@
 //! An application on Linux runs on the native host of its session: the
 //! native Wayland host under a Wayland compositor and the native X11 host on
-//! an X server, never winit (ADR-0151 §11).
+//! an X server (ADR-0151 §11).
 //!
 //! Each case starts a display server of its own (a headless Weston, an Xvfb)
 //! and runs the application in a child process of this binary whose session

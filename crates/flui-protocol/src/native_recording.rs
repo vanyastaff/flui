@@ -43,9 +43,6 @@ vocabulary! {
         /// Android `MotionEvent`s.
         #[serde(rename = "android")]
         Android => "android",
-        /// The winit fallback.
-        #[serde(rename = "winit")]
-        Winit => "winit",
         /// The native X11 host's XInput 2 events.
         #[serde(rename = "x11")]
         X11 => "x11",
