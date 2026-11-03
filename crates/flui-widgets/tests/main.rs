@@ -208,5 +208,7 @@ mod visibility;
 mod widgets_app;
 #[path = "widgets_app_router.rs"]
 mod widgets_app_router;
+#[path = "window_chrome.rs"]
+mod window_chrome;
 #[path = "wrap.rs"]
 mod wrap;
