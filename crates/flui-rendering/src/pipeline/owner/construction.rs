@@ -16,7 +16,7 @@ use crate::storage::RenderTree;
 use crate::pipeline::{
     PipelinePhase, TextContextHandle,
     handle::DirtySender,
-    notifier::VisualUpdateNotifier,
+    notifier::SharedNotifier,
     phase::{Idle, Layout},
     scheduler::DirtyTracker,
 };
@@ -55,13 +55,11 @@ impl PipelineOwner<Idle> {
     /// [`Self::new`]). Use this when the default 256 doesn't match the
     /// producer profile.
     pub fn new_with_capacity(dirty_channel_capacity: usize, text: TextContextHandle) -> Self {
-        let notifier = std::sync::Arc::new(parking_lot::RwLock::new(VisualUpdateNotifier::new()));
+        let notifier = SharedNotifier::default();
         let (dirty_sender, dirty_rx) =
-            DirtySender::new_pair(dirty_channel_capacity, std::sync::Arc::clone(&notifier));
-        let scheduler = DirtyTracker::new(std::sync::Arc::clone(&notifier));
-        let local_dirty = super::super::local_invalidation::LocalDirtyInbox::new(
-            std::sync::Arc::clone(&notifier),
-        );
+            DirtySender::new_pair(dirty_channel_capacity, notifier.clone());
+        let scheduler = DirtyTracker::new(notifier.clone());
+        let local_dirty = super::super::local_invalidation::LocalDirtyInbox::new(notifier.clone());
         Self {
             // A context lent while a pipeline is built is a measurement
             // building one: seed zero, and the first drain after the loan

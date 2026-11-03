@@ -515,9 +515,9 @@ unconditional contract is unchanged by this phase gate.
 **Mapping decision** (ADR-0027 leapfrog zone: runtime/scheduling topology
 is a sanctioned divergence point): the pipeline carrier no longer bypasses
 `UpdateScheduler`. `PipelineOwner::request_visual_update`
-(`flui-rendering/src/pipeline/owner/accessors.rs`) still calls
-`VisualUpdateNotifier::fire_need_visual_update`
-(`flui-rendering/src/pipeline/notifier.rs`), which still invokes the
+(`flui-rendering/src/pipeline/owner/accessors.rs`) still delivers the
+pipeline's visual-update wake (`flui-rendering/src/pipeline/notifier.rs`,
+an owned snapshot run with no notifier guard held), which still invokes the
 closure a presentation registers via `owner.set_on_need_visual_update`
 (`flui-runtime/src/presentation.rs`) — but that closure no longer calls
 the UI runtime's shared `visual_wake()` and no longer pokes

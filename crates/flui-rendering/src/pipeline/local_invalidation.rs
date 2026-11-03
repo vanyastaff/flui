@@ -3,15 +3,13 @@
 use std::{
     cell::{Cell, RefCell},
     rc::{Rc, Weak},
-    sync::Arc,
 };
 
 use flui_foundation::RenderId;
-use parking_lot::RwLock;
 
 use super::{
     handle::{AttachmentEpoch, DirtyKind, SendError},
-    notifier::VisualUpdateNotifier,
+    notifier::SharedNotifier,
 };
 
 pub(crate) struct LocalDirtyRecord {
@@ -41,7 +39,7 @@ pub(crate) fn bit(kind: DirtyKind) -> u8 {
 
 pub(crate) struct LocalDirtyInbox {
     pending: RefCell<Vec<Weak<LocalDirtyRecord>>>,
-    notifier: Arc<RwLock<VisualUpdateNotifier>>,
+    notifier: SharedNotifier,
     /// Set while the owner paints. Paint must not change geometry, so a
     /// layout mark in that window is a bug in the render object that made it.
     painting: Cell<bool>,
@@ -50,7 +48,7 @@ pub(crate) struct LocalDirtyInbox {
 }
 
 impl LocalDirtyInbox {
-    pub(crate) fn new(notifier: Arc<RwLock<VisualUpdateNotifier>>) -> Rc<Self> {
+    pub(crate) fn new(notifier: SharedNotifier) -> Rc<Self> {
         Rc::new(Self {
             pending: RefCell::new(Vec::new()),
             notifier,
@@ -162,7 +160,7 @@ impl LocalRenderInvalidationHandle {
         // Retry a missing or failed wake even if this phase was already queued.
         // No queue borrow, notifier guard or strong inbox reference survives
         // the callback: releasing the owner there must revoke every peer.
-        let wake = { inbox.notifier.read().deferred_visual_update() };
+        let wake = inbox.notifier.visual_update();
         drop(inbox);
         wake.notify();
         Ok(())

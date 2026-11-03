@@ -5,9 +5,8 @@
 //!
 //! - The two [`DirtySets`] pairs (`dirty` and `mid_layout_marks`).
 //! - The three `debug_doing_*` phase-guard flags.
-//! - A clone of the [`VisualUpdateNotifier`] Arc (the wake sink — the owner
-//!   holds its own Arc clone for the callback setters; both point at the same
-//!   allocation).
+//! - A clone of the pipeline's [`SharedNotifier`] (the wake sink — the owner
+//!   holds its own clone for the callback setters; both share one notifier).
 //!
 //! **Correctness contract (the wake-on-mark invariant):**
 //! Every *new* queue entry admits one visual wake so a quiescent platform event
@@ -38,7 +37,7 @@ use crate::storage::RenderTree;
 
 use super::{
     dirty::{DirtyNode, DirtySets, PaintEntry, PaintKind},
-    notifier::VisualUpdateNotifier,
+    notifier::SharedNotifier,
 };
 
 // ============================================================================
@@ -92,7 +91,7 @@ pub(super) enum PhaseKind {
 /// The dirty-work scheduling subsystem for the rendering pipeline.
 ///
 /// Owns the two [`DirtySets`] (active work + mid-phase side queue), the three
-/// phase-guard flags, and a clone of the [`VisualUpdateNotifier`] Arc for
+/// phase-guard flags, and a clone of the pipeline's [`SharedNotifier`] for
 /// wake-on-mark.
 #[derive(Debug)]
 pub(super) struct DirtyTracker {
@@ -144,15 +143,15 @@ pub(super) struct DirtyTracker {
     /// The layout batch buffer, lent out per `run_layout` pass and returned.
     layout_batch: Vec<DirtyNode>,
 
-    /// Shared wake sink — the same `Arc` that `PipelineOwner` holds for its
-    /// callback setters. Both clones point at the same
-    /// `RwLock<VisualUpdateNotifier>`.
-    notifier: std::sync::Arc<parking_lot::RwLock<VisualUpdateNotifier>>,
+    /// Shared wake sink — a clone of the notifier `PipelineOwner` holds for
+    /// its callback setters. A wake takes an owned snapshot of the callback
+    /// and runs it with no notifier guard held.
+    notifier: SharedNotifier,
 }
 
 impl DirtyTracker {
     /// Creates a new `DirtyTracker` sharing `notifier` with the owner.
-    pub(super) fn new(notifier: std::sync::Arc<parking_lot::RwLock<VisualUpdateNotifier>>) -> Self {
+    pub(super) fn new(notifier: SharedNotifier) -> Self {
         Self {
             dirty: DirtySets::new(),
             mid_layout_marks: DirtySets::new(),
@@ -688,7 +687,7 @@ impl DirtyTracker {
     }
 
     fn notify_visual_update(&self) {
-        let wake = { self.notifier.read().deferred_visual_update() };
+        let wake = self.notifier.visual_update();
         wake.notify();
     }
 
@@ -1065,8 +1064,7 @@ impl DirtyTracker {
     /// [`Self::new_test_pair_with_wake_counter`] to wire a wake counter.
     #[cfg(test)]
     pub(crate) fn new_test_pair() -> (Self, RenderTree) {
-        let notifier = std::sync::Arc::new(parking_lot::RwLock::new(VisualUpdateNotifier::new()));
-        (Self::new(notifier), RenderTree::new())
+        (Self::new(SharedNotifier::default()), RenderTree::new())
     }
 }
 
@@ -1150,9 +1148,7 @@ mod tests {
     /// directly. `exit_phase` documents the window all the same, and this is
     /// what keeps the routing honest with that contract.
     fn a_repaint_raised_mid_paint_survives_a_boundary_already_queued_as_an_update() {
-        let mut tracker = DirtyTracker::new(std::sync::Arc::new(parking_lot::RwLock::new(
-            VisualUpdateNotifier::new(),
-        )));
+        let mut tracker = DirtyTracker::new(SharedNotifier::default());
         let boundary = RenderId::new(7);
 
         tracker.enqueue_paint(
