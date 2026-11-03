@@ -48,6 +48,7 @@ pub struct RenderListener {
     smart_zoom_target: Option<SmartZoomTarget>,
     behavior: HitTestBehavior,
     has_child: bool,
+    claims_presses: bool,
 }
 
 impl RenderListener {
@@ -61,6 +62,7 @@ impl RenderListener {
             smart_zoom_target: None,
             behavior,
             has_child: false,
+            claims_presses: false,
         }
     }
 
@@ -120,6 +122,19 @@ impl RenderListener {
     pub fn set_behavior(&mut self, behavior: HitTestBehavior) {
         self.behavior = behavior;
     }
+
+    /// Says whether the listener takes presses: it has a pointer-down handler or adds
+    /// recognizers to the gesture arena. Under an application's title bar such a listener is
+    /// cut out of the move area, so it is pressed rather than dragging the window; a
+    /// hover-only listener is not. The input regions are collected on composited frames, so
+    /// a change marks paint.
+    pub fn set_claims_presses(&mut self, claims: bool) -> flui_rendering::RenderUpdateImpact {
+        if self.claims_presses == claims {
+            return flui_rendering::RenderUpdateImpact::NONE;
+        }
+        self.claims_presses = claims;
+        flui_rendering::RenderUpdateImpact::PAINT
+    }
 }
 
 impl std::fmt::Debug for RenderListener {
@@ -131,6 +146,7 @@ impl std::fmt::Debug for RenderListener {
             .field("has_smart_zoom_target", &self.smart_zoom_target.is_some())
             .field("behavior", &self.behavior)
             .field("has_child", &self.has_child)
+            .field("claims_presses", &self.claims_presses)
             .finish_non_exhaustive()
     }
 }
@@ -151,6 +167,8 @@ impl flui_foundation::inspect::Inspect for RenderListener {
             .default(&false);
         out.field("behavior", &self.behavior);
         out.field("has_child", &self.has_child).default(&false);
+        out.field("claims_presses", &self.claims_presses)
+            .default(&false);
     }
 }
 
@@ -202,6 +220,16 @@ impl RenderBox for RenderListener {
     }
 
     // paint: default pass-through (splices the child in order).
+
+    fn describe_input_regions(
+        &self,
+        _size: Size,
+        regions: &mut flui_rendering::input_regions::InputRegionSink,
+    ) {
+        if self.claims_presses {
+            regions.claim_presses();
+        }
+    }
 
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Single, BoxParentData>) -> bool {
         if !ctx.is_within_own_size() {

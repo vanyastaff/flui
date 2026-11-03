@@ -985,9 +985,9 @@ verify that later calls answer `gone`. The windows hold the presentation's seman
 cost lasts exactly as long as the hook keeps a window: a hook that does not serve is handed none,
 and one that detaches or panics drops its windows, and collection stops on the next frame. `flui-app`'s desktop and iOS runners
 and `flui_testing::HeadlessDevAgent` drive the hook through `dev_agent::DevAgentHost`; the
-endpoint that serves it is `flui-devtools`' `agent` feature. Pinned by
+driver agent that serves it is `flui-app`'s (ADR-0239), one host per hook. Pinned by
 `an_agent_for_a_closed_presentation_answers_gone`, `dev_agent_host_contains_its_hook` and
-`flui-devtools`' `the_endpoint_contains_every_failure`.
+`flui-app`'s `the_driver_agent_contains_every_failure`.
 
 ### The development agent host lives in the runtime
 

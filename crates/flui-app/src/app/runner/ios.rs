@@ -240,6 +240,11 @@ where
         for service in &config.services {
             super::host::start_service(service)?;
         }
+        // The driver agent (ADR-0239), beside the application's own hooks, when
+        // the simulator launch named an endpoint. A driver ends the app with
+        // `simctl terminate`, so a disconnect asks no quit here.
+        let mut config = config;
+        crate::app::agent::install_from_env(&mut config, &std::sync::Arc::default());
         let reload = WorkerReload::from_config(&config);
         let watcher = reload.spawn_watcher(runtime_wake_callback());
         let agent = config

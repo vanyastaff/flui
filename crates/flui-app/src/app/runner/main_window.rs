@@ -11,6 +11,8 @@ use super::{
     },
     owner_dispatch::{ExitWatchdog, TeardownStep, teardown_platform_ui_runtime_logged},
 };
+use crate::app::agent::Disconnect;
+use crate::app::dev_agent::DevAgentAttachments;
 use crate::app::{
     AppConfig, AppRunError, Application, StartupWindow,
     application::WindowErrorObserver,
@@ -19,7 +21,6 @@ use crate::app::{
     hot_reload::{WorkerReload, WorkerWatcherGuard},
 };
 use flui_native::{HostWindow, PendingWindow, PlatformProxy, WindowOpen};
-use flui_runtime::dev_agent::DevAgentAttachment;
 use flui_view::View;
 use std::{
     cell::RefCell,
@@ -62,7 +63,7 @@ pub(in crate::app) struct MainController {
     watcher: Option<WorkerWatcherGuard>,
     /// The loop's development agent attachment; dropping it detaches the
     /// hook.
-    agent: Option<DevAgentAttachment>,
+    agent: Option<DevAgentAttachments>,
 }
 // Each field is dropped on its own, so one that panics does not keep the
 // rest; the first panic resumes once all are gone (ADR-0258 §5), and the
@@ -659,9 +660,13 @@ pub(super) fn main_window_closed(address: flui_foundation::PresentationAddress) 
 /// there is the loop's terminal failure (ADR-0258 §2), which the exit
 /// resumes once it has written what the application persisted.
 pub(super) fn shutdown_main_window() {
-    let (controller, ingress) = APP_RUNTIME.with(|slot| {
+    let (controller, ingress, dev_agent) = APP_RUNTIME.with(|slot| {
         let mut runtime = slot.borrow_mut();
-        (runtime.main_controller.take(), runtime.main_ingress.take())
+        (
+            runtime.main_controller.take(),
+            runtime.main_ingress.take(),
+            runtime.loop_dev_agent.take(),
+        )
     });
     if let Some(ingress) = ingress {
         ingress.close();
@@ -670,6 +675,9 @@ pub(super) fn shutdown_main_window() {
         super::terminal::contain_terminal("main window cancellation", || controller.cancel());
         super::terminal::contain_terminal("main window retirement", || drop(controller));
     }
+    // The hooks' last references may run their `Drop`, outside the borrow and
+    // contained like the controller's.
+    super::terminal::contain_terminal("development agents' release", || drop(dev_agent));
 }
 
 /// Retires the loop's main window and UI runtimes when dropped: after
@@ -759,12 +767,17 @@ pub(crate) struct StartedLoop {
     watchdog: Rc<RefCell<Option<Rc<ExitWatchdog>>>>,
     fatal: Rc<RefCell<Option<AppRunError>>>,
     result: Result<(), flui_native::PlatformError>,
+    /// Whether the driver agent quit the loop because its driver went.
+    disconnect: Arc<Disconnect>,
 }
 
 impl StartedLoop {
     /// Tear the loop down, then report its outcome (ADR-0258 §3): a terminal
     /// failure resumes, else the first fatal failure the loop recorded is
-    /// returned, else what `run` returned.
+    /// returned, else what `run` returned. A loop the driver agent quit
+    /// because its driver went (ADR-0239 §5) ends the process with
+    /// [`EXIT_DISCONNECTED`](flui_protocol::launch::EXIT_DISCONNECTED)
+    /// instead of returning.
     ///
     /// # Panics
     ///
@@ -777,6 +790,7 @@ impl StartedLoop {
             watchdog,
             fatal,
             result,
+            disconnect,
         } = self;
         drop(teardown);
         drop(owner_guard);
@@ -787,6 +801,12 @@ impl StartedLoop {
         let failure = fatal.borrow_mut().take();
         if let Some(error) = failure {
             return Err(error);
+        }
+        if disconnect.happened() {
+            // The teardown above wrote what the application persisted; the
+            // driver that launched the app tells this exit from a normal one
+            // and from a panic by its code.
+            std::process::exit(flui_protocol::launch::EXIT_DISCONNECTED);
         }
         result.map_err(AppRunError::from_platform)
     }
@@ -817,6 +837,9 @@ where
     let _logging = super::super::logging::init_managed_logging(&application.config);
     let platform = platform()?;
     let fatal = Rc::new(RefCell::new(None));
+    let disconnect = Arc::new(Disconnect::default());
+    // The loop's handle on it: the loop arms it and installs the agent.
+    let ended = Arc::clone(&disconnect);
     let recorded = Rc::clone(&fatal);
     // Declared before the owner guard, so the watch outlives it on unwind.
     let watchdog = Rc::default();
@@ -864,6 +887,25 @@ where
                 if let Some(ingress) = reopen.upgrade() {
                     ingress.request_native_show();
                 }
+            });
+            // The driver agent (ADR-0239), beside the application's own hooks,
+            // when launched with an endpoint; a driver that goes under
+            // `EXIT_ON_DISCONNECT` quits past every close guard.
+            let mut config = config;
+            let quit = Arc::downgrade(&ingress);
+            ended.arm(move || {
+                if let Some(ingress) = quit.upgrade() {
+                    let _ = ingress.quit_now();
+                }
+            });
+            crate::app::agent::install_from_env(&mut config, &ended);
+            // A stale value would be one a loop on this thread failed to clear;
+            // it drops here, outside the borrow.
+            let _stale = APP_RUNTIME.with(|slot| {
+                std::mem::replace(
+                    &mut slot.borrow_mut().loop_dev_agent,
+                    config.dev_agent.clone(),
+                )
             });
             let reload = WorkerReload::from_config(&config);
             let watcher = reload.spawn_watcher(runtime_wake_callback());
@@ -956,6 +998,7 @@ where
         watchdog,
         fatal,
         result,
+        disconnect,
     })
 }
 
@@ -1499,6 +1542,10 @@ mod tests {
                     .is_some()),
                 "the loop holds the attachment"
             );
+            assert!(
+                super::super::desktop::window_dev_agent(&AppConfig::new()).is_some(),
+                "a window opened with a configuration that names no hook is handed to the loop's"
+            );
             for _ in 0..2 {
                 let mut request = handle.request_show_main_window().expect("admit retry");
                 drive_main_window();
@@ -1518,6 +1565,10 @@ mod tests {
             counts.get(),
             (1, 1, 0),
             "loop teardown detached the hook exactly once"
+        );
+        assert!(
+            super::super::desktop::window_dev_agent(&AppConfig::new()).is_none(),
+            "the loop's end released its hooks"
         );
     }
 

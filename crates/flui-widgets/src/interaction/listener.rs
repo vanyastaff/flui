@@ -503,6 +503,12 @@ impl Listener {
         Some(self.handler(writer))
     }
 
+    /// Whether this listener takes presses: a pointer-down handler or recognizers that
+    /// join the gesture arena. A hover-only listener does not.
+    fn claims_presses(&self) -> bool {
+        self.on_pointer_down.is_some() || !self.recognizers.is_empty()
+    }
+
     /// Register the merged handler in the active owner lane, returning its
     /// data-only identity for render storage.
     ///
@@ -705,6 +711,7 @@ impl RenderView for Listener {
 
     fn create_render_object(&self, ctx: &flui_view::RenderObjectContext<'_>) -> Self::RenderObject {
         let mut render_object = RenderListener::new(self.register(ctx), self.behavior);
+        let _ = render_object.set_claims_presses(self.claims_presses());
         render_object.set_scroll_target(self.register_scroll_claim(ctx));
         render_object.set_pan_zoom_target(self.register_pan_zoom_claim(ctx));
         render_object.set_smart_zoom_target(self.register_smart_zoom_claim(ctx));
@@ -733,7 +740,7 @@ impl RenderView for Listener {
         self.sync_pan_zoom_claim(ctx, render_object);
         self.sync_smart_zoom_claim(ctx, render_object);
         render_object.set_behavior(self.behavior);
-        flui_rendering::RenderUpdateImpact::NONE
+        render_object.set_claims_presses(self.claims_presses())
     }
 
     fn did_unmount_render_object(

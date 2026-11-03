@@ -6,7 +6,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use flui_protocol::WindowId;
-use flui_sdk::view::dev_agent::AgentWindow;
+use flui_view::dev_agent::AgentWindow;
 use parking_lot::Mutex;
 
 /// What the registry knows of a window id.

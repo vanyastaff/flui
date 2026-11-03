@@ -379,6 +379,16 @@ pub(crate) struct AppRuntime {
         not(target_arch = "wasm32")
     ))]
     pub(super) main_ingress: Option<Arc<super::application_control::Ingress>>,
+    /// The development agents this loop attached, the application's and the
+    /// driver agent: every window the loop installs is handed to them, whatever
+    /// configuration the application opened it with. Cleared with the main
+    /// window at the loop's end.
+    #[cfg(all(
+        not(target_os = "android"),
+        not(target_os = "ios"),
+        not(target_arch = "wasm32")
+    ))]
+    pub(super) loop_dev_agent: Option<super::dev_agent::DevAgent>,
     #[cfg(all(
         not(target_os = "android"),
         not(target_os = "ios"),
@@ -567,6 +577,12 @@ impl AppRuntime {
                 not(target_arch = "wasm32")
             ))]
             main_ingress: None,
+            #[cfg(all(
+                not(target_os = "android"),
+                not(target_os = "ios"),
+                not(target_arch = "wasm32")
+            ))]
+            loop_dev_agent: None,
             #[cfg(all(
                 not(target_os = "android"),
                 not(target_os = "ios"),

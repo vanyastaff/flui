@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "extraKnownMarketplaces": {
+    "rust-studio": {
+      "source": {
+        "source": "github",
+        "repo": "vanyastaff/rust-studio"
+      }
+    }
+  },
+  "enabledPlugins": {
+    "rust-studio@rust-studio": true
+  }
+}

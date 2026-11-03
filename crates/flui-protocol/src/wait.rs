@@ -76,7 +76,8 @@ pub struct WaitParams {
     pub window: WindowId,
     /// What to wait for.
     pub condition: Condition,
-    /// How long, in milliseconds of the runtime's clock; 5000 when absent.
+    /// How long, in milliseconds of the runtime's clock; 5000 when absent and
+    /// at most 24 hours ([`Self::effective_timeout_ms`]).
     #[cfg_attr(
         feature = "serde",
         serde(default, skip_serializing_if = "Option::is_none")
@@ -91,6 +92,13 @@ pub struct WaitParams {
 }
 
 impl WaitParams {
+    /// How long a wait holds out when it names no timeout, in milliseconds.
+    pub const DEFAULT_TIMEOUT_MS: u64 = 5_000;
+
+    /// The longest a wait holds out, in milliseconds (24 hours); a longer
+    /// timeout is this long.
+    pub const MAX_TIMEOUT_MS: u64 = 24 * 60 * 60 * 1_000;
+
     /// `condition` in `window`, with the default timeout.
     #[must_use]
     pub fn new(window: WindowId, condition: Condition) -> Self {
@@ -107,6 +115,14 @@ impl WaitParams {
     pub fn with_timeout_ms(mut self, timeout_ms: u64) -> Self {
         self.timeout_ms = Some(timeout_ms);
         self
+    }
+
+    /// How long the app holds the wait out, in milliseconds: the timeout
+    /// named, at most [`Self::MAX_TIMEOUT_MS`], or [`Self::DEFAULT_TIMEOUT_MS`].
+    #[must_use]
+    pub fn effective_timeout_ms(&self) -> u64 {
+        self.timeout_ms
+            .map_or(Self::DEFAULT_TIMEOUT_MS, |ms| ms.min(Self::MAX_TIMEOUT_MS))
     }
 }
 

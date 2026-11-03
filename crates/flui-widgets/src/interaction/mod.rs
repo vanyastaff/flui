@@ -29,6 +29,7 @@ mod system_gesture_exclusion;
 mod transformation_controller;
 mod visibility;
 mod visibility_gate;
+mod window_chrome;
 
 /// The pointer-ignoring wrapper lives in `paint`, where lower modules can
 /// reach it; this path keeps existing imports working.
@@ -82,3 +83,6 @@ pub use system_gesture_exclusion::SystemGestureExclusion;
 pub use transformation_controller::TransformationController;
 pub use visibility::Visibility;
 pub use visibility_gate::VisibilityGate;
+pub use window_chrome::{
+    WindowCaptionButton, WindowChromeState, WindowMovePassThrough, WindowResizeArea, WindowTitleBar,
+};
