@@ -5,10 +5,6 @@
   `android.java`, `android.proguard`), the generated Android manifest, the iOS privacy manifest,
   the verify mode of `flui doctor` and `flui add`.
 - **Date:** 2026-11-03
-- **Amended:** 2026-11-03: version 2 adds `android.dex` and `android.java`, the Java classes a
-  crate ships, so the packagers take `FluiActivity` from the `flui-native` the application links
-  (ADR-0255 decision 4); `android.proguard` joins version 2, the R8 rules that keep what native
-  code reaches in those classes.
 - **Supersedes:** [ADR-0154](ADR-0154-capability-crates.md) §7 (where declarations live and
   their keys: a versioned `declares` table in any crate, in place of the illustrative schema) and,
   in §8, the step of `flui add` that writes declarations; the rest of ADR-0154 stands
