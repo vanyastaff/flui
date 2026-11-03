@@ -3,10 +3,11 @@
 //!
 //! The web sends through the page's `fetch` (`FetchClient`, wasm32), Android
 //! through `HttpURLConnection` (`UrlConnectionClient`), Windows through
-//! WinHTTP (`WinHttpClient`) and macOS and iOS through `NSURLSession`
-//! (`UrlSessionClient`), the native ones each request on a thread of its own
-//! (the `blocking` module's model). Linux uses the composition root's
-//! `reqwest` client (`docs/gaps.md`, entry 42).
+//! WinHTTP (`WinHttpClient`), macOS and iOS through `NSURLSession`
+//! (`UrlSessionClient`) and the native hosts without a system stack (Linux
+//! and the BSDs) through `ureq` (`UreqClient`, the `http` feature), the
+//! native ones each request on a thread of its own (the `blocking` module's
+//! model).
 
 #[cfg(target_os = "android")]
 mod android;
@@ -17,9 +18,12 @@ mod apple;
     target_os = "windows",
     target_os = "macos",
     target_os = "ios",
+    ureq_host,
     test
 ))]
 pub(crate) mod blocking;
+#[cfg(ureq_host)]
+mod ureq_stack;
 #[cfg(target_arch = "wasm32")]
 mod web;
 #[cfg(any(target_os = "windows", test))]
@@ -29,6 +33,8 @@ mod winhttp;
 pub use android::UrlConnectionClient;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub use apple::UrlSessionClient;
+#[cfg(ureq_host)]
+pub use ureq_stack::UreqClient;
 #[cfg(target_arch = "wasm32")]
 pub use web::FetchClient;
 #[cfg(target_os = "windows")]
