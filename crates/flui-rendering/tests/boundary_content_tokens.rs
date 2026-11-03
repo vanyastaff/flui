@@ -11,7 +11,7 @@ use flui_foundation::RenderId;
 use flui_foundation::geometry::Size;
 use flui_layer::{ContentToken, DamageRect, DamageRegion, Layer, LayerDiffer, LayerTree, Scene};
 use flui_objects::{
-    RenderColoredBox, RenderFlex, RenderLeaderLayer, RenderOpacity, RenderRepaintBoundary,
+    RenderColoredBox, RenderFlex, RenderFollowerLayer, RenderOpacity, RenderRepaintBoundary,
 };
 use flui_rendering::{
     constraints::BoxConstraints,
@@ -204,8 +204,8 @@ fn root_keeps_its_token_when_only_a_nested_boundary_is_dirty() {
     assert_ne!(tokens(&second)[&root], tokens(&third)[&root]);
 }
 
-/// A boundary whose capture was refused (it holds a leader, whose follower
-/// correlation a capture cannot carry) has nothing to vouch for its content,
+/// A boundary whose capture was refused (it holds a follower, whose hit-test
+/// correlation a capture does not carry) has nothing to vouch for its content,
 /// so it mints on every frame even while clean.
 #[test]
 fn an_evicted_capture_mints() {
@@ -214,8 +214,8 @@ fn an_evicted_capture_mints() {
         box_node(RenderFlex::row())
             .child(
                 box_node(RenderRepaintBoundary::new())
-                    .label("leading")
-                    .child(box_node(RenderLeaderLayer::new(link)).child(leaf())),
+                    .label("following")
+                    .child(box_node(RenderFollowerLayer::new(link)).child(leaf())),
             )
             .child(
                 box_node(RenderRepaintBoundary::new())
@@ -223,17 +223,17 @@ fn an_evicted_capture_mints() {
                     .child(leaf()),
             ),
     );
-    let leading = registry.get("leading").expect("labelled");
+    let following = registry.get("following").expect("labelled");
     let other = registry.get("other").expect("labelled");
     let (mut owner, first) = frame(owner);
     assert_eq!(
         owner.retained_boundary_count(),
         1,
-        "precondition: only the leaderless boundary is retained"
+        "precondition: only the followerless boundary is retained"
     );
     owner.mark_needs_paint(other);
     let (_, second) = frame(owner);
-    assert_ne!(tokens(&first)[&leading], tokens(&second)[&leading]);
+    assert_ne!(tokens(&first)[&following], tokens(&second)[&following]);
 }
 
 /// End to end: two pipeline frames through the differ damage exactly the
