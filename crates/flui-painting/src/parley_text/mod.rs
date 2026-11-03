@@ -20,5 +20,5 @@ mod shape;
 
 #[cfg(test)]
 pub(crate) use shape::holds_exactly;
+pub(crate) use shape::{DecoratedStretch, LinePlacement, SpanBrush, span_paint_color};
 pub use shape::{ParagraphLayout, ParagraphSpec};
-pub(crate) use shape::{SpanBrush, span_paint_color};

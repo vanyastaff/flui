@@ -5,7 +5,8 @@
 //! pins subsequent consumer additions and removals, plus `painting::DrawOp`,
 //! which the design systems' paint tests read, `painting::Shadow` and
 //! `painting::BlurSigma`, which a text style's shadows and the op a
-//! paragraph's shadow records name (ADR-0309), `view::dev_reload`, the
+//! paragraph's shadow records name (ADR-0309), the four decoration types
+//! `TextStyle::decoration` names (ADR-0310), `view::dev_reload`, the
 //! hook `flui-hot-reload`'s host drivers implement (ADR-0094 §1), and
 //! `view::dev_agent`, the hook a package's development tool implements
 //! (ADR-0095 §3), and `view::FrameWaker`, the one scheduler capability a
@@ -112,8 +113,13 @@ mod measured {
     };
     // A text style's shadows and the op a paragraph's shadow records (ADR-0309).
     use flui_sdk::painting::{BlurSigma as _, Shadow as _};
+    // A text style's decoration (ADR-0310).
     use flui_sdk::painting::{Canvas as _, DrawOp as _};
     use flui_sdk::painting::{Clip as _, ClipOp as _, Paint as _, Path as _, StrokeCap as _};
+    use flui_sdk::painting::{
+        DecorationThickness as _, TextDecoration as _, TextDecorationLines as _,
+        TextDecorationStyle as _,
+    };
     // The shapes the Material 3 Expressive loading indicators morph between.
     use flui_sdk::painting::{
         FontWeight as _, TextDirection as _, TextSizing as _, TextStyle as _,
@@ -393,6 +399,17 @@ fn the_re_exports_are_the_facades_types() {
     let _: fn(flui::painting::DrawOp) -> flui_sdk::painting::DrawOp = |x| x;
     let _: fn(flui::painting::BlurSigma) -> flui_sdk::painting::BlurSigma = |x| x;
     let _: fn(flui::painting::styling::Shadow<f64>) -> flui_sdk::painting::Shadow<f64> = |x| x;
+    let _: fn(flui::painting::typography::TextDecoration) -> flui_sdk::painting::TextDecoration =
+        |x| x;
+    let _: fn(
+        flui::painting::typography::TextDecorationLines,
+    ) -> flui_sdk::painting::TextDecorationLines = |x| x;
+    let _: fn(
+        flui::painting::typography::TextDecorationStyle,
+    ) -> flui_sdk::painting::TextDecorationStyle = |x| x;
+    let _: fn(
+        flui::painting::typography::DecorationThickness,
+    ) -> flui_sdk::painting::DecorationThickness = |x| x;
     let _: fn(flui::painting::TextSizing) -> flui_sdk::painting::TextSizing = |x| x;
     let _: fn(flui::platform::Brightness) -> flui_sdk::platform::Brightness = |x| x;
     let _: fn(flui::platform::InvalidLocale) -> flui_sdk::platform::InvalidLocale = |x| x;
@@ -594,7 +611,11 @@ fn the_public_surface_is_the_measured_list() {
         "pub use flui_painting::styling::BoxShadow;",
         "pub use flui_painting::styling::Color;",
         "pub use flui_painting::styling::Shadow;",
+        "pub use flui_painting::typography::DecorationThickness;",
         "pub use flui_painting::typography::FontWeight;",
+        "pub use flui_painting::typography::TextDecoration;",
+        "pub use flui_painting::typography::TextDecorationLines;",
+        "pub use flui_painting::typography::TextDecorationStyle;",
         "pub use flui_painting::typography::TextDirection;",
         "pub use flui_painting::typography::TextStyle;",
         "pub use flui_platform::AdmissionError;",
