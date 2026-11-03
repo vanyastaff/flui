@@ -38,6 +38,13 @@ mod clipboard;
 #[cfg(any(windows, wayland_host, x11_host))]
 pub(crate) use clipboard::MAX_TEXT;
 #[cfg(any(
+    target_os = "android",
+    target_os = "macos",
+    target_os = "ios",
+    target_arch = "wasm32"
+))]
+pub(crate) use clipboard::admit_utf16;
+#[cfg(any(
     windows,
     target_os = "android",
     target_os = "macos",

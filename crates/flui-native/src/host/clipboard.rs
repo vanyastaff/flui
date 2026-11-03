@@ -74,6 +74,30 @@ pub(crate) fn host_text(text: String) -> ClipboardRead {
     Ok(Some(Arc::from(text)))
 }
 
+/// Refuse text the host holds as `units` UTF-16 code units (an `NSString`, a
+/// JavaScript or Java string) before it is copied out, when it is past
+/// [`MAX_TEXT`] on length alone: each unit takes at least one byte of UTF-8.
+/// A host calls this before its copy and hands the copy to [`host_text`],
+/// which measures text within the bound exactly, so the answer is the same on
+/// every host and text a read refuses for its length is never copied.
+#[cfg(any(
+    target_os = "android",
+    target_os = "macos",
+    target_os = "ios",
+    target_arch = "wasm32",
+    test
+))]
+pub(crate) fn admit_utf16(units: usize) -> Result<(), flui_platform::ClipboardError> {
+    if units > MAX_TEXT {
+        tracing::warn!(
+            units,
+            "a clipboard read past {MAX_TEXT} bytes was refused before its copy"
+        );
+        return Err(flui_platform::ClipboardError::TooLarge);
+    }
+    Ok(())
+}
+
 /// A clipboard the operating system reads synchronously: its read answers
 /// at once.
 pub(crate) trait SyncClipboard {
@@ -224,7 +248,7 @@ impl<C: NativePrimarySelection + ?Sized> NativePrimarySelection for Arc<C> {
 mod tests {
     use flui_platform::ClipboardError;
 
-    use super::{MAX_TEXT, host_text};
+    use super::{MAX_TEXT, admit_utf16, host_text};
 
     /// Text a host handed over is answered up to the limit and refused past
     /// it, the refusal made before any copy of the text.
@@ -237,6 +261,25 @@ mod tests {
         );
         let past = "a".repeat(MAX_TEXT + 1);
         assert_eq!(host_text(past), Err(ClipboardError::TooLarge));
+    }
+
+    /// Text a host holds as UTF-16 is refused on its length before a copy
+    /// past the limit is made; text within it is measured exactly as UTF-8,
+    /// so two-byte characters that fit as units but not as bytes are refused
+    /// once copied.
+    #[test]
+    fn utf16_text_past_the_limit_is_refused_before_its_copy() {
+        assert_eq!(admit_utf16(MAX_TEXT + 1), Err(ClipboardError::TooLarge));
+        assert_eq!(admit_utf16(MAX_TEXT), Ok(()));
+
+        let units = MAX_TEXT / 2 + 1;
+        assert_eq!(admit_utf16(units), Ok(()));
+        assert_eq!(
+            host_text("é".repeat(units)),
+            Err(ClipboardError::TooLarge),
+            "admitted on units, refused on its {} bytes",
+            2 * units
+        );
     }
 }
 
