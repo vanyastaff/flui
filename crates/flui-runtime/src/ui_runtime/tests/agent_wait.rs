@@ -238,6 +238,34 @@ fn a_window_admits_a_bounded_number_of_waits_and_refuses_the_next_with_a_typed_e
 }
 
 #[test]
+fn a_wait_nobody_takes_any_more_gives_up_its_place() {
+    let (ui_runtime, _clock, agent, _sink) = shown();
+    let mut parked = Vec::new();
+    for _ in 0..2 {
+        parked.extend((0..128).map(|_| wait(&ui_runtime, &agent, appears("Missing"), None)));
+        let _report = ui_runtime.drain_commands();
+    }
+    // Every asker goes away, as a driver's connection does mid-wait.
+    drop(parked);
+    let mut admitted = wait(&ui_runtime, &agent, appears("Missing"), None);
+    let _report = ui_runtime.drain_commands();
+    assert!(
+        admitted.try_take().is_none(),
+        "the abandoned waits held no place: this one is parked, not refused"
+    );
+    ui_runtime.evaluate_agent_waits(false);
+    let state = ui_runtime
+        .presentations
+        .get(ui_runtime.presentation_id())
+        .expect("the primary presentation is hosted");
+    assert_eq!(
+        state.agent_waits.borrow().len(),
+        1,
+        "only the wait someone takes is still parked"
+    );
+}
+
+#[test]
 fn a_window_that_closes_first_answers_its_waits_gone() {
     let mut ui_runtime = UiRuntime::for_test();
     let second = ui_runtime.install_second_presentation_for_test();

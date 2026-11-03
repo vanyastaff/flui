@@ -64,6 +64,15 @@ pub(super) fn rendered_window_options(config: &AppConfig) -> flui_platform::Wind
     options
 }
 
+/// The development agents a window is handed to: the ones its loop attached
+/// (the application's and the driver agent), whatever configuration the
+/// application opened the window with; `config`'s own outside a loop.
+pub(super) fn window_dev_agent(config: &AppConfig) -> Option<crate::app::dev_agent::DevAgent> {
+    APP_RUNTIME
+        .with(|slot| slot.borrow().loop_dev_agent.clone())
+        .or_else(|| config.dev_agent.clone())
+}
+
 pub(super) fn install_desktop_window<V>(
     root: V,
     config: &AppConfig,
@@ -170,8 +179,8 @@ where
     // The development agent's window is vended while the ui_runtime is still
     // ours: if the installation below fails, the ui_runtime drops it, and the
     // hook is handed only a window that finished installing.
-    let agent_window = config
-        .dev_agent
+    let dev_agent = window_dev_agent(config);
+    let agent_window = dev_agent
         .as_ref()
         .and_then(|agent| agent.vend(&ui_runtime, ui_runtime.presentation_id()));
 
@@ -256,7 +265,7 @@ where
     install_input_wiring(owner_dispatch, window.as_ref());
 
     // Install frame resources once; native deliveries carry only their binding.
-    installation.dev_agent(config.dev_agent.clone().zip(agent_window));
+    installation.dev_agent(dev_agent.zip(agent_window));
     let frame = installation
         .frame_driver(super::frame_driver::FrameDriver::Desktop(
             DesktopFrameDriver {

@@ -606,6 +606,18 @@ fn the_page_label_comes_from_the_widgets_localizations() {
         fn autoplay_resume_label(&self) -> &'static str {
             DefaultWidgetsLocalizations.autoplay_resume_label()
         }
+        fn minimize_window_label(&self) -> &'static str {
+            DefaultWidgetsLocalizations.minimize_window_label()
+        }
+        fn maximize_window_label(&self) -> &'static str {
+            DefaultWidgetsLocalizations.maximize_window_label()
+        }
+        fn restore_window_label(&self) -> &'static str {
+            DefaultWidgetsLocalizations.restore_window_label()
+        }
+        fn close_window_label(&self) -> &'static str {
+            DefaultWidgetsLocalizations.close_window_label()
+        }
     }
     #[derive(Debug)]
     struct GermanDelegate;

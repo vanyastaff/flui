@@ -73,7 +73,8 @@ await its returned request or poll `try_result` to obtain the window result."
 //! | `cupertino` | off | `flui::cupertino` |
 //! | `localizations` | off | nothing; deprecated, kept so existing feature lists resolve |
 //! | `hot-reload` | off | re-exports `flui-hot-reload` as `hot_reload`; install its hook with `AppConfig::with_dev_reload` |
-//! | `dev-agent` | off | re-exports `flui-devtools` as `devtools`, with its agent server; install it with `AppConfig::with_dev_agent` (`flui run --agent`) |
+//! | `devtools` | off | re-exports `flui-devtools` as `devtools`: the frame profiler, timeline and inspector counters |
+//! | `driver` | off | the driver agent in an optimized build; every debug build serves its windows to a driver launched with an endpoint (ADR-0239) |
 //! | `native` | off | `flui::native`, the operating systems' window extensions (Evolving) |
 //!
 //! Nothing is on by default (ADR-0088 §6): an application names the catalog it
@@ -181,8 +182,9 @@ pub use flui_app as app;
 /// feature.
 #[cfg(feature = "cupertino")]
 pub use flui_cupertino as cupertino;
-/// The development agent server (`flui-devtools`). Requires the `dev-agent` feature.
-#[cfg(feature = "dev-agent")]
+/// The profiler, timeline and inspector counters (`flui-devtools`). Requires the `devtools`
+/// feature.
+#[cfg(feature = "devtools")]
 pub use flui_devtools as devtools;
 pub use flui_foundation as foundation;
 pub use flui_foundation::geometry;

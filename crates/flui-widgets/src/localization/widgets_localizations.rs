@@ -83,6 +83,14 @@ pub trait WidgetsLocalizations: Any + fmt::Debug + Send + Sync {
     fn autoplay_pause_label(&self) -> &'static str;
     /// Semantics label of a carousel's control that resumes its paused autoplay.
     fn autoplay_resume_label(&self) -> &'static str;
+    /// Semantics label of a caption button that minimizes the window.
+    fn minimize_window_label(&self) -> &'static str;
+    /// Semantics label of a caption button that maximizes the window.
+    fn maximize_window_label(&self) -> &'static str;
+    /// Semantics label of a caption button that restores a maximized window.
+    fn restore_window_label(&self) -> &'static str;
+    /// Semantics label of a caption button that closes the window.
+    fn close_window_label(&self) -> &'static str;
     /// What assistive technology hears after an item moved in a reorderable
     /// list: the item, when it is named, at `position` (1-based) of `count`.
     fn reorder_item_moved(&self, item: Option<&str>, position: usize, count: usize) -> String;
@@ -189,5 +197,21 @@ impl WidgetsLocalizations for DefaultWidgetsLocalizations {
 
     fn autoplay_resume_label(&self) -> &'static str {
         "Resume autoplay"
+    }
+
+    fn minimize_window_label(&self) -> &'static str {
+        "Minimize"
+    }
+
+    fn maximize_window_label(&self) -> &'static str {
+        "Maximize"
+    }
+
+    fn restore_window_label(&self) -> &'static str {
+        "Restore"
+    }
+
+    fn close_window_label(&self) -> &'static str {
+        "Close"
     }
 }

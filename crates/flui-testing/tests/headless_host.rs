@@ -497,6 +497,34 @@ fn the_headless_window_drops_input_regions_no_host_could_send() {
     );
 }
 
+/// A frame or mode a window command set leaves the host unsettled until the pump that tells
+/// the UI runtime: an idle host's loop does not wait for input, and settling pumps it.
+///
+/// Fails against a host whose readiness reads the UI runtime's work alone, which waits for
+/// input and leaves the window's subscribers on the old frame.
+#[test]
+fn a_window_command_keeps_the_host_unsettled_until_it_is_observed() {
+    use flui_platform::{WindowCommand, WindowFrame};
+    use flui_testing::window_commands::AdmitAndApply as _;
+
+    let (mut ui_runtime, _armed) = tripwire_ui_runtime(false);
+    ui_runtime
+        .pump_until_settled(Duration::from_millis(16), 8)
+        .expect("a still tree settles");
+    assert_eq!(ui_runtime.time_to_next_frame(), None, "idle");
+
+    ui_runtime
+        .window()
+        .admit_and_apply(WindowCommand::SetFrame(WindowFrame::None))
+        .expect("the headless window takes every frame");
+    assert_eq!(ui_runtime.time_to_next_frame(), Some(Duration::ZERO));
+    let frames = ui_runtime
+        .pump_until_settled(Duration::from_millis(16), 8)
+        .expect("the observation settles");
+    assert!(frames >= 1, "the observation is pumped");
+    assert_eq!(ui_runtime.time_to_next_frame(), None, "idle again");
+}
+
 // ============================================================================
 // Backing off a frame that keeps failing (R10, ADR-0258 §6)
 // ============================================================================

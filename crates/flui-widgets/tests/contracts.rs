@@ -26,6 +26,25 @@ fn input_regions() {
     );
 }
 
+/// An application's own title bar: the chrome regions its widgets mark, the press-taking
+/// widgets cut out of its move area, and the caption buttons acting on the window.
+#[test]
+fn window_chrome() {
+    run_cases(
+        "window_chrome",
+        &[
+            ("window_chrome::a_title_bar_moves_the_window_except_where_its_widgets_take_presses", crate::window_chrome::a_title_bar_moves_the_window_except_where_its_widgets_take_presses as fn()),
+            ("window_chrome::nothing_is_marked_while_the_system_draws_the_title_bar", crate::window_chrome::nothing_is_marked_while_the_system_draws_the_title_bar),
+            ("window_chrome::a_frame_change_marks_and_unmarks_the_bar", crate::window_chrome::a_frame_change_marks_and_unmarks_the_bar),
+            ("window_chrome::a_maximized_window_is_not_resized_from_its_border", crate::window_chrome::a_maximized_window_is_not_resized_from_its_border),
+            ("window_chrome::the_maximize_button_maximizes_and_restores", crate::window_chrome::the_maximize_button_maximizes_and_restores),
+            ("window_chrome::the_minimize_button_minimizes", crate::window_chrome::the_minimize_button_minimizes),
+            ("window_chrome::the_close_button_asks_to_close", crate::window_chrome::the_close_button_asks_to_close),
+            ("window_chrome::caption_buttons_are_buttons_named_after_what_they_do", crate::window_chrome::caption_buttons_are_buttons_named_after_what_they_do),
+        ],
+    );
+}
+
 /// Navigator failure paths: panicking hooks and factories, mismatched result types,
 /// undeliverable results, and every re-entrant push or observer callback that must not
 /// deadlock the history lock.
@@ -740,6 +759,7 @@ fn selection_menu() {
             ("selection_menu::a_handle_drag_hides_the_toolbar_until_it_lets_go", crate::selection_menu::a_handle_drag_hides_the_toolbar_until_it_lets_go),
             ("selection_menu::a_policy_or_no_menu_keeps_the_menu_away", crate::selection_menu::a_policy_or_no_menu_keeps_the_menu_away),
             ("selection_menu::a_tap_on_the_caret_handle_toggles_the_toolbar", crate::selection_menu::a_tap_on_the_caret_handle_toggles_the_toolbar),
+            ("selection_menu::a_caret_long_press_shows_the_toolbar_over_the_caret", crate::selection_menu::a_caret_long_press_shows_the_toolbar_over_the_caret),
             ("selection_menu::an_assistive_click_on_the_toolbar_takes_it_away", crate::selection_menu::an_assistive_click_on_the_toolbar_takes_it_away),
             ("selection_menu::the_toolbar_follows_a_scroll", crate::selection_menu::the_toolbar_follows_a_scroll),
             ("selection_menu::a_rebuilt_field_refreshes_its_shown_toolbar", crate::selection_menu::a_rebuilt_field_refreshes_its_shown_toolbar),

@@ -1,8 +1,8 @@
 //! The development-agent seam (ADR-0095 §3).
 //!
 //! A development tool that serves the application's semantics tree to an
-//! agent — `flui-devtools`' `agent` server today — implements
-//! [`DevAgentHook`]; the application installs the instance on its
+//! agent — `flui-app`'s driver agent (ADR-0239) — implements
+//! [`DevAgentHook`]; the host or the application installs the instance on its
 //! configuration (`flui_app::AppConfig::with_dev_agent`), and the host hands
 //! it an [`AgentWindow`] for each window that has content to read. The trait
 //! lives here, below the runtime, so the host never names the tool and the

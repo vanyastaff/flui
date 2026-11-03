@@ -5,7 +5,7 @@
 //! pins subsequent consumer additions and removals, plus `painting::DrawOp`,
 //! which the design systems' paint tests read, `view::dev_reload`, the
 //! hook `flui-hot-reload`'s host drivers implement (ADR-0094 §1), and
-//! `view::dev_agent`, the hook `flui-devtools`' agent server implements
+//! `view::dev_agent`, the hook a package's development tool implements
 //! (ADR-0095 §3), and `view::FrameWaker`, the one scheduler capability a
 //! package hands a worker thread (ADR-0136 §2). The input-completeness surface
 //! the spec places in the SDK follows: arena observation, the per-kind gesture

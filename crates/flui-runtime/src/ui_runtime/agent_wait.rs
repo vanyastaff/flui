@@ -9,6 +9,7 @@
 //! window had not settled), not an error.
 
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
+use std::sync::Weak;
 use std::time::Duration;
 
 use flui_foundation::geometry::DevicePixelRatio;
@@ -22,17 +23,26 @@ use super::UiRuntime;
 use super::agent::{AgentError, ReplySender, send_reply};
 use crate::presentation::PresentationState;
 
-/// How long a wait holds out when the caller names no timeout.
-const DEFAULT_WAIT: Duration = Duration::from_millis(5_000);
-
-/// The longest a wait may hold out; a longer timeout is this long.
-const MAX_WAIT: Duration = Duration::from_hours(24);
-
 /// The most waits one presentation holds at once. A wait past it is refused with
 /// [`AgentError::TooManyWaits`], never dropped silently or in place of an older one.
 pub(crate) const MAX_PARKED_WAITS: usize = 256;
 
 /// A wait, parked on its presentation until its condition holds or its deadline passes.
+/// Where a wait's outcome goes, and whether anyone can still take it.
+#[derive(Debug)]
+pub struct WaitReply {
+    reply: ReplySender<WaitOutcome>,
+    /// The asker's answer holds the other end: once it is dropped, nobody
+    /// takes the outcome and the parked wait is let go.
+    asker: Weak<()>,
+}
+
+impl WaitReply {
+    pub(super) fn new(reply: ReplySender<WaitOutcome>, asker: Weak<()>) -> Self {
+        Self { reply, asker }
+    }
+}
+
 /// Owner thread only.
 pub(crate) struct PendingWait {
     condition: Condition,
@@ -43,12 +53,19 @@ pub(crate) struct PendingWait {
     /// On the presentation's clock.
     deadline: Instant,
     reply: ReplySender<WaitOutcome>,
+    /// Gone once nobody takes the outcome.
+    asker: Weak<()>,
 }
 
 impl PendingWait {
     /// The window emitted an event of `kind`; the wait sees it at its next evaluation.
     pub(crate) fn note_event(&mut self, kind: flui_protocol::EventKind) {
         self.events.insert(kind);
+    }
+
+    /// Whether anyone can still take the outcome.
+    fn is_awaited(&self) -> bool {
+        self.asker.strong_count() > 0
     }
 
     /// The window closed before the wait ended.
@@ -70,15 +87,14 @@ impl UiRuntime {
         &self,
         presentation: flui_foundation::PresentationId,
         params: WaitParams,
-        reply: ReplySender<WaitOutcome>,
+        reply: WaitReply,
     ) -> bool {
+        let WaitReply { reply, asker } = reply;
         let Some(state) = self.presentations.get(presentation) else {
             send_reply(&reply, None, Err(AgentError::PresentationGone));
             return false;
         };
-        let timeout = params
-            .timeout_ms
-            .map_or(DEFAULT_WAIT, |ms| Duration::from_millis(ms).min(MAX_WAIT));
+        let timeout = Duration::from_millis(params.effective_timeout_ms());
         let now = state.clock().now();
         let pending = PendingWait {
             condition: params.condition,
@@ -86,11 +102,17 @@ impl UiRuntime {
             events: EventSet::EMPTY,
             deadline: now.checked_add(timeout).unwrap_or(now),
             reply,
+            asker,
         };
         // A condition that holds already, or a tree that cannot be read, answers here.
         let Some(pending) = self.settle_wait(state, pending, now) else {
             return true;
         };
+        // Waits nobody takes any more hold no place against the limit.
+        state
+            .agent_waits
+            .borrow_mut()
+            .retain(PendingWait::is_awaited);
         let parked = state.agent_waits.borrow().len();
         if parked >= MAX_PARKED_WAITS {
             send_reply(&pending.reply, None, Err(AgentError::TooManyWaits));
@@ -119,6 +141,10 @@ impl UiRuntime {
             let mut keep = Vec::with_capacity(waits.len());
             let mut waits = waits.into_iter();
             while let Some(mut wait) = waits.next() {
+                // Nobody takes this outcome any more: let the wait go unanswered.
+                if !wait.is_awaited() {
+                    continue;
+                }
                 if frame {
                     wait.frames += 1;
                 }
