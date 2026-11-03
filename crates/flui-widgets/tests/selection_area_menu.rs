@@ -600,14 +600,12 @@ pub(crate) fn an_area_s_handle_drag_s_magnifier_follows_the_finger_and_each_step
     scene.long_press(scene.along(width_of("alpha be")));
     let end = width_of("alpha beta");
     let from = scene.end_handle(end);
-    let letter = width_of("alpha beta gamm") - width_of("alpha beta gam");
+    // The prefixes of the line the steps stop after.
+    let line = "alpha beta gamma";
+    let at = |bytes: usize| width_of(&line[..bytes]);
+    let letter = at(15) - at(14);
     // Three steps, then a third of the next letter.
-    let stops = [
-        width_of("alpha beta g"),
-        width_of("alpha beta ga"),
-        width_of("alpha beta gam"),
-        width_of("alpha beta gam") + letter / 3.0,
-    ];
+    let stops = [at(12), at(13), at(14), at(14) + letter / 3.0];
     // The finger first goes down past the drag slop, which the line's
     // letters keep: a step of one letter alone would not start the drag.
     let below = from + Offset::new(0.0, 30.0);
@@ -639,7 +637,7 @@ pub(crate) fn an_area_s_handle_drag_s_magnifier_follows_the_finger_and_each_step
     });
     scene.settle();
     let shown = during.expect("the drag ran");
-    assert_eq!(scene.selected().as_deref(), Some("beta gam"));
+    assert_eq!(scene.selected().as_deref(), Some(&line[6..14]));
     let clicks = scene
         .laid
         .window()
