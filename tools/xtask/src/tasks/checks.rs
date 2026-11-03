@@ -10,8 +10,9 @@ use anyhow::bail;
 use super::exec::{Cmd, Runner, installed, parsed};
 use crate::{
     android_dex, change_scope, changelog, docs_links, docs_paths, file_length, fonts, globals,
-    icon_import, inspect_debug, key_vocabulary, markers, module_dag, panic_boundary, perf,
-    platform_floor, recording_vocabulary, send_impls, testing, toolchain, try_new, wgsl, workspace,
+    icon_import, inspect_debug, key_vocabulary, markers, module_dag, panic_boundary,
+    panic_messages, perf, platform_floor, recording_vocabulary, send_impls, testing, toolchain,
+    try_new, wgsl, workspace,
 };
 
 /// A formatter or linter that is a binary of its own, not a cargo step.
@@ -101,7 +102,7 @@ type InProcess = fn(&[&str]) -> anyhow::Result<ExitCode>;
 /// This crate's own checks, in the order they run: each `cargo xtask`
 /// command line and the command it names. lychee is skippable like
 /// [`TOOLS`], so `--strict` reaches `docs-links` too.
-fn in_process(strict: bool) -> [(&'static str, InProcess); 37] {
+fn in_process(strict: bool) -> [(&'static str, InProcess); 39] {
     [
         (
             if strict {
@@ -143,6 +144,12 @@ fn in_process(strict: bool) -> [(&'static str, InProcess); 37] {
             try_new::try_new(&parsed(args)?)
         }),
         ("try-new", |args| try_new::try_new(&parsed(args)?)),
+        ("panic-messages --self-test", |args| {
+            panic_messages::panic_messages(&parsed(args)?)
+        }),
+        ("panic-messages", |args| {
+            panic_messages::panic_messages(&parsed(args)?)
+        }),
         ("inspect-debug", |args| {
             inspect_debug::inspect_debug(&parsed(args)?)
         }),
@@ -234,6 +241,8 @@ mod tests {
                 "send-impls",
                 "try-new --self-test",
                 "try-new",
+                "panic-messages --self-test",
+                "panic-messages",
                 "inspect-debug",
                 "paths-filter",
                 "font-assets --package-list",

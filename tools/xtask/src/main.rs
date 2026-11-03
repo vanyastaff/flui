@@ -31,6 +31,7 @@ mod key_vocabulary;
 mod markers;
 mod module_dag;
 mod panic_boundary;
+mod panic_messages;
 mod perf;
 mod platform_floor;
 mod ratchet;
@@ -129,6 +130,9 @@ enum Command {
     /// Check that every `new` returning `Result` or `Option` is listed and the list only
     /// shrinks: such a constructor is `try_new` (AGENTS.md).
     TryNew(try_new::TryNewArgs),
+    /// Check that every production `expect` and `panic!` names its invariant (`BUG: `) or its
+    /// `try_` twin; the counts of the ones that do not only go down (docs/PANIC-POLICY.md).
+    PanicMessages(panic_messages::PanicMessagesArgs),
     /// Check a linked wasm module's imports against the allowlist.
     WasmImports(wasm::WasmImportsArgs),
     /// Print the crates whose tests run on wasm32.
@@ -213,6 +217,7 @@ fn main() -> ExitCode {
         Command::SendImpls(args) => send_impls::send_impls(&args),
         Command::SendPositions(args) => send_positions::send_positions(&args),
         Command::TryNew(args) => try_new::try_new(&args),
+        Command::PanicMessages(args) => panic_messages::panic_messages(&args),
         Command::InspectDebug(args) => inspect_debug::inspect_debug(&args),
         Command::WasmImports(args) => wasm::wasm_imports(&args),
         Command::WasmTestCrates(args) => wasm::wasm_test_crates(&args),
