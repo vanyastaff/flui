@@ -676,7 +676,7 @@ pub(crate) mod force {
 
 #[cfg(any(target_os = "macos", test))]
 pub(crate) mod title_bar {
-    //! A press on a title bar the application draws (ADR-0286 §7): where the
+    //! A press on a title bar the application draws (ADR-0286 §8): where the
     //! chrome regions put a left press, and what a double-click on the bar
     //! does after the user's setting. AppKit reads the setting and moves the
     //! window; this decides.

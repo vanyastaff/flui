@@ -1455,7 +1455,7 @@ impl PlatformWindow for MacOSWindow {
     }
 
     /// The content view answers a left press from the move areas of a title
-    /// bar the application draws (ADR-0286 §7). AppKit keeps the resize
+    /// bar the application draws (ADR-0286 §8). AppKit keeps the resize
     /// borders and draws the caption buttons itself, and lets no window keep
     /// the system's trackpad gestures out, so the other kinds are not honoured
     /// (`input::availability::macos`).

@@ -121,7 +121,7 @@ fn every_backend_states_its_availability() {
 }
 
 /// Win32 answers the system's hit test from every chrome region and AppKit
-/// moves the window from a move area (ADR-0286 §7); the others leave them
+/// moves the window from a move area (ADR-0286 §7, §8); the others leave them
 /// `Unavailable` until they do.
 #[test]
 fn the_desktop_hosts_honour_the_chrome_regions_they_answer() {

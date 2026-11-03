@@ -1194,7 +1194,7 @@ pub(crate) mod mode {
 #[cfg(any(target_os = "macos", test))]
 pub(crate) mod title_bar {
     //! How an `NSWindow` whose application draws the title bar is styled
-    //! (ADR-0286 §7), and where its traffic lights go when the application
+    //! (ADR-0286 §8), and where its traffic lights go when the application
     //! moves them.
     //!
     //! The title bar of such a window is the system's, made transparent, with
