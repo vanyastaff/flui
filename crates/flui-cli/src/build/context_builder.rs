@@ -55,6 +55,7 @@ pub(crate) struct BuilderContextBuilder<P = NoPlatform, Pr = NoProfile> {
     output_dir: Option<PathBuf>,
     bundle: Option<AppBundle>,
     floors: AppFloors,
+    features: Vec<String>,
 }
 
 // Initial builder creation
@@ -74,6 +75,7 @@ impl BuilderContextBuilder<NoPlatform, NoProfile> {
             output_dir: None,
             bundle: None,
             floors: AppFloors::default(),
+            features: Vec::new(),
         }
     }
 }
@@ -97,6 +99,7 @@ impl<Pr> BuilderContextBuilder<NoPlatform, Pr> {
             output_dir: self.output_dir,
             bundle: self.bundle,
             floors: self.floors,
+            features: self.features,
         }
     }
 }
@@ -117,6 +120,7 @@ impl<P> BuilderContextBuilder<P, NoProfile> {
             output_dir: self.output_dir,
             bundle: self.bundle,
             floors: self.floors,
+            features: self.features,
         }
     }
 }
@@ -146,6 +150,14 @@ impl<P, Pr> BuilderContextBuilder<P, Pr> {
     #[must_use]
     pub(crate) fn with_floors(mut self, floors: AppFloors) -> Self {
         self.floors = floors;
+        self
+    }
+
+    /// Turn on `features` beyond the package's defaults, each as `--features`
+    /// takes it.
+    #[must_use]
+    pub(crate) fn with_features(mut self, features: impl IntoIterator<Item = String>) -> Self {
+        self.features.extend(features);
         self
     }
 
@@ -188,6 +200,7 @@ impl BuilderContextBuilder<HasPlatform, HasProfile> {
             output_dir,
             bundle: self.bundle,
             floors: self.floors,
+            features: self.features,
         }
     }
 }

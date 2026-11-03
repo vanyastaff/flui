@@ -26,6 +26,9 @@ pub(crate) struct BuilderContext {
     /// The floors the build packages and links with (ADR-0244 §10): FLUI's,
     /// raised where `flui.toml` asks.
     pub(crate) floors: crate::build::app_floor::AppFloors,
+    /// Cargo features the build turns on beyond the package's defaults, each
+    /// as `--features` takes it (`flui/driver`).
+    pub(crate) features: Vec<String>,
 }
 
 /// Identity an application bundle is staged under.

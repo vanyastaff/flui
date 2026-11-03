@@ -6,24 +6,33 @@
 //! credentials in this module:
 //!
 //! - `flui run --agent` creates a [`Session`]: a fresh endpoint address, a
-//!   launch token, and a file naming both. It starts the app with the
-//!   endpoint and the token in its environment.
+//!   launch token, and a file naming the token and where a client reaches the
+//!   app. It starts a desktop app with the endpoint and the token in its
+//!   environment, and an Android app with them as the launching intent's
+//!   extras, its endpoint an abstract socket that [`forward::AdbForward`]
+//!   carries a loopback port to.
 //! - `flui mcp` ([`mcp`]) serves MCP over stdio and forwards each tool call
 //!   to that endpoint through a [`client::Connection`].
 //!
-//! The launch contract (the variable names, the shortest token) and the wire
-//! types are `flui-protocol`'s, the contract crate the app's server reads too.
+//! The launch contract (the variable and extra names, the shortest token) and
+//! the wire types are `flui-protocol`'s, the contract crate the app's server
+//! reads too.
 
 pub(crate) mod client;
+pub(crate) mod forward;
 pub(crate) mod mcp;
 
 use std::fmt;
 use std::fs;
 use std::io::{self, Write as _};
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 pub(crate) use flui_protocol::launch::{ENDPOINT_ENV, TOKEN_ENV};
+use flui_protocol::launch::{ENDPOINT_EXTRA, TOKEN_EXTRA};
+
+use self::forward::AdbForward;
 
 use crate::error::{CliError, CliResult, ResultExt};
 
@@ -40,12 +49,32 @@ const SESSION_FILE: &str = "flui-agent.json";
 #[cfg(unix)]
 const MAX_SOCKET_PATH: usize = 100;
 
-/// Where an app listens and the token that admits a client. Written to the
-/// session file, so it is what `flui mcp` reads.
+/// Where a client reaches an app's agent.
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum Endpoint {
+    /// The endpoint the app binds on this host: a pipe name on Windows, a
+    /// socket path elsewhere.
+    Local(String),
+    /// A loopback port that `adb forward` carries to an Android app's
+    /// abstract socket.
+    Forwarded(SocketAddr),
+}
+
+impl fmt::Display for Endpoint {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Local(address) => f.write_str(address),
+            Self::Forwarded(address) => write!(f, "{address} (adb forward)"),
+        }
+    }
+}
+
+/// Where a client reaches the app and the token that admits it. Written to
+/// the session file, so it is what `flui mcp` reads.
 #[derive(serde::Serialize, serde::Deserialize, Clone, PartialEq, Eq)]
 pub(crate) struct Credentials {
-    /// A pipe name on Windows, a socket path elsewhere.
-    pub(crate) endpoint: String,
+    pub(crate) endpoint: Endpoint,
     /// At least 32 bytes, hex.
     pub(crate) token: String,
     /// The `flui run` process that owns the session.
@@ -69,7 +98,7 @@ impl Credentials {
         let endpoint = std::env::var(ENDPOINT_ENV).ok().filter(|v| !v.is_empty())?;
         let token = std::env::var(TOKEN_ENV).ok().filter(|v| !v.is_empty())?;
         Some(Self {
-            endpoint,
+            endpoint: Endpoint::Local(endpoint),
             token,
             pid: 0,
         })
@@ -124,16 +153,28 @@ pub(crate) fn target_dir_override() -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
-/// An agent session owned by one `flui run --agent`: the credentials, the
-/// private directory holding the socket, and the session file. Dropping it
-/// removes all three, so a session never outlives the command.
+/// An agent session owned by one `flui run --agent`: the credentials, what
+/// keeps the endpoint (the private directory holding a desktop app's socket,
+/// or an Android app's `adb forward`), and the session file. Dropping it
+/// removes all of them, so a session never outlives the command.
 pub(crate) struct Session {
     credentials: Credentials,
-    /// Holds the socket (Unix). Removed on drop.
-    _dir: tempfile::TempDir,
+    /// The address the app binds: the endpoint of [`Self::credentials`] on
+    /// the desktop, `@name` for an Android app's abstract socket.
+    app_endpoint: String,
+    /// What keeps the endpoint; removed on drop.
+    _held: Held,
     file: PathBuf,
     /// The feature a build without debug assertions needs to keep the agent.
     driver_feature: Option<String>,
+}
+
+/// What a session holds its endpoint with.
+enum Held {
+    /// The private directory holding a desktop app's socket (Unix).
+    Directory { _dir: tempfile::TempDir },
+    /// The loopback port `adb` carries to an Android app's abstract socket.
+    Forward { _forward: AdbForward },
 }
 
 impl Session {
@@ -157,19 +198,46 @@ impl Session {
             fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o700))
                 .context("could not make the agent session directory private")?;
         }
-        // Twice the shortest token the app takes, as hex.
-        let token = random_hex(flui_protocol::launch::MIN_TOKEN_LEN)?;
         let endpoint = endpoint_in(dir.path(), &random_hex(4)?)?;
         let credentials = Credentials {
-            endpoint,
-            token,
+            endpoint: Endpoint::Local(endpoint.clone()),
+            token: launch_token()?,
             pid: std::process::id(),
         };
         let file = session_file_for_writing(start, workspace_root, target_dir);
         write_private(&file, &credentials).context("could not write the agent session file")?;
         Ok(Self {
             credentials,
-            _dir: dir,
+            app_endpoint: endpoint,
+            _held: Held::Directory { _dir: dir },
+            file,
+            driver_feature: None,
+        })
+    }
+
+    /// A new session for an Android app on the device `serial`, which `adb`
+    /// reaches: the app binds a fresh abstract socket, and a loopback port of
+    /// this host is forwarded to it. The rest is [`Self::create`]'s.
+    pub(crate) fn create_forwarded(
+        start: &Path,
+        workspace_root: Option<&Path>,
+        target_dir: Option<&Path>,
+        adb: &Path,
+        serial: &str,
+    ) -> CliResult<Self> {
+        let socket = format!("flui-agent-{}", random_hex(8)?);
+        let forward = AdbForward::open(adb, serial, &socket)?;
+        let credentials = Credentials {
+            endpoint: Endpoint::Forwarded(forward.address()),
+            token: launch_token()?,
+            pid: std::process::id(),
+        };
+        let file = session_file_for_writing(start, workspace_root, target_dir);
+        write_private(&file, &credentials).context("could not write the agent session file")?;
+        Ok(Self {
+            credentials,
+            app_endpoint: format!("@{socket}"),
+            _held: Held::Forward { _forward: forward },
             file,
             driver_feature: None,
         })
@@ -186,9 +254,21 @@ impl Session {
         &self.credentials
     }
 
+    /// The address the app binds: a pipe name or a socket path on the
+    /// desktop, `@name` for an Android app's abstract socket.
+    pub(crate) fn app_endpoint(&self) -> &str {
+        &self.app_endpoint
+    }
+
     /// The session file `flui mcp` reads.
     pub(crate) fn file(&self) -> &Path {
         &self.file
+    }
+
+    /// The `--features` value a build without debug assertions needs to keep
+    /// the agent, when the profile needs one.
+    pub(crate) fn driver_feature(&self) -> Option<&str> {
+        self.driver_feature.as_deref()
     }
 
     /// Gives `cmd` (the cargo that builds and runs the app) the driver
@@ -197,20 +277,41 @@ impl Session {
         if let Some(feature) = &self.driver_feature {
             cmd.args(["--features", feature]);
         }
-        cmd.env(ENDPOINT_ENV, &self.credentials.endpoint)
+        cmd.env(ENDPOINT_ENV, &self.app_endpoint)
             .env(TOKEN_ENV, &self.credentials.token);
     }
 
+    /// The `am start` arguments that hand an Android app the endpoint and the
+    /// token as the launching intent's string extras.
+    pub(crate) fn intent_extras(&self) -> [&str; 6] {
+        [
+            "--es",
+            ENDPOINT_EXTRA,
+            &self.app_endpoint,
+            "--es",
+            TOKEN_EXTRA,
+            &self.credentials.token,
+        ]
+    }
+
     /// Clears what a previous run of the app left at the endpoint: a socket
-    /// file a killed app could not remove would fail the next bind.
+    /// file a killed app could not remove would fail the next bind. An
+    /// abstract socket and a named pipe leave nothing behind.
     #[cfg_attr(
         windows,
         expect(clippy::unused_self, reason = "a named pipe leaves no file behind")
     )]
     pub(crate) fn clear_endpoint(&self) {
         #[cfg(unix)]
-        let _ = fs::remove_file(&self.credentials.endpoint);
+        if matches!(self.credentials.endpoint, Endpoint::Local(_)) {
+            let _ = fs::remove_file(&self.app_endpoint);
+        }
     }
+}
+
+/// A fresh launch token: twice the shortest the app takes, as hex.
+fn launch_token() -> CliResult<String> {
+    random_hex(flui_protocol::launch::MIN_TOKEN_LEN)
 }
 
 impl Drop for Session {
@@ -343,7 +444,7 @@ mod tests {
         let session = Session::create(project.path(), None, None).unwrap();
         let mode = |p: &Path| fs::metadata(p).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode(session.file()), 0o600);
-        let socket_dir = Path::new(&session.credentials().endpoint).parent().unwrap();
+        let socket_dir = Path::new(session.app_endpoint()).parent().unwrap();
         assert_eq!(mode(socket_dir), 0o700, "the app refuses anything wider");
     }
 
@@ -354,7 +455,7 @@ mod tests {
         let file = older.file().to_owned();
         // Another `flui run` in the same project replaced the file.
         let replacement = Credentials {
-            endpoint: "elsewhere".into(),
+            endpoint: Endpoint::Local("elsewhere".into()),
             token: "t".repeat(32),
             pid: std::process::id() + 1,
         };
@@ -366,10 +467,112 @@ mod tests {
     #[test]
     fn credentials_never_print_their_token() {
         let credentials = Credentials {
-            endpoint: "e".into(),
+            endpoint: Endpoint::Local("e".into()),
             token: "super-secret-token".into(),
             pid: 1,
         };
         assert!(!format!("{credentials:?}").contains("super-secret"));
+    }
+
+    /// An `adb` that logs its arguments to `log` and allocates port 43123.
+    #[cfg(unix)]
+    fn logging_adb(dir: &Path, log: &Path) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt as _;
+        let adb = dir.join("adb");
+        fs::write(
+            &adb,
+            format!(
+                "#!/bin/sh\necho \"$*\" >> '{}'\n[ \"$3 $4\" = 'forward tcp:0' ] && echo 43123\nexit 0\n",
+                log.display()
+            ),
+        )
+        .unwrap();
+        fs::set_permissions(&adb, fs::Permissions::from_mode(0o755)).unwrap();
+        adb
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_android_session_forwards_a_port_to_a_fresh_abstract_socket_and_removes_it() {
+        let project = tempfile::tempdir().unwrap();
+        let tools = tempfile::tempdir().unwrap();
+        let log = tools.path().join("adb.log");
+        let adb = logging_adb(tools.path(), &log);
+
+        let session =
+            Session::create_forwarded(project.path(), None, None, &adb, "emulator-5554").unwrap();
+        let socket = session
+            .app_endpoint()
+            .strip_prefix('@')
+            .expect("the app binds an abstract socket")
+            .to_owned();
+        assert!(socket.starts_with("flui-agent-"), "{socket}");
+        assert_eq!(
+            session.credentials().endpoint,
+            Endpoint::Forwarded(SocketAddr::from(([127, 0, 0, 1], 43123))),
+            "a client connects to the forwarded port"
+        );
+        assert_eq!(
+            session.intent_extras(),
+            [
+                "--es",
+                "flui.agent.endpoint",
+                session.app_endpoint(),
+                "--es",
+                "flui.agent.token",
+                session.credentials().token.as_str(),
+            ]
+        );
+        assert_eq!(
+            Credentials::read(session.file()).unwrap(),
+            *session.credentials()
+        );
+        let other =
+            Session::create_forwarded(project.path(), None, None, &adb, "emulator-5554").unwrap();
+        assert_ne!(other.app_endpoint(), session.app_endpoint());
+
+        let calls = || fs::read_to_string(&log).unwrap();
+        assert_eq!(
+            calls().lines().next(),
+            Some(format!("-s emulator-5554 forward tcp:0 localabstract:{socket}").as_str())
+        );
+        let removed = || {
+            calls()
+                .lines()
+                .filter(|call| *call == "-s emulator-5554 forward --remove tcp:43123")
+                .count()
+        };
+        assert_eq!(removed(), 0, "a live session keeps its forward");
+        drop(other);
+        assert_eq!(removed(), 1);
+        let file = session.file().to_owned();
+        drop(session);
+        assert_eq!(removed(), 2, "the forward goes with the session");
+        assert!(!file.exists(), "the file goes with the session");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_failed_forward_starts_no_session() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let project = tempfile::tempdir().unwrap();
+        let tools = tempfile::tempdir().unwrap();
+        let adb = tools.path().join("adb");
+        fs::write(
+            &adb,
+            "#!/bin/sh\necho 'error: device offline' >&2\nexit 1\n",
+        )
+        .unwrap();
+        fs::set_permissions(&adb, fs::Permissions::from_mode(0o755)).unwrap();
+
+        let refused = Session::create_forwarded(project.path(), None, None, &adb, "emulator-5554");
+        assert!(
+            matches!(refused, Err(CliError::CommandFailed { .. })),
+            "{refused:?}"
+        );
+        assert!(
+            find_session_file(project.path(), None).is_none(),
+            "no session file names a port nobody forwards"
+        );
     }
 }
