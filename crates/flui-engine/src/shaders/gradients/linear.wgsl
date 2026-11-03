@@ -65,8 +65,7 @@ var<uniform> viewport: Viewport;
 // Vertex Shader
 // =============================================================================
 
-@vertex
-fn vs_main(
+fn vertexStage(
     vertex: VertexInput,
     instance: InstanceInput,
 ) -> VertexOutput {
@@ -157,3 +156,8 @@ fn shadeFragment(in: VertexOutput) -> ShadedFragment {
 // `batches/gradients.rs::dispatch_shader_rect` converts the shader's absolute
 // `from`/`to` to rect-local pixels and records one `LinearGradientInstance`
 // with the rounded rect's per-corner radii.
+
+@vertex
+fn vs_main(vertex: VertexInput, instance: InstanceInput) -> VertexOutput {
+    return vertexStage(vertex, instance);
+}

@@ -402,10 +402,10 @@ impl FrameRun {
     /// instead of panicking. The owner stays in this run either way, so the
     /// next frame starts from the failed one.
     pub fn try_pump(&mut self) -> Result<FrameReport, RenderError> {
-        let owner = self.owner.take_idle();
-        let (owner, result) = owner.run_frame();
-        self.owner = owner;
-        self.layer_tree = result.map_err(flui_foundation::TreeError::into_error)?;
+        self.layer_tree = self
+            .owner
+            .run_frame_in_place()
+            .map_err(flui_foundation::TreeError::into_error)?;
         Ok(self.report())
     }
 

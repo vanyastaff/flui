@@ -1,6 +1,7 @@
 //! [`Text`] — displays a run of styled text.
 
 use flui_painting::typography::{TextAlign, TextDirection, TextSpan, TextStyle};
+use flui_view::CreationSite;
 use flui_view::element::ElementKind;
 use flui_view::prelude::*;
 
@@ -27,11 +28,13 @@ pub struct Text {
     align: Option<TextAlign>,
     direction: TextDirection,
     max_lines: Option<u32>,
+    site: CreationSite,
 }
 
 impl Text {
     /// Create text displaying `data` with default style, start alignment, and
     /// left-to-right direction.
+    #[track_caller]
     pub fn new(data: impl Into<String>) -> Self {
         Self {
             data: data.into(),
@@ -39,6 +42,7 @@ impl Text {
             align: None,
             direction: TextDirection::Ltr,
             max_lines: None,
+            site: CreationSite::here(),
         }
     }
 
@@ -77,6 +81,10 @@ impl Text {
 impl View for Text {
     fn create_element(&self) -> ElementKind {
         ElementKind::stateless(self)
+    }
+
+    fn creation_site(&self) -> CreationSite {
+        self.site
     }
 }
 

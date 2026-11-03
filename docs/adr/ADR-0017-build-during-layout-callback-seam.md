@@ -71,17 +71,13 @@ reconcile the prepared build targets through the ordinary owner path.
 The owner is threaded **through `PipelineCell`**. An element reaches the same cell when
 mounting render objects. Building inside a `with_mut` checkout would reenter that cell
 the moment a builder mounts a child. Each pass in `run_frame_with_layout_builders`
-therefore restores the idle pipeline before servicing builders:
+therefore restores the idle pipeline before servicing builders. `PipelineCell::run_layout`
+drains the dirty channel, lays out, and leaves the same owner in the cell on every exit, a
+panic included:
 
 ```rust
 drive_fixpoint(|| {
-    pipeline.with_mut(|pipeline_owner| {
-        pipeline_owner.drain_pending_dirty();
-        let mut layout = pipeline_owner.take_idle().into_layout();
-        let result = layout.run_layout();
-        *pipeline_owner = layout.into_idle(); // restored on the error path too
-        result
-    })?;
+    pipeline.run_layout()?; // the owner stays in the cell on every exit
     Ok(owner.service_layout_builders(tree, pipeline)) // builds with the cell free
 })
 ```

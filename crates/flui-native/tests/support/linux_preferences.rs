@@ -1,9 +1,10 @@
 //! Public Linux owner acceptance. Run inside dbus-run-session and xvfb-run.
 //!
-//! `cargo run -p flui-native --features winit-backend --test linux_preferences` runs it.
+//! `xvfb-run -a cargo run -p flui-native --test linux_preferences` runs it on the native X11
+//! host.
 
 pub mod linux {
-    use flui_native::{Platform, PlatformProxy, WinitPlatform};
+    use flui_native::{Platform, PlatformProxy, X11Platform};
     use flui_platform::{MotionPreference, WindowAppearance};
     use std::sync::{
         Arc,
@@ -356,13 +357,14 @@ pub mod linux {
             eprintln!("Linux preference owner did not complete within 30 seconds");
             std::process::exit(2);
         });
-        let platform = Arc::new(WinitPlatform::new());
+        let platform =
+            Arc::new(X11Platform::try_new().expect("the X11 platform on the harness's X server"));
         let reader = Arc::clone(&platform);
         let changed = Arc::new(AtomicBool::new(false));
         let witness = Arc::clone(&changed);
         let after = after.observation();
         platform
-            .run_event_loop(crate::app::on_ready(move |owner| {
+            .run_shared(crate::app::on_ready(move |owner| {
                 let initial = owner.preferences().expect("initial owner observation");
                 assert!(
                     before.observed(&initial),
@@ -431,7 +433,7 @@ pub mod linux {
     }
 
     struct RetireCheck {
-        platform: Arc<WinitPlatform>,
+        platform: Arc<X11Platform>,
         refused: Arc<AtomicBool>,
     }
 
@@ -514,7 +516,8 @@ pub mod linux {
                 }
             })
             .expect("isolated portal service");
-        let platform = Arc::new(WinitPlatform::new());
+        let platform =
+            Arc::new(X11Platform::try_new().expect("the X11 platform on the harness's X server"));
         let stopped = Arc::clone(&platform);
         let reader = Arc::clone(&platform);
         let (start, begin) = tokio::sync::oneshot::channel::<PlatformProxy>();
@@ -595,7 +598,7 @@ pub mod linux {
             refused: Arc::clone(&refused),
         };
         platform
-            .run_event_loop(crate::app::on_ready(move |owner| {
+            .run_shared(crate::app::on_ready(move |owner| {
                 let initial = owner.preferences().expect("initial owner observation");
                 assert_eq!(
                     initial.motion(),

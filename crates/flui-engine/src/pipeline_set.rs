@@ -870,18 +870,9 @@ pub(super) fn create_unit_quad_pipeline_with_targets(
     targets: &[Option<wgpu::ColorTargetState>],
     vertex_entry: &'static str,
 ) -> wgpu::RenderPipeline {
-    let source = if vertex_entry == "vs_isolation" {
-        std::borrow::Cow::Owned(
-            spec.shader_source
-                .replace("@vertex", "")
-                .replace("fn vs_isolation", "@vertex fn vs_isolation"),
-        )
-    } else {
-        std::borrow::Cow::Borrowed(spec.shader_source)
-    };
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some(spec.shader_label),
-        source: wgpu::ShaderSource::Wgsl(source),
+        source: wgpu::ShaderSource::Wgsl(spec.shader_source.into()),
     });
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some(spec.pipeline_label),
