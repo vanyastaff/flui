@@ -15,7 +15,8 @@ use crate::{
     parent_data::{ParentData, SliverParentData},
     protocol::{
         capabilities::{
-            ChildLayout, HitTestCapability, HitTestContextApi, LayoutCapability, LayoutContextApi,
+            BoxChildSize, ChildLayout, HitTestCapability, HitTestContextApi, LayoutCapability,
+            LayoutContextApi,
         },
         protocol::{Protocol, sealed},
     },
@@ -211,6 +212,12 @@ pub type SliverChildLayoutCallback<'a> =
 /// Callback type for cross-protocol box child layout driven by a Sliver parent.
 pub type BoxChildLayoutCallback<'a> =
     &'a dyn Fn(RenderId, BoxConstraints) -> crate::error::RenderResult<Size>;
+
+/// The walk's box-child layout callback: like [`BoxChildLayoutCallback`],
+/// and it also says whether the walk substituted the size (see
+/// [`BoxChildSize`]).
+pub(crate) type ErasedBoxChildLayoutCallback<'a> =
+    &'a dyn Fn(RenderId, BoxConstraints) -> crate::error::RenderResult<BoxChildSize>;
 
 /// Callback type for cross-protocol box child intrinsic queries driven by a
 /// Sliver parent.
@@ -453,7 +460,20 @@ impl<'ctx, A: Arity, P: ParentData + Default> SliverLayoutCtx<'ctx, A, P> {
         index: usize,
         constraints: BoxConstraints,
     ) -> crate::error::RenderResult<Size> {
+        self.measure_box_child(index, constraints)
+            .map(BoxChildSize::size)
+    }
+
+    /// Lays out a Box-protocol child of this Sliver parent and says whether
+    /// the child produced its size or the walk substituted one.
+    pub fn measure_box_child(
+        &mut self,
+        index: usize,
+        constraints: BoxConstraints,
+    ) -> crate::error::RenderResult<BoxChildSize> {
         match &mut self.storage {
+            // A direct context runs no walk, so a size its callback answers
+            // is the child's own.
             SliverLayoutCtxStorage::Direct {
                 child_ids,
                 layout_box_child_callback,
@@ -463,12 +483,12 @@ impl<'ctx, A: Arity, P: ParentData + Default> SliverLayoutCtx<'ctx, A, P> {
                     (*child_ids, layout_box_child_callback.as_ref())
                     && let Some(&child_id) = child_ids.get(index)
                 {
-                    return callback(child_id, constraints);
+                    return callback(child_id, constraints).map(BoxChildSize::Measured);
                 }
-                Ok(Size::ZERO)
+                Ok(BoxChildSize::StandIn(Size::ZERO))
             }
             SliverLayoutCtxStorage::Proxy { erased, .. } => {
-                erased.layout_box_child(index, constraints)
+                erased.measure_box_child(index, constraints)
             }
         }
     }
@@ -659,12 +679,29 @@ pub trait SliverLayoutCtxErased {
         constraints: SliverConstraints,
     ) -> crate::error::RenderResult<SliverGeometry>;
 
-    /// Performs synchronous Box layout on child at `index`.
+    /// Performs synchronous Box layout on child at `index` and says whether
+    /// the child produced its size or the walk substituted one (see
+    /// [`BoxChildSize`]).
+    ///
+    /// Required, with no default: a context that forwarded to
+    /// [`layout_box_child`](Self::layout_box_child) could only answer
+    /// `Measured`, and a lazy list would keep a stand-in as a child's extent.
+    fn measure_box_child(
+        &mut self,
+        index: usize,
+        constraints: BoxConstraints,
+    ) -> crate::error::RenderResult<BoxChildSize>;
+
+    /// Performs synchronous Box layout on child at `index`; the size to
+    /// position it with in this pass.
     fn layout_box_child(
         &mut self,
         index: usize,
         constraints: BoxConstraints,
-    ) -> crate::error::RenderResult<Size>;
+    ) -> crate::error::RenderResult<Size> {
+        self.measure_box_child(index, constraints)
+            .map(BoxChildSize::size)
+    }
 
     /// Performs a synchronous Box intrinsic query on child at `index`.
     fn box_child_intrinsic(
@@ -757,12 +794,12 @@ impl<A: Arity, P: ParentData + Default> SliverLayoutCtxErased for SliverLayoutCt
     }
 
     #[inline]
-    fn layout_box_child(
+    fn measure_box_child(
         &mut self,
         index: usize,
         constraints: BoxConstraints,
-    ) -> crate::error::RenderResult<Size> {
-        SliverLayoutCtx::layout_box_child(self, index, constraints)
+    ) -> crate::error::RenderResult<BoxChildSize> {
+        SliverLayoutCtx::measure_box_child(self, index, constraints)
     }
 
     #[inline]
@@ -875,7 +912,7 @@ pub struct ErasedSliverLayoutCtx<'ctx> {
     children: &'ctx mut Vec<ErasedSliverChildState>,
     child_ids: &'ctx [RenderId],
     layout_child_callback: SliverChildLayoutCallback<'ctx>,
-    layout_box_child_callback: BoxChildLayoutCallback<'ctx>,
+    layout_box_child_callback: ErasedBoxChildLayoutCallback<'ctx>,
     box_child_intrinsic_callback: BoxChildIntrinsicCallback<'ctx>,
     /// Tree id of the sliver being laid out — the parent the producer sinks
     /// below record their requests against.
@@ -929,7 +966,7 @@ impl<'ctx> ErasedSliverLayoutCtx<'ctx> {
         children: &'ctx mut Vec<ErasedSliverChildState>,
         child_ids: &'ctx [RenderId],
         layout_child_callback: SliverChildLayoutCallback<'ctx>,
-        layout_box_child_callback: BoxChildLayoutCallback<'ctx>,
+        layout_box_child_callback: ErasedBoxChildLayoutCallback<'ctx>,
         box_child_intrinsic_callback: BoxChildIntrinsicCallback<'ctx>,
         node_id: RenderId,
         pending_child_requests: &'ctx std::cell::RefCell<Vec<(RenderId, usize)>>,
@@ -980,18 +1017,19 @@ impl SliverLayoutCtxErased for ErasedSliverLayoutCtx<'_> {
         Ok(geometry)
     }
 
-    fn layout_box_child(
+    fn measure_box_child(
         &mut self,
         index: usize,
         constraints: BoxConstraints,
-    ) -> crate::error::RenderResult<Size> {
+    ) -> crate::error::RenderResult<BoxChildSize> {
         let Some(&child_id) = self.child_ids.get(index) else {
-            return Ok(Size::ZERO);
+            return Ok(BoxChildSize::StandIn(Size::ZERO));
         };
         // A box child of a sliver — `RenderSliverToBoxAdapter`'s child, a
         // persistent header's. It has no sliver geometry to record, but it was
         // still laid out this pass, and the paint gate cannot tell the two
-        // reasons for an unmarked slot apart.
+        // reasons for an unmarked slot apart. A substituted size marks the slot
+        // too: the child's last committed geometry is what paint shows.
         let size = (self.layout_box_child_callback)(child_id, constraints)?;
         if let Some(slot) = self.children.get_mut(index) {
             slot.laid_out_this_pass = true;
