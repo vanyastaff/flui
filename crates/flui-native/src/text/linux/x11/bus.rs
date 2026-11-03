@@ -1,7 +1,8 @@
 //! The input method's bus, served on the background executor: one task that
-//! holds the connection to IBus or Fcitx5, makes and destroys each window's
-//! input context, sends what the owner asks, and posts what it hears back to
-//! the owner in the order the daemon sent it.
+//! holds the connection to IBus or Fcitx5 (or, with neither on D-Bus, to an
+//! XIM server), makes and destroys each window's input context, sends what
+//! the owner asks, and posts what it hears back to the owner in the order the
+//! daemon sent it.
 //!
 //! The answers to keys and the daemon's signals arrive on one stream, so a
 //! string the input method committed for a key reaches the owner before the
@@ -24,6 +25,7 @@ use zbus::message::Type as MessageType;
 use zbus::{Connection, Message, MessageStream};
 use zbus::{OwnedObjectPath, Variant as Value};
 
+use super::xim::{self, XimReach};
 use crate::text::linux::input_context::{
     ANSWER_TIMEOUT, Daemon, Endpoint, IBUS_CAPABILITIES, IBUS_RELEASE, Ticket, X_KEYCODE_OFFSET,
     endpoints, fcitx_capability, ibus_address, ibus_address_file, ibus_content,
@@ -53,7 +55,7 @@ const MAX_CALLS: usize = 1024;
 
 /// How long a key's call is awaited: past the owner's own deadline its
 /// answer is dropped there anyway.
-const KEY_CALL_TIMEOUT: Duration = ANSWER_TIMEOUT.saturating_mul(2);
+pub(super) const KEY_CALL_TIMEOUT: Duration = ANSWER_TIMEOUT.saturating_mul(2);
 
 /// How long the daemon has to make a context before it counts as lost.
 pub(super) const CREATE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -167,7 +169,7 @@ impl Heard {
 
     /// The answer to `request` the daemon never gives: a key not taken, a
     /// focus that fences nothing. `None` for a request no answer awaits.
-    fn unanswered(context: ContextId, request: &Request) -> Option<Self> {
+    pub(super) fn unanswered(context: ContextId, request: &Request) -> Option<Self> {
         match *request {
             Request::Key { ticket, .. } => Some(Self::Answer(context, ticket, false)),
             Request::FocusIn { fence } => Some(Self::Fenced(context, fence)),
@@ -199,7 +201,7 @@ struct Heards {
 }
 
 impl Inbox {
-    fn post(&self, heard: Heard) {
+    pub(super) fn post(&self, heard: Heard) {
         {
             let mut heards = self.heard.lock();
             let Heards { queue, spilled } = &mut *heards;
@@ -259,10 +261,14 @@ pub(crate) enum Reach {
     /// stand-in on a test's private bus.
     #[cfg(test)]
     Address { daemon: Daemon, address: String },
+    /// An XIM server alone, no D-Bus daemon tried: a stand-in on a test's
+    /// X server.
+    #[cfg(test)]
+    Xim(super::xim::XimReach),
 }
 
-enum Command {
-    Open(ContextId),
+pub(super) enum Command {
+    Open(ContextId, x11rb::protocol::xproto::Window),
     Send(ContextId, Request),
     Close(ContextId),
 }
@@ -315,11 +321,12 @@ impl Bus {
         &self.inbox
     }
 
-    /// Make context `context`; it is [`Heard::Ready`] once the daemon made
+    /// Make context `context` for the X window `window` (an XIM context is
+    /// bound to it); it is [`Heard::Ready`] once the daemon made
     /// it, else [`Heard::Lost`].
-    pub(crate) fn open(&self, context: ContextId) {
+    pub(crate) fn open(&self, context: ContextId, window: x11rb::protocol::xproto::Window) {
         // Fails only once the task ended, and its connection with it.
-        if self.lifecycle.send(Command::Open(context)).is_err() {
+        if self.lifecycle.send(Command::Open(context, window)).is_err() {
             self.inbox.post(Heard::Lost(context));
         }
     }
@@ -403,6 +410,8 @@ struct Link {
 /// Connect to the first endpoint whose daemon runs.
 async fn connect(reach: Reach) -> Option<Link> {
     match reach {
+        #[cfg(test)]
+        Reach::Xim(_) => None,
         #[cfg(test)]
         Reach::Address { daemon, address } => {
             let names = Names::of(Endpoint {
@@ -552,8 +561,28 @@ async fn serve(
     mut lifecycle: mpsc::UnboundedReceiver<Command>,
     inbox: Arc<Inbox>,
 ) {
+    let xim = match &reach {
+        Reach::Session => XimReach::session(),
+        #[cfg(test)]
+        Reach::Address { .. } => None,
+        #[cfg(test)]
+        Reach::Xim(xim) => Some(xim.clone()),
+    };
     let Some(link) = connect(reach).await else {
-        tracing::info!("no input method answers on D-Bus: X11 windows take keys as typed (gap 5)");
+        // With no daemon on D-Bus, the X server's own input method protocol.
+        if let Some(server) = match xim {
+            Some(xim) => xim::open(&xim).await,
+            None => None,
+        } {
+            tracing::info!("no input method answers on D-Bus: X11 windows speak XIM");
+            if xim::serve(server, &mut commands, &mut lifecycle, &inbox).await {
+                return;
+            }
+        } else {
+            tracing::info!(
+                "no input method answers on D-Bus or XIM: X11 windows take keys as typed (gap 5)"
+            );
+        }
         // Every context is lost at once, so no key waits on it.
         refuse(&mut commands, &mut lifecycle, &inbox).await;
         return;
@@ -648,7 +677,7 @@ async fn serve(
 impl Session {
     async fn command(&mut self, command: Command) {
         match command {
-            Command::Open(context) => {
+            Command::Open(context, _) => {
                 self.contexts.insert(context, Context::default());
                 let names = self.link.names;
                 let call = match names.daemon {
@@ -1215,7 +1244,7 @@ async fn refuse(
             return;
         };
         match command {
-            Command::Open(context) => inbox.post(Heard::Lost(context)),
+            Command::Open(context, _) => inbox.post(Heard::Lost(context)),
             Command::Send(context, request) => {
                 if let Some(heard) = Heard::unanswered(context, &request) {
                     inbox.post(heard);
