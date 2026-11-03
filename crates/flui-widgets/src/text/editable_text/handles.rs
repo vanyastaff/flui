@@ -129,6 +129,38 @@ impl Default for CaretHandle {
     }
 }
 
+/// What a touch long press in an editable text selects, and what the same
+/// touch moves as it drags. Either way the magnifier shows over the moving
+/// end while the touch is down, and the handles show once it lifts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum LongPressSelection {
+    /// The word under the finger; dragging extends the selection word by
+    /// word, keeping the pressed word. Android's and the desktop's.
+    Word,
+    /// A caret under the finger; dragging moves it between characters.
+    /// iOS's.
+    Caret,
+}
+
+impl LongPressSelection {
+    /// What a long press selects in `platform`'s own text fields.
+    #[must_use]
+    pub const fn for_platform(platform: TargetPlatform) -> Self {
+        match platform {
+            TargetPlatform::iOS => Self::Caret,
+            _ => Self::Word,
+        }
+    }
+}
+
+impl Default for LongPressSelection {
+    /// The long press of the platform the app is built for.
+    fn default() -> Self {
+        Self::for_platform(TargetPlatform::current())
+    }
+}
+
 /// Which handles a field shows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Shown {
@@ -138,9 +170,18 @@ pub(super) enum Shown {
     Selection,
 }
 
+/// What a long press under way holds.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Press {
+    /// The word it selected, which the touch extends from.
+    Word(Range<usize>),
+    /// The caret it placed, which the touch moves.
+    Caret,
+}
+
 impl EditableText {
-    /// A touch selection (a long press, which the same touch extends by
-    /// words, a double tap or a drag) shows a handle under each end, and a
+    /// A touch selection (a long press, as [`Self::long_press`] says, a
+    /// double tap or a drag) shows a handle under each end, and a
     /// tap one under the caret as [`Self::caret_handle`] says; dragging a
     /// handle moves its end. They show in the nearest
     /// [`Overlay`](crate::Overlay), and none without one.
@@ -173,6 +214,15 @@ impl EditableText {
     #[must_use]
     pub fn caret_handle(mut self, caret_handle: CaretHandle) -> Self {
         self.caret_handle = Some(caret_handle);
+        self
+    }
+
+    /// What a touch long press selects, and the same touch then moves, in
+    /// place of the nearest [`DefaultSelectionControls`]' choice or the
+    /// platform's ([`LongPressSelection::default`]).
+    #[must_use]
+    pub fn long_press(mut self, selection: LongPressSelection) -> Self {
+        self.long_press = Some(selection);
         self
     }
 }
@@ -217,8 +267,13 @@ pub(super) struct FieldHandles {
     timer: RefCell<DrivenController>,
     timer_status: RefCell<Option<StatusSubscription>>,
     vsync: RefCell<Option<Vsync>>,
-    /// The word a long press selected, which the same touch extends from.
-    pressed_word: RefCell<Option<Range<usize>>>,
+    /// What a long press under way selected, which the same touch moves.
+    press: RefCell<Option<Press>>,
+    /// What a long press selects, resolved at the field's last build.
+    press_selects: Cell<LongPressSelection>,
+    /// The end a long press under way moves, which the magnifier shows
+    /// over before the handles show.
+    pressing: Cell<Option<HandleSide>>,
     /// The field's long-press recognizer, which [`Self::abandon`] cancels.
     long_press: RefCell<Weak<LongPressGestureRecognizer>>,
     /// Rebuild shown handles when the ends they follow change after a
@@ -260,7 +315,9 @@ impl FieldHandles {
             ),
             timer_status: RefCell::new(None),
             vsync: RefCell::new(None),
-            pressed_word: RefCell::new(None),
+            press: RefCell::new(None),
+            press_selects: Cell::new(LongPressSelection::Word),
+            pressing: Cell::new(None),
             long_press: RefCell::new(Weak::new()),
             watches: RefCell::new(Vec::new()),
             warned: Cell::new(false),
@@ -420,12 +477,15 @@ impl FieldHandles {
     }
 
     /// The links the field publishes its ends under: the caret under the
-    /// first while the caret handle shows, both while the selection's do.
+    /// first while the caret handle shows, both while the selection's do
+    /// or a long press shows the magnifier over the end it moves.
     pub(super) fn published_links(&self) -> (Option<LayerLink>, Option<LayerLink>) {
-        match self.shown.get() {
-            Some(Shown::Caret) => (Some(self.links[0]), None),
-            Some(Shown::Selection) => (Some(self.links[0]), Some(self.links[1])),
-            None => (None, None),
+        match (self.shown.get(), self.pressing.get()) {
+            (Some(Shown::Caret), _) => (Some(self.links[0]), None),
+            (Some(Shown::Selection), _) | (None, Some(_)) => {
+                (Some(self.links[0]), Some(self.links[1]))
+            }
+            (None, None) => (None, None),
         }
     }
 
@@ -497,6 +557,12 @@ impl FieldHandles {
         }
     }
 
+    /// Sets what a long press selects; one under way keeps what it began
+    /// with.
+    pub(super) fn set_long_press(&self, selection: LongPressSelection) {
+        self.press_selects.set(selection);
+    }
+
     /// Sets what a handle drag shows over its end, rebuilding the handles
     /// when a drag shows another one now.
     pub(super) fn set_magnifier(&self, magnifier: Option<Rc<dyn SelectionMagnifier>>) {
@@ -541,19 +607,7 @@ impl FieldHandles {
         *self.expected.borrow_mut() = Some((selection, caret, revision));
         self.shown.set(Some(shown));
         self.restart_timer();
-        let entry = if self.entry.borrow().is_none() {
-            let handles = Rc::downgrade(self);
-            let entry = OverlayEntry::new(move |_ctx| {
-                HandlesView {
-                    handles: handles.clone(),
-                }
-                .boxed()
-            });
-            *self.entry.borrow_mut() = Some(entry.clone());
-            Some(entry)
-        } else {
-            None
-        };
+        let entry = self.entry_to_insert();
         // The handles are recorded before the overlay and the field hear of
         // them, so a wake that fails there leaves state `hide` clears.
         match entry {
@@ -563,6 +617,23 @@ impl FieldHandles {
             None => self.refresh(failure),
         }
         self.repaint_field(failure);
+    }
+
+    /// A new overlay entry for the handles, recorded as theirs, when they
+    /// have none yet; the caller inserts it.
+    fn entry_to_insert(self: &Rc<Self>) -> Option<OverlayEntry> {
+        if self.entry.borrow().is_some() {
+            return None;
+        }
+        let handles = Rc::downgrade(self);
+        let entry = OverlayEntry::new(move |_ctx| {
+            HandlesView {
+                handles: handles.clone(),
+            }
+            .boxed()
+        });
+        *self.entry.borrow_mut() = Some(entry.clone());
+        Some(entry)
     }
 
     /// The field stopped taking touches here (it was disabled, given another
@@ -603,11 +674,12 @@ impl FieldHandles {
     fn take_down(&self, failure: &mut FirstPanic) -> bool {
         self.grip.set(None);
         self.held.set(false);
-        self.pressed_word.borrow_mut().take();
+        self.press.borrow_mut().take();
         *self.expected.borrow_mut() = None;
         let _ = self.timer.borrow().controller().stop();
         self.menu.stop_toolbar();
-        let was_shown = self.shown.replace(None).is_some();
+        // A long press's magnifier counts: the field stops publishing its ends.
+        let was_shown = self.shown.replace(None).is_some() | self.pressing.take().is_some();
         let entry = self.entry.borrow_mut().take();
         if let Some(entry) = entry {
             failure.contain(|| entry.remove());
@@ -623,10 +695,10 @@ impl FieldHandles {
             return;
         }
         // An edit during a long press, whose handles show only once it
-        // lifts, ends the press: the word it holds is the old text's. The
-        // word goes first, so the cancel finds nothing to show handles for.
+        // lifts, ends the press: what it holds is the old text's. The press
+        // goes first, so the cancel finds nothing to show handles for.
         if self.shown.get().is_none() {
-            if self.pressed_word.borrow_mut().take().is_some() {
+            if self.press.borrow_mut().take().is_some() {
                 let recognizer = self.long_press.borrow().upgrade();
                 if let Some(recognizer) = recognizer {
                     failure.contain(|| {
@@ -642,44 +714,128 @@ impl FieldHandles {
         }
     }
 
-    /// A touch long press at `global` selects the word under it (the whole
-    /// text of an obscured field). Returns whether it selected.
+    /// A touch long press at `global` selects what
+    /// [`LongPressSelection`] says: the word under it (the whole text of an
+    /// obscured field), or a caret there. Returns whether it selected; the
+    /// magnifier then shows over the end the press moves.
     /// A panic from the controller's listeners is held in `failure`: the
     /// press still selected, so the caller still claims the contact.
-    pub(super) fn long_pressed(&self, global: Offset<f64>, failure: &mut FirstPanic) -> bool {
-        let Some(word) = self.word_at(global) else {
-            return false;
+    pub(super) fn long_pressed(
+        self: &Rc<Self>,
+        global: Offset<f64>,
+        failure: &mut FirstPanic,
+    ) -> bool {
+        let (press, side) = match self.press_selects.get() {
+            LongPressSelection::Caret => {
+                let Some(at) = self.source_offset_at(global) else {
+                    return false;
+                };
+                *self.press.borrow_mut() = Some(Press::Caret);
+                failure.contain(|| {
+                    self.move_controller(|controller| controller.set_caret_byte_offset(at));
+                });
+                (Press::Caret, HandleSide::Collapsed)
+            }
+            LongPressSelection::Word => {
+                let Some(word) = self.word_at(global) else {
+                    return false;
+                };
+                *self.press.borrow_mut() = Some(Press::Word(word.clone()));
+                failure.contain(|| {
+                    self.move_controller(|controller| {
+                        controller.set_selection(word.start, word.end);
+                    });
+                });
+                (Press::Word(word), HandleSide::End)
+            }
         };
-        *self.pressed_word.borrow_mut() = Some(word.clone());
-        failure.contain(|| {
-            self.move_controller(|controller| controller.set_selection(word.start, word.end));
-        });
+        // A listener that edited in reply ended the press.
+        if self.press.borrow().as_ref() == Some(&press) {
+            failure.contain(|| self.magnify_press(side, global));
+        }
         true
     }
 
-    /// The long-pressing touch moved to `global`: the selection runs from
-    /// the pressed word to the word there, keeping the pressed word.
+    /// The long-pressing touch moved to `global`: the caret goes there, or
+    /// the selection runs from the pressed word to the word there, keeping
+    /// the pressed word. The magnifier follows the finger over the end that
+    /// moves.
     pub(super) fn long_press_moved(&self, global: Offset<f64>) {
-        let Some(pressed) = self.pressed_word.borrow().clone() else {
+        let Some(press) = self.press.borrow().clone() else {
             return;
         };
-        let Some(word) = self.word_at(global) else {
-            return;
+        let side = match press {
+            Press::Caret => {
+                if let Some(at) = self.source_offset_at(global) {
+                    self.move_controller(|controller| controller.set_caret_byte_offset(at));
+                }
+                HandleSide::Collapsed
+            }
+            Press::Word(pressed) => {
+                let Some(word) = self.word_at(global) else {
+                    return;
+                };
+                let (anchor, extent, side) = if word.start < pressed.start {
+                    (pressed.end, word.start, HandleSide::Start)
+                } else {
+                    (pressed.start, word.end.max(pressed.end), HandleSide::End)
+                };
+                self.move_controller(|controller| controller.set_selection(anchor, extent));
+                side
+            }
         };
-        let (anchor, extent) = if word.start < pressed.start {
-            (pressed.end, word.start)
-        } else {
-            (pressed.start, word.end.max(pressed.end))
-        };
-        self.move_controller(|controller| controller.set_selection(anchor, extent));
+        if self.pressing.get().is_some() {
+            if self.pressing.replace(Some(side)) != Some(side) {
+                let mut failure = FirstPanic::new();
+                self.refresh(&mut failure);
+                failure.resume();
+            }
+            self.follow_finger(side, global);
+        }
     }
 
-    /// The long-pressing touch lifted or was cancelled.
+    /// Shows the magnifier over `side`, the end a long press at `global`
+    /// moves, while the touch stays down; the field publishes its ends for
+    /// it. Without a magnifier or an overlay it shows nothing.
+    fn magnify_press(self: &Rc<Self>, side: HandleSide, global: Offset<f64>) {
+        if self.magnifier.borrow().is_none() {
+            return;
+        }
+        let Some(overlay) = self.overlay.borrow().clone() else {
+            return;
+        };
+        self.pressing.set(Some(side));
+        self.magnifier_along.set(0.0);
+        let mut failure = FirstPanic::new();
+        self.follow_finger(side, global);
+        match self.entry_to_insert() {
+            Some(entry) => {
+                failure.contain(|| overlay.insert(&entry, &InsertPosition::Top));
+            }
+            None => self.refresh(&mut failure),
+        }
+        self.repaint_field(&mut failure);
+        failure.resume();
+    }
+
+    /// The long-pressing touch lifted or was cancelled: its magnifier goes,
+    /// and the handles show for what it selected.
     pub(super) fn long_press_ended(self: &Rc<Self>, failure: &mut FirstPanic) {
-        if self.pressed_word.borrow_mut().take().is_some() {
+        let pressed = self.press.borrow_mut().take().is_some();
+        let magnified = self.pressing.take().is_some();
+        if pressed {
             self.show_for_touch(failure);
             if self.shown.get() == Some(Shown::Selection) && self.menu.policy().after_long_press() {
                 self.show_toolbar(failure);
+            }
+        }
+        if magnified {
+            if self.shown.get().is_none() {
+                // No handles took over the magnifier's entry.
+                self.take_down(failure);
+                self.repaint_field(failure);
+            } else {
+                self.refresh(failure);
             }
         }
     }
@@ -1167,7 +1323,11 @@ fn handle(
 
 /// The magnifier over the end a handle drag holds, if the field shows one.
 fn drag_magnifier(handles: &Rc<FieldHandles>, ctx: &dyn BuildContext) -> Option<BoxedView> {
-    let (side, _) = handles.grip.get()?;
+    let side = handles
+        .grip
+        .get()
+        .map(|(side, _)| side)
+        .or(handles.pressing.get())?;
     let look = handles.magnifier.borrow().clone()?;
     let (_, line_height) = handles.end_line(side)?;
     let link = match side {
