@@ -7,7 +7,7 @@
 //! handles recorded, and an error turned into the protocol's error object with the handle it is
 //! about. The dispatch is generated from the protocol's table
 //! ([`flui_protocol::for_each_window_method!`]), so a window method the table gains does not
-//! compile here until it has an impl: one that answers it, or one in [`not_answered!`] that
+//! compile here until it has an impl: one that answers it, or one in `not_answered!` that
 //! refuses it `not_supported`.
 
 use std::cell::RefCell;
@@ -97,7 +97,7 @@ impl<T> ServeCx<'_, T> {
 
 /// How the owner answers a window method.
 pub(super) trait Serve: WindowMethod {
-    /// Whether this build's windows answer it. A method in [`not_answered!`] does not.
+    /// Whether this build's windows answer it. A method in `not_answered!` does not.
     const ANSWERS: bool = true;
 
     /// Records the element handles an answer reports.
