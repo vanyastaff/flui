@@ -113,7 +113,7 @@ pub fn current_user_sid() -> std::io::Result<String> {
 /// The process's effective user ID.
 ///
 /// The development agent's abstract socket, which any process of the system can reach, admits
-/// a peer of this user (ADR-0288 §6), as a pipe's DACL admits [`current_user_sid`]'s on Windows.
+/// a peer of this user (ADR-0288 §6), as a pipe's DACL admits the current user's SID on Windows.
 #[cfg(any(target_os = "linux", target_os = "android"))]
 #[must_use]
 pub fn current_user_id() -> u32 {
