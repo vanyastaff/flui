@@ -878,9 +878,7 @@ fn a_view_hit_test_reports_a_busy_tree_and_contains_a_render_object_panic() {
         owner.set_root_constraints(Some(flui_rendering::constraints::BoxConstraints::tight(
             flui_foundation::geometry::Size::new(100.0, 100.0),
         )));
-        let (returned, frame) = owner.take_idle().run_frame();
-        frame.expect("the tree paints");
-        *owner = returned;
+        owner.run_frame_in_place().expect("the tree paints");
         healthy
     });
     let position = flui_foundation::geometry::Offset::new(10.0, 10.0);

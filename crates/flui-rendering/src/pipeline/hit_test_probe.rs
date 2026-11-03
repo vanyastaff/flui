@@ -134,10 +134,8 @@ mod tests {
         owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(20.0, 20.0))));
 
         let cell = PipelineCell::new(owner);
-        cell.with_mut(|o| {
-            let (returned, _) = o.take_idle().run_frame();
-            *o = returned;
-        });
+        cell.run_frame()
+            .expect("a one-node tree lays out and paints");
         cell
     }
 

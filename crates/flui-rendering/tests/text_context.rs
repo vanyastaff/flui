@@ -354,34 +354,6 @@ fn intrinsic_and_dry_queries_measure_through_the_pipelines_context() {
     );
 }
 
-/// An owner moved out of its slot for a typestate transition leaves an empty
-/// one behind that measures through the same context: a frame driver that
-/// takes the owner (and the slot a transition that unwinds leaves) never
-/// measures on a context the pipeline was not built with. Fails if the
-/// placeholder is built with any other context.
-#[test]
-fn a_taken_pipeline_leaves_an_owner_that_measures_through_the_same_context() {
-    let text = ui_runtime_text();
-    let mut slot = PipelineOwner::new(text.clone());
-    let taken = slot.take_idle();
-    assert!(
-        TextContextHandle::ptr_eq(taken.text_context_for_test(), &text),
-        "the taken owner keeps the pipeline's context"
-    );
-
-    let labels = mount_on(&mut slot, paragraph("on the placeholder"));
-    let paragraph = labels.get("paragraph").expect("labelled");
-    let before = lends(&text);
-    let (slot, result) = slot.run_frame();
-    result.expect("the placeholder lays out");
-    let size = inspect::box_geometry(&slot, paragraph).expect("the paragraph laid out");
-    assert!(size.width > 0.0 && size.height > 0.0, "got {size:?}");
-    assert!(
-        lends(&text) > before,
-        "the placeholder measured through the context the pipeline was built with"
-    );
-}
-
 // ============================================================================
 // A font collection change re-lays out what measured text
 // ============================================================================

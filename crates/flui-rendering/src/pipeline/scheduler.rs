@@ -687,7 +687,7 @@ impl DirtyTracker {
         target.push(DirtyNode::new(node_id, depth))
     }
 
-    fn notify_visual_update(&self) {
+    pub(super) fn notify_visual_update(&self) {
         let wake = { self.notifier.read().deferred_visual_update() };
         wake.notify();
     }
