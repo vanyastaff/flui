@@ -40,9 +40,9 @@ use flui_rendering::semantics::{
 use flui_view::element::ElementKind;
 use flui_view::prelude::*;
 use flui_view::{
-    BoxedView, EventCx, EventOutcome, InheritedView, LifecycleContext, PostFrameHandle,
-    RebuildHandle, RebuildReason, StatefulView, View, ViewExt, ViewState, WriterSource,
-    impl_inherited_view,
+    BoxedView, CreationSite, EventCx, EventOutcome, InheritedView, LifecycleContext,
+    PostFrameHandle, RebuildHandle, RebuildReason, StatefulView, View, ViewExt, ViewState,
+    WriterSource, impl_inherited_view,
 };
 
 pub use self::controller::{SelectError, SelectionController};
@@ -171,6 +171,7 @@ pub struct SelectionArea {
     controller: Option<SelectionController>,
     menu: MenuSettings,
     magnifier: Option<MagnifierChoice>,
+    site: CreationSite,
 }
 
 impl std::fmt::Debug for SelectionArea {
@@ -188,6 +189,7 @@ impl std::fmt::Debug for SelectionArea {
 
 impl SelectionArea {
     /// Make the static text in `child` selectable.
+    #[track_caller]
     pub fn new(child: impl IntoView) -> Self {
         Self {
             child: child.into_view().boxed(),
@@ -198,6 +200,7 @@ impl SelectionArea {
             controller: None,
             menu: MenuSettings::default(),
             magnifier: None,
+            site: CreationSite::here(),
         }
     }
 
@@ -282,6 +285,10 @@ impl SelectionArea {
 impl View for SelectionArea {
     fn create_element(&self) -> ElementKind {
         ElementKind::stateful(self)
+    }
+
+    fn creation_site(&self) -> CreationSite {
+        self.site
     }
 }
 
@@ -1235,13 +1242,16 @@ impl_inherited_view!(SelectionScope);
 #[derive(Clone, Debug)]
 pub struct SelectionContainer {
     child: BoxedView,
+    site: CreationSite,
 }
 
 impl SelectionContainer {
     /// `child`, whose text no enclosing area selects.
+    #[track_caller]
     pub fn disabled(child: impl IntoView) -> Self {
         Self {
             child: child.into_view().boxed(),
+            site: CreationSite::here(),
         }
     }
 }
@@ -1249,6 +1259,10 @@ impl SelectionContainer {
 impl View for SelectionContainer {
     fn create_element(&self) -> ElementKind {
         ElementKind::stateless(self)
+    }
+
+    fn creation_site(&self) -> CreationSite {
+        self.site
     }
 }
 

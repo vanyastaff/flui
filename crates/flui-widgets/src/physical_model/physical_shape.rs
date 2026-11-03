@@ -8,7 +8,7 @@ use flui_objects::{ClipSourceToken, RenderPhysicalShape};
 use flui_painting::paint::{Clip, Path};
 use flui_painting::styling::Color;
 use flui_rendering::protocol::BoxProtocol;
-use flui_view::{Child, IntoView, RenderView, impl_render_view};
+use flui_view::{Child, CreationSite, IntoView, RenderView, impl_render_view};
 
 /// The user-supplied clip-shape function: maps the laid-out box size to the
 /// [`Path`] to clip against. The closure stays owner-local (UI-UI runtime affine, never sent across
@@ -38,6 +38,7 @@ pub struct PhysicalShape {
     color: Color,
     shadow_color: Color,
     child: Child,
+    site: CreationSite,
 }
 
 impl PhysicalShape {
@@ -45,6 +46,7 @@ impl PhysicalShape {
     /// with `color`, at the defaults `elevation: 0`,
     /// `clip_behavior: Clip::None`, opaque-black `shadow_color`.
     #[must_use]
+    #[track_caller]
     pub fn new(clipper: impl Fn(Size) -> Path + 'static, color: Color) -> Self {
         Self {
             clipper: Rc::new(clipper),
@@ -54,6 +56,7 @@ impl PhysicalShape {
             color,
             shadow_color: Color::BLACK,
             child: Child::empty(),
+            site: CreationSite::here(),
         }
     }
 
@@ -184,4 +187,4 @@ impl RenderView for PhysicalShape {
     flui_view::single_child_view_children!();
 }
 
-impl_render_view!(PhysicalShape);
+impl_render_view!(PhysicalShape, site = site);

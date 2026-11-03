@@ -71,8 +71,7 @@ var<uniform> viewport: Viewport;
 // Vertex Shader
 // =============================================================================
 
-@vertex
-fn vs_main(
+fn vertexStage(
     vertex: VertexInput,
     instance: InstanceInput,
 ) -> VertexOutput {
@@ -173,4 +172,9 @@ fn shadeFragment(in: VertexOutput) -> ShadedFragment {
     shaded.color = color;
     shaded.coverage = edge_alpha * clip_alpha;
     return shaded;
+}
+
+@vertex
+fn vs_main(vertex: VertexInput, instance: InstanceInput) -> VertexOutput {
+    return vertexStage(vertex, instance);
 }

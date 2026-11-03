@@ -9,8 +9,9 @@
 //!
 //! Its own harness: it starts an X server, a session bus and the
 //! accessibility bus before anything connects and names them for the
-//! process. A run without Xvfb, `dbus-daemon` or `at-spi-bus-launcher` is
-//! skipped, and fails where `FLUI_REQUIRE_ATSPI` is set.
+//! process, and a headless Weston for the Wayland window's case. A run
+//! without Xvfb, `dbus-daemon` or `at-spi-bus-launcher` is skipped, and fails
+//! where `FLUI_REQUIRE_ATSPI` is set.
 
 fn main() {
     #[cfg(target_os = "linux")]
@@ -34,7 +35,7 @@ mod cases {
     use atspi::{Interface, Role, State, zbus};
     use flui_foundation::geometry::{Rect, Size};
     use flui_foundation::{RenderId, SemanticsId};
-    use flui_native::{HostWindow, Platform as _, X11Platform};
+    use flui_native::{HostWindow, Platform, WaylandPlatform, X11Platform};
     use flui_platform::WindowOptions;
     use flui_semantics::{
         Announcements, LiveSetting, NumericRange, SemanticsAction, SemanticsConfiguration,
@@ -69,6 +70,10 @@ mod cases {
             "focus_follows_the_tree_once_the_window_is_active",
             focus_follows_the_tree_once_the_window_is_active,
         ),
+        (
+            "a_wayland_window_reads_back_its_tree",
+            a_wayland_window_reads_back_its_tree,
+        ),
     ];
 
     pub(super) fn main() {
@@ -99,12 +104,15 @@ mod cases {
     }
 
     /// An X server, a session bus and the accessibility bus, which the
-    /// process's environment names.
+    /// process's environment names, and a headless Weston where one is
+    /// installed, which `WAYLAND_DISPLAY` names.
     struct Session {
         /// The client's connection to the accessibility bus.
         bus: zbus::Connection,
         /// Appended to every text a case listens for.
         nonce: String,
+        /// A Weston answers on `WAYLAND_DISPLAY`.
+        wayland: bool,
         /// Stopped before the runtime directory they use is removed.
         _children: Children,
         _runtime: TempDir,
@@ -150,6 +158,9 @@ mod cases {
     /// How long a case waits for the bus to answer or an event to arrive.
     const PATIENCE: Duration = Duration::from_secs(10);
 
+    /// The socket the session's Weston listens on, in its runtime directory.
+    const WESTON_SOCKET: &str = "flui-atspi-weston";
+
     impl Session {
         /// Start the X server and both buses, and turn accessibility on as a
         /// desktop does when a screen reader starts; `None` where a program
@@ -179,6 +190,7 @@ mod cases {
             let (server, display) = x_server();
             children.0.push(server);
             let session_address = format!("unix:path={}", runtime.0.join("bus").display());
+            let wayland = available("weston");
             // Set before the session bus starts, so a program it activates
             // runs in this session too.
             // SAFETY: no thread has started; nothing reads the environment
@@ -189,10 +201,32 @@ mod cases {
             )]
             unsafe {
                 std::env::set_var("DISPLAY", &display);
-                std::env::remove_var("WAYLAND_DISPLAY");
+                if wayland {
+                    std::env::set_var("WAYLAND_DISPLAY", WESTON_SOCKET);
+                } else {
+                    std::env::remove_var("WAYLAND_DISPLAY");
+                }
                 std::env::set_var("DBUS_SESSION_BUS_ADDRESS", &session_address);
                 std::env::remove_var("AT_SPI_BUS_ADDRESS");
                 std::env::set_var("XDG_RUNTIME_DIR", &runtime.0);
+            }
+            if wayland {
+                children.0.push(
+                    Command::new("weston")
+                        .args(["--backend=headless", "--idle-time=0"])
+                        .arg(format!("--socket={WESTON_SOCKET}"))
+                        .stdout(Stdio::null())
+                        .stderr(Stdio::null())
+                        .process_group(0)
+                        .spawn()
+                        .expect("weston starts"),
+                );
+                let socket = runtime.0.join(WESTON_SOCKET);
+                let deadline = Instant::now() + PATIENCE;
+                while !socket.exists() {
+                    assert!(Instant::now() < deadline, "timed out waiting for Weston");
+                    std::thread::sleep(Duration::from_millis(10));
+                }
             }
             let session_bus = Command::new("dbus-daemon")
                 .args(["--session", "--nofork", "--print-address=1"])
@@ -264,6 +298,7 @@ mod cases {
                 _children: children,
                 bus,
                 nonce: format!("{nonce:08x}"),
+                wayland,
                 _runtime: runtime,
             })
         }
@@ -398,7 +433,10 @@ mod cases {
         for number in (first..first + 200).map(|number| 100 + number % 900) {
             let display = format!(":{number}");
             let mut server = Command::new("Xvfb")
-                .args([&display, "-screen", "0", "1024x768x24", "-nolisten", "tcp"])
+                // `-noreset`: a server whose last client leaves resets, and refuses
+                // the next case's connection meanwhile; the launcher holds no
+                // X connection once `WAYLAND_DISPLAY` names the session's Weston.
+                .args([&display, "-screen", "0", "1024x768x24", "-nolisten", "tcp", "-noreset"])
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
                 .process_group(0)
@@ -423,31 +461,55 @@ mod cases {
         panic!("no free X display number");
     }
 
-    /// A window of the X11 host whose semantics owner publishes to the
-    /// window's AT-SPI adapter, as a presentation's does, rooted at a window
-    /// node named `name`.
+    /// The host a fixture's window is on.
+    enum Host {
+        X11(X11Platform),
+        /// Held for its window, which a case reaches through the bus alone.
+        Wayland {
+            _platform: WaylandPlatform,
+        },
+    }
+
+    /// A window whose semantics owner publishes to the window's AT-SPI
+    /// adapter, as a presentation's does, rooted at a window node named
+    /// `name`.
     struct Fixture {
-        platform: X11Platform,
+        host: Host,
         window: Rc<dyn HostWindow>,
         owner: SemanticsOwner,
         ids: Vec<(usize, SemanticsId)>,
     }
 
     impl Fixture {
+        /// A window of the X11 host.
         fn new(name: &str) -> Self {
             let platform = X11Platform::try_new().expect("the X11 platform");
-            let window = platform
-                .open_window(
-                    WindowOptions::default().with_size(Size::new(400.0, 300.0)),
-                    RecordingWindowHandler::new() as _,
-                )
-                .expect("an X11 window opens");
-            let accessibility = window.accessibility().expect("an X11 window is accessible");
+            let window = open(&platform);
+            Self::on(Host::X11(platform), window, name)
+        }
+
+        /// A window of the Wayland host, on the session's Weston.
+        fn on_wayland(name: &str) -> Self {
+            let platform = WaylandPlatform::try_new().expect("the session's Weston answers");
+            let window = open(&platform);
+            Self::on(
+                Host::Wayland {
+                    _platform: platform,
+                },
+                window,
+                name,
+            )
+        }
+
+        fn on(host: Host, window: Rc<dyn HostWindow>, name: &str) -> Self {
+            let accessibility = window
+                .accessibility()
+                .expect("a Linux window is accessible");
             let owner = SemanticsOwner::new(Arc::new(move |update: &TreeUpdate| {
                 accessibility.publish(update.clone());
             }));
             let mut fixture = Self {
-                platform,
+                host,
                 window,
                 owner,
                 ids: Vec::new(),
@@ -510,21 +572,34 @@ mod cases {
             use raw_window_handle::{HasWindowHandle as _, RawWindowHandle};
             use x11rb::connection::Connection as _;
             use x11rb::protocol::xproto::{ConnectionExt as _, InputFocus};
+            let Host::X11(platform) = &self.host else {
+                panic!("only an X11 window takes the X input focus")
+            };
             let target = self.window.surface_target();
             let handle = target.window_handle().expect("an open window has a handle");
             let RawWindowHandle::Xcb(handle) = handle.as_raw() else {
                 panic!("an X11 window hands out an XCB handle")
             };
             let (connection, _) = RustConnection::connect(None).expect("the X server answers");
-            flui_native::testing::x11::run_for(&self.platform, Duration::from_millis(100))
+            flui_native::testing::x11::run_for(platform, Duration::from_millis(100))
                 .expect("the loop turns");
             connection
                 .set_input_focus(InputFocus::PARENT, handle.window.get(), x11rb::CURRENT_TIME)
                 .expect("request");
             connection.flush().expect("flush");
-            flui_native::testing::x11::run_for(&self.platform, Duration::from_millis(200))
+            flui_native::testing::x11::run_for(platform, Duration::from_millis(200))
                 .expect("the loop turns");
         }
+    }
+
+    /// A 400 by 300 window of `platform`.
+    fn open<P: Platform>(platform: &P) -> Rc<dyn HostWindow> {
+        platform
+            .open_window(
+                WindowOptions::default().with_size(Size::new(400.0, 300.0)),
+                RecordingWindowHandler::new() as _,
+            )
+            .expect("a window opens")
     }
 
     /// A run of `text` on one line, each character ten pixels wide, words
@@ -728,6 +803,49 @@ mod cases {
                 );
             }
         }
+    }
+
+    /// A window of the Wayland host reaches the client as an X11 window
+    /// does: the adapter registers it by its root's name and serves its
+    /// nodes.
+    fn a_wayland_window_reads_back_its_tree(session: &Session) {
+        if !session.wayland {
+            assert!(
+                std::env::var_os("FLUI_REQUIRE_WAYLAND").is_none(),
+                "FLUI_REQUIRE_WAYLAND is set and weston is missing"
+            );
+            eprintln!("skipped: no weston to open a Wayland window on");
+            return;
+        }
+        let name = session.marked("Wayland");
+        let mut fixture = Fixture::on_wayland(&name);
+        fixture.add(Some(1), 2, (10.0, 10.0, 100.0, 30.0), |c| {
+            c.set_role(SemanticsRole::Button);
+            c.set_label("Save");
+            c.set_hint("Writes the file");
+            c.add_action(SemanticsAction::Click, Rc::new(|_| {}));
+        });
+        fixture.owner.flush();
+
+        let window = session.window(&name);
+        let nodes = block_on(async {
+            let mut nodes = Vec::new();
+            for child in children(&session.bus, &window).await {
+                nodes.push(read(&child).await);
+            }
+            nodes
+        });
+        assert_eq!(
+            nodes,
+            [Read {
+                role: Role::Button,
+                name: "Save".into(),
+                description: "Writes the file".into(),
+                text: None,
+                value: None,
+                actions: vec!["click".into()],
+            }]
+        );
     }
 
     /// A live region is announced when its own label changes, when a label

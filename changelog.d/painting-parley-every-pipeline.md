@@ -7,7 +7,6 @@
 ### Added
 
 - `TextContextHandle::standalone`, a context over a font collection of its own, for a pipeline that is a realm by itself.
-- `PipelineOwner::take_idle`, which moves an owner out of its slot and leaves an empty one that measures through the same context.
 
 ### Removed
 

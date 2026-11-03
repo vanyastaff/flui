@@ -308,10 +308,13 @@ jobs:
       - name: cargo clippy flui-engine --features testing
         run: cargo clippy -p flui-engine --all-targets --locked --features testing -- -D warnings
 
-      # The slice of `feature-matrix` (main only) that a pull request can break
-      # most cheaply: the workspace pass above builds flui-native with `desktop`
-      # (Wayland and X11 together), which hides a `cfg` gap in any one backend.
+      # Each flui-native backend alone: the workspace pass above builds it with
+      # `desktop` (Wayland and X11 together), which hides a `cfg` gap in any
+      # one backend. Main only, like the rest of `feature-matrix`: it adds
+      # 5 minutes to a pull request's slowest jobs, and a gap shows as a red
+      # main. Locally: `cargo xtask native-features`.
       - name: cargo xtask native-features
+        if: needs.plan.outputs.lane == 'full'
         run: cargo xtask native-features
 
   # ─────────────────────────────────────────────────────────────────────────
@@ -428,11 +431,13 @@ jobs:
         run: cargo xtask test --fast
 
       # The GPU readback suites once per backend the Linux renderer can pick:
-      # Vulkan first, then the GLES fallback it takes without one.
+      # Vulkan first, then the GLES fallback it takes without one. The
+      # fallback runs on main only: pull requests take the Vulkan pass.
       - name: cargo xtask gpu-test --backend vulkan
         run: cargo xtask gpu-test --backend vulkan
 
       - name: cargo xtask gpu-test --backend gl
+        if: needs.plan.outputs.lane == 'full'
         run: cargo xtask gpu-test --backend gl
 
       - name: cargo xtask build-all-targets (links the examples and benches)
@@ -494,7 +499,10 @@ jobs:
         with:
           cache-bin: false
           cache-on-failure: true
-          shared-key: workspace-nested-v1
+          # v2: the job builds only the packages that hold the nested-cargo
+          # group (`cargo xtask test --nested --nested-group native`), so the
+          # v1 entry (~4 GB of every test binary's dependencies) is not reused.
+          shared-key: workspace-nested-v2
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Install cargo-nextest
@@ -685,11 +693,14 @@ jobs:
         run: cargo semver-checks check-release -p flui-platform --baseline-rev "$BASELINE"
 
   # Nightly API contracts keep their rustdoc JSON output in one job, separately
-  # from stable documentation and the semver report.
+  # from stable documentation and the semver report. Main only: at 17-18
+  # minutes it was a pull request's slowest job but one, and a change that
+  # breaks the API closure shows as a red main. Locally:
+  # `cargo xtask api-closure` and `cargo xtask send-positions`.
   api-contracts:
     name: api-contracts
     needs: [checks, plan]
-    if: contains(fromJSON('["wide","full"]'), needs.plan.outputs.lane)
+    if: needs.plan.outputs.lane == 'full'
     runs-on: ubuntu-26.04
     timeout-minutes: 25
     steps:
@@ -1179,9 +1190,9 @@ jobs:
         env:
           NEEDS: ${{ toJSON(needs) }}
           HEAVY_JOBS: >-
-            clippy wasm-check cross-typecheck test test-nested doc api-contracts test-features
+            clippy wasm-check cross-typecheck test test-nested doc test-features
           FULL_JOBS: >-
-            feature-matrix doc-test miri test-trybuild
+            feature-matrix doc-test miri test-trybuild api-contracts
           LANE: ${{ needs.plan.outputs.lane }}
           EVENT: ${{ github.event_name }}
         run: cargo xtask ci-verify

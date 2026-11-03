@@ -141,9 +141,15 @@ the dispatch layer moves there too.
 - **The driver agent is the host's, installed from the launch (ADR-0239).** A
   debug build, or one with the `driver` feature, adds the driver agent after
   the application's own `DevAgentHook`s when its launch names an endpoint
-  (`flui_protocol::launch`); with none, nothing is created. Each hook has a
-  host of its own, so one that panics is dropped alone and the others keep
-  being served (`every_installed_hook_is_attached_and_one_that_panics_is_dropped_alone`).
+  (`flui_protocol::launch`); with none, nothing is created. The event loop
+  owns the hooks (ADR-0288 §7): it takes them from its configuration when it
+  starts into one `DevAgentHost` kept in its state, lends that host out for
+  each call so no borrow is held while a hook runs, and drops it when it ends,
+  which detaches them before the windows they serve are retired. A hook that
+  panics is dropped alone and the others keep
+  being served (`a_loop_takes_every_installed_hook_once_and_one_that_panics_is_dropped_alone`).
+  `cfg(driver_agent)`, set by `build.rs` from the profile's debug assertions
+  and the `driver` feature, names the build that compiles the agent.
   The conversation is `flui_runtime::agent`'s (ADR-0288); `flui-app` keeps the
   launch and the desktop transport, a current-user named pipe or a Unix socket
   in a `0700` directory. The acceptor blocks in `accept`, and each
