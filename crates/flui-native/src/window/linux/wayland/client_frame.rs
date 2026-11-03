@@ -37,13 +37,23 @@
 //! - **The frame goes away** where it has no place: all of it in
 //!   fullscreen; the margins of a maximized window and of a window that
 //!   cannot be resized; the margin of each edge the compositor tiled.
+//! - **Around a title bar of the application's** (`WindowFrame::AppTitleBar`)
+//!   the frame is its margins alone, and a press on the content is answered
+//!   from the chrome regions the application marks ([`ContentChrome`],
+//!   ADR-0286 §11): a move once the pointer travels from a press on the bar,
+//!   a maximize on a double-click, the window menu on a secondary press.
 
 #![forbid(unsafe_code)]
 
+use std::time::Instant;
+
 use cursor_icon::CursorIcon;
 use flui_foundation::geometry::Size;
+use flui_platform::input_regions::ResizeEdge;
 
 use super::configure::{TiledEdges, ToplevelStates, WmCapabilities};
+use crate::input::regions::ProjectedInputRegions;
+use crate::input::regions::presses::{ChromePress, ChromePresses, PressButton, device_point};
 
 /// The title bar's height, in logical pixels.
 pub(crate) const HEADER: f64 = 37.0;
@@ -87,6 +97,22 @@ pub(crate) enum Edge {
 }
 
 impl Edge {
+    /// The edge a resize region names; `None` for an edge of a newer
+    /// contract.
+    pub(crate) const fn of(edge: ResizeEdge) -> Option<Self> {
+        match edge {
+            ResizeEdge::Top => Some(Self::Top),
+            ResizeEdge::Bottom => Some(Self::Bottom),
+            ResizeEdge::Left => Some(Self::Left),
+            ResizeEdge::Right => Some(Self::Right),
+            ResizeEdge::TopLeft => Some(Self::TopLeft),
+            ResizeEdge::TopRight => Some(Self::TopRight),
+            ResizeEdge::BottomLeft => Some(Self::BottomLeft),
+            ResizeEdge::BottomRight => Some(Self::BottomRight),
+            _ => None,
+        }
+    }
+
     /// The `xdg_toplevel.resize_edge` value.
     pub(crate) const fn protocol(self) -> u32 {
         match self {
@@ -237,6 +263,10 @@ pub(crate) struct Frame {
     pub(crate) resizable: bool,
     /// What the compositor lets the frame offer.
     pub(crate) offers: Offers,
+    /// Whether the frame draws its title bar: not where the application
+    /// draws one of its own (`WindowFrame::AppTitleBar`), which keeps the
+    /// margins alone.
+    pub(crate) title_bar: bool,
 }
 
 impl Frame {
@@ -245,9 +275,13 @@ impl Frame {
         !self.states.fullscreen
     }
 
-    /// The title bar's height: [`HEADER`] while the frame is shown.
+    /// The title bar's height: [`HEADER`] while the frame is shown with one.
     pub(crate) const fn header(&self) -> f64 {
-        if self.shown() { HEADER } else { 0.0 }
+        if self.shown() && self.title_bar {
+            HEADER
+        } else {
+            0.0
+        }
     }
 
     /// The edges the margins are on: none for a frame not shown, a
@@ -289,7 +323,7 @@ impl Frame {
         let left = if edges.left { -MARGIN } else { 0.0 };
         let right = if edges.right { width + MARGIN } else { width };
         let rect = match piece {
-            Piece::Header => self.shown().then_some(Rect {
+            Piece::Header => (self.shown() && self.title_bar).then_some(Rect {
                 x: 0.0,
                 y: -header,
                 width,
@@ -543,6 +577,116 @@ impl PointerOnFrame {
             }
             _ => None,
         }
+    }
+}
+
+/// What a press or a release on the window's own surface comes to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ContentAnswer {
+    /// It reaches the application.
+    App,
+    /// The window takes it, and asks this of itself, if anything.
+    Taken(Option<Action>),
+}
+
+/// The presses on the window's own surface where the application draws the
+/// title bar (`WindowFrame::AppTitleBar`, ADR-0286 §11), answered from the
+/// chrome regions the last composited frame handed the window: a move once
+/// the pointer travels from a press on the bar, a maximize on a double-click,
+/// the window menu on a secondary press, a resize from a resize region. The
+/// frame keeps its margins for the edges, so no band of the content resizes.
+#[derive(Debug, Default)]
+pub(crate) struct ContentChrome {
+    /// The regions, in device pixels.
+    pub(crate) projected: ProjectedInputRegions,
+    /// The scale the regions were projected at, which a press is measured
+    /// at too.
+    pub(crate) scale: f64,
+    presses: ChromePresses,
+    /// Where the pointer is on the content, in logical pixels.
+    at: Option<(f64, f64)>,
+    /// The button of a press taken and not released yet.
+    held: Option<u32>,
+}
+
+impl ContentChrome {
+    /// The pointer is at (`x`, `y`) on the content, in logical pixels: a
+    /// move where a press on the bar is held and the pointer travelled.
+    pub(crate) fn moved(&mut self, x: f64, y: f64) -> Option<Action> {
+        self.at = Some((x, y));
+        if self.held != Some(BTN_LEFT) {
+            return None;
+        }
+        let point = device_point(x * self.scale, y * self.scale)?;
+        self.presses
+            .moved(point, self.scale)
+            .then_some(Action::Move)
+    }
+
+    /// Button `code` (evdev) went down or up at `at` over the content, with
+    /// `frame` the window's own frame as last laid out (`None` while it draws
+    /// none): only a frame without its title bar answers from the regions.
+    pub(crate) fn button(
+        &mut self,
+        frame: Option<&Frame>,
+        code: u32,
+        pressed: bool,
+        at: Instant,
+    ) -> ContentAnswer {
+        if !pressed {
+            if self.held != Some(code) {
+                return ContentAnswer::App;
+            }
+            self.held = None;
+            self.presses.released();
+            return ContentAnswer::Taken(None);
+        }
+        // A press whose release the compositor kept (it took the pointer for
+        // a move) holds nothing any more.
+        self.held = None;
+        let Some(frame) = frame.filter(|frame| !frame.title_bar) else {
+            return ContentAnswer::App;
+        };
+        let button = match code {
+            BTN_LEFT => PressButton::Primary,
+            BTN_RIGHT => PressButton::Secondary,
+            _ => return ContentAnswer::App,
+        };
+        let Some((x, y)) = self.at else {
+            return ContentAnswer::App;
+        };
+        let Some(point) = device_point(x * self.scale, y * self.scale) else {
+            return ContentAnswer::App;
+        };
+        let answer = self
+            .presses
+            .press(self.projected.sent(), point, button, None, at, self.scale);
+        let action = match answer {
+            ChromePress::App => return ContentAnswer::App,
+            ChromePress::Move => None,
+            ChromePress::Resize(edge) => match Edge::of(edge) {
+                Some(edge) => Some(Action::Resize(edge)),
+                None => return ContentAnswer::App,
+            },
+            ChromePress::ToggleMaximize => {
+                (frame.offers.maximize && frame.resizable).then_some(if frame.states.maximized {
+                    Action::Restore
+                } else {
+                    Action::Maximize
+                })
+            }
+            ChromePress::WindowMenu => {
+                if !frame.offers.window_menu {
+                    return ContentAnswer::App;
+                }
+                Some(Action::Menu {
+                    x: rounded(x),
+                    y: rounded(y),
+                })
+            }
+        };
+        self.held = Some(code);
+        ContentAnswer::Taken(action)
     }
 }
 
@@ -1118,9 +1262,11 @@ pub(crate) mod surfaces {
     use std::os::fd::AsFd;
     use std::os::unix::fs::FileExt;
     use std::sync::{Arc, OnceLock, Weak};
+    use std::time::Instant;
 
     use cursor_icon::CursorIcon;
     use flui_painting::text_layout::FontCollection;
+    use flui_platform::input_regions::InputRegion;
     use parking_lot::Mutex;
     use wayland_client::protocol::wl_buffer::{self, WlBuffer};
     use wayland_client::protocol::wl_compositor::WlCompositor;
@@ -1136,8 +1282,8 @@ pub(crate) mod surfaces {
 
     use super::title::TitleText;
     use super::{
-        Action, Button, Frame, HeaderLook, Look, Part, Piece, PointerOnFrame, Rect, TitleMask,
-        device_extent, paint_header, paint_margin, rounded,
+        Action, Button, ContentAnswer, ContentChrome, Frame, HeaderLook, Look, Part, Piece,
+        PointerOnFrame, Rect, TitleMask, device_extent, paint_header, paint_margin, rounded,
     };
     use crate::executor::BackgroundExecutor;
     use crate::owner::linux::wayland::{FramePointer, LoopWaker, WaylandState};
@@ -1202,6 +1348,11 @@ pub(crate) mod surfaces {
         frame: Option<Frame>,
         pointer: PointerOnFrame,
         asked: Option<Asked>,
+        /// The presses on the window's own surface, where the application
+        /// draws the title bar.
+        chrome: ContentChrome,
+        /// The seat and serial of the press on the bar a move waits on.
+        armed: Option<(WlSeat, u32)>,
         /// The moves, resizes and menus carried out, with the serial each
         /// named, for a test.
         #[cfg(any(test, feature = "testing"))]
@@ -1213,6 +1364,20 @@ pub(crate) mod surfaces {
     pub(crate) struct FrameRecord(Mutex<Pointing>);
 
     impl FrameRecord {
+        /// Take the chrome regions of the window's last composited frame
+        /// (window-logical) at `scale`, which its presses are answered from.
+        /// Projected with nothing locked: a dropped region is reported
+        /// through `tracing`, whose subscriber is the application's code.
+        pub(crate) fn set_regions(&self, regions: &[InputRegion], scale: f64) {
+            let mut projected = std::mem::take(&mut self.0.lock().chrome.projected);
+            let _changed = projected.update(regions, scale, None);
+            let mut pointing = self.0.lock();
+            pointing.chrome.projected = projected;
+            if scale.is_finite() && scale > 0.0 {
+                pointing.chrome.scale = scale;
+            }
+        }
+
         /// The action the pointer asked for since the last look.
         pub(crate) fn take_asked(&self) -> Option<Asked> {
             self.0.lock().asked.take()
@@ -1278,6 +1443,45 @@ pub(crate) mod surfaces {
                     seat: seat.clone(),
                     serial,
                 });
+            }
+        }
+
+        fn content_moved(&self, x: f64, y: f64) {
+            let mut pointing = self.0.lock();
+            if pointing.chrome.moved(x, y) == Some(Action::Move)
+                && let Some((seat, serial)) = pointing.armed.take()
+            {
+                pointing.asked = Some(Asked {
+                    action: Action::Move,
+                    seat,
+                    serial,
+                });
+            }
+        }
+
+        fn content_button(&self, seat: &WlSeat, serial: u32, code: u32, pressed: bool) -> bool {
+            let mut pointing = self.0.lock();
+            let frame = pointing.frame;
+            let answer = pointing
+                .chrome
+                .button(frame.as_ref(), code, pressed, Instant::now());
+            pointing.armed = None;
+            match answer {
+                ContentAnswer::App => false,
+                ContentAnswer::Taken(None) => {
+                    if pressed {
+                        pointing.armed = Some((seat.clone(), serial));
+                    }
+                    true
+                }
+                ContentAnswer::Taken(Some(action)) => {
+                    pointing.asked = Some(Asked {
+                        action,
+                        seat: seat.clone(),
+                        serial,
+                    });
+                    true
+                }
             }
         }
     }

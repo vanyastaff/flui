@@ -1,6 +1,7 @@
 //! Integration tests of the system services, through the public API on a
 //! headless host.
 
+mod capability;
 mod dialogs;
 mod launcher;
 #[cfg(target_os = "linux")]

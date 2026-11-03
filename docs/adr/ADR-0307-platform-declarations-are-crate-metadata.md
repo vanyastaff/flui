@@ -1,11 +1,12 @@
 # ADR-0307: Platform declarations are crate metadata
 
-- **Status:** Accepted (2026-11-03). Partly implemented: the reader, the version-1 keys
-  (`android.permissions`) and the generated Android manifest are in `flui-cli`; Apple's privacy
-  manifest, the verify mode and `flui add` follow (see Migration).
+- **Status:** Accepted (2026-11-03). Implemented in `flui-cli`: the reader, the version-1 keys
+  (`android.permissions`, `apple.privacy.accessed-apis`), the generated Android manifest, the
+  iOS privacy manifest, the verify mode of `flui doctor` and `flui add`.
 - **Date:** 2026-11-03
-- **Supersedes:** [ADR-0154](ADR-0154-capability-crates.md) §7 only (where declarations live and
-  their keys: a versioned `declares` table in any crate, in place of the illustrative schema)
+- **Supersedes:** [ADR-0154](ADR-0154-capability-crates.md) §7 (where declarations live and
+  their keys: a versioned `declares` table in any crate, in place of the illustrative schema) and,
+  in §8, the step of `flui add` that writes declarations; the rest of ADR-0154 stands
 - **Related:** [ADR-0255](ADR-0255-mobile-and-web-hosts.md) decision 6 (the generated Android
   manifest); [ADR-0280](ADR-0280-http-is-a-capability-of-the-host.md) (the HTTP capability, whose Android
   stack needs the network permission); [ADR-0088](ADR-0088-official-packages-sdk-and-facade.md)
@@ -78,8 +79,19 @@ permissions = ["android.permission.INTERNET"]
   flui-cli"; a key the CLI does not know is refused with the crate's name and the key. The reader's
   types use `deny_unknown_fields`. They are private to the `flui` binary, so `#[non_exhaustive]`
   would change nothing: the version number is what keeps the schema open.
-- Version 1 has `android.permissions` and `features.<feature>.android.permissions`. A permission is
-  two or more dot-separated ASCII Java identifiers, so no value can break out of its attribute.
+- Version 1 has `android.permissions` and `apple.privacy.accessed-apis`, at the top and under
+  `features.<feature>`. A permission is two or more dot-separated ASCII Java identifiers, so no
+  value can break out of its attribute. An accessed API is a `category`, one of Apple's five
+  required-reason categories by its manifest name, and one or more `reasons`, each an
+  approved-reason code (four upper-case hexadecimal digits, `.`, a number). Neither is a free
+  string.
+
+```toml
+[[package.metadata.flui.declares.apple.privacy.accessed-apis]]
+category = "NSPrivacyAccessedAPICategoryFileTimestamp"
+reasons = ["C617.1"]
+```
+
 - A key arrives with the first crate that needs it. A key an older CLI could safely ignore needs no
   new version; one whose absence would build a wrong app raises `schema`.
 - `features.<name>` must name a feature of the crate.
@@ -100,13 +112,58 @@ join is a set per key, in a fixed order, with the crates that asked for each ent
   Both the SDK-tools packager and Gradle read that file. The CLI writes it only when it changed,
   and it carries a generated-file header. A file at that path without the header is refused, not
   overwritten, so a hand edit is never lost silently.
-- **Apple** (next change): the privacy manifest's accessed APIs come from the same tables, and the
-  CLI's constant goes.
+- **Apple.** The iOS packager writes the bundle's `PrivacyInfo.xcprivacy` from the accessed APIs
+  the graph of the application's target declares, joined with the application's own
+  `<project>/platforms/ios/PrivacyInfo.xcprivacy`: per category, the reasons of every crate and of the
+  application. Tracking and collected data stay the application's. A Rust crate links statically
+  into the executable, so no per-SDK privacy bundle exists and the application's manifest carries
+  the union. That is the rule React Native applies to the pods it links
+  (`scripts/cocoapods/privacy_manifest_utils.rb`, `add_aggregated_privacy_manifest`: every pod's
+  accessed APIs, the core's and the application's, joined per category with the reasons
+  deduplicated), which settles the check ADR-0154 §7 left for this change.
+- **Manifests the CLI does not write.** `flui doctor` reads the same declarations. In a FLUI
+  project, `project.declarations` fails on a table `flui build` would refuse, and
+  `project.android-manifest` fails on a hand-written Android manifest, listing what it lacks.
+  `flui doctor --manifest <PATH>`, repeatable, checks an `AndroidManifest.xml` or an XML
+  `PrivacyInfo.xcprivacy` the CLI does not write, such as an embedding project's, against the
+  graph of the project in the current directory for that manifest's targets: one
+  `project.manifest` check per path, each missing entry named with the crates that declare it and
+  the line to add. The ids are stable, for `--json` readers. An Android file is read as written:
+  Gradle's manifest merger is not run, so a file that is not the merged manifest carries a note
+  saying entries library manifests merge in are not seen. A `uses-permission` marked
+  `tools:node="remove"` counts as absent.
+
+### 5. `flui add` links a capability crate, which states its plugin
+
+ADR-0154 §8's `flui add <capability>` no longer writes declarations: the crate carries them. A
+capability crate states how an application registers it in `[package.metadata.flui.capability]`,
+whose one key in this version is `plugin`, the path of its `Plugin` type from the crate root. The
+type implements `Default`. A string holding an expression would be checked by nothing; a type path
+is checked by a test of the crate itself, which compares the declared path with the type's and
+needs `Plugin + Default` of it, so the declaration cannot go stale.
+
+```toml
+[package.metadata.flui.capability]
+plugin = "SystemPlugin"
+```
+
+`flui add <name>` resolves `name` as the facade feature that enables one optional crate
+(`system` → `flui-system`) and enables it in `Cargo.toml`, keeping the file's formatting; without
+the facade, or for a name the facade does not carry and the application already depends on, it is
+a crate name, added with `cargo add` from the FLUI checkout the application's other FLUI
+dependencies come from when that checkout has it. It then reads the linked crate's table and
+prints the registration line, `.plugin(flui::services::system::SystemPlugin::default())`, or
+`flui_system::…` without the facade, with what the crate declares for the manifests. It does not
+edit the application's source. A change whose crate states no plugin is undone, `Cargo.lock`
+included. Linking a linked capability changes nothing. An unknown name fails with the facade's
+capability features. `--json` emits one `add.done` event. `name`, which ADR-0154 §7 sketched as
+`Capability::NAME`, is not a key: a crate such as `flui-system` provides several capabilities, and
+a key arrives with its first consumer.
 
 ### Consequences
 
-- Good, because an application declares exactly what it links: no `flui-assets`, no file-timestamp
-  reason; the `http` feature off, no network permission.
+- Good, because an application declares exactly what it links: the `http` feature off, no network
+  permission; a crate that reads no file timestamps adds no reason for them.
 - Good, because the Android network permission, missing until now, is declared by the crate whose
   provider needs it, and HTTP works on Android.
 - Good, because a third party's crate declares its own needs the same way, with no change to the
@@ -125,7 +182,20 @@ join is a set per key, in a fixed order, with the crates that asked for each ent
   workspace built for Android and finds `VIBRATE` and `INTERNET`, so removing either crate's
   declaration fails it.
 - `android_manifest::tests::the_manifest_is_rewritten_only_when_flui_wrote_it`.
-- `cargo xtask workspace` accepts `declares` among the `[package.metadata.flui]` keys.
+- `ios_package::tests::publication_contract` ("privacy manifest declares what flui calls", "privacy
+  manifest joins the application's own") reads FLUI's own workspace built for `aarch64-apple-ios`
+  and finds `35F9.1` and `C617.1`, joined with an application's reasons.
+- `declarations::tests::a_privacy_reason_is_an_approved_reason_code`.
+- `cli_doctor::doctor_lists_what_a_manifest_lacks_of_the_crates_declarations` (the project's
+  declarations and hand-written Android manifest; `--manifest` files lacking an entry, one removing
+  it with `tools:node`, complete ones, a merged one without the note, privacy manifests, a binary
+  property list).
+- `cli_add::add_links_a_capability_and_shows_its_registration` (a facade feature enabled, a second
+  run, a crate without a plugin undone with its lockfile, an unknown name, a crate added from the
+  checkout); `commands::add::tests::a_feature_joins_the_facade_dependency_in_any_shape`;
+  `flui-system`'s `the_declared_plugin_is_the_crates_default_plugin`.
+- `cargo xtask workspace` accepts `declares` and `capability` among the `[package.metadata.flui]`
+  keys.
 
 ## Pros and cons of the options
 
@@ -151,11 +221,14 @@ join is a set per key, in a fixed order, with the crates that asked for each ent
 
 1. This change: the reader, `android.permissions`, the generated Android manifest, `flui-native`'s
    `VIBRATE` and `flui-app`'s `http`-feature `INTERNET`.
-2. Apple's privacy manifest: `apple.privacy.accessed-apis` in `flui-native` and `flui-assets`; the
-   iOS packager's constant goes, and the application's own `PrivacyInfo.xcprivacy` is still joined.
-   The aggregation rule for statically linked code (ADR-0154 §7, Confirmation) is checked then.
-3. The verify mode, a `flui doctor` check for projects whose manifests the CLI does not write.
-4. `flui add <capability>`.
+2. Done: Apple's privacy manifest, `apple.privacy.accessed-apis` in `flui-native` and
+   `flui-assets`; the iOS packager's constant is gone, and the application's own
+   `PrivacyInfo.xcprivacy` is still joined. The macOS bundle has no privacy manifest yet; when it
+   gets one, `flui-native`'s read of the global `NSUserDefaults` (the title bar's double-click
+   setting) needs a declared reason.
+3. Done: the verify mode, `flui doctor`'s Project section and `--manifest`.
+4. Done: `flui add <capability>` and `[package.metadata.flui.capability] plugin`, declared by
+   `flui-system`.
 
 ## More information
 

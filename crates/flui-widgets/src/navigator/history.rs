@@ -389,8 +389,9 @@ impl RouteEntry {
 ///
 /// A well-behaved route raises at most one command per lifecycle callback, so two
 /// passes is the realistic maximum. The bound exists so a route that re-raises
-/// from its own callback fails loudly instead of hanging — the same posture as
-/// ADR-0017's `MAX_LAYOUT_BUILD_PASSES`.
+/// from its own callback fails loudly instead of hanging. Route commands advance
+/// lifecycle states monotonically, so a pass count bounds them, unlike nested
+/// layout builders (ADR-0308).
 const MAX_FLUSH_PASSES: usize = 10;
 
 /// Everything one flush decided but did **not** do, because doing it means leaving

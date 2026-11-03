@@ -466,6 +466,30 @@ impl Shared {
             .flatten()
     }
 
+    /// The frame of the window whose own surface `pointer` is over: what a
+    /// press on a title bar of the application's is answered by.
+    fn content_frame(&self, pointer: &WlPointer) -> Option<Arc<dyn FramePointer>> {
+        let key = self
+            .objects
+            .with(|objects| {
+                objects
+                    .seats
+                    .iter()
+                    .filter_map(|seat| seat.pointer.as_ref())
+                    .find(|held| held.pointer == *pointer)
+                    .and_then(|held| held.focus.map(|(key, _)| key))
+            })
+            .flatten()?;
+        self.windows
+            .with(|windows| {
+                windows
+                    .iter()
+                    .find(|window| surface_key(window.id) == key)
+                    .map(|window| Arc::clone(&window.frame))
+            })
+            .flatten()
+    }
+
     /// The window surface `surface` is, when it is a window's.
     fn surface_of(&self, surface: &WlSurface) -> Option<NativeSurface> {
         self.windows
@@ -2037,6 +2061,9 @@ impl Dispatch<WlPointer, PointerData> for WaylandState {
                     }
                     show_cursor(&shared, objects, key, cursor, scale);
                 });
+                if let Some(frame) = shared.content_frame(pointer) {
+                    frame.content_moved(surface_x, surface_y);
+                }
                 (
                     arrival(None),
                     PointerWire::Enter {
@@ -2065,13 +2092,18 @@ impl Dispatch<WlPointer, PointerData> for WaylandState {
                 time,
                 surface_x,
                 surface_y,
-            } => (
-                arrival(Some(time)),
-                PointerWire::Motion {
-                    x: surface_x,
-                    y: surface_y,
-                },
-            ),
+            } => {
+                if let Some(frame) = shared.content_frame(pointer) {
+                    frame.content_moved(surface_x, surface_y);
+                }
+                (
+                    arrival(Some(time)),
+                    PointerWire::Motion {
+                        x: surface_x,
+                        y: surface_y,
+                    },
+                )
+            }
             wl_pointer::Event::Button {
                 serial,
                 time,
@@ -2097,6 +2129,23 @@ impl Dispatch<WlPointer, PointerData> for WaylandState {
                     }
                 } else {
                     shared.record_button(data.seat, None);
+                }
+                // A press on a title bar of the application's, and the
+                // release of one, is the window's, not its input's.
+                let seat = shared
+                    .objects
+                    .with(|objects| {
+                        objects
+                            .seats
+                            .iter()
+                            .find(|held| held.key == data.seat)
+                            .map(|held| held.seat.clone())
+                    })
+                    .flatten();
+                if let (Some(frame), Some(seat)) = (shared.content_frame(pointer), seat)
+                    && frame.content_button(&seat, serial, button, pressed)
+                {
+                    return;
                 }
                 (
                     arrival(Some(time)),

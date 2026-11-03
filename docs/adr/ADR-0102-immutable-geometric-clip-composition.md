@@ -143,6 +143,24 @@ eight hard leaves would otherwise exceed the frame work ceiling despite having
 no fractional coverage. The public `hard_clip_membership_scales_to_a_full_hd_frame`
 row pins that ordinary frame's admission and corner/interior pixels.
 
+Inside an antialiased expression, a mask pixel whose every sample passes every
+leaf resolves to full coverage without the samples. The host derives that
+uniform interior from the lowered tape and mapping in the `f32` values the
+shader reads: a box of pixels whose whole square lies inside each intersected
+leaf (a rectangle's bounds, or the larger arm of a rounded rectangle or
+superellipse clear of its corners) and outside each subtracted leaf's bounds,
+with a margin for the shader's `f32` rounding. Admission charges one unit for
+an interior pixel and the full samples-times-leaves for every other pixel, so a
+window-sized clip pays for its edges: a 6016×3384 window under one antialiased
+rounded rectangle of radius 12 was 1,302,921,216 units and refused on every
+full frame, and is 26,655,876. Rotated or skewed mappings, path leaves and
+non-finite values have no interior, and their cost is unchanged. The interior
+never changes a coverage value: the public
+`an_antialiased_clip_resolves_its_interior_without_sampling` row reads clip
+shapes back byte for byte against the same scene with a path leaf that turns
+the interior off, and admits a 1024² frame and a full-surface group under
+sixteen antialiased leaves.
+
 Requested device limits are checked before creating the lazy clip layout: three
 fragment uniform buffers, an 8192-byte uniform binding and an 8192-byte buffer
 are required. Insufficient capabilities produce `PreparedResourceLimit`.

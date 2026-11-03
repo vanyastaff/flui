@@ -107,6 +107,10 @@ console = "0.16"
 dialoguer = { version = "0.12", default-features = false }
 zip = { workspace = true }
 
+# `flui doctor --manifest`: reads an AndroidManifest.xml or an XML property
+# list FLUI did not write, to list what the linked crates declare and it lacks.
+roxmltree = { workspace = true }
+
 
 # Terminal mode for `flui run`'s hot-keys (see commands/run.rs `raw_mode`):
 # canonical mode and echo off for the session, restored on every exit path.

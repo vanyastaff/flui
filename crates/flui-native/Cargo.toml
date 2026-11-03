@@ -625,9 +625,9 @@ wayland = [
     "dep:wayland-cursor",
 ]
 
-# winit fallback backend — the Linux host `current_platform` picks while it is
-# built, until the native Wayland and X11 hosts are complete (ADR-0151 §11);
-# optional on Windows/macOS.
+# winit fallback backend, optional on every desktop. `current_platform` never
+# picks it on Linux, where the native hosts replaced it; it goes with the rest
+# of winit (ADR-0151 §11).
 winit-backend = [
     "dep:winit",
     "dep:arboard",
@@ -991,6 +991,20 @@ schema = 1
 # (`haptics::android`).
 [package.metadata.flui.declares.android]
 permissions = ["android.permission.VIBRATE"]
+
+# Apple's required-reason APIs the core calls on iOS and macOS. UIKit event
+# timestamps are placed on the frame clock through `systemUptime`
+# (`input::apple`; 35F9.1, time between events inside the app); the file
+# store `stat`s its own files and reads their modification time to sweep
+# stale staged writes (`storage::file_store`; C617.1, files inside the app's
+# container).
+[[package.metadata.flui.declares.apple.privacy.accessed-apis]]
+category = "NSPrivacyAccessedAPICategorySystemBootTime"
+reasons = ["35F9.1"]
+
+[[package.metadata.flui.declares.apple.privacy.accessed-apis]]
+category = "NSPrivacyAccessedAPICategoryFileTimestamp"
+reasons = ["C617.1"]
 
 # A window's tree read back by a real AT-SPI client on an accessibility bus of
 # its own: its own harness, because it starts an X server, a session bus and

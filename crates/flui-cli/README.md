@@ -94,7 +94,8 @@ it. Inside the FLUI checkout, generate against the local source instead:
 | `flui analyze` | `cargo clippy --workspace --all-targets -D warnings` (`--pedantic`, `--fix`). |
 | `flui format` | `cargo fmt --all` (`--check` exits 4 when unformatted). |
 | `flui clean` | Cargo artifacts and every platform's build output; `--platform <android\|ios\|web\|desktop>` cleans one platform's output instead, and `--deep` adds what platform build tools write in `platforms/`. A directory given to `flui build --output` is yours to clean. |
-| `flui doctor` | Environment checks with fix hints; `--fix` installs missing `rustup` targets. |
+| `flui add <capability>` | Link a capability crate (`flui add system`): enables its facade feature, prints the `.plugin(…)` line that registers it and what it declares for the manifests. |
+| `flui doctor` | Environment and project checks with fix hints; `--fix` installs missing `rustup` targets, `--manifest` checks a manifest FLUI does not write. |
 | `flui devices` | Desktop, Android (`adb`), iOS simulators and browsers, with the ids `--device` takes. |
 | `flui emulators list|launch` | List and start Android AVDs and iOS simulators. |
 | `flui platform add|remove|list` | Manage the platforms declared in `flui.toml` (`remove --yes` for scripts). |
@@ -282,6 +283,23 @@ only warn unless you select them explicitly with `--android`, `--ios` or
 `--web`. Every external probe has a 10-second deadline; a hung tool is
 reported, never waited on. Java's macOS stub (which prints "Unable to locate a
 Java Runtime") is detected as missing, not as installed.
+
+Inside a FLUI project a Project section follows. `project.declarations` reads
+what the crates the app links declare for its manifests
+(`[package.metadata.flui.declares]`, ADR-0307) and fails on a malformed table,
+as `flui build` would. `project.android-manifest` fails when
+`<project>/platforms/android/app/src/main/AndroidManifest.xml` was not written by
+`flui build`, listing what it lacks. `--manifest PATH`, repeatable, checks a
+manifest FLUI does not write, such as an embedding project's
+`AndroidManifest.xml` or `PrivacyInfo.xcprivacy` (XML form), against the
+crates of the project in the current directory: one `project.manifest` check
+per path, failing with each missing entry, the crates that declare it and the
+lines to add. An Android file that is not Gradle's merged manifest carries a
+`note` saying entries merged in from libraries are not seen.
+
+```bash
+flui doctor --json --manifest ../host/app/src/main/AndroidManifest.xml
+```
 
 ## Devices and emulators
 

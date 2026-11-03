@@ -16,12 +16,12 @@ help: the trait `ToValue` is not implemented for `Handle`
   = help: the following other types implement trait `ToValue`:
             &T
             Axis
+            AxisDirection
             Box<T>
+            BoxFit
+            Clip
             Cow<'_, str>
-            Edges
-            ElementId
-            GenId<flui_sdk::flui_foundation::markers::Render>
-            Lifecycle
+            CrossAxisAlignment
           and $N others
   = note: required for `Handle` to implement `FieldValue`
 note: required by a bound in `Fields::<'s>::field`

@@ -884,7 +884,7 @@ jobs:
       # `BuildOwner::finalize_tree`. No `unsafe` of its own — the point is the
       # slab-backed element arena and the reborrow chains it drives underneath.
       - name: cargo miri test (global_key_contract_matrix)
-        run: cargo +nightly miri test -p flui-view --test view_it --locked global_key_contract_matrix
+        run: cargo +nightly miri test -p flui-view --features testing --test view_it --locked global_key_contract_matrix
 
       # The surface-ownership drop order (ADR-0063, issue #1043): a generic
       # `SurfaceLease` fixture observes the surface dropping before its target.

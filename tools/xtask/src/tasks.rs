@@ -677,7 +677,11 @@ fn miri_plan() -> Vec<Step> {
             "--test rendering_it --features testing",
             "layout_failure_matrix",
         ),
-        ("flui-view", "--test view_it", "global_key_contract_matrix"),
+        (
+            "flui-view",
+            "--test view_it --features testing",
+            "global_key_contract_matrix",
+        ),
         ("flui-engine", "--lib", "surface_lease"),
         ("flui-engine", "--lib", "cancelling_renderer_new"),
     ]

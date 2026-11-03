@@ -726,8 +726,8 @@ fn text_contract() {
                 text_overflow_unit::a_truncated_paragraph_paints_exactly_the_lines_it_measured,
             ),
             (
-                "root_recolor_keeps_the_shaped_buffer",
-                text_overflow_unit::root_recolor_keeps_the_shaped_buffer_and_span_recolor_reshapes_once,
+                "a_recolour_paints_what_a_fresh_layout_paints",
+                text_overflow_unit::a_recolour_paints_what_a_fresh_layout_paints,
             ),
             (
                 "every_style_and_span_field_is_classified_by_what_the_shaped_paragraph_holds",

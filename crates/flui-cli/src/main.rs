@@ -337,6 +337,12 @@ enum Commands {
         /// targets) and re-check
         #[arg(long)]
         fix: bool,
+
+        /// Check a manifest FLUI does not write (an embedding project's
+        /// AndroidManifest.xml or PrivacyInfo.xcprivacy) against what the
+        /// crates of the project in the current directory declare; repeatable
+        #[arg(long = "manifest", value_name = "PATH")]
+        manifests: Vec<std::path::PathBuf>,
     },
 
     /// List available devices
@@ -394,6 +400,13 @@ enum Commands {
         /// Check formatting without modifying files
         #[arg(long)]
         check: bool,
+    },
+
+    /// Link a capability crate: enable its facade feature (or `cargo add`
+    /// it), then show how to register its plugin and what it declares
+    Add {
+        /// The facade feature (e.g. `system`) or, without one, the crate name
+        capability: String,
     },
 
     /// Generate shell completions
@@ -778,12 +791,14 @@ fn main() {
             ios,
             web,
             fix,
+            manifests,
         } => commands::doctor::execute(commands::doctor::DoctorOptions {
             verbose: doctor_verbose || verbose,
             android,
             ios,
             web,
             fix,
+            manifests,
         }),
 
         Commands::Devices { details, platform } => commands::devices::execute(details, platform),
@@ -814,6 +829,8 @@ fn main() {
         Commands::Format { check } => commands::format::execute(check),
 
         Commands::Completions { shell } => commands::completions::execute(shell),
+
+        Commands::Add { capability } => commands::add::execute(&capability),
     };
 
     if let Err(e) = result {
