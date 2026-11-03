@@ -2,6 +2,9 @@
 
 - **Status:** Accepted
 - **Date:** 2026-08-16
+- **Superseded-by:** [ADR-0304](ADR-0304-the-scene-is-retained-and-damage-is-the-footprint-of-its-patch.md)
+  for the Decision and the 2026-09-29 amendment only (damage is the footprint of the applied scene
+  patch, not a comparison of consecutive layer trees through boundary stamps)
 - **Amended by:** [ADR-0087](ADR-0087-raster-contract-and-cpu-backend.md) §3 (the producer)
 
 *Damage cannot be derived from which render objects repainted, because the ones

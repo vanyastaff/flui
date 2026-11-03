@@ -39,6 +39,13 @@
   `OpenedWindow`, the window's identity on any thread and the window on its owner thread only;
   (3) an AppKit window asked for a frame from another thread queues the redraw on its owner lane
   and returns at once, where it used to block until the lane ran it.
+- **Amended:** 2026-11-03 — decision 5, by
+  [ADR-0305](ADR-0305-one-gpu-context-serves-every-surface-through-a-raster-executor.md): the
+  runner hands the surface target to the owner's `SurfaceFactory::create`, whose surface reaches
+  the raster executor's slot in an `Attach` or `Restore` command, in place of `Renderer::new`; the
+  slot calls the target's `pre_present_notify` itself. The instance a surface is made from takes
+  its display from the platform's `DisplayConnection`, never from a window's target, because wgpu
+  reads the instance's display at every surface it makes. The target's obligations are unchanged.
 - **Supersedes:**
   - [ADR-0237](ADR-0237-window-state-and-host-notices.md), in part: the window-scoped getters and
     per-fact callbacks that sit beside the snapshot; decision 3's refusal inside `apply` (it moves

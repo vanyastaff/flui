@@ -12,6 +12,12 @@
   `on_surface_status_change` registration (it becomes the window handler's `surface_changed`; the
   signal's release-and-rebuild semantics stay). The `WindowTarget` bound, the lease, probing
   before creating and the engine side stay.
+- **Superseded-by:** [ADR-0305](ADR-0305-one-gpu-context-serves-every-surface-through-a-raster-executor.md)
+  for decision 1's constructor and decision 6's renderer methods only: `Renderer::new(target)`,
+  `Renderer::release_surface` and `Renderer::recreate_surface` give way to the owner's
+  `SurfaceFactory::create` and the raster executor's `Attach`, `Release` and `Restore` commands.
+  The `WindowTarget` bound, the lease, probing before creating, always rebuilding on a returned
+  window and releasing before creating stand.
 
 *A `wgpu::Surface<'static>` is sound only while the window behind it exists. The engine used to
 prove that with another crate's convention; now it proves it with ownership, and recovery asks
