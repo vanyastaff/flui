@@ -145,8 +145,9 @@ interprocess = { workspace = true }
 widestring = { workspace = true }
 
 # The built-in HTTP client (`http` feature, ADR-0280), driven on the run's IO
-# lane. Android and the web have no client yet (`HttpError::NotYetOnThisHost`).
-[target.'cfg(not(any(target_arch = "wasm32", target_os = "android")))'.dependencies]
+# lane. The web, Android and Windows send through the system's own stack
+# (`flui-native::http`).
+[target.'cfg(not(any(target_arch = "wasm32", target_os = "android", target_os = "windows")))'.dependencies]
 reqwest = { workspace = true, optional = true }
 # Names a failed TLS handshake in reqwest's error chain (`HttpError::Tls`).
 rustls = { workspace = true, optional = true }
