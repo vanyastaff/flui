@@ -3,13 +3,16 @@ plugins {
 }
 
 android {
+    // The package of the app's own Java or Kotlin code: it stays when flui.toml's
+    // `[app] id` changes, as the code's package does.
     namespace = "{{package_name}}"
     // `flui build` writes both properties into gradle.properties.
     compileSdk = providers.gradleProperty("flui.targetSdk").get().toInt()
     ndkVersion = "29.0.14206865"
 
     defaultConfig {
-        applicationId = "{{package_name}}"
+        // `flui build` writes it from flui.toml (`[app] id`) into gradle.properties.
+        applicationId = providers.gradleProperty("flui.applicationId").get()
         minSdk = providers.gradleProperty("flui.minSdk").get().toInt()
         targetSdk = providers.gradleProperty("flui.targetSdk").get().toInt()
         versionCode = 1

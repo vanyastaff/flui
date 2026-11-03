@@ -337,19 +337,28 @@ impl AndroidBuilder {
         // A Gradle wrapper in the project means the app has grown a Java or
         // Kotlin side and Gradle owns the APK; without one, the SDK's own
         // build-tools package the NativeActivity app directly.
+        // flui.toml names the package either way, so a changed `[app] id`
+        // reaches the APK whichever packages it.
+        let config = crate::config::FluiConfig::load_from(&self.workspace_root.join("flui.toml"))
+            .map_err(|error| {
+            BuildError::Other(format!("flui.toml names the package: {error}"))
+        })?;
         let gradle_wrapper_path = android_dir.join(gradle_wrapper_name);
         if !gradle_wrapper_path.exists() {
-            return self.package_with_build_tools(ctx, artifacts).await;
+            return self.package_with_build_tools(ctx, artifacts, &config).await;
         }
         let java_home = self.java_home.as_ref().ok_or_else(|| BuildError::ToolNotFound {
             tool: "JAVA_HOME (Gradle needs a JDK)".to_string(),
             install_hint: "set JAVA_HOME to a JDK 17+, or remove platforms/android/gradlew to package without Gradle".to_string(),
         })?;
 
-        crate::build::gradle_floor::state_sdk_levels(
+        crate::build::gradle_project::state_project(
             &android_dir,
-            ctx.floors.android_api(),
-            crate::build::platform_floor::ANDROID_TARGET_SDK,
+            &crate::build::gradle_project::GradleFacts {
+                min_sdk: ctx.floors.android_api(),
+                target_sdk: crate::build::platform_floor::ANDROID_TARGET_SDK,
+                application_id: config.app.id.android_package(),
+            },
         )?;
         let gradle_task = match ctx.profile {
             crate::build::platform::Profile::Debug => "assembleDebug",
@@ -404,12 +413,9 @@ impl AndroidBuilder {
         &self,
         ctx: &BuilderContext,
         artifacts: &BuildArtifacts,
+        config: &crate::config::FluiConfig,
     ) -> BuildResult<FinalArtifacts> {
-        let config = crate::config::FluiConfig::load_from(&self.workspace_root.join("flui.toml"))
-            .map_err(|error| {
-            BuildError::Other(format!("flui.toml names the package: {error}"))
-        })?;
-        let package = config.app.id.android_package().to_owned();
+        let package = config.app.id.android_package();
         let manifest = self
             .workspace_root
             .join("platforms")
@@ -445,7 +451,7 @@ impl AndroidBuilder {
         tools
             .package(&super::android_package::ApkSpec {
                 manifest: &manifest,
-                package: &package,
+                package,
                 native_libs: &native_libs,
                 work_dir: &ctx.output_dir.join("apk-work"),
                 output: &output,
