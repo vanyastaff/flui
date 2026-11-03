@@ -55,6 +55,10 @@
   `Header`, `Row` and what they nest, plain data a reader reads without the runtime.
   `flui_runtime::{Privacy, WireError}` and `InputRecord::to_wire`/`from_wire` convert to and from
   them; `flui_testing::recording` keeps its API (`RecordingClock` and `Privacy` are re-exports).
+- **`InputTaps::install` adds a tap beside the registered ones** instead of replacing the
+  registered tap (ADR-0215 §1): each registration is offered the rows admitted after it was
+  installed and keeps its own `Gap` and `End` rows and lost-row count, so an application's
+  recording and a driver's run side by side. Dropping a handle unregisters its own tap alone.
 
 ### Added
 

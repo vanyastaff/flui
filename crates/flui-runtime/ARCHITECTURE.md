@@ -528,14 +528,18 @@ sequence, which replay skips. An applied preference revision is a
 `Preferences` row.
 Without a tap nothing is cloned and no arena is observed. Delivery is a batched pass over owned rows
 with no runtime or registry borrow held: rows a tap admits reentrantly wait for
-the next pass, which an owner wake starts. Every call is contained; the first
-failure is kept, a lost row becomes a pending `Gap` count delivered in a second
-contained call or before the next row, and an outgoing tap is retired after the
-failure is reported, so its destructor's panic never comes first. Finishing (the
-handle's `finish`, or the registry's drop for a tap installed for the runtime's
-life) delivers the pending gap and the `End` row, or reports
+the next pass, which an owner wake starts. Taps fan out: each registration is
+offered the rows admitted after it was installed (each row carries its admission
+number) and keeps its own losses, so an application's recording and a driver's
+run side by side. Every call is contained; the first
+failure is kept, a lost row becomes the tap's pending `Gap` count delivered in a
+second contained call or before its next row, and a removed tap is retired after
+the failure is reported, so its destructor's panic never comes first. Finishing (the
+handle's `finish`, or the registry's drop for taps installed for the runtime's
+life) delivers that tap's pending gap and `End` row, or reports
 `RecordingIncomplete`; finishing inside a tap call counts the rows its pass has
-not offered yet, and rows queued for a later pass, as lost in those final rows.
+not offered that tap yet (the running row too, when its call has not started),
+and rows queued for a later pass, as lost in those final rows.
 An AT request no handler ran for is recorded `Unhandled`, as a key is. Handles are
 generation-bound and generations are never reused. `input_tap_delivery_contract`
 pins each of these.

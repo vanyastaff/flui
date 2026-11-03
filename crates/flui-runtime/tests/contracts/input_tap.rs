@@ -1,6 +1,7 @@
-//! `InputTap` delivery (ADR-0215 §1): the records a runtime emits reach its
-//! tap after each dispatch commits, every tap call is contained, losses travel
-//! as `Gap` rows, and a recording is complete only once its `End` row is out.
+//! `InputTap` delivery (ADR-0215 §1): the records a runtime emits reach each
+//! of its taps after each dispatch commits, every tap call is contained, each
+//! tap's losses travel as its own `Gap` rows, and a recording is complete only
+//! once its `End` row is out.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -184,36 +185,108 @@ fn a_tap_may_dispatch_reentrantly() {
     assert_eq!(recorded.borrow().last().map(String::as_str), Some("end 0"));
 }
 
-fn a_tap_replaced_mid_call_takes_effect_from_the_next_row() {
+fn a_tap_installed_mid_call_records_from_the_next_row_beside_the_first() {
     let fixture = Fixture::new();
     let recorded = rows();
-    let replacement: Rc<RefCell<Option<InputTapHandle>>> = Rc::new(RefCell::new(None));
+    let installed: Rc<RefCell<Option<InputTapHandle>>> = Rc::new(RefCell::new(None));
     let first = {
         let recorded = Rc::clone(&recorded);
         let taps = fixture.taps.clone();
-        let replacement = Rc::clone(&replacement);
-        let second = writer(&recorded, "B:");
-        let second = RefCell::new(Some(second));
+        let installed = Rc::clone(&installed);
+        let second = RefCell::new(Some(writer(&recorded, "B:")));
         move |record: &InputRecord| {
             recorded
                 .borrow_mut()
                 .push(format!("A:{}", describe(record)));
             if let Some(second) = second.borrow_mut().take() {
-                *replacement.borrow_mut() = Some(taps.install(second).expect("replacement"));
+                *installed.borrow_mut() = Some(taps.install(second).expect("second registration"));
             }
         }
     };
-    let stale = fixture.taps.install(first).expect("first registration");
+    let first = fixture.taps.install(first).expect("first registration");
     fixture.key(Code::F1);
     fixture.key(Code::F2);
-    assert_eq!(*recorded.borrow(), ["A:key F1", "B:key F2"]);
-    assert!(!stale.is_registered());
-    drop(stale);
-    let current = replacement.borrow_mut().take().expect("B registered");
-    assert!(current.is_registered(), "a stale handle leaves the new tap");
+    assert_eq!(*recorded.borrow(), ["A:key F1", "A:key F2", "B:key F2"]);
+    let second = installed.borrow_mut().take().expect("B registered");
+    assert!(first.is_registered() && second.is_registered());
+    drop(first);
+    assert!(
+        second.is_registered(),
+        "a handle unregisters its own registration alone"
+    );
     fixture.key(Code::F3);
-    assert_eq!(*recorded.borrow(), ["A:key F1", "B:key F2", "B:key F3"]);
-    current.finish().expect("complete recording");
+    second.finish().expect("complete recording");
+    assert_eq!(
+        *recorded.borrow(),
+        ["A:key F1", "A:key F2", "B:key F2", "B:key F3", "B:end 0"]
+    );
+}
+
+/// An application's tap and a driver's record side by side: each keeps its
+/// own losses, gaps and end row.
+fn each_tap_keeps_its_own_gaps_and_end_row() {
+    let fixture = Fixture::new();
+    let recorded = rows();
+    let failing = {
+        let recorded = Rc::clone(&recorded);
+        move |record: &InputRecord| {
+            let row = describe(record);
+            if row == "key F1" {
+                std::panic::panic_any("first tap failure");
+            }
+            recorded.borrow_mut().push(format!("A:{row}"));
+        }
+    };
+    let failing = fixture.taps.install(failing).expect("first registration");
+    let steady = fixture
+        .taps
+        .install(writer(&recorded, "B:"))
+        .expect("second registration");
+    fixture.key(Code::F1);
+    fixture.key(Code::F2);
+    failing.finish().expect("its gap and end were delivered");
+    steady.finish().expect("complete recording");
+    assert_eq!(
+        *recorded.borrow(),
+        [
+            "A:gap 1", "B:key F1", "A:key F2", "B:key F2", "A:end 1", "B:end 0"
+        ]
+    );
+    assert!(!fixture.taps.is_recording());
+}
+
+/// A tap that finishes another's recording before the running row reached it
+/// counts that row as lost to it.
+fn a_tap_finished_by_another_before_the_running_row_reached_it_counts_that_row_lost() {
+    let fixture = Fixture::new();
+    let recorded = rows();
+    let later: Rc<RefCell<Option<InputTapHandle>>> = Rc::new(RefCell::new(None));
+    let first = {
+        let recorded = Rc::clone(&recorded);
+        let later = Rc::clone(&later);
+        move |record: &InputRecord| {
+            recorded
+                .borrow_mut()
+                .push(format!("A:{}", describe(record)));
+            if let Some(later) = later.borrow_mut().take() {
+                assert_eq!(later.finish(), Ok(()), "its gap and end were delivered");
+            }
+        }
+    };
+    let first = fixture.taps.install(first).expect("first registration");
+    *later.borrow_mut() = Some(
+        fixture
+            .taps
+            .install(writer(&recorded, "B:"))
+            .expect("second registration"),
+    );
+    fixture.key(Code::F1);
+    fixture.key(Code::F2);
+    first.finish().expect("complete recording");
+    assert_eq!(
+        *recorded.borrow(),
+        ["A:key F1", "B:gap 1", "B:end 1", "A:key F2", "A:end 0"]
+    );
 }
 
 fn a_panicking_tap_is_contained_and_the_first_failure_kept() {
@@ -263,44 +336,43 @@ fn tap_registration_refuses_at_generation_exhaustion() {
     assert!(last.is_registered(), "a refusal leaves the registered tap");
 }
 
-fn a_tap_that_installs_a_replacement_then_panics_retires_contained_and_the_new_tap_records_the_next_row()
- {
+fn a_failing_tap_keeps_its_losses_and_retires_contained_beside_a_tap_it_installed() {
     let fixture = Fixture::new();
     let recorded = rows();
-    let replacement: Rc<RefCell<Option<InputTapHandle>>> = Rc::new(RefCell::new(None));
-    let outgoing = {
+    let installed: Rc<RefCell<Option<InputTapHandle>>> = Rc::new(RefCell::new(None));
+    let failing = {
         let taps = fixture.taps.clone();
-        let replacement = Rc::clone(&replacement);
+        let installed = Rc::clone(&installed);
         let incoming = RefCell::new(Some(writer(&recorded, "B:")));
-        let capture = PanickingCapture("outgoing tap capture");
+        let capture = PanickingCapture("failing tap capture");
         move |_: &InputRecord| {
             let _keep = &capture;
             if let Some(incoming) = incoming.borrow_mut().take() {
-                *replacement.borrow_mut() = Some(taps.install(incoming).expect("replacement"));
+                *installed.borrow_mut() = Some(taps.install(incoming).expect("registration"));
             }
-            std::panic::panic_any("outgoing tap failure");
+            std::panic::panic_any("failing tap failure");
         }
     };
-    let stale = fixture.taps.install(outgoing).expect("registration");
+    let failing = fixture.taps.install(failing).expect("registration");
     fixture.key(Code::F1);
     fixture.key(Code::F2);
+    drop(failing);
     let failure = fixture.taps.first_failure().expect("a contained failure");
     assert_eq!(
         (failure.site, failure.message.as_deref()),
-        (TapFailureSite::Row, Some("outgoing tap failure")),
+        (TapFailureSite::Row, Some("failing tap failure")),
         "the capture's destructor did not replace the first failure"
     );
-    assert_eq!(*recorded.borrow(), ["B:gap 1", "B:key F2"]);
-    drop(stale);
-    replacement
+    installed
         .borrow_mut()
         .take()
-        .expect("the incoming tap")
+        .expect("the installed tap")
         .finish()
         .expect("complete recording");
     assert_eq!(
-        recorded.borrow().last().map(String::as_str),
-        Some("B:end 1")
+        *recorded.borrow(),
+        ["B:key F2", "B:end 0"],
+        "the failing tap's losses stay its own"
     );
 }
 
@@ -502,8 +574,16 @@ fn input_tap_delivery_contract() {
                 a_tap_may_dispatch_reentrantly as fn(),
             ),
             (
-                "a_tap_replaced_mid_call_takes_effect_from_the_next_row",
-                a_tap_replaced_mid_call_takes_effect_from_the_next_row,
+                "a_tap_installed_mid_call_records_from_the_next_row_beside_the_first",
+                a_tap_installed_mid_call_records_from_the_next_row_beside_the_first,
+            ),
+            (
+                "each_tap_keeps_its_own_gaps_and_end_row",
+                each_tap_keeps_its_own_gaps_and_end_row,
+            ),
+            (
+                "a_tap_finished_by_another_before_the_running_row_reached_it_counts_that_row_lost",
+                a_tap_finished_by_another_before_the_running_row_reached_it_counts_that_row_lost,
             ),
             (
                 "a_panicking_tap_is_contained_and_the_first_failure_kept",
@@ -514,8 +594,8 @@ fn input_tap_delivery_contract() {
                 tap_registration_refuses_at_generation_exhaustion,
             ),
             (
-                "a_tap_that_installs_a_replacement_then_panics_retires_contained_and_the_new_tap_records_the_next_row",
-                a_tap_that_installs_a_replacement_then_panics_retires_contained_and_the_new_tap_records_the_next_row,
+                "a_failing_tap_keeps_its_losses_and_retires_contained_beside_a_tap_it_installed",
+                a_failing_tap_keeps_its_losses_and_retires_contained_beside_a_tap_it_installed,
             ),
             (
                 "releasing_the_owner_during_a_tap_call_finishes_cleanly",

@@ -1,17 +1,22 @@
-//! Delivery of a runtime's [`InputRecord`] stream to its tap (ADR-0215 §1).
+//! Delivery of a runtime's [`InputRecord`] stream to its taps (ADR-0215 §1).
 //!
 //! The runtime admits each record after the dispatch it describes has
-//! committed, then a delivery pass hands the owned rows to the tap one by one
-//! with no runtime borrow held. A pass delivers only the rows present when it
-//! started: rows a tap callback admits reentrantly wait for the next pass,
+//! committed, then a delivery pass hands the owned rows to the taps one by
+//! one with no runtime borrow held. A pass delivers only the rows present when
+//! it started: rows a tap callback admits reentrantly wait for the next pass,
 //! which an owner wake schedules, so a tap that dispatches on every row cannot
 //! keep the owner loop from returning.
 //!
+//! Several taps may be registered at once, an application's recording beside
+//! a driver's. Each registration is offered the rows admitted after it was
+//! installed, in the order they were admitted, and keeps its own account of
+//! what it lost: one tap's failure never reaches another's recording.
+//!
 //! Every tap call is contained. The first failure is authoritative and
 //! reported; the tap stays registered, the row it panicked on is not offered
-//! again, and the loss travels as a pending count delivered as an
-//! [`InputRecord::Gap`] row in a second contained call, retried before the
-//! next row while it keeps failing. Finishing delivers the pending gap and an
+//! to it again, and the loss travels as its pending count delivered as an
+//! [`InputRecord::Gap`] row in a second contained call, retried before its
+//! next row while it keeps failing. Finishing delivers its pending gap and an
 //! [`InputRecord::End`] row; a recording that cannot get both out reports
 //! [`RecordingIncomplete`] instead of claiming to be whole.
 
@@ -38,9 +43,10 @@ pub const INPUT_TAP_TARGET: &str = "flui_runtime::input_tap";
 /// Observes the records a runtime emits, on its owner thread, in the order
 /// the runtime applied them.
 ///
-/// A tap may dispatch input, replace or remove itself, or panic: dispatched
-/// input is recorded in a later pass, a replacement receives the next row, and
-/// a panic is contained (see the `input_tap` module docs).
+/// A tap may dispatch input, install or remove taps, or panic: dispatched
+/// input is recorded in a later pass, a tap installed meanwhile is offered the
+/// rows admitted after it, and a panic is contained (see the `input_tap`
+/// module docs).
 pub trait InputTap {
     /// Observe one record.
     fn record(&self, record: &InputRecord);
@@ -53,8 +59,8 @@ impl<F: Fn(&InputRecord)> InputTap for F {
 }
 
 /// A recording ended without its final rows: the tap panicked on the pending
-/// [`InputRecord::Gap`] or on the [`InputRecord::End`] row, or its
-/// registration was replaced before it finished.
+/// [`InputRecord::Gap`] or on the [`InputRecord::End`] row, or its runtime's
+/// registry was gone when it finished.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 #[error("the recording is incomplete: {lost_rows} rows were lost and its end was not delivered")]
 pub struct RecordingIncomplete {
@@ -72,7 +78,7 @@ pub enum TapFailureSite {
     Gap,
     /// The tap's call for the [`InputRecord::End`] row.
     End,
-    /// Destroying a replaced or removed tap.
+    /// Destroying a removed tap.
     Retire,
     /// The owner wake that schedules the next delivery pass.
     Wake,
@@ -92,8 +98,11 @@ pub struct TapFailure {
 
 /// A runtime's tap registry and its pending records.
 ///
-/// Clones share one registry. [`install`](Self::install) registers a tap;
-/// the runtime admits and delivers records only while one is registered.
+/// Clones share one registry. [`install`](Self::install) adds a registration
+/// beside the others: each is offered the rows admitted after it was
+/// installed and keeps its own lost-row count, pending gap and `End` row, so
+/// an application's recording and a driver's run side by side (ADR-0215 §1).
+/// The runtime admits and delivers records only while one is registered.
 #[derive(Clone)]
 pub struct InputTaps {
     state: Rc<TapState>,
@@ -102,30 +111,69 @@ pub struct InputTaps {
 impl std::fmt::Debug for InputTaps {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("InputTaps")
-            .field("recording", &self.is_recording())
+            .field("registrations", &self.state.registered.borrow().len())
             .field("queued", &self.state.queue.borrow().len())
             .finish_non_exhaustive()
     }
 }
 
 struct TapState {
-    queue: RefCell<VecDeque<InputRecord>>,
+    /// Rows admitted for the next pass.
+    queue: RefCell<VecDeque<Admitted>>,
     /// The rows of the running delivery pass not yet offered.
-    in_flight: RefCell<VecDeque<InputRecord>>,
-    current: RefCell<Option<Registered>>,
+    in_flight: RefCell<VecDeque<Admitted>>,
+    /// The row the running pass is offering, and to which registration.
+    offering: Cell<Option<Offering>>,
+    /// The registrations in the order they were installed, so by generation.
+    registered: RefCell<Vec<Rc<Registration>>>,
     /// Issues registration generations; never reuses one.
     generations: IdMint<NonZeroU64>,
-    /// Lost rows not yet delivered as a `Gap`.
-    pending_gap: Cell<u64>,
-    lost_total: Cell<u64>,
+    /// The number the next admitted row takes.
+    next_row: Cell<u64>,
     delivering: Cell<bool>,
     first_failure: RefCell<Option<TapFailure>>,
     wake: Arc<dyn Fn() + Send + Sync>,
 }
 
-struct Registered {
+/// A row admitted for delivery, numbered in the order it was admitted.
+struct Admitted {
+    number: u64,
+    record: InputRecord,
+}
+
+/// Where the running pass is with its row.
+#[derive(Clone, Copy)]
+struct Offering {
+    row: u64,
+    /// The registration whose call is running.
     generation: NonZeroU64,
-    tap: Rc<dyn InputTap>,
+    /// Whether that call is the row's own, rather than the gap ahead of it.
+    row_call: bool,
+}
+
+/// One registration: its tap and its own account of the rows it lost.
+struct Registration {
+    generation: NonZeroU64,
+    /// The number of the first row it is offered: the rows admitted before it
+    /// was installed belong to the recordings already running.
+    first_row: u64,
+    tap: Box<dyn InputTap>,
+    /// Lost rows not yet delivered as a `Gap`.
+    pending_gap: Cell<u64>,
+    lost_total: Cell<u64>,
+}
+
+impl Registration {
+    fn wants(&self, row: u64) -> bool {
+        row >= self.first_row
+    }
+
+    fn lose(&self, rows: u64) {
+        self.lost_total
+            .set(self.lost_total.get().saturating_add(rows));
+        self.pending_gap
+            .set(self.pending_gap.get().saturating_add(rows));
+    }
 }
 
 impl InputTaps {
@@ -134,10 +182,10 @@ impl InputTaps {
             state: Rc::new(TapState {
                 queue: RefCell::new(VecDeque::new()),
                 in_flight: RefCell::new(VecDeque::new()),
-                current: RefCell::new(None),
+                offering: Cell::new(None),
+                registered: RefCell::new(Vec::new()),
                 generations: IdMint::new(),
-                pending_gap: Cell::new(0),
-                lost_total: Cell::new(0),
+                next_row: Cell::new(0),
                 delivering: Cell::new(false),
                 first_failure: RefCell::new(None),
                 wake,
@@ -145,9 +193,9 @@ impl InputTaps {
         }
     }
 
-    /// Register `tap` in place of the current one, which is retired.
-    ///
-    /// Inside a tap callback the replacement takes effect from the next row.
+    /// Register `tap` beside the registered taps. It is offered every row
+    /// admitted from now on: inside a tap call, from the next row admitted,
+    /// not the rest of the running pass.
     ///
     /// # Errors
     ///
@@ -165,21 +213,26 @@ impl InputTaps {
     /// [`IdExhausted`], as [`install`](Self::install).
     pub fn install_boxed(&self, tap: Box<dyn InputTap>) -> Result<InputTapHandle, IdExhausted> {
         let generation = self.state.generations.next()?;
-        let outgoing = self.state.current.replace(Some(Registered {
-            generation,
-            tap: Rc::from(tap),
-        }));
-        self.state.retire(outgoing.map(|registered| registered.tap));
+        self.state
+            .registered
+            .borrow_mut()
+            .push(Rc::new(Registration {
+                generation,
+                first_row: self.state.next_row.get(),
+                tap,
+                pending_gap: Cell::new(0),
+                lost_total: Cell::new(0),
+            }));
         Ok(InputTapHandle {
             state: Rc::downgrade(&self.state),
             generation,
         })
     }
 
-    /// Whether a tap is registered, so the runtime records.
+    /// Whether any tap is registered, so the runtime records.
     #[must_use]
     pub fn is_recording(&self) -> bool {
-        self.state.current.borrow().is_some()
+        !self.state.registered.borrow().is_empty()
     }
 
     /// The first tap failure this registry contained, if any. Later
@@ -199,7 +252,14 @@ impl InputTaps {
     /// Queue `record` for the next pass, while a tap is registered.
     pub(crate) fn admit(&self, record: InputRecord) {
         if self.is_recording() {
-            self.state.queue.borrow_mut().push_back(record);
+            let number = self.state.next_row.get();
+            // Past 2^64 rows the number stays put: a registration installed
+            // then is offered a row admitted just before it, and loses none.
+            self.state.next_row.set(number.saturating_add(1));
+            self.state
+                .queue
+                .borrow_mut()
+                .push_back(Admitted { number, record });
         }
     }
 
@@ -217,10 +277,17 @@ impl TapState {
         }
         let batch = std::mem::take(&mut *self.queue.borrow_mut());
         *self.in_flight.borrow_mut() = batch;
-        while let Some(record) = self.next_in_flight() {
-            self.deliver_pending_gap();
-            self.offer(&record);
+        while let Some(admitted) = self.next_in_flight() {
+            let mut after = None;
+            while let Some(registration) = self.registration_after(after) {
+                after = Some(registration.generation);
+                if registration.wants(admitted.number) {
+                    self.offer(&registration, &admitted);
+                }
+                self.retire(registration);
+            }
         }
+        self.offering.set(None);
         self.delivering.set(false);
         if !self.queue.borrow().is_empty() {
             let wake = Arc::clone(&self.wake);
@@ -234,85 +301,132 @@ impl TapState {
         }
     }
 
-    fn next_in_flight(&self) -> Option<InputRecord> {
+    fn next_in_flight(&self) -> Option<Admitted> {
         self.in_flight.borrow_mut().pop_front()
     }
 
-    /// Count the rows a finishing registration will never be offered as
-    /// lost: the rest of a pass it finished inside, and rows admitted for a
-    /// later pass. They travel in the final `Gap` and `End` rows.
-    fn skip_undelivered(&self) {
-        let in_flight = std::mem::take(&mut *self.in_flight.borrow_mut());
-        let queued = std::mem::take(&mut *self.queue.borrow_mut());
-        let skipped = u64::try_from(in_flight.len() + queued.len()).unwrap_or(u64::MAX);
-        self.lost_total
-            .set(self.lost_total.get().saturating_add(skipped));
-        self.pending_gap
-            .set(self.pending_gap.get().saturating_add(skipped));
+    /// The first registration installed after `generation` (the first of
+    /// all for `None`). A pass walks them this way, so a tap call may install
+    /// or remove registrations.
+    fn registration_after(&self, generation: Option<NonZeroU64>) -> Option<Rc<Registration>> {
+        self.registered
+            .borrow()
+            .iter()
+            .find(|registration| generation.is_none_or(|after| registration.generation > after))
+            .map(Rc::clone)
     }
 
-    /// Hand `record` to the current tap; a panic loses the row and sends the
-    /// loss as a `Gap` right away.
-    fn offer(&self, record: &InputRecord) {
-        if self.call(record, TapFailureSite::Row) == Some(false) {
-            self.lost_total.set(self.lost_total.get().saturating_add(1));
-            self.pending_gap
-                .set(self.pending_gap.get().saturating_add(1));
-            self.deliver_pending_gap();
+    fn registration(&self, generation: NonZeroU64) -> Option<Rc<Registration>> {
+        self.registered
+            .borrow()
+            .iter()
+            .find(|registration| registration.generation == generation)
+            .map(Rc::clone)
+    }
+
+    fn is_registered(&self, generation: NonZeroU64) -> bool {
+        self.registered
+            .borrow()
+            .iter()
+            .any(|registration| registration.generation == generation)
+    }
+
+    /// Count as lost, for `registration` alone, the rows a finishing
+    /// registration will never be offered: the rest of a pass it finished
+    /// inside (the running row too, when this registration's call for it has
+    /// not started) and rows admitted for a later pass. The other
+    /// registrations are still offered them.
+    fn skip_undelivered(&self, registration: &Registration) {
+        let wanted = |admitted: &&Admitted| registration.wants(admitted.number);
+        let ahead = self.in_flight.borrow().iter().filter(wanted).count()
+            + self.queue.borrow().iter().filter(wanted).count();
+        let running = self.offering.get().is_some_and(|offering| {
+            registration.wants(offering.row)
+                && (registration.generation > offering.generation
+                    || (registration.generation == offering.generation && !offering.row_call))
+        });
+        registration.lose(
+            u64::try_from(ahead)
+                .unwrap_or(u64::MAX)
+                .saturating_add(u64::from(running)),
+        );
+    }
+
+    /// Offer `admitted` to `registration`, after the gap it still owes; a
+    /// panic loses the row for that registration alone and sends the loss as
+    /// a `Gap` right away.
+    fn offer(&self, registration: &Registration, admitted: &Admitted) {
+        let mut offering = Offering {
+            row: admitted.number,
+            generation: registration.generation,
+            row_call: false,
+        };
+        self.offering.set(Some(offering));
+        self.deliver_pending_gap(registration);
+        offering.row_call = true;
+        self.offering.set(Some(offering));
+        if self.call(registration, &admitted.record, TapFailureSite::Row) == Some(false) {
+            registration.lose(1);
+            self.deliver_pending_gap(registration);
         }
     }
 
-    /// Deliver the pending lost-row count as a `Gap`; it stays pending when
-    /// that call panics too. Returns whether nothing is pending afterwards.
-    fn deliver_pending_gap(&self) -> bool {
-        let rows = self.pending_gap.get();
+    /// Deliver `registration`'s pending lost-row count as a `Gap`; it stays
+    /// pending when that call panics too. Returns whether nothing is pending
+    /// afterwards.
+    fn deliver_pending_gap(&self, registration: &Registration) -> bool {
+        let rows = registration.pending_gap.get();
         if rows == 0 {
             return true;
         }
-        let delivered = self.call(&InputRecord::Gap { rows }, TapFailureSite::Gap) == Some(true);
+        let delivered = self.call(
+            registration,
+            &InputRecord::Gap { rows },
+            TapFailureSite::Gap,
+        ) == Some(true);
         if delivered {
-            self.pending_gap.set(self.pending_gap.get() - rows);
+            registration
+                .pending_gap
+                .set(registration.pending_gap.get().saturating_sub(rows));
         }
         delivered
     }
 
-    /// One contained call of the current tap: `None` with no tap, else
-    /// whether it returned. The failure is reported before the clone is
-    /// retired, because a tap replaced or removed inside the call may be
-    /// retired by it, and its destructor's failure must not come first.
-    fn call(&self, record: &InputRecord, site: TapFailureSite) -> Option<bool> {
-        let tap = self.current_tap()?;
+    /// One contained call of `registration`'s tap: `None` once it is no
+    /// longer registered, else whether the call returned. The caller holds
+    /// the registration and retires it after, because a tap removed inside
+    /// the call is destroyed by that, and its destructor's failure must not
+    /// come first.
+    fn call(
+        &self,
+        registration: &Registration,
+        record: &InputRecord,
+        site: TapFailureSite,
+    ) -> Option<bool> {
+        if !self.is_registered(registration.generation) {
+            return None;
+        }
         #[expect(
             clippy::disallowed_methods,
             reason = "ADR-0287: a tap's record call runs contained so delivery continues"
         )]
-        let delivered = catch_unwind(AssertUnwindSafe(|| tap.record(record)));
+        let delivered = catch_unwind(AssertUnwindSafe(|| registration.tap.record(record)));
         let returned = delivered.is_ok();
         if let Err(payload) = delivered {
             self.report(payload, site);
         }
-        self.retire(Some(tap));
         Some(returned)
     }
 
-    fn current_tap(&self) -> Option<Rc<dyn InputTap>> {
-        self.current
-            .borrow()
-            .as_ref()
-            .map(|registered| Rc::clone(&registered.tap))
-    }
-
-    /// Drop an outgoing tap's captures under containment: a panic there is
-    /// reported but never replaces the first failure or escapes.
-    fn retire(&self, tap: Option<Rc<dyn InputTap>>) {
-        let Some(tap) = tap else {
-            return;
-        };
+    /// Let go of a registration under containment: when it was the last
+    /// hold, the tap's captures are destroyed, and a panic there is reported
+    /// but never replaces the first failure or escapes.
+    fn retire(&self, registration: Rc<Registration>) {
         #[expect(
             clippy::disallowed_methods,
             reason = "ADR-0287: a retired tap's drop runs contained and is reported"
         )]
-        if let Err(payload) = catch_unwind(AssertUnwindSafe(|| drop(tap))) {
+        if let Err(payload) = catch_unwind(AssertUnwindSafe(|| drop(registration))) {
             self.report(payload, TapFailureSite::Retire);
         }
     }
@@ -352,54 +466,57 @@ impl TapState {
         }
     }
 
-    fn remove(&self, generation: NonZeroU64) -> bool {
+    /// Unregister `generation`; the last registration's going clears the
+    /// rows queued for it.
+    fn remove(&self, generation: NonZeroU64) {
         let outgoing = {
-            let mut current = self.current.borrow_mut();
-            if current
-                .as_ref()
-                .is_some_and(|registered| registered.generation == generation)
-            {
-                current.take()
-            } else {
-                None
-            }
+            let mut registered = self.registered.borrow_mut();
+            registered
+                .iter()
+                .position(|registration| registration.generation == generation)
+                .map(|index| registered.remove(index))
         };
-        let removed = outgoing.is_some();
-        self.retire(outgoing.map(|registered| registered.tap));
-        if self.current.borrow().is_none() {
+        if let Some(outgoing) = outgoing {
+            self.retire(outgoing);
+        }
+        if self.registered.borrow().is_empty() {
             self.queue.borrow_mut().clear();
         }
-        removed
-    }
-
-    fn is_current(&self, generation: NonZeroU64) -> bool {
-        self.current
-            .borrow()
-            .as_ref()
-            .is_some_and(|registered| registered.generation == generation)
     }
 }
 
 impl Drop for TapState {
-    /// A tap still registered when its runtime goes away (one installed for
-    /// the runtime's life) is finished as [`InputTapHandle::finish`] would:
-    /// its queued rows, the pending gap and the `End` row go out.
+    /// The taps still registered when the runtime goes away (ones installed
+    /// for the runtime's life) are finished as [`InputTapHandle::finish`]
+    /// would: the queued rows go out, then each one's pending gap and `End`
+    /// row, which counts the rows that last pass admitted as lost.
     fn drop(&mut self) {
-        if self.current.get_mut().is_none() {
+        if self.registered.get_mut().is_empty() {
             return;
         }
         self.deliver();
-        if self.deliver_pending_gap() {
-            let lost_rows = self.lost_total.get();
-            let _ = self.call(&InputRecord::End { lost_rows }, TapFailureSite::End);
+        let mut after = None;
+        while let Some(registration) = self.registration_after(after) {
+            after = Some(registration.generation);
+            self.skip_undelivered(&registration);
+            if self.deliver_pending_gap(&registration) {
+                let lost_rows = registration.lost_total.get();
+                let _ = self.call(
+                    &registration,
+                    &InputRecord::End { lost_rows },
+                    TapFailureSite::End,
+                );
+            }
+            self.retire(registration);
         }
-        let outgoing = self.current.get_mut().take();
-        self.retire(outgoing.map(|registered| registered.tap));
+        for outgoing in std::mem::take(self.registered.get_mut()) {
+            self.retire(outgoing);
+        }
     }
 }
 
-/// One tap registration. Dropping it unregisters that registration only: a
-/// handle whose tap was replaced leaves the replacement registered.
+/// One tap registration. Dropping it unregisters this registration alone:
+/// the other taps keep recording.
 #[must_use = "dropping the handle unregisters the tap"]
 pub struct InputTapHandle {
     state: Weak<TapState>,
@@ -415,53 +532,51 @@ impl std::fmt::Debug for InputTapHandle {
 }
 
 impl InputTapHandle {
-    /// Whether this registration is still the registered one.
+    /// Whether this registration is registered: while its runtime's
+    /// registry lives, until the handle goes.
     #[must_use]
     pub fn is_registered(&self) -> bool {
         self.state
             .upgrade()
-            .is_some_and(|state| state.is_current(self.generation))
+            .is_some_and(|state| state.is_registered(self.generation))
     }
 
-    /// Deliver every queued row, the pending [`InputRecord::Gap`] and the
-    /// [`InputRecord::End`] row, then unregister.
+    /// Deliver every queued row, then this registration's pending
+    /// [`InputRecord::Gap`] and its [`InputRecord::End`] row, and unregister.
     ///
-    /// Called inside a tap call, the running pass keeps its rows: those it
-    /// has not offered yet, and rows admitted for a later pass, are lost and
-    /// counted in the final `Gap` and `End` rows.
+    /// Called inside a tap call, the running pass keeps its rows: the ones it
+    /// has not offered this registration yet, and rows admitted for a later
+    /// pass, are lost to it and counted in its final `Gap` and `End` rows.
     ///
     /// # Errors
     ///
     /// [`RecordingIncomplete`] when the tap panicked on the final gap or the
-    /// end row (neither is retried), or this registration is no longer the
-    /// registered one.
+    /// end row (neither is retried), or the runtime's registry is gone.
     pub fn finish(self) -> Result<(), RecordingIncomplete> {
         let Some(state) = self.state.upgrade() else {
             return Err(RecordingIncomplete { lost_rows: 0 });
         };
-        if !state.is_current(self.generation) {
-            return Err(RecordingIncomplete {
-                lost_rows: state.lost_total.get(),
-            });
-        }
         // Inside a tap call this delivers nothing: the running pass owns the
-        // rows, and the ones it has not offered yet are counted as lost.
+        // rows, and the ones it has not offered this registration are lost.
         state.deliver();
-        if state.is_current(self.generation) {
-            state.skip_undelivered();
-        }
-        let complete = state.is_current(self.generation)
-            && state.deliver_pending_gap()
-            && state.is_current(self.generation)
+        // Only its handle unregisters a registration, so this one is here.
+        let Some(registration) = state.registration(self.generation) else {
+            return Err(RecordingIncomplete { lost_rows: 0 });
+        };
+        state.skip_undelivered(&registration);
+        let complete = state.deliver_pending_gap(&registration)
             && state.call(
+                &registration,
                 &InputRecord::End {
-                    lost_rows: state.lost_total.get(),
+                    lost_rows: registration.lost_total.get(),
                 },
                 TapFailureSite::End,
             ) == Some(true);
-        let lost_rows = state.lost_total.get();
-        // `self` drops here and unregisters this generation.
+        let lost_rows = registration.lost_total.get();
+        // `self` drops here and unregisters this generation; the tap is
+        // destroyed when the registration is retired after it.
         drop(self);
+        state.retire(registration);
         if complete {
             Ok(())
         } else {
