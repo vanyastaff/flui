@@ -14,7 +14,7 @@ use flui_platform::{ClipboardError, ClipboardRead, ClipboardWrite, Concealment};
 use jni::objects::JObject;
 use jni::{JValue, jni_sig, jni_str};
 
-use crate::host::{SyncClipboard, host_text};
+use crate::host::{SyncClipboard, admit_utf16, host_text};
 use crate::owner::android::activity::with_activity;
 use crate::version::gate::android::{AndroidApi, ClipExtras};
 
@@ -54,10 +54,10 @@ fn clipboard_manager<'local>(
 
 impl SyncClipboard for AndroidClipboard {
     fn read_now(&self) -> ClipboardRead {
-        let text = with_activity(&self.app, |env, activity| {
+        with_activity(&self.app, |env, activity| {
             let manager = clipboard_manager(env, activity)?;
             if manager.is_null() {
-                return Ok(None);
+                return Ok(Ok(None));
             }
             let clip = env
                 .call_method(
@@ -68,13 +68,13 @@ impl SyncClipboard for AndroidClipboard {
                 )?
                 .l()?;
             if clip.is_null() {
-                return Ok(None);
+                return Ok(Ok(None));
             }
             let items = env
                 .call_method(&clip, jni_str!("getItemCount"), jni_sig!("()I"), &[])?
                 .i()?;
             if items < 1 {
-                return Ok(None);
+                return Ok(Ok(None));
             }
             let item = env
                 .call_method(
@@ -93,7 +93,15 @@ impl SyncClipboard for AndroidClipboard {
                 )?
                 .l()?;
             if text.is_null() {
-                return Ok(None);
+                return Ok(Ok(None));
+            }
+            // Measured in UTF-16 units before either copy: Java's `toString`
+            // and the one into Rust.
+            let units = env
+                .call_method(&text, jni_str!("length"), jni_sig!("()I"), &[])?
+                .i()?;
+            if let Err(refused) = admit_utf16(usize::try_from(units).unwrap_or(0)) {
+                return Ok(Err(refused));
             }
             let text = env
                 .call_method(
@@ -104,17 +112,16 @@ impl SyncClipboard for AndroidClipboard {
                 )?
                 .l()?;
             let text = env.cast_local::<jni::objects::JString<'_>>(text)?;
-            Ok(Some(text.try_to_string(env)?))
+            Ok(host_text(text.try_to_string(env)?))
         })
-        .map_err(|error| {
+        .unwrap_or_else(|error| {
             tracing::warn!(
                 target: "flui_native::android",
                 %error,
                 "clipboard read failed"
             );
-            ClipboardError::Unavailable
-        })?;
-        text.map_or(Ok(None), host_text)
+            Err(ClipboardError::Unavailable)
+        })
     }
 
     fn write_now(&self, write: ClipboardWrite) {
