@@ -208,6 +208,13 @@ fn scaffolded_platforms_ignore_and_clean_what_builds_write() {
         properties.lines().any(|line| line == "flui.minSdk=23"),
         "Android safe-area capture requires API 23"
     );
+    assert!(
+        android.contains("applicationId = providers.gradleProperty(\"flui.applicationId\").get()")
+            && properties
+                .lines()
+                .any(|line| line == "flui.applicationId=com.test.all_platforms"),
+        "the build script reads the package flui.toml's `[app] id` gives, never a literal"
+    );
 
     let wrongly_tracked: Vec<_> = BUILD_OUTPUTS
         .iter()

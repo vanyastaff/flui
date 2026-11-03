@@ -37,6 +37,16 @@ matching the platform's [View.getRootWindowInsets](https://developer.android.com
 `scaffolded_platforms_ignore_and_clean_what_builds_write` checks the generated
 application configuration through the CLI.
 
+The Android package comes from `flui.toml`'s `[app] id` on every build, whichever packages the
+APK. The SDK-tools path writes it into the manifest it links; for a Gradle project `flui build`
+writes it into `gradle.properties` as `flui.applicationId` beside `flui.minSdk` and
+`flui.targetSdk`, and the scaffolded `app/build.gradle.kts` reads it. A changed identifier
+therefore reaches the APK that `flui run` then starts and copies scene plugins into by that same
+package. A literal `minSdk` or `applicationId` in the script that differs, or one the build cannot
+read, is a second statement and is refused before Gradle runs
+(`a_build_script_states_what_flui_toml_states_or_is_refused`). The `namespace` stays as scaffolded:
+it is the package of the app's own Java or Kotlin code.
+
 ### Local source dependencies are explicit Cargo paths
 
 `flui create NAME --local` selects the current working directory as the source
