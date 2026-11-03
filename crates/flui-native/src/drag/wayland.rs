@@ -49,6 +49,7 @@ use std::time::Duration;
 
 use flui_foundation::DataTransferId;
 use flui_foundation::geometry::Point;
+use flui_foundation::panic::{FirstPanic, discard_payload};
 use flui_platform::data_transfer::{
     DataTransferOffer, DataTransferSource, DropFeedback, RepresentationDescriptor,
     RepresentationIndex, TransferActions, TransferCompleter, TransferError, TransferLimits,
@@ -384,11 +385,9 @@ impl SeatDrag {
         if after.sent {
             (self.shared.wake)();
         }
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "ADR-0287: a handler's panic still lets accepted requests be answered"
-        )]
-        let dispatched = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        // A request accepted before the handler failed is still answered.
+        let mut failure = FirstPanic::new();
+        failure.contain(|| {
             if let Some((window, event)) = after.dispatch {
                 let delivery = self
                     .shared
@@ -402,28 +401,9 @@ impl SeatDrag {
                     delivery.dispatch_input(PlatformInput::DragDrop(event));
                 }
             }
-        }));
-        // A request accepted before the handler failed is still answered,
-        // each in its own containment: a waker that panics leaves the rest
-        // answered, and the first failure goes on; a later one is retained
-        // rather than dropped (ADR-0127 §2).
-        let mut failure = dispatched.err();
-        for (completer, result) in after.completions {
-            #[expect(
-                clippy::disallowed_methods,
-                reason = "ADR-0287: a waker's panic leaves the remaining completions answered"
-            )]
-            if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                completer.complete(result);
-            })) {
-                if failure.is_none() {
-                    failure = Some(payload);
-                } else {
-                    std::mem::forget(payload);
-                }
-            }
-        }
-        failure.map_or(Ok(()), Err)
+        });
+        complete_all(&mut failure, after.completions);
+        failure.into_payload().map_or(Ok(()), Err)
     }
 
     fn finish(&self, after: After) {
@@ -652,7 +632,7 @@ impl SeatDrag {
 
     /// Retire the dropped offer `id` the window will not conclude, and
     /// destroy it unfinished; an offer the window concluded already is gone.
-    /// A failure on the way is retained: the window's goes on.
+    /// A failure on the way is discarded under containment: no caller resumes it.
     fn abandon_drop(&self, id: DataTransferId) {
         let mut after = After::default();
         {
@@ -668,7 +648,7 @@ impl SeatDrag {
             }
         }
         if let Err(failure) = self.try_finish(after) {
-            std::mem::forget(failure);
+            discard_payload(failure);
         }
     }
 
@@ -728,6 +708,19 @@ impl SeatDrag {
     }
 }
 
+/// Answer every request a step accepted, each in its own containment: a waker
+/// that panics leaves the rest answered. `failure` keeps the first panic, a
+/// handler's included, and a later one is discarded under containment
+/// (ADR-0281).
+fn complete_all(
+    failure: &mut FirstPanic,
+    completions: Vec<(TransferCompleter, Result<TransferPayload, TransferError>)>,
+) {
+    for (completer, result) in completions {
+        failure.contain(move || completer.complete(result));
+    }
+}
+
 /// What a fetch of `kind` read comes to, held to `limit`: measured before
 /// it is made, which can take more than the bytes read.
 fn outcome(
@@ -771,7 +764,7 @@ fn fetched(shared: &Weak<Shared>, ticket: u64, outcome: Result<TransferPayload, 
     }
     // No window hears anything here; a waker's panic stays on this thread.
     if let Err(failure) = drag.try_finish(after) {
-        std::mem::forget(failure);
+        discard_payload(failure);
     }
 }
 
@@ -845,7 +838,7 @@ impl WaylandDrag for SeatDrag {
         drop(windows);
         self.release_session();
         if let Err(failure) = self.try_finish(after) {
-            std::mem::forget(failure);
+            discard_payload(failure);
         }
     }
 }
@@ -946,5 +939,91 @@ mod tests {
         }
         assert_eq!(dnd_action(Some(TransferActions::LINK)), DndAction::empty());
         assert_eq!(dnd_action(None), DndAction::empty());
+    }
+
+    /// A panic payload that counts its drops.
+    struct Counted {
+        first: bool,
+        drops: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl Drop for Counted {
+        fn drop(&mut self) {
+            self.drops.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    /// A waker that panics with a [`Counted`] payload as it is woken.
+    struct FailsAsWoken {
+        first: bool,
+        drops: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl std::task::Wake for FailsAsWoken {
+        fn wake(self: Arc<Self>) {
+            self.wake_by_ref();
+        }
+        fn wake_by_ref(self: &Arc<Self>) {
+            std::panic::panic_any(Counted {
+                first: self.first,
+                drops: Arc::clone(&self.drops),
+            });
+        }
+    }
+
+    /// Requests whose wakers panic leave the rest answered. The first panic is
+    /// kept and a later one is destroyed under containment, not leaked.
+    #[test]
+    fn a_waker_that_panics_leaves_the_rest_answered_and_a_later_panic_destroyed() {
+        use std::future::Future as _;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::task::{Context, Poll, Waker};
+
+        let drops = Arc::new(AtomicUsize::new(0));
+        let failing = |first| {
+            Waker::from(Arc::new(FailsAsWoken {
+                first,
+                drops: Arc::clone(&drops),
+            }))
+        };
+        let wakers = [failing(true), Waker::noop().clone(), failing(false)];
+        let mut requests = Vec::new();
+        let mut completions = Vec::new();
+        for waker in &wakers {
+            let (mut request, completer) = TransferRequest::pending();
+            assert!(
+                std::pin::Pin::new(&mut request)
+                    .poll(&mut Context::from_waker(waker))
+                    .is_pending()
+            );
+            requests.push(request);
+            completions.push((completer, Err(TransferError::SourceGone)));
+        }
+        drop(wakers);
+
+        let mut failure = FirstPanic::new();
+        complete_all(&mut failure, completions);
+
+        assert_eq!(
+            drops.load(Ordering::SeqCst),
+            1,
+            "the later panic's payload was destroyed"
+        );
+        let kept = failure.into_payload().expect("the first panic is kept");
+        assert!(
+            kept.downcast_ref::<Counted>()
+                .is_some_and(|payload| payload.first),
+            "the kept panic is the first"
+        );
+        discard_payload(kept);
+        for request in &mut requests {
+            assert!(
+                matches!(
+                    std::pin::Pin::new(request).poll(&mut Context::from_waker(Waker::noop())),
+                    Poll::Ready(Err(TransferError::SourceGone))
+                ),
+                "every request is answered"
+            );
+        }
     }
 }

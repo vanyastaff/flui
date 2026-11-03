@@ -62,6 +62,10 @@ impl std::ops::DerefMut for OwnerValues {
 impl Drop for OwnerValues {
     fn drop(&mut self) {
         for (_, value) in self.values.drain() {
+            #[expect(
+                clippy::mem_forget,
+                reason = "at thread exit a destructor may reach thread-locals already destroyed"
+            )]
             std::mem::forget(value);
         }
     }

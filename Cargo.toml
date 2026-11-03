@@ -637,6 +637,11 @@ large_futures = "warn"
 imprecise_flops = "warn"
 # A mutating debug assertion changes behavior between debug and release builds.
 debug_assert_with_mut_call = "warn"
+# A forgotten value never runs its destructor. A caught panic's payload goes to
+# `flui_foundation::panic::discard_payload` (ADR-0281); a deliberate leak (an OS
+# that still owns the memory, a destructor that would recurse) names its reason
+# with `#[expect(clippy::mem_forget, reason = "…")]` at the call.
+mem_forget = "warn"
 # Already on through `pedantic` (the first three) and `all` (`unnecessary_unwrap`),
 # so CI holds them at zero sites on every target; pinned so a group change cannot
 # drop them. `is_some()` then `unwrap()` is a pattern match; `use x::*` hides which
