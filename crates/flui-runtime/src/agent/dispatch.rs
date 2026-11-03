@@ -30,8 +30,9 @@ use flui_protocol::method::{
     Addressed, EventsSubscribe, EventsUnsubscribe, Method, WindowMethod, WindowsList,
 };
 use flui_protocol::{
-    Effect, EffectKind, ErrorCode, ErrorObject, Event, EventFilter, HandleKind, METHODS,
-    MethodEffect, MethodInfo, RequestId, Retry, ServedBy, Subscription, WindowId, WindowList,
+    ClientRole, Effect, EffectKind, ErrorCode, ErrorObject, Event, EventFilter, HandleKind,
+    METHODS, MethodEffect, MethodInfo, RequestId, Retry, ServedBy, Subscription, WindowId,
+    WindowList,
 };
 use flui_view::dev_agent::{AgentAnswer, AgentEvents, AgentWindow};
 use serde::Serialize;
@@ -56,13 +57,30 @@ pub(super) fn serves(method: &MethodInfo) -> bool {
         && (APPS_OWN.contains(&method.name) || crate::ui_runtime::window_answers(method.name))
 }
 
-/// The methods the agent answers, by wire name, in table order.
-pub(super) fn served() -> Vec<String> {
+/// Whether a connection admitted as `role` may call `method`: the driver anything, an observer
+/// only what reads (ADR-0288 §8).
+pub(super) fn may_call(role: ClientRole, method: &MethodInfo) -> bool {
+    role.is_driver() || method.effect == MethodEffect::ReadOnly
+}
+
+/// The methods the agent answers a connection admitted as `role`, by wire name, in table order.
+pub(super) fn served(role: ClientRole) -> Vec<String> {
     METHODS
         .iter()
-        .filter(|method| serves(method))
+        .filter(|method| serves(method) && may_call(role, method))
         .map(|method| method.name.to_owned())
         .collect()
+}
+
+/// `method` acts, and the connection only observes.
+pub(super) fn not_driver(method: &MethodInfo) -> ErrorObject {
+    ErrorObject::new(
+        ErrorCode::NotDriver,
+        format!(
+            "{} acts, and this connection observes: only the app's driver acts",
+            method.name
+        ),
+    )
 }
 
 /// `method` is in the table but not answered here: by another side, or not yet by this agent.

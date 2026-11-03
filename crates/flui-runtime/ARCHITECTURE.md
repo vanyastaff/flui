@@ -1027,7 +1027,7 @@ extensions are the VM's. Pinned by `dev_agent_host_contains_its_hook` (`src/dev_
 
 **Rule.** `agent::Service` serves the windows a development-agent hook is handed (the hook calls
 `Service::window_opened`) to every conversation it accepts: the token, `Limits`, the app's
-introduction and the driver's claim are the service's, and a `Session` is one conversation. A
+introduction and the driver's seat are the service's, and a `Session` is one conversation. A
 session never reads, writes, sleeps, spawns or reads a clock. A transport hands it what it read
 (`receive`, `peer_closed`) with the current instant, writes what `transmit` gives, and calls
 `poll` again when the waker it passed is woken or `next_deadline` passes; it closes the
@@ -1036,10 +1036,12 @@ version check, refusals and the linger after one, the queue cap (waiting, runnin
 untransmitted answers), timeouts (`reply_timeout` plus a wait's own), subscriptions and the
 dispatch over the protocol's table are the session's. Requests run in order, one at a time.
 Events are taken between answers, in turn from each stream, while fewer than 64 lines wait; past
-1024 waiting lines the client is not reading and the conversation closes. The driver's
-obligation runs once, contained, when the first conversation past its hello is dropped while the
-service is not stopped. A waker the session registers is woken by the seam after the answer or
-event is in place (`flui_view` §"The development-agent hook lives here too"); the registry wakes
+1024 waiting lines the client is not reading and the conversation closes. One conversation holds
+the driver's seat at a time: a hello naming no role, or `driver`, takes it, a second is refused
+`not_driver`, and an observer reads and subscribes beside it and is refused `not_driver` when it
+acts (ADR-0288 §8). The driver's obligation runs once, contained, when the driver's conversation
+is dropped while the service is not stopped. A waker the session registers is woken by the seam
+after the answer or event is in place (`flui_view` §"The development-agent hook lives here too"); the registry wakes
 it when a window opens and when the service stops, after its lock is released.
 
 **Why here.** Every host serves the same protocol: the desktop sockets, Android, the web page and a
