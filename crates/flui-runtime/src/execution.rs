@@ -55,10 +55,13 @@
 //! same contract.
 
 use std::fmt;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::task::{Context, Poll, Waker};
 
-pub use flui_platform::executor::{ComputeJob, IoFuture, SpawnError};
+pub use flui_platform::executor::{ComputeJob, IoFuture, Lane, RoomFuture, SpawnError};
 
 /// Host-provided worker pool for the **asynchronous compute** work class.
 ///
@@ -67,10 +70,15 @@ pub use flui_platform::executor::{ComputeJob, IoFuture, SpawnError};
 /// shutdown-cancellation check, so an implementation only needs to execute.
 ///
 /// Return [`SpawnError::Saturated`] to refuse a job when the host's own
-/// queue is full — FLUI surfaces that to its caller unchanged.
+/// queue is full — FLUI surfaces that to its caller unchanged — and resolve
+/// [`room`](Self::room) only once it has room again.
 pub trait HostComputePool: Send + Sync {
     /// Queue `job` for execution.
     fn spawn_job(&self, job: ComputeJob) -> Result<(), SpawnError>;
+
+    /// Waits for the pool to take one more job, as [`RoomFuture`] says. A
+    /// pool that never refuses resolves `Ok(())` at once.
+    fn room(&self) -> RoomFuture;
 }
 
 /// Host-provided executor for the **IO** work class.
@@ -78,10 +86,16 @@ pub trait HostComputePool: Send + Sync {
 /// Implementations drive each future to completion, on any thread. FLUI
 /// wraps every future it hands over with its own admission accounting and
 /// cancellation (on shutdown the wrapped future resolves early), so an
-/// implementation only needs to poll.
+/// implementation only needs to poll. A pool that refuses a future with
+/// [`SpawnError::Saturated`] resolves [`room`](Self::room) only once it has
+/// room again.
 pub trait HostIoPool: Send + Sync {
     /// Queue `future` for execution.
     fn spawn_future(&self, future: IoFuture) -> Result<(), SpawnError>;
+
+    /// Waits for the pool to take one more future, as
+    /// [`HostComputePool::room`] does for a job.
+    fn room(&self) -> RoomFuture;
 }
 
 /// The host-injection seam: an embedded host's own executors, passed via
@@ -164,17 +178,115 @@ impl Default for AdmissionLimits {
     }
 }
 
-/// One lane's admission window: an in-flight counter with a cap.
+/// The wakers of the waits on one signal, each removed when its wait ends.
+#[derive(Default)]
+struct Waiters {
+    inner: parking_lot::Mutex<WaitersInner>,
+}
+
+#[derive(Default)]
+struct WaitersInner {
+    /// The next registration's number; a `u64` counted up once per
+    /// registration does not wrap.
+    next: u64,
+    wakers: Vec<(u64, Waker)>,
+}
+
+impl Waiters {
+    /// Holds `waker` for the wait `registration` names, registering it
+    /// first when it is not registered (or was woken and let go since).
+    fn register(&self, registration: &mut Option<u64>, waker: &Waker) {
+        // Cloned, and the waker it replaces dropped, outside the lock: both
+        // run the waker owner's code.
+        let waker = waker.clone();
+        let unused = {
+            let mut inner = self.inner.lock();
+            let held = registration.and_then(|id| {
+                inner
+                    .wakers
+                    .iter_mut()
+                    .find(|(held, _)| *held == id)
+                    .map(|(_, held)| held)
+            });
+            match held {
+                Some(held) if held.will_wake(&waker) => Some(waker),
+                Some(held) => Some(std::mem::replace(held, waker)),
+                None => {
+                    let id = inner.next;
+                    inner.next += 1;
+                    inner.wakers.push((id, waker));
+                    *registration = Some(id);
+                    None
+                }
+            }
+        };
+        drop(unused);
+    }
+
+    /// Ends the wait `registration` names: its waker is let go of, outside
+    /// the lock.
+    fn remove(&self, registration: &mut Option<u64>) {
+        let Some(id) = registration.take() else {
+            return;
+        };
+        let removed = {
+            let mut inner = self.inner.lock();
+            inner
+                .wakers
+                .iter()
+                .position(|(held, _)| *held == id)
+                .map(|at| inner.wakers.swap_remove(at))
+        };
+        drop(removed);
+    }
+
+    /// Wakes, and lets go of, every waiting waker, outside the lock: a waker
+    /// is its owner's code. A wait polled again registers again. A waker
+    /// that panics leaves the rest woken; the first panic is raised once
+    /// every one is (ADR-0281).
+    fn wake_all(&self) {
+        let waiting = std::mem::take(&mut self.inner.lock().wakers);
+        let mut first = flui_foundation::panic::FirstPanic::new();
+        for (_, waker) in waiting {
+            first.contain(|| waker.wake());
+        }
+        first.resume();
+    }
+
+    /// Waits registered now.
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.inner.lock().wakers.len()
+    }
+}
+
+/// One lane's admission window: an in-flight counter with a cap, and the
+/// waits for room in it.
 struct Admission {
-    in_flight: Arc<AtomicUsize>,
+    window: Arc<Window>,
+}
+
+struct Window {
+    in_flight: AtomicUsize,
     limit: usize,
+    /// Woken, all of them, when a unit of work leaves the window.
+    waiting: Waiters,
+}
+
+impl Window {
+    fn has_room(&self) -> bool {
+        self.in_flight.load(Ordering::Acquire) < self.limit
+    }
 }
 
 impl Admission {
     fn new(limit: usize) -> Self {
         Self {
-            in_flight: Arc::new(AtomicUsize::new(0)),
-            limit,
+            window: Arc::new(Window {
+                in_flight: AtomicUsize::new(0),
+                limit,
+                waiting: Waiters::default(),
+            }),
         }
     }
 
@@ -182,12 +294,13 @@ impl Admission {
     /// when dropped (job finished, future completed/cancelled, or the
     /// wrapper itself was dropped unrun at pool shutdown).
     fn try_admit(&self) -> Result<AdmissionGuard, SpawnError> {
-        let mut current = self.in_flight.load(Ordering::Relaxed);
+        let window = &self.window;
+        let mut current = window.in_flight.load(Ordering::Relaxed);
         loop {
-            if current >= self.limit {
+            if current >= window.limit {
                 return Err(SpawnError::Saturated);
             }
-            match self.in_flight.compare_exchange_weak(
+            match window.in_flight.compare_exchange_weak(
                 current,
                 current + 1,
                 Ordering::AcqRel,
@@ -195,7 +308,7 @@ impl Admission {
             ) {
                 Ok(_) => {
                     return Ok(AdmissionGuard {
-                        in_flight: Arc::clone(&self.in_flight),
+                        window: Arc::clone(window),
                     });
                 }
                 Err(observed) => current = observed,
@@ -206,18 +319,121 @@ impl Admission {
     /// Test-only like [`ExecutionServices::in_flight`], its one caller.
     #[cfg(test)]
     fn in_flight(&self) -> usize {
-        self.in_flight.load(Ordering::Acquire)
+        self.window.in_flight.load(Ordering::Acquire)
+    }
+}
+
+/// A wait for room in one admission window; dropping it ends the wait.
+struct WindowRoom {
+    window: Arc<Window>,
+    registration: Option<u64>,
+}
+
+impl WindowRoom {
+    fn poll(&mut self, cx: &mut Context<'_>) -> Poll<()> {
+        if !self.window.has_room() {
+            self.window
+                .waiting
+                .register(&mut self.registration, cx.waker());
+            // Checked again once registered: a unit that left before the
+            // registration woke no one, and one that leaves after it wakes
+            // this waker.
+            if !self.window.has_room() {
+                return Poll::Pending;
+            }
+        }
+        self.window.waiting.remove(&mut self.registration);
+        Poll::Ready(())
+    }
+}
+
+impl Drop for WindowRoom {
+    fn drop(&mut self) {
+        self.window.waiting.remove(&mut self.registration);
     }
 }
 
 /// RAII release of one admission slot.
 struct AdmissionGuard {
-    in_flight: Arc<AtomicUsize>,
+    window: Arc<Window>,
 }
 
 impl Drop for AdmissionGuard {
     fn drop(&mut self) {
-        self.in_flight.fetch_sub(1, Ordering::AcqRel);
+        self.window.in_flight.fetch_sub(1, Ordering::AcqRel);
+        self.window.waiting.wake_all();
+    }
+}
+
+/// Whether the services still admit work, and the waits that hear when they
+/// stop.
+struct Lifecycle {
+    /// `true` until shutdown begins.
+    accepting: AtomicBool,
+    /// Woken, all of them, when shutdown begins.
+    stopping: Waiters,
+}
+
+impl Lifecycle {
+    fn is_accepting(&self) -> bool {
+        self.accepting.load(Ordering::Acquire)
+    }
+}
+
+/// The host's pool behind a window, asked for room once the window has some.
+enum HostPool {
+    None,
+    Compute(Arc<dyn HostComputePool>),
+    Io(Arc<dyn HostIoPool>),
+}
+
+/// A wait for room on one lane of [`ExecutionServices`]: its admission
+/// window first, then the host's pool, and shutdown at any point.
+struct ServicesRoom {
+    lifecycle: Arc<Lifecycle>,
+    registration: Option<u64>,
+    window: WindowRoom,
+    host: HostPool,
+    /// The host pool's own wait, once asked.
+    host_wait: Option<RoomFuture>,
+}
+
+impl Future for ServicesRoom {
+    type Output = Result<(), SpawnError>;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = &mut *self;
+        if !this.lifecycle.is_accepting() {
+            return Poll::Ready(Err(SpawnError::ShuttingDown));
+        }
+        this.lifecycle
+            .stopping
+            .register(&mut this.registration, cx.waker());
+        // Checked again once registered: shutdown stops admission before
+        // it wakes the waiting, so this sees it or is woken.
+        if !this.lifecycle.is_accepting() {
+            return Poll::Ready(Err(SpawnError::ShuttingDown));
+        }
+        if this.window.poll(cx).is_pending() {
+            return Poll::Pending;
+        }
+        if this.host_wait.is_none() {
+            this.host_wait = match &this.host {
+                HostPool::None => return Poll::Ready(Ok(())),
+                HostPool::Compute(pool) => Some(pool.room()),
+                HostPool::Io(pool) => Some(pool.room()),
+            };
+        }
+        match &mut this.host_wait {
+            Some(waiting) => Pin::new(waiting).poll(cx),
+            None => Poll::Ready(Ok(())),
+        }
+    }
+}
+
+impl Drop for ServicesRoom {
+    fn drop(&mut self) {
+        self.lifecycle.stopping.remove(&mut self.registration);
     }
 }
 
@@ -230,7 +446,7 @@ impl Drop for AdmissionGuard {
 /// first spawn, so a run that never spawns background work never starts a
 /// worker thread.
 pub struct ExecutionServices {
-    accepting: AtomicBool,
+    lifecycle: Arc<Lifecycle>,
     compute_admission: Admission,
     io_admission: Admission,
     backend: Backend,
@@ -379,7 +595,10 @@ impl ExecutionServices {
             None => Backend::Sequential,
         };
         Self {
-            accepting: AtomicBool::new(true),
+            lifecycle: Arc::new(Lifecycle {
+                accepting: AtomicBool::new(true),
+                stopping: Waiters::default(),
+            }),
             compute_admission: Admission::new(limits.compute),
             io_admission: Admission::new(limits.io),
             backend,
@@ -403,7 +622,6 @@ impl ExecutionServices {
     /// (`true` — the lazily-started default pools on native targets,
     /// sequential in-place execution on wasm32) rather than routing it to
     /// host-injected pools (`false`).
-    #[cfg(any(test, feature = "testing"))]
     #[must_use]
     pub fn owns_default_pools(&self) -> bool {
         !matches!(self.backend, Backend::Host(_))
@@ -421,7 +639,7 @@ impl ExecutionServices {
     /// [`SpawnError::Unavailable`] when the default compute pool cannot be
     /// started. The job is dropped unrun in every case.
     pub fn spawn_compute(&self, job: ComputeJob) -> Result<(), SpawnError> {
-        if !self.accepting.load(Ordering::Acquire) {
+        if !self.lifecycle.is_accepting() {
             return Err(SpawnError::ShuttingDown);
         }
         let guard = self.compute_admission.try_admit()?;
@@ -473,7 +691,7 @@ impl ExecutionServices {
     /// stopped by this; a long-running task checks it between units of work.
     #[must_use]
     pub fn is_accepting(&self) -> bool {
-        self.accepting.load(Ordering::Acquire)
+        self.lifecycle.is_accepting()
     }
 
     /// Spawn an **IO** future (see the module doc's work-class model).
@@ -488,7 +706,7 @@ impl ExecutionServices {
     /// when the default IO runtime cannot be started. The future is dropped
     /// unpolled in every case.
     pub fn spawn_io(&self, future: IoFuture) -> Result<(), SpawnError> {
-        if !self.accepting.load(Ordering::Acquire) {
+        if !self.lifecycle.is_accepting() {
             return Err(SpawnError::ShuttingDown);
         }
         let guard = self.io_admission.try_admit()?;
@@ -534,6 +752,47 @@ impl ExecutionServices {
         }
     }
 
+    /// Waits for `lane` to have room for one more unit of work: its
+    /// admission window first, then the host's pool.
+    ///
+    /// The wait is woken when a unit of work leaves the window, when the
+    /// host's pool has room again, and when [`Self::shutdown`] begins.
+    /// Room is not reserved: a spawn that follows may find it taken and
+    /// wait again. Dropping the wait lets go of its waker.
+    ///
+    /// # Errors
+    ///
+    /// Resolves `Err(SpawnError::ShuttingDown)` once [`Self::shutdown`] has
+    /// begun, `Unavailable` for a lane these services do not run, and what
+    /// a host pool answers when waiting cannot help.
+    pub fn room(&self, lane: Lane) -> RoomFuture {
+        let (admission, host) = match (lane, &self.backend) {
+            (Lane::Compute, Backend::Host(host)) => (
+                &self.compute_admission,
+                HostPool::Compute(Arc::clone(&host.compute)),
+            ),
+            (Lane::Io, Backend::Host(host)) => {
+                (&self.io_admission, HostPool::Io(Arc::clone(&host.io)))
+            }
+            // FLUI's own pools start at the spawn, which answers
+            // `Unavailable` when the OS refuses their threads.
+            (Lane::Compute, _) => (&self.compute_admission, HostPool::None),
+            (Lane::Io, _) => (&self.io_admission, HostPool::None),
+            // A lane these services do not run never has room.
+            _ => return RoomFuture::ready(Err(SpawnError::Unavailable)),
+        };
+        RoomFuture::new(ServicesRoom {
+            lifecycle: Arc::clone(&self.lifecycle),
+            registration: None,
+            window: WindowRoom {
+                window: Arc::clone(&admission.window),
+                registration: None,
+            },
+            host,
+            host_wait: None,
+        })
+    }
+
     /// Work admitted but not yet finished, per lane, `(compute, io)`.
     /// Diagnostics only — a snapshot, immediately stale.
     #[cfg(test)]
@@ -572,7 +831,7 @@ impl ExecutionServices {
     /// await points, a compute closure mid-run); work that has not started
     /// is dropped unrun, which is the cancellation stage doing its job.
     pub fn shutdown(&self, deadline: std::time::Instant) {
-        self.accepting.store(false, Ordering::Release);
+        self.lifecycle.accepting.store(false, Ordering::Release);
 
         #[cfg(not(target_arch = "wasm32"))]
         {
@@ -600,6 +859,9 @@ impl ExecutionServices {
             // deliberately unused.
             let _ = deadline;
         }
+        // Last, so a waker that panics leaves the shutdown done: a caller
+        // waiting for room hears it is shutting down.
+        self.lifecycle.stopping.wake_all();
     }
 }
 
@@ -610,6 +872,10 @@ impl flui_platform::executor::Executor for ExecutionServices {
         Self::spawn_compute(self, job)
     }
 
+    fn room(&self, lane: Lane) -> RoomFuture {
+        Self::room(self, lane)
+    }
+
     fn spawn_io(&self, future: IoFuture) -> Result<(), SpawnError> {
         Self::spawn_io(self, future)
     }
@@ -618,7 +884,7 @@ impl flui_platform::executor::Executor for ExecutionServices {
 impl fmt::Debug for ExecutionServices {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ExecutionServices")
-            .field("accepting", &self.accepting.load(Ordering::Relaxed))
+            .field("accepting", &self.lifecycle.is_accepting())
             .field(
                 "owns_default_pools",
                 &!matches!(self.backend, Backend::Host(_)),
@@ -627,26 +893,31 @@ impl fmt::Debug for ExecutionServices {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 impl Drop for ExecutionServices {
     fn drop(&mut self) {
         // Last-resort teardown for the path that never ran the explicit
-        // `shutdown` (a panic mid-teardown, a test dropping its host).
+        // `shutdown` (a panic mid-teardown, a test dropping its host), on
+        // every target: a wait for room outlives the services and must hear
+        // that they stopped.
+        self.lifecycle.accepting.store(false, Ordering::Release);
         // `shutdown_background` never blocks, so — unlike `Runtime`'s own
         // blocking `Drop` — this is safe even if the drop happens from
         // inside a task running on some other runtime.
-        self.accepting.store(false, Ordering::Release);
-        self.cancel.cancel();
-        if let Backend::Default(pools) = &self.backend {
-            let io = pools.io.lock().take_runtime();
-            let compute = pools.compute.lock().take_runtime();
-            if let Some(runtime) = io {
-                runtime.shutdown_background();
-            }
-            if let Some(runtime) = compute {
-                runtime.shutdown_background();
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.cancel.cancel();
+            if let Backend::Default(pools) = &self.backend {
+                let io = pools.io.lock().take_runtime();
+                let compute = pools.compute.lock().take_runtime();
+                if let Some(runtime) = io {
+                    runtime.shutdown_background();
+                }
+                if let Some(runtime) = compute {
+                    runtime.shutdown_background();
+                }
             }
         }
+        self.lifecycle.stopping.wake_all();
     }
 }
 
@@ -879,6 +1150,11 @@ impl HostComputePool for DeterministicExecutors {
         self.inner.jobs.lock().push_back(job);
         Ok(())
     }
+
+    /// Its queue is unbounded: room always.
+    fn room(&self) -> RoomFuture {
+        RoomFuture::ready(Ok(()))
+    }
 }
 
 impl HostIoPool for DeterministicExecutors {
@@ -889,6 +1165,11 @@ impl HostIoPool for DeterministicExecutors {
             ready: Arc::new(AtomicBool::new(true)),
         });
         Ok(())
+    }
+
+    /// Its queue is unbounded: room always.
+    fn room(&self) -> RoomFuture {
+        RoomFuture::ready(Ok(()))
     }
 }
 
@@ -1097,6 +1378,160 @@ mod tests {
         );
     }
 
+    /// Counts its wakes, and panics on the first when told to.
+    struct CountingWaker {
+        wakes: AtomicUsize,
+        panics: bool,
+    }
+
+    impl std::task::Wake for CountingWaker {
+        fn wake(self: Arc<Self>) {
+            self.wake_by_ref();
+        }
+
+        fn wake_by_ref(self: &Arc<Self>) {
+            let wakes = self.wakes.fetch_add(1, Ordering::SeqCst);
+            assert!(!self.panics || wakes > 0, "a waiter's waker panicked");
+        }
+    }
+
+    fn counting_waker(panics: bool) -> (Arc<CountingWaker>, Waker) {
+        let count = Arc::new(CountingWaker {
+            wakes: AtomicUsize::new(0),
+            panics,
+        });
+        (Arc::clone(&count), Waker::from(count))
+    }
+
+    fn poll(wait: &mut RoomFuture, waker: &Waker) -> Poll<Result<(), SpawnError>> {
+        Pin::new(wait).poll(&mut Context::from_waker(waker))
+    }
+
+    /// A full lane keeps its waits pending and wakes each once work leaves
+    /// it, past a waiter whose waker panics; a wait polled again holds one
+    /// place; the other lane has room meanwhile.
+    fn a_full_lane_wakes_its_waiters_when_work_leaves_it() {
+        let deterministic = DeterministicExecutors::new();
+        let services = ExecutionServices::with_limits(Some(deterministic.host_executors()), 1, 1);
+        services
+            .spawn_compute(Box::new(|| {}))
+            .expect("within the admission window");
+        let (panicking, panicking_waker) = counting_waker(true);
+        let (waiting, waiting_waker) = counting_waker(false);
+        let mut first = services.room(Lane::Compute);
+        let mut second = services.room(Lane::Compute);
+        assert!(poll(&mut first, &panicking_waker).is_pending());
+        assert!(poll(&mut second, &waiting_waker).is_pending());
+        assert!(poll(&mut second, &waiting_waker).is_pending());
+        assert_eq!(
+            services.compute_admission.window.waiting.len(),
+            2,
+            "a wait polled again holds one place"
+        );
+        assert_eq!(
+            poll(&mut services.room(Lane::Io), &waiting_waker),
+            Poll::Ready(Ok(())),
+            "the other lane has room"
+        );
+
+        let drove = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            deterministic.run_until_idle()
+        }));
+        assert!(drove.is_err(), "the first waker's panic is raised");
+        assert_eq!(panicking.wakes.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            waiting.wakes.load(Ordering::SeqCst),
+            1,
+            "woken once past the panic"
+        );
+        assert_eq!(poll(&mut second, &waiting_waker), Poll::Ready(Ok(())));
+    }
+
+    /// A wait dropped before the lane has room lets go of its waker at
+    /// once, so waits started and abandoned while a lane stays full hold
+    /// nothing.
+    fn a_dropped_wait_lets_go_of_its_waker() {
+        let deterministic = DeterministicExecutors::new();
+        let services = ExecutionServices::with_limits(Some(deterministic.host_executors()), 1, 1);
+        services
+            .spawn_compute(Box::new(|| {}))
+            .expect("within the admission window");
+        let (count, waker) = counting_waker(false);
+        for _ in 0..3 {
+            let mut wait = services.room(Lane::Compute);
+            assert!(poll(&mut wait, &waker).is_pending());
+        }
+        assert_eq!(services.compute_admission.window.waiting.len(), 0);
+        assert_eq!(services.lifecycle.stopping.len(), 0);
+        assert_eq!(Arc::strong_count(&count), 2, "only the test's own waker");
+    }
+
+    /// Services dropped without a shutdown end a wait that outlives them,
+    /// which then hears they stopped.
+    fn dropped_services_end_a_wait_for_room() {
+        let deterministic = DeterministicExecutors::new();
+        let services = ExecutionServices::with_limits(Some(deterministic.host_executors()), 1, 1);
+        services
+            .spawn_compute(Box::new(|| {}))
+            .expect("within the admission window");
+        let (waiting, waker) = counting_waker(false);
+        let mut wait = services.room(Lane::Compute);
+        assert!(poll(&mut wait, &waker).is_pending());
+
+        drop(services);
+        assert_eq!(waiting.wakes.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            poll(&mut wait, &waker),
+            Poll::Ready(Err(SpawnError::ShuttingDown))
+        );
+    }
+
+    /// Shutdown wakes a wait for room, which then hears it is shutting
+    /// down: one waiting on the admission window, and one waiting on a host
+    /// pool with no room, whose lifecycle is the host's.
+    fn shutdown_wakes_a_waiter_for_room() {
+        struct Full;
+        impl HostComputePool for Full {
+            fn spawn_job(&self, _job: ComputeJob) -> Result<(), SpawnError> {
+                Err(SpawnError::Saturated)
+            }
+
+            fn room(&self) -> RoomFuture {
+                RoomFuture::new(std::future::pending())
+            }
+        }
+        let deterministic = DeterministicExecutors::new();
+        let services = ExecutionServices::with_limits(
+            Some(HostExecutors::new(Arc::new(Full), Arc::new(deterministic))),
+            1,
+            1,
+        );
+        services
+            .spawn_io(Box::pin(async {}))
+            .expect("within the admission window");
+        let (on_window, window_waker) = counting_waker(false);
+        let (on_host, host_waker) = counting_waker(false);
+        let mut window_wait = services.room(Lane::Io);
+        let mut host_wait = services.room(Lane::Compute);
+        assert!(poll(&mut window_wait, &window_waker).is_pending());
+        assert!(
+            poll(&mut host_wait, &host_waker).is_pending(),
+            "the window has room, the host's pool none"
+        );
+
+        services.shutdown(std::time::Instant::now());
+        assert_eq!(on_window.wakes.load(Ordering::SeqCst), 1);
+        assert_eq!(on_host.wakes.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            poll(&mut window_wait, &window_waker),
+            Poll::Ready(Err(SpawnError::ShuttingDown))
+        );
+        assert_eq!(
+            poll(&mut host_wait, &host_waker),
+            Poll::Ready(Err(SpawnError::ShuttingDown))
+        );
+    }
+
     #[test]
     fn execution_lane_matrix() {
         crate::table_test::run_table(
@@ -1110,6 +1545,22 @@ mod tests {
                 (
                     "conformance_admission_is_bounded_and_released",
                     conformance_admission_is_bounded_and_released as fn(),
+                ),
+                (
+                    "a_full_lane_wakes_its_waiters_when_work_leaves_it",
+                    a_full_lane_wakes_its_waiters_when_work_leaves_it as fn(),
+                ),
+                (
+                    "shutdown_wakes_a_waiter_for_room",
+                    shutdown_wakes_a_waiter_for_room as fn(),
+                ),
+                (
+                    "dropped_services_end_a_wait_for_room",
+                    dropped_services_end_a_wait_for_room as fn(),
+                ),
+                (
+                    "a_dropped_wait_lets_go_of_its_waker",
+                    a_dropped_wait_lets_go_of_its_waker as fn(),
                 ),
                 (
                     "frame_lane_makes_progress_while_background_lanes_are_saturated",

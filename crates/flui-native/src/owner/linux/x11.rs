@@ -57,6 +57,7 @@ use flui_platform::CursorError;
 use flui_platform::input_capabilities::InputCapabilities;
 use std::sync::{Arc, Weak};
 
+use flui_foundation::panic::FirstPanic;
 use flui_platform::data_transfer::DataTransferSource;
 use flui_platform::{
     DisplayRevision, DisplaySnapshot, SessionEndAnswer, SessionEndPhase, SystemNotice,
@@ -220,8 +221,18 @@ pub(crate) trait X11Host: 'static {
     ) -> Arc<dyn LinuxNotices>;
 
     /// The windows' input on `connection`: the pointers, the keyboard and
-    /// the cursor, made on the thread that builds the loop.
-    fn input(connection: &Arc<X11Connection>) -> Arc<dyn LoopInput>;
+    /// the cursor, made on the thread that builds the loop. Every key goes
+    /// through `text`.
+    fn input(connection: &Arc<X11Connection>, text: Arc<dyn LoopText>) -> Arc<dyn LoopInput>;
+
+    /// The windows' text input: the input method's D-Bus input context,
+    /// reached on `executor`, which rings `doorbell` when the input method
+    /// sent something. Made on the thread that builds the loop.
+    fn text(
+        connection: &Arc<X11Connection>,
+        executor: &BackgroundExecutor,
+        doorbell: &Doorbell,
+    ) -> Arc<dyn LoopText>;
 
     /// The clipboard and the primary selection: the `CLIPBOARD` and
     /// `PRIMARY` selections, owned and read on a connection and a thread of
@@ -252,6 +263,12 @@ pub(crate) trait X11Host: 'static {
 /// method but the [`DataTransferSource`]'s runs on the owner thread, and
 /// none runs user code with a lock of its own held.
 pub(crate) trait LoopDrag: DataTransferSource {
+    /// The drag source of `window`, whose sessions run on this transfer.
+    fn drag_source(
+        self: Arc<Self>,
+        window: WindowRef,
+    ) -> Arc<dyn flui_platform::drag::PlatformDragSource>;
+
     /// `target` opened: drags over it are offered to it from now on.
     fn window_opened(&self, target: InputTarget);
 
@@ -261,7 +278,12 @@ pub(crate) trait LoopDrag: DataTransferSource {
     /// An event the server sent; `true` when it was the drag's alone.
     fn event(&self, event: &Event) -> bool;
 
-    /// When the first fetch under way times out.
+    /// The windows whose press a session took since the last call, which
+    /// the loop has the input end: no release reaches them.
+    fn pointers_taken(&self) -> Vec<xproto::Window>;
+
+    /// When the first fetch under way, or the session's wait for its
+    /// target, times out.
     fn deadline(&self) -> Option<web_time::Instant>;
 
     /// End the fetches whose time is out at `now`, or whose request was
@@ -306,6 +328,10 @@ pub(crate) trait LoopInput: Send + Sync {
     /// when the windows hear it too (a focus change the input also follows).
     fn event(&self, event: &Event) -> bool;
 
+    /// An OS drag session took the pointer from `window` mid-press: its
+    /// contacts end with their capture lost, since no release will reach them.
+    fn pointer_taken(&self, window: xproto::Window);
+
     /// Show `cursor` over `window`.
     ///
     /// # Errors
@@ -318,6 +344,113 @@ pub(crate) trait LoopInput: Send + Sync {
 
     /// [`Platform::on_keyboard_layout_change`].
     fn on_keyboard_layout_change(&self, callback: Box<dyn FnMut() + Send>);
+}
+
+/// One key as the input read it, which the text input hands to the window's
+/// input method before the window hears it (ADR-0151 §10: the input names no
+/// text, and the text no input).
+pub(crate) struct X11Key {
+    /// The window the key was typed into.
+    pub(crate) window: WindowRef,
+    /// Its keysym in the keyboard's state as it was typed.
+    pub(crate) keysym: u32,
+    /// Its X key code (the kernel's plus 8).
+    pub(crate) keycode: u8,
+    /// The X modifier mask as it was typed.
+    pub(crate) state: u16,
+    /// A release, not a press.
+    pub(crate) release: bool,
+    /// The server's time on it.
+    pub(crate) time: xproto::Timestamp,
+    /// Hand the key to the window's handler: application code.
+    pub(crate) deliver: Box<dyn FnOnce()>,
+}
+
+impl std::fmt::Debug for X11Key {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("X11Key")
+            .field("window", &self.window)
+            .field("keysym", &self.keysym)
+            .field("release", &self.release)
+            .finish_non_exhaustive()
+    }
+}
+
+/// The windows' text input, the text feature's (ADR-0151 §10): the input
+/// method each window's focused field composes with. The input hands it
+/// every key, which it delivers now or once the input method has answered
+/// for it, in the order the keys came. Every method runs on the owner
+/// thread, and none runs user code with a borrow of its own held.
+pub(crate) trait LoopText: Send + Sync {
+    /// `window` opened at `scale`, its text `text`, the window's text
+    /// position's: its field reaches the input method from now on.
+    fn window_opened(
+        &self,
+        window: WindowRef,
+        scale: WindowScale,
+        text: Option<Arc<dyn X11WindowText>>,
+    );
+
+    /// `window` closed: nothing more reaches it, and its keys still held
+    /// are delivered.
+    fn window_closed(&self, window: WindowRef);
+
+    /// An event the server sent, which the windows and the input hear too:
+    /// a window's focus is the input method's.
+    fn event(&self, event: &Event);
+
+    /// A key the input read, delivered now or once the input method answered
+    /// for it.
+    fn key(&self, key: X11Key);
+
+    /// A pointer or touch press reaches the window of X id `xid`, which may
+    /// move its caret: the keys it holds are typed first, in order, so the
+    /// user's edits keep the order they were made in.
+    fn pointer_pressed(&self, xid: xproto::Window);
+
+    /// Apply what the input method sent since the last turn, and deliver
+    /// the keys whose answer came or whose time is out at `now`.
+    fn deliver(&self, now: web_time::Instant);
+
+    /// When the first key held runs out of time.
+    fn deadline(&self) -> Option<web_time::Instant>;
+
+    /// The loop ends: the input method hears no more and the keys still held
+    /// go undelivered.
+    fn release(&self);
+}
+
+/// A window's text as the loop's text input reaches it: the text position's
+/// state of the window, which the text input knows by its own type.
+pub trait X11WindowText: std::any::Any + Send + Sync {}
+
+/// A text input with no input method: each key goes to its window as it
+/// comes, for a test of the input alone.
+#[cfg(test)]
+#[derive(Debug)]
+pub(crate) struct KeysAsTyped;
+
+#[cfg(test)]
+impl LoopText for KeysAsTyped {
+    fn window_opened(&self, _: WindowRef, _: WindowScale, _: Option<Arc<dyn X11WindowText>>) {}
+
+    fn window_closed(&self, _: WindowRef) {}
+
+    fn event(&self, _: &Event) {}
+
+    fn key(&self, key: X11Key) {
+        (key.deliver)();
+    }
+
+    fn pointer_pressed(&self, _: xproto::Window) {}
+
+    fn deliver(&self, _: web_time::Instant) {}
+
+    fn deadline(&self) -> Option<web_time::Instant> {
+        None
+    }
+
+    fn release(&self) {}
 }
 
 /// What the input delivers to one window by: the window, its delivery and
@@ -450,6 +583,7 @@ pub struct X11Loop {
     displays: Arc<dyn HostDisplays>,
     windows: Arc<dyn LoopWindows>,
     input: Arc<dyn LoopInput>,
+    text: Arc<dyn LoopText>,
     clipboard: Arc<dyn LoopClipboard>,
     drag: Arc<dyn LoopDrag>,
     start_preferences: fn(&BackgroundExecutor, &Arc<OwnerSignal>) -> Arc<dyn LinuxPreferences>,
@@ -489,7 +623,9 @@ impl X11Loop {
         let app = Arc::new(AppDelivery::new());
         let notices = H::notices(&app);
         let displays = H::displays();
-        let input = H::input(&connection);
+        let background_executor = Arc::new(BackgroundExecutor::new());
+        let text = H::text(&connection, &background_executor, &doorbell);
+        let input = H::input(&connection, Arc::clone(&text));
         let clipboard = H::clipboard(&doorbell)?;
         let drag = H::drag(&connection, &doorbell)?;
         notices.mark_held_stale_on_wake(Arc::downgrade(&displays) as Weak<dyn StaleOnWake>);
@@ -504,11 +640,12 @@ impl X11Loop {
             displays,
             windows,
             input,
+            text,
             clipboard,
             drag,
             start_preferences: H::preferences,
             start_host_notices: H::host_notices,
-            background_executor: Arc::new(BackgroundExecutor::new()),
+            background_executor,
             portal: PortalSlot::default(),
             exit_reevaluation: AtomicBool::new(false),
             affinity,
@@ -541,6 +678,12 @@ impl X11Loop {
     /// drop target with.
     pub(crate) fn drag(&self) -> &Arc<dyn LoopDrag> {
         &self.drag
+    }
+
+    /// The windows' text input, which a window opens and closes its field's
+    /// input method with.
+    pub(crate) fn text(&self) -> &Arc<dyn LoopText> {
+        &self.text
     }
 
     /// The displays, which a window names its display from.
@@ -580,6 +723,7 @@ impl X11Loop {
         loop {
             self.doorbell.answer();
             self.dispatch_events(&mut turns)?;
+            self.text.deliver(web_time::Instant::now());
             // The application's primary selection is asked for its text here,
             // at the turn, with nothing of the loop held.
             self.clipboard.deliver();
@@ -592,13 +736,19 @@ impl X11Loop {
                 return Ok(());
             }
             self.drag.expire(web_time::Instant::now());
-            self.wait(&mut turns, earliest(Some(deadline), self.drag.deadline()))?;
+            let wake_at = earliest(Some(deadline), self.drag.deadline());
+            self.wait(&mut turns, earliest(wake_at, self.text.deadline()))?;
         }
     }
 
     /// Hand every event the server sent, and those a turn's requests left
     /// queued, to the windows, until none is queued.
     fn dispatch_events(&self, turns: &mut Turns) -> Result<(), PlatformError> {
+        // A session started since the last turn took its window's press:
+        // the input ends it before the events after it, the session's now.
+        for window in self.drag.pointers_taken() {
+            self.input.pointer_taken(window);
+        }
         loop {
             let event = match turns.queued.pop_front() {
                 Some(event) => event,
@@ -623,26 +773,17 @@ impl X11Loop {
             if self.drag.event(&event) {
                 continue;
             }
-            // A handler's panic in what the input delivered still leaves the
-            // windows the event, a focus change they follow too; the panic
-            // is raised again after.
-            let heard =
-                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.input.event(&event)));
-            match heard {
-                Ok(true) => {}
-                Ok(false) => self.windows.event(&event),
-                Err(payload) => {
-                    // The first failure is the one raised.
-                    if let Err(second) =
-                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                            self.windows.event(&event);
-                        }))
-                    {
-                        flui_foundation::panic::discard_payload(second);
-                    }
-                    std::panic::resume_unwind(payload);
-                }
+            // The text input hears a focus change before the input ends the
+            // keyboard's keys there, so a key it holds reaches the window
+            // first. A handler's panic in what the text input or the input
+            // delivered still leaves the windows the event, a focus change
+            // they follow too; the first panic is raised again after.
+            let mut failure = FirstPanic::new();
+            failure.contain(|| self.text.event(&event));
+            if failure.contain(|| self.input.event(&event)) != Some(true) {
+                failure.contain(|| self.windows.event(&event));
             }
+            failure.resume();
         }
     }
 
@@ -711,6 +852,7 @@ impl X11Loop {
                 self.windows.redraw_for_deadline();
             }
             self.dispatch_events(&mut turns)?;
+            self.text.deliver(web_time::Instant::now());
             // The application's primary selection is asked for its text here,
             // at the turn, with nothing of the loop held.
             self.clipboard.deliver();
@@ -733,6 +875,7 @@ impl X11Loop {
             }
             self.drag.expire(web_time::Instant::now());
             let wake_at = earliest(self.wake_deadline(&mut deadline), self.drag.deadline());
+            let wake_at = earliest(wake_at, self.text.deadline());
             self.wait(&mut turns, wake_at)?;
         }
     }
@@ -860,6 +1003,7 @@ impl Drop for RunGuard<'_> {
         platform.portal.set(None);
         drop(self.preferences.take());
         drop(self.host_notices.take());
+        contain_owner_callback(|| platform.text.release());
         contain_owner_callback(|| platform.windows.release());
         // The connection carries the destruction of the windows released
         // above to the server before the handler hears the quit.

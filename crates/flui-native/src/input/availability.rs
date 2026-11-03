@@ -162,11 +162,13 @@ pub const fn wayland(globals: WaylandInputGlobals) -> InputCapabilities {
 
 /// The native X11 backend: XInput 2 carries pen input (a tablet's stylus and
 /// eraser) and touch, and on a server with XInput 2.4 (`gestures`) a
-/// touchpad's pinch; its smooth scrolling has no phases, and there is no
-/// outgoing drag yet.
+/// touchpad's pinch; its smooth scrolling has no phases. Every window starts
+/// OS drag sessions over XDND.
 #[must_use]
 pub const fn x11(gestures: bool) -> InputCapabilities {
-    let builder = InputCapabilities::builder().pen(Native);
+    let builder = InputCapabilities::builder()
+        .pen(Native)
+        .outgoing_drag(Native);
     if gestures {
         builder.trackpad_gestures(Native).build()
     } else {
@@ -174,11 +176,11 @@ pub const fn x11(gestures: bool) -> InputCapabilities {
     }
 }
 
-/// When an OS drag session can start on Win32, AppKit, Android and winit: the
-/// drag runs in its window and escalates when the pointer leaves it
-/// (ADR-0211 §2). Win32 starts them through OLE and Android through
-/// `startDragAndDrop` (ADR-0247); the other backends report outgoing drags
-/// `Unavailable` until their native session lands.
+/// When an OS drag session can start on Win32, X11, AppKit, Android and
+/// winit: the drag runs in its window and escalates when the pointer leaves
+/// it (ADR-0211 §2). Win32 starts them through OLE, X11 over XDND and Android
+/// through `startDragAndDrop` (ADR-0247); the other backends report outgoing
+/// drags `Unavailable` until their native session lands.
 pub const DESKTOP_DRAG_START: flui_platform::drag::OsDragStart =
     flui_platform::drag::OsDragStart::OnLeavingWindow;
 

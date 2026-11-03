@@ -1758,6 +1758,27 @@ fn conjugate(
     }
 }
 
+/// A backdrop filter recorded in a node's local space, moved into the space
+/// of a layer that draws the node at `origin`: a transform filter's focal
+/// point stays where the node put it. A move that leaves the transform
+/// non-finite keeps the filter as recorded, so nothing non-finite reaches
+/// the scene.
+fn backdrop_filter_at(
+    filter: flui_painting::paint::ImageFilter,
+    origin: Offset,
+) -> flui_painting::paint::ImageFilter {
+    if origin == Offset::ZERO {
+        return filter;
+    }
+    match filter.try_translated(origin) {
+        Ok(moved) => moved,
+        Err(error) => {
+            tracing::warn!(?origin, %error, "a backdrop filter's transform could not follow its node");
+            filter
+        }
+    }
+}
+
 /// Maps a recorded effect-layer scope onto its `flui-layer` layer.
 ///
 /// Scope shapes/bounds are recorded in the node's LOCAL coordinates, while
@@ -1794,8 +1815,12 @@ fn scope_layer(scope: FragmentScope, origin: Offset) -> Layer {
             bounds,
             group,
         } => Layer::BackdropFilter(
-            BackdropFilterLayer::new(filter, blend_mode, bounds.translate_offset(origin))
-                .with_group(group),
+            BackdropFilterLayer::new(
+                backdrop_filter_at(filter, origin),
+                blend_mode,
+                bounds.translate_offset(origin),
+            )
+            .with_group(group),
         ),
         FragmentScope::AnnotatedRegion { value, bounds } => Layer::AnnotatedRegion(
             AnnotatedRegionLayer::from_value(bounds.translate_offset(origin), value),

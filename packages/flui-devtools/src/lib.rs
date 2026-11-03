@@ -74,6 +74,9 @@
 
 #[cfg(feature = "agent")]
 pub mod agent;
+/// The one capture of frame spans every profiling tool reads.
+#[cfg(feature = "profiling")]
+pub mod capture;
 /// Feeds the profiler from the framework's own frame spans — the only seam
 /// layering permits, since nothing in the framework may depend on this crate.
 #[cfg(feature = "profiling")]
@@ -84,13 +87,20 @@ pub mod gesture_inspector;
 pub mod gesture_overlay;
 #[cfg(feature = "inspector")]
 pub mod inspector;
+/// Which spans are frame phases.
+#[cfg(feature = "profiling")]
+pub mod phase;
 #[cfg(feature = "profiling")]
 pub mod profiler;
 #[cfg(feature = "timeline")]
 pub mod timeline;
 
 #[cfg(feature = "profiling")]
+pub use capture::{Capture, CaptureLayer, CapturedFrame, CapturedSpan, FrameOpening, Partition};
+#[cfg(feature = "profiling")]
 pub use frame_timing_layer::FrameTimingLayer;
+#[cfg(feature = "profiling")]
+pub use phase::Phase;
 #[cfg(feature = "profiling")]
 pub use profiler::{JankLine, Profiler, ProfilerConfig};
 

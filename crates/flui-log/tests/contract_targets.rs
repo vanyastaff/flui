@@ -1,5 +1,5 @@
-//! The `flui.<subsystem>` targets through the real `EnvFilter`, and the old spellings that
-//! still select them for one release.
+//! The `flui.<subsystem>` targets through the real `EnvFilter`: a directive selects a target and
+//! everything under it.
 
 use std::sync::{Arc, Mutex};
 
@@ -79,49 +79,12 @@ fn a_contract_target_selects_itself_and_what_is_under_it() {
 }
 
 #[test]
-fn an_old_spelling_selects_the_new_target_for_one_release() {
-    assert_eq!(
-        admitted("off,flui::reconcile=trace"),
-        ["flui.tree.reconcile"]
-    );
-    assert_eq!(admitted("off,flui::signals=trace"), ["flui.signals"]);
-    assert_eq!(admitted("off,flui::a11y=trace"), ["flui.a11y"]);
-    assert_eq!(
-        admitted("off,flui_animation::diagnostics=trace"),
-        ["flui.animation.diagnostics"]
-    );
-    // The crate's module path is the old target of an event that names none, so it stays.
-    assert_eq!(
-        admitted("off,flui_animation=trace"),
-        [
-            "flui.animation",
-            "flui.animation.diagnostics",
-            "flui_animation::controller"
-        ]
-    );
-}
-
-#[test]
-fn the_aliases_leave_other_directives_alone() {
+fn other_directives_are_left_alone() {
     assert_eq!(admitted("off"), Vec::<&str>::new());
     assert_eq!(admitted("off,an_app=trace"), ["an_app"]);
-    // A span filter keeps its brackets and fields.
+    // A module path is the target of an event that names none, and it is selected as before.
     assert_eq!(
-        admitted("off,flui::reconcile[rebuild{a=1}]=trace"),
-        Vec::<&str>::new()
-    );
-}
-
-#[test]
-fn an_alias_keeps_the_order_of_the_directives_around_it() {
-    // The later explicit opt-out wins over the alias of the earlier old spelling.
-    assert_eq!(
-        admitted("off,flui::signals=trace,flui.signals=off"),
-        Vec::<&str>::new()
-    );
-    // And the other way round, the later old spelling wins over the earlier new one.
-    assert_eq!(
-        admitted("off,flui.signals=off,flui::signals=trace"),
-        ["flui.signals"]
+        admitted("off,flui_animation=trace"),
+        ["flui_animation::controller"]
     );
 }

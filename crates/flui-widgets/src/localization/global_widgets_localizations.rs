@@ -100,6 +100,12 @@ impl WidgetsLocalizations for GlobalWidgetsLocalizations {
     fn share_button_label(&self) -> &'static str {
         DefaultWidgetsLocalizations.share_button_label()
     }
+    fn more_button_label(&self) -> &'static str {
+        DefaultWidgetsLocalizations.more_button_label()
+    }
+    fn back_button_label(&self) -> &'static str {
+        DefaultWidgetsLocalizations.back_button_label()
+    }
 
     fn radio_button_unselected_label(&self) -> &'static str {
         DefaultWidgetsLocalizations.radio_button_unselected_label()

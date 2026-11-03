@@ -90,7 +90,7 @@ use crate::localization::{
 use crate::navigator::{Navigator, NavigatorHandle, NavigatorObserver, PageRoute, RouteId};
 use crate::router::{Routable, Router};
 use crate::text::DefaultTextStyle;
-use crate::{FocusScope, MediaQuery, MediaQueryData};
+use crate::{DefaultSelectionControls, FocusScope, MediaQuery, MediaQueryData, PlainSelectionMenu};
 
 /// The app-level wrapping hook: receives the routing subtree
 /// (`Some` when the app has a router or a navigator, `None` otherwise) and returns the
@@ -612,6 +612,12 @@ impl<F: AppForm> ViewState<WidgetsApp<F>> for WidgetsAppState {
             Some(style) => DefaultTextStyle::new(style.clone(), content).boxed(),
             None => content,
         };
+
+        // The plain selection menu, which a design package's
+        // `DefaultSelectionControls` beneath replaces.
+        let content = DefaultSelectionControls::new(content)
+            .menu(PlainSelectionMenu)
+            .boxed();
 
         // The application-level `Localizations`: caller delegates
         // first, the default widgets delegate appended (first-of-type wins).

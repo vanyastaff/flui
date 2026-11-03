@@ -191,6 +191,11 @@ pub enum Kept {
 /// value it is kept in.
 pub type Planter = Rc<dyn Fn(Kept) -> Box<dyn Any>>;
 
+/// Counts each change the Note screen's form reports: a change of a field's
+/// value, the text the user committed, not each keystroke an input method
+/// composes.
+pub type EditCounter = Rc<Cell<u32>>;
+
 /// What `planter` gives for `kind`, when there is a planter.
 fn plant(planter: Option<&Planter>, kind: Kept) -> Option<Rc<dyn Any>> {
     planter.map(|planter| Rc::<dyn Any>::from(planter(kind)))
@@ -227,6 +232,7 @@ pub struct AcceptanceApp {
     loader: Loader,
     first_attempt: u32,
     planter: Option<Planter>,
+    edits: Option<EditCounter>,
 }
 
 impl AcceptanceApp {
@@ -239,6 +245,7 @@ impl AcceptanceApp {
             faults,
             first_attempt: 0,
             planter: None,
+            edits: None,
             loader: Rc::new(|_attempt| {
                 let mut polled = false;
                 Box::pin(poll_fn(move |cx| {
@@ -273,6 +280,13 @@ impl AcceptanceApp {
         self.planter = Some(planter);
         self
     }
+
+    /// Count each change of the Note screen's form value in `edits`.
+    #[must_use]
+    pub fn with_edit_counter(mut self, edits: EditCounter) -> Self {
+        self.edits = Some(edits);
+        self
+    }
 }
 
 impl StatelessView for AcceptanceApp {
@@ -282,6 +296,7 @@ impl StatelessView for AcceptanceApp {
             loader: Rc::clone(&self.loader),
             first_attempt: self.first_attempt,
             planter: self.planter.clone(),
+            edits: self.edits.clone(),
         }
     }
 }
@@ -603,6 +618,7 @@ struct Shared {
     close: Option<CloseWatch>,
     faults: Faults,
     planter: Option<Planter>,
+    edits: Option<EditCounter>,
 }
 
 /// A presentation's close guard and a notifier told each time what it has
@@ -669,6 +685,7 @@ struct Root {
     loader: Loader,
     first_attempt: u32,
     planter: Option<Planter>,
+    edits: Option<EditCounter>,
 }
 
 struct RootState {
@@ -754,6 +771,7 @@ impl ViewState<Root> for RootState {
         let load = documents.clone();
         let faults = view.faults;
         let planter = view.planter.clone();
+        let edits = view.edits.clone();
         let fresh = Rc::clone(&self.fresh);
         let starting_over = Rc::clone(&self.fresh);
         let ready = FutureBuilder::keyed(
@@ -849,6 +867,7 @@ impl ViewState<Root> for RootState {
                     documents: documents.clone(),
                     faults,
                     planter: planter.clone(),
+                    edits: edits.clone(),
                 }
                 .boxed()
             }),
@@ -864,6 +883,7 @@ struct Loaded {
     documents: Documents,
     faults: Faults,
     planter: Option<Planter>,
+    edits: Option<EditCounter>,
 }
 
 struct LoadedState {
@@ -875,6 +895,7 @@ struct LoadedState {
     place: Option<Rc<Place>>,
     faults: Faults,
     planter: Option<Planter>,
+    edits: Option<EditCounter>,
     _kept: Option<Rc<dyn Any>>,
 }
 
@@ -889,6 +910,7 @@ impl StatefulView for Loaded {
             place: None,
             faults: self.faults,
             planter: self.planter.clone(),
+            edits: self.edits.clone(),
             _kept: plant(self.planter.as_ref(), Kept::State),
         }
     }
@@ -944,6 +966,7 @@ impl ViewState<Loaded> for LoadedState {
                 .map(|(guard, driver)| CloseWatch::start(guard, &driver)),
             faults: self.faults,
             planter: self.planter.clone(),
+            edits: self.edits.clone(),
         });
         self.stack = restored.stack;
         self.place = Some(place);
@@ -1261,6 +1284,7 @@ fn editor(
     let save = shared.clone();
     let delete = shared.clone();
     let validate = form.clone();
+    let edits = shared.edits.clone();
     Form::new(Column::new(column![
         Text::new(format!("Editing note {id}")),
         TextFormField::new(shared.draft.clone())
@@ -1322,6 +1346,11 @@ fn editor(
         ),
     ]))
     .handle(form.clone())
+    .on_changed(move |_cx| {
+        if let Some(edits) = &edits {
+            edits.set(edits.get() + 1);
+        }
+    })
     .boxed()
 }
 

@@ -7,8 +7,8 @@
 //! asynchronously via `Image::asset`/`Image::network`.
 //!
 //! The `asset-images` feature exposes `AssetImage`, an async provider backed
-//! by `flui-assets`; `network-images` additionally exposes `NetworkImage`,
-//! an async HTTP/HTTPS provider. Both are off by default so stable builds do
+//! by `flui-assets`, and `NetworkImage`, an async HTTP/HTTPS provider over
+//! the host's HTTP capability. The feature is off by default so stable builds do
 //! not pull in `flui-assets` unless asked for. (Not
 //! doc-linked above: these items only exist when their feature is enabled,
 //! and this module's own doc is built unconditionally.)
@@ -20,7 +20,7 @@ mod texture;
 
 #[cfg(feature = "asset-images")]
 mod asset_image;
-#[cfg(feature = "network-images")]
+#[cfg(feature = "asset-images")]
 mod network_image;
 mod resolve;
 
@@ -28,11 +28,12 @@ pub use cache_key::ImageCacheKey;
 pub use image::Image;
 pub use image::ImageState;
 pub use provider::{
-    DecodeJob, DirectImageProvider, FileImage, ImageProvider, ImageProviderError, MemoryImage,
+    DecodeJob, DirectImageProvider, FileImage, ImageProvider, ImageProviderError, ImageServices,
+    MemoryImage,
 };
 pub use texture::{Texture, TextureState};
 
 #[cfg(feature = "asset-images")]
 pub use asset_image::AssetImage;
-#[cfg(feature = "network-images")]
+#[cfg(feature = "asset-images")]
 pub use network_image::NetworkImage;

@@ -41,8 +41,8 @@ use flui_view::{BoxedView, RenderView, impl_render_view};
 use crate::AnimatedBuilder;
 use crate::interaction::actions::{
     Action, ActionChain, ActionChainProvider, ActionOutcome, ActivateIntent, ActivationPressIntent,
-    CopySelectionTextIntent, DismissIntent, PasteTextIntent, SelectAllTextIntent, as_node_context,
-    erased_action, layered_chain,
+    CopySelectionTextIntent, DismissIntent, PasteTextIntent, SelectAllTextIntent,
+    ShowContextMenuIntent, as_node_context, erased_action, layered_chain,
 };
 use crate::semantics::Semantics;
 use crate::support::{command_modifiers, ref_callback};
@@ -51,11 +51,13 @@ use crate::text::primary_selection::PrimarySelectionOwner;
 use crate::text::selection_area::handles::Look;
 use crate::text::selection_style::{DefaultSelectionStyle, SelectionStyle};
 use crate::text::text_store::{EditableTextStore, FieldParts, with_editable_global};
-use crate::{DefaultSelectionHandles, DotHandles, SelectionHandles};
+use crate::{DefaultSelectionControls, DotHandles, SelectionHandles};
 
 mod clipboard;
 mod cursor_area;
 mod handles;
+mod menu;
+use crate::text::{MagnifierChoice, MenuSettings, ShowSelectionMenu};
 use cursor_area::CursorAreaLoop;
 
 pub use handles::CaretHandle;
@@ -454,6 +456,8 @@ pub struct EditableText {
     pub(super) field_semantics: FieldSemantics,
     pub(super) handles: Option<Rc<dyn SelectionHandles>>,
     pub(super) caret_handle: Option<CaretHandle>,
+    pub(super) menu: MenuSettings,
+    pub(super) magnifier: Option<MagnifierChoice>,
 }
 
 /// The field's name, placeholder, validity and whether it is required, as its semantics node
@@ -496,6 +500,8 @@ impl EditableText {
             field_semantics: FieldSemantics::default(),
             handles: None,
             caret_handle: None,
+            menu: MenuSettings::default(),
+            magnifier: None,
         }
     }
 
@@ -574,30 +580,9 @@ impl EditableText {
     }
 
     /// Build the touch handles with `handles`, in place of the nearest
-    /// [`DefaultSelectionHandles`]' or [`DotHandles`] in the opaque active
+    /// [`DefaultSelectionControls`]' or [`DotHandles`] in the opaque active
     /// selection colour, as a [`SelectionArea`](crate::SelectionArea) does.
     ///
-    /// A touch selection (a long press, which the same touch extends by
-    /// words, a double tap or a drag) shows a handle under each end, and a
-    /// tap one under the caret as [`Self::caret_handle`] says; dragging a
-    /// handle moves its end. They show in the nearest
-    /// [`Overlay`](crate::Overlay), and none without one.
-    #[must_use]
-    pub fn handles(mut self, handles: impl SelectionHandles) -> Self {
-        self.handles = Some(Rc::new(handles));
-        self
-    }
-
-    /// Whether a tap shows a handle under the caret, in place of the
-    /// nearest [`DefaultSelectionHandles`]' choice or the platform's
-    /// ([`CaretHandle::default`]).
-    #[must_use]
-    pub fn caret_handle(mut self, caret_handle: CaretHandle) -> Self {
-        self.caret_handle = Some(caret_handle);
-        self
-    }
-
-    /// Override the caret color (default black).
     #[must_use]
     pub fn caret_color(mut self, color: Color) -> Self {
         self.caret_color = color;
@@ -757,7 +742,7 @@ impl std::fmt::Debug for EditableText {
             .field("field_semantics", &self.field_semantics)
             .field("handles", &self.handles.is_some())
             .field("caret_handle", &self.caret_handle)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -1067,6 +1052,13 @@ impl EditableTextState {
                 if !enabled || drag_anchor.get().is_some() {
                     return;
                 }
+                if press.button() == PointerButton::SECONDARY {
+                    // The popup opens when this press's secondary tap wins the
+                    // arena (`wrap_double_tap_word_select`), so an enclosing
+                    // menu's tap can't open its own over it.
+                    handles.menu().secondary_down(position, resolve(position));
+                    return;
+                }
                 if press.button() == PointerButton::AUXILIARY {
                     // A middle press pastes the primary selection where it
                     // lands, on the platforms that have one, and selects
@@ -1278,6 +1270,13 @@ impl EditableTextState {
                 }
             });
         }
+        // The popup opens on the secondary tap a press in the field began,
+        // through the arena (see `menu::with_secondary_tap`).
+        if view.enabled && self.touch_handles.menu().look().is_some() {
+            let field = (Rc::clone(&self.controller), Rc::clone(&self.focus_node));
+            let menu = Rc::clone(self.touch_handles.menu());
+            detector = menu::with_secondary_tap(detector, menu, field, self.composition_commit());
+        }
         detector.child(child)
     }
 
@@ -1287,6 +1286,7 @@ impl EditableTextState {
         self.touch_handles.set_scope(
             crate::Overlay::maybe_of(ctx),
             crate::animated::VsyncScope::maybe_of(ctx),
+            ctx.haptics(),
         );
         let drag = Rc::downgrade(&self.selection_drag);
         self.long_press.build(
@@ -1466,6 +1466,10 @@ impl EditableTextState {
                 erased_action::<ActivateIntent>(KeptByTheField),
                 erased_action::<ActivationPressIntent>(KeptByTheField),
                 erased_action::<DismissIntent>(KeptByTheField),
+                erased_action::<ShowContextMenuIntent>(ShowSelectionMenu::new(
+                    self.touch_handles.menu(),
+                    enclosing.as_ref(),
+                )),
             ],
         );
         // Register the new record before the old token drops: the old one is
@@ -2227,7 +2231,7 @@ impl ViewState<EditableText> for EditableTextState {
         let look = view
             .handles
             .clone()
-            .or_else(|| DefaultSelectionHandles::maybe_of(ctx))
+            .or_else(|| DefaultSelectionControls::handles_of(ctx))
             .map_or_else(
                 || {
                     Look::Dots(DotHandles::new(
@@ -2238,9 +2242,17 @@ impl ViewState<EditableText> for EditableTextState {
             );
         let caret_handle = view
             .caret_handle
-            .or_else(|| DefaultSelectionHandles::caret_handle_of(ctx))
+            .or_else(|| DefaultSelectionControls::caret_handle_of(ctx))
             .unwrap_or_default();
         self.touch_handles.set_look(look, caret_handle);
+        (self.touch_handles).set_magnifier(DefaultSelectionControls::magnifier_of(
+            ctx,
+            view.magnifier.as_ref(),
+        ));
+        let origin =
+            crate::PopupOrigin::new(self.inner_anchor.clone(), self.pipeline_owner.clone());
+        let chain = self.action_chain.clone();
+        (self.touch_handles).menu_configured(ctx, &view.menu, chain, &origin);
         let touch_handles = Rc::clone(&self.touch_handles);
 
         // OUTSIDE the inner `AnchoredBox`, not inside it: the IME cursor-area
@@ -2289,6 +2301,7 @@ impl ViewState<EditableText> for EditableTextState {
             handles.retire(&mut failure);
             failure.resume();
         });
+        calls.run(|| self.touch_handles.menu().close());
         // This field's own rebuild listener goes first: the commit below
         // must not schedule a build of a subtree that is being unmounted.
         if let Some(id) = self.controller_listener_id.take() {
@@ -2920,6 +2933,9 @@ fn build_field_view(
             let focus = actions.clone();
             semantics = semantics.on_focus(move |cx| focus.focus(cx));
         }
+        let focus = actions.clone();
+        semantics =
+            crate::text::show_menu_action(semantics, handles.menu(), move |cx| focus.focus(cx));
     }
     let field = crate::__private::AnchoredBox::new(
         inner_anchor,

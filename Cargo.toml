@@ -116,10 +116,10 @@ layers = [
 # `reach-exceptions` entry, which covers the paths that run through it.
 [workspace.metadata.flui.reach]
 # Generic FFI crates name no windowing backend, so no pattern matches them.
-# They arrive through reqwest -> rustls-platform-verifier
-# (flui-widgets/network-images) and through common crates.
+# They arrive through flui-native's Android backend, reqwest ->
+# rustls-platform-verifier (flui-app/http) and through common crates.
 generic-ffi = [
-    { name = "jni", reason = "rustls-platform-verifier's Android trust store (network-images)" },
+    { name = "jni", reason = "flui-native's Android bridge and rustls-platform-verifier's Android trust store" },
     { name = "jni-sys", reason = "jni's bindings" },
     { name = "windows-sys", reason = "raw Win32 bindings used by std-level crates (parking_lot, tokio, ...)" },
     { name = "windows-link", reason = "windows-sys's link shim" },
@@ -377,6 +377,10 @@ winit = "0.30.12"
 # `zxdg_output_v1`, `xdg-decoration` and `xdg-foreign` under `unstable`, and
 # `wp_fractional_scale_v1` and `wp_color_management_v1` under `staging`.
 x11rb = { version = "0.13", default-features = false, features = ["randr"] }
+# COMPOUND_TEXT, the encoding X Input Method servers send text in, for the
+# native X11 host's text input where no input method answers on D-Bus. The XIM
+# wire format itself is flui-native's own (`text::linux::x11::xim::wire`).
+xim-ctext = { version = "0.5", default-features = false, features = ["std"] }
 wayland-client = "0.31"
 wayland-protocols = { version = "0.32", features = ["client", "unstable", "staging"] }
 # The native Wayland host's connection runs on libwayland-client, loaded at run
@@ -468,6 +472,9 @@ moka = { version = "0.12.16", features = ["future"] }
 # charset/http2/system-proxy opt-in. Asset loading only needs binary responses;
 # the provider example enables JSON at its own development dependency.
 reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
+# The TLS stack reqwest runs, to recognise its handshake errors; no features of
+# its own.
+rustls = { version = "0.23", default-features = false }
 
 # UI EVENTS - Cross-platform input event abstraction (W3C compliant)
 ui-events = "0.3"

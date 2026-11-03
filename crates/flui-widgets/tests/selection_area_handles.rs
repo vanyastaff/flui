@@ -22,7 +22,7 @@ use flui_rendering::semantics::{DocumentPosition, DocumentSelection};
 use flui_testing::replay::{MouseScript, PointerScript};
 use flui_view::{BoxedView, BuildContext, ViewExt};
 use flui_widgets::{
-    Column, DefaultSelectionHandles, DefaultTextStyle, Directionality, Focus, HandleInfo,
+    Column, DefaultSelectionControls, DefaultTextStyle, Directionality, Focus, HandleInfo,
     HandleSide, SelectionArea, SelectionChangeCause, SelectionController, SelectionHandles,
     SelectionInput, SizedBox, Text, WidgetsApp,
 };
@@ -70,16 +70,15 @@ impl Scene {
 
     fn area(heard: &Heard, handles: Option<Marked>) -> SelectionArea {
         let recorded = Rc::clone(heard);
-        let area = SelectionArea::new(Column::new((Text::new(WORDS),))).on_selection_changed(
-            move |_cx, change| {
+        let area =
+            menuless(Column::new((Text::new(WORDS),))).on_selection_changed(move |_cx, change| {
                 recorded.borrow_mut().push(
                     change
                         .selected
                         .as_ref()
                         .map(|selected| selected.text.clone()),
                 );
-            },
-        );
+            });
         match handles {
             Some(handles) => area.handles(handles),
             None => area,
@@ -349,7 +348,7 @@ pub(crate) fn a_controller_selection_hides_the_handles() {
     let heard: Heard = Rc::default();
     let causes = Rc::new(RefCell::new(Vec::new()));
     let (recorded, noted) = (Rc::clone(&heard), Rc::clone(&causes));
-    let area = SelectionArea::new(Column::new((Text::new(WORDS),)))
+    let area = menuless(Column::new((Text::new(WORDS),)))
         .controller(controller.clone())
         .on_selection_changed(move |_cx, change| {
             recorded.borrow_mut().push(
@@ -397,7 +396,7 @@ pub(crate) fn a_listener_selecting_elsewhere_leaves_no_handles() {
     let controller = SelectionController::new();
     let heard: Heard = Rc::default();
     let (recorded, redirect) = (Rc::clone(&heard), controller.clone());
-    let area = SelectionArea::new(Column::new((Text::new(WORDS),)))
+    let area = menuless(Column::new((Text::new(WORDS),)))
         .controller(controller)
         .on_selection_changed(move |_cx, change| {
             recorded.borrow_mut().push(
@@ -434,7 +433,7 @@ pub(crate) fn handles_come_from_the_area_then_the_default_and_need_an_overlay() 
     let app = |own: Option<Marked>, heard: &Heard| {
         let area = Scene::area(heard, own);
         let default = default.clone();
-        WidgetsApp::new(DefaultSelectionHandles::new(default, area))
+        WidgetsApp::new(DefaultSelectionControls::new(area).handles(default))
     };
     let at = width_of("alpha be");
 
@@ -469,7 +468,7 @@ pub(crate) fn handles_come_from_the_area_then_the_default_and_need_an_overlay() 
 pub(crate) fn a_panicking_listener_still_shows_the_handles() {
     let heard: Heard = Rc::default();
     let recorded = Rc::clone(&heard);
-    let area = SelectionArea::new(Column::new((Text::new(WORDS),)))
+    let area = menuless(Column::new((Text::new(WORDS),)))
         .on_selection_changed(move |_cx, change| {
             recorded.borrow_mut().push(
                 change
@@ -524,7 +523,7 @@ pub(crate) fn an_end_at_a_text_edge_drags_from_where_its_handle_is() {
     const NEXT: &str = "delta epsilon";
     let heard: Heard = Rc::default();
     let recorded = Rc::clone(&heard);
-    let area = SelectionArea::new(Column::new((Text::new(WORDS), Text::new(NEXT))))
+    let area = menuless(Column::new((Text::new(WORDS), Text::new(NEXT))))
         .on_selection_changed(move |_cx, change| {
             recorded.borrow_mut().push(
                 change
@@ -723,7 +722,7 @@ pub(crate) fn shown_handles_rebuild_with_a_new_direction() {
 /// line).
 pub(crate) fn shown_handles_follow_their_text_laid_out_anew() {
     let area = |handles: Marked, size: f64| {
-        SelectionArea::new(Column::new((
+        menuless(Column::new((
             Text::new(WORDS).style(TextStyle::new().with_font_size(size)),
         )))
         .handles(handles)
@@ -770,7 +769,7 @@ pub(crate) fn an_end_inside_a_new_cluster_sits_where_the_highlight_ends() {
     let heard: Heard = Rc::default();
     let area = |text: &'static str, heard: &Heard| {
         let recorded = Rc::clone(heard);
-        SelectionArea::new(Column::new((Text::new(text),)))
+        menuless(Column::new((Text::new(text),)))
             .on_selection_changed(move |_cx, change| {
                 recorded.borrow_mut().push(
                     change
@@ -820,7 +819,7 @@ pub(crate) fn an_end_inside_a_new_cluster_sits_where_the_highlight_ends() {
 /// (the handles keep the old line).
 pub(crate) fn shown_handles_follow_an_inherited_style() {
     let marked = Marked::default();
-    let area = SelectionArea::new(Column::new((Text::new(WORDS),))).handles(marked.clone());
+    let area = menuless(Column::new((Text::new(WORDS),))).handles(marked.clone());
     let styled = |size: f64| {
         WidgetsApp::new(DefaultTextStyle::new(
             TextStyle::new().with_font_size(size),
@@ -919,7 +918,7 @@ pub(crate) fn a_listener_taking_the_focus_away_leaves_no_handles() {
     let heard: Heard = Rc::default();
     let elsewhere = FocusNode::with_debug_label("elsewhere");
     let (recorded, moved) = (Rc::clone(&heard), Rc::clone(&elsewhere));
-    let area = SelectionArea::new(Column::new((Text::new(WORDS),)))
+    let area = menuless(Column::new((Text::new(WORDS),)))
         .on_selection_changed(move |_cx, change| {
             recorded.borrow_mut().push(
                 change
@@ -1001,7 +1000,7 @@ pub(crate) fn a_handle_scrolled_out_of_view_takes_no_touch() {
     const SCROLLED: f64 = 100.0;
     let heard: Heard = Rc::default();
     let controller = ScrollController::new();
-    let area = SelectionArea::new(Column::new((Text::new(WORDS), SizedBox::new(400.0, 300.0))))
+    let area = menuless(Column::new((Text::new(WORDS), SizedBox::new(400.0, 300.0))))
         .handles(Marked::default())
         .on_selection_changed({
             let recorded = Rc::clone(&heard);
@@ -1097,7 +1096,7 @@ pub(crate) fn shown_handles_follow_a_relayout_without_a_build() {
             width: Rc::clone(&width),
             rebuild: Rc::clone(&rebuild),
         },
-        Expanded::new(SelectionArea::new(Column::new((text,))).handles(marked.clone())),
+        Expanded::new(menuless(Column::new((text,))).handles(marked.clone())),
     )));
     let mut scene = Scene::laid_out(app, Rc::default());
     let paragraph = scene.paragraph();
@@ -1145,7 +1144,7 @@ pub(crate) fn a_long_press_extends_by_words_as_the_touch_moves() {
     let heard: Heard = Rc::default();
     let causes = Rc::new(RefCell::new(Vec::new()));
     let (recorded, noted) = (Rc::clone(&heard), Rc::clone(&causes));
-    let area = SelectionArea::new(Column::new((Text::new(WORDS),)))
+    let area = menuless(Column::new((Text::new(WORDS),)))
         .handles(Marked::default())
         .on_selection_changed(move |_cx, change| {
             recorded.borrow_mut().push(
@@ -1196,7 +1195,7 @@ pub(crate) fn losing_the_focus_ends_a_long_press_extension() {
     let heard: Heard = Rc::default();
     let elsewhere = FocusNode::with_debug_label("elsewhere");
     let (recorded, moved) = (Rc::clone(&heard), Rc::clone(&elsewhere));
-    let area = SelectionArea::new(Column::new((Text::new(WORDS),)))
+    let area = menuless(Column::new((Text::new(WORDS),)))
         .on_selection_changed(move |_cx, change| {
             let selected = change
                 .selected
@@ -1229,4 +1228,10 @@ pub(crate) fn losing_the_focus_ends_a_long_press_extension() {
     assert_eq!(scene.selected().as_deref(), Some("beta gamma"));
     assert!(elsewhere.has_primary_focus());
     assert_eq!(scene.handles(), 0);
+}
+
+/// An area over `child` with no selection menu, so the overlay holds only
+/// its handles (the menu's toolbar is the `selection_menu` table's).
+fn menuless(child: impl flui_view::IntoView) -> SelectionArea {
+    SelectionArea::new(child).no_menu()
 }

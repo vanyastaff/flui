@@ -161,6 +161,10 @@ mod selection_area_controller;
 mod selection_area_handles;
 #[path = "selection_area_input.rs"]
 mod selection_area_input;
+#[path = "selection_area_menu.rs"]
+mod selection_area_menu;
+#[path = "selection_menu.rs"]
+mod selection_menu;
 #[path = "semantics.rs"]
 mod semantics;
 #[path = "shortcuts.rs"]
@@ -190,6 +194,8 @@ mod text_field;
 mod text_field_widget;
 #[path = "text_store_kit.rs"]
 mod text_store_kit;
+#[path = "toolbar_items.rs"]
+mod toolbar_items;
 #[path = "transition_route.rs"]
 mod transition_route;
 #[path = "transitions.rs"]

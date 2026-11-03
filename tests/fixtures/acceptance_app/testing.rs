@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use flui::foundation::RenderId;
 use flui::interaction::PointerKind;
-use flui::platform::EventTime;
+use flui::platform::{EventTime, ImeEvent};
 use flui::platform::keyboard::{Code, Key, KeyEvent, KeyRepeat, KeyState, Modifiers, NamedKey};
 use flui::testing::a11y::Role;
 use flui::testing::storage::MemoryStorage;
@@ -167,12 +167,12 @@ impl AppRun {
         self.settle();
     }
 
-    /// Focus the Title field and replace its text by typing `text`.
+    /// Tap the Title field near its start, focusing it, then settle.
     ///
     /// # Panics
     ///
     /// When no Title field is on screen.
-    pub fn replace_title(&mut self, text: &str) {
+    pub fn focus_title(&mut self) {
         let field = self.title_field();
         let position = self.laid.absolute_offset(field);
         let size = self.laid.size(field);
@@ -180,6 +180,45 @@ impl AppRun {
         self.laid.dispatch_pointer_down(x, y);
         self.laid.dispatch_pointer_up(x, y);
         self.settle();
+    }
+
+    /// Deliver `event` from the platform's input method, then settle.
+    pub fn ime(&mut self, event: ImeEvent) {
+        self.laid.dispatch_ime(event);
+        self.settle();
+    }
+
+    /// The byte range of the Title field's composition, if one is shown.
+    pub fn title_composing(&self) -> Option<std::ops::Range<u64>> {
+        let node = self.laid.render_node(self.title_field());
+        let start = node.get::<u64>("composing_start").ok()?;
+        let end = node.get::<u64>("composing_end").ok()?;
+        Some(start..end)
+    }
+
+    /// Whether the Title field shows its caret.
+    pub fn title_shows_caret(&self) -> bool {
+        self.laid
+            .render_node(self.title_field())
+            .get::<bool>("show_caret")
+            .expect("BUG: an editable reports whether it shows its caret")
+    }
+
+    /// Where the Title field's caret is, as a byte offset into its text.
+    pub fn title_caret(&self) -> u64 {
+        self.laid
+            .render_node(self.title_field())
+            .get::<u64>("caret_byte_offset")
+            .expect("BUG: an editable reports its caret")
+    }
+
+    /// Focus the Title field and replace its text by typing `text`.
+    ///
+    /// # Panics
+    ///
+    /// When no Title field is on screen.
+    pub fn replace_title(&mut self, text: &str) {
+        self.focus_title();
         let command = if cfg!(any(target_os = "macos", target_os = "ios")) {
             Modifiers::META
         } else {

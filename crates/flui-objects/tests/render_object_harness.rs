@@ -67,6 +67,7 @@
 //! | `RenderIndexedStack` | `harness_indexed_stack_*` | yes | yes | yes | yes | baseline |
 //! | `RenderTheater` | `harness_theater_*` | yes | yes | yes | yes | skip_count, semantics_blocked_count |
 //! | `RenderListBody` | `harness_list_body_*` | yes | yes | — | yes | dry baseline |
+//! | `RenderToolbarItems` | `harness_toolbar_items_*` | yes | yes | yes | yes | split, semantics |
 //! | `RenderFlow` | `harness_flow_*` | yes | yes | yes | yes | order, paint transform |
 //! | `RenderTable` | `harness_table_*` | yes | yes | yes | yes | column widths |
 //! | `RenderAbsorbPointer` | `harness_absorb_pointer_*` | yes | yes | — | yes | — |
@@ -258,6 +259,7 @@ const RENDER_OBJECT_TYPES: &[&str] = &[
     "RenderFlow",
     "RenderTable",
     "RenderTheater",
+    "RenderToolbarItems",
     "RenderAbsorbPointer",
     "RenderContentShape",
     "RenderHitSlop",
@@ -7164,6 +7166,51 @@ fn harness_backdrop_filter_carries_its_group_to_the_layer() {
     );
 }
 
+/// A magnifying backdrop filter keeps its focal point where its node put
+/// it: the layer's transform, a node's padding away from the layer's origin,
+/// still holds the node's own point still, under a composed filter too.
+fn harness_backdrop_filter_transform_follows_its_node() {
+    let focal = Point::new(20.0, 15.0);
+    let magnify = ImageFilter::try_magnify(focal, 2.0).expect("a valid scale");
+    for filter in [
+        magnify.clone(),
+        ImageFilter::Compose(vec![ImageFilter::blur(1.0), magnify]),
+    ] {
+        let run = RenderTester::mount(
+            box_node(RenderPadding::new(EdgeInsets::new(20.0, 0.0, 0.0, 10.0))).child(
+                box_node(RenderBackdropFilter::new(filter))
+                    .child(box_node(RenderColoredBox::red(40.0, 30.0))),
+            ),
+        )
+        .with_constraints(loose(200.0))
+        .run_frame();
+        let transforms: Vec<[f64; 6]> = run
+            .layer_tree()
+            .expect("a painted frame")
+            .iter()
+            .filter_map(|(_, node)| match node.layer() {
+                flui_rendering::layer::Layer::BackdropFilter(layer) => Some(layer.filter().clone()),
+                _ => None,
+            })
+            .filter_map(|filter| match filter {
+                ImageFilter::Compose(filters) => filters.into_iter().last(),
+                other => Some(other),
+            })
+            .filter_map(|filter| match filter {
+                ImageFilter::Transform { transform, .. } => Some(transform.inverse_coefficients()),
+                _ => None,
+            })
+            .collect::<Vec<[f64; 6]>>();
+        assert_eq!(transforms.len(), 1, "one transform filter: {transforms:?}");
+        let [xx, yx, xy, yy, x0, y0] = transforms[0];
+        // The node sits at (10, 20), so its focal point is (30, 35) in the
+        // layer: the transform there must leave it in place.
+        let (x, y) = (30.0, 35.0);
+        let shows = (xx * x + xy * y + x0, yx * x + yy * y + y0);
+        assert_eq!(shows, (x, y), "the focal point moved");
+    }
+}
+
 // ============================================================================
 // RenderLeaderLayer / RenderFollowerLayer
 // ============================================================================
@@ -7999,6 +8046,234 @@ fn harness_list_body_vertical_down_stretches_cross_axis_and_hits_children() {
         "RenderListBody",
         &["axis_direction"],
     );
+}
+
+/// Three 30-wide items and a 10-wide overflow button. In 70 the row holds
+/// two items and the button, and the third is not hit or announced;
+/// expanded, the button and the third stand in a column; in 200 every item
+/// shows and the button does not. Live and dry layout agree, and the
+/// intrinsics follow the split the layout makes.
+fn harness_toolbar_items_hide_what_does_not_fit_behind_the_button() {
+    const RED: [f32; 4] = [1.0, 0.0, 0.0, 1.0];
+    const GREEN: [f32; 4] = [0.0, 1.0, 0.0, 1.0];
+    const BLUE: [f32; 4] = [0.0, 0.0, 1.0, 1.0];
+    let painted = |run: &FrameRun| {
+        run.display_commands()
+            .into_iter()
+            .map(|cmd| cmd.line)
+            .collect::<Vec<String>>()
+            .join("\n")
+    };
+    let item = |label: &'static str, inner: &'static str, color: [f32; 4], width: f64| {
+        box_node(
+            RenderSemanticsAnnotations::from_configuration(labelled(label)).with_container(true),
+        )
+        .label(label)
+        .child(box_node(RenderColoredBox::new(color, Size::new(width, 20.0))).label(inner))
+    };
+    let tester = |split: &ToolbarItemsSplit, expanded: bool, max_width: f64| {
+        RenderTester::mount(
+            box_node(RenderToolbarItems::new(split.clone()).with_expanded(expanded))
+                .child(item("a", "a_box", RED, 30.0))
+                .child(item("b", "b_box", RED, 30.0))
+                .child(item("c", "c_box", BLUE, 30.0))
+                .child(item("more", "more_box", GREEN, 10.0)),
+        )
+        .with_constraints(BoxConstraints::new(0.0, max_width, 0.0, 100.0))
+    };
+    let announced = |split: &ToolbarItemsSplit, expanded: bool, max_width: f64| {
+        let run = tester(split, expanded, max_width)
+            .with_semantics_enabled()
+            .run_to_semantics();
+        let mut labels = run
+            .semantics_owner()
+            .expect("semantics enabled")
+            .tree()
+            .iter()
+            .filter_map(|(_, node)| node.label().map(ToString::to_string))
+            .collect::<Vec<String>>();
+        labels.sort();
+        labels
+    };
+    let narrow = BoxConstraints::new(0.0, 70.0, 0.0, 100.0);
+
+    let split = ToolbarItemsSplit::new();
+    assert_eq!(split.row_len(), None, "nothing is laid out yet");
+    assert_eq!(split.hidden(), 0..0);
+    let mut run = tester(&split, false, 70.0).run_frame();
+    let root = run.root();
+    assert_eq!(run.box_geometry(root), Size::new(70.0, 20.0));
+    assert_eq!(run.dry_layout(root, narrow), Size::new(70.0, 20.0));
+    assert_eq!(split.row_len(), Some(2));
+    assert_eq!(split.hidden(), 2..3);
+    assert_eq!(run.offset(run.id("more")), Offset::new(60.0, 0.0));
+    assert_eq!(run.hit_first(65.0, 10.0), Some(run.id("more_box")));
+    assert_eq!(run.hit_first(35.0, 10.0), Some(run.id("b_box")));
+    assert_eq!(
+        run.hit_first(5.0, 10.0),
+        Some(run.id("a_box")),
+        "a hidden item is not hit where it was left"
+    );
+    assert_eq!(run.min_intrinsic_width(root, 100.0), 40.0);
+    assert_eq!(run.max_intrinsic_width(root, 100.0), 90.0);
+    assert_eq!(run.max_intrinsic_height(root, 70.0), 20.0);
+    assert_eq!(announced(&split, false, 70.0), ["a", "b", "more"]);
+    let commands = painted(&run);
+    assert!(
+        commands.contains("#FF0000FF") && !commands.contains("#0000FFFF"),
+        "the row paints its items, not the left-over one; commands:\n{commands}"
+    );
+
+    flui_rendering::testing::update_render_object::<RenderToolbarItems, _>(
+        run.owner_mut(),
+        root,
+        |object| object.set_expanded(true),
+    );
+    run.pump();
+    assert_eq!(run.box_geometry(root), Size::new(30.0, 40.0));
+    assert_eq!(run.dry_layout(root, narrow), Size::new(30.0, 40.0));
+    assert_eq!(run.offset(run.id("c")), Offset::new(0.0, 20.0));
+    assert_eq!(
+        run.box_geometry(run.id("more")),
+        Size::new(30.0, 20.0),
+        "a column's children span its width"
+    );
+    assert_eq!(run.hit_first(5.0, 25.0), Some(run.id("c_box")));
+    assert_eq!(run.hit_first(5.0, 5.0), Some(run.id("more_box")));
+    assert_eq!(run.max_intrinsic_height(root, 70.0), 40.0);
+    assert_eq!(announced(&split, true, 70.0), ["c", "more"]);
+    let commands = painted(&run);
+    assert!(
+        commands.contains("#0000FFFF") && !commands.contains("#FF0000FF"),
+        "the column paints the left-over item, not the row's; commands:\n{commands}"
+    );
+
+    let wide = ToolbarItemsSplit::new();
+    let run = tester(&wide, false, 200.0).run_frame();
+    assert_eq!(run.box_geometry(run.root()), Size::new(90.0, 20.0));
+    assert_eq!(wide.row_len(), Some(3));
+    assert_eq!(wide.hidden(), 3..3);
+    assert_eq!(run.hit_first(85.0, 10.0), Some(run.id("c_box")));
+    assert_eq!(announced(&wide, true, 200.0), ["a", "b", "c"]);
+    assert_descendant_properties(
+        &run.render_snapshot(),
+        "RenderToolbarItems",
+        &["expanded", "text_direction", "row_len"],
+    );
+}
+
+/// Every command stays reachable: a first item too wide beside the button
+/// gives up the button's room; a column taller than the room continues in
+/// another column beside it, or in runs across the room when the columns
+/// are wider than it too; and a back button narrower than "more" moves
+/// no item into a row that does not show.
+fn harness_toolbar_items_keep_every_command_reachable() {
+    let sized =
+        |label: &'static str, width: f64| box_node(RenderSizedBox::fixed(width, 20.0)).label(label);
+    let toolbar = |expanded: bool, children: Vec<(&'static str, f64)>| {
+        let mut node =
+            box_node(RenderToolbarItems::new(ToolbarItemsSplit::new()).with_expanded(expanded));
+        for (label, width) in children {
+            node = node.child(sized(label, width));
+        }
+        node
+    };
+
+    // 100 + 40 in 100 beside a 20 button: the first item takes 80.
+    let run = RenderTester::mount(toolbar(
+        false,
+        vec![("wide", 100.0), ("b", 40.0), ("more", 20.0)],
+    ))
+    .with_constraints(BoxConstraints::new(0.0, 100.0, 0.0, 100.0))
+    .run_frame();
+    assert_eq!(run.box_geometry(run.id("wide")).width, 80.0);
+    assert_eq!(run.offset(run.id("more")), Offset::new(80.0, 0.0));
+    assert_eq!(run.hit_first(90.0, 10.0), Some(run.id("more")));
+
+    // Six 40-wide items in 100 × 60: two in the row, and expanded, the
+    // button and four items in columns of three and two.
+    let six = vec![
+        ("a", 40.0),
+        ("b", 40.0),
+        ("c", 40.0),
+        ("d", 40.0),
+        ("e", 40.0),
+        ("f", 40.0),
+        ("more", 20.0),
+    ];
+    let short = BoxConstraints::new(0.0, 100.0, 0.0, 60.0);
+    let mut run = RenderTester::mount(toolbar(true, six))
+        .with_constraints(short)
+        .run_frame();
+    let root = run.root();
+    assert_eq!(run.box_geometry(root), Size::new(80.0, 60.0));
+    assert_eq!(run.dry_layout(root, short), Size::new(80.0, 60.0));
+    assert_eq!(run.offset(run.id("more")), Offset::new(0.0, 0.0));
+    assert_eq!(run.offset(run.id("d")), Offset::new(0.0, 40.0));
+    assert_eq!(run.offset(run.id("f")), Offset::new(40.0, 20.0));
+    assert_eq!(run.hit_first(60.0, 30.0), Some(run.id("f")));
+    flui_rendering::testing::update_render_object::<RenderToolbarItems, _>(
+        run.owner_mut(),
+        root,
+        |object| object.set_text_direction(TextDirection::Rtl),
+    );
+    run.pump();
+    assert_eq!(
+        run.offset(run.id("f")),
+        Offset::new(0.0, 20.0),
+        "columns follow the reading direction"
+    );
+
+    // Columns wider than the room as well: the expanded items run across
+    // it instead, in rows of the button and b, then c and d, then e to h.
+    let mixed = vec![
+        ("a", 60.0),
+        ("b", 40.0),
+        ("c", 60.0),
+        ("d", 40.0),
+        ("e", 60.0),
+        ("f", 10.0),
+        ("g", 10.0),
+        ("h", 10.0),
+        ("more", 20.0),
+    ];
+    let mut run = RenderTester::mount(toolbar(true, mixed))
+        .with_constraints(short)
+        .run_frame();
+    assert_eq!(run.box_geometry(run.root()), Size::new(100.0, 60.0));
+    assert_eq!(run.dry_layout(run.root(), short), Size::new(100.0, 60.0));
+    assert_eq!(run.offset(run.id("b")), Offset::new(20.0, 0.0));
+    assert_eq!(run.offset(run.id("h")), Offset::new(80.0, 40.0));
+    assert_eq!(run.hit_first(85.0, 50.0), Some(run.id("h")));
+
+    // Three 40-wide items in 100 beside a 30 "more" leave one in the row;
+    // expanded with a 20 "back", the column still starts at the second.
+    let mut run = RenderTester::mount(toolbar(
+        false,
+        vec![("a", 40.0), ("b", 40.0), ("c", 40.0), ("button", 30.0)],
+    ))
+    .with_constraints(BoxConstraints::new(0.0, 100.0, 0.0, 100.0))
+    .run_frame();
+    let root = run.root();
+    assert_eq!(run.offset(run.id("button")), Offset::new(40.0, 0.0));
+    let button = run.id("button");
+    flui_rendering::testing::update_render_object::<RenderSizedBox, _>(
+        run.owner_mut(),
+        button,
+        |object| object.set_size(Some(20.0), Some(20.0)),
+    );
+    flui_rendering::testing::update_render_object::<RenderToolbarItems, _>(
+        run.owner_mut(),
+        root,
+        |object| object.set_expanded(true),
+    );
+    run.pump();
+    assert_eq!(
+        run.offset(run.id("b")),
+        Offset::new(0.0, 20.0),
+        "b is in the column"
+    );
+    assert_eq!(run.hit_first(10.0, 30.0), Some(run.id("b")));
 }
 
 // ── RenderStack dry layout ────────────────────────────────────────────────────
@@ -13659,6 +13934,10 @@ fn family_clips_and_effects() {
                 harness_backdrop_filter_carries_its_group_to_the_layer,
             ),
             (
+                "backdrop_filter_transform_follows_its_node",
+                harness_backdrop_filter_transform_follows_its_node,
+            ),
+            (
                 "opacity_paints_with_alpha_layer",
                 harness_opacity_paints_with_alpha_layer,
             ),
@@ -14103,6 +14382,14 @@ fn family_multi_child() {
             (
                 "theater_skips_leading_children_in_layout_paint_and_hit_test",
                 harness_theater_skips_leading_children_in_layout_paint_and_hit_test,
+            ),
+            (
+                "toolbar_items_hide_what_does_not_fit_behind_the_button",
+                harness_toolbar_items_hide_what_does_not_fit_behind_the_button,
+            ),
+            (
+                "toolbar_items_keep_every_command_reachable",
+                harness_toolbar_items_keep_every_command_reachable,
             ),
         ],
     );

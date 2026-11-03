@@ -13,7 +13,8 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::task::{Context, Poll, Wake, Waker};
 use std::time::{Duration, Instant};
 
-use flui_platform::executor::{ComputeJob, Executor, IoFuture, SpawnError};
+use flui_assets::LoadServices;
+use flui_platform::executor::{ComputeJob, Executor, IoFuture, Lane, RoomFuture, SpawnError};
 use parking_lot::Mutex;
 
 /// How long [`block_on`] waits before it fails the test.
@@ -72,6 +73,11 @@ impl ThreadLanes {
         Arc::clone(self) as Arc<dyn Executor>
     }
 
+    /// The lanes as a load's services take them.
+    pub fn services(self: &Arc<Self>) -> LoadServices {
+        LoadServices::new().with_lanes(self.lanes())
+    }
+
     /// The IO lane's runtime.
     pub fn io_handle(&self) -> tokio::runtime::Handle {
         self.io
@@ -98,6 +104,15 @@ impl Executor for ThreadLanes {
         drop(runtime.spawn(future));
         Ok(())
     }
+
+    fn room(&self, lane: Lane) -> RoomFuture {
+        // A compute job gets a thread of its own; the IO runtime takes
+        // every future until it is shut down.
+        RoomFuture::ready(match lane {
+            Lane::Io if self.io.lock().is_none() => Err(SpawnError::ShuttingDown),
+            _ => Ok(()),
+        })
+    }
 }
 
 impl Drop for ThreadLanes {
@@ -114,12 +129,32 @@ impl Drop for ThreadLanes {
 pub struct QueuedLanes {
     compute: Mutex<VecDeque<ComputeJob>>,
     io: Mutex<Vec<IoFuture>>,
-    /// What every spawn answers while set.
-    refusal: Mutex<Option<SpawnError>>,
+    /// What each lane answers, and who waits for room on it.
+    refusals: Arc<Refusals>,
     /// Compute jobs accepted so far.
     computes: AtomicUsize,
-    /// Set by a spawn that queued a future not yet polled.
+    /// Set by a spawn that queued a future not yet polled, or by room made
+    /// for the queued futures waiting for it.
     fresh: AtomicBool,
+}
+
+/// What each lane of [`QueuedLanes`] answers while set, and the waits for
+/// room on them.
+#[derive(Default)]
+struct Refusals {
+    compute: Mutex<Option<SpawnError>>,
+    io: Mutex<Option<SpawnError>>,
+    /// Waiting for room while a lane refuses as saturated.
+    room: Mutex<Vec<Waker>>,
+}
+
+impl Refusals {
+    fn of(&self, lane: Lane) -> &Mutex<Option<SpawnError>> {
+        match lane {
+            Lane::Compute => &self.compute,
+            _ => &self.io,
+        }
+    }
 }
 
 /// Records that a queued future asked to be polled again.
@@ -144,9 +179,39 @@ impl QueuedLanes {
         Arc::clone(self) as Arc<dyn Executor>
     }
 
-    /// Refuse every later spawn with `refusal`.
+    /// The lanes as a load's services take them.
+    pub fn services(self: &Arc<Self>) -> LoadServices {
+        LoadServices::new().with_lanes(self.lanes())
+    }
+
+    /// Refuse every later spawn with `refusal`, on both lanes.
     pub fn refuse(&self, refusal: SpawnError) {
-        *self.refusal.lock() = Some(refusal);
+        self.refuse_lane(Lane::Compute, refusal);
+        self.refuse_lane(Lane::Io, refusal);
+    }
+
+    /// Refuse every later spawn on `lane` with `refusal`.
+    pub fn refuse_lane(&self, lane: Lane, refusal: SpawnError) {
+        *self.refusals.of(lane).lock() = Some(refusal);
+        // A refusal waiting cannot help ends the wait.
+        if refusal != SpawnError::Saturated {
+            self.wake_room();
+        }
+    }
+
+    /// Take work again on both lanes, and wake whoever waits for room.
+    pub fn make_room(&self) {
+        *self.refusals.compute.lock() = None;
+        *self.refusals.io.lock() = None;
+        self.wake_room();
+    }
+
+    fn wake_room(&self) {
+        let waiting = std::mem::take(&mut *self.refusals.room.lock());
+        self.fresh.store(true, Ordering::SeqCst);
+        for waker in waiting {
+            waker.wake();
+        }
     }
 
     /// Shut down as a host's lanes do: refuse every later spawn and drop
@@ -164,6 +229,11 @@ impl QueuedLanes {
     pub fn drop_compute(&self) {
         self.refuse(SpawnError::ShuttingDown);
         drop(std::mem::take(&mut *self.compute.lock()));
+    }
+
+    /// Callers waiting for room now.
+    pub fn waiting_for_room(&self) -> usize {
+        self.refusals.room.lock().len()
     }
 
     /// Compute jobs accepted so far.
@@ -218,7 +288,7 @@ impl QueuedLanes {
 
 impl Executor for QueuedLanes {
     fn spawn_compute(&self, job: ComputeJob) -> Result<(), SpawnError> {
-        let refusal = *self.refusal.lock();
+        let refusal = *self.refusals.compute.lock();
         if let Some(refusal) = refusal {
             return Err(refusal);
         }
@@ -228,12 +298,27 @@ impl Executor for QueuedLanes {
     }
 
     fn spawn_io(&self, future: IoFuture) -> Result<(), SpawnError> {
-        let refusal = *self.refusal.lock();
+        let refusal = *self.refusals.io.lock();
         if let Some(refusal) = refusal {
             return Err(refusal);
         }
         self.io.lock().push(future);
         self.fresh.store(true, Ordering::SeqCst);
         Ok(())
+    }
+
+    fn room(&self, lane: Lane) -> RoomFuture {
+        let refusals = Arc::clone(&self.refusals);
+        RoomFuture::new(std::future::poll_fn(move |cx| {
+            let refusal = *refusals.of(lane).lock();
+            match refusal {
+                None => Poll::Ready(Ok(())),
+                Some(SpawnError::Saturated) => {
+                    refusals.room.lock().push(cx.waker().clone());
+                    Poll::Pending
+                }
+                Some(refusal) => Poll::Ready(Err(refusal)),
+            }
+        }))
     }
 }

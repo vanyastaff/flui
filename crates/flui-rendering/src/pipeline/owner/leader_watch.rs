@@ -4,7 +4,8 @@
 //! A follower's *position* tracks its leader at composite time. A follower
 //! whose *build* depends on its leader (a selection handle sized to its end's
 //! line, a menu that opens above or below its anchor) needs to hear when that
-//! geometry changes, including after a relayout no build caused. A
+//! geometry changes (its size, or where it stands after a scroll), including
+//! after a relayout no build caused. A
 //! [`LeaderWatch`] is that signal: the owner compares each live watch against
 //! the layer tree each painted frame commits and queues only the watches whose
 //! value changed into the frame's post-frame lane. A steady layout queues
@@ -15,9 +16,9 @@ use std::fmt;
 use std::rc::{Rc, Weak};
 
 use flui_foundation::ListenerId;
-use flui_foundation::geometry::Size;
+use flui_foundation::geometry::{Point, Size};
 use flui_foundation::notifier::{ChangeNotifier, Listenable, ListenerObserver};
-use flui_layer::{LayerLink, LayerTree};
+use flui_layer::{LayerLink, LayerTree, leader_origin};
 use flui_scheduler::PostFrameHandle;
 use rustc_hash::FxHashMap;
 
@@ -28,6 +29,11 @@ pub struct LeaderGeometry {
     /// The leader's laid-out size: the extent its followers' anchors align
     /// within.
     pub size: Size<f64>,
+    /// The leader's top-left corner in the coordinates of the layer tree's
+    /// root, which a scroll or a transform above the leader moves while its
+    /// size stays; `None` when a transform on its chain is singular or not
+    /// finite.
+    pub origin: Option<Point<f64>>,
 }
 
 /// A watch on the leader that publishes under one [`LayerLink`] in one
@@ -129,6 +135,7 @@ impl LeaderWatches {
                     link,
                     LeaderGeometry {
                         size: leader.size(),
+                        origin: leader_origin(tree, link),
                     },
                 ))
             })

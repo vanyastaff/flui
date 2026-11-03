@@ -475,7 +475,7 @@ fn test_features_plan() -> Vec<Step> {
             "--locked",
             "--no-fail-fast",
             "--features",
-            "flui-assets/full,flui-widgets/images,flui-widgets/asset-images,flui-widgets/network-images",
+            "flui-assets/full,flui-widgets/images,flui-widgets/asset-images",
         ]),
         // not a subset of the run above: without `asset-images`, `Image` is
         // the `StatelessView` impl a consumer of `images` alone builds, which

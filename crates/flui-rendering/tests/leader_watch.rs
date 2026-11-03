@@ -22,6 +22,8 @@ struct Scene {
     scheduler: UpdateScheduler,
     frame: OwnerFrame,
     sized: flui_foundation::RenderId,
+    /// A box before the leader, whose width moves it.
+    lead: flui_foundation::RenderId,
     link: LayerLink,
 }
 
@@ -31,10 +33,12 @@ impl Scene {
         let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
         let (root, registry) = tree::mount(
             &mut owner,
-            box_node(RenderFlex::row()).child(
-                box_node(RenderLeaderLayer::new(link))
-                    .child(box_node(RenderSizedBox::fixed(10.0, height)).label("sized")),
-            ),
+            box_node(RenderFlex::row())
+                .child(box_node(RenderSizedBox::fixed(0.0, 10.0)).label("lead"))
+                .child(
+                    box_node(RenderLeaderLayer::new(link))
+                        .child(box_node(RenderSizedBox::fixed(10.0, height)).label("sized")),
+                ),
         );
         owner.set_root_id(Some(root));
         owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(200.0, 200.0))));
@@ -45,6 +49,7 @@ impl Scene {
             scheduler,
             frame,
             sized: registry.get("sized").expect("labelled"),
+            lead: registry.get("lead").expect("labelled"),
             link,
         }
     }
@@ -70,6 +75,15 @@ impl Scene {
         self.cell.with_mut(|owner| {
             update_render_object::<RenderSizedBox, _>(owner, self.sized, |sized| {
                 sized.set_size(Some(10.0), Some(height))
+            });
+        });
+    }
+
+    /// Moves the leader `width` along the row, leaving its size.
+    fn shift(&self, width: f64) {
+        self.cell.with_mut(|owner| {
+            update_render_object::<RenderSizedBox, _>(owner, self.lead, |lead| {
+                lead.set_size(Some(width), Some(10.0))
             });
         });
     }
@@ -209,4 +223,28 @@ fn a_late_watch_starts_from_the_committed_leader() {
     scene.paint();
     scene.complete();
     assert_eq!((heard.get(), height(&watch)), (0, Some(20.0)));
+}
+
+/// A leader moved without a resize is heard, with where it now stands: a
+/// follower placed against the window learns its leader scrolled.
+///
+/// Red-check: leave the origin out of the compared geometry (the move is
+/// not heard).
+#[test]
+fn a_moved_leader_is_heard() {
+    let scene = Scene::new(20.0);
+    let watch = scene.watch(scene.link);
+    let heard = counted(&watch);
+    scene.paint();
+    scene.complete();
+    let origin = |watch: &LeaderWatch| watch.geometry().and_then(|geometry| geometry.origin);
+    assert_eq!(heard.get(), 1);
+    assert_eq!(origin(&watch).map(|point| point.x), Some(0.0));
+
+    scene.shift(30.0);
+    scene.paint();
+    scene.complete();
+    assert_eq!(heard.get(), 2, "the move is heard");
+    assert_eq!(origin(&watch).map(|point| point.x), Some(30.0));
+    assert_eq!(height(&watch), Some(20.0), "the size stays");
 }
