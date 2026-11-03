@@ -782,7 +782,7 @@ assert_eq!(fresh_host.replay(&replayable), replayable.decisions());
 A variant added to the recorded vocabulary fails `cargo xtask checks` until
 `cargo xtask recording-vocabulary --write` regenerates the variant table, and
 then `every_vocabulary_variant_round_trips_through_the_recording_dto` until the
-DTO mirrors it.
+wire form mirrors it.
 
 ### Accessibility
 

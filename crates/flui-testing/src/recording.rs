@@ -13,9 +13,12 @@
 //! file, and a row that lost text is marked so replay refuses it instead of
 //! applying different text. [`Privacy::KeepText`] is the explicit opt-in.
 //!
-//! The vocabulary carries no serde: private mirror types with pinned
-//! spellings stand between it and the wire, and a generated table of its
-//! variants keeps them in step (`cargo xtask recording-vocabulary`).
+//! The vocabulary carries no serde: [`flui_protocol::input_recording`] declares the
+//! rows and the header with pinned spellings, `flui-runtime` converts between
+//! them and the vocabulary ([`InputRecord::to_wire`](flui_runtime::InputRecord::to_wire)),
+//! and this module frames them as JSON Lines and replays them. A generated table
+//! of the vocabulary's variants keeps the conversions in step
+//! (`cargo xtask recording-vocabulary`).
 //!
 //! ```
 //! use flui_testing::recording::{
@@ -33,7 +36,6 @@
 //! # Ok::<(), flui_testing::recording::RecordingError>(())
 //! ```
 
-mod dto;
 mod format;
 mod replay;
 mod tap;

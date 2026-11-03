@@ -1,7 +1,7 @@
 //! The table of every variant an input recording carries (ADR-0215 §2).
 //!
-//! The event vocabulary and `InputRecord` are `#[non_exhaustive]`, so the
-//! recording DTO in `flui-testing` cannot match them exhaustively: a variant
+//! The event vocabulary is `#[non_exhaustive]`, so the
+//! recording's wire conversions in `flui-runtime` cannot match the vocabulary exhaustively: a variant
 //! added to the vocabulary would compile and fail only when recorded. This
 //! command reads each recorded enum from its source with `syn` and writes the
 //! list of its variants to `crates/flui-testing/tests/generated/recording_variants.rs`,

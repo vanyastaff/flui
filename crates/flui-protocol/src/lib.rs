@@ -38,6 +38,10 @@
 //!   [`ServerLine`] an app answers with;
 //! - [`framing`]: how a byte transport frames lines ([`LineReader`]) and binary payloads;
 //! - [`error`]: the fixed [`ErrorCode`]s, [`Retry`] and the [`ErrorObject`] that carries them;
+//! - `input_recording` (with `serde`): the schema of an input recording, the `HostInput` stream
+//!   a UI runtime applied with its gesture decisions and preferences (ADR-0215 §2), which
+//!   `flui-runtime` converts to and from the event vocabulary and a reader such as the driver
+//!   reads without it;
 //! - `native_recording` (with `serde`): the schema of a native recording, the journal of a
 //!   backend's pointer registry before translation (ADR-0215 §4), which the core writes and
 //!   a reader such as the driver reads without it;
@@ -69,6 +73,8 @@ pub mod events;
 pub mod framing;
 pub mod geometry;
 pub mod input;
+#[cfg(feature = "serde")]
+pub mod input_recording;
 pub mod inspect;
 pub mod launch;
 pub mod locator;

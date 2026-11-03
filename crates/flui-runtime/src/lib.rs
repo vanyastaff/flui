@@ -74,6 +74,7 @@ pub mod owner;
 pub mod presentation;
 mod presentation_forest;
 pub mod pump;
+mod recording_wire;
 #[cfg(feature = "hot-reload")]
 pub mod reload;
 pub mod renderer_binding;
@@ -95,4 +96,7 @@ pub use input_record::{
 pub use input_tap::{
     INPUT_TAP_TARGET, InputTap, InputTapFactory, InputTapHandle, InputTaps, RecordingIncomplete,
     TapFailure, TapFailureSite,
+};
+pub use recording_wire::{
+    Privacy, WireError, device_from_wire, device_to_wire, profiles_from_wire, profiles_to_wire,
 };
