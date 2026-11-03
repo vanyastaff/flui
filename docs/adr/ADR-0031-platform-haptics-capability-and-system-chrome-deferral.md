@@ -6,7 +6,7 @@
   deferral) stands, except the overlay style: [ADR-0232](ADR-0232-annotated-regions-and-overlay-style.md)
 - **Amended by:** [ADR-0082](ADR-0082-platform-api-contract-crate.md) (§1–§3: `PlatformHaptics`
   now lives in `flui-platform`, re-exported at its old `flui-native` path; its contract is
-  unchanged); [ADR-0098](ADR-0098-owned-f64-geometry-values.md) (on acceptance; §1: `flui-types` is deleted
+  unchanged); [ADR-0098](ADR-0098-owned-f64-geometry-values.md) (§1: `flui-types` is deleted
   and `HapticFeedback` lives in `flui-platform`, as `flui_platform::HapticFeedback`)
 
 ## Context

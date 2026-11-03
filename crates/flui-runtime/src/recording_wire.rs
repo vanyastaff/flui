@@ -186,7 +186,7 @@ impl TryConvert<&InputRecord> for rec::Row {
     fn try_convert(record: &InputRecord) -> Result<Self> {
         Ok(match record {
             InputRecord::Input(row) => Self::Input(rec::InputRow {
-                window: row.window.0,
+                window: row.window.get().get(),
                 t: row.t.as_nanos(),
                 arrival: row.arrival.as_nanos(),
                 input: rec::HostInput::try_convert(&row.input)?,
@@ -203,7 +203,7 @@ impl TryConvert<&InputRecord> for rec::Row {
                 redacted: false,
             }),
             InputRecord::Decision(row) => Self::Decision(rec::Decision {
-                window: row.window.0,
+                window: row.window.get().get(),
                 pointer: row.pointer.get().get(),
                 t: row.t.as_nanos(),
                 disposition: match row.disposition {
@@ -215,7 +215,7 @@ impl TryConvert<&InputRecord> for rec::Row {
                 member_type: row.member_type.to_string(),
             }),
             InputRecord::Deadline(row) => Self::Deadline(rec::Deadline {
-                window: row.window.0,
+                window: row.window.get().get(),
                 pointer: row.pointer.map(|pointer| pointer.get().get()),
                 sequence: row.sequence.map(|sequence| sequence.get().get()),
                 t: row.t.as_nanos(),
@@ -236,7 +236,7 @@ impl TryConvert<rec::Row> for InputRecord {
         Ok(match row {
             rec::Row::Input(row) => Self::Input(
                 InputRow::new(
-                    WindowId(row.window),
+                    window_id(row.window)?,
                     EventTime::from_nanos(row.t),
                     EventTime::from_nanos(row.arrival),
                     HostInput::try_convert(row.input)?,
@@ -254,7 +254,7 @@ impl TryConvert<rec::Row> for InputRecord {
             ),
             rec::Row::Decision(row) => Self::Decision(
                 DecisionRow::new(
-                    WindowId(row.window),
+                    window_id(row.window)?,
                     pointer_id(row.pointer)?,
                     EventTime::from_nanos(row.t),
                     match row.disposition {
@@ -268,7 +268,7 @@ impl TryConvert<rec::Row> for InputRecord {
             ),
             rec::Row::Deadline(row) => Self::Deadline(
                 DeadlineRow::new(
-                    WindowId(row.window),
+                    window_id(row.window)?,
                     row.pointer.map(pointer_id).transpose()?,
                     EventTime::from_nanos(row.t),
                     RecordedMember::new(nonzero(row.member, "member")?),
@@ -398,6 +398,11 @@ fn recorded_sequence(value: Option<u64>) -> Result<Option<RecordedSequence>> {
     value
         .map(|value| nonzero(value, "sequence").map(RecordedSequence::new))
         .transpose()
+}
+
+/// The window a row names; 0 is no window any host issued.
+pub(crate) fn window_id(value: u64) -> Result<WindowId> {
+    WindowId::try_from_raw(value).ok_or_else(|| invalid("window id 0"))
 }
 
 fn pointer_id(value: u64) -> Result<PointerId> {

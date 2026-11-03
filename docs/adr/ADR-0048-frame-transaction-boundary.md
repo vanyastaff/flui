@@ -181,7 +181,8 @@ observable recovery floor and narrows several blast radii:
 
   **Superseded in part by ADR-0123.** During a terminal presentation close
   that holds a failure or runs inside an unwind, the remaining elements are
-  not disposed: they are retained with the closed presentation, per ADR-0127.
+  not disposed: they are destroyed with the closed presentation, under the
+  close's containment (ADR-0281 §3).
 - `RenderObjectElement.unmount` calls `super.unmount()` before
   `didUnmountRenderObject`; if that hook throws, render-object `dispose` is
   skipped. FLUI's ordering differs: the element behavior runs before

@@ -1,10 +1,8 @@
 # ADR-0172: Host-owned system preferences and ordered runtime delivery
 
-- **Status:** Accepted; implemented on Windows, macOS, iOS, Android, the web, Linux (the native
-  Wayland and X11 hosts) and the headless host, with text, motion, contrast, language, gesture
-  and wheel consumers. Updates are never coalesced (point 3 allows it; no host needs it). The
-  Windows winit transport and its two witnesses below left with the winit host (ADR-0151 §11).
+- **Status:** Accepted (2026-10-08)
 - **Date:** 2026-10-08
+- **Revised:** 2026-11-03 — the Windows winit transport and its witnesses left with the winit host (ADR-0151 §11); which hosts provide each preference is [`docs/platform-parity.md`](../platform-parity.md#system-preferences)'s.
 - **Supersedes:** the system-preferences section of the 2026-10-06 proposal of
   [ADR-0151](ADR-0151-platform-layer-boundary-and-names.md); the accepted ADR-0151 (2026-10-20)
   leaves system preferences to this ADR.
@@ -60,7 +58,7 @@ Native observer handles and callback stacks never enter runtime values.
    outside locks and owner-local borrows, under the existing first-failure policy.
 3. Foreign-thread notifications admit data or invalidation and wake the owner.
    Runtime delivery executes on the owner through the typed host FIFO. Adjacent
-   compatible preference updates may coalesce; input, frames, lifecycle and other
+   compatible preference updates may coalesce (no host coalesces them today); input, frames, lifecycle and other
    observable work preserve their admitted order. Native invalidation itself is
    not a snapshot and does not promise the OS state at an earlier input timestamp.
 4. Seed each runtime before mounting its first root. A later runtime receives the
@@ -264,21 +262,5 @@ and actual OS notification delivery are separate evidence. A probe that register
 and removes a token does not establish change delivery. Implementation acceptance
 is tracked in the [platform-layer spec](../plans/specs/platform-layer/tasks.md).
 
-The Windows winit transport uses this same owner-local source. It publishes a
-sampled preference observation before input or wake delivery, preserves deferred
-sampling for its deadline retry and does not dirty user windows merely to retry
-preferences. Shutdown closes the owner signal and releases the source before
-retiring user-window callbacks. Raw wheel input remains signed Detents; consumers
-resolve the current system count once.
-
-The native Windows winit tests
-`windows_winit_wheels_preserve_raw_units_and_observe_system_policy` and
-`windows_winit_cold_preferences_recover_on_an_idle_owner_turn` executed the actual
-wheel packet pipeline, cold deferred bootstrap followed by idle-owner recovery,
-WM_SETTINGCHANGE refresh failure followed by idle-owner recovery, retry without
-an extra redraw and refusal after shutdown. These witnesses do not change system
-policy. The retry witness measures delivered native paint callbacks on an
-offscreen, unactivated user window; preference-only recovery leaves that count
-unchanged. They establish this Windows transport's observed wheel and preference
-delivery, not physical pen or touch input, other operating-system execution or
-broader platform-layer acceptance.
+A Windows winit transport used this same owner-local source; it and its two native witnesses left
+with the winit host (ADR-0151 §11).

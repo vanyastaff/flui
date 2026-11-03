@@ -1,14 +1,18 @@
-# ADR-0136: UI surfaces are owner-local; one thread-boundary ledger
+# ADR-0136: UI surfaces are owner-local; the compiler proves what crosses a thread
 
-- **Status:** Accepted (§2). The thread-boundary ledger and opt-in parallel layout were
-  rejected by the owner on 2026-10-28 (see Alternatives rejected); the other sections are not
-  decisions.
+- **Status:** Accepted (2026-10-28)
 - **Date:** 2026-10-06
 - **Amended:** 2026-10-11 — later accepted owner APIs are distinguished from this record's historical signatures and unadopted proposals.
+- **Revised:** 2026-11-03 — the gates the owner kept when rejecting the thread-boundary ledger
+  are a numbered decision (§3) instead of a clause under "Alternatives rejected", and the title
+  says so.
 - **Superseded-by:** [ADR-0182](ADR-0182-complete-owner-execution.md) for scheduler execution authority and frame-entry API.
 - **Superseded-by:** [ADR-0175](ADR-0175-owner-local-scheduling-and-animation.md)
   for the transitional scheduler ownership and split post-frame queues;
   [ADR-0178](ADR-0178-notification-first-failure-custody.md) for listener failure custody.
+- **Superseded-by:** [ADR-0281](ADR-0281-a-destructor-that-panics-during-an-unwind-aborts-as-in-std.md),
+  §2's teardown item only where it retains later panics and, during an unwind, the values without
+  running their destructors: they are destroyed under the teardown's containment.
 - **Supersedes:** [ADR-0018](ADR-0018-async-builder-seam.md) D3 and D5 (where the driver's
   tasks live and what may be spawned), [ADR-0027](ADR-0027-owner-affine-ui-realms.md) §2
   (which UI capabilities are `!Send`), [ADR-0035](ADR-0035-lifecycle-consolidation-and-frames-enabled.md)
@@ -19,12 +23,12 @@
   [ADR-0083](ADR-0083-one-frame-transaction-in-flui-runtime.md),
   [ADR-0091](ADR-0091-one-owner-thread-isolated-realms-raster-thread.md)
 
-Only section 2 was accepted in this record. Its UI-runtime ownership of async tasks
-and weak owner-local handles remains; the scheduler execution API and transitional
+§2 and §3 are this record's decisions. §2's UI-runtime ownership of async tasks and weak
+owner-local handles remains; the scheduler execution API and transitional
 queue/notification descriptions are superseded by ADR-0182, ADR-0175 and ADR-0178
 in the scopes above. The thread-boundary ledger and opt-in parallel layout were
-rejected (see Alternatives rejected). Later accepted records do not retroactively
-approve every reserved section here.
+rejected by the owner on 2026-10-28 (see Alternatives rejected); §3 is what that
+decision kept.
 
 ## Context
 
@@ -96,6 +100,24 @@ weak-handle and thread-boundary rules in this section still apply.
 - `FutureBuilder<K, T, E>` requires `K: Clone + PartialEq + Debug + 'static` and
   `T, E: 'static`; `BoxedResultFuture` has no `Send` bound.
 
+### 3. A value crosses a thread because the compiler proves it may; two gates hold the exceptions
+
+§2 holds because the compiler refuses an owner-local value on another thread. Nothing is made
+`Send` or `Sync` by assertion, and the places that do cross are lists that only shrink:
+
+- **`cargo xtask send-impls`** lists every `unsafe impl Send` and `unsafe impl Sync` in the
+  workspace in `tools/xtask/allowlists/send-impls.toml`; an unlisted impl fails the gate, and the
+  list only shrinks. The impls that stay wrap an OS handle the platform guarantees for another
+  thread, each with its `SAFETY:` comment. `deny.toml` bans `send_wrapper` and `fragile`, which
+  would turn the compiler's refusal into a panic on the wrong thread.
+- **`cargo xtask send-positions`** lists every `Send` and `Sync` position an author wrote in the
+  public API of `flui` and `flui-sdk` (a supertrait, a bound, a `dyn … + Send`) in
+  `tools/xtask/allowlists/send-positions.toml`, read from the nightly rustdoc JSON that
+  [ADR-0089](ADR-0089-upstream-types-in-stable-signatures.md) §6's loader produces, in CI's
+  `api-contracts` job; a new position fails the gate, and the list only shrinks. A position that
+  stays is one a value really crosses a thread through (a panic payload, a waker, a worker's
+  result).
+
 ## Consequences
 
 - Persistence and widget code spawn `!Send` futures directly; IO crosses threads as `Send`
@@ -117,10 +139,7 @@ weak-handle and thread-boundary rules in this section still apply.
   wrong thread.
 - **A thread-boundary ledger** (rejected by the owner, 2026-10-28): every `Send` type and
   bound listed with a flip-or-keep reason. The reasons would be prose a gate cannot check.
-  What remains is the gate without the ledger: `cargo xtask send-positions` counts the
-  author-written `Send` positions of the public API against a list that only shrinks, and
-  `cargo xtask send-impls` with the `deny.toml` bans keeps `unsafe impl Send`/`Sync` and
-  send-wrapper crates out ([ADR-0089](ADR-0089-upstream-types-in-stable-signatures.md) §6).
+  What remains is the gate without the ledger (§3).
 - **Opt-in parallel layout through an `IndependentLayout` marker** (rejected by the owner,
   2026-10-28). It would put a `Send` position back into the render-object surface for a
   speed-up nothing measures; [ADR-0091](ADR-0091-one-owner-thread-isolated-realms-raster-thread.md)
@@ -128,6 +147,9 @@ weak-handle and thread-boundary rules in this section still apply.
 
 ## Validation
 
+- §3: `cargo xtask send-impls` runs in `cargo xtask checks` and `cargo xtask send-positions` in
+  CI's `api-contracts` job, each with its `--self-test`; `cargo xtask deps` (cargo-deny over
+  `deny.toml`) holds the crate bans.
 - `tests/thread_boundary_ui.rs` (`async_driver_stays_on_its_thread`): an `AsyncDriver` handed
   to `std::thread::spawn` does not compile.
 - `crates/flui-testing/tests/async_driver.rs` (`owner_local_task_matrix`):

@@ -64,7 +64,7 @@ fn a_seat_gone_in_a_dispatch_keeps_what_its_input_method_sent_first() {
             .expect("the window's client on its thread")
             .focus_store(Some(Rc::clone(&store) as Rc<dyn TextStore>));
         texts.attach(
-            WindowId(1),
+            WindowId::try_from_raw(1).expect("a nonzero window id"),
             &surface,
             &(Arc::clone(&text) as Arc<dyn SeatWindowText>),
         );

@@ -20,7 +20,9 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 use flui_foundation::geometry::Size;
 use flui_layer::Scene;
-use flui_platform::{CursorError, CursorIcon, PlatformTextInput, PlatformWindow, WindowId};
+use flui_platform::{
+    CursorError, CursorIcon, PlatformTextInput, PlatformWindow, WindowId, WindowIdMint,
+};
 use flui_semantics::platform::PlatformAccessibility;
 
 use crate::sink::{FrameSink, SubmitVerdict};
@@ -83,7 +85,9 @@ impl TestWindow {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            id: WindowId(1),
+            id: WindowIdMint::new()
+                .next()
+                .expect("BUG: a fresh mint issues its first id"),
             scale_factor: 1.0,
             physical_size: Size::default(),
             logical_size: Size::default(),
@@ -100,8 +104,8 @@ impl TestWindow {
 
     /// Report `id` from [`PlatformWindow::id`].
     #[must_use]
-    pub fn with_id(mut self, id: u64) -> Self {
-        self.id = WindowId(id);
+    pub fn with_id(mut self, id: WindowId) -> Self {
+        self.id = id;
         self
     }
 

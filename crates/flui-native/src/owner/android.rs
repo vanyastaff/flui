@@ -267,48 +267,51 @@ pub(crate) struct EditorState {
 /// The identity of one window of the Activity: the window the Activity's next
 /// surface brings never takes an earlier one's, so what a feature keeps of a
 /// window, or a reply made for it, cannot reach the window after it.
+///
+/// It is the window's [`WindowId`](flui_platform::WindowId), which the loop
+/// issues.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub(crate) struct ActivityWindowId(std::num::NonZeroU64);
+pub(crate) struct ActivityWindowId(flui_platform::WindowId);
+
+impl ActivityWindowId {
+    /// The window's platform id.
+    pub(crate) const fn window(self) -> flui_platform::WindowId {
+        self.0
+    }
+}
 
 /// The identities the loop issues, in increasing order, without wrapping:
-/// once the last is issued, no window opens.
+/// once the last is issued, no window opens. The loop is shared with the
+/// threads the Activity's callbacks run on; the lock covers one step of the
+/// mint.
 #[derive(Debug, Default)]
-pub(crate) struct ActivityWindowIds(std::sync::atomic::AtomicU64);
+pub(crate) struct ActivityWindowIds(parking_lot::Mutex<flui_platform::WindowIdMint>);
 
 impl ActivityWindowIds {
-    /// The next identity; `None` once the space is used up.
-    pub(crate) fn next(&self) -> Option<ActivityWindowId> {
-        use std::sync::atomic::Ordering;
-        let previous = self
-            .0
-            .try_update(Ordering::Relaxed, Ordering::Relaxed, |issued| {
-                issued.checked_add(1)
-            })
-            .ok()?;
-        let issued = previous.checked_add(1)?;
-        std::num::NonZeroU64::new(issued).map(ActivityWindowId)
+    /// The next identity.
+    ///
+    /// # Errors
+    ///
+    /// [`IdExhausted`](flui_foundation::IdExhausted) once the space is used
+    /// up, for good.
+    pub(crate) fn next(&self) -> Result<ActivityWindowId, flui_foundation::IdExhausted> {
+        self.0.lock().next().map(ActivityWindowId)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::AtomicU64;
-
     use super::ActivityWindowIds;
 
-    /// Each window of the Activity gets an identity no other had, and the
-    /// last one is the last: the space is refused, never wrapped onto a
-    /// window a reply or a feature's state still names.
+    /// Each window of the Activity gets an identity no other had; that the
+    /// space is refused at its end, never wrapped, is the mint's
+    /// (`flui_platform::WindowIdMint`).
     #[test]
-    fn activity_window_identities_never_repeat_or_wrap() {
+    fn activity_window_identities_never_repeat() {
         let ids = ActivityWindowIds::default();
         let first = ids.next().expect("the first identity");
         let second = ids.next().expect("the second identity");
         assert_ne!(first, second);
-
-        let near_the_end = ActivityWindowIds(AtomicU64::new(u64::MAX - 1));
-        assert!(near_the_end.next().is_some(), "the last identity is issued");
-        assert_eq!(near_the_end.next(), None, "and none after it");
-        assert_eq!(near_the_end.next(), None, "ever");
+        assert_ne!(first.window(), second.window());
     }
 }

@@ -444,6 +444,8 @@ is a value. `nearest_equivalent` reduces the difference to a reference into
 Once a presentation closes, its signal graph refuses reads, writes and new
 signals with `SignalError::OwnerClosed`
 ([ADR-0123](../../docs/adr/ADR-0123-exceptional-presentation-close.md)). After an
-exceptional close the graph's existing values are retained rather than dropped
-([ADR-0127](../../docs/adr/ADR-0127-exceptional-path-retention.md)), but they
-cannot be read or written through it.
+exceptional close the graph's existing values are not released element by element; they stay
+in the graph, which cannot read or write them, until it is destroyed with its presentation under
+the close's containment
+([ADR-0281](../../docs/adr/ADR-0281-a-destructor-that-panics-during-an-unwind-aborts-as-in-std.md)
+§3).

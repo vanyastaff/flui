@@ -1,7 +1,6 @@
 # ADR-0152: The capability seam, revised from ADR-0084
 
-- **Status:** Accepted (2026-10-20). Implemented with the clipboard, its first consumer (see
-  "Landing rule and first consumer" and "As built").
+- **Status:** Accepted (2026-10-20)
 - **Date:** 2026-10-06
 - **Revised:** 2026-10-20 — after reading how ten frameworks ship platform services (sources
   below): one result type, the first two `ProviderContext` methods, the full reason and

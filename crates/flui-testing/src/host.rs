@@ -42,7 +42,7 @@ use flui_platform::input_regions::{DeviceInputRegion, InputRegion};
 use flui_platform::text_store::TextStoreStatus;
 use flui_platform::{
     CursorError, CursorIcon, DisplayId, PlatformInput, PlatformTextInput, PlatformWindow,
-    Unsupported, UnsupportedReason, WindowId,
+    Unsupported, UnsupportedReason, WindowId, WindowIdMint,
 };
 use flui_platform::{SessionEndAnswer, SessionEndPhase, TextStoreHost};
 use flui_rendering::layer::{LayerTree, Scene};
@@ -213,7 +213,10 @@ impl HeadlessWindow {
     #[must_use]
     pub fn new(width: u32, height: u32) -> Self {
         Self {
-            id: WindowId(1),
+            // The host that opens the window gives it its id.
+            id: WindowIdMint::new()
+                .next()
+                .expect("BUG: a fresh mint issues its first id"),
             size: Size::new(f64::from(width), f64::from(height)),
             scale_factor: Mutex::new(1.0),
             cursor: Mutex::new(CursorIcon::Default),
@@ -792,6 +795,10 @@ pub struct HeadlessHost {
     scripted: ScriptedBuiltIns,
     /// The windows opened beside the primary one, in opening order.
     secondary: Vec<SecondaryWindow>,
+    /// Issues the id of every window the host opens, the primary first,
+    /// never one twice: a window opened after another closed has an id of
+    /// its own.
+    window_ids: WindowIdMint,
     /// The surfaces embedded in the primary window, in minting order.
     embedded: Vec<flui_interaction::InputSurface>,
     text_store_host: Option<Rc<RecordingTextStoreHost>>,
@@ -889,7 +896,7 @@ impl HeadlessHost {
     }
 
     fn assemble(
-        window: HeadlessWindow,
+        mut window: HeadlessWindow,
         storage: Option<KitStorage>,
         capabilities: Option<flui_runtime::capability::CapabilityRegistry>,
         scripted: Option<ScriptedBuiltIns>,
@@ -902,6 +909,10 @@ impl HeadlessHost {
         let surface = (window.size.width as u32, window.size.height as u32);
         let text_store_host = window.text_store_host.then(RecordingTextStoreHost::new);
         let gesture_preset = window.gesture_preset.clone();
+        let window_ids = WindowIdMint::new();
+        window.id = window_ids
+            .next()
+            .expect("BUG: a fresh mint issues the primary window's id");
         let window = Rc::new(window);
         let accessibility = Arc::new(HeadlessAccessibility::default());
         let scripted = scripted.unwrap_or_default();
@@ -1001,6 +1012,7 @@ impl HeadlessHost {
             scripted,
             text_store_host,
             secondary: Vec::new(),
+            window_ids,
             embedded: Vec::new(),
             failures,
             presented: None,
@@ -1450,13 +1462,13 @@ impl HeadlessHost {
     /// pipeline of its own at the window's scale factor. It shows nothing
     /// until a view is [attached](Self::attach_to) to it.
     ///
-    /// The window gets the next free window identity, so no two windows of
-    /// this host share one.
+    /// The window gets a window identity no window of this host had, open
+    /// or closed.
     pub fn open_window(&mut self, mut window: HeadlessWindow) -> HeadlessWindowId {
-        let next = u64::try_from(self.secondary.len())
-            .expect("BUG: a test opens far fewer than u64::MAX windows")
-            + 2;
-        window.id = WindowId(next);
+        window.id = self
+            .window_ids
+            .next()
+            .expect("BUG: a test opens far fewer than u64::MAX windows");
         let text_store_host = window.text_store_host.then(RecordingTextStoreHost::new);
         let gesture_preset = window.gesture_preset.clone();
         let window = Rc::new(window);
@@ -2189,7 +2201,13 @@ impl HeadlessHost {
             .collect()
     }
 
-    fn window_of(&self, window: HeadlessWindowId) -> &HeadlessWindow {
+    /// The window `window` names: the primary one or one the host
+    /// [opened](Self::open_window) and has not closed.
+    ///
+    /// # Panics
+    /// When `window` names a secondary window that closed.
+    #[must_use]
+    pub fn window_of(&self, window: HeadlessWindowId) -> &HeadlessWindow {
         if window == self.primary_window() {
             return &self.window;
         }

@@ -60,6 +60,19 @@ trait depends on `flui-platform` instead.
   window hooks; a window reads a display, preference or lifecycle fact
   through an owner hook; and the features that answer one AppKit or UIKit
   view join it through the owner's hooks.
+- **A window's id is issued, never derived (ADR-0039 §4).** Each host issues
+  the `WindowId` of every window it opens from a `flui_platform::WindowIdMint`
+  in its own state (the Win32 `WindowSet`, the AppKit `MacOSWindows`, the X11
+  `X11Windows`, the Wayland loop's table, the UIKit scene state,
+  the Android loop's `ActivityWindowIds`, the Web loop's state), never from an
+  HWND, an `NSWindow` address or an X id, which the OS reuses. The headless
+  host's mint is one for the process (`HEADLESS_WINDOW_IDS`), since a test
+  builds several headless platforms whose windows meet in one application
+  registry. A host keyed by a native handle looks the id up in its
+  table of open windows, whose entry goes as the window is destroyed; a
+  handle that misses names no window. A mint that issued its last id refuses
+  the open with `OpenWindowError::IdsExhausted`. The window conformance check
+  `a_window_opened_after_a_close_has_an_id_of_its_own` holds a host to it.
 - **A host is a table, and `Platform` has one implementation (ADR-0151 §10).**
   `host::Host` names one type for each position of the closed list (loop,
   window, displays, input, text, accessibility, clipboard, drag, haptics,
@@ -3647,8 +3660,8 @@ manager reads as it maps it, so a window opened in a mode is mapped only once
 the property holds it. Logical numbers become 16-bit X11 coordinates and
 extents only when they are finite and fit (`window::linux::x11::placement`).
 
-A window's identity is the `WindowId` the platform mints from a checked
-counter; the X id only routes an event to the window that holds it now and is
+A window's identity is the `WindowId` the platform issues from its `WindowIdMint`;
+the X id only routes an event to the window that holds it now and is
 forgotten as the window closes, before the X window is destroyed. A close (the
 window manager's `WM_DELETE_WINDOW`, which asks the handler, or
 `WindowCommand::Close`, which does not) withdraws the window at once, delivers
@@ -3815,7 +3828,7 @@ provider on the owner thread, with no cell borrowed, in one property: a
 payload past one request is refused, since the source writes no `INCR` yet.
 The session lives in an owner-thread cell; its provider and end hook run
 outside it, and the provider is dropped contained, so the hook hears the end
-though a capture fails (ADR-0127 §2).
+though a capture fails (ADR-0281 §3).
 
 Tests of the drag: `drag::x11::tests` holds the model's tables
 (`messages_read_what_the_source_wrote`, `types_offer_each_format_once`,

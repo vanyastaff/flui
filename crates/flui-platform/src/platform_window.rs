@@ -100,15 +100,15 @@ pub enum WindowAt {
 ///     PlatformHaptics, PlatformSystemChrome, PlatformTextInput, PlatformWindow,
 ///     RedrawRequester,
 ///     SurfaceTarget, Unsupported, UnsupportedReason, WindowCapabilities, WindowCommand,
-///     WindowGeometry, WindowId, WindowMaterial, WindowMode, WindowState,
+///     WindowGeometry, WindowId, WindowIdMint, WindowMaterial, WindowMode, WindowState,
 /// };
 /// use flui_foundation::geometry::Size;
 ///
-/// struct Offscreen;
+/// struct Offscreen(WindowId);
 ///
 /// impl PlatformWindow for Offscreen {
 ///     fn id(&self) -> WindowId {
-///         WindowId(7)
+///         self.0
 ///     }
 ///     fn request_redraw(&self) {}
 ///     fn redraw_requester(&self) -> Arc<dyn RedrawRequester> {
@@ -150,8 +150,10 @@ pub enum WindowAt {
 ///     }
 /// }
 ///
-/// let window: &dyn PlatformWindow = &Offscreen;
-/// assert_eq!(window.id(), WindowId(7));
+/// // The id comes from the mint of whoever opened the window.
+/// let id = WindowIdMint::new().next().expect("a fresh mint issues an id");
+/// let window: &dyn PlatformWindow = &Offscreen(id);
+/// assert_eq!(window.id(), id);
 /// let capabilities = window.state().capabilities;
 /// assert!(matches!(
 ///     WindowCommand::Show.admit(&capabilities),
@@ -204,11 +206,11 @@ pub enum WindowAt {
 /// };
 /// use flui_foundation::geometry::Size;
 ///
-/// struct Offscreen;
+/// struct Offscreen(WindowId);
 ///
 /// impl PlatformWindow for Offscreen {
 ///     fn id(&self) -> WindowId {
-///         WindowId(7)
+///         self.0
 ///     }
 ///     fn request_redraw(&self) {}
 ///     fn redraw_requester(&self) -> Arc<dyn RedrawRequester> {

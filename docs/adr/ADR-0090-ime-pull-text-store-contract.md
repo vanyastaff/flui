@@ -1,12 +1,11 @@
 # ADR-0090: IME talks to a pull text-store contract with edits and asynchronous locks
 
-- **Status:** Accepted in part (2026-09-26): §1, §2 and §4 are implemented (the migration
-  plan's IME text-store row). The Win32 TSF host implementation now lives under ADR-0135;
-  this record's remaining §3/§5 acceptance and native exit B1 evidence stay separate. §2 was amended
-  on acceptance: the projection takes an asynchronous lock, not a synchronous one (see §2).
+- **Status:** Accepted (2026-09-26) for §1, §2 and §4; §3 and §5 are Proposed
 - **Date:** 2026-09-25
-- **Amended:** 2026-10-11 — current Win32 host/observer wiring is distinguished from pending acceptance and the controller-lock interim.
-- **Amended:** 2026-10-30 — the macOS row: edits take an `Async` read-write lock, queries keep `Sync`.
+- **Revised:** 2026-10-11 — current Win32 host/observer wiring is distinguished from pending acceptance and the controller-lock interim.
+- **Revised:** 2026-10-30 — the macOS row: edits take an `Async` read-write lock, queries keep `Sync`.
+- **Related:** [ADR-0135](ADR-0135-win32-text-services-hold-the-text-store-on-the-owner-thread.md)
+  (the Win32 TSF host of this contract)
 - **Amended by:** [ADR-0247](ADR-0247-android-java-view.md) (2026-10-17): the Android row of the
   platform mapping, and the GameActivity hypothesis in Consequences, rejected.
 - **Superseded-by:** [ADR-0142](ADR-0142-text-store-commit-gate-and-owner-code-containment.md),

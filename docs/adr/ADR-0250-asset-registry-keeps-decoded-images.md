@@ -5,9 +5,12 @@
 - **Superseded-by:** [ADR-0279](ADR-0279-image-loads-run-on-the-lanes-their-caller-holds.md)
   for §2 only how a load is aborted and what a dropped load does to its waiters, and for §3
   only where a decode runs
+- **Supersedes:** [ADR-0118](ADR-0118-network-image-registry-identity.md), the key's shape only
+  (registry identity now covers asset images too, and the key is opaque);
+  [ADR-0120](ADR-0120-typed-asset-cache-retention.md), its Consequences paragraph on the widget
+  image bridge's own LRU only
 - **Amends:** [ADR-0097](ADR-0097-no-process-global-state-gate.md) (removes the decoded-image
-  `CACHE` global), [ADR-0118](ADR-0118-network-image-registry-identity.md) (registry identity now
-  covers asset images too, and the key is opaque),
+  `CACHE` global),
   [ADR-0237](ADR-0237-window-state-and-host-notices.md) decision 9 (which image memory the host
   reclaims itself)
 - **Related:** [ADR-0105](ADR-0105-asset-validation-and-bridge-progress.md) (bridge runtime

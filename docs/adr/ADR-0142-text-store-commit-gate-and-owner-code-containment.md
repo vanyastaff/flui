@@ -1,12 +1,12 @@
 # ADR-0142: Text store owner notification, commit gate and owner-code containment
 
-- **Status:** Accepted (2026-10-06). Items 1–3 and 5–8 are implemented; item 4 lands with the
-  widget's composition handling. Of it, the host contract, the owner's `complete_composition`
-  with the `Abandoned` path, the removal of `active_store`
-  ([ADR-0135](ADR-0135-win32-text-services-hold-the-text-store-on-the-owner-thread.md)), the
-  field's commit on blur, on a pointer-down on it and on a paste, and the runtime's commit on a
-  pointer-down anywhere in the presentation are in the code.
+- **Status:** Accepted (2026-10-06). Not implemented:
+  [`docs/gaps.md` entry 43, ADR-0142 item 4](../gaps.md#43-accepted-adr-sections-not-built-yet).
 - **Date:** 2026-10-06
+- **Superseded-by:** [ADR-0281](ADR-0281-a-destructor-that-panics-during-an-unwind-aborts-as-in-std.md),
+  only where items 2 and 8 and the consequences retain a later failure or a failed scope's values
+  per ADR-0127: a later payload goes to `discard_payload`, and the values are destroyed under the
+  scope's containment.
 - **Superseded-by:** [ADR-0151](ADR-0151-platform-layer-boundary-and-names.md), for the placement
   of `LockArbiter`, `CompositionLedger` and `EditGeneration` in the contract crate only (they move
   to `flui-interaction::text_input`); every decision of this ADR stands.
@@ -22,8 +22,8 @@
   (item 4).
 - **Related:** [ADR-0027](ADR-0027-owner-affine-ui-realms.md) §3 (the commit anchor),
   [ADR-0123](ADR-0123-exceptional-presentation-close.md) (presentation close keeps its own
-  containment), [ADR-0127](ADR-0127-exceptional-path-retention.md) (values retained on an
-  exceptional path)
+  containment), [ADR-0127](ADR-0127-exceptional-path-retention.md) (an exceptional
+  path's operation boundaries)
 
 ## Context
 
@@ -111,9 +111,7 @@ framework does not control is contained.
    client's composition through the same path, before the incoming client is installed (on a
    pull host, a completion queued ahead of the incoming focus): which field the focus manager
    tells first does not matter, and the blurred field's own later completion and detach carry a
-   stale token and do nothing. A failure in that commit is kept and the attach goes on. Until
-   this item lands, a form reset during a composition leaves the
-   preedit in the field (the reset writes only the committed text it compares against).
+   stale token and do nothing. A failure in that commit is kept and the attach goes on.
 5. **A commit anchor skipped by an unwound frame is a debt of the UI runtime**, paid at its next owner
    turn (a drained inbox, a background pump or a pump), not at the next frame, and a failed wake
    does not clear it.

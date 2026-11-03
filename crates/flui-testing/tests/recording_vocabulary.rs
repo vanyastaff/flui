@@ -54,7 +54,13 @@ fn at(nanos: u64) -> EventTime {
 }
 
 fn row(input: HostInput, outcome: InputOutcome) -> InputRecord {
-    InputRecord::Input(InputRow::new(WindowId(1), at(5), at(9), input, outcome))
+    InputRecord::Input(InputRow::new(
+        WindowId::try_from_raw(1).expect("a nonzero window id"),
+        at(5),
+        at(9),
+        input,
+        outcome,
+    ))
 }
 
 fn host(input: HostInput) -> InputRecord {
@@ -301,7 +307,7 @@ fn action(action: accesskit::Action, data: Option<accesskit::ActionData>) -> Inp
 fn decision(disposition: GestureDisposition) -> InputRecord {
     InputRecord::Decision(
         DecisionRow::new(
-            WindowId(2),
+            WindowId::try_from_raw(2).expect("a nonzero window id"),
             PointerId::try_from(6_u64).expect("nonzero"),
             at(19),
             disposition,
@@ -331,7 +337,7 @@ fn sample(enumeration: &str, variant: &str) -> Option<Vec<InputRecord>> {
         ("InputRecord", "Deadline") => Some(vec![
             InputRecord::Deadline(
                 DeadlineRow::new(
-                    WindowId(2),
+                    WindowId::try_from_raw(2).expect("a nonzero window id"),
                     Some(PointerId::try_from(6_u64).expect("nonzero")),
                     at(23),
                     RecordedMember::new(NonZeroU64::new(4).expect("nonzero")),
@@ -342,7 +348,7 @@ fn sample(enumeration: &str, variant: &str) -> Option<Vec<InputRecord>> {
                 .with_member_type("flui_interaction::LongPressGestureRecognizer"),
             ),
             InputRecord::Deadline(DeadlineRow::new(
-                WindowId(2),
+                WindowId::try_from_raw(2).expect("a nonzero window id"),
                 None,
                 at(24),
                 RecordedMember::new(NonZeroU64::new(5).expect("nonzero")),
@@ -370,7 +376,7 @@ fn sample(enumeration: &str, variant: &str) -> Option<Vec<InputRecord>> {
         )),
         ("RecordedSurface", "Embedded") => one(InputRecord::Input(
             InputRow::new(
-                WindowId(1),
+                WindowId::try_from_raw(1).expect("a nonzero window id"),
                 at(5),
                 at(9),
                 HostInput::Platform(PlatformInput::Pointer(PointerEvent::Down(press(touch())))),

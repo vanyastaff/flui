@@ -116,8 +116,8 @@ pub enum UiCommand {
         /// Runs inside an `EventCx` opened by the `WriterSource` of the
         /// presentation whose graph minted `target`, and of no other. A
         /// retained `FnMut` envelope invoked at most once: after a callback
-        /// panic its captures are kept rather than destroyed (ADR-0086,
-        /// revised 2026-09-28).
+        /// panic its captures are destroyed under containment, the first
+        /// failure staying first (ADR-0281 §3).
         apply: Box<dyn FnMut(&mut flui_view::EventCx<'_>) + Send>,
     },
 }

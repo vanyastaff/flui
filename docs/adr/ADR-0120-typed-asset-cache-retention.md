@@ -1,7 +1,8 @@
 # ADR-0120: Typed asset-cache retention and shared initialization
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-10-04)
 - **Date:** 2026-10-04
+- **Superseded-by:** [ADR-0250](ADR-0250-asset-registry-keeps-decoded-images.md) for the Consequences paragraph on the widget image bridge only: the registry keeps decoded images itself, and the widget layer has no LRU of its own.
 - **Related:** ADR-0105 (asset runtime ownership), ADR-0107 (asset byte sources)
 
 ## Context

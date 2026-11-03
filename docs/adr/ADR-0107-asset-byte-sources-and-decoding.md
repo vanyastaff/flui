@@ -1,7 +1,12 @@
 # ADR-0107: Asset byte sources and decoding
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-10-03)
 - **Date:** 2026-10-03
+- **Superseded-by:** [ADR-0280](ADR-0280-http-is-a-capability-of-the-host.md) §5 for the network
+  bridge only: `flui-assets` has no `NetworkLoader`, no `reqwest` and no `network` feature, and
+  `flui-widgets` no `network-images`; a network image is fetched through the host's
+  `HttpCapability`. The byte sources, the decoders and the rule that a disabled feature leaves no
+  callable stub stand.
 - **Related:** [ADR-0105](ADR-0105-asset-validation-and-bridge-progress.md)
 
 ## Context

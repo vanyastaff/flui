@@ -4,6 +4,9 @@
 - **Date:** 2026-10-07
 - **Supersedes:** [ADR-0086](ADR-0086-signal-writes-through-event-context.md) §4,
   only its promise to preserve gesture extension signatures
+- **Superseded-by:** [ADR-0281](ADR-0281-a-destructor-that-panics-during-an-unwind-aborts-as-in-std.md),
+  only where containment retains opaque ownership according to ADR-0127: it is destroyed under
+  that containment.
 - **Related:** [ADR-0027](ADR-0027-owner-affine-ui-realms.md),
   [ADR-0127](ADR-0127-exceptional-path-retention.md),
   [ADR-0159](ADR-0159-gesture-arena-owner-delivery.md)

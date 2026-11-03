@@ -150,7 +150,8 @@ fn native_identity_is_observed_before_registry_publication() {
         drop(uninstalled);
         let queried = Arc::new(AtomicBool::new(false));
         let window: Rc<dyn PlatformWindow> = Rc::new(ReentrantIdentityWindow {
-            inner: crate::app::window_test_support::TestWindow::new().with_id(100),
+            inner: crate::app::window_test_support::TestWindow::new()
+                .with_id(flui_platform::WindowId::try_from_raw(100).expect("a nonzero window id")),
             probe,
             queried: Arc::clone(&queried),
             on_scale: None,
@@ -362,7 +363,9 @@ fn presentation_assembly_reentry_revalidates_its_authorizer() {
         let primary = install_test_ui_runtime();
         let sibling = keep_sibling.then(|| {
             let window: Rc<dyn PlatformWindow> =
-                Rc::new(crate::app::window_test_support::TestWindow::new().with_id(99));
+                Rc::new(crate::app::window_test_support::TestWindow::new().with_id(
+                    flui_platform::WindowId::try_from_raw(99).expect("a nonzero window id"),
+                ));
             install_presentation_alongside(primary, window).expect("initial sibling installs")
         });
         let uninstalled = crate::app::ui_runtime::UiRuntime::for_test();
@@ -374,7 +377,8 @@ fn presentation_assembly_reentry_revalidates_its_authorizer() {
         let assembled = Arc::new(AtomicBool::new(false));
         let observed = Arc::clone(&assembled);
         let window: Rc<dyn PlatformWindow> = Rc::new(ReentrantIdentityWindow {
-            inner: crate::app::window_test_support::TestWindow::new().with_id(100),
+            inner: crate::app::window_test_support::TestWindow::new()
+                .with_id(flui_platform::WindowId::try_from_raw(100).expect("a nonzero window id")),
             probe,
             queried: Arc::new(AtomicBool::new(false)),
             on_scale: Some(Arc::new(move || {
@@ -868,13 +872,9 @@ fn panic_restores_dispatch_host_for_next_event() {
 
 /// Installs two coexisting UI runtimes, A (through the legacy displacing
 /// `install_platform_ui_runtime`) and B (through `install_ui_runtime_alongside`,
-/// non-displacing). Both windows come from ONE shared headless platform
-/// instance, not two separate `test_window()` calls: `HeadlessPlatform`
-/// mints window ids from an instance-local counter, so two windows from
-/// two SEPARATE `headless_platform()` calls can alias the same id —
-/// fatal for two UI runtimes meant to coexist, since `WindowRegistry::
-/// register` REPLACES on a matching id, silently dropping ui_runtime
-/// A's window mapping the moment UI runtime B's aliased-id window installs.
+/// non-displacing). Both windows come from one headless platform, whose
+/// window ids differ, since `WindowRegistry` refuses a second mapping of a
+/// window id it already maps.
 fn install_two_test_ui_runtimes() -> (PresentationDispatcher, PresentationDispatcher) {
     let platform = flui_native::headless_platform();
     let window_a: Rc<dyn PlatformWindow> = platform
@@ -1356,7 +1356,9 @@ fn preferences_wake_each_isolated_window() {
         .run(crate::app::runner::app_handler(move |owner| {
             install_owner_platform(owner)?;
             for id in [101, 102] {
-                let window = crate::app::window_test_support::TestWindow::new().with_id(id);
+                let window = crate::app::window_test_support::TestWindow::new().with_id(
+                    flui_platform::WindowId::try_from_raw(id).expect("a nonzero window id"),
+                );
                 let redraws = window.redraw_calls_handle();
                 let window: Rc<dyn PlatformWindow> = Rc::new(window);
                 let observed = Rc::new(RefCell::new(Vec::new()));

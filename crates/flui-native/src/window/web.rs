@@ -1201,8 +1201,9 @@ impl host::Window<WebLoop> for WebWindow {
     ) -> Result<Rc<dyn HostWindow>, OpenWindowError> {
         tracing::info!(title = %options.title, "Creating web window (canvas)");
 
+        let id = owner.with_state(|state| state.window_ids.next())?;
         let window = Self::try_new(
-            WindowId(0), // Single window in browser
+            id,
             &options.title,
             options.size.width,
             options.size.height,
@@ -1226,11 +1227,11 @@ impl host::Window<WebLoop> for WebWindow {
                 let removed = state.upgrade().and_then(|state| {
                     let mut state = state.lock();
                     if state
-                        .window_delivery
+                        .window
                         .as_ref()
-                        .is_some_and(|current| Arc::ptr_eq(current, &retiring))
+                        .is_some_and(|(_, current)| Arc::ptr_eq(current, &retiring))
                     {
-                        state.window_delivery.take()
+                        state.window.take()
                     } else {
                         None
                     }
@@ -1239,7 +1240,7 @@ impl host::Window<WebLoop> for WebWindow {
             },
         )?;
         owner.with_state(|s| {
-            s.window_delivery = Some(delivery);
+            s.window = Some((id, delivery));
         });
 
         let window = Rc::new(window);
@@ -1250,12 +1251,7 @@ impl host::Window<WebLoop> for WebWindow {
     }
 
     fn active(owner: &WebLoop, _: &WindowPositions<CanvasRef>) -> Option<WindowId> {
-        owner
-            .state
-            .lock()
-            .window_delivery
-            .as_ref()
-            .map(|_| WindowId(0))
+        owner.state.lock().window.as_ref().map(|(id, _)| *id)
     }
 
     fn capabilities(_: &WebLoop, _: &WindowPositions<CanvasRef>) -> WindowCapabilities {

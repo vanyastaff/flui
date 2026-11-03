@@ -1,15 +1,19 @@
-# ADR-0027: Owner-affine UI runtimes — a multi-threaded runtime of single-writer ownership domains
+# ADR-0027: Owner-affine UI runtimes — single-writer ownership domains, with parallelism outside the UI transaction
 
-- **Status:** Accepted
-- **Superseded-by:** ADR-0171 for terminology only; the ownership and threading
-  decisions below remain in force.
+- **Status:** Accepted (2026-07-11)
+- **Superseded-by:** [ADR-0171](ADR-0171-ui-runtime-and-host-vocabulary.md) for terminology
+  only; the ownership and threading decisions below remain in force.
 - **Superseded-by:** [ADR-0266](ADR-0266-one-owner-thread-ui-runtimes-isolate.md) for the verdict's
   sentence "Multiple UI runtimes may execute concurrently" and §1's sentence on runtime count per
   owner thread: every UI runtime runs on one owner thread.
 - **Date:** 2026-07-11
-- **Amended:** 2026-10-30 — §9 matches the code after the `!Send` flip: the view, render and
+- **Revised:** 2026-11-03 — the title no longer calls FLUI a multi-threaded runtime: one owner
+  thread hosts every UI runtime (ADR-0266), and the parallelism is outside the UI transaction.
+- **Revised:** 2026-10-30 — §9 matches the code after the `!Send` flip: the view, render and
   callback surfaces carry no `Send` bound, and the cross-thread handles are the ones listed there.
-- **Amended:** 2026-10-11 — factual runtime location and attachment capability names follow ADR-0083/0190; the former self-absorption label is removed.
+- **Revised:** 2026-10-11 — factual runtime location and attachment capability names follow ADR-0083/0190; the former self-absorption label is removed.
+- **Amended by:** [ADR-0091](ADR-0091-one-owner-thread-isolated-realms-raster-thread.md) (§5: one
+  raster thread serves several presentations' raster owners)
 - **Absorbs:** [retired ADR-0002](https://github.com/vanyastaff/flui/blob/aaecd27847a6338538f70e230a1aa01a018b0fd6/docs/adr/ADR-0002-engine-wide-threading-architecture.md), the original engine-wide threading constraints.
 - **Refined by:** ADR-0037 (presentation ownership domains), ADR-0043 (per-presentation trees,
   UI runtime `GlobalKeyScope`), ADR-0045 (the raster lane)

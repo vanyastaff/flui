@@ -1,19 +1,20 @@
 # ADR-0261: Dropping a build owner ends its tree observation
 
-- **Status:** Accepted (2026-10-28). Not implemented on `main`: `BuildOwner`'s `Drop` reclaims its
-  key claims only (`crates/flui-view/src/owner/build_owner.rs`; §1 is in review with the flui-view
-  guard work), and `flui-testing` has no `DropLedger`; the tests that count drops today each keep a
-  probe of their own.
+- **Status:** Accepted (2026-10-28)
 - **Date:** 2026-10-28
+- **Revised:** 2026-11-03 — §1's exceptional paths follow ADR-0281: an owner dropped during an
+  unwind destroys its observer without calling it, and a close that holds a failure destroys the
+  owner under containment, so `detached()` is called once.
 - **Supersedes:** [ADR-0040](ADR-0040-tree-observation-seam.md) §3, the "Teardown
   honesty" item's sentences "A `BuildOwner` dropped without `clear_tree_observer` emits no
   `detached()` — embedders that install must clear (install/clear symmetry)", and the matching
   negative consequence and follow-up ("A UI runtime-teardown hook that guarantees
   `clear_tree_observer`"). The rest of §3, that nothing synthesizes `element_unmounted` for elements
   alive at teardown, stands.
-- **Related:** [ADR-0127](ADR-0127-exceptional-path-retention.md) (a thread-shared `Arc` is
-  retained on an exceptional path), [ADR-0123](ADR-0123-exceptional-presentation-close.md) (a close
-  that holds a failure retains ownership),
+- **Related:** [ADR-0281](ADR-0281-a-destructor-that-panics-during-an-unwind-aborts-as-in-std.md)
+  (values on a failed path are destroyed under containment),
+  [ADR-0123](ADR-0123-exceptional-presentation-close.md) (a close that holds a failure withdraws
+  authority first),
   [ADR-0258](ADR-0258-owner-turn-panic-boundary-and-terminal-exit.md) §5 (a destructor does not
   resume while user values live), [ADR-0097](ADR-0097-no-process-global-state-gate.md) (a counter
   in the framework would be a `static`), [ADR-0243](ADR-0243-one-testing-kit-per-layer.md) (a
@@ -69,8 +70,9 @@ Chosen option for §1: 1, because the owner is the one value that always goes wh
 `BuildOwner`'s `Drop` leaves the observer in its slot and calls `detached()` once on a clone of
 its `Arc`, through the contained call `clear_tree_observer` and `set_tree_observer` already use for
 the observer they displace (`notify_detached`). Nothing of the owner is borrowed during the call.
-A panic in `detached()` is contained and logged as for any observer (ADR-0040 §6), its payload and
-that clone are retained, and the drop goes on.
+A panic in `detached()` is contained and logged as for any observer (ADR-0040 §6), its payload
+discarded and that clone destroyed under the same containment (ADR-0281 §2–§3), and the drop
+goes on.
 
 ```rust
 // flui-view
@@ -93,27 +95,21 @@ one, and the old observer was told then, so every stream has exactly one end. `d
 last call the observer gets from that owner: the drop runs after the tree's unmounts, and nothing
 of the owner emits after it.
 
-On an exceptional path the observer is not called and not dropped:
+On an exceptional path:
 
 - **During an unwind.** `BuildOwner::drop` runs as the unwind passes, so `thread::panicking()` is
-  true there, and the drop does not call `detached()`; the slot's own `Drop` retains the `Arc`
-  (`mem::forget`) instead of dropping it (ADR-0127 §2–3).
+  true there, and the drop does not call `detached()`: the observer is user code, and an unwind
+  is already in progress. The slot still drops the observer's `Arc` with the other fields
+  (ADR-0281 §1), so that stream ends without `detached()`, as it does for an observer that
+  panicked.
 - **A close that holds a failure (ADR-0123).** Here `thread::panicking()` is false, since the
-  failure was caught, so the drop could not tell; it is never asked. That path never drops the
-  owner: `UiRuntime`'s `Drop` and presentation removal decide from the failure they hold
-  (`first.is_some()`) or from the presentation's own retained mode (`preserving_close()`), close
-  the presentation with `CloseMode::PreservingFailure`, and retain it whole with `mem::forget`
-  (`crates/flui-runtime/src/ui_runtime/mod.rs`, `ui_runtime/presentations.rs`). The
-  `BuildOwner` inside is never dropped, so its `Drop`, `detached()` included, never runs, and the
-  observer's `Arc` is retained with it.
+  failure was caught. The close (`CloseMode::PreservingFailure`) destroys the presentation, its
+  `BuildOwner` included, under the close's containment (ADR-0281 §3), so the owner's `Drop` runs
+  and calls `detached()` once, contained like any other call of it; the close's first failure
+  stays first.
 
-Such a stream ends without `detached()`, as it does today for an observer that panicked. A path
-that holds a failure and still drops the owner would be a defect of that path, not of this rule.
-Since ADR-0281 §3 the close destroys the owner under containment instead, and
-`a_close_that_holds_a_failure_detaches_once` (`flui-runtime`) asserts that `detached()` is
-called once and the observer released. A
-`dispose` that panics is not such a close: it is contained where it runs (ADR-0040 §6), the close
-stays healthy, the owner drops, and the stream ends with `detached()`.
+A `dispose` that panics is not such a close: it is contained where it runs (ADR-0040 §6), the
+close stays healthy, the owner drops, and the stream ends with `detached()`.
 
 ### §2. A teardown test proves the release with sentinels from one ledger in the testing kit
 
@@ -178,8 +174,8 @@ holds the states planted in it.
 - Good, because the "teardown hook that guarantees `clear_tree_observer`" follow-up of ADR-0040
   needs no hook.
 - Bad, because the drop of a `BuildOwner` now runs user code, contained, where it ran none.
-- Neutral, because a stream that ends on an exceptional path still ends silently, by the retention
-  rule every container follows.
+- Neutral, because a stream whose owner drops during an unwind still ends silently: no user code
+  runs while the thread unwinds.
 - Good, because a release test proves destructors ran, with one kit type and no `static`.
 - Bad, because a release test sees only what its application planted: a framework-internal cycle
   that holds no application value passes it.
@@ -188,7 +184,7 @@ holds the states planted in it.
 
 - `dropping_an_owner_with_an_observer_detaches_it_once` (`flui-view`): an owner dropped with an
   observer calls `detached()` once; after `clear_tree_observer` the drop calls nothing; no event
-  follows `detached()`; an owner dropped during an unwind calls nothing and retains the observer;
+  follows `detached()`; an owner dropped during an unwind calls nothing and drops the observer;
   the owner's key-retirement rows keep passing, since the slot's field order is unchanged.
 - `a_close_that_holds_a_failure_detaches_once` (`flui-runtime`, new): the presentation is
   destroyed under containment (ADR-0281 §3), `detached()` called once.

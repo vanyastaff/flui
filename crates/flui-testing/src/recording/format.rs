@@ -230,7 +230,7 @@ fn header_to_wire(header: &RecordingHeader, privacy: Privacy) -> Result<rec::Hea
             .iter()
             .map(|window| {
                 Ok(rec::Window {
-                    window: window.window.0,
+                    window: window.window.get().get(),
                     scale_factor: window.scale_factor,
                     title: text(&window.title),
                     gestures: window
@@ -277,7 +277,8 @@ fn header_from_wire(header: rec::Header, line: u64) -> Result<RecordingHeader, R
             .into_iter()
             .map(|window| {
                 Ok(RecordedWindow {
-                    window: WindowId(window.window),
+                    window: WindowId::try_from_raw(window.window)
+                        .ok_or_else(|| WireError::Invalid("window id 0".into()))?,
                     scale_factor: window.scale_factor,
                     title: window.title,
                     gesture_profiles: window.gestures.map(profiles_from_wire).transpose()?,

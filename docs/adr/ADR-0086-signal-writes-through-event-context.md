@@ -1,22 +1,6 @@
 # ADR-0086: Signal writes go through `EventCx` opened by a `WriterSource`
 
-- **Status:** Accepted (2026-10-30), with §5 amended. Implemented: `EventCx`, `Writer`,
-  `WriterSource`, lifecycle and render-context writer acquisition, callback inference helpers,
-  typed `Signal` writes, and the owner-local catalog migration described below, including
-  `Draggable`, `PageView::on_page_changed` (delivered on the local post-frame lane), the
-  `Action::invoke`/`CallbackAction`/`CallbackShortcuts` family, and `DragTarget`'s and
-  `Semantics`' callbacks through owner-local interaction-lane payloads (§3, amended
-  2026-09-30). §8 step 3 is implemented: `Reactive` is no longer a write target,
-  `BuildContext::reactive()` and the public `BuildOwner::reactive()` are gone (host code
-  writes through `BuildOwner::writer_source`), and `UiCommand::SignalWrite` runs its retained
-  `FnMut(&mut EventCx)` envelope inside an `EventCx` opened by the minting presentation's
-  `WriterSource` (the ADR-0074 §5.8 amendment). A `LocalHistoryEntry::on_remove` owed by a
-  pop inside a navigator flush is delivered on the navigator's post-frame queue, after the
-  frame, so its write is never refused by the build guard. Bound `StateCell`/`StateHandle`
-  mutation refusal during `build` (§7) is implemented. The UI callback surface lost `Send`
-  (ADR-0091 §1), and listener, animation-status and post-frame callbacks write through a
-  captured `WriterSource` (§5 as amended). The rollback trigger was evaluated and not met
-  (§9). `LocalHistoryEntry` stays crate-private until its first catalog consumer.
+- **Status:** Accepted (2026-10-30)
 - **Date:** 2026-09-25
 - **Amended:** 2026-10-30 — §5: listener, animation-status and post-frame callbacks lost `Send`
   without gaining `cx`; they write through a captured `WriterSource`.
@@ -25,9 +9,10 @@
   only §4's gesture extension signature compatibility promise; the signal write
   boundary and widget-side `WriterSource` wrapping remain in force
 - **Revised:** 2026-09-28 — the transitional `SignalWrite` callback is a retained `FnMut`
-  envelope invoked at most once; success disposes captures after redraw demand is durable, while
-  callback panic retains the opaque bundle because aggregate drop glue cannot be made
-  recovery-safe. The planned `WriterSource` migration preserves that ownership contract.
+  envelope invoked at most once; success disposes captures after redraw demand is durable, and
+  the `WriterSource` migration preserves that ownership contract.
+- **Revised:** 2026-11-03 — after a callback panic the `SignalWrite` capture bundle is destroyed
+  under containment instead of retained (ADR-0281 §3).
 - **Amends:** [ADR-0074](ADR-0074-realm-scoped-signals.md) — §5.1 (the signatures of `set`,
   `update` and `set_if_changed`), §5.2 (the run-time guard stays authoritative; `Writer` narrows
   it and does not replace it), §5.8 (`UiCommand::SignalWrite` opens its write through the
@@ -266,7 +251,7 @@ classification, with the command above as its census:
 | widgets `semantics/mod.rs` | 15: `on_click`, `on_show_context_menu`, `on_scroll_{left,right,up,down}`, `on_increment`, `on_decrement`, `on_scroll_into_view`, `on_focus`, `on_blur`, `on_set_value`, `on_set_numeric_value`, `on_set_scroll_offset`, `on_action` | event | no (was yes) | the UI runtime's semantics-action drain, synchronously, through the node's `WriterSource` |
 | widgets `text/editable_text.rs`, `text/text_field.rs` | `on_submitted` ×2 | event | no | not yet audited |
 | widgets `text/editable_text.rs`, `text/text_field.rs` | `on_changed` ×2 | event | no | the field's key handler, IME commit and clipboard actions, after a user edit |
-| widgets `navigator/local_history.rs` | `on_remove` | event | no | not yet audited |
+| widgets `navigator/local_history.rs` | `on_remove` | event | no | the navigator's post-frame queue, after the frame, when a pop inside a navigator flush owes it, so the build guard never refuses its write; `LocalHistoryEntry` is crate-private until its first catalog consumer |
 | widgets `form/mod.rs` | `Form::on_changed` | event | no | a handle method the caller invokes: `FormFieldHandle::did_change`/`reset`, `FormHandle::reset` |
 | widgets `form/form_field.rs`, `form/raw_text_form_field.rs` | `on_saved` ×2, `on_reset` ×2, `on_submitted` | event | no | `on_saved` from `FormHandle::save`, `on_reset` from `FormHandle::reset`/`FormFieldHandle::reset`; `on_submitted` as `EditableText`'s |
 | material `text_field.rs`, `text_form_field.rs` | `on_changed`, `on_saved`, `on_reset`, `on_submitted` | event | no | as the widgets rows above |

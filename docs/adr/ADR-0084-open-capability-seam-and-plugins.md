@@ -4,14 +4,10 @@
 - **Superseded-by:** [ADR-0152](ADR-0152-capability-seam-revised.md) as a whole
 - **Date:** 2026-09-25
 - **Revised:** 2026-09-26 (prototype of the seam; see Context)
-- **Supersedes in part (on acceptance):** [ADR-0078](ADR-0078-rules-live-in-types-and-lints.md)
-  §1, the sentence "A new capability is a method on `LifecycleContext`, never on
-  `BuildContext`" (for platform capabilities; the build/lifecycle split and the sealing stand)
-- **Amends (on acceptance):** [ADR-0031](ADR-0031-platform-haptics-capability-and-system-chrome-deferral.md)
-  §4 (the widget-facing haptics handle arrives through the registry; this replaces the deferral
-  "No widget-facing handle exists yet"); [ADR-0038](ADR-0038-data-transfer-architecture.md) §7
-  (`DataTransferHandle` is reached through the registry, not a `LifecycleContext` method)
-- **Related:** [ADR-0028](ADR-0028-design-system-decoupling-contract.md) ("Platform-adaptive
+- **Related:** [ADR-0078](ADR-0078-rules-live-in-types-and-lints.md) §1,
+  [ADR-0031](ADR-0031-platform-haptics-capability-and-system-chrome-deferral.md) §4 and
+  [ADR-0038](ADR-0038-data-transfer-architecture.md) §7 (the rules this proposal would have
+  changed; ADR-0152 decides them instead), [ADR-0028](ADR-0028-design-system-decoupling-contract.md) ("Platform-adaptive
   behavior is a capability seam, not a branch"),
   [ADR-0037](ADR-0037-presentation-ownership-domains.md),
   [ADR-0039](ADR-0039-event-loop-affinity-capability.md) §6,
@@ -38,6 +34,11 @@ The rule that came with it — "A new capability is a method on `LifecycleContex
 set: only `flui-view` can add a capability, and only by naming its type, so a capability whose
 backend lives in a third-party crate cannot exist. The "Extending FLUI" table in `docs/extending.md` repeats the
 rule.
+
+Had it been accepted, this record would have replaced that sentence of ADR-0078 §1 for platform
+capabilities (the build/lifecycle split and the sealing stand) and moved the widget-facing haptics
+handle of ADR-0031 §4 and the `DataTransferHandle` of ADR-0038 §7 into the registry. ADR-0152
+replaces it as a whole and decides those rules instead.
 
 The platform side already has more than the widget side can reach:
 

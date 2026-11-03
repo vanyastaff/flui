@@ -94,8 +94,9 @@ payload в `window_proc` с `DefWindowProcW` и `PostQuitMessage` (4a) — от�
 `ClosePresentation` последнего realm целиком (доставка закрытия и уничтожение), уничтожение
 realm в `teardown_platform_realm`, `queued_turns`, `on_quit`, ошибка сброса реестра или паника
 сервиса при shutdown, если слот пуст. Сбой при закрытии не последнего realm даёт один
-`CallbackPanic` и удержание. Возобновляется инертный payload (`&str`/`String`); непрозрачный
-удерживается, а возобновляется `String` с его текстом.
+`CallbackPanic`, а неуничтоженное уничтожается под локализацией (ADR-0281 §3). Возобновляется
+инертный payload (`&str`/`String`); непрозрачный уходит в `discard_payload`, а возобновляется
+`String` с его текстом.
 
 ### (c) Учёт `Drop` (ADR-0261 §2, варианты 2a–2c)
 
@@ -270,9 +271,10 @@ HDD; ещё ~0,5 с — запас на `ShutdownBlockReasonDestroy` и `PostQui
 нельзя: наблюдатель, который блокирует S3 дольше бюджета, съедает время сброса. Это предел
 приложения, он задокументирован. Тест утверждает только долю фреймворка.
 
-**Первая ошибка главная.** Слот хранит первый payload, следующие логируются. Payload
-локализованной паники дропается под catch, если поток не в unwind, и удерживается, если сам
-дроп паникует. Значение, чьи поля дважды паникуют в drop glue, abort'ит (ADR-0127).
+**Первая ошибка главная.** Слот хранит первый payload, следующие логируются и уходят в
+`discard_payload`, который дропает payload под catch (ADR-0281 §2). `Drop`, паникующий внутри
+идущего unwind, и значение, чьи поля дважды паникуют в drop glue, abort'ят, как в std
+(ADR-0281 §1).
 `UiRealm::drop` не возобновляет панику, пока поля (post-frame lane, `AsyncDriver`, writers)
 держат пользовательские значения: они выносятся в `ManuallyDrop`/`Option` и уничтожаются явно
 (обход #1165).
@@ -290,7 +292,8 @@ HDD; ещё ~0,5 с — запас на `ShutdownBlockReasonDestroy` и `PostQui
 **Одна граница для пользовательского кода teardown.** Teardown вызывает код приложения в
 нескольких местах: обработчик закрытия (`CloseRequestHandler`), наблюдатели Detached,
 waker'ы `CloseChanged`, writer реестра сброса, `Drop` захватов. Для всех них — один
-helper локализации (catch, удержание payload по ADR-0127, первая ошибка главная, отчёт
+helper локализации (catch, payload и оставшиеся значения уничтожаются под локализацией по
+ADR-0281 §2–§3, первая ошибка главная, отчёт
 `CallbackPanic` через `report_contained_panic`, отпускание замков и `RefCell` до вызова) и
 одна матрица тестов: каждая точка одна, две в конкуренции, следующая операция после
 локализации. Отдельный catch на каждом месте не пишется (урок text-ime: несколько
@@ -311,11 +314,11 @@ helper локализации (catch, удержание payload по ADR-0127, 
 |---|---|---|---|
 | R6 | Запись не успевает к дедлайну | `flush_within` → `DeadlineExceeded`; файл цел (persistence R21) | 0 |
 | R7, R12 | Паника в `dispose`/`Drop` при закрытии последнего окна | Слот → quit → сброс реестра → сервисы → пулы → `resume_unwind` | 101 |
-| R13 | Паника `Drop` захвата при закрытии последнего окна | Первая главная, хвост удержан | 101 |
+| R13 | Паника `Drop` захвата при закрытии последнего окна | Первая главная, хвост уничтожен под локализацией | 101 |
 | R4 | Деструктор приложения или `on_quit` блокирует выход | Сторож `EXIT_WATCHDOG` (15 с с шага 1): сброс реестра 1 с, `end_process` (ADR-0258 §7) | 124 |
-| R14 | `Drop` внутри идущего unwind | Режим сохранения, `forget` | без abort |
+| — | `Drop` внутри идущего unwind (R14 снято ADR-0281 §1) | Как в std | abort |
 | — | Паника в доставке закрытия последнего realm | Терминальна | 101 |
-| — | Паника при закрытии не последнего realm | `CallbackPanic` + удержание (D4) | процесс жив |
+| — | Паника при закрытии не последнего realm | `CallbackPanic` + уничтожение под локализацией (D4, ADR-0281 §3) | процесс жив |
 | R9 | Паника handler'а ввода, post-frame, lifecycle, команды | Per-task catch, `CallbackPanic` | процесс жив |
 | R8, R23 | Паника `build`; паника вето | `ErrorView`; `KeepOpen` | процесс жив |
 | R10 | Паника layout/paint | `SegmentPanic` на сбой, откат через `next_wake` | процесс жив |
@@ -352,7 +355,6 @@ teardown, поэтому код 101 проходит в обе стороны; �
 | R4 | `a_blocking_destructor_ends_the_process_with_the_hung_code` (ребёнок: деструктор приложения не возвращается; код 124 в пределах `EXIT_WATCHDOG` + 1 с, байты реестра на диске) | Fix | процесс не выходит |
 | R12 | `dispose_panic_on_last_window_close_resumes_after_flush` (ребёнок); нативный: паника в `dispose` → 101 | Fix | `0xC0000409` |
 | R13 | `capture_drop_panic_keeps_the_first_failure_and_still_flushes` (ребёнок) | Fix | Сброс пропущен |
-| R14 | `user_drop_panic_inside_an_unwind_is_retained` (ребёнок; `realm_and_presentation_isolation_matrix`) | Характеризация | abort |
 | R15–R20 | `close_requested_inside_a_frame_runs_once_on_the_next_turn`, `a_late_completion_after_close_requests_no_frame`, R17-строки роутера `flui-widgets`, `a_second_close_request_tears_down_once`, `stale_handles_refuse_after_the_runtime_drops`, `device_loss_on_the_closing_frame_still_exits_ok` | Характеризация | — |
 | R21 | `closing_during_composition_commits_before_detached` (headless-runner); windows | Fix | Detached без preedit |
 | R22 | `session_end_flushes_the_registry_within_the_framework_budget` (доля фреймворка ≤ бюджет); `session_end_with_a_checked_out_runtime_writes_registry_bytes_and_calls_no_user_code` (`simulate_session_end` из handler'а; счётчик вызовов наблюдателей = 0, байты на диске); нативный: сообщения сеанса окну приложения приёмки, перезапуск | Fix | Нет реестра; пользовательский код при извлечённом realm |

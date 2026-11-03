@@ -1,6 +1,7 @@
 # ADR-0188: Gesture velocity and contact ownership across settle
 
-Status: Accepted
+- **Status:** Accepted (2026-10-11)
+- **Date:** 2026-10-11
 
 ## Context
 

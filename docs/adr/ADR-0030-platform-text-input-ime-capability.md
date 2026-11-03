@@ -16,7 +16,7 @@
   region is underlined as a span decoration over its bytes
 - **Amended by:** [ADR-0082](ADR-0082-platform-api-contract-crate.md) (§2: `PlatformTextInput`
   now lives in `flui-platform`, re-exported at its old `flui-native` path; its contract is
-  unchanged); [ADR-0098](ADR-0098-owned-f64-geometry-values.md) (on acceptance; §1: `flui-types` is deleted
+  unchanged); [ADR-0098](ADR-0098-owned-f64-geometry-values.md) (§1: `flui-types` is deleted
   and `ImeEvent` lives in `flui-platform`, as `flui_platform::ImeEvent`)
 
 ## Context

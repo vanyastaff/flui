@@ -326,7 +326,7 @@ struct RecordingWindow {
 
 impl PlatformWindow for RecordingWindow {
     fn id(&self) -> WindowId {
-        WindowId(900)
+        WindowId::try_from_raw(900).expect("a nonzero window id")
     }
     fn request_redraw(&self) {}
     fn redraw_requester(&self) -> Arc<dyn flui_platform::RedrawRequester> {

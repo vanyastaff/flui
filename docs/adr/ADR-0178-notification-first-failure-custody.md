@@ -6,6 +6,10 @@
   swallowed listener failure and snapshot disposal behavior.
 - **Superseded-by:** [ADR-0219](ADR-0219-required-observer-registration.md), the default relay
   adapter only.
+- **Superseded-by:** [ADR-0281](ADR-0281-a-destructor-that-panics-during-an-unwind-aborts-as-in-std.md),
+  only where opaque payloads keep ADR-0119's retention and where opaque custody and outgoing
+  ownership are retained after a caught failure: a superseded payload goes to `discard_payload`,
+  and the rest is destroyed under the round's containment.
 - **Related:** [ADR-0119](ADR-0119-inert-panic-payload-retirement.md),
   [ADR-0127](ADR-0127-exceptional-path-retention.md),
   [ADR-0177](ADR-0177-controller-ordered-delivery.md),

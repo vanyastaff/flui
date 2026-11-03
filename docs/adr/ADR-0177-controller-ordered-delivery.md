@@ -3,6 +3,9 @@
 - **Status:** Accepted
 - **Superseded-by:** [ADR-0178](ADR-0178-notification-first-failure-custody.md) for the shared notification failure policy and owner-local callback integration.
 - **Superseded-by:** [ADR-0193](ADR-0193-directional-phase-names.md) for settled-phase vocabulary only.
+- **Superseded-by:** [ADR-0281](ADR-0281-a-destructor-that-panics-during-an-unwind-aborts-as-in-std.md),
+  only its sentence putting snapshots and displaced resources under ADR-0127's exceptional
+  retention: they are destroyed under the delivery's containment.
 - **Date:** 2026-10-08
 - **Amended:** 2026-10-11 — the delivery type is `RunDelivery`; ordering and first-failure custody are unchanged.
 - **Related:** [ADR-0064](ADR-0064-animation-completion-is-one-controller-resolved-future.md),

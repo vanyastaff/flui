@@ -7,7 +7,8 @@ use flui_rendering::constraints::BoxConstraints;
 use super::*;
 
 fn counting_window(id: u64) -> (Rc<dyn PlatformWindow>, Arc<AtomicU32>) {
-    let window = crate::testing::TestWindow::new().with_id(id);
+    let window = crate::testing::TestWindow::new()
+        .with_id(flui_platform::WindowId::try_from_raw(id).expect("a test window id is nonzero"));
     let redraw_calls = window.redraw_calls_handle();
     (Rc::new(window), redraw_calls)
 }

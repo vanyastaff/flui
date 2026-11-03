@@ -72,11 +72,11 @@ impl crate::SurfaceTarget for NoNativeSurface {
 /// # use std::sync::Arc;
 /// # use flui_foundation::geometry::Size;
 /// # use flui_platform::*;
-/// struct Double;
+/// struct Double(WindowId);
 ///
 /// impl PlatformWindow for Double {
 ///     flui_platform::window_takes_no_frame_verbs!();
-/// #   fn id(&self) -> WindowId { WindowId(1) }
+/// #   fn id(&self) -> WindowId { self.0 }
 /// #   fn request_redraw(&self) {}
 /// #   fn surface_target(&self) -> Arc<dyn SurfaceTarget> { Arc::new(testing::NoNativeSurface) }
 /// #   fn redraw_requester(&self) -> Arc<dyn RedrawRequester> { Arc::new(|| {}) }
@@ -94,9 +94,10 @@ impl crate::SurfaceTarget for NoNativeSurface {
 /// #   fn drag_source(&self) -> Option<Arc<dyn drag::PlatformDragSource>> { None }
 /// }
 ///
-/// let refused = Double.set_frame_rate_hint(FrameRateHint::High).unwrap_err();
+/// # let double = Double(WindowIdMint::new().next().expect("a fresh mint issues an id"));
+/// let refused = double.set_frame_rate_hint(FrameRateHint::High).unwrap_err();
 /// assert_eq!(refused.reason, UnsupportedReason::NotOnThisPlatform);
-/// assert!(Double.set_input_regions(&[]).is_err());
+/// assert!(double.set_input_regions(&[]).is_err());
 /// ```
 #[macro_export]
 macro_rules! window_takes_no_frame_verbs {

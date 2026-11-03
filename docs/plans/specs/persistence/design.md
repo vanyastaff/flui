@@ -311,7 +311,7 @@ wasm32 — тот же API поверх IndexedDB, асинхронный), `sto
 | R20, R30 | `Failed`, `Full`, `TooLarge` без чтения (`metadata().len()`, затем `take(limit + 1)`) |
 | R21, R27 | уникальный tmp + `sync_all` + `rename`; unmount не отменяет принятые реестром байты |
 | R25, R28 | поколение загрузки; реестр: последнее значение побеждает, линия правок перебазируется |
-| R29 | `catch_unwind` вокруг `encode`/`decode` → `Panicked`; `payload_text`, `retain_opaque_payload` |
+| R29 | `catch_unwind` вокруг `encode`/`decode` → `Panicked`; `payload_text`, `discard_payload` |
 | R31 | `ReadOnly(NewerVersion)`; `decode(version, …)` или `Decode` без записи |
 | R32 | данные — блокировка + CAS → `Conflict`; без блокировок — `ReadOnly`; сеанс — `Replace` |
 | R33 | `storage()` → `None` → `Unavailable`, работа в памяти с баннером |
@@ -324,8 +324,9 @@ wasm32 — тот же API поверх IndexedDB, асинхронный), `sto
 
 **Паника.** `catch_unwind(AssertUnwindSafe(…))` вокруг `encode` и `decode`; при панике в `encode`
 ничего не публикуется, память и файл не тронуты, статус `Failed(Panicked)`; следующий `set`
-работает. Первый сбой остаётся в статусе до следующего успеха. Payload — `retain_opaque_payload`
-(ADR-0127). Предел: значение `D`, чей `Drop` паникует дважды до границы, — за ADR-0127.
+работает. Первый сбой остаётся в статусе до следующего успеха. Payload — `discard_payload`
+(ADR-0281 §2). Предел: значение `D`, чей `Drop` паникует дважды до границы, abort'ит, как в std
+(ADR-0281 §1).
 
 ## Тестовая стратегия
 

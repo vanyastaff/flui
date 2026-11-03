@@ -1,13 +1,18 @@
 # ADR-0118: Network image identity includes its registry
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-10-04)
 - **Date:** 2026-10-04
-- **Amended:** 2026-10-19 — the registry keeps decoded images itself and asset images share the
-  registry identity; the key is an opaque `ImageCacheKey` and `NetworkImageKey` is gone
-  ([ADR-0250](ADR-0250-asset-registry-keeps-decoded-images.md)).
-- **Amended:** 2026-10-31 — a load brings its own HTTP client, so a network source also carries
-  the typed authority of that client, and one registry keeps two clients' images of one URL apart
-  ([ADR-0280](ADR-0280-http-is-a-capability-of-the-host.md) §6).
+- **Superseded-by:** [ADR-0250](ADR-0250-asset-registry-keeps-decoded-images.md) for the key's
+  shape only: the registry keeps decoded images itself, asset images share the registry identity,
+  and the key is the opaque `ImageCacheKey`; `NetworkImageKey` and its `Weak<AssetRegistry>` are
+  gone.
+- **Superseded-by:** [ADR-0280](ADR-0280-http-is-a-capability-of-the-host.md) §5–§6 for the
+  registry's own HTTP client (the `reqwest::ClientBuilder` configuration and
+  `NetworkLoader::with_client`) and for the registry as the authority of a response: a load
+  brings its own client, a network source carries that client's typed `HttpAuthority`, and one
+  registry keeps two clients' images of one URL apart. The rule that a URL alone never
+  identifies a response stands.
+- **Revised:** 2026-11-03 — the two amendment lines are recorded as the supersessions they are.
 - **Related:** ADR-0105 (asset runtime ownership), ADR-0107 (asset byte sources)
 
 ## Context

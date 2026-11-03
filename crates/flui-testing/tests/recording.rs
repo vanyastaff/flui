@@ -405,6 +405,52 @@ fn an_unknown_variant_is_a_typed_error_not_a_skipped_row() {
     replayable(&extended).expect("unknown fields are skipped");
 }
 
+/// Window 0 is no id a host issues: a header or a row that names it is a
+/// typed error on its line, never a window.
+#[test]
+fn a_recording_naming_window_zero_is_refused_on_its_line() {
+    let (bytes, _) = recorded(Privacy::Redact, |host| press(host, 1, 1));
+    let text = std::str::from_utf8(&bytes).expect("utf-8 recording");
+    let header = text.lines().next().expect("a header");
+    assert!(
+        header.contains(r#""window":1,"#),
+        "the header names window 1"
+    );
+    let zeroed = with_line(
+        &bytes,
+        0,
+        &header.replacen(r#""window":1,"#, r#""window":0,"#, 1),
+    );
+    assert!(
+        matches!(
+            RecordingReader::try_new(&zeroed[..]),
+            Err(RecordingError::Json { line: 1, .. })
+        ),
+        "a header naming window 0 is refused"
+    );
+
+    let row = text
+        .lines()
+        .position(|line| line.starts_with(r#"{"input":{"window":1,"#))
+        .expect("an input row");
+    let zeroed = with_line(
+        &bytes,
+        row,
+        &text.lines().nth(row).expect("row").replacen(
+            r#"{"input":{"window":1,"#,
+            r#"{"input":{"window":0,"#,
+            1,
+        ),
+    );
+    let line = u64::try_from(row + 1).expect("small");
+    assert!(
+        RecordingReader::try_new(&zeroed[..])
+            .expect("header")
+            .any(|row| matches!(row, Err(RecordingError::Json { line: at, .. }) if at == line)),
+        "a row naming window 0 is refused on line {line}"
+    );
+}
+
 #[test]
 fn replay_stops_at_a_gap_with_non_replayable() {
     let (bytes, _) = recorded(Privacy::Redact, |host| press(host, 1, 1));
@@ -461,7 +507,7 @@ fn text_rows() -> Vec<InputRecord> {
     .into_iter()
     .map(|input| {
         InputRecord::Input(InputRow::new(
-            WindowId(1),
+            WindowId::try_from_raw(1).expect("a nonzero window id"),
             at,
             at,
             input,
@@ -488,7 +534,10 @@ fn written(privacy: Privacy) -> Vec<u8> {
     use flui_testing::recording::{RecordedWindow, RecordingClock, RecordingHeader};
 
     let mut header = RecordingHeader::new(RecordingClock::Virtual)
-        .with_window(RecordedWindow::new(WindowId(1), 1.5).with_title("Private window"))
+        .with_window(
+            RecordedWindow::new(WindowId::try_from_raw(1).expect("a nonzero window id"), 1.5)
+                .with_title("Private window"),
+        )
         .with_device(
             DeviceId::try_from(3_u64).expect("nonzero"),
             PointerKind::Pen { tool: PenTool::Tip },
@@ -1284,7 +1333,11 @@ fn header_gesture_values_read_back_exactly() {
         let mouse = GestureSettings::try_from_values(values.clone()).expect("valid values");
         let profiles = base.with_kind(PointerKind::Mouse, mouse);
         let header = RecordingHeader::new(RecordingClock::Virtual).with_window(
-            RecordedWindow::new(WindowId(3), 1.25).with_gesture_profiles(profiles.clone()),
+            RecordedWindow::new(
+                WindowId::try_from_raw(3).expect("a nonzero window id"),
+                1.25,
+            )
+            .with_gesture_profiles(profiles.clone()),
         );
         let bytes = RecordingWriter::try_new(Vec::new(), &header)
             .expect("the header writes")

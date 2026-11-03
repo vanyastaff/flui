@@ -48,6 +48,11 @@
 //!   drawable metrics and scale, focus, visibility, occlusion where it can be
 //!   asked) is the snapshot's
 //!   (ADR-0254 §1). The capabilities the checks read are the snapshot's.
+//! - **A window's id is its own.** A window the host opens after the one
+//!   under test closed has another [`WindowId`](flui_platform::WindowId),
+//!   whatever handle the window system reuses for it (ADR-0039 §4). A
+//!   fixture that cannot open a second window
+//!   ([`WindowFixture::open_another`]) skips it.
 //!
 //! [`check`] returns each violated promise by name; [`assert_conforms`] panics
 //! listing them.
@@ -143,6 +148,13 @@ pub trait WindowFixture {
     fn present_and_request_frame(&mut self) -> Option<FrameRequest> {
         None
     }
+
+    /// Open another window of the same host the way the window under test
+    /// opened, once that window closed, and settle. `None` where the fixture
+    /// cannot open a second window, which skips the identity check.
+    fn open_another(&mut self) -> Option<Rc<dyn PlatformWindow>> {
+        None
+    }
 }
 
 /// One promise a window broke.
@@ -221,6 +233,10 @@ const CHECKS: &[(&str, Check)] = &[
         a_surface_target_is_send_sync_and_unavailable_after_close,
     ),
     ("a_closed_window_refuses", a_closed_window_refuses),
+    (
+        "a_window_opened_after_a_close_has_an_id_of_its_own",
+        a_window_opened_after_a_close_has_an_id_of_its_own,
+    ),
 ];
 
 /// Every command kind, with numbers a window of any size can take, built from
@@ -722,6 +738,27 @@ fn a_closed_window_refuses(fixture: &mut dyn WindowFixture) -> Result<(), String
         match window.apply(admitted) {
             Err(ApplyError::Closed) => {}
             other => broken.push(format!("{command:?} after close answered {other:?}")),
+        }
+    }
+    finish(broken)
+}
+
+/// `a_window_opened_after_a_close_has_an_id_of_its_own` (ADR-0039 §4): the
+/// host issues the next window another id, even where the operating system
+/// hands that window the closed one's handle or address, so nothing addressed
+/// to the closed window reaches it.
+fn a_window_opened_after_a_close_has_an_id_of_its_own(
+    fixture: &mut dyn WindowFixture,
+) -> Result<(), String> {
+    let closed = fixture.window().id();
+    let mut broken = Vec::new();
+    close_window(fixture, &mut broken);
+    if let Some(another) = fixture.open_another() {
+        let reopened = another.id();
+        if reopened == closed {
+            broken.push(format!(
+                "a window opened after {closed:?} closed has its id"
+            ));
         }
     }
     finish(broken)

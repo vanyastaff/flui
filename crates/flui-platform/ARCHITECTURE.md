@@ -335,9 +335,10 @@ owner registry remains to wake on abandonment. Producer disconnection maps to
 contract violation. `TransferRequest::ready` keeps its concrete payload locally
 and never clones the executor waker.
 
-Executor clone, wake and retirement run outside shared locks. Caught delivery
-failures retain opaque executor ownership and preserve the result; during an
-existing unwind, secondary failures cannot replace it. The concrete transfer
+Executor clone, wake and retirement run outside shared locks. A caught delivery
+failure still destroys the executor's waker under containment and preserves the
+result; during an existing unwind it is discarded, so a secondary failure cannot
+replace the incoming one (ADR-0281 §2–§3). The concrete transfer
 payload has no caller-defined destructor. Ordinary successful retirement still
 runs destructors, with Rust's normal abort semantics if aggregate destruction
 panics twice before containment regains control.

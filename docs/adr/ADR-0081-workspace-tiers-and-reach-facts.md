@@ -1,27 +1,11 @@
 # ADR-0081: Workspace tiers, reach facts and stability kinds
 
-- **Status:** Accepted (2026-11-03) for §1, §2, §3 and §4.2; §4.1 and §5 are Proposed.
-  `cargo xtask checks` runs `workspace` and `reach`, each with its `--self-test`
-  (`tools/xtask/src/tasks/checks.rs:116-121`): every library crate declares `tier`,
-  `tier-kind` and `order`, the kind rule is `tools/xtask/src/workspace.rs:15-20`, and the
-  facade's four `edge-exceptions` are at `Cargo.toml:741-746`. `runtime-internals` is in no
-  manifest; its items are at `flui_view::__runtime` (`crates/flui-view/src/lib.rs:169`), which
-  the facade shadows behind a `compile_fail,E0603` doctest (`src/lib.rs:293-307`). §2 rests on
-  three points, decided with it: `pkg`'s OS globs stand, so `flui-hot-reload →
-  android_log-sys` is an entry of its own (`crates/flui-hot-reload/Cargo.toml:83-86`, exit
-  ADR-0094); `flui-engine`'s standing `grant` for `wgpu` stands
-  (`crates/flui-engine/Cargo.toml:204-206`); and no `reach-exceptions` entry names
-  `flui-native`, because the three edges the gate reports without entries are the ones those
-  entries and that grant excuse. Not implemented: the `layer` key and ADR-0041's layer rule are
-  still checked beside the tiers (`Cargo.toml:97`, `crates/flui-engine/Cargo.toml:200`,
-  `tools/xtask/src/workspace.rs:25-31`). Proposed: §4.1, which no rule of `cargo xtask
-  workspace` checks (no `cfg` names `signals = []`, `crates/flui-view/Cargo.toml:124`); and §5,
-  whose roadmap file under docs/ is not in the tree, whose frame-entry check does not exist (ADR-0083
-  §2), and whose workspace version `0.2.0` is `0.2.0-dev` today (`Cargo.toml:183`).
+- **Status:** Accepted (2026-11-03) for §1, §2, §3 and §4.2; §4.1 and §5 are Proposed. Not
+  implemented: [`docs/gaps.md` entry 43, ADR-0081 §1](../gaps.md#43-accepted-adr-sections-not-built-yet)
 - **Date:** 2026-09-25
 - **Superseded-by:** [ADR-0154](ADR-0154-capability-crates.md) for §3's list of kinds and §2's
   reach table only (the kinds gain `capability`; the reach table gains its row).
-- **Amended:** 2026-10-11 — current manifest inventory and testing/runtime order are distinguished from the original tier-migration evidence; qualified acceptance remains unchanged.
+- **Revised:** 2026-10-11 — current manifest inventory and testing/runtime order are distinguished from the original tier-migration evidence; qualified acceptance remains unchanged.
 - **Amended-by:** [ADR-0098](ADR-0098-owned-f64-geometry-values.md) (§8) — `flui-geometry` and
   `flui-types` are deleted; the V tier's values live in `flui-foundation` and their owners
   above it, so the tier table and the `mint` findings below name crates that no longer exist.
@@ -257,6 +241,12 @@ entries it reports 13 (crate, forbidden name) pairs through three edges:
 `flui-hot-reload → android_log-sys` (1) and `flui-engine → wgpu` (2: `wgpu` itself, and
 `windows` through `wgpu-hal`). Three entries are seeded: the two `flui-hot-reload` edges exit
 with ADR-0094, and `flui-engine`'s `wgpu` is the grant of §1. With them the gate is green.
+
+Three points are decided with this section. `pkg`'s OS globs stand, so
+`flui-hot-reload → android_log-sys` is an entry of its own, whose exit is ADR-0094.
+`flui-engine`'s standing `grant` for `wgpu` stands. No `reach-exceptions` entry names
+`flui-native`: the three edges the gate reports without entries are the ones those entries and
+that grant excuse.
 
 ### 3. Stability kinds
 

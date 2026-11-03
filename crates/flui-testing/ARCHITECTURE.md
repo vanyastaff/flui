@@ -68,8 +68,8 @@ substrate driver over raw owners, which the raw-owner suites still use.
   (ADR-0048) and reports it to the handler `HeadlessHost` installs, with
   text retained verbatim. `pump` raises the first report once the pump has
   returned; when a later panic unwinds out of the same pump, the report is
-  raised and the later payload is leaked (its destructor could panic),
-  logged at error level. A lifecycle panic the tree recovered from (an
+  raised and the later payload, logged at error level, goes to
+  `discard_payload` (ADR-0281 §2). A lifecycle panic the tree recovered from (an
   `ErrorView`) is not raised: its frame completed. A report the UI runtime makes
   between pumps is raised by the next pump before it frames, not erased.
   After any raise, including a pump that unwound past its commit anchor, the

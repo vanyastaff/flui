@@ -6,7 +6,10 @@
 //! `flui_native::Platform` that opens windows (which stays in
 //! `flui-native`, ADR-0082 §2) use in their signatures.
 
+use std::num::NonZeroU64;
+
 use flui_foundation::geometry::{Point, Size};
+use flui_foundation::{IdExhausted, IdMint};
 
 use crate::os_options::OsWindowOptions;
 use crate::{Unsupported, WindowFrame, WindowGeometry, WindowMode};
@@ -257,19 +260,81 @@ impl Default for WindowOptions {
 
 // ==================== Identity and mode ====================
 
-/// Window identifier
+/// The identity of one window within the host that opened it.
+///
+/// Issued only by a [`WindowIdMint`], which the host holds and which never
+/// issues a value twice: a window that closes takes its id with it, and the
+/// next window gets another one even when the operating system hands it the
+/// recycled handle or address of the closed one. So a late event addressed to
+/// a closed window names no window, never its successor. A native handle is
+/// never an id: a backend keyed by one keeps a map from the handle to the id
+/// it issued, and a handle that is not in the map names no window.
+///
+/// There is no conversion from a number outside the `testing` feature's
+/// [`try_from_raw`](Self::try_from_raw), which a recording decoder uses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct WindowId(pub u64);
+pub struct WindowId(NonZeroU64);
 
 impl WindowId {
-    /// Create a new window ID.
-    pub fn new(id: u64) -> Self {
-        Self(id)
+    /// The issued value, for diagnostics and recordings. It means nothing
+    /// outside the host that issued it.
+    #[must_use]
+    pub const fn get(self) -> NonZeroU64 {
+        self.0
     }
 
-    /// Get the raw ID value.
-    pub fn as_u64(self) -> u64 {
-        self.0
+    /// The id a recording or a test names by value, or `None` for 0, which
+    /// no mint issues.
+    ///
+    /// Behind the `testing` feature: production code gets an id from the
+    /// mint of the host that opened the window, and a value built here is a
+    /// claim, not proof of a window: the host's own table still decides
+    /// whether it names one.
+    #[cfg(feature = "testing")]
+    #[must_use]
+    pub const fn try_from_raw(raw: u64) -> Option<Self> {
+        match NonZeroU64::new(raw) {
+            Some(raw) => Some(Self(raw)),
+            None => None,
+        }
+    }
+}
+
+/// Issues the [`WindowId`]s of one host, in increasing order from 1, and
+/// never one twice.
+///
+/// Owner-local, as the windows are: a host keeps one in the state of the
+/// thread that opens its windows. It never wraps: once its last value was
+/// issued, every later [`next`](Self::next) refuses with [`IdExhausted`].
+///
+/// ```rust
+/// use flui_platform::WindowIdMint;
+///
+/// let ids = WindowIdMint::new();
+/// let first = ids.next()?;
+/// let second = ids.next()?;
+/// assert_ne!(first, second);
+/// assert_eq!(first.get().get(), 1);
+/// # Ok::<(), flui_foundation::IdExhausted>(())
+/// ```
+#[derive(Debug, Default)]
+pub struct WindowIdMint(IdMint<NonZeroU64>);
+
+impl WindowIdMint {
+    /// A mint whose first id is 1.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self(IdMint::new())
+    }
+
+    /// Issue the id of a window about to open.
+    ///
+    /// # Errors
+    ///
+    /// [`IdExhausted`] once every id was issued; the mint refuses from then
+    /// on, so no window ever gets an id another window had.
+    pub fn next(&self) -> Result<WindowId, IdExhausted> {
+        self.0.next().map(WindowId)
     }
 }
 

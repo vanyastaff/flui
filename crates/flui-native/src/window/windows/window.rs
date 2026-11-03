@@ -72,6 +72,10 @@ pub struct WindowsWindow {
     /// Which native window this wrapper was built for.
     pub(crate) identity: crate::owner::windows::WindowIdentity,
 
+    /// The id the window set issued for this window, which no other window
+    /// of the platform has, however Win32 recycles `hwnd`.
+    pub(crate) window_id: WindowId,
+
     /// The windows the platform tracks, which this one leaves when the last
     /// wrapper drops.
     windows: Arc<WindowSet>,
@@ -180,11 +184,12 @@ impl WindowsWindow {
     /// Create a new Windows window. Crate-internal: windows are opened
     /// through [`Window::open`](crate::host::Window::open), which refuses a
     /// call off the owner thread and hands over the platform's own handler
-    /// set.
+    /// set, and which issued `window_id` for it.
     ///
     /// # Errors
     /// [`OpenWindowError::Backend`] when Win32 window creation fails.
     pub(crate) fn try_new(
+        window_id: WindowId,
         mut options: WindowOptions,
         handler: Rc<dyn flui_platform::WindowHandler>,
         windows: Arc<WindowSet>,
@@ -221,6 +226,7 @@ impl WindowsWindow {
             displays,
             notices,
             identity,
+            window_id,
             hwnd,
             requested,
             scale_factor,
@@ -334,6 +340,7 @@ impl WindowsWindow {
         displays: Arc<dyn crate::owner::windows::HostDisplays>,
         notices: Arc<dyn crate::owner::notices::NoticeChannel>,
         identity: crate::owner::windows::WindowIdentity,
+        window_id: WindowId,
         hwnd: HWND,
         requested: Size<i32>,
         scale_factor: f64,
@@ -440,7 +447,6 @@ impl WindowsWindow {
 
             use super::proc::WindowContext;
 
-            let window_id = WindowId(hwnd.0 as u64);
             let config = windows.config.clone();
             // The window class's input hook gives the capabilities of the
             // devices attached before the handler hears its snapshot.
@@ -536,6 +542,7 @@ impl WindowsWindow {
                 hwnd,
                 state,
                 identity,
+                window_id,
                 windows,
                 displays,
                 snapshot,
@@ -1305,7 +1312,7 @@ impl crate::host_window::HostWindow for WindowsWindow {
 
 impl PlatformWindow for WindowsWindow {
     fn id(&self) -> WindowId {
-        WindowId(self.hwnd.0 as u64)
+        self.window_id
     }
 
     fn text_input(&self) -> Option<Arc<dyn flui_platform::PlatformTextInput>> {
@@ -1922,6 +1929,7 @@ impl Clone for WindowsWindow {
             hwnd: self.hwnd,
             state: Arc::clone(&self.state),
             identity: self.identity,
+            window_id: self.window_id,
             windows: Arc::clone(&self.windows),
             displays: Arc::clone(&self.displays),
             snapshot: Arc::clone(&self.snapshot),

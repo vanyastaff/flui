@@ -79,7 +79,7 @@ graph LR
   писателя. Остаток — задача P6 ниже.
 - **P4** — путь загрузки (`persist/persisted.rs`): `open` берёт `StorageCapability`, `load` —
   чтение с `MAX_BYTES`, заголовок (`Corrupt` для нет/чужого/битого), `NewerVersion` →
-  `ReadOnly`, `decode` под `catch_unwind` (`Panicked`, payload — `retain_opaque_payload`),
+  `ReadOnly`, `decode` под `catch_unwind` (`Panicked`, payload — `discard_payload`, ADR-0281 §2),
   поколение (применяется последняя), отмена при `Drop` future; без хранилища —
   `Storage(Unsupported(NotRegistered))` и `Unavailable`. Строки (`tests/persist.rs`):
   `a_load_reports_each_stored_state` (R18, R29, R30, R31), `only_the_latest_of_several_loads_is_applied`

@@ -440,7 +440,7 @@ struct CaptureWakeWindow(std::sync::Arc<std::sync::atomic::AtomicUsize>);
 
 impl flui_platform::PlatformWindow for CaptureWakeWindow {
     fn id(&self) -> flui_platform::WindowId {
-        flui_platform::WindowId::new(21)
+        flui_platform::WindowId::try_from_raw(21).expect("a nonzero window id")
     }
     fn request_redraw(&self) {
         self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
