@@ -1167,11 +1167,10 @@ pub(crate) enum DrawItem {
 pub(crate) enum BackdropEffect {
     /// A separable Gaussian blur with these sigmas.
     Blur([f32; 2]),
-    /// The backdrop resampled through an axis-aligned map: the output pixel
-    /// at `p` shows the backdrop at `scale * p + offset`, read through `filter`.
+    /// The backdrop resampled through an affine map: the output pixel
+    /// centred at `p` shows the backdrop at `map · p`, read through `filter`.
     Resample {
-        scale: [f64; 2],
-        offset: [f64; 2],
+        map: glam::DAffine2,
         filter: ResampleFilter,
     },
 }
