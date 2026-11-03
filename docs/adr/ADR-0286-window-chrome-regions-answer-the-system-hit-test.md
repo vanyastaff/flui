@@ -3,7 +3,8 @@
 - **Status:** Accepted (2026-11-02)
 - **Date:** 2026-11-02
 - **Amended:** 2026-11-02: §5 and §6, the press takers cut out of a move area and the widgets that
-  mark the regions; §7, the Win32 frame. 2026-11-03: §8, the AppKit title bar; §9, the winit window.
+  mark the regions; §7, the Win32 frame. 2026-11-03: §8, the AppKit title bar; §9, the winit
+  window; §10, the X11 window.
 - **Amends:** [ADR-0217](ADR-0217-interaction-module-layers-and-pointer-assembly.md) §5: input
   regions gain the chrome kinds the title-bar follow-up named, and their availability is
   answered per kind.
@@ -174,6 +175,15 @@ whose release the window system kept. A
 application's own buttons, so winit's input capabilities answer `window_move` and
 `window_resize` and leave `caption_buttons` `Unavailable`.
 
+§10. **X11.** A window with `AppTitleBar` has no decorations (`_MOTIF_WM_HINTS`) and answers its
+presses as §9 says, from the XInput 2 events the loop hands it before the input: a move or a
+resize is a `_NET_WM_MOVERESIZE` request to the window manager, sent once the pointer's grab is
+let go of, and a double-click enters or leaves maximized through `_NET_WM_STATE`. The window
+manager's menu has no request every window manager takes, so a secondary press stays the
+application's, as does a touch's emulated pointer. The window's capabilities take the title bar
+only where the window manager lists `_NET_WM_MOVERESIZE`; elsewhere the window opens with the
+window manager's frame. The input capabilities answer `window_move` and `window_resize`.
+
 ### Consequences
 
 - Good, because the system's callback reads a slice and returns: no framework code, no lock
@@ -185,9 +195,10 @@ application's own buttons, so winit's input capabilities answer `window_move` an
 - Bad, because the answer can be one frame behind a layout change: a press during the frame
   that moves a button is resolved against the previous frame's regions. A frame is the
   granularity every other input path has too.
-- Neutral, because Win32, AppKit and winit answer from the regions and the native Linux hosts
-  do not yet: until they do, their capabilities leave the chrome kinds `Unavailable` and their
-  windows open `WindowFrame::AppTitleBar` with the system's frame (`WindowFrame::at_open`).
+- Neutral, because Win32, AppKit, winit and X11 answer from the regions and the Wayland host
+  does not yet: until it does, its capabilities leave the chrome kinds `Unavailable` and its
+  windows open `WindowFrame::AppTitleBar` with the system's frame (`WindowFrame::at_open`), as an
+  X11 window does where the window manager lists no `_NET_WM_MOVERESIZE`.
 
 ### Confirmation
 
@@ -222,6 +233,8 @@ application's own buttons, so winit's input capabilities answer `window_move` an
   `a_second_press_on_the_bar_soon_and_near_toggles_maximize` and
   `only_the_release_of_a_taken_press_is_taken` in `flui-native`, and on an X server
   `x11_window_with_an_app_title_bar_has_no_decorations_and_answers_its_bar`, pin §9.
+- `a_title_bar_of_the_applications_moves_and_resizes_through_the_window_manager` in
+  `flui-native`'s `x11_input` suite, run on Xvfb under openbox, pins §10.
 
 ## Pros and cons of the options
 
