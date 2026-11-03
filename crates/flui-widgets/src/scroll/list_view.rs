@@ -87,6 +87,9 @@ pub struct ListView {
     semantics_label: Option<std::sync::Arc<str>>,
     /// The accessible name of an empty list.
     empty_label: Option<std::sync::Arc<str>>,
+    /// Slides moved items into their new places (a reorderable list's
+    /// rows); only the lazy variant honours it.
+    placement: Option<flui_objects::Placement>,
 }
 
 impl ListView {
@@ -110,6 +113,7 @@ impl ListView {
             focusable: false,
             semantics_label: None,
             empty_label: None,
+            placement: None,
         }
     }
 
@@ -144,6 +148,7 @@ impl ListView {
             focusable: false,
             semantics_label: None,
             empty_label: None,
+            placement: None,
         }
     }
 
@@ -154,6 +159,12 @@ impl ListView {
     #[must_use]
     pub fn repaint_boundaries(mut self, add: bool) -> Self {
         self.add_repaint_boundaries = add;
+        self
+    }
+
+    /// Slide moved items into their new places along `placement`.
+    pub(crate) fn placement(mut self, placement: flui_objects::Placement) -> Self {
+        self.placement = Some(placement);
         self
     }
 
@@ -345,6 +356,10 @@ impl StatelessView for ListView {
                     SliverList::new(delegate.item_count, self.item_extent_estimate, builder);
                 let sliver = match self.collection_label() {
                     Some(label) => sliver.semantics_label(label),
+                    None => sliver,
+                };
+                let sliver = match &self.placement {
+                    Some(placement) => sliver.placement(placement.clone()),
                     None => sliver,
                 };
                 match &delegate.find_index_by_key {

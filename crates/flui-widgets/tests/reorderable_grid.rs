@@ -217,8 +217,9 @@ impl ViewState<BoardGrid> for BoardGridState {
     }
 }
 
+/// Pump past every motion a move starts: the rows' 250 ms slides.
 fn settle(laid: &mut LaidOut) {
-    for _ in 0..8 {
+    for _ in 0..24 {
         laid.pump_for(Duration::from_millis(16));
     }
 }

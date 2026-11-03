@@ -21,6 +21,11 @@
 //! displaced content position into a paint offset with its own placement
 //! function, which keeps the growth and cross-axis directions consistent.
 //! Paint and hit testing both read the displaced offset.
+//!
+//! An owner can also move one item without a reorder: [`PlacementSlot::displace`]
+//! paints the item away from where it is painted now and slides it home on
+//! the run its roster change starts, so an item a drag put down lands from
+//! where it was let go.
 
 use std::cell::Cell;
 use std::fmt;
@@ -31,7 +36,9 @@ use flui_animation::curve::Curve;
 use flui_animation::{
     Animation, AnimationController, MotionSpec, SpringSimulation, Tolerance, curves,
 };
+use flui_foundation::geometry::{Axis, Offset};
 use flui_foundation::panic::PanicRecovery;
+use flui_rendering::constraints::{SliverConstraints, right_way_up};
 use flui_rendering::pipeline::LocalRenderInvalidationHandle;
 
 /// A position along both sliver axes: main-axis layout offset, cross-axis
@@ -69,6 +76,28 @@ impl Axes {
         }
     }
 
+    /// `offset` in a sliver's physical space (x right, y down) along its
+    /// main and cross axes: the main axis runs against the paint direction
+    /// when the sliver is not the right way up, the cross axis never does.
+    fn of_physical(offset: Offset, constraints: &SliverConstraints) -> Self {
+        let sign = if right_way_up(constraints.axis_direction, constraints.growth_direction) {
+            1.0
+        } else {
+            -1.0
+        };
+        match constraints.axis_direction.axis() {
+            Axis::Vertical => Self {
+                main: sign * offset.dy,
+                cross: offset.dx,
+            },
+            Axis::Horizontal => Self {
+                main: sign * offset.dx,
+                cross: offset.dy,
+            },
+        }
+        .or_zero()
+    }
+
     /// Finite on both axes; a non-finite displacement is dropped rather than
     /// published as geometry.
     fn or_zero(self) -> Self {
@@ -95,6 +124,9 @@ pub struct PlacementSlot {
     /// The displacement from the laid-out position when the clock last
     /// restarted.
     from: Cell<Axes>,
+    /// A displacement the owner asked for, in the sliver's physical space,
+    /// and the roster generation it comes with.
+    pushed: Cell<Option<(Offset, u64)>>,
 }
 
 impl PlacementSlot {
@@ -102,6 +134,20 @@ impl PlacementSlot {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Paint the item `offset` away from where it is painted now, and slide
+    /// it home with the run its roster change starts: an item put down where
+    /// the pointer let it go lands in its slot from there.
+    ///
+    /// `offset` is in the sliver's own space (x right, y down, logical
+    /// pixels). It applies in the first pass of the placement whose
+    /// [`generation`](Placement::new) is `generation`, which the owner hands
+    /// the sliver with this change, and only if that pass lays the item out;
+    /// otherwise, or when `offset` is not finite, the item lands at once.
+    pub fn displace(&self, offset: Offset, generation: u64) {
+        let finite = offset.dx.is_finite() && offset.dy.is_finite();
+        self.pushed.set(finite.then_some((offset, generation)));
     }
 }
 
@@ -318,15 +364,19 @@ impl PlacementTrack {
     }
 
     /// Record where this pass laid `children` out, start a slide when an
-    /// armed pass moved one of them, and hand each displaced child to
+    /// armed pass moved one of them or carries an owner's
+    /// [`displace`](PlacementSlot::displace), and hand each displaced child to
     /// `position` with its displaced content position `(main, cross)`.
     ///
     /// `settled` says the pass requested no children and corrected no scroll
     /// offset, so the roster change it armed for is fully applied.
+    /// `constraints` turn an owner's physical displacement into the sliver's
+    /// axes.
     pub(crate) fn place(
         &mut self,
         children: &[Placed],
         settled: bool,
+        constraints: &SliverConstraints,
         mut position: impl FnMut(&Placed, f64, f64),
     ) {
         // Saturates rather than wraps: past the last pass no child has a
@@ -339,8 +389,10 @@ impl PlacementTrack {
         let armed = self.applied != Some(placement.generation);
         let remaining = placement.remaining();
 
-        // A child's slot, where the previous pass laid it out (when it did)
-        // and where this pass lays it out.
+        // A child's slot, where the previous pass laid it out (when it did),
+        // where this pass lays it out, and what its owner pushed it by for
+        // this generation. A push for this generation that an unarmed pass
+        // sees came after the change was applied: it lands at once.
         let track = |child: &Placed| {
             let slot = placement.slots.get(child.logical)?;
             let previous = slot
@@ -351,19 +403,26 @@ impl PlacementTrack {
                 main: child.main,
                 cross: child.cross,
             };
-            Some((slot, previous, here))
+            let pushed = match slot.pushed.get() {
+                Some((offset, generation)) if generation == placement.generation => {
+                    slot.pushed.set(None);
+                    armed.then(|| Axes::of_physical(offset, constraints))
+                }
+                _ => None,
+            };
+            Some((slot, previous, here, pushed))
         };
+        let tracked: Vec<_> = children.iter().filter_map(track).collect();
         let moved = armed
-            && children
-                .iter()
-                .filter_map(&track)
-                .any(|(_, previous, here)| {
-                    previous.is_some_and(|at| at.minus(here).or_zero() != Axes::ZERO)
-                });
+            && tracked.iter().any(|(_, previous, here, pushed)| {
+                pushed.is_some()
+                    || previous.is_some_and(|at| at.minus(*here).or_zero() != Axes::ZERO)
+            });
 
         // A moved pass rebases every continuing child's displacement onto a
-        // fresh run; a child new to the band appears where it is laid out.
-        for (slot, previous, here) in children.iter().filter_map(&track) {
+        // fresh run; a child new to the band appears where it is laid out;
+        // a push adds to either.
+        for (slot, previous, here, pushed) in tracked {
             match previous {
                 Some(at) if moved => {
                     let now = slot.from.get().scaled(remaining).or_zero();
@@ -371,6 +430,9 @@ impl PlacementTrack {
                 }
                 Some(_) => {}
                 None => slot.from.set(Axes::ZERO),
+            }
+            if let Some(pushed) = pushed {
+                slot.from.set(slot.from.get().plus(pushed).or_zero());
             }
             slot.last.set(Some((here, pass)));
         }

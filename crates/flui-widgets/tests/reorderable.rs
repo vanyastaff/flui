@@ -287,8 +287,9 @@ impl ViewState<ShelfList> for ShelfListState {
     }
 }
 
+/// Pump past every motion a move starts: the rows' 250 ms slides.
 fn settle(laid: &mut LaidOut) {
-    for _ in 0..8 {
+    for _ in 0..24 {
         laid.pump_for(Duration::from_millis(16));
     }
 }
@@ -492,10 +493,11 @@ pub(crate) fn a_drag_that_does_not_drop_moves_nothing() {
     assert_eq!(shelf.items(), strings(&["a", "b", "c", "d"]));
 }
 
-/// While a drag runs, the preview reports each row it moves over, once per
-/// change, from the dragged item's index: none between two rows, "over none"
-/// over the list's space after its last row or once the drag leaves the list,
-/// and once more when a drag ends over a row.
+/// While a drag runs, the preview reports where a drop would put the row,
+/// once per change, from the dragged item's index: the position of the row
+/// it moves over, none between two rows, the same position over the list's
+/// space after its last row, "over none" once the drag leaves the list, and
+/// once more when a drag ends over a row.
 pub(crate) fn the_preview_follows_the_drag_over_the_rows() {
     let shelf = Shelf::new(&["a", "b", "c", "d"]);
     let seen = || -> Vec<(usize, Option<usize>)> {
@@ -540,7 +542,8 @@ pub(crate) fn the_preview_follows_the_drag_over_the_rows() {
     );
     assert_eq!(shelf.moves(), []);
 
-    // Two rows fill half the list: the space after them is over no row.
+    // Two rows fill half the list: the space after them keeps the gap where
+    // the drag last was, and a drop there lands in it.
     let short = Shelf::new(&["a", "b"]);
     let mut laid = short.mount();
     mouse_drag(&laid, row_at(0, HANDLE_X), row_at(1, HANDLE_X));
@@ -556,26 +559,43 @@ pub(crate) fn the_preview_follows_the_drag_over_the_rows() {
         .collect::<Vec<_>>();
     assert_eq!(
         previews,
-        [Some(0), Some(1), None],
-        "the list below its last row is over no row"
+        [Some(0), Some(1)],
+        "the list below its last row keeps the gap"
     );
-    press(&laid, &SingleActivator::named(NamedKey::Escape));
     laid.dispatch_pointer_up(HANDLE_X, 3.0 * ROW);
     settle(&mut laid);
+    assert_eq!(short.moves(), [(0, 1, ReorderCause::Drag)]);
 }
 
 /// A drag shows the list's feedback under the pointer, the row's label by
-/// default; the item builder builds each row once, so what a row owns alone
-/// (a field's focus node, a controller) is never mounted twice.
+/// default, and never a second copy of the row's content: what a row owns
+/// alone (a field's focus node, a controller) is never mounted twice.
 pub(crate) fn a_drag_shows_the_feedback_and_never_a_second_copy_of_the_row() {
-    let built = |shelf: &Shelf| shelf.log.built.borrow().iter().filter(|i| **i == 0).count();
+    fn content_boxes(laid: &LaidOut, id: RenderId, found: &mut usize) {
+        // The content beside the 44-wide default handle.
+        if laid.try_size(id) == Some(Size::new(356.0, ROW)) {
+            *found += 1;
+        }
+        for child in laid.children(id) {
+            content_boxes(laid, child, found);
+        }
+    }
+    let copies = |laid: &mut LaidOut| {
+        let mut found = 0;
+        content_boxes(laid, laid.current_root(), &mut found);
+        found
+    };
     let shelf = Shelf::new(&["a", "b", "c", "d"]);
     let mut laid = shelf.mount();
-    let before = built(&shelf);
-    assert_eq!(before, 1, "a row is built once");
+    let before = copies(&mut laid);
+    assert!(before > 0, "the rows' content is laid out");
     mouse_drag(&laid, row_at(0, HANDLE_X), row_at(2, HANDLE_X));
     laid.pump();
-    assert_eq!(built(&shelf), before, "the drag builds no copy of the row");
+    assert_eq!(
+        copies(&mut laid),
+        before,
+        "the drag mounts no copy of the row"
+    );
     laid.dispatch_pointer_up(row_at(2, HANDLE_X).0, row_at(2, HANDLE_X).1);
     settle(&mut laid);
 
