@@ -115,7 +115,7 @@ impl OwnedValue {
             Self::Link(link) => Value::Link(*link),
             Self::Shared { ty, number } => Value::Shared(Shared::numbered(ty, *number)),
             // The text, so it prints as written rather than quoted.
-            Self::Debug(text) => Value::Debug(text),
+            Self::Debug(text) => Value::Debug(super::value::Untyped(text)),
             Self::None => Value::None,
             Self::Seq(_) => return None,
         })
