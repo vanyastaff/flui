@@ -9,6 +9,7 @@ use flui_native::host::{Absent, Host, Loop, Services, position};
 use flui_native::{
     AppHandler, PathPromptOptions, Platform, PlatformError, PlatformExecutor, Task,
 };
+use flui_platform::LaunchKey;
 
 struct Idle;
 
@@ -33,6 +34,10 @@ impl Services for Idle {
 
     fn app_path(&self) -> Result<PathBuf, PlatformError> {
         Ok(PathBuf::new())
+    }
+
+    fn launch_value(&self, _: LaunchKey) -> Option<String> {
+        None
     }
 
     fn open_url(&self, _: &str) {}
