@@ -8,6 +8,9 @@ use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use std::task::{Wake, Waker};
 use std::time::Duration;
 
+use flui_interaction::events::Code;
+use flui_interaction::testing::input::KeyEventBuilder;
+use flui_platform::PlatformInput;
 use flui_protocol::version::PROTOCOL_VERSION;
 use flui_protocol::{
     ActParams, ActionName, ActionSequence, AppInfo, InputParams, InputSource, Locator,
@@ -15,9 +18,9 @@ use flui_protocol::{
 };
 use flui_runtime::agent::{Limits, Refused, Service, ServiceConfig, Session, Status};
 use flui_testing::{HeadlessDevAgent, HeadlessHost, HeadlessWindow};
-use flui_view::Signal;
 use flui_view::dev_agent::{AgentWindow, DevAgentHook};
 use flui_view::prelude::*;
+use flui_view::{CloseReason, Signal};
 use flui_widgets::{Column, RawButton, Text, column};
 use serde_json::{Value, json};
 use web_time::Instant;
@@ -588,5 +591,355 @@ fn input_a_connection_holds_is_let_go_when_it_goes() {
         *seen.lock(),
         ["down", "cancel"],
         "the connection's going let its contact go"
+    );
+}
+
+/// A key pressed on the window, one row of a recording.
+fn key(code: Code) -> PlatformInput {
+    PlatformInput::Keyboard(KeyEventBuilder::new(code).build())
+}
+
+/// Poll `session`, let the window's owner drain what it asked, poll again, and take the lines.
+fn exchange(
+    session: &mut Session,
+    host: &mut HeadlessHost,
+    now: Instant,
+    waker: &Waker,
+) -> Vec<Value> {
+    session.poll(now, waker);
+    let _ = host.pump(Duration::ZERO);
+    session.poll(now, waker);
+    transmitted(session)
+}
+
+/// Every line `session` sends until the answer to request `id`, polling as the transport
+/// would once it has written what was there.
+fn until_answered(session: &mut Session, id: u64, now: Instant, waker: &Waker) -> Vec<Value> {
+    let mut lines = Vec::new();
+    for _ in 0..1000 {
+        session.poll(now, waker);
+        lines.extend(transmitted(session));
+        if lines.last().is_some_and(|line| line["id"] == id) {
+            return lines;
+        }
+    }
+    panic!("request {id} was not answered: {lines:?}");
+}
+
+/// Start recording `window` (the only one when `None`) on `session`: the answer, then the rows
+/// recorded by the time it came (the frame that drained the request is one).
+fn record(
+    session: &mut Session,
+    host: &mut HeadlessHost,
+    window: Option<WindowId>,
+    now: Instant,
+    waker: &Waker,
+) -> Vec<Value> {
+    let params = flui_protocol::RecordParams::input(window);
+    session.receive(
+        &line(&json!({ "id": 1, "method": "record.start", "params": params })),
+        now,
+    );
+    let started = exchange(session, host, now, waker);
+    assert!(
+        started.first().is_some_and(|line| line["id"] == 1)
+            && started[1..].iter().all(|line| line["event"] == "record"),
+        "the answer to record.start comes first, then its rows: {started:?}"
+    );
+    started
+}
+
+/// The rows of the `record` events among `lines`, in order.
+fn rows_of(lines: &[Value]) -> Vec<&Value> {
+    lines
+        .iter()
+        .filter(|line| line["event"] == "record")
+        .map(|line| &line["params"]["row"])
+        .collect()
+}
+
+/// How many of `rows` a recording counts as its own: every row but its `gap` and `end` rows.
+fn counted(rows: &[&Value]) -> usize {
+    rows.iter()
+        .filter(|row| row.get("gap").is_none() && row.get("end").is_none())
+        .count()
+}
+
+/// How many of `rows` are keys: the input rows that are not frames.
+fn keys(rows: &[&Value]) -> usize {
+    rows.iter()
+        .filter(|row| {
+            row.get("input")
+                .is_some_and(|input| input["input"].get("frame").is_none())
+        })
+        .count()
+}
+
+/// A recording's rows go to the connection that started it, as `record` events after the
+/// answer that carries its header, until `record.stop`: its `end` row goes out, then the answer
+/// says what it came to, and the runtime records nothing more for it.
+#[test]
+fn a_recording_streams_the_runtimes_rows_to_its_connection_until_it_stops() {
+    let service = service(Limits::default(), None);
+    let (mut host, _agent, _presses) = shown(&service);
+    let waker = Waker::from(Arc::new(Wakes::default()));
+    let now = Instant::now();
+    let (mut recorder, welcome) = greeted_as(&service, now, &waker, Some("observer"));
+    assert_eq!(
+        welcome["hello"]["capabilities"]["record"],
+        json!(["input"]),
+        "the hello says what is recorded: {welcome}"
+    );
+    let mut other = greeted_as(&service, now, &waker, Some("observer")).0;
+
+    let mut lines = record(&mut recorder, &mut host, None, now, &waker);
+    assert_eq!(lines[0]["result"]["recording"], 1, "{lines:?}");
+    let header = &lines[0]["result"]["header"];
+    assert_eq!(
+        (
+            &header["flui_recording"],
+            &header["clock"],
+            &header["keep_text"]
+        ),
+        (&json!(3), &json!("virtual"), &json!(false)),
+        "{header}"
+    );
+    assert_eq!(
+        header["windows"].as_array().map(Vec::len),
+        Some(1),
+        "{header}"
+    );
+    assert!(host.input_taps().is_recording());
+
+    host.dispatch(key(Code::KeyA));
+    host.dispatch(key(Code::KeyB));
+    recorder.poll(now, &waker);
+    let recorded = transmitted(&mut recorder);
+    assert!(
+        recorded
+            .iter()
+            .all(|line| line["event"] == "record" && line["params"]["recording"] == 1),
+        "{recorded:?}"
+    );
+    assert_eq!(
+        keys(&rows_of(&recorded)),
+        2,
+        "each key is a row: {recorded:?}"
+    );
+    lines.extend(recorded);
+    other.poll(now, &waker);
+    assert!(
+        transmitted(&mut other).is_empty(),
+        "another connection is sent none of its rows"
+    );
+
+    recorder.receive(
+        &line(&json!({ "id": 2, "method": "record.stop", "params": { "recording": 1 } })),
+        now,
+    );
+    lines.extend(exchange(&mut recorder, &mut host, now, &waker));
+    let (answer, lines) = lines.split_last().expect("record.stop answers");
+    let rows = rows_of(lines);
+    assert_eq!(
+        rows.last(),
+        Some(&&json!({ "end": { "lost_rows": 0 } })),
+        "the end row goes out before the answer: {lines:?}"
+    );
+    assert_eq!(
+        (&answer["id"], &answer["result"]),
+        (
+            &json!(2),
+            &json!({ "rows": counted(&rows), "lost_rows": 0, "complete": true })
+        ),
+        "{lines:?}"
+    );
+    assert!(
+        !host.input_taps().is_recording(),
+        "the stop removed its tap"
+    );
+    host.dispatch(key(Code::KeyC));
+    recorder.poll(now, &waker);
+    assert!(
+        transmitted(&mut recorder).is_empty(),
+        "nothing after its end"
+    );
+}
+
+/// A recording ends with its `end` row when the window it was started on closes and when its
+/// runtime goes, and is held for `record.stop` to say what it came to; the connection that
+/// started it going removes its tap with no row.
+#[test]
+fn a_recording_ends_with_its_window_or_runtime_and_goes_with_its_connection() {
+    #[derive(Debug, Clone, Copy)]
+    enum Ending {
+        WindowCloses,
+        RuntimeGoes,
+    }
+    for ending in [Ending::WindowCloses, Ending::RuntimeGoes] {
+        let service = service(Limits::default(), None);
+        let (mut host, mut agent, _presses) = shown(&service);
+        let second = host.open_window(HeadlessWindow::new(120, 120));
+        host.attach_to(
+            second,
+            &Counter {
+                presses: Arc::new(AtomicU32::new(0)),
+            },
+        )
+        .expect("mount the second window");
+        host.serve_window(second, &mut agent);
+        let _ = host.pump(Duration::from_millis(16));
+        let waker = Waker::from(Arc::new(Wakes::default()));
+        let now = Instant::now();
+
+        let mut gone = greeted_as(&service, now, &waker, Some("observer")).0;
+        gone.receive(
+            &line(&json!({ "id": 9, "method": "windows.list", "params": {} })),
+            now,
+        );
+        gone.poll(now, &waker);
+        let listed = transmitted(&mut gone);
+        let windows =
+            serde_json::from_value::<Vec<WindowId>>(listed[0]["result"]["windows"].clone())
+                .expect("the windows' ids");
+        let (first, opened) = match windows.as_slice() {
+            [first, opened] => (*first, *opened),
+            _ => panic!("both windows are served: {listed:?}"),
+        };
+        let _ = record(&mut gone, &mut host, Some(first), now, &waker);
+        assert!(host.input_taps().is_recording(), "{ending:?}");
+        drop(gone);
+        let _ = host.pump(Duration::ZERO);
+        assert!(
+            !host.input_taps().is_recording(),
+            "{ending:?}: the connection's going removed its tap"
+        );
+
+        let mut recorder = greeted_as(&service, now, &waker, Some("observer")).0;
+        let mut lines = record(&mut recorder, &mut host, Some(opened), now, &waker);
+        host.dispatch(key(Code::KeyA));
+        match ending {
+            Ending::WindowCloses => assert!(
+                host.request_close(second, CloseReason::User),
+                "the window closes"
+            ),
+            Ending::RuntimeGoes => {
+                // The registry outlives the runtime in a clone the application holds: the
+                // runtime ends its recordings itself as it goes.
+                let registry = host.input_taps().clone();
+                drop(host);
+                drop(registry);
+            }
+        }
+        recorder.receive(
+            &line(&json!({ "id": 2, "method": "record.stop", "params": { "recording": 1 } })),
+            now,
+        );
+        lines.extend(until_answered(&mut recorder, 2, now, &waker));
+        let (answer, lines) = lines.split_last().expect("record.stop answers");
+        let rows = rows_of(lines);
+        assert_eq!(keys(&rows), 1, "{ending:?}: {lines:?}");
+        assert_eq!(
+            rows.last(),
+            Some(&&json!({ "end": { "lost_rows": 0 } })),
+            "{ending:?}: {lines:?}"
+        );
+        assert_eq!(
+            answer["result"],
+            json!({ "rows": counted(&rows), "lost_rows": 0, "complete": true }),
+            "{ending:?}: {lines:?}"
+        );
+    }
+}
+
+/// A reader that falls behind loses only its own rows: the ones its queue had no room for are
+/// counted, a `gap` row says how many before the next row that fits, and the `end` row counts
+/// them all.
+#[test]
+fn a_recording_counts_the_rows_its_reader_fell_behind_on() {
+    const KEYS: usize = 1100;
+    let service = service(Limits::default(), None);
+    let (mut host, _agent, _presses) = shown(&service);
+    let waker = Waker::from(Arc::new(Wakes::default()));
+    let now = Instant::now();
+    let mut recorder = greeted_as(&service, now, &waker, Some("observer")).0;
+    let mut lines = record(&mut recorder, &mut host, None, now, &waker);
+
+    // Nothing is read while the keys go in.
+    for _ in 0..KEYS {
+        host.dispatch(key(Code::KeyA));
+    }
+    recorder.receive(
+        &line(&json!({ "id": 2, "method": "record.stop", "params": { "recording": 1 } })),
+        now,
+    );
+    recorder.poll(now, &waker);
+    let _ = host.pump(Duration::ZERO);
+    lines.extend(until_answered(&mut recorder, 2, now, &waker));
+    let (answer, lines) = lines.split_last().expect("record.stop answers");
+    let rows = rows_of(lines);
+    let lost = answer["result"]["lost_rows"]
+        .as_u64()
+        .expect("the answer counts what was lost");
+    assert!(lost > 0, "the queue had no room for every key: {answer}");
+    let gaps: Vec<&Value> = rows.iter().filter_map(|row| row.get("gap")).collect();
+    assert_eq!(gaps, [&json!({ "rows": lost })], "one gap row names them");
+    assert_eq!(rows.last(), Some(&&json!({ "end": { "lost_rows": lost } })));
+    assert_eq!(
+        answer["result"]["rows"].as_u64(),
+        u64::try_from(counted(&rows)).ok(),
+        "{answer}"
+    );
+    assert!(
+        u64::try_from(keys(&rows)).expect("a count fits") + lost >= KEYS as u64,
+        "every key is a row kept or counted lost: {answer}"
+    );
+}
+
+/// A connection holds as many recordings as its limit, ended ones it has not stopped included,
+/// and `record.stop` names only one of its own.
+#[test]
+fn a_connection_holds_its_recordings_up_to_its_limit_and_stops_only_its_own() {
+    let limits = Limits {
+        recordings: 2,
+        ..Limits::default()
+    };
+    let service = service(limits, None);
+    let (mut host, _agent, _presses) = shown(&service);
+    let waker = Waker::from(Arc::new(Wakes::default()));
+    let now = Instant::now();
+    let mut recorder = greeted_as(&service, now, &waker, Some("observer")).0;
+    let mut other = greeted_as(&service, now, &waker, Some("observer")).0;
+    for number in 1..=2 {
+        let started = record(&mut recorder, &mut host, None, now, &waker);
+        assert_eq!(started[0]["result"]["recording"], number, "{started:?}");
+    }
+    recorder.receive(
+        &line(&json!({ "id": 3, "method": "record.start", "params": { "layers": ["input"] } })),
+        now,
+    );
+    let refused = until_answered(&mut recorder, 3, now, &waker);
+    assert_eq!(
+        refused.last().map(|line| &line["error"]["code"]),
+        Some(&json!("busy")),
+        "{refused:?}"
+    );
+
+    other.receive(
+        &line(&json!({ "id": 1, "method": "record.stop", "params": { "recording": 1 } })),
+        now,
+    );
+    let foreign = until_answered(&mut other, 1, now, &waker);
+    assert_eq!(
+        (
+            &foreign[0]["error"]["code"],
+            &foreign[0]["error"]["kind"],
+            &foreign[0]["error"]["handle"]
+        ),
+        (&json!("unknown_handle"), &json!("recording"), &json!("1")),
+        "{foreign:?}"
+    );
+    assert!(
+        host.input_taps().is_recording(),
+        "another connection's stop left the recording running"
     );
 }

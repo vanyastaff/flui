@@ -1,6 +1,6 @@
 # ADR-0288: The development agent is one sans-IO service; transports only move lines
 
-- **Status:** Accepted (2026-11-03). Implemented: §§1–10, the desktop, Android and web
+- **Status:** Accepted (2026-11-03). Implemented: §§1–11, the desktop, Android and web
   transports, each driven by `flui run --agent`.
 - **Date:** 2026-11-03
 - **Supersedes in part:** [ADR-0239](ADR-0239-every-debug-app-hosts-the-driver-agent.md) §1,
@@ -9,12 +9,13 @@
   a session is polled. Unchanged: the build rule, the launch, the endpoints and their
   credentials, owner-inbox execution and `may_have_run` on a timed-out act.
 - **Amends:** [ADR-0095](ADR-0095-agent-protocol-schema-crate.md) §3, the seam: an
-  `AgentAnswer` and an `AgentEvents` tell a waker when they can be read; and
+  `AgentAnswer`, an `AgentEvents` and an `AgentRecording` tell a waker when they can be read; and
   [ADR-0238](ADR-0238-flui-driver-protocol.md) §3, the error codes: `not_driver` (§8).
 - **Related:** [ADR-0238](ADR-0238-flui-driver-protocol.md) (the protocol);
   [ADR-0287](ADR-0287-owner-state-is-committed-before-user-code-runs.md) (user code runs after
   the state is committed); [ADR-0083](ADR-0083-one-frame-transaction-in-flui-runtime.md) (what
-  `flui-runtime` may depend on)
+  `flui-runtime` may depend on); [ADR-0215](ADR-0215-input-recording-and-backend-conformance.md) (the recording
+  format and its taps, §11)
 
 ## Context and problem statement
 
@@ -227,6 +228,30 @@ drag-and-drop and a capability change are not. A pointer the protocol has no cla
 no physical contact, or one the platform did not name) is `other`. `input.inject` answers
 `observed`, the span of the named window's entries its ticks made.
 
+§11. **A connection records what the runtime applies.** `record.start` names a window and the
+layers to record (`RecordLayer`; `input` is the one this build records, and the hello's
+`capabilities.record` lists it) and answers `{recording, header}`: the recording's number on the
+connection and its first line, in the input recording's format (ADR-0215). The window's
+`AgentWindow::record` starts it at the owner's next drain as a tap beside the application's own
+(ADR-0215 §1), so it covers every window of that UI runtime: the gesture decisions and
+preference revisions are the runtime's, and a replay needs them in order with the input. The
+header names the runtime's windows, their scales and gesture values and the preferences in
+effect, on the `virtual` clock under a manual clock source and `monotonic` otherwise; its text is
+redacted unless `keep_text` asks otherwise (ADR-0215 §5). Each row then goes, to the connection
+that started the recording and no other, as a `record` event `{recording, window, row}`, a
+recording's line. A subscription that selects `record` selects nothing. The owner queues at most
+1024 rows a recording's reader has not taken: past that the rows are counted, and the next row
+that fits is preceded by a `gap` row naming how many were lost, so a reader that falls behind
+costs the runtime nothing but its own rows. A recording ends with its `end` row, which counts
+every row lost: when `record.stop` asks, at the owner's next drain and after the rows admitted
+before it; when the window it was started on closes; and when the runtime goes. `record.stop`
+answers `{rows, lost_rows, complete}` once the `end` row is written, and a recording that ended
+by itself is held, with what it came to, until `record.stop` names it. The connection going
+removes the tap with no row. A runtime holds at most 8 recordings and a connection 4
+(`Limits::recordings`); one past either is answered `busy`. The recording's number is the
+connection's: `record.stop` from another connection is answered `unknown_handle`, kind
+`recording`.
+
 ### Consequences
 
 - Good, because a headless run, the web runner and the desktop serve one conversation, and a
@@ -328,6 +353,15 @@ no physical contact, or one the platform did not name) is `other`. `input.inject
   `the_journal_keeps_its_latest_entries_and_counts_the_ones_it_let_go`. Each fails with its rule
   removed: the agent's input not marked, no `input` event, a journal that holds one entry more,
   and an answer without `observed`.
+- Recording (§11) is driven through sessions in `agent_service.rs`:
+  `a_recording_streams_the_runtimes_rows_to_its_connection_until_it_stops`,
+  `a_recording_ends_with_its_window_or_runtime_and_goes_with_its_connection`,
+  `a_recording_counts_the_rows_its_reader_fell_behind_on` and
+  `a_connection_holds_its_recordings_up_to_its_limit_and_stops_only_its_own`. Each fails with its
+  rule removed: the stop never taken at the drain, the `end` row not awaited before the answer,
+  the window's close or the runtime's drop leaving the recording open, an unbounded queue, and no
+  limit per connection. `flui-protocol`'s `no_two_wire_types_share_a_schema_name` keeps the
+  recording's types apart from the session's in the 0.9 golden.
 
 ## Pros and cons of the options
 

@@ -31,13 +31,14 @@ use std::sync::{Arc, Weak};
 use std::task::Waker;
 use std::time::Duration;
 
+use flui_protocol::input_recording::{Header, Row};
 use flui_protocol::method::WindowMethod;
-use flui_protocol::{ErrorObject, Event, EventFilter, WindowId};
+use flui_protocol::{ErrorObject, Event, EventFilter, RecordParams, WindowId};
 use flui_scheduler::AppLifecycleState;
 
 use crate::WidgetsBinding;
 pub use crate::close_guard::{CloseGuardSource, SettledClose};
-use crate::dev_agent::{AgentAnswer, AgentEvents, AgentWindow};
+use crate::dev_agent::{AgentAnswer, AgentEvents, AgentRecording, AgentWindow};
 pub use crate::flush_registry::{
     FlushChanged, FlushHost, FlushPublisher, FlushRegistry, FlushReport, FlushState, FlushWrite,
     FlushWriter, SESSION_END_BUDGET,
@@ -93,6 +94,14 @@ pub trait AgentPort: Send + Sync {
     /// drain. Never refused: the release is recorded before the owner is woken, and a
     /// window that closed released everything already.
     fn release(&self, lease: LeaseId);
+
+    /// Enqueue a recording of the UI runtime that hosts the window: the owner starts it at its
+    /// next drain and answers with the recording.
+    ///
+    /// # Errors
+    ///
+    /// When the request cannot be enqueued.
+    fn record(&self, params: RecordParams) -> Result<AgentAnswer<AgentRecording>, ErrorObject>;
 }
 
 /// One input lease of a window, minted by its [`AgentPort`]: the synthetic input injected
@@ -345,6 +354,31 @@ pub trait EventSource: Send {
 /// Wraps a runtime's queue as the [`AgentEvents`] a hook receives.
 pub fn agent_events(source: impl EventSource + 'static) -> AgentEvents {
     AgentEvents::new(Box::new(source))
+}
+
+/// The queue behind an [`AgentRecording`], which the runtime fills.
+pub trait RecordSource: Send {
+    /// The next row, if one is queued.
+    fn try_next(&mut self) -> Option<Row>;
+
+    /// The next row, waiting up to `timeout`; `None` if none came, and once the recording ended.
+    fn recv_timeout(&mut self, timeout: Duration) -> Option<Row>;
+
+    /// Whether the recording ended and every row it queued was taken.
+    fn is_finished(&self) -> bool;
+
+    /// Wake `waker` once a row is queued or the recording ends (see [`WakeSlot`]).
+    fn register(&mut self, waker: &Waker);
+
+    /// Ask the owner to end the recording with its `end` row. Never refused: the request is
+    /// recorded before the owner is woken, and a recording that ended already ignores it.
+    fn stop(&mut self);
+}
+
+/// Wraps a runtime's recording, which starts from `header`, as the [`AgentRecording`] a hook
+/// receives.
+pub fn agent_recording(header: Header, source: impl RecordSource + 'static) -> AgentRecording {
+    AgentRecording::new(header, Box::new(source))
 }
 
 /// The [`AgentWindow`] for window `id`, answering through `port` while the

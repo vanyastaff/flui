@@ -24,15 +24,15 @@ use flui_foundation::geometry::DevicePixelRatio;
 use flui_protocol::{
     ActOutcome, ActionName, ActionRequest, Actionability, ActionabilityParams, Effect, EffectKind,
     EffectUnit, ElementId, ElementRef, ErrorCode, ErrorObject, EventFilter, HandleKind, InputPath,
-    LocateParams, Matches, ReadQuery, Retry, Snapshot, SnapshotReading, Tree, WaitOutcome,
-    WindowId,
+    LocateParams, Matches, ReadQuery, RecordParams, Retry, Snapshot, SnapshotReading, Tree,
+    WaitOutcome, WindowId,
 };
 use flui_rendering::binding::{RendererBinding as _, ViewHitTest};
 use flui_semantics::{
     Placement, SemanticsActionError, TreeSnapshot, WireActionError, WireLocateError, WireReadError,
 };
 use flui_view::__runtime::{AgentPort, LeaseId, Reply, WindowCall};
-use flui_view::dev_agent::{AgentAnswer, AgentEvents, AgentWindow};
+use flui_view::dev_agent::{AgentAnswer, AgentEvents, AgentRecording, AgentWindow};
 use parking_lot::{Mutex, RwLock};
 
 use super::UiRuntime;
@@ -130,6 +130,16 @@ pub(crate) enum AgentError {
     /// stream is dropped) before another is taken.
     #[error("the window already has as many event subscriptions as it admits")]
     TooManySubscriptions,
+    /// The UI runtime already holds as many recordings as it admits; one ends (its reader is
+    /// dropped, or stops it) before another is taken.
+    #[error("the window's runtime already holds as many recordings as it admits")]
+    TooManyRecordings,
+    /// The runtime cannot start a recording: `reason` says why.
+    #[error("{reason}")]
+    RecordingRefused {
+        /// Why, for people.
+        reason: &'static str,
+    },
     /// The render tree was busy (a layout was in progress) when the hit-test
     /// asked for it; the same call can succeed after the frame.
     #[error("the render tree was busy")]
@@ -206,6 +216,7 @@ impl AgentError {
             | Self::RenderTreeBusy
             | Self::TooManyWaits
             | Self::TooManySubscriptions
+            | Self::TooManyRecordings
             | Self::InputQueueFull
             | Self::TreeBusy(_) => ErrorCode::Busy,
             Self::InputPartial { failure, .. } => failure.code(),
@@ -228,7 +239,8 @@ impl AgentError {
             | Self::ResolvePanicked { .. }
             | Self::HitTestPanicked { .. }
             | Self::InspectPanicked
-            | Self::Panicked => ErrorCode::Platform,
+            | Self::Panicked
+            | Self::RecordingRefused { .. } => ErrorCode::Platform,
         }
     }
 
@@ -241,6 +253,7 @@ impl AgentError {
             | Self::RenderTreeBusy
             | Self::TooManyWaits
             | Self::TooManySubscriptions
+            | Self::TooManyRecordings
             | Self::InputQueueFull
             | Self::TreeBusy(_) => Retry::Soon,
             Self::NoMatch => Retry::WhenAppears,
@@ -690,6 +703,16 @@ impl AgentPort for DevAgentPort {
         // Recorded first: the wake is the platform's, and a release it fails to deliver is
         // taken at the owner's next drain all the same.
         self.sender.wake_owner();
+    }
+
+    fn record(&self, params: RecordParams) -> Result<AgentAnswer<AgentRecording>, ErrorObject> {
+        let (reply, answer) = flui_view::__runtime::reply_pair();
+        self.admit(UiCommand::AgentRecord {
+            presentation_id: self.sender.presentation_id,
+            params,
+            reply,
+        })?;
+        Ok(answer)
     }
 }
 

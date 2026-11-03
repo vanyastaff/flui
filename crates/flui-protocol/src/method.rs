@@ -424,6 +424,12 @@ macro_rules! __method_table {
             /// End the span and report it.
             PerfStop = "perf.stop", Agent(window), ReadOnly, Perf,
                 $crate::session::WindowParams => $crate::perf::PerfReport;
+            /// Record what a window's UI runtime applies, sent row by row as `record` events.
+            RecordStart = "record.start", Agent, ReadOnly, Record,
+                $crate::record::RecordParams => $crate::record::Recording;
+            /// End a recording, once its `end` row was sent.
+            RecordStop = "record.stop", Agent, ReadOnly, Record,
+                $crate::record::RecordStopParams => $crate::record::RecordSummary;
             /// One semantics action on one element.
             SemanticsAct = "semantics.act", Agent(window), Acts, Core,
                 $crate::act::ActParams => $crate::act::ActOutcome;

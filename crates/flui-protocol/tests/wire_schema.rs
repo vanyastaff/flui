@@ -126,6 +126,26 @@ fn current_schema() -> Value {
     })
 }
 
+/// schemars names a type whose name another type already took by appending a number, so a
+/// reader could not tell which of the two a reference means, and the type that gets the plain
+/// name reads to the additivity check as the other one's shape changing.
+#[test]
+fn no_two_wire_types_share_a_schema_name() {
+    let schema = current_schema();
+    let definitions = schema["$defs"].as_object().expect("the schema has `$defs`");
+    let shared: Vec<&String> = definitions
+        .keys()
+        .filter(|name| {
+            let stem = name.trim_end_matches(|c: char| c.is_ascii_digit());
+            stem.len() < name.len() && definitions.contains_key(stem)
+        })
+        .collect();
+    assert!(
+        shared.is_empty(),
+        "types that share a schema name with another, numbered by schemars: {shared:?}"
+    );
+}
+
 fn read_schema(path: &Path) -> Value {
     let text =
         std::fs::read_to_string(path).unwrap_or_else(|e| panic!("reading {}: {e}", path.display()));

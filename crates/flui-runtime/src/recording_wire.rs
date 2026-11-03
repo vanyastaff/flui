@@ -55,7 +55,7 @@ use flui_protocol::native_recording as wire;
 use crate::owner::{InputOutcome, WindowObservation};
 #[cfg(feature = "testing")]
 use crate::{DeadlineRow, DecisionRow, InputRow, RecordedMember, RecordedSequence};
-use crate::{HostInput, InputRecord, PreferencesRow, RecordedSurface};
+use crate::{HostInput, InputRecord, PreferencesRow, RecordedSurface, RecordingStart};
 
 /// A value the recording's wire form cannot convert in either direction.
 #[derive(Debug, thiserror::Error)]
@@ -1879,6 +1879,42 @@ impl TryConvert<rec::Preferences> for PreferencesRow {
 // ============================================================================
 // Header pieces
 // ============================================================================
+
+impl RecordingStart {
+    /// The first line of a recording on `clock` that starts from here, keeping text under
+    /// `privacy`: each window with its scale and gesture values, untitled, and the preference
+    /// revision in effect. It names no device: the rows carry the devices they saw.
+    ///
+    /// # Errors
+    ///
+    /// [`WireError::Unmirrored`] when a window's gesture values or the preferences hold a
+    /// variant the wire form does not mirror.
+    pub fn to_wire(&self, clock: rec::Clock, privacy: Privacy) -> Result<rec::Header> {
+        Ok(rec::Header {
+            flui_recording: rec::FORMAT_VERSION,
+            clock,
+            windows: self
+                .windows
+                .iter()
+                .map(|window| {
+                    Ok(rec::Window {
+                        window: window.window.get().get(),
+                        scale_factor: window.scale_factor,
+                        title: None,
+                        gestures: Some(profiles_to_wire(&window.gesture_profiles)?),
+                    })
+                })
+                .collect::<Result<Vec<rec::Window>>>()?,
+            devices: Vec::new(),
+            preferences: self
+                .preferences
+                .as_ref()
+                .map(PreferencesRow::to_wire)
+                .transpose()?,
+            keep_text: privacy == Privacy::KeepText,
+        })
+    }
+}
 
 /// A header's entry for `device`, a pointer device of `kind` named `name`.
 ///
