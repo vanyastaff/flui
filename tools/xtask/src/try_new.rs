@@ -106,13 +106,13 @@ impl Found {
 }
 
 /// A crate the scan reads.
-struct Krate {
-    name: String,
-    targets: Vec<Target>,
+pub(crate) struct Krate {
+    pub(crate) name: String,
+    pub(crate) targets: Vec<Target>,
 }
 
 /// Every workspace member, with its library and bin targets.
-fn crates(root: &Path, metadata: &Metadata) -> anyhow::Result<Vec<Krate>> {
+pub(crate) fn crates(root: &Path, metadata: &Metadata) -> anyhow::Result<Vec<Krate>> {
     let mut crates = Vec::new();
     for package in metadata.workspace_packages() {
         let mut targets = Vec::new();

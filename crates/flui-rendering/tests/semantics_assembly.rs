@@ -943,3 +943,80 @@ pub(crate) fn a_table_shape_the_role_drops_bounds_no_cell() {
         Some(CellPosition::new(two, two))
     );
 }
+
+/// Re-assembling several marked subtrees reports the same refusal as
+/// assembling the whole tree: the marked anchors are visited in render
+/// preorder, not in the order a hash set yields them.
+///
+/// Eight sibling groups each hold a leaf that authors a non-finite reading
+/// order. The whole-tree assembly names the last leaf in preorder; marking all
+/// eight leaves on a mounted tree re-assembles under eight group anchors and
+/// must name that same host.
+pub(crate) fn re_assembling_marked_subtrees_refuses_like_the_whole_tree() {
+    use flui_rendering::semantics::SemanticsSortKey;
+    const GROUPS: usize = 8;
+    fn invalid() -> SemanticsConfiguration {
+        let mut config = SemanticsConfiguration::new();
+        config.set_label("invalid ordering");
+        config.set_sort_key(SemanticsSortKey::new(f64::NAN));
+        config
+    }
+    fn tree(configuration: impl Fn() -> Option<SemanticsConfiguration>) -> RenderTester {
+        let mut root = box_node(SemanticsContainer::default().with_boundary()).label("root");
+        for _ in 0..GROUPS {
+            root = root.child(
+                box_node(SemanticsContainer::default().with_boundary()).child(box_node(
+                    SemanticsLeaf {
+                        side: 4.0,
+                        configuration: configuration(),
+                        boundary: true,
+                        label: Some("leaf"),
+                        ..Default::default()
+                    },
+                )),
+            );
+        }
+        RenderTester::mount(root)
+            .with_constraints(constraints())
+            .with_semantics_enabled()
+    }
+
+    let whole_tree = tree(|| Some(invalid()))
+        .try_run_frame()
+        .expect_err("the whole-tree assembly must refuse a non-finite reading order")
+        .to_string();
+
+    let mut run = tree(|| None).run_frame();
+    let root = run.id("root");
+    let leaves: Vec<RenderId> = {
+        let tree = run.owner_mut().render_tree();
+        tree.children(root)
+            .iter()
+            .flat_map(|&group| tree.children(group).iter().copied())
+            .collect()
+    };
+    assert_eq!(leaves.len(), GROUPS);
+    for &leaf in &leaves {
+        run.owner_mut()
+            .render_tree_mut()
+            .get_mut(leaf)
+            .expect("leaf node")
+            .as_box_mut()
+            .expect("leaf is a box")
+            .render_object_mut()
+            .as_any_mut()
+            .downcast_mut::<SemanticsLeaf>()
+            .expect("leaf is a SemanticsLeaf")
+            .configuration = Some(invalid());
+        run.owner_mut().mark_needs_semantics(leaf);
+    }
+    let marked = run
+        .try_pump()
+        .expect_err("re-assembling the marked subtrees must refuse a non-finite reading order")
+        .to_string();
+
+    assert_eq!(
+        marked, whole_tree,
+        "the marked re-assembly must name the host the whole-tree assembly names",
+    );
+}

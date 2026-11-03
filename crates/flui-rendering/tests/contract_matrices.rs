@@ -79,6 +79,7 @@ fn semantics_assembly_matrix() {
         ("semantics_assembly::an_identifier_names_only_the_node_its_configuration_forms", crate::semantics_assembly::an_identifier_names_only_the_node_its_configuration_forms),
         ("semantics_assembly::a_table_shape_the_role_drops_bounds_no_cell", crate::semantics_assembly::a_table_shape_the_role_drops_bounds_no_cell),
         ("semantics_assembly::nonfinite_reading_order_is_refused_before_publication", crate::semantics_assembly::nonfinite_reading_order_is_refused_before_publication),
+        ("semantics_assembly::re_assembling_marked_subtrees_refuses_like_the_whole_tree", crate::semantics_assembly::re_assembling_marked_subtrees_refuses_like_the_whole_tree),
         ("semantics_assembly::a_panicking_semantics_callback_leaves_the_phase", crate::semantics_assembly::a_panicking_semantics_callback_leaves_the_phase),
         ("semantics_assembly::excludes_semantics_subtree_drops_descendant_content", crate::semantics_assembly::excludes_semantics_subtree_drops_descendant_content),
         ("semantics_assembly::explicit_child_nodes_forms_direct_contributors", crate::semantics_assembly::explicit_child_nodes_forms_direct_contributors),

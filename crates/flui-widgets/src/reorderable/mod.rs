@@ -1,26 +1,29 @@
-//! [`ReorderableList`] — a lazy list whose rows the user moves (ADR-0211 §9).
+//! [`ReorderableList`] and [`ReorderableGrid`] — a lazy list and a lazy grid
+//! whose items the user moves (ADR-0211 §9).
 //!
-//! Moving a row is a drag-and-drop session that never leaves the window
-//! ([`DragReach::Window`]): a row's handle starts it at once, and on touch and
-//! pen a long press on the row starts it too. Every row is a drop target that
-//! takes only drags of its own list, so the row under the pointer is where the
-//! dragged row lands, and edge autoscroll comes from the list's scrollable.
-//! The dragged row keeps its state while it is scrolled out of the built band:
-//! its drag holds the row alive.
+//! Moving an item is a drag-and-drop session that never leaves the window
+//! ([`DragReach::Window`]): an item's handle starts it at once, and on touch
+//! and pen a long press on the item starts it too. Every item is a drop target
+//! that takes only drags of its own list or grid, so the item under the
+//! pointer is where the dragged item lands, and edge autoscroll comes from the
+//! scrollable. The dragged item keeps its state while it is scrolled out of
+//! the built band: its drag holds the item alive.
 //!
-//! The same moves have a path without a drag (ADR-0216): each row carries the
-//! commands "Move to the start", "Move up", "Move down" and "Move to the end"
-//! that apply to it, on the platform's keys while focus is in the row, as
-//! assistive technology's actions on the row's node, and for one pointer in a
-//! context menu opened from the row's handle, a secondary click or the menu
-//! key. A command's move is announced with the row's new position.
+//! The same moves have a path without a drag (ADR-0216): each item carries the
+//! commands that apply to it — "Move to the start", "Move to the end" and one
+//! step each way, which in a grid are a tile along its row and a whole row —
+//! on the platform's keys while focus is in the item, as assistive
+//! technology's actions on the item's node, and for one pointer in a context
+//! menu opened from the item's handle, a secondary click or the menu key. A
+//! command's move is announced with the item's new position.
 //!
-//! The list moves nothing itself: it calls [`on_reorder`](Reorder) once, and
-//! the app moves the item in its model and rebuilds. Rows are keyed by the
-//! model key the list is given, so a row's element, state and focus follow
-//! its item to the new position.
+//! Neither moves anything itself: each calls [`on_reorder`](Reorder) once,
+//! and the app moves the item in its model and rebuilds. Items are keyed by
+//! the model key they are given, so an item's element, state and focus follow
+//! it to the new position.
 
-use std::cell::RefCell;
+use std::any::Any;
+use std::cell::{Cell, RefCell};
 use std::fmt;
 use std::hash::Hash;
 use std::rc::Rc;
@@ -30,9 +33,12 @@ use flui_foundation::ViewKey;
 use flui_foundation::geometry::Axis;
 use flui_foundation::geometry::Size;
 use flui_interaction::drag::{DragItem, DragReach, DragView};
+use flui_interaction::gesture::PanClaim;
 use flui_interaction::{MultiDragAxis, PointerKindSet};
 use flui_objects::SubtreeAnchor;
 use flui_painting::styling::{Border, BorderSide, BorderStyle, BoxDecoration, Color};
+use flui_rendering::constraints::SliverConstraints;
+use flui_rendering::delegates::{SliverGridDelegate, SliverGridLayout};
 use flui_rendering::pipeline::WeakPipelineCell;
 
 use crate::__private::AnchoredBox;
@@ -57,11 +63,11 @@ use crate::localization::{
 };
 use crate::{
     Center, ColoredBox, Column, ContextMenuArea, Draggable, DropTarget, Expanded, GestureDetector,
-    ListView, Listener, Row, Scrollable, SizedBox, Text,
+    GridView, ListView, Listener, PanClaimRegion, Row, Scrollable, SizedBox, Text,
 };
 
-/// A row's move, as [`ReorderableList`] reports it once: the item at `from`
-/// goes to `to`.
+/// An item's move, as [`ReorderableList`] or [`ReorderableGrid`] reports it
+/// once: the item at `from` goes to `to`.
 ///
 /// `to` is the item's index **after** it is removed from `from`, so the move
 /// is exactly a `Vec::remove` then a `Vec::insert`:
@@ -91,61 +97,73 @@ pub struct Reorder {
     pub cause: ReorderCause,
 }
 
-/// What moved a row.
+/// What moved an item.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum ReorderCause {
-    /// A drag of the row, dropped on another row.
+    /// A drag of the item, dropped on another item.
     Drag,
     /// A move command: its keys, assistive technology's action or the menu.
     Command,
 }
 
-/// Where a drag of a row is while it runs, for a list that shows it.
+/// Where a drag of an item is while it runs, for a list or grid that shows
+/// it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub struct ReorderPreview {
     /// Where the dragged item is.
     pub from: usize,
-    /// The row the drag is over, which a drop now would move it to; `None`
-    /// once it left the rows.
+    /// The item the drag is over, which a drop now would move it to; `None`
+    /// once it left the items.
     pub over: Option<usize>,
 }
 
-/// Where a row's drag handle comes from.
+/// Where an item's drag handle comes from.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum ReorderHandles {
-    /// The list puts a handle before each row's content.
+    /// The list puts a handle before each row's content, and the grid one
+    /// above each tile's.
     #[default]
     Default,
-    /// Each row places its own, through [`ReorderableItem::handle`].
+    /// Each item places its own, through [`ReorderableItem::handle`].
     Custom,
 }
 
-/// One move of a reorderable row, for the platform's keys, assistive
-/// technology and the row's menu.
+/// One move of a reorderable item, for the platform's keys, assistive
+/// technology and the item's menu.
+///
+/// The arrows name the direction the item moves on screen. In a list they
+/// move it one position; in a grid the arrows along the grid's rows move it
+/// one position too (from a row's end to the next row's start), and the
+/// arrows across them by a whole row, onto the last tile when the next row
+/// is short.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum ReorderIntent {
     /// To the first position.
     Start,
-    /// One position back in a vertical list.
+    /// Up: one position back in a vertical list, a row up in a vertical grid,
+    /// one tile up in a horizontal grid.
     Up,
-    /// One position forward in a vertical list.
+    /// Down: one position forward in a vertical list, a row down in a
+    /// vertical grid, one tile down in a horizontal grid.
     Down,
     /// To the last position.
     End,
-    /// One position to the left in a horizontal list: back in a
-    /// left-to-right locale, forward in a right-to-left one.
+    /// Left: one position in a horizontal list or one tile in a vertical
+    /// grid, a row in a horizontal grid; back in a left-to-right locale,
+    /// forward in a right-to-left one.
     Left,
-    /// One position to the right in a horizontal list.
+    /// Right: the opposite of [`Left`](Self::Left).
     Right,
 }
 
 impl Intent for ReorderIntent {}
 
-/// What [`ReorderableList`]'s item builder knows of the row it builds.
+/// What the item builder of [`ReorderableList`] or [`ReorderableGrid`] knows
+/// of the item it builds.
 pub struct ReorderableItem<'a> {
     index: usize,
     key: &'a dyn ViewKey,
@@ -153,21 +171,21 @@ pub struct ReorderableItem<'a> {
 }
 
 impl ReorderableItem<'_> {
-    /// The row's index.
+    /// The item's index.
     #[must_use]
     pub fn index(&self) -> usize {
         self.index
     }
 
-    /// The row's model key.
+    /// The item's model key.
     #[must_use]
     pub fn key(&self) -> &dyn ViewKey {
         self.key
     }
 
-    /// `child` as the row's drag handle: a press on it that moves drags the
-    /// row, and a tap opens the row's menu. Place one in each row of a list
-    /// with [`ReorderHandles::Custom`].
+    /// `child` as the item's drag handle: a press on it that moves drags the
+    /// item, and a tap opens the item's menu. Place one in each item of a
+    /// list or grid with [`ReorderHandles::Custom`].
     #[must_use]
     pub fn handle(&self, child: impl IntoView) -> BoxedView {
         self.handle.handle(child.into_view().boxed())
@@ -187,6 +205,95 @@ type ItemFn = Rc<dyn Fn(&ReorderableItem<'_>) -> BoxedView>;
 type ReorderFn = Rc<dyn Fn(&mut EventCx<'_>, Reorder)>;
 type PreviewFn = Rc<dyn Fn(&mut EventCx<'_>, ReorderPreview)>;
 type LabelFn = Rc<dyn Fn(usize) -> String>;
+
+/// How the items are laid out.
+#[derive(Clone)]
+enum Layout {
+    /// One after another along the scroll axis.
+    List {
+        /// The row extent assumed before rows are measured.
+        item_extent_estimate: f64,
+    },
+    /// In rows across the scroll axis, as the delegate lays them out.
+    Grid {
+        delegate: Rc<dyn SliverGridDelegate>,
+    },
+}
+
+/// What a [`ReorderableList`] or [`ReorderableGrid`] was configured with.
+#[derive(Clone)]
+struct Config {
+    item_count: usize,
+    key_of: KeyFn,
+    item: ItemFn,
+    feedback: Option<ItemFn>,
+    on_reorder: ReorderFn,
+    on_reorder_preview: Option<PreviewFn>,
+    item_label: Option<LabelFn>,
+    handles: ReorderHandles,
+    long_press: bool,
+    controls: Option<ControlPlacement>,
+    scroll_direction: Axis,
+    layout: Layout,
+}
+
+impl Config {
+    fn new<K, V, R>(
+        layout: Layout,
+        item_count: usize,
+        key: impl Fn(usize) -> K + 'static,
+        item: impl Fn(&ReorderableItem<'_>) -> V + 'static,
+        on_reorder: impl Fn(&mut EventCx<'_>, Reorder) -> R + 'static,
+    ) -> Self
+    where
+        K: Clone + Hash + Eq + fmt::Debug + 'static,
+        V: IntoView,
+        R: EventOutcome,
+    {
+        Self {
+            item_count,
+            key_of: Rc::new(move |index| Rc::new(ValueKey::new(key(index))) as Rc<dyn ViewKey>),
+            item: Rc::new(move |row| item(row).into_view().boxed()),
+            feedback: None,
+            on_reorder: Rc::new(move |cx, change| on_reorder(cx, change).report()),
+            on_reorder_preview: None,
+            item_label: None,
+            handles: ReorderHandles::default(),
+            long_press: true,
+            controls: None,
+            scroll_direction: Axis::Vertical,
+            layout,
+        }
+    }
+
+    fn feedback<V: IntoView>(&mut self, feedback: impl Fn(&ReorderableItem<'_>) -> V + 'static) {
+        self.feedback = Some(Rc::new(move |row| feedback(row).into_view().boxed()));
+    }
+
+    fn on_reorder_preview<F, R>(&mut self, callback: F)
+    where
+        F: Fn(&mut EventCx<'_>, ReorderPreview) -> R + 'static,
+        R: EventOutcome,
+    {
+        self.on_reorder_preview = Some(Rc::new(move |cx, preview| callback(cx, preview).report()));
+    }
+
+    /// The index of the item keyed `key`, by the keys now.
+    fn index_of(&self, key: &dyn ViewKey) -> Option<usize> {
+        (0..self.item_count).find(|&index| (self.key_of)(index).key_eq(key))
+    }
+
+    /// Where a press on an item's handle must move to drag it: along a list,
+    /// so the handle is the innermost member on the list's scroll axis, and
+    /// any way in a grid, whose tiles move across its rows too.
+    fn handle_axis(&self) -> MultiDragAxis {
+        match (&self.layout, self.scroll_direction) {
+            (Layout::Grid { .. }, _) => MultiDragAxis::Free,
+            (Layout::List { .. }, Axis::Vertical) => MultiDragAxis::Vertical,
+            (Layout::List { .. }, Axis::Horizontal) => MultiDragAxis::Horizontal,
+        }
+    }
+}
 
 /// A lazy list whose rows the user moves by dragging them, with their move
 /// commands as the drag's alternative — see the module docs.
@@ -212,27 +319,16 @@ type LabelFn = Rc<dyn Fn(usize) -> String>;
 /// ```
 #[derive(Clone)]
 pub struct ReorderableList {
-    item_count: usize,
-    key_of: KeyFn,
-    item: ItemFn,
-    feedback: Option<ItemFn>,
-    on_reorder: ReorderFn,
-    on_reorder_preview: Option<PreviewFn>,
-    item_label: Option<LabelFn>,
-    handles: ReorderHandles,
-    long_press: bool,
-    controls: Option<ControlPlacement>,
-    scroll_direction: Axis,
-    item_extent_estimate: f64,
+    config: Config,
 }
 
 impl fmt::Debug for ReorderableList {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ReorderableList")
-            .field("item_count", &self.item_count)
-            .field("handles", &self.handles)
-            .field("long_press", &self.long_press)
-            .field("scroll_direction", &self.scroll_direction)
+            .field("item_count", &self.config.item_count)
+            .field("handles", &self.config.handles)
+            .field("long_press", &self.config.long_press)
+            .field("scroll_direction", &self.config.scroll_direction)
             .finish_non_exhaustive()
     }
 }
@@ -252,24 +348,17 @@ impl ReorderableList {
         V: IntoView,
         R: EventOutcome,
     {
-        Self {
-            item_count,
-            key_of: Rc::new(move |index| Rc::new(ValueKey::new(key(index))) as Rc<dyn ViewKey>),
-            item: Rc::new(move |row| item(row).into_view().boxed()),
-            feedback: None,
-            on_reorder: Rc::new(move |cx, change| on_reorder(cx, change).report()),
-            on_reorder_preview: None,
-            item_label: None,
-            handles: ReorderHandles::default(),
-            long_press: true,
-            controls: None,
-            scroll_direction: Axis::Vertical,
+        let layout = Layout::List {
             item_extent_estimate: 56.0,
+        };
+        Self {
+            config: Config::new(layout, item_count, key, item, on_reorder),
         }
     }
 
     /// What a drag of a row shows under the pointer; the row's label
-    /// ([`item_label`](Self::item_label)) by default, nothing without one.
+    /// ([`item_label`](Self::item_label)) by default, a plate the row's size
+    /// without one.
     ///
     /// `feedback` builds a second view beside the row, which stays mounted
     /// while it is dragged: it must not reuse what the row owns alone, such
@@ -279,7 +368,7 @@ impl ReorderableList {
         mut self,
         feedback: impl Fn(&ReorderableItem<'_>) -> V + 'static,
     ) -> Self {
-        self.feedback = Some(Rc::new(move |row| feedback(row).into_view().boxed()));
+        self.config.feedback(feedback);
         self
     }
 
@@ -291,7 +380,7 @@ impl ReorderableList {
         F: Fn(&mut EventCx<'_>, ReorderPreview) -> R + 'static,
         R: EventOutcome,
     {
-        self.on_reorder_preview = Some(Rc::new(move |cx, preview| callback(cx, preview).report()));
+        self.config.on_reorder_preview(callback);
         self
     }
 
@@ -299,14 +388,14 @@ impl ReorderableList {
     /// its move.
     #[must_use]
     pub fn item_label(mut self, label: impl Fn(usize) -> String + 'static) -> Self {
-        self.item_label = Some(Rc::new(label));
+        self.config.item_label = Some(Rc::new(label));
         self
     }
 
     /// Where the drag handles come from; [`ReorderHandles::Default`] by default.
     #[must_use]
     pub fn handles(mut self, handles: ReorderHandles) -> Self {
-        self.handles = handles;
+        self.config.handles = handles;
         self
     }
 
@@ -314,7 +403,7 @@ impl ReorderableList {
     /// handle; on by default. A mouse drags only by the handle.
     #[must_use]
     pub fn long_press(mut self, long_press: bool) -> Self {
-        self.long_press = long_press;
+        self.config.long_press = long_press;
         self
     }
 
@@ -322,14 +411,14 @@ impl ReorderableList {
     /// a menu opened from its handle.
     #[must_use]
     pub fn visible_controls(mut self, placement: ControlPlacement) -> Self {
-        self.controls = Some(placement);
+        self.config.controls = Some(placement);
         self
     }
 
     /// The list's axis; vertical by default.
     #[must_use]
     pub fn scroll_direction(mut self, axis: Axis) -> Self {
-        self.scroll_direction = axis;
+        self.config.scroll_direction = axis;
         self
     }
 
@@ -340,19 +429,315 @@ impl ReorderableList {
     /// When the list builds, if `extent` is not finite and positive.
     #[must_use]
     pub fn item_extent_estimate(mut self, extent: f64) -> Self {
-        self.item_extent_estimate = extent;
+        self.config.layout = Layout::List {
+            item_extent_estimate: extent,
+        };
+        self
+    }
+}
+
+/// A lazy grid whose tiles the user moves by dragging them, with their move
+/// commands as the drag's alternative — see the module docs.
+///
+/// The grid lays its tiles out with a [`SliverGridDelegate`], as
+/// [`GridView::builder`] does. A tile's handle drags it any way, and on touch
+/// and pen a long press on the tile drags it too. Its commands move it to the
+/// next tile along its row and by a whole row, by the number of tiles the
+/// delegate put in a row at the grid's last layout, so a grid whose width
+/// changes the column count moves by its new rows.
+///
+/// ```rust
+/// use std::cell::RefCell;
+/// use std::rc::Rc;
+///
+/// use flui_widgets::{ReorderableGrid, SliverGridDelegateWithFixedCrossAxisCount, Text};
+///
+/// let photos = Rc::new(RefCell::new(vec!["Beach", "Forest", "Harbour", "Dunes"]));
+/// let (keys, labels, model) = (Rc::clone(&photos), Rc::clone(&photos), Rc::clone(&photos));
+/// let _grid = ReorderableGrid::builder(
+///     SliverGridDelegateWithFixedCrossAxisCount::new(3),
+///     photos.borrow().len(),
+///     move |i| keys.borrow()[i],
+///     move |tile| Text::new(labels.borrow()[tile.index()]),
+///     move |_cx, change| {
+///         let mut photos = model.borrow_mut();
+///         let photo = photos.remove(change.from);
+///         photos.insert(change.to, photo);
+///     },
+/// );
+/// ```
+#[derive(Clone)]
+pub struct ReorderableGrid {
+    config: Config,
+}
+
+impl fmt::Debug for ReorderableGrid {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut debug = f.debug_struct("ReorderableGrid");
+        debug.field("item_count", &self.config.item_count);
+        if let Layout::Grid { delegate } = &self.config.layout {
+            debug.field("grid_delegate", delegate);
+        }
+        debug
+            .field("handles", &self.config.handles)
+            .field("long_press", &self.config.long_press)
+            .field("scroll_direction", &self.config.scroll_direction)
+            .finish_non_exhaustive()
+    }
+}
+
+impl ReorderableGrid {
+    /// A grid of `item_count` tiles laid out by `grid_delegate`: `key` names
+    /// each item in the app's model, `item` builds its tile, and `on_reorder`
+    /// moves it there when the user moves the tile (see [`Reorder`] for what
+    /// `to` counts).
+    pub fn builder<K, V, R>(
+        grid_delegate: impl SliverGridDelegate + 'static,
+        item_count: usize,
+        key: impl Fn(usize) -> K + 'static,
+        item: impl Fn(&ReorderableItem<'_>) -> V + 'static,
+        on_reorder: impl Fn(&mut EventCx<'_>, Reorder) -> R + 'static,
+    ) -> Self
+    where
+        K: Clone + Hash + Eq + fmt::Debug + 'static,
+        V: IntoView,
+        R: EventOutcome,
+    {
+        let layout = Layout::Grid {
+            delegate: Rc::new(grid_delegate),
+        };
+        Self {
+            config: Config::new(layout, item_count, key, item, on_reorder),
+        }
+    }
+
+    /// What a drag of a tile shows under the pointer; the tile's label
+    /// ([`item_label`](Self::item_label)) by default, a plate the tile's size
+    /// without one.
+    ///
+    /// `feedback` builds a second view beside the tile, which stays mounted
+    /// while it is dragged: it must not reuse what the tile owns alone, such
+    /// as a text field's focus node or a controller.
+    #[must_use]
+    pub fn feedback<V: IntoView>(
+        mut self,
+        feedback: impl Fn(&ReorderableItem<'_>) -> V + 'static,
+    ) -> Self {
+        self.config.feedback(feedback);
         self
     }
 
-    /// The index of the item keyed `key`, by the list's keys now.
-    fn index_of(&self, key: &dyn ViewKey) -> Option<usize> {
-        (0..self.item_count).find(|&index| (self.key_of)(index).key_eq(key))
+    /// Called as a drag of a tile moves over the tiles: where a drop would
+    /// put it now.
+    #[must_use]
+    pub fn on_reorder_preview<F, R>(mut self, callback: F) -> Self
+    where
+        F: Fn(&mut EventCx<'_>, ReorderPreview) -> R + 'static,
+        R: EventOutcome,
+    {
+        self.config.on_reorder_preview(callback);
+        self
+    }
+
+    /// Name each tile ("Beach"), for its menu's labels and the announcement
+    /// of its move.
+    #[must_use]
+    pub fn item_label(mut self, label: impl Fn(usize) -> String + 'static) -> Self {
+        self.config.item_label = Some(Rc::new(label));
+        self
+    }
+
+    /// Where the drag handles come from; [`ReorderHandles::Default`] by default.
+    #[must_use]
+    pub fn handles(mut self, handles: ReorderHandles) -> Self {
+        self.config.handles = handles;
+        self
+    }
+
+    /// Whether a touch or pen long press on a tile drags it, as well as its
+    /// handle; on by default. A mouse drags only by the handle.
+    #[must_use]
+    pub fn long_press(mut self, long_press: bool) -> Self {
+        self.config.long_press = long_press;
+        self
+    }
+
+    /// Show each tile's move commands as controls at `placement` instead of
+    /// in a menu opened from its handle.
+    #[must_use]
+    pub fn visible_controls(mut self, placement: ControlPlacement) -> Self {
+        self.config.controls = Some(placement);
+        self
+    }
+
+    /// The grid's scroll axis; vertical by default, whose rows run across.
+    #[must_use]
+    pub fn scroll_direction(mut self, axis: Axis) -> Self {
+        self.config.scroll_direction = axis;
+        self
     }
 }
 
 // ============================================================================
-// The list
+// The grid's rows
 // ============================================================================
+
+/// How a grid laid its tiles out at its last layout: what its row moves need.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct GridShape {
+    /// The tiles in one row across the scroll axis.
+    stride: usize,
+    /// Whether the index order runs against the screen along the scroll axis
+    /// (a horizontal grid in a right-to-left locale).
+    main_reversed: bool,
+    /// Whether it runs against the screen across it.
+    cross_reversed: bool,
+}
+
+impl GridShape {
+    /// The shape assumed before the grid is laid out: no row moves, and the
+    /// tiles in the screen's order.
+    const UNKNOWN: Self = Self {
+        stride: 1,
+        main_reversed: false,
+        cross_reversed: false,
+    };
+}
+
+/// The app's grid delegate, which also records the shape of each layout it
+/// gives, so the row moves go by the rows on screen.
+#[derive(Debug)]
+struct ShapeRecorder {
+    inner: Rc<dyn SliverGridDelegate>,
+    shape: Rc<Cell<Option<GridShape>>>,
+}
+
+impl SliverGridDelegate for ShapeRecorder {
+    fn get_layout(&self, constraints: SliverConstraints) -> SliverGridLayout {
+        let layout = self.inner.get_layout(constraints);
+        self.shape.set(Some(GridShape {
+            stride: layout.cross_axis_count.max(1),
+            main_reversed: constraints.axis_direction.is_reversed(),
+            cross_reversed: layout.reverse_cross_axis,
+        }));
+        layout
+    }
+
+    fn should_relayout(&self, old_delegate: &dyn SliverGridDelegate) -> bool {
+        match old_delegate.as_any().downcast_ref::<Self>() {
+            Some(old) => {
+                !Rc::ptr_eq(&self.shape, &old.shape) || self.inner.should_relayout(&*old.inner)
+            }
+            None => true,
+        }
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
+/// How far a move goes from an item's index.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Step {
+    /// Toward the first item, by this many.
+    Back(usize),
+    /// Toward the last item, by this many; past the last, onto it, when the
+    /// item is not in the last row.
+    Forward(usize),
+}
+
+/// The step an arrow's move takes along a list, in the list's reading
+/// direction; `None` for Start and End, which go to a place, not by a step.
+fn list_step(intent: ReorderIntent, rtl: bool) -> Option<Step> {
+    match intent {
+        ReorderIntent::Start | ReorderIntent::End => None,
+        ReorderIntent::Left if rtl => Some(Step::Forward(1)),
+        ReorderIntent::Right if rtl => Some(Step::Back(1)),
+        ReorderIntent::Up | ReorderIntent::Left => Some(Step::Back(1)),
+        ReorderIntent::Down | ReorderIntent::Right => Some(Step::Forward(1)),
+    }
+}
+
+/// The step an arrow's move of a tile takes in a grid shaped `shape` on the
+/// `axis`: the arrows along its rows go to the next tile, those across them
+/// by a row, each the way it points on screen. `None` for Start and End, and
+/// for a row move in a grid of one tile per row, which would only repeat the
+/// move along it.
+fn grid_step(intent: ReorderIntent, axis: Axis, shape: GridShape) -> Option<Step> {
+    let toward = |forward_on_screen: bool, reversed: bool, by: usize| {
+        if forward_on_screen == reversed {
+            Step::Back(by)
+        } else {
+            Step::Forward(by)
+        }
+    };
+    let row = |forward_on_screen: bool| {
+        (shape.stride > 1).then(|| toward(forward_on_screen, shape.main_reversed, shape.stride))
+    };
+    let along = |forward_on_screen: bool| Some(toward(forward_on_screen, shape.cross_reversed, 1));
+    match (axis, intent) {
+        (_, ReorderIntent::Start | ReorderIntent::End) => None,
+        (Axis::Vertical, ReorderIntent::Up) | (Axis::Horizontal, ReorderIntent::Left) => row(false),
+        (Axis::Vertical, ReorderIntent::Down) | (Axis::Horizontal, ReorderIntent::Right) => {
+            row(true)
+        }
+        (Axis::Vertical, ReorderIntent::Left) | (Axis::Horizontal, ReorderIntent::Up) => {
+            along(false)
+        }
+        (Axis::Vertical, ReorderIntent::Right) | (Axis::Horizontal, ReorderIntent::Down) => {
+            along(true)
+        }
+    }
+}
+
+/// Where `intent` moves the item at `index` of `view`, laid out as `shape`
+/// when it is a grid; `None` when the move does not apply there.
+fn move_target(
+    view: &Config,
+    shape: Option<GridShape>,
+    rtl: bool,
+    index: usize,
+    intent: ReorderIntent,
+) -> Option<usize> {
+    let last = view.item_count.checked_sub(1)?;
+    if index > last {
+        return None;
+    }
+    let target = match intent {
+        ReorderIntent::Start => 0,
+        ReorderIntent::End => last,
+        _ => {
+            let step = match view.layout {
+                Layout::List { .. } => list_step(intent, rtl),
+                Layout::Grid { .. } => grid_step(
+                    intent,
+                    view.scroll_direction,
+                    shape.unwrap_or(GridShape::UNKNOWN),
+                ),
+            }?;
+            match step {
+                Step::Back(by) => index.checked_sub(by)?,
+                // A row down from a row that is not the last lands on the
+                // tile below, or on the last tile when the next row is short.
+                Step::Forward(by) => {
+                    if index / by >= last / by {
+                        return None;
+                    }
+                    index.saturating_add(by).min(last)
+                }
+            }
+        }
+    };
+    (target != index).then_some(target)
+}
+
+// ============================================================================
+// The list or grid
+// ============================================================================
+//
+// From here on a "row" is an item of either: a row of a list, a tile of a
+// grid.
 
 /// What one drag of a row carries: its list, so only that list's rows take
 /// it, and the dragged item's key, so a drop finds where the item is now.
@@ -370,9 +755,12 @@ struct RowDrag {
     row_reported: bool,
 }
 
-/// One mounted list, as its rows share it.
+/// One mounted list or grid, as its rows share it.
 struct Shared {
-    view: RefCell<ReorderableList>,
+    view: RefCell<Config>,
+    /// How a grid laid its tiles out last; `None` for a list and before a
+    /// grid's first layout.
+    grid: Rc<Cell<Option<GridShape>>>,
     /// The drags of this list's rows that run now, one per dragged item:
     /// two contacts may drag two rows at once, each with its own preview.
     drags: RefCell<Vec<RowDrag>>,
@@ -505,6 +893,103 @@ impl Shared {
     }
 }
 
+impl Shared {
+    fn new(view: &Config) -> Rc<Self> {
+        Rc::new(Self {
+            view: RefCell::new(view.clone()),
+            grid: Rc::new(Cell::new(None)),
+            drags: RefCell::new(Vec::new()),
+            writer: RefCell::new(None),
+            announcer: RefCell::new(None),
+            strings: RefCell::new(None),
+            pipeline: RefCell::new(None),
+        })
+    }
+
+    /// Take the capabilities the rows' moves use.
+    fn acquire(&self, ctx: &dyn LifecycleContext) {
+        *self.writer.borrow_mut() = Some(ctx.writer_source());
+        *self.announcer.borrow_mut() = ctx.announcer();
+        *self.pipeline.borrow_mut() = ctx.pipeline_owner().map(|owner| owner.downgrade());
+    }
+
+    /// The list or grid of `view`'s rows in its scrollable, as one drop
+    /// target around them.
+    fn build(self: &Rc<Self>, view: &Config, ctx: &dyn BuildContext) -> BoxedView {
+        *self.strings.borrow_mut() = BoxedWidgetsLocalizations::maybe_of(ctx);
+        let _prev = self.view.replace(view.clone());
+        let shared = Rc::clone(self);
+        let config = view.clone();
+        let left = Rc::clone(self);
+        let scrollable = Scrollable::new()
+            .scroll_direction(view.scroll_direction)
+            .viewport_builder(Rc::new(move |position| {
+                let shared = Rc::clone(&shared);
+                let rows = config.clone();
+                let keys = config.clone();
+                let grid = Rc::clone(&shared.grid);
+                let row = move |index: usize| {
+                    (index < rows.item_count).then(|| {
+                        ReorderRow {
+                            index,
+                            key: (rows.key_of)(index),
+                            list: Rc::clone(&shared),
+                        }
+                        .boxed()
+                    })
+                };
+                match &config.layout {
+                    Layout::List {
+                        item_extent_estimate,
+                    } => ListView::builder(config.item_count, *item_extent_estimate, row)
+                        .scroll_direction(config.scroll_direction)
+                        .find_index_by_key(move |key| keys.index_of(key))
+                        .focusable(true)
+                        .position(position)
+                        .boxed(),
+                    Layout::Grid { delegate } => {
+                        let recorder = ShapeRecorder {
+                            inner: Rc::clone(delegate),
+                            shape: Rc::clone(&grid),
+                        };
+                        GridView::builder(recorder, config.item_count, row)
+                            .scroll_direction(config.scroll_direction)
+                            .find_index_by_key(move |key| keys.index_of(key))
+                            .focusable(true)
+                            .position(position)
+                            .boxed()
+                    }
+                }
+            }))
+            .boxed();
+        // The rows report where a drag is. The list, which answers each move
+        // after the rows under it, reports "over none" for a move no row
+        // answered (the space after the last row) and when the drag leaves
+        // it; a row's own leave would report it between two rows.
+        let between = Rc::clone(self);
+        DropTarget::bare(
+            move |drag: &DragView<'_>| {
+                if let Some(payload) = drag.value::<RowPayload>()
+                    && Rc::ptr_eq(&payload.list, &between)
+                    && !between.take_row_reported(&*payload.key)
+                {
+                    between.hover(&payload.key, None);
+                }
+                None
+            },
+            move |_hover| scrollable.clone(),
+        )
+        .on_leave(move |drag| {
+            if let Some(payload) = drag.value::<RowPayload>()
+                && Rc::ptr_eq(&payload.list, &left)
+            {
+                left.hover(&payload.key, None);
+            }
+        })
+        .boxed()
+    }
+}
+
 /// Persistent state of a [`ReorderableList`].
 pub struct ReorderableListState {
     shared: Rc<Shared>,
@@ -529,88 +1014,66 @@ impl StatefulView for ReorderableList {
 
     fn create_state(&self) -> Self::State {
         ReorderableListState {
-            shared: Rc::new(Shared {
-                view: RefCell::new(self.clone()),
-                drags: RefCell::new(Vec::new()),
-                writer: RefCell::new(None),
-                announcer: RefCell::new(None),
-                strings: RefCell::new(None),
-                pipeline: RefCell::new(None),
-            }),
+            shared: Shared::new(&self.config),
         }
-    }
-}
-
-impl ReorderableListState {
-    fn acquire(&self, ctx: &dyn LifecycleContext) {
-        *self.shared.writer.borrow_mut() = Some(ctx.writer_source());
-        *self.shared.announcer.borrow_mut() = ctx.announcer();
-        *self.shared.pipeline.borrow_mut() = ctx.pipeline_owner().map(|owner| owner.downgrade());
     }
 }
 
 impl ViewState<ReorderableList> for ReorderableListState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        self.acquire(ctx);
+        self.shared.acquire(ctx);
     }
 
     fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
-        self.acquire(ctx);
+        self.shared.acquire(ctx);
     }
 
     fn build(&self, view: &ReorderableList, ctx: &dyn BuildContext) -> impl IntoView {
-        *self.shared.strings.borrow_mut() = BoxedWidgetsLocalizations::maybe_of(ctx);
-        let _prev = self.shared.view.replace(view.clone());
-        let shared = Rc::clone(&self.shared);
-        let list = view.clone();
-        let left = Rc::clone(&self.shared);
-        let scrollable = Scrollable::new()
-            .scroll_direction(view.scroll_direction)
-            .viewport_builder(Rc::new(move |position| {
-                let shared = Rc::clone(&shared);
-                let rows = list.clone();
-                let keys = list.clone();
-                ListView::builder(list.item_count, list.item_extent_estimate, move |index| {
-                    (index < rows.item_count).then(|| {
-                        ReorderRow {
-                            index,
-                            key: (rows.key_of)(index),
-                            list: Rc::clone(&shared),
-                        }
-                        .boxed()
-                    })
-                })
-                .scroll_direction(list.scroll_direction)
-                .find_index_by_key(move |key| keys.index_of(key))
-                .focusable(true)
-                .position(position)
-                .boxed()
-            }))
-            .boxed();
-        // The rows report where a drag is. The list, which answers each move
-        // after the rows under it, reports "over none" for a move no row
-        // answered (the space after the last row) and when the drag leaves
-        // it; a row's own leave would report it between two rows.
-        let between = Rc::clone(&self.shared);
-        DropTarget::bare(
-            move |drag: &DragView<'_>| {
-                if let Some(payload) = drag.value::<RowPayload>()
-                    && Rc::ptr_eq(&payload.list, &between)
-                    && !between.take_row_reported(&*payload.key)
-                {
-                    between.hover(&payload.key, None);
-                }
-                None
-            },
-            move |_hover| scrollable.clone(),
-        )
-        .on_leave(move |drag| {
-            if let Some(payload) = drag.value::<RowPayload>()
-                && Rc::ptr_eq(&payload.list, &left)
-            {
-                left.hover(&payload.key, None);
-            }
-        })
+        self.shared.build(&view.config, ctx)
+    }
+}
+
+/// Persistent state of a [`ReorderableGrid`].
+pub struct ReorderableGridState {
+    shared: Rc<Shared>,
+}
+
+impl fmt::Debug for ReorderableGridState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ReorderableGridState")
+            .field("drags", &self.shared.drags.borrow().len())
+            .field("shape", &self.shared.grid.get())
+            .finish_non_exhaustive()
+    }
+}
+
+impl View for ReorderableGrid {
+    fn create_element(&self) -> ElementKind {
+        ElementKind::stateful(self)
+    }
+}
+
+impl StatefulView for ReorderableGrid {
+    type State = ReorderableGridState;
+
+    fn create_state(&self) -> Self::State {
+        ReorderableGridState {
+            shared: Shared::new(&self.config),
+        }
+    }
+}
+
+impl ViewState<ReorderableGrid> for ReorderableGridState {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
+        self.shared.acquire(ctx);
+    }
+
+    fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
+        self.shared.acquire(ctx);
+    }
+
+    fn build(&self, view: &ReorderableGrid, ctx: &dyn BuildContext) -> impl IntoView {
+        self.shared.build(&view.config, ctx)
     }
 }
 
@@ -624,8 +1087,8 @@ struct HandleSource {
     key: Rc<dyn ViewKey>,
     feedback: BoxedView,
     menu: bool,
-    /// The list's axis, which a press on the handle moves along to drag.
-    axis: Axis,
+    /// Where a press on the handle moves to drag ([`Config::handle_axis`]).
+    axis: MultiDragAxis,
 }
 
 impl HandleSource {
@@ -659,22 +1122,25 @@ impl HandleSource {
         // All of the handle's box takes the press, not only what it paints,
         // and a press that moves along the list drags the row: on the list's
         // axis the handle is deeper than the list's own scroll, so it wins.
+        // A grid's handle drags on a press that moves any way, and keeps the
+        // contact from the grid's scroll, which would take any motion along
+        // its axis from a free drag (ADR-0208 rule 1).
         let child = Listener::new()
             .behavior(HitTestBehavior::Opaque)
             .child(child)
             .boxed();
-        let axis = match self.axis {
-            Axis::Vertical => MultiDragAxis::Vertical,
-            Axis::Horizontal => MultiDragAxis::Horizontal,
+        let handle = self
+            .draggable(child, PointerKindSet::all())
+            .axis(self.axis)
+            .boxed();
+        let handle = match self.axis {
+            MultiDragAxis::Free => PanClaimRegion::new(PanClaim::None, handle).boxed(),
+            MultiDragAxis::Horizontal | MultiDragAxis::Vertical => handle,
         };
-        let handle = self.draggable(child, PointerKindSet::all()).axis(axis);
         if self.menu {
-            DragHandle {
-                child: handle.boxed(),
-            }
-            .boxed()
+            DragHandle { child: handle }.boxed()
         } else {
-            handle.boxed()
+            handle
         }
     }
 }
@@ -725,18 +1191,20 @@ fn default_handle() -> BoxedView {
 }
 
 /// `content` after `handle`, which sits in a square `side` wide (the touch
-/// minimum) at the row's reading start in a vertical list, or on top in a
-/// horizontal one.
+/// minimum) at the row's reading start in a vertical list, and on top in a
+/// horizontal list or a grid's tile.
 ///
 /// The handle comes before the content because keyboard focus in the row
 /// reveals the row's menu control at the trailing edge, where it would
 /// cover a handle.
-fn beside_handle(content: BoxedView, handle: BoxedView, side: f64, axis: Axis) -> BoxedView {
+fn beside_handle(content: BoxedView, handle: BoxedView, side: f64, view: &Config) -> BoxedView {
     let handle = SizedBox::new(side, side).child(handle).boxed();
     let content = Expanded::new(content).boxed();
-    match axis {
-        Axis::Vertical => Row::new(vec![handle, content]).boxed(),
-        Axis::Horizontal => Column::new(vec![handle, content]).boxed(),
+    match (&view.layout, view.scroll_direction) {
+        (Layout::List { .. }, Axis::Vertical) => Row::new(vec![handle, content]).boxed(),
+        (Layout::List { .. }, Axis::Horizontal) | (Layout::Grid { .. }, _) => {
+            Column::new(vec![handle, content]).boxed()
+        }
     }
 }
 
@@ -779,7 +1247,7 @@ impl StatelessView for ReorderRow {
             key: Rc::clone(&self.key),
             feedback: SizedBox::shrink().boxed(),
             menu,
-            axis: view.scroll_direction,
+            axis: view.handle_axis(),
         };
         let anchor = SubtreeAnchor::new();
         let feedback = match &view.feedback {
@@ -809,7 +1277,7 @@ impl StatelessView for ReorderRow {
                 let side = GestureArenaScope::settings_or_default_of(ctx)
                     .min_target_for(flui_interaction::PointerKind::Touch);
                 let handle = source.handle(default_handle());
-                beside_handle(content, handle, side, view.scroll_direction)
+                beside_handle(content, handle, side, &view)
             }
             ReorderHandles::Custom => content,
         };
@@ -859,7 +1327,7 @@ impl StatelessView for ReorderRow {
         let strings: &dyn WidgetsLocalizations = localizations
             .as_deref()
             .map_or(&DefaultWidgetsLocalizations, |boxed| &**boxed);
-        let moves = moves(strings, &view, index, rtl);
+        let moves = moves(strings, &view, self.list.grid.get(), index, rtl);
         // The menu, controls and assistive actions offer the moves that apply
         // now; the keys are bound for every move, and the action decides when
         // it runs from where the model has the row then.
@@ -970,64 +1438,64 @@ fn arrow(intent: ReorderIntent) -> &'static str {
     }
 }
 
-/// Every move of a row of `view`, in menu order, with whether it applies to
-/// the row at `index`: Start and back need a row before it, forward and End
-/// one after it.
+/// Every move of a row of `view` (laid out as `shape` when it is a grid), in
+/// menu order, with whether it applies to the row at `index`: a list's moves
+/// along it, a grid's along its rows and across them.
 fn moves(
     strings: &dyn WidgetsLocalizations,
-    view: &ReorderableList,
+    view: &Config,
+    shape: Option<GridShape>,
     index: usize,
     rtl: bool,
 ) -> Vec<(GestureCommand, ReorderIntent, SingleActivator, bool)> {
-    let last = view.item_count.saturating_sub(1);
-    let key = |named: NamedKey| SingleActivator::named(named).alt();
-    let (back, back_key, forward, forward_key) = match (view.scroll_direction, rtl) {
-        (Axis::Vertical, _) => (
-            (strings.reorder_item_up(), ReorderIntent::Up),
-            NamedKey::ArrowUp,
-            (strings.reorder_item_down(), ReorderIntent::Down),
-            NamedKey::ArrowDown,
-        ),
-        (Axis::Horizontal, false) => (
-            (strings.reorder_item_left(), ReorderIntent::Left),
-            NamedKey::ArrowLeft,
-            (strings.reorder_item_right(), ReorderIntent::Right),
-            NamedKey::ArrowRight,
-        ),
-        (Axis::Horizontal, true) => (
-            (strings.reorder_item_right(), ReorderIntent::Right),
-            NamedKey::ArrowRight,
-            (strings.reorder_item_left(), ReorderIntent::Left),
-            NamedKey::ArrowLeft,
-        ),
+    let up = (
+        strings.reorder_item_up(),
+        ReorderIntent::Up,
+        NamedKey::ArrowUp,
+    );
+    let down = (
+        strings.reorder_item_down(),
+        ReorderIntent::Down,
+        NamedKey::ArrowDown,
+    );
+    let left = (
+        strings.reorder_item_left(),
+        ReorderIntent::Left,
+        NamedKey::ArrowLeft,
+    );
+    let right = (
+        strings.reorder_item_right(),
+        ReorderIntent::Right,
+        NamedKey::ArrowRight,
+    );
+    let steps = match (&view.layout, view.scroll_direction, rtl) {
+        (Layout::List { .. }, Axis::Vertical, _) => vec![up, down],
+        (Layout::List { .. }, Axis::Horizontal, false) => vec![left, right],
+        (Layout::List { .. }, Axis::Horizontal, true) => vec![right, left],
+        (Layout::Grid { .. }, _, _) => vec![up, down, left, right],
     };
-    let (after_start, before_end) = (index > 0, index < last);
-    [
-        (
-            strings.reorder_item_to_start(),
-            ReorderIntent::Start,
-            NamedKey::Home,
-            after_start,
-        ),
-        (back.0, back.1, back_key, after_start),
-        (forward.0, forward.1, forward_key, before_end),
-        (
-            strings.reorder_item_to_end(),
-            ReorderIntent::End,
-            NamedKey::End,
-            before_end,
-        ),
-    ]
-    .into_iter()
-    .map(|(label, intent, named, applies)| {
-        (
-            GestureCommand::new(label, intent),
-            intent,
-            key(named),
-            applies,
-        )
-    })
-    .collect::<Vec<_>>()
+    let start = (
+        strings.reorder_item_to_start(),
+        ReorderIntent::Start,
+        NamedKey::Home,
+    );
+    let end = (
+        strings.reorder_item_to_end(),
+        ReorderIntent::End,
+        NamedKey::End,
+    );
+    std::iter::once(start)
+        .chain(steps)
+        .chain(std::iter::once(end))
+        .map(|(label, intent, named)| {
+            (
+                GestureCommand::new(label, intent),
+                intent,
+                SingleActivator::named(named).alt(),
+                move_target(view, shape, rtl, index, intent).is_some(),
+            )
+        })
+        .collect::<Vec<_>>()
 }
 
 /// Performs a row's moves.
@@ -1042,20 +1510,10 @@ impl RowMoves {
         // The row's index now, not when it was built: the app may have moved
         // its model since, by an earlier command delivered before a rebuild.
         // The key is resolved outside the borrow, since `key_of` is app code.
+        // A grid's rows are those of its last layout.
         let view = self.list.view.borrow().clone();
         let index = view.index_of(&*self.key)?;
-        let last = view.item_count.checked_sub(1)?;
-        let back = index.checked_sub(1);
-        let forward = (index < last).then_some(index + 1);
-        let target = match intent {
-            ReorderIntent::Start => Some(0),
-            ReorderIntent::End => Some(last),
-            ReorderIntent::Left if self.rtl => forward,
-            ReorderIntent::Right if self.rtl => back,
-            ReorderIntent::Up | ReorderIntent::Left => back,
-            ReorderIntent::Down | ReorderIntent::Right => forward,
-        };
-        target.filter(|&target| target != index)
+        move_target(&view, self.list.grid.get(), self.rtl, index, intent)
     }
 }
 
