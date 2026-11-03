@@ -884,10 +884,12 @@ pub(crate) fn magnifiers(laid: &LaidOut) -> Vec<flui_foundation::geometry::Rect<
 
 /// A drag of the caret's handle shows the scope's magnifier over the caret
 /// as it moves, its bottom centre a gap above the line at the caret, and
-/// takes it away with the drag; a desktop platform shows none by default.
+/// takes it away with the drag; a desktop platform shows none by default,
+/// and the field's own choice wins over the scope's.
 ///
 /// Red-check: leave the magnifier out of the handles (none during the
-/// drag), or keep it after the drag (one after the release).
+/// drag), keep it after the drag (one after the release), or ignore the
+/// field's own choice (the scope's look).
 pub(crate) fn a_handle_drag_shows_the_magnifier_over_the_dragged_end() {
     use flui_widgets::{MagnifierInfo, PlainMagnifier};
 
@@ -955,4 +957,100 @@ pub(crate) fn a_handle_drag_shows_the_magnifier_over_the_dragged_end() {
         "the host is a desktop"
     );
     assert!(shown.is_empty(), "a desktop shows none: {shown:?}");
+
+    // The field's own choice wins over the scope's.
+    let mut scene = Scene::build(Some(|c| c.magnifier(PlainMagnifier::rounded())), |field| {
+        field
+            .caret_handle(CaretHandle::on_tap())
+            .magnifier(PlainMagnifier::capsule())
+    });
+    let ((shown, _), _) = drag_caret(&mut scene);
+    let sizes = shown
+        .iter()
+        .map(|loupe| (loupe.width(), loupe.height()))
+        .collect::<Vec<_>>();
+    assert_eq!(sizes, [(80.0, 48.0)], "the field's own look");
+    let mut scene = Scene::build(Some(|c| c.magnifier(PlainMagnifier::rounded())), |field| {
+        field.caret_handle(CaretHandle::on_tap()).no_magnifier()
+    });
+    let ((shown, _), _) = drag_caret(&mut scene);
+    assert!(shown.is_empty(), "the field turned it off: {shown:?}");
+}
+
+/// While a drag of the caret's handle steps the caret over characters, each
+/// step plays one selection click, and the magnifier follows the finger
+/// between characters: a finger resting a third of a letter past the caret
+/// has the magnifier centred under it, not on the caret.
+///
+/// Red-check: play no click on a step (none heard), or keep the magnifier
+/// on the caret (centred a third of a letter short).
+pub(crate) fn a_handle_drag_s_magnifier_follows_the_finger_and_each_step_clicks() {
+    use flui_platform::HapticFeedback;
+    use flui_widgets::PlainMagnifier;
+
+    let mut scene = Scene::build(Some(|c| c.magnifier(PlainMagnifier::rounded())), |field| {
+        field.caret_handle(CaretHandle::on_tap())
+    });
+    let caret = start_of("alpha ");
+    scene.tap(scene.along(caret));
+    let from = scene.handle_at(caret);
+    let letter = start_of("alpha beta") - start_of("alpha bet");
+    // Three letters, one a step, then a third of the next.
+    let stops = [
+        start_of("alpha b"),
+        start_of("alpha be"),
+        start_of("alpha bet"),
+        start_of("alpha bet") + letter / 3.0,
+    ];
+    // The finger first goes down past the drag slop, which the line's
+    // letters keep: a step of one letter alone would not start the drag.
+    let below = from + Offset::new(0.0, 30.0);
+    let mut script = TouchScript::new("step the caret handle")
+        .down(1, from)
+        .wait(Duration::from_millis(16))
+        .move_to(1, below)
+        .frame();
+    for stop in stops {
+        script = script
+            .wait(Duration::from_millis(16))
+            .move_to(1, below + Offset::new(stop - caret, 0.0))
+            .frame();
+    }
+    let drag = script
+        .wait(Duration::from_millis(16))
+        .frame()
+        .wait(Duration::from_millis(16))
+        .frame()
+        .up(1)
+        .build()
+        .expect("a valid script");
+    let last = drag.steps().len() - 1;
+    let mut during = None;
+    let controller = scene.controller.clone();
+    scene.laid.replay_with(&drag, |laid, index| {
+        if index + 1 == last {
+            during = Some((magnifiers(laid), controller.caret_byte_offset()));
+        }
+    });
+    scene.settle();
+    let (shown, at) = during.expect("the drag ran");
+    assert_eq!(at, "alpha bet".len(), "the caret stopped on a letter");
+    let clicks = scene
+        .laid
+        .window()
+        .haptic_actuator()
+        .feedback()
+        .iter()
+        .filter(|kind| **kind == HapticFeedback::SelectionClick)
+        .count();
+    assert_eq!(clicks, 3, "one click a step over a letter");
+    assert_eq!(shown.len(), 1, "one magnifier during the drag: {shown:?}");
+    let field = scene.laid.absolute_offset(scene.editable());
+    let finger_x = field.dx + stops[3];
+    assert!(
+        (shown[0].center().x - finger_x).abs() < 0.5,
+        "centred under the finger at {finger_x}, the caret at {}: {:?}",
+        field.dx + stops[2],
+        shown[0]
+    );
 }

@@ -392,6 +392,7 @@ mod event_loop {
     use crate::owner::window_delivery::WindowDelivery;
     use crate::owner::{DirectOwnerHooks, OpenWindowError, OwnerHooks, OwnerPlatform};
     use crate::platform::{AppHandler, Platform, PlatformExecutor};
+    use crate::transfer::linux::wayland::DataDevices;
 
     /// The newest `wl_compositor` the loop understands: version 6 gives a
     /// surface its preferred buffer scale.
@@ -436,7 +437,7 @@ mod event_loop {
 
         /// The clipboard, made on the owner thread, which sets its selection
         /// under the user input `last_input` records last.
-        fn clipboard(last_input: LastInput) -> Arc<dyn WaylandClipboard>;
+        fn clipboard(last_input: LastInput, devices: DataDevices) -> Arc<dyn WaylandClipboard>;
 
         /// The channel the loop's system notices take to the application.
         fn notices(app: &Arc<AppDelivery>) -> Arc<dyn NoticeChannel>;
@@ -1041,6 +1042,8 @@ mod event_loop {
         input: Arc<dyn WaylandInput>,
         /// The clipboard, offered the same globals.
         clipboard: Arc<dyn WaylandClipboard>,
+        /// The seats' data devices, which the clipboard and drag share.
+        devices: DataDevices,
     }
 
     impl WaylandState {
@@ -1055,6 +1058,8 @@ mod event_loop {
         ) {
             self.input.global(registry, name, interface, version, queue);
             self.clipboard
+                .global(registry, name, interface, version, queue);
+            self.devices
                 .global(registry, name, interface, version, queue);
         }
 
@@ -1123,6 +1128,7 @@ mod event_loop {
                     state.remove_output(name);
                     state.input.global_removed(name);
                     state.clipboard.global_removed(name);
+                    state.devices.global_removed(name);
                 }
                 _ => {}
             }
@@ -1374,6 +1380,7 @@ mod event_loop {
         displays: Arc<dyn WaylandDisplays>,
         input: Arc<dyn WaylandInput>,
         clipboard: Arc<dyn WaylandClipboard>,
+        devices: DataDevices,
         notices: Arc<dyn NoticeChannel>,
         portal: PortalSlot,
         start_preferences: fn(&BackgroundExecutor, &Arc<OwnerSignal>) -> Arc<dyn LinuxPreferences>,
@@ -1480,12 +1487,14 @@ mod event_loop {
             let live = LiveOutputs::default();
             let last_input = LastInput::default();
             let input = H::input(last_input.clone());
-            let clipboard = H::clipboard(last_input.clone());
+            let devices = DataDevices::new();
+            let clipboard = H::clipboard(last_input.clone(), devices.clone());
             let mut state = WaylandState {
                 outputs: Vec::new(),
                 live: live.clone(),
                 input: Arc::clone(&input),
                 clipboard: Arc::clone(&clipboard),
+                devices: devices.clone(),
             };
             let announced = globals.contents().with_list(|list| {
                 list.iter()
@@ -1503,6 +1512,7 @@ mod event_loop {
             // window opens before the loop's first turn, and a seat's
             // selection reaches only a device that exists when the keyboard
             // enters.
+            devices.seats(&input.seats());
             clipboard.seats(&input.seats());
             let waker = Arc::new(
                 LoopWaker::try_new().map_err(|error| init("the loop's wake descriptor", &error))?,
@@ -1554,6 +1564,7 @@ mod event_loop {
                 displays: H::displays(),
                 input,
                 clipboard,
+                devices,
                 portal: PortalSlot::default(),
                 start_preferences: H::preferences,
                 start_host_notices: H::host_notices,
@@ -1756,7 +1767,9 @@ mod event_loop {
             self.dispatch_pending()?;
             // Each seat the input holds has a data device before a window it
             // focuses is told the seat's selection.
-            self.clipboard.seats(&self.input.seats());
+            let seats = self.input.seats();
+            self.devices.seats(&seats);
+            self.clipboard.seats(&seats);
             // The input the seats reported reaches the windows before they
             // settle, so a frame they deliver follows the input it shows.
             // Neither holds a lock of the loop: a handler may open, close or
@@ -1951,6 +1964,7 @@ mod event_loop {
             }
             self.input.release();
             self.clipboard.release();
+            self.devices.release();
             let quit = self.app.quit_requested();
             self.app.release();
             quit.or_resume(());

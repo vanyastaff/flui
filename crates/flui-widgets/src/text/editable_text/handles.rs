@@ -16,6 +16,7 @@ use flui_animation::{
 use flui_foundation::geometry::Offset;
 use flui_foundation::notifier::{ChangeNotifier, Listenable};
 use flui_foundation::panic::FirstPanic;
+use flui_interaction::HapticsHandle;
 use flui_interaction::{
     GestureEndReason, GestureRecognizer, LongPressGestureRecognizer, PointerKindSet,
 };
@@ -27,20 +28,24 @@ use flui_rendering::pipeline::{LeaderWatch, PipelineCell};
 use flui_view::prelude::*;
 use flui_view::{BoxedView, View, ViewExt};
 
-use super::{CompositionCommit, source_offset_at_global, source_word_range_at_global};
+use super::{
+    CompositionCommit, EditableText, source_offset_at_global, source_word_range_at_global,
+};
+#[cfg(doc)]
+use crate::DefaultSelectionControls;
 use crate::interaction::GesturePolicy;
 use crate::interaction::actions::ActionChain;
 use crate::interaction::recognizer_attachment::RecognizerAttachment;
 use crate::interaction::{DragSlot, GestureDetector, Listener};
 use crate::overlay::{InsertPosition, OverlayEntry, OverlayHandle};
 use crate::text::controller::TextEditingController;
-use crate::text::selection_area::handles::{LinkFollower, Look};
+use crate::text::selection_area::handles::{LinkFollower, Look, play_step};
 use crate::text::text_store::with_editable_global;
 use crate::text::{
-    MagnifierInfo, MenuHost, MenuSettings, PopupOrigin, SelectionMagnifier, ToolbarAnchors,
-    editing_commands,
+    MagnifierChoice, MagnifierInfo, MenuHost, MenuSettings, PopupOrigin, SelectionMagnifier,
+    ToolbarAnchors, editing_commands,
 };
-use crate::{HandleInfo, HandleSide, Positioned, Stack};
+use crate::{HandleInfo, HandleSide, Positioned, SelectionHandles, Stack};
 
 /// Whether a tap in an editable text shows a handle under its caret, which
 /// a drag moves, and how long it stays without a touch.
@@ -133,6 +138,45 @@ pub(super) enum Shown {
     Selection,
 }
 
+impl EditableText {
+    /// A touch selection (a long press, which the same touch extends by
+    /// words, a double tap or a drag) shows a handle under each end, and a
+    /// tap one under the caret as [`Self::caret_handle`] says; dragging a
+    /// handle moves its end. They show in the nearest
+    /// [`Overlay`](crate::Overlay), and none without one.
+    #[must_use]
+    pub fn handles(mut self, handles: impl SelectionHandles) -> Self {
+        self.handles = Some(Rc::new(handles));
+        self
+    }
+
+    /// Show `magnifier` while a finger drags a handle, in place of the
+    /// nearest [`DefaultSelectionControls`]' or the platform's
+    /// ([`PlainMagnifier::for_platform`](crate::text::PlainMagnifier::for_platform)).
+    #[must_use]
+    pub fn magnifier(mut self, magnifier: impl SelectionMagnifier) -> Self {
+        self.magnifier = Some(MagnifierChoice::Show(Rc::new(magnifier)));
+        self
+    }
+
+    /// Show no magnifier while a finger drags a handle, though a
+    /// [`DefaultSelectionControls`] above or the platform gives one.
+    #[must_use]
+    pub fn no_magnifier(mut self) -> Self {
+        self.magnifier = Some(MagnifierChoice::Hide);
+        self
+    }
+
+    /// Whether a tap shows a handle under the caret, in place of the
+    /// nearest [`DefaultSelectionControls`]' choice or the platform's
+    /// ([`CaretHandle::default`]).
+    #[must_use]
+    pub fn caret_handle(mut self, caret_handle: CaretHandle) -> Self {
+        self.caret_handle = Some(caret_handle);
+        self
+    }
+}
+
 /// What a field's handles reach in the field: its render object, its
 /// controller and how its text is masked. Set once the field is mounted.
 pub(super) struct HandleParts {
@@ -184,6 +228,11 @@ pub(super) struct FieldHandles {
     /// What a handle drag shows over the dragged end, resolved at the
     /// field's last build.
     magnifier: RefCell<Option<Rc<dyn SelectionMagnifier>>>,
+    /// How far along the line from the dragged end the drag's magnifier
+    /// sits: where the finger holds the end, less where the end is.
+    magnifier_along: Cell<f64>,
+    /// What a handle drag plays a step over a character with.
+    haptics: RefCell<Option<HapticsHandle>>,
     /// The field's selection menu, whose toolbar shows over shown handles.
     menu: Rc<MenuHost>,
     /// Whether the finger on a handle has dragged it since it touched.
@@ -218,6 +267,8 @@ impl FieldHandles {
             menu: Rc::new(MenuHost::default()),
             touch_dragged: Cell::new(false),
             magnifier: RefCell::new(None),
+            magnifier_along: Cell::new(0.0),
+            haptics: RefCell::new(None),
         })
     }
 
@@ -380,7 +431,13 @@ impl FieldHandles {
 
     /// Follows the overlay the handles go in and the vsync their timer
     /// runs on; a moved overlay takes shown handles away.
-    pub(super) fn set_scope(&self, overlay: Option<OverlayHandle>, vsync: Option<Vsync>) {
+    pub(super) fn set_scope(
+        &self,
+        overlay: Option<OverlayHandle>,
+        vsync: Option<Vsync>,
+        haptics: Option<HapticsHandle>,
+    ) {
+        *self.haptics.borrow_mut() = haptics;
         let moved = match (self.overlay.borrow().as_ref(), overlay.as_ref()) {
             (Some(old), Some(new)) => !old.is_same(new),
             (None, None) => false,
@@ -701,6 +758,7 @@ impl FieldHandles {
         failure.resume();
         let grip = self.end_line(side).map(|(middle, _)| middle - global);
         self.grip.set(grip.map(|grip| (side, grip)));
+        self.magnifier_along.set(0.0);
         // The magnifier shows over the end the drag holds.
         let mut failure = FirstPanic::new();
         self.refresh_magnifier(&mut failure);
@@ -708,7 +766,10 @@ impl FieldHandles {
     }
 
     /// `side`'s handle was dragged to `global`: its end moves there, and a
-    /// selection's end never passes the other.
+    /// selection's end never passes the other. Each step of the end plays
+    /// a selection click, and the magnifier stays under the finger; both
+    /// happen though a listener of the controller fails, whose first
+    /// failure is resumed after.
     fn dragged(&self, side: HandleSide, global: Offset<f64>) {
         let Some((gripped, grip)) = self.grip.get() else {
             return;
@@ -716,30 +777,40 @@ impl FieldHandles {
         if gripped != side {
             return;
         }
-        let Some(at) = self.source_offset_at(global + grip) else {
-            return;
-        };
-        let Some((selection, _, _)) = self.controller_state() else {
-            return;
-        };
-        match side {
-            HandleSide::Start if at < selection.end => {
-                self.move_controller(|controller| controller.set_selection(selection.end, at));
-            }
-            HandleSide::End if at > selection.start => {
-                self.move_controller(|controller| controller.set_selection(selection.start, at));
-            }
-            HandleSide::Collapsed => {
-                self.move_controller(|controller| controller.set_caret_byte_offset(at));
-            }
-            _ => {}
+        let held = global + grip;
+        let before = self.controller_state();
+        let mut failure = FirstPanic::new();
+        if let (Some(at), Some((selection, _, _))) = (self.source_offset_at(held), &before) {
+            failure.contain(|| match side {
+                HandleSide::Start if at < selection.end => {
+                    self.move_controller(|controller| controller.set_selection(selection.end, at));
+                }
+                HandleSide::End if at > selection.start => {
+                    self.move_controller(|controller| {
+                        controller.set_selection(selection.start, at);
+                    });
+                }
+                HandleSide::Collapsed => {
+                    self.move_controller(|controller| controller.set_caret_byte_offset(at));
+                }
+                _ => {}
+            });
         }
+        let moved =
+            |state: Option<(Range<usize>, usize, u64)>| state.map(|(s, caret, _)| (s, caret));
+        if moved(self.controller_state()) != moved(before) {
+            let haptics = self.haptics.borrow().clone();
+            failure.contain(|| play_step(haptics.as_ref()));
+        }
+        failure.contain(|| self.follow_finger(side, held));
+        failure.resume();
     }
 
     /// `side`'s handle was let go.
     fn drag_ended(self: &Rc<Self>, side: HandleSide) {
         if self.grip.get().is_some_and(|(gripped, _)| gripped == side) {
             self.grip.set(None);
+            self.magnifier_along.set(0.0);
             let mut failure = FirstPanic::new();
             // The magnifier goes with the drag.
             self.refresh_magnifier(&mut failure);
@@ -768,24 +839,54 @@ impl FieldHandles {
     /// Where `side`'s end sits: the middle of the caret there, in
     /// render-root coordinates, and the caret's height.
     fn end_line(&self, side: HandleSide) -> Option<(Offset<f64>, f64)> {
+        self.caret_line(|editable| {
+            let selection = editable.selection().filter(|range| !range.is_empty());
+            end_position(side, selection.cloned(), editable.caret_byte_offset())
+        })
+    }
+
+    /// Where the controller now puts `side`'s end, laid out as the field
+    /// last was: what the next layout moves the end's leader to while the
+    /// text stays as it is, as it does through a handle drag.
+    fn controller_end_line(&self, side: HandleSide) -> Option<(Offset<f64>, f64)> {
+        let (selection, caret, _) = self.controller_state()?;
+        let selection = Some(selection).filter(|range| !range.is_empty());
+        self.caret_line(|_| end_position(side, selection, caret))
+    }
+
+    /// The middle of the caret at the position `pick` chooses, in
+    /// render-root coordinates, and the caret's height.
+    fn caret_line(
+        &self,
+        pick: impl FnOnce(&flui_objects::RenderEditable) -> TextPosition,
+    ) -> Option<(Offset<f64>, f64)> {
         let parts = self.parts.borrow();
         let parts = parts.as_ref()?;
         with_editable_global(
             parts.pipeline.as_ref()?,
             &parts.inner_anchor,
             |editable, to_root| {
-                let selection = editable.selection().filter(|range| !range.is_empty());
-                let position = match (side, selection) {
-                    (HandleSide::Start, Some(range)) => TextPosition::downstream(range.start),
-                    (HandleSide::End, Some(range)) => TextPosition::upstream(range.end),
-                    _ => TextPosition::downstream(editable.caret_byte_offset()),
-                };
-                let caret = editable.caret_rect_at(position)?;
+                let caret = editable.caret_rect_at(pick(editable))?;
                 let (x, y) =
                     to_root.transform_point(caret.left(), caret.top() + caret.height() / 2.0);
                 Some((Offset::new(x, y), caret.height()))
             },
         )
+    }
+
+    /// Keeps a drag's magnifier under the finger, which holds `side`'s end
+    /// at `held`: it sits that far along the line from where the end now
+    /// goes, so it moves between characters while the end steps over them.
+    fn follow_finger(&self, side: HandleSide, held: Offset<f64>) {
+        let Some((end, _)) = self.controller_end_line(side) else {
+            return;
+        };
+        let along = held.dx - end.dx;
+        if self.magnifier_along.replace(along) != along {
+            let mut failure = FirstPanic::new();
+            self.refresh_magnifier(&mut failure);
+            failure.resume();
+        }
     }
 
     fn controller_state(&self) -> Option<(Range<usize>, usize, u64)> {
@@ -1074,7 +1175,14 @@ fn drag_magnifier(handles: &Rc<FieldHandles>, ctx: &dyn BuildContext) -> Option<
         HandleSide::Start | HandleSide::Collapsed => handles.links[0],
     };
     let info = MagnifierInfo::new(side, TextDirection::Ltr, line_height);
-    Some(crate::text::magnifier(look.as_ref(), &info, link, ctx))
+    let along = handles.magnifier_along.get();
+    Some(crate::text::magnifier(
+        look.as_ref(),
+        &info,
+        link,
+        along,
+        ctx,
+    ))
 }
 
 /// The menu's toolbar over the selection's start (the caret while the
@@ -1103,4 +1211,15 @@ fn toolbar(handles: &Rc<FieldHandles>) -> Option<BoxedView> {
         }
     });
     crate::text::toolbar(&handles.menu, anchors, handles.links[0], post_frame, hide)
+}
+
+/// Where `side`'s end of `selection` (non-empty) sits, or the caret at
+/// `caret` without one: the start before its first byte, the end after its
+/// last.
+fn end_position(side: HandleSide, selection: Option<Range<usize>>, caret: usize) -> TextPosition {
+    match (side, selection) {
+        (HandleSide::Start, Some(range)) => TextPosition::downstream(range.start),
+        (HandleSide::End, Some(range)) => TextPosition::upstream(range.end),
+        _ => TextPosition::downstream(caret),
+    }
 }

@@ -3,7 +3,7 @@
 //! ## Generated filter bindings
 //!
 //! Generates Rust bindings for the transfer-filter shaders (gamma, blur,
-//! morphology, color_matrix) and the naga_oil-composed shaders (mode,
+//! morphology, resample, color_matrix) and the naga_oil-composed shaders (mode,
 //! advanced_blend), plus decoded-image source filters, into `OUT_DIR`. The
 //! consumer includes each generated file and owns its runtime pipeline.
 //!
@@ -14,6 +14,7 @@
 //! | gamma.wgsl          | gamma_generated.rs            | 16 bytes     | color_filter   |
 //! | blur.wgsl           | blur_generated.rs             | 32 bytes     | —              |
 //! | morphology.wgsl     | morphology_generated.rs       | 48 bytes     | —              |
+//! | resample.wgsl       | resample_generated.rs         | 64 bytes     | —              |
 //! | color_matrix.wgsl   | color_matrix_generated.rs     | 80 bytes     | color_filter   |
 //! | effects/mode.wgsl   | mode_generated.rs             | 32 bytes     | color_filter   |
 //! | image_source_filter_layout.wgsl | image_source_filter_generated.rs | 112 bytes | color_filter |
@@ -76,9 +77,10 @@ use wgsl_bindgen::{
 /// sampler to `SamplerBindingType::Filtering`.  Shaders that sample texel-aligned
 /// data (gamma / morphology / color_matrix / mode) must override
 /// both to non-filtering, or wgpu rejects the bind group at runtime (a Filtering
-/// sampler paired with a non-filterable texture is a validation error).  Blur and
-/// advanced_blend are filterable (bilinear composes with the Gaussian, and
-/// reads a resampled backdrop).
+/// sampler paired with a non-filterable texture is a validation error).  Blur,
+/// resample and advanced_blend are filterable: bilinear composes with the
+/// Gaussian, a resample reads between texels, and advanced_blend reads its
+/// foreground with the sampling its caller picks.
 struct BindingOverrides {
     /// Regex matching the texture binding name(s).  Use an alternation
     /// (`a|b`) for a shader with more than one sampled texture.
@@ -116,7 +118,7 @@ const SHADER_CONFIGS: &[ShaderConfig] = &[
     ShaderConfig {
         shader_name: "blur.wgsl",
         out_file: "blur_generated.rs",
-        // blur is the only filterable shader: the Gaussian kernel composes
+        // blur is filterable: the Gaussian kernel composes
         // cleanly with bilinear, and requires a Filtering sampler.
         overrides: BindingOverrides {
             texture_regex: "src_texture",
@@ -129,6 +131,18 @@ const SHADER_CONFIGS: &[ShaderConfig] = &[
         shader_name: "morphology.wgsl",
         out_file: "morphology_generated.rs",
         overrides: NEAREST_SRC,
+    },
+    ShaderConfig {
+        shader_name: "resample.wgsl",
+        out_file: "resample_generated.rs",
+        // The resample reads between texels through a nearest or bilinear
+        // sampler the caller picks, so its texture is filterable.
+        overrides: BindingOverrides {
+            texture_regex: "src_texture",
+            texture_filterable: true,
+            sampler_regex: "src_sampler",
+            sampler_type: SamplerType::Filtering,
+        },
     },
 ];
 

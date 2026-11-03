@@ -68,6 +68,7 @@ mod wayland {
         LastInput, WaylandClipboard, WaylandDisplays, WaylandHost, WaylandInput, WaylandLoop,
     };
     use crate::text::linux::wayland::{SeatTexts, WaylandText};
+    use crate::transfer::linux::wayland::DataDevices;
     use crate::window::linux::wayland::{WaylandWindow, WaylandWindows};
 
     /// The Wayland host's table.
@@ -108,8 +109,8 @@ mod wayland {
         }
 
         /// The seats' selection, through `wl_data_device`.
-        fn clipboard(last_input: LastInput) -> Arc<dyn WaylandClipboard> {
-            Arc::new(SeatClipboard::new(last_input))
+        fn clipboard(last_input: LastInput, devices: DataDevices) -> Arc<dyn WaylandClipboard> {
+            Arc::new(SeatClipboard::new(last_input, devices))
         }
 
         fn notices(app: &Arc<AppDelivery>) -> Arc<dyn NoticeChannel> {

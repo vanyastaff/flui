@@ -32,8 +32,8 @@ pub use selection_menu::{
     ToolbarItemsState,
 };
 pub(crate) use selection_menu::{
-    MenuHost, MenuSettings, ShowSelectionMenu, ToolbarAnchors, editing_commands, magnifier,
-    reading_commands, show_menu_action, toolbar,
+    MagnifierChoice, MenuHost, MenuSettings, ShowSelectionMenu, ToolbarAnchors, editing_commands,
+    magnifier, reading_commands, show_menu_action, toolbar,
 };
 pub use selection_style::{DefaultSelectionStyle, SelectionStyle};
 pub use text::Text;
