@@ -169,6 +169,9 @@ fn drive_owner() {
 }
 
 fn stop_process() {
+    // The loop's hooks detach first, as on the desktop: an agent stops
+    // before the scenes it serves are retired.
+    super::dev_agents::end();
     let controller = APP_RUNTIME.with(|slot| {
         let mut runtime = slot.borrow_mut();
         runtime.ios_running = false;
@@ -247,15 +250,14 @@ where
         crate::app::agent::install_from_env(&mut config, &std::sync::Arc::default());
         let reload = WorkerReload::from_config(&config);
         let watcher = reload.spawn_watcher(runtime_wake_callback());
-        let agent = config
-            .dev_agent
-            .as_ref()
-            .and_then(crate::app::dev_agent::DevAgent::attach);
+        // The loop takes the hooks and owns them until the process stops
+        // (`stop_process`).
+        super::dev_agents::start(&config);
         let installer = Box::new(move |window| {
             bootstrap_ios(root.clone(), config.clone(), reload.clone(), window)
         });
         APP_RUNTIME.with(|slot| {
-            slot.borrow_mut().ios_controller = Some(IOSController::new(installer, watcher, agent));
+            slot.borrow_mut().ios_controller = Some(IOSController::new(installer, watcher));
         });
         Ok(())
     }));
@@ -388,10 +390,7 @@ where
     worker_reload.register_ui_runtime(&ui_runtime);
     // Vended while the ui_runtime is still ours, handed over once the install
     // commits: a failed install drops it with the ui_runtime.
-    let agent_window = config
-        .dev_agent
-        .as_ref()
-        .and_then(|agent| agent.vend(&ui_runtime, ui_runtime.presentation_id()));
+    let agent_window = super::dev_agents::vend(&ui_runtime, ui_runtime.presentation_id());
     let textures = ui_runtime.texture_registry(ui_runtime.presentation_id());
     let mut installation = prepare_ui_runtime_alongside(ui_runtime, Rc::clone(&window));
     installation.text_sizing(native_sizing);
@@ -413,7 +412,7 @@ where
     // 5. Input -> entered ui_runtime input dispatch.
     install_input_wiring(owner_dispatch, window.as_ref());
 
-    installation.dev_agent(config.dev_agent.zip(agent_window));
+    installation.dev_agent(agent_window);
     let frame =
         installation.frame_driver(super::frame_driver::FrameDriver::Ios(IosFrameDriver {
             lane: Arc::clone(&lane),

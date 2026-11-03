@@ -380,15 +380,10 @@ pub(crate) struct AppRuntime {
     ))]
     pub(super) main_ingress: Option<Arc<super::application_control::Ingress>>,
     /// The development agents this loop attached, the application's and the
-    /// driver agent: every window the loop installs is handed to them, whatever
-    /// configuration the application opened it with. Cleared with the main
-    /// window at the loop's end.
-    #[cfg(all(
-        not(target_os = "android"),
-        not(target_os = "ios"),
-        not(target_arch = "wasm32")
-    ))]
-    pub(super) loop_dev_agent: Option<super::dev_agent::DevAgent>,
+    /// driver agent (ADR-0288 §7): every window the loop installs is handed to
+    /// them, whatever configuration the application opened it with. Ended with
+    /// the loop.
+    pub(super) loop_dev_agent: super::dev_agent::LoopAgents,
     #[cfg(all(
         not(target_os = "android"),
         not(target_os = "ios"),
@@ -577,12 +572,7 @@ impl AppRuntime {
                 not(target_arch = "wasm32")
             ))]
             main_ingress: None,
-            #[cfg(all(
-                not(target_os = "android"),
-                not(target_os = "ios"),
-                not(target_arch = "wasm32")
-            ))]
-            loop_dev_agent: None,
+            loop_dev_agent: super::dev_agent::LoopAgents::None,
             #[cfg(all(
                 not(target_os = "android"),
                 not(target_os = "ios"),

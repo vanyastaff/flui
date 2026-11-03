@@ -41,8 +41,7 @@ struct VertexOutput {
     @location(1) world_pos: vec2<f32>,
 }
 
-@vertex
-fn vs_main(input: VertexInput) -> VertexOutput {
+fn vertexStage(input: VertexInput) -> VertexOutput {
     var output: VertexOutput;
 
     // Convert pixel coordinates to clip space [-1, 1] using viewport uniform
@@ -78,4 +77,9 @@ fn shadeFragment(input: VertexOutput) -> ShadedFragment {
         clip.local_origin,
     );
     return shaded;
+}
+
+@vertex
+fn vs_main(input: VertexInput) -> VertexOutput {
+    return vertexStage(input);
 }

@@ -17,6 +17,7 @@ mod android;
     not(target_arch = "wasm32")
 ))]
 mod desktop;
+mod dev_agents;
 mod device_recovery;
 mod display_host;
 #[cfg(all(

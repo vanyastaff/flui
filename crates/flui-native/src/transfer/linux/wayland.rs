@@ -19,6 +19,9 @@
 //!   [`DragListener`] hears each, and the offer of an `enter` is its own
 //!   from then on; with no listener the offer is let go of at `leave` or
 //!   `drop`.
+//! - **A drag the client starts** goes from a seat's device under the
+//!   serial of the pointer grab its origin surface holds
+//!   ([`DataDevices::start_drag`]).
 //!
 //! The dispatch records what the compositor said and runs no handler; a
 //! listener hears it with nothing of the devices held.
@@ -333,6 +336,26 @@ impl DataDevices {
             .with(|state| {
                 let device = state.devices.iter().find(|device| device.seat == *seat)?;
                 device.device.set_selection(Some(source), serial);
+                Some(())
+            })
+            .flatten()
+            .is_some()
+    }
+
+    /// Start a drag of `source` from `origin` on `seat`, under the serial of
+    /// the grab `origin` holds; `false` when the seat has no device.
+    pub(crate) fn start_drag(
+        &self,
+        seat: &WlSeat,
+        source: &WlDataSource,
+        origin: &WlSurface,
+        serial: u32,
+    ) -> bool {
+        self.shared
+            .state
+            .with(|state| {
+                let device = state.devices.iter().find(|device| device.seat == *seat)?;
+                device.device.start_drag(Some(source), origin, None, serial);
                 Some(())
             })
             .flatten()

@@ -105,7 +105,23 @@ impl PipelineOwner<PaintPhase> {
 
         self.scheduler.enter_phase(PhaseKind::Paint);
         self.local_dirty.begin_paint();
+        // A panic that unwinds out of the pass (a `tracing` subscriber, a
+        // visual-update callback) leaves the paint queue as the error arm
+        // does, for the retry to run on; the phase is left before it resumes,
+        // so the next frame does not route its marks as mid-paint ones.
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.paint_in_phase())) {
+            Ok(result) => result,
+            Err(payload) => {
+                let _ = self.local_dirty.end_paint();
+                let _ = self.scheduler.exit_phase(PhaseKind::Paint);
+                std::panic::resume_unwind(payload)
+            }
+        }
+    }
 
+    /// The paint pass proper, between entering and leaving the phase: see
+    /// [`Self::run_paint`].
+    fn paint_in_phase(&mut self) -> crate::error::RenderResult<()> {
         // Retained output was recorded for another pixel ratio (text shaping and hairline
         // snapping depend on it), so none of it is replayed: every capture goes and the root,
         // served without one, repaints the whole tree.

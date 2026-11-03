@@ -306,8 +306,7 @@ pub(super) fn run_real_pipeline_frame(
         );
         owner.set_root_id(Some(render_root));
         owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(320.0, 80.0))));
-        let (idle, result) = owner.take_idle().run_frame();
-        *owner = idle;
+        let result = owner.run_frame_in_place();
         result.expect("the dense containment topology must complete a real pipeline frame");
     });
 }

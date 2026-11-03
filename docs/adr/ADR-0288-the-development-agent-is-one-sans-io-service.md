@@ -1,7 +1,8 @@
 # ADR-0288: The development agent is one sans-IO service; transports only move lines
 
-- **Status:** Accepted (2026-11-03). Implemented: §§1–6. §7 (the hook host owned by the loop
-  and one launch source) and §8 (the driver's role in the hello) land in their own changes.
+- **Status:** Accepted (2026-11-03). Implemented: §§1–7, with §7's launch source left to the
+  first transport that reads a second one. §8 (the driver's role in the hello) lands in its own
+  change.
 - **Date:** 2026-11-03
 - **Supersedes in part:** [ADR-0239](ADR-0239-every-debug-app-hosts-the-driver-agent.md) §1,
   where the server lives: the conversation is `flui-runtime`'s, and `flui-app` keeps the desktop
@@ -117,10 +118,18 @@ until the session's waker or deadline wakes it:
 
 Android, the web and a headless run drive the same `Session` over their own transport.
 
-§7. **The loop owns the hooks, and the launch has one source.** `DevAgentHost` becomes a value
-the event loop owns, with no `Arc<Mutex>`, each hook still contained. `LaunchSource` (`Env`,
-`AndroidExtras`, `WebPreload`) feeds one `Launch::try_from_source`, and `flui-app`'s build script
-names one cfg for the install sites.
+§7. **The loop owns the hooks.** `DevAgentHost` is a value the event loop owns, with no
+`Arc<Mutex>`: `DevAgentHost::attach(hooks)` attaches the hooks the loop took from its
+configuration, every call that runs a hook takes `&mut self`, so a hook cannot reach the host and
+nothing re-enters it, and dropping the host detaches each hook, then drops it, each contained. A
+configuration holds each hook until the first loop that starts with it takes it. `flui-app` keeps
+the host in the loop's state and lends it out for each call, so no borrow of that state is held
+while a hook runs, and drops it as the loop ends, before the windows it serves are retired; a
+loop that ends while the host is lent has the lender drop it. `flui-app`'s
+build script names the build that compiles the agent once, `cfg(driver_agent)`, from what Cargo
+reports of the profile's debug assertions and the `driver` feature. The launch gets one source
+(`LaunchSource`: the environment, Android's extras, the page's preload) with the first transport
+that reads a second one, so no variant waits without a reader.
 
 §8. **A role in the hello.** `Greeting.role` is `Driver` (the default) or `Observer`, in protocol
 0.9 and its golden. One driver is admitted per app; an observer reads and subscribes, and never
@@ -158,6 +167,18 @@ claims input, leases or exit on disconnect. It replaces §5's "first conversatio
   installed regardless.
 - `flui-app`'s socket suite (`the_driver_agent_contains_every_failure`) drives the desktop
   transport end to end.
+- A hook cannot reach its host: `DevAgentHost` is `!Send` and `!Sync`, and every call that runs a
+  hook takes it by `&mut` (compiler). `flui-runtime`'s `dev_agent_host_contains_its_hook` drops a
+  hook that panics in any call, alone, keeps the others served in order, and contains a detach or
+  a drop that panics while the host goes.
+- `flui-app`'s `a_loop_takes_every_installed_hook_once_and_one_that_panics_is_dropped_alone`
+  takes three hooks from one configuration, finds a clone of it holding none, and finds the hook
+  that panicked in `attach` dropped without a detach;
+  `a_host_lent_when_its_loop_ends_is_handed_back_to_be_dropped` ends a loop while its host is
+  lent and finds the host dropped, its hook detached once, when it comes back.
+- `flui-app`'s build script and the agent's module agree on `cfg(driver_agent)`: a
+  `compile_error!` fires in a build where the alias and `any(debug_assertions, feature = "driver")`
+  on a system with a local-socket transport differ.
 
 ## Pros and cons of the options
 
@@ -189,7 +210,8 @@ claims input, leases or exit on disconnect. It replaces §5's "first conversatio
 
 ## Migration
 
-The desktop transport moved in the change that accepted this ADR. Then, each in its own change:
-§7, §8, the Android transport (an abstract socket, the same code as Unix), the web transport (the
-page's export, driven from the JS event loop), and held input per connection (a lease the session
-owns, released when it is dropped).
+The desktop transport moved in the change that accepted this ADR, and the hook host moved into
+the loop in the next (§7). Then, each in its own change: §8, the Android transport (an abstract
+socket, the same code as Unix, and with it `LaunchSource`), the web transport (the page's export,
+driven from the JS event loop), and held input per connection (a lease the session owns,
+released when it is dropped).
