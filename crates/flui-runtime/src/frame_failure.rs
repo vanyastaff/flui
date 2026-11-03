@@ -130,7 +130,10 @@ impl FrameFailureDetail {
     }
 
     /// Apply the same retention policy to a typed pipeline error's text.
-    pub(crate) fn pipeline_text(self, error: &RenderError) -> PanicText {
+    pub(crate) fn pipeline_text(
+        self,
+        error: &flui_foundation::TreeError<RenderError>,
+    ) -> PanicText {
         self.materialize(|| error.to_string().into_boxed_str())
     }
 
@@ -372,12 +375,13 @@ pub enum FrameFailureKind {
     /// failed node's dirty state is retained by the pipeline for the
     /// armed retry.
     Pipeline {
-        /// The pipeline's own typed error. The UI runtime applies
+        /// The pipeline's own typed error with the path to the node it names, when it names one
+        /// ([`TreeContext`](flui_foundation::TreeContext)). The UI runtime applies
         /// [`FrameFailureDetail`] only when formatting this error for
         /// `tracing`; a registered handler retains the typed value. Its
         /// fields and `Debug` output may contain sensitive text, so handler
         /// authors own that exposure.
-        error: RenderError,
+        error: flui_foundation::TreeError<RenderError>,
     },
     /// A lifecycle-hook panic recovered at a narrower per-child boundary.
     #[non_exhaustive]

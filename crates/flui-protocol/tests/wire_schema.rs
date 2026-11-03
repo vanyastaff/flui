@@ -12,9 +12,9 @@ use std::path::{Path, PathBuf};
 
 use flui_protocol::version::BREAKING;
 use flui_protocol::{
-    ActionRequest, ErrorCode, ErrorObject, Event, Hello, HelloReply, METHODS, MethodEffect,
-    MotionRequest, MotionState, Node, PROTOCOL_VERSION, ProtocolVersion, ReadQuery, Retry,
-    ServedBy, Tier, Tree,
+    ActionRequest, ErrorCode, ErrorObject, Event, Greeting, Hello, HelloReply, METHODS,
+    MethodEffect, MotionRequest, MotionState, Node, PROTOCOL_VERSION, ProtocolVersion, ReadQuery,
+    Request, RequestId, Retry, ServedBy, ServerLine, Tier, Tree,
 };
 use serde_json::Value;
 
@@ -71,6 +71,21 @@ fn current_schema() -> Value {
     envelope.insert(
         "HelloReply".into(),
         of(generator.subschema_for::<HelloReply>()),
+    );
+    // The lines themselves (ADR-0238 §2): a request's params and a result are each method's own,
+    // listed under `methods`.
+    envelope.insert("Greeting".into(), of(generator.subschema_for::<Greeting>()));
+    envelope.insert(
+        "Request".into(),
+        of(generator.subschema_for::<Request<Value>>()),
+    );
+    envelope.insert(
+        "RequestId".into(),
+        of(generator.subschema_for::<RequestId>()),
+    );
+    envelope.insert(
+        "ServerLine".into(),
+        of(generator.subschema_for::<ServerLine<Value>>()),
     );
     let mut methods = serde_json::Map::new();
     macro_rules! method_rows {

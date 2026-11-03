@@ -3,8 +3,9 @@
 use std::borrow::Cow;
 use std::time::Duration;
 
-use crate::origin::{ControllerOrigin, CreationSite};
+use crate::origin::ControllerOrigin;
 use crate::{AnimationController, DrivenController, RangeDefect, Vsync};
+use flui_foundation::CreationSite;
 
 /// Finite controller bounds with a finite, positive span.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -151,7 +152,7 @@ impl AnimationControllerBuilder {
     pub fn build(self) -> AnimationController {
         let origin = ControllerOrigin {
             label: self.debug_label,
-            site: CreationSite::caller(),
+            site: CreationSite::here(),
         };
         let controller = AnimationController::from_config(
             self.duration,

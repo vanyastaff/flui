@@ -8,17 +8,22 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::time::{Duration, Instant};
 
-use flui_protocol::framing::MAX_LINE;
+use flui_protocol::framing::{LineReader, MAX_LINE};
 use flui_protocol::version::PROTOCOL_VERSION;
 use flui_protocol::{
-    Capabilities, ErrorCode, ErrorObject, Hello, HelloReply, InputPath, MethodInfo, ServedBy,
+    Capabilities, ErrorCode, ErrorObject, Greeting, Hello, HelloReply, InputPath, MethodInfo,
+    Request, RequestId, ServedBy, ServerLine,
 };
 use interprocess::local_socket::Stream;
 use parking_lot::Mutex;
-use serde_json::{Value, json};
+use serde::Serialize;
+use serde_json::Value;
 
 use super::dispatch::{self, Context, Subscriptions};
 use super::endpoint::{POLL, Shared};
+
+/// What the server writes: a result is the method's output as a JSON value.
+type Line = ServerLine<Value>;
 
 /// How long a reply may take to leave before the connection is dropped.
 const WRITE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -33,7 +38,7 @@ const LINGER_IDLE: Duration = Duration::from_millis(250);
 
 /// One request, queued for the connection's worker.
 struct Job {
-    id: Value,
+    id: RequestId,
     method: &'static MethodInfo,
     params: Value,
 }
@@ -49,7 +54,7 @@ enum End {
 pub(super) fn serve(stream: Stream, shared: &Arc<Shared>) {
     let mut connection = Connection {
         stream,
-        buffer: Vec::new(),
+        lines: LineReader::new(MAX_LINE),
         progress: Instant::now(),
     };
     if !handshake(&mut connection, shared) {
@@ -96,12 +101,11 @@ fn handshake(connection: &mut Connection, shared: &Shared) -> bool {
         super::trace(|| tracing::debug!("agent connection refused: wrong token"));
         return false;
     }
-    if hello.protocol != PROTOCOL_VERSION {
+    // An app serves every older client its schema still reads (ADR-0238 §2), and answers
+    // with its own version: the capabilities say what it answers.
+    if !PROTOCOL_VERSION.serves(hello.protocol) {
         let error = ErrorObject::version(PROTOCOL_VERSION, hello.protocol);
-        if connection
-            .write_value(&json!({ "error": error }), shared)
-            .is_ok()
-        {
+        if connection.write_line(&Line::refusal(error), shared).is_ok() {
             connection.linger(shared);
         }
         return false;
@@ -115,14 +119,13 @@ fn handshake(connection: &mut Connection, shared: &Shared) -> bool {
     let welcome = HelloReply::new(PROTOCOL_VERSION)
         .with_app(shared.app.clone())
         .with_capabilities(capabilities);
-    connection
-        .write_value(&json!({ "hello": welcome }), shared)
-        .is_ok()
+    connection.write_line(&Line::hello(welcome), shared).is_ok()
 }
 
 fn parse_hello(line: &[u8]) -> Option<Hello> {
-    let mut value = serde_json::from_slice::<Value>(line).ok()?;
-    serde_json::from_value(value.get_mut("hello")?.take()).ok()
+    serde_json::from_slice::<Greeting>(line)
+        .ok()
+        .map(|greeting| greeting.hello)
 }
 
 /// Compares two tokens in time that depends on their lengths only.
@@ -157,7 +160,7 @@ impl Drop for Closing {
 /// Serve requests until the driver goes or the agent stops.
 fn converse(connection: &mut Connection, shared: &Arc<Shared>) -> End {
     let subscriptions = Arc::new(Mutex::new(Subscriptions::default()));
-    let (outbox, answers) = mpsc::channel::<Value>();
+    let (outbox, answers) = mpsc::channel::<Line>();
     let closing = Closing(Arc::new(AtomicBool::new(false)));
     let Some(jobs) = start_worker(shared, &subscriptions, &closing.0, outbox) else {
         return End::Stopped;
@@ -175,8 +178,8 @@ fn converse(connection: &mut Connection, shared: &Arc<Shared>) -> End {
         match connection.next_line(shared) {
             Next::Line(line) => {
                 busy = true;
-                if let Some(error) = admit(&line, &mut queue)
-                    && connection.write_value(&error, shared).is_err()
+                if let Some(refusal) = admit(&line, &mut queue)
+                    && connection.write_line(&refusal, shared).is_err()
                 {
                     return End::Peer;
                 }
@@ -186,10 +189,7 @@ fn converse(connection: &mut Connection, shared: &Arc<Shared>) -> End {
                     ErrorCode::InvalidArgument,
                     format!("a request line is longer than {MAX_LINE} bytes"),
                 );
-                if connection
-                    .write_value(&json!({ "id": null, "error": error }), shared)
-                    .is_ok()
-                {
+                if connection.write_line(&Line::refusal(error), shared).is_ok() {
                     connection.linger(shared);
                 }
                 return End::Peer;
@@ -202,7 +202,7 @@ fn converse(connection: &mut Connection, shared: &Arc<Shared>) -> End {
                 Ok(answer) => {
                     busy = true;
                     queue.held = queue.held.saturating_sub(1);
-                    if connection.write_value(&answer, shared).is_err() {
+                    if connection.write_line(&answer, shared).is_err() {
                         return End::Peer;
                     }
                 }
@@ -223,10 +223,11 @@ fn converse(connection: &mut Connection, shared: &Arc<Shared>) -> End {
         let events = drained.events;
         for event in events {
             busy = true;
-            let Ok(line) = serde_json::to_value(&event) else {
+            // An event that cannot be written is skipped, not the connection.
+            let Some(bytes) = encode(&Line::Event(event)) else {
                 continue;
             };
-            if connection.write_value(&line, shared).is_err() {
+            if connection.write_bytes(&bytes, shared).is_err() {
                 return End::Peer;
             }
         }
@@ -243,7 +244,7 @@ fn start_worker(
     shared: &Arc<Shared>,
     subscriptions: &Arc<Mutex<Subscriptions>>,
     closed: &Arc<AtomicBool>,
-    outbox: mpsc::Sender<Value>,
+    outbox: mpsc::Sender<Line>,
 ) -> Option<mpsc::Sender<Job>> {
     let (jobs, queue) = mpsc::channel::<Job>();
     let shared = Arc::clone(shared);
@@ -261,7 +262,7 @@ fn work(
     shared: &Shared,
     subscriptions: &Mutex<Subscriptions>,
     closed: &AtomicBool,
-    outbox: &mpsc::Sender<Value>,
+    outbox: &mpsc::Sender<Line>,
 ) {
     let cx = Context {
         shared,
@@ -277,10 +278,7 @@ fn work(
         let outcome = dispatch::run(method, params, &cx);
         let elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
         let failed = outcome.as_ref().err().map(|error| error.code);
-        let answer = match outcome {
-            Ok(result) => json!({ "id": id, "result": result }),
-            Err(error) => json!({ "id": id, "error": error }),
-        };
+        let answer = Line::answer(id, outcome);
         // The answer is posted before it is traced.
         let posted = outbox.send(answer).is_ok();
         super::trace(|| match failed {
@@ -298,27 +296,19 @@ fn work(
     }
 }
 
-/// Queue the request on `line`, or the error to answer it with at once.
-fn admit(line: &[u8], queue: &mut Queue) -> Option<Value> {
-    let Ok(mut request) = serde_json::from_slice::<Value>(line) else {
-        let error = ErrorObject::new(ErrorCode::InvalidArgument, "the request is not JSON");
-        return Some(json!({ "id": null, "error": error }));
+/// Queue the request on `line`, or the line to refuse it with at once.
+fn admit(line: &[u8], queue: &mut Queue) -> Option<Line> {
+    let Ok(request) = serde_json::from_slice::<Request<Value>>(line) else {
+        return Some(malformed(line));
     };
-    let id = request.get_mut("id").map_or(Value::Null, Value::take);
-    let refuse = |error: ErrorObject| Some(json!({ "id": id.clone(), "error": error }));
-    if !(id.is_u64() || id.is_string()) {
-        return refuse(ErrorObject::new(
-            ErrorCode::InvalidArgument,
-            "a request carries an id: a number or a string",
-        ));
-    }
-    let Some(name) = request.get("method").and_then(Value::as_str) else {
-        return refuse(ErrorObject::new(
-            ErrorCode::InvalidArgument,
-            "a request names its method",
-        ));
-    };
-    let Some(method) = flui_protocol::method::find(name) else {
+    let Request {
+        id,
+        method: name,
+        params,
+        ..
+    } = request;
+    let refuse = |error: ErrorObject| Some(Line::answer(id.clone(), Err(error)));
+    let Some(method) = flui_protocol::method::find(&name) else {
         // Only a known method's name is echoed or traced: an unknown one is
         // the client's text, which may carry anything.
         return refuse(ErrorObject::new(
@@ -338,9 +328,10 @@ fn admit(line: &[u8], queue: &mut Queue) -> Option<Value> {
             .with_retry(flui_protocol::Retry::Soon),
         );
     }
-    let params = match request.get_mut("params").map(Value::take) {
-        None | Some(Value::Null) => json!({}),
-        Some(params) => params,
+    let params = if params.is_null() {
+        Value::Object(serde_json::Map::new())
+    } else {
+        params
     };
     let job = Job {
         id: id.clone(),
@@ -357,6 +348,21 @@ fn admit(line: &[u8], queue: &mut Queue) -> Option<Value> {
     None
 }
 
+/// The refusal of a line that is not a request: it answers the line's id when the line
+/// carries one, so a client that sent a broken request is not left waiting for it.
+fn malformed(line: &[u8]) -> Line {
+    use serde::Deserialize as _;
+
+    let invalid = |message| ErrorObject::new(ErrorCode::InvalidArgument, message);
+    let Ok(value) = serde_json::from_slice::<Value>(line) else {
+        return Line::refusal(invalid("the request is not JSON"));
+    };
+    match value.get("id").map(RequestId::deserialize) {
+        Some(Ok(id)) => Line::answer(id, Err(invalid("a request names its method"))),
+        _ => Line::refusal(invalid("a request carries an id: a number or a string")),
+    }
+}
+
 enum Next {
     Line(Vec<u8>),
     /// No whole line yet.
@@ -367,7 +373,7 @@ enum Next {
 
 struct Connection {
     stream: Stream,
-    buffer: Vec<u8>,
+    lines: LineReader,
     /// When bytes last moved, for [`Self::pause`].
     progress: Instant,
 }
@@ -378,19 +384,10 @@ impl Connection {
     fn next_line(&mut self, shared: &Shared) -> Next {
         let mut chunk = [0_u8; 8192];
         loop {
-            if let Some(end) = self.buffer.iter().position(|byte| *byte == b'\n') {
-                if end > MAX_LINE {
-                    return Next::TooLong;
-                }
-                let mut line: Vec<u8> = self.buffer.drain(..=end).collect();
-                line.pop();
-                if line.last() == Some(&b'\r') {
-                    line.pop();
-                }
-                return Next::Line(line);
-            }
-            if self.buffer.len() > MAX_LINE {
-                return Next::TooLong;
+            match self.lines.next_line() {
+                Ok(Some(line)) => return Next::Line(line),
+                Ok(None) => {}
+                Err(_) => return Next::TooLong,
             }
             if shared.stop.load(Ordering::SeqCst) {
                 return Next::Pending;
@@ -398,7 +395,7 @@ impl Connection {
             match read_some(&self.stream, &mut chunk) {
                 Ok(0) => return Next::Closed,
                 Ok(read) => {
-                    self.buffer.extend_from_slice(&chunk[..read]);
+                    self.lines.push(&chunk[..read]);
                     self.progress = Instant::now();
                 }
                 Err(error) if error.kind() == io::ErrorKind::WouldBlock => return Next::Pending,
@@ -429,12 +426,16 @@ impl Connection {
         }
     }
 
-    /// Write `value` as one line. Gives up when the agent stops, so a
-    /// client that stops reading never holds up a detach, and after
-    /// [`WRITE_TIMEOUT`].
-    fn write_value(&mut self, value: &Value, shared: &Shared) -> io::Result<()> {
-        let mut bytes = serde_json::to_vec(value).map_err(io::Error::other)?;
-        bytes.push(b'\n');
+    /// Write `line` as one line.
+    fn write_line(&mut self, line: &impl Serialize, shared: &Shared) -> io::Result<()> {
+        let bytes = encode(line).ok_or_else(|| io::Error::other("a line did not serialize"))?;
+        self.write_bytes(&bytes, shared)
+    }
+
+    /// Write `bytes`, a whole line with its newline. Gives up when the agent
+    /// stops, so a client that stops reading never holds up a detach, and
+    /// after [`WRITE_TIMEOUT`].
+    fn write_bytes(&mut self, bytes: &[u8], shared: &Shared) -> io::Result<()> {
         let deadline = Instant::now() + WRITE_TIMEOUT;
         let mut written = 0;
         while written < bytes.len() {
@@ -492,4 +493,11 @@ fn read_some(stream: &Stream, buffer: &mut [u8]) -> io::Result<usize> {
         },
         other => other,
     }
+}
+
+/// `line` as the bytes of one line, its newline included; `None` when it does not serialize.
+fn encode(line: &impl Serialize) -> Option<Vec<u8>> {
+    let mut bytes = serde_json::to_vec(line).ok()?;
+    bytes.push(b'\n');
+    Some(bytes)
 }

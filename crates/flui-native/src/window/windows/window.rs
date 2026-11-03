@@ -26,7 +26,7 @@ use windows::{
                 SW_MINIMIZE, SW_RESTORE, SW_SHOW, SW_SHOWMAXIMIZED, SW_SHOWMINIMIZED,
                 SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
                 SetClassLongPtrW, SetCursor, SetForegroundWindow, SetWindowLongPtrW,
-                SetWindowPlacement, SetWindowPos, SetWindowTextW, ShowWindow, WM_CLOSE, WS_CAPTION,
+                SetWindowPlacement, SetWindowPos, SetWindowTextW, ShowWindow, WM_CLOSE,
                 WS_EX_APPWINDOW, WS_MAXIMIZE,
             },
         },
@@ -148,15 +148,17 @@ pub(crate) const fn window_capabilities(
     use flui_platform::Availability::{Emulated, Native};
     // A tablet shows a touch keyboard (`InputPane`), whose occlusion this host
     // does not read yet.
-    let mut capabilities = WindowCapabilities::NONE
-        .without_keyboard_inset(CapabilityAbsence::NotYetOnThisHost)
-        .without_app_title_bar(CapabilityAbsence::NotYetOnThisHost);
+    let mut capabilities =
+        WindowCapabilities::NONE.without_keyboard_inset(CapabilityAbsence::NotYetOnThisHost);
     capabilities.sets_title = Native;
     capabilities.sets_position = Native;
     capabilities.sets_size = Native;
     capabilities.sets_constraints = Native;
     capabilities.sets_resizable = Native;
     capabilities.sets_frame = Native;
+    // The caption goes in `WM_NCCALCSIZE` and the chrome regions answer
+    // `WM_NCHITTEST` (ADR-0286).
+    capabilities.app_title_bar = Native;
     capabilities.minimizes = Native;
     capabilities.maximizes = Native;
     capabilities.enters_fullscreen = Emulated;
@@ -183,7 +185,7 @@ impl WindowsWindow {
     /// # Errors
     /// [`OpenWindowError::Backend`] when Win32 window creation fails.
     pub(crate) fn try_new(
-        options: WindowOptions,
+        mut options: WindowOptions,
         handler: Rc<dyn flui_platform::WindowHandler>,
         windows: Arc<WindowSet>,
         shares: crate::owner::windows::control::OwnerShares,
@@ -200,6 +202,8 @@ impl WindowsWindow {
             preferences,
             ..
         } = shares;
+        // A title bar of the application's is one this host draws the frame for.
+        options.frame = options.frame.at_open(&windows.capabilities());
         // Admission refuses identity exhaustion before creating an HWND
         // whose ownership has not yet transferred to a context and wrapper.
         let (identity, created) = crate::owner::windows::WindowIdentity::admit(
@@ -254,8 +258,8 @@ impl WindowsWindow {
             // Always created hidden: the window is placed and put in its mode
             // first, and shown afterwards, so its first sight is the final one.
             let style = windows::Win32::UI::WindowsAndMessaging::WINDOW_STYLE(frame_style(
-                // No title bar of the application's here yet: one asked for
-                // opens with the system's frame.
+                // A title bar of the application's keeps the overlapped style:
+                // the system still resizes, snaps and animates the window.
                 options.frame != WindowFrame::None,
                 options.resizable,
             ));
@@ -270,7 +274,14 @@ impl WindowsWindow {
                 .display
                 .and_then(|id| snapshot.as_ref().and_then(|snapshot| snapshot.get(id)));
             let spot = open_spot(options, target, system_scale, |dpi, content| {
-                outer_size(style.0, ex_style.0, dpi, content).unwrap_or(content)
+                outer_size(
+                    style.0,
+                    ex_style.0,
+                    dpi,
+                    content,
+                    matches!(options.frame, WindowFrame::AppTitleBar(_)),
+                )
+                .unwrap_or(content)
             });
             let (width, height) = spot.outer;
             let scale_factor = spot.scale;
@@ -414,6 +425,7 @@ impl WindowsWindow {
                     hovered: false,
                     occluded: false,
                     capabilities: windows.capabilities(),
+                    frame: options.frame,
                 },
             )));
 
@@ -486,6 +498,8 @@ impl WindowsWindow {
                 restore_style: std::cell::Cell::new(0),
                 constraints: std::cell::Cell::new(constraints),
                 resizable: std::cell::Cell::new(options.resizable),
+                frame: std::cell::Cell::new(options.frame),
+                input_regions: std::cell::RefCell::default(),
                 first_show: std::cell::Cell::new(if deferred {
                     FirstShow::AfterFirstFrame(options.mode)
                 } else {
@@ -568,6 +582,12 @@ impl WindowsWindow {
             .map_err(|_gone| OpenWindowError::Backend {
                 message: "the window was destroyed while its class's hooks learned of it".into(),
             })?;
+
+            // The caption is dropped once the context answers `WM_NCCALCSIZE`:
+            // the creation computed the client with the system's frame.
+            if matches!(options.frame, WindowFrame::AppTitleBar(_)) {
+                Self::recompute_frame(hwnd);
+            }
 
             // The window is still hidden: put it where and in the mode it
             // opens, then show it now, later (first frame) or never (hidden).
@@ -659,6 +679,25 @@ impl WindowsWindow {
             }) == Some(true)
     }
 
+    /// Ask Win32 for the window's frame again (`WM_NCCALCSIZE`), keeping its
+    /// place and outer size: the frame the context now answers with replaces
+    /// the one the window was created or last sized with.
+    fn recompute_frame(hwnd: HWND) {
+        // SAFETY: `hwnd` is a live window of this thread; the call takes plain
+        // integers and the documented no-op z-order handle.
+        let _ = unsafe {
+            SetWindowPos(
+                hwnd,
+                None,
+                0,
+                0,
+                0,
+                0,
+                SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+            )
+        };
+    }
+
     /// What the desktop window manager draws for a window as it opens: the
     /// frame extended into the client area, so a material shows wherever the
     /// content is transparent; [`WindowMaterial::System`] where the build
@@ -689,6 +728,16 @@ impl WindowsWindow {
             let _ = super::backdrop::apply_material(hwnd, gate, WindowMaterial::System);
         }
         let _ = super::backdrop::apply_corners(hwnd, corners);
+    }
+
+    /// Whether the application draws the window's title bar.
+    fn draws_app_title_bar(&self) -> bool {
+        super::proc::with_window_context(
+            self.hwnd,
+            "frame",
+            super::proc::WindowContext::draws_app_title_bar,
+        )
+        .unwrap_or(false)
     }
 
     /// Get the native HWND handle
@@ -780,6 +829,7 @@ impl WindowsWindow {
                 .map(|restore_bounds| (restore_bounds, ctx.restore_style.get()))
         })
         .flatten();
+        let app_title_bar = self.draws_app_title_bar();
         // SAFETY: `self.hwnd` is this wrapper's live window handle. Every
         // out-parameter (`RECT`, `WINDOWPLACEMENT`) is a stack local passed as
         // `&raw mut`/`&raw const`, correctly sized for its call, with
@@ -790,8 +840,9 @@ impl WindowsWindow {
             let dpi = GetDpiForWindow(self.hwnd).max(USER_DEFAULT_SCREEN_DPI);
             let ex_style = GetWindowLongPtrW(self.hwnd, GWL_EXSTYLE) as u32;
             if let Some((restore_bounds, restore_style)) = fullscreen {
-                let (width, height) = outer_size(restore_style, ex_style, dpi, content)
-                    .map_err(|e| backend_error("AdjustWindowRectExForDpi", e))?;
+                let (width, height) =
+                    outer_size(restore_style, ex_style, dpi, content, app_title_bar)
+                        .map_err(|e| backend_error("AdjustWindowRectExForDpi", e))?;
                 super::proc::with_window_context(self.hwnd, "set_inner_size", |ctx| {
                     ctx.mode.set(ctx.mode.get().with_fullscreen_bounds(Bounds {
                         origin: restore_bounds.origin,
@@ -807,7 +858,7 @@ impl WindowsWindow {
                 || placement.showCmd == SW_SHOWMINIMIZED.0 as u32;
             let style = GetWindowLongPtrW(self.hwnd, GWL_STYLE) as u32;
             if away_from_normal {
-                let (width, height) = outer_size(style, ex_style, dpi, content)
+                let (width, height) = outer_size(style, ex_style, dpi, content, app_title_bar)
                     .map_err(|e| backend_error("AdjustWindowRectExForDpi", e))?;
                 placement.rcNormalPosition.right =
                     placement.rcNormalPosition.left.saturating_add(width);
@@ -819,7 +870,7 @@ impl WindowsWindow {
                 self.clamp_restore_rectangle();
                 return Ok(());
             }
-            let (width, height) = outer_size(style, ex_style, dpi, content)
+            let (width, height) = outer_size(style, ex_style, dpi, content, app_title_bar)
                 .map_err(|e| backend_error("AdjustWindowRectExForDpi", e))?;
             SetWindowPos(
                 self.hwnd,
@@ -910,7 +961,16 @@ impl WindowsWindow {
     ///
     /// # Errors
     /// [`ApplyError::Platform`] when Win32 refuses or fails the change.
-    fn restyle_frame(&self, decorated: bool, resizable: bool) -> Result<(), ApplyError> {
+    fn restyle_frame(&self, frame: WindowFrame, resizable: bool) -> Result<(), ApplyError> {
+        let decorated = frame != WindowFrame::None;
+        let app_title_bar = matches!(frame, WindowFrame::AppTitleBar(_));
+        // Set before the window is restyled: the `WM_NCCALCSIZE` the change
+        // sends answers with the new frame.
+        let had_app_title_bar =
+            super::proc::with_window_context(self.hwnd, "restyle_frame", |ctx| {
+                matches!(ctx.frame.replace(frame), WindowFrame::AppTitleBar(_))
+            })
+            .unwrap_or(false);
         let fullscreen = super::proc::with_window_context(self.hwnd, "restyle_frame", |ctx| {
             ctx.resizable.set(resizable);
             let mode = ctx.mode.get();
@@ -928,8 +988,8 @@ impl WindowsWindow {
                     )
                 };
                 if let (Ok(was), Ok(now)) = (
-                    outer_size(old, ex_style, dpi, (0, 0)),
-                    outer_size(new, ex_style, dpi, (0, 0)),
+                    outer_size(old, ex_style, dpi, (0, 0), had_app_title_bar),
+                    outer_size(new, ex_style, dpi, (0, 0), app_title_bar),
                 ) {
                     ctx.mode.set(
                         mode.with_fullscreen_bounds(Bounds {
@@ -969,7 +1029,9 @@ impl WindowsWindow {
                 unsafe {
                     let style = GetWindowLongPtrW(self.hwnd, GWL_STYLE) as u32;
                     let changed = restyled(style, decorated, resizable);
-                    if changed == style {
+                    // The system's title bar and the application's share a style:
+                    // only the caption `WM_NCCALCSIZE` leaves differs.
+                    if changed == style && had_app_title_bar == app_title_bar {
                         return Ok(());
                     }
                     let mut client = RECT::default();
@@ -980,8 +1042,9 @@ impl WindowsWindow {
                     let dpi = GetDpiForWindow(self.hwnd).max(USER_DEFAULT_SCREEN_DPI);
                     let normal = !IsZoomed(self.hwnd).as_bool() && !IsIconic(self.hwnd).as_bool();
                     SetWindowLongPtrW(self.hwnd, GWL_STYLE, changed as isize);
-                    let (width, height) = outer_size(changed, ex_style, dpi, content)
-                        .map_err(|e| backend_error("AdjustWindowRectExForDpi", e))?;
+                    let (width, height) =
+                        outer_size(changed, ex_style, dpi, content, app_title_bar)
+                            .map_err(|e| backend_error("AdjustWindowRectExForDpi", e))?;
                     let mut flags = SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE;
                     if !normal {
                         flags |= SWP_NOSIZE;
@@ -991,8 +1054,8 @@ impl WindowsWindow {
                     if !normal {
                         // The rectangle the window returns to grows or shrinks by
                         // the change of frame, so restoring it keeps its content.
-                        let was = outer_size(style, ex_style, dpi, (0, 0));
-                        let now = outer_size(changed, ex_style, dpi, (0, 0));
+                        let was = outer_size(style, ex_style, dpi, (0, 0), had_app_title_bar);
+                        let now = outer_size(changed, ex_style, dpi, (0, 0), app_title_bar);
                         if let (Ok(was), Ok(now), Ok(mut placement)) =
                             (was, now, placement_of(self.hwnd))
                         {
@@ -1394,27 +1457,18 @@ impl PlatformWindow for WindowsWindow {
             WindowCommand::SetSize(size) => self.set_inner_size(size)?,
             WindowCommand::SetConstraints(constraints) => self.set_constraints(constraints),
             WindowCommand::SetResizable(on) => {
-                let decorated =
-                    super::proc::with_window_context(self.hwnd, "set_resizable", |ctx| {
-                        // A fullscreen window has been stripped of its frame:
-                        // the style it returns to says whether it has one.
-                        let style = if ctx.mode.get().holds_fullscreen() {
-                            ctx.restore_style.get()
-                        } else {
-                            // SAFETY: a plain style query on this window.
-                            unsafe { GetWindowLongPtrW(self.hwnd, GWL_STYLE) as u32 }
-                        };
-                        style & WS_CAPTION.0 == WS_CAPTION.0
-                    })
-                    .unwrap_or(true);
-                self.restyle_frame(decorated, on)?;
+                let frame = super::proc::with_window_context(self.hwnd, "set_resizable", |ctx| {
+                    ctx.frame.get()
+                })
+                .unwrap_or_default();
+                self.restyle_frame(frame, on)?;
             }
             WindowCommand::SetFrame(frame) => {
                 let resizable = super::proc::with_window_context(self.hwnd, "set_frame", |ctx| {
                     ctx.resizable.get()
                 })
                 .unwrap_or(true);
-                self.restyle_frame(frame.has_system_title_bar(), resizable)?;
+                self.restyle_frame(frame, resizable)?;
             }
             WindowCommand::SetMode(mode) => self.set_mode(mode)?,
             WindowCommand::Hide => self.hide_native(),
@@ -1462,16 +1516,24 @@ impl PlatformWindow for WindowsWindow {
         Err(Unsupported::new(UnsupportedReason::NotOnThisPlatform))
     }
 
-    /// The input regions keep the system's edge gestures out of a region
-    /// (`InputRegionKind::SystemGestureExclusion`). Windows starts its edge
-    /// swipes whatever a window says: `SetWindowRgn` and `HTTRANSPARENT` decide
-    /// where a window takes input, which is not that. The input capabilities
-    /// say `Unavailable`.
+    /// The chrome regions (`WindowMove`, `WindowResize`, `CaptionButton` and
+    /// the `WindowContent` cut out of them) are kept in device pixels for
+    /// `WM_NCHITTEST`, which answers from them without running framework code
+    /// (ADR-0286). Windows starts its edge swipes whatever a window says, so a
+    /// `SystemGestureExclusion` region is not honoured and the input
+    /// capabilities say so. A window that is gone, or a call off the owner
+    /// thread, keeps nothing.
     fn set_input_regions(
         &self,
-        _regions: &[flui_platform::input_regions::InputRegion],
+        regions: &[flui_platform::input_regions::InputRegion],
     ) -> Result<(), Unsupported> {
-        Err(Unsupported::new(UnsupportedReason::NotOnThisPlatform))
+        let scale = self.state.lock().scale_factor;
+        super::proc::with_window_context(self.hwnd, "set_input_regions", |ctx| {
+            // `WM_NCHITTEST` borrows them only while it reads a slice and runs
+            // no code of the application's, so nothing holds them here.
+            ctx.input_regions.borrow_mut().update(regions, scale, None);
+        });
+        Ok(())
     }
 }
 

@@ -31,8 +31,8 @@
 //! [`MAX_LINE`](flui_protocol::framing::MAX_LINE) bytes.
 //!
 //! ```text
-//! → {"hello":{"token":"…","protocol":"0.8","client":"flui-driver/0.1.0"}}
-//! ← {"hello":{"protocol":"0.8","app":{…},"capabilities":{…}}}
+//! → {"hello":{"token":"…","protocol":"0.9","client":"flui-driver/0.1.0"}}
+//! ← {"hello":{"protocol":"0.9","app":{…},"capabilities":{…}}}
 //! → {"id":7,"method":"semantics.locate","params":{…}}
 //! ← {"id":7,"result":{…}}  |  {"id":7,"error":{"code":…,"message":…,"retry":…}}
 //! ← {"event":"frame","params":{…}}   (after events.subscribe)

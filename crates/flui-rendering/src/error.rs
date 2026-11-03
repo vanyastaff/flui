@@ -446,6 +446,20 @@ impl From<flui_painting::TextMeasurementError> for RenderError {
 }
 
 impl RenderError {
+    /// The node this error names, when it carries one: the node a lookup missed, a layout cycle
+    /// re-entered, or the parent whose child list was indexed past its end.
+    ///
+    /// Errors that name no node (a panic caught in a render object, an invalid constraint) answer
+    /// `None`; the pipeline owner attaches the node when it knows it.
+    #[must_use]
+    pub fn node(&self) -> Option<RenderId> {
+        match self {
+            Self::NodeNotFound(id) | Self::LayoutCycle(id) => Some(*id),
+            Self::ChildIndexOutOfBounds { parent, .. } => Some(*parent),
+            _ => None,
+        }
+    }
+
     /// An ordinary layout refusal must propagate without a poisoned stand-in.
     pub(crate) fn is_recoverable_layout_error(&self) -> bool {
         matches!(

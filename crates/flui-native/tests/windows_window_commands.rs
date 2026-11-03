@@ -384,29 +384,111 @@ fn the_frame_follows_resizable_and_the_system_frame_and_keeps_the_content() {
     assert!(!window.state().resizable);
 }
 
-fn an_unsupported_app_title_bar_opens_with_the_system_frame() {
-    use flui_platform::{AdmissionError, AppTitleBar, CapabilityAbsence, SystemControls};
+fn an_app_title_bar_drops_the_caption_and_keeps_the_content() {
+    use flui_platform::{AppTitleBar, SystemControls};
 
     let platform = platform();
     let requested =
         WindowFrame::AppTitleBar(AppTitleBar::new().with_system_controls(SystemControls::Hidden));
     let window = open(&platform, hidden().with_frame(requested));
     let opened = window.state();
-    assert_eq!(opened.frame, WindowFrame::System);
-    assert_eq!(style(&window) & WS_CAPTION.0, WS_CAPTION.0);
-    assert!(content_is(&opened, 640.0, 480.0));
+    assert_eq!(opened.frame, requested);
     assert_eq!(
-        opened.capabilities.into_parts().app_title_bar,
-        Err(CapabilityAbsence::NotYetOnThisHost),
+        style(&window) & WS_CAPTION.0,
+        WS_CAPTION.0,
+        "the system still resizes, snaps and animates the window"
     );
+    assert!(content_is(&opened, 640.0, 480.0), "{opened:?}");
     assert_eq!(
-        window.admit_and_apply(WindowCommand::SetFrame(requested)),
-        Err(CommandRefusal::Admission(AdmissionError::Unsupported(
-            flui_platform::Unsupported::new(flui_platform::UnsupportedReason::NotYetOnThisHost),
-        ))),
+        client_top_on_screen(&window),
+        rect(&window).top,
+        "nothing lies above the content"
     );
-    assert_eq!(window.state(), opened);
-    assert_eq!(style(&window) & WS_CAPTION.0, WS_CAPTION.0);
+
+    apply(&window, WindowCommand::SetFrame(WindowFrame::System));
+    let system = window.state();
+    assert_eq!(system.frame, WindowFrame::System);
+    assert!(content_is(&system, 640.0, 480.0), "{system:?}");
+    assert!(
+        client_top_on_screen(&window) > rect(&window).top,
+        "the caption is back"
+    );
+
+    apply(&window, WindowCommand::SetFrame(requested));
+    let again = window.state();
+    assert_eq!(again.frame, requested);
+    assert!(content_is(&again, 640.0, 480.0), "{again:?}");
+    assert_eq!(client_top_on_screen(&window), rect(&window).top);
+}
+
+fn the_system_hit_test_answers_from_the_chrome_regions() {
+    use flui_foundation::geometry::Rect;
+    use flui_platform::input_regions::{CaptionButton, InputRegion, InputRegionKind};
+    use flui_platform::{AppTitleBar, SystemControls};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        HTCAPTION, HTCLIENT, HTMAXBUTTON, HTTOP, WM_NCHITTEST,
+    };
+
+    let platform = platform();
+    let frame =
+        WindowFrame::AppTitleBar(AppTitleBar::new().with_system_controls(SystemControls::Hidden));
+    let window = open(&platform, hidden().with_frame(frame));
+    let logical = |left, top, right, bottom| Rect::from_ltrb(left, top, right, bottom);
+    window
+        .set_input_regions(&[
+            InputRegion::new(InputRegionKind::WindowMove, logical(0.0, 0.0, 640.0, 32.0)),
+            InputRegion::new(
+                InputRegionKind::WindowContent,
+                logical(100.0, 4.0, 200.0, 28.0),
+            ),
+            InputRegion::new(
+                InputRegionKind::CaptionButton(CaptionButton::Maximize),
+                logical(560.0, 0.0, 600.0, 32.0),
+            ),
+        ])
+        .expect("a Win32 window honours the chrome regions");
+    let scale = window.state().metrics.expect("drawable").scale().get();
+    let hit = |x: f64, y: f64| {
+        let origin = client_origin_on_screen(&window);
+        let x = origin.0 + (x * scale).round() as i32;
+        let y = origin.1 + (y * scale).round() as i32;
+        let packed = ((y as u32 & 0xffff) << 16) | (x as u32 & 0xffff);
+        // SAFETY: a message sent to the live window on its creating thread, as
+        // the system sends it on every pointer move.
+        let answer = unsafe {
+            SendMessageW(
+                hwnd_of(&window),
+                WM_NCHITTEST,
+                Some(WPARAM(0)),
+                Some(LPARAM(packed as i32 as isize)),
+            )
+        };
+        answer.0 as u32
+    };
+    assert_eq!(hit(50.0, 20.0), HTCAPTION, "the bar moves the window");
+    assert_eq!(hit(150.0, 20.0), HTCLIENT, "a field in the bar is content");
+    assert_eq!(
+        hit(580.0, 20.0),
+        HTMAXBUTTON,
+        "the maximize button shows the snap layouts"
+    );
+    assert_eq!(hit(50.0, 1.0), HTTOP, "the top band resizes the window");
+    assert_eq!(hit(50.0, 200.0), HTCLIENT, "below the bar is content");
+}
+
+/// Where the window's client area starts on the screen, in device pixels.
+fn client_origin_on_screen(window: &Rc<dyn HostWindow>) -> (i32, i32) {
+    use windows::Win32::Foundation::POINT;
+    use windows::Win32::Graphics::Gdi::ClientToScreen;
+
+    let mut origin = POINT::default();
+    // SAFETY: `origin` is a stack local in/out parameter of the live window.
+    assert!(unsafe { ClientToScreen(hwnd_of(window), &raw mut origin) }.as_bool());
+    (origin.x, origin.y)
+}
+
+fn client_top_on_screen(window: &Rc<dyn HostWindow>) -> i32 {
+    client_origin_on_screen(window).1
 }
 
 fn the_limits_hold_against_resizing() {
@@ -1826,8 +1908,12 @@ fn native_window_commands() {
             win32_close_drains_platform_map_entry,
         ),
         (
-            "an_unsupported_app_title_bar_opens_with_the_system_frame",
-            an_unsupported_app_title_bar_opens_with_the_system_frame,
+            "an_app_title_bar_drops_the_caption_and_keeps_the_content",
+            an_app_title_bar_drops_the_caption_and_keeps_the_content,
+        ),
+        (
+            "the_system_hit_test_answers_from_the_chrome_regions",
+            the_system_hit_test_answers_from_the_chrome_regions,
         ),
         (
             "a_deferred_window_is_hidden_until_its_first_frame",

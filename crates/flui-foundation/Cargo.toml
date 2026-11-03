@@ -97,6 +97,8 @@ harness = false
 
 [features]
 default = []
+## Keep creation sites (`CreationSite`) in release builds; debug builds always keep them.
+creation-site = []
 serde = ["dep:serde", "dep:serde_json"]
 
 [package.metadata.docs.rs]

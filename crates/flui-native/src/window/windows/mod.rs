@@ -3,6 +3,9 @@
 //! - [`limits`] and [`mode`]: the pure half, compiled and tested on every
 //!   host: the size limits the system asks for and the mode the window
 //!   tracks with what its way back needs, as rules over plain values;
+//! - [`chrome`]: the pure half too: what `WM_NCCALCSIZE` leaves of the frame
+//!   of a window whose application draws its title bar, and what
+//!   `WM_NCHITTEST` answers from its chrome regions (ADR-0286);
 //! - [`material`]: the pure half too: from which build the window draws a
 //!   material behind it;
 //! - `window`: [`WindowsWindow`], the handle a host hands out, how it opens
@@ -26,6 +29,7 @@
 
 #[cfg(windows)]
 pub(crate) mod backdrop;
+pub(crate) mod chrome;
 pub(crate) mod frame_timing;
 pub(crate) mod limits;
 #[cfg(windows)]
