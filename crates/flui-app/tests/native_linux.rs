@@ -27,7 +27,8 @@ use flui_view::prelude::*;
 /// under it.
 const CHILD: &str = "FLUI_NATIVE_LINUX_CHILD";
 
-/// The child prints the host after this.
+/// The child prints the host after this, on a line libtest may have begun
+/// with the case's name.
 const HOST_LINE: &str = "native-linux host: ";
 
 /// The child's case, as the harness names it.
@@ -129,7 +130,7 @@ fn assert_host(child: &Output, expected: &str) {
     let stdout = String::from_utf8_lossy(&child.stdout);
     let host = stdout
         .lines()
-        .find_map(|line| line.strip_prefix(HOST_LINE))
+        .find_map(|line| line.split_once(HOST_LINE).map(|(_, host)| host.trim()))
         .unwrap_or_else(|| panic!("the child reported no host:\n{}", describe(child)));
     assert_eq!(host, expected, "the application ran on the {host} host");
 }
