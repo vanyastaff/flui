@@ -36,6 +36,8 @@ pub type BootstrapError = Box<dyn std::error::Error + Send + Sync + 'static>;
 /// * [`UnsupportedOs`](Self::UnsupportedOs) and
 ///   [`MissingRequirement`](Self::MissingRequirement) — the same
 ///   constructors, when the system is below FLUI's floor (ADR-0244 §3).
+/// * [`HostProtocol`](Self::HostProtocol) — the Android constructor, when the
+///   APK's Java classes come from another FLUI version (ADR-0255).
 /// * [`EventLoop`](Self::EventLoop) — `Platform::run` when the loop itself
 ///   fails to start or exits abnormally.
 /// * [`Bootstrap`](Self::Bootstrap) — `Platform::run` when the embedder's
@@ -102,6 +104,21 @@ pub enum PlatformError {
         environment: Environment,
         /// What was looked for, as `platform-support.toml` names it.
         requirement: &'static str,
+    },
+
+    /// FLUI's Java classes in the APK state another version of their contract
+    /// with this library than it does (ADR-0255 decision 5): the APK was
+    /// packaged with another FLUI version's classes. Android only, raised
+    /// before any native method is bound.
+    #[error(
+        "the APK's FLUI Java classes speak protocol {packaged}, this library {library}; package \
+         the app with the `flui build` of the FLUI version it links"
+    )]
+    HostProtocol {
+        /// The protocol this library speaks.
+        library: i32,
+        /// The protocol the classes in the APK state (`FluiHost.PROTOCOL`).
+        packaged: i32,
     },
 
     /// The platform event loop failed to start, or terminated abnormally.

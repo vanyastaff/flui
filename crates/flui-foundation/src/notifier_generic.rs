@@ -507,6 +507,10 @@ impl<Arg> Notifier<Arg> {
                 if self.is_disposed.get() || !self.listeners.entries.borrow().contains_key(id) {
                     continue;
                 }
+                #[expect(
+                    clippy::disallowed_methods,
+                    reason = "ADR-0287: a listener's panic must not stop the remaining listeners"
+                )]
                 if let Err(payload) =
                     catch_unwind(AssertUnwindSafe(|| callback.invoke(arg, recovery)))
                 {

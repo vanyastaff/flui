@@ -123,6 +123,10 @@ impl UiRuntime {
                     wait.frames += 1;
                 }
                 let reply = wait.reply.clone();
+                #[expect(
+                    clippy::disallowed_methods,
+                    reason = "ADR-0287: a wait's settle runs contained so the reply is still sent"
+                )]
                 let settled = catch_unwind(AssertUnwindSafe(|| self.settle_wait(state, wait, now)));
                 match settled {
                     Ok(Some(wait)) => keep.push(wait),

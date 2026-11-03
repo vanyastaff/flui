@@ -308,6 +308,10 @@ impl Drop for SessionEndBlock {
             // A hook that panics must not turn a release (possibly during
             // unwinding) into an abort; its payload is left alone rather
             // than dropped, which could panic in turn.
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "ADR-0287: a release hook's panic must not abort a release during unwinding"
+            )]
             if let Err(payload) = catch_unwind(AssertUnwindSafe(release)) {
                 flui_foundation::panic::discard_payload(payload);
             }

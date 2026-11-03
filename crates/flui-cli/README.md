@@ -158,7 +158,7 @@ flui run --profile bench
 On Android the project's `cdylib` is compiled with `cargo ndk`, packaged
 into an APK by the SDK's own build-tools (no Gradle, no Java project: see
 [Building](#building)), installed with `adb install -r`, and its
-`NativeActivity` started; `adb logcat --pid` of the app is the session's
+`FluiActivity` started; `adb logcat --pid` of the app is the session's
 output. A change rebuilds, reinstalls and restarts; `q` or Ctrl-C
 force-stop the app.
 

@@ -4795,14 +4795,21 @@ real loop, woken by posted mouse moves rather than the system pointer, and
 or from another process (Explorer, a browser), a held mouse button, pen or
 touch, and a whole `flui-app` with two runtimes.
 
-### Android's Java side is `FluiView`, loaded from the native library
+### Android's Java side is `FluiActivity` and `FluiView`, in the APK
 
-`owner::android::java_view` loads `FluiView`'s dex (`android/classes.dex`, compiled from
-`android/java` and checked against it by `cargo xtask android-dex`) on the Java main thread at
-platform start: `InMemoryDexClassLoader` from API 26, a read-only, byte-compared code-cache copy
-through `DexClassLoader` below, either parented to the Activity's loader. The view's native
-methods are bound with `RegisterNatives` on the class that loader returned, and one full-window
-view is laid over the `NativeActivity`'s content (ADR-0247). Every owner-to-view call is posted
+The Java classes (`FluiActivity`, `FluiHost`, `FluiView` and its helpers) are compiled from
+`android/java` into `android/classes.dex`, checked against the sources by `cargo xtask
+android-dex`, and declared in this crate's `[package.metadata.flui.declares.android]` (`dex`,
+`java`; ADR-0307 version 2), so `flui build` packs the dex of the `flui-native` an application
+links into its APK, and a Gradle build compiles the sources. The generated manifest names
+`FluiActivity`, a `NativeActivity` subclass, with `hasCode="true"` (ADR-0255 decisions 1 and 4).
+Before the platform starts, `owner::android::java_host` reads through the Activity's class loader
+whether the APK has `FluiHost`, whether its `PROTOCOL` is the library's and whether the Activity is
+a `FluiActivity`; anything else refuses the start with `PlatformError::HostProtocol` or `Init`,
+naming what it found, before any native method is bound (decision 5). `owner::android::java_view`
+then loads `FluiView` through the same loader on the Java main thread, binds its native methods
+with `RegisterNatives` on the class it returned (`FindClass` would search the system loader), and
+lays one full-window view over the Activity's content (ADR-0247). Every owner-to-view call is posted
 (`JavaView::post`, or `post_or` when a refusal must still discharge an obligation, as a drag the
 view could not start must still end); every native method only queues a `ViewEvent` and wakes the
 owner, which delivers them in order each loop turn, and contains a panic before it reaches the

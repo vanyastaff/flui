@@ -67,6 +67,15 @@ the application's `cdylib`. It is written only when it changed. A file there wit
 generated-file header is refused untouched rather than overwritten
 (`the_manifest_is_rewritten_only_when_flui_wrote_it`).
 
+The base names `FluiActivity` with `hasCode`, `singleTop` and the back flag
+(`the_base_names_flui_activity_with_the_code_it_needs`); its class comes from the dex
+`flui-native` declares (`android.dex`, schema 2), which the packager without Gradle stores in the
+APK as `classes.dex` (then `classes2.dex`, … for further crates), and Gradle compiles the declared
+sources (`android.java`) from `flui.javaSources`, refusing a build script that does not read it
+(`libraries_and_dex_files_are_appended_where_the_platform_reads_them`,
+`gradle_compiles_the_java_sources_the_crates_declare`). No `javac` or `d8` runs on the SDK-tools
+path. The library checks the classes' protocol before it starts (ADR-0255 decision 5).
+
 The iOS bundle's `PrivacyInfo.xcprivacy` lists the required-reason APIs the graph of the device or
 simulator target declares (`apple.privacy.accessed-apis`), joined per category with the
 application's own `<project>/platforms/ios/PrivacyInfo.xcprivacy`; tracking and collected data stay the

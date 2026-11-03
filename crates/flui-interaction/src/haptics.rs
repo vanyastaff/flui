@@ -171,6 +171,10 @@ struct State {
 /// Drop `outgoing` outside every borrow; a panic in its destructor must not
 /// unwind into the widget that replaced or removed it.
 fn retire_outside_delivery(outgoing: Option<Observer>) {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "ADR-0287: a replaced observer's drop runs contained after the swap"
+    )]
     if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(outgoing)))
     {
         tracing::error!(

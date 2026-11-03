@@ -117,6 +117,10 @@ pub fn preserve_first_lifecycle_panic(
     } else {
         // A tracing subscriber is user code: a panic it raises must not
         // replace the first failure.
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: a subscriber's panic must not replace the first failure"
+        )]
         if let Err(payload) = std::panic::catch_unwind(|| {
             tracing::error!(
                 phase,

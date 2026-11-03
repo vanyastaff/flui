@@ -158,6 +158,10 @@ fn disable(what: &'static str, hook: Box<dyn DevAgentHook>) {
 /// Run `body`: its value, or `None` when it panicked. The panic's payload is
 /// discarded under containment (ADR-0281 §2).
 fn contained<R>(body: impl FnOnce() -> R) -> Option<R> {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "ADR-0287: an agent request's panic is discarded so the server keeps serving"
+    )]
     match catch_unwind(AssertUnwindSafe(body)) {
         Ok(value) => Some(value),
         Err(payload) => {

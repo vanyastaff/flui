@@ -349,14 +349,17 @@ impl AndroidBuilder {
             .map_err(|error| {
             BuildError::Other(format!("flui.toml names the package: {error}"))
         })?;
-        self.write_manifest(ctx, &config)?;
+        let declarations = self.declarations(ctx)?;
+        self.write_manifest(&config, &declarations)?;
 
         // A Gradle wrapper in the project means the app has grown a Java or
         // Kotlin side and Gradle owns the APK; without one, the SDK's own
         // build-tools package the NativeActivity app directly.
         let gradle_wrapper_path = android_dir.join(gradle_wrapper_name);
         if !gradle_wrapper_path.exists() {
-            return self.package_with_build_tools(ctx, artifacts, &config).await;
+            return self
+                .package_with_build_tools(ctx, artifacts, &config, &declarations)
+                .await;
         }
         let java_home = self.java_home.as_ref().ok_or_else(|| BuildError::ToolNotFound {
             tool: "JAVA_HOME (Gradle needs a JDK)".to_string(),
@@ -369,6 +372,10 @@ impl AndroidBuilder {
                 min_sdk: ctx.floors.android_api(),
                 target_sdk: crate::build::platform_floor::ANDROID_TARGET_SDK,
                 application_id: config.app.id.android_package(),
+                java_sources: &declarations
+                    .android_java()
+                    .map(|(_, path)| path.to_path_buf())
+                    .collect::<Vec<_>>(),
             },
         )?;
         let gradle_task = match ctx.profile {
@@ -420,23 +427,31 @@ impl AndroidBuilder {
 /// The Gradle-less delivery: `aapt2` + `zipalign` + `apksigner` from the
 /// SDK's build-tools, see `android_package.rs`.
 impl AndroidBuilder {
-    /// Writes `platforms/android/app/src/main/AndroidManifest.xml`, which
-    /// both packagers read: FLUI's base, what the crates linked for the ABIs
-    /// built declare, the label from `flui.toml` and the library `cargo ndk`
-    /// built (ADR-0307).
-    fn write_manifest(
-        &self,
-        ctx: &BuilderContext,
-        config: &crate::config::FluiConfig,
-    ) -> BuildResult<()> {
+    /// What the crates linked for the ABIs built, with the features the build
+    /// turns on, declare (ADR-0307).
+    fn declarations(&self, ctx: &BuilderContext) -> BuildResult<crate::declarations::Declarations> {
         let crate::build::platform::Platform::Android { targets } = &ctx.platform else {
             return Err(BuildError::InvalidPlatform {
                 reason: "Expected Android platform".to_string(),
             });
         };
         let triples: Vec<&str> = targets.iter().map(|abi| rust_target(abi)).collect();
-        let declarations =
-            crate::declarations::Declarations::collect(&self.workspace_root, &triples)?;
+        crate::declarations::Declarations::collect_with_features(
+            &self.workspace_root,
+            &triples,
+            &ctx.features,
+        )
+    }
+
+    /// Writes `platforms/android/app/src/main/AndroidManifest.xml`, which
+    /// both packagers read: FLUI's base, what the crates linked for the ABIs
+    /// built declare, the label from `flui.toml` and the library `cargo ndk`
+    /// built (ADR-0307).
+    fn write_manifest(
+        &self,
+        config: &crate::config::FluiConfig,
+        declarations: &crate::declarations::Declarations,
+    ) -> BuildResult<()> {
         let lib_name = super::util::cargo::cargo_project(&self.workspace_root)?
             .cdylib
             .ok_or_else(|| {
@@ -452,7 +467,7 @@ impl AndroidBuilder {
                 label: &config.app.name,
                 lib_name: &lib_name,
             },
-            &declarations,
+            declarations,
         )
     }
 
@@ -461,9 +476,14 @@ impl AndroidBuilder {
         ctx: &BuilderContext,
         artifacts: &BuildArtifacts,
         config: &crate::config::FluiConfig,
+        declarations: &crate::declarations::Declarations,
     ) -> BuildResult<FinalArtifacts> {
         let package = config.app.id.android_package();
         let manifest = super::android_manifest::path_in(&self.workspace_root);
+        let dex: Vec<PathBuf> = declarations
+            .android_dex()
+            .map(|(_, path)| path.to_path_buf())
+            .collect();
         let native_libs: Vec<(String, PathBuf)> = artifacts
             .rust_libs
             .iter()
@@ -487,6 +507,7 @@ impl AndroidBuilder {
                 manifest: &manifest,
                 package,
                 native_libs: &native_libs,
+                dex: &dex,
                 work_dir: &ctx.output_dir.join("apk-work"),
                 output: &output,
                 min_sdk: ctx.floors.android_api(),

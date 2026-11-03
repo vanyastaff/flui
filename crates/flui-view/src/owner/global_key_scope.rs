@@ -149,6 +149,10 @@ fn refuse_unstable_comparison() -> ! {
 fn retire_snapshot(snapshot: Vec<SnapshotClaim>) {
     let mut first = None;
     for claim in snapshot {
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: a snapshot key's drop runs contained; the first panic is kept"
+        )]
         crate::lifecycle::preserve(
             &mut first,
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(claim.key))).err(),
@@ -463,6 +467,10 @@ impl GlobalKeyScope {
         let reclaimed = removed.len();
         let mut first = None;
         for key in removed {
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "ADR-0287: a claimed key's drop runs contained; the first panic is kept"
+            )]
             crate::lifecycle::preserve(
                 &mut first,
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(key))).err(),

@@ -733,6 +733,10 @@ where
         if !self.initialized {
             let sink_start = lifecycle_sink_len(owner);
             let lifecycle_ctx = ctx_choice.as_lifecycle_ctx();
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "ADR-0287: a state's init_state panic is recorded and the element recovers"
+            )]
             let init = std::panic::catch_unwind(AssertUnwindSafe(|| {
                 self.state.init_state(lifecycle_ctx);
             }));
@@ -750,6 +754,10 @@ where
             }
             self.initialized = true;
             if let Some(old_view) = self.pending_update.take() {
+                #[expect(
+                    clippy::disallowed_methods,
+                    reason = "ADR-0287: a state's did_update_view panic is recorded and the element recovers"
+                )]
                 let update = std::panic::catch_unwind(AssertUnwindSafe(|| {
                     self.state.did_update_view(&old_view, core.view());
                 }));
@@ -772,6 +780,10 @@ where
         }
         if self.apply_pending {
             let sink_start = lifecycle_sink_len(owner);
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "ADR-0287: a state's apply_view panic is recorded and the element recovers"
+            )]
             let applied = std::panic::catch_unwind(AssertUnwindSafe(|| {
                 self.state.apply_view(core.view(), ctx_choice.as_ctx());
             }));
@@ -844,6 +856,10 @@ where
         if !self.initialized {
             return;
         }
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: a state's dispose panic is recorded; later elements still unmount"
+        )]
         if let Err(payload) = std::panic::catch_unwind(AssertUnwindSafe(|| self.state.dispose())) {
             owner.record_hook_panic(
                 core.self_id(),
@@ -883,6 +899,10 @@ where
         if !self.initialized {
             return;
         }
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: a state's activate panic is recorded against its element"
+        )]
         if let Err(payload) = std::panic::catch_unwind(AssertUnwindSafe(|| self.state.activate())) {
             owner.record_armed_lifecycle_panic(
                 core.self_id(),
@@ -915,6 +935,10 @@ where
         if !self.initialized {
             return;
         }
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: a state's deactivate panic is recorded and the flip still happens"
+        )]
         if let Err(payload) = std::panic::catch_unwind(AssertUnwindSafe(|| self.state.deactivate()))
         {
             owner.record_hook_panic(
@@ -974,6 +998,10 @@ where
         self.apply_pending = true;
         let ctx_choice = make_build_ctx(core, owner);
         let sink_start = lifecycle_sink_len(owner);
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: a state's did_change_dependencies panic is recorded, not unwound"
+        )]
         let outcome = std::panic::catch_unwind(AssertUnwindSafe(|| {
             self.state
                 .did_change_dependencies(ctx_choice.as_lifecycle_ctx());
@@ -1214,6 +1242,7 @@ where
                 Some(owner.reactive),
             );
             pipeline_owner.with_mut(|pipeline_owner| {
+                #[expect(clippy::disallowed_methods, reason = "ADR-0287: the view's unmount hook runs contained; the element still unmounts")]
                 if let Some(render_object) = pipeline_owner
                     .render_tree_mut()
                     .get_mut(render_id)

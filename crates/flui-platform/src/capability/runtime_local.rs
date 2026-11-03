@@ -88,6 +88,10 @@ impl RuntimeLocals {
         let slots = std::mem::take(&mut *self.inner.slots.borrow_mut());
         let mut first = None;
         for (_, slot) in slots {
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "ADR-0287: a slot's drop runs contained so the remaining slots retire"
+            )]
             if let Err(payload) =
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(slot)))
             {

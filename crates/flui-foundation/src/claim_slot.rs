@@ -118,6 +118,10 @@ impl<T> Inner<T> {
     /// the first abandonment transition this slot ever sees.
     fn notify_abandoned(&self) -> Result<(), Payload> {
         if !self.wake_fired.swap(true, Ordering::AcqRel) {
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "ADR-0287: the wake callback is owner code; its panic is returned, not thrown"
+            )]
             catch_unwind(AssertUnwindSafe(|| (self.wake)()))?;
         }
         Ok(())

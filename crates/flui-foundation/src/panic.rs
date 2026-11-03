@@ -58,6 +58,10 @@ pub fn is_internal_invariant(text: &str) -> bool {
 pub fn discard_payload(payload: Box<dyn Any + Send>) {
     let mut pending = Some(payload);
     while let Some(payload) = pending.take() {
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "the containment primitive owners catch through (ADR-0287)"
+        )]
         if let Err(next) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(payload)))
         {
             pending = Some(next);
@@ -69,6 +73,10 @@ pub fn discard_payload(payload: Box<dyn Any + Send>) {
 /// destructor runs contained and a panic it raises is discarded with
 /// [`discard_payload`] (ADR-0281 §3).
 pub fn drop_contained<T>(value: T) {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the containment primitive owners catch through (ADR-0287)"
+    )]
     if let Err(payload) =
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || drop(value)))
     {
@@ -103,6 +111,10 @@ impl FirstPanic {
 
     /// Run `run`, holding its panic if it has one and none is held yet.
     pub fn contain<R>(&mut self, run: impl FnOnce() -> R) -> Option<R> {
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "the containment primitive owners catch through (ADR-0287)"
+        )]
         match std::panic::catch_unwind(std::panic::AssertUnwindSafe(run)) {
             Ok(value) => Some(value),
             Err(payload) => {
@@ -414,6 +426,10 @@ impl PanicRecovery {
     /// failure is still the one resumed.
     pub fn finish_reporting(mut self, report: impl FnOnce(&[String])) {
         let competing = std::mem::take(&mut self.competing);
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "the containment primitive owners catch through (ADR-0287)"
+        )]
         if !competing.is_empty()
             && let Err(payload) =
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| report(&competing)))
@@ -450,6 +466,10 @@ impl RecoveryScope<'_> {
             channels: self.channels,
             class,
         };
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "the containment primitive owners catch through (ADR-0287)"
+        )]
         match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| action(&mut child))) {
             Ok(()) => true,
             Err(payload) => {
@@ -541,6 +561,10 @@ impl RecoveryScope<'_> {
             channels: Some(&latch),
             class: self.class,
         };
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "the containment primitive owners catch through (ADR-0287)"
+        )]
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| action(&mut child)));
         if outcome.is_err() {
             child.mark_active_channels();

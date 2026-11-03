@@ -213,6 +213,10 @@ impl FrameDriver {
         // What the registry's finished writes resolved wakes here too, each
         // waker contained and reported against this frame's presentation.
         for waker in settle_flush_registry() {
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "ADR-0287: a settle waker's panic is reported against the frame, not lost"
+            )]
             if let Err(payload) =
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| waker.wake()))
             {

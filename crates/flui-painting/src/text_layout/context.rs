@@ -668,6 +668,10 @@ fn register_source(collection: &mut parley::fontique::Collection, data: &HostDat
 fn reads_a_family(data: &HostData) -> bool {
     use std::panic::{AssertUnwindSafe, catch_unwind};
 
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "ADR-0287: a panicking font read answers no instead of poisoning the shared lock"
+    )]
     let read = catch_unwind(AssertUnwindSafe(|| {
         let mut scratch = parley::fontique::Collection::new(parley::fontique::CollectionOptions {
             shared: false,

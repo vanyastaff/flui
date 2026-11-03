@@ -66,6 +66,10 @@ pub use self::session::{Session, Status};
 /// Emits what `event` traces, contained: a subscriber is user code, and one that panics must not
 /// take down the transport the conversation runs on, nor the work it accepted.
 fn trace(event: impl FnOnce()) {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "ADR-0287: a tracing subscriber's panic must not stop the transport"
+    )]
     let traced = std::panic::catch_unwind(std::panic::AssertUnwindSafe(event));
     if let Err(payload) = traced {
         flui_foundation::panic::discard_payload(payload);

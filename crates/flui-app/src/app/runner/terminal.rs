@@ -63,6 +63,10 @@ pub(super) fn take_terminal() -> Option<Box<dyn Any + Send>> {
     not(target_arch = "wasm32")
 ))]
 pub(super) fn contain_terminal(during: &'static str, body: impl FnOnce()) {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "ADR-0287: a terminal body's panic is held as the loop's failure (ADR-0258)"
+    )]
     if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(body)) {
         hold_terminal(payload, during);
     }
@@ -73,6 +77,10 @@ pub(super) fn contain_terminal(during: &'static str, body: impl FnOnce()) {
 /// quit, and the method answers `failed` instead of unwinding into the
 /// platform.
 pub(super) fn contained<R>(failed: R, during: &'static str, body: impl FnOnce() -> R) -> R {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "ADR-0287: a platform handler's panic is held as the loop's terminal failure (ADR-0258)"
+    )]
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(body)) {
         Ok(answer) => answer,
         Err(payload) => {
@@ -85,6 +93,10 @@ pub(super) fn contained<R>(failed: R, during: &'static str, body: impl FnOnce() 
 
 /// Ask the loop to end after a terminal failure, as a program quit does.
 fn request_terminal_quit() {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "ADR-0287: the terminal quit request is contained; the failure stays held"
+    )]
     let quit = std::panic::catch_unwind(|| {
         let _ = super::host::with_owner_platform(flui_native::OwnerPlatform::quit);
     });
@@ -97,6 +109,10 @@ fn request_terminal_quit() {
 /// panics while it reports cannot replace the failure, so its payload is
 /// retained.
 pub(super) fn contain_diagnostic(report: impl FnOnce()) {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "ADR-0287: a reporting subscriber's panic must not replace the held failure"
+    )]
     if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(report)) {
         flui_foundation::panic::discard_payload(payload);
     }

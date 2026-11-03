@@ -114,6 +114,10 @@
 //! [`catalog_covers_every_render_object_name`] guards the table: every row's
 //! type string must appear in this file so a missing harness test fails CI.
 
+#![allow(
+    clippy::disallowed_methods,
+    reason = "test code catches a panic to assert on it (ADR-0303 §5)"
+)]
 // Row functions are plain `fn`s run by the family tables below, so clippy no
 // longer treats them as `#[test]` bodies where `unwrap` is allowed.
 #![allow(clippy::unwrap_used)]

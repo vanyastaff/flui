@@ -95,6 +95,10 @@ impl UnmountHooks {
         let _running = Running(&self.inner);
         let mut first = None;
         while let Some(hook) = self.take_next(element) {
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "ADR-0287: an unmount hook's panic must not skip the remaining hooks"
+            )]
             if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(hook)) {
                 if first.is_none() {
                     first = Some(payload);

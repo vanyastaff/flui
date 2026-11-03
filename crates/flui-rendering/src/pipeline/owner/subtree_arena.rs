@@ -1440,6 +1440,10 @@ unsafe fn layout_subtree_borrowed_impl(
             // depth-first and synchronous), which is what the flag below records.
             let events_before = arena.degradation_count();
             let render_object = entry.render_object_mut();
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "ADR-0287: perform_layout runs contained; a panic poisons the node"
+            )]
             let unwind_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 render_object.perform_layout_raw(erased)
             }));
@@ -1447,6 +1451,10 @@ unsafe fn layout_subtree_borrowed_impl(
                 Ok(inner) => inner?,
                 Err(payload) => {
                     let msg = payload_text(&*payload).unwrap_or("(non-string panic payload)");
+                    #[expect(
+                        clippy::disallowed_methods,
+                        reason = "ADR-0287: a panic report runs tracing subscribers, contained"
+                    )]
                     if let Err(reporting_payload) =
                         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                             tracing::error!(
@@ -2139,6 +2147,10 @@ unsafe fn layout_sliver_subtree_borrowed_impl(
         // See the box twin: the delta over this call is this subtree's.
         let events_before = arena.degradation_count();
         let render_object = entry.render_object_mut();
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: a sliver's perform_layout runs contained; a panic poisons the node"
+        )]
         let unwind_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             render_object.perform_layout_raw(erased)
         }));
@@ -2146,6 +2158,10 @@ unsafe fn layout_sliver_subtree_borrowed_impl(
             Ok(inner) => inner?,
             Err(payload) => {
                 let msg = payload_text(&*payload).unwrap_or("(non-string panic payload)");
+                #[expect(
+                    clippy::disallowed_methods,
+                    reason = "ADR-0287: a panic report runs tracing subscribers, contained"
+                )]
                 if let Err(reporting_payload) =
                     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                         tracing::error!(

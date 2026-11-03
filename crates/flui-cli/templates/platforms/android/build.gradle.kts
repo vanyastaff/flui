@@ -32,6 +32,13 @@ android {
     sourceSets {
         getByName("main") {
             jniLibs.srcDirs("src/main/jniLibs")
+            // The Java sources of the crates the app links, FluiActivity's among
+            // them: `flui build` writes their directories into gradle.properties.
+            java.srcDirs(
+                providers.gradleProperty("flui.javaSources").get()
+                    .split(File.pathSeparator)
+                    .filter { it.isNotEmpty() }
+            )
         }
     }
 }

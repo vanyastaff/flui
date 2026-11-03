@@ -125,6 +125,10 @@ impl LifecycleDelivery {
                 break;
             };
             if request_frame {
+                #[expect(
+                    clippy::disallowed_methods,
+                    reason = "ADR-0287: the frame request runs a wake hook, contained; delivery goes on"
+                )]
                 preserve_first_failure(
                     &custody,
                     &mut first,
@@ -148,6 +152,10 @@ impl LifecycleDelivery {
                     .iter()
                     .any(|listener| listener.id == id);
                 if live {
+                    #[expect(
+                        clippy::disallowed_methods,
+                        reason = "ADR-0287: a lifecycle listener's panic must not stop the remaining listeners"
+                    )]
                     preserve_first_failure(
                         &custody,
                         &mut first,
@@ -157,6 +165,10 @@ impl LifecycleDelivery {
                 // A callback may remove its last registered owner while running.
                 // Its captures retire contained; an earlier failure stays first
                 // (ADR-0281).
+                #[expect(
+                    clippy::disallowed_methods,
+                    reason = "ADR-0287: a callback's captures retire contained; an earlier failure stays first"
+                )]
                 preserve_first_failure(
                     &custody,
                     &mut first,

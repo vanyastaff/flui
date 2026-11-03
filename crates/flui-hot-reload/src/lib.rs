@@ -117,6 +117,14 @@
 // Ship bar (wave 4): every public item is documented; keep it that way.
 #![deny(missing_docs)]
 #![warn(rust_2018_idioms, clippy::all, clippy::pedantic)]
+// After the `warn(clippy::all)` above, which would otherwise turn the lint back on in tests.
+#![cfg_attr(
+    test,
+    allow(
+        clippy::disallowed_methods,
+        reason = "test code catches a panic to assert on it (ADR-0303 §5)"
+    )
+)]
 #![expect(clippy::module_name_repetitions)]
 // The crate-level `warn(clippy::pedantic)` above re-enables the pedantic
 // lints the workspace allows; these five are re-suppressed. `allow`, not

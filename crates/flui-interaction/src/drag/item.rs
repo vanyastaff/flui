@@ -217,6 +217,10 @@ impl SessionData {
         };
         // A provider that panics leaves a definite answer behind, not a slot
         // stuck running; the panic itself still reaches the requester.
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: a lazy provider's panic leaves a definite answer, not a stuck slot"
+        )]
         match std::panic::catch_unwind(std::panic::AssertUnwindSafe(provider)) {
             Ok(result) => {
                 *slot.state.borrow_mut() = LazyState::Done(result.clone());

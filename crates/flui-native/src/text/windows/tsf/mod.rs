@@ -281,6 +281,10 @@ impl TextServices {
         });
         // The diagnostic runs a user-installed subscriber: contained, so it
         // cannot unwind through the caller's half-built window.
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: a subscriber's panic must not unwind through the half-built window"
+        )]
         if let Err(payload) = catch_unwind(|| {
             tracing::debug!(target: "flui_native::tsf", client_id, "ITfThreadMgr activated");
         }) {
@@ -417,6 +421,10 @@ impl TextServices {
     /// failure already held ([`Self::keep_failure`]), and the operation (its
     /// native cleanup included) goes on.
     fn diagnose(&self, log: impl FnOnce()) {
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: a subscriber's panic is kept and the host operation goes on"
+        )]
         if let Err(payload) = catch_unwind(AssertUnwindSafe(log)) {
             self.keep_failure(payload);
         }
@@ -515,6 +523,10 @@ impl TextServices {
     /// Apply `op`, keeping a panic of the application code it reaches for
     /// the outermost host operation, so the queue behind it still runs.
     fn apply_contained(&self, op: HostOp) {
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: an op's panic is kept so the queue behind it still runs"
+        )]
         if let Err(payload) = catch_unwind(AssertUnwindSafe(|| self.apply(op))) {
             self.keep_failure(payload);
         }
@@ -844,6 +856,10 @@ impl TextStoreHost for TextServices {
             return Ok(CompositionEnd::Deferred);
         }
         let depth = self.enter_host_op();
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: a composition-end panic is kept for the outermost host operation"
+        )]
         let end = catch_unwind(AssertUnwindSafe(|| self.terminate_composition(store)))
             .unwrap_or_else(|payload| {
                 self.keep_failure(payload);

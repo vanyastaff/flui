@@ -130,6 +130,13 @@
 //! native sink, nothing narrows the result afterwards:
 //! `RUST_LOG=flui_view=trace` really does deliver `TRACE`.
 
+#![cfg_attr(
+    test,
+    allow(
+        clippy::disallowed_methods,
+        reason = "test code catches a panic to assert on it (ADR-0303 §5)"
+    )
+)]
 #![warn(
     missing_debug_implementations,
     rust_2018_idioms,

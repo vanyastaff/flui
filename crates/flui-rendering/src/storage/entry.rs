@@ -476,6 +476,10 @@ impl<P: Protocol> RenderEntry<P> {
             constraints_for_ctx,
             text,
             |erased_ctx| {
+                #[expect(
+                    clippy::disallowed_methods,
+                    reason = "ADR-0287: a leaf's perform_layout runs contained; a panic poisons the node"
+                )]
                 let unwind_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     render_object.perform_layout_raw(erased_ctx)
                 }));
@@ -492,6 +496,10 @@ impl<P: Protocol> RenderEntry<P> {
                     // catch-all bucket for "we don't know more".
                     Err(payload) => {
                         let msg = payload_text(&*payload).unwrap_or("(non-string panic payload)");
+                        #[expect(
+                            clippy::disallowed_methods,
+                            reason = "ADR-0287: reporting a layout panic runs tracing subscribers, contained"
+                        )]
                         if let Err(reporting_payload) =
                             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                                 tracing::error!(

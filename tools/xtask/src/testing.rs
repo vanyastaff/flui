@@ -1133,6 +1133,10 @@ fn rows() -> Vec<(&'static str, fn())> {
 /// `cargo xtask testing --self-test`.
 fn self_test() -> ExitCode {
     let rows = rows();
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "ADR-0287: the self-test counts a row's panic as that row failing"
+    )]
     let failed: Vec<&str> = rows
         .iter()
         .filter(|(_, row)| std::panic::catch_unwind(*row).is_err())

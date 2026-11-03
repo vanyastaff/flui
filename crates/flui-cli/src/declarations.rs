@@ -12,11 +12,13 @@
 //! The table is strict: an unknown key is an error naming the crate, and
 //! `schema` names the version of the keys the crate uses, so a crate written
 //! for a newer CLI is refused by name instead of being half-applied. Keys
-//! arrive with their first consumer; version 1 has `android.permissions`.
+//! arrive with their first consumer: version 1 has `android.permissions` and
+//! `apple.privacy.accessed-apis`, version 2 adds `android.dex` and
+//! `android.java`, the compiled Java classes a crate ships and their sources.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{self, Display, Formatter};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use cargo_metadata::{Metadata, Package, PackageId};
 use serde::Deserialize;
@@ -27,7 +29,7 @@ pub(crate) mod capability;
 pub(crate) mod verify;
 
 /// The newest `schema` this CLI reads.
-pub(crate) const SCHEMA: u32 = 1;
+pub(crate) const SCHEMA: u32 = 2;
 
 /// The key under `[package.metadata.flui]` that holds a crate's
 /// declarations.
@@ -222,13 +224,74 @@ impl TryFrom<String> for PrivacyReason {
     }
 }
 
-/// What a crate needs from the Android manifest.
+/// What a crate needs from the Android manifest and the APK.
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct AndroidPart {
     /// Each `<uses-permission>`.
     #[serde(default)]
     permissions: Vec<AndroidPermission>,
+    /// A dex the crate ships, which the APK carries (schema 2): the crate's
+    /// compiled Java classes, which the Activity's class loader reads.
+    #[serde(default)]
+    dex: Option<CratePath>,
+    /// The directory of the Java sources that dex is compiled from (schema
+    /// 2), which a Gradle build compiles itself.
+    #[serde(default)]
+    java: Option<CratePath>,
+}
+
+/// A path inside a crate's directory, as its declarations name it:
+/// `/`-separated, relative, never climbing out (`..`).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(try_from = "String")]
+pub(crate) struct CratePath(String);
+
+impl CratePath {
+    /// Parse `path`.
+    ///
+    /// # Errors
+    ///
+    /// Why `path` is not a relative path inside the crate.
+    pub(crate) fn try_new(path: impl Into<String>) -> Result<Self, String> {
+        let path = path.into();
+        let inside = !path.is_empty()
+            && !path.starts_with('/')
+            && !path.contains(['\\', ':'])
+            && path
+                .split('/')
+                .all(|part| !part.is_empty() && part != "." && part != "..");
+        if inside {
+            Ok(Self(path))
+        } else {
+            Err(format!(
+                "`{path}` is not a path inside the crate: relative, `/`-separated, without `.`, \
+                 `..`, `\\` or `:`"
+            ))
+        }
+    }
+
+    /// The path under the crate directory `crate_dir`.
+    #[must_use]
+    pub(crate) fn under(&self, crate_dir: &Path) -> PathBuf {
+        self.0
+            .split('/')
+            .fold(crate_dir.to_path_buf(), |path, part| path.join(part))
+    }
+}
+
+impl TryFrom<String> for CratePath {
+    type Error = String;
+
+    fn try_from(path: String) -> Result<Self, String> {
+        Self::try_new(path)
+    }
+}
+
+impl Display for CratePath {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
 }
 
 /// Every declaration of the crates an application links, joined, with the
@@ -236,6 +299,11 @@ struct AndroidPart {
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub(crate) struct Declarations {
     android_permissions: BTreeMap<AndroidPermission, BTreeSet<String>>,
+    /// Each dex a crate ships, by crate and then path: the order of the APK's
+    /// `classes.dex`, `classes2.dex`, ….
+    android_dex: BTreeSet<(String, PathBuf)>,
+    /// Each directory of Java sources, by crate and then path.
+    android_java: BTreeSet<(String, PathBuf)>,
     apple_accessed_apis: BTreeMap<PrivacyCategory, BTreeMap<PrivacyReason, BTreeSet<String>>>,
 }
 
@@ -249,11 +317,30 @@ impl Declarations {
     /// The failure of `cargo metadata`, or [`BuildError::InvalidConfig`] for a
     /// crate whose declarations are malformed.
     pub(crate) fn collect(app_dir: &Path, targets: &[&str]) -> BuildResult<Self> {
+        Self::collect_with_features(app_dir, targets, &[])
+    }
+
+    /// [`Declarations::collect`] for a build that also turns on `features`
+    /// (each as `cargo --features` takes it, such as `flui/driver`): the
+    /// parts those features enable count.
+    ///
+    /// # Errors
+    ///
+    /// As [`Declarations::collect`].
+    pub(crate) fn collect_with_features(
+        app_dir: &Path,
+        targets: &[&str],
+        features: &[String],
+    ) -> BuildResult<Self> {
         let mut joined = Self::default();
         for target in targets {
+            let mut options = vec!["--filter-platform".to_owned(), (*target).to_owned()];
+            if !features.is_empty() {
+                options.extend(["--features".to_owned(), features.join(",")]);
+            }
             let metadata = cargo_metadata::MetadataCommand::new()
                 .current_dir(app_dir)
-                .other_options(vec!["--filter-platform".to_owned(), (*target).to_owned()])
+                .other_options(options)
                 .exec()
                 .map_err(|error| {
                     BuildError::Other(format!("cargo metadata for {target}: {error}"))
@@ -325,11 +412,11 @@ impl Declarations {
                 "declares for feature `{unknown}`, which {name} does not have"
             )));
         }
-        self.add_android(name, &declares.android);
+        self.add_android(package, declares.schema, &declares.android)?;
         self.add_apple(name, &declares.apple)?;
         for (feature, part) in &declares.features {
             if features.contains(&feature.as_str()) {
-                self.add_android(name, &part.android);
+                self.add_android(package, declares.schema, &part.android)?;
                 self.add_apple(name, &part.apple)?;
             }
         }
@@ -358,13 +445,59 @@ impl Declarations {
         Ok(())
     }
 
-    fn add_android(&mut self, crate_name: &str, android: &AndroidPart) {
+    /// Add the Android part of `package`'s table, which states `schema`.
+    fn add_android(
+        &mut self,
+        package: &Package,
+        schema: u32,
+        android: &AndroidPart,
+    ) -> BuildResult<()> {
+        let crate_name = package.name.as_str();
         for permission in &android.permissions {
             self.android_permissions
                 .entry(permission.clone())
                 .or_default()
                 .insert(crate_name.to_owned());
         }
+        let refused = |reason: String| {
+            BuildError::invalid_config(
+                format!("{crate_name}'s [package.metadata.flui.{KEY}]"),
+                reason,
+            )
+        };
+        let crate_dir = package
+            .manifest_path
+            .parent()
+            .map(|dir| dir.as_std_path().to_path_buf())
+            .unwrap_or_default();
+        for (key, path, is_dir) in [("dex", &android.dex, false), ("java", &android.java, true)] {
+            let Some(path) = path else { continue };
+            if schema < 2 {
+                return Err(refused(format!(
+                    "declares android.{key}, which schema 2 introduced; state `schema = 2`"
+                )));
+            }
+            let resolved = path.under(&crate_dir);
+            let present = if is_dir {
+                resolved.is_dir()
+            } else {
+                resolved.is_file()
+            };
+            if !present {
+                return Err(refused(format!(
+                    "declares android.{key} = \"{path}\", and {} is no {}",
+                    resolved.display(),
+                    if is_dir { "directory" } else { "file" }
+                )));
+            }
+            let joined = if is_dir {
+                &mut self.android_java
+            } else {
+                &mut self.android_dex
+            };
+            joined.insert((crate_name.to_owned(), resolved));
+        }
+        Ok(())
     }
 
     fn join(&mut self, other: Self) {
@@ -374,6 +507,8 @@ impl Declarations {
                 .or_default()
                 .extend(crates);
         }
+        self.android_dex.extend(other.android_dex);
+        self.android_java.extend(other.android_java);
         for (category, reasons) in other.apple_accessed_apis {
             let joined = self.apple_accessed_apis.entry(category).or_default();
             for (reason, crates) in reasons {
@@ -388,6 +523,22 @@ impl Declarations {
         &self,
     ) -> impl Iterator<Item = (&AndroidPermission, &BTreeSet<String>)> {
         self.android_permissions.iter()
+    }
+
+    /// Every dex the linked crates ship, in the order the APK numbers them
+    /// (`classes.dex`, `classes2.dex`, …), with the crate that ships it.
+    pub(crate) fn android_dex(&self) -> impl Iterator<Item = (&str, &Path)> {
+        self.android_dex
+            .iter()
+            .map(|(crate_name, path)| (crate_name.as_str(), path.as_path()))
+    }
+
+    /// Every directory of Java sources the linked crates ship, in order, with
+    /// the crate that ships it.
+    pub(crate) fn android_java(&self) -> impl Iterator<Item = (&str, &Path)> {
+        self.android_java
+            .iter()
+            .map(|(crate_name, path)| (crate_name.as_str(), path.as_path()))
     }
 
     /// Every required-reason API category declared, in order, with each of
@@ -563,11 +714,141 @@ mod tests {
         );
     }
 
+    /// A feature the build turns on beyond the defaults, as `flui run --agent`
+    /// turns on `flui/driver`, brings in what it enables, named by the
+    /// application's feature or by the dependency's.
+    #[test]
+    fn the_features_a_build_turns_on_count() {
+        let project = fixture(&[
+            (
+                "app",
+                &manifest(
+                    "app",
+                    "[workspace]\n[features]\nextra = [\"lib/extra\"]\n\
+                     [dependencies]\nlib = { path = \"../lib\" }\n",
+                ),
+            ),
+            (
+                "lib",
+                &manifest(
+                    "lib",
+                    "[features]\nextra = []\n\
+                     [package.metadata.flui.declares]\nschema = 1\n\
+                     [package.metadata.flui.declares.features.extra.android]\n\
+                     permissions = [\"android.permission.INTERNET\"]\n",
+                ),
+            ),
+        ]);
+        let app = project.path().join("app");
+        let target = ["aarch64-linux-android"];
+        let internet = vec![(
+            "android.permission.INTERNET".to_owned(),
+            vec!["lib".to_owned()],
+        )];
+        let defaults = Declarations::collect(&app, &target).expect("declarations");
+        assert_eq!(permissions(&defaults), []);
+        for features in [["extra".to_owned()], ["lib/extra".to_owned()]] {
+            let on = Declarations::collect_with_features(&app, &target, &features)
+                .expect("declarations");
+            assert_eq!(permissions(&on), internet, "{features:?}");
+        }
+    }
+
+    /// Each crate's dex and Java sources reach the APK resolved under that
+    /// crate's own directory, in crate order (the order of `classes.dex`,
+    /// `classes2.dex`, …); a feature's dex counts only when the graph enables
+    /// the feature.
+    #[test]
+    fn a_crates_dex_and_java_sources_resolve_under_the_crate() {
+        let project = fixture(&[
+            (
+                "app",
+                &manifest(
+                    "app",
+                    "[workspace]\n[dependencies]\nzeta = { path = \"../zeta\" }\n\
+                     alpha = { path = \"../alpha\" }\n",
+                ),
+            ),
+            (
+                "zeta",
+                &manifest(
+                    "zeta",
+                    "[package.metadata.flui.declares]\nschema = 2\n\
+                     [package.metadata.flui.declares.android]\n\
+                     dex = \"android/classes.dex\"\njava = \"android/java\"\n",
+                ),
+            ),
+            (
+                "alpha",
+                &manifest(
+                    "alpha",
+                    "[features]\nextra = []\n\
+                     [package.metadata.flui.declares]\nschema = 2\n\
+                     [package.metadata.flui.declares.android]\n\
+                     dex = \"android/classes.dex\"\n\
+                     [package.metadata.flui.declares.features.extra.android]\n\
+                     dex = \"android/missing.dex\"\n",
+                ),
+            ),
+        ]);
+        for (path, directory) in [
+            ("zeta/android/classes.dex", false),
+            ("zeta/android/java", true),
+            ("alpha/android/classes.dex", false),
+        ] {
+            let path = project.path().join(path);
+            if directory {
+                std::fs::create_dir_all(&path).expect("the directory");
+            } else {
+                std::fs::create_dir_all(path.parent().expect("a parent")).expect("the directory");
+                std::fs::write(&path, b"dex\n035\0").expect("the dex");
+            }
+        }
+        let android =
+            collect(&project.path().join("app"), "aarch64-linux-android").expect("declarations");
+        let relative = |entries: Vec<(&str, &Path)>| -> Vec<(String, std::path::PathBuf)> {
+            entries
+                .into_iter()
+                .map(|(crate_name, path)| {
+                    let path = path.canonicalize().expect("a declared path exists");
+                    let root = project.path().canonicalize().expect("the project");
+                    (
+                        crate_name.to_owned(),
+                        path.strip_prefix(root)
+                            .expect("under the project")
+                            .to_path_buf(),
+                    )
+                })
+                .collect()
+        };
+        assert_eq!(
+            relative(android.android_dex().collect()),
+            [
+                (
+                    "alpha".to_owned(),
+                    Path::new("alpha/android/classes.dex").to_path_buf()
+                ),
+                (
+                    "zeta".to_owned(),
+                    Path::new("zeta/android/classes.dex").to_path_buf()
+                ),
+            ]
+        );
+        assert_eq!(
+            relative(android.android_java().collect()),
+            [(
+                "zeta".to_owned(),
+                Path::new("zeta/android/java").to_path_buf()
+            )]
+        );
+    }
+
     /// A malformed table is refused naming the crate and what is wrong: an
-    /// unknown key, a missing or newer schema, a feature the crate does not
-    /// have, a permission that is not a name, a required-reason category Apple
-    /// does not define, an accessed API without a reason or with a malformed
-    /// one.
+    /// unknown key, a missing or newer schema, a key newer than the schema
+    /// the crate states, a path outside the crate or naming nothing, a feature
+    /// the crate does not have, a permission that is not a name, a
+    /// required-reason category Apple does not define, an accessed API without
+    /// a reason or with a malformed one.
     #[test]
     fn a_malformed_declaration_is_refused_by_crate() {
         let cases = [
@@ -583,8 +864,25 @@ mod tests {
                 "[package.metadata.flui.declares.android]\npermissions = [\"a.B\"]\n",
                 "missing field `schema`",
             ),
-            ("schema = 2\n", "states schema 2"),
+            ("schema = 3\n", "states schema 3"),
             ("schema = 0\n", "states schema 0"),
+            (
+                "schema = 1\n[package.metadata.flui.declares.android]\ndex = \"src/lib.rs\"\n",
+                "declares android.dex, which schema 2 introduced",
+            ),
+            (
+                "schema = 2\n[package.metadata.flui.declares.android]\n\
+                 dex = \"../lib/src/lib.rs\"\n",
+                "is not a path inside the crate",
+            ),
+            (
+                "schema = 2\n[package.metadata.flui.declares.android]\ndex = \"classes.dex\"\n",
+                "classes.dex is no file",
+            ),
+            (
+                "schema = 2\n[package.metadata.flui.declares.android]\njava = \"src/lib.rs\"\n",
+                "is no directory",
+            ),
             (
                 "schema = 1\n[package.metadata.flui.declares.features.camera.android]\n\
                  permissions = [\"a.B\"]\n",

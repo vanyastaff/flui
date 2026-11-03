@@ -361,6 +361,10 @@ fn read_typed<T: 'static, R>(
     // unwinding, before `catch_unwind` can return. It is destroyed here on
     // every path; after a reader or graph panic its destructor's own panic is
     // a competing failure and the first one propagates (ADR-0281).
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "ADR-0287: the reader's captures drop contained so a reader panic stays first"
+    )]
     let disposed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(f)));
     let outcome = finish_read(out, graph_outcome, disposed, slot)?;
     finish_subscription(outcome, sink, slot)
@@ -376,6 +380,10 @@ fn invoke_reader<T: 'static, R>(
 ) -> (ReaderInvocation<R>, GraphReadOutcome) {
     let mut called = false;
     let mut out: Option<Result<std::thread::Result<R>, SignalError>> = None;
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "ADR-0287: the graph read and the reader run contained; the reader's panic stays first"
+    )]
     let graph_outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         graph.read_erased(slot, &mut |value: &dyn Any| {
             if std::mem::replace(&mut called, true) {
@@ -495,6 +503,10 @@ fn finish_subscription<R>(
     slot: SignalSlot,
 ) -> Result<R, SignalError> {
     let subscription = sink.map(|sink| {
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: a sink's subscribe panic is held while the read result is settled"
+        )]
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| sink.subscribe(slot)))
     });
     match outcome {

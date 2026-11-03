@@ -12,12 +12,20 @@
 //!   reaches the Gradle build as it reaches the packager without Gradle and
 //!   `flui run`.
 //!
+//! - The Java sources of the crates the application links (ADR-0255
+//!   decision 4, ADR-0307: `android.java`), written as `flui.javaSources`,
+//!   which the scaffolded script adds to its `main` source set: Gradle
+//!   compiles `FluiActivity` and the rest itself, where the packager without
+//!   Gradle packs the checked-in dex.
+//!
 //! The scaffolded `app/build.gradle.kts` reads each property. A literal
 //! `minSdk` or `applicationId` in the script that differs would be a second
-//! place the value is stated, so the build refuses it.
+//! place the value is stated, so the build refuses it, and a script that
+//! does not read `flui.javaSources` would build an APK without the Activity
+//! its manifest names, so the build refuses that too.
 
-use std::fmt::Display;
-use std::path::Path;
+use std::fmt::{Display, Write as _};
+use std::path::{Path, PathBuf};
 
 use crate::build::error::{BuildError, BuildResult};
 
@@ -29,6 +37,9 @@ const TARGET_PROPERTY: &str = "flui.targetSdk";
 /// The property the scaffolded `app/build.gradle.kts` reads its
 /// `applicationId` from.
 const APPLICATION_ID_PROPERTY: &str = "flui.applicationId";
+/// The property the scaffolded `app/build.gradle.kts` reads its Java source
+/// directories from.
+const JAVA_SOURCES_PROPERTY: &str = "flui.javaSources";
 
 /// What `flui build` states for a Gradle project.
 #[derive(Debug, Clone, Copy)]
@@ -39,6 +50,8 @@ pub(crate) struct GradleFacts<'a> {
     pub(crate) target_sdk: u32,
     /// The Android package, from `flui.toml`'s `[app] id`.
     pub(crate) application_id: &'a str,
+    /// The directories of Java sources the linked crates declare.
+    pub(crate) java_sources: &'a [PathBuf],
 }
 
 /// Writes `facts` into the project's `gradle.properties`, after refusing a
@@ -59,7 +72,7 @@ pub(crate) fn state_project(android_dir: &Path, facts: &GradleFacts<'_>) -> Buil
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
         Err(error) => return Err(error.into()),
     };
-    let restated = restate_all(&text, facts);
+    let restated = restate_all(&text, facts)?;
     if restated != text {
         std::fs::write(&properties, restated)?;
     }
@@ -68,7 +81,7 @@ pub(crate) fn state_project(android_dir: &Path, facts: &GradleFacts<'_>) -> Buil
 
 /// Why the build script `script` cannot be built with `facts`, if it cannot:
 /// the first `minSdk`, then the first `applicationId`, that states another
-/// value or one the build cannot read.
+/// value or one the build cannot read, then Java sources it does not read.
 fn refusal(script: &str, facts: &GradleFacts<'_>) -> Option<String> {
     let min_sdk = min_sdk_assignments(script)
         .into_iter()
@@ -94,21 +107,67 @@ fn refusal(script: &str, facts: &GradleFacts<'_>) -> Option<String> {
             Stated::Literal(literal) => Some(format!("\"{literal}\"")),
             Stated::Unverified(expression) => Some(expression),
         });
-    application_id.map(|stated| {
-        format!(
+    if let Some(stated) = application_id {
+        return Some(format!(
             "states `applicationId = {stated}`, but flui.toml's `[app] id` gives the package \
              `{}`; change it there and read it with \
              `applicationId = providers.gradleProperty(\"{APPLICATION_ID_PROPERTY}\").get()`",
             facts.application_id
+        ));
+    }
+    let reads_java_sources =
+        without_comments(script).contains(&format!("\"{JAVA_SOURCES_PROPERTY}\""));
+    (!facts.java_sources.is_empty() && !reads_java_sources).then(|| {
+        format!(
+            "does not read `{JAVA_SOURCES_PROPERTY}`, the Java sources of the crates the app \
+             links, so the APK would lack the Activity its manifest names \
+             ({}); add them to the main source set: `java.srcDirs(providers.gradleProperty(\
+             \"{JAVA_SOURCES_PROPERTY}\").get().split(File.pathSeparator).filter {{ \
+             it.isNotEmpty() }})`",
+            crate::build::android_manifest::ACTIVITY
         )
     })
 }
 
 /// `text` (a `gradle.properties`) stating every property of `facts`.
-fn restate_all(text: &str, facts: &GradleFacts<'_>) -> String {
+///
+/// # Errors
+///
+/// Why the Java source directories cannot be listed in one property: a path
+/// that holds the platform's path separator.
+fn restate_all(text: &str, facts: &GradleFacts<'_>) -> BuildResult<String> {
     let text = restate(text, PROPERTY, facts.min_sdk);
     let text = restate(&text, TARGET_PROPERTY, facts.target_sdk);
-    restate(&text, APPLICATION_ID_PROPERTY, facts.application_id)
+    let text = restate(&text, APPLICATION_ID_PROPERTY, facts.application_id);
+    Ok(restate(
+        &text,
+        JAVA_SOURCES_PROPERTY,
+        java_sources_value(facts.java_sources)?,
+    ))
+}
+
+/// `directories` as one `gradle.properties` value that Kotlin splits on
+/// `File.pathSeparator`: `/`-separated, since a `\` escapes in that format,
+/// and every character outside ASCII as a `\uXXXX` escape, since Gradle reads
+/// the file as ISO 8859-1.
+fn java_sources_value(directories: &[PathBuf]) -> BuildResult<String> {
+    let joined = std::env::join_paths(directories).map_err(|error| {
+        BuildError::Other(format!(
+            "the Java source directories cannot be listed for Gradle: {error}"
+        ))
+    })?;
+    let mut value = String::new();
+    for c in joined.to_string_lossy().replace('\\', "/").chars() {
+        if c.is_ascii() {
+            value.push(c);
+        } else {
+            let mut units = [0_u16; 2];
+            for unit in c.encode_utf16(&mut units) {
+                let _ = write!(value, "\\u{unit:04x}");
+            }
+        }
+    }
+    Ok(value)
 }
 
 /// `text` (a `gradle.properties`) stating `property=value`: the existing
@@ -327,14 +386,15 @@ fn without_comments(script: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        GradleFacts, Stated, application_id_assignments, min_sdk_assignments, refusal, restate_all,
-        state_project,
+        GradleFacts, PathBuf, Stated, application_id_assignments, min_sdk_assignments, refusal,
+        restate_all, state_project,
     };
 
     const FACTS: GradleFacts<'static> = GradleFacts {
         min_sdk: 26,
         target_sdk: 36,
         application_id: "com.example.notes",
+        java_sources: &[],
     };
 
     /// `flui.minSdk`, `flui.targetSdk` and `flui.applicationId` are each
@@ -368,7 +428,9 @@ mod tests {
                 "flui.applicationId=com.example.notes\nflui.targetSdk=36\nflui.minSdk=26\n",
             ),
         ] {
-            let found = restate_all(text, &FACTS);
+            let found = restate_all(text, &FACTS).expect("restated");
+            // No Java sources: the property is stated empty, after the rest.
+            let expected = format!("{expected}flui.javaSources=\n");
             if found != expected {
                 failures.push(format!("{text:?}: {found:?}"));
             }
@@ -566,5 +628,44 @@ mod tests {
             }
         }
         assert!(failures.is_empty(), "{failures:#?}");
+    }
+
+    /// The Java source directories the linked crates declare reach Gradle as
+    /// one property it splits on `File.pathSeparator`, `/`-separated and with
+    /// every non-ASCII character escaped; a script that does not read them is
+    /// refused, naming the Activity the APK would lack, while the scaffolded
+    /// one reads them.
+    #[test]
+    fn gradle_compiles_the_java_sources_the_crates_declare() {
+        let separator = if cfg!(windows) { ';' } else { ':' };
+        let sources = [
+            PathBuf::from("/deps/flui-native/android/java"),
+            PathBuf::from("/home/ваня/other/java"),
+        ];
+        let facts = GradleFacts {
+            java_sources: &sources,
+            ..FACTS
+        };
+        let written = restate_all("", &facts).expect("restated");
+        let expected = format!(
+            "flui.javaSources=/deps/flui-native/android/java{separator}\
+             /home/\\u0432\\u0430\\u043d\\u044f/other/java\n"
+        );
+        assert!(written.ends_with(&expected), "{written}");
+
+        let template = include_str!("../../templates/platforms/android/build.gradle.kts");
+        assert_eq!(refusal(template, &facts), None);
+        let without = template.replace("\"flui.javaSources\"", "\"other.sources\"");
+        let refused = refusal(&without, &facts).expect("a script without the sources");
+        assert!(
+            refused.contains("flui.javaSources")
+                && refused.contains(crate::build::android_manifest::ACTIVITY),
+            "{refused}"
+        );
+        assert_eq!(
+            refusal(&without, &FACTS),
+            None,
+            "no sources declared, none to read"
+        );
     }
 }

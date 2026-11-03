@@ -98,6 +98,10 @@ pub(super) fn preserve_first_input_panic(
     if first.is_none() {
         *first = Some(candidate);
     } else {
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: a tracing subscriber's panic must not replace the first failure"
+        )]
         let telemetry_panic = catch_unwind(AssertUnwindSafe(|| {
             tracing::error!(
                 phase,
@@ -277,6 +281,10 @@ impl UiRuntime {
         dispatch: Result<(), Box<dyn std::any::Any + Send>>,
     ) {
         let mut first_panic = dispatch.err();
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: the redraw wake runs contained so the dispatch failure is kept"
+        )]
         let wake_panic = catch_unwind(AssertUnwindSafe(|| {
             self.request_redraw_for(presentation);
         }))
@@ -371,6 +379,10 @@ impl UiRuntime {
         }
         let keyboard = matches!(input, PlatformInput::Keyboard(_));
         let recorded = input.clone();
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: platform input applies contained so the recording is finished"
+        )]
         let applied = catch_unwind(AssertUnwindSafe(|| {
             self.apply_platform_input(presentation_id, target, input, true)
         }));
@@ -478,11 +490,19 @@ impl UiRuntime {
         // press was dispatched.
         let committed = {
             let _commit = PressCommit::begin(&self.press_commit, target_id);
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "ADR-0287: completing a composition runs contained before the press dispatches"
+            )]
             catch_unwind(AssertUnwindSafe(|| {
                 presentation.text_input().complete_composition();
             }))
             .err()
         };
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: input routing runs contained so the press commit is released"
+        )]
         let routed = catch_unwind(AssertUnwindSafe(|| {
             if self.input_dropped_for(presentation, &input) {
                 Applied::default()
@@ -600,6 +620,10 @@ impl UiRuntime {
                 }
                 let mut sequence = None;
                 let mut first_panic = None;
+                #[expect(
+                    clippy::disallowed_methods,
+                    reason = "ADR-0287: the pointer frame runs contained so deferred work still runs"
+                )]
                 let framed = catch_unwind(AssertUnwindSafe(|| {
                     presentation.gestures().pointer_frame(|| {
                         for event in frame.events() {
@@ -621,6 +645,10 @@ impl UiRuntime {
                 }))
                 .err();
                 preserve_first_input_panic(&mut first_panic, framed, "pointer frame end");
+                #[expect(
+                    clippy::disallowed_methods,
+                    reason = "ADR-0287: deferred arena resolutions run contained after the pointer frame"
+                )]
                 let deferred = catch_unwind(AssertUnwindSafe(|| {
                     presentation.gestures().drain_deferred_arena_resolutions();
                 }))
@@ -713,15 +741,27 @@ impl UiRuntime {
         presentation: &PresentationState,
         dispatch: impl FnOnce(),
     ) -> Result<(), Box<dyn std::any::Any + Send>> {
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: pending input flushes contained so dispatch still runs"
+        )]
         let mut first = catch_unwind(AssertUnwindSafe(|| {
             presentation.gestures().flush_pending_input();
         }))
         .err();
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: deferred arena resolutions run contained so dispatch still runs"
+        )]
         let resolved = catch_unwind(AssertUnwindSafe(|| {
             presentation.gestures().drain_deferred_arena_resolutions();
         }))
         .err();
         preserve_first_input_panic(&mut first, resolved, "input motion resolution");
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: the dispatch runs contained so the first input panic is kept"
+        )]
         let dispatched = catch_unwind(AssertUnwindSafe(dispatch)).err();
         preserve_first_input_panic(&mut first, dispatched, "input after measured motion");
         first.map_or(Ok(()), Err)
@@ -757,6 +797,7 @@ impl UiRuntime {
         // move focus: focus a click moves is not shown.
         let modality_panic = pointer_pressed(pointer_event)
             .then(|| {
+                #[expect(clippy::disallowed_methods, reason = "ADR-0287: a focus manager's note runs contained so the event still routes")]
                 catch_unwind(AssertUnwindSafe(|| {
                     presentation.focus_manager().note_pointer_input();
                 }))
@@ -767,6 +808,10 @@ impl UiRuntime {
         // A render object that panicked in the hit test is a miss there; its
         // panic is reported once the event reached the rest of the path.
         let mut hit_panic = None;
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: event routing runs contained so the hit panic is reported after"
+        )]
         let routing_panic = catch_unwind(AssertUnwindSafe(|| {
             let outcome =
                 presentation
@@ -796,6 +841,10 @@ impl UiRuntime {
         }))
         .err();
         let deferred_panic = if drain_deferred {
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "ADR-0287: deferred arena resolutions run contained after the frame"
+            )]
             catch_unwind(AssertUnwindSafe(|| {
                 presentation.gestures().drain_deferred_arena_resolutions();
             }))
@@ -807,6 +856,10 @@ impl UiRuntime {
         // The back button (X1) is also the Back key, after its pointer event
         // reached the widgets under it.
         let back_panic = back_button_change(pointer_event).and_then(|(state, time)| {
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "ADR-0287: the Back key's handlers run contained after the pointer event"
+            )]
             catch_unwind(AssertUnwindSafe(|| {
                 let _ = presentation
                     .focus_manager()
@@ -870,6 +923,10 @@ impl UiRuntime {
         if !self.begin_recorded_input() {
             return self.apply_accessibility(presentation_id, request).handled;
         }
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: accessibility actions run contained so the recording is finished"
+        )]
         let applied = catch_unwind(AssertUnwindSafe(|| {
             self.apply_accessibility(presentation_id, request)
         }));
@@ -902,6 +959,10 @@ impl UiRuntime {
         node: Option<accesskit::NodeId>,
     ) -> bool {
         let recording = self.begin_recorded_input();
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: accessibility focus runs contained so the recording is finished"
+        )]
         let applied = catch_unwind(AssertUnwindSafe(|| {
             let Some(presentation) = self.presentations.get(presentation_id) else {
                 tracing::trace!(
@@ -1017,6 +1078,10 @@ impl UiRuntime {
     /// the frame's row and a replay applies them before rendering it too. A
     /// drain failure is resumed after the frame's row is recorded.
     pub fn note_frame_request(&self, presentation_id: PresentationId, request: FrameRequest) {
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: queued commands drain contained so the frame request is recorded"
+        )]
         let drained = catch_unwind(AssertUnwindSafe(|| self.drain_commands())).err();
         let recording = self.begin_recorded_input();
         if let Some(presentation) = self.presentations.get(presentation_id) {

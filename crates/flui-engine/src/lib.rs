@@ -1,3 +1,10 @@
+#![cfg_attr(
+    test,
+    allow(
+        clippy::disallowed_methods,
+        reason = "test code catches a panic to assert on it (ADR-0303 §5)"
+    )
+)]
 // `missing_debug_implementations` is suppressed crate-wide for the public
 // types that hold `lyon`/atlas state or boxed closures with no `Debug`
 // (`WgpuPainter`, `RasterOwner<B>`'s backend, the pre-present hook). wgpu 30's

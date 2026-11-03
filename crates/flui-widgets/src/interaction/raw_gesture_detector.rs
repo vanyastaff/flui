@@ -502,9 +502,17 @@ impl ViewState<RawGestureDetector> for RawGestureDetectorState {
         // factory's update may panic too: every kept recognizer is still
         // updated, and the first failure is resumed after the last.
         let retired: Vec<Slot> = outgoing.into_iter().flatten().collect();
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: a retired recognizer's cancel panic must not skip updates"
+        )]
         let mut first = catch_unwind(AssertUnwindSafe(|| cancel_slots(&retired))).err();
         drop(retired);
         for index in updates {
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "ADR-0287: a factory's update panic must not skip the other recognizers"
+            )]
             let updated = catch_unwind(AssertUnwindSafe(|| {
                 self.factories[index]
                     .factory

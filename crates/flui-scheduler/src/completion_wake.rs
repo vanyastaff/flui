@@ -7,6 +7,10 @@ use std::task::Waker;
 type Payload = Box<dyn Any + Send>;
 
 fn report(payload: &(dyn Any + Send), context: &'static str) {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "ADR-0287: reporting runs tracing subscribers, contained"
+    )]
     if let Err(secondary) = catch_unwind(AssertUnwindSafe(|| {
         tracing::error!(
             context,
@@ -69,9 +73,17 @@ impl<'a> WakeBatch<'a> {
     /// Wake through the borrowed executor envelope, then destroy it; both run
     /// contained, and a failure of either competes for first (ADR-0281).
     pub(crate) fn wake(&mut self, waker: Waker) {
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: a waker's wake runs contained; the first failure is kept"
+        )]
         if let Err(payload) = catch_unwind(AssertUnwindSafe(|| waker.wake_by_ref())) {
             self.failed(payload);
         }
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: a waker's drop runs contained; the first failure is kept"
+        )]
         if let Err(payload) = catch_unwind(AssertUnwindSafe(|| drop(waker))) {
             self.failed(payload);
         }

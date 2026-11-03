@@ -109,6 +109,10 @@ fn poll_resolution(
 /// Keep chronological failure priority even when reporting it runs foreign
 /// tracing subscribers. A later payload is dropped (ADR-0281).
 fn record_delivery_failure(first: &mut Option<PanicPayload>, payload: PanicPayload) {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "ADR-0287: reporting runs foreign tracing subscribers, contained"
+    )]
     let reported = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let text =
             flui_foundation::panic::payload_text(&*payload).unwrap_or("<non-string panic payload>");
@@ -139,10 +143,18 @@ fn invoke_contained<T>(
     invoke: impl FnOnce(&mut T),
     first: &mut Option<PanicPayload>,
 ) {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "ADR-0287: a continuation or waker runs contained; the first failure is kept"
+    )]
     let called = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| invoke(&mut value)));
     if let Err(payload) = called {
         record_delivery_failure(first, payload);
     }
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "ADR-0287: a continuation's drop runs contained; the first failure is kept"
+    )]
     if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(value))) {
         record_delivery_failure(first, payload);
     }

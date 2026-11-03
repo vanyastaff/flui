@@ -726,6 +726,10 @@ fn flush_for_session_end(deadline: std::time::Instant) {
     let Some(flush) = flush else {
         return;
     };
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "ADR-0287: a flush hook's panic is warned about; the host keeps running"
+    )]
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         flush.flush_within(deadline)
     })) {
