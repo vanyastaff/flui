@@ -4,10 +4,17 @@
 //! Moving an item is a drag-and-drop session that never leaves the window
 //! ([`DragReach::Window`]): an item's handle starts it at once, and on touch
 //! and pen a long press on the item starts it too. Every item is a drop target
-//! that takes only drags of its own list or grid, so the item under the
-//! pointer is where the dragged item lands, and edge autoscroll comes from the
-//! scrollable. The dragged item keeps its state while it is scrolled out of
-//! the built band: its drag holds the item alive.
+//! that takes only drags of its own list or grid, and edge autoscroll comes
+//! from the scrollable. The dragged item keeps its state while it is scrolled
+//! out of the built band: its drag holds the item alive.
+//!
+//! While a drag runs, the dragged item leaves a gap where a drop would put
+//! it, at the item the pointer is over, and the items between make room; what
+//! the drag shows lifts from the item's place
+//! ([`proxy_decorator`](ReorderableList::proxy_decorator)). A drop or
+//! a cancel lands the item in its place from where it was let go, and a move
+//! command slides the items the same way: every slide takes 250 ms, and under
+//! reduced motion lands on its next frame.
 //!
 //! The same moves have a path without a drag (ADR-0216): each item carries the
 //! commands that apply to it — "Move to the start", "Move to the end" and one
@@ -124,8 +131,9 @@ pub enum ReorderCause {
 pub struct ReorderPreview {
     /// Where the dragged item is.
     pub from: usize,
-    /// The item the drag is over, which a drop now would move it to; `None`
-    /// once it left the items.
+    /// Where a drop now would move the item: the position of the item the
+    /// drag is over, counted in the order the list shows while it makes
+    /// room; `None` once the drag left the list.
     pub over: Option<usize>,
 }
 
@@ -1054,18 +1062,22 @@ impl Shared {
     /// The drag of `key` is over `over` now; the preview hears of each
     /// change, per dragged item, and a change of the lead's moves the gap.
     fn hover(&self, key: &Rc<dyn ViewKey>, over: Option<usize>, shifted: Option<&Rc<dyn ViewKey>>) {
-        let Some((changed, lead)) = self.with_drag(&**key, |drag, lead| {
+        let Some((changed, lead, replaced)) = self.with_drag(&**key, |drag, lead| {
             let changed = std::mem::replace(&mut drag.over, over) != over;
             if over.is_some() {
                 drag.left_over = None;
             }
-            if changed {
-                drag.shifted = shifted.cloned();
-            }
-            (changed, lead)
+            let replaced = if changed {
+                std::mem::replace(&mut drag.shifted, shifted.cloned())
+            } else {
+                None
+            };
+            (changed, lead, replaced)
         }) else {
             return;
         };
+        // Dropped once the cell is released: a key's destructor is app code.
+        drop(replaced);
         if !changed {
             return;
         }
@@ -1091,30 +1103,34 @@ impl Shared {
         let Some(item) = view.index_of(&**row) else {
             return;
         };
-        let Some((over, shifted)) = self
-            .with_drag(&**key, |drag, lead| {
-                drag.row_reported = true;
-                if !lead {
-                    return Some((Some(item), None));
-                }
-                if row.key_eq(&**key) {
-                    drag.shifted = None;
-                    return Some((drag.over.or(Some(item)), None));
-                }
-                if drag
-                    .shifted
-                    .as_ref()
-                    .is_some_and(|shifted| shifted.key_eq(&**row))
-                {
-                    return None;
-                }
-                Some((Some(Gap::slot_of(gap, item)), Some(Rc::clone(row))))
-            })
-            .flatten()
-        else {
+        let Some((report, cleared)) = self.with_drag(&**key, |drag, lead| {
+            drag.row_reported = true;
+            if !lead {
+                return (Some((Some(item), None)), None);
+            }
+            if row.key_eq(&**key) {
+                let cleared = drag.shifted.take();
+                return (Some((drag.over.or(Some(item)), None)), cleared);
+            }
+            if drag
+                .shifted
+                .as_ref()
+                .is_some_and(|shifted| shifted.key_eq(&**row))
+            {
+                return (None, None);
+            }
+            (
+                Some((Some(Gap::slot_of(gap, item)), Some(Rc::clone(row)))),
+                None,
+            )
+        }) else {
             return;
         };
-        self.hover(key, over, shifted.as_ref());
+        // Dropped once the cell is released: a key's destructor is app code.
+        drop(cleared);
+        if let Some((over, shifted)) = report {
+            self.hover(key, over, shifted.as_ref());
+        }
     }
 
     /// Whether a row answered the drag of `key` since the list last asked.
@@ -1187,7 +1203,7 @@ impl Shared {
     /// target but the one dropped on that the drag left before the drop.
     fn left(&self, key: &Rc<dyn ViewKey>) {
         let _ = self.with_drag(&**key, |drag, _| {
-            drag.left_over = drag.over.or(drag.left_over)
+            drag.left_over = drag.over.or(drag.left_over);
         });
         self.hover(key, None, None);
     }
@@ -1264,17 +1280,19 @@ impl Shared {
         *self.pipeline.borrow_mut() = ctx.pipeline_owner().map(|owner| owner.downgrade());
         *self.rebuild.borrow_mut() = Some(ctx.rebuild_handle());
         let vsync = VsyncScope::maybe_of(ctx);
-        {
+        let rebound = {
             let mut clock = self.clock.borrow_mut();
             let mut drags = self.drags.borrow_mut();
-            if let Err(error) = VsyncUpdate::run(|update| {
+            VsyncUpdate::run(|update| {
                 update.rebind_controller(&mut clock, vsync.as_ref());
                 for drag in drags.iter_mut() {
                     update.rebind_controller(&mut drag.lift, vsync.as_ref());
                 }
-            }) {
-                tracing::error!(%error, "a reorderable list lost its frame registry");
-            }
+            })
+        };
+        // Logged once the cells are released: a subscriber is app code.
+        if let Err(error) = rebound {
+            tracing::error!(%error, "a reorderable list lost its frame registry");
         }
         *self.vsync.borrow_mut() = vsync;
     }
@@ -1424,7 +1442,12 @@ impl Shared {
 fn lifted(proxy: BoxedView, lift: Rc<dyn Animation<f64>>) -> BoxedView {
     let listenable: Rc<dyn flui_foundation::Listenable> = lift.clone();
     AnimatedBuilder::new(listenable, move || {
-        let t = lift.value().clamp(0.0, 1.0);
+        let t = lift.value();
+        let t = if t.is_finite() {
+            t.clamp(0.0, 1.0)
+        } else {
+            1.0
+        };
         let scale = 1.0 + (LIFT_SCALE - 1.0) * t;
         PhysicalModel::new(Color::TRANSPARENT)
             .elevation(LIFT_ELEVATION * t)

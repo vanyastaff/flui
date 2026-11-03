@@ -305,7 +305,8 @@ impl fmt::Debug for ListView {
             .field("shrink_wrap", &self.shrink_wrap)
             .field("focusable", &self.focusable)
             .field("semantics_label", &self.semantics_label)
-            .field("empty_label", &self.empty_label);
+            .field("empty_label", &self.empty_label)
+            .field("placement", &self.placement);
         if self.builder_source.is_some() {
             s.field("item_extent_estimate", &self.item_extent_estimate);
             s.field("builder_source", &self.builder_source);

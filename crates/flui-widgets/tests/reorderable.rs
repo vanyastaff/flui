@@ -49,6 +49,9 @@ fn row_at(index: usize, x: f64) -> (f64, f64) {
     (x, top + ROW / 2.0)
 }
 
+/// A lift the list handed its proxy decorator.
+type Lift = Rc<dyn flui_animation::Animation<f64>>;
+
 /// What the shelf's moves recorded.
 #[derive(Default)]
 struct Log {
@@ -66,7 +69,7 @@ struct Log {
     /// Whether the list dresses its proxy itself, and the lifts it was given
     /// with the dragged row's index.
     decorated: std::cell::Cell<bool>,
-    lifts: RefCell<Vec<(usize, Rc<dyn flui_animation::Animation<f64>>)>>,
+    lifts: RefCell<Vec<(usize, Lift)>>,
     /// Whether the rows have no label.
     unlabelled: std::cell::Cell<bool>,
 }

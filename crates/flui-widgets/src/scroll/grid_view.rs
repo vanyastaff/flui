@@ -298,7 +298,8 @@ impl fmt::Debug for GridView {
             .field("shrink_wrap", &self.shrink_wrap)
             .field("focusable", &self.focusable)
             .field("semantics_label", &self.semantics_label)
-            .field("empty_label", &self.empty_label);
+            .field("empty_label", &self.empty_label)
+            .field("placement", &self.placement);
         if self.builder_source.is_some() {
             s.field("builder_source", &self.builder_source);
         } else {

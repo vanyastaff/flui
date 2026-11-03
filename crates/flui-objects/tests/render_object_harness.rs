@@ -9751,6 +9751,67 @@ fn harness_sliver_grid_placement_slides_tiles_between_cells() {
     assert_eq!((run.offset(a).dx, run.offset(b).dx), (0.0, 100.0));
 }
 
+/// An owner's push: under the generation it names, the item is painted the
+/// push away, on both axes, and slides home on the run it starts; a push no
+/// armed pass carries lands at once.
+///
+/// Fails without the push: the item would sit at its laid-out offset.
+fn harness_sliver_list_placement_displace_slides_an_item_home() {
+    let (clock, driver, motion) = placement_clock();
+    let slots: Rc<[Rc<PlacementSlot>]> = placement_slots(2).into();
+    let mut list = RenderSliverList::new(2, 48.0);
+    let _ = list.set_placement(Some(&Placement::new(
+        clock.clone(),
+        motion.clone(),
+        Rc::clone(&slots),
+        0,
+    )));
+    let mut run = RenderTester::mount(viewport(
+        sliver_node(list)
+            .label("list")
+            .child(seeded(box_node(RenderColoredBox::red(300.0, 48.0)), "a", 0))
+            .child(seeded(box_node(RenderColoredBox::red(300.0, 48.0)), "b", 1)),
+    ))
+    .with_size(Size::new(300.0, 400.0))
+    .run_frame();
+    let (a, b) = (run.id("a"), run.id("b"));
+
+    slots[1].displace(Offset::new(30.0, 20.0), 1);
+    let pushed = Placement::new(clock, motion, Rc::clone(&slots), 1);
+    run.update::<RenderSliverList>(run.id("list"), |list| {
+        let _ = list.set_placement(Some(&pushed));
+    });
+    run.pump();
+    assert_eq!(
+        run.offset(b),
+        Offset::new(30.0, 68.0),
+        "painted the push away"
+    );
+    assert_eq!(
+        run.offset(a),
+        Offset::new(0.0, 0.0),
+        "an item not pushed stays"
+    );
+    driver.tick_at(Duration::from_millis(50));
+    run.pump();
+    assert_eq!(run.offset(b), Offset::new(15.0, 58.0), "half way home");
+    driver.tick_at(Duration::from_millis(100));
+    run.pump();
+    assert_eq!(run.offset(b), Offset::new(0.0, 48.0), "home");
+
+    // A push for a generation already applied lands at once.
+    slots[0].displace(Offset::new(0.0, 40.0), 1);
+    run.update::<RenderColoredBox>(b, |item| {
+        let _ = item.set_preferred_size(Size::new(300.0, 50.0));
+    });
+    run.pump();
+    assert_eq!(
+        run.offset(a),
+        Offset::new(0.0, 0.0),
+        "no armed pass carries it"
+    );
+}
+
 fn harness_sliver_offstage_hidden_reports_zero_geometry() {
     let run = RenderTester::mount(viewport(
         sliver_node(RenderSliverOffstage::hidden())
@@ -14527,6 +14588,7 @@ fn family_sliver_lists() {
         ("sliver_list_anchor_correction_emits_in_both_scroll_directions", harness_sliver_list_anchor_correction_emits_in_both_scroll_directions),
         ("sliver_list_placement_slides_moved_children_into_place", harness_sliver_list_placement_slides_moved_children_into_place),
         ("sliver_grid_placement_slides_tiles_between_cells", harness_sliver_grid_placement_slides_tiles_between_cells),
+        ("sliver_list_placement_displace_slides_an_item_home", harness_sliver_list_placement_displace_slides_an_item_home),
         ("sliver_main_axis_group_composes_scroll_extents_and_places_children", harness_sliver_main_axis_group_composes_scroll_extents_and_places_children),
         ("sliver_cross_axis_group_allocates_tracks_in_both_physical_axes", harness_sliver_cross_axis_group_allocates_tracks_in_both_physical_axes),
         ("sliver_cross_axis_group_refuses_unrepresentable_tracks_and_missing_content_extent", harness_sliver_cross_axis_group_refuses_unrepresentable_tracks_and_missing_content_extent),

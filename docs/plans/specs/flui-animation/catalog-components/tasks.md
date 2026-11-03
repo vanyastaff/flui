@@ -1,8 +1,8 @@
 # flui-animation / catalog-components — задачи
 
 - **Статус:** в работе. Влиты T1, T2, T3, T4, T7, T8, T9, T10, T11, T13; переключаемый
-  `IconButton` сделан; T33 полноты ввода влит (`ReorderableList`, `ReorderableGrid`), дальше T6,
-  затем T12.
+  `IconButton` сделан; T33 полноты ввода влит (`ReorderableList`, `ReorderableGrid`); T6 в PR
+  (ветка `claude/project-thread-op0kt3`), затем T12.
 - **Дата:** 2026-10-17
 - **Design:** [design.md](design.md), [requirements.md](requirements.md).
 - **Тикеты:** родитель vanyastaff/flui#1691; T1 #1692 · T2 #1693 · T3 #1694 · T4 #1695 ·
@@ -91,13 +91,21 @@ T1..T13 ─► T12 поверхность SDK, ARCHITECTURE, motion_lab, таб�
   `a_path_effect_draws_the_paths_on_and_off`); доктест `compile_fail` у `PathEffect` (у `Icon`
   нет `path_effect`); `navigation_bar::a_newly_selected_icon_bounces` в `material_it`.
 
-### T6 — движение перестановки (#1697)
+### T6 — движение перестановки (#1697) — в PR
 
 - **Что:** поверх DnD-сессии `ReorderableList`/`ReorderableGrid` (T33 полноты ввода):
   `proxy_decorator` подъёма, FLIP-сдвиг соседей из `AnimatedList`, посадка и возврат при
   отмене, то же движение для клавиатуры и действий A8; контракт колбэков R1 закреплён
   тестами.
 - **Требования:** R1–R4, строка M1. **После:** T33 полноты ввода.
+- **Проверка:** `reorderable_list` в `flui-widgets` (`reorderable::a_dragged_row_lifts_and_the_rows_make_room`,
+  `…::a_dropped_row_lands_from_where_it_was_let_go`, `…::a_cancelled_drag_returns_the_row_to_its_place`,
+  `…::a_move_command_slides_the_rows`, `…::reduced_motion_moves_the_rows_at_once` — строка M1,
+  `…::a_drag_that_does_not_drop_moves_nothing` — размонтирование); `reorderable_grid`
+  (`reorderable_grid::a_dragged_tile_makes_room_across_the_rows`); `flui-objects`
+  `harness_sliver_list_placement_displace_slides_an_item_home`. Восемь мутаций красные. Сдвиг
+  и посадка — одно FLIP-размещение (`Placement`) с толчком `PlacementSlot::displace`; бросок
+  под последней строкой кладёт в дырку.
 
 ### T7 — карусель (#1698) — влито
 
