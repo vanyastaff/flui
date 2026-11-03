@@ -38,7 +38,7 @@ pub mod keys {
     //! [`kvk`] module transcribes it. The `Code` each keycode maps to follows the
     //! W3C uievents-code registry (<https://www.w3.org/TR/uievents-code/>) as
     //! implemented by Firefox (`NativeKeyToDOMCodeName.h`, the `CODE_MAP_MAC`
-    //! rows) and the winit macOS backend (winit 0.30
+    //! rows) and winit's macOS backend (winit 0.30
     //! `platform_impl/macos/event.rs`, `scancode_to_physicalkey`). Where those
     //! two disagree the table follows Apple's header and Firefox, and the
     //! divergence is commented at the arm.
@@ -176,9 +176,8 @@ pub mod keys {
         pub const F12: u16 = 0x6F;
         pub const F15: u16 = 0x71;
         /// The Help key on Apple pro keyboards — the Insert position of a PC
-        /// keyboard, and `Insert` is what the winit backend and Chromium call
-        /// it (Firefox says `Help`); this table sides with the winit wire so
-        /// FLUI's two macOS backends agree.
+        /// keyboard, and `Insert` is what winit's macOS backend and Chromium call
+        /// it (Firefox says `Help`); this table sides with winit.
         pub const HELP: u16 = 0x72;
         pub const HOME: u16 = 0x73;
         pub const PAGE_UP: u16 = 0x74;
@@ -197,7 +196,7 @@ pub mod keys {
     /// Map an `NSEvent.keyCode` (a `kVK_*` virtual keycode) to the W3C `code`
     /// value naming the physical key.
     ///
-    /// Two arms deliberately diverge from the winit macOS backend's table, both
+    /// Two arms deliberately diverge from winit's macOS backend's table, both
     /// toward Apple's `Events.h` and Firefox:
     ///
     /// - **Volume keys.** `Events.h` says `kVK_VolumeUp`/`Down`/`Mute` are

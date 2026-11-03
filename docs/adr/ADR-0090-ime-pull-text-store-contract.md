@@ -48,7 +48,7 @@ Three of the platforms FLUI targets are pull models, and the push shape cannot s
   `crates/`, no `text_input()` override (the implementations are headless, macOS and winit only:
   `crates/flui-native/src/window/headless.rs:1078`,
   `crates/flui-native/src/window/apple/macos.rs:1337`,
-  `crates/flui-native/src/window/winit.rs:793`), and no text-services feature of the
+  and the winit window, since deleted with that host), and no text-services feature of the
   `windows` crate enabled (`crates/flui-native/Cargo.toml:89-105`).
 - **macOS.** `NSTextInputClient` is a pull protocol too, and the backend already implements the
   query half with nothing to answer from: `attributedSubstringForProposedRange:actualRange:` returns

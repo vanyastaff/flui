@@ -42,7 +42,7 @@ use rustix::event::{EventfdFlags, eventfd};
 
 use super::protocol::{Environment, Protocol};
 use super::session::{DisplayError, Session, Step, connect};
-#[cfg(any(wayland_host, winit_host))]
+#[cfg(wayland_host)]
 use super::view::display_of_native_number;
 use super::view::{FreshIds, NativeIds, OutputView};
 use crate::display::source::DisplaySource;
@@ -166,9 +166,9 @@ impl LinuxDisplays {
     /// the one the outputs were read from, or when no display answers to the
     /// number; the latter also marks the snapshot stale once per revision, since
     /// a window can be on an output the snapshot does not hold yet. The
-    /// Wayland and winit hosts name a window's output by number; the X11 host
+    /// Wayland host names a window's output by number; the X11 host
     /// does not.
-    #[cfg(any(wayland_host, winit_host))]
+    #[cfg(wayland_host)]
     pub(crate) fn display_of_native(
         &self,
         protocol: Protocol,
@@ -336,9 +336,8 @@ pub(crate) struct DisplayWatcher {
 impl DisplayWatcher {
     /// Whether the thread has ended on its own: the connection failed or the
     /// session panicked. The source then answers with that error until a new
-    /// watcher starts. The winit host replaces such a watcher on its next
-    /// event.
-    #[cfg(any(feature = "winit-backend", test))]
+    /// watcher starts.
+    #[cfg(test)]
     pub(crate) fn finished(&self) -> bool {
         self.thread.as_ref().is_none_or(JoinHandle::is_finished)
     }

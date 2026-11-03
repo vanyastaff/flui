@@ -45,7 +45,7 @@ impl dyn NoticeChannel {
 }
 
 /// A loop that hears its host's lifecycle in its own callbacks (AppKit's
-/// application delegate, UIKit's, the Activity's, the winit loop's turns on
+/// application delegate, UIKit's, the Activity's, the Wayland and X11 loops' turns on
 /// Linux). The lifecycle feature's position reaches it through this.
 #[cfg(any(
     target_os = "android",

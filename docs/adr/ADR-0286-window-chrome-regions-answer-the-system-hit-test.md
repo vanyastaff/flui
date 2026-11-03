@@ -5,6 +5,9 @@
 - **Amended:** 2026-11-02: §5 and §6, the press takers cut out of a move area and the widgets that
   mark the regions; §7, the Win32 frame. 2026-11-03: §8, the AppKit title bar; §9, the winit
   window; §10, the X11 window; §11, the Wayland window.
+- **Retired:** 2026-11-03: §9's winit window left with the winit host (ADR-0151 §11). Its press
+  rules (the resize band, the move threshold, the double-click and the window menu) stand as the
+  rules §10 and §11 refer to.
 - **Amends:** [ADR-0217](ADR-0217-interaction-module-layers-and-pointer-assembly.md) §5: input
   regions gain the chrome kinds the title-bar follow-up named, and their availability is
   answered per kind.
@@ -243,10 +246,9 @@ compositor overrules reads back as the system's. The input capabilities answer `
   `a_double_click_on_the_bar_does_what_system_settings_says`), and
   `the_desktop_hosts_honour_the_chrome_regions_they_answer` for the kinds each host honours, pin
   §8.
-- `a_press_on_a_frameless_window_moves_resizes_or_reaches_the_app`,
-  `a_second_press_on_the_bar_soon_and_near_toggles_maximize` and
-  `only_the_release_of_a_taken_press_is_taken` in `flui-native`, and on an X server
-  `x11_window_with_an_app_title_bar_has_no_decorations_and_answers_its_bar`, pin §9.
+- `a_press_on_a_frameless_window_moves_resizes_or_reaches_the_app` and
+  `a_second_press_on_the_bar_soon_and_near_toggles_maximize` in `flui-native`'s shared press
+  model (`input::regions::presses`) pin §9's press rules, which §10 and §11 apply.
 - `a_title_bar_of_the_applications_moves_and_resizes_through_the_window_manager` in
   `flui-native`'s `x11_input` suite, run on Xvfb under openbox, pins §10.
 - `a_press_on_the_applications_bar_is_the_windows` in `flui-native`, and

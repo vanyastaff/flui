@@ -42,8 +42,8 @@ fn flui_headless_env_var_selects_the_headless_platform() {
 // Exit policy (issue #555's live-loop wiring) -- driven entirely through the
 // public surface, exactly as a real embedder would: `run` with a handler,
 // `open_window` on the owner, the window's own `WindowCommand::Close`. This is
-// the same `notify_closed` bookkeeping the winit backend's `CloseRequested`
-// handler consults, not a parallel test-only mechanism.
+// the same `notify_closed` bookkeeping every host's close handling
+// consults, not a parallel test-only mechanism.
 // ============================================================================
 
 /// Closing the last window asks the handler; its veto keeps the platform

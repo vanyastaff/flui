@@ -9,7 +9,7 @@ use crate::keyboard::Modifiers;
 ///
 /// The values are cumulative, not per-event steps: an update replaces the previous one, and a
 /// consumer that wants the step divides the scale by (and subtracts the rotation of) the
-/// previous update. A backend whose platform reports steps (AppKit, winit) multiplies the
+/// previous update. A backend whose platform reports steps (AppKit) multiplies the
 /// scale and sums the rotation; one that reports a cumulative transform passes it on.
 /// Cumulative values let a recognizer that joins mid-gesture see the whole gesture, and do not
 /// drift the way a product of many rounded steps does.

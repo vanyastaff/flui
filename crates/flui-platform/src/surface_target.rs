@@ -22,16 +22,14 @@ use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 /// Android target its native window on the looper thread only, and answer
 /// [`HandleError::Unavailable`](raw_window_handle::HandleError::Unavailable) elsewhere: a renderer creates and recreates
 /// its surface there (on Apple, `raw-window-metal` makes the Metal layer on
-/// the main thread alone). Win32, winit, the web and headless answer on any
+/// the main thread alone). Win32, the web and headless answer on any
 /// thread.
 ///
 /// # Once the window is gone
 ///
-/// A target does not keep its window open. The winit target holds the winit
-/// window itself (winit's window is `Send + Sync` and must outlive a surface
-/// made from it), so that window is let go when the renderer lets go of the
-/// target; the Apple targets keep the window's content view alive the same
-/// way; the others hold no reference to the window. Once the native window is
+/// A target does not keep its window open. The Apple targets keep the
+/// window's content view alive until the renderer lets go of the target; the
+/// others hold no reference to the window. Once the native window is
 /// destroyed (closed, or recycled by the OS) or its surface is gone, both
 /// handle queries answer [`HandleError::Unavailable`](raw_window_handle::HandleError::Unavailable), and keep answering it:
 /// a renderer that re-queries the target on recovery never receives a handle
@@ -52,7 +50,7 @@ use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 ///   window detached from its scene;
 /// - **Android**: while the activity has no native window (after
 ///   `TerminateWindow`); a pause that keeps the window keeps the target;
-/// - **winit and the web**: the retirement alone;
+/// - **X11, Wayland and the web**: the retirement alone;
 /// - **headless**: always, since no native window exists.
 pub trait SurfaceTarget: HasWindowHandle + HasDisplayHandle + Send + Sync + 'static {
     /// A frame is about to be presented into this surface.
@@ -141,7 +139,7 @@ impl DxgiFrameStatistics {
 /// accessibility adapter's thread — asks through the requester the window
 /// handed out instead. It never blocks: the host carries the request to the
 /// owner where its window system needs that (AppKit), and asks the window
-/// system directly where any thread may (Win32, winit, Android). Once the
+/// system directly where any thread may (Win32, Android). Once the
 /// window is gone, a request reaches nothing.
 ///
 /// Any `Fn() + Send + Sync + 'static` closure is a requester, which is what a

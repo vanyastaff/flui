@@ -61,7 +61,6 @@ pub(crate) fn owned_text(text: &Arc<str>) -> ClipboardRead {
     target_arch = "wasm32",
     wayland_host,
     x11_host,
-    feature = "winit-backend"
 ))]
 pub(crate) fn host_text(text: String) -> ClipboardRead {
     if text.len() > MAX_TEXT {
@@ -218,7 +217,6 @@ impl<C: NativePrimarySelection + ?Sized> NativePrimarySelection for Arc<C> {
         target_arch = "wasm32",
         wayland_host,
         x11_host,
-        feature = "winit-backend"
     )
 ))]
 mod tests {

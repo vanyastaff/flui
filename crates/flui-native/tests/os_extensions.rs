@@ -4,11 +4,10 @@
 //! does what it says or answers why not. What a window is created with on one
 //! OS (`WindowOptions::os_options`) is taken by that OS's host.
 //!
-//! The foreign windows are the headless host's and, with `winit-backend`, the
-//! winit host's on the same OS. Its own harness: winit builds its event loop
-//! only on the process's main thread, which a libtest worker is not. The macOS
-//! cases build wherever the macOS target is type-checked; they run only on a
-//! Mac.
+//! The foreign windows are the headless host's. Its own harness: the cases
+//! run on the process's main thread, which AppKit requires and a libtest
+//! worker is not. The macOS cases build wherever the macOS target is
+//! type-checked; they run only on a Mac.
 
 fn main() {
     #[cfg(any(target_os = "windows", target_os = "macos"))]
@@ -81,34 +80,6 @@ mod cases {
             )
             .expect("a headless window opens");
         check("headless", window.as_ref());
-
-        #[cfg(feature = "winit-backend")]
-        {
-            use std::cell::Cell;
-            use std::rc::Rc;
-
-            let checked = Rc::new(Cell::new(false));
-            let marked = Rc::clone(&checked);
-            let platform: Box<dyn Platform> = Box::new(flui_native::WinitPlatform::new());
-            platform
-                .run(flui_native::testing::app::on_ready(move |owner| {
-                    let window = owner
-                        .open_window(
-                            hidden(),
-                            flui_testing::window_handler::RecordingWindowHandler::new(),
-                        )
-                        .expect("the winit owner opens a window")
-                        .try_ready()
-                        .expect("a window opened on the owner is ready");
-                    check("winit", window.as_ref());
-                    marked.set(true);
-                    window.close_now();
-                    owner.quit();
-                    Ok(())
-                }))
-                .expect("the winit loop runs");
-            assert!(checked.get(), "the winit host opened no window to check");
-        }
     }
 
     #[cfg(target_os = "windows")]

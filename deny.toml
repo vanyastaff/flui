@@ -136,7 +136,6 @@ deny = [
     # One Unicode source (ADR-0092 §6): FLUI segments through ICU4X, the data
     # Parley shapes with. Only the third-party crates that bring it may name it.
     { crate = "unicode-segmentation", wrappers = [
-        "winit",
         "convert_case",
     ], reason = "FLUI segments text through ICU4X (ADR-0092 §6)" },
 
@@ -148,6 +147,10 @@ deny = [
     { crate = "send-cell", reason = "owner-local state is not wrapped to be Send (ADR-0136)" },
     { crate = "unsend", reason = "owner-local state is not wrapped to be Send (ADR-0136)" },
     { crate = "force-send-sync", reason = "owner-local state is not wrapped to be Send (ADR-0136)" },
+
+    # The native hosts replaced winit on every desktop (ADR-0151 §11); a host
+    # comes back as a native one, not as a fallback that hides its gaps.
+    { crate = "winit", reason = "the native hosts replaced winit (ADR-0151 §11)" },
 ]
 
 # Crates whose job std or core now does (once_cell → OnceLock/LazyLock,

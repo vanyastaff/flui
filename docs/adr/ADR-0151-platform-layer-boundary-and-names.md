@@ -26,6 +26,10 @@
   the core host's `ProjectedInputRegions` and the testing host both use; `KeyText` keeps a
   character key's text non-empty by type. The rest of the list moved as written; the typed
   `UriList` and `Image` payloads went with `TransferUri` and `TransferImage` (ADR-0038).
+- **Amended:** 2026-11-03 — section 11 is implemented: `current_platform` picks the native
+  Wayland or X11 host by the session, the winit host and its `winit-backend` feature are deleted,
+  and `deny.toml` bans the `winit` crate. Section 15's amendment of 2026-10-22 no longer depends
+  on winit: `accesskit_unix` and `zbus` are unconditional Linux dependencies of the core host.
 - **Supersedes:** [ADR-0082](ADR-0082-platform-api-contract-crate.md) §1 (what the contract crate
   holds), §2 (the crates' names and what the core host keeps), §4 step 2 (callbacks without
   `Send`, jointly with [ADR-0254](ADR-0254-window-contract.md)) and §5's Linux row (winit as the

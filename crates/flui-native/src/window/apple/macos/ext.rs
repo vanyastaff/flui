@@ -20,7 +20,7 @@ use crate::host_window::HostWindow;
 /// macOS-specific window extensions.
 ///
 /// Implemented for every [`HostWindow`] (ADR-0151 §8). A window of another
-/// host (headless, winit) is not an AppKit window: [`appkit`](Self::appkit)
+/// host (headless, another system's) is not an AppKit window: [`appkit`](Self::appkit)
 /// answers `None` for it, and nothing is asked of it.
 ///
 /// ```

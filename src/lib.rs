@@ -219,7 +219,7 @@ pub mod services {
 /// implemented for `dyn HostWindow`, the window as the core host hands it out.
 /// Its one method narrows the window to that system's view of it (`win32()`,
 /// `appkit()`) and answers `None` for a window of any other host (headless,
-/// winit, another system), so nothing is asked of a window that cannot take it
+/// another system), so nothing is asked of a window that cannot take it
 /// and nothing panics. The views take and return FLUI types; a raw window or
 /// display handle leaves only through `raw-window-handle`'s `HasWindowHandle`
 /// and `HasDisplayHandle`, which every window implements.

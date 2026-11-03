@@ -4,7 +4,7 @@
 //! # The seam this fills
 //!
 //! [`flui_platform::WindowHandler::close_requested`] is a real
-//! per-window veto: the winit, Win32 and AppKit backends all consult it
+//! per-window veto: the Win32, AppKit, X11 and Wayland backends all consult it
 //! synchronously when the *user* asks a window to close, and a
 //! [`KeepOpen`](flui_platform::CloseDecision::KeepOpen) answer stops the
 //! close before anything else in the arm runs — no `closed`, no UI runtime
@@ -75,17 +75,6 @@
 //!   system lets the application refuse a close, so a handler registered
 //!   there is never asked. That is a property of those backends, not of
 //!   this module.
-//! - **Resolving a deferred close on winit completes on the owner's next
-//!   turn, not inside the call** (issue #919, fixed). A winit window's
-//!   `WindowCommand::Close` posts the close to that backend's owner lane and the owner runs the
-//!   same teardown a compositor close takes — `on_close`, window-map
-//!   removal, callback clear, exit-policy consult — so the process exits
-//!   when that was the last window. What this module inherits from it: on
-//!   winit the presentation is torn down AFTER
-//!   [`request_presentation_close`](crate::request_presentation_close)
-//!   returns, on the owner turn; the headless double still runs `on_close`
-//!   synchronously inside the command, so a test that asserts right after the
-//!   call pins the double, not the winit contract.
 
 use std::sync::Arc;
 use std::thread::ThreadId;
@@ -164,11 +153,6 @@ pub enum CloseResponse {
     /// A quit ([`CloseReason::Program`]) this answer refuses is deferred
     /// until the record is resolved; see
     /// [`AppHandle::request_quit`](crate::AppHandle::request_quit).
-    ///
-    /// On winit the close resolved that way completes on the owner's next
-    /// turn rather than inside the call — see
-    /// [`request_presentation_close`](crate::request_presentation_close)'s
-    /// backend section.
     KeepOpen,
 }
 
@@ -445,8 +429,8 @@ impl CloseRequestRouter {
     ///
     /// This runs **first**, and the ordering is causal rather than chosen.
     /// A backend consults this at the top of its close-request handling
-    /// (winit: `WindowEvent::CloseRequested`, before `dispatch_close`,
-    /// before the window leaves its tracking map); it consults the
+    /// (before `dispatch_close`, before the window leaves its tracking
+    /// map); it consults the
     /// exit-policy hook — which is where `ServiceLifetime::KeepsAppAlive`
     /// vetoes — only once a close has already happened *and* left no
     /// window behind. So a [`CloseResponse::KeepOpen`] here means the exit
@@ -642,12 +626,9 @@ impl CloseRequestRouter {
     /// application saved its work and now wants the close it deferred.
     ///
     /// **Completes on every backend whose `WindowCommand::Close` performs a
-    /// real close** (headless, winit, Win32, AppKit); a window that refuses
-    /// it (Android) answers [`CloseRequestError::Refused`]. On winit the
-    /// teardown — `on_close`,
-    /// window-map removal, exit-policy consult — runs on the owner's next
-    /// turn, not inside this call (issue #919's fix); the headless double
-    /// runs it synchronously. See
+    /// real close** (headless, Win32, AppKit, X11, Wayland); a window that
+    /// refuses it (Android) answers [`CloseRequestError::Refused`]. The
+    /// headless double runs `on_close` synchronously inside the command. See
     /// [`request_presentation_close`](crate::request_presentation_close)
     /// for the per-backend statement.
     /// Bypassing the handler is the point — every backend's own

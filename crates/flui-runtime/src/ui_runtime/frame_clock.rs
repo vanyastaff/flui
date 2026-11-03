@@ -155,7 +155,7 @@ impl UiRuntime {
         // the pointer event, the flags sat unread, and a live drag froze
         // the screen while the position advanced invisibly. The wake sets
         // `needs_redraw` (idempotent with the store above) AND requests a
-        // platform redraw, which winit coalesces per frame.
+        // platform redraw.
         // Use the ui_runtime's shared owner-turn delivery ledger. If the platform
         // hook unwinds before posting the redraw, the dirty flags above stay
         // durable and the next ingress or completed command-drain boundary

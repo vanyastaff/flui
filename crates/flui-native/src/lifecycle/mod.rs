@@ -8,7 +8,7 @@
 //! application's handler; the host's table makes the source and the channel
 //! for the loop. Each loop is its table's lifecycle position. A loop that
 //! hears the lifecycle in its own callbacks (AppKit's and UIKit's application
-//! delegates, the Activity's, the winit loop's turns on Linux) answers the
+//! delegates, the Activity's, the Linux loops' turns) answers the
 //! release of a session end itself (`LifecycleHooks`), and one position serves
 //! all of them here; the Windows and web loops answer their own, and the
 //! headless host's position is its test handle.
@@ -34,7 +34,7 @@ pub(crate) mod web;
 pub(crate) mod windows;
 
 /// The lifecycle position of every loop that hears its host's lifecycle in
-/// its own callbacks: macOS, iOS, Android, and the winit host on Linux.
+/// its own callbacks: macOS, iOS, Android, and the Linux hosts.
 #[cfg(any(
     target_os = "android",
     target_os = "macos",
@@ -66,7 +66,7 @@ impl<L: crate::owner::notices::LifecycleHooks> crate::host::Lifecycle<L> for L {
     fn activate(_: &L, _: bool) {
         // None of these hosts brings the application forward on request:
         // AppKit's is activated once, as its loop starts; UIKit and Android
-        // decide which application is in front; winit raises one window at a
-        // time (`Window::focus_window`).
+        // decide which application is in front; the Linux hosts raise one
+        // window at a time.
     }
 }

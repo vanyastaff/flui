@@ -276,12 +276,9 @@ pub fn window_handle(
 ///
 /// # Backend behaviour
 ///
-/// This resolves the close fully on the **headless**, **winit**, **Win32**
-/// and **AppKit** backends, whose `WindowCommand::Close` performs a real
-/// close. Timing differs: on **winit** the teardown (`on_close`, window-map
-/// removal, exit-policy consult) runs on the event-loop owner's next turn,
-/// after this call returns — never synchronously inside it (issue #919's
-/// fix) — while the **headless** double runs `on_close` synchronously
+/// This resolves the close fully on the **headless**, **Win32**, **AppKit**,
+/// **X11** and **Wayland** backends, whose `WindowCommand::Close` performs a
+/// real close; the **headless** double runs `on_close` synchronously
 /// inside the command. On **web** and **Android** the veto itself is inert
 /// (neither backend consults `dispatch_should_close`), so there is nothing
 /// to resolve; an Android window refuses the close
@@ -497,11 +494,11 @@ mod tests {
     /// (WARP), not this one. This instead drives the exact ordering invariant
     /// headlessly: `HeadlessWindow::request_redraw` (flui-native's headless
     /// backend, used elsewhere in this crate's tests) dispatches its
-    /// `WindowHandler::frame_requested` callback SYNCHRONOUSLY — unlike a real winit window,
-    /// where a queued `RedrawRequested` would not fire until `on_ready` (and
-    /// this reordering) has already returned. That is exactly why the ordering
-    /// bug was invisible in a real window's actual first frame but is directly
-    /// observable here.
+    /// `WindowHandler::frame_requested` callback SYNCHRONOUSLY — unlike a real
+    /// native window, where the frame request arrives from the event loop and
+    /// so cannot fire until `on_ready` (and this reordering) has already
+    /// returned. That is exactly why the ordering bug was invisible in a real
+    /// window's actual first frame but is directly observable here.
     ///
     /// Checks a unique window *size* rather than mere `is_some()`, so this
     /// cannot pass merely because an earlier test left SOME window installed

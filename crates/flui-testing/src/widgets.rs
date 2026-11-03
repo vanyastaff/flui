@@ -408,7 +408,7 @@ fn mount_laid_out(
         unconstrained_wrap,
     );
     // Every platform window has an input method: the kit's plays a push-model
-    // one, as winit does, so [`LaidOut::dispatch_ime`] reaches the focused field.
+    // one, so [`LaidOut::dispatch_ime`] reaches the focused field.
     let window = HeadlessWindow::new(surface.0, surface.1).with_text_input();
     let host = WidgetHost::mount(wrapped, window, storage);
     let pipeline_owner = host.pipeline().clone();
@@ -1746,7 +1746,7 @@ impl LaidOut {
     }
 
     /// The platform reported the pointer leaving the hosting window
-    /// (winit `CursorLeft`): sweep hover state — every hovered
+    /// (`CursorLeft`): sweep hover state — every hovered
     /// `MouseRegion` gets its `on_exit`, and the cursor resets.
     pub fn dispatch_window_hover_left(&self) {
         self.host.ui_runtime().dispatch_hover_left();

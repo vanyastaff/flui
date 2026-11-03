@@ -1340,7 +1340,7 @@ pub(super) fn install_platform_quit_hook() {
 /// the web has no idle wait.
 ///
 /// The route re-enters `APP_RUNTIME` only when the platform asks
-/// (`about_to_wait`) — never synchronously from this function — and only
+/// (its idle wait) — never synchronously from this function — and only
 /// reads it (`AppRuntime::next_wake` takes `&self`).
 #[cfg(all(
     not(target_os = "android"),
@@ -1377,11 +1377,11 @@ pub(super) fn merge_wake_deadlines(
 /// (`AppLifecycleState::Hidden`/`Paused`/`Detached`), the frame closure's
 /// `WakeAction::PumpBackground` arm returns before `render_frame_with_device_
 /// recovery` ever runs, so nothing on that path would consume a reported
-/// deadline — reporting it anyway hands `about_to_wait` the SAME past
-/// instant on every idle iteration once it comes due, which is
-/// `WinitApp::new_events`'s own named `WaitUntil(past)` busy-spin, forced by
-/// this hook instead of a stale UI runtime deadline. The deadline is not lost by
-/// staying unreported while disabled: presentation lifecycle reconciliation
+/// deadline — reporting it anyway hands the idle wait the SAME past
+/// instant on every idle iteration once it comes due, which is a
+/// `WaitUntil(past)` busy-spin, forced by this hook instead of a stale UI
+/// runtime deadline. The deadline is not lost by staying unreported while
+/// disabled: presentation lifecycle reconciliation
 /// redirties the restored root and wakes the loop through the ordinary
 /// `needs_redraw` channel, which
 /// lets a real `WakeAction::Render` resume the retry then.
@@ -1505,8 +1505,8 @@ pub(crate) fn with_owner_platform<R>(
 }
 
 /// Unwind-safe TLS clearing. Arm this guard *before* calling
-/// `Platform::run(...)` on any backend whose `run` returns (winit,
-/// headless, Android, AppKit) — not inside `on_ready` — so a panic anywhere inside
+/// `Platform::run(...)` on any backend whose `run` returns (headless,
+/// Android, AppKit) — not inside `on_ready` — so a panic anywhere inside
 /// `on_ready` or later in `run` unwinds through the guard's `Drop` and
 /// cannot leak the host into whatever runs on this thread next (notably,
 /// the next test). Clearing an already-empty slot is a no-op.

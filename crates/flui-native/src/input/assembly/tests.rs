@@ -854,8 +854,8 @@ fn pan_zoom_carries_only_scale_and_rotation() {
 
 /// Every backend's native scroll phases, through the shared grammar: a
 /// two-finger pan begins, changes and ends as a phased scroll, and platform
-/// momentum follows as `Momentum*`. Rows are the native encodings: winit's
-/// `PanGesture`/pixel `MouseWheel` touch phases, AppKit's `phase` and
+/// momentum follows as `Momentum*`. Rows are the native encodings: the Wayland
+/// finger axis source's begin, step and stop, AppKit's `phase` and
 /// `momentumPhase`.
 fn two_finger_pan_is_phased_scroll_on_every_backend() {
     use GesturePhase::{Began, Cancelled, Changed, Ended};
@@ -864,7 +864,7 @@ fn two_finger_pan_is_phased_scroll_on_every_backend() {
     type Row = (&'static str, Vec<ScrollReading>, Vec<Option<ScrollPhase>>);
     let rows: [Row; 4] = [
         (
-            "winit",
+            "wayland",
             vec![fingers(Began), fingers(Changed), fingers(Ended)],
             vec![
                 Some(ScrollPhase::Began),

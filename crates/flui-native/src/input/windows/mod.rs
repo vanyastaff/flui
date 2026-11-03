@@ -1849,7 +1849,7 @@ mod raw {
     /// `WM_MOUSEWHEEL`) carries the `MK_*` mask in the low word of `WPARAM`, and
     /// Win32 already applies the W3C rule for us: the bit for a button is set on
     /// its DOWN message and clear on its UP message, i.e. the set held *after*
-    /// the event. That makes this stateless — unlike the winit backend, which has
+    /// the event. That makes this stateless — unlike winit's Windows backend, which has
     /// to track the transition itself because winit does not surface a mask.
     ///
     /// This matters beyond fidelity: the framework tells a drag-move from a hover

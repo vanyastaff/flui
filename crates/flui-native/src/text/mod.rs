@@ -16,7 +16,6 @@
 //!   the system font scale;
 //! - `web`: the browser's `EditContext` or a hidden textarea, which mirrors
 //!   the focused field;
-//! - `winit`: winit's IME enablement and cursor area;
 //! - `headless`: the recording double of IME requests.
 //!
 //! The model's `ime` is built for the two hosts that mirror a field and for
@@ -57,11 +56,6 @@ pub(crate) mod sizing;
 pub(crate) mod web;
 #[cfg(any(windows, test))]
 pub(crate) mod windows;
-#[cfg(all(
-    feature = "winit-backend",
-    any(target_os = "windows", target_os = "macos", target_os = "linux")
-))]
-pub(crate) mod winit;
 
 /// What one window holds of the text feature, made by its table's text
 /// position (ADR-0151 §3, [`host::Text`](crate::host::Text)): the window
@@ -120,7 +114,7 @@ pub trait TextInput: Send + Sync + 'static {
 /// How a window's text input reaches the focused field.
 pub enum WindowTextInput {
     /// The field tells the input method whether it may compose and where its
-    /// caret is: winit and the headless host.
+    /// caret is: the headless host.
     Ime(Arc<dyn PlatformTextInput>),
     /// The platform reads the field's store (TSF, AppKit, UIKit) or mirrors it into an
     /// editor of its own (Android's `FluiView`, the browser's `EditContext` or

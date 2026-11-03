@@ -743,8 +743,8 @@ impl MouseTracker {
     /// clears that hover state, and resets the cursor — the cursor has left
     /// the window, so nothing is hovered any more.
     ///
-    /// The winit wire has no synthetic remove event, so the window-leave
-    /// signal calls this directly. Without it, a widget hovered at the moment the cursor
+    /// The window-leave signal is not a pointer remove event, so it calls this
+    /// directly. Without it, a widget hovered at the moment the cursor
     /// crosses the window edge keeps its hover visuals forever and
     /// `MouseRegion::on_exit` never fires.
     ///

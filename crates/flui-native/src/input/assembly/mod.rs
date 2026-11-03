@@ -288,7 +288,7 @@ impl NativeReading {
 
     /// This reading at device-pixel `(x, y)` with `scale` device pixels per
     /// logical pixel: a backend whose OS reports physical pixels (Win32,
-    /// Android, X11, winit).
+    /// Android, X11).
     #[must_use]
     pub const fn at_device(self, x: f64, y: f64, scale: f64) -> Self {
         Self {

@@ -4,8 +4,7 @@
 //!
 //! The Win32 loop holds the monitors through its `HostDisplays` hook and the
 //! broadcast receiver tells [`DisplayBroadcasts`] what the system broadcast;
-//! the host's table makes both. The winit host on Windows reads the same
-//! monitors through its own loop's hook.
+//! the host's table makes both.
 //!
 //! `sample` is the pure half, which every host compiles and tests; `source`
 //! and `broadcasts` call Win32 and exist only on Windows.
@@ -587,64 +586,6 @@ pub(crate) mod source {
         #[cfg(test)]
         fn sample_count(&self) -> usize {
             self.samples.load(std::sync::atomic::Ordering::Relaxed)
-        }
-    }
-
-    /// The winit host's displays on Windows are these monitors. winit enumerates
-    /// monitors only through a live event loop, and keys them by a reusable GDI
-    /// device name; this source needs no event loop, keys monitors by display
-    /// target, reads the refresh period from `QueryDisplayConfig` and names a
-    /// window's display by `MonitorFromWindow`. winit's own monitor list is not
-    /// read. The source is invalidated by `WM_DISPLAYCHANGE` and work-area changes
-    /// on the loop's broadcast receiver (created on resume) and sampled again where
-    /// winit reports a move, a scale change or a resume.
-    #[cfg(feature = "winit-backend")]
-    impl crate::owner::winit::HostDisplays for WindowsDisplays {
-        fn snapshot(&self) -> Result<DisplaySnapshot, PlatformError> {
-            crate::owner::windows::HostDisplays::snapshot(self)
-        }
-
-        /// The display `window` is on, by the monitor nearest its native window.
-        fn id_of_window(&self, window: &winit::window::Window) -> Option<DisplayId> {
-            use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-
-            let RawWindowHandle::Win32(handle) = window.window_handle().ok()?.as_raw() else {
-                return None;
-            };
-            crate::owner::windows::HostDisplays::display_of_window(
-                self,
-                HWND(handle.hwnd.get() as *mut _),
-            )
-        }
-
-        /// Sample the monitors now, which needs neither the event loop nor the
-        /// signal: whether the snapshot differs from the one the last sample
-        /// published. A revision that cannot advance keeps the previous sample.
-        fn resample(
-            &self,
-            _event_loop: &winit::event_loop::ActiveEventLoop,
-            _signal: Option<&std::sync::Arc<crate::owner::signal::OwnerSignal>>,
-        ) -> bool {
-            let before = self.source.published().revision();
-            self.source.invalidate();
-            match crate::owner::windows::HostDisplays::snapshot(self) {
-                Ok(snapshot) => snapshot.revision() != before,
-                Err(error) => {
-                    tracing::warn!(
-                        %error,
-                        "display revisions exhausted; keeping the last snapshot"
-                    );
-                    false
-                }
-            }
-        }
-
-        fn broadcasts(
-            self: std::sync::Arc<Self>,
-            signal: &std::sync::Arc<crate::owner::signal::OwnerSignal>,
-        ) -> std::rc::Rc<dyn crate::owner::windows::broadcast::Subscriber> {
-            let displays: std::sync::Arc<dyn crate::owner::windows::HostDisplays> = self;
-            std::rc::Rc::new(super::DisplayBroadcasts::new(&displays, signal))
         }
     }
 
@@ -1383,28 +1324,6 @@ mod broadcasts {
                 wakes.load(Ordering::SeqCst),
                 2,
                 "a detached subscriber woke the owner"
-            );
-        }
-
-        /// The winit loop's receiver takes its subscriber from the displays'
-        /// winit hook, which gives the same one: a display change marks the
-        /// monitors stale and wakes the owner.
-        #[cfg(feature = "winit-backend")]
-        #[test]
-        fn the_winit_loop_s_displays_hear_a_display_change() {
-            let (signal, wakes) = counting_signal();
-            let displays = Arc::new(WindowsDisplays::new());
-            let sampled: Arc<dyn HostDisplays> = Arc::clone(&displays) as _;
-            let subscriber = crate::owner::winit::HostDisplays::broadcasts(displays, &signal);
-            let receiver = Receiver::try_new([subscriber]).expect("a receiver");
-            sampled.snapshot().expect("the first sample");
-
-            receiver.send_with_for_test(WM_DISPLAYCHANGE, 32, 0);
-            assert!(samples_again(&sampled), "a display change marked nothing");
-            assert_eq!(
-                wakes.load(Ordering::SeqCst),
-                1,
-                "a display change did not wake the owner"
             );
         }
     }

@@ -817,11 +817,11 @@ pub(super) fn drain_pending_secondary_window_completions(
 ///
 /// Returns `Ok(None)` for the `Pending` arm (see
 /// [`spawn_pending_secondary_window_completion`]): `OwnerPlatform::
-/// open_window` resolves synchronously only inside `on_ready`, or on a
-/// backend with no owner lane at all (headless); the real winit backend
-/// defers any call after `on_ready` — exactly the calling convention this
-/// function documents as its own intended use (from a callback the FIRST
-/// window already registered) — so a caller reachable ONLY through that
+/// open_window` resolves synchronously on every native backend; a backend
+/// that defers a call after `on_ready` (the headless test owner does, to
+/// exercise this arm) answers `Pending` — and that is exactly the calling
+/// convention this function documents as its own intended use (from a
+/// callback the FIRST window already registered) — so a caller reachable ONLY through that
 /// convention must handle `None` as "accepted, completing asynchronously",
 /// not assume `Some` unconditionally.
 #[cfg(all(

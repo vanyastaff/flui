@@ -47,23 +47,6 @@ flui-foundation = { path = "../flui-foundation", version = "=0.2.0-dev" }
 web-time = { workspace = true }
 
 cursor-icon = { workspace = true }
-# Native keyboard adapters are confined to Winit and Android.
-keyboard-types = { workspace = true, optional = true }
-
-# Windowing (for platform implementations)
-winit = { workspace = true, optional = true }
-
-# The ecosystem bridge from winit's native event types to our canonical
-# `ui_events`/`keyboard-types` vocabulary (Masonry ships it too) — the winit
-# backend's whole keyboard event (code, logical key, location, state,
-# repeat, modifiers) delegates to it entirely rather than hand-assembling
-# any of those fields here. See ARCHITECTURE.md §Mapping decisions for why
-# the Win32 and AppKit backends keep their own hand-written `Code`/`Key`
-# tables instead of also delegating. Pins `winit ^0.30`; if the workspace
-# winit pin needs to move to 0.31 before this crate follows, patch it via
-# `[patch.crates-io]` pointing at the upstream git repo (and add that repo
-# to `deny.toml`'s `sources.allow-git`) rather than reviving a hand table.
-ui-events-winit = { version = "0.3", optional = true }
 
 # Error handling & logging. `anyhow` is deliberately absent here: the
 # public API is typed (`PlatformError`/`OpenWindowError`, thiserror), and
@@ -84,7 +67,6 @@ serde_json = { workspace = true, optional = true, features = ["float_roundtrip"]
 
 # Synchronization
 parking_lot = { workspace = true }
-crossbeam-channel = { workspace = true, optional = true }
 
 # Window handle abstraction
 raw-window-handle = "0.6"
@@ -96,11 +78,6 @@ raw-window-handle = "0.6"
 # `#[cfg(test)]` — so this must be a real dependency, not dev-only, or the
 # assertions never expand outside this crate's own test builds.
 static_assertions = { workspace = true }
-
-# The winit fallback uses a desktop clipboard; mobile backends own their
-# native clipboard implementations even when every feature is enabled.
-[target.'cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))'.dependencies]
-arboard = { workspace = true, optional = true }
 
 # Windows platform
 [target.'cfg(target_os = "windows")'.dependencies]
@@ -241,8 +218,7 @@ dispatch2.workspace = true
 # which is what `PlatformWindow::refresh_period` needs. NSScreen has no
 # current-mode rate — its `maximumFramesPerSecond` is the hardware *maximum*
 # (it over-reports on a ProMotion panel running a 60 Hz mode) and is macOS 12+,
-# above this crate's 11.0 deployment floor — and the winit backend this mirrors
-# reads the mode rate the same way. Pinned to the version `cocoa` 0.27 already
+# above this crate's 11.0 deployment floor. Pinned to the version `cocoa` 0.27 already
 # pulls in, so no second copy of the crate enters the tree.
 core-graphics = { workspace = true }
 # The view's backing layer (`owner::apple::metal_layer`): a `CAMetalLayer`
@@ -413,8 +389,7 @@ console_error_panic_hook = "0.1"
 # The X server's client, behind the `x11` feature: the native X11 host's
 # connection on libxcb (`allow-unsafe-code` and `dl-libxcb`, so a surface can be
 # made from it and libxcb is loaded at run time rather than linked), and the
-# display source's pure-Rust connection for RandR. winit enables the same
-# features, so the tree gains no crate.
+# display source's pure-Rust connection for RandR.
 x11rb = { workspace = true, optional = true, features = [
     "allow-unsafe-code",
     "dl-libxcb",
@@ -424,7 +399,7 @@ x11rb = { workspace = true, optional = true, features = [
     "xkb",
     "cursor",
 ] }
-# libxkbcommon and libxkbcommon-x11, loaded at run time as winit loads them:
+# libxkbcommon and libxkbcommon-x11, loaded at run time:
 # the keymap, the keyboard state and compose, which both Linux hosts read
 # through `input::linux::xkb`.
 xkbcommon-dl = { version = "0.4", optional = true, features = ["x11"] }
@@ -433,7 +408,7 @@ xkbcommon-dl = { version = "0.4", optional = true, features = ["x11"] }
 xim-ctext = { workspace = true, optional = true }
 # The native Wayland host's protocol clients, also the display source's, and
 # the descriptor primitives both Linux hosts wait on, behind the `wayland` and
-# `x11` features (`desktop` and `winit-backend` enable both).
+# `x11` features (`desktop` enables both).
 wayland-client = { workspace = true, optional = true }
 # `staging` for `cursor-shape`, which the Wayland host's input speaks beside
 # the unstable `tablet` and `pointer-gestures`.
@@ -444,7 +419,7 @@ wayland-backend = { workspace = true, optional = true }
 # `fs`: the memory file a Wayland window's own frame is drawn into.
 rustix = { workspace = true, optional = true, features = ["time", "fs", "pipe"] }
 # The cursor theme the Wayland host draws a cursor from where the compositor
-# has no `cursor-shape`. winit loads the same crate, so the tree gains none.
+# has no `cursor-shape`.
 wayland-cursor = { version = "0.31", optional = true }
 accesskit_unix = { version = "0.24" }
 zbus = { workspace = true }
@@ -609,7 +584,6 @@ default = ["desktop"]
 
 # The native desktop hosts, selected by target OS: on Linux the Wayland and
 # X11 hosts, of which the session picks one; Windows and macOS need no feature.
-# The optional winit fallback belongs to `winit-backend` alone.
 desktop = ["wayland", "x11"]
 
 # Linux display server protocols. `wayland` is the native Wayland host and `x11`
@@ -623,21 +597,6 @@ wayland = [
     "dep:rustix",
     "dep:xkbcommon-dl",
     "dep:wayland-cursor",
-]
-
-# winit fallback backend, optional on every desktop. `current_platform` never
-# picks it on Linux, where the native hosts replaced it; it goes with the rest
-# of winit (ADR-0151 §11).
-winit-backend = [
-    "dep:winit",
-    "dep:arboard",
-    "dep:crossbeam-channel",
-    "dep:ui-events-winit",
-    "dep:keyboard-types",
-    # The winit backend takes its Linux display list from the compositor
-    # through these two (the dependencies themselves exist on Linux only).
-    "wayland",
-    "x11",
 ]
 
 # Web platform
@@ -720,8 +679,8 @@ windows = { workspace = true, features = [
     "Win32_Graphics_Dxgi_Common",
 ] }
 
-# The harnesses that run their cases on the main thread, where winit builds
-# its event loop (`linux_preferences`, `os_extensions`).
+# The harnesses that run their cases on the main thread
+# (`linux_preferences`, `os_extensions`).
 [target.'cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))'.dev-dependencies]
 libtest-mimic.workspace = true
 
@@ -749,8 +708,8 @@ path = "tests/linux_preferences.rs"
 harness = false
 required-features = ["x11"]
 
-# An OS extension on another host's windows, the winit host's among them: its
-# own harness, because winit builds its event loop on the main thread only.
+# An OS extension on another host's windows: its own harness, because AppKit
+# builds its windows on the main thread only.
 [[test]]
 name = "os_extensions"
 path = "tests/os_extensions.rs"
@@ -906,7 +865,6 @@ globals = [
     { item = "owner::windows::control::REGISTERED", grant = "ADR-0097", class = "process", reason = "the registered Win32 owner-control window class, which Windows holds once per process" },
     { item = "owner::windows::WINDOW_CLASS", grant = "ADR-0097", class = "process", reason = "Windows' registration of FLUI's window class with the host whose hooks its procedure dispatches to: Windows holds the class, and the procedure it was registered with, once per process, so a second host is refused" },
     { item = "owner::windows::CLASS_ON_THREAD", grant = "ADR-0097", class = "trampoline", reason = "the Win32 window procedure is called with a window's handle and no pointer of FLUI's: it reads here the hooks of FLUI's window class on its thread, each of which keeps its own state of a window, keyed by the window's identity" },
-    { item = "owner::winit::ACTIVE_EVENT_LOOP", grant = "ADR-0097", class = "trampoline", reason = "winit's event-loop borrow, reached from its callbacks for same-thread window creation" },
     { item = "clipboard::lock::CLIPBOARD", grant = "ADR-0097", class = "process", reason = "serializes access to the system clipboard, which the process shares with every window" },
     { item = "clipboard::lock::reentrancy::SESSION_OPEN", grant = "ADR-0097", class = "diagnostic", reason = "debug-build detection of a nested clipboard session; it only asserts" },
     { item = "journal::capture::INSTALLED", grant = "ADR-0097", class = "diagnostic", reason = "debug-build `native-capture` journal of pointer registry calls; it only observes" },
@@ -934,7 +892,7 @@ features = [
     "fonts",
     "http",
 ]
-platforms = ["windows", "apple", "android", "web", "linux", "winit", "headless"]
+platforms = ["windows", "apple", "android", "web", "linux", "headless"]
 groups = { apple = ["macos", "ios"], linux = ["wayland", "x11"] }
 base = ["owner", "version", "storage", "transfer"]
 hosts = "hosts"
@@ -950,14 +908,10 @@ crate-level = [
     "journal",
     "process",
 ]
-# The one edge between platform files of one feature: the winit host on Linux
-# reads the compositor's outputs through the Linux source, which leaves with
-# winit. No window file names another feature's: a window's text input,
+# No platform file names another feature's: a window's text input,
 # accessibility, actuator and chrome come from the host table, a feature keeps
 # its own state of a window, and the owner hands a window the facts it reads.
-exceptions = [
-    { from = "display::winit", to = "display::linux", exit = "ADR-0151", since = "2026-10-22", reason = "the winit host on Linux takes its displays from the Linux source (display::linux) until the native Linux host replaces winit (ADR-0151 §11)" },
-]
+exceptions = []
 [package.metadata.flui.api-closure]
 # The only upstream crates a public path may name: the raw handles
 # (ADR-0089 §2), the contract's cursor, the lock the window's callback setters

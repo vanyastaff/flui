@@ -551,8 +551,8 @@ impl RendererBinding for RenderingBinding {
         // owner's hit-test walk (RenderState.offset-aware).
         //
         // The position arrives in LOGICAL pixels already: every
-        // platform converter normalizes at event build (winit and
-        // Win32 divide raw physical coordinates by the scale factor;
+        // platform converter normalizes at event build (Win32 divides raw
+        // physical coordinates by the scale factor;
         // macOS NSPoint is logical natively). The render tree lives in
         // logical pixels too, so the position passes through unscaled
         // — dividing by the DPR here would shrink every hit a second

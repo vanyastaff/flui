@@ -194,7 +194,7 @@ pub struct AppConfig {
 
     /// Governs when the platform loop exits once every hosted window has
     /// closed. See [`ExitPolicy`]'s own doc for the drain-before-decide
-    /// rule; `run_desktop`'s bootstrap installs this into the live winit
+    /// rule; `run_desktop`'s bootstrap installs this into the live platform
     /// event loop (issue #555's native-lifecycle wiring). Not present on
     /// iOS: [`ExitPolicy`]/`AppRuntime` are themselves not compiled there
     /// (`run_ios` never reads any field of this config beyond ignoring it
@@ -263,7 +263,7 @@ pub struct AppConfig {
     /// [`CloseResponse::KeepOpen`](super::close_request::CloseResponse::KeepOpen)
     /// for why a veto needs no deadline.
     ///
-    /// Only the winit, Win32 and AppKit backends consult the underlying
+    /// Only the Win32, AppKit, X11 and Wayland backends consult the underlying
     /// platform seam; on web and Android a registered handler is inert.
     /// Not present on iOS; UIKit scene destruction does not use the desktop
     /// close-request veto policy.
@@ -460,8 +460,8 @@ impl AppConfig {
     ///
     /// Applied where the backend places a window at open
     /// ([`WindowCapabilities::places_at_open`](flui_platform::WindowCapabilities::places_at_open)):
-    /// Win32 today. The winit and AppKit backends do not yet read it and leave
-    /// the place to the system.
+    /// a backend that does not report it (the Wayland host, where the
+    /// compositor places windows) leaves the place to the system.
     #[must_use = "the builder returns the updated configuration; assign or chain it"]
     pub fn with_position(mut self, at: Point<f64>) -> Self {
         self.position = Some(at);
@@ -470,8 +470,8 @@ impl AppConfig {
 
     /// Set the mode the window opens in.
     ///
-    /// Applied where the backend opens a window in a mode: Win32 today. The
-    /// winit and AppKit backends do not yet read it, so there a window opens in
+    /// Applied where the backend opens a window in a mode (Win32 and AppKit
+    /// do). A backend that does not read it opens a window in
     /// [`WindowMode::Normal`] and the application sets the mode through its
     /// `WindowHandle` once it is up.
     #[must_use = "the builder returns the updated configuration; assign or chain it"]
@@ -676,8 +676,8 @@ impl AppConfig {
     /// the window themselves.
     ///
     /// Where it is applied: Win32 opens the window at the remembered position,
-    /// size and mode, and matches the display it was on. The winit and AppKit
-    /// backends do not yet place a window at open (they report so through
+    /// size and mode, and matches the display it was on. A backend that does
+    /// not place a window at open (it reports so through
     /// [`WindowCapabilities::places_at_open`](flui_platform::WindowCapabilities::places_at_open)),
     /// so there only the size is restored and the position is left to the
     /// system; see `docs/platform-parity.md`.

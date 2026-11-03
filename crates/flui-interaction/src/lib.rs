@@ -31,7 +31,7 @@
 //! # Architecture
 //!
 //! ```text
-//! Platform (winit, Win32, etc.)
+//! Platform (Win32, AppKit, etc.)
 //!     ↓
 //! PointerEvent/KeyEvent
 //!     ↓
