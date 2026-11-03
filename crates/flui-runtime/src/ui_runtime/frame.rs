@@ -459,7 +459,12 @@ impl UiRuntime {
         let result = result
             .expect("BUG: a drive that did not unwind returned")
             .expect("BUG: the runtime's live frame owner must admit its frame transaction");
-        self.run_commit_anchor();
+        // The frame boundary, the anchor's grants run: injected input goes on, one tick per
+        // boundary, even after an anchor that failed, whose failure continues first.
+        let mut boundary = flui_foundation::panic::FirstPanic::new();
+        boundary.contain(|| self.run_commit_anchor());
+        boundary.contain(|| self.advance_agent_input(now));
+        boundary.resume();
         result
     }
 

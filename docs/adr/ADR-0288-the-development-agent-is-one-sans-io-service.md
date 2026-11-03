@@ -1,6 +1,6 @@
 # ADR-0288: The development agent is one sans-IO service; transports only move lines
 
-- **Status:** Accepted (2026-11-03). Implemented: §§1–8, the desktop, Android and web
+- **Status:** Accepted (2026-11-03). Implemented: §§1–9, the desktop, Android and web
   transports, each driven by `flui run --agent`.
 - **Date:** 2026-11-03
 - **Supersedes in part:** [ADR-0239](ADR-0239-every-debug-app-hosts-the-driver-agent.md) §1,
@@ -188,6 +188,32 @@ a lease or the exit on disconnect. When the driver's conversation ends the seat 
 or, with §5's obligation, the obligation runs and the app is ending, so a later driver's hello
 is answered `shutting_down`. This replaces §5's "first conversation past its hello".
 
+§9. **Held input is the connection's.** `input.inject` plays an `ActionSequence` into the
+window's own input path, where the platform's input enters (`UiRuntime::handle_input_on`), one
+tick per frame boundary, after the frame's commit anchor: a tick lasts as long as its longest
+pause or move, on the frame clock, and a move is spread over the frames of its span. Its device
+is `DeviceId::AGENT`, reserved but not contactless: its pointers touch down and lift as a
+finger's do, each with an id of its own. Its keys go where the platform's do, to the active
+window, whichever window the call names. What a sequence leaves held (a contact down, a key
+pressed) belongs to the lease it was asked through: an `InputLease` from
+`AgentWindow::input_lease`, `Send`, not `Clone`, released when it is dropped. The window takes
+`input.inject` and `input.release` through a lease only, and answers them `invalid_argument`
+through `AgentWindow::call`. A release cancels the contacts held down and lifts the keys held,
+the latest first, and says how many of each. A dropped lease is recorded on the window's port
+and released at the owner's next drain, counted before the drain reads its commands: every call
+asked through it was enqueued before it was dropped, so the call is taken first, and the work
+still queued through the lease is answered `gone`. A `Session` holds one lease per window it
+injected into, taken on first use and dropped with the conversation, so a driver that goes
+leaves nothing pressed, and two connections never release each other's input. The answer, `ran`
+by the `synthetic` path, comes once a frame has passed since the last tick, with the snapshot it
+asks for; a sequence that fails part of the way answers the failure with a `partial` effect
+counting the ticks that went out. The reply's deadline adds the sequence's span
+(`InputParams::holds_for`). A sequence the window cannot play as asked is refused whole before
+anything plays: more than 32 sources, 4096 ticks or ten minutes, two sources of one name, a key
+that is neither a W3C key name nor the text of one, a point or pressure out of range
+(`invalid_argument`), or a trackpad gesture (`not_supported`). A window keeps at most 64 queued
+injections and releases, and answers one past that `busy`, retry `soon`.
+
 ### Consequences
 
 - Good, because a headless run, the web runner and the desktop serve one conversation, and a
@@ -270,6 +296,19 @@ is answered `shutting_down`. This replaces §5's "first conversation past its he
   own in `a_client_waits_for_the_page_export_and_is_carried_to_a_connection_of_its_own` and
   `a_page_connection_ends_with_its_client_and_every_one_with_a_reload`. A FLUI app served in a
   browser is run by the owner.
+- Held input (§9) is driven through `flui-runtime`'s public API with no thread
+  (`tests/contracts/agent_input.rs`):
+  `an_injected_tap_reaches_the_app_one_tick_per_frame_and_answers_after_a_frame`,
+  `a_pause_holds_the_injection_for_its_duration`,
+  `held_input_stays_down_until_the_lease_releases_it`,
+  `dropping_the_lease_lets_go_what_it_holds_and_answers_its_queued_work`,
+  `a_lease_releases_only_its_own_input`, `input_the_window_cannot_play_as_asked_is_refused_whole`,
+  `an_injection_that_fails_part_of_the_way_says_how_far_it_got` and
+  `a_closing_window_answers_its_queued_input_gone`; `agent_service.rs`'s
+  `input_a_connection_holds_is_let_go_when_it_goes` drops a session holding a contact down and
+  finds it cancelled. Each fails with its rule removed: the answer sent at the last tick, the
+  release applied before the drain's commands, a call taken without a lease, the queued input
+  dropped unanswered at close, and a lease the session never drops.
 
 ## Pros and cons of the options
 
@@ -308,5 +347,5 @@ Android: the endpoint and the token as `am start` extras, and a session file tha
 loopback port `adb forward` holds instead of the app's own endpoint, which only the device
 reaches. The web transport came after it (§6, with the page's launch object, §7), and then
 `flui run --agent` in a browser: the browser started with its remote protocol on, the launch
-installed by a preload, and the session's endpoint carried to the page. Then held input per
-connection (a lease the session owns, released when it is dropped).
+installed by a preload, and the session's endpoint carried to the page. Held input per
+connection came after it (§9): a lease the session owns, released when it is dropped.

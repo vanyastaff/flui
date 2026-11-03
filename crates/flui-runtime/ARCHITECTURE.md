@@ -905,6 +905,24 @@ appeared, capped at 256 entries with `truncated`. A presentation that closes fir
 owed reading `readback_failed` with the effect `ran`, since the action was delivered. Pinned by
 `src/ui_runtime/tests/agent_act_read.rs` and `crates/flui-semantics/tests/delta.rs`.
 
+**Injected input.** `input.inject` and `input.release` reach the owner through an input lease
+(`AgentWindow::input_lease`; the call carries its `LeaseId`) and are refused `invalid_argument`
+without one (ADR-0288 §9). `agent_input.rs` turns the sequence into a plan of ticks before
+anything plays (`plan`, which refuses the whole sequence) and queues it on the presentation
+(`agent_input`, at most 64 jobs, then `InputQueueFull`). `drive_frame` advances the queue once per
+frame boundary, after the commit anchor: a tick's input goes in through `handle_input_on`, the
+path the platform's input takes, each event contained so one handler's panic does not keep the
+rest out, and the first panic continues once all went in. What a lease holds (contacts down,
+keys pressed) is kept per lease; a release cancels the contacts and lifts the keys, the latest
+first. A lease the agent drops is recorded on the port (`DevAgentPort::release`, which wakes the
+owner) and released by the drain, which counts the dropped leases before it reads its commands
+and releases them after: a call asked through a lease was enqueued before the lease was dropped,
+so it is taken first, and work still queued through the lease is answered `LeaseReleased`
+(`gone`). The last tick parks the reply as an act's reading (`ReadingOwed`), so it is answered
+once a frame has passed since that input. A failure part of the way answers `InputPartial`, the
+failure's code with a `partial` effect counting ticks. A window that closes answers its queued
+input `gone`. Pinned by `tests/contracts/agent_input.rs` and `agent_service.rs`.
+
 **Waits.** `wait.until` parks a condition on the presentation
 (`agent_waits`) instead of polling it. The owner evaluates it when it arrives, so one that holds
 already answers at the drain; after each frame `drive_frame` ran, which also counts that frame

@@ -105,6 +105,8 @@ mod agent_service;
 
 #[path = "contracts/agent_act.rs"]
 mod agent_act;
+#[path = "contracts/agent_input.rs"]
+mod agent_input;
 #[path = "contracts/announce.rs"]
 mod announce;
 #[path = "contracts/device_loss.rs"]

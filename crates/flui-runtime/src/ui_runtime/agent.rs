@@ -14,15 +14,16 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::num::NonZeroU32;
+use std::num::{NonZeroU32, NonZeroU64};
 use std::rc::Rc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Weak};
 
 use flui_foundation::PresentationId;
 use flui_foundation::geometry::DevicePixelRatio;
 use flui_protocol::{
     ActOutcome, ActionName, ActionRequest, Actionability, ActionabilityParams, Effect, EffectKind,
-    ElementId, ElementRef, ErrorCode, ErrorObject, EventFilter, HandleKind, InputPath,
+    EffectUnit, ElementId, ElementRef, ErrorCode, ErrorObject, EventFilter, HandleKind, InputPath,
     LocateParams, Matches, ReadQuery, Retry, Snapshot, SnapshotReading, Tree, WaitOutcome,
     WindowId,
 };
@@ -30,9 +31,9 @@ use flui_rendering::binding::{RendererBinding as _, ViewHitTest};
 use flui_semantics::{
     Placement, SemanticsActionError, TreeSnapshot, WireActionError, WireLocateError, WireReadError,
 };
-use flui_view::__runtime::{AgentPort, Reply, WindowCall};
+use flui_view::__runtime::{AgentPort, LeaseId, Reply, WindowCall};
 use flui_view::dev_agent::{AgentAnswer, AgentEvents, AgentWindow};
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 
 use super::UiRuntime;
 use super::agent_serve::PanicAnswer;
@@ -175,6 +176,24 @@ pub(crate) enum AgentError {
     /// continues on the owner thread.
     #[error("the window panicked while answering")]
     Panicked,
+    /// The window already has as much injected input queued as it keeps; one injection ends
+    /// before another is taken.
+    #[error("the window already has as much injected input queued as it keeps")]
+    InputQueueFull,
+    /// The input lease the call was asked through was released before the call ran.
+    #[error("the input lease it was asked through was released before it ran")]
+    LeaseReleased,
+    /// An injection stopped part of the way through: `played` of its `total` ticks went out
+    /// before `failure` stopped it.
+    #[error("{failure} (after {played} of {total} ticks)")]
+    InputPartial {
+        /// What stopped it.
+        failure: Box<AgentError>,
+        /// The ticks that went out in full.
+        played: u32,
+        /// The ticks it had.
+        total: u32,
+    },
 }
 
 impl AgentError {
@@ -187,9 +206,12 @@ impl AgentError {
             | Self::RenderTreeBusy
             | Self::TooManyWaits
             | Self::TooManySubscriptions
+            | Self::InputQueueFull
             | Self::TreeBusy(_) => ErrorCode::Busy,
+            Self::InputPartial { failure, .. } => failure.code(),
             Self::RuntimeGone => ErrorCode::ShuttingDown,
             Self::PresentationGone
+            | Self::LeaseReleased
             | Self::NodeNotFound { issued: true, .. }
             | Self::NodeGone { .. } => ErrorCode::Gone,
             Self::NodeNotFound { issued: false, .. } | Self::UnknownPresentation { .. } => {
@@ -219,6 +241,7 @@ impl AgentError {
             | Self::RenderTreeBusy
             | Self::TooManyWaits
             | Self::TooManySubscriptions
+            | Self::InputQueueFull
             | Self::TreeBusy(_) => Retry::Soon,
             Self::NoMatch => Retry::WhenAppears,
             _ => Retry::Never,
@@ -254,6 +277,18 @@ impl AgentError {
         let message = self.to_string();
         let mut error =
             match self {
+                // Part of the input went out: the effect counts the ticks.
+                Self::InputPartial {
+                    failure,
+                    played,
+                    total,
+                } => {
+                    return failure.into_error(window).with_effect(Effect::partial(
+                        played,
+                        total,
+                        EffectUnit::Tick,
+                    ));
+                }
                 Self::Ambiguous { candidates, .. } => ErrorObject::ambiguous(message, candidates),
                 Self::PresentationGone => ErrorObject::new(code, message)
                     .with_handle(HandleKind::Window, window.to_string()),
@@ -555,6 +590,12 @@ pub(crate) struct DevAgentPort {
     sender: UiCommandSender,
     window: WindowId,
     open: RwLock<bool>,
+    /// The last input lease minted; ids are never reused within the port.
+    leases: AtomicU64,
+    /// Leases let go since the owner last took them: each is released once,
+    /// so the list holds at most one entry per lease minted, and the owner
+    /// empties it at each drain.
+    released: Mutex<Vec<LeaseId>>,
 }
 
 // A refusal is the protocol's error object itself, which the window answers with.
@@ -614,6 +655,58 @@ impl AgentPort for DevAgentPort {
         })?;
         Ok(answer)
     }
+
+    fn lease(&self) -> Result<LeaseId, ErrorObject> {
+        if !self.is_open() {
+            return Err(AgentError::PresentationGone.into_error(self.window));
+        }
+        let last = self
+            .leases
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |last| {
+                last.checked_add(1)
+            })
+            .map_err(|_| {
+                ErrorObject::new(
+                    ErrorCode::Busy,
+                    "the window has handed out every input lease",
+                )
+                .with_retry(Retry::Never)
+            })?;
+        let minted = last
+            .checked_add(1)
+            .and_then(NonZeroU64::new)
+            .expect("BUG: the update refused the last lease id");
+        Ok(LeaseId::new(minted))
+    }
+
+    fn release(&self, lease: LeaseId) {
+        if !self.is_open() {
+            // The presentation released everything as it closed.
+            return;
+        }
+        self.released.lock().push(lease);
+        // Recorded first: the wake is the platform's, and a release it fails to deliver is
+        // taken at the owner's next drain all the same.
+        self.sender.wake_owner();
+    }
+}
+
+impl DevAgentSlot {
+    pub(crate) fn withdraw(&self) {
+        self.port.close();
+    }
+
+    /// How many leases the window's handles have let go that the owner has not released yet.
+    pub(super) fn released_count(&self) -> usize {
+        self.port.released.lock().len()
+    }
+
+    /// The first `count` leases let go, oldest first, taken to be released.
+    pub(super) fn take_released(&self, count: usize) -> Vec<LeaseId> {
+        let mut released = self.port.released.lock();
+        let count = count.min(released.len());
+        released.drain(..count).collect()
+    }
 }
 
 impl Drop for DevAgentSlot {
@@ -621,12 +714,6 @@ impl Drop for DevAgentSlot {
     /// now on, even through a port a call still holds, and nothing is
     /// enqueued for the closed window after this returns.
     fn drop(&mut self) {
-        self.port.close();
-    }
-}
-
-impl DevAgentSlot {
-    pub(crate) fn withdraw(&self) {
         self.port.close();
     }
 }
@@ -686,6 +773,44 @@ pub(super) struct ReadingOwed {
     snapshot: Snapshot,
     /// The tree the action started on, for a delta.
     before: Option<TreeSnapshot>,
+}
+
+impl ReadingOwed {
+    /// What an action that answered `outcome` owes once a frame has passed: the reading
+    /// `snapshot` asks for, against `before` for a delta.
+    pub(super) fn new(
+        outcome: ActOutcome,
+        snapshot: Snapshot,
+        before: Option<TreeSnapshot>,
+    ) -> Self {
+        Self {
+            outcome,
+            snapshot,
+            before,
+        }
+    }
+}
+
+/// The tree an action that asks for `snapshot` starts on: read for a delta, `None` otherwise.
+pub(super) fn tree_before(
+    state: &PresentationState,
+    window: WindowId,
+    snapshot: Snapshot,
+) -> Result<Option<TreeSnapshot>, AgentError> {
+    if snapshot != Snapshot::Delta {
+        return Ok(None);
+    }
+    let placement = placement_of(state, window);
+    state
+        .pipeline()
+        .with(|pipeline| {
+            pipeline
+                .semantics_owner()
+                .ok_or(AgentError::NoTreeYet)?
+                .snapshot_wire(placement)
+                .map_err(AgentError::from_unscoped_read)
+        })
+        .map(Some)
 }
 
 /// An action's reply, parked on its presentation until a frame has passed.
@@ -829,18 +954,7 @@ pub(super) fn act(
     issued: bool,
     if_panics: &PanicAnswer,
 ) -> Result<Served, AgentError> {
-    let before = if snapshot == Snapshot::Delta {
-        let placement = placement_of(state, window);
-        Some(state.pipeline().with(|pipeline| {
-            pipeline
-                .semantics_owner()
-                .ok_or(AgentError::NoTreeYet)?
-                .snapshot_wire(placement)
-                .map_err(AgentError::from_unscoped_read)
-        })?)
-    } else {
-        None
-    };
+    let before = tree_before(state, window, snapshot)?;
     let resolved = state.pipeline().with(|pipeline| {
         pipeline
             .semantics_owner()
@@ -902,6 +1016,8 @@ impl UiRuntime {
                         sender,
                         window,
                         open: RwLock::new(true),
+                        leases: AtomicU64::new(0),
+                        released: Mutex::default(),
                     }),
                     collecting: Weak::new(),
                     issued: Rc::default(),
@@ -963,6 +1079,7 @@ impl UiRuntime {
                 snapshot,
                 before,
             } = owed;
+            let asked = snapshot;
             let reading = match (snapshot, before, &now) {
                 (Snapshot::Delta, Some(before), Some(Ok(now))) => Some(SnapshotReading::Delta(
                     before.delta_to(now, false, DELTA_CAP),
@@ -982,7 +1099,7 @@ impl UiRuntime {
                 }
                 _ => None,
             };
-            outcome.readback_failed = reading.is_none();
+            outcome.readback_failed = reading.is_none() && asked != Snapshot::None;
             outcome.snapshot = reading;
             let element = outcome.element.map(|element| element.element);
             send_reply(&reply, element, Ok(outcome));

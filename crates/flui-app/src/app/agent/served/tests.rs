@@ -824,7 +824,7 @@ fn malformed_unknown_and_unserved_requests() {
             driver_side["error"]["capability"], "session.launch",
             "{driver_side}"
         );
-        let not_yet = client.call("input.inject", json!({}));
+        let not_yet = client.call("perf.start", json!({}));
         assert_eq!(not_yet["error"]["code"], "not_supported", "{not_yet}");
         let malformed = client.call("semantics.read", json!({ "window": 3 }));
         assert_eq!(

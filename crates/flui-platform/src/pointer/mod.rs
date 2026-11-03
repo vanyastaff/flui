@@ -167,6 +167,12 @@ impl DeviceId {
     /// (ADR-0207 §4). Reserved: a backend never assigns it to hardware.
     pub const PROGRAMMATIC: Self = Self::reserved(0);
 
+    /// The driver agent, as the device of the input it plays into a window (ADR-0288).
+    /// Reserved: a backend never assigns it to hardware. Unlike the contactless devices
+    /// [`is_reserved`](Self::is_reserved) names, its pointers touch down, move and lift
+    /// like a mouse, pen or finger.
+    pub const AGENT: Self = Self::reserved(3);
+
     const fn reserved(below_max: u64) -> Self {
         match NonZeroU64::new(u64::MAX - below_max) {
             Some(value) => Self(value),

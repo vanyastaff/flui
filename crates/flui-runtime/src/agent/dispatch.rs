@@ -21,20 +21,22 @@
     )
 )]
 
+use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
 use std::marker::PhantomData;
 use std::task::Waker;
 use std::time::Duration;
 
 use flui_protocol::method::{
-    Addressed, EventsSubscribe, EventsUnsubscribe, Method, WindowMethod, WindowsList,
+    Addressed, EventsSubscribe, EventsUnsubscribe, InputInject, InputRelease, Method, WindowMethod,
+    WindowsList,
 };
 use flui_protocol::{
     ClientRole, Effect, EffectKind, ErrorCode, ErrorObject, Event, EventFilter, HandleKind,
     METHODS, MethodEffect, MethodInfo, RequestId, Retry, ServedBy, Subscription, WindowId,
     WindowList,
 };
-use flui_view::dev_agent::{AgentAnswer, AgentEvents, AgentWindow};
+use flui_view::dev_agent::{AgentAnswer, AgentEvents, AgentWindow, InputLease};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -165,6 +167,7 @@ fn timed_out(method: &MethodInfo) -> ErrorObject {
 pub(super) fn start(
     shared: &Shared,
     subscriptions: &mut Subscriptions,
+    leases: &mut Leases,
     admitted: Admitted,
     now: Instant,
 ) -> Running {
@@ -183,9 +186,8 @@ pub(super) fn start(
             ),
             Err(error) => done(Err(error)),
         },
-        _ => {
-            window_route(shared, method, params).unwrap_or_else(|| done(Err(not_supported(method))))
-        }
+        _ => window_route(shared, leases, method, params)
+            .unwrap_or_else(|| done(Err(not_supported(method)))),
     };
     // A timeout too long to reach is no deadline at all.
     let deadline = now.checked_add(shared.limits.reply_timeout.saturating_add(holds_for));
@@ -202,12 +204,33 @@ fn done(outcome: Result<Value, ErrorObject>) -> (Work, Duration) {
     (Work::Done(Some(outcome)), Duration::ZERO)
 }
 
-/// Start a window method: the route generated for each one the table declares.
-fn window_route(shared: &Shared, method: &MethodInfo, params: Value) -> Option<(Work, Duration)> {
+/// Start a window method: the route generated for each one the table declares. Synthetic input
+/// is asked through the connection's lease on the window ([`Leases`]).
+fn window_route(
+    shared: &Shared,
+    leases: &mut Leases,
+    method: &MethodInfo,
+    params: Value,
+) -> Option<(Work, Duration)> {
+    match method.name {
+        InputInject::NAME => {
+            return Some(ask::<InputInject>(shared, params, |window, params| {
+                leases.call::<InputInject>(window, params)
+            }));
+        }
+        InputRelease::NAME => {
+            return Some(ask::<InputRelease>(shared, params, |window, params| {
+                leases.call::<InputRelease>(window, params)
+            }));
+        }
+        _ => {}
+    }
     macro_rules! routes {
         ($($ty:ident = $name:literal, $effect:ident, $tier:ident, $params:ty => $output:ty;)+) => {
             match method.name {
-                $($name => Some(ask::<flui_protocol::method::$ty>(shared, params)),)+
+                $($name => Some(ask::<flui_protocol::method::$ty>(shared, params, |window, params| {
+                    window.call::<flui_protocol::method::$ty>(params)
+                })),)+
                 _ => None,
             }
         };
@@ -215,9 +238,13 @@ fn window_route(shared: &Shared, method: &MethodInfo, params: Value) -> Option<(
     flui_protocol::for_each_window_method!(routes)
 }
 
-/// Ask the window `params` address `M`: the work that waits for its answer, and how long the
-/// window may hold the request past the reply timeout.
-fn ask<M: WindowMethod>(shared: &Shared, params: Value) -> (Work, Duration)
+/// Ask the window `params` address `M` through `call`: the work that waits for its answer, and
+/// how long the window may hold the request past the reply timeout.
+fn ask<M: WindowMethod>(
+    shared: &Shared,
+    params: Value,
+    call: impl FnOnce(&AgentWindow, M::Params) -> Result<AgentAnswer<M::Output>, ErrorObject>,
+) -> (Work, Duration)
 where
     M::Params: DeserializeOwned,
     M::Output: Serialize,
@@ -235,7 +262,7 @@ where
         Err(error) => return done(Err(error)),
     };
     let holds_for = params.holds_for();
-    match window.call::<M>(params) {
+    match call(&window, params) {
         Ok(answer) => (
             Work::Window(Box::new(Typed::<M> {
                 answer,
@@ -562,5 +589,32 @@ impl Subscribed {
             }
         }
         self.asked = waiting;
+    }
+}
+
+/// The input leases one connection holds, one per window it injected into: what its input holds
+/// stays the connection's, and is let go when the connection goes and they are dropped.
+#[derive(Default)]
+pub(super) struct Leases(BTreeMap<WindowId, InputLease>);
+
+impl Leases {
+    /// Ask `window` `M` through the connection's lease on it, taken on first use; taking one lets
+    /// go the leases on windows that have closed since.
+    fn call<M: WindowMethod>(
+        &mut self,
+        window: &AgentWindow,
+        params: M::Params,
+    ) -> Result<AgentAnswer<M::Output>, ErrorObject> {
+        if !self.0.contains_key(&window.id()) {
+            self.0.retain(|_, lease| lease.is_open());
+        }
+        let lease = match self.0.entry(window.id()) {
+            Entry::Occupied(held) => held.into_mut(),
+            Entry::Vacant(free) => {
+                let lease = window.input_lease()?;
+                free.insert(lease)
+            }
+        };
+        lease.call::<M>(params)
     }
 }

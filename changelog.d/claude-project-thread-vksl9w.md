@@ -116,11 +116,25 @@
   own, installs the launch in each top-level document before the app's module runs, and carries
   every `flui mcp` connection to the session's usual local endpoint on to a connection of the
   page's; a reload ends them, and the client connects again. Firefox is driven over WebDriver
-  BiDi and the Chromium family over the DevTools protocol, with no driver binary. `--headless`
-  runs the browser without a window; Safari is refused (`docs/gaps.md` entry 42).
-  `run.agent.ready` carries `relayed` in a browser.
+  BiDi and the Chromium family over the DevTools protocol, with no driver binary; a browser has
+  60 s to start and answer the link's first commands. `--headless` runs the browser without a
+  window; Safari is refused (`docs/gaps.md` entry 42). `run.agent.ready` carries `relayed` in a
+  browser.
 - **`flui_protocol::launch::PAGE_LAUNCH_GLOBAL` and `PAGE_EXPORT_VERSION`**: the global a
   driver installs a page's launch under, and the version of the export it connects through.
+- **The driver agent injects input** (`input.inject`, `input.release`, ADR-0288 §9): a pointer,
+  wheel, keyboard, text or input-method sequence enters the window's own input path one tick per
+  frame, and the answer comes once a frame has passed since its last tick. What it leaves held
+  is the connection's until `input.release` or the connection goes. Trackpad gestures answer
+  `not_supported`.
+- **`AgentWindow::input_lease` and `InputLease`** (`flui-view`'s development-agent seam): input
+  is injected and released through a lease, `Send` and not `Clone`, whose drop releases what it
+  holds.
+- **`flui_platform::pointer::DeviceId::AGENT`**: the device of the driver agent's pointers,
+  reserved, with contacts.
+- **`ActionSequence::ticks` and `ActionSequence::span`** (`flui-protocol`): how many ticks a
+  sequence plays and how long it takes; `InputParams::holds_for` is its span, so a server's
+  reply deadline covers the input.
 
 ### Removed
 
