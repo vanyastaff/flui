@@ -143,7 +143,7 @@ pub enum UiCommand {
         /// The condition, window and timeout.
         params: Box<flui_protocol::WaitParams>,
         /// Where the outcome goes.
-        reply: super::agent::ReplySender<flui_protocol::WaitOutcome>,
+        reply: super::agent_wait::WaitReply,
     },
     /// Register a subscription to the addressed presentation's events and answer with its
     /// stream.

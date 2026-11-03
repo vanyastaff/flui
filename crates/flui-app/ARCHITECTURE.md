@@ -138,6 +138,23 @@ the dispatch layer moves there too.
   delivery through the private native-initialization seam. It does not establish
   operating-system activation behavior.
 
+- **The driver agent is the host's, installed from the launch (ADR-0239).** A
+  debug build, or one with the `driver` feature, adds the driver agent after
+  the application's own `DevAgentHook`s when its launch names an endpoint
+  (`flui_protocol::launch`); with none, nothing is created. Each hook has a
+  host of its own, so one that panics is dropped alone and the others keep
+  being served (`every_installed_hook_is_attached_and_one_that_panics_is_dropped_alone`).
+  The agent serves protocol 0.8 over a current-user named pipe or a Unix socket
+  in a `0700` directory; every operation goes through the window's owner inbox
+  and waits a bounded time, and a full connection answers `busy`. Under
+  `EXIT_ON_DISCONNECT` the first connection past its hello is the driver: when
+  it closes, the loop quits past every close guard and the process exits with
+  `EXIT_DISCONNECTED` after the teardown; the agent detaching asks no exit.
+  `the_driver_agent_contains_every_failure` covers the refusals, timeouts,
+  closed windows, events, a client that stops reading, a bind failure and the
+  exit; `reads_the_counter_and_taps_it_by_element_and_by_locator` the
+  conversation over a real socket or pipe.
+
 - **Quit is a closed operation.** The host stops installed runtimes in mount
   order and restores each checkout before continuing. A failing lifecycle
   listener cannot skip a sibling; reentrant work waits until notifications

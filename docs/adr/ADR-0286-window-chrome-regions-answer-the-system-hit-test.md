@@ -2,6 +2,7 @@
 
 - **Status:** Accepted (2026-11-02)
 - **Date:** 2026-11-02
+- **Amended:** 2026-11-02: §5 and §6, the press takers cut out of a move area and the widgets that mark the regions.
 - **Amends:** [ADR-0217](ADR-0217-interaction-module-layers-and-pointer-assembly.md) §5: input
   regions gain the chrome kinds the title-bar follow-up named, and their availability is
   answered per kind.
@@ -110,6 +111,29 @@ otherwise, and filters as a native host does.
 §4. **Recording format.** A recorded backend profile carries the four availabilities;
 `flui-testing`'s recording format moves to version 3 and refuses version 2.
 
+§5. **Press takers are cut out of a move area.** A render object says it takes presses with
+`InputRegionSink::claim_presses` from `describe_input_regions`; `RenderListener` does when its
+widget has a pointer-down handler or recognizers in the gesture arena, a hover-only listener does
+not. While the walk is under a node that reported a `WindowMove` region, such a node adds a
+`WindowContent` region over its box after its own regions, so a button or a field in the bar keeps
+its presses and nobody marks it by hand. `InputRegionSink::claim_presses_over` takes presses on
+part of the box only: `RenderParagraph` says it over the glyphs of each routed link, so a link in
+the bar is pressed and the text around it moves the window. A caption button or resize region between the two keeps
+its subtree's presses its own (the system answers them), and
+`InputRegionSink::pass_presses_through` keeps a subtree moving the window until a move area below
+it starts cutting out again: `RenderPressPassThrough` says it, and so does an ignoring
+`RenderIgnorePointer` or `RenderSliverIgnorePointer`, whose subtree no press reaches. Inside a
+cut-out such a node adds a `WindowMove` region over its box, so a handle inside a button still
+moves the window.
+
+§6. **Widgets.** `flui-widgets` marks the regions: `WindowTitleBar` (`WindowMove`),
+`WindowCaptionButton::{minimize, maximize, close}` (`CaptionButton`, a `RawButton` named after
+what it does now, acting through the window's `WindowHandle`), `WindowResizeArea::new(edge)`
+(`WindowResize`, only while the window is in its normal mode) and `WindowMovePassThrough`. Each
+reads the window's frame through a `WindowHandle` subscription and marks nothing while the system
+draws the title bar, so one tree runs on every frame and host. Ordering the caption buttons after
+the platform's convention belongs to the title bars the design packages build from these parts.
+
 ### Consequences
 
 - Good, because the system's callback reads a slice and returns: no framework code, no lock
@@ -134,6 +158,13 @@ otherwise, and filters as a native host does.
   `headless_without_any_kind_refuses_input_regions` in `flui-native` pin the filtering and the
   refusal; the window conformance check
   `per_frame_verbs_report_unsupported_exactly_when_unavailable` reads `honours_input_regions`.
+- `harness_input_regions_cut_press_takers_out_of_a_move_area`, `harness_press_pass_through_disabled_cuts_out_again` and
+  `harness_input_regions_follow_the_order_a_parent_paints_in` in `render_object_harness` pin §5
+  and §2's paint order.
+- The `window_chrome` table in `flui-widgets` pins §6 through the headless kit: the regions a bar
+  with a button, a hover area, a pass-through and a close button publishes, nothing under the
+  system's frame, a frame change, no resize border while maximized, and the caption buttons
+  minimizing, maximizing, restoring and asking to close under the names they announce.
 
 ## Pros and cons of the options
 

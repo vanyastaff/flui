@@ -25,8 +25,11 @@
   `expand` and `collapse` reach FLUI's discrete `Expand`/`Collapse` actions rather than the tap
   handler, and a numeric `set_value` keeps its number; the double-toggle race stated below
   remains only for a node that registers neither discrete action
-- **Superseded in part by (Proposed):** [ADR-0239](ADR-0239-every-debug-app-hosts-the-driver-agent.md)
-  for §3 (the server moves to `flui-app` and every host drives it);
+- **Superseded in part by:** [ADR-0239](ADR-0239-every-debug-app-hosts-the-driver-agent.md)
+  for §3: the server is `flui-app`'s, installed by the host from the launch, in protocol 0.8;
+  `flui-devtools` has no `agent` feature and the facade no `dev-agent` feature, and
+  `flui run --agent` needs no feature of the application. What §3 says below of the
+  `flui-devtools` server, its `op` framing and its `agent_endpoint` tests is history.
   [ADR-0238](ADR-0238-flui-driver-protocol.md) settles the still-Proposed items of §§1, 3 and 5
 - **Related:** [ADR-0040](ADR-0040-tree-observation-seam.md),
   [ADR-0079](ADR-0079-keyboard-activation-and-focus-for-assistive-technology.md),
