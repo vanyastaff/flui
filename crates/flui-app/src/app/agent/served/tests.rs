@@ -183,10 +183,15 @@ impl Client {
         json!({ "hello": { "token": token, "protocol": PROTOCOL_VERSION.to_string(), "client": "test" } })
     }
 
-    /// Connected and past the hello; the hello's answer.
-    fn greeted(address: &str) -> (Self, Value) {
+    /// Connected and past a hello asking for `role`, `None` for the driver's; the hello's
+    /// answer.
+    fn greeted_as(address: &str, role: Option<&str>) -> (Self, Value) {
         let mut client = Self::connect(address);
-        client.send(&Self::hello_line(TOKEN));
+        let mut hello = Self::hello_line(TOKEN);
+        if let Some(role) = role {
+            hello["hello"]["role"] = json!(role);
+        }
+        client.send(&hello);
         match client.recv(RECV) {
             Recv::Line(welcome) => (client, welcome),
             Recv::Closed => panic!("the agent closed the connection at the hello"),
@@ -194,8 +199,17 @@ impl Client {
         }
     }
 
+    /// Connected and past the hello, as the driver; the hello's answer.
+    fn greeted(address: &str) -> (Self, Value) {
+        Self::greeted_as(address, None)
+    }
+
     fn hello(address: &str) -> Self {
-        let (client, welcome) = Self::greeted(address);
+        Self::hello_as(address, None)
+    }
+
+    fn hello_as(address: &str, role: Option<&str>) -> Self {
+        let (client, welcome) = Self::greeted_as(address, role);
         assert_eq!(
             welcome["hello"]["protocol"],
             json!(PROTOCOL_VERSION.to_string()),
@@ -670,7 +684,9 @@ fn a_client_leaving_mid_request_does_not_stall_the_next() {
     let mut owner = Owner::new(agent);
     let at = address.address;
     owner.drive(move |owner| {
-        let mut leaving = Client::hello(&at);
+        // An observer, so the next client is admitted as the driver however soon the agent
+        // sees this one go.
+        let mut leaving = Client::hello_as(&at, Some("observer"));
         let window = leaving.only_window();
         owner.ask(Command::Pause);
         leaving
@@ -1042,8 +1058,8 @@ fn the_driver_going_asks_one_exit_when_launched_to() {
 
         let mut driver = Client::hello(&at);
         driver.only_window();
-        // An inspector beside the driver comes and goes: the app stays.
-        let mut inspector = Client::hello(&at);
+        // An inspector observing beside the driver comes and goes: the app stays.
+        let mut inspector = Client::hello_as(&at, Some("observer"));
         inspector.only_window();
         drop(inspector);
         std::thread::sleep(Duration::from_millis(100));
@@ -1062,7 +1078,11 @@ fn the_driver_going_asks_one_exit_when_launched_to() {
             );
             std::thread::sleep(Duration::from_millis(5));
         }
-        let mut second = Client::hello(&at);
+        // The app is ending: another driver is refused, an observer still reads.
+        let (refused, answer) = Client::greeted(&at);
+        assert_eq!(answer["error"]["code"], "shutting_down", "{answer}");
+        drop(refused);
+        let mut second = Client::hello_as(&at, Some("observer"));
         second.only_window();
         drop(second);
         std::thread::sleep(Duration::from_millis(100));

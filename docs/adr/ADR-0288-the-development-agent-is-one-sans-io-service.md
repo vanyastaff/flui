@@ -1,8 +1,7 @@
 # ADR-0288: The development agent is one sans-IO service; transports only move lines
 
-- **Status:** Accepted (2026-11-03). Implemented: §§1–7, with §7's launch source left to the
-  first transport that reads a second one. §8 (the driver's role in the hello) lands in its own
-  change.
+- **Status:** Accepted (2026-11-03). Implemented: §§1–8, with §7's launch source left to the
+  first transport that reads a second one.
 - **Date:** 2026-11-03
 - **Supersedes in part:** [ADR-0239](ADR-0239-every-debug-app-hosts-the-driver-agent.md) §1,
   where the server lives: the conversation is `flui-runtime`'s, and `flui-app` keeps the desktop
@@ -10,7 +9,8 @@
   a session is polled. Unchanged: the build rule, the launch, the endpoints and their
   credentials, owner-inbox execution and `may_have_run` on a timed-out act.
 - **Amends:** [ADR-0095](ADR-0095-agent-protocol-schema-crate.md) §3, the seam: an
-  `AgentAnswer` and an `AgentEvents` tell a waker when they can be read.
+  `AgentAnswer` and an `AgentEvents` tell a waker when they can be read; and
+  [ADR-0238](ADR-0238-flui-driver-protocol.md) §3, the error codes: `not_driver` (§8).
 - **Related:** [ADR-0238](ADR-0238-flui-driver-protocol.md) (the protocol);
   [ADR-0287](ADR-0287-owner-state-is-committed-before-user-code-runs.md) (user code runs after
   the state is committed); [ADR-0083](ADR-0083-one-frame-transaction-in-flui-runtime.md) (what
@@ -131,9 +131,16 @@ reports of the profile's debug assertions and the `driver` feature. The launch g
 (`LaunchSource`: the environment, Android's extras, the page's preload) with the first transport
 that reads a second one, so no variant waits without a reader.
 
-§8. **A role in the hello.** `Greeting.role` is `Driver` (the default) or `Observer`, in protocol
-0.9 and its golden. One driver is admitted per app; an observer reads and subscribes, and never
-claims input, leases or exit on disconnect. It replaces §5's "first conversation past its hello".
+§8. **A role in the hello.** The hello names what its client may do: `Hello.role`, a
+`ClientRole` of `driver` (the default, which a hello may leave out) or `observer`, in protocol
+0.9 and its golden. It sits beside the token and the protocol because it is part of what the
+client presents, not a second key of the greeting line. One conversation holds the driver's seat
+at a time; a second driver's hello is refused with a new code, `not_driver`, retry `soon`, and
+closed. An observer reads and subscribes beside the driver: its hello lists only the methods it
+may call, and a call of its that acts is answered `not_driver`. An observer never claims input,
+a lease or the exit on disconnect. When the driver's conversation ends the seat is free again,
+or, with §5's obligation, the obligation runs and the app is ending, so a later driver's hello
+is answered `shutting_down`. This replaces §5's "first conversation past its hello".
 
 ### Consequences
 
@@ -179,6 +186,12 @@ claims input, leases or exit on disconnect. It replaces §5's "first conversatio
 - `flui-app`'s build script and the agent's module agree on `cfg(driver_agent)`: a
   `compile_error!` fires in a build where the alias and `any(debug_assertions, feature = "driver")`
   on a system with a local-socket transport differ.
+- `flui-runtime`'s `one_driver_at_a_time_and_an_observer_only_reads` refuses a second driver's
+  hello `not_driver` until the first goes, lists an observer only the methods that read, and
+  answers its act `not_driver` without running it; `the_drivers_end_runs_its_obligation_once_and_not_after_a_stop`
+  runs the obligation for the driver alone and answers a later driver `shutting_down`.
+  `flui-protocol`'s `a_hello_names_its_role_only_when_it_observes` pins the spelling, and the
+  0.9 golden holds `ClientRole` and `not_driver`.
 
 ## Pros and cons of the options
 
@@ -210,8 +223,8 @@ claims input, leases or exit on disconnect. It replaces §5's "first conversatio
 
 ## Migration
 
-The desktop transport moved in the change that accepted this ADR, and the hook host moved into
-the loop in the next (§7). Then, each in its own change: §8, the Android transport (an abstract
-socket, the same code as Unix, and with it `LaunchSource`), the web transport (the page's export,
-driven from the JS event loop), and held input per connection (a lease the session owns,
-released when it is dropped).
+The desktop transport moved in the change that accepted this ADR, the hook host moved into the
+loop in the next (§7), and the role came into the hello after it (§8). Then, each in its own
+change: the Android transport (an abstract socket, the same code as Unix, and with it
+`LaunchSource`), the web transport (the page's export, driven from the JS event loop), and held
+input per connection (a lease the session owns, released when it is dropped).

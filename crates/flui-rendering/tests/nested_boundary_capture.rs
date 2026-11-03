@@ -12,10 +12,10 @@ use std::sync::{
 
 use flui_foundation::geometry::Size;
 use flui_foundation::{Leaf, RenderId};
-use flui_layer::{Layer, LayerTree};
+use flui_layer::{Layer, LayerTree, leader_origin, resolve_follower_transform};
 use flui_objects::{
-    RenderColoredBox, RenderFlex, RenderLeaderLayer, RenderOpacity, RenderPaintAnchor,
-    RenderRepaintBoundary,
+    RenderColoredBox, RenderFlex, RenderFollowerLayer, RenderLeaderLayer, RenderOpacity,
+    RenderPaintAnchor, RenderRepaintBoundary, RenderSizedBox,
 };
 use flui_rendering::{
     constraints::BoxConstraints,
@@ -51,7 +51,7 @@ fn leaf() -> TreeNode {
 fn describe(layer: &Layer) -> String {
     match layer {
         Layer::Picture(picture) => format!("Picture:{}", picture.picture().commands().len()),
-        Layer::Offset(_) | Layer::Opacity(_) => format!("{layer:?}"),
+        Layer::Offset(_) | Layer::Opacity(_) | Layer::Leader(_) => format!("{layer:?}"),
         other => other.kind_name().to_owned(),
     }
 }
@@ -267,7 +267,7 @@ fn a_repainted_nested_boundary_restamps_and_its_neighbours_keep_their_tokens() {
     assert_eq!(a[&other], b[&other]);
 }
 
-/// A nested boundary with no capture of its own (it holds a leader, which is never retained)
+/// A nested boundary with no capture of its own (it holds a follower, which is never retained)
 /// repaints at its slot while the boundary around it is replayed.
 #[test]
 fn a_nested_boundary_without_a_capture_repaints_alone() {
@@ -281,7 +281,7 @@ fn a_nested_boundary_without_a_capture_repaints_alone() {
                         .child(box_node(outer_tally.clone()))
                         .child(
                             box_node(RenderRepaintBoundary::new()).child(
-                                box_node(RenderLeaderLayer::new(link))
+                                box_node(RenderFollowerLayer::new(link))
                                     .child(box_node(inner_tally.clone())),
                             ),
                         ),
@@ -311,6 +311,80 @@ fn a_nested_boundary_without_a_capture_repaints_alone() {
         "the uncaptured nested boundary repainted at its slot"
     );
     assert_eq!(fingerprint(&first), fingerprint(&second));
+}
+
+/// A boundary that holds a leader is replayed from its capture, and the replayed leader is
+/// indexed where the boundary now stands: a sibling's relayout moves the boundary, and the
+/// follower resolves against the moved leader as it does for a fresh owner painting the same
+/// tree. The retained count and the paint count are the regression check; the comparison with
+/// the fresh owner guards correctness and passes with or without the fix.
+#[test]
+fn a_boundary_holding_a_leader_is_replayed_where_it_now_stands() {
+    let link = flui_layer::LayerLink::new();
+    let scene = |lead_width: f64, tally: &PaintTally| {
+        box_node(RenderFlex::row())
+            .child(box_node(RenderSizedBox::fixed(lead_width, 10.0)).label("lead"))
+            .child(
+                box_node(RenderRepaintBoundary::new())
+                    .label("leading")
+                    .child(box_node(RenderLeaderLayer::new(link)).child(box_node(tally.clone()))),
+            )
+            .child(
+                box_node(RenderRepaintBoundary::new())
+                    .child(box_node(RenderFollowerLayer::new(link)).child(leaf())),
+            )
+    };
+    let follower_transform = |t: &LayerTree| {
+        let (follower, _) = t
+            .iter()
+            .find(|(_, node)| matches!(node.layer(), Layer::Follower(_)))
+            .expect("the follower is painted");
+        resolve_follower_transform(t, follower)
+    };
+    let content_of = |t: &LayerTree, boundary: RenderId| {
+        t.iter()
+            .find_map(|(_, node)| {
+                node.boundary()
+                    .filter(|stamp| stamp.render_id() == boundary)
+                    .map(|stamp| stamp.content().clone())
+            })
+            .expect("the boundary is stamped")
+    };
+
+    let tally = PaintTally::new();
+    let (owner, registry) = mount(scene(20.0, &tally));
+    let lead = registry.get("lead").expect("labelled");
+    let leading = registry.get("leading").expect("labelled");
+    let (mut owner, first) = frame(owner);
+    assert_eq!(
+        owner.retained_boundary_count(),
+        1,
+        "precondition: the leading boundary is retained, the following one is not"
+    );
+    let paints = tally.paints();
+
+    update_render_object::<RenderSizedBox, _>(&mut owner, lead, |sized| {
+        sized.set_size(Some(30.0), Some(10.0))
+    });
+    let (_, second) = frame(owner);
+    assert_eq!(
+        tally.paints(),
+        paints,
+        "the moved leading boundary was replayed, not repainted"
+    );
+    assert_eq!(
+        content_of(&first, leading),
+        content_of(&second, leading),
+        "the replayed boundary keeps its content token"
+    );
+
+    let (fresh, _) = mount(scene(30.0, &PaintTally::new()));
+    let (_, fresh) = frame(fresh);
+    assert_eq!(fingerprint(&second), fingerprint(&fresh));
+    let origin = leader_origin(&second, link);
+    assert_eq!(origin, leader_origin(&fresh, link));
+    assert_eq!(origin.expect("the replayed leader is indexed").x, 30.0);
+    assert_eq!(follower_transform(&second), follower_transform(&fresh));
 }
 
 /// A paint anchor inside the replayed region still governs the nested boundary that repaints.

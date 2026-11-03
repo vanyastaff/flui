@@ -31,6 +31,35 @@ impl WindowParams {
     }
 }
 
+vocabulary! {
+    /// What a client may do on its connection, named in its hello (ADR-0288 §8).
+    #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+    #[cfg_attr(
+        feature = "serde",
+        derive(serde::Serialize, serde::Deserialize),
+        serde(rename_all = "snake_case")
+    )]
+    #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+    pub enum ClientRole {
+        /// Reads, subscribes and acts. One driver is admitted per app at a time; another
+        /// driver's hello is refused `not_driver`. When the app was launched to exit on its
+        /// driver's disconnect, this is the connection it exits with. The default.
+        #[default]
+        Driver => "driver",
+        /// Reads and subscribes, beside the driver. A call that acts is refused `not_driver`,
+        /// and its disconnect never ends the app.
+        Observer => "observer",
+    }
+}
+
+impl ClientRole {
+    /// Whether this is [`Self::Driver`], the role a hello that names none asks for.
+    #[must_use]
+    pub const fn is_driver(&self) -> bool {
+        matches!(self, Self::Driver)
+    }
+}
+
 /// The first line a client sends: `{"hello": {…}}`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -47,16 +76,23 @@ pub struct Hello {
         serde(default, skip_serializing_if = "Option::is_none")
     )]
     pub client: Option<String>,
+    /// What the client may do on this connection; absent, it asks to drive.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "ClientRole::is_driver")
+    )]
+    pub role: ClientRole,
 }
 
 impl Hello {
-    /// A hello presenting `token` in `protocol`, naming no client.
+    /// A hello presenting `token` in `protocol` as the app's driver, naming no client.
     #[must_use]
     pub fn new(token: impl Into<String>, protocol: ProtocolVersion) -> Self {
         Self {
             token: token.into(),
             protocol,
             client: None,
+            role: ClientRole::Driver,
         }
     }
 
@@ -64,6 +100,13 @@ impl Hello {
     #[must_use]
     pub fn with_client(mut self, client: impl Into<String>) -> Self {
         self.client = Some(client.into());
+        self
+    }
+
+    /// Asking for `role` instead of the driver's.
+    #[must_use]
+    pub const fn with_role(mut self, role: ClientRole) -> Self {
+        self.role = role;
         self
     }
 }

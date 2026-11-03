@@ -65,6 +65,20 @@ pub enum DragAnchor {
 /// Builds a view on demand: the feedback, the child while dragged.
 type ViewFn = Rc<dyn Fn() -> BoxedView>;
 
+/// How a widget that lands a dragged item itself (a reorderable row) frames
+/// the drag's feedback: the feedback shows a box the child sits in, lifts
+/// from that box's place, and the box's last place is reported when the drag
+/// ends.
+#[derive(Clone)]
+pub(crate) struct FeedbackFrame {
+    /// Where the child's top-left sits in the box, read as each drag starts.
+    pub(crate) child_offset: Rc<dyn Fn() -> Offset<f64>>,
+    /// Hears the feedback's top-left in the window's space when a drag ends
+    /// with the feedback still shown under the pointer; not when the
+    /// operating system took the drag over.
+    pub(crate) ended: Rc<dyn Fn(Offset<f64>)>,
+}
+
 /// The drag's commands without a pointer path: a cut, and a copy when the
 /// drag allows copying, and how one pointer reaches them.
 ///
@@ -139,6 +153,7 @@ pub struct Draggable {
     devices: PointerKindSet,
     axis: MultiDragAxis,
     reach: Option<DragReach>,
+    frame: Option<FeedbackFrame>,
 }
 
 impl std::fmt::Debug for Draggable {
@@ -182,6 +197,7 @@ impl Draggable {
             devices: PointerKindSet::all(),
             axis: MultiDragAxis::Free,
             reach: None,
+            frame: None,
         })
     }
 
@@ -202,6 +218,7 @@ impl Draggable {
             devices: PointerKindSet::all(),
             axis: MultiDragAxis::Free,
             reach: None,
+            frame: None,
         }
     }
 
@@ -223,6 +240,13 @@ impl Draggable {
     /// How far the drag may go, instead of what its allowed actions derive.
     pub(crate) fn reach(mut self, reach: DragReach) -> Self {
         self.reach = Some(reach);
+        self
+    }
+
+    /// Lift the feedback from a box around the child and report where it
+    /// was when the drag ended: see [`FeedbackFrame`].
+    pub(crate) fn feedback_frame(mut self, frame: FeedbackFrame) -> Self {
+        self.frame = Some(frame);
         self
     }
 
@@ -325,6 +349,7 @@ struct SourceConfig {
     on_drag_started: Option<EventCallback>,
     on_drag_end: Option<ValueCallback<DragOutcome>>,
     reach: Option<DragReach>,
+    frame: Option<FeedbackFrame>,
 }
 
 impl SourceConfig {
@@ -337,6 +362,7 @@ impl SourceConfig {
             on_drag_started: view.on_drag_started.clone(),
             on_drag_end: view.on_drag_end.clone(),
             reach: view.reach,
+            frame: view.frame.clone(),
         }
     }
 }
@@ -448,8 +474,14 @@ impl Source {
             .copied()
             .find(|info| info.id == pointer)
             .unwrap_or_else(|| PointerInfo::new(pointer, flui_interaction::PointerKind::Unknown));
+        // A frame lifts the feedback from the box around the child, so it
+        // starts where that box is painted.
+        let frame_offset = config
+            .frame
+            .as_ref()
+            .map_or(Offset::ZERO, |frame| (frame.child_offset)());
         let anchor = match config.anchor {
-            DragAnchor::Child => grab,
+            DragAnchor::Child => grab + frame_offset,
             DragAnchor::Pointer => Offset::ZERO,
         };
         let pipeline = self.capabilities.borrow().pipeline.clone();
@@ -460,6 +492,7 @@ impl Source {
             source: Rc::downgrade(self),
             feedback: feedback.clone(),
             on_drag_end: config.on_drag_end.clone(),
+            frame_ended: config.frame.as_ref().map(|frame| Rc::clone(&frame.ended)),
         });
         let mut start = drag_and_drop
             .drag((config.items)(), config.allowed)
@@ -496,6 +529,7 @@ impl Source {
             source: Rc::downgrade(self),
             feedback: None,
             on_drag_end: config.on_drag_end.clone(),
+            frame_ended: None,
         });
         let start = drag_and_drop
             .drag((config.items)(), config.allowed)
@@ -524,6 +558,9 @@ struct SessionObserver {
     source: Weak<Source>,
     feedback: Option<Rc<Feedback>>,
     on_drag_end: Option<ValueCallback<DragOutcome>>,
+    /// The frame's [`ended`](FeedbackFrame::ended), told where the feedback
+    /// was before it goes.
+    frame_ended: Option<Rc<dyn Fn(Offset<f64>)>>,
 }
 
 impl DragObserver for SessionObserver {
@@ -535,7 +572,11 @@ impl DragObserver for SessionObserver {
 
     fn ended(&self, outcome: DragOutcome) {
         if let Some(feedback) = &self.feedback {
+            let last = feedback.top_left_in_window();
             feedback.remove();
+            if let (Some(last), Some(ended)) = (last, &self.frame_ended) {
+                ended(last);
+            }
         }
         if let Some(source) = self.source.upgrade() {
             source.ended(outcome, self.on_drag_end.as_ref());
@@ -576,6 +617,8 @@ struct Feedback {
     entry: OverlayEntry,
     place: Rc<FeedbackPlace>,
     removed: Cell<bool>,
+    /// Whether a move has placed it under the pointer yet.
+    placed: Cell<bool>,
 }
 
 /// Where a feedback entry paints, and how to tell it to move.
@@ -623,6 +666,7 @@ impl Feedback {
             entry,
             place,
             removed: Cell::new(false),
+            placed: Cell::new(false),
         })
     }
 
@@ -632,6 +676,7 @@ impl Feedback {
             return;
         }
         self.place.pointer.set(global);
+        self.placed.set(true);
         let rebuild = self.place.rebuild.borrow().clone();
         if let Some(rebuild) = rebuild {
             rebuild.schedule(flui_view::RebuildReason::StateChange);
@@ -642,6 +687,13 @@ impl Feedback {
         if !self.removed.replace(true) {
             self.entry.remove();
         }
+    }
+
+    /// Where the feedback's top-left corner is in the window's space, while
+    /// it is shown and has been placed under the pointer.
+    fn top_left_in_window(&self) -> Option<Offset<f64>> {
+        (!self.removed.get() && self.placed.get())
+            .then(|| self.place.pointer.get() - self.place.anchor)
     }
 }
 
