@@ -185,8 +185,9 @@ fn ordinary_facade_graph_excludes_test_support() {
             "hot reload in default={defaults} normal graph:\n{graph}"
         );
         // Persisted documents bring no serialization crate: an application
-        // encodes its documents with its own. Only the driver agent, which
-        // every debug app hosts (ADR-0239), speaks JSON.
+        // encodes its documents with its own. Only the driver agent's service
+        // in `flui-runtime` (ADR-0288), which every debug app hosts (ADR-0239),
+        // speaks JSON.
         let dependents = Command::new(env!("CARGO"))
             .args([
                 "tree",
@@ -209,7 +210,7 @@ fn ordinary_facade_graph_excludes_test_support() {
         let strays: Vec<&str> = dependents
             .lines()
             .skip(1)
-            .filter(|line| !line.is_empty() && !line.starts_with("flui-app "))
+            .filter(|line| !line.is_empty() && !line.starts_with("flui-runtime "))
             .collect();
         assert!(
             strays.is_empty(),
