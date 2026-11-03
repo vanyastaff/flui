@@ -579,3 +579,83 @@ pub(crate) fn an_area_s_handle_drag_shows_the_magnifier_over_the_dragged_end() {
     let (shown, _) = drag_end(&mut scene);
     assert!(shown.is_empty(), "the area turned it off: {shown:?}");
 }
+
+/// While a drag of an area's end handle steps the end over characters,
+/// each step plays one selection click, and the magnifier follows the
+/// finger between characters: a finger resting a third of a letter past
+/// the end has the magnifier centred under it, not on the end.
+///
+/// Red-check: play no click on a step (none heard), or keep the magnifier
+/// on the end (centred a third of a letter short).
+pub(crate) fn an_area_s_handle_drag_s_magnifier_follows_the_finger_and_each_step_clicks() {
+    use flui_platform::HapticFeedback;
+    use flui_testing::replay::TouchScript;
+    use flui_widgets::PlainMagnifier;
+
+    let mut scene = Scene::build(
+        |area| area,
+        Some(|controls| controls.magnifier(PlainMagnifier::capsule())),
+        |page| page,
+    );
+    scene.long_press(scene.along(width_of("alpha be")));
+    let end = width_of("alpha beta");
+    let from = scene.end_handle(end);
+    let letter = width_of("alpha beta gamm") - width_of("alpha beta gam");
+    // Three steps, then a third of the next letter.
+    let stops = [
+        width_of("alpha beta g"),
+        width_of("alpha beta ga"),
+        width_of("alpha beta gam"),
+        width_of("alpha beta gam") + letter / 3.0,
+    ];
+    // The finger first goes down past the drag slop, which the line's
+    // letters keep: a step of one letter alone would not start the drag.
+    let below = from + Offset::new(0.0, 30.0);
+    let mut script = TouchScript::new("step the end handle")
+        .down(1, from)
+        .wait(Duration::from_millis(16))
+        .move_to(1, below)
+        .frame();
+    for stop in stops {
+        script = script
+            .wait(Duration::from_millis(16))
+            .move_to(1, below + Offset::new(stop - end, 0.0))
+            .frame();
+    }
+    let drag = script
+        .wait(Duration::from_millis(16))
+        .frame()
+        .wait(Duration::from_millis(16))
+        .frame()
+        .up(1)
+        .build()
+        .expect("a valid script");
+    let last = drag.steps().len() - 1;
+    let mut during = None;
+    scene.laid.replay_with(&drag, |laid, index| {
+        if index + 1 == last {
+            during = Some(crate::editable_text_handles::magnifiers(laid));
+        }
+    });
+    scene.settle();
+    let shown = during.expect("the drag ran");
+    assert_eq!(scene.selected().as_deref(), Some("beta gam"));
+    let clicks = scene
+        .laid
+        .window()
+        .haptic_actuator()
+        .feedback()
+        .iter()
+        .filter(|kind| **kind == HapticFeedback::SelectionClick)
+        .count();
+    assert_eq!(clicks, 3, "one click a step");
+    assert_eq!(shown.len(), 1, "one magnifier during the drag: {shown:?}");
+    let line = scene.laid.absolute_offset(scene.paragraph);
+    let finger_x = line.dx + stops[3];
+    assert!(
+        (shown[0].center().x - finger_x).abs() < 0.5,
+        "centred under the finger at {finger_x}, the end at {}: {:?}",
+        line.dx + stops[2],
+        shown[0]
+    );
+}

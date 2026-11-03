@@ -1324,6 +1324,7 @@ impl EditableTextState {
         self.touch_handles.set_scope(
             crate::Overlay::maybe_of(ctx),
             crate::animated::VsyncScope::maybe_of(ctx),
+            ctx.haptics(),
         );
         let drag = Rc::downgrade(&self.selection_drag);
         self.long_press.build(

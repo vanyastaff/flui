@@ -25,13 +25,14 @@ use crate::{
 ///
 /// While a finger drags a handle of a selection area or an editable text,
 /// FLUI shows the magnifier this builds above the line of the dragged end:
-/// its bottom centre [`MagnifierInfo::gap`] above the top of the line, at
-/// the end. It moves with the end, takes no touch, and shows nothing to
-/// assistive technology, which hears the end move already. It goes when
-/// the drag ends or the handles hide.
+/// its bottom centre [`MagnifierInfo::gap`] above the top of the line,
+/// where the finger holds the end along it. It follows the finger between
+/// characters while the end steps over them, takes no touch, and shows
+/// nothing to assistive technology, which hears the end move already. It
+/// goes when the drag ends or the handles hide.
 ///
-/// A look usually builds a [`RawMagnifier`] focused on the end with
-/// [`MagnifierInfo::focal_offset`].
+/// A look usually builds a [`RawMagnifier`] focused on the text under it
+/// with [`MagnifierInfo::focal_offset`].
 pub trait SelectionMagnifier: 'static {
     /// The magnifier over `info`'s end.
     fn build(&self, info: &MagnifierInfo, ctx: &dyn BuildContext) -> BoxedView;
@@ -66,7 +67,7 @@ impl MagnifierInfo {
 
     /// Where the middle of the end's line is from the centre of a magnifier
     /// of `size` placed over it: what [`RawMagnifier::focal_offset`] takes
-    /// to show the end at the magnifier's centre.
+    /// to show the line under the finger at the magnifier's centre.
     #[must_use]
     pub fn focal_offset(&self, size: Size<f64>) -> Offset<f64> {
         Offset::new(0.0, size.height / 2.0 + self.gap + self.line_height / 2.0)
@@ -172,15 +173,17 @@ pub(crate) enum MagnifierChoice {
 }
 
 /// The magnifier `look` builds for `info`, placed above the end published
-/// under `link`, taking no touch and hidden from assistive technology.
+/// under `link` and `along` past it on the line, where the finger holds
+/// the end; it takes no touch and is hidden from assistive technology.
 pub(crate) fn magnifier(
     look: &dyn SelectionMagnifier,
     info: &MagnifierInfo,
     link: LayerLink,
+    along: f64,
     ctx: &dyn BuildContext,
 ) -> BoxedView {
     let shown = ExcludeSemantics::new().child(IgnorePointer::new().child(look.build(info, ctx)));
-    Positioned::new(LinkFollower::above(link, info.gap, shown))
+    Positioned::new(LinkFollower::above(link, info.gap, along, shown))
         .left(0.0)
         .top(0.0)
         .boxed()
