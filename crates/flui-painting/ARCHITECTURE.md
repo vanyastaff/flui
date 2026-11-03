@@ -52,9 +52,18 @@ own root clips end with it. An empty picture records nothing. The engine's
 The wire carries no serde ([ADR-0066](../../docs/adr/ADR-0066-display-list-command-representation.md)).
 
 `Paint` is interned per canvas: each `draw_*` scans a small `Vec<Arc<Paint>>`
-for an equal paint and shares the `Arc`. `Path` is copy-on-write
-(`Arc<Vec<PathCommand>>`), so recording a caller's path copies nothing.
-`DrawOp` is at most 128 bytes and `DrawCommand` 192;
+for an equal paint and shares the `Arc` (`Canvas::intern_paint`,
+`src/canvas/mod.rs:88`). `Path` is copy-on-write over `Arc<kurbo::BezPath>`
+(`src/paint/path.rs:75`): a path inside a `DrawOp` (`ClipPath`, `Path`,
+`Shadow`) holds that `Arc` plus an inline shape hint (at most an `RRect`), a
+fill type and a cached bounds, and recording a caller's path copies no
+geometry. `PathCommand` (`src/paint/path.rs:24`) is the element
+`Path::commands` yields (`src/paint/path.rs:600`), not the storage.
+`DrawCommand.transform` is a full `Matrix4`, sixteen `f64` (128 bytes), so every
+command carries that much beside its `DrawOp`
+(`src/display_list/command.rs:30`;
+`crates/flui-foundation/src/geometry/matrix4.rs:124`). No test in the crate
+pins a size for `DrawOp` or `DrawCommand`, and no budget is stated here;
 `display_list_record` (criterion) measures the recording cost.
 
 `Canvas::finish` is infallible: an unbalanced save fires a `debug_assert`

@@ -1,10 +1,21 @@
 # ADR-0103: Portable independent primitive coverage
 
-- **Status:** Proposed; implementation and local gates pass, pending PR acceptance.
+- **Status:** Accepted (2026-11-03). A direct destination-sensitive draw on a device without
+  `DUAL_SOURCE_BLENDING`, and Plus on every device, goes through `PortableCoveragePipeline`
+  (`crates/flui-engine/src/portable_coverage.rs:20`), as `needs_portable` decides
+  (`crates/flui-engine/src/replay/coverage.rs:18-24`), and `WgpuPainter::render_to_texture`
+  takes the backing texture (`crates/flui-engine/src/painter/mod.rs:513`). Pinned by
+  `coverage_blend_reads_back_as_specified`
+  (`crates/flui-engine/src/coverage_blend_readback_tests.rs:793`), which renders each case on a
+  device with `DUAL_SOURCE_BLENDING` withheld (`crates/flui-engine/src/headless.rs:96`). Not
+  implemented: nothing in the decision. Not run: these readbacks on a browser or a mobile GPU.
 - **Date:** 2026-10-02
 - **Supersedes:** [ADR-0102](ADR-0102-immutable-geometric-clip-composition.md),
   its direct-primitive capability decision only; the geometric expression,
   sample lattice, group ownership and admission decisions remain in force.
+- **Supersedes:** [ADR-0057](ADR-0057-coverage-correct-blending-is-capability-gated.md) for its
+  capability gate only (a device without `DUAL_SOURCE_BLENDING` draws a direct primitive through
+  the portable path; the dual-source channel stays the linear fast path)
 - **Related:** [ADR-0100](ADR-0100-prepared-gpu-work-and-retained-frame-commit.md)
 
 ## Context

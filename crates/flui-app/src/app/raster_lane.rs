@@ -163,7 +163,11 @@ impl RasterResizeHook {
 
 /// The environment variable that switches damage production off for every
 /// presentation the process opens: `FLUI_DAMAGE=off` sends every frame as
-/// `Full`, retains nothing and never renders a partial frame (ADR-0087 §3).
+/// `Full` and never renders a partial frame (ADR-0087 §3). It empties the
+/// lane's `LayerDiffer` of previous-frame records and nothing else: the
+/// pipeline owner still grafts retained repaint-boundary output when it
+/// paints, and the backend still renders into its retained target when the
+/// surface needs an intermediate image.
 /// It is the fallback for stale pixels in the field, read once per lane, and
 /// stays until an `AppConfig` switch carries the same choice per app.
 #[cfg(not(target_arch = "wasm32"))]
@@ -260,8 +264,9 @@ impl<B: RasterBackend> RasterLane<B> {
     }
 
     /// Switches damage production on or off for this presentation.
-    /// [`DamageMode::Off`] retains nothing and sends every frame as `Full`,
-    /// at the per-frame cost of having no differ.
+    /// [`DamageMode::Off`] sends every frame as `Full` and keeps no
+    /// previous-frame records in the differ, so every frame pays for a full
+    /// render.
     pub(crate) fn set_damage_mode(&mut self, mode: DamageMode) {
         self.damage.set_mode(mode);
     }
