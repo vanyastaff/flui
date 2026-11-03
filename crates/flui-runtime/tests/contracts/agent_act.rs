@@ -116,8 +116,8 @@ fn locate(host: &mut HeadlessHost, window: &AgentWindow, locator: Locator) -> Ma
 /// semantics tree committed.
 fn shown() -> (HeadlessHost, HeadlessDevAgent, AgentWindow, Arc<AtomicU32>) {
     let windows = Arc::new(Mutex::new(Vec::new()));
-    let agent = HeadlessDevAgent::attach(Windows(Arc::clone(&windows)));
-    let mut host = HeadlessHost::new(HeadlessWindow::new(200, 200)).with_dev_agent(&agent);
+    let mut agent = HeadlessDevAgent::attach(Windows(Arc::clone(&windows)));
+    let mut host = HeadlessHost::new(HeadlessWindow::new(200, 200)).with_dev_agent(&mut agent);
     let presses = Arc::new(AtomicU32::new(0));
     host.attach(&Moving {
         presses: Arc::clone(&presses),

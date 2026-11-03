@@ -1289,21 +1289,20 @@ fn agent_notification_follows_live_native_initialization() {
         let window: Rc<dyn PlatformWindow> = host;
         let opened = Arc::new(AtomicUsize::new(0));
         let live = Arc::new(AtomicUsize::new(0));
-        let agent = crate::app::dev_agent::DevAgent::new(Agent {
+        // The loop's development agents, as a runner starts them.
+        super::super::dev_agents::start(&crate::AppConfig::new().with_dev_agent(Agent {
             opened: Arc::clone(&opened),
             live: Arc::clone(&live),
             close: matches!(case, DuringInstall::CloseFromAgent).then(|| mock.clone()),
-        });
-        let _attachment = agent.attach().expect("attach development agent");
+        }));
         let runtime = UiRuntime::for_test();
         runtime
             .attach_root_widget(&flui_widgets::SizedBox::new(10.0, 10.0))
             .expect("mount root");
-        let agent_window = agent
-            .vend(&runtime, runtime.presentation_id())
+        let agent_window = super::super::dev_agents::vend(&runtime, runtime.presentation_id())
             .expect("vend mounted presentation");
         let mut installation = prepare_replacement_ui_runtime(runtime, Rc::clone(&window));
-        installation.dev_agent(Some((agent, agent_window)));
+        installation.dev_agent(Some(agent_window));
         let native = Rc::clone(&window);
         installation
             .frame_driver(FrameDriver::Test(TestFrameDriver {
@@ -1355,6 +1354,7 @@ fn agent_notification_follows_live_native_initialization() {
             opened.load(Ordering::SeqCst),
             "every notified window is live at handover: {case:?}"
         );
+        super::super::dev_agents::end();
         teardown_platform_ui_runtime();
         let next = prepared_runtime();
         let dispatcher = next.dispatcher();

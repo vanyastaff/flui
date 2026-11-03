@@ -19,7 +19,7 @@
 - **Amended:** 2026-10-13 — the current FLUI schema is 0.4, which adds a node's optional `description`.
 - **Amended:** 2026-10-18 — the Android runner drives the hook as the desktop and iOS runners do.
 - **Amended:** 2026-10-19 — `flui run --agent` and `flui mcp` are built in `flui-cli` (see "The CLI half" in §3): `flui mcp` is a stdio proxy written in the CLI over the endpoint's framing, with no `flui-mcp` library and no cross-window handle table.
-- **Amended:** 2026-11-03 — an `AgentAnswer` and an `AgentEvents` wake a registered waker when they can be read, and the conversation over them is `flui-runtime`'s ([ADR-0288](ADR-0288-the-development-agent-is-one-sans-io-service.md)).
+- **Amended:** 2026-11-03 — an `AgentAnswer` and an `AgentEvents` wake a registered waker when they can be read, the conversation over them is `flui-runtime`'s, and the event loop that starts first takes the hook and owns it ([ADR-0288](ADR-0288-the-development-agent-is-one-sans-io-service.md)).
 - **Amends:** [ADR-0080](ADR-0080-agent-protocol-desktop-contract.md) (settles its "Not
   decided here" in-process transport; the wire contract is unchanged)
 - **Superseded in part by:** [ADR-0124](ADR-0124-controlled-numeric-and-disclosure-actions.md):
@@ -143,7 +143,7 @@ This settles ADR-0080's open item:
 - *The seam.* `flui-devtools` is an official package and cannot name `flui-runtime`, and
   `flui-app` cannot name an official package. So the application installs the server as a
   `flui_view::dev_agent::DevAgentHook` on its configuration (`AppConfig::with_dev_agent`), which
-  the package reaches through `flui-sdk`; the host attaches it once per event loop and hands it
+  the package reaches through `flui-sdk`; the first event loop that starts with it takes it, attaches it and hands it
   an `AgentWindow` per window with content. `flui_runtime::dev_agent::DevAgentHost` holds the
   hook's containment for every host (the desktop, iOS and Android runners, and `flui-testing`'s headless
   UI runtime, which is how CI exercises it); no transport is in the runtime. An `AgentWindow` holds
@@ -151,7 +151,7 @@ This settles ADR-0080's open item:
   close notification, and holds the window's semantics handle strongly, so semantics are
   collected only while the tool keeps the window. `DevAgentHook::attach` answers whether the
   hook serves: one that does not (a release build, missing or short credentials, a failed bind)
-  stays unattached and is handed no window, so it costs the application nothing. The web
+  is dropped and is handed no window, so it costs the application nothing. The web
   drives no hook. An Android app process inherits no launch environment, so the application
   builds its `AgentEndpoint` itself (the interaction gallery reads a token the driver wrote into
   its files as its own user, and serves a socket there, which the driver reaches through

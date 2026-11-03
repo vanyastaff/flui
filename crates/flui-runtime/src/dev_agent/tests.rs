@@ -1,22 +1,21 @@
 //! The development-agent host's containment matrix: each hook method
-//! panicking alone, a hook whose `Drop` panics too, a nested call, a refused
-//! second attach, a new loop after the last one ended, and no semantics work
-//! while no hook is attached, while it does not serve, or once it has let go
-//! of its windows; a deferred detach whose panic payload panics on drop, and
-//! a hook whose `Drop` panics when the last host clone goes, unwinding or
-//! not. After every failure the UI runtime still frames and
-//! later publishes do nothing.
+//! panicking alone, a hook whose `Drop` panics too, a detach whose panic
+//! payload panics on drop, a hook that does not serve, one hook's panic beside
+//! one that keeps serving, and no semantics work while no hook serves or once
+//! the hooks have let go of their windows. After every failure the UI runtime
+//! still frames and later publishes do nothing.
 
+use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use flui_protocol::{ReadParams, method};
+use parking_lot::Mutex;
 
 use super::*;
 use crate::testing::ScriptedSink;
 
-// The attachment stays on the owner thread, so its drop (the detach) runs
-// there and never races a hand-over.
-static_assertions::assert_not_impl_any!(DevAgentAttachment: Send, Sync);
+// The host stays on its loop's thread, so its drop (the detach) runs there.
+static_assertions::assert_not_impl_any!(DevAgentHost: Send, Sync);
 
 /// Which hook method panics.
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
@@ -49,16 +48,6 @@ struct Record {
     drops: AtomicUsize,
     /// A window handed over, kept by a hook that does not panic.
     windows: Mutex<Vec<AgentWindow>>,
-    /// The host a re-entrant hook publishes through from `window_opened`.
-    reenter: Mutex<Option<DevAgentHost>>,
-}
-
-thread_local! {
-    /// The loop's attachment, which `window_opened` drops, ending the loop
-    /// while the hook is lent. Owner-thread state, as the attachment is.
-    #[cfg_attr(target_os = "android", allow(clippy::missing_const_for_thread_local, reason = "Const initializer; Android std macro false positive: https://github.com/rust-lang/rust-clippy/issues/13422"))]
-    static RELEASE: std::cell::RefCell<Option<DevAgentAttachment>> =
-        const { std::cell::RefCell::new(None) };
 }
 
 impl Record {
@@ -100,12 +89,6 @@ impl DevAgentHook for Hook {
             self.panic_in != PanicIn::WindowOpened,
             "hook window_opened fails"
         );
-        let reenter = self.record.reenter.lock().take();
-        if let Some(host) = reenter {
-            host.window_opened(window.clone());
-        }
-        let release = RELEASE.with_borrow_mut(Option::take);
-        drop(release);
         self.record.windows.lock().push(window);
     }
 }
@@ -117,14 +100,20 @@ impl Drop for Hook {
     }
 }
 
-fn host(panic_in: PanicIn, panic_on_drop: bool) -> (DevAgentHost, Arc<Record>) {
+fn hook(panic_in: PanicIn, panic_on_drop: bool) -> (Box<dyn DevAgentHook>, Arc<Record>) {
     let record = Arc::new(Record::default());
-    let host = DevAgentHost::new(Hook {
+    let hook = Box::new(Hook {
         record: Arc::clone(&record),
         panic_in,
         panic_on_drop,
     });
-    (host, record)
+    (hook, record)
+}
+
+/// A host that attached one hook.
+fn host(panic_in: PanicIn, panic_on_drop: bool) -> (DevAgentHost, Arc<Record>) {
+    let (hook, record) = hook(panic_in, panic_on_drop);
+    (DevAgentHost::attach([hook]), record)
 }
 
 /// A UI runtime with a root mounted and one frame committed.
@@ -162,11 +151,8 @@ fn collects_semantics(ui_runtime: &UiRuntime, sink: &mut ScriptedSink) -> bool {
 
 fn a_hook_panicking_in_attach_is_dropped_and_nothing_is_vended() {
     let (ui_runtime, mut sink) = ui_runtime();
-    let (host, record) = host(PanicIn::Attach, false);
-    assert!(
-        host.attach().is_none(),
-        "a panicking attach attaches nothing"
-    );
+    let (mut host, record) = host(PanicIn::Attach, false);
+    assert!(!host.is_serving(), "a panicking attach attaches nothing");
     host.publish(&ui_runtime, ui_runtime.presentation_id());
     assert_eq!(
         record.counts(),
@@ -177,17 +163,14 @@ fn a_hook_panicking_in_attach_is_dropped_and_nothing_is_vended() {
         !collects_semantics(&ui_runtime, &mut sink),
         "no semantics work"
     );
-    assert!(
-        host.attach().is_none(),
-        "a dropped hook never attaches again"
-    );
+    drop(host);
+    assert_eq!(record.counts(), (1, 0, 0, 1), "and never detached");
 }
 
-fn a_hook_that_does_not_serve_is_not_attached_and_costs_nothing() {
+fn a_hook_that_does_not_serve_is_dropped_and_costs_nothing() {
     let (ui_runtime, mut sink) = ui_runtime();
-    let (host, record) = host(PanicIn::Inert, false);
-    assert!(host.attach().is_none(), "an inert hook attaches nothing");
-    assert!(!host.is_attached());
+    let (mut host, record) = host(PanicIn::Inert, false);
+    assert!(!host.is_serving(), "an inert hook attaches nothing");
     assert!(
         host.vend(&ui_runtime, ui_runtime.presentation_id())
             .is_none()
@@ -195,28 +178,26 @@ fn a_hook_that_does_not_serve_is_not_attached_and_costs_nothing() {
     host.publish(&ui_runtime, ui_runtime.presentation_id());
     assert_eq!(
         record.counts(),
-        (1, 0, 0, 0),
-        "asked once, handed nothing, never detached, kept"
+        (1, 0, 0, 1),
+        "asked once, handed nothing, dropped without a detach"
     );
     assert!(
         !collects_semantics(&ui_runtime, &mut sink),
         "no semantics work"
     );
-    assert!(
-        host.attach().is_none(),
-        "the next loop asks again and is answered the same"
-    );
-    assert_eq!(record.counts(), (2, 0, 0, 0));
+    drop(host);
+    assert_eq!(record.counts(), (1, 0, 0, 1));
 }
 
 fn a_hook_panicking_in_window_opened_is_dropped_with_the_window() {
     let (ui_runtime, mut sink) = ui_runtime();
-    let (host, record) = host(PanicIn::WindowOpened, false);
-    let attachment = host.attach().expect("attach succeeds");
+    let (mut host, record) = host(PanicIn::WindowOpened, false);
+    assert!(host.is_serving());
     host.publish(&ui_runtime, ui_runtime.presentation_id());
     assert_eq!(record.counts(), (1, 0, 1, 1), "the hook is dropped");
+    assert!(!host.is_serving());
     host.publish(&ui_runtime, ui_runtime.presentation_id());
-    drop(attachment);
+    drop(host);
     assert_eq!(
         record.counts(),
         (1, 0, 1, 1),
@@ -230,22 +211,16 @@ fn a_hook_panicking_in_window_opened_is_dropped_with_the_window() {
 
 fn a_hook_panicking_in_detach_is_contained() {
     let (ui_runtime, mut sink) = ui_runtime();
-    let (host, record) = host(PanicIn::Detach, false);
-    let attachment = host.attach().expect("attach succeeds");
+    let (mut host, record) = host(PanicIn::Detach, false);
     host.publish(&ui_runtime, ui_runtime.presentation_id());
-    drop(attachment);
+    drop(host);
     assert_eq!(record.counts(), (1, 1, 1, 1), "detached once, then dropped");
-    assert!(
-        host.attach().is_none(),
-        "a dropped hook never attaches again"
-    );
     frame(&ui_runtime, &mut sink);
 }
 
 fn a_hook_whose_drop_panics_too_is_contained() {
     let (ui_runtime, mut sink) = ui_runtime();
-    let (host, record) = host(PanicIn::WindowOpened, true);
-    let _attachment = host.attach().expect("attach succeeds");
+    let (mut host, record) = host(PanicIn::WindowOpened, true);
     host.publish(&ui_runtime, ui_runtime.presentation_id());
     assert_eq!(record.counts(), (1, 0, 1, 1));
     host.publish(&ui_runtime, ui_runtime.presentation_id());
@@ -253,26 +228,15 @@ fn a_hook_whose_drop_panics_too_is_contained() {
     frame(&ui_runtime, &mut sink);
 }
 
-fn a_deferred_detach_panicking_with_a_panicking_payload_is_contained() {
+fn a_detach_panicking_with_a_panicking_payload_is_contained() {
     let (ui_runtime, mut sink) = ui_runtime();
-    let (host, record) = host(PanicIn::DetachWithPanickingPayload, false);
-    let attachment = host.attach().expect("attach succeeds");
-    RELEASE.set(Some(attachment));
+    let (mut host, record) = host(PanicIn::DetachWithPanickingPayload, false);
     host.publish(&ui_runtime, ui_runtime.presentation_id());
+    drop(host);
     assert_eq!(
         record.counts(),
         (1, 1, 1, 1),
-        "the owed detach ran once when the hand-over returned, then the hook was dropped"
-    );
-    assert!(
-        host.attach().is_none(),
-        "a dropped hook never attaches again"
-    );
-    host.publish(&ui_runtime, ui_runtime.presentation_id());
-    assert_eq!(
-        record.counts(),
-        (1, 1, 1, 1),
-        "a later publish calls nothing"
+        "detached once, then the hook was dropped"
     );
     assert!(
         !collects_semantics(&ui_runtime, &mut sink),
@@ -280,63 +244,59 @@ fn a_deferred_detach_panicking_with_a_panicking_payload_is_contained() {
     );
 }
 
-fn a_hook_whose_drop_panics_is_contained_when_the_last_host_goes() {
-    let (first, record) = host(PanicIn::Nowhere, true);
-    let clone = first.clone();
-    drop(first);
-    assert_eq!(
-        record.counts(),
-        (0, 0, 0, 0),
-        "a clone still holds the hook"
-    );
-    drop(clone);
-    assert_eq!(record.counts(), (0, 0, 0, 1), "the last clone dropped it");
+fn a_hook_whose_drop_panics_is_contained_when_the_host_goes() {
+    let (host, record) = host(PanicIn::Nowhere, true);
+    drop(host);
+    assert_eq!(record.counts(), (1, 1, 0, 1), "detached, then dropped");
 
-    let (second, record) = host(PanicIn::Nowhere, true);
-    let attachment = second.attach().expect("attach succeeds");
-    drop(attachment);
+    let (host, record) = self::host(PanicIn::Nowhere, true);
     let unwound = std::panic::catch_unwind(AssertUnwindSafe(move || {
-        let _host = second;
+        let _host = host;
         panic!("the host's owner unwinds");
     }));
     assert!(unwound.is_err(), "the owner's own panic still unwinds");
     assert_eq!(
         record.counts(),
         (1, 1, 0, 1),
-        "the hook was dropped during the unwind without aborting it"
+        "the hook was detached and dropped during the unwind without aborting it"
     );
 }
 
-fn a_nested_call_finds_the_hook_lent_and_does_nothing() {
-    let (ui_runtime, _sink) = ui_runtime();
-    let (host, record) = host(PanicIn::Nowhere, false);
-    let _attachment = host.attach().expect("attach succeeds");
-    *record.reenter.lock() = Some(host.clone());
+fn one_hooks_panic_leaves_the_others_served_in_order() {
+    let (ui_runtime, mut sink) = ui_runtime();
+    let (failing, failed) = hook(PanicIn::WindowOpened, false);
+    let (serving, served) = hook(PanicIn::Nowhere, false);
+    let mut host = DevAgentHost::attach([failing, serving]);
     host.publish(&ui_runtime, ui_runtime.presentation_id());
     assert_eq!(
-        record.counts(),
-        (1, 0, 1, 0),
-        "the nested hand-over reached nothing"
+        failed.counts(),
+        (1, 0, 1, 1),
+        "the panicking hook is dropped"
     );
-    assert_eq!(record.windows.lock().len(), 1);
+    assert_eq!(
+        served.counts(),
+        (1, 0, 1, 0),
+        "the next one is still handed the window"
+    );
+    assert!(host.is_serving());
+    assert!(
+        collects_semantics(&ui_runtime, &mut sink),
+        "the window the serving hook keeps is read"
+    );
+    drop(host);
+    assert_eq!(served.counts(), (1, 1, 1, 1), "detached once, then dropped");
+    assert_eq!(
+        failed.counts(),
+        (1, 0, 1, 1),
+        "nothing more reached the dropped one"
+    );
 }
 
-fn a_second_attach_while_attached_is_refused() {
-    let (host, record) = host(PanicIn::Nowhere, false);
-    let first = host.attach().expect("attach succeeds");
-    assert!(host.attach().is_none(), "one attach per detach");
-    assert_eq!(record.counts(), (1, 0, 0, 0));
-    drop(first);
-    assert_eq!(record.counts(), (1, 1, 0, 0));
-}
-
-fn a_new_loop_attaches_and_publishes_again() {
-    let (ui_runtime, _sink) = ui_runtime();
-    let (host, record) = host(PanicIn::Nowhere, false);
-    drop(host.attach().expect("the first loop attaches"));
-    let _second = host.attach().expect("the next loop attaches");
+fn a_published_window_is_read_until_the_host_detaches() {
+    let (ui_runtime, mut sink) = ui_runtime();
+    let (mut host, record) = host(PanicIn::Nowhere, false);
     host.publish(&ui_runtime, ui_runtime.presentation_id());
-    assert_eq!(record.counts(), (2, 1, 1, 0));
+    assert_eq!(record.counts(), (1, 0, 1, 0));
     let window = record.windows.lock()[0].clone();
     assert_eq!(
         window.id().get(),
@@ -349,54 +309,28 @@ fn a_new_loop_attaches_and_publishes_again() {
             .is_ok(),
         "the window reads while open"
     );
-}
-
-fn detaching_the_hook_ends_its_windows_semantics_work() {
-    let (ui_runtime, mut sink) = ui_runtime();
-    let (host, record) = host(PanicIn::Nowhere, false);
-    let attachment = host.attach().expect("attach succeeds");
-    host.publish(&ui_runtime, ui_runtime.presentation_id());
+    drop(window);
     assert!(
         collects_semantics(&ui_runtime, &mut sink),
         "a handed-over window is read"
     );
-    drop(attachment);
-    assert_eq!(record.counts(), (1, 1, 1, 0));
+    drop(host);
+    assert_eq!(record.counts(), (1, 1, 1, 1));
     assert!(
         !collects_semantics(&ui_runtime, &mut sink),
         "the hook let go of its windows at detach"
     );
-    let second = host.attach().expect("the next loop attaches");
-    host.publish(&ui_runtime, ui_runtime.presentation_id());
-    assert!(
-        collects_semantics(&ui_runtime, &mut sink),
-        "the next loop's window is read again"
-    );
-    drop(second);
 }
 
-fn nothing_is_vended_while_no_hook_is_attached() {
+fn nothing_is_vended_while_no_hook_serves() {
     let (ui_runtime, mut sink) = ui_runtime();
-    let (host, record) = host(PanicIn::Nowhere, false);
+    let mut host = DevAgentHost::attach(std::iter::empty());
+    assert!(!host.is_serving());
     assert!(
         host.vend(&ui_runtime, ui_runtime.presentation_id())
             .is_none()
     );
     host.publish(&ui_runtime, ui_runtime.presentation_id());
-    assert_eq!(record.counts(), (0, 0, 0, 0));
-    assert!(
-        !collects_semantics(&ui_runtime, &mut sink),
-        "no semantics work"
-    );
-
-    let attachment = host.attach().expect("attach succeeds");
-    drop(attachment);
-    host.publish(&ui_runtime, ui_runtime.presentation_id());
-    assert_eq!(
-        record.counts(),
-        (1, 1, 0, 0),
-        "nothing after the loop ended"
-    );
     assert!(
         !collects_semantics(&ui_runtime, &mut sink),
         "no semantics work"
@@ -413,8 +347,8 @@ fn dev_agent_host_contains_its_hook() {
                 a_hook_panicking_in_attach_is_dropped_and_nothing_is_vended,
             ),
             (
-                "a_hook_that_does_not_serve_is_not_attached_and_costs_nothing",
-                a_hook_that_does_not_serve_is_not_attached_and_costs_nothing,
+                "a_hook_that_does_not_serve_is_dropped_and_costs_nothing",
+                a_hook_that_does_not_serve_is_dropped_and_costs_nothing,
             ),
             (
                 "a_hook_panicking_in_window_opened_is_dropped_with_the_window",
@@ -429,32 +363,24 @@ fn dev_agent_host_contains_its_hook() {
                 a_hook_whose_drop_panics_too_is_contained,
             ),
             (
-                "a_deferred_detach_panicking_with_a_panicking_payload_is_contained",
-                a_deferred_detach_panicking_with_a_panicking_payload_is_contained,
+                "a_detach_panicking_with_a_panicking_payload_is_contained",
+                a_detach_panicking_with_a_panicking_payload_is_contained,
             ),
             (
-                "a_hook_whose_drop_panics_is_contained_when_the_last_host_goes",
-                a_hook_whose_drop_panics_is_contained_when_the_last_host_goes,
+                "a_hook_whose_drop_panics_is_contained_when_the_host_goes",
+                a_hook_whose_drop_panics_is_contained_when_the_host_goes,
             ),
             (
-                "a_nested_call_finds_the_hook_lent_and_does_nothing",
-                a_nested_call_finds_the_hook_lent_and_does_nothing,
+                "one_hooks_panic_leaves_the_others_served_in_order",
+                one_hooks_panic_leaves_the_others_served_in_order,
             ),
             (
-                "a_second_attach_while_attached_is_refused",
-                a_second_attach_while_attached_is_refused,
+                "a_published_window_is_read_until_the_host_detaches",
+                a_published_window_is_read_until_the_host_detaches,
             ),
             (
-                "a_new_loop_attaches_and_publishes_again",
-                a_new_loop_attaches_and_publishes_again,
-            ),
-            (
-                "detaching_the_hook_ends_its_windows_semantics_work",
-                detaching_the_hook_ends_its_windows_semantics_work,
-            ),
-            (
-                "nothing_is_vended_while_no_hook_is_attached",
-                nothing_is_vended_while_no_hook_is_attached,
+                "nothing_is_vended_while_no_hook_serves",
+                nothing_is_vended_while_no_hook_serves,
             ),
         ],
     );

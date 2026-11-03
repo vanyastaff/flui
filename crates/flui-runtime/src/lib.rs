@@ -14,9 +14,9 @@
 //! - [`capability`]: the registry presentations acquire platform capabilities
 //!   from, and the queue a provider's answers reach the owner through
 //!   (ADR-0152);
-//! - [`dev_agent`]: the host half of the development-agent seam — attaches
-//!   an installed `DevAgentHook` once per loop, hands it each window with
-//!   content, and contains its panics (ADR-0095 §3);
+//! - [`dev_agent`]: the host half of the development-agent seam — the hooks
+//!   an event loop owns, attached when it starts, handed each window with
+//!   content, detached when it ends, each contained (ADR-0095 §3, ADR-0288 §7);
 //! - [`ui_runtime`]: `UiRuntime`, the owner-affine UI runtime — the presentations it
 //!   hosts, their frame transaction, input routing, lifecycle and command
 //!   inbox;

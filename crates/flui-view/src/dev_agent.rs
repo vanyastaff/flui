@@ -22,11 +22,12 @@
 //! | desktop, iOS, Android | yes | each window that mounts a root view |
 //! | web | attach only: the page's loop never ends | the page's window |
 //!
-//! - [`DevAgentHook::attach`] runs once per event loop, on the owner thread,
-//!   before the first window opens. When it answers that it serves, the
-//!   hook is attached and [`DevAgentHook::detach`] runs once when that loop
-//!   ends; when it answers that it does not, nothing else is called for that
-//!   loop. A hook is never attached twice without a detach between.
+//! - The event loop that starts first with the hook's configuration takes the
+//!   hook and owns it until it ends (ADR-0288 §7). [`DevAgentHook::attach`]
+//!   runs once, on that loop's owner thread, before its first window opens.
+//!   When it answers that it serves, [`DevAgentHook::detach`] runs once when
+//!   that loop ends and the hook is then dropped; when it answers that it
+//!   does not, it is dropped at once and nothing else is called.
 //! - [`DevAgentHook::window_opened`] runs on the owner thread once a window's
 //!   UI runtime is installed, and only between `attach` and `detach`. A window
 //!   whose installation fails is never handed over.
@@ -100,19 +101,20 @@ use crate::__runtime::{AgentPort, EventSource, WakeSlot, WindowCall};
 /// }
 /// ```
 pub trait DevAgentHook: Send + 'static {
-    /// Once per event loop, before the first window: start serving (bind an
-    /// endpoint, start the threads that answer agents), and answer whether
-    /// it serves.
+    /// Once, when the event loop that took the hook starts, before its first
+    /// window: start serving (bind an endpoint, start the threads that answer
+    /// agents), and answer whether it serves.
     ///
     /// `false` (the endpoint could not be bound, the build or the
-    /// credentials rule serving out) leaves the hook unattached for this
-    /// loop: it is handed no window and not detached, so the application
+    /// credentials rule serving out) leaves the hook unattached: it is
+    /// dropped, handed no window and not detached, so the application
     /// collects no semantics for it.
     #[must_use = "the host attaches the hook only when it serves"]
     fn attach(&mut self) -> bool;
 
     /// The loop is ending: stop serving and let go of every window. The
-    /// host pairs every `attach` that answered `true` with one `detach`.
+    /// host pairs an `attach` that answered `true` with one `detach`, then
+    /// drops the hook.
     fn detach(&mut self) {}
 
     /// A window with content to read has opened.
