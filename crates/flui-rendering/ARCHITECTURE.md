@@ -928,8 +928,9 @@ capture when it is absent from the FULL queue (a composited-layer update counts,
 since a patched graft changes pixels) and has a capture; otherwise it mints a
 new token. The capture stores its token (`RetainedSubtree::content`), so every
 eviction path drops the token with it, and a graft that served a layer update
-writes the new token back with its patches. The root is never captured, so its
-token lives in `PipelineOwner::root_content` under the same rule. Minted tokens
+writes the new token back with its patches. A root that is a repaint boundary is
+captured and replayed like any other (ADR-0253 §4); its token lives in
+`PipelineOwner::root_content` under the same rule. Minted tokens
 commit with the frame; an errored frame drops them, and the retry, still
 queued, mints again. Nested boundaries keep their stamp (token included)
 through an enclosing boundary's graft.
@@ -944,7 +945,7 @@ keeps both its token and its own pictures
 
 **Accepted trade-off:** a clean node that paints differently breaks this rule
 exactly as it already breaks grafting. A boundary whose capture was refused
-(it holds a leader or follower) mints every frame and is always damaged.
+(it holds a follower) mints every frame and is always damaged.
 Tests: `tests/boundary_content_tokens.rs`.
 
 ### Paint reports the offset to the nearest paint anchor
@@ -1261,6 +1262,10 @@ per live watch per painted frame and nothing while the value holds: a steady lay
 delivery and requests no frame (`leader_watch::a_watch_hears_only_changes`). A per-frame
 post-frame check would request frames itself; a value each render object reports from
 `perform_layout` needs an opt-in per object and a flush hook beside it.
+
+A leader replayed from its boundary's capture is indexed by `LayerTree::push_child` like a
+painted one, so a boundary that moves without repainting still publishes the leader where it now
+stands (`a_boundary_holding_a_leader_is_replayed_where_it_now_stands`).
 
 **Lag and coalescing.** A change is known once paint commits, so a follower that rebuilds from it
 shows the new value one frame later; that frame paints the same value and queues nothing. The
