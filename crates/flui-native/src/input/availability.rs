@@ -127,10 +127,15 @@ pub const fn web(gesture_events: bool) -> InputCapabilities {
 
 /// The winit backend in `session`: winit 0.30 reports no pen; touch phases on
 /// pixel scrolling arrive on macOS and Wayland; pinch and rotate on macOS
-/// only; outgoing drags are not supported.
+/// only; outgoing drags are not supported. A window whose application draws
+/// the title bar has no decorations, and moves and resizes from its regions
+/// (`drag_window`, `drag_resize_window`, ADR-0286 §9); no window system draws
+/// caption buttons around it.
 #[must_use]
 pub const fn winit(session: WinitSession) -> InputCapabilities {
-    let builder = InputCapabilities::builder();
+    let builder = InputCapabilities::builder()
+        .window_move(Native)
+        .window_resize(Native);
     match session {
         WinitSession::MacOs => builder
             .precise_scroll(Native)

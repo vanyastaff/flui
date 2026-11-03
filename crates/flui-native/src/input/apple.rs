@@ -1193,10 +1193,14 @@ pub(crate) mod macos {
         }
 
         fn set_input_regions(&self, regions: &[InputRegion], scale: f64) {
-            let mut chrome = self.chrome.borrow_mut();
+            // Projected with nothing borrowed: a dropped region is reported
+            // through `tracing`, whose subscriber is the application's code.
+            let mut projected = std::mem::take(&mut self.chrome.borrow_mut().projected);
             // A scale the projection refuses keeps the regions and the scale
             // they were projected at.
-            let _changed = chrome.projected.update(regions, scale, None);
+            let _changed = projected.update(regions, scale, None);
+            let mut chrome = self.chrome.borrow_mut();
+            chrome.projected = projected;
             if scale.is_finite() && scale > 0.0 {
                 chrome.scale = scale;
             }
