@@ -11,6 +11,8 @@
 
 /// Android platform build support
 pub(crate) mod android;
+/// The 16 KB page alignment of Android native libraries.
+mod android_elf;
 /// APK packaging with the SDK build-tools (no Gradle).
 mod android_package;
 /// Type-state builder for `BuilderContext`

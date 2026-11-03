@@ -30,6 +30,11 @@ set-by = "UIScene and UIWindowScene, through which the backend gets its window"
 api = 23
 release = "Android 6.0"
 set-by = "the backend's own NDK use (`__system_property_get`, the API level read) and `View.getRootWindowInsets` for the safe area; Vulkan or GLES 3.0"
+# The `targetSdk` every APK declares, and the lowest `android.jar` it compiles against
+# (ADR-0255 decision 7). A packaging value, not a floor: `flui.toml` does not change it. Google
+# Play takes new apps and updates only at the level it requires (API 36 from 2026-08-31), and
+# raising it turns on that level's behaviour changes, so the change says which ones FLUI meets.
+target-sdk = 36
 
 [linux]
 glibc = "2.17"
