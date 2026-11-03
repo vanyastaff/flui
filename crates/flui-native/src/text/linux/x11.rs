@@ -21,8 +21,9 @@
 //!
 //! The bus runs on the background executor (`bus`); what it hears waits for
 //! the owner's turn, which applies it with no borrow of this feature held.
-//! With no input method on the bus, every key goes to the window as typed,
-//! as it did before.
+//! With no input method on the bus, the same task speaks XIM to the server
+//! `XMODIFIERS` names (`xim`); with neither, every key goes to the window as
+//! typed.
 
 use std::any::Any;
 use std::cell::{Cell, RefCell};
@@ -51,6 +52,7 @@ use crate::text::{TextInput, WindowTextInput};
 mod bus;
 #[cfg(test)]
 mod bus_tests;
+mod xim;
 
 use bus::{Bus, ContextId, Heard, Reach, Request};
 
@@ -139,6 +141,8 @@ struct BusWire {
     /// The window's input context: replaced when the input method left a
     /// key unanswered, so nothing it sends late reaches the field.
     context: Cell<ContextId>,
+    /// The X window the context serves, which an XIM context is bound to.
+    xid: xproto::Window,
     bus: Arc<Bus>,
     locate: Locate,
     batch: RefCell<Vec<Request>>,
@@ -472,7 +476,7 @@ impl X11Ime {
             self.finish_leaving(leaving, failure);
         }
         if !wire.opened.replace(true) {
-            self.bus.open(wire.context.get());
+            self.bus.open(wire.context.get(), wire.xid);
         }
         if let Some(client) = client {
             failure.contain(|| client.entered(wire as Rc<dyn TextInputWire>));
@@ -577,7 +581,7 @@ impl X11Ime {
             "the input method's stream for a field broke: its input context is replaced"
         );
         self.bus.close(old);
-        self.bus.open(next);
+        self.bus.open(next, wire.xid);
         let Some(client) = client.filter(|_| wire.focused.get()) else {
             self.deliver_ready(failure);
             return;
@@ -733,6 +737,7 @@ impl LoopText for X11Ime {
             ime.next = context.next();
             let wire = Rc::new(BusWire {
                 context: Cell::new(context),
+                xid: window.xid,
                 bus: Arc::clone(&self.bus),
                 locate,
                 batch: RefCell::new(Vec::new()),
