@@ -1,16 +1,26 @@
 # ADR-0057: Coverage-correct blending is capability-gated, and the fallback is named
 
-- **Status:** Accepted; superseded by ADR-0102.
-- **Superseded-by:** [ADR-0102](ADR-0102-immutable-geometric-clip-composition.md)
+- **Status:** Accepted (2026-09-05). Replaced: the decision below, folded and incorrect pixels
+  on a device without `DUAL_SOURCE_BLENDING`, is not in the code: `needs_portable` sends such a
+  device to the portable coverage path (`crates/flui-engine/src/replay/coverage.rs:18-24`), and
+  `coverage_blend_reads_back_as_specified` asserts the coverage-correct value on a device with
+  the feature withheld (`crates/flui-engine/src/coverage_blend_readback_tests.rs:793-797`). The
+  dual-source channel survives only as the fast path for the linear modes
+  (`coverage_blend_state_for`, `crates/flui-engine/src/pipeline_cache.rs:231`).
+- **Superseded-by:** [ADR-0102](ADR-0102-immutable-geometric-clip-composition.md) §5 for the
+  folded fallback only (independent coverage is mandatory, and a direct draw that cannot have it
+  is refused with `UnsupportedCoverageBlend` rather than published folded)
+- **Superseded-by:** [ADR-0103](ADR-0103-portable-independent-primitive-coverage.md) for the
+  capability gate only (a device without the feature draws a direct primitive through the
+  portable path, so the same layer tree has the same edges on WebGPU and on a native backend)
 - **Date:** 2026-09-05
 - **Related:** `crates/flui-engine/ARCHITECTURE.md` mapping decision 4 (the implementation of this contract)
 - **Depends on:** `wgpu::Features::DUAL_SOURCE_BLENDING`, which is optional and absent on WebGPU
 - **Issue:** #904
 
-The decision below records the former capability fallback. ADR-0102 preserves
-independent coverage as the correctness requirement and replaces permission to
-publish folded incorrect pixels with typed direct-draw refusal. The portable
-group destination-read path is available; portable direct coverage remains work.
+The decision below records the former capability fallback and keeps its text as the
+reasoning. ADR-0102 preserves independent coverage as the correctness requirement; ADR-0103
+supplies the portable path for direct primitives.
 
 ## Context
 

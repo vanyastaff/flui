@@ -112,3 +112,13 @@ tier-kind = "internal"
 order = 7
 # tokio's networking stack (mio) has no wasm32-unknown-unknown support.
 wasm = false
+
+# What the asset loader needs from the application's manifests (ADR-0307):
+# it `fstat`s each file it reads (`registry::images`), an Apple
+# required-reason API (C617.1, files inside the app's container).
+[package.metadata.flui.declares]
+schema = 1
+
+[[package.metadata.flui.declares.apple.privacy.accessed-apis]]
+category = "NSPrivacyAccessedAPICategoryFileTimestamp"
+reasons = ["C617.1"]

@@ -7,6 +7,14 @@
 - **Superseded-by:** [ADR-0254](ADR-0254-window-contract.md), in part: decision 5's relay as a new
   `PlatformProxy` verb. A thread that is not a window's owner asks it for a frame through the
   window's `RedrawRequester` (ADR-0254 §5); the rule that the raster side never asks stays.
+- **Superseded-by:** [ADR-0305](ADR-0305-one-gpu-context-serves-every-surface-through-a-raster-executor.md)
+  for decisions 1 to 7, as its table maps each: decision 3's pacing, decision 5's rule that the
+  raster side never asks and its floor, the split rule, owner-side surface creation, macOS inline
+  and the first window's adapter choice of decision 1 and 2, the single counter of decision 4 and
+  the bounded teardown of decision 7 are restated there per slot as accepted; one value crossing
+  down and `RasterBackend: Send` (decision 1), `GpuServices` and `ReplaceServices` (decision 2),
+  the GPU-resource axis (decision 4) and `PipelineDepth` with `RasterMode` (decision 6) are
+  replaced.
 - **Related:** ADR-0027 §5–§6, ADR-0037, ADR-0039 §3, ADR-0044 §7 and §9; issue #559
 
 ## Context

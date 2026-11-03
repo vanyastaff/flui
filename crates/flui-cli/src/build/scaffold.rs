@@ -14,8 +14,6 @@ const VALID_PLATFORMS: &[&str] = &["android", "ios", "web", "windows", "linux", 
 // ── Embedded templates ──────────────────────────────────────────────────────
 
 // Android
-const ANDROID_MANIFEST: &str =
-    include_str!("../../templates/platforms/android/AndroidManifest.xml");
 const ANDROID_BUILD_GRADLE: &str =
     include_str!("../../templates/platforms/android/build.gradle.kts");
 const ANDROID_ROOT_BUILD_GRADLE: &str =
@@ -53,10 +51,6 @@ struct TemplateFile {
 fn platform_templates(platform: &str) -> &'static [TemplateFile] {
     match platform {
         "android" => &[
-            TemplateFile {
-                rel_path: "app/src/main/AndroidManifest.xml",
-                content: ANDROID_MANIFEST,
-            },
             TemplateFile {
                 rel_path: "app/build.gradle.kts",
                 content: ANDROID_BUILD_GRADLE,
@@ -175,13 +169,31 @@ pub(crate) fn scaffold_platform_plan(
         )));
     }
 
-    Ok(platform_templates(&platform_lower)
+    let mut files: Vec<ScaffoldFile> = platform_templates(&platform_lower)
         .iter()
         .map(|tmpl| ScaffoldFile {
             rel_path: std::path::PathBuf::from(tmpl.rel_path),
             contents: substitute(tmpl.content, params),
         })
-        .collect())
+        .collect();
+    if platform_lower == "android" {
+        // The manifest every build generates, here before the first build
+        // knows what the linked crates declare.
+        files.insert(
+            0,
+            ScaffoldFile {
+                rel_path: std::path::PathBuf::from("app/src/main/AndroidManifest.xml"),
+                contents: crate::build::android_manifest::render(
+                    &crate::build::android_manifest::ManifestFacts {
+                        label: params.app,
+                        lib_name: params.lib,
+                    },
+                    &crate::declarations::Declarations::default(),
+                ),
+            },
+        );
+    }
+    Ok(files)
 }
 
 /// Scaffold platform-specific directories and config files.

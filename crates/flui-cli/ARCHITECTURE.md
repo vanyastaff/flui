@@ -47,6 +47,33 @@ read, is a second statement and is refused before Gradle runs
 (`a_build_script_states_what_flui_toml_states_or_is_refused`). The `namespace` stays as scaffolded:
 it is the package of the app's own Java or Kotlin code.
 
+### Manifests declare what the linked crates declare
+
+A crate states what it needs from the application's manifests in
+`[package.metadata.flui.declares]` (ADR-0307): a `schema` version, then per-platform keys, and
+under `features.<feature>` what a feature adds while it is enabled. `declarations.rs` reads every
+package of the graph `cargo metadata --filter-platform` resolves for each target built, with the
+features that graph enables, and joins them. The table is strict: an unknown key, a schema newer
+than the CLI reads, a feature the crate lacks or a malformed value fails the build naming the crate
+(`a_malformed_declaration_is_refused_by_crate`). The CLI holds nobody's needs as literals:
+`flui-native` declares `VIBRATE` for its haptic patterns, `flui-app`'s `http` feature declares
+`INTERNET` for `HttpURLConnection` (`declarations_are_joined_over_the_graph_the_target_links`,
+`the_manifest_declares_what_the_linked_crates_need`).
+
+Android's `AndroidManifest.xml` is generated whole on every build (ADR-0255 decision 6) at
+`<project>/platforms/android/app/src/main/AndroidManifest.xml`, where both packagers read it: FLUI's base
+(`templates/android/AndroidManifest.xml`), the joined permissions, the label from `flui.toml` and
+the application's `cdylib`. It is written only when it changed. A file there without the
+generated-file header is refused untouched rather than overwritten
+(`the_manifest_is_rewritten_only_when_flui_wrote_it`).
+
+The iOS bundle's `PrivacyInfo.xcprivacy` lists the required-reason APIs the graph of the device or
+simulator target declares (`apple.privacy.accessed-apis`), joined per category with the
+application's own `<project>/platforms/ios/PrivacyInfo.xcprivacy`; tracking and collected data stay the
+application's. Rust links statically, so no per-SDK privacy bundle exists and the application's
+manifest carries the union. `flui-native` declares `systemUptime` (`35F9.1`) and file timestamps
+(`C617.1`), `flui-assets` file timestamps (`publication_contract`).
+
 ### Local source dependencies are explicit Cargo paths
 
 `flui create NAME --local` selects the current working directory as the source

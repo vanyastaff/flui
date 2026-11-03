@@ -535,6 +535,18 @@ mod event_loop {
         /// numbered `serial`: a move, a resize or a window menu it starts
         /// names that seat and serial.
         fn button(&self, seat: &WlSeat, serial: u32, time: u32, code: u32, pressed: bool);
+
+        /// The pointer is at (`x`, `y`), surface-local, on the window's own
+        /// surface: a press on a title bar of the application's is answered
+        /// from there, and a press on it held moves the window once the
+        /// pointer travels (ADR-0286 §11).
+        fn content_moved(&self, x: f64, y: f64);
+
+        /// Button `code` (evdev) of `seat`'s pointer went down or up over the
+        /// window's own surface, as the event numbered `serial`: whether the
+        /// window's chrome took it, which keeps it from the window's input.
+        /// The release of a press it took is taken too.
+        fn content_button(&self, seat: &WlSeat, serial: u32, code: u32, pressed: bool) -> bool;
     }
 
     /// What one seat's `zwp_text_input_v3` reported, recorded in the seats'
@@ -2207,6 +2219,10 @@ mod event_loop {
     }
 
     impl host::Services for WaylandLoop {
+        fn launch_value(&self, key: flui_platform::LaunchKey) -> Option<String> {
+            host::environment_launch_value(key)
+        }
+
         fn background_executor(&self) -> Arc<dyn PlatformExecutor> {
             Arc::clone(&self.executor) as _
         }

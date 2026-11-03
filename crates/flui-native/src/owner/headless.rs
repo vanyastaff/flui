@@ -568,6 +568,10 @@ impl host::Loop for HeadlessLoop {
 }
 
 impl host::Services for HeadlessLoop {
+    fn launch_value(&self, key: flui_platform::LaunchKey) -> Option<String> {
+        host::environment_launch_value(key)
+    }
+
     fn background_executor(&self) -> Arc<dyn PlatformExecutor> {
         self.with_state(|state| state.background_executor.clone())
     }

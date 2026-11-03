@@ -24,7 +24,7 @@ use std::sync::{
 
 use flui_foundation::RenderId;
 use flui_foundation::geometry::{Matrix4, Size};
-use flui_objects::RenderPadding;
+use flui_objects::{RenderConstrainedBox, RenderFlex, RenderPadding};
 use flui_rendering::{
     constraints::BoxConstraints,
     error::RenderError,
@@ -252,6 +252,93 @@ pub(crate) fn single_transient_failure_does_not_poison() {
 // ============================================================================
 // Failure at the dirty root itself
 // ============================================================================
+
+/// A dirty root that fails layout ends its pass, and the relayout roots queued
+/// after it in the same batch stay queued: the failed frame's retry lays them
+/// out. A structural failure poisons the root at once, so the retry skips it;
+/// a retriable one is attempted again on each retry until the budget (three
+/// consecutive failures) poisons it, and the healthy root is laid out on the
+/// frame after that.
+///
+/// Fails without the fix: the pass dropped the rest of its batch with the
+/// error, so the healthy root kept `NEEDS_LAYOUT` with nothing queued, no retry
+/// laid it out, and a retriable root was never attempted again either.
+pub(crate) fn a_failed_dirty_root_keeps_the_rest_of_its_batch() {
+    for (mode, failed_frames) in [(FailMode::Structural, 1), (FailMode::Retriable, 3)] {
+        let bad_attempts = Arc::new(AtomicUsize::new(0));
+        let good_attempts = Arc::new(AtomicUsize::new(0));
+        let leaf = |attempts: &Arc<AtomicUsize>| FlakyLeaf {
+            attempts: Arc::clone(attempts),
+            fail: false,
+            mode,
+        };
+        // Each leaf sits under a tight 40×40 box, so each is its own relayout
+        // root; the healthy one is one level deeper, so the batch, sorted
+        // shallow-first, reaches the failing root first.
+        let tight = || RenderConstrainedBox::new(BoxConstraints::tight(Size::new(40.0, 40.0)));
+        let mut run =
+            RenderTester::mount(
+                box_node(RenderFlex::column())
+                    .child(box_node(tight()).child(box_node(leaf(&bad_attempts)).label("bad")))
+                    .child(box_node(RenderPadding::all(0.0)).child(
+                        box_node(tight()).child(box_node(leaf(&good_attempts)).label("good")),
+                    )),
+            )
+            .with_constraints(BoxConstraints::new(0.0, 200.0, 0.0, 200.0))
+            .run_frame();
+        let (bad, good) = (run.id("bad"), run.id("good"));
+
+        run.update::<FlakyLeaf>(bad, |leaf| leaf.fail = true);
+        run.update::<FlakyLeaf>(good, |_| {});
+        let queued: Vec<RenderId> = run
+            .owner()
+            .nodes_needing_layout()
+            .iter()
+            .map(|dirty| dirty.id)
+            .collect();
+        assert!(
+            queued.len() == 2 && queued.contains(&bad) && queued.contains(&good),
+            "{mode:?}: precondition: each leaf is its own relayout root, got {queued:?}",
+        );
+        let (bad_before, good_before) = (
+            bad_attempts.load(Ordering::Relaxed),
+            good_attempts.load(Ordering::Relaxed),
+        );
+
+        let mut failed = 0;
+        while run.try_pump().is_err() {
+            failed += 1;
+            assert!(
+                failed <= failed_frames,
+                "{mode:?}: the failing root stops failing frames"
+            );
+        }
+
+        assert_eq!(
+            failed, failed_frames,
+            "{mode:?}: frames the failing root failed"
+        );
+        assert_eq!(
+            bad_attempts.load(Ordering::Relaxed) - bad_before,
+            failed_frames,
+            "{mode:?}: the failing root is attempted once per failed frame, then skipped",
+        );
+        assert!(
+            run.owner().is_layout_poisoned(bad),
+            "{mode:?}: the failing root is poisoned"
+        );
+        assert_eq!(
+            good_attempts.load(Ordering::Relaxed) - good_before,
+            1,
+            "{mode:?}: the healthy root queued after the failing one is laid out",
+        );
+        assert!(
+            !node(&run, good).needs_layout(),
+            "{mode:?}: the healthy root is laid out, not left dirty",
+        );
+        run.pump_idle_frames(2);
+    }
+}
 
 // ============================================================================
 // Intrinsic-measurement poison — fixtures

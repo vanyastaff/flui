@@ -729,11 +729,13 @@ impl GpuCapabilities {
 
     /// Whether the adapter exposes a second blend source (`@blend_src(1)`).
     ///
-    /// Without it, the blend modes whose destination factor ignores source
-    /// alpha (`Clear`, `Src`, `SrcIn`, `SrcOut`, `Modulate`, `DstIn`,
-    /// `DstATop` — see `crate::pipeline_cache::destination_alpha_scale_for`)
-    /// use independent source/coverage isolation and destination sampling for
-    /// exact partial coverage. This flag identifies the optional fast path.
+    /// The fast path serves the `Replacing` and `Masking` classes of
+    /// `BlendMode::coverage_class` (`Clear`, `Src`, `SrcIn`, `SrcOut`,
+    /// `Modulate`, whose destination factor is `Zero`, and `DstIn`, `DstATop`,
+    /// whose destination factor is `SrcAlpha`): their partial coverage cannot
+    /// be folded into source alpha, so the second source carries it. Without
+    /// it, those modes use independent source/coverage isolation and
+    /// destination sampling for exact partial coverage.
     pub fn supports_dual_source_blending(&self) -> bool {
         self.features.contains(wgpu::Features::DUAL_SOURCE_BLENDING)
     }

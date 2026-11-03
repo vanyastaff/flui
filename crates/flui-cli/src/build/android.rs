@@ -334,15 +334,23 @@ impl AndroidBuilder {
             "gradlew"
         };
 
-        // A Gradle wrapper in the project means the app has grown a Java or
-        // Kotlin side and Gradle owns the APK; without one, the SDK's own
-        // build-tools package the NativeActivity app directly.
+        if !android_dir.is_dir() {
+            return Err(BuildError::path_not_found(
+                android_dir,
+                "the Android platform is not scaffolded; run `flui platform add android`",
+            ));
+        }
         // flui.toml names the package either way, so a changed `[app] id`
         // reaches the APK whichever packages it.
         let config = crate::config::FluiConfig::load_from(&self.workspace_root.join("flui.toml"))
             .map_err(|error| {
             BuildError::Other(format!("flui.toml names the package: {error}"))
         })?;
+        self.write_manifest(ctx, &config, &android_dir)?;
+
+        // A Gradle wrapper in the project means the app has grown a Java or
+        // Kotlin side and Gradle owns the APK; without one, the SDK's own
+        // build-tools package the NativeActivity app directly.
         let gradle_wrapper_path = android_dir.join(gradle_wrapper_name);
         if !gradle_wrapper_path.exists() {
             return self.package_with_build_tools(ctx, artifacts, &config).await;
@@ -409,6 +417,47 @@ impl AndroidBuilder {
 /// The Gradle-less delivery: `aapt2` + `zipalign` + `apksigner` from the
 /// SDK's build-tools, see `android_package.rs`.
 impl AndroidBuilder {
+    /// Writes `platforms/android/app/src/main/AndroidManifest.xml`, which
+    /// both packagers read: FLUI's base, what the crates linked for the ABIs
+    /// built declare, the label from `flui.toml` and the library `cargo ndk`
+    /// built (ADR-0307).
+    fn write_manifest(
+        &self,
+        ctx: &BuilderContext,
+        config: &crate::config::FluiConfig,
+        android_dir: &Path,
+    ) -> BuildResult<()> {
+        let crate::build::platform::Platform::Android { targets } = &ctx.platform else {
+            return Err(BuildError::InvalidPlatform {
+                reason: "Expected Android platform".to_string(),
+            });
+        };
+        let triples: Vec<&str> = targets.iter().map(|abi| rust_target(abi)).collect();
+        let declarations =
+            crate::declarations::Declarations::collect(&self.workspace_root, &triples)?;
+        let lib_name = super::util::cargo::cargo_project(&self.workspace_root)?
+            .cdylib
+            .ok_or_else(|| {
+                BuildError::invalid_config(
+                    "Cargo.toml",
+                    "the application builds no `cdylib`, which NativeActivity loads; \
+                     `flui create` writes `[lib] crate-type = [\"cdylib\", …]`",
+                )
+            })?;
+        super::android_manifest::write(
+            &android_dir
+                .join("app")
+                .join("src")
+                .join("main")
+                .join("AndroidManifest.xml"),
+            &super::android_manifest::ManifestFacts {
+                label: &config.app.name,
+                lib_name: &lib_name,
+            },
+            &declarations,
+        )
+    }
+
     async fn package_with_build_tools(
         &self,
         ctx: &BuilderContext,
@@ -424,12 +473,6 @@ impl AndroidBuilder {
             .join("src")
             .join("main")
             .join("AndroidManifest.xml");
-        if !manifest.is_file() {
-            return Err(BuildError::path_not_found(
-                manifest,
-                "the Android platform is not scaffolded; run `flui platform add android`",
-            ));
-        }
         let native_libs: Vec<(String, PathBuf)> = artifacts
             .rust_libs
             .iter()

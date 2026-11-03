@@ -90,6 +90,13 @@ pub struct ParagraphLayout {
     /// The kept lines by run and grapheme, for `TextPainter::line_layouts`;
     /// built on the first query.
     pub(super) line_layouts: OnceLock<Vec<crate::typography::TextLineLayout>>,
+    /// The colour each paint run paints with, by the run's index in its
+    /// glyph runs' [`SpanBrush`]: a colour is not shaped, so the layout keeps
+    /// it beside the runs and [`recolor`](Self::recolor) replaces it.
+    run_colors: Box<[Option<Color>]>,
+    /// How many spans the paragraph was shaped from: the length a
+    /// recolour's colours must have.
+    source_spans: usize,
 }
 
 // A painter keeps its layout in its cache, and a render object holding the
@@ -107,7 +114,12 @@ struct SpanInfo {
     weight: f32,
     italic: bool,
     size: Option<f32>,
-    color: Option<Color>,
+    /// The paragraph span this one stands for: itself, or for an ellipsis
+    /// the span whose style it takes.
+    source: usize,
+    /// The paint run it paints in; `None` for an empty span, which paints
+    /// nothing.
+    paint_run: Option<usize>,
 }
 
 impl ParagraphLayout {
@@ -207,6 +219,72 @@ impl ParagraphLayout {
     /// same offsets and cluster advances are used by the caret queries.
     #[must_use]
     pub fn to_shaped(&self, root: Option<Color>) -> ShapedParagraph {
+        self.shaped_with(root, &self.run_colors)
+    }
+
+    /// The paint runs' colours when the paragraph's spans, in the order it
+    /// was shaped from, paint `colors`, or `None` when they do not fit this
+    /// layout: a different number of spans, or two spans that share a paint
+    /// run given different colours, which only a new layout can split.
+    fn recolored_runs(&self, colors: &[Option<Color>]) -> Option<Box<[Option<Color>]>> {
+        if colors.len() != self.source_spans {
+            return None;
+        }
+        let mut runs: Vec<Option<Option<Color>>> = vec![None; self.run_colors.len()];
+        for span in &self.spans {
+            let Some(run) = span.paint_run else {
+                continue;
+            };
+            let color = *colors.get(span.source)?;
+            let slot = runs.get_mut(run)?;
+            match slot {
+                Some(set) if *set != color => return None,
+                Some(_) => {}
+                None => *slot = Some(color),
+            }
+        }
+        runs.into_iter()
+            .collect::<Option<Vec<Option<Color>>>>()
+            .map(Vec::into_boxed_slice)
+    }
+
+    /// Gives the paragraph's spans the colours `colors` (one per span it
+    /// was shaped from, as [`span_paint_color`] resolves them) without
+    /// shaping, and returns the paragraph painted with them over `root`.
+    ///
+    /// `None`, and the layout unchanged, when the colours do not fit its
+    /// paint runs ([`recolored_runs`](Self::recolored_runs)).
+    pub(crate) fn recolor(
+        &mut self,
+        root: Option<Color>,
+        colors: &[Option<Color>],
+    ) -> Option<ShapedParagraph> {
+        let runs = self.recolored_runs(colors)?;
+        let paragraph = self.shaped_with(root, &runs);
+        self.run_colors = runs;
+        Some(paragraph)
+    }
+
+    /// [`recolor`](Self::recolor) without building the paragraph, for a
+    /// recolour the paragraph already painted keeps (one that changes only
+    /// spans painted in the root's colour, with the root). `false`, and the
+    /// layout unchanged, when the colours do not fit its paint runs.
+    pub(crate) fn recolor_runs(&mut self, colors: &[Option<Color>]) -> bool {
+        let Some(runs) = self.recolored_runs(colors) else {
+            return false;
+        };
+        self.run_colors = runs;
+        true
+    }
+
+    /// The paragraph with its paint runs coloured `runs`.
+    fn shaped_with(&self, root: Option<Color>, runs: &[Option<Color>]) -> ShapedParagraph {
+        let run_color = |run: usize| {
+            runs.get(run)
+                .copied()
+                .flatten()
+                .filter(|color| Some(*color) != root)
+        };
         let metrics = self.metrics();
         let mut faces: Vec<FontFace> = Vec::new();
         let mut face_index: HashMap<(u64, u32), u32> = HashMap::new();
@@ -259,17 +337,17 @@ impl ParagraphLayout {
                     font_size,
                     coords: range32(coords_start, coords.len()),
                     synthesis,
-                    color: glyph_run
-                        .style()
-                        .brush
-                        .0
-                        .filter(|color| Some(*color) != root),
+                    color: run_color(glyph_run.style().brush.0),
                     baseline,
                     glyphs: range32(glyph_start, glyphs.len()),
                 });
             }
         }
-        let spans = self.spans.iter().map(|span| describe(span, root)).collect();
+        let spans = self
+            .spans
+            .iter()
+            .map(|span| describe(span, span.paint_run.and_then(run_color)))
+            .collect();
         ShapedParagraph {
             text: self.text.as_str().into(),
             size: Size::new(metrics.width, metrics.height),
@@ -442,8 +520,9 @@ impl InkBounds {
 }
 
 /// One span's line in [`ShapedParagraph::describe_spans`]: the text a
-/// snapshot prints.
-fn describe(span: &SpanInfo, root: Option<Color>) -> String {
+/// snapshot prints, with the colour its run paints with when that is not the
+/// paragraph command's.
+fn describe(span: &SpanInfo, color: Option<Color>) -> String {
     let mut parts = vec![
         format!("len={}", span.len),
         format!("family={}", span.family),
@@ -453,22 +532,65 @@ fn describe(span: &SpanInfo, root: Option<Color>) -> String {
     if let Some(size) = span.size {
         parts.push(format!("size={size:.2}"));
     }
-    if let Some(color) = span.color.filter(|color| Some(*color) != root) {
+    if let Some(color) = color {
         let [r, g, b, a] = color.to_rgba8();
         parts.push(format!("color=#{:02x}{:02x}{:02x}{:02x}", r, g, b, a));
     }
     parts.join(" ")
 }
 
-/// The colour a span paints with, carried through shaping per glyph run.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub(crate) struct SpanBrush(Option<Color>);
+/// The paint run a glyph run belongs to: an index into its layout's run
+/// colours, not the colour itself, so recolouring a span changes no style
+/// Parley shaped with. Parley splits shaping items only on font properties,
+/// never on the brush, so the index splits glyph runs where colours differ
+/// and shapes nothing differently.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct SpanBrush(usize);
+
+/// The colour a span styled `style` paints with in a paragraph whose
+/// default style is `default`: its own, or the default's where it sets
+/// none. The one rule shaping and a recolour both use.
+pub(crate) fn span_paint_color(
+    style: Option<&TextStyle>,
+    default: Option<&TextStyle>,
+) -> Option<Color> {
+    style
+        .and_then(paint_color)
+        .or_else(|| default.and_then(paint_color))
+}
+
+/// Which paragraph span each span handed to `shape_spans` stands for.
+#[derive(Clone, Copy, Debug)]
+enum SpanSources {
+    /// The paragraph's own spans, in order.
+    Own,
+    /// The first `prefix` spans are the paragraph's own, cut at the
+    /// ellipsis; the ellipsis after them takes the style of span
+    /// `ellipsis`.
+    Ellipsized { prefix: usize, ellipsis: usize },
+}
+
+impl SpanSources {
+    fn source(self, index: usize) -> usize {
+        match self {
+            Self::Own => index,
+            Self::Ellipsized { prefix, ellipsis } => {
+                if index < prefix {
+                    index
+                } else {
+                    ellipsis
+                }
+            }
+        }
+    }
+}
 
 /// A layout and what it was shaped from.
 struct Shaped {
     layout: Layout<SpanBrush>,
     text: String,
     spans: Vec<SpanInfo>,
+    run_colors: Vec<Option<Color>>,
 }
 
 /// The characters Parley ends a line at.
@@ -591,7 +713,7 @@ impl TextContext {
     ) -> Result<ParagraphLayout, TextLayoutError> {
         validate_request(paragraph)?;
         let max_lines = paragraph.max_lines.filter(|&lines| lines > 0);
-        let mut shaped = self.shape_spans(paragraph, paragraph.spans)?;
+        let mut shaped = self.shape_spans(paragraph, paragraph.spans, SpanSources::Own)?;
         let mut ellipsized = false;
         let mut kept_text = shaped.text.len();
         if let (Some(max_lines), Some(ellipsis)) =
@@ -637,6 +759,8 @@ impl TextContext {
             kept_text,
             placed: OnceLock::new(),
             line_layouts: OnceLock::new(),
+            run_colors: shaped.run_colors.into_boxed_slice(),
+            source_spans: paragraph.spans.len(),
         };
         validate_layout(&layout)?;
         Ok(layout)
@@ -658,7 +782,7 @@ impl TextContext {
     ) -> Result<Shaped, TextLayoutError> {
         let full = &shaped.text;
         let Some(line) = shaped.layout.get(max_lines - 1) else {
-            return self.shape_spans(paragraph, paragraph.spans);
+            return self.shape_spans(paragraph, paragraph.spans, SpanSources::Own);
         };
         let line_start = line.text_range().start;
         let mut cut = line.text_range().end;
@@ -668,7 +792,9 @@ impl TextContext {
                     .last()
                     .and_then(|(_, style)| style.clone());
                 let spans = vec![(ellipsis.to_owned(), style)];
-                self.shape_spans(paragraph, &spans)?.layout.width()
+                self.shape_spans(paragraph, &spans, SpanSources::Own)?
+                    .layout
+                    .width()
             };
             // Clusters in logical order: the advance of a logical prefix is
             // its width whatever its visual order.
@@ -701,12 +827,18 @@ impl TextContext {
         }
         loop {
             let mut spans = sliced_spans(paragraph.spans, cut);
+            // The sliced spans keep the paragraph's indices; the ellipsis
+            // takes the style, and so the source, of the last of them.
+            let sources = SpanSources::Ellipsized {
+                prefix: spans.len(),
+                ellipsis: spans.len().saturating_sub(1),
+            };
             let style = spans
                 .last()
                 .or(paragraph.spans.first())
                 .and_then(|(_, style)| style.clone());
             spans.push((ellipsis.to_owned(), style));
-            let candidate = self.shape_spans(paragraph, &spans)?;
+            let candidate = self.shape_spans(paragraph, &spans, sources)?;
             let fits = candidate.layout.len() <= max_lines
                 && paragraph.max_width.is_none_or(|max_width| {
                     candidate.layout.lines().last().is_none_or(|line| {
@@ -726,11 +858,18 @@ impl TextContext {
         }
     }
 
-    /// Shapes `spans` with `paragraph`'s other settings.
+    /// Shapes `spans` with `paragraph`'s other settings; `sources` names the
+    /// paragraph span each of them stands for.
+    ///
+    /// Adjacent non-empty spans that paint one colour share a paint run, and
+    /// each run's index is the brush over its spans, so the run colours are
+    /// the layout's to replace without shaping. An empty span paints nothing
+    /// and opens no run.
     fn shape_spans(
         &mut self,
         paragraph: &ParagraphSpec<'_>,
         spans: &[(String, Option<TextStyle>)],
+        sources: SpanSources,
     ) -> Result<Shaped, TextLayoutError> {
         let text: String = spans.iter().map(|(text, _)| text.as_str()).collect();
         let breaks = one_break_per_crlf(&text);
@@ -751,12 +890,14 @@ impl TextContext {
         );
         let mut start = 0;
         let mut infos = Vec::with_capacity(spans.len());
+        let mut run_colors: Vec<Option<Color>> = Vec::new();
         let span_properties: Vec<_> = spans
             .iter()
-            .map(|(span, style)| {
+            .enumerate()
+            .map(|(index, (span, style))| {
                 let range = start..start + span.len();
                 start = range.end;
-                let properties = style.as_ref().map_or_default(|style| {
+                let mut properties = style.as_ref().map_or_default(|style| {
                     properties(
                         collection,
                         style,
@@ -764,7 +905,18 @@ impl TextContext {
                         paragraph.font_weight_adjustment,
                     )
                 });
-                infos.push(match style {
+                let paint_run = (!span.is_empty()).then(|| {
+                    let color = span_paint_color(style.as_ref(), paragraph.default_style);
+                    if run_colors.last() != Some(&color) {
+                        run_colors.push(color);
+                    }
+                    run_colors.len() - 1
+                });
+                // Run 0 is the default brush, which every span starts with.
+                if let Some(run) = paint_run.filter(|&run| run > 0) {
+                    properties.push(StyleProperty::Brush(SpanBrush(run)));
+                }
+                let info = match style {
                     Some(style) => {
                         let (_, name) = family(collection, Some(style));
                         span_info(
@@ -779,6 +931,11 @@ impl TextContext {
                         len: span.len(),
                         ..default_info.clone()
                     },
+                };
+                infos.push(SpanInfo {
+                    source: sources.source(index),
+                    paint_run,
+                    ..info
                 });
                 (range, properties)
             })
@@ -833,6 +990,7 @@ impl TextContext {
             layout,
             text,
             spans: infos,
+            run_colors,
         })
     }
 }
@@ -875,7 +1033,8 @@ fn sliced_spans(
     out
 }
 
-/// What a span of `len` bytes styled `style` in `family` was shaped with.
+/// What a span of `len` bytes styled `style` in `family` was shaped with;
+/// its source and paint run are the caller's to set.
 fn span_info(
     len: usize,
     family: String,
@@ -901,7 +1060,8 @@ fn span_info(
         size: style
             .and_then(|style| style.font_size)
             .map(|size| size as f32),
-        color: style.and_then(paint_color),
+        source: 0,
+        paint_run: None,
     }
 }
 
@@ -1058,9 +1218,6 @@ fn properties(
         properties.push(StyleProperty::LineHeight(LineHeight::FontSizeRelative(
             height as f32,
         )));
-    }
-    if let Some(color) = paint_color(style) {
-        properties.push(StyleProperty::Brush(SpanBrush(Some(color))));
     }
     properties
 }

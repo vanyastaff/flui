@@ -160,10 +160,17 @@ pub struct WaylandInputGlobals {
 /// source with a stop at the lift, delivered as phased precise scrolling;
 /// pens arrive through `tablet-v2` and a touchpad's pinch through
 /// `pointer-gestures`, where the compositor has them. No system gesture can
-/// be excluded, and no drag leaves the window yet (`wl_data_device`).
+/// be excluded, and no drag leaves the window yet (`wl_data_device`). A window
+/// whose application draws the title bar keeps the margins of its own frame,
+/// and the compositor moves and resizes it from its regions
+/// (`xdg_toplevel.move` and `resize`, ADR-0286 §11); no compositor draws
+/// caption buttons around it.
 #[must_use]
 pub const fn wayland(globals: WaylandInputGlobals) -> InputCapabilities {
-    let mut builder = InputCapabilities::builder().precise_scroll(Native);
+    let mut builder = InputCapabilities::builder()
+        .precise_scroll(Native)
+        .window_move(Native)
+        .window_resize(Native);
     if globals.tablet {
         builder = builder.pen(Native);
     }

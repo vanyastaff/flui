@@ -57,7 +57,10 @@
 //! on subsurfaces around its content: a title bar with its title and buttons,
 //! and margins its edges are resized from ([`client_frame`]). Its geometry is
 //! then the title bar and the content, its outer size includes the title bar,
-//! and the size a configure gives loses the title bar to the content.
+//! and the size a configure gives loses the title bar to the content. A
+//! window whose application draws the title bar (`WindowFrame::AppTitleBar`)
+//! asks the compositor for no frame and draws the margins alone; the presses
+//! on its content are answered from the chrome regions (ADR-0286 §11).
 //!
 //! Where the compositor offers `xdg-foreign`, the window is exported as it
 //! opens, so a portal can parent its dialog to it; the handle reaches the
@@ -77,6 +80,7 @@ pub(crate) use toplevel::{WaylandWindow, WaylandWindows};
 
 pub(crate) mod activation;
 pub(crate) mod client_frame;
+pub(crate) mod decoration;
 
 pub(crate) mod configure {
     //! What a configure from the compositor means for a Wayland window: the
@@ -251,7 +255,9 @@ pub(crate) mod configure {
 
     /// What a Wayland window honours, given what its compositor announced
     /// (`None` before version 5, or before it said), why it cannot have its
-    /// frame turned on and off (`decoration`, `None` where it can) and
+    /// frame turned on and off (`decoration`, `None` where it can), why it
+    /// cannot take a title bar of the application's (`app_title_bar`, `None`
+    /// where it can: its own frame keeps the margins, ADR-0286 §11) and
     /// whether the compositor takes activation requests (`activation`):
     /// the title, the size and its
     /// limits, the modes the compositor offers, and closing. Resizability is
@@ -267,6 +273,7 @@ pub(crate) mod configure {
     pub(crate) fn capabilities(
         announced: Option<WmCapabilities>,
         decoration: Option<CapabilityAbsence>,
+        app_title_bar: Option<CapabilityAbsence>,
         states: ToplevelStates,
         activation: Activation,
     ) -> WindowCapabilities {
@@ -275,7 +282,6 @@ pub(crate) mod configure {
             // desktop compositor keeps no edges for system gestures.
             .without_keyboard_inset(CapabilityAbsence::NotOnThisPlatform)
             .without_system_gestures(CapabilityAbsence::NotOnThisPlatform)
-            .without_app_title_bar(CapabilityAbsence::NotYetOnThisHost)
             .unavailable(
                 &WindowCommand::SetPosition(flui_foundation::geometry::Point::new(0.0, 0.0)),
                 CapabilityAbsence::NotOnThisPlatform,
@@ -296,6 +302,9 @@ pub(crate) mod configure {
         if let Some(absence) = decoration {
             capabilities =
                 capabilities.unavailable(&WindowCommand::SetFrame(WindowFrame::System), absence);
+        }
+        if let Some(absence) = app_title_bar {
+            capabilities = capabilities.without_app_title_bar(absence);
         }
         if states.tiled_by_compositor() {
             capabilities = capabilities.unavailable(
@@ -623,6 +632,7 @@ pub(crate) mod configure {
             let unannounced = capabilities(
                 None,
                 Some(CapabilityAbsence::NotOnThisDevice),
+                Some(CapabilityAbsence::NotOnThisDevice),
                 free,
                 Activation::Missing,
             );
@@ -631,14 +641,20 @@ pub(crate) mod configure {
             assert!(unannounced.sets_size.is_available());
             assert_eq!(unannounced.sets_resizable, Availability::Emulated);
             assert_eq!(
-                capabilities(None, None, free, Activation::Missing).sets_frame,
+                capabilities(None, None, None, free, Activation::Missing).sets_frame,
                 Availability::Native,
                 "a compositor that draws frames takes the command"
             );
             assert_eq!(
-                capabilities(None, None, free, Activation::Offered).activates,
+                capabilities(None, None, None, free, Activation::Offered).activates,
                 Availability::Emulated,
                 "the compositor decides what an activation request does"
+            );
+            assert!(
+                capabilities(None, None, None, free, Activation::Missing)
+                    .app_title_bar
+                    .is_available(),
+                "a window that draws its own margins takes the application's title bar"
             );
             for (command, reason) in [
                 (
@@ -657,6 +673,12 @@ pub(crate) mod configure {
                     WindowCommand::Activate,
                     flui_platform::UnsupportedReason::NotOnThisDevice,
                 ),
+                (
+                    WindowCommand::SetFrame(WindowFrame::AppTitleBar(
+                        flui_platform::AppTitleBar::default(),
+                    )),
+                    flui_platform::UnsupportedReason::NotOnThisDevice,
+                ),
             ] {
                 let refused = command
                     .clone()
@@ -670,6 +692,7 @@ pub(crate) mod configure {
             }
             let announced = capabilities(
                 Some(WmCapabilities::decode(&array(&[CAN_FULLSCREEN]))),
+                None,
                 None,
                 free,
                 Activation::Offered,
@@ -694,7 +717,7 @@ pub(crate) mod configure {
         fn a_tiled_window_takes_no_size() {
             let tiled = ToplevelStates::decode(&array(&[TILED_LEFT, ACTIVATED]));
             let refused = WindowCommand::SetSize(Size::new(640.0, 480.0))
-                .admit(&capabilities(None, None, tiled, Activation::Missing))
+                .admit(&capabilities(None, None, None, tiled, Activation::Missing))
                 .expect_err("the tiling holds the size");
             assert_eq!(
                 refused.unsupported().map(|unsupported| unsupported.reason),
@@ -702,13 +725,13 @@ pub(crate) mod configure {
             );
             let maximized = ToplevelStates::decode(&array(&[TILED_LEFT, MAXIMIZED]));
             assert!(
-                capabilities(None, None, maximized, Activation::Missing)
+                capabilities(None, None, None, maximized, Activation::Missing)
                     .sets_size
                     .is_available()
             );
             let floating = ToplevelStates::decode(&array(&[ACTIVATED]));
             assert!(
-                capabilities(None, None, floating, Activation::Missing)
+                capabilities(None, None, None, floating, Activation::Missing)
                     .sets_size
                     .is_available()
             );
@@ -940,233 +963,6 @@ pub(crate) mod frame {
             assert_eq!(first_live(&[7, 9], live), Some(9));
             assert_eq!(first_live(&[7], live), None);
             assert_eq!(first_live::<u32>(&[], live), None);
-        }
-    }
-}
-
-pub(crate) mod decoration {
-    //! Who draws a Wayland window's frame: the compositor (`xdg-decoration`),
-    //! the window itself ([`client_frame`](super::client_frame)), or nobody.
-    //!
-    //! A compositor that offers `zxdg_decoration_manager_v1` draws a frame for
-    //! a window that asks, outside its surface; it may also decline and leave
-    //! the frame to the client. A compositor that offers none (Weston, GNOME)
-    //! draws none, and leaves the frame to the client. Where the frame is the
-    //! client's and the window wants one, the window draws its own; where it
-    //! wants none, it has none.
-
-    #![forbid(unsafe_code)]
-
-    use flui_platform::CapabilityAbsence;
-
-    /// `zxdg_toplevel_decoration_v1.mode` values.
-    const CLIENT_SIDE: u32 = 1;
-    const SERVER_SIDE: u32 = 2;
-
-    /// Who draws the frame, as the compositor last said.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-    pub(crate) enum FrameDrawer {
-        /// The compositor draws it.
-        Compositor,
-        /// The client draws it, or none.
-        Client,
-    }
-
-    impl FrameDrawer {
-        /// The drawer a configure's `mode` names; `None` for a mode of a
-        /// newer protocol.
-        pub(crate) const fn from_mode(mode: u32) -> Option<Self> {
-            match mode {
-                SERVER_SIDE => Some(Self::Compositor),
-                CLIENT_SIDE => Some(Self::Client),
-                _ => None,
-            }
-        }
-    }
-
-    /// Who draws the window's frame now.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-    pub(crate) enum Drawn {
-        /// The compositor, outside the window's surface.
-        Compositor,
-        /// The window, on surfaces of its own around its content.
-        Client,
-        /// Nobody: the window wants none, or the compositor has not said yet.
-        Nobody,
-    }
-
-    /// A window's frame as the client asked for it and the compositor
-    /// answered.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-    pub(crate) struct Decoration {
-        /// The compositor offers `xdg-decoration`.
-        pub(crate) offered: bool,
-        /// The window can draw a frame of its own: the compositor offers the
-        /// subsurfaces and the shared memory it is drawn with.
-        pub(crate) draws_own: bool,
-        /// The client last asked for a frame.
-        pub(crate) requested: bool,
-        /// What the compositor last said; `None` before it said.
-        pub(crate) told: Option<FrameDrawer>,
-        /// The compositor answered the last request.
-        pub(crate) answered: bool,
-    }
-
-    impl Decoration {
-        /// Who draws the frame: the compositor once it said it does; the
-        /// window where the frame is left to it and it wants one, which a
-        /// compositor without `xdg-decoration` does from the start; nobody
-        /// while a compositor that offers frames has not answered yet.
-        pub(crate) const fn drawn(self) -> Drawn {
-            match self.told {
-                Some(FrameDrawer::Compositor) => Drawn::Compositor,
-                Some(FrameDrawer::Client) if self.requested && self.draws_own => Drawn::Client,
-                None if !self.offered && self.requested && self.draws_own => Drawn::Client,
-                _ => Drawn::Nobody,
-            }
-        }
-
-        /// Whether the window has a frame, whoever draws it.
-        pub(crate) const fn decorated(self) -> bool {
-            !matches!(self.drawn(), Drawn::Nobody)
-        }
-
-        /// Why the window's frame cannot be turned on and off, or `None`
-        /// where it can. A compositor that answered a request for no frame
-        /// with one of its own decides the frame itself (sway draws one
-        /// around every tiled window). A window that cannot draw its own
-        /// frame has none where the compositor draws none, and one the
-        /// compositor answered with the other mode is overruled either way.
-        /// Until the compositor answers, the request stands.
-        pub(crate) const fn absence(self) -> Option<CapabilityAbsence> {
-            let (answered_with, decided) = match (self.answered, self.told) {
-                (true, Some(drawer)) => (Some(drawer), true),
-                _ => (None, false),
-            };
-            let overruled = if self.draws_own {
-                decided && matches!(answered_with, Some(FrameDrawer::Compositor)) && !self.requested
-            } else {
-                decided && matches!(answered_with, Some(FrameDrawer::Compositor)) != self.requested
-            };
-            if overruled || (!self.offered && !self.draws_own) {
-                Some(CapabilityAbsence::NotOnThisDevice)
-            } else {
-                None
-            }
-        }
-    }
-
-    #[cfg(test)]
-    mod tests {
-        use super::*;
-
-        /// The frame is the compositor's answer where it draws one and the
-        /// window's own where the frame is left to it, and only a compositor
-        /// that insists on drawing it takes the command away.
-        #[test]
-        fn a_window_has_the_frame_its_compositor_leaves_it() {
-            use Drawn::{Client as Own, Compositor as Theirs, Nobody};
-            use FrameDrawer::{Client, Compositor};
-            let overruled = Some(CapabilityAbsence::NotOnThisDevice);
-            let decoration = |offered, requested, told, answered| Decoration {
-                offered,
-                draws_own: true,
-                requested,
-                told,
-                answered,
-            };
-            for (case, decoration, drawn, absence) in [
-                (
-                    "no xdg-decoration: the window's own",
-                    decoration(false, true, None, false),
-                    Own,
-                    None,
-                ),
-                (
-                    "no xdg-decoration, none wanted",
-                    decoration(false, false, None, false),
-                    Nobody,
-                    None,
-                ),
-                (
-                    "asked, not answered yet",
-                    decoration(true, true, None, false),
-                    Nobody,
-                    None,
-                ),
-                (
-                    "asked and drawn",
-                    decoration(true, true, Some(Compositor), true),
-                    Theirs,
-                    None,
-                ),
-                (
-                    "asked, left to the client: the window's own",
-                    decoration(true, true, Some(Client), true),
-                    Own,
-                    None,
-                ),
-                (
-                    "turned off",
-                    decoration(true, false, Some(Client), true),
-                    Nobody,
-                    None,
-                ),
-                (
-                    "turned off, drawn regardless",
-                    decoration(true, false, Some(Compositor), true),
-                    Theirs,
-                    overruled,
-                ),
-                (
-                    "turned off, the old frame until the answer",
-                    decoration(true, false, Some(Compositor), false),
-                    Theirs,
-                    None,
-                ),
-                (
-                    "turned on again, the window's own until the answer",
-                    decoration(true, true, Some(Client), false),
-                    Own,
-                    None,
-                ),
-            ] {
-                assert_eq!(decoration.drawn(), drawn, "{case}");
-                assert_eq!(decoration.decorated(), drawn != Nobody, "{case}");
-                assert_eq!(decoration.absence(), absence, "{case}");
-            }
-            assert_eq!(
-                FrameDrawer::from_mode(SERVER_SIDE),
-                Some(FrameDrawer::Compositor)
-            );
-            assert_eq!(
-                FrameDrawer::from_mode(CLIENT_SIDE),
-                Some(FrameDrawer::Client)
-            );
-            assert_eq!(FrameDrawer::from_mode(9), None);
-        }
-
-        /// A window that cannot draw a frame of its own (no subsurfaces or
-        /// shared memory) has only the compositor's, and says so.
-        #[test]
-        fn a_window_that_draws_no_frame_has_the_compositors() {
-            let none = |offered, requested, told, answered| Decoration {
-                offered,
-                draws_own: false,
-                requested,
-                told,
-                answered,
-            };
-            let overruled = Some(CapabilityAbsence::NotOnThisDevice);
-            let bare = none(false, true, None, false);
-            assert_eq!(bare.drawn(), Drawn::Nobody);
-            assert_eq!(bare.absence(), overruled);
-            let left = none(true, true, Some(FrameDrawer::Client), true);
-            assert_eq!(left.drawn(), Drawn::Nobody);
-            assert_eq!(left.absence(), overruled);
-            let drawn = none(true, true, Some(FrameDrawer::Compositor), true);
-            assert_eq!(drawn.drawn(), Drawn::Compositor);
-            assert_eq!(drawn.absence(), None);
         }
     }
 }
@@ -1661,6 +1457,9 @@ mod toplevel {
         decoration_requested: bool,
         /// The compositor answered that request.
         decoration_answered: bool,
+        /// The title bar of the application's the window asked for, which asks
+        /// the compositor for no frame and keeps the margins of its own.
+        app_title_bar: Option<flui_platform::AppTitleBar>,
         /// The title bar's height the size limits were last sent with.
         limits_header: f64,
         /// The window geometry last sent, once the window drew a frame of its
@@ -1683,14 +1482,27 @@ mod toplevel {
         }
 
         /// The frame the window draws itself with `states` and its content
-        /// now; `None` where it draws none.
+        /// now; `None` where it draws none. Around a title bar of the
+        /// application's it is the margins alone.
         fn own_frame(&self, decoration: Decoration, states: ToplevelStates) -> Option<Frame> {
-            (decoration.drawn() == Drawn::Client).then_some(Frame {
+            let app_margins = decoration.app_margins(self.app_title_bar.is_some());
+            (app_margins || decoration.drawn() == Drawn::Client).then_some(Frame {
                 content: self.sizing.content(),
                 states,
                 resizable: self.resizable,
                 offers: Offers::from(self.told.wm),
+                title_bar: !app_margins,
             })
+        }
+
+        /// The frame the window reports: the application's title bar where
+        /// the window draws the margins around it, otherwise whether it has
+        /// a frame at all.
+        fn reported_frame(&self, decoration: Decoration) -> WindowFrame {
+            match self.app_title_bar {
+                Some(bar) if decoration.app_margins(true) => WindowFrame::AppTitleBar(bar),
+                _ => system_frame_or_none(decoration.decorated()),
+            }
         }
     }
 
@@ -1816,7 +1628,7 @@ mod toplevel {
                 .with_title(Some(applied.title.clone()))
                 .with_constraints(applied.constraints)
                 .with_resizable(applied.resizable)
-                .with_frame(system_frame_or_none(decoration.decorated()))
+                .with_frame(applied.reported_frame(decoration))
                 .with_display(output.map(|output| output.display));
             ReportedFacts {
                 metrics: WindowMetrics::from_logical(content, scale).ok(),
@@ -1843,6 +1655,7 @@ mod toplevel {
                     capabilities(
                         applied.told.wm,
                         decoration.absence(),
+                        decoration.app_title_bar_absence(),
                         states,
                         self.activation,
                     ),
@@ -1900,10 +1713,19 @@ mod toplevel {
                 .viewporter
                 .as_ref()
                 .map(|viewporter| viewporter.get_viewport(&surface, &queue, ()));
-            // This host takes no title bar of the application's
-            // (`app_title_bar` is not yet on it), so a window asking for one
-            // opens with the system's frame.
-            let decorated_at_open = options.frame != WindowFrame::None;
+            // A title bar of the application's the window cannot take (it
+            // draws no frame of its own) opens with the system's frame; one it
+            // takes asks the compositor for none and keeps its own margins.
+            let frame = options
+                .frame
+                .at_open(&<Self as host::Window<WaylandLoop>>::capabilities(
+                    owner, windows,
+                ));
+            let decorated_at_open = frame.has_system_title_bar();
+            let app_title_bar = match frame {
+                WindowFrame::AppTitleBar(bar) => Some(bar),
+                _ => None,
+            };
             // Asked before the first commit, so the first configure says who
             // draws the frame.
             let decoration = protocol.decoration.as_ref().map(|manager| {
@@ -1950,6 +1772,7 @@ mod toplevel {
                 configured: false,
                 leaving_maximized: false,
                 decoration_requested: decorated_at_open,
+                app_title_bar,
                 decoration_answered: false,
                 limits_header: 0.0,
                 geometry: None,
@@ -2831,7 +2654,14 @@ mod toplevel {
                     } else {
                         drop(roles);
                     }
-                    self.applied.borrow_mut().decoration_requested = decorated;
+                    {
+                        let mut applied = self.applied.borrow_mut();
+                        applied.decoration_requested = decorated;
+                        applied.app_title_bar = match frame {
+                            WindowFrame::AppTitleBar(bar) => Some(bar),
+                            _ => None,
+                        };
+                    }
                     self.show_frame_change();
                 }
                 WindowCommand::SetMode(WindowMode::Normal) => self.leave_compositor_modes(),
@@ -2882,13 +2712,20 @@ mod toplevel {
             Err(Unsupported::new(UnsupportedReason::NotOnThisPlatform))
         }
 
-        /// The input regions are the system's edge gestures a region keeps
-        /// out, which no Wayland compositor lets a window exclude.
+        /// The chrome regions answer the presses on a title bar of the
+        /// application's (ADR-0286 §11); the system's edge gestures a region
+        /// keeps out are none a Wayland compositor lets a window exclude.
         fn set_input_regions(
             &self,
-            _regions: &[flui_platform::input_regions::InputRegion],
+            regions: &[flui_platform::input_regions::InputRegion],
         ) -> Result<(), Unsupported> {
-            Err(Unsupported::new(UnsupportedReason::NotOnThisPlatform))
+            let scale = self
+                .state
+                .published()
+                .metrics
+                .map_or(1.0, |metrics| metrics.scale().get());
+            self.frame_record.set_regions(regions, scale);
+            Ok(())
         }
 
         fn text_input(&self) -> Option<Arc<dyn PlatformTextInput>> {
@@ -3073,6 +2910,7 @@ mod toplevel {
                 capabilities(
                     None,
                     decoration.absence(),
+                    decoration.app_title_bar_absence(),
                     ToplevelStates::default(),
                     if owner.offers_activation() {
                         Activation::Offered

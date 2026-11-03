@@ -124,10 +124,11 @@ impl InlineSpan {
     /// ([`TextStyle::layout_affecting_eq`]), and placeholder geometry.
     ///
     /// `true` means the two span trees produce identical glyph
-    /// geometry — a text engine may keep its shaped layout and only
-    /// re-emit paint commands (colors/shadows changed at most).
-    /// Interaction-only fields (semantic labels, cursors, links) are
-    /// ignored: they affect neither shaping nor paint.
+    /// geometry. [`TextPainter::set_text`](crate::TextPainter::set_text)
+    /// also compares the span colours its shaped runs carry, so only a root
+    /// recolour keeps the shaped layout. Interaction-only fields (semantic
+    /// labels, cursors, links) are ignored: they affect neither shaping nor
+    /// paint.
     #[must_use]
     pub fn layout_affecting_eq(&self, other: &Self) -> bool {
         match (self, other) {
@@ -259,10 +260,20 @@ impl TextSpan {
     /// See [`InlineSpan::layout_affecting_eq`] for the contract.
     #[must_use]
     pub fn layout_affecting_eq(&self, other: &Self) -> bool {
-        if self.text != other.text || self.children.len() != other.children.len() {
+        let Self {
+            text,
+            style,
+            children,
+            // Neither shaping nor paint reads these; `RenderParagraph::set_text`
+            // diffs them through its span runs and the semantics text.
+            semantics_label: _,
+            mouse_cursor: _,
+            link: _,
+        } = self;
+        if *text != other.text || children.len() != other.children.len() {
             return false;
         }
-        let style_eq = match (&self.style, &other.style) {
+        let style_eq = match (style, &other.style) {
             (None, None) => true,
             (Some(a), Some(b)) => a.layout_affecting_eq(b),
             // A style appearing/disappearing can change font selection
@@ -270,8 +281,7 @@ impl TextSpan {
             _ => false,
         };
         style_eq
-            && self
-                .children
+            && children
                 .iter()
                 .zip(&other.children)
                 .all(|(a, b)| a.layout_affecting_eq(b))

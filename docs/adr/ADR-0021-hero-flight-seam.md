@@ -3,6 +3,7 @@
 - **Status:** Accepted
 - **Date:** 2026-07-09
 - **Superseded in part by:** ADR-0078 (capability acquisition)
+- **Amended:** 2026-11-03 — gesture-driven flights (edge swipe-back) and flights across nested navigators are implemented and stated as §9; the "not carried" entries for them are removed. §1 to §7 are unchanged, and §8's public surface lists `Hero::transition_on_user_gestures`.
 
 ## Context
 
@@ -143,7 +144,7 @@ if the destination is gone, the shuttle fades out while the flight keeps flying.
 ### 8. Public surface
 
 `Hero` (`new(tag: impl ViewKey, child)`, `create_rect_tween`, `flight_shuttle_builder`,
-`placeholder`, `curve`, `reverse_curve`), `HeroController`, `HeroControllerScope`, `HeroMode`,
+`placeholder`, `curve`, `reverse_curve`, `transition_on_user_gestures` of §9), `HeroController`, `HeroControllerScope`, `HeroMode`,
 `FlightDirection`. Registry, handles, manifests, flights and `HeroTag` stay private.
 
 - `create_rect_tween`: per-hero, else controller-level, else linear `Tween<Rect>`; re-invoked on
@@ -164,6 +165,66 @@ if the destination is gone, the shuttle fades out while the flight keeps flying.
   attached to a mounted navigator refuses a second one (Flutter reports and lets both run).
   The scope is read once in `init_state`.
 
+### 9. Gesture-driven flights and nested navigators
+
+A flight can start from a user gesture (the edge swipe-back) rather than from a committed route
+change. The seam of §3 and §7 is unchanged; these rules add the gesture entry to it, and
+`Hero::transition_on_user_gestures` joins the public surface of §8.
+
+- **The navigator counts gestures.** `NavigatorHandle::did_start_user_gesture` increments an
+  atomic count; only the 0 to 1 edge resolves the top route and its predecessor and calls
+  `NavigatorObserver::did_start_user_gesture(route, previous)`, and only the 1 to 0 edge calls
+  `did_stop_user_gesture`. The stop edge saturates at zero, so an unmatched stop is a no-op in
+  release and a debug assertion in debug builds. Observers run after the history lock is
+  released, as in §4 (`crates/flui-widgets/src/navigator/navigator.rs:1243`, `:1255`; the
+  counting itself at `:712`, `:732`).
+- **The gesture source.** `BackGestureController::new` calls the navigator's
+  `did_start_user_gesture` before its first drag update; a route takes part through
+  `PageRoute::back_gesture(true)`
+  (`crates/flui-widgets/src/navigator/back_gesture.rs:108`,
+  `crates/flui-widgets/src/navigator/page_route.rs:339`).
+- **A gesture flight is always a pop.** `HeroController::did_start_user_gesture` runs the same
+  eligibility and launch path as `did_change_top`, with the dragged route as `from` and the route
+  it would reveal as `to`, and `FlightDirection::classify` returns `Pop` for a gesture before it
+  reads either route's status
+  (`crates/flui-widgets/src/navigator/hero_controller.rs:861`, `:139`). The commit of the swipe
+  pops the route and fires `did_change_top` while the gesture is still in progress; that call
+  returns without a second flight (`hero_controller.rs:825`).
+- **A synchronous start.** For a gesture pop whose destination `maintain_state` and whose page
+  subtree already has a finite laid-out size, the measurement and launch run inside the observer
+  callback: no offstage flip and no post-frame schedule (`hero_controller.rs:405`). Otherwise the
+  flight takes the post-frame path of §3.
+- **Heroes opt in.** `Hero::transition_on_user_gestures(bool)` defaults to `false`; a tag flies
+  during a gesture only when the hero on both routes opts in, and a hero left out is un-hidden if
+  an earlier flight froze it (`crates/flui-widgets/src/navigator/hero.rs:1123`;
+  `HeroController` `filter_for_gesture`, `hero_controller.rs:682`).
+- **A drag that never moves still ends.** A gesture pop flight records
+  `is_user_gesture_transition` (`crates/flui-widgets/src/navigator/hero_flight.rs:82`). On the stop
+  edge `HeroController::did_stop_user_gesture` returns while another gesture is in progress, then
+  `finish_stalled_gesture_pops` finishes every airborne gesture pop whose proxy never left
+  `ReverseSettled`, through the same `finish` a real terminal status uses
+  (`hero_controller.rs:872`, `hero_flight.rs:1351`). The sweep attempts every flight under one
+  `PanicRecovery` and resumes the first failure after the last one, so a panicking hero callback
+  leaves no other flight airborne. Teardown is idempotent (`hero_flight.rs:491`), so a flight
+  reached by both its shuttle and the sweep ends once.
+- **Nested navigators.** A route's heroes for a flight are `ModalHandle::all_heroes`: its own plus,
+  recursively, those a nested `Navigator` publishes for its current `PageRoute`
+  (`crates/flui-widgets/src/navigator/modal_route.rs:976`). The nested navigator re-resolves the
+  enclosing route's registry on every build, moves its hero source when that registry changed,
+  and withdraws it at dispose, so a disposed navigator's heroes are never matched
+  (`navigator.rs:2887`, `:3072`). A
+  `HeroControllerScope::none` stops the nested navigator from attaching its own controller; it does
+  not stop the outer controller from matching its heroes.
+
+Confirmation: `hero_gesture::complete_release_pops_to_the_destination_route_and_the_flight_lands`
+and `hero_gesture::an_excluding_gesture_restores_pending_programmatic_placeholders`
+(`crates/flui-widgets/tests/hero_gesture.rs:260`, `:176`, rows of `crates/flui-widgets/tests/contracts.rs:1239`)
+drive a gesture through `BackGestureController`;
+`navigator::hero::registry_tests::nested_hero_resolution_preserves_local_identity_through_cycles`
+(`crates/flui-widgets/src/navigator/hero.rs:608`) pins nested registration in `all_heroes`. A row
+for a drag that never moves before its stop, finished by the sweep, is to be added to
+`tests/hero_gesture.rs`.
+
 ## Flutter divergences
 
 Listed above: registry instead of element walk; first-wins duplicate tags; no foreign contexts
@@ -175,9 +236,8 @@ retains its selected rect factory and evaluates it with the original endpoint or
 mirrored progress. This retraces arbitrary custom mappings as well as linear tweens;
 a different destination selects a new mapping.
 
-**Not carried:** user-gesture flights (`transitionOnUserGestures`,
-`didStart/StopUserGesture`; FLUI has no back-swipe), cross-navigator flights, `MediaQuery`
-padding compensation in the default shuttle, hero-specific semantics.
+**Not carried:** `MediaQuery` padding compensation in the default shuttle
+(`crates/flui-widgets/src/navigator/hero.rs:879`), hero-specific semantics.
 
 ## Alternatives rejected
 

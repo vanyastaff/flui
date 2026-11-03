@@ -7,7 +7,7 @@
 use std::{fmt::Debug, hash::Hash};
 
 use flui_foundation::Arity;
-use flui_foundation::geometry::Offset;
+use flui_foundation::geometry::{Offset, Size};
 
 use crate::parent_data::ParentData;
 
@@ -97,6 +97,40 @@ pub enum ChildLayout {
     NoChild,
     /// No request sink is wired in this context (a bug if reached in production).
     Unwired,
+}
+
+/// The size a box child answered to its sliver parent, and whether the child
+/// itself produced it.
+///
+/// - [`Measured`](BoxChildSize::Measured): the child's own layout ran in this
+///   call, or a clean child answered with the geometry its last layout committed.
+///   A child laid out over a failed descendant is measured too: that is the size
+///   it paints at (ADR-0054 decision 2).
+/// - [`StandIn`](BoxChildSize::StandIn): the walk substituted this value for
+///   the child's own layout. The child's layout failed and the parent got
+///   `Size::ZERO`, the child is layout-poisoned and served its stand-in, or
+///   there is no child at that index. The value positions this pass's children
+///   and is not the child's size to keep.
+///
+/// A parent that keeps a child's size beyond the pass (a lazy list's measured
+/// extents) records only `Measured`. Exhaustive on purpose: a third case would
+/// change what every such parent may keep, so it has to fail to compile there.
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[must_use = "a stand-in is not a measurement; match on it or call size()"]
+pub enum BoxChildSize {
+    /// The child produced this size.
+    Measured(Size),
+    /// The walk substituted this size for the child's own layout.
+    StandIn(Size),
+}
+
+impl BoxChildSize {
+    /// The size to position the child with in this pass, whichever case it is.
+    pub fn size(self) -> Size {
+        match self {
+            Self::Measured(size) | Self::StandIn(size) => size,
+        }
+    }
 }
 
 /// API for layout context operations.

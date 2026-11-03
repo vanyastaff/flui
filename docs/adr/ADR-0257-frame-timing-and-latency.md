@@ -16,6 +16,10 @@
 - **Supersedes:** [ADR-0058](ADR-0058-the-platform-paces-production-not-a-sleep.md) decision 0 only,
   its sentence fixing `desired_maximum_frame_latency` at 2: the number of frames in flight is a
   setting whose default is 2. `Fifo` stays the only present mode, and the rest stands.
+- **Amended:** 2026-11-03 — decision 4, by
+  [ADR-0305](ADR-0305-one-gpu-context-serves-every-surface-through-a-raster-executor.md) §5: the
+  setting is the window's slot's, given when the slot is attached and changed by a `Configure`
+  command, which is the per-window override; the slot supplies it at every `Surface::configure`.
 - **Related:** [ADR-0207](ADR-0207-host-input-boundary-and-timeline.md) §2 (the event timeline a
   vsync is stamped on), [ADR-0249](ADR-0249-the-android-loop-blocks-until-woken.md) (a loop that
   blocks until woken is why `Mailbox` is not offered)

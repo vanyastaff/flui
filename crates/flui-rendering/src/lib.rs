@@ -206,6 +206,7 @@ pub use pipeline::{
     LayoutPremise, PipelineCell, PipelineOwner, TextContextHandle, TextCx, TextSource,
 };
 pub use protocol::{
+    BoxChildSize,
     // Concrete capabilities
     BoxHitTest,
     BoxLayout,

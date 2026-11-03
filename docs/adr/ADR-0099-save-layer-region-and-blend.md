@@ -1,8 +1,17 @@
 # ADR-0099: A save layer composites its whole region with its recorded blend mode
 
-- **Status:** Proposed. `flui-engine` implements it in the change that adds this record;
-  acceptance waits on the review of that change.
-- **Superseded-by:** [ADR-0102](ADR-0102-immutable-geometric-clip-composition.md)
+- **Status:** Accepted (2026-11-03). The engine composites a save layer's whole region with its
+  recorded mode (`a_layer_composites_its_whole_region_with_its_mode`,
+  `crates/flui-engine/src/layer_blend_tests.rs:443`) and the damage producers report that region
+  (`a_bounded_save_layer_extent_is_its_mapped_bounds`,
+  `crates/flui-painting/tests/damage_extent.rs:298`). Not implemented: nothing in §1–§4. The
+  items under "Limits" no longer hold: a layer's bounds join its composite clip expression under
+  their captured transform (`crates/flui-engine/src/painter/layer.rs:510-544`), so a bounded
+  layer always composites, and the edge mix is ADR-0102 §5's. Mapping decision 19 in
+  `crates/flui-engine/ARCHITECTURE.md:1065` is the implementation detail.
+- **Superseded-by:** [ADR-0102](ADR-0102-immutable-geometric-clip-composition.md) for §1–§4
+  (§6 of ADR-0102 restates the region, the whole-region blend, the damage and the shader-mask
+  rule; this record keeps its text as the reasoning).
 - **Date:** 2026-09-30
 - **Related:** [ADR-0057](ADR-0057-coverage-correct-blending-is-capability-gated.md) (coverage-correct blending,
   shapes only), [ADR-0087](ADR-0087-raster-contract-and-cpu-backend.md) (the raster contract
@@ -11,8 +20,8 @@
 ADR-0102 retains whole-region compositing while replacing single-slot clip and
 doubled-edge limitations with immutable expression ownership. It also supersedes
 ADR-0057's former permission for incorrect featureless direct destructive AA;
-those direct draws now require capability or return `UnsupportedCoverageBlend`.
-This does not claim the portable direct-draw fallback is implemented.
+those direct draws take ADR-0103's portable path, or return `UnsupportedCoverageBlend`
+on a view-only target.
 
 ## Context
 

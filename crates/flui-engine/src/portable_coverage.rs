@@ -565,6 +565,20 @@ fn mode_index(mode: BlendMode) -> EngineResult<u32> {
         BlendMode::Xor => 11,
         BlendMode::Plus => 12,
         BlendMode::Modulate => 13,
-        _ => return Err(EngineError::UnsupportedCoverageBlend { mode }),
+        BlendMode::Screen
+        | BlendMode::Overlay
+        | BlendMode::Darken
+        | BlendMode::Lighten
+        | BlendMode::ColorDodge
+        | BlendMode::ColorBurn
+        | BlendMode::HardLight
+        | BlendMode::SoftLight
+        | BlendMode::Difference
+        | BlendMode::Exclusion
+        | BlendMode::Multiply
+        | BlendMode::Hue
+        | BlendMode::Saturation
+        | BlendMode::Color
+        | BlendMode::Luminosity => return Err(EngineError::UnsupportedCoverageBlend { mode }),
     })
 }

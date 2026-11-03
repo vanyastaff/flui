@@ -141,6 +141,12 @@ fn connect(address: &str) -> io::Result<Stream> {
         use interprocess::local_socket::{GenericNamespaced, ToNsName as _};
         address.to_ns_name::<GenericNamespaced>()?
     };
+    #[cfg(target_os = "linux")]
+    if let Some(name) = address.strip_prefix('@') {
+        use interprocess::local_socket::ToNsName as _;
+        use interprocess::os::unix::local_socket::AbstractNsUdSocket;
+        return Stream::connect(name.to_ns_name::<AbstractNsUdSocket>()?);
+    }
     #[cfg(unix)]
     let name = {
         use interprocess::local_socket::{GenericFilePath, ToFsName as _};
@@ -1229,6 +1235,40 @@ fn unbounded_timeouts_wait_without_a_deadline() {
     assert_eq!(owner.presses(), 1, "the button's handler ran once");
 }
 
+/// An abstract socket (`@name`), Android's endpoint, serves a peer of the app's user, and closes
+/// unread a connection whose peer its rule does not admit.
+#[cfg(target_os = "linux")]
+fn an_abstract_socket_serves_its_user_and_closes_others_unread() {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("the clock is after the epoch")
+        .as_nanos();
+    let at = format!("@flui-agent-test-{}-{nanos}", std::process::id());
+    let launch = || Launch::try_new(at.clone(), TOKEN.to_owned(), false).expect("a long token");
+
+    let (agent, _, _) = driver_agent(launch());
+    let mut owner = Owner::new(agent);
+    assert!(owner.is_attached(), "the abstract socket is bound");
+    let served = at.clone();
+    owner.drive(move |_| {
+        let mut client = Client::hello(&served);
+        let _ = client.only_window();
+    });
+    drop(owner);
+
+    let (agent, _, _) = driver_agent(launch().with_peer_rule(|_| false));
+    let mut owner = Owner::new(agent);
+    let refused = at.clone();
+    owner.drive(move |_| {
+        let mut stranger = Client::connect(&refused);
+        stranger.send(&Client::hello_line(TOKEN));
+        assert!(
+            stranger.closed_unread(),
+            "a peer the rule refuses is closed before its hello is read"
+        );
+    });
+}
+
 /// Runs every row, then fails naming each row that failed.
 fn run_cases(cases: &[(&str, fn())]) {
     let mut failures = Vec::new();
@@ -1309,5 +1349,89 @@ fn the_driver_agent_contains_every_failure() {
             "unbounded_timeouts_wait_without_a_deadline",
             unbounded_timeouts_wait_without_a_deadline,
         ),
+        #[cfg(target_os = "linux")]
+        (
+            "an_abstract_socket_serves_its_user_and_closes_others_unread",
+            an_abstract_socket_serves_its_user_and_closes_others_unread,
+        ),
     ]);
+}
+
+#[test]
+fn the_launch_is_read_through_its_keys() {
+    use flui_protocol::launch::{ENDPOINT_ENV, EXIT_ON_DISCONNECT_ENV, TOKEN_ENV};
+
+    use super::launch::{ENDPOINT, EXIT_ON_DISCONNECT, TOKEN as TOKEN_KEY};
+
+    // A desktop reads the variables a driver sets, under the keys an Android
+    // launch names its extras with.
+    for (key, variable) in [
+        (ENDPOINT, ENDPOINT_ENV),
+        (TOKEN_KEY, TOKEN_ENV),
+        (EXIT_ON_DISCONNECT, EXIT_ON_DISCONNECT_ENV),
+    ] {
+        assert_eq!(key.environment_variable(), variable, "{key}");
+    }
+
+    let read = |endpoint: Option<&str>, token: &str, exit: Option<&str>| {
+        Launch::read(|key| {
+            let value = if key == ENDPOINT {
+                endpoint
+            } else if key == TOKEN_KEY {
+                Some(token)
+            } else if key == EXIT_ON_DISCONNECT {
+                exit
+            } else {
+                panic!("the launch reads no other key: {key}")
+            };
+            value.map(str::to_owned)
+        })
+    };
+    let at = "/run/user/agent.sock";
+    assert!(read(None, TOKEN, None).is_none(), "no endpoint, no agent");
+    assert!(read(Some(at), "short", None).is_none(), "a short token");
+    let plain = read(Some(at), TOKEN, None).expect("a launch");
+    assert_eq!(plain.address, at);
+    assert!(!plain.exit_on_disconnect());
+    assert!(
+        read(Some(at), TOKEN, Some("1"))
+            .expect("a launch")
+            .exit_on_disconnect()
+    );
+    assert!(
+        !read(Some(at), TOKEN, Some("true"))
+            .expect("a launch")
+            .exit_on_disconnect(),
+        "only `1` turns the exit on"
+    );
+    assert!(plain.peers.is_none(), "a socket file needs no peer rule");
+    let abstract_launch = read(Some("@flui-agent-1"), TOKEN, None).expect("a launch");
+    assert_eq!(
+        abstract_launch.peers.is_some(),
+        cfg!(any(target_os = "linux", target_os = "android")),
+        "an abstract socket admits only the peers its rule does"
+    );
+}
+
+#[test]
+fn an_abstract_socket_admits_its_user_root_and_on_android_the_shell() {
+    use super::launch::peer_admitted;
+
+    const OWN: u32 = 10_123;
+    for (peer, android, admitted) in [
+        (OWN, false, true),
+        (OWN, true, true),
+        (0, false, true),
+        (0, true, true),
+        (2000, true, true),
+        (2000, false, false),
+        (10_124, true, false),
+        (1000, false, false),
+    ] {
+        assert_eq!(
+            peer_admitted(peer, OWN, android),
+            admitted,
+            "peer {peer}, android {android}"
+        );
+    }
 }

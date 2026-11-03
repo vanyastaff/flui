@@ -424,6 +424,15 @@ pub trait Platform: sealed::Sealed + Send + Sync + 'static {
     /// [`PlatformError::AppPath`] when the backend's own lookup fails.
     fn app_path(&self) -> Result<PathBuf, PlatformError>;
 
+    /// The value the process was launched with under `key` (ADR-0288 §7): on Android the
+    /// launching intent's string extra of that name; elsewhere the environment variable
+    /// [`LaunchKey::environment_variable`](flui_platform::LaunchKey::environment_variable)
+    /// spells, which on the iOS Simulator is what `simctl launch` passed as `SIMCTL_CHILD_`.
+    /// The web reads none yet. `None` when the launch did not give it or gave it empty.
+    ///
+    /// Any thread may ask, and each ask reads the launch again.
+    fn launch_value(&self, key: flui_platform::LaunchKey) -> Option<String>;
+
     /// Where the application `app` keeps its data on this platform, or `None`
     /// when it has nowhere to keep it.
     ///
@@ -714,6 +723,10 @@ impl<H: Host> Platform for HostPlatform<H> {
 
     fn app_path(&self) -> Result<PathBuf, PlatformError> {
         self.owner.app_path()
+    }
+
+    fn launch_value(&self, key: flui_platform::LaunchKey) -> Option<String> {
+        self.owner.launch_value(key)
     }
 
     fn data_store(&self, app: &AppDataDir) -> Option<DataStore> {

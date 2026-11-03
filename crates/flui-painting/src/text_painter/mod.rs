@@ -38,13 +38,14 @@ pub(crate) const DEFAULT_FONT_SIZE: f64 = 14.0;
 
 /// What a property change invalidates — the shaped/paint split.
 ///
-/// A paragraph that cannot update paint attributes in place must re-shape
-/// on a color change. FLUI's [`TextPainter::set_text`] diffs the old and new span trees
-/// ([`InlineSpan::layout_affecting_eq`]) and reports which half
-/// actually changed; a paint-only change KEEPS the shaped layout —
-/// metrics, baselines, and cursor geometry stay valid, and the next
-/// paint re-emits draw commands with the new attributes at zero
-/// reshape cost.
+/// [`TextPainter::set_text`] diffs the old and new span trees
+/// ([`InlineSpan::layout_affecting_eq`] and the span colours the shaped runs
+/// carry) and reports which half actually changed. A paint-only change KEEPS
+/// the shaped layout: metrics, baselines, and cursor geometry stay valid, and
+/// the next paint re-emits draw commands at zero reshape cost. Root and span
+/// recolours are paint-only; the exception is a recolour that splits a glyph
+/// run (two adjacent spans of one colour given different colours), which
+/// reports [`Invalidation::Layout`].
 ///
 /// The variants are ordered by severity, so a prop-diff over several
 /// properties can fold with `max`.
@@ -52,8 +53,9 @@ pub(crate) const DEFAULT_FONT_SIZE: f64 = 14.0;
 pub enum Invalidation {
     /// Nothing observable changed.
     None,
-    /// Only paint attributes changed (colors, shadows): repaint with
-    /// the existing shaped layout.
+    /// Only colours that keep every glyph run, or a field shaping does not
+    /// read (background, shadows, a span's link, cursor or semantics label),
+    /// changed: repaint with the existing shaped layout.
     Paint,
     /// Glyph geometry changed: re-shape before the next paint.
     Layout,
@@ -121,7 +123,9 @@ pub(super) struct TextLayoutCache {
     /// Whether layout did overflow.
     pub(super) did_exceed_max_lines: bool,
     /// The paragraph `paint` records: the runs of the layout that gave
-    /// `size`, so what is painted is, by identity, what was measured.
+    /// `size`, so what is painted is, by identity, what was measured. A
+    /// span recolour replaces it with one built from the same layout and the
+    /// new colours; a root-only recolour keeps it.
     pub(super) paragraph: Arc<ShapedParagraph>,
     /// The layout that measured and painted, which carets, selection, line
     /// metrics, hit-testing and word boundaries read.
@@ -285,35 +289,67 @@ impl TextPainter {
     /// Sets the text to paint and reports what the change invalidates.
     ///
     /// The shaped/paint split: when the new span tree differs only in
-    /// paint attributes (colors, shadows), the shaped layout is KEPT —
-    /// size, baselines, and cursor geometry remain valid, and the next
+    /// colours or in fields shaping does not read (background, shadows,
+    /// links, cursors, semantics labels), the shaped layout is KEPT: size,
+    /// baselines, and cursor geometry remain valid, and the next
     /// [`paint`](TextPainter::paint) emits the new attributes with zero
-    /// reshape cost. Only a layout-affecting change (text content, font
-    /// selection, sizes, spacing) drops the cache, and only then must
-    /// [`layout`](TextPainter::layout) run again before painting. The
-    /// caller (a render object) routes the returned [`Invalidation`] to
-    /// its mark-needs-layout / mark-needs-paint decision.
+    /// reshape cost. A root-only recolour keeps the painted paragraph
+    /// itself (the same `Arc`); a span recolour rebuilds it from the kept
+    /// layout (ADR-0065). The one paint-only change that shapes again is a
+    /// recolour that gives two adjacent spans of one colour different
+    /// colours, which splits their glyph run. A layout-affecting change
+    /// (text content, font selection, sizes, spacing) drops the cache, and
+    /// only then must [`layout`](TextPainter::layout) run again before
+    /// painting. The caller (a render object) routes the returned
+    /// [`Invalidation`] to its mark-needs-layout / mark-needs-paint decision.
     pub fn set_text(&mut self, text: Option<InlineSpan>) -> Invalidation {
         if self.text == text {
             return Invalidation::None;
         }
-        let layout_preserved = match (&self.text, &text) {
-            // A span colour is baked into the shaped layout (only the root
-            // colour rides on the paragraph command), so a recolour of one
-            // span is a layout change here even though the geometry is not.
-            (Some(old), Some(new)) => {
-                old.layout_affecting_eq(new) && Self::span_colors(old) == Self::span_colors(new)
+        let recolor = match (&self.text, &text) {
+            (Some(old), Some(new)) if old.layout_affecting_eq(new) => {
+                let root = new.style().and_then(crate::text_layout::paint_color);
+                let colors = Self::span_paint_colors(new);
+                let old_root = old.style().and_then(crate::text_layout::paint_color);
+                // The cached paragraph paints each span in its own colour or,
+                // where that is the root's, in the command's: it already
+                // paints `new` when the colours agree relative to each root.
+                let painted = Self::relative_to_root(&Self::span_paint_colors(old), old_root)
+                    == Self::relative_to_root(&colors, root);
+                Some((root, colors, painted))
             }
-            // Appearing/disappearing text is always a layout change.
-            _ => false,
+            // Appearing/disappearing text, or new geometry, is a layout change.
+            _ => None,
+        };
+        // Computed before anything is committed; `recolor` replaces the
+        // layout's run colours only once the paragraph is built.
+        let invalidation = match (recolor, self.layout_cache.as_mut()) {
+            (Some((_, colors, true)), Some(cache)) => {
+                if cache.layout.recolor_runs(&colors) {
+                    Invalidation::Paint
+                } else {
+                    Invalidation::Layout
+                }
+            }
+            (Some((root, colors, false)), Some(cache)) => {
+                match cache.layout.recolor(root, &colors) {
+                    Some(paragraph) => {
+                        cache.paragraph = Arc::new(paragraph);
+                        Invalidation::Paint
+                    }
+                    // Spans that shared a paint run now differ: only a new
+                    // layout splits the run.
+                    None => Invalidation::Layout,
+                }
+            }
+            (Some((_, _, true)), None) => Invalidation::Paint,
+            _ => Invalidation::Layout,
         };
         self.text = text;
-        if layout_preserved {
-            Invalidation::Paint
-        } else {
+        if invalidation == Invalidation::Layout {
             self.mark_needs_layout();
-            Invalidation::Layout
         }
+        invalidation
     }
 
     /// Sets the text alignment.
