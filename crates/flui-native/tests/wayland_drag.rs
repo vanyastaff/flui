@@ -203,14 +203,23 @@ mod cases {
     /// Start a drag from the source and bring it over the window, which
     /// hears `Entered`.
     fn drag_over(client: &Client, pointer: &Pointer, source: &DragSource) -> DataTransferId {
-        pointer.to(ON_SOURCE);
-        client.turn();
-        pointer.press();
+        // sway puts the pointer on the source once the layout that shows it
+        // applied, which a loaded host may take a while for: move until the
+        // source hears the pointer.
         let deadline = Instant::now() + STEP;
-        while !source.heard().contains(&Heard::Started) {
+        let mut nudge = 0;
+        while !source.heard().contains(&Heard::Pointed) {
+            nudge = 1 - nudge;
+            pointer.to((ON_SOURCE.0 + nudge, ON_SOURCE.1));
             client.turn();
-            assert!(Instant::now() < deadline, "the drag never started");
+            assert!(
+                Instant::now() < deadline,
+                "the pointer never reached the source; it heard {:?}",
+                source.heard()
+            );
         }
+        pointer.press();
+        until_heard(client, source, &Heard::Started);
         pointer.glide(client, ON_SOURCE, ON_WINDOW);
         client.until("the drag to enter the window", || entered(client).is_some());
         entered(client).expect("entered above")

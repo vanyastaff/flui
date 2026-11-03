@@ -145,6 +145,7 @@ pub(crate) fn representations<K: Copy>(types: &[(K, &str)]) -> Vec<(K, Kind)> {
 
 /// The bytes `payload` is written as: text and HTML in UTF-8, any other
 /// payload as it is.
+#[cfg(x11_host)]
 pub(crate) fn bytes_of(payload: TransferPayload) -> Vec<u8> {
     match payload {
         TransferPayload::Text(text) | TransferPayload::Html(text) => text.into_bytes(),
