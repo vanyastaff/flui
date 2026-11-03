@@ -18,7 +18,7 @@ use super::{FirstPanic, PanicRecovery};
 
 /// One piece of user code a mutation queued.
 enum Deferred {
-    Call(Box<dyn FnOnce()>),
+    Call(Box<dyn FnMut()>),
     Wake(Waker),
     Release(Box<dyn Any>),
 }
@@ -43,7 +43,11 @@ impl std::fmt::Debug for Outbox {
 impl Outbox {
     /// Run `call` once the state is released. It does not run when the
     /// mutation that queued it panics: it is destroyed instead.
-    pub fn call(&mut self, call: impl FnOnce() + 'static) {
+    ///
+    /// `call` is an `FnMut` called at most once, so its captures outlive the
+    /// call: they are destroyed after it, contained, a panic included, never
+    /// during its unwind (ADR-0281 §3).
+    pub fn call(&mut self, call: impl FnMut() + 'static) {
         self.queue.push(Deferred::Call(Box::new(call)));
     }
 
@@ -65,8 +69,12 @@ impl Outbox {
     fn deliver(self, committed: bool, sink: &mut impl Contain) {
         for item in self.queue {
             match item {
-                Deferred::Call(call) if committed => sink.contain_unit(call),
-                Deferred::Call(call) => sink.contain_unit(move || drop(call)),
+                Deferred::Call(mut call) => {
+                    if committed {
+                        sink.contain_unit(&mut call);
+                    }
+                    sink.contain_unit(move || drop(call));
+                }
                 Deferred::Wake(waker) => sink.contain_unit(move || waker.wake()),
                 Deferred::Release(value) => sink.contain_unit(move || drop(value)),
             }

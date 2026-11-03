@@ -32,7 +32,7 @@ use crate::owner::android::{
 };
 use crate::window::capabilities::{
     ActivityFacts, WindowColorMode, activity_capabilities, activity_color_mode,
-    pointer_icon_absence,
+    pointer_icon_absence, unbuffered_input_sources,
 };
 use crate::window::keyboard_motion::KeyboardMotion;
 
@@ -603,12 +603,27 @@ impl host::Window<AndroidLoop> for AndroidWindow {
         options: WindowOptions,
         handler: Rc<dyn flui_platform::WindowHandler>,
     ) -> Result<Rc<dyn crate::host_window::HostWindow>, OpenWindowError> {
-        if options.input_latency == flui_platform::InputLatency::Low {
-            // NativeActivity takes touch from the native input queue, which
-            // `requestUnbufferedDispatch` does not reach (docs/gaps.md).
-            tracing::warn!(
-                "InputLatency::Low is not supported on Android yet; input stays batched"
-            );
+        match unbuffered_input_sources(options.input_latency, owner.api) {
+            Some(sources) => {
+                let app = owner.app.clone();
+                // The view hierarchy belongs to the Java main thread.
+                owner.app.run_on_java_main_thread(Box::new(move || {
+                    if let Err(error) = unbuffered_input::apply(&app, sources) {
+                        tracing::warn!(
+                            target: "flui_native::android",
+                            %error,
+                            "the window's input dispatch was not changed"
+                        );
+                    }
+                }));
+            }
+            None if options.input_latency == flui_platform::InputLatency::Low => {
+                tracing::debug!(
+                    target: "flui_native::android",
+                    "below API 30 the system batches input once per frame"
+                );
+            }
+            None => {}
         }
         let id = owner.window_ids.next().ok_or(OpenWindowError::Backend {
             message: "the Activity's window identities are used up".to_owned(),
@@ -1304,6 +1319,50 @@ mod color_mode {
                 jni_str!("setColorMode"),
                 jni_sig!("(I)V"),
                 &[JValue::Int(mode)],
+            )?;
+            Ok(())
+        })
+    }
+}
+
+mod unbuffered_input {
+    //! Ask the Activity's decor view for unbuffered input
+    //! (`View.requestUnbufferedDispatch(int)`, API 30+).
+
+    use android_activity::AndroidApp;
+    use jni::{JValue, jni_sig, jni_str};
+
+    /// Ask the decor view to take the `InputDevice.SOURCE_CLASS_*` mask
+    /// `sources` as soon as the system has it, or to return to per-frame
+    /// batches for `0`. The window's `ViewRootImpl` reads the request ahead of
+    /// the native input queue. Must run on Android's Java main thread, which
+    /// owns the view hierarchy.
+    pub(super) fn apply(
+        app: &AndroidApp,
+        sources: i32,
+    ) -> Result<(), flui_platform::PreferenceQueryError> {
+        crate::owner::android::activity::with_activity(app, |env, activity| {
+            let window = env
+                .call_method(
+                    activity,
+                    jni_str!("getWindow"),
+                    jni_sig!("()Landroid/view/Window;"),
+                    &[],
+                )?
+                .l()?;
+            let decor = env
+                .call_method(
+                    &window,
+                    jni_str!("getDecorView"),
+                    jni_sig!("()Landroid/view/View;"),
+                    &[],
+                )?
+                .l()?;
+            env.call_method(
+                &decor,
+                jni_str!("requestUnbufferedDispatch"),
+                jni_sig!("(I)V"),
+                &[JValue::Int(sources)],
             )?;
             Ok(())
         })
