@@ -12,6 +12,9 @@ mod sequence;
 #[path = "panic_recovery.rs"]
 mod panic_recovery;
 
+#[path = "commit.rs"]
+mod commit;
+
 #[path = "reclaim_memory.rs"]
 mod reclaim_memory;
 
