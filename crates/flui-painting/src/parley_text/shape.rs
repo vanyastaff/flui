@@ -287,6 +287,90 @@ impl ParagraphLayout {
         out
     }
 
+    /// The stretches of the kept lines a decoration is drawn along
+    /// (ADR-0310 §3): adjacent clusters on one line that `decorate` gives
+    /// the same value, joined into one stretch, with the line's trailing
+    /// whitespace and hard breaks left out. A stretch takes the decoration
+    /// metrics of its largest run, so a fallback face inside decorated text
+    /// does not step the line.
+    pub(crate) fn decorated_stretches<V: Copy + PartialEq>(
+        &self,
+        decorate: &dyn Fn(ClusterSite) -> Option<V>,
+    ) -> Vec<DecoratedStretch<V>> {
+        let sources = SpanSourceMap::of(&self.spans);
+        let mut out: Vec<DecoratedStretch<V>> = Vec::new();
+        for line in self.layout.lines().take(self.kept()) {
+            let metrics = line.metrics();
+            let baseline = f64::from(metrics.baseline);
+            let trailing = self.trailing_whitespace_start(line.text_range());
+            let mut x = metrics.offset + metrics.inline_min_coord;
+            let mut open: Option<(DecoratedStretch<V>, f32)> = None;
+            for run in line.runs() {
+                let size = run.font_size();
+                let run_metrics = DecorationMetrics::of(run.metrics(), size);
+                for cluster in run.visual_clusters() {
+                    let (left, right) = (x, x + cluster.advance());
+                    x = right;
+                    let start = cluster.text_range().start;
+                    let value = (start < trailing)
+                        .then(|| sources.info_at(start))
+                        .flatten()
+                        .and_then(|info| {
+                            let span = self.spans.get(info)?;
+                            decorate(ClusterSite {
+                                span: span.source,
+                                text_byte: (start < self.kept_text).then_some(start),
+                                glyph: span
+                                    .paint_run
+                                    .and_then(|run| self.run_colors.get(run).copied().flatten()),
+                            })
+                        });
+                    match (&mut open, value) {
+                        (Some((stretch, largest)), Some(value))
+                            if stretch.value == value
+                                && (stretch.right - f64::from(left)).abs() < 1e-3 =>
+                        {
+                            stretch.right = f64::from(right);
+                            if size > *largest {
+                                *largest = size;
+                                stretch.metrics = run_metrics;
+                            }
+                        }
+                        (_, Some(value)) => {
+                            out.extend(open.take().map(|(stretch, _)| stretch));
+                            open = Some((
+                                DecoratedStretch {
+                                    left: f64::from(left),
+                                    right: f64::from(right),
+                                    baseline,
+                                    metrics: run_metrics,
+                                    value,
+                                },
+                                size,
+                            ));
+                        }
+                        (_, None) => out.extend(open.take().map(|(stretch, _)| stretch)),
+                    }
+                }
+            }
+            out.extend(open.take().map(|(stretch, _)| stretch));
+        }
+        out
+    }
+
+    /// Where the whitespace a line ends with starts, in the shaped text: a
+    /// decoration is not drawn under the spaces and break a line hangs past
+    /// its end. No-break spaces are not trailing whitespace.
+    fn trailing_whitespace_start(&self, line: std::ops::Range<usize>) -> usize {
+        let Some(text) = self.text.get(line.clone()) else {
+            return line.end;
+        };
+        let kept = text.trim_end_matches(|c: char| {
+            c.is_whitespace() && !matches!(c, '\u{00A0}' | '\u{2007}' | '\u{202F}')
+        });
+        line.start + kept.len()
+    }
+
     /// The paint runs' colours when the paragraph's spans, in the order it
     /// was shaped from, paint `colors`, or `None` when they do not fit this
     /// layout: a different number of spans, or two spans that share a paint
@@ -495,9 +579,124 @@ impl SpanSourceMap {
 
     /// The paragraph span byte `byte` of the shaped text belongs to.
     fn at(&self, byte: usize) -> Option<usize> {
-        self.sources
-            .get(self.ends.partition_point(|&end| end <= byte))
-            .copied()
+        self.sources.get(self.info_at(byte)?).copied()
+    }
+
+    /// The shaped span byte `byte` of the shaped text belongs to, by its
+    /// index in the layout's spans.
+    fn info_at(&self, byte: usize) -> Option<usize> {
+        let index = self.ends.partition_point(|&end| end <= byte);
+        (index < self.ends.len()).then_some(index)
+    }
+}
+
+/// A cluster a decoration may be drawn along, as
+/// [`ParagraphLayout::decorated_stretches`] asks about it.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ClusterSite {
+    /// The paragraph span the cluster belongs to; an ellipsis belongs to the
+    /// span whose style it takes.
+    pub(crate) span: usize,
+    /// The cluster's first byte in the paragraph's text; `None` for the
+    /// ellipsis, which is not in it.
+    pub(crate) text_byte: Option<usize>,
+    /// The colour the cluster's glyphs paint in; `None` paints the
+    /// paragraph's root colour.
+    pub(crate) glyph: Option<Color>,
+}
+
+/// One stretch of one line a decoration is drawn along, in the paragraph's
+/// coordinates.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct DecoratedStretch<V> {
+    pub(crate) left: f64,
+    pub(crate) right: f64,
+    /// The line's baseline.
+    pub(crate) baseline: f64,
+    pub(crate) metrics: DecorationMetrics,
+    pub(crate) value: V,
+}
+
+/// Where a decoration line lies, from the baseline, y down.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct LinePlacement {
+    /// The line's top edge.
+    pub(crate) top: f64,
+    pub(crate) thickness: f64,
+}
+
+/// Where a run's font puts its decoration lines (ADR-0310 §2).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct DecorationMetrics {
+    pub(crate) underline: LinePlacement,
+    /// At the ascent, as thick as the underline.
+    pub(crate) overline: LinePlacement,
+    pub(crate) line_through: LinePlacement,
+}
+
+impl DecorationMetrics {
+    /// The decoration lines of a run of `size` whose font reports `metrics`.
+    ///
+    /// The font's values are trusted only within an em of the baseline and
+    /// with a thickness up to a quarter em: a font without them makes
+    /// Parley substitute values in font units, not pixels. Outside that, an
+    /// underline is an eighteenth of an em thick, that far below the
+    /// baseline, and a line-through is centred half an x-height above it.
+    pub(crate) fn of(metrics: &parley::layout::RunMetrics, size: f32) -> Self {
+        let em = f64::from(size).max(0.0);
+        let fallback = em / 18.0;
+        let thickness = |size: f32| {
+            let size = f64::from(size);
+            (size.is_finite() && size > 0.0 && size <= em / 4.0).then_some(size)
+        };
+        // The font's offsets are y up, to the line's top edge.
+        let top = |offset: f32, range: std::ops::RangeInclusive<f64>| {
+            let offset = f64::from(offset);
+            (offset.is_finite() && range.contains(&offset)).then_some(-offset)
+        };
+        let placed = |top: Option<f64>, thickness: Option<f64>| {
+            Some(LinePlacement {
+                top: top?,
+                thickness: thickness?,
+            })
+        };
+        let underline = placed(
+            top(metrics.underline_offset, -em..=0.0),
+            thickness(metrics.underline_size),
+        )
+        .unwrap_or(LinePlacement {
+            top: fallback,
+            thickness: fallback,
+        });
+        let line_through = placed(
+            top(metrics.strikethrough_offset, 0.0..=em),
+            thickness(metrics.strikethrough_size),
+        )
+        .unwrap_or_else(|| {
+            let x_height = metrics
+                .x_height
+                .map(f64::from)
+                .filter(|height| height.is_finite() && (0.0..=em).contains(height))
+                .unwrap_or(em * 0.5);
+            LinePlacement {
+                top: -(x_height / 2.0) - underline.thickness / 2.0,
+                thickness: underline.thickness,
+            }
+        });
+        let ascent = f64::from(metrics.ascent);
+        let ascent = if ascent.is_finite() && (0.0..=em * 2.0).contains(&ascent) {
+            ascent
+        } else {
+            em * 0.8
+        };
+        Self {
+            underline,
+            overline: LinePlacement {
+                top: -ascent,
+                thickness: underline.thickness,
+            },
+            line_through,
+        }
     }
 }
 
@@ -1550,5 +1749,88 @@ mod tests {
             min >= seven - 1e-3,
             "min {min} covers the word 'seven' ({seven})"
         );
+    }
+
+    /// A font's own decoration metrics are used where they are in range; the
+    /// values Parley substitutes for a font without them, in font units, and
+    /// non-finite ones fall back to an eighteenth of an em.
+    #[test]
+    fn decoration_metrics_trust_the_font_only_in_range() {
+        use parley::layout::RunMetrics;
+
+        use super::{DecorationMetrics, LinePlacement};
+
+        let size = 72.0;
+        let em_18 = 4.0;
+        let font = RunMetrics {
+            ascent: 66.0,
+            x_height: Some(38.0),
+            underline_offset: -7.0,
+            underline_size: 3.0,
+            strikethrough_offset: 20.0,
+            strikethrough_size: 5.0,
+            ..RunMetrics::default()
+        };
+        assert_eq!(
+            DecorationMetrics::of(&font, size),
+            DecorationMetrics {
+                underline: LinePlacement {
+                    top: 7.0,
+                    thickness: 3.0
+                },
+                overline: LinePlacement {
+                    top: -66.0,
+                    thickness: 3.0
+                },
+                line_through: LinePlacement {
+                    top: -20.0,
+                    thickness: 5.0
+                },
+            },
+            "a font's metrics in range are its own"
+        );
+
+        // 2048 units per em over 18, unscaled: what a font without the
+        // metrics reports.
+        let units = 2048.0 / 18.0;
+        let substituted = RunMetrics {
+            underline_offset: units,
+            underline_size: units,
+            strikethrough_offset: units,
+            strikethrough_size: units,
+            ..font
+        };
+        let not_finite = RunMetrics {
+            ascent: f32::NAN,
+            x_height: Some(f32::INFINITY),
+            underline_offset: f32::NAN,
+            underline_size: f32::INFINITY,
+            strikethrough_offset: f32::NEG_INFINITY,
+            strikethrough_size: f32::NAN,
+            ..font
+        };
+        for (fixture, metrics, ascent, x_height) in [
+            ("substituted", substituted, 66.0, 38.0),
+            ("not finite", not_finite, 72.0 * 0.8, 72.0 * 0.5),
+        ] {
+            assert_eq!(
+                DecorationMetrics::of(&metrics, size),
+                DecorationMetrics {
+                    underline: LinePlacement {
+                        top: em_18,
+                        thickness: em_18
+                    },
+                    overline: LinePlacement {
+                        top: -ascent,
+                        thickness: em_18
+                    },
+                    line_through: LinePlacement {
+                        top: -(x_height / 2.0) - em_18 / 2.0,
+                        thickness: em_18
+                    },
+                },
+                "{fixture} metrics fall back"
+            );
+        }
     }
 }

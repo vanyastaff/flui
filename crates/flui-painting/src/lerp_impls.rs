@@ -150,8 +150,42 @@ impl Lerp for crate::typography::TextStyle {
                 },
             ),
             shadows,
+            decoration: lerp_decoration(self.decoration, other.decoration, t),
             ..near.clone()
         }
+    }
+}
+
+/// Two decorations of the same lines and shape blend their colour and
+/// thickness; any other pair switches at the midpoint.
+fn lerp_decoration(
+    from: Option<crate::typography::TextDecoration>,
+    to: Option<crate::typography::TextDecoration>,
+    t: f64,
+) -> Option<crate::typography::TextDecoration> {
+    use crate::typography::DecorationThickness;
+    match (from, to) {
+        (Some(a), Some(b)) if a.lines == b.lines && a.style == b.style => {
+            let near = if t < 0.5 { a } else { b };
+            let color = match (a.color, b.color) {
+                (Some(from), Some(to)) => Some(from.lerp_to(&to, t)),
+                _ => near.color,
+            };
+            // An overshooting curve stops inside the thickness's range.
+            let scale = f64::from(a.thickness.get())
+                .lerp_to(&f64::from(b.thickness.get()), t)
+                .clamp(
+                    f64::from(f32::MIN_POSITIVE),
+                    f64::from(DecorationThickness::MAX.get()),
+                );
+            Some(crate::typography::TextDecoration {
+                color,
+                thickness: DecorationThickness::try_new(scale).unwrap_or(near.thickness),
+                ..near
+            })
+        }
+        _ if t < 0.5 => from,
+        _ => to,
     }
 }
 

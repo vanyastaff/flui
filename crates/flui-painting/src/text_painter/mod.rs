@@ -21,6 +21,7 @@ use crate::parley_text::ParagraphLayout;
 
 pub mod baseline;
 mod decor;
+mod decoration;
 pub mod measure;
 mod measurement;
 pub mod paint;

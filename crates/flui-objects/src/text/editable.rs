@@ -22,13 +22,14 @@
 //! this object and is not here either; this object is told a range, it does
 //! not decide one.
 //!
-//! **Composing-region underline** (ADR-0030): [`RenderEditable::composing_range`]
-//! paints one thin rect per selection box under the composing text — a
-//! declared **1px-at-baseline+1 approximation**, not real font underline
-//! metrics (`TextStyle` has no `decoration` field to merge).
-//! [`RenderEditable::rect_for_composing_range`] exposes the same
-//! geometry as a bounding rect for the IME cursor-area loop (ADR-0030), with
-//! a caret-rect fallback. Single-line only: box-to-byte-range
+//! **Composing-region underline** (ADR-0030, ADR-0310 §5):
+//! [`RenderEditable::composing_range`] is underlined the way a span styled
+//! with [`TextDecoration::UNDERLINE`] is, through
+//! [`TextPainter::paint_with_decorations`]: where the composing text's font
+//! puts an underline, in its glyphs' colour.
+//! [`RenderEditable::rect_for_composing_range`] reports the composing text's
+//! selection boxes as a bounding rect for the IME cursor-area loop
+//! (ADR-0030), with a caret-rect fallback. Single-line only: box-to-byte-range
 //! mapping (`get_boxes_for_range`) compares a global byte range against
 //! per-run glyph indices, which is only correct while this object is
 //! constrained to one line (`max_lines(1)`) — revisit when multiline lands.
@@ -44,7 +45,9 @@ use flui_painting::paint::Clip;
 use flui_painting::{Invalidation, Paint, TextBaseline as PainterBaseline, TextPainter};
 use flui_painting::{
     styling::Color,
-    typography::{InlineSpan, TextAffinity, TextAlign, TextDirection, TextPosition},
+    typography::{
+        InlineSpan, TextAffinity, TextAlign, TextDecoration, TextDirection, TextPosition,
+    },
 };
 
 use flui_rendering::{
@@ -63,19 +66,6 @@ use flui_rendering::{
 const DEFAULT_CARET_WIDTH: f64 = 1.0;
 const DEFAULT_CARET_HEIGHT: f64 = 18.0;
 const CARET_GAP: f64 = 1.0;
-
-/// Thickness of the composing-region underline, in logical pixels.
-///
-/// Declared divergence (ADR-0030): a flat 1px bar, not a font's actual
-/// underline metrics — `TextStyle` has no `decoration` field to source real
-/// metrics from.
-const COMPOSING_UNDERLINE_THICKNESS: f64 = 1.0;
-
-/// Gap between the alphabetic baseline and the top of the composing-region
-/// underline, in logical pixels. Same value as [`CARET_GAP`] by coincidence,
-/// not by any shared meaning — kept as a separate constant so the two can
-/// diverge later without one silently dragging the other along.
-const COMPOSING_UNDERLINE_GAP: f64 = 1.0;
 
 /// Render object that lays out editable text and paints a collapsed caret.
 #[derive(Debug)]
@@ -740,45 +730,6 @@ impl RenderEditable {
             start..end
         }
     }
-
-    /// The color the composing-region underline must paint — identical to
-    /// the color the glyphs themselves resolve to, by construction (ADR-0030's
-    /// color-resolution contract): `foreground` takes precedence over
-    /// `color`, falling back to black, exactly matching
-    /// `flui-engine`'s `render_text_span` resolution for the root span
-    /// style. Reads the span this object already owns through `painter()`
-    /// rather than requiring a separately plumbed color, since nothing else
-    /// resolves it earlier in the pipeline that this object could observe.
-    fn resolved_glyph_color(&self) -> Color {
-        self.painter
-            .text()
-            .and_then(InlineSpan::style)
-            .and_then(|style| style.color)
-            .unwrap_or(Color::BLACK)
-    }
-
-    /// The underline rect for one composing-region selection box: 1px thick
-    /// ([`COMPOSING_UNDERLINE_THICKNESS`]), positioned
-    /// [`COMPOSING_UNDERLINE_GAP`] below the alphabetic baseline, clamped to
-    /// stay inside `box_rect`'s vertical span. Declared divergence from real
-    /// font underline metrics — see the module doc's ADR-0030 note.
-    fn underline_rect_for_box(&self, box_rect: Rect) -> Rect {
-        let baseline = if self.painter.has_layout() {
-            self.painter
-                .compute_distance_to_actual_baseline(PainterBaseline::Alphabetic)
-        } else {
-            box_rect.height()
-        };
-        let top = box_rect.top();
-        let max_top = (box_rect.bottom() - COMPOSING_UNDERLINE_THICKNESS).max(top);
-        let y = (baseline + COMPOSING_UNDERLINE_GAP).clamp(top, max_top);
-        Rect::from_ltrb(
-            box_rect.left(),
-            y,
-            box_rect.right(),
-            y + COMPOSING_UNDERLINE_THICKNESS,
-        )
-    }
 }
 
 impl Inspect for RenderEditable {
@@ -982,24 +933,17 @@ impl RenderEditable {
     fn paint_visible_content(&self, ctx: &mut PaintCx<'_, Leaf>) {
         self.paint_selection(ctx);
 
-        self.painter
-            .paint(ctx.canvas(), Offset::new(-self.scroll_x, 0.0));
-
-        if let Some(range) = self.composing_range.clone()
-            && !range.is_empty()
-        {
-            let boxes = self.painter.get_boxes_for_selection(range.start, range.end);
-            if !boxes.is_empty() {
-                let underline_paint = Paint::fill(self.resolved_glyph_color());
-                for text_box in &boxes {
-                    ctx.canvas().draw_rect(
-                        self.underline_rect_for_box(text_box.rect)
-                            .translate_offset(Offset::new(-self.scroll_x, 0.0)),
-                        &underline_paint,
-                    );
-                }
-            }
-        }
+        // The composing region is underlined as a span would be: where its
+        // font puts an underline, in its glyphs' colour (ADR-0310 §5).
+        let composing = self
+            .composing_range
+            .clone()
+            .map(|range| (range, TextDecoration::UNDERLINE));
+        self.painter.paint_with_decorations(
+            ctx.canvas(),
+            Offset::new(-self.scroll_x, 0.0),
+            composing.as_slice(),
+        );
 
         if self.show_caret && self.caret_width > 0.0 && self.resolved_caret_height() > 0.0 {
             ctx.canvas()
