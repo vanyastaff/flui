@@ -994,26 +994,26 @@ already admitted command keeps its place in the inbox. The bounded child rows
 in `agent_port_admission_matrix` exercise both public reads and actions, then
 verify that later calls answer `gone`. The windows hold the presentation's semantics handle strongly instead of the presentation, so the
 cost lasts exactly as long as the hook keeps a window: a hook that does not serve is handed none,
-and one that detaches or panics drops its windows, and collection stops on the next frame. `flui-app`'s desktop and iOS runners
-and `flui_testing::HeadlessDevAgent` drive the hook through `dev_agent::DevAgentHost`; the
-conversation over it is `agent::Service`'s (ADR-0288), which `flui-app`'s driver agent (ADR-0239)
-drives over its endpoint, one host per hook. Pinned by
+and one that detaches or panics drops its windows, and collection stops on the next frame. `flui-app`'s runners
+and `flui_testing::HeadlessDevAgent` drive the hooks through `dev_agent::DevAgentHost`, one per
+loop; the conversation over it is `agent::Service`'s (ADR-0288), which `flui-app`'s driver agent
+(ADR-0239) drives over its endpoint. Pinned by
 `an_agent_for_a_closed_presentation_answers_gone`, `dev_agent_host_contains_its_hook` and
 `flui-app`'s `the_driver_agent_contains_every_failure`.
 
 ### The development agent host lives in the runtime
 
-**Rule.** `dev_agent::DevAgentHost` is the only code that calls an installed `DevAgentHook`:
-attach once per loop (a second attach while attached is refused, and a hook whose `attach`
-answers that it does not serve stays unattached and is never detached), hand over each window with
-content, detach when the loop's `DevAgentAttachment` drops. The attachment is `!Send + !Sync`,
-so that detach runs on the owner thread like every other call. Each call lends the hook out of its
-slot with no lock held, so a hook that re-enters the host finds the slot empty, and a detach that
-arrives meanwhile runs when the call returns; a panic drops the hook (its `Drop` contained too,
-its payload forgotten, a deferred detach's included) and every later call does nothing; a hook
-still held when the last host clone goes is dropped under the same containment; nothing
-is vended while the hook is not attached, so a hook that does not serve or failed to attach costs
-no semantics work, and a window's semantics work ends once the hook drops its `AgentWindow`.
+**Rule.** `dev_agent::DevAgentHost` is the only code that calls an installed `DevAgentHook`, and
+an event loop owns it (ADR-0288 §7): `DevAgentHost::attach` attaches the hooks the loop took when
+it starts (a hook whose `attach` answers that it does not serve, or panics, is dropped and never
+detached), each window with content is handed to every hook in order, and dropping the host
+detaches each hook, then drops it. The host is `!Send + !Sync` and a plain value: every call that
+runs a hook takes `&mut self`, so a hook cannot reach the host, nothing re-enters it, and no lock
+is held while a hook runs. A panic drops that hook alone (its `Drop` contained too, its payload
+discarded under containment) and the others keep being served; the host's own drop, unwinding or
+not, detaches and drops under the same containment. Nothing is vended while no hook serves, so a
+hook that does not serve or failed to attach costs no semantics work, and a window's semantics
+work ends once the hooks drop its `AgentWindow`.
 
 **Why here.** Two hosts drive it, `flui-app`'s windowed runners and `flui-testing`'s headless
 UI runtime, and the headless one is the only one CI executes (a windowed install creates a GPU
