@@ -175,9 +175,9 @@ pub trait RasterBackend: Send {
     /// surface's frame callback, which is what makes the next redraw
     /// request compositor-paced and an occluded surface silent. It runs
     /// only when a present WILL follow, never on a skip path: a frame
-    /// callback requested with no commit behind it would leave winit
-    /// withholding every later `RedrawRequested` (its Wayland event loop
-    /// waits for the callback that commit would have produced).
+    /// callback requested with no commit behind it would hold the Wayland
+    /// host back from every later frame until its callback grace ran out (the
+    /// callback that commit would have produced never comes).
     ///
     /// The hook receives what the backend read from its swap chain about
     /// earlier frames reaching the screen, for a platform that reports it

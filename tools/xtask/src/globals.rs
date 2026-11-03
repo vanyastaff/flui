@@ -453,7 +453,7 @@ fn check(source: &dyn Source, crates: &[Krate], adrs: &BTreeSet<String>) -> anyh
 /// Which one-trampoline slot a global occupies: the host, or one platform of
 /// the platform crate — its loop's module under [`OWNER`], which a platform
 /// word of the crate's `[package.metadata.flui.modules]` names
-/// (`owner/winit.rs` and what is under `owner/winit/`); below a group's module
+/// (`owner/windows.rs` and what is under `owner/windows/`); below a group's module
 /// the child the group lists is the platform (`owner/apple/ios.rs` is iOS's),
 /// and the group's own module, which its children share, is no platform's.
 fn trampoline_slot(krate: &Krate, defs: &[Def]) -> Option<String> {

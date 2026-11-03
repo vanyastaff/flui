@@ -7,8 +7,8 @@
 //! virtual keys and `MK_*` bits of the mouse buttons ([`MOUSE_BUTTONS`]),
 //! which OLE drag and drop reads too. Beside them is what every backend
 //! shares: the one table of key locations (`location_of_number`,
-//! [`location_for_code`]) and the adapter from `keyboard-types` the winit and
-//! Android hosts read their keys through.
+//! [`location_for_code`]) and the adapter from `keyboard-types` the
+//! Android host reads its keys through.
 //!
 //! This module is deliberately free of `cfg` gates and platform types so the
 //! per-decision tables compile — and their tests execute — on any host, even
@@ -31,7 +31,7 @@
 //! `Key::Character` on a `KeyState::Down` event (`flui-widgets`'
 //! `EditableText` key handler), so dispatching the character as a second,
 //! separate event would double-type every key the fallback table already
-//! names. The winit Windows backend performs the same merge with its own
+//! names. winit's Windows backend performs the same merge with its own
 //! queue peek (winit 0.30 `platform_impl/windows/keyboard.rs`).
 //!
 //! A `WM_CHAR` with no owning keydown still exists — Alt+numpad composition
@@ -42,7 +42,6 @@ use flui_platform::keyboard::{Code, Key, Location, NamedKey};
 use flui_platform::pointer::PointerButton;
 
 #[cfg(any(
-    winit_host,
     wayland_host,
     x11_host,
     target_os = "windows",
@@ -52,7 +51,6 @@ use flui_platform::pointer::PointerButton;
 ))]
 mod unplaced;
 #[cfg(any(
-    winit_host,
     wayland_host,
     x11_host,
     target_os = "windows",
@@ -192,7 +190,7 @@ pub fn parse_key_lparam(lparam: isize) -> (u16, bool, bool) {
 /// which [`wm_char_text`] rejects, so shortcut matching still sees `"s"`).
 ///
 /// `shift` upcases the letter fallbacks so a Ctrl+Shift+S chord reports
-/// `"S"`, matching the W3C `key` value and the winit backend's
+/// `"S"`, matching the W3C `key` value and winit's
 /// `logical_key`. Punctuation (`OEM_*`) uses the US-layout positions — the
 /// only layout-independent choice available without the live keyboard
 /// layout; a real typed character never takes this path because the
@@ -298,7 +296,7 @@ pub fn vk_to_key(vk_code: u16, shift: bool) -> Key {
 /// `code` value naming the physical key.
 ///
 /// The table follows the W3C registry
-/// (<https://www.w3.org/TR/uievents-code/>) as implemented by the winit
+/// (<https://www.w3.org/TR/uievents-code/>) as implemented by winit's
 /// Windows backend and Firefox's `NativeKeyToDOMCodeName.h`, including the
 /// legacy quirks those sources agree on: `Pause` reports `0x45`
 /// (`0xE046` when Ctrl is held), `NumLock` reports the *extended* `0xE045`,
@@ -483,8 +481,8 @@ struct LocationRow {
 ///
 /// The one table of key locations: the DOM reports the number
 /// (`location_of_number`); Win32 and AppKit report only the key, whose code
-/// implies its place ([`location_for_code`]). The winit and Android adapters
-/// read keyboard-types' own `Location`, whose variants the adapter matches
+/// implies its place ([`location_for_code`]). The Android adapter
+/// reads keyboard-types' own `Location`, whose variants the adapter matches
 /// one by one, and `input::keys::mapping` holds them to the same rows.
 const LOCATIONS: [LocationRow; 4] = [
     LocationRow {
@@ -685,15 +683,9 @@ pub fn assemble_stray_wm_char(
     }
 }
 
-#[cfg(any(
-    target_os = "android",
-    all(
-        feature = "winit-backend",
-        any(target_os = "windows", target_os = "macos", target_os = "linux")
-    )
-))]
+#[cfg(target_os = "android")]
 pub(crate) mod adapter {
-    //! The keyboard-only boundary for audited Winit and Android mappings.
+    //! The keyboard-only boundary for the audited Android mappings.
     //!
     //! Native key tables stay in their maintained ecosystem adapters. Their results
     //! are converted here into the owned FLUI contract; pointer input never passes
@@ -788,7 +780,7 @@ pub(crate) mod adapter {
             })
     }
 
-    // Winit's KeyEvent has private platform state, so integration tests cannot
+    // The upstream key events are not FLUI's, so integration tests cannot
     // construct the complete native input. This private boundary is tested here;
     // native public producer coverage remains in the backend probes.
     #[cfg(test)]
@@ -879,7 +871,7 @@ mod mapping {
         win32: (u16, bool),
         /// AppKit's virtual key code.
         appkit: u16,
-        /// The number the DOM, winit and Android report for its location.
+        /// The number the DOM and Android report for its location.
         number: u32,
         location: Location,
     }
@@ -936,15 +928,9 @@ mod mapping {
         },
     ];
 
-    /// What the keyboard-types adapter of the winit and Android hosts reads
+    /// What the keyboard-types adapter of the Android host reads
     /// for a key whose location keyboard-types numbers `number`.
-    #[cfg(any(
-        target_os = "android",
-        all(
-            feature = "winit-backend",
-            any(target_os = "windows", target_os = "macos", target_os = "linux")
-        )
-    ))]
+    #[cfg(target_os = "android")]
     fn keyboard_types(number: u32, code: Code) -> Location {
         use keyboard_types as upstream;
 
@@ -990,17 +976,11 @@ mod mapping {
                 "AppKit: {case}"
             );
             assert_eq!(location_of_number(key.number), key.location, "DOM: {case}");
-            #[cfg(any(
-                target_os = "android",
-                all(
-                    feature = "winit-backend",
-                    any(target_os = "windows", target_os = "macos", target_os = "linux")
-                )
-            ))]
+            #[cfg(target_os = "android")]
             assert_eq!(
                 keyboard_types(key.number, code),
                 key.location,
-                "winit and Android: {case}"
+                "Android: {case}"
             );
         }
         // A location the DOM may number later, and a character no key typed

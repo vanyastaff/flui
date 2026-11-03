@@ -1,5 +1,4 @@
-//! The X11 window: the native X11 host's window, and what the winit host
-//! reads of an X11 window that winit does not report.
+//! The X11 window: the native X11 host's window.
 //!
 //! The pure half reads and writes what the X server and the window manager
 //! keep of a window, and is checked on every host:
@@ -21,33 +20,20 @@
 //! - `window` (the native X11 host): [`X11Window`], one window of the
 //!   platform's connection, and [`X11Windows`], the platform's windows, which
 //!   the loop holds as its `LoopWindows` (`owner::linux::x11`);
-//! - `probe` (the winit host): reads the mode properties of a winit window
-//!   from the server and watches them change, answering the window model's
-//!   `WindowManagerView`, which the winit host connects to the winit window.
 
-#[cfg(all(target_os = "linux", feature = "winit-backend"))]
-mod probe;
 #[cfg(all(target_os = "linux", feature = "x11"))]
 mod window;
 
-#[cfg(all(target_os = "linux", feature = "winit-backend"))]
-pub(crate) use probe::connect_window_manager;
 #[cfg(all(target_os = "linux", feature = "x11"))]
 pub(crate) use window::WindowAtoms;
 #[cfg(all(target_os = "linux", feature = "x11"))]
 pub use window::{X11Window, X11Windows};
 
-// The winit window on a real X server, over a running winit loop.
-#[cfg(all(test, target_os = "linux", feature = "winit-backend"))]
-mod tests;
-
 pub(crate) mod mode {
     //! The mode of an X11 window, from the two properties a window manager keeps
     //! for it.
     //!
-    //! winit reports a window as maximized or fullscreen but not as minimized, and
-    //! its answers for the other two lag the window manager by an event. The
-    //! adapter reads the properties directly, this model reads what they say
+    //! The host reads the properties directly, this model reads what they say
     //! (`mode_flags`) and `window::state::mode_of` decides the mode.
     //!
     //! - **`WM_STATE`** (ICCCM) is the window manager's statement of whether the

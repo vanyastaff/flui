@@ -38,7 +38,7 @@ trait depends on `flui-platform` instead.
   feature's model, and each platform is a file (or, where one OS object or the
   3 000-line limit needs it, a directory) in every feature it fills, named in
   std's words (`windows`, `apple` with `macos`/`ios`, `android`, `web`,
-  `linux` with `wayland`/`x11`, `winit`, `headless`). A public name a host
+  `linux` with `wayland`/`x11`, `headless`). A public name a host
   offers beyond `Platform` (a window, the headless test controls, the UIKit
   scene events) is named at the crate root, except one OS's window
   extensions, which are named in that OS's module of `os` (`os::windows`,
@@ -52,9 +52,8 @@ trait depends on `flui-platform` instead.
   directory the layout does not name cannot come back unchecked
   (`table_test`, built for tests only, needs none). A platform file names its
   model, a base and other features' models; every other edge is a
-  named, dated exception whose `reason` says what removes it, and one is
-  left: the winit host's displays on Linux reading `display::linux` (until
-  the native Linux host, ADR-0151 §11). No window file names another
+  named, dated exception whose `reason` says what removes it, and none is
+  left. No window file names another
   feature's: a window's text input, accessibility bridge, actuator and
   chrome reach it through the host table; a feature keeps its own state of a
   window, keyed by the window's identity and set up and dropped by its own
@@ -81,7 +80,7 @@ trait depends on `flui-platform` instead.
   features reach a window by (`host::Window::Ref`): owner vocabulary any
   feature may name (`owner::windows::WindowRef`,
   `owner::apple::macos::ContentViewRef`, `owner::apple::ios::ViewRef`,
-  `owner::android::ActivityRef`, `owner::web::CanvasRef`, the winit window,
+  `owner::android::ActivityRef`, `owner::web::CanvasRef`,
   `()` headless). `HostPlatform` builds the table's `host::WindowPositions`, one
   function per position, and hands it to the window position's `Shared`, so a
   window cannot make another type than its table names. The positions make a
@@ -159,9 +158,9 @@ trait depends on `flui-platform` instead.
   `PlatformAccessibility`, whose methods take AccessKit's tree as that trait
   does (`traits`). Tests in `tests/` read a window's `HWND` the way an
   embedder does, through `raw-window-handle` (`win32_handle` in
-  `tests/main.rs`); `tests/os_extensions.rs`, its own harness so winit builds
-  its loop on the main thread, pins that a headless and a winit window have
-  no Win32 view and a Win32 window has one, that a Win32 window opens with
+  `tests/main.rs`); `tests/os_extensions.rs`, its own harness so AppKit gets the main
+  thread, pins that a headless window has no Win32 view and a Win32 window has one, that a
+  Win32 window opens with
   the corners and theme its options ask for, that its view refuses another
   thread and a closed window, and, on a Mac, the AppKit backdrop's views.
 - **The owner thread's machinery lives in `owner/`, which names no feature
@@ -189,13 +188,8 @@ trait depends on `flui-platform` instead.
   crate root only. Its tests name no feature or host either: they run over
   stand-ins of the owner's own (`owner::windows::testing::QuietHost<C>`, a
   Win32 host with the window hooks `C` gives, none by default;
-  `owner::winit::testing::{QuietHost<D>, QuietTable, quiet_platform}`, a winit
-  loop whose hooks report nothing but the displays `D` gives, under a table
-  whose window position opens no window; `owner::notices::testing::NoNotices`),
-  and a test that needs a host's real windows is that feature's. A feature's
-  test that runs the winit loop by hand reaches it through
-  `owner::winit::testing` (`install_control_lane`, `WinitApp::for_test` and
-  accessors marked `_for_test`), and the loop keeps its state private.
+  `owner::notices::testing::NoNotices`), and a test that needs a host's real windows is that
+  feature's.
 - **Each platform's loop is a module of `owner/` (ADR-0151 §10).**
   `owner::windows` is the Win32 message loop and its wake deadlines, the
   owner's message-only window (`control`), the thread's COM apartment, FLUI's
@@ -207,7 +201,7 @@ trait depends on `flui-platform` instead.
   (`frame_clock`, ADR-0269), the JNI `FluiView` and the NDK lookup;
   `owner::web` the `requestAnimationFrame` loop; `owner::linux::x11` the X11
   host's loop over its libxcb connection and an eventfd doorbell;
-  `owner::winit` winit's `ApplicationHandler`; `owner::headless` the test
+  `owner::headless` the test
   double's owner turns. The
   hosts' tables name these loops. A multiplexer of the operating system that
   serves several features dispatches through a hook declared beside it, which
@@ -226,7 +220,7 @@ trait depends on `flui-platform` instead.
   `HostDisplays` (`observe_link`, `move_window`, `forget_link`). A
   loop keeps a feature's state the same way: each `owner` module declares one
   host trait (`WindowsHost`, `MacosHost`, `IosHost`, `AndroidHost`,
-  `WebHost`, `X11Host`, `WinitHost`, `HeadlessHost`) whose methods the table implements
+  `WebHost`, `X11Host`, `HeadlessHost`) whose methods the table implements
   to make what the loop holds, each through a hook trait declared beside the
   loop, and the loop is the table's position for that feature, so the table
   cannot name one type and build another (the displays, the preferences and
@@ -326,14 +320,9 @@ trait depends on `flui-platform` instead.
     the order; only the lifecycle answers, the session-end query and the power
     broadcast, which no other subscriber reads. Each subscriber admits wakes of
     its own: the preferences' closes as their source drops, the displays' when
-    the receiver detaches it before destroying its window. winit on Windows
-    builds a receiver of its own for its displays and, when they open, its
-    preference source; a preference source that fails to open leaves the
-    displays subscribed. Tests: `broadcast_subscribers_hear_a_message_in_order`,
+    the receiver detaches it before destroying its window. Tests: `broadcast_subscribers_hear_a_message_in_order`,
     `the_displays_and_the_preferences_hear_every_change_in_either_order`,
-    `a_display_change_reaches_the_displays_when_the_preferences_cannot_open`,
-    `display_broadcasts_mark_the_monitors_stale_and_wake_until_detached`,
-    `the_winit_loop_s_displays_hear_a_display_change`.
+    `display_broadcasts_mark_the_monitors_stale_and_wake_until_detached`.
   - The owner's message-only window answers its own messages (the wake, the
     exit policy) and offers any other, in order, to the `OwnerMessages` hooks
     of the objects the loop holds: today the drag transport the table makes
@@ -373,10 +362,9 @@ trait depends on `flui-platform` instead.
   pointers, keys, wheel and gestures, registered into the same
   registration, which answer the key route the window hands its text input,
   `CanvasKeys`),
-  `WinitHost::clipboard`, `WinitHost::drag` (`FileDrops`), `WaylandHost::drag`
+  `WaylandHost::drag`
   (`WaylandDrag`: the drops on the windows, which the seats' data devices hear,
-  and the sessions the windows start) and `WinitHost::input` (`LoopInput`: the
-  session's pointers and keys as the loop's events and turns bring them),
+  and the sessions the windows start),
   `AndroidHost::clipboard`,
   `AndroidHost::transfer` (`ViewTransfer`, made for `FluiView`) and
   `AndroidHost::input` (`ActivityInput`: the native queue's motion and key
@@ -400,7 +388,7 @@ trait depends on `flui-platform` instead.
   `NativeTextSize`) and the `Text` position's trait, `TextInput`: the handle
   a window holds its text input by answers one `WindowTextInput`, either
   `Ime` (the field tells the input method whether it may compose and where
-  its caret is: winit, headless) or `Store` (the platform reads or
+  its caret is: headless) or `Store` (the platform reads or
   mirrors the field's store: AppKit, UIKit, TSF, Android, web, Wayland's
   `zwp_text_input_v3`), and `Absent<position::Text>` answers none; each
   window's accessor goes through it, as do its text sizing
@@ -440,7 +428,7 @@ trait depends on `flui-platform` instead.
   `web.rs` (the pure `ime`, `input`), `linux/{text_input, input_context, wayland, x11}.rs` (the
   pure `text_input` client of `zwp_text_input_v3` over a wire trait, the pure
   `input_context` key hold and D-Bus input-method values, the Wayland
-  objects and the X11 daemon's wire and bus task), `winit.rs` and `headless.rs`. `cargo
+  objects and the X11 daemon's wire and bus task) and `headless.rs`. `cargo
   xtask module-dag` lists each feature directory in `features`: a platform
   module names its model, `owner/`, `version/` and other features' models,
   never another platform's module; `owner/` and `version/` name no feature's
@@ -509,8 +497,8 @@ trait depends on `flui-platform` instead.
   platform, and `[package.metadata.flui.modules]` lists the four as
   `features`: `cargo xtask module-dag` holds a platform file to its own model,
   `owner/`, `version/` and other features' models. The models are
-  `clipboard::lock` (the Win32 session lock the Win32 and `arboard` clipboards
-  share), `drag::offers` (the offer table every data-transfer source mints its
+  `clipboard::lock` (the process-wide lock every Win32 clipboard session
+  runs under), `drag::offers` (the offer table every data-transfer source mints its
   ids in, `TransferUri`,
   a URI list as the hosts that read paths or URIs write it, and what a media
   type offers and its bytes carry, shared
@@ -524,8 +512,8 @@ trait depends on `flui-platform` instead.
   file is a module's tests, the mechanism of one OS object
   (`drag::windows::com`, OLE's COM objects), or a split past 3 000 lines. A
   position a platform does not have is `Absent`: drag on macOS and
-  iOS, accessibility on the Web and under winit off Linux,
-  haptics on winit. Android's clipboard is `ClipboardManager`, reached
+  iOS, accessibility on the Web,
+  Android's clipboard is `ClipboardManager`, reached
   through JNI from the owner thread.
 
   Accessibility has no Cargo feature (ADR-0151 §15, as amended).
@@ -535,7 +523,7 @@ trait depends on `flui-platform` instead.
   Wayland host brought them, and `accessibility::{bridge, linux}` compile under
   `target_os = "linux"`. `UnixAccessibility` is the accessibility position of
   every Linux table for any window reference (it needs nothing of the window),
-  so the Wayland and winit windows announce themselves on the AT-SPI bus
+  so the Wayland and X11 windows announce themselves on the AT-SPI bus
   alike. Every Android Activity window builds `accesskit_android`'s low-level
   adapter, which lives on the Java main thread: `FluiView`'s node provider
   answers from it there, and a publish is posted there and applied in order
@@ -591,8 +579,7 @@ trait depends on `flui-platform` instead.
   `link_rate`), `android.rs` (`source` and the pure `sample`), `web.rs`
   (`source` with the capabilities it detects, `events`, and the pure
   `capability`, `dppx_query`, `refresh_estimate`, `screen_identity`),
-  `linux/` (Wayland and X11 outputs), `winit.rs` (the source over
-  `display::linux` that the winit host reads on Linux) and `headless.rs`. The
+  `linux/` (Wayland and X11 outputs) and `headless.rs`. The
   halves of a platform file are inline modules: a pure one is
   `cfg(any(<os>, test))` with `forbid(unsafe_code)`, so the Linux host runs
   its tests, and the one that calls the operating system is `cfg(<os>)`. A
@@ -605,23 +592,17 @@ trait depends on `flui-platform` instead.
   displays through the hook its `owner` module declares
   (`owner::<os>::HostDisplays`, on headless the snapshot itself), which the
   table fills through the owner's host trait (`WindowsHost`, `MacosHost`,
-  `IosHost`, `AndroidHost`, `WebHost`, `WaylandHost`, `X11Host`, `WinitHost`,
+  `IosHost`, `AndroidHost`, `WebHost`, `WaylandHost`, `X11Host`,
   `HeadlessHost`); the windows a loop opens reach the displays through the same hook, whose
   implementations hold the bodies. Every observer a display source starts for
   the loop (AppKit's and UIKit's screen notifications, Android's refresh-rate
-  callback, the browser's listeners, the Linux connection thread under winit)
+  callback, the browser's listeners, the Linux connection thread)
   comes back as an `owner::watch::Watch`, which is `#[must_use]` and which the
   loop keeps until it stops, so an unwind cannot skip a stop; the macOS loop
   keeps its watch in a `NativeOwner`, which releases it on the main thread.
-  The winit host on Windows and macOS reads the Win32 and AppKit hosts' own
-  sources, which implement `owner::winit::HostDisplays` beside their own
-  loop's hook; on Linux `display::winit` reads `display::linux`, the one edge
-  between platform files `module-dag` admits, by name, until winit goes
-  (ADR-0151 §11). The Android loop's poll rule is the loop's
+  The Android loop's poll rule is the loop's
   (`owner::android::poll`). The iOS source reads the OS version as it is built
-  (`version::gate::apple::AppleVersion::read`). Which windows the winit loop
-  looks at again on Linux, because winit may have moved them to another output
-  without an event, is the loop's (`WinitApp::sync_unannounced_displays`).
+  (`version::gate::apple::AppleVersion::read`).
 - **The preferences and the lifecycle are feature directories,
   `preferences/` and `lifecycle/` (ADR-0151 §10).**
   - `preferences`: the model is `read` (the bounded read admission the Android
@@ -630,8 +611,8 @@ trait depends on `flui-platform` instead.
     Win32, told of changes by the broadcast receiver), `apple::{macos, ios}`,
     `android` (`configuration`, and the rules `contrast` and `text_weight`),
     `web` (`browser`, and the rule `media`), `linux` (the Settings portal,
-    whose watch names no winit type, so the Wayland and X11 hosts start it as
-    the winit host does) and `headless`.
+    whose watch names no host type, so the Wayland and X11 hosts both start it) and
+    `headless`.
   - `lifecycle`: the notice channel (`notice`) and the one position of the
     loops that hear the lifecycle themselves; the platform files are `windows`
     (`host_events`, and the rules `messages` and `memory_watch`),
@@ -647,20 +628,18 @@ trait depends on `flui-platform` instead.
     displays (`WindowsHost::{preferences, notices, lifecycle}`,
     `MacosHost::{preferences, notices, notice_sources}`,
     `IosHost::{preferences, notices}`, `AndroidHost::{preferences, notices,
-    activity}`, `WebHost::{preferences, page}`, `WinitHost::{notices,
-    preferences, host_notices}`, `WaylandHost` and `X11Host::{notices,
+    activity}`, `WebHost::{preferences, page}`, `WaylandHost` and `X11Host::{notices,
     preferences, host_notices}`, `HeadlessHost::notices`): the preference
     source as `owner::sources::SystemPreferenceSource` or a loop's own trait
     over it (`OwnerPreferences`, `UIKitPreferences`, `ActivityPreferences`,
-    `PortalPreferences` under winit, `owner::linux::LinuxPreferences` for the
+    `owner::linux::LinuxPreferences` for the
     two native Linux loops), the notice channel as
     `owner::notices::NoticeChannel` (`lifecycle::notice::SystemNotices`
     implements it), the Windows lifecycle as `OwnerLifecycle`, and what the
     Activity's callbacks mean as `ActivityCallbacks`. A source the loop starts
     only once it runs is an object the table makes with a method that starts
     it (`NoticeSources::listen` and `PageLifecycle::listen`, which return a
-    `Watch`; `PreferenceStart` and `HostNoticeStart` under winit, whose signal
-    exists only once it runs; the Wayland and X11 tables' `preferences` and
+    `Watch`; the Wayland and X11 tables' `preferences` and
     `host_notices`, which take the executor and the signal). The native Linux
     loops share one shape for the session (`owner::linux`): the portal as
     `LinuxPreferences` behind a `PortalSlot` their windows read the colour
@@ -671,12 +650,10 @@ trait depends on `flui-platform` instead.
     on every host but headless, whose position is its test handle
     (`HeadlessPreferences`, `HeadlessHostEvents`). The loops that hear the
     lifecycle in their own callbacks (AppKit's and UIKit's delegates, the
-    Activity's, the winit loop's turns on Linux) implement
+    Activity's, the native Linux loops' turns) implement
     `owner::notices::LifecycleHooks`, and one generic impl in
     `lifecycle/mod.rs` makes them the position; the Windows and web loops
-    answer their own. winit on Windows and macOS hears no session end or
-    notice, so its lifecycle is `Absent<Lifecycle>`: its application handler
-    is never asked about either.
+    answer their own.
   - What the Activity's callbacks mean is the lifecycle feature's
     (`lifecycle::android`, `onTrimMemory` from `FluiHost`'s queue included), behind the looper's
     `ActivityCallbacks` hook; the looper keeps their vocabulary
@@ -692,8 +669,8 @@ trait depends on `flui-platform` instead.
   naming them (ADR-0151 §10).** The model is what two or more platforms share:
   the published state (`window::state`), the one rule that decides a window's
   mode from what its window system says (`window::state::mode_of` over
-  `ModeFlags`: minimized before fullscreen before maximized; winit's
-  queries, AppKit's flags, the X11 window manager's properties and the Win32
+  `ModeFlags`: minimized before fullscreen before maximized;
+  AppKit's flags, the X11 window manager's properties and the Win32
   window's tracked mode each read their report into the flags and nothing
   else), the desktop window configuration
   (`window::config`, crate-private: its windows open with F11 as the
@@ -701,7 +678,7 @@ trait depends on `flui-platform` instead.
   a host waits for before it publishes a window it attached
   (`window::installation`, public at the crate root as `WindowInstallation`,
   `PendingWindowInstallation`, `InstallationCancelled`).
-  `window::state::mapping` reads one table through winit's flags, the X11
+  `window::state::mapping` reads one table through the X11
   window manager's properties, AppKit's raw flags (which keep full screen
   above a miniaturized flag, a row of their own) and the Win32 tracked mode.
   Whether a window is seen is three facts of its snapshot, `visible`, its
@@ -714,13 +691,13 @@ trait depends on `flui-platform` instead.
   each window system tells of a shown window kept off the screen: a DWM
   cloak or a locked session, an X11 `VisibilityNotify` of `FullyObscured` or
   an unviewable map state, AppKit's `occlusionState` without its visible
-  bit, winit's `Occluded`, a Wayland toplevel unconfigured, on no output or
+  bit, a Wayland toplevel unconfigured, on no output or
   `suspended`, an Activity stopped, a scene in the background, a hidden
   document. The pure `held_to` holds a size to the window's constraints
   for the hosts whose window system applies a size as given (AppKit's
   `setContentSize:`, the headless model). Each platform's
-  window is one file beside it (`android`, `web`, `winit`, `headless`, and
-  `linux/x11`, the live X11 layer the winit host uses), or a directory where
+  window is one file beside it (`android`, `web`, `headless`, and
+  `linux/{wayland, x11}`, the live Wayland and X11 layers), or a directory where
   its halves or one OS object need one: `windows/` (the pure `limits` and
   `mode`; the window, the set and position, the
   procedure and the backdrop under `cfg(windows)`) and `apple/` (the pure
@@ -730,8 +707,7 @@ trait depends on `flui-platform` instead.
   the same file.
   - **The host seam.** The window position names what a platform's windows
     share, `host::Window::Shared`: the Win32 handle map and configuration
-    (`WindowSet`), the macOS configuration, the UIKit window factory, the
-    winit frame inset and window manager's view, the headless window model,
+    (`WindowSet`), the macOS configuration, the UIKit window factory, the headless window model,
     and on every host the table's window-level positions
     (`host::WindowPositions`, all Android and the Web share). The host's
     constructor builds it with
@@ -754,18 +730,13 @@ trait depends on `flui-platform` instead.
     connection returns what the loop watches of that installation, so a
     connection cannot leave the loop with nothing to publish or roll back);
     `owner::android::ActivityWindow` (the Activity's one window);
-    `owner::winit::{LoopWindow, LoopWindows}` (the loop numbers, registers
-    and finishes each window, `LoopWindows::build` only builds it from a
-    `WindowSeed`, and `LoopWindows::take_unreported` names the X11 windows
-    the loop reads again); and `owner::headless::TrackedWindows`.
+    `owner::linux::wayland::LoopWindow` and `owner::linux::x11::LoopWindows`
+    (what the Wayland and X11 loops ask of the windows they hold); and
+    `owner::headless::TrackedWindows`.
   - The Win32 window-thread affinity rules (`owner::hwnd_affinity`) are
     owner machinery: the owner control and the loop apply them as the
     window does; they sit beside the Win32 loop, under `cfg(any(windows,
-    test))`, so every host tests them. The X11 window manager's view
-    (`window::WindowManagerView`, its error `window::WindowManagerError`) is a
-    model trait: the winit window reads it, `window::linux::x11`'s probe
-    answers it, and the winit host connects them, so neither platform file
-    names the other.
+    test))`, so every host tests them.
   - No window file names another feature's, and no feature's code names the
     window's. A feature keeps its own state of a window: the Win32 text
     services, drop target and session by the window's identity, each set up
@@ -786,7 +757,7 @@ trait depends on `flui-platform` instead.
   no platform file and forbids `unsafe`), `availability` (each backend's
   input capabilities table), `keys` (the Win32 virtual keys and the mouse
   buttons' codes, `MouseButtonCodes`, the `adapter` from `ui-events` key
-  results that Android and winit share, with keyboard-types' locations
+  results that Android reads, with keyboard-types' locations
   matched variant by variant, and the one table of key locations, whose
   named rows give the number the DOM reports for each location and the
   codes that imply it, which Win32 and AppKit read it from; a character no
@@ -797,12 +768,12 @@ trait depends on `flui-platform` instead.
   platform's amounts in the unit it picks, each axis turned to FLUI's
   direction by whether it moves the offset or the content, an idle axis
   `+0.0` whichever zero the platform reported, a non-finite amount refused,
-  which winit and AppKit deliver as a zero step and the Web and Android
+  which AppKit delivers as a zero step and the Web and Android
   drop) and `event_timestamp_ns` (public at the crate root).
   `input::keys::mapping` reads one table of keys through the Win32 scancode
   table, the AppKit keycode table, the DOM's number and the keyboard-types
   adapter; `input::scroll::mapping` reads one table of turns through the
-  Win32 registry, the Web's, Android's, AppKit's and winit's steps. Beside it, one file per platform, each pure
+  Win32 registry, the Web's, Android's and AppKit's steps. Beside it, one file per platform, each pure
   half forbidding `unsafe`: `windows/` (`mod.rs`: `InputWindows`, the
   class's input hook, which keeps each window's `InputWindow` keyed by its
   identity, and `raw`, the messages decoded; `direct_manipulation.rs`, the
@@ -811,8 +782,8 @@ trait depends on `flui-platform` instead.
   `ViewInputs`, the input of one content view, and its events; `ios`,
   `TouchInputState`, the touches of one view), `android.rs`
   (the pure `keys`, `motion` and `scroll`; `AndroidInput`), `web.rs` (the
-  pure `keys`, `wheel` and `pinch`; `events`, `WebInput`), `winit.rs` (`WinitInput`)
-  and `headless.rs` (`AttachedDevices`, the devices a test attaches). A loop
+  pure `keys`, `wheel` and `pinch`; `events`, `WebInput`),
+  `linux/` (the Wayland and X11 hosts' input) and `headless.rs` (`AttachedDevices`, the devices a test attaches). A loop
   holds its input through a hook (`InputWindows` in the window class,
   `ActivityInput`, `HostInput`, `LoopInput`, `SimulatedDevices`), and the
   table's input position names the loop
@@ -839,14 +810,14 @@ trait depends on `flui-platform` instead.
   again from inside it. `install` replaces a handler and `retire` drops any
   other user-owned value the same way, so a capture's destructor may call the
   platform. A handler's panic is the call's `Failure`: the caller resumes it
-  where a Rust frame waits (headless, winit, a window's FIFO) or contains it
+  where a Rust frame waits (headless, a window's FIFO) or contains it
   where the operating system called (Win32's exit policy and session end,
   AppKit, UIKit); a handler displaced during a failed call is dropped,
   contained, its panic discarded (ADR-0281). `AppDelivery` and
   `WindowDelivery` call only through it. Tests: `owner::call_point::tests`;
-  the public-API tables in `tests/handler_reentry.rs` (headless, Win32 and
-  winit, each case on a worker thread so that a regression fails as a deadlock
-  instead of hanging), `winit_exit_policy_runs_outside_the_state_lock` and
+  the public-API tables in `tests/handler_reentry.rs` (headless and Win32, each case on a
+  worker thread so that a regression fails as a deadlock
+  instead of hanging) and
   `web_session_end_handler_reenters_the_platform`. Android and the Apple hosts
   run the same call point and are type-checked only.
 - **The application's handler is passed to `run` (ADR-0254 §4).**
@@ -919,7 +890,7 @@ trait depends on `flui-platform` instead.
   closure is added to its GCD list (`exec_async`, `exec_sync`, `exec_after`,
   `after`, `barrier_*`, names the crate keeps for GCD), and a constructor a
   glob import hides to its list of callback types. `wasm_bindgen` closures are
-  out of its scope because wasm32 aborts on panic, winit's and
+  out of its scope because wasm32 aborts on panic,
   android-activity's procedures contain their own, and `flui-hot-reload`'s
   plugin ABI is outside this crate. Tests: `owner::panic_boundary::tests` (the
   first failure is logged before the answer, with the entry's arguments, and a
@@ -939,16 +910,6 @@ trait depends on `flui-platform` instead.
   window seal goes through one generic implementation so that the error lists
   the same implementations on every target and feature set. `PlatformWindow`
   stays open for test doubles.
-- **The winit fallback is a desktop backend.** Its module, public re-exports
-  and `arboard` clipboard dependency are available only on Windows, macOS and
-  Linux under `winit-backend`, and `current_platform` never picks it on Linux,
-  where the native Wayland and X11 hosts replaced it (ADR-0151 §11). The
-  `desktop` selector enables `wayland` and `x11`, the native Linux hosts,
-  which add nothing off Linux; the other native desktop
-  backends are selected by target OS. Enabling every feature on Android or iOS keeps the native backend;
-  it does not enable desktop clipboard code. The required-target and
-  all-features `cargo xtask cross-typecheck` configurations compile this
-  boundary, including the selected packages' tests, examples and benches.
 - **A window leaves a backend as an `Rc<dyn HostWindow>`, and stays on its
   owner thread (ADR-0254 §5).** `HostWindow: PlatformWindow` adds the one
   AccessKit-speaking accessor, `accessibility()`. `Platform::open_window` and
@@ -966,13 +927,13 @@ trait depends on `flui-platform` instead.
     longer finds the window behind its handle, on any thread but the main
     one for AppKit and UIKit, on any thread but the looper for Android, or
     when the Android activity has no native window. A target keeps alive
-    what its handle names, so a handle it gave out never dangles: winit's
-    holds the `Arc<winit::Window>`, the Apple targets a retained reference
+    what its handle names, so a handle it gave out never dangles:
+    the Apple targets a retained reference
     to the content view (`MainRetainedView`, taken and released on the main
     thread, a drop elsewhere posts the release there), Android's a counted
     `NativeWindow`, the Wayland target an `Arc` of the window's `wl_surface`
     (destroyed when the last holder drops) and a clone of the connection. Its
-    `pre_present_notify` arms the Wayland frame callback on winit and on the
+    `pre_present_notify` arms the Wayland frame callback on the
     native Wayland host, and returns at once elsewhere. It is also where a
     presentation report starts: the native Wayland target asks
     `wp_presentation` for a feedback per commit, whose `presented` event the
@@ -997,8 +958,8 @@ trait depends on `flui-platform` instead.
     delivery waits. The headless window reports what a test injects
     (`MockWindow::simulate_presented`). The web and X11 windows answer
     `NotOnThisPlatform` (a browser names the frame's start, never its showing;
-    an X11 present completes on the GPU driver's connection), winit
-    `NotYetOnThisHost`, and UIKit and the Activity
+    an X11 present completes on the GPU driver's connection),
+    and UIKit and the Activity
     `NotYetOnThisHost` (`window::capabilities::PRESENTATION`: a UIKit view
     backed by its own `CAMetalLayer` showed nothing on the iOS Simulator, and
     Android's swap chain that knows is wgpu's). Only the web target and
@@ -1006,10 +967,10 @@ trait depends on `flui-platform` instead.
     names the invariant;
   - its `RedrawRequester` (`redraw_requester()`), how a waker, a signal
     written on a worker or an accessibility adapter's thread asks for a
-    frame: Win32, winit and Android ask the window system directly, AppKit
+    frame: Win32 and Android ask the window system directly, AppKit
     hops to the owner lane, the headless host waits for an owner turn, UIKit
     and the web serve every frame from their display links.
-  A host table of open windows (`WindowSet`, winit's `windows`, the AppKit
+  A host table of open windows (`WindowSet`, the AppKit
   registry) holds them in `owner::slot::{OwnerCell, OwnerMap}`, which only the
   owner thread reaches; `OwnerWeak` is the `Send` weak reference a queued
   close or state publisher carries. A cell or map belongs to the thread that
@@ -1027,8 +988,7 @@ trait depends on `flui-platform` instead.
   of each backend are what its `apply` carries out today. Every host's `apply`
   opens the token against the capabilities of its last published snapshot
   (`WindowStateCell::published_capabilities`), never a constant of its own, so
-  a capability change the snapshot published (winit's X11 minimize
-  observation, the headless `simulate_capabilities`) answers
+  a capability change the snapshot published (the headless `simulate_capabilities`) answers
   `ApplyError::Superseded`. `WindowStateCell::new` stamps the window's first
   snapshot with a `CapabilitiesOwner` from one process-wide counter
   (`window::state::NEXT_CAPABILITIES_OWNER`, checked, never reissued), so a
@@ -1070,7 +1030,7 @@ trait depends on `flui-platform` instead.
   leaves the snapshot stale for the owner's next read. A fact another
   feature reports reaches the snapshot the same way: the hover is what the
   last `WindowDelivery::report_hover` said, whether Win32 or web input,
-  AppKit's tracking area or winit's cursor events reported it. An
+  AppKit's tracking area reported it. An
   observation committed at its delivery point (the Web's focus and
   visibility) is published right after its commit. The facts beyond
   geometry (metrics, appearance, safe area, execution, hover, activation,
@@ -1086,7 +1046,7 @@ trait depends on `flui-platform` instead.
   already running gets nothing and comes forward under the OS's own rules,
   as no process is ever handed the right to take the foreground from any
   other (`ASFW_ANY`). The other hosts have
-  no notion apart from focus (AppKit's key window, winit's `Focused`, the
+  no notion apart from focus (AppKit's key window, the
   canvas focus, the scene and the Activity), so their activation is their
   focus. `window_facts_arrive_only_in_the_snapshot` pins one revision and
   one notification per fact; a `compile_fail` doctest on `PlatformWindow`
@@ -1096,7 +1056,7 @@ trait depends on `flui-platform` instead.
   samples the OS with no lock held, and a sample equal to the published one
   keeps the revision. the handler's `state_changed` is raised after the publish, outside
   the cell, only when the revision grew. Win32 and AppKit refresh from their
-  window messages and delegate callbacks, winit from its window events, the
+  window messages and delegate callbacks, the
   Web from the layout, focus and visibility observers and on each owner
   wake, which is how a screen change reaches it; the headless window
   keeps a model that stands in for the OS (`HeadlessWindowPolicy` makes it clamp a size
@@ -1181,8 +1141,8 @@ trait depends on `flui-platform` instead.
   run beside the owner and never run application code: an async logind task
   (`lifecycle::linux::logind`) and a kernel-pressure thread
   (`lifecycle::linux::pressure`). Each posts a `HostEvent` to one `Inbox` and
-  wakes the owner, which drains it in its next turn through the winit loop's
-  `HostNotices` hook. logind's sleep and shutdown carry a
+  wakes the owner, which drains it in its next turn (`HostNoticeSource::take`).
+  logind's sleep and shutdown carry a
   completion: the delay inhibitor is held until the owner has delivered the
   event (a panic in a subscriber drops the completion too) and is released
   after at most four seconds, inside logind's own `InhibitDelayMaxSec`.
@@ -1192,15 +1152,6 @@ trait depends on `flui-platform` instead.
   (`lifecycle::linux::logind::signals`, `lifecycle::linux::pressure::triggers`),
   and the X11 atoms to a window mode are the window feature's
   (`window::linux::x11::mode`), each checked on every host.
-- **The X11 window probe uses two connections on purpose.** One queries from
-  whichever thread asks and sets the properties a client sets on an unmapped
-  window; the other is read only by the watch thread, which records which
-  windows' `WM_STATE` or `_NET_WM_STATE` changed. A reply wait on the
-  watching connection would read events into its queue while the thread sleeps
-  in `poll`, so no request there waits for a reply. A window that opens
-  maximized or fullscreen is created unmapped, gets its mode written into
-  `_NET_WM_STATE`, and is mapped afterwards, because a window manager reads
-  the mode from the property when it maps a window.
 - **An OS version is compared only inside `version::gate` (ADR-0244).**
   Windows, iOS and Android each have one version type (`WindowsBuild`,
   `AppleVersion`, `AndroidApi`), each in a module of `version/gate.rs` built
@@ -1964,9 +1915,7 @@ setting change (both on the hidden broadcast receiver, whose
 `DisplayBroadcasts` subscriber handles nothing else of the display: it sets
 the flag and wakes the owner, because the message can arrive inside a COM
 call), or a window's `WM_DPICHANGED` says the displays may differ. The flag is cleared before the read, so an invalidation that lands
-during a sample survives it. winit on Windows takes its snapshot from the same
-source (its monitor list and GDI-name key are not read) and re-samples where
-winit reports a move, a scale change or a resume.
+during a sample survives it.
 
 The refresh period is the path's `targetInfo.refreshRate` rational, converted
 through `RefreshPeriod::from_ratio` so 60000/1001 stays exact. A monitor whose
@@ -2079,9 +2028,7 @@ controlled JS boundary. It is not an actual OS-setting change test.
 
 The same host observation set also reads motion. AppKit samples
 `NSWorkspace::accessibilityDisplayShouldReduceMotion` on its existing owner-lane
-timer. The same timer also serves the macOS winit fallback: `WinitApp` owns the
-source and the platform stores only a weak lookup. Reads lease it outside platform state;
-no AppKit query is added to `about_to_wait`. Shutdown and unwinding fence the
+timer. Shutdown and unwinding fence the
 signal before retiring that source. Initial native observations,
 foreign-thread refusal and reentrant retirement without a user window need a
 macOS main-thread process; local cross-compilation does not establish them.
@@ -2098,7 +2045,7 @@ These sources feed the existing ADR-0172 delivery path and ADR-0195 projection.
 Local cross-target clippy compiles these native paths; it does not execute their
 OS getters or external-setting notifications.
 
-Linux winit owners use one Settings portal connection on the existing background
+Linux owners use one Settings portal connection on the existing background
 executor. The calls are awaited there, but the connection's own I/O runs on
 zbus's `zruntime` thread: the workspace builds `zbus` without its `tokio`
 feature, so a capability crate that talks D-Bus reaches no Tokio (ADR-0154 §1),
@@ -2120,7 +2067,7 @@ The same connection reads `org.freedesktop.appearance/color-scheme`: 1 is dark,
 everything else (no preference, prefers light, a missing key) light. It is kept
 beside the snapshot, not in it, because brightness is presentation-specific
 (ADR-0172): the owner's wake hands the accepted value to each window, and a
-window with no winit theme of its own (X11 always, Wayland without an app
+window with no theme of its own (X11 always, Wayland without an app
 override) publishes it in its window state, a new revision only when it
 changed. One read failing neither discards nor delays the other's accepted
 value.
@@ -2142,12 +2089,12 @@ configuration's night mode on `ConfigChanged`, and the Web listens for
 `prefers-color-scheme`'s `change`.
 
 The process-isolated `linux_preferences` table runs through public
-`WinitPlatform` owner capabilities with a private session bus. It checks initial
+`X11Platform` owner capabilities with a private session bus. It checks initial
 sampling without a window, live changes, unknown values, unsupported observations,
 GNOME and legacy portal reads, service replacement, failed-read recovery without
 another notification, foreign-thread refusal and reentrant capture retirement.
-`libtest-mimic` keeps execution on winit's required main thread and supplies the
-Cargo/nextest protocol. These tests execute Linux D-Bus and winit, but do not change a desktop's
+`libtest-mimic` keeps execution on the main thread and supplies the
+Cargo/nextest protocol. These tests execute Linux D-Bus and the X11 host, but do not change a desktop's
 actual OS settings or establish live behavior of the other native platforms.
 
 Thread-safe residual handles may outlive the event-loop owner. The background
@@ -2172,7 +2119,7 @@ languages) and the application becoming active, and the owner samples every
 value again. The interval therefore refreshes when the user comes back from
 System Settings; a change written while the application stays active waits for
 its next activation. The observers hold only a weak owner signal and end before
-the source, with the platform or at the winit loop's shutdown. A failed or
+the source, with the platform or at the loop's shutdown. A failed or
 unwound read schedules one owner wake at its retry deadline, since no timer
 would otherwise come back for it.
 Android has no single notification for its observations either. Configuration
@@ -2307,7 +2254,7 @@ apartment and the message-only windows are unchanged.
 ### The Win32 clipboard opens with a message-only owner window on a dedicated pump thread
 
 `WindowsClipboard` has no single owning thread: any thread may read or
-write, and the winit backend has no FLUI-pumped loop. Opening with a `NULL` owner, as `arboard` and FLUI used to,
+write. Opening with a `NULL` owner, as FLUI used to,
 does not exclude other threads of the process, since all `NULL` openers count
 as one owner (see "Win32 clipboard: cross-thread sessions" in
 [`docs/safety-review.md`](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/safety-review.md)).
@@ -2320,14 +2267,14 @@ only job is `GetMessageW`/`DispatchMessageW`; every message goes to
 process *sends* `WM_DESTROYCLIPBOARD` to the current owner and waits for it.
 
 Rejected: reusing the owner thread's loop. It exists only on the Win32
-backend, not while a winit loop or a headless test drives the process, and
+backend, not while a headless test drives the process, and
 not before `run`. A session on a worker thread would also block on a
 `SendMessage` to the UI thread, which deadlocks whenever the UI thread waits
 on that worker. A thread per process costs one idle stack and removes all of
 this.
 
-The process-wide `clipboard::lock` stays: `arboard` sessions still open with a
-`NULL` owner, and a `WindowsClipboard` session would be let in beside one.
+The process-wide `clipboard::lock` stays: `OpenClipboard` does not exclude other threads that
+open with the same owner window, so it serializes every `WindowsClipboard` session.
 `OpenClipboard(NULL)` also leaves `SetClipboardData` without an owner to
 record, which Win32 documents as liable to fail; with an owner it is on the
 documented path. If the window cannot be created, sessions fall back to a
@@ -2559,133 +2506,13 @@ procedure then checks that no window is tracked and no quit is under way, asks
 the application's handler through the call point with no borrow held, and
 checks the window count again, since the handler may have opened a replacement
 window. A handler that panics is contained as a veto. An allowed exit ends the
-loop the way `quit` does. A run with no handler bound allows the exit, as on
-winit. Deferring the decision keeps the handler, which re-enters the embedder,
+loop the way `quit` does. A run with no handler bound allows the exit. Deferring the
+decision keeps the handler, which re-enters the embedder,
 out of a `WM_DESTROY` nested inside
 embedder code that closed the window. The native rows in `tests/contract.rs`
 (`closing_the_last_window_ends_the_loop`,
 `exit_policy_veto_holds_until_a_reevaluation_allows_exit`,
 `window_opened_by_the_exit_policy_keeps_the_loop`) run the real message loop.
-
-### The winit backend delegates the whole keyboard event to `ui-events-winit`; Win32/AppKit keep hand-written tables
-
-**Rule:** every native keyboard event this crate receives must be normalized
-into FLUI's owned keyboard vocabulary (`Code`, `Key`,
-`Location`) at the platform boundary — see the module doc of `crates/flui-platform/src/input.rs`.
-`Code::Unidentified` must mean the backend genuinely could not identify the
-physical key, never that a conversion table was incomplete (issue #1092).
-
-**Choice:** the winit backend's `keyboard_event` (`input/winit.rs`)
-converts the whole `winit::event::KeyEvent` (code, logical key, location,
-down/up state, `repeat`, and modifiers) through
-`ui_events_winit::keyboard::from_winit_keyboard_event` (crates.io
-`ui-events-winit`, the same bridge Masonry and Xilem use) instead of
-hand-assembling any `KeyboardEvent` field itself; `owner/winit.rs`'s
-`ModifiersChanged` handler stores winit's raw `ModifiersState` rather than a
-pre-converted `keyboard_types::Modifiers`, and each read site (pointer paths
-and the keyboard path alike) converts through the crate's
-`from_winit_modifier_state` at the point of use. The Win32 (`input/keys.rs`)
-and AppKit (`input/apple.rs`, `keys`) backends keep their own hand-written
-`Code`/`Key` tables, because no equivalent bridge crate exists for
-`WM_KEYDOWN` scancodes or `NSEvent.keyCode` — those two native id spaces are
-FLUI-specific translation work with no upstream crate to delegate to.
-
-Location is also sourced differently than before this issue: winit's own
-`KeyEvent.location: KeyLocation` field feeds `from_winit_keyboard_event`
-directly, rather than being re-derived from the physical `Code` (the
-pre-#1092 code matched a hand-picked list of `KeyCode` variants against
-`Location::Numpad`/`Left`/`Right` — exactly the incomplete-table failure
-mode this issue fixed for `code` too). There is no "does `Code::X` imply
-`Location::Numpad`" property left to hold; winit already computes location
-per-platform and exposes it, so nothing here re-derives it.
-
-This asymmetry between backends is deliberate, not inconsistent: the rule is
-"delegate to an audited bridge when one exists for this native surface," not
-"every backend must look the same." `tests/backend_conformance.rs`'s
-`physical_keys_agree_across_backends` cross-checks a curated set of
-physical keys against both hand-written tables so the two authored
-translations and the delegated one cannot silently drift apart.
-
-The Winit and Android ecosystem mappings remain boundary dependencies:
-`input::keys::adapter` converts their results to owned `KeyEvent` values.
-Win32 and AppKit tables return owned enums directly, and Web parses the DOM's
-W3C spellings against the generated owned tables. No pointer event uses the
-keyboard adapter. `keyboard_adapter_contract` preserves all named/physical
-key spellings, legacy Meta aliases and every event field. This conversion
-test lives beside the private adapter because Winit's complete `KeyEvent`
-contains private platform state and cannot be constructed by an integration
-test; native backend probes cover actual input delivery separately.
-
-**Alternatives considered:**
-
-- Complete the crate's own hand-written `winit::KeyCode → Code` table (kept
-  as a dev-dependency oracle test against `ui-events-winit`, never shipped).
-  Rejected: it is a second, unaudited copy of exactly the table the bridge
-  crate already maintains and tests upstream — an ownership cost with no
-  behavioral upside, and the class of bug this issue exists to fix (a
-  hand-rolled table quietly falling behind the enum it mirrors).
-- Delegate only the three field-level conversions (`from_winit_code`,
-  `from_winit_key`, `from_winit_location`) and keep hand-assembling
-  `KeyboardEvent`'s remaining fields (down/up state, `repeat`,
-  `is_composing`, and a separately hand-written modifiers conversion) in
-  `keyboard_event`. Rejected: `from_winit_keyboard_event` and
-  `from_winit_modifier_state` already perform exactly that assembly, so a
-  hand-written half is byte-identical duplicate logic — the same
-  re-derived-seam risk the issue exists to close, just smaller.
-- Vendor `ui-events-winit`'s tables directly into this crate (a `// PORT
-  NOTE`-style copy). Rejected for the same reason as the first bullet, plus
-  it would need re-syncing by hand on every winit/`ui-events` bump instead
-  of `cargo update` doing it.
-
-**Trade-off:** this crate's winit backend now tracks `ui-events-winit`'s
-release cadence for keyboard fidelity — a regression or gap introduced
-upstream reaches FLUI without a code review here. The `.github/dependabot.yml`
-`ui-events-cohort` group (with `ui-events` itself) and the
-`every_winit_keycode_maps_to_a_canonical_code` regression test are the
-mitigations: a bump that drops coverage for a `KeyCode` variant fails CI
-immediately rather than shipping silently — though that test can only pin
-the dependency's own completeness, not a regression inside `keyboard_event`
-itself, since `winit::event::KeyEvent` cannot be constructed outside winit
-(`platform_specific` is `pub(crate)`) and so `keyboard_event` can never be
-called directly from a test; see that test's doc for the full reasoning. If
-the workspace's `winit` pin ever needs to move ahead of what
-`ui-events-winit` supports (it pins `winit ^0.30`), the escape hatch is a
-`[patch.crates-io]` pin at the upstream `ui-events-winit` git repo (plus
-adding that repo to `deny.toml`'s `sources.allow-git`), not reviving a hand
-table — see the dependency comment in `Cargo.toml`.
-
-**One observable behavior change for already-working input:** a winit
-`Key::Dead(_)` (a dead-key composition in progress) now reports
-`Key::Named(NamedKey::Dead)` instead of `Key::Named(NamedKey::Unidentified)`
-— `from_winit_key` distinguishes the two where the deleted hand table
-collapsed both to `Unidentified`. Verified inert today:
-`crates/flui-widgets/src/text/editable_text.rs`'s key handler matches
-specific `NamedKey` variants and falls through everything else, `Dead`
-included, to `Key::Named(_) => KeyEventResult::Ignored` — no consumer in the
-workspace currently branches on `NamedKey::Dead` specifically (`rg
-'NamedKey::Dead'` across `crates/` has no hits outside this record). Named
-here so a future consumer that starts caring about dead-key state — an IME
-composition indicator, for instance — knows this signal already exists on
-the winit backend and does not need a new one.
-
-**Further reading:** [`.rust-studio/specs/1092-winit-physical-key-map/survey.md`](https://github.com/vanyastaff/flui/blob/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/.rust-studio/specs/1092-winit-physical-key-map/survey.md)
-is the market/reference survey that motivated this decision (`ui-events-winit`
-coverage measurement, a generated physical-key catalog as
-the completeness precedent, and the three options evaluated before choosing
-production delegation) — read it for context, not as the source of a fact;
-figures cited in this entry are measured directly against this repository
-and `ui-events-winit`'s own source, not against the survey.
-
-**Replacement coverage:** `input/winit.rs`'s
-`keyboard_conversion_tests` module (`every_winit_keycode_maps_to_a_canonical_code`
-over all 194 winit 0.30.13 `KeyCode` variants — length- and
-duplicate-checked against the winit source) and
-`tests/backend_conformance.rs`'s `physical_keys_agree_across_backends`
-(winit vs. Win32 vs. AppKit on a shared physical-key set). Before this change, `convert_physical_key`'s hand
-table mapped 71 of winit 0.30.13's 194 `KeyCode` variants to `Code` (the
-count measured at issue #1092's baseline) and `convert_winit_key` mapped 37 of 306
-`NamedKey` variants to `Key`, falling through to `Unidentified` for the rest
-in both cases.
 
 ### The surface-availability signal is a handler method, not a polled query
 
@@ -2742,8 +2569,7 @@ which first despawned the window on suspend and was revised to "keep Bevy window
 only recreate Winit window and wgpu surface"; and
 [winit#3786](https://github.com/rust-windowing/winit/pull/3786), which forwards
 Android's `suspended()`/`resumed()` and is a named second emitter for this same
-`false`/`true` pair, since winit is already a workspace dependency with a backend
-here. Flutter asks for the same contract under another name:
+`false`/`true` pair. Flutter asks for the same contract under another name:
 [flutter#160933](https://github.com/flutter/flutter/issues/160933) requested an
 `onSurfaceDestroying` that precedes the engine's `cleanup()`, having found the
 after-the-fact callback fires once the native surface is gone. The spelling that
@@ -2816,10 +2642,11 @@ newer request. After a frame that left nothing marked, the producer stops.
 
 The runtime asks through `request_redraw` for every frame it needs (`wake_frame`,
 animations, a failed frame the handler asks for again), so a host that waits
-for a request never misses a frame the runtime wants. Win32, AppKit, Wayland,
-X11 and winit already paint only on request and keep their own mechanisms:
-`WM_PAINT`, the display pass, the compositor's frame callback, and the event
-loop's redraw. None of them has a producer that ticks on its own.
+for a request never misses a frame the runtime wants. Win32, AppKit, Wayland and
+X11 already paint only on request and keep their own mechanisms:
+`WM_PAINT`, the display pass, the compositor's frame callback, and on X11 a
+window's redraw flag that rings the loop's doorbell. None of them has a producer
+that ticks on its own.
 
 **Rejected:** ticking every refresh and letting the runner skip frames that are
 not dirty. A still screen then pays a callback per refresh, and on iOS it keeps
@@ -3078,9 +2905,8 @@ input.
 (`Window::set_ime_allowed`): with IME allowed the window receives `Ime` events
 and, during the preedit phase, no `KeyboardInput`; with it disallowed the window
 receives no `Ime` events and a `KeyboardInput` for every keypress; and IME is
-**not** allowed by default. The winit backend inherits this by delegation
-(`WinitTextInput`); the native backend owns the pipeline instead of delegating,
-so it implements the protocol rather than wrapping one. The documentation covers
+**not** allowed by default. The native backend owns the pipeline
+instead of delegating to a library, so it implements the protocol rather than wrapping one. The documentation covers
 the *press*; reading winit's macOS implementation shows the release is gated too
 and on a different variable — `key_up` queues a `KeyboardInput` only from its
 `Ground` and `Disabled` states, so an open preedit suppresses the release while a
@@ -3259,30 +3085,26 @@ keeps an `OwnerTurnSlot` (`!Send`) in its owner control context, so closing or
 dropping the last `Arc<OwnerSignal>` on another thread never drops the
 callback there; the owner clears the slot on quit, or `WM_NCDESTROY` frees it
 with the context, and a platform dropped off its owner leaks it with the
-context. **Unasserted:** no test pins this. macOS, UIKit, winit and headless
+context. **Unasserted:** no test pins this. macOS, UIKit and headless
 still use `register` and `drive`, backed by a shared slot inside the signal,
 until their own steps of ADR-0082 §4.
 
 A posted turn is acknowledged when it begins (`OwnerSignal::begin_turn`), not
 when the application's turn runs. A loop that reads what wakes asked of it
-before driving (the winit loop's host notices, portal appearance and X11 window
+before driving (the Linux loops' host notices, portal appearance and X11 window
 properties) begins the turn, reads, then drives the `OwnerTurn`; a wake that
 lands while it reads posts the next turn, which reads again, instead of being
 settled by the drive with its change unread. `drive` and `drive_in` begin and
 drive at once, for loops that read nothing first (Win32, AppKit, UIKit, web,
 headless) or read only after the drive (Android's view events, UIKit's scene
 installation). A begun turn dropped before it is driven (a read that unwinds,
-a loop that returns early) posts the next turn for the work still owed. A read
-on the owner thread that finds work for the application's turn owes it to the
-turn it runs in (`OwnerTurn::owe`, the winit loop's Windows preferences) rather
-than waking, which would post a turn with nothing left to read. A wake that
+a loop that returns early) posts the next turn for the work still owed. A wake that
 finds no callback stays owed, and a registration posts it. Tests:
-`a_wake_while_the_loop_reads_gets_a_turn_that_reads_again` (the winit loop and
-the signal itself), `an_undriven_turn_posts_the_next_one`,
-`a_turn_owed_by_its_read_posts_nothing`,
+`a_wake_while_the_loop_reads_gets_a_turn_that_reads_again`,
+`an_undriven_turn_posts_the_next_one`,
 `a_change_with_no_turn_callback_reaches_the_next_one_registered`.
 
-macOS posts through GCD, winit through its existing EventLoopProxy, and Win32
+macOS posts through GCD, and Win32
 through a dedicated message-only class with its own typed userdata. Headless
 provides `HeadlessOwnerTurns`, an owner-local driver and one-shot posting failure
 injection for deterministic app recovery tests. Successful headless run return
@@ -3304,13 +3126,11 @@ preserve maximized/fullscreen mode and geometry. The command reveals and
 requests focus; operating-system focus policy still decides whether focus moves.
 AppKit deminiaturizes then orders the window forward. Win32 queries
 `WINDOWPLACEMENT` fallibly and interprets `WPF_RESTORETOMAXIMIZED` only for minimized
-placement, using `SW_SHOW` for non-minimized windows. A winit 0.30.13 Wayland
-window leaves `shows` and `activates` `Unavailable`, so `admit` refuses the
-command before any mutation: unminimize and focus are unsupported there. A
-closed window refuses every command with `Closed`.
+placement, using `SW_SHOW` for non-minimized windows.
+A window whose capabilities leave `shows` and `activates` `Unavailable` makes `admit` refuse the
+command before any mutation. A closed window refuses every command with `Closed`.
 
-Sources: [winit Window](https://docs.rs/winit/0.30.13/winit/window/struct.Window.html),
-[Win32 WINDOWPLACEMENT](https://learn.microsoft.com/en-us/windows/win32/api/winuser/ns-winuser-windowplacement).
+Source: [Win32 WINDOWPLACEMENT](https://learn.microsoft.com/en-us/windows/win32/api/winuser/ns-winuser-windowplacement).
 Headless tests model minimized independently from maximized/fullscreen.
 Windows evidence is strict cross-compilation, not a native runtime claim.
 
@@ -3369,11 +3189,8 @@ can see and close rather than a process with no window. The fallback deadline
 joins the desktop wake-deadline route and the frame closure's dirty predicate
 like every other wake-deadline source there.
 
-The winit backend reveals at open, unchanged: whether a hidden X11 or Win32
-window hands out swapchain images could not be verified here, and a wrong guess
-would cost every Linux launch the fallback's second. Wayland maps a surface at
-its first commit, which is the first present, so the deferral there is the
-protocol's own. Win32's native backend is likewise unchanged.
+Wayland maps a surface at its first commit, which is the first present, so the deferral there
+is the protocol's own. Win32's native backend is likewise unchanged.
 
 ### Per-window execution eligibility
 
@@ -4065,21 +3882,19 @@ reaches the window's input. Tests: `a_frame_lies_around_its_content`,
 `a_window_has_the_frame_its_compositor_leaves_it` (Weston and sway), and
 `tests/wayland_frame.rs` on Weston's desktop shell through XTest.
 
-### Linux displays come from the compositor on a connection of their own, and a winit window names its display by native number
+### Linux displays come from the compositor on a connection of their own, and a window names its display by native number
 
 `display/linux/` reads the outputs of a Wayland compositor or an X
 server without a window system: `wayland_model` and `x11_model` are pure (they
 take events or a RandR state and answer `OutputView`s, so every host checks
 them), `wayland.rs` and `x11.rs` are thin adapters behind the `wayland` and
 `x11` features, and `source.rs` resolves the views into the snapshot and keeps
-them current from the thread `flui-display-linux`. The winit backend takes its
-snapshot from it on Linux; Windows and macOS take theirs from their native
-sources, and winit's own monitor list is read nowhere.
+them current from the thread `flui-display-linux`. The native Wayland and X11
+hosts take their snapshot from it; Windows and macOS take theirs from their native
+sources.
 
-**Why a connection of its own.** winit enumerates monitors only through a live
-event loop and reports no change outside it, and its Wayland connection
-belongs to winit. A second connection costs a socket and a thread and gives a
-snapshot before the loop runs, with the same global names winit sees. The
+**Why a connection of its own.** A second connection costs a socket and a
+thread and gives a snapshot before the loop runs. The
 thread only waits (`poll` on the connection and a stop `eventfd`), swaps the
 new list in, marks the snapshot stale and wakes the owner through a `Weak`
 signal; application code never runs on it. Shutdown closes the owner signal's
@@ -4088,14 +3903,13 @@ the connection before it ends. A source that cannot connect, or loses its
 connection, answers every snapshot with that error until a watcher starts
 again, instead of reconnecting on every owner wake.
 
-**Which protocol.** The rule is winit 0.30.13's, read from its source:
-`WAYLAND_DISPLAY` or `WAYLAND_SOCKET` set and non-empty means Wayland, then a
-non-empty `DISPLAY` means X11. winit 0.30 no longer reads `WINIT_UNIX_BACKEND`.
-The winit backend then checks the choice against the display winit actually
-opened (the event loop's `RawDisplayHandle`, which is the one its windows use)
-and replaces the watcher on a mismatch. `WAYLAND_SOCKET` hands over a single
-connected descriptor that winit consumes, so the source connects by
-`WAYLAND_DISPLAY` only.
+**Which protocol.** The rule is the session rule in `display::linux::protocol`,
+which the native host choice and the display source share: a `WAYLAND_DISPLAY`
+that names a socket means Wayland, else a non-empty `DISPLAY` means X11.
+`WAYLAND_SOCKET` is not followed: it hands over a single connected descriptor
+that the process's own window system takes, and a second reader would steal the
+connection, so the source connects by `WAYLAND_DISPLAY` only
+(`the_protocol_is_the_session_a_connection_can_reach`).
 
 **Wayland.** An output is listed after its first `wl_output.done`, and each
 later burst replaces what is listed only at `done`
@@ -4123,35 +3937,25 @@ area the monitor cut to `_NET_WORKAREA` of the current desktop. A whole
 reconfiguration (screen, CRTC and output notifications) is one read of the
 state, and a state whose displays are unchanged wakes nobody.
 
-**Native number.** winit 0.30.13's `MonitorHandleExtX11::native_id` is the
-**CRTC** (not the RandR output), and
-`MonitorHandleExtWayland::native_id` is the `wl_output` global name. A display
-therefore answers to the CRTCs behind all of its monitor's outputs and to its
-global
-(`winit_window_matches_its_output_by_native_id`: mirrored outputs of one
-rectangle stay two displays, a tiled monitor is one). A monitor handle with no
-match, or a window with no monitor, has no display.
+**Native number.** A display answers to a number of the window system: the
+`wl_output` global name on Wayland, and on X11 the **CRTC** (not the RandR
+output). A display therefore answers to the CRTCs behind all of its monitor's
+outputs and to its global (`a_window_matches_its_output_by_native_id`: mirrored
+outputs of one rectangle stay two displays, a tiled monitor is one). A number
+with no match, or a window with no output, has no display. The Wayland host
+names a window's output by number; the X11 host does not.
 
-**What reaches the window.** `Moved`, `ScaleFactorChanged` and `Resized` ask
-the window whether its display changed. A change of the monitor list needs no
-event of its own: the thread wakes the owner and the host derives every window's
-display from the new snapshot. On Wayland winit reports no event when a window
-enters an output: none for its first (a window is on no output until its first
-frame enters one), and only a `ScaleFactorChanged` for a later one of another
-scale, so a window moved to an output of equal scale but another refresh rate
-would keep the old one. Every Wayland window is therefore asked its monitor again
-each time the loop goes idle (`about_to_wait`, `sync_unannounced_displays`),
-which follows the compositor's `enter`; a change publishes the window's state
-and then raises the display hint. An X11 window reports moves with `Moved`, so
-only one with no display yet is looked at there. The `wl_surface.enter` events
-themselves belong to winit's connection.
+**What reaches the window.** A Wayland window is on the first output its surface
+entered that it has not left, so a window the compositor moves to another output
+names that output's display, whatever its scale. A change of the monitor list
+needs no event of its own: the thread wakes the owner and the host derives every
+window's display from the new snapshot.
 
 **What was not run.** The pure rows run on every host. The thread is tested
 against a scripted session on Linux (`display_thread_contract`: change, wake,
 stop-and-join, failure, panic, closed owner, dropped signal). The Wayland and X11
 adapters were run live against WSLg (Wayland and XWayland), a headless weston and
-an Xorg dummy server whose modes `xrandr` changed; the macOS winit source is
-compiled and type-checked (`aarch64-apple-darwin`) but not run, and a window
+an Xorg dummy server whose modes `xrandr` changed. A window
 moved between two real monitors was not observed.
 
 ### The file store replaces a value with `std::fs::rename`, and probes an access refusal
@@ -4230,7 +4034,7 @@ after which the platform's own leave is a silent orphan; a hovering pen whose la
 another kind leaves first); drives touch and pen sequences by their contact (a barrel button
 changes within it, or while the pen hovers) and mouse sequences by any held
 button; counts clicks only from OS settings a backend supplies (Win32 today, AppKit
-reports its own count, winit reports none); folds trackpad components into one
+reports its own count); folds trackpad components into one
 `PanZoomAccumulator` session; and chooses each sequence's clock when it starts:
 the performance counter when the device and the host report one, otherwise the
 coarse stamp, after which that device stays on the coarse stamp. Stamps within a
@@ -4254,42 +4058,15 @@ position, and clock rebasing, wrap, saturation, monotonic order and per-device
 choice; `pointer_assembly_allocates_nothing_per_event` in
 `tests/pointer_assembly_allocation.rs` counts allocations over every per-event
 path with a positive control. The backends' own rows (Win32
-`native_pointer_decoding_contracts`, winit `pointer_translation_tests`, AppKit
+`native_pointer_decoding_contracts`, AppKit
 `native_pinch_and_rotation_share_one_cumulative_gesture`, UIKit
 `native_touch_readings_keep_sensor_presence_and_pen_angles`, Android
 `android_motion_translation`) pin only the copy into readings. Scroll phases
 go through the shared `ScrollPhases` grammar, and a two-finger pan is a phased
-scroll on every backend, winit's `PanGesture` included; a pinch's translation is
+scroll on every backend; a pinch's translation is
 its focal point, which every `Update` refreshes (ADR-0217 §4;
 `two_finger_pan_is_phased_scroll_on_every_backend`,
-`pan_zoom_carries_only_scale_and_rotation`, `winit_pan_gesture_is_a_phased_scroll`).
-
-### The winit translation makes up for what winit reports alike on every session
-
-`input/winit.rs` decides what winit's shared shapes hide
-(`session_quirks_translate_to_one_grammar`):
-
-- A winit device id is labelled per kind of input (cursor, touch, trackpad
-  gesture): Wayland gives every pointer and touch event one id and X11 the
-  master device's, so a mouse and a touchscreen behind one id are two devices
-  of known kind, both present, rather than one of mixed kind that reports
-  none. `DeviceEvent::Removed` retires every label of the id.
-- winit 0.30 drops the protocol's event time, so every reading is stamped at
-  dispatch. A move is held until the next event: a move of the same contact
-  replaces it, anything else (another window event, an owner wake that may
-  close its window, the end of the loop turn at `about_to_wait`) delivers it
-  first (`programmatic_close_runs_the_full_teardown_and_exits_the_loop` holds a
-  move across a close request). The moves a late turn dispatches back to back are then
-  one move, and velocity never sees their microsecond spacing.
-- On X11, winit reports a `CursorMoved` on the master device at the first
-  touch's position before its press and moves; a held move that any event of
-  a touch at that position follows (its lift and cancel included) is dropped,
-  so nothing hovers under the finger. A
-  fractional `LineDelta` is a touchpad's smooth scrolling and is precise; it
-  carries no phases.
-- On Wayland, a leave with a button held cancels the mouse's sequence: the
-  compositor that took the pointer sends no release. On X11 the implicit grab
-  keeps delivering the sequence after a leave, and it continues.
+`pan_zoom_carries_only_scale_and_rotation`).
 
 ### Android motion events decode through a cfg-free translation
 
@@ -4477,7 +4254,7 @@ timing; the shape is then the same on every run.
 
 `native_recording_contracts` in `tests/native_recording/mod.rs` replays one
 recording per backend (`win32_pointer_info_recordings_decode_to_their_host_input`
-and its AppKit, UIKit, Android, winit, Wayland and web rows, the web's Chrome capture
+and its AppKit, UIKit, Android, Wayland, X11 and web rows, the web's Chrome capture
 `web_bidi_recording_decodes_to_its_host_input` among them) against hand-computed
 transcripts, writes each back byte for byte, refuses unknown variants, other
 versions, out-of-range values and undeclared devices, and, with the feature,
@@ -4505,11 +4282,11 @@ A close request is a delivery of the same FIFO: asked at once when nothing
 runs, and raised behind a running method (a `WM_CLOSE` sent from inside
 `input`) it keeps the window for now and is asked after the method returns,
 a granted one closing the window by the host's deferred close (Win32 posts
-`CLOSE_WINDOW`, winit and headless close by command, AppKit sends `close`).
+`CLOSE_WINDOW`, headless closes by command, AppKit sends `close`).
 A delivery raised on another thread (a command applied from a worker
 publishes the window's state there) is queued and delivered in an owner turn
 the window asks for (`WindowDelivery::resume_through`: a posted `DELIVER_QUEUED` on
-Win32, the loop's owner signal on winit, headless, AppKit, UIKit and Android).
+Win32, the loop's owner signal on headless, AppKit, UIKit and Android).
 The host keeps no input for a handler still to come: a handler that cannot
 take its input yet keeps it itself (`flui-app`'s `WindowRoutes` holds what
 arrives before the window's presentation exists and hands it over in order).
@@ -4525,8 +4302,8 @@ the order (`the_first_event_after_open_reaches_the_handler`,
 `capability_change_is_ordered_with_input`,
 `input_raised_from_input_is_delivered_after_it`) and the panic
 (`a_panic_on_the_snapshot_is_resumed`); `window_handler_obligation_table`
-pins each method's obligation on the delivery itself. Presence changes reach a window from the headless device handle, the
-winit backend's registry and the Wayland seats' registry; the native Win32, AppKit, UIKit, Android and web
+pins each method's obligation on the delivery itself. Presence changes reach a window from the headless device handle and the
+Wayland seats' registry; the native Win32, AppKit, UIKit, Android and web
 backends report their initial table without presence changes yet.
 
 ### Every backend's haptics table is a pure function

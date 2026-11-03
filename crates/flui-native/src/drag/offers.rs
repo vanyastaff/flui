@@ -73,15 +73,7 @@ impl OfferTable {
 
     /// The representations live offer `id` announced. Slot **and** generation
     /// must match, so a retired id never addresses the slot's next occupant.
-    #[cfg(any(
-        target_os = "android",
-        target_arch = "wasm32",
-        all(
-            feature = "winit-backend",
-            any(target_os = "windows", target_os = "macos", target_os = "linux")
-        ),
-        test
-    ))]
+    #[cfg(any(target_os = "android", target_arch = "wasm32", test))]
     #[must_use]
     pub(crate) fn get(&self, id: DataTransferId) -> Option<&Arc<[RepresentationDescriptor]>> {
         let slot = self.slots.get(id.index() as usize)?;
@@ -118,29 +110,13 @@ impl OfferTable {
 // URI lists
 // ============================================================================
 
-#[cfg(any(
-    windows,
-    target_os = "android",
-    all(
-        feature = "winit-backend",
-        any(target_os = "macos", target_os = "linux")
-    ),
-    test
-))]
+#[cfg(any(windows, target_os = "android", test))]
 pub(crate) use uri_list::{PathStyle, TransferUri};
 
 /// The entries of a `text/uri-list` and the `file:` URIs of local paths
 /// (RFC 2483, RFC 8089), as the hosts that read paths or URIs write and read
 /// them.
-#[cfg(any(
-    windows,
-    target_os = "android",
-    all(
-        feature = "winit-backend",
-        any(target_os = "macos", target_os = "linux")
-    ),
-    test
-))]
+#[cfg(any(windows, target_os = "android", test))]
 mod uri_list {
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
@@ -156,40 +132,25 @@ mod uri_list {
     /// has only the style its OS hands out.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub(crate) enum PathStyle {
-        /// Win32 paths (`CF_HDROP`, a winit host on Windows).
+        /// Win32 paths (`CF_HDROP`).
         #[cfg(any(windows, test))]
         Windows,
-        /// POSIX paths (Android, a winit host on macOS and Linux).
+        /// POSIX paths (Android).
         #[cfg(any(not(windows), test))]
         Posix,
-    }
-
-    impl PathStyle {
-        /// The style of the paths this host's OS hands out.
-        #[cfg(all(feature = "winit-backend", target_os = "windows"))]
-        pub(crate) const HOST: Self = Self::Windows;
-
-        /// The style of the paths this host's OS hands out.
-        #[cfg(all(
-            feature = "winit-backend",
-            any(target_os = "macos", target_os = "linux")
-        ))]
-        pub(crate) const HOST: Self = Self::Posix;
     }
 
     /// One entry of a `text/uri-list` as a host reads or writes it: a local
     /// path, which travels as its `file:` URI, or any other URI.
     ///
-    /// The OS hands a host paths (`CF_HDROP`, winit's dropped files) or URIs (a
+    /// The OS hands a host paths (`CF_HDROP`) or URIs (a
     /// clip's items); the application sees the list as the bytes of
     /// `text/uri-list`, the one form every protocol shares.
     #[derive(Debug, Clone, PartialEq, Eq)]
     pub(crate) enum TransferUri {
         /// A local filesystem path.
         Path(PathBuf),
-        /// Any other URI, unparsed. The winit host on macOS and Linux reads
-        /// only paths.
-        #[cfg(any(windows, target_os = "android", test))]
+        /// Any other URI, unparsed.
         Uri(String),
     }
 
@@ -226,7 +187,6 @@ mod uri_list {
         /// read as that path in `style`; `None` for a payload of any other
         /// type, or one that is not UTF-8. Blank lines and `#` comments are
         /// skipped.
-        #[cfg(any(windows, target_os = "android", test))]
         #[must_use]
         pub(crate) fn list_of(payload: &TransferPayload, style: PathStyle) -> Option<Vec<Self>> {
             let TransferPayload::Custom { mime, bytes } = payload else {
@@ -251,7 +211,6 @@ mod uri_list {
         /// This entry as a URI, or `None` for a path with no `file:` URI.
         fn to_uri(&self, style: PathStyle) -> Option<String> {
             match self {
-                #[cfg(any(windows, target_os = "android", test))]
                 Self::Uri(uri) => Some(uri.clone()),
                 Self::Path(path) => file_uri(path, style),
             }
@@ -339,7 +298,6 @@ mod uri_list {
     /// Windows: `file:///C:/a` reads as `C:\a`, `file://host/share/a` as
     /// `\\host\share\a`, `file:///a` as `\a`. POSIX: `file:///a` (and
     /// `file://localhost/a`) reads as `/a`.
-    #[cfg(any(windows, target_os = "android", test))]
     fn path_of_file_uri(uri: &str, style: PathStyle) -> Option<PathBuf> {
         let scheme = uri.get(..5)?;
         if !scheme.eq_ignore_ascii_case("file:") {
@@ -376,7 +334,6 @@ mod uri_list {
 
     /// `text` with its percent escapes decoded, or `None` for a malformed one:
     /// a `%` takes exactly two hexadecimal digits.
-    #[cfg(any(windows, target_os = "android", test))]
     fn percent_decoded(text: &str) -> Option<Vec<u8>> {
         let hex = |byte: u8| char::from(byte).to_digit(16);
         let bytes = text.as_bytes();

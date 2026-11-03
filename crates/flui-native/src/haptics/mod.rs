@@ -14,7 +14,7 @@
 //! - `web`: `navigator.vibrate`;
 //! - `headless`: the contract's recording double.
 //!
-//! Linux and winit have no actuator to drive: their tables name
+//! Linux has no actuator to drive: its tables name
 //! `Absent<Haptics>`.
 
 #[cfg(target_os = "android")]

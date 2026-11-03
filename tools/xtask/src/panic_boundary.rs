@@ -67,9 +67,8 @@
 //! - `wasm_bindgen` closures: every wasm32 build aborts on panic, so nothing
 //!   unwinds into the page; a panic traps the instance, and `catch_unwind` has
 //!   nothing to catch there.
-//! - winit's `ApplicationHandler` and android-activity's glue: those crates
-//!   hold the boundary of their own procedures (winit resumes the panic in
-//!   `run_app`, on the Rust side; android-activity aborts with a log).
+//! - android-activity's glue: that crate holds the boundary of its own
+//!   procedures (it aborts with a log).
 //! - `flui-hot-reload`'s plugin ABI (`flui_scene_build`, `flui_app_build`):
 //!   entries a host process calls in a plugin, outside `flui-native`.
 //! - Test code: a stub's panic aborts the test process, which fails the run.

@@ -23,7 +23,7 @@
 //! - `hwnd_affinity`: the Win32 rules for which thread may reach a window
 //!   and when its user data is torn down, which the owner control and the
 //!   loop apply (on Windows, and in tests on every host);
-//! - `windows`, `apple`, `android`, `web`, `linux` (Wayland and X11), `winit`
+//! - `windows`, `apple`, `android`, `web`, `linux` (Wayland and X11)
 //!   and [`headless`]: each platform's loop, its wakes and what it owns of the
 //!   thread, each on the targets its host runs on (headless everywhere);
 //!   `redraw_poll`, the redraw decision around one native poll,
@@ -121,11 +121,6 @@ pub(crate) mod sources;
 pub(crate) mod web;
 #[cfg(windows)]
 pub(crate) mod windows;
-#[cfg(all(
-    feature = "winit-backend",
-    any(target_os = "windows", target_os = "macos", target_os = "linux")
-))]
-pub(crate) mod winit;
 
 use std::fmt;
 use std::marker::PhantomData;
@@ -649,12 +644,9 @@ impl WindowRequest {
     /// its handler. The factory is application code: its panic is contained
     /// here (logged, its payload retained) and the open fails with what it
     /// said, so a loop draining requests carries on.
-    #[cfg_attr(
-        not(all(
-            feature = "winit-backend",
-            any(target_os = "windows", target_os = "macos", target_os = "linux")
-        )),
-        expect(dead_code, reason = "only the winit lane carries deferred opens")
+    #[expect(
+        dead_code,
+        reason = "no host defers a window open: every transport refuses `PlatformProxy::open_window`"
     )]
     pub(crate) fn build_on_owner(
         self,
@@ -920,13 +912,6 @@ impl fmt::Debug for PendingWindow {
 }
 
 impl PendingWindow {
-    // Only the winit backend's deferred owner-lane path ever constructs a
-    // `PendingWindow` (`WinitOwnerHooks::open_owner_window` and
-    // `WinitProxyTransport::open_window`, `owner/winit.rs`) —
-    // every lane-less backend (`DirectOwnerHooks`) always resolves `Ready`.
-    // Building this crate without the `winit-backend` feature (e.g. the
-    // headless-only default) makes this constructor genuinely unused.
-    #[cfg_attr(not(feature = "winit-backend"), allow(dead_code))]
     pub(crate) fn new(
         handle: ClaimHandle<Result<OpenedWindow, OpenWindowError>>,
         owner_thread: ThreadId,
@@ -1051,7 +1036,7 @@ pub(crate) trait OwnerHooks: Send + Sync {
     }
 
     /// Creates or enqueues a window from the owner thread. Backends with an
-    /// owner lane (winit) enqueue when called outside `on_ready`; every
+    /// owner lane may enqueue when called outside `on_ready`; every
     /// other backend creates directly and always returns `Ready`.
     fn open_owner_window(
         &self,
@@ -1108,9 +1093,8 @@ impl OwnerHooks for DirectOwnerHooks {
     }
 }
 
-/// Cross-thread transport behind [`PlatformProxy`]. Winit supports window
-/// requests and signals; other desktop/headless backends support signals only.
-/// Direct backends support signals while refusing deferred window creation.
+/// Cross-thread transport behind [`PlatformProxy`]. Every backend supports
+/// signals and refuses deferred window creation.
 pub(crate) trait ProxyTransport: Send + Sync {
     fn wake(&self) -> Result<(), ProxySendError<()>> {
         Err(ProxySendError::Unsupported { rejected: () })

@@ -320,14 +320,8 @@ impl<K: std::hash::Hash + Eq + Copy + 'static, V: Clone + 'static> OwnerMap<K, V
     }
 }
 
-/// How the winit and X11 hosts read their window tables.
-#[cfg(any(
-    all(
-        feature = "winit-backend",
-        any(target_os = "windows", target_os = "macos", target_os = "linux")
-    ),
-    all(target_os = "linux", feature = "x11")
-))]
+/// How the X11 host reads its window table.
+#[cfg(x11_host)]
 impl<K: std::hash::Hash + Eq + Copy + 'static, V: Clone + 'static> OwnerMap<K, V> {
     /// A clone of the value under `key`.
     pub(crate) fn get(&self, key: &K) -> Option<V> {
@@ -347,8 +341,8 @@ impl<K: std::hash::Hash + Eq + Copy + 'static, V: Clone + 'static> OwnerMap<K, V
     }
 }
 
-/// How the winit, AppKit, Wayland and X11 hosts read their window tables.
-#[cfg(any(winit_host, target_os = "macos", wayland_host, x11_host))]
+/// How the AppKit, Wayland and X11 hosts read their window tables.
+#[cfg(any(target_os = "macos", wayland_host, x11_host))]
 impl<K: std::hash::Hash + Eq + Copy + 'static, V: Clone + 'static> OwnerMap<K, V> {
     /// A snapshot of the values.
     pub(crate) fn values(&self) -> Vec<V> {
@@ -359,7 +353,7 @@ impl<K: std::hash::Hash + Eq + Copy + 'static, V: Clone + 'static> OwnerMap<K, V
 
     /// A snapshot of the keys.
     // The X11 host walks its table by entries.
-    #[cfg(any(winit_host, target_os = "macos"))]
+    #[cfg(target_os = "macos")]
     pub(crate) fn keys(&self) -> Vec<K> {
         self.cell
             .with(|map| map.keys().copied().collect())

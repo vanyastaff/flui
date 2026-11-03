@@ -1,8 +1,9 @@
 # ADR-0172: Host-owned system preferences and ordered runtime delivery
 
-- **Status:** Accepted; implemented on Windows, macOS, iOS, Android, the web, Linux (winit) and
-  the headless host, with text, motion, contrast, language, gesture and wheel consumers. Updates
-  are never coalesced (point 3 allows it; no host needs it).
+- **Status:** Accepted; implemented on Windows, macOS, iOS, Android, the web, Linux (the native
+  Wayland and X11 hosts) and the headless host, with text, motion, contrast, language, gesture
+  and wheel consumers. Updates are never coalesced (point 3 allows it; no host needs it). The
+  Windows winit transport and its two witnesses below left with the winit host (ADR-0151 §11).
 - **Date:** 2026-10-08
 - **Supersedes:** the system-preferences section of the 2026-10-06 proposal of
   [ADR-0151](ADR-0151-platform-layer-boundary-and-names.md); the accepted ADR-0151 (2026-10-20)

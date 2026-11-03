@@ -220,8 +220,8 @@ struct PlatformPrimarySelection {
 impl CapabilityProvider<PrimarySelectionCapability> for PlatformPrimarySelection {
     fn provide(&self, cx: &ProviderContext<'_>) -> Result<PrimarySelectionHandle, Unsupported> {
         let native = self.slot.borrow().clone().ok_or_else(|| {
-            // Between loops, or a host of this platform without one (winit,
-            // a compositor without the protocol).
+            // Between loops, or a host of this platform without one (a
+            // compositor without the protocol).
             Unsupported::of::<PrimarySelectionCapability>(UnsupportedReason::Unavailable)
         })?;
         Ok(PrimarySelectionHandle::new(native, cx))

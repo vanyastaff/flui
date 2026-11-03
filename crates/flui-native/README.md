@@ -13,7 +13,7 @@ path), then compile-time `#[cfg]` picks the OS backend:
 | Win32 (`WindowsPlatform`) | Windows | Native, full featured |
 | AppKit (`MacOSPlatform`) | macOS | Native, in progress |
 | Headless (`HeadlessPlatform`) | any (`FLUI_HEADLESS=1`) | Mock backend for CI/tests |
-| winit (`WinitPlatform`) | cross-platform fallback | Primary on Linux; optional elsewhere via `winit-backend` |
+| X11 (`X11Platform`), Wayland (`WaylandPlatform`) | Linux | Native; Wayland when `WAYLAND_DISPLAY` names a compositor, X11 otherwise |
 
 Part of the [FLUI](https://github.com/vanyastaff/flui) workspace — pre-release,
 consumed by path (not published to crates.io).
@@ -35,7 +35,7 @@ version/         the OS version floors and the gates above them (ADR-0244)
 window/, input/, text/, display/, clipboard/, drag/, accessibility/,
 haptics/, preferences/, lifecycle/
                  a feature each: its model beside one file per platform
-                 (windows, apple, android, web, linux, winit, headless)
+                 (windows, apple, android, web, linux, headless)
 storage/         where an application keeps its data
 executor.rs      BackgroundExecutor (tokio pool)
 error.rs         PlatformError, BootstrapError
@@ -75,9 +75,9 @@ rest of the workspace stays `unsafe`-free. Every unsafe block carries a
 
 The suite runs under nextest in CI on Linux (the `test` job's dedicated step,
 headless + Xvfb). Native Windows/macOS suites run locally through
-`cargo xtask platform-test`, with default and all features. Run it with nextest, not `cargo test`: the winit tests that drive a
-real event loop need one process per test, because winit allows one
-`EventLoop` per process. macOS and the mobile backends are lint-only in CI
+`cargo xtask platform-test`, with default and all features. Run it with
+nextest, not `cargo test`: the tests that drive a real event loop expect a
+process of their own. macOS and the mobile backends are lint-only in CI
 (`cross-typecheck`).
 
 The Win32 clipboard is opened only under a process-wide lock

@@ -188,7 +188,7 @@ with an answer you can point to in the code; the reviewers ask the same ones.
 6. **Untrusted input.** Size checked before decoding or copying, how many copies of one payload
    live at once, every queue and cache bounded.
 7. **Parity.** Policy (a limit, normalization, a version floor) lives at the seam. If a backend
-   holds it, every backend has it, winit and headless included.
+   holds it, every backend has it, headless included.
 8. **Mirrors.** A diff that syncs a second copy of state lists every field of the source and
    every operation that changes it: reorder, removal, hiding, reversed direction, the browser's
    own normalization.

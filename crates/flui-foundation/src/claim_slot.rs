@@ -1,11 +1,11 @@
 //! `ClaimSlot<T>` — a generic at-most-once request/reply primitive.
 //!
 //! ADR-0039 §3 needs a reply protocol strictly stronger than a buffered
-//! one-shot channel: today's winit owner lane hands back a
+//! one-shot channel: a
 //! `sync_channel(1)` whose send always succeeds once the receiver exists,
 //! even if the receiver is later dropped without ever reading it — so a
 //! requester that abandons a request *after* the owner replies leaks
-//! whatever the reply carries (a created window, on the winit lane). A
+//! whatever the reply carries (a created window, for a window-open request). A
 //! claim slot closes that gap: the requester side and the owner side share
 //! one small state machine, and every transition is linearized under the
 //! slot's own private lock (this module exposes no lock guard or
@@ -20,13 +20,13 @@
 //! ```
 //!
 //! The owner side ([`ClaimSlot<T>`]) is kept alive by the caller *past*
-//! `deliver` — an owner-side in-flight registry (ADR-0039 §3; the winit
+//! `deliver` — an owner-side in-flight registry (ADR-0039 §3; an owner
 //! lane's drain-and-sweep loop) holds it so it can later notice a
 //! `Delivered -> Abandoned` transition (the requester dropped without
 //! claiming) and reclaim the payload via [`ClaimSlot::take_abandoned`] to
 //! unwind it. `deliver` is therefore `&self`, not consuming; at-most-once
 //! delivery is a runtime contract on the owner (exactly one `deliver` call
-//! per request — the winit lane has exactly one call site), enforced by a
+//! per request), enforced by a
 //! `BUG:` panic on violation rather than by the type system. Abandonment
 //! (whichever side notices it first) fires an injected wake callback
 //! exactly once, so an owner parked on its own event loop learns promptly
@@ -47,9 +47,9 @@
 //!
 //! This primitive is deliberately generic and carries no `flui-native`
 //! vocabulary (no `WindowId`, no `OpenWindowError`) — the ADR places its
-//! tests in the winit lane, which CI does not execute; landing the tested
-//! core here means the state-machine behavior is CI-verified even though
-//! its winit composition is not (the same rationale `OwnerAffinity`
+//! tests with the owner lanes that use it; landing the tested
+//! core here means the state-machine behavior is CI-verified apart from any
+//! host composition (the same rationale `OwnerAffinity`
 //! already established for the runtime-backstop half of ADR-0039).
 //!
 //! Executor clone and retirement run outside locks. Wake invokes borrowed
@@ -471,8 +471,7 @@ impl<T> ClaimHandle<T> {
     /// # Owner obligation
     /// The owner must still guarantee it always eventually calls `deliver`,
     /// typically via a panic-safe guard that calls it unconditionally on
-    /// drop if not already called explicitly (`flui-native`'s
-    /// `OpenWindowReplyGuard` is exactly this guard for the winit lane).
+    /// drop if not already called explicitly.
     /// `ClaimSlot`'s `Drop` is the backstop for when that discipline is
     /// broken upstream of the guard (the owner died or unwound before
     /// `deliver` even had a guard protecting it): a blocked `wait` now
@@ -566,8 +565,8 @@ impl<T> Drop for ClaimHandle<T> {
 ///
 /// `wake` fires at most once, exactly when the request transitions into
 /// `Abandoned` (see the module docs' state diagram) — never on delivery or
-/// claim. On the winit lane this is the coalesced owner wake that already
-/// exists for enqueue (`control.rs`'s `wake_owner`); a generic caller with
+/// claim. An owner lane passes the coalesced owner wake that already
+/// exists for enqueue; a generic caller with
 /// no wake-worthy event loop may pass `Arc::new(|| {})`.
 #[must_use = "dropping both halves immediately abandons the request for no reason"]
 pub fn claim_slot<T>(wake: WakeOwner) -> (ClaimSlot<T>, ClaimHandle<T>) {

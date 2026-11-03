@@ -16,9 +16,6 @@
 //! - `web`: the browser's screens, pixel ratio and animation-frame cadence;
 //! - `linux`: the outputs of a Wayland compositor or an X server, read on a
 //!   connection of its own;
-//! - `winit`: the winit host's source on Linux, over `linux`; on Windows and
-//!   macOS the winit host reads `windows` and `apple`, and never winit's
-//!   monitor list (ADR-0236);
 //! - `headless`: the displays a test lays out and changes.
 //!
 //! A loop holds its platform's displays through the hook its `owner` module
@@ -55,5 +52,3 @@ pub(crate) mod linux;
 pub(crate) mod web;
 #[cfg(any(windows, test))]
 pub(crate) mod windows;
-#[cfg(all(feature = "winit-backend", target_os = "linux"))]
-pub(crate) mod winit;

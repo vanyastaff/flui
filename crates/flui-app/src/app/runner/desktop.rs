@@ -208,7 +208,7 @@ where
     let fallback = Arc::new(FallbackWake::new());
 
     // 3d. Wire the wall-clock-wake hook, now that `owner_dispatch`
-    // exists — the winit backend's `about_to_wait` consults this every
+    // exists — the owner loop consults this every
     // idle iteration instead of blocking forever, so a pending gesture-
     // arena deadline (a long-press hold, a double-tap give-up) or an
     // armed device-recovery retry still wakes the loop at the right
@@ -285,7 +285,7 @@ where
 
     // Window close -> close THIS window's own presentation before the
     // platform decides whether to exit. Load-bearing ordering, not just
-    // bookkeeping hygiene: the winit backend's `CloseRequested` handling
+    // bookkeeping hygiene: a native host's close handling
     // delivers a window's `closed` (this route) BEFORE it consults the
     // exit-policy hook `install_exit_policy_hook` installs above
     // (`AppRuntime::should_exit`, which decides purely from
@@ -325,7 +325,7 @@ where
         // behind it) to after the loop was gone: the Wayland post-quit
         // SIGSEGV of issue #713. Keyed by id, not unconditional, so
         // closing a `WindowPolicy::Shared` sibling never unpins the primary.
-        // Dropped outside the TLS borrow: the winit window's own drop
+        // Dropped outside the TLS borrow: the native window's own drop
         // may re-enter platform code.
         let released =
             APP_RUNTIME.with(|slot| slot.borrow().release_redraw_window_for(closing_window_id));
@@ -498,8 +498,8 @@ impl DesktopFrameDriver {
             let scheduler = ui_runtime.scheduler();
 
             // Every fire of this callback is a genuine platform-delivered
-            // frame-request signal on this backend (`WinitWindowEvent::
-            // RedrawRequested` -> `dispatch_request_frame` -> here; see
+            // frame-request signal on this backend (the host's redraw request
+            // -> `dispatch_request_frame` -> here; see
             // `docs/adr/ADR-0044-driver-loop-hybrid.md`'s per-platform table for which backends
             // pace this via the compositor vs. deliver it immediately).
             // Recorded unconditionally, before the dirty/wake_action gate below

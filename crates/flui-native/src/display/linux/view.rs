@@ -118,9 +118,9 @@ impl FreshIds {
 }
 
 /// The display a native number belongs to: a window names its monitor by the
-/// number winit gives it, and any of a display's numbers answers (a tiled X11
+/// number its host gives it, and any of a display's numbers answers (a tiled X11
 /// monitor has several CRTCs).
-#[cfg(any(wayland_host, winit_host, test))]
+#[cfg(any(wayland_host, test))]
 pub(crate) fn display_of_native_number(natives: &[NativeIds], native: u32) -> Option<DisplayId> {
     natives
         .iter()

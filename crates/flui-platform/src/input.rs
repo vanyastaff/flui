@@ -254,10 +254,7 @@ pub enum DragDropEvent {
         offer: crate::data_transfer::DataTransferOffer,
         /// Actions the source currently permits.
         allowed: crate::data_transfer::TransferActions,
-        /// Logical-pixel position when the backend knows it. The winit
-        /// backend stamps the last tracked cursor position — `None` before
-        /// any cursor event, and possibly stale on Wayland where an external
-        /// drag grabs the cursor (documented backend limitation).
+        /// Logical-pixel position when the backend knows it.
         position: Option<Point<f64>>,
     },
     /// The drag moved while over the window. `allowed` is re-stamped on

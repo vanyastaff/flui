@@ -29,7 +29,7 @@
 //! # The client is a text store
 //!
 //! A client attaches a [`TextInputClient`], which carries the field's
-//! [`TextStore`] (ADR-0090). A push-model event (winit's [`ImeEvent`]) is
+//! [`TextStore`] (ADR-0090). A push-model event ([`ImeEvent`], shaped after winit's `Ime`) is
 //! projected onto that store as edits under a read-write lock
 //! ([`project_ime_event`]), so a field has one editing path whichever model
 //! its platform speaks.
@@ -44,7 +44,7 @@
 //! # Backends
 //!
 //! The owner speaks to its platform one of two ways ([`TextInputBackend`]).
-//! A push-model platform (winit, UIKit) gets `set_ime_allowed` and
+//! A push-model platform gets `set_ime_allowed` and
 //! the cursor area, and pushes [`ImeEvent`]s back. A pull-model platform
 //! (Win32 text services) hands the presentation a [`TextStoreHost`], and the
 //! owner tells it which store the focused field is: the host then reads and

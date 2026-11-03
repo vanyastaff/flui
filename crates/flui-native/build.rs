@@ -4,13 +4,6 @@
 fn main() {
     app_floor();
     cfg_aliases::cfg_aliases! {
-        // The winit host, on the targets it builds for.
-        winit_host: {
-            all(
-                feature = "winit-backend",
-                any(target_os = "windows", target_os = "macos", target_os = "linux")
-            )
-        },
         // The native Wayland host.
         wayland_host: { all(target_os = "linux", feature = "wayland") },
         // The native X11 host.
@@ -35,7 +28,7 @@ fn main() {
         linux_host: {
             all(
                 target_os = "linux",
-                any(feature = "winit-backend", feature = "wayland", feature = "x11")
+                any(feature = "wayland", feature = "x11")
             )
         },
     }
