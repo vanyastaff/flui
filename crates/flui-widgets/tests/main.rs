@@ -23,6 +23,7 @@ mod nested_scroll;
 mod pointer_vocabulary;
 mod refresh_indicator;
 mod reorderable;
+mod reorderable_grid;
 mod touchpad_pan;
 
 #[path = "absorb_pointer.rs"]
