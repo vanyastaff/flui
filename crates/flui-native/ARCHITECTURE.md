@@ -27,10 +27,13 @@ trait depends on `flui-platform` instead.
   (`error.rs`), the table-test runner (`table_test.rs`) and, until `Platform`
   loses its executor, `executor.rs` and `task.rs`. Its directories are the
   tables (`hosts/`), the owner thread and each platform's loop (`owner/`), the
-  OS versions (`version/`), the storage position's vocabulary (`storage/`) and
+  OS versions (`version/`), the storage position's vocabulary (`storage/`), the
+  OS objects two kinds of transfer share (`transfer/`: the Wayland seats' data
+  devices, which the clipboard and drag both reach) and
   one directory per feature of the closed list: `window`, `input`, `text`,
   `display`, `clipboard`, `drag`, `accessibility`, `haptics`, `fonts`, `http`, `preferences`,
-  `lifecycle`. There is no directory of code shared across features and no
+  `lifecycle`. Beside `transfer` there is no directory of code shared across
+  features, and there is no
   directory per platform: what two platforms of a feature share is that
   feature's model, and each platform is a file (or, where one OS object or the
   3 000-line limit needs it, a directory) in every feature it fills, named in
@@ -41,7 +44,8 @@ trait depends on `flui-platform` instead.
   extensions, which are named in that OS's module of `os` (`os::windows`,
   `os::macos`), the modules the facade publishes as `flui::native::<os>`.
   `[package.metadata.flui.modules]` gives the roles `cargo xtask module-dag`
-  checks: the ten features; `owner`, `version` and `storage` as `base`, which
+  checks: the ten features; `owner`, `version`, `storage` and `transfer` as
+  `base`, which
   names no feature; `hosts`, which nothing names; and the crate-level files
   (`crate-level`: `host`, `platform`, `host_window`, `error`, `executor`,
   `task`, `os`). A top-level module with none of these roles is a finding, so a
@@ -1259,8 +1263,8 @@ trait depends on `flui-platform` instead.
   change announced while one is read is asked for once it is done or failed,
   and the description it replaces is destroyed (the information destroys
   itself at its `done`). The display watch, on its own connection, reads at
-  most the outputs the loop binds. No `wl_data_device` is bound yet, so no
-  data offer arrives.
+  most the outputs the loop binds. A data offer keeps at most 100 MIME types of
+  at most 255 bytes each, each once, however often its owner repeats one.
 - **Work per peer event is bounded.** What a compositor's or an X server's
   event costs is a constant, or linear in that event's own bytes; never in
   data the peer sent before (a keymap's size, a list's length), so a burst of

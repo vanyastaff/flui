@@ -2,15 +2,10 @@
 //! `wl_data_device` (ADR-0151 §10, ADR-0152).
 //!
 //! The loop's clipboard hook (`owner::linux::wayland::WaylandClipboard`),
-//! which the host's table fills. It binds `wl_data_device_manager` as the
-//! compositor announces it and keeps one data device on each seat the input
-//! holds, which the loop hands it every turn.
+//! which the host's table fills. The seats' data devices are the loop's
+//! (`transfer::linux::wayland`), shared with drag and drop: the selection a
+//! seat holds is the last offer its device was told.
 //!
-//! - **The selection a seat holds** reaches its device as a data offer named
-//!   by `selection`, sent before the keyboard enters one of the client's
-//!   surfaces and whenever it changes while the keyboard is in one. The
-//!   device keeps the last; a drag's offer (`enter`) is let go of at
-//!   `leave`, as this host takes no drop yet.
 //! - **A read** answers at once while the application owns the selection of
 //!   the seat it reads (the last input's, else the first holding one):
 //!   the text it wrote is the selection, and asking the compositor for it
@@ -48,13 +43,10 @@ use flui_platform::{
     ClipboardError, ClipboardRead, ClipboardWrite, Concealment, capability::Resolver,
 };
 use wayland_client::protocol::wl_callback::{self, WlCallback};
-use wayland_client::protocol::wl_data_device::{self, WlDataDevice};
-use wayland_client::protocol::wl_data_device_manager::{self, WlDataDeviceManager};
-use wayland_client::protocol::wl_data_offer::{self, WlDataOffer};
 use wayland_client::protocol::wl_data_source::{self, WlDataSource};
 use wayland_client::protocol::wl_registry::WlRegistry;
 use wayland_client::protocol::wl_seat::WlSeat;
-use wayland_client::{Connection, Dispatch, Proxy, QueueHandle, event_created_child};
+use wayland_client::{Connection, Dispatch, Proxy, QueueHandle};
 use web_time::Instant;
 
 use super::owners::Owners;
@@ -62,12 +54,10 @@ use crate::clipboard::text::{CONCEALED_HINT, CONCEALED_HINT_VALUE, TextForm};
 use crate::host::{MAX_TEXT, NativeClipboard, NativePrimarySelection, owned_text};
 use crate::owner::linux::wayland::{LastInput, WaylandClipboard, WaylandState};
 use crate::owner::slot::OwnerCell;
+use crate::transfer::linux::wayland::{DataDevices, DeviceListener, OfferData};
 
 mod primary;
 
-/// The newest `wl_data_device_manager`: version 3 adds the drag actions,
-/// version 2 lets a device be released.
-const MANAGER_VERSION: u32 = 3;
 /// How long a read waits for the selection's owner to write its text, and a
 /// write for the reader to take it. An owner that hangs answers nothing.
 const TRANSFER_TIMEOUT: Duration = Duration::from_secs(5);
@@ -84,6 +74,8 @@ pub(crate) struct SeatClipboard {
 /// What the clipboard holds, reached on the owner thread.
 struct Shared {
     state: OwnerCell<State>,
+    /// The seats' data devices, the loop's.
+    devices: DataDevices,
     /// The last user input, whose seat and serial a write is set under.
     last_input: LastInput,
     /// The primary selection, beside the clipboard on devices of its own.
@@ -94,35 +86,15 @@ struct Shared {
 
 #[derive(Default)]
 struct State {
-    /// `wl_data_device_manager`, by its global's name.
-    manager: Option<(u32, WlDataDeviceManager)>,
-    /// The queue the devices and sources report to.
-    queue: Option<QueueHandle<WaylandState>>,
-    devices: Vec<SeatDevice>,
     /// The text the application owns each seat's selection with.
     owned: Owners<WlSeat, Owned>,
 }
 
-/// One seat's data device and the offers it holds.
-struct SeatDevice {
-    seat: WlSeat,
-    device: WlDataDevice,
-    /// The offer of the seat's selection; `None` when it holds none.
-    selection: Option<WlDataOffer>,
-    /// The offer of a drag over one of the client's surfaces.
-    dragged: Option<WlDataOffer>,
-}
-
-impl SeatDevice {
-    fn release(self) {
-        for offer in [self.selection, self.dragged].into_iter().flatten() {
-            offer.destroy();
-        }
-        // `release` exists from version 2; below it the proxy is just
-        // dropped.
-        if self.device.version() >= 2 {
-            self.device.release();
-        }
+impl DeviceListener for Shared {
+    /// Text held in this process with no source is the selection until a
+    /// selection arrives: another client's, or the application's own.
+    fn selection_arrived(&self) {
+        self.state.with(|state| state.owned.remove_unseated());
     }
 }
 
@@ -163,17 +135,19 @@ impl Owned {
 }
 
 impl SeatClipboard {
-    /// The clipboard of a loop on the calling thread, with no global bound
-    /// yet, setting its selection under the inputs `last_input` records.
-    pub(crate) fn new(last_input: LastInput) -> Self {
-        Self {
-            shared: Arc::new(Shared {
-                state: OwnerCell::new(),
-                last_input,
-                primary: OwnerCell::new(),
-                writers: transfer::Writers::default(),
-            }),
-        }
+    /// The clipboard of a loop on the calling thread, setting its selection
+    /// on `devices` under the inputs `last_input` records.
+    pub(crate) fn new(last_input: LastInput, devices: DataDevices) -> Self {
+        let shared = Arc::new(Shared {
+            state: OwnerCell::new(),
+            devices: devices.clone(),
+            last_input,
+            primary: OwnerCell::new(),
+            writers: transfer::Writers::default(),
+        });
+        let listener: Weak<Shared> = Arc::downgrade(&shared);
+        devices.listen(listener);
+        Self { shared }
     }
 }
 
@@ -183,29 +157,12 @@ impl WaylandClipboard for SeatClipboard {
         registry: &WlRegistry,
         name: u32,
         interface: &str,
-        version: u32,
+        _: u32,
         queue: &QueueHandle<WaylandState>,
     ) {
         self.shared
             .primary
             .with(|primary| primary.global(registry, name, interface, queue));
-        if interface != WlDataDeviceManager::interface().name {
-            return;
-        }
-        self.shared.state.with(|state| {
-            // A second announcement would bind an object nothing destroys.
-            if state.manager.is_some() {
-                return;
-            }
-            let manager = registry.bind::<WlDataDeviceManager, (), WaylandState>(
-                name,
-                version.min(MANAGER_VERSION),
-                queue,
-                (),
-            );
-            state.manager = Some((name, manager));
-            state.queue = Some(queue.clone());
-        });
     }
 
     fn global_removed(&self, name: u32) {
@@ -217,23 +174,6 @@ impl WaylandClipboard for SeatClipboard {
         primary_gone
             .into_iter()
             .for_each(primary::PrimaryDeviceGone::release);
-        let gone = self
-            .shared
-            .state
-            .with(|state| {
-                if state
-                    .manager
-                    .as_ref()
-                    .is_some_and(|(held, _)| *held == name)
-                {
-                    state.manager = None;
-                    std::mem::take(&mut state.devices)
-                } else {
-                    Vec::new()
-                }
-            })
-            .unwrap_or_default();
-        gone.into_iter().for_each(SeatDevice::release);
     }
 
     fn seats(&self, seats: &[WlSeat]) {
@@ -246,44 +186,11 @@ impl WaylandClipboard for SeatClipboard {
         primary_gone
             .into_iter()
             .for_each(primary::PrimaryDeviceGone::release);
-        let gone = self
-            .shared
-            .state
-            .with(|state| {
-                let (kept, gone) = std::mem::take(&mut state.devices)
-                    .into_iter()
-                    .partition(|device| seats.contains(&device.seat));
-                state.devices = kept;
-                if let (Some((_, manager)), Some(queue)) = (&state.manager, &state.queue) {
-                    for seat in seats {
-                        if state.devices.iter().any(|device| device.seat == *seat) {
-                            continue;
-                        }
-                        let device = manager.get_data_device(
-                            seat,
-                            queue,
-                            DeviceData {
-                                shared: Arc::downgrade(&self.shared),
-                            },
-                        );
-                        state.devices.push(SeatDevice {
-                            seat: seat.clone(),
-                            device,
-                            selection: None,
-                            dragged: None,
-                        });
-                    }
-                }
-                gone
-            })
-            .unwrap_or_default();
-        gone.into_iter().for_each(SeatDevice::release);
     }
 
     fn release(&self) {
         let held = self.shared.state.with(std::mem::take);
-        if let Some(State { devices, owned, .. }) = held {
-            devices.into_iter().for_each(SeatDevice::release);
+        if let Some(State { owned }) = held {
             owned.into_items().into_iter().for_each(Owned::release);
         }
         if let Some(primary) = self.shared.primary.with(primary::Primary::take) {
@@ -293,18 +200,11 @@ impl WaylandClipboard for SeatClipboard {
 
     #[cfg(any(test, feature = "testing"))]
     fn selection_offers_hint(&self) -> Option<bool> {
-        let seat = self.shared.last_input.latest().map(|input| input.seat);
-        self.shared
-            .state
-            .with(|state| {
-                let device = state
-                    .devices
-                    .iter()
-                    .find(|device| Some(&device.seat) == seat.as_ref())?;
-                let data = device.selection.as_ref()?.data::<OfferData>()?;
-                data.hint.with(|hint| *hint)
-            })
-            .flatten()
+        let seat = self.shared.last_input.latest()?.seat;
+        let offer = self.shared.devices.selection_of(&seat)?;
+        offer
+            .data::<OfferData>()?
+            .types(|types| types.iter().any(|mime| mime == CONCEALED_HINT))
     }
 
     fn has_primary_selection(&self) -> bool {
@@ -348,28 +248,21 @@ enum Read {
 impl NativeClipboard for SeatClipboard {
     fn read_text(&self, answer: Resolver<ClipboardRead>) {
         let last_seat = self.shared.last_input.latest().map(|input| input.seat);
+        // The seat read: the last input's, or else the first holding a
+        // selection.
+        let selection = self.shared.devices.selection(last_seat.as_ref());
         let read = self
             .shared
             .state
             .with(|state| {
-                // The seat read: the last input's, or else the first holding
-                // a selection.
-                let device = state
-                    .devices
-                    .iter()
-                    .find(|device| Some(&device.seat) == last_seat.as_ref())
-                    .or_else(|| {
-                        state
-                            .devices
-                            .iter()
-                            .find(|device| device.selection.is_some())
-                    });
-                if let Some(owned) = state.owned.read(device.map(|device| &device.seat)) {
+                let seat = selection.as_ref().map(|selection| &selection.seat);
+                if let Some(owned) = state.owned.read(seat) {
                     return Read::Now(owned_text(&owned.text));
                 }
-                let Some((offer, (form, mime))) = device
-                    .and_then(|device| device.selection.as_ref())
-                    .and_then(|offer| Some((offer, offer.data::<OfferData>()?.preferred()?)))
+                let Some((offer, (form, mime))) = selection
+                    .as_ref()
+                    .and_then(|selection| selection.offer.as_ref())
+                    .and_then(|offer| Some((offer, preferred(offer.data::<OfferData>()?)?)))
                 else {
                     return Read::Now(Ok(None));
                 };
@@ -421,23 +314,17 @@ impl NativeClipboard for SeatClipboard {
         let text: Arc<str> = write.into_text().into();
         let last = self.shared.last_input.latest();
         let previous = self.shared.state.with(|state| {
-            let State {
-                manager,
-                queue,
-                devices,
-                owned,
-            } = state;
+            let State { owned } = state;
+            let devices = &self.shared.devices;
             let set = |source: &WlDataSource, seat: &WlSeat, serial: u32| {
-                let device = devices.iter().find(|device| device.seat == *seat)?;
-                device.device.set_selection(Some(source), serial);
-                Some(())
+                devices.set_selection(seat, source, serial).then_some(())
             };
             let create = |text: &Arc<str>| {
-                let (_, manager) = manager.as_ref()?;
-                let source = manager.create_data_source(
-                    queue.as_ref()?,
-                    SourceData::new(Arc::downgrade(&self.shared), Arc::clone(text), concealed),
-                );
+                let source = devices.create_source(SourceData::new(
+                    Arc::downgrade(&self.shared),
+                    Arc::clone(text),
+                    concealed,
+                ))?;
                 for mime in offered(concealed) {
                     source.offer(mime.to_owned());
                 }
@@ -466,7 +353,7 @@ impl NativeClipboard for SeatClipboard {
                         SelectionCheck::send(
                             &current,
                             Arc::downgrade(&self.shared),
-                            queue.as_ref(),
+                            devices.queue().as_ref(),
                         );
                     } else {
                         source.destroy();
@@ -540,62 +427,18 @@ impl SelectionCheck {
     }
 }
 
-// ---- The dispatch of the clipboard's objects on the owner's queue: each
-// records what the compositor said, and runs no handler.
-
-/// A data device's user data.
-pub(crate) struct DeviceData {
-    shared: Weak<Shared>,
-}
-
-/// A data offer's user data: the forms of text it offers, as its `offer`
-/// events name them, read on the owner thread alone.
-pub(crate) struct OfferData {
-    /// Each text form offered, once, with the MIME type it was first offered
-    /// under: at most one entry per [`TextForm`], however often the owner
-    /// repeats an `offer` event.
-    forms: OwnerCell<Vec<(TextForm, String)>>,
-    /// Whether the offer names [`CONCEALED_HINT`].
-    hint: OwnerCell<bool>,
-}
-
-impl OfferData {
-    /// An offer's data, made by the dispatch on the owner thread.
-    fn new() -> Self {
-        Self {
-            forms: OwnerCell::new(),
-            hint: OwnerCell::new(),
-        }
-    }
-
-    /// Record an `offer` event: a text form not offered before, under the
-    /// MIME type named, or the concealment hint. Other types and repeats
-    /// keep nothing.
-    fn offer(&self, mime_type: String) {
-        if mime_type == CONCEALED_HINT {
-            self.hint.with(|hint| *hint = true);
-            return;
-        }
-        let Some(form) = TextForm::named(&mime_type) else {
-            return;
-        };
-        self.forms.with(|forms| {
-            if forms.iter().all(|(offered, _)| *offered != form) {
-                forms.push((form, mime_type));
-            }
-        });
-    }
-
-    /// The form a read asks the offer for, with the MIME type the owner
-    /// offered it under.
-    fn preferred(&self) -> Option<(TextForm, String)> {
-        self.forms
-            .with(|forms| {
-                let form = TextForm::preferred(forms.iter().map(|(_, mime)| mime.as_str()))?;
-                forms.iter().find(|(offered, _)| *offered == form).cloned()
-            })
-            .flatten()
-    }
+/// The form a read asks `offer` for, with the MIME type its owner offered
+/// it under first: an owner may match what it is asked for exactly.
+fn preferred(offer: &OfferData) -> Option<(TextForm, String)> {
+    offer
+        .types(|types| {
+            let form = TextForm::preferred(types.iter().map(String::as_str))?;
+            let mime = types
+                .iter()
+                .find(|mime| TextForm::named(mime) == Some(form))?;
+            Some((form, mime.clone()))
+        })
+        .flatten()
 }
 
 /// The MIME types a source offers: each text form, and [`CONCEALED_HINT`]
@@ -691,89 +534,8 @@ impl SourceData {
     }
 }
 
-impl Dispatch<WlDataDeviceManager, ()> for WaylandState {
-    fn event(
-        _: &mut Self,
-        _: &WlDataDeviceManager,
-        _: wl_data_device_manager::Event,
-        (): &(),
-        _: &Connection,
-        _: &QueueHandle<Self>,
-    ) {
-        // The manager has no events.
-    }
-}
-
-impl Dispatch<WlDataDevice, DeviceData> for WaylandState {
-    fn event(
-        _: &mut Self,
-        device: &WlDataDevice,
-        event: wl_data_device::Event,
-        data: &DeviceData,
-        _: &Connection,
-        _: &QueueHandle<Self>,
-    ) {
-        let Some(shared) = data.shared.upgrade() else {
-            return;
-        };
-        let replaced = shared
-            .state
-            .with(|state| {
-                // While the application holds no source, any selection that
-                // arrives is another client's.
-                let foreign = matches!(&event, wl_data_device::Event::Selection { id: Some(_) });
-                let held = state
-                    .devices
-                    .iter_mut()
-                    .find(|held| held.device == *device)?;
-                let replaced = match event {
-                    wl_data_device::Event::Selection { id } => {
-                        let replaced = std::mem::replace(&mut held.selection, id);
-                        // Text held in this process with no source is the
-                        // selection until another client's arrives.
-                        if foreign {
-                            state.owned.remove_unseated();
-                        }
-                        replaced
-                    }
-                    wl_data_device::Event::Enter { id, .. } => {
-                        std::mem::replace(&mut held.dragged, id)
-                    }
-                    wl_data_device::Event::Leave | wl_data_device::Event::Drop => {
-                        held.dragged.take()
-                    }
-                    _ => None,
-                };
-                // An offer named again is the one already held.
-                replaced.filter(|offer| {
-                    Some(offer) != held.selection.as_ref() && Some(offer) != held.dragged.as_ref()
-                })
-            })
-            .flatten();
-        if let Some(offer) = replaced {
-            offer.destroy();
-        }
-    }
-
-    event_created_child!(WaylandState, WlDataDevice, [
-        wl_data_device::EVT_DATA_OFFER_OPCODE => (WlDataOffer, OfferData::new()),
-    ]);
-}
-
-impl Dispatch<WlDataOffer, OfferData> for WaylandState {
-    fn event(
-        _: &mut Self,
-        _: &WlDataOffer,
-        event: wl_data_offer::Event,
-        data: &OfferData,
-        _: &Connection,
-        _: &QueueHandle<Self>,
-    ) {
-        if let wl_data_offer::Event::Offer { mime_type } = event {
-            data.offer(mime_type);
-        }
-    }
-}
+// ---- The dispatch of the clipboard's objects on the owner's queue: each
+// records what the compositor said, and runs no handler.
 
 impl Dispatch<WlDataSource, SourceData> for WaylandState {
     fn event(
@@ -1076,22 +838,24 @@ pub(crate) mod transfer {
 mod tests {
     use super::*;
 
-    /// An owner that repeats its `offer` events grows nothing past one entry
-    /// per text form, and a read still asks for the spelling offered first.
+    /// A read asks for the text form [`TextForm::preferred`] picks, under the
+    /// spelling the owner offered first, whatever else it offers.
     #[test]
-    fn repeated_offers_keep_one_entry_per_form() {
+    fn a_read_asks_for_the_spelling_offered_first() {
         let data = OfferData::new();
-        for _ in 0..10_000 {
-            data.offer("text/plain;charset=UTF-8".to_owned());
-            data.offer("text/plain;charset=utf-8".to_owned());
-            data.offer("UTF8_STRING".to_owned());
-            data.offer("image/png".to_owned());
+        for mime in [
+            "image/png",
+            "UTF8_STRING",
+            "text/plain;charset=UTF-8",
+            "text/plain;charset=utf-8",
+        ] {
+            data.offer(mime.to_owned());
         }
-        assert_eq!(data.forms.with(|forms| forms.len()), Some(2));
         assert_eq!(
-            data.preferred(),
+            preferred(&data),
             Some((TextForm::PlainUtf8, "text/plain;charset=UTF-8".to_owned()))
         );
+        assert_eq!(preferred(&OfferData::new()), None);
     }
 
     /// A concealed write offers KDE's password-manager hint beside its text
