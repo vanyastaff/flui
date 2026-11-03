@@ -1,7 +1,8 @@
 # flui-animation / catalog-components — задачи
 
 - **Статус:** в работе. Влиты T1, T2, T3, T4, T7, T8, T9, T10, T11, T13; переключаемый
-  `IconButton` сделан; дальше T6 после T33 полноты ввода, затем T12.
+  `IconButton` сделан; T33 полноты ввода влит (`ReorderableList`, `ReorderableGrid`), дальше T6,
+  затем T12.
 - **Дата:** 2026-10-17
 - **Design:** [design.md](design.md), [requirements.md](requirements.md).
 - **Тикеты:** родитель vanyastaff/flui#1691; T1 #1692 · T2 #1693 · T3 #1694 · T4 #1695 ·

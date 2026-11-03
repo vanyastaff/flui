@@ -394,11 +394,19 @@ impl FrameRun {
     /// A frame with no dirty work produces no layer tree, mirroring the
     /// production idle-frame behavior.
     pub fn pump(&mut self) -> FrameReport {
+        self.try_pump()
+            .expect("pump frame must succeed for a well-formed test tree")
+    }
+
+    /// [`pump`](FrameRun::pump) that returns the frame's [`RenderError`]
+    /// instead of panicking. The owner stays in this run either way, so the
+    /// next frame starts from the failed one.
+    pub fn try_pump(&mut self) -> Result<FrameReport, RenderError> {
         let owner = self.owner.take_idle();
         let (owner, result) = owner.run_frame();
         self.owner = owner;
-        self.layer_tree = result.expect("pump frame must succeed for a well-formed test tree");
-        self.report()
+        self.layer_tree = result.map_err(flui_foundation::TreeError::into_error)?;
+        Ok(self.report())
     }
 
     /// Runs `count` consecutive frames with no mutations between them.

@@ -5,14 +5,18 @@
 //! producer half of a delivery, the URI list the hosts that read paths or
 //! URIs share, and what a drag that names its representations by media type
 //! offers and the payload their bytes carry, which the Android and Web files
-//! share. Beside it, one file per platform holds the host's one
-//! `DataTransferSource` (the drag position of its table) and what a window
-//! needs to take and start drags:
+//! share, with the representations the types of an X selection or a Wayland
+//! data offer give and what their bytes are read as (`offers::Kind`), which
+//! the X11 and Wayland files share. Beside it, one file per platform holds the
+//! host's one `DataTransferSource` (the drag position of its table) and what
+//! a window needs to take and start drags:
 //!
 //! - `windows`: OLE;
 //! - `android`: `FluiView`'s drag events and system drags;
 //! - `web`: HTML drag and drop;
 //! - `winit`: the files winit reports dragged and dropped;
+//! - `wayland`: drops on the native Wayland host's windows through the seats'
+//!   data devices;
 //! - `x11`: XDND drops on the native X11 host's windows, and the sessions they
 //!   start;
 //! - `headless`: a double that plays the operating system's side.
@@ -23,13 +27,15 @@
 //! `cfg(any(<os>, test))` with its OS side under `cfg(<os>)`, so every host
 //! checks it.
 //!
-//! macOS, iOS and the native Wayland host have no drag and drop yet: their
+//! macOS and iOS have no drag and drop yet: their
 //! table names `Absent<Drag>`.
 
 #[cfg(any(target_os = "android", test))]
 pub(crate) mod android;
 pub(crate) mod headless;
 pub(crate) mod offers;
+#[cfg(wayland_host)]
+pub(crate) mod wayland;
 #[cfg(any(target_arch = "wasm32", test))]
 pub(crate) mod web;
 #[cfg(any(windows, test))]

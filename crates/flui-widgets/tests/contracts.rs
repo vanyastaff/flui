@@ -215,6 +215,31 @@ fn reorderable_list() {
     );
 }
 
+/// `ReorderableGrid`: a tile moved by its handle any way and by a touch long
+/// press, the moves along a row and by a row, and row moves that follow the
+/// rows the grid lays out.
+#[test]
+fn reorderable_grid() {
+    run_cases(
+        "reorderable_grid",
+        &[
+            (
+                "reorderable_grid::a_tile_dragged_by_its_handle_moves_onto_another_tile",
+                crate::reorderable_grid::a_tile_dragged_by_its_handle_moves_onto_another_tile
+                    as fn(),
+            ),
+            (
+                "reorderable_grid::the_grid_moves_go_along_a_row_and_by_a_row",
+                crate::reorderable_grid::the_grid_moves_go_along_a_row_and_by_a_row,
+            ),
+            (
+                "reorderable_grid::the_row_moves_follow_the_rows_the_grid_lays_out",
+                crate::reorderable_grid::the_row_moves_follow_the_rows_the_grid_lays_out,
+            ),
+        ],
+    );
+}
+
 /// The editable-text capability: selection gestures, obscuring, IME, clipboard, keys.
 #[test]
 fn text_editing() {
@@ -1816,6 +1841,10 @@ fn gesture_alternatives() {
             (
                 "reorderable::reorderable_list",
                 crate::reorderable::reorderable_list,
+            ),
+            (
+                "reorderable_grid::reorderable_grid",
+                crate::reorderable_grid::reorderable_grid,
             ),
         ],
     );

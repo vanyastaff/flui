@@ -54,6 +54,7 @@ use crate::clipboard::text::{CONCEALED_HINT, CONCEALED_HINT_VALUE, TextForm};
 use crate::host::{MAX_TEXT, NativeClipboard, NativePrimarySelection, owned_text};
 use crate::owner::linux::wayland::{LastInput, WaylandClipboard, WaylandState};
 use crate::owner::slot::OwnerCell;
+use crate::transfer::linux::wayland::pipe::{self, PipeError};
 use crate::transfer::linux::wayland::{DataDevices, DeviceListener, OfferData};
 
 mod primary;
@@ -65,6 +66,22 @@ const TRANSFER_TIMEOUT: Duration = Duration::from_secs(5);
 /// until its reader has the text or the deadline passes; a client asking
 /// faster than it reads is answered with nothing past this.
 const MAX_WRITERS: usize = 4;
+
+/// The selection's bytes through `reader`, at most [`MAX_TEXT`], a failure
+/// told as the clipboard tells it.
+fn read_selection(reader: OwnedFd) -> Result<Vec<u8>, ClipboardError> {
+    pipe::read(reader, Instant::now() + TRANSFER_TIMEOUT, MAX_TEXT).map_err(|error| match error {
+        PipeError::Timeout => {
+            tracing::debug!("a clipboard read timed out");
+            ClipboardError::Timeout
+        }
+        PipeError::TooLarge { .. } => {
+            tracing::warn!("a clipboard read past {MAX_TEXT} bytes was dropped");
+            ClipboardError::TooLarge
+        }
+        PipeError::Failed => ClipboardError::Unavailable,
+    })
+}
 
 /// The seats' clipboard: the loop's clipboard hook. See the module docs.
 pub(crate) struct SeatClipboard {
@@ -81,7 +98,7 @@ struct Shared {
     /// The primary selection, beside the clipboard on devices of its own.
     primary: OwnerCell<primary::Primary>,
     /// The `send`s being answered now.
-    writers: transfer::Writers,
+    writers: pipe::Writers,
 }
 
 #[derive(Default)]
@@ -143,7 +160,7 @@ impl SeatClipboard {
             devices: devices.clone(),
             last_input,
             primary: OwnerCell::new(),
-            writers: transfer::Writers::default(),
+            writers: pipe::Writers::new(MAX_WRITERS),
         });
         let listener: Weak<Shared> = Arc::downgrade(&shared);
         devices.listen(listener);
@@ -290,8 +307,7 @@ impl NativeClipboard for SeatClipboard {
                 let spawned = std::thread::Builder::new()
                     .name("flui-wayland-clipboard".to_owned())
                     .spawn(move || {
-                        let text = transfer::read(reader, Instant::now() + TRANSFER_TIMEOUT)
-                            .and_then(|bytes| form.answer(bytes));
+                        let text = read_selection(reader).and_then(|bytes| form.answer(bytes));
                         let _ = answer.resolve(text);
                     });
                 // The closure, and the resolver in it, is dropped: the read
@@ -561,7 +577,7 @@ impl Dispatch<WlDataSource, SourceData> for WaylandState {
                 let spawned = std::thread::Builder::new()
                     .name("flui-wayland-clipboard".to_owned())
                     .spawn(move || {
-                        transfer::write(fd, &bytes, Instant::now() + TRANSFER_TIMEOUT);
+                        pipe::write(fd, &bytes, Instant::now() + TRANSFER_TIMEOUT);
                         drop(permit);
                     });
                 if let Err(error) = spawned {
@@ -644,191 +660,6 @@ impl Dispatch<WlCallback, SelectionCheck> for WaylandState {
                 target: "flui.clipboard.wayland",
                 "the compositor kept the selection set earlier under this input: the concealed \
                  write made since was not put on the clipboard"
-            );
-        }
-    }
-}
-
-pub(crate) mod transfer {
-    //! A selection's bytes through the pipe its reader and owner share,
-    //! bounded in time and size: what the threads of a read and a write run,
-    //! and how many writes run at once.
-
-    use std::os::fd::OwnedFd;
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
-    use rustix::event::{PollFd, PollFlags, Timespec, poll};
-    use rustix::io::Errno;
-    use web_time::Instant;
-
-    use flui_platform::ClipboardError;
-
-    use super::{MAX_TEXT, MAX_WRITERS};
-
-    /// The writes running now, at most [`MAX_WRITERS`].
-    #[derive(Debug, Default)]
-    pub(crate) struct Writers(Arc<AtomicUsize>);
-
-    /// One write's place among [`Writers`], given back when dropped.
-    #[derive(Debug)]
-    pub(crate) struct Permit(Arc<AtomicUsize>);
-
-    impl Writers {
-        /// A place for one more write; `None` while [`MAX_WRITERS`] run.
-        pub(crate) fn permit(&self) -> Option<Permit> {
-            self.0
-                .try_update(Ordering::AcqRel, Ordering::Acquire, |running| {
-                    (running < MAX_WRITERS).then_some(running + 1)
-                })
-                .ok()
-                .map(|_| Permit(Arc::clone(&self.0)))
-        }
-    }
-
-    impl Drop for Permit {
-        fn drop(&mut self) {
-            self.0.fetch_sub(1, Ordering::AcqRel);
-        }
-    }
-
-    /// Wait until `fd` is ready for `flags` or `deadline` passes; `false` on
-    /// the deadline or a failed poll.
-    fn ready(fd: &OwnedFd, flags: PollFlags, deadline: Instant) -> bool {
-        loop {
-            let left = deadline.saturating_duration_since(Instant::now());
-            if left.is_zero() {
-                return false;
-            }
-            let timeout = Timespec {
-                tv_sec: i64::try_from(left.as_secs()).unwrap_or(i64::MAX),
-                tv_nsec: left.subsec_nanos().into(),
-            };
-            let mut descriptors = [PollFd::new(fd, flags)];
-            match poll(&mut descriptors, Some(&timeout)) {
-                Ok(0) => return false,
-                Ok(_) => return true,
-                Err(Errno::INTR) => {}
-                Err(_) => return false,
-            }
-        }
-    }
-
-    /// Everything the owner writes to `reader` until it closes its end:
-    /// [`ClipboardError::Timeout`] when it is still writing at `deadline`,
-    /// [`ClipboardError::TooLarge`] past [`MAX_TEXT`], and
-    /// [`ClipboardError::Unavailable`] when the read fails.
-    pub(crate) fn read(reader: OwnedFd, deadline: Instant) -> Result<Vec<u8>, ClipboardError> {
-        let mut bytes = Vec::new();
-        let mut chunk = vec![0_u8; 64 * 1024];
-        loop {
-            if !ready(&reader, PollFlags::IN, deadline) {
-                tracing::debug!("a clipboard read timed out");
-                return Err(ClipboardError::Timeout);
-            }
-            match rustix::io::read(&reader, &mut chunk) {
-                Ok(0) => return Ok(bytes),
-                Ok(count) => {
-                    if bytes.len() + count > MAX_TEXT {
-                        tracing::warn!("a clipboard read past {MAX_TEXT} bytes was dropped");
-                        return Err(ClipboardError::TooLarge);
-                    }
-                    bytes.extend_from_slice(&chunk[..count]);
-                }
-                Err(Errno::INTR | Errno::AGAIN) => {}
-                Err(error) => {
-                    tracing::debug!(%error, "a clipboard read failed");
-                    return Err(ClipboardError::Unavailable);
-                }
-            }
-        }
-    }
-
-    /// Write `bytes` to `writer` and close it; stop at `deadline` or when the
-    /// reader closed its end.
-    pub(crate) fn write(writer: OwnedFd, bytes: &[u8], deadline: Instant) {
-        // A full pipe answers `AGAIN` instead of holding the thread past its
-        // deadline.
-        if let Err(error) = rustix::fs::fcntl_setfl(&writer, rustix::fs::OFlags::NONBLOCK) {
-            tracing::debug!(%error, "a clipboard write could not be made non-blocking");
-            return;
-        }
-        let mut left = bytes;
-        while !left.is_empty() {
-            if !ready(&writer, PollFlags::OUT, deadline) {
-                tracing::debug!("a clipboard write timed out");
-                return;
-            }
-            // A reader gone answers `PIPE`: Rust's runtime ignores
-            // `SIGPIPE`, so the write fails instead of ending the process.
-            match rustix::io::write(&writer, left) {
-                Ok(count) => left = &left[count..],
-                Err(Errno::INTR | Errno::AGAIN) => {}
-                Err(error) => {
-                    tracing::debug!(%error, "a clipboard write ended early");
-                    return;
-                }
-            }
-        }
-    }
-
-    #[cfg(test)]
-    mod tests {
-        use std::time::Duration;
-
-        use super::*;
-
-        /// At most [`MAX_WRITERS`] writes run at once; each that ends gives
-        /// its place to the next.
-        #[test]
-        fn writes_past_the_limit_wait_for_a_place() {
-            let writers = Writers::default();
-            let mut held: Vec<Permit> = (0..MAX_WRITERS)
-                .map(|_| writers.permit().expect("a place below the limit"))
-                .collect();
-            assert!(writers.permit().is_none(), "the limit is full");
-            drop(held.pop().expect("a held place"));
-            assert_eq!(held.len(), MAX_WRITERS - 1);
-            assert!(writers.permit().is_some(), "an ended write frees its place");
-        }
-
-        fn pipe() -> (OwnedFd, OwnedFd) {
-            rustix::pipe::pipe_with(rustix::pipe::PipeFlags::CLOEXEC).expect("a pipe")
-        }
-
-        /// What one end writes the other reads whole, past the pipe's own
-        /// buffer, once the writer closes its end.
-        #[test]
-        fn a_selection_crosses_the_pipe_whole() {
-            let (reader, writer) = pipe();
-            let text = "selection ".repeat(100_000).into_bytes();
-            let sent = text.clone();
-            let deadline = Instant::now() + Duration::from_secs(5);
-            let writing = std::thread::spawn(move || write(writer, &sent, deadline));
-            assert_eq!(read(reader, deadline), Ok(text));
-            writing.join().expect("the writer ends");
-        }
-
-        /// An owner that never closes its end answers nothing once the
-        /// deadline passes; a reader gone ends the write at once.
-        #[test]
-        fn a_transfer_ends_at_its_deadline_or_its_peer() {
-            let (reader, writer) = pipe();
-            let started = Instant::now();
-            assert_eq!(
-                read(reader, started + Duration::from_millis(50)),
-                Err(ClipboardError::Timeout)
-            );
-            assert!(started.elapsed() < Duration::from_secs(2));
-            drop(writer);
-
-            let (reader, writer) = pipe();
-            drop(reader);
-            let started = Instant::now();
-            write(writer, b"nobody reads", started + Duration::from_secs(5));
-            assert!(
-                started.elapsed() < Duration::from_secs(2),
-                "a closed reader ends the write before its deadline"
             );
         }
     }

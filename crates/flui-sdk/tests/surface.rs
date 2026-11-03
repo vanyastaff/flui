@@ -277,7 +277,8 @@ mod measured {
     };
     use flui_sdk::widgets::{
         Reorder as _, ReorderCause as _, ReorderHandles as _, ReorderIntent as _,
-        ReorderPreview as _, ReorderableItem as _, ReorderableList as _, ReorderableListState as _,
+        ReorderPreview as _, ReorderableGrid as _, ReorderableGridState as _, ReorderableItem as _,
+        ReorderableList as _, ReorderableListState as _,
     };
     use flui_sdk::{
         geometry::{
