@@ -124,17 +124,21 @@ The root `clippy.toml` sets `allow-unwrap-in-tests = true` and
 modules are exempt automatically. No crate opts out.
 
 `expect()` is deliberately **not** linted (`expect_used` stays off): with the
-`BUG:` convention it is the sanctioned invariant idiom, and the review bar is
-the message, not the call. `panic!()` is held to the same bar: its message
+`BUG:` convention it is the sanctioned invariant idiom, and the bar is the
+message, not the call. `panic!()` is held to the same bar: its message
 starts with `BUG: ` (an invariant) or names the `try_` twin it is the
-convenience form of. Audit them with:
+convenience form of.
 
-```bash
-rg '\.expect\("(?!BUG: )' crates/*/src --pcre2   # expects missing the convention
-rg 'panic!\("(?!BUG: )(?!.*try_)' crates/*/src --pcre2   # panics that are neither BUG: nor a twin
-rg '\.unwrap\(\)' crates/*/src                   # should be test-only or allow-tracked
-```
+`cargo xtask panic-messages` (part of `cargo xtask checks`) holds that bar.
+It reads the syntax tree of every workspace member's library and bin
+targets, leaves out what the table above lets panic freely (`#[test]` and
+`cfg(test)` code, test support under `feature = "testing"`, the
+`flui-testing` crate, examples and `tools/`), and counts per file each
+`.expect(…)` and `panic!(…)` whose message is not a literal starting with
+`BUG: ` or naming a `try_` form. The counts in
+`tools/xtask/allowlists/panic-messages.toml` are exact and only go down: a
+new unnamed message fails the gate, and so does a fixed one whose count was
+not lowered. Sites inside another macro's arguments are out of its reach.
 
-`unwrap_used` is the only mechanical part. The `BUG:` prefix on `expect()`
-and the `BUG:`-or-`try_`-twin bar on `panic!()` are conventions that review
-holds, with the searches above as the audit.
+`unwrap_used` and the gate above are the mechanical parts. `rg '\.unwrap\(\)'
+crates/*/src` remains the audit for unwraps outside clippy's reach.

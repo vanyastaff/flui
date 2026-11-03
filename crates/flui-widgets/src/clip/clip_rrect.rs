@@ -5,7 +5,7 @@ use flui_objects::RenderClipRRect;
 use flui_painting::paint::Clip;
 use flui_painting::styling::BorderRadius;
 use flui_rendering::protocol::BoxProtocol;
-use flui_view::{Child, IntoView, RenderView, impl_render_view};
+use flui_view::{Child, CreationSite, IntoView, RenderView, impl_render_view};
 
 /// Clips its child to a rounded rectangle whose corners follow `border_radius`.
 ///
@@ -18,10 +18,18 @@ pub struct ClipRRect {
     border_radius: BorderRadius,
     clip_behavior: Clip,
     child: Child,
+    site: CreationSite,
 }
 
 impl Default for ClipRRect {
     fn default() -> Self {
+        // A trait fn cannot be `#[track_caller]`: the site is this line.
+        Self::at(CreationSite::here())
+    }
+}
+
+impl ClipRRect {
+    fn at(site: CreationSite) -> Self {
         Self {
             border_radius: BorderRadius {
                 top_left: Radius::ZERO,
@@ -31,19 +39,20 @@ impl Default for ClipRRect {
             },
             clip_behavior: Clip::AntiAlias,
             child: Child::empty(),
+            site,
         }
     }
-}
 
-impl ClipRRect {
     /// A rounded-rect clip with zero radius (a sharp rect) and the default
     /// `AntiAlias` behavior — chain [`border_radius`](Self::border_radius) to
     /// round the corners.
+    #[track_caller]
     pub fn new() -> Self {
-        Self::default()
+        Self::at(CreationSite::here())
     }
 
     /// A rounded-rect clip with the same circular `radius` on all four corners.
+    #[track_caller]
     pub fn circular(radius: f64) -> Self {
         Self::new().border_radius(BorderRadius {
             top_left: Radius::circular(radius),
@@ -105,4 +114,4 @@ impl RenderView for ClipRRect {
     flui_view::single_child_view_children!();
 }
 
-impl_render_view!(ClipRRect);
+impl_render_view!(ClipRRect, site = site);

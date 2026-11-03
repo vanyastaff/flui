@@ -3,7 +3,7 @@
 use flui_objects::{DecorationPosition, RenderDecoratedBox};
 use flui_painting::styling::BoxDecoration;
 use flui_rendering::protocol::BoxProtocol;
-use flui_view::{Child, IntoView, RenderView, impl_render_view};
+use flui_view::{Child, CreationSite, IntoView, RenderView, impl_render_view};
 
 /// Paints a [`BoxDecoration`] (color, border, gradient, shadow, …) before or
 /// after painting its child.
@@ -15,15 +15,18 @@ pub struct DecoratedBox {
     decoration: BoxDecoration<f64>,
     position: DecorationPosition,
     child: Child,
+    site: CreationSite,
 }
 
 impl DecoratedBox {
     /// Paint `decoration` behind the child (the common case).
+    #[track_caller]
     pub fn new(decoration: BoxDecoration<f64>) -> Self {
         Self {
             decoration,
             position: DecorationPosition::Background,
             child: Child::empty(),
+            site: CreationSite::here(),
         }
     }
 
@@ -67,4 +70,4 @@ impl RenderView for DecoratedBox {
     flui_view::single_child_view_children!();
 }
 
-impl_render_view!(DecoratedBox);
+impl_render_view!(DecoratedBox, site = site);
