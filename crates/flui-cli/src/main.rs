@@ -47,6 +47,7 @@ mod app_id;
 mod build;
 mod commands;
 mod config;
+mod declarations;
 mod error;
 mod proc;
 mod runner;

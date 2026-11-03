@@ -982,6 +982,16 @@ targets = [
     { target = "wasm32-unknown-unknown" },
 ]
 
+# What the core's hosts need from the application's manifests (ADR-0307).
+[package.metadata.flui.declares]
+schema = 1
+
+# Haptic patterns play on the Vibrator, which needs this install-time
+# permission; semantic feedback goes through the view without it
+# (`haptics::android`).
+[package.metadata.flui.declares.android]
+permissions = ["android.permission.VIBRATE"]
+
 # A window's tree read back by a real AT-SPI client on an accessibility bus of
 # its own: its own harness, because it starts an X server, a session bus and
 # the accessibility bus and names them for the process before anything

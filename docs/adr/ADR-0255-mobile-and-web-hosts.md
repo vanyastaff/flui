@@ -62,7 +62,7 @@ as the escalation, to take "when FLUI needs a callback only a manifest-declared 
 That need is now the owner's list.
 The manifest and the packager are behind the framework as well: the template declares three of
 the eleven `configChanges` values Flutter's declares
-(`crates/flui-cli/templates/platforms/android/AndroidManifest.xml:5-22`;
+(`crates/flui-cli/templates/android/AndroidManifest.xml`;
 [flutter/flutter@6597889f57
 packages/flutter_tools/templates/app/android.tmpl/app/src/main/AndroidManifest.xml.tmpl:12](https://github.com/flutter/flutter/blob/6597889f57/packages/flutter_tools/templates/app/android.tmpl/app/src/main/AndroidManifest.xml.tmpl#L12)), and
 an Activity the system recreates is a new `android_main` and a whole new Rust runtime
@@ -418,7 +418,7 @@ text-input paths its platform requires.
 
   | Piece | Change |
   |---|---|
-  | `crates/flui-cli/templates/platforms/android/AndroidManifest.xml` | Becomes the generated manifest of decision 6 |
+  | `crates/flui-cli/templates/android/AndroidManifest.xml` | The base of the generated manifest of decision 6, which `flui build` writes with the crates' declarations (ADR-0307) |
   | `crates/flui-cli/src/build/android_package.rs` | Adds `classes.dex` as a zip entry; `targetSdk` from `platform-support.toml`; stops describing the path as `hasCode="false"` |
   | `crates/flui-cli/templates/platforms/android/build.gradle.kts` | Host sources through a generated directory or `sourceSets`; keep rules; the `proguard-rules.pro` it names but the template set lacks |
   | `crates/flui-native/src/owner/android/java_view.rs` | Class loading through the Activity's loader; the in-memory and file loaders deleted; the protocol check |
