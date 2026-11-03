@@ -232,6 +232,10 @@ impl UiRuntime {
         // An anchor an earlier turn owes runs before this frame builds. The
         // frame runs even when it fails: that failure came first, and is
         // raised once the frame is done.
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: the owed anchor runs contained so the frame still runs"
+        )]
         let paid = catch_unwind(AssertUnwindSafe(|| {
             self.enter(UiRuntime::pay_owed_anchor);
         }))
@@ -257,6 +261,10 @@ impl UiRuntime {
             );
         let mut frame_time = None;
         let mut geometry_turn = None;
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: the frame's turn runs contained so the geometry turn is closed"
+        )]
         let outcome = catch_unwind(AssertUnwindSafe(|| {
             self.enter(|ui_runtime| {
                 // Begin, draw and end frame run as the ui_runtime's text-store
@@ -329,6 +337,10 @@ impl UiRuntime {
         self.begin_recorded_input();
         self.deliver_input_records();
         let mut turn = None;
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: the pump's turn runs contained so the geometry turn is closed"
+        )]
         let outcome = catch_unwind(AssertUnwindSafe(|| {
             self.enter(|ui_runtime| {
                 ui_runtime
@@ -360,7 +372,15 @@ impl UiRuntime {
         let turn = self.begin_geometry_turn();
         // The owed anchor first; the inbox drains even if it fails, so the
         // bounded inbox never fills behind a failing grant.
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: the owed anchor runs contained so the inbox still drains"
+        )]
         let mut first = catch_unwind(AssertUnwindSafe(|| self.pay_owed_anchor())).err();
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: the inbox drains contained even when the owed anchor failed"
+        )]
         let drained = catch_unwind(AssertUnwindSafe(|| {
             let report = self.drain_commands();
             if report != DrainReport::default() {
@@ -395,6 +415,10 @@ impl UiRuntime {
         if !self.owes_anchor() {
             return outcome;
         }
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: the redraw wake runs contained so the turn's outcome is kept"
+        )]
         let woke = catch_unwind(AssertUnwindSafe(|| self.request_redraw())).err();
         match outcome {
             Ok(value) => woke.map_or(Ok(value), Err),
@@ -427,6 +451,10 @@ impl UiRuntime {
             crate::owner::RecoveryState::Healthy
         };
         let outer_turn_finished = self.geometry_turn.borrow().is_none();
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: deadline refresh runs contained so the pump finishes its turn"
+        )]
         let refresh = catch_unwind(AssertUnwindSafe(|| {
             match deadlines {
                 // An inbox drain can precede its enclosing frame's sampling.
@@ -450,6 +478,10 @@ impl UiRuntime {
         // An inbox drain can run inside a larger pump/background transaction.
         // Its reports wait for that enclosing turn as well as any owner lease.
         if outer_turn_finished {
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "ADR-0287: sampling reports deliver contained after the enclosing turn"
+            )]
             let delivery = catch_unwind(AssertUnwindSafe(|| {
                 self.deliver_sampling_reports_if_unleased();
             }))

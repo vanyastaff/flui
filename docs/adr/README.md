@@ -99,13 +99,29 @@ decision should be revisited, say what would trigger it. -->
 - **One decision per ADR** where the decision stands alone. A boundary ADR may hold the numbered
   decisions that define both sides of the boundary; a later ADR supersedes one section, not the
   file.
-- **Status is a fact about the code.** `Proposed` until the owner accepts it; `Accepted (date)`
-  once the decision is the rule, with a "Not implemented: …" clause while the code catches up;
-  code that disagrees with an accepted ADR is a defect in one of them (`AGENTS.md`, "ADR Policy").
-  `Deprecated` when the decision is withdrawn without a replacement. A replaced decision gets
-  `Superseded-by:` in its header and keeps its text: git keeps history, the ADR keeps the reasoning.
+- **Status is one word and a date.** `Proposed` until the owner accepts it; `Accepted (date)`
+  once the decision is the rule; `Deprecated (date)` when it is withdrawn without a replacement.
+  A replaced decision gets `Superseded-by:` in its header and keeps its text: git keeps history,
+  the ADR keeps the reasoning. Code that disagrees with an accepted ADR is a defect in one of them
+  (`AGENTS.md`, "ADR Policy"). Whether the code is built yet is not status: it is a
+  `docs/gaps.md` entry that names `ADR-NNNN §k`, and a "Not implemented" clause in the record is
+  only a link to that entry, which the PR that builds the section removes.
+- **The header keys are the template's.** `Status`, `Date`, `Supersedes`, `Superseded-by`,
+  `Related`, `Revised`, `Sources`, nothing else. `Supersedes` and `Superseded-by` are written in
+  pairs, one on each record.
 - **Supersede explicitly and narrowly.** Name the section and the clause. "Supersedes ADR-0082"
-  without a section retires decisions the author never read.
+  without a section retires decisions the author never read. A `Proposed` record supersedes
+  nothing: the pair of links is written when it is accepted, never as "(on acceptance)".
+- **A reversal reaches every record of the old rule.** Before the PR that reverses a rule merges,
+  `rg` its terms across `docs/adr/`, each crate's `ARCHITECTURE.md`, `docs/plans/specs/` and
+  `docs/`; every record that still prescribes the old rule gets `Superseded-by:` for that section
+  or is rewritten in the same PR. A reversal that names six records and leaves eleven teaching
+  the old rule is a defect, and the next change copies the old rule.
+- **Rewrite, don't stack.** A record that changes is rewritten so its body states the current
+  decision, with a `Revised:` line saying what changed. An amendment line over an unchanged body
+  leaves the reader to apply the patch. When a topic has gathered several partial supersessions,
+  the next change to it writes one ADR that states the whole current rule and supersedes the
+  chain.
 - **Rust shapes, not conventions.** A decision that can be a type, a bound, a sealed trait, an
   error enum or a gate is written as that; a decision that can only be a convention says which
   check (lint, `xtask` gate, test) makes the convention fail loudly.

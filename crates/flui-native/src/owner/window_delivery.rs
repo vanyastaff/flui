@@ -534,6 +534,10 @@ impl WindowDelivery {
             let Some(delivery) = drain.next() else {
                 return input_result;
             };
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "ADR-0287: a handler's panic stops the drain but the queued tail is delivered"
+            )]
             let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 self.deliver(delivery, &mut input_result);
             }));

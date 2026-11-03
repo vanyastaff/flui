@@ -54,6 +54,13 @@
 //! let _themed = Theme::new(ThemeData::dark(), SizedBox::shrink());
 //! ```
 
+#![cfg_attr(
+    test,
+    allow(
+        clippy::disallowed_methods,
+        reason = "test code catches a panic to assert on it (ADR-0303 §5)"
+    )
+)]
 #![deny(missing_docs)]
 
 pub mod animated_icons;

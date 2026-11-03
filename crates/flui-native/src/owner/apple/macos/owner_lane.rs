@@ -160,6 +160,7 @@ pub(crate) fn exec_on_owner<R: Send>(
         let result = owner.exec_sync(move || {
             os_entry("the owner lane", (), AfterPanic::Abort, move || {
                 let _guard = OnOwnerQueueGuard::new(owner);
+                #[expect(clippy::disallowed_methods, reason = "ADR-0287: the closure's panic is replayed on the caller after exec_sync returns")]
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(f))
             })
         });
@@ -239,6 +240,10 @@ pub(crate) fn exec_after_on_owner(
 /// Answers whether `body` ran to its end, for a step whose failure changes
 /// what the next one may do.
 pub(crate) fn run_cleanup_guarded(body: impl FnOnce()) -> bool {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "ADR-0287: each cleanup step runs contained so the remaining steps still run"
+    )]
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(body)) {
         Ok(()) => true,
         Err(payload) => {
@@ -253,6 +258,10 @@ pub(super) fn report_contained_panic(payload: Box<dyn std::any::Any + Send>) {
     // also panics during teardown; both payloads are destroyed under
     // containment (ADR-0281).
     flui_foundation::panic::discard_payload(payload);
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "ADR-0287: a diagnostic subscriber's panic is discarded during teardown"
+    )]
     if let Err(payload) = std::panic::catch_unwind(|| {
         tracing::error!("contained panic in AppKit lifecycle callback or cleanup");
     }) {

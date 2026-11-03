@@ -305,7 +305,6 @@ impl AndroidLoop {
         let java_view = java_view::JavaView::start(
             app.clone(),
             Arc::downgrade(&owner_signal),
-            api,
             H::input_method(),
             H::transfer,
         );

@@ -122,6 +122,13 @@
 //! - Change notifiers use efficient listener storage
 //! - Atomic flags provide lock-free state management
 
+#![cfg_attr(
+    test,
+    allow(
+        clippy::disallowed_methods,
+        reason = "test code catches a panic to assert on it (ADR-0303 §5)"
+    )
+)]
 // Ship bar (wave 1): every public item is documented; keep it that way.
 #![deny(missing_docs)]
 // A library that prints owns a terminal it was never given; report through

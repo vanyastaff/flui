@@ -169,6 +169,10 @@ pub(crate) fn ask_contained(
 ) -> SystemFallback {
     use std::panic::{AssertUnwindSafe, catch_unwind};
 
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "ADR-0287: a system fallback query's panic is logged and answers no fallback"
+    )]
     match catch_unwind(AssertUnwindSafe(|| ask(locale))) {
         Ok(answer) => answer,
         Err(payload) => {

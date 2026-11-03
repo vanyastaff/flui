@@ -12,6 +12,10 @@ use std::{
 };
 
 pub(super) fn contain(body: impl FnOnce()) {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "ADR-0287: a session body's panic is discarded so the controller keeps running"
+    )]
     if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(body)) {
         flui_foundation::panic::discard_payload(payload);
     }

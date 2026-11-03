@@ -151,9 +151,17 @@ fn end_process(entry: &'static str, args: Option<&dyn std::fmt::Debug>, why: &'s
 /// Contain owner callback and capture cleanup panics; the panic is logged with
 /// its text and its payload destroyed under containment (ADR-0281).
 pub(crate) fn contain_owner_callback(body: impl FnOnce()) {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the one OS entry boundary of flui-native (ADR-0151 §16)"
+    )]
     let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(body)) else {
         return;
     };
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the one OS entry boundary of flui-native (ADR-0151 §16)"
+    )]
     if let Err(secondary) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         tracing::error!(
             panic = flui_foundation::panic::payload_text(&*payload),
@@ -195,6 +203,10 @@ fn contained<R>(
     args: Option<&dyn std::fmt::Debug>,
     body: impl FnOnce() -> R,
 ) -> Option<R> {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the one OS entry boundary of flui-native (ADR-0151 §16)"
+    )]
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(body)) {
         Ok(value) => Some(value),
         Err(payload) => {

@@ -1,6 +1,10 @@
 //! Async dispatch tests for the `Image` widget's image loads (`asset-images`
 //! feature): a retired provider's late completion cannot replace the current
 //! image, and unmounting the widget cancels its in-flight load.
+#![allow(
+    clippy::disallowed_methods,
+    reason = "test code catches a panic to assert on it (ADR-0303 §5)"
+)]
 #![cfg(feature = "asset-images")]
 
 mod common;

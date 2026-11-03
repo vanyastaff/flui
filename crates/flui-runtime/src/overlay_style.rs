@@ -50,6 +50,10 @@ impl OverlayStyleCoalescer {
             // style is a no-op; a panic restores the previous delivery, and the
             // next accepted frame with this style tries again.
             let previous = self.delivered.replace(Some(style));
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "ADR-0287: a chrome's set_overlay_style panic restores the previous delivery"
+            )]
             if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 chrome.set_overlay_style(style);
             })) {

@@ -359,7 +359,15 @@ fn submit_and_track<T>(
 ) -> Result<T, DomainError> {
     let submitted = ledger.submission()?;
     let hold = CompletionHold::new(permits, Some(submitted), metadata, None, external_leases);
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "ADR-0287: submit runs embedder code; its panic still quarantines the hold"
+    )]
     let result = catch_unwind(AssertUnwindSafe(submit));
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "ADR-0287: register runs owner code; its panic still quarantines the hold"
+    )]
     let registration = catch_unwind(AssertUnwindSafe(|| register(Arc::clone(&hold))));
     if result.is_err() || registration.is_err() {
         quarantine(ledger, holds, hold);
@@ -600,6 +608,10 @@ impl DeviceDomain {
         };
         let hold = CompletionHold::new(permits, None, None, retirement, external_leases);
         let callback = Arc::clone(&hold);
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: the queue hook runs contained so the hold is quarantined, not leaked"
+        )]
         if let Err(payload) = catch_unwind(AssertUnwindSafe(|| {
             self.queue
                 .on_submitted_work_done(move || callback.complete());
@@ -616,6 +628,10 @@ impl DeviceDomain {
 // A final poll can invoke trusted embedder callbacks. Drop must not start a
 // second unwind; the payload is destroyed under containment (ADR-0281).
 fn contain_final_progress(progress: impl FnOnce()) {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "ADR-0287: a final poll's embedder callbacks run contained so Drop never unwinds"
+    )]
     if let Err(payload) = catch_unwind(AssertUnwindSafe(progress)) {
         flui_foundation::panic::discard_payload(payload);
     }

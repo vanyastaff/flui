@@ -12,6 +12,10 @@
 //! (flui-cli currently has none; see flui-view's error_view_recovery
 //! for the reference case.)
 
+#![allow(
+    clippy::disallowed_methods,
+    reason = "test code catches a panic to assert on it (ADR-0303 §5)"
+)]
 #[path = "cli_add.rs"]
 mod cli_add;
 #[path = "cli_agent.rs"]

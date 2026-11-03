@@ -43,6 +43,10 @@ impl<'de, T: serde::Deserialize<'de>> serde::Deserialize<'de> for DecodedCurve<T
 #[cfg(feature = "serde")]
 impl<T> Drop for DecodedCurve<T> {
     fn drop(&mut self) {
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: a curve's drop runs contained so deserialization cleanup survives"
+        )]
         if let Some(curve) = self.0.take()
             && let Err(payload) =
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || drop(curve)))

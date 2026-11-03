@@ -1,8 +1,10 @@
 # ADR-0255: How Android, iOS and the Web host FLUI
 
-- **Status:** Accepted (2026-10-20). Not implemented: the code changes land as separate PRs after
-  this ADR, and a platform's row in `docs/platform-parity.md` moves only after a run on that
-  platform (Confirmation).
+- **Status:** Accepted (2026-10-20). Implemented in part: Android decisions 1, 4, 5 and 7, and of
+  decision 6 the Activity, `hasCode`, `singleTop`, the back flag and `configChanges` (the dex is a
+  declaration of `flui-native`, ADR-0307 version 2; the handshake is
+  `owner::android::java_host`). The rest lands as separate PRs, and a platform's row in
+  `docs/platform-parity.md` moves only after a run on that platform (Confirmation).
 - **Date:** 2026-10-20
 - **Amended:** 2026-11-03 — decision 9 matches the platform: `InputLatency::Low` on Android does
   not need a Java touch path, since `ViewRootImpl` batches ahead of the native input queue and
@@ -482,6 +484,11 @@ Linux CI runs the parts that need no device: the generated manifest carries the 
 attributes, the packager adds the dex and uses the pinned `targetSdk`, `xtask platform-floor`
 agrees with `platform-support.toml` for the new key, and the protocol check rejects a mismatch
 before any native is bound. The support claim for a platform is the run.
+The tests that do so: `android_manifest::tests::the_base_names_flui_activity_with_the_code_it_needs`,
+`android_package::tests::libraries_and_dex_files_are_appended_where_the_platform_reads_them`,
+`gradle_project::tests::gradle_compiles_the_java_sources_the_crates_declare` (`flui-cli`) and
+`owner::android::java_host::tests::the_java_classes_state_the_protocol_of_the_library` and
+`the_platform_starts_only_over_its_own_java_classes` (`flui-native`).
 
 - `cargo xtask android-dex`, extended to every `build.rs` (ADR-0154), fails a build script that
   names `javac`, `d8` or `swiftc` (decision 21); a generated project file that differs from the

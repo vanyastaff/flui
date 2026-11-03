@@ -109,7 +109,10 @@ impl HostPlatform<Android> {
     /// # Errors
     ///
     /// [`PlatformError::UnsupportedOs`] on an API level below FLUI's floor,
-    /// as a second line behind `minSdk` (ADR-0244 §3).
+    /// as a second line behind `minSdk` (ADR-0244 §3);
+    /// [`PlatformError::HostProtocol`] and [`PlatformError::Init`] when the
+    /// APK's Java classes are another FLUI version's, missing, or not under a
+    /// `FluiActivity` (ADR-0255 decision 5).
     pub(crate) fn try_new(app: AndroidApp) -> Result<Self, PlatformError> {
         // Opened once and kept for the platform's life by the loop.
         let library: Arc<dyn SymbolSource> = Arc::new(LoadedLibraries::open());
@@ -121,6 +124,7 @@ impl HostPlatform<Android> {
         });
         tracing::info!(api = %api, "Android API level");
         crate::version::gate::refuse_below_floor(api)?;
+        crate::owner::android::java_host::verify(&app)?;
         Ok(Self::from_parts(
             |positions| positions,
             |_| AndroidLoop::new::<Android>(app, library, api),

@@ -275,6 +275,10 @@ fn run(
     mut session: Box<dyn Session>,
     stop: &OwnedFd,
 ) {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "ADR-0287: a session panic ends the display thread and reports the loss"
+    )]
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         loop {
             match session.step(stop.as_fd()) {

@@ -72,6 +72,10 @@ impl HeadlessRun {
         let exit_reevaluation = platform.exit_reevaluation();
         let teardown = Rc::new(RefCell::new(Vec::new()));
         let renderers = StandInRenderers::default();
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: the kit reports a start's panic as a failed start"
+        )]
         let started = catch_unwind(AssertUnwindSafe(|| {
             start_loop(
                 application,
@@ -178,6 +182,10 @@ impl HeadlessRunHandle {
     ///
     /// What [`Application::run`] returns for the same run.
     pub fn join(self) -> Result<ExitReport, AppRunError> {
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: the kit reports a run's panic as its exit"
+        )]
         let exit = match self.state {
             Started::Running(started) => {
                 match catch_unwind(AssertUnwindSafe(|| started.finish())) {

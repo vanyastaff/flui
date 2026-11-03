@@ -100,6 +100,10 @@ impl DataTransferSource for DragDouble {
         };
         // A source's failure is contained as the OS contains it: the target
         // sees the transfer fail, and the provider stays for its next request.
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: a source's panic fails the transfer and the provider stays"
+        )]
         let served =
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| serve(representation)));
         if let Err(displaced) = provider.restore(serve) {

@@ -1110,6 +1110,10 @@ impl HeadlessHost {
         let Self {
             ui_runtime, sink, ..
         } = self;
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: the kit keeps a pump's panic to settle failures before resuming"
+        )]
         let attempt = catch_unwind(AssertUnwindSafe(|| ui_runtime.pump(&mut frame_clock, sink)));
         let first_failure = {
             let mut failures = self.failures.lock();
@@ -1173,9 +1177,17 @@ impl HeadlessHost {
         input: PlatformInput,
     ) {
         self.ui_runtime.enter(|ui_runtime| {
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "ADR-0287: the kit keeps the input panic so the flush still runs"
+            )]
             let delivered = catch_unwind(AssertUnwindSafe(|| {
                 ui_runtime.handle_input_on(presentation, surface, input);
             }));
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "ADR-0287: the kit keeps the flush panic so later input steps still run"
+            )]
             let flushed = catch_unwind(AssertUnwindSafe(|| {
                 if !ui_runtime.gestures().is_resampling_enabled() {
                     ui_runtime.gestures().flush_pending_moves();

@@ -649,6 +649,10 @@ impl WidgetsBinding {
         observer: std::sync::Arc<dyn flui_foundation::observe::TreeObserver>,
     ) {
         let mut inner = self.inner.write();
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: a tree observer's replay runs contained so install can abort"
+        )]
         let replay_ok = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             inner.element_tree.replay_mounts(&*observer);
         }))
@@ -889,6 +893,10 @@ impl WidgetsBinding {
                 // The host already owns the failure this close preserves.
                 crate::drop_contained(key);
             } else {
+                #[expect(
+                    clippy::disallowed_methods,
+                    reason = "ADR-0287: a closed key's drop runs contained; the first panic is kept"
+                )]
                 crate::lifecycle::preserve(
                     &mut first,
                     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(key))).err(),
@@ -1364,6 +1372,10 @@ impl WidgetsBinding {
     }
 
     pub(crate) fn notify_lifecycle(&self, state: AppLifecycleState) {
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: observer callbacks run contained; later observers still hear it"
+        )]
         let mut first = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let observers: Vec<BindingObserverOwner> = self.inner.read().observers.clone();
             for observer in &observers {
@@ -1371,6 +1383,10 @@ impl WidgetsBinding {
             }
         }))
         .err();
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: the lifecycle drain runs contained and keeps the first failure"
+        )]
         crate::lifecycle::preserve(
             &mut first,
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.lifecycle.drain())).err(),
