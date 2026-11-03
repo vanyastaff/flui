@@ -406,7 +406,9 @@ as in std.
 state and an `Outbox`, never the cell; `Outbox` has no public constructor. User
 code the change owes is queued there (`call`, `wake`, `release`) and runs after
 the borrow ends, in order, each item contained, the first panic resumed once
-every item ran. A mutation that panics runs none of its calls but still wakes
+every item ran. A call is an `FnMut` called at most once, so its captures are
+destroyed after it, contained, and never by its own unwind (ADR-0281 §3). A
+mutation that panics runs none of its calls but still wakes
 its wakers. `commit_into` does the same inside an operation's `PanicRecovery`.
 `panic::Obligation` claims an owed flag and sets it again unless the delivery
 discharges it. `TicketSource<K>` issues opaque `Ticket<K>`s from an `IdMint`
