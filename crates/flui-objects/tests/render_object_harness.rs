@@ -75,6 +75,7 @@
 //! | `RenderHitSlop` | `harness_hit_slop_*` | yes | yes | — | yes | — |
 //! | `RenderIgnorePointer` | `harness_ignore_pointer_*` | yes | yes | — | yes | — |
 //! | `RenderInputRegion` | `harness_input_regions*` | yes | yes | — | yes | input regions |
+//! | `RenderPressPassThrough` | `harness_press_pass_through_*`, `harness_input_regions_cut_*` | yes | yes | — | yes | input regions |
 //! | `RenderIgnoreBaseline` | `harness_ignore_baseline_*` | yes | yes | — | yes | baseline hidden |
 //! | `RenderListener` | `harness_listener_*` | yes | yes | — | yes | — |
 //! | `RenderMouseRegion` | `harness_mouse_region_*` | yes | yes | — | yes | cursor/annotation |
@@ -263,6 +264,7 @@ const RENDER_OBJECT_TYPES: &[&str] = &[
     "RenderContentShape",
     "RenderHitSlop",
     "RenderInputRegion",
+    "RenderPressPassThrough",
     "RenderIgnorePointer",
     "RenderIgnoreBaseline",
     "RenderListener",
@@ -2100,7 +2102,7 @@ fn harness_icon_pending_layout_withdraws_old_glyph_geometry() {
     let (owner, result) = run.owner_mut().take_idle().run_frame();
     *run.owner_mut() = owner;
     assert!(matches!(
-        result,
+        result.map_err(flui_foundation::TreeError::into_error),
         Err(flui_rendering::RenderError::TextPreparationPending(_))
     ));
     flui_rendering::testing::edit_render_object::<RenderIcon, _, _>(
@@ -8530,6 +8532,282 @@ fn harness_input_regions_follow_the_order_a_parent_paints_in() {
     assert_eq!(run.owner().input_regions(), vec![move_area, button]);
 }
 
+/// Under a move area a listener that takes presses is cut out of it as window content,
+/// in paint order after the area; a hover-only listener is not, nor is a press-taking one
+/// a pass-through wraps, until a move area below the pass-through starts again, nor one a
+/// caption button draws. A listener
+/// outside any move area reports nothing.
+fn harness_input_regions_cut_press_takers_out_of_a_move_area() {
+    use flui_rendering::input_regions::{CaptionButton, InputRegion, InputRegionKind};
+    let at = |left: f64, top: f64| StackParentData::new().with_top(top).with_left(left);
+    let listener = |claims: bool| {
+        let mut listener = RenderListener::new(None, HitTestBehavior::DeferToChild);
+        let _ = listener.set_claims_presses(claims);
+        box_node(listener).child(box_node(RenderColoredBox::green(20.0, 20.0)))
+    };
+    let bar = box_node(RenderInputRegion::new(InputRegionKind::WindowMove)).child(
+        box_node(RenderStack::new())
+            .child(box_node(RenderColoredBox::red(200.0, 32.0)))
+            .child(listener(true).with_stack_parent_data(at(10.0, 6.0)))
+            .child(listener(false).with_stack_parent_data(at(40.0, 6.0)))
+            .child(
+                box_node(RenderPressPassThrough::new())
+                    .child(listener(true))
+                    .with_stack_parent_data(at(70.0, 6.0)),
+            )
+            .child(
+                box_node(RenderPressPassThrough::new())
+                    .child(
+                        box_node(RenderInputRegion::new(InputRegionKind::WindowMove))
+                            .child(listener(true)),
+                    )
+                    .with_stack_parent_data(at(100.0, 6.0)),
+            )
+            .child(
+                box_node(RenderInputRegion::new(InputRegionKind::CaptionButton(
+                    CaptionButton::Close,
+                )))
+                .child(listener(true))
+                .with_stack_parent_data(at(170.0, 6.0)),
+            ),
+    );
+    let run = RenderTester::mount(
+        box_node(RenderStack::new())
+            .child(bar)
+            .child(listener(true).with_stack_parent_data(at(10.0, 100.0))),
+    )
+    .with_size(Size::new(200.0, 200.0))
+    .run_frame();
+
+    assert_eq!(
+        run.owner().input_regions(),
+        vec![
+            InputRegion::new(
+                InputRegionKind::WindowMove,
+                Rect::from_ltrb(0.0, 0.0, 200.0, 32.0)
+            ),
+            InputRegion::new(
+                InputRegionKind::WindowContent,
+                Rect::from_ltrb(10.0, 6.0, 30.0, 26.0)
+            ),
+            InputRegion::new(
+                InputRegionKind::WindowMove,
+                Rect::from_ltrb(100.0, 6.0, 120.0, 26.0)
+            ),
+            InputRegion::new(
+                InputRegionKind::WindowContent,
+                Rect::from_ltrb(100.0, 6.0, 120.0, 26.0)
+            ),
+            InputRegion::new(
+                InputRegionKind::CaptionButton(CaptionButton::Close),
+                Rect::from_ltrb(170.0, 6.0, 190.0, 26.0)
+            ),
+        ],
+    );
+
+    let mut listener = RenderListener::new(None, HitTestBehavior::DeferToChild);
+    assert_eq!(
+        listener.set_claims_presses(true),
+        flui_rendering::RenderUpdateImpact::PAINT
+    );
+    assert_eq!(
+        listener.set_claims_presses(true),
+        flui_rendering::RenderUpdateImpact::NONE
+    );
+    let mut pass_through = RenderPressPassThrough::new();
+    assert_eq!(
+        pass_through.set_enabled(false),
+        flui_rendering::RenderUpdateImpact::PAINT
+    );
+}
+
+/// A disabled pass-through lets the walk cut its press-taking listener out again.
+fn harness_press_pass_through_disabled_cuts_out_again() {
+    use flui_rendering::input_regions::{InputRegion, InputRegionKind};
+    let mut listener = RenderListener::new(None, HitTestBehavior::DeferToChild);
+    let _ = listener.set_claims_presses(true);
+    let mut pass_through = RenderPressPassThrough::new();
+    let _ = pass_through.set_enabled(false);
+    let run = RenderTester::mount(
+        box_node(RenderStack::new()).child(
+            box_node(RenderInputRegion::new(InputRegionKind::WindowMove)).child(
+                box_node(pass_through)
+                    .child(box_node(listener).child(box_node(RenderColoredBox::green(20.0, 20.0))))
+                    .label("pass_through"),
+            ),
+        ),
+    )
+    .with_size(Size::new(200.0, 200.0))
+    .run_frame();
+    assert_eq!(
+        run.box_geometry(run.id("pass_through")),
+        Size::new(20.0, 20.0)
+    );
+    assert_eq!(
+        run.owner().input_regions(),
+        vec![
+            InputRegion::new(
+                InputRegionKind::WindowMove,
+                Rect::from_ltrb(0.0, 0.0, 20.0, 20.0)
+            ),
+            InputRegion::new(
+                InputRegionKind::WindowContent,
+                Rect::from_ltrb(0.0, 0.0, 20.0, 20.0)
+            ),
+        ],
+    );
+    assert_descendant_properties(
+        &run.render_snapshot(),
+        "RenderPressPassThrough",
+        &["disabled"],
+    );
+}
+
+/// A press that reaches no press taker moves the window again: a pass-through inside a
+/// press-taking listener marks its own box a move area over the listener's cut-out, and a
+/// listener under an ignoring `IgnorePointer` is not cut out, until it stops ignoring.
+fn harness_input_regions_give_back_presses_no_press_taker_receives() {
+    use flui_rendering::input_regions::{InputRegion, InputRegionKind};
+    let at = |left: f64, top: f64| StackParentData::new().with_top(top).with_left(left);
+    let claiming = |child| {
+        let mut listener = RenderListener::new(None, HitTestBehavior::DeferToChild);
+        let _ = listener.set_claims_presses(true);
+        box_node(listener).child(child)
+    };
+    let button_with_handle = claiming(
+        box_node(RenderStack::new())
+            .child(box_node(RenderColoredBox::green(40.0, 20.0)))
+            .child(
+                box_node(RenderPressPassThrough::new())
+                    .child(box_node(RenderColoredBox::red(20.0, 20.0)))
+                    .with_stack_parent_data(at(20.0, 0.0)),
+            ),
+    );
+    let ignored = box_node(RenderIgnorePointer::new(true))
+        .child(claiming(box_node(RenderColoredBox::green(20.0, 20.0))))
+        .label("ignore");
+    let mut run = RenderTester::mount(
+        box_node(RenderStack::new()).child(
+            box_node(RenderInputRegion::new(InputRegionKind::WindowMove)).child(
+                box_node(RenderStack::new())
+                    .child(box_node(RenderColoredBox::red(200.0, 32.0)))
+                    .child(button_with_handle.with_stack_parent_data(at(10.0, 6.0)))
+                    .child(ignored.with_stack_parent_data(at(100.0, 6.0))),
+            ),
+        ),
+    )
+    .with_size(Size::new(200.0, 200.0))
+    .run_frame();
+    let bar = InputRegion::new(
+        InputRegionKind::WindowMove,
+        Rect::from_ltrb(0.0, 0.0, 200.0, 32.0),
+    );
+    let button = InputRegion::new(
+        InputRegionKind::WindowContent,
+        Rect::from_ltrb(10.0, 6.0, 50.0, 26.0),
+    );
+    let handle = InputRegion::new(
+        InputRegionKind::WindowMove,
+        Rect::from_ltrb(30.0, 6.0, 50.0, 26.0),
+    );
+    assert_eq!(run.owner().input_regions(), vec![bar, button, handle]);
+
+    let ignore = run.id("ignore");
+    run.update_paint::<RenderIgnorePointer>(ignore, |ignore| {
+        assert!(
+            ignore.set_ignoring(false).needs_paint(),
+            "the regions are collected on composited frames"
+        );
+    });
+    run.pump();
+    assert_eq!(
+        run.owner().input_regions(),
+        vec![
+            bar,
+            button,
+            handle,
+            InputRegion::new(
+                InputRegionKind::WindowContent,
+                Rect::from_ltrb(100.0, 6.0, 120.0, 26.0),
+            ),
+        ]
+    );
+}
+
+/// A routed link in a move area is cut out over its glyphs, as hit testing routes presses
+/// there to it; the rest of the paragraph moves the window, and an unrouted link does too.
+fn harness_input_regions_cut_routed_links_out_of_a_move_area() {
+    use flui_objects::{SemanticsActionRoute, TextLinkKey, TextLinkRoute};
+    use flui_rendering::input_regions::{InputRegion, InputRegionKind};
+    use flui_rendering::semantics::SemanticsActionHandler;
+    let lane = flui_interaction::InteractionLane::try_new().expect("interaction lane");
+    let route = lane.enter(|| {
+        let handle = lane.dispatch_handle();
+        let pointer = handle
+            .register_pointer(|_event| {})
+            .expect("register no-op pointer target");
+        let actions = handle
+            .register_local_payload(std::rc::Rc::new(()))
+            .expect("register no-op action table");
+        let handler: SemanticsActionHandler = std::rc::Rc::new(|_call| {});
+        TextLinkRoute::new(
+            TextLinkKey(1),
+            pointer,
+            SemanticsActionRoute::new(actions, handler),
+        )
+    });
+    let text =
+        TextSpan::new("drag ").with_child(TextSpan::new("link").with_link("https://flui.dev"));
+    let mut run = RenderTester::mount(
+        box_node(RenderStack::new()).child(
+            box_node(RenderInputRegion::new(InputRegionKind::WindowMove)).child(
+                box_node(RenderStack::new())
+                    .child(box_node(RenderColoredBox::red(200.0, 32.0)))
+                    .child(
+                        box_node(RenderParagraph::new(text, TextDirection::Ltr))
+                            .label("paragraph")
+                            .with_stack_parent_data(
+                                StackParentData::new().with_top(6.0).with_left(10.0),
+                            ),
+                    ),
+            ),
+        ),
+    )
+    .with_size(Size::new(200.0, 200.0))
+    .run_frame();
+    let bar = InputRegion::new(
+        InputRegionKind::WindowMove,
+        Rect::from_ltrb(0.0, 0.0, 200.0, 32.0),
+    );
+    assert_eq!(
+        run.owner().input_regions(),
+        vec![bar],
+        "an unrouted link moves the window"
+    );
+
+    let paragraph = run.id("paragraph");
+    let mut glyphs = None;
+    run.update_paint::<RenderParagraph>(paragraph, |paragraph| {
+        assert!(
+            paragraph.set_link_routes(vec![route]).needs_paint(),
+            "the regions are collected on composited frames"
+        );
+        glyphs = paragraph.link_bounds(0);
+    });
+    run.pump();
+    let glyphs = glyphs.expect("the link has glyphs");
+    assert!(glyphs.left() > 0.0, "the link starts after the plain text");
+    assert_eq!(
+        run.owner().input_regions(),
+        vec![
+            bar,
+            InputRegion::new(
+                InputRegionKind::WindowContent,
+                glyphs.translate_offset(Offset::new(10.0, 6.0)),
+            ),
+        ]
+    );
+}
 /// A region under a follower is reported at the follower's composite-resolved
 /// position (its leader's anchor), where it is painted and hit-tested, not at
 /// its tree-relative position.
@@ -14039,6 +14317,22 @@ fn family_pointer() {
             (
                 "input_regions_follow_the_order_a_parent_paints_in",
                 harness_input_regions_follow_the_order_a_parent_paints_in,
+            ),
+            (
+                "input_regions_cut_press_takers_out_of_a_move_area",
+                harness_input_regions_cut_press_takers_out_of_a_move_area,
+            ),
+            (
+                "press_pass_through_disabled_cuts_out_again",
+                harness_press_pass_through_disabled_cuts_out_again,
+            ),
+            (
+                "input_regions_give_back_presses_no_press_taker_receives",
+                harness_input_regions_give_back_presses_no_press_taker_receives,
+            ),
+            (
+                "input_regions_cut_routed_links_out_of_a_move_area",
+                harness_input_regions_cut_routed_links_out_of_a_move_area,
             ),
         ],
     );

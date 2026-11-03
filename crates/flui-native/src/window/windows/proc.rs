@@ -28,7 +28,7 @@ use windows::Win32::{
     Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM},
     Graphics::{
         Dwm::{DWMWA_CLOAKED, DwmGetWindowAttribute},
-        Gdi::{BeginPaint, ClientToScreen, EndPaint, PAINTSTRUCT},
+        Gdi::{BeginPaint, ClientToScreen, EndPaint, PAINTSTRUCT, ScreenToClient},
     },
     System::Threading::GetCurrentThreadId,
     UI::{
@@ -37,14 +37,15 @@ use windows::Win32::{
             CHILDID_SELF, DefWindowProcW, DestroyWindow, EVENT_OBJECT_CLOAKED,
             EVENT_OBJECT_UNCLOAKED, GWL_EXSTYLE, GWL_STYLE, GWLP_USERDATA, GetClientRect,
             GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId, HTCLIENT, IsIconic,
-            IsWindowVisible, IsZoomed, KillTimer, MINMAXINFO, OBJID_WINDOW, PostMessageW,
-            SC_KEYMENU, SC_RESTORE, SW_SHOW, SW_SHOWMAXIMIZED, SW_SHOWMINIMIZED, SWP_NOSIZE,
-            SendMessageW, SetTimer, SetWindowLongPtrW, WA_INACTIVE, WINDOWPOS,
+            IsWindowVisible, IsZoomed, KillTimer, MINMAXINFO, NCCALCSIZE_PARAMS, OBJID_WINDOW,
+            PostMessageW, SC_KEYMENU, SC_RESTORE, SW_SHOW, SW_SHOWMAXIMIZED, SW_SHOWMINIMIZED,
+            SWP_NOSIZE, SendMessageW, SetTimer, SetWindowLongPtrW, WA_INACTIVE, WINDOWPOS,
             WINEVENT_OUTOFCONTEXT, WM_ACTIVATE, WM_APP, WM_CLOSE, WM_CREATE, WM_DESTROY,
-            WM_DPICHANGED, WM_ERASEBKGND, WM_GETMINMAXINFO, WM_KILLFOCUS, WM_MOVE, WM_PAINT,
-            WM_SETCURSOR, WM_SETFOCUS, WM_SETTEXT, WM_SETTINGCHANGE, WM_SHOWWINDOW, WM_SIZE,
-            WM_STYLECHANGED, WM_SYSCOMMAND, WM_WINDOWPOSCHANGED, WM_WINDOWPOSCHANGING, WS_CAPTION,
-            WS_MAXIMIZE, WS_MAXIMIZEBOX, WS_MINIMIZE, WS_OVERLAPPEDWINDOW, WS_POPUP, WS_THICKFRAME,
+            WM_DPICHANGED, WM_ERASEBKGND, WM_GETMINMAXINFO, WM_KILLFOCUS, WM_MOVE, WM_NCCALCSIZE,
+            WM_NCHITTEST, WM_PAINT, WM_SETCURSOR, WM_SETFOCUS, WM_SETTEXT, WM_SETTINGCHANGE,
+            WM_SHOWWINDOW, WM_SIZE, WM_STYLECHANGED, WM_SYSCOMMAND, WM_WINDOWPOSCHANGED,
+            WM_WINDOWPOSCHANGING, WS_CAPTION, WS_MAXIMIZE, WS_MAXIMIZEBOX, WS_MINIMIZE,
+            WS_OVERLAPPEDWINDOW, WS_POPUP, WS_THICKFRAME,
         },
     },
 };
@@ -65,7 +66,7 @@ use crate::owner::windows::{
 };
 use crate::owner::windows::{get_x_lparam, get_y_lparam};
 use crate::window::config::WindowConfiguration;
-use crate::window::state::{ReportedFacts, WindowStateCell, mode_of, system_frame_or_none};
+use crate::window::state::{ReportedFacts, WindowStateCell, mode_of, reported_frame};
 
 /// Posted to a window nothing paints, so its frame still runs: a hidden window
 /// never receives `WM_PAINT`.
@@ -235,6 +236,14 @@ pub(crate) struct WindowContext {
     /// Whether the app wants the window resizable. A window without a frame
     /// cannot be, but gets the frame back with this still set.
     pub resizable: std::cell::Cell<bool>,
+    /// The frame the app asked for. `AppTitleBar` keeps the system's overlapped
+    /// style and drops the caption in `WM_NCCALCSIZE`; it and `None` answer
+    /// `WM_NCHITTEST` from [`Self::input_regions`].
+    pub(crate) frame: std::cell::Cell<flui_platform::WindowFrame>,
+    /// The device-pixel input regions the last composited frame handed the
+    /// window, which `WM_NCHITTEST` answers from without running framework
+    /// code (ADR-0286).
+    pub(crate) input_regions: std::cell::RefCell<crate::input::regions::ProjectedInputRegions>,
     /// How many multi-step changes are in flight; see
     /// [`Self::hold_publishing`].
     pub publish_hold: std::cell::Cell<u32>,
@@ -374,6 +383,12 @@ impl WindowContext {
             .outcome()
     }
 
+    /// Whether the application draws the window's title bar: the frame asked
+    /// for is `AppTitleBar`, whose caption `WM_NCCALCSIZE` drops.
+    pub(crate) fn draws_app_title_bar(&self) -> bool {
+        matches!(self.frame.get(), flui_platform::WindowFrame::AppTitleBar(_))
+    }
+
     /// What this context knows of the window beyond what Win32 reports.
     pub(crate) fn tracking(&self, hwnd: HWND) -> OwnerTracking {
         OwnerTracking {
@@ -386,6 +401,7 @@ impl WindowContext {
             active: self.active.get(),
             hovered: self.delivery.hovered(),
             capabilities: self.capabilities,
+            frame: self.frame.get(),
         }
     }
 
@@ -671,7 +687,8 @@ impl WindowMessages for WindowProc {
             | WM_SHOWWINDOW | WM_MOVE | WM_DPICHANGED | WM_WINDOWPOSCHANGING
             | WM_WINDOWPOSCHANGED | TOGGLE_FULLSCREEN | CLOSE_WINDOW | DELIVER_QUEUED
             | WM_SETTEXT | WM_STYLECHANGED | WM_GETMINMAXINFO | REQUEST_FRAME | WM_SETCURSOR
-            | WM_SETFOCUS | WM_KILLFOCUS | WM_ACTIVATE | WM_SETTINGCHANGE => true,
+            | WM_SETFOCUS | WM_KILLFOCUS | WM_ACTIVATE | WM_SETTINGCHANGE | WM_NCCALCSIZE
+            | WM_NCHITTEST => true,
             WM_TIMER => wparam.0 == MODAL_DEADLINE_TIMER,
             WM_SYSCOMMAND => (wparam.0 & 0xFFF0) == SC_KEYMENU as usize,
             _ => false,
@@ -1240,6 +1257,78 @@ impl WindowProc {
                     LRESULT(0)
                 }
 
+                // A title bar of the application's: the caption and the top
+                // border go, the side and bottom borders stay the system's.
+                WM_NCCALCSIZE => {
+                    if !(wparam.0 != 0
+                        && ctx.is_some_and(WindowContext::draws_app_title_bar)
+                        && has_caption(hwnd))
+                    {
+                        return Some(DefWindowProcW(hwnd, msg, wparam, lparam));
+                    }
+                    // SAFETY: with a nonzero `wParam`, `lParam` points at the
+                    // `NCCALCSIZE_PARAMS` the system owns for this call, valid
+                    // and writable until the message returns; the default
+                    // procedure reads and writes it before this does.
+                    let params = lparam.0 as *mut NCCALCSIZE_PARAMS;
+                    let proposed = edges((*params).rgrc[0]);
+                    let answer = DefWindowProcW(hwnd, msg, wparam, lparam);
+                    let defaulted = edges((*params).rgrc[0]);
+                    let maximized_inset = IsZoomed(hwnd).as_bool().then(|| frame_thickness(hwnd));
+                    let client =
+                        super::chrome::app_title_bar_client(proposed, defaulted, maximized_inset);
+                    (*params).rgrc[0] = RECT {
+                        left: client.left,
+                        top: client.top,
+                        right: client.right,
+                        bottom: client.bottom,
+                    };
+                    answer
+                }
+
+                // A frame of the application's: the system asks what lies under
+                // the pointer, and the chrome regions the last composited frame
+                // handed the window answer, without running the application.
+                WM_NCHITTEST => {
+                    let defaulted = DefWindowProcW(hwnd, msg, wparam, lparam);
+                    let Some(ctx) = ctx.filter(|ctx| {
+                        // A fullscreen window is not moved or resized from its bar.
+                        !ctx.frame.get().has_system_title_bar()
+                            && !ctx.mode.get().holds_fullscreen()
+                            && defaulted.0 == HTCLIENT as isize
+                    }) else {
+                        return Some(defaulted);
+                    };
+                    let mut point = POINT {
+                        x: get_x_lparam(lparam),
+                        y: get_y_lparam(lparam),
+                    };
+                    let mut client = RECT::default();
+                    if !ScreenToClient(hwnd, &raw mut point).as_bool()
+                        || GetClientRect(hwnd, &raw mut client).is_err()
+                    {
+                        return Some(defaulted);
+                    }
+                    // The top border went with the caption: a band inside the
+                    // client stands in for it while the user can resize the
+                    // window from it.
+                    let style = GetWindowLongPtrW(hwnd, GWL_STYLE) as u32;
+                    let top_band = (ctx.draws_app_title_bar()
+                        && style & WS_THICKFRAME.0 != 0
+                        && !IsZoomed(hwnd).as_bool())
+                    .then(|| frame_thickness(hwnd));
+                    let Ok(regions) = ctx.input_regions.try_borrow() else {
+                        return Some(defaulted);
+                    };
+                    let code = super::chrome::client_hit_code(
+                        regions.sent(),
+                        flui_foundation::geometry::DevicePoint::new(point.x, point.y),
+                        client.right - client.left,
+                        top_band,
+                    );
+                    LRESULT(code as isize)
+                }
+
                 WM_SETCURSOR => {
                     if let Some(ctx) = ctx
                         && (lparam.0 as u32 & 0xffff) == HTCLIENT
@@ -1390,6 +1479,42 @@ pub(crate) struct OwnerTracking {
     pub(crate) hovered: bool,
     /// What the window honours and observes.
     pub(crate) capabilities: flui_platform::WindowCapabilities,
+    /// The frame the app asked for: a window with a caption reports it, so an
+    /// application title bar reads back as itself.
+    pub(crate) frame: flui_platform::WindowFrame,
+}
+
+/// Whether the window's style has a caption: a fullscreen window has been
+/// stripped of it, and keeps no frame of the application's either.
+fn has_caption(hwnd: HWND) -> bool {
+    // SAFETY: a plain style query; a stale handle reads as no style.
+    let style = unsafe { GetWindowLongPtrW(hwnd, GWL_STYLE) as u32 };
+    style & WS_CAPTION.0 == WS_CAPTION.0
+}
+
+/// How thick the sizing frame of `hwnd` is at its DPI, in device pixels: the
+/// band a window without a top border resizes from, and how far a maximized
+/// window hangs its frame off the monitor.
+fn frame_thickness(hwnd: HWND) -> i32 {
+    use windows::Win32::UI::HiDpi::{GetDpiForWindow, GetSystemMetricsForDpi};
+    use windows::Win32::UI::WindowsAndMessaging::{SM_CXPADDEDBORDER, SM_CYFRAME};
+
+    // SAFETY: plain queries of a window's DPI and the system's metrics at it.
+    unsafe {
+        let dpi = GetDpiForWindow(hwnd);
+        GetSystemMetricsForDpi(SM_CYFRAME, dpi)
+            .saturating_add(GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi))
+    }
+}
+
+/// A `RECT`'s edges as the frame rules read them.
+const fn edges(rect: RECT) -> super::chrome::Edges {
+    super::chrome::Edges {
+        left: rect.left,
+        top: rect.top,
+        right: rect.right,
+        bottom: rect.bottom,
+    }
 }
 
 /// The window's title as the system holds it, `None` when it cannot be read.
@@ -1425,6 +1550,7 @@ pub(crate) fn sample_state(
         active,
         hovered,
         capabilities,
+        frame,
     } = tracking;
     let (scale, visible, focused, cached) = {
         let record = record.lock();
@@ -1506,7 +1632,7 @@ pub(crate) fn sample_state(
         .with_title(window_text(hwnd))
         .with_constraints(constraints)
         .with_resizable(style & WS_THICKFRAME.0 != 0)
-        .with_frame(system_frame_or_none(style & WS_CAPTION.0 == WS_CAPTION.0))
+        .with_frame(reported_frame(style & WS_CAPTION.0 == WS_CAPTION.0, frame))
         .with_display(display);
     ReportedFacts {
         // The client area in device pixels at the window's scale; a minimized
@@ -2310,7 +2436,8 @@ impl WindowContext {
         // The frame the window adds around its content at this DPI, measured
         // for the style given, not the rectangle it has.
         let (frame_width, frame_height) =
-            super::set::outer_size(style, ex_style, dpi, (0, 0)).unwrap_or((0, 0));
+            super::set::outer_size(style, ex_style, dpi, (0, 0), self.draws_app_title_bar())
+                .unwrap_or((0, 0));
         Some(track_limits(
             constraints.min,
             constraints.max,

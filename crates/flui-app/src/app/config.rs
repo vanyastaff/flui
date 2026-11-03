@@ -158,8 +158,8 @@ pub struct AppConfig {
     /// default: the system's per-frame batches.
     /// [`InputLatency::Low`](flui_platform::InputLatency::Low) asks for every
     /// sample as soon as the system has it, for live ink and drawing: the web
-    /// host listens to `pointerrawupdate`; a host that cannot deliver earlier
-    /// ignores it.
+    /// host listens to `pointerrawupdate`, Android (API 30+) asks for unbuffered
+    /// pointer dispatch; a host that cannot deliver earlier ignores it.
     pub input_latency: flui_platform::InputLatency,
 
     /// The development reload driver, if the application installed one with
@@ -174,19 +174,22 @@ pub struct AppConfig {
     /// configuration. The web runner drives no hook.
     pub dev_reload: Option<DevReload>,
 
-    /// The development agent hook, if the application installed one with
+    /// The development agent hooks the application installed with
     /// [`Self::with_dev_agent`] (ADR-0095 §3).
     ///
-    /// `None` (the default): no agent is served, and no devtools crate is in
-    /// the application's graph. `Some`: the desktop, iOS and Android runners attach
-    /// the hook once per event loop and hand it each window that mounts a
-    /// root view once the window is installed; a window with no content, and
-    /// a presentation opened into another window's UI runtime, are not handed
-    /// over. Every window opened with a clone of this configuration shares
-    /// the one hook, so a secondary window is served only when opened with
-    /// the application's configuration. The web runner does the same for the
-    /// page's one window and never detaches the hook.
-    pub dev_agent: Option<DevAgent>,
+    /// `None` (the default): the application installed none. The runners
+    /// attach every hook once per event loop and hand each one every window
+    /// that mounts a root view once the window is installed; a window with no
+    /// content, and a presentation opened into another window's UI runtime,
+    /// are not handed over. Every window opened with a clone of this
+    /// configuration shares the hooks, so a secondary window is served only
+    /// when opened with the application's configuration. The web runner does
+    /// the same for the page's one window and never detaches the hooks.
+    ///
+    /// The driver agent (ADR-0239) is not one of these: in a debug build, or
+    /// with the `driver` feature, the runner installs it beside them when the
+    /// launch names an endpoint.
+    pub(crate) dev_agent: Option<DevAgent>,
 
     /// Governs when the platform loop exits once every hosted window has
     /// closed. See [`ExitPolicy`]'s own doc for the drain-before-decide
@@ -541,13 +544,16 @@ impl AppConfig {
         self
     }
 
-    /// Install a development agent hook, such as `flui-devtools`'
-    /// `agent::AgentServer`. See [`Self::dev_agent`] for when the runners call
-    /// it, and [`DevAgentHook`](flui_view::dev_agent::DevAgentHook) for the
-    /// hook's contract. Replaces any hook installed before.
+    /// Install a development agent hook: a tool of the application's own
+    /// that reads and acts on its windows. The runners attach it once per
+    /// event loop and hand it every window that mounts a root view; see
+    /// [`DevAgentHook`](flui_view::dev_agent::DevAgentHook) for the hook's
+    /// contract. Adds to the hooks installed before, each of which keeps
+    /// being served if another panics. The driver agent needs none of this:
+    /// the runner installs it itself (ADR-0239).
     #[must_use = "the builder returns the updated configuration; assign or chain it"]
     pub fn with_dev_agent(mut self, hook: impl flui_view::dev_agent::DevAgentHook) -> Self {
-        self.dev_agent = Some(DevAgent::new(hook));
+        self.dev_agent = Some(DevAgent::with(self.dev_agent.take(), hook));
         self
     }
 

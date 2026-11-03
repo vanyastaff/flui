@@ -842,7 +842,6 @@ where
             return;
         }
         if let Err(payload) = std::panic::catch_unwind(AssertUnwindSafe(|| self.state.dispose())) {
-            let payload = std::mem::ManuallyDrop::new(payload);
             owner.record_hook_panic(
                 core.self_id(),
                 None,
@@ -851,7 +850,7 @@ where
                 payload.as_ref(),
                 "disposing StatefulElement",
             );
-            flui_foundation::panic::discard_payload(std::mem::ManuallyDrop::into_inner(payload));
+            flui_foundation::panic::discard_payload(payload);
         }
     }
 
@@ -914,7 +913,6 @@ where
         }
         if let Err(payload) = std::panic::catch_unwind(AssertUnwindSafe(|| self.state.deactivate()))
         {
-            let payload = std::mem::ManuallyDrop::new(payload);
             owner.record_hook_panic(
                 core.self_id(),
                 None,
@@ -923,7 +921,7 @@ where
                 payload.as_ref(),
                 "deactivating StatefulElement",
             );
-            flui_foundation::panic::discard_payload(std::mem::ManuallyDrop::into_inner(payload));
+            flui_foundation::panic::discard_payload(payload);
         }
     }
 
@@ -1114,6 +1112,12 @@ where
                 // leaking it.
                 self.render_id = Some(render_id);
 
+                // The node reports where its view was created when an error
+                // names it.
+                if let Some(node) = pipeline_owner.render_tree_mut().get_mut(render_id) {
+                    node.set_creation_site(core.creation_site());
+                }
+
                 // Handle parent relationship. `adopt_child` writes the
                 // child's parent link and the parent's child-list entry in
                 // one call — the two directions can never be written
@@ -1218,7 +1222,6 @@ where
             });
         }
         if let Some(payload) = recovered {
-            let payload = std::mem::ManuallyDrop::new(payload);
             owner.record_hook_panic(
                 core.self_id(),
                 None,
@@ -1227,7 +1230,7 @@ where
                 payload.as_ref(),
                 "unmounting the render object of RenderElement",
             );
-            flui_foundation::panic::discard_payload(std::mem::ManuallyDrop::into_inner(payload));
+            flui_foundation::panic::discard_payload(payload);
         }
         super::behavior_commons::remove_render_object_from_tree(
             core,

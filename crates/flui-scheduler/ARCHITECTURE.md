@@ -60,8 +60,8 @@ reached every admission panics, including after the panic is caught, tasks are
 cancelled or another driver clone is used. An accepted task therefore keeps its
 cancellation authority and its priority/FIFO position. Admission checks capacity
 before polling a future or publishing a task, and the rejected callback or
-future is retained rather than dropped (ADR-0127), so its destructor cannot
-replace the capacity failure.
+future is destroyed under containment (ADR-0281), so a panic from its destructor
+is discarded and cannot replace the capacity failure.
 
 ### Post-frame panic preserves uninvoked work in its original queue
 
@@ -110,9 +110,9 @@ scope first revokes weak handles and detaches its queued and active entries, the
 retires captures in ID order using the owner-frame retirement policy. A weak
 cleanup authority establishes execution exclusion for standalone close and
 inherits an active turn's live first-failure receipt for nested close. This
-metadata retains neither the scheduler nor its queues. A caught nested failure
-retains the remaining opaque capture tail; a later healthy refusal gets fresh
-custody. `scope_retirement_inherits_live_owner_failure_custody` pins both paths.
+metadata retains neither the scheduler nor its queues. After a caught nested failure
+the remaining capture tail is still destroyed under containment, behind that
+failure (ADR-0281). `scope_retirement_after_live_owner_failure_destroys_captures` pins both paths.
 The first destructor failure is returned to the enclosing owner's recovery; other scopes'
 entries remain deliverable. As with owner retirement, an aggregate whose captures
 double-panic before control returns cannot be rescued by an outer catch.
@@ -127,12 +127,12 @@ saved-handle reentry between these stages, ordered competing retirement failures
 and healthy sibling delivery.
 
 If the runtime close sequence already owns a failure, `close_preserving` uses
-the same withdrawal and detachment but retains only that scope's opaque callback
-ownership without invoking destructors or diagnostics. Callback IDs and epoch
+the same withdrawal and detachment, then destroys only that scope's callbacks under
+containment, discarding a panic from them so that failure stays first (ADR-0281). Callback IDs and epoch
 metadata are ordinary framework values; unrelated queued or active scopes remain
 deliverable. Later scope `Drop` finds no callbacks to retire. This explicit mode
 is required after a catch, where `thread::panicking()` alone no longer records
-the first failure. `preserving_scope_close_retains_captures_and_keeps_siblings_deliverable`
+the first failure. `preserving_scope_close_destroys_captures_and_keeps_siblings_deliverable`
 pins prior owner failure, potentially failing capture destruction and healthy
 sibling recovery through the public close and frame-drive APIs.
 
@@ -709,22 +709,19 @@ and thread-index allocation. No callback runs with a delivery lock held. Same-th
 reentry records demand for at most one compensating attempt, which rereads the
 currently installed hook. A replacement hook therefore pays the debt even when the
 displaced hook panics. Both owning envelopes remain live until the active entry is
-removed; the first panic remains authoritative when compensation also fails. A
-callback failure retains both envelopes, because self-uninstallation or replacement
-can make an opaque capture bundle's
-Drop the next failure. Opaque secondary panic payloads are also intentionally
-retained: an aggregate whose two fields both panic in Drop aborts even inside a
-catch boundary. These exceptional leaks keep the first failure authoritative;
-they do not change normal hook ownership. On successful delivery, initial-envelope
-retirement happens after active bookkeeping closes; if retirement panics, its error
-resumes after retaining the compensation envelope. Two panicking field destructors
-inside that first retirement remain Rust's unavoidable aggregate-abort boundary.
+removed; the first panic remains authoritative when compensation also fails.
+callback failure does not keep them: each envelope is destroyed under containment
+once the active entry is removed, and a panic from its destructor is kept behind
+the first failure (ADR-0281). A destructor that panics while the thread is
+already unwinding aborts, as in std. On successful delivery, initial-envelope
+retirement happens after active bookkeeping closes; if retirement panics, its
+error resumes after the compensation envelope is destroyed the same way.
 A hookless request never acknowledges
 debt. `coalesced_wake_delivery_recovery` exercises repeated requests, cloned task
 wakers, overlapping receipts, missing hooks, reentry, competing failures and the next
 operation. Its `reentrant_hook_replacement_delivers_the_current_hook_after_failure`
 row covers replacement on both scheduling and task wakes;
-`initial_hook_retirement_retains_the_compensating_envelope_on_failure` covers
+`initial_hook_retirement_destroys_the_compensating_envelope_on_failure` covers
 competing capture retirement and the next operation. Hooks must still only wake
 the owner, never drive a frame inline.
 
@@ -785,23 +782,21 @@ never reached by `notify_frame_completion` first (a delivered completion
 already left the registry through that same `drain`) — the guard would be
 dead code testing a fact the type already proves, not a real defense. Every
 waker is invoked with `wake_by_ref` after its state guard is released, while the
-owning executor envelope remains outside the catch. A failed invocation retains
-that envelope; an ordinary successful invocation retires it through a separate
-catch. Once an earlier callback, pipeline, wake or retirement failure exists (or
-teardown is already unwinding), remaining opaque envelopes are retained after
-waking, since their aggregate destruction cannot safely run over that failure.
+owning executor envelope remains outside the catch. Each envelope is retired
+through a separate catch after its invocation, whether the invocation failed or
+not, and after an earlier callback, pipeline, wake or retirement failure the
+remaining envelopes are still destroyed under containment (ADR-0281): a panic
+from one is a competing failure.
 Telemetry runs in its own catch and never displaces the delivery failure or stops
-the tail. Opaque secondary payloads are retained without running drop glue. The
+the tail. Secondary payloads are destroyed with `discard_payload`. The
 first failure propagates after normal frame delivery finishes; scheduler teardown
-retains it instead. Explicit frame abort preserves the same chronology; recovery
-of an already failed pipeline also retains its earlier authoritative payload.
+keeps it instead. Explicit frame abort preserves the same chronology; recovery
+of an already failed pipeline also keeps its earlier authoritative payload.
 
 A cancelled pending `FrameCompletionFuture` can itself own the final executor
-waker. Its state destructor retains that envelope during unrelated unwind and
-performs ordinary destruction otherwise. Exceptional retention is deliberate:
-two panicking fields in one opaque destructor can abort before an outer catch
-returns. Ordinary successful retirement with such an aggregate remains outside
-the containment guarantee, as with ticker executor envelopes.
+waker. Its state destructor destroys that envelope, during an unrelated unwind
+too; a destructor that panics while the thread unwinds aborts, as in std
+(ADR-0281).
 `completion_wake_ownership_and_recovery`, a row of
 `end_of_frame_demand_matrix`, isolates normal/aborted/failed-pipeline delivery,
 post-frame failure, teardown and existing unwind, successful envelope retention,
@@ -878,17 +873,17 @@ is neither polled nor drained.
 **Teardown order:** `OwnerFrame::retire` closes both admission lanes, detaches their
 ownership and disables every task waker and the frame hook before user destruction.
 It retires the post-frame queue, then the
-tasks, keeping the first panic and retaining the remaining opaque tail; the UI runtime calls it
+tasks, keeping the first panic and destroying the remaining tail under containment; the UI runtime calls it
 after closing its presentations and before resuming any earlier failure.
-During an existing unwind the values are retained instead, the same limit
+During an existing unwind the values are still destroyed, under containment, the same rule
 `TaskToken`'s `Drop` states.
 
 **Tests:** `owner_local_task_matrix` in
 `crates/flui-testing/tests/async_driver.rs` (`owner_local_future_completes_after_a_worker_wake`,
 `late_completion_after_ui_runtime_drop_drops_captures_on_the_owner`,
 `a_leaked_async_driver_holds_no_task_after_the_ui_runtime`);
-`retirement_retains_the_tail_and_keeps_the_first_panic` and
-`retirement_retains_failed_callback_tail_and_closes_the_queue` here;
+`retirement_destroys_the_tail_and_keeps_the_first_panic` and
+`retirement_destroys_failed_callback_tail_and_closes_the_queue` here;
 `async_driver_unwind_matrix` covers reentrant callback destruction, sibling wakes,
 eager-poll retirement and foreign-owner rejection without consuming frame demand;
 `frame_waker_wakes_the_ui_runtime_from_a_worker` in `flui-runtime`.
@@ -958,13 +953,11 @@ not scanning.
 
 **Owned future failure boundary:** both lazy and eager polling borrow the
 future into `catch_unwind`, keeping its ownership outside the closure. On
-poll failure the future is retained without invoking opaque destruction, its
-waker is cancelled, and the original payload resumes. `PumpGuard` removes the
+poll failure the future is destroyed under containment, its waker is
+cancelled, and the original payload resumes. `PumpGuard` removes the
 empty slot and restores unreached siblings. A token dropped during an existing
-unwind likewise detaches its task and retains its future. Catching `drop` would
-not contain two panicking fields in one future; exceptional retention includes
-all captures and nested tokens, so it does not promise recursive cleanup.
-Ordinary completion and explicit cancellation still run destructors outside
+unwind likewise detaches its task and destroys its future under containment,
+a panic from it discarded (ADR-0281). Ordinary completion and explicit cancellation still run destructors outside
 the map lock and propagate their first failure. Panics competing inside a
 user's own `poll` locals, or multiple fields of an ordinary opaque destructor,
 remain subject to Rust's abort behavior.

@@ -73,8 +73,9 @@ impl ProjectedInputRegions {
         Some(&self.sent)
     }
 
-    /// The device-pixel regions the OS was last handed.
-    #[cfg(test)]
+    /// The device-pixel regions the OS was last handed: what the Win32 window
+    /// answers its hit test from, and the AppKit window a left press.
+    #[cfg(any(test, windows, target_os = "macos"))]
     #[must_use]
     pub(crate) fn sent(&self) -> &[DeviceInputRegion] {
         &self.sent

@@ -339,7 +339,7 @@ impl TsfStore {
                 state.poisoned.set(true);
                 // The log runs a user-installed subscriber: contained, so
                 // nothing it raises unwinds into TSF (a failure it raises is
-                // retained with the scope).
+                // discarded with the scope).
                 let mut diagnostics = OwnerCalls::new();
                 diagnostics.run(|| {
                     tracing::error!(
@@ -350,8 +350,8 @@ impl TsfStore {
                     );
                 });
                 drop(diagnostics);
-                // A payload whose `Drop` panics must not unwind into TSF.
-                std::mem::forget(payload);
+                // Discarded under containment: nothing unwinds into TSF (ADR-0281).
+                flui_foundation::panic::discard_payload(payload);
                 if let Some(services) = &services {
                     services.document_poisoned(&state);
                 }

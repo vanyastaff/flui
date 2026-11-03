@@ -3,60 +3,67 @@
 //! tree, and the actionability facts join the tree's with the render
 //! hit-test's, run outside every semantics borrow.
 
+use flui_protocol::method;
 use flui_protocol::{
-    ActionName, ActionRequest, Actionability, ActionabilityParams, ElementRef, ErrorCode,
+    ActionName, Actionability, ActionabilityParams, ElementRef, ErrorCode, ErrorObject, HandleKind,
     LocateParams, Locator, LogicalPoint, Matches, Role, WindowId,
 };
-use flui_view::dev_agent::AgentWindow;
+use flui_view::dev_agent::{AgentAnswer, AgentWindow};
 use std::sync::atomic::AtomicU32;
 
-use super::agent_semantics::{answer, counter, find, frame, read};
+use super::agent_semantics::{act_params, answer, counter, find, frame, read};
 use super::*;
 
-static_assertions::assert_impl_all!(AgentReply<Matches>: Send);
-static_assertions::assert_impl_all!(AgentReply<Actionability>: Send);
+static_assertions::assert_impl_all!(AgentAnswer<Matches>: Send);
+static_assertions::assert_impl_all!(AgentAnswer<Actionability>: Send);
 
 fn window_of(ui_runtime: &UiRuntime) -> WindowId {
     WindowId::from_u64(ui_runtime.presentation_id().as_u64())
         .expect("a presentation id packs a non-zero generation")
 }
 
-fn locate(ui_runtime: &UiRuntime, agent: &SemanticsAgent, locator: Locator) -> Matches {
-    let reply = agent
-        .locate(LocateParams::new(locator))
+fn locate(ui_runtime: &UiRuntime, window: &AgentWindow, locator: Locator) -> Matches {
+    let reply = window
+        .call::<method::SemanticsLocate>(LocateParams::new(locator))
         .expect("the inbox has room");
     answer(ui_runtime, reply).expect("the committed tree resolves a locator")
 }
 
+#[expect(
+    clippy::result_large_err,
+    reason = "the protocol's error object is the answer under test"
+)]
 fn actionability(
     ui_runtime: &UiRuntime,
-    agent: &SemanticsAgent,
+    window: &AgentWindow,
     params: ActionabilityParams,
-) -> Result<Actionability, AgentError> {
-    let reply = agent.actionability(params).expect("the inbox has room");
+) -> Result<Actionability, ErrorObject> {
+    let reply = window
+        .call::<method::ElementActionability>(params)
+        .expect("the inbox has room");
     answer(ui_runtime, reply)
 }
 
 /// A mounted counter, its agent and a sink, after the first frame.
-fn shown(hide_at: Option<u32>) -> (UiRuntime, Arc<AtomicU32>, SemanticsAgent, ScriptedSink) {
+fn shown(hide_at: Option<u32>) -> (UiRuntime, Arc<AtomicU32>, AgentWindow, ScriptedSink) {
     let ui_runtime = UiRuntime::for_test();
     let presses = counter(&ui_runtime, hide_at);
-    let agent = ui_runtime
-        .semantics_agent(ui_runtime.presentation_id())
+    let window = ui_runtime
+        .dev_agent_window(ui_runtime.presentation_id())
         .expect("the ui_runtime hosts its primary presentation");
     let mut sink = ScriptedSink::always_presents();
     frame(&ui_runtime, &mut sink);
-    (ui_runtime, presses, agent, sink)
+    (ui_runtime, presses, window, sink)
 }
 
 #[test]
 fn a_locator_lists_the_element_a_read_reports_and_an_unknown_name_lists_none() {
-    let (ui_runtime, _presses, agent, _sink) = shown(None);
-    let button = find(&read(&ui_runtime, &agent), "Increment").id;
+    let (ui_runtime, _presses, window, _sink) = shown(None);
+    let button = find(&read(&ui_runtime, &window), "Increment").id;
 
     let found = locate(
         &ui_runtime,
-        &agent,
+        &window,
         Locator::role(Role::Button).name("Increment"),
     );
     assert_eq!(found.matches.len(), 1);
@@ -68,18 +75,18 @@ fn a_locator_lists_the_element_a_read_reports_and_an_unknown_name_lists_none() {
     assert_eq!(only.node.name.as_deref(), Some("Increment"));
     assert_eq!(found.truncated, 0);
 
-    let none = locate(&ui_runtime, &agent, Locator::named("Decrement"));
+    let none = locate(&ui_runtime, &window, Locator::named("Decrement"));
     assert!(none.matches.is_empty(), "no match is a list, not a fault");
 }
 
 #[test]
 fn a_located_element_acts_through_the_owner_and_its_handle_goes_gone_with_it() {
-    let (ui_runtime, presses, agent, mut sink) = shown(Some(1));
-    let found = locate(&ui_runtime, &agent, Locator::named("Increment"));
+    let (ui_runtime, presses, window, mut sink) = shown(Some(1));
+    let found = locate(&ui_runtime, &window, Locator::named("Increment"));
     let button = found.matches[0].element.element;
 
-    let tap = agent
-        .act(ActionRequest::new(button, ActionName::Invoke))
+    let tap = window
+        .call::<method::SemanticsAct>(act_params(&window, button, ActionName::Invoke))
         .expect("the inbox has room");
     answer(&ui_runtime, tap).expect("the handler runs");
     frame(&ui_runtime, &mut sink);
@@ -88,22 +95,22 @@ fn a_located_element_acts_through_the_owner_and_its_handle_goes_gone_with_it() {
 
     // The press replaced the button by a text: the handle the locator issued
     // is gone, and not one that was never issued.
-    let again = agent
-        .act(ActionRequest::new(button, ActionName::Invoke))
+    let again = window
+        .call::<method::SemanticsAct>(act_params(&window, button, ActionName::Invoke))
         .expect("the inbox has room");
     let failed = answer(&ui_runtime, again).expect_err("the button left the tree");
     assert_eq!(
-        failed,
-        AgentError::NodeNotFound {
-            element: button,
-            issued: true
-        }
+        (failed.code, failed.kind, failed.handle.as_deref()),
+        (
+            ErrorCode::Gone,
+            Some(HandleKind::Element),
+            Some(button.to_string().as_str())
+        )
     );
-    assert_eq!(failed.code(), ErrorCode::Gone);
 
     let facts = actionability(
         &ui_runtime,
-        &agent,
+        &window,
         ActionabilityParams::new(ElementRef::new(window_of(&ui_runtime), button)),
     )
     .expect("a gone element is a fact, not a fault");
@@ -116,12 +123,12 @@ fn a_located_element_acts_through_the_owner_and_its_handle_goes_gone_with_it() {
 
 #[test]
 fn a_button_is_visible_enabled_and_receives_the_pointer_at_its_centre() {
-    let (ui_runtime, _presses, agent, _sink) = shown(None);
-    let button = find(&read(&ui_runtime, &agent), "Increment");
+    let (ui_runtime, _presses, window, _sink) = shown(None);
+    let button = find(&read(&ui_runtime, &window), "Increment");
     let rect = button.surface_rect.expect("a laid-out button has bounds");
     let element = ElementRef::new(window_of(&ui_runtime), button.id);
 
-    let facts = actionability(&ui_runtime, &agent, ActionabilityParams::new(element))
+    let facts = actionability(&ui_runtime, &window, ActionabilityParams::new(element))
         .expect("the facts read");
     assert!(facts.attached && facts.visible && facts.enabled);
     assert!(
@@ -136,8 +143,8 @@ fn a_button_is_visible_enabled_and_receives_the_pointer_at_its_centre() {
 
 #[test]
 fn a_point_on_another_element_names_what_covers_it() {
-    let (ui_runtime, _presses, agent, _sink) = shown(None);
-    let tree = read(&ui_runtime, &agent);
+    let (ui_runtime, _presses, window, _sink) = shown(None);
+    let tree = read(&ui_runtime, &window);
     let button = find(&tree, "Increment");
     let text = find(&tree, "Count: 0")
         .surface_rect
@@ -149,7 +156,7 @@ fn a_point_on_another_element_names_what_covers_it() {
     let mut params = ActionabilityParams::new(ElementRef::new(window_of(&ui_runtime), button.id));
     params.point = Some(on_text);
 
-    let facts = actionability(&ui_runtime, &agent, params).expect("the facts read");
+    let facts = actionability(&ui_runtime, &window, params).expect("the facts read");
     assert!(
         !facts.receives,
         "the pointer lands on the count, not the button"
@@ -161,60 +168,62 @@ fn a_point_on_another_element_names_what_covers_it() {
 
 #[test]
 fn an_element_is_stable_once_a_frame_has_passed_with_the_same_bounds() {
-    let (ui_runtime, _presses, agent, mut sink) = shown(None);
-    let button = find(&read(&ui_runtime, &agent), "Increment").id;
+    let (ui_runtime, _presses, window, mut sink) = shown(None);
+    let button = find(&read(&ui_runtime, &window), "Increment").id;
     let params = ActionabilityParams::new(ElementRef::new(window_of(&ui_runtime), button));
 
-    let first = actionability(&ui_runtime, &agent, params).expect("the facts read");
+    let first = actionability(&ui_runtime, &window, params).expect("the facts read");
     assert!(!first.stable, "there is nothing yet to compare with");
     frame(&ui_runtime, &mut sink);
-    let second = actionability(&ui_runtime, &agent, params).expect("the facts read");
+    let second = actionability(&ui_runtime, &window, params).expect("the facts read");
     assert!(second.stable, "same bounds as the call before the frame");
     assert_eq!(second.rect, first.rect);
     assert_eq!(second.first_failed(), None);
 }
 
 #[test]
-fn an_element_of_another_window_is_not_attached_here() {
-    let (ui_runtime, _presses, agent, _sink) = shown(None);
-    let button = find(&read(&ui_runtime, &agent), "Increment").id;
+fn an_element_of_another_window_is_refused_not_looked_up_here() {
+    let (ui_runtime, _presses, window, _sink) = shown(None);
+    let button = find(&read(&ui_runtime, &window), "Increment").id;
     let other =
         WindowId::from_u64(window_of(&ui_runtime).get() + (1 << 32)).expect("a non-zero window id");
 
-    let facts = actionability(
-        &ui_runtime,
-        &agent,
-        ActionabilityParams::new(ElementRef::new(other, button)),
-    )
-    .expect("the facts read");
-    assert!(
-        !facts.attached,
-        "element numbers are scoped to their window"
-    );
+    let refused = window
+        .call::<method::ElementActionability>(ActionabilityParams::new(ElementRef::new(
+            other, button,
+        )))
+        .expect_err("element numbers are scoped to their window");
+    assert_eq!(refused.code, ErrorCode::InvalidArgument);
+    let report = ui_runtime.drain_commands();
+    assert_eq!(report.invoked, 0, "the owner is never asked");
 }
 
 #[test]
 fn locating_before_the_first_semantics_frame_is_busy() {
     let ui_runtime = UiRuntime::for_test();
     let _presses = counter(&ui_runtime, None);
-    let agent = ui_runtime
-        .semantics_agent(ui_runtime.presentation_id())
+    let window = ui_runtime
+        .dev_agent_window(ui_runtime.presentation_id())
         .expect("the ui_runtime hosts its primary presentation");
 
-    let reply = agent
-        .locate(LocateParams::new(Locator::named("Increment")))
+    let reply = window
+        .call::<method::SemanticsLocate>(LocateParams::new(Locator::named("Increment")))
         .expect("the inbox has room");
     let failed = answer(&ui_runtime, reply).expect_err("no tree is committed yet");
-    assert_eq!(failed, AgentError::NoTreeYet);
-    assert_eq!(failed.code(), ErrorCode::Busy);
+    assert!(
+        failed.message.contains("no semantics tree"),
+        "busy because no tree is committed: {}",
+        failed.message
+    );
+    assert_eq!(failed.code, ErrorCode::Busy);
 }
 
 #[test]
 fn a_panic_while_reading_the_facts_is_the_owners_and_answers_platform_first() {
-    let (ui_runtime, _presses, agent, _sink) = shown(None);
-    let button = find(&read(&ui_runtime, &agent), "Increment").id;
-    let mut reply = agent
-        .actionability(ActionabilityParams::new(ElementRef::new(
+    let (ui_runtime, _presses, window, _sink) = shown(None);
+    let button = find(&read(&ui_runtime, &window), "Increment").id;
+    let mut reply = window
+        .call::<method::ElementActionability>(ActionabilityParams::new(ElementRef::new(
             window_of(&ui_runtime),
             button,
         )))
@@ -232,20 +241,21 @@ fn a_panic_while_reading_the_facts_is_the_owners_and_answers_platform_first() {
         .try_take()
         .expect("the reply was answered before unwinding")
         .expect_err("the panic is the answer");
-    assert_eq!(failed, AgentError::ResolvePanicked { element: button });
-    assert_eq!(failed.code(), ErrorCode::Platform);
-    assert!(!failed.may_have_run());
+    assert!(
+        failed.message.contains("resolving the action"),
+        "the failure is the resolving's: {}",
+        failed.message
+    );
+    assert_eq!(failed.code, ErrorCode::Platform);
+    assert_eq!(failed.effect, None);
 }
 
 #[test]
 fn a_development_window_locates_and_reads_facts_until_its_presentation_closes() {
-    let (ui_runtime, _presses, _agent, _sink) = shown(None);
-    let window: AgentWindow = ui_runtime
-        .dev_agent_window(ui_runtime.presentation_id())
-        .expect("the ui_runtime hosts its primary presentation");
+    let (ui_runtime, _presses, window, _sink) = shown(None);
 
     let mut located = window
-        .locate(LocateParams::new(Locator::named("Increment")))
+        .call::<method::SemanticsLocate>(LocateParams::new(Locator::named("Increment")))
         .expect("the window is open");
     let _report = ui_runtime.drain_commands();
     let found = located
@@ -255,7 +265,7 @@ fn a_development_window_locates_and_reads_facts_until_its_presentation_closes() 
     let button = found.matches[0].element;
 
     let mut facts = window
-        .actionability(ActionabilityParams::new(button))
+        .call::<method::ElementActionability>(ActionabilityParams::new(button))
         .expect("the window is open");
     let _report = ui_runtime.drain_commands();
     let facts = facts
@@ -341,15 +351,15 @@ fn a_render_object_that_panics_in_the_hit_test_answers_platform_before_the_owner
             )
         })
         .expect("the stack attaches");
-    let agent = ui_runtime
-        .semantics_agent(ui_runtime.presentation_id())
+    let window = ui_runtime
+        .dev_agent_window(ui_runtime.presentation_id())
         .expect("the ui_runtime hosts its primary presentation");
     let mut sink = ScriptedSink::always_presents();
     frame(&ui_runtime, &mut sink);
-    let element = find(&read(&ui_runtime, &agent), "Press").id;
+    let element = find(&read(&ui_runtime, &window), "Press").id;
 
-    let mut reply = agent
-        .actionability(ActionabilityParams::new(ElementRef::new(
+    let mut reply = window
+        .call::<method::ElementActionability>(ActionabilityParams::new(ElementRef::new(
             window_of(&ui_runtime),
             element,
         )))
@@ -363,7 +373,11 @@ fn a_render_object_that_panics_in_the_hit_test_answers_platform_before_the_owner
         .try_take()
         .expect("the reply was answered before unwinding")
         .expect_err("the panic is the answer");
-    assert_eq!(failed, AgentError::HitTestPanicked { element });
-    assert_eq!(failed.code(), ErrorCode::Platform);
-    assert!(!failed.may_have_run(), "a hit-test only reads");
+    assert!(
+        failed.message.contains("hit-test"),
+        "the failure is the hit-test's: {}",
+        failed.message
+    );
+    assert_eq!(failed.code, ErrorCode::Platform);
+    assert_eq!(failed.effect, None, "a hit-test only reads");
 }

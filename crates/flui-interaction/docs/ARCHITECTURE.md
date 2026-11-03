@@ -12,7 +12,7 @@ checks them with no exceptions. Each public item has one module path; the crate 
 
 | Layer | Module | One-paragraph description |
 |---|---|---|
-| 0 | `events`, `ids`, `retain` | The owned input vocabulary and identities. `retain` decides what a failure path keeps rather than destroys. |
+| 0 | `events`, `ids` | The owned input vocabulary and identities. |
 | 1 | `close`, `containment` | `close` holds the terminal close policy (`CloseMode`, `CloseTombstone`, `ClosePanic`) every owner shares; `containment` holds `RoutePanic`, the first failure of a synchronous dispatch phase, kept until mandatory cleanup finishes. |
 | 2 | `pointer` | Pointer delivery: hit testing, the `InteractionLane` that resolves and invokes pointer routes, `PointerRouter`, `PointerCapture`, `MouseTracker` (enter/exit/hover), the `TransformGuard` stack-RAII, `PointerEventResampler` (frame-rate adaptation with a 100-event pressure threshold, preserved sequence boundaries and 1 ms minimum sample interval), its `SamplingClock`, and wheel preferences. Route resolution on Down and cached-route invocation on every Move/Up are on the per-pointer hot path (`benches/pointer_route_bench.rs`). |
 | 2 | `focus` | The presentation-owned `FocusManager` (`FocusManager::new` returns an `Rc<Self>`; there is no thread-local focus state), `FocusScopeNode` / reading-order Tab traversal and directional traversal. |
@@ -147,23 +147,23 @@ Local design choices and why. Each entry names the conflict, the choice, and the
   reaches the pointer router only: no target heard its Down. A mouse or pen
   with every button up hovers whatever refusal its contact carried. The
   binding's contact cap does not limit members per contact.
-- **Terminal lane retirement commits before user destruction (ADR-0127).**
+- **Terminal lane retirement commits before user destruction (ADR-0281).**
   Closing withdraws executable callbacks and opaque route ownership before
-  retiring them outside borrows. Healthy retirement releases resources; after
-  the first failure or during unwind, remaining owners that could execute user
-  code are retained. Non-last owner-local `Rc` clones can still be released.
+  destroying them outside borrows. Every withdrawn owner is destroyed; after
+  the first failure each remaining destructor runs under containment, so a
+  later panic is discarded and the first failure is the one raised. A
+  destructor that panics while the thread already unwinds aborts, as in std.
   Saved dispatch handles become stale, while another live lane remains usable.
   `lane_terminal_retirement_contract` covers independent storage families,
-  competing failures, reentry, unwind retention and surviving-lane recovery.
+  competing failures, reentry, destruction during an unwind and surviving-lane
+  recovery.
   Every target snapshot also carries terminal lane authority, including raw
   registrations without a presentation owner. `lane_snapshot_authority_contract`
   pins cached mouse exits after lane closure and revocation between callbacks
-  already admitted to one round. Final framework snapshots retain withdrawn
-  captures after a preserving close; external non-last callback clones remain
-  releasable. Fresh stale-handle values retire ordinarily after the close window
-  returns, while rejected ownership during that window follows its failure mode.
-  Containment cannot rescue one opaque aggregate that double-panics inside its
-  own destruction before control returns to the framework.
+  already admitted to one round. Final framework snapshots are destroyed after
+  a preserving close too. Fresh stale-handle values retire ordinarily after the
+  close window returns, while rejected ownership during that window follows its
+  failure mode.
 - **Dispatch identity does not imply activation authority.** A saved dispatch
   handle carries an exact lane ticket but runs only while that lane is entered
   on its owner thread. `UiRuntime::enter` establishes this scope for mounted
@@ -256,7 +256,7 @@ Local design choices and why. Each entry names the conflict, the choice, and the
   preserves that device's prior
   state for retry, and every committed callback batch runs before the first
   failure resumes. Replaced and departed captures retire outside the tracker
-  borrow under ADR-0127. Annotations are kept per surface, since two
+  borrow (ADR-0281). Annotations are kept per surface, since two
   surfaces' trees may reuse a render id. A source that leaves (its own
   `Leave`, its device removed) exits what it hovered and is forgotten; a
   window leave keeps sources for their return. Either way the regions no
@@ -264,15 +264,14 @@ Local design choices and why. Each entry names the conflict, the choice, and the
   `hover_ends_when_its_source_leaves`, `shared_region_exit_per_device`,
   `ambient_refresh_contains_each_device` (including later-probe reentry) and
   `released_region_destructor_reenters_tracker` pin these contracts.
-- **Hover payload retirement preserves delivery and first failure (ADR-0127).**
+- **Hover payload retirement preserves delivery and first failure (ADR-0281).**
   Queued replacement commits its newer movement before the outgoing hit path
-  retires. Each entry detaches metadata before destruction and retains it
-  during unwind. Frame delivery explicitly retires metadata after an already
-  caught callback failure, while accepted sibling movements still run.
+  retires. Each entry detaches metadata before destroying it under
+  containment. Frame delivery destroys metadata after an already caught
+  callback failure too, while accepted sibling movements still run.
   `binding_input_contract_matrix` pins healthy destruction, callback and
   metadata retirement competition, reentrant replacement and fresh recovery.
-  Containment ends at each opaque payload; its own double-panicking destructor
-  cannot be rescued by the framework path.
+  A payload destructor that panics while the thread unwinds aborts, as in std.
 
 - **Gesture observers hear decisions after the operation, in passes.** The
   arena queues a `GestureObservation` when it commits a decision, only while an
@@ -551,7 +550,7 @@ Local design choices and why. Each entry names the conflict, the choice, and the
 
 - **Committed focus notifications finish before propagating failure.** Node and manager observers share one containment accumulator across the outer request and its accepted FIFO tail. Every still-registered observer in each round runs, even after an earlier observer panics; callback snapshots and canceled queued nodes retire outside borrows and preserve the first failure. Diagnostic subscribers are contained by the same accumulator. Reentrant registration changes affect subsequent snapshots, and a removed listener is skipped. The public `caught_callback_failures_leave_captures_with_their_owner` table pins node-only failures, competing manager failures, node/manager competition, self-replacement, queued requests, canceled-target retirement, diagnostic failures, and the next healthy focus operation. Terminal close notifications retain their separate stop-on-failure policy. The depth guard restores only depth: it neither cancels accepted debt nor executes user code on an unexpected unwind.
 
-- **Nested focus cleanup inherits a caught observer failure.** A scoped owner-local `CloseMode` is established before subsequent observers or queued-retirement diagnostics run, and updated immediately after containment before callback snapshots retire. A later observer calling `close` therefore commits terminal state while retaining opaque captures instead of starting ordinary destruction under an earlier saved failure. Nested scopes restore the previous mode; a live owner's later healthy operations do not inherit a policy from a failure its caller already caught. The public `caught_callback_failures_leave_captures_with_their_owner` table pins healthy and panicking nested-close captures, the exact first observer failure, terminal state, stale requests, and repeated close.
+- **Nested focus cleanup inherits a caught observer failure.** A scoped owner-local `CloseMode` is established before subsequent observers or queued-retirement diagnostics run, and updated immediately after containment before callback snapshots retire. A later observer calling `close` therefore commits terminal state and destroys opaque captures under containment, discarding their failures, so the earlier saved failure stays the one reported (ADR-0281). Nested scopes restore the previous mode; a live owner's later healthy operations do not inherit a policy from a failure its caller already caught. The public `caught_callback_failures_leave_captures_with_their_owner` table pins healthy and panicking nested-close captures, the exact first observer failure, terminal state, stale requests, and repeated close.
 
 - **Scoped hit-test transforms survive caught panics.** `with_paint_offset` and `with_paint_transform` restore their entry transform depth through `TransformGuard`, whether the callback returns or unwinds. Pending transform parts may have become globalized while entries were added, so rollback restores the combined depth rather than blindly popping one part. The rendering consumer `hit_test_matrix` catches a transformed descendant failure and checks the healthy sibling's emitted local coordinates. Raw pushes still require balanced pops; scopes do not authorize removing their ancestors' transforms.
 
@@ -730,12 +729,12 @@ destroyed. A capture destructor
 may query or remove the same pointer and register its next route; that new route
 survives the outer removal. An ordinary destructor panic propagates after the
 registry transaction commits. Framework-owned callback collections retire each
-callback independently. After the first failure, the remaining opaque callback
-handles are retained; during an active unwind all removed callback handles are
-retained. This exceptional-path retention prevents a later destructor from
-competing with the first failure. It does not contain multiple panicking
-destructors inside a single opaque callback capture. `remove_route` and
-`remove_global_handler` retain the caller's callback handle.
+callback independently. After the first failure, the remaining callback handles
+are still destroyed, each under containment, so a later destructor panic is
+discarded and cannot replace the first failure (ADR-0281). While the thread
+already unwinds, the first failure is discarded rather than raised; a
+destructor that panics there aborts, as in std. `remove_route` and
+`remove_global_handler` leave the caller's callback handle with the caller.
 Final owner destruction detaches both registries through exclusive `get_mut`
 access before applying the same retirement fence across pointer and global
 callbacks. No diagnostics run between detachment and retirement. A weak handle
@@ -747,11 +746,11 @@ capture reentry and a panic after reentry, then delivers the next contact throug
 `GestureBinding` to the replacement route.
 `pointer_router_competing_retirement_preserves_first_failure_and_recovery`
 uses bounded child processes for each collection-removal operation, with one or
-two separately stored hostile captures and removal during an active unwind. It
-checks the original failure, retained tail and actual next-contact delivery.
-The same bounded family covers last-owner destruction with one hostile capture,
-pointer/global capture competition and an active unwind, including weak-owner
-refusal during retirement.
+two separately stored hostile captures. It checks the original failure, that
+every capture is destroyed exactly once, and actual next-contact delivery.
+The same bounded family covers last-owner destruction with one hostile capture
+and pointer/global capture competition, including weak-owner refusal during
+retirement.
 
 ## Focus traversal policy snapshots
 
@@ -764,7 +763,7 @@ by `tab_and_shift_tab_move_the_focus_through_the_actions_chain`.
 
 Sorting borrows policy and candidate ownership held outside its containment
 boundary. Retirement preserves the first sorting or destructor failure and
-retains later opaque owners. Traversal during an existing unwind returns no
+destroys later opaque owners under containment (ADR-0281). Traversal during an existing unwind returns no
 order without invoking user sorting code. The public Tab and Shift-Tab row
 `tab_traversal_preserves_failure_before_policy_and_candidate_retirement` covers
 policy replacement, last-owner retirement competition and subsequent traversal.
@@ -802,27 +801,26 @@ and failing key callbacks, the first focus failure and subsequent delivery.
 
 Focus closure detaches the complete node tree and withdraws node properties
 before callbacks can inspect or reenter it. The first callback or retirement
-failure remains authoritative; later opaque owners are retained. Ordinary
+failure remains authoritative; later opaque owners are destroyed under containment (ADR-0281). Ordinary
 notifications retain their established delivery contract, while terminal
 notifications stop after failure or during an outer unwind. Key dispatch uses
 registry identities and weak snapshots, so removing a still-owned handler
 prevents its invocation in the current turn. The protected current callback is
 retired separately after invocation. The existing
 `focus_failure_and_reentrancy_matrix` covers committed terminal state, independent
-capture retirement, active unwind, reentrant close during key delivery, removed
-live handlers and subsequent healthy delivery. Its hostile competition cases run
-in bounded child processes. An aggregate user capture whose own destructors
-double-panic before returning to the containment boundary remains outside this
-guarantee.
+capture retirement with each capture destroyed exactly once, reentrant close
+during key delivery, removed live handlers and subsequent healthy delivery. A
+destructor that panics while it is itself unwinding aborts, as in std, and has
+no guard (ADR-0281).
 
-Retention keeps only what dropping would destroy. A callback, handler or
-policy snapshot that is not the last `Rc` owner is released after a caught
-failure, so its captures still die with the manager, node or scope that
-registered them (`caught_callback_failures_leave_captures_with_their_owner`).
+After a caught failure, a callback, handler or policy snapshot is still
+destroyed, under containment, so its captures never outlive the manager, node
+or scope that registered them (`caught_callback_failures_leave_captures_with_their_owner`,
+ADR-0281).
 
 Closed-manager rejection uses the same ownership fence for incoming callbacks,
 contexts, rectangle providers and traversal policies. Healthy rejected values
-retire outside borrows; an existing unwind retains opaque incoming ownership.
+retire outside borrows; during an existing unwind they are destroyed too.
 Rejection cannot reinstate a terminal owner. The row
 `closed_rejections_preserve_outer_failure_and_healthy_retirement` covers all
 seven rejection paths, healthy destructor reentry, ordinary retirement failure
@@ -966,15 +964,13 @@ keep accepted delivery debt separate from hook availability; a prior accepted
 tail precedes newer work, and each grant rechecks the current commit gate and
 lifecycle. Closure cancels its remaining tail. Detach, replacement, close,
 deferred grants and owner drop share one retirement path: it preserves the
-first failure, and after it, or while the thread is already unwinding, retains
-the remaining stores and callbacks instead of starting another destructor
-(ADR-0127). Owner drop follows the same order and retains the failure it
-cannot propagate. The public `text_input_retirement_allows_reentry_and_preserves_recovery`
-table pins replacement, owner release, custom store destructor competition,
-grant ordering, gate changes and the next operation;
-`text_input_owners_are_retained_after_a_failure_and_during_unwind` runs a
-store whose destructor panics twice after a failed callback and under an
-unwinding owner drop, each in its own process.
+first failure and destroys the remaining stores and callbacks under
+containment, discarding their later failures (ADR-0281). Owner drop follows the
+same order and discards the failure it cannot propagate. The public
+`text_input_retirement_allows_reentry_and_preserves_recovery` table pins
+replacement, owner release, custom store destructor competition, grant
+ordering, gate changes, destruction after a failed callback and under an
+unwinding owner drop, and the next operation.
 
 Allocating a `ClientToken` reserves identity; committing an active client admits
 the replacement. Supersession follows the last successful admission, so failed
@@ -991,8 +987,9 @@ interaction-lane owners in the close mode the runtime passes down
 closed owner admits no new work, and a cached route that spans presentations
 skips the closed one's targets while a sibling's targets stay callable. Each
 owner removes its callbacks from its locks before dropping them. In preserving
-mode, the callbacks still owned are retained rather than dropped
-([ADR-0127](../../../docs/adr/ADR-0127-exceptional-path-retention.md)); a healthy
+mode, optional callbacks are skipped and the callbacks still owned are
+destroyed with each destructor under containment
+([ADR-0281](../../../docs/adr/ADR-0281-a-destructor-that-panics-during-an-unwind-aborts-as-in-std.md)); a healthy
 close, and a later call that a closed owner rejects, drop them normally.
 
 `GestureBinding` closes in two steps. Closing sets a flag; the state each
@@ -1042,6 +1039,6 @@ or haptics are turned off, or when the presentation closes.
   observers are retired outside every borrow.
 - `close` resolves the queue, runs one final pass, reports what it could not
   deliver with its ticket, and retires the observers. `withdraw`, the close after
-  a failure that preserves ownership, runs no observer code: pending outcomes are
-  reported, and observers are retained, never dropped (ADR-0127,
+  a failure, runs no observer code: pending outcomes are reported, and each
+  observer is destroyed under containment (ADR-0281,
   `withdrawing_runs_no_observer_code`).

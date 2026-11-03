@@ -1,20 +1,21 @@
 //! `flui mcp`: an MCP server over stdio that forwards to a running app's
-//! development endpoint (ADR-0095 §3).
+//! driver agent (ADR-0239).
 //!
 //! The agent sees one MCP server whichever FLUI app it drives. Four tools map
-//! one to one onto the endpoint's operations:
+//! one to one onto the agent's methods:
 //!
-//! | Tool | Endpoint op | Does |
+//! | Tool | Method | Does |
 //! |---|---|---|
-//! | `flui_windows` | `windows` | lists the windows that have content |
-//! | `flui_read` | `read` | reads a window's semantics tree |
-//! | `flui_act` | `act` | performs an advertised action on an element |
-//! | `flui_motion` | `motion` | reads, pauses or steps the animation clock |
+//! | `flui_windows` | `windows.list` | lists the windows that have content |
+//! | `flui_read` | `semantics.read` | reads a window's semantics tree |
+//! | `flui_act` | `semantics.act` | performs an advertised action on an element |
+//! | `flui_motion` | `motion.set` | reads, pauses or steps the animation clock |
 //!
 //! A tool that takes a `window` may leave it out when the app has exactly one.
-//! Replies carry the endpoint's JSON as text; a failure carries ADR-0080's
-//! error object (`code`, `message`, `retry`, …) so the agent branches on the
-//! code, not the prose.
+//! Each call's parameters are checked against the method's parameter type
+//! before they are sent. Replies carry the app's JSON as text; a failure
+//! carries ADR-0080's error object (`code`, `message`, `retry`, …) so the
+//! agent branches on the code, not the prose.
 //!
 //! The server connects on the first tool call, so a client can register
 //! `flui mcp` before the app exists and the app can restart under it: a
@@ -27,6 +28,11 @@ use std::io::{self, BufRead, Write};
 use std::path::PathBuf;
 use std::time::Duration;
 
+use flui_protocol::method::{
+    Method, MethodEffect, MotionSet, SemanticsAct, SemanticsRead, WindowsList,
+};
+use serde::Serialize;
+use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
 use super::client::{Connection, Failure};
@@ -53,8 +59,8 @@ sees a settled frame. A failure carries a stable `code` and a `retry` hint; \
 /// What a tool call talks to. [`Live`] is the running app; tests supply a
 /// canned one.
 pub(crate) trait Agent {
-    /// Runs one endpoint operation with `fields` merged into its request.
-    fn call(&mut self, op: &str, fields: Value) -> Result<Value, Failure>;
+    /// Calls the agent's `method` with `params`.
+    fn call(&mut self, method: &str, params: Value) -> Result<Value, Failure>;
 }
 
 /// Serves MCP on `input` and `output` until `input` ends.
@@ -149,7 +155,7 @@ fn tools() -> Value {
         },
         {
             "name": "flui_act",
-            "description": "Perform one action a node advertised in its `actions` (invoke, toggle, set_value, select, focus, expand, collapse, scroll_into_view). The reply means the app received it; read the tree to see its effect. A `timeout` error with effect `may_have_run` means the action is still queued: read before repeating it.",
+            "description": "Perform one action a node advertised in its `actions` (invoke, toggle, set_value, select, focus, expand, collapse, scroll_into_view). The reply says how the app delivered it; read the tree to see its effect. A `timeout` error with effect `may_have_run` means the action is still queued: read before repeating it.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -193,41 +199,57 @@ fn call_tool(params: &Value, agent: &mut impl Agent) -> Result<Value, (i32, Stri
         return Err((-32602, "arguments must be an object".into()));
     };
     let outcome = match name {
-        "flui_windows" => agent.call("windows", json!({})),
+        "flui_windows" => send::<WindowsList>(agent, json!({})),
         "flui_read" => window_of(args, agent).and_then(|window| {
-            let mut query = serde_json::Map::new();
-            for (field, key) in [
-                ("root", "root"),
-                ("max_depth", "max_depth"),
-                ("max_nodes", "max_nodes"),
-            ] {
-                if let Some(value) = args.get(field) {
-                    query.insert(key.into(), value.clone());
-                }
-            }
-            agent.call("read", json!({ "window": window, "query": query }))
+            let query = picked(args, &["root", "max_depth", "max_nodes"]);
+            send::<SemanticsRead>(agent, json!({ "window": window, "query": query }))
         }),
         "flui_act" => window_of(args, agent).and_then(|window| {
             let element = required_str(args, "element")?;
             let action = required_str(args, "action")?;
-            let mut request = json!({ "element": element, "action": action });
+            // A handle from a read is scoped to its window (`e12`); a full
+            // reference (`w3/e12`) already names it.
+            let element = if element.contains('/') {
+                element.to_owned()
+            } else {
+                format!("{window}/{element}")
+            };
+            let mut params = json!({ "target": { "element": element }, "action": action });
             if let Some(value) = args.get("value") {
-                request["value"] = value.clone();
+                params["value"] = value.clone();
             }
-            agent.call("act", json!({ "window": window, "request": request }))
+            send::<SemanticsAct>(agent, params)
         }),
         "flui_motion" => window_of(args, agent).and_then(|window| {
-            let mut request = serde_json::Map::new();
-            for key in ["rate", "step_ms"] {
-                if let Some(value) = args.get(key) {
-                    request.insert(key.into(), value.clone());
-                }
-            }
-            agent.call("motion", json!({ "window": window, "request": request }))
+            let request = picked(args, &["rate", "step_ms"]);
+            send::<MotionSet>(agent, json!({ "window": window, "request": request }))
         }),
         other => return Err((-32602, format!("unknown tool: {other}"))),
     };
     Ok(tool_result(outcome))
+}
+
+/// The fields of `args` named in `keys`, as an object.
+fn picked(args: &serde_json::Map<String, Value>, keys: &[&str]) -> Value {
+    Value::Object(
+        keys.iter()
+            .filter_map(|key| Some(((*key).to_owned(), args.get(*key)?.clone())))
+            .collect::<serde_json::Map<String, Value>>(),
+    )
+}
+
+/// Calls `M` with `params`, checked against its parameter type first: what
+/// the app would refuse is refused here, before anything is sent.
+fn send<M>(agent: &mut impl Agent, params: Value) -> Result<Value, Failure>
+where
+    M: Method,
+    M::Params: Serialize + DeserializeOwned,
+{
+    let params = serde_json::from_value::<M::Params>(params)
+        .map_err(|e| invalid(&format!("{}: {e}", M::NAME)))?;
+    let params = serde_json::to_value(&params)
+        .map_err(|e| Failure::Transport(format!("{} did not serialize: {e}", M::NAME)))?;
+    agent.call(M::NAME, params)
 }
 
 /// The window a call names, or the app's only one.
@@ -241,7 +263,7 @@ fn window_of(
             .map(str::to_owned)
             .ok_or_else(|| invalid("`window` must be a string handle"));
     }
-    let listed = agent.call("windows", json!({}))?;
+    let listed = send::<WindowsList>(agent, json!({}))?;
     let windows: Vec<&str> = listed
         .get("windows")
         .and_then(Value::as_array)
@@ -286,7 +308,7 @@ fn tool_result(outcome: Result<Value, Failure>) -> Value {
             serde_json::to_string_pretty(&json!({ "error": error })).unwrap_or_default(),
             true,
         ),
-        Err(Failure::Transport(why)) => (why, true),
+        Err(Failure::Transport(why) | Failure::Unsent(why)) => (why, true),
     };
     json!({ "content": [{ "type": "text", "text": text }], "isError": is_error })
 }
@@ -337,9 +359,13 @@ impl Live {
 }
 
 impl Agent for Live {
-    fn call(&mut self, op: &str, fields: Value) -> Result<Value, Failure> {
-        // Once more on a broken connection: the app may have restarted since
-        // the last call and left a dead socket behind.
+    fn call(&mut self, method: &str, params: Value) -> Result<Value, Failure> {
+        // Once more when the connection broke: the app may have restarted
+        // since the last call and left a dead socket behind. A request that
+        // never reached it goes again; one that did goes again only when the
+        // method reads, since one that acts may have run.
+        let reads = flui_protocol::method::find(method)
+            .is_some_and(|info| info.effect == MethodEffect::ReadOnly);
         for attempt in 0..2 {
             if self.connection.is_none() {
                 self.connection = Some(self.connect()?);
@@ -348,9 +374,10 @@ impl Agent for Live {
                 .connection
                 .as_mut()
                 .expect("BUG: connected one line above");
-            match connection.request(op, fields.clone()) {
-                Err(Failure::Transport(_)) if attempt == 0 => self.connection = None,
-                Err(failure @ Failure::Transport(_)) => {
+            match connection.request(method, params.clone()) {
+                Err(Failure::Unsent(_)) if attempt == 0 => self.connection = None,
+                Err(Failure::Transport(_)) if attempt == 0 && reads => self.connection = None,
+                Err(failure @ (Failure::Transport(_) | Failure::Unsent(_))) => {
                     self.connection = None;
                     return Err(failure);
                 }
@@ -365,7 +392,7 @@ impl Agent for Live {
 mod tests {
     use super::*;
 
-    /// Answers each op from a table and records what it was asked.
+    /// Answers each method from a table and records what it was asked.
     struct Canned {
         windows: Vec<&'static str>,
         asked: Vec<(String, Value)>,
@@ -383,14 +410,14 @@ mod tests {
     }
 
     impl Agent for Canned {
-        fn call(&mut self, op: &str, fields: Value) -> Result<Value, Failure> {
-            self.asked.push((op.to_owned(), fields));
+        fn call(&mut self, method: &str, params: Value) -> Result<Value, Failure> {
+            self.asked.push((method.to_owned(), params));
             if let Some(error) = &self.fail_with {
                 return Err(Failure::Wire(error.clone()));
             }
-            Ok(match op {
-                "windows" => json!({ "windows": self.windows }),
-                _ => json!({ "ok": op }),
+            Ok(match method {
+                "windows.list" => json!({ "windows": self.windows }),
+                _ => json!({ "ok": method }),
             })
         }
     }
@@ -469,7 +496,7 @@ mod tests {
     }
 
     #[test]
-    fn a_read_forwards_its_bounds_as_the_endpoints_query() {
+    fn a_read_forwards_its_bounds_as_the_methods_query() {
         let mut agent = Canned::with_windows(&["w3"]);
         call(
             &mut agent,
@@ -479,14 +506,14 @@ mod tests {
         assert_eq!(
             agent.asked,
             [(
-                "read".to_owned(),
+                "semantics.read".to_owned(),
                 json!({ "window": "w3", "query": { "root": "e4", "max_depth": 2, "max_nodes": 50 } })
             )]
         );
     }
 
     #[test]
-    fn an_act_wraps_the_action_request_the_endpoint_reads() {
+    fn an_act_names_its_element_by_window_and_handle() {
         let mut agent = Canned::with_windows(&["w3"]);
         call(
             &mut agent,
@@ -496,48 +523,34 @@ mod tests {
         assert_eq!(
             agent.asked,
             [(
-                "act".to_owned(),
-                json!({ "window": "w3",
-                        "request": { "element": "e9", "action": "set_value", "value": "hi" } })
+                "semantics.act".to_owned(),
+                json!({ "target": { "element": "w3/e9" }, "action": "set_value", "value": "hi" })
             )]
         );
     }
 
     #[test]
-    fn a_missing_window_is_the_only_one_and_ambiguity_is_an_error_naming_them() {
-        let mut one = Canned::with_windows(&["w5"]);
-        call(&mut one, "flui_motion", json!({ "step_ms": 16 }));
-        assert_eq!(one.asked[1].1["window"], "w5");
-        assert_eq!(one.asked[1].1["request"], json!({ "step_ms": 16 }));
-
-        let mut two = Canned::with_windows(&["w1", "w2"]);
-        let reply = call(&mut two, "flui_read", json!({}));
-        assert_eq!(reply["result"]["isError"], true);
-        let text = reply["result"]["content"][0]["text"].as_str().unwrap();
-        assert!(
-            text.contains("invalid_argument") && text.contains("w1, w2"),
-            "{text}"
-        );
-        assert_eq!(two.asked.len(), 1, "no read was sent");
-
-        let mut none = Canned::with_windows(&[]);
-        let reply = call(&mut none, "flui_read", json!({}));
-        let text = reply["result"]["content"][0]["text"].as_str().unwrap();
-        assert!(
-            text.contains("not_found") && text.contains("soon"),
-            "{text}"
-        );
-    }
-
-    #[test]
-    fn an_act_without_its_element_is_refused_before_anything_is_sent() {
+    fn a_call_the_method_would_refuse_is_refused_before_anything_is_sent() {
+        for arguments in [
+            json!({ "window": "w1", "action": "invoke" }),
+            json!({ "window": "w1", "element": "x9", "action": "invoke" }),
+            json!({ "window": "w1", "element": "e9", "action": "dance" }),
+            json!({ "window": "window-one", "element": "e9", "action": "invoke" }),
+        ] {
+            let mut agent = Canned::with_windows(&["w1"]);
+            let reply = call(&mut agent, "flui_act", arguments.clone());
+            assert_eq!(reply["result"]["isError"], true, "{arguments}: {reply}");
+            let text = reply["result"]["content"][0]["text"].as_str().unwrap();
+            assert!(text.contains("invalid_argument"), "{arguments}: {text}");
+            assert_eq!(agent.asked.len(), 0, "{arguments}");
+        }
         let mut agent = Canned::with_windows(&["w1"]);
         let reply = call(
             &mut agent,
-            "flui_act",
-            json!({ "window": "w1", "action": "invoke" }),
+            "flui_read",
+            json!({ "window": "w1", "max_depth": -1 }),
         );
-        assert_eq!(reply["result"]["isError"], true);
+        assert_eq!(reply["result"]["isError"], true, "{reply}");
         assert_eq!(agent.asked.len(), 0);
     }
 

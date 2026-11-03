@@ -67,9 +67,9 @@ pub(in crate::navigator) fn navigator_command_identity_exhaustion_preserves_targ
 
 use crate::support::child_process::child_test;
 
-// Each case runs in its own child process: the failure it guards against is an
-// abort from a competing destructor during capacity unwind (ADR-0127), and the
-// named-operation cases spend the process-global identity counters.
+// Each case runs in its own child process: the named-operation cases spend
+// the process-global identity counters, and every refusal is checked against
+// a fresh one.
 
 child_test! {
     fn admission_at_the_last_identity_is_healthy() {
@@ -77,33 +77,13 @@ child_test! {
     }
 }
 child_test! {
-    fn admission_refusal_retains_the_route() {
-        assert_identity_admission_custody("route");
+    fn admission_refusal_destroys_route_and_commit() {
+        assert_identity_admission_custody("refused");
     }
 }
 child_test! {
-    fn admission_refusal_retains_the_commit() {
-        assert_identity_admission_custody("commit");
-    }
-}
-child_test! {
-    fn admission_refusal_retains_route_and_commit() {
-        assert_identity_admission_custody("both");
-    }
-}
-child_test! {
-    fn batch_refusal_retains_the_routes() {
+    fn batch_refusal_destroys_routes_and_commit() {
         assert_identity_batch_admission_custody("tail-route");
-    }
-}
-child_test! {
-    fn batch_refusal_retains_the_commit() {
-        assert_identity_batch_admission_custody("tail-commit");
-    }
-}
-child_test! {
-    fn batch_refusal_retains_routes_and_commit() {
-        assert_identity_batch_admission_custody("tail-both");
     }
 }
 child_test! {
@@ -117,18 +97,17 @@ child_test! {
     }
 }
 child_test! {
-    fn pop_and_push_named_with_refusal_retains_result_and_request() {
+    fn pop_and_push_named_with_refusal_destroys_result_and_request() {
         assert_named_refusal_changes_nothing("pop_and_push_named_with");
     }
 }
 child_test! {
-    fn push_named_typed_refusal_retains_the_request() {
+    fn push_named_typed_refusal_destroys_the_request() {
         assert_named_refusal_changes_nothing("push_named_typed");
     }
 }
 
-/// A user value whose destructor panics once armed: dropping it during a
-/// capacity unwind would abort the process.
+/// A caller value that counts its destruction once armed.
 struct ArmedPayload {
     armed: Arc<AtomicBool>,
     drops: Arc<AtomicU32>,
@@ -138,14 +117,13 @@ impl Drop for ArmedPayload {
     fn drop(&mut self) {
         if self.armed.load(Ordering::SeqCst) {
             self.drops.fetch_add(1, Ordering::SeqCst);
-            panic!("competing payload destruction");
         }
     }
 }
 
 /// A named operation refused at route-identity exhaustion fails whole: the
 /// departing route stays, nothing is pushed, the caller's request arguments
-/// and result are retained rather than dropped during unwind, and the same
+/// and result are destroyed during the unwind (ADR-0281), and the same
 /// handle keeps navigating.
 fn assert_named_refusal_changes_nothing(operation: &str) {
     use crate::navigator::named_route::RouteRequest;
@@ -186,8 +164,12 @@ fn assert_named_refusal_changes_nothing(operation: &str) {
     );
     assert_eq!(
         drops.load(Ordering::SeqCst),
-        0,
-        "no caller value dropped during unwind"
+        if operation == "pop_and_push_named_with" {
+            2
+        } else {
+            1
+        },
+        "every caller value is destroyed during the unwind"
     );
     armed.store(false, Ordering::SeqCst);
     assert_eq!(navigator.route_ids(), before, "nothing dismissed or pushed");
@@ -197,21 +179,14 @@ fn assert_named_refusal_changes_nothing(operation: &str) {
 }
 
 fn assert_identity_admission_custody(case: &str) {
-    if case.starts_with("tail-") {
-        assert_identity_batch_admission_custody(case);
-        return;
-    }
     use crate::navigator::overlay_route::{RouteContentBuilder, SimpleRoute};
     use std::cell::Cell;
     struct Capture {
         calls: Rc<Cell<usize>>,
-        panics: bool,
-        label: &'static str,
     }
     impl Drop for Capture {
         fn drop(&mut self) {
             self.calls.set(self.calls.get() + 1);
-            assert!(!self.panics, "{}", self.label);
         }
     }
     struct RejectedRoute {
@@ -236,14 +211,10 @@ fn assert_identity_admission_custody(case: &str) {
         settings: RouteSettings::default(),
         capture: Capture {
             calls: Rc::clone(&route_calls),
-            panics: matches!(case, "route" | "both"),
-            label: "competing rejected route destruction",
         },
     };
     let commit_capture = Capture {
         calls: Rc::clone(&commit_calls),
-        panics: matches!(case, "commit" | "both"),
-        label: "competing rejected commit destruction",
     };
     let counter = AtomicU64::new(if case == "healthy" {
         u64::MAX - 1
@@ -293,13 +264,13 @@ fn assert_identity_admission_custody(case: &str) {
         );
         assert_eq!(
             route_calls.get(),
-            0,
-            "incoming unwind retains rejected route ownership"
+            1,
+            "the rejected route is destroyed during the unwind"
         );
         assert_eq!(
             commit_calls.get(),
-            0,
-            "incoming unwind retains independent commit ownership"
+            1,
+            "the rejected commit capture is destroyed during the unwind"
         );
         assert_eq!(navigator.current(), Some(base));
         for _ in 0..2 {
@@ -326,7 +297,6 @@ fn assert_identity_batch_admission_custody(case: &str) {
         settings: RouteSettings,
         slot: RouteBindingSlot,
         drops: Rc<Cell<usize>>,
-        panics: bool,
         builds: Rc<Cell<usize>>,
     }
     impl Route for TailRoute {
@@ -347,17 +317,14 @@ fn assert_identity_batch_admission_custody(case: &str) {
     impl Drop for TailRoute {
         fn drop(&mut self) {
             self.drops.set(self.drops.get() + 1);
-            assert!(!self.panics, "competing rejected batch route destruction");
         }
     }
     struct CommitCapture {
         calls: Rc<Cell<usize>>,
-        panics: bool,
     }
     impl Drop for CommitCapture {
         fn drop(&mut self) {
             self.calls.set(self.calls.get() + 1);
-            assert!(!self.panics, "competing rejected batch commit destruction");
         }
     }
     let drops = Rc::new(Cell::new(0));
@@ -373,11 +340,9 @@ fn assert_identity_batch_admission_custody(case: &str) {
         slot: slots[index].clone(),
         drops: Rc::clone(&drops),
         builds: Rc::clone(&builds),
-        panics: matches!(case, "tail-route" | "tail-both"),
     };
     let commit = CommitCapture {
         calls: Rc::clone(&commit_calls),
-        panics: matches!(case, "tail-commit" | "tail-both"),
     };
     let navigator = NavigatorHandle::new();
     navigator.push(SimpleRoute::<()>::new(|_| {
@@ -418,10 +383,14 @@ fn assert_identity_batch_admission_custody(case: &str) {
     );
     assert_eq!(
         drops.get(),
-        0,
-        "prepared, remaining and top rejected routes retain independent custody"
+        3,
+        "prepared, remaining and top rejected routes are each destroyed once"
     );
-    assert_eq!(commit_calls.get(), 0);
+    assert_eq!(
+        commit_calls.get(),
+        1,
+        "the rejected commit capture is destroyed"
+    );
     assert_eq!(
         builds.get(),
         0,

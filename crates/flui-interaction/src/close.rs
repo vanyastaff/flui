@@ -13,26 +13,29 @@ use std::{
     },
 };
 
-use crate::retain::Retain;
-
 /// Whether terminal cleanup already owes an earlier failure to its caller.
+///
+/// Either way outgoing ownership is destroyed; after a failure each
+/// destructor runs under the close's containment (ADR-0281 §3).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CloseMode {
-    /// Deliver final notifications and ordinarily destroy outgoing ownership.
+    /// Deliver final notifications and destroy outgoing ownership.
     Ordinary,
-    /// Revoke authority, but retain outgoing opaque ownership and omit optional callbacks.
+    /// Revoke authority and omit optional callbacks; a panic of an outgoing
+    /// destructor is discarded behind the failure already owed.
     PreservingFailure,
 }
 
 /// A terminal mode outlives an owner without retaining that owner or its callbacks.
 ///
-/// Two policies hang off it. Values a preserving close withdrew stay under
-/// retention wherever their last owner later lands ([`Self::preserved`]).
-/// Values offered to or invoked through the closed owner afterwards follow
-/// [`Self::mode`], which is preserving only while a close of this owner is in
-/// progress, so a destructor that reenters during that close cannot destroy
-/// what the close owes its failure; once the close returns and its failure is
-/// caught, rejections through stale handles retire normally again.
+/// Two policies hang off it. A close of an owner whose earlier close ran, or
+/// turned, preserving is preserving too ([`Self::preserved`]), so its
+/// optional callbacks stay skipped. Values offered to or invoked through the
+/// closed owner afterwards follow [`Self::mode`], which is preserving only
+/// while a close of this owner is in progress, so a panic from a destructor
+/// that reenters during that close is discarded behind the failure the close
+/// owes (ADR-0281 §3); once the close returns and its failure is caught,
+/// rejections through stale handles retire as ordinary ones again.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct CloseTombstone(Arc<TombstoneState>);
 
@@ -141,7 +144,7 @@ impl ClosePanic {
 
     /// Keep `payload`, a failure of this close's own code the caller caught
     /// (in the order its own containment decided), as [`Self::invoke`] keeps
-    /// one: the first is raised by an ordinary close, the rest retained.
+    /// one: the first is raised by an ordinary close, the rest discarded.
     pub(crate) fn keep_caught(&mut self, payload: Box<dyn Any + Send>) {
         if let Some(terminal) = &self.terminal {
             terminal.preserve();
@@ -153,32 +156,16 @@ impl ClosePanic {
         }
     }
 
-    /// Destroy `value` ordinarily, or, once a failure is owed, retain only what
-    /// its destruction would run as user code ([`Retain`]): a shared handle
-    /// that is not the last owner is released, so a still-live owner keeps
-    /// sole custody of its captures (ADR-0127).
-    pub(crate) fn retire<T: Retain>(&mut self, value: T) {
-        if self.preserving() {
-            value.retain();
-        } else {
-            self.run(|| drop(value));
-        }
-    }
-
-    /// Release a framework-owned handle (a platform capability): dropping it
-    /// runs no user code, so it is destroyed even after a failure. Only an
-    /// unwind already in progress retains it (ADR-0127).
-    pub(crate) fn release<T>(&mut self, value: T) {
-        if std::thread::panicking() {
-            std::mem::forget(value);
-        } else {
-            let _ = self.invoke(|| drop(value));
-        }
+    /// Destroy `value` under this close's containment: a panic of its
+    /// destructor becomes the close's first failure, or is discarded behind
+    /// one already owed (ADR-0281 §3).
+    pub(crate) fn retire<T>(&mut self, value: T) {
+        let _: Option<()> = self.invoke(|| drop(value));
     }
 
     /// Keep `payload`, a failure caught before this close began (one a store
     /// parked for its presentation), ahead of the close's own: raised by an
-    /// ordinary close, retained by a preserving one (ADR-0123).
+    /// ordinary close, discarded by a preserving one (ADR-0123, ADR-0281 §2).
     pub(crate) fn keep_earlier(&mut self, payload: Box<dyn Any + Send>) {
         if self.preserving {
             flui_foundation::panic::discard_payload(payload);
@@ -201,9 +188,11 @@ impl ClosePanic {
         }
     }
 
-    pub(crate) fn finish_with<T: Default + Retain>(self, value: T) -> T {
+    /// Hand `value` back after an ordinary close; a preserving close destroys
+    /// it under containment instead and raises its first failure.
+    pub(crate) fn finish_with<T: Default>(mut self, value: T) -> T {
         if self.preserving() {
-            value.retain();
+            self.retire(value);
             self.finish();
             T::default()
         } else {

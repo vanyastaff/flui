@@ -22,12 +22,6 @@ use super::UiRuntime;
 use super::agent::{AgentError, ReplySender, send_reply};
 use crate::presentation::PresentationState;
 
-/// How long a wait holds out when the caller names no timeout.
-const DEFAULT_WAIT: Duration = Duration::from_millis(5_000);
-
-/// The longest a wait may hold out; a longer timeout is this long.
-const MAX_WAIT: Duration = Duration::from_hours(24);
-
 /// The most waits one presentation holds at once. A wait past it is refused with
 /// [`AgentError::TooManyWaits`], never dropped silently or in place of an older one.
 pub(crate) const MAX_PARKED_WAITS: usize = 256;
@@ -51,6 +45,11 @@ impl PendingWait {
         self.events.insert(kind);
     }
 
+    /// Whether anyone can still take the outcome.
+    fn is_awaited(&self) -> bool {
+        self.reply.is_awaited()
+    }
+
     /// The window closed before the wait ended.
     pub(crate) fn abandon(self) {
         send_reply(&self.reply, None, Err(AgentError::PresentationGone));
@@ -63,22 +62,15 @@ impl PendingWait {
 }
 
 impl UiRuntime {
-    /// The owner half of [`SemanticsAgent::wait`](super::SemanticsAgent::wait): evaluates the
-    /// condition against what the window has committed, and parks the wait when it does not hold
-    /// yet. Returns whether the presentation was still open.
+    /// The owner half of `wait.until`: evaluates the condition against what the window has
+    /// committed, and parks the wait when it does not hold yet.
     pub(super) fn park_agent_wait(
         &self,
-        presentation: flui_foundation::PresentationId,
+        state: &PresentationState,
         params: WaitParams,
         reply: ReplySender<WaitOutcome>,
-    ) -> bool {
-        let Some(state) = self.presentations.get(presentation) else {
-            send_reply(&reply, None, Err(AgentError::PresentationGone));
-            return false;
-        };
-        let timeout = params
-            .timeout_ms
-            .map_or(DEFAULT_WAIT, |ms| Duration::from_millis(ms).min(MAX_WAIT));
+    ) {
+        let timeout = Duration::from_millis(params.effective_timeout_ms());
         let now = state.clock().now();
         let pending = PendingWait {
             condition: params.condition,
@@ -89,19 +81,23 @@ impl UiRuntime {
         };
         // A condition that holds already, or a tree that cannot be read, answers here.
         let Some(pending) = self.settle_wait(state, pending, now) else {
-            return true;
+            return;
         };
+        // Waits nobody takes any more hold no place against the limit.
+        state
+            .agent_waits
+            .borrow_mut()
+            .retain(PendingWait::is_awaited);
         let parked = state.agent_waits.borrow().len();
         if parked >= MAX_PARKED_WAITS {
             send_reply(&pending.reply, None, Err(AgentError::TooManyWaits));
-            return true;
+            return;
         }
         let keeps_frames_coming = counts_frames(&pending.condition);
         state.agent_waits.borrow_mut().push(pending);
         if keeps_frames_coming {
             self.request_redraw_for(state);
         }
-        true
     }
 
     /// Evaluates every parked wait: after the owner presented a frame (`frame`, which also counts
@@ -119,6 +115,10 @@ impl UiRuntime {
             let mut keep = Vec::with_capacity(waits.len());
             let mut waits = waits.into_iter();
             while let Some(mut wait) = waits.next() {
+                // Nobody takes this outcome any more: let the wait go unanswered.
+                if !wait.is_awaited() {
+                    continue;
+                }
                 if frame {
                     wait.frames += 1;
                 }

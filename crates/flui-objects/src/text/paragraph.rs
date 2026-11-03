@@ -115,8 +115,8 @@ impl RenderParagraph {
     }
 
     /// Replaces the link routes. Hit testing reads them live; the
-    /// accessible link nodes change only when a route reaches a different
-    /// registration.
+    /// accessible link nodes and the links' input regions change only when a
+    /// route reaches a different registration.
     pub fn set_link_routes(
         &mut self,
         routes: Vec<TextLinkRoute>,
@@ -131,6 +131,7 @@ impl RenderParagraph {
             flui_rendering::RenderUpdateImpact::NONE
         } else {
             flui_rendering::RenderUpdateImpact::SEMANTICS
+                | flui_rendering::RenderUpdateImpact::PAINT
         }
     }
 
@@ -866,6 +867,23 @@ impl RenderBox for RenderParagraph {
             ctx.set_self_hit_cursor(CursorRequest::Icon(cursor));
         }
         true
+    }
+
+    /// A routed link takes presses on its glyphs, as hit testing routes them to it: under an
+    /// application's title bar the link is pressed and the rest of the text moves the window.
+    fn describe_input_regions(
+        &self,
+        _size: Size,
+        regions: &mut flui_rendering::input_regions::InputRegionSink,
+    ) {
+        if !self.routes_links() || !self.painter.has_layout() {
+            return;
+        }
+        for link in 0..self.runs.link_count().min(self.link_routes.len()) {
+            for text_box in self.runs.link_boxes(&self.painter, link) {
+                regions.claim_presses_over(text_box.rect);
+            }
+        }
     }
 
     /// A paragraph with routed links publishes one region per link and per

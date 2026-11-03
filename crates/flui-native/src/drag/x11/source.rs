@@ -896,7 +896,7 @@ impl X11Drag {
         } else {
             // The provider and the rest are the runtime's: dropped with no
             // cell borrowed, and contained, so a capture's failing
-            // destructor leaves the hook its outcome (ADR-0127 §2).
+            // destructor leaves the hook its outcome (ADR-0281).
             contain_owner_callback(|| drop(session));
         }
         if let Then::End(on_end, outcome) = then {

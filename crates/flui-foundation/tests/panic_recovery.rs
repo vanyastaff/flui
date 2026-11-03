@@ -422,6 +422,46 @@ fn a_later_payload_with_a_panicking_destructor_is_contained() {
         .expect_err("the first failure resumes");
     assert_eq!(resumed.downcast_ref::<&str>(), Some(&"first failure"));
 }
+
+/// ADR-0281 §3: a value destroyed after a caught failure that stays the
+/// first one is dropped, and its destructor's panic is discarded.
+fn drop_contained_destroys_the_value_and_discards_its_panic() {
+    let hostile = Arc::new(AtomicUsize::new(0));
+    let value = HostileDrop(Arc::clone(&hostile));
+    let returned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+        flui_foundation::panic::drop_contained(value);
+    }));
+    assert!(returned.is_ok(), "the destructor's panic is discarded");
+    assert_eq!(
+        hostile.load(Ordering::Relaxed),
+        1,
+        "the value was destroyed"
+    );
+}
+
+/// A `FirstPanic` resumed from a `Drop` that an earlier failure's unwind
+/// runs discards what it holds: the unwinding failure is the first one, and
+/// raising out of that destructor would abort (ADR-0281 §1).
+fn a_first_panic_resumed_during_an_unwind_discards_what_it_holds() {
+    struct ResumesOnDrop(Arc<AtomicUsize>);
+    impl Drop for ResumesOnDrop {
+        fn drop(&mut self) {
+            let mut first = flui_foundation::panic::FirstPanic::new();
+            first.contain(|| panic!("later failure"));
+            first.resume();
+            self.0.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+    let resumed = Arc::new(AtomicUsize::new(0));
+    let guard = ResumesOnDrop(Arc::clone(&resumed));
+    let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+        let _guard = guard;
+        panic!("first failure");
+    }))
+    .expect_err("the first failure unwinds");
+    assert_eq!(unwound.downcast_ref::<&str>(), Some(&"first failure"));
+    assert_eq!(resumed.load(Ordering::Relaxed), 1, "resume returned");
+}
 #[test]
 fn recovery_preserves_provenance_and_owned_failure() {
     crate::run_table(&[
@@ -440,6 +480,14 @@ fn recovery_preserves_provenance_and_owned_failure() {
         (
             "later payload with a panicking destructor",
             a_later_payload_with_a_panicking_destructor_is_contained,
+        ),
+        (
+            "contained drop of a panicking destructor",
+            drop_contained_destroys_the_value_and_discards_its_panic,
+        ),
+        (
+            "first panic resumed during an unwind",
+            a_first_panic_resumed_during_an_unwind_discards_what_it_holds,
         ),
         (
             "unproved retirement",

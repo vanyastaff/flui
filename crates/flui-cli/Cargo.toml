@@ -52,8 +52,9 @@ bin-dir = "{ bin }{ binary-ext }"
 pkg-fmt = "zip"
 
 [dependencies]
-# The CLI has no internal dependency at all: the build pipeline (`src/build/`)
-# and the source watcher (`src/watch.rs`) are modules here, the hot-reload
+# The one internal dependency is the contract crate `flui-protocol`, for the
+# driver agent's launch contract and wire types (ADR-0239). The build pipeline
+# (`src/build/`) and the source watcher (`src/watch.rs`) are modules here, the hot-reload
 # runtime half stays in `flui-hot-reload`, linked by the app, with the env-var
 # contract checked by a dev-dependency test in `commands/run.rs`, and there is
 # no logging framework — `-v` diagnostics go through `ui::debug` like every
@@ -92,9 +93,11 @@ toml_edit = "0.25"
 which = { workspace = true }
 
 # `flui run --agent`'s launch token, and `flui mcp`'s connection to the app's
-# development endpoint (a named pipe or Unix socket, ADR-0095 §3).
+# driver agent (a named pipe or Unix socket, ADR-0239), in the protocol
+# `flui-protocol` defines.
 getrandom = { workspace = true }
 interprocess = { workspace = true }
+flui-protocol = { workspace = true, features = ["serde"] }
 
 # Terminal drawing (`ui.rs`) and the prompts of `flui create` / `platform
 # remove`. `console` alone draws the bar, the glyphs and the spinner;

@@ -705,7 +705,7 @@ fn dispatched_client_retirement_after_a_failure() {
     assert_eq!(
         raised(|| owner.dispatch(&ImeEvent::Commit("a".into()))).as_deref(),
         Some("listener failure"),
-        "the client is retained, not destroyed, after the failure"
+        "the client is destroyed under containment after the failure"
     );
     the_owner_keeps_working(&owner);
 }
@@ -978,7 +978,7 @@ fn host_detaching_then_panicking() {
     assert_eq!(
         raised(|| owner.complete_composition()).as_deref(),
         Some("complete failure"),
-        "the completed store is retained, not destroyed, after the failure"
+        "the completed store is destroyed under containment after the failure"
     );
     assert_eq!(
         *log.borrow(),
@@ -1294,8 +1294,7 @@ fn host_completion_inside_a_failing_grant_then_closed() {
 
 /// An owner dropped without a close, holding the last owners of two stores
 /// that owe a queued commit, both of whose destructors panic: they retire one
-/// at a time, the second retained behind the first, so the drop neither
-/// aborts nor raises.
+/// at a time, each under containment, so the drop neither aborts nor raises.
 fn owner_dropped_with_two_completing_stores_whose_drops_panic() {
     let owner = owner();
     for message in [
@@ -1558,7 +1557,7 @@ const ROWS: &[(&str, fn())] = &[
     ),
     (
         "arbiter: a sync grant behind a failing one",
-        arbiter_retaining_a_sync_grant_behind_a_failing_one,
+        arbiter_destroying_a_sync_grant_behind_a_failing_one,
     ),
     (
         "store: dropped during an unwind with a queued grant",
@@ -1771,12 +1770,12 @@ fn owner_code_is_contained_at_every_point() {
 // ----------------------------------------------------------------------------
 
 /// Requests a synchronous grant of `store` when dropped; the grant holds a
-/// capture that panics when destroyed.
-struct RequestsWhenDropped(Rc<dyn TextStore>);
+/// capture that counts its destruction.
+struct RequestsWhenDropped(Rc<dyn TextStore>, Rc<Cell<usize>>);
 
 impl Drop for RequestsWhenDropped {
     fn drop(&mut self) {
-        let capture = PanicsOnDrop("refused grant capture destroyed");
+        let capture = CountsDrops(Rc::clone(&self.1));
         let _ = self.0.request_lock(
             LockGrant::read(move |_| {
                 let _keep_alive = &capture;
@@ -1792,14 +1791,21 @@ fn arbiter_refusing_a_grant_during_an_unwind() {
     store.set_commit_gate(gate.clone());
     gate.set_open(false);
     let requester: Rc<dyn TextStore> = store.clone();
+    let drops = Rc::new(Cell::new(0));
+    let counted = Rc::clone(&drops);
     assert_eq!(
         raised(move || {
-            let _requests = RequestsWhenDropped(requester);
+            let _requests = RequestsWhenDropped(requester, counted);
             panic!("unwinding");
         })
         .as_deref(),
         Some("unwinding"),
-        "the refused grant is retained, not destroyed during the unwind"
+        "the incoming failure is the one raised"
+    );
+    assert_eq!(
+        drops.get(),
+        1,
+        "the refused grant is destroyed during the unwind (ADR-0281)"
     );
     gate.set_open(true);
     assert_eq!(
@@ -1843,7 +1849,7 @@ fn arbiter_keeping_an_async_grant_behind_a_failing_one() {
     assert_eq!(store.text(), "b");
 }
 
-fn arbiter_retaining_a_sync_grant_behind_a_failing_one() {
+fn arbiter_destroying_a_sync_grant_behind_a_failing_one() {
     let (store, gate) = store_with_a_failing_queued_grant();
     let capture = PanicsOnDrop("sync grant capture destroyed");
     assert_eq!(
@@ -1857,7 +1863,7 @@ fn arbiter_retaining_a_sync_grant_behind_a_failing_one() {
         })
         .as_deref(),
         Some("queued grant failure"),
-        "the grant that could not run is retained, not destroyed during the unwind"
+        "the grant that could not run is destroyed under containment"
     );
     assert_eq!(
         edit(&*store, "b"),
@@ -1890,7 +1896,7 @@ fn store_dropped_during_an_unwind_with_a_queued_grant() {
         })
         .as_deref(),
         Some("unwinding"),
-        "the queued grant is retained, not destroyed during the unwind"
+        "the queued grant is destroyed under containment during the unwind"
     );
     let next = InMemoryTextStore::new("");
     assert_eq!(edit(&*next, "a"), Ok(LockOutcome::Granted));
@@ -1935,7 +1941,7 @@ fn store_refusing_a_grant_when_its_flush_fails() {
         })
         .as_deref(),
         Some("observer failure"),
-        "the grant the request could not admit is retained"
+        "the grant the request could not admit is destroyed under containment"
     );
     store.set_observer(None);
     assert_eq!(
@@ -2015,14 +2021,21 @@ fn editable_refusing_a_grant_once_unmounted() {
     let mut harness = focused(EditableText::new(controller, Rc::clone(&node)), &node);
     let field = field(&harness);
     harness.swap_root(flui_widgets::SizedBox::new(1.0, 1.0));
+    let drops = Rc::new(Cell::new(0));
+    let counted = Rc::clone(&drops);
     assert_eq!(
         raised(move || {
-            let _requests = RequestsWhenDropped(field);
+            let _requests = RequestsWhenDropped(field, counted);
             panic!("unwinding");
         })
         .as_deref(),
         Some("unwinding"),
-        "the refused grant is retained, not destroyed during the unwind"
+        "the incoming failure is the one raised"
+    );
+    assert_eq!(
+        drops.get(),
+        1,
+        "the refused grant is destroyed during the unwind (ADR-0281)"
     );
     assert_eq!(raised(|| harness.tick()), None, "the next frame");
 }
@@ -2244,7 +2257,7 @@ fn attach_with_a_store_failing_to_take_the_gate() {
         })
         .as_deref(),
         Some("store failure installing the gate"),
-        "the rejected client is retained, not destroyed during the unwind"
+        "the rejected client is destroyed under containment during the unwind"
     );
     the_owner_keeps_working(&owner);
 }
@@ -2820,10 +2833,10 @@ fn arbiter_refusing_a_grant_when_the_queue_is_full_during_an_unwind() {
         );
     }
     /// Requests an asynchronous grant of a full queue when dropped.
-    struct RequestsAsync(Rc<InMemoryTextStore>);
+    struct RequestsAsync(Rc<InMemoryTextStore>, Rc<Cell<usize>>);
     impl Drop for RequestsAsync {
         fn drop(&mut self) {
-            let capture = PanicsOnDrop("refused grant capture destroyed");
+            let capture = CountsDrops(Rc::clone(&self.1));
             let outcome = self.0.request_lock(
                 LockGrant::read(move |_| {
                     let _keep_alive = &capture;
@@ -2834,14 +2847,21 @@ fn arbiter_refusing_a_grant_when_the_queue_is_full_during_an_unwind() {
         }
     }
     let requester = Rc::clone(&store);
+    let drops = Rc::new(Cell::new(0));
+    let counted = Rc::clone(&drops);
     assert_eq!(
         raised(move || {
-            let _requests = RequestsAsync(requester);
+            let _requests = RequestsAsync(requester, counted);
             panic!("unwinding");
         })
         .as_deref(),
         Some("unwinding"),
-        "the grant the full queue refused is retained, not destroyed during the unwind"
+        "the incoming failure is the one raised"
+    );
+    assert_eq!(
+        drops.get(),
+        1,
+        "the grant the full queue refused is destroyed during the unwind (ADR-0281)"
     );
     gate.set_open(true);
     assert_eq!(
@@ -2891,7 +2911,7 @@ fn anchor_retiring_stores_whose_drops_panic() {
         })
         .as_deref(),
         Some("first retired store destroyed"),
-        "the anchor retires its stores inside its scope: the first failure, the second retained"
+        "the anchor retires its stores inside its scope: the first failure is raised, the second destroyed under containment"
     );
     the_owner_keeps_working(&owner);
 }
@@ -2910,7 +2930,7 @@ fn attach_rejected_by_a_closed_owner() {
         })
         .as_deref(),
         Some("rejected store destroyed"),
-        "the rejected client retires inside the close's containment: store first, the callback retained"
+        "the rejected client retires inside the close's containment: store first, the callback destroyed under containment"
     );
     the_owner_keeps_working(&self::owner());
 }
@@ -3465,7 +3485,7 @@ fn editable_store_outliving_its_field() {
     assert_eq!(
         raised(move || drop(field)).as_deref(),
         Some("on_changed capture destroyed"),
-        "the store retires its last handles in order; the controller is retained after the failure"
+        "the store retires its last handles in order; the controller is destroyed under containment after the failure"
     );
     assert_eq!(raised(|| harness.tick()), None, "the next frame");
 }

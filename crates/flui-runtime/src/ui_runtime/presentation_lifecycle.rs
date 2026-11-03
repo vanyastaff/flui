@@ -13,9 +13,10 @@ use crate::lifecycle_state::{
 };
 
 /// The close mode for the next terminal step of a lifecycle pass: preserving
-/// once a failure is held or the thread is already unwinding (ADR-0123).
+/// once a failure is held (ADR-0123). Unwinding is no reason to retain
+/// (ADR-0281 §1).
 fn terminal_close_mode(failure_held: bool) -> flui_interaction::__runtime::CloseMode {
-    if failure_held || std::thread::panicking() {
+    if failure_held {
         flui_interaction::__runtime::CloseMode::PreservingFailure
     } else {
         flui_interaction::__runtime::CloseMode::Ordinary
@@ -489,15 +490,15 @@ impl UiRuntime {
     }
 
     /// Keeps the first failure of a lifecycle pass. Once any failure is held,
-    /// or the thread is already unwinding, every closing presentation's
-    /// lifecycle source switches to preserving mode (ADR-0123).
+    /// every closing presentation's lifecycle source switches to preserving
+    /// mode (ADR-0123).
     fn record_lifecycle_failure(
         &self,
         first_panic: &mut Option<Box<dyn std::any::Any + Send>>,
         failure: Option<Box<dyn std::any::Any + Send>>,
         phase: &'static str,
     ) {
-        if first_panic.is_some() || failure.is_some() || std::thread::panicking() {
+        if first_panic.is_some() || failure.is_some() {
             self.seed_terminal_lifecycle_recovery();
         }
         preserve_first_lifecycle_panic(first_panic, failure, phase);
@@ -520,7 +521,7 @@ impl UiRuntime {
             .filter(|presentation| presentation.closing_requested.get())
             .map(|presentation| presentation.widgets().lifecycle_source().close_window())
             .collect();
-        if first_panic.is_some() || std::thread::panicking() {
+        if first_panic.is_some() {
             self.seed_terminal_lifecycle_recovery();
         }
         let transitions: Vec<_> = self

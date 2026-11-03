@@ -181,16 +181,6 @@ kind = "double"
 names = ["RecordingBridge"]
 
 [[allow]]
-path = "crates/flui-scheduler/src/async_driver.rs"
-kind = "double"
-names = ["Probe"]
-
-[[allow]]
-path = "crates/flui-scheduler/src/post_frame.rs"
-kind = "double"
-names = ["Probe"]
-
-[[allow]]
 path = "crates/flui-scheduler/tests/async_driver_unwind.rs"
 kind = "double"
 names = ["ProbeFuture"]

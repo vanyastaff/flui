@@ -269,9 +269,9 @@ fn answer_of<T>(
     }
 }
 
-/// Logs a panic where the work ran and keeps its payload, whose destructor
-/// may panic too, off the unwinding path. A panicking log is contained and
-/// kept the same way, so reporting never stops the answer.
+/// Logs a panic where the work ran and destroys its payload under
+/// containment (ADR-0281). A panicking log is contained and discarded the
+/// same way, so reporting never stops the answer.
 fn panicked(payload: Box<dyn std::any::Any + Send>) -> BackgroundError {
     let report = catch_unwind(AssertUnwindSafe(|| {
         tracing::error!(
@@ -391,7 +391,7 @@ impl<T: Send + 'static> Future for Cancellable<T> {
                 Ok(Poll::Pending) => return Poll::Pending,
                 Ok(Poll::Ready(value)) => Ok(value),
                 Err(payload) => {
-                    std::mem::forget(this.future.take());
+                    crate::drop_contained(this.future.take());
                     Err(panicked(payload))
                 }
             }

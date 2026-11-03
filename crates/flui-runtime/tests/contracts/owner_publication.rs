@@ -57,70 +57,63 @@ impl Drop for RetirementCapture {
 }
 
 fn cancelled_proposal_preserves_retirement_and_retention_policy() {
-    for outer_failure in [false, true] {
-        for (first, second) in [
-            (None, None),
-            (Some("runtime capture"), None),
-            (None, Some("factory capture")),
-            (Some("runtime capture"), Some("factory capture")),
-        ] {
-            let owner = OwnerHost::new();
-            let wake_retired = Arc::new(AtomicUsize::new(0));
-            let local_retired = Arc::new(AtomicUsize::new(0));
-            let wake_capture = RetirementCapture {
-                retired: Arc::clone(&wake_retired),
-                failure: second,
-            };
-            let runtime = runtime_with_wake(Arc::new(move || {
-                std::hint::black_box(&wake_capture);
-            }));
-            let local_capture = RetirementCapture {
-                retired: Arc::clone(&local_retired),
-                failure: first,
-            };
-            let post_frame = runtime.owner_frame().post_frame_handle();
-            post_frame
-                .schedule(move |_| drop(local_capture))
-                .expect("live runtime accepts capture");
-            let prepared = owner.prepare_runtime(runtime);
-            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                let permit = owner.publication(prepared).expect("reserve publication");
-                assert!(!outer_failure, "outer failure");
-                drop(permit);
-            }));
-            // ADR-0136 retains post-frame callbacks during an existing unwind,
-            // but closes their lane before retaining the opaque captures.
-            assert_eq!(
-                local_retired.load(Ordering::SeqCst),
-                usize::from(!outer_failure)
-            );
-            // ADR-0127 retains the last factory's opaque captures after a held
-            // runtime failure as well as during an existing unwind.
-            assert_eq!(
-                wake_retired.load(Ordering::SeqCst),
-                usize::from(!outer_failure && first.is_none())
-            );
-            assert!(
-                post_frame.schedule(|_| {}).is_err(),
-                "retention cannot leave callback admission open"
-            );
-            let expected = if outer_failure {
-                Some("outer failure")
-            } else {
-                first.or(second)
-            };
-            match expected {
-                Some(expected) => {
-                    let failure = result.expect_err("first failure propagates");
-                    assert_eq!(failure.downcast_ref::<&str>(), Some(&expected));
-                }
-                None => result.expect("healthy cancellation"),
+    // A capture that panics while an outer failure unwinds aborts, as in std
+    // (ADR-0281), so the outer failure runs only with healthy captures.
+    for (outer_failure, first, second) in [
+        (false, None, None),
+        (false, Some("runtime capture"), None),
+        (false, None, Some("factory capture")),
+        (false, Some("runtime capture"), Some("factory capture")),
+        (true, None, None),
+    ] {
+        let owner = OwnerHost::new();
+        let wake_retired = Arc::new(AtomicUsize::new(0));
+        let local_retired = Arc::new(AtomicUsize::new(0));
+        let wake_capture = RetirementCapture {
+            retired: Arc::clone(&wake_retired),
+            failure: second,
+        };
+        let runtime = runtime_with_wake(Arc::new(move || {
+            std::hint::black_box(&wake_capture);
+        }));
+        let local_capture = RetirementCapture {
+            retired: Arc::clone(&local_retired),
+            failure: first,
+        };
+        let post_frame = runtime.owner_frame().post_frame_handle();
+        post_frame
+            .schedule(move |_| drop(local_capture))
+            .expect("live runtime accepts capture");
+        let prepared = owner.prepare_runtime(runtime);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let permit = owner.publication(prepared).expect("reserve publication");
+            assert!(!outer_failure, "outer failure");
+            drop(permit);
+        }));
+        // Every capture is destroyed, after a held failure and during an
+        // outer unwind alike (ADR-0281 §3).
+        assert_eq!(local_retired.load(Ordering::SeqCst), 1);
+        assert_eq!(wake_retired.load(Ordering::SeqCst), 1);
+        assert!(
+            post_frame.schedule(|_| {}).is_err(),
+            "cancellation closes callback admission"
+        );
+        let expected = if outer_failure {
+            Some("outer failure")
+        } else {
+            first.or(second)
+        };
+        match expected {
+            Some(expected) => {
+                let failure = result.expect_err("first failure propagates");
+                assert_eq!(failure.downcast_ref::<&str>(), Some(&expected));
             }
-            let _ = owner
-                .publication(owner.prepare_runtime(self::runtime()))
-                .expect("publication remains usable after cancellation")
-                .commit();
+            None => result.expect("healthy cancellation"),
         }
+        let _ = owner
+            .publication(owner.prepare_runtime(self::runtime()))
+            .expect("publication remains usable after cancellation")
+            .commit();
     }
 }
 

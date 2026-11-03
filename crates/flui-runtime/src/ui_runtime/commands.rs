@@ -1,7 +1,6 @@
 //! The owner inbox: `UiCommand`, `UiCommandSender`, and draining it on the owner thread.
 
 use super::UiRuntime;
-use super::agent::Served;
 use super::input::preserve_first_input_panic;
 use crossbeam_channel::{Sender, TrySendError};
 use flui_foundation::PresentationId;
@@ -86,114 +85,23 @@ pub enum UiCommand {
         /// The node the cursor is on, or `None` off the tree.
         node: Option<accesskit::NodeId>,
     },
-    /// Read the addressed presentation's semantics tree as wire nodes, for
-    /// a [`SemanticsAgent`](super::SemanticsAgent), and answer on `reply`.
-    SemanticsRead {
-        /// The presentation the agent was vended for.
+    /// One window method of the development agent's, for the addressed presentation: run at
+    /// the drain, answered through the call's reply (`agent_serve`).
+    Agent {
+        /// The presentation the agent's window addresses.
         presentation_id: PresentationId,
-        /// How much of the tree to read.
-        query: flui_protocol::ReadQuery,
-        /// Whether the agent's reads ever reported the query's root; true
-        /// when the query has none.
-        issued: bool,
-        /// Where the answer goes.
-        reply: super::agent::ReplySender<flui_protocol::Tree>,
-    },
-    /// Read the announcements the addressed presentation delivered, for a
-    /// [`SemanticsAgent`](super::SemanticsAgent), and answer on `reply`.
-    SemanticsAnnouncements {
-        /// The presentation the agent was vended for.
-        presentation_id: PresentationId,
-        /// Which announcements to answer.
-        params: flui_protocol::AnnouncementsParams,
-        /// Where the answer goes.
-        reply: super::agent::ReplySender<flui_protocol::AnnouncementJournal>,
-    },
-    /// Resolve an agent's wire action against the addressed presentation's
-    /// committed tree, invoke it, and answer on `reply`.
-    SemanticsAgentAction {
-        /// The presentation the agent was vended for.
-        presentation_id: PresentationId,
-        /// The element and action.
-        request: flui_protocol::ActionRequest,
-        /// Whether the agent's reads ever reported the element.
-        issued: bool,
-        /// Where the answer goes.
-        reply: super::agent::ReplySender<()>,
-    },
-    /// As [`Self::SemanticsAgentAction`], and read the tree back once the
-    /// action's effect has settled: the frame after the action ran.
-    SemanticsAgentActionRead {
-        /// The presentation the agent was vended for.
-        presentation_id: PresentationId,
-        /// The element and action.
-        request: flui_protocol::ActionRequest,
-        /// What to read back.
-        snapshot: flui_protocol::Snapshot,
-        /// Whether the agent's reads ever reported the element.
-        issued: bool,
-        /// Where the outcome goes.
-        reply: super::agent::ReplySender<flui_protocol::ActOutcome>,
-    },
-    /// Hold out for a condition on the addressed presentation: answered when a frame makes it
-    /// hold or its deadline passes (not at the drain, unless it holds already).
-    SemanticsAgentWait {
-        /// The presentation the agent was vended for.
-        presentation_id: PresentationId,
-        /// The condition, window and timeout.
-        params: Box<flui_protocol::WaitParams>,
-        /// Where the outcome goes.
-        reply: super::agent::ReplySender<flui_protocol::WaitOutcome>,
+        /// The method, its parameters and its reply.
+        call: flui_view::__runtime::WindowCall,
     },
     /// Register a subscription to the addressed presentation's events and answer with its
     /// stream.
-    SemanticsAgentSubscribe {
-        /// The presentation the agent was vended for.
+    AgentSubscribe {
+        /// The presentation the agent's window addresses.
         presentation_id: PresentationId,
         /// The events to stream.
         filters: Vec<flui_protocol::EventFilter>,
         /// Where the stream goes.
-        reply: super::agent::ReplySender<super::agent_events::EventStream>,
-    },
-    /// Snapshot one of the addressed presentation's trees and answer on `reply`.
-    SemanticsAgentInspect {
-        /// The presentation the agent was vended for.
-        presentation_id: PresentationId,
-        /// Which tree.
-        target: flui_view::dev_agent::InspectTarget,
-        /// The subtree, depth, node limit and detail level.
-        params: Box<flui_protocol::InspectParams>,
-        /// Where the answer goes.
-        reply: super::agent::ReplySender<flui_protocol::InspectReading>,
-    },
-    /// Resolve a locator over the addressed presentation's committed tree
-    /// and answer on `reply`.
-    SemanticsLocate {
-        /// The presentation the agent was vended for.
-        presentation_id: PresentationId,
-        /// What to look for.
-        params: Box<flui_protocol::LocateParams>,
-        /// Where the answer goes.
-        reply: super::agent::ReplySender<flui_protocol::Matches>,
-    },
-    /// Read the facts that decide whether input reaches an element: the
-    /// committed tree's, and the render hit-test's at the action point.
-    ElementActionability {
-        /// The presentation the agent was vended for.
-        presentation_id: PresentationId,
-        /// The element, and where the action would land.
-        params: flui_protocol::ActionabilityParams,
-        /// Where the answer goes.
-        reply: super::agent::ReplySender<flui_protocol::Actionability>,
-    },
-    /// Apply playback to the exact presentation's animation clock.
-    Motion {
-        /// The window addressed by the agent port.
-        presentation_id: PresentationId,
-        /// Rate and step, validated before either is committed.
-        request: flui_protocol::MotionRequest,
-        /// The accepted state or refusal.
-        reply: super::agent::ReplySender<flui_protocol::MotionState>,
+        reply: flui_view::__runtime::Reply<flui_view::dev_agent::AgentEvents>,
     },
     /// Apply a typed navigator mutation on the owner thread.
     Navigation(NavigatorCommand),
@@ -237,96 +145,22 @@ impl std::fmt::Debug for UiCommand {
                 .field("presentation_id", presentation_id)
                 .field("node", node)
                 .finish(),
-            UiCommand::SemanticsRead {
+            UiCommand::Agent {
                 presentation_id,
-                query,
-                ..
+                call,
             } => f
-                .debug_struct("UiCommand::SemanticsRead")
+                .debug_struct("UiCommand::Agent")
                 .field("presentation_id", presentation_id)
-                .field("query", query)
-                .finish_non_exhaustive(),
-            UiCommand::SemanticsAnnouncements {
-                presentation_id,
-                params,
-                ..
-            } => f
-                .debug_struct("UiCommand::SemanticsAnnouncements")
-                .field("presentation_id", presentation_id)
-                .field("since", &params.since)
-                .finish_non_exhaustive(),
-            // The request's value stays out: it may be what a user typed.
-            UiCommand::SemanticsAgentAction {
-                presentation_id,
-                request,
-                ..
-            } => f
-                .debug_struct("UiCommand::SemanticsAgentAction")
-                .field("presentation_id", presentation_id)
-                .field("element", &request.element)
-                .field("action", &request.action)
-                .finish_non_exhaustive(),
-            UiCommand::SemanticsAgentActionRead {
-                presentation_id,
-                request,
-                snapshot,
-                ..
-            } => f
-                .debug_struct("UiCommand::SemanticsAgentActionRead")
-                .field("presentation_id", presentation_id)
-                .field("element", &request.element)
-                .field("action", &request.action)
-                .field("snapshot", snapshot)
-                .finish_non_exhaustive(),
-            // The condition's text stays out for the same reason.
-            UiCommand::SemanticsAgentWait {
-                presentation_id, ..
-            } => f
-                .debug_struct("UiCommand::SemanticsAgentWait")
-                .field("presentation_id", presentation_id)
-                .finish_non_exhaustive(),
-            UiCommand::SemanticsAgentSubscribe {
+                .field("call", call)
+                .finish(),
+            UiCommand::AgentSubscribe {
                 presentation_id,
                 filters,
                 ..
             } => f
-                .debug_struct("UiCommand::SemanticsAgentSubscribe")
+                .debug_struct("UiCommand::AgentSubscribe")
                 .field("presentation_id", presentation_id)
-                .field("filters", &filters.len())
-                .finish_non_exhaustive(),
-            UiCommand::SemanticsAgentInspect {
-                presentation_id,
-                target,
-                ..
-            } => f
-                .debug_struct("UiCommand::SemanticsAgentInspect")
-                .field("presentation_id", presentation_id)
-                .field("target", target)
-                .finish_non_exhaustive(),
-            // The locator's text stays out: it may be a label the app shows.
-            UiCommand::SemanticsLocate {
-                presentation_id, ..
-            } => f
-                .debug_struct("UiCommand::SemanticsLocate")
-                .field("presentation_id", presentation_id)
-                .finish_non_exhaustive(),
-            UiCommand::ElementActionability {
-                presentation_id,
-                params,
-                ..
-            } => f
-                .debug_struct("UiCommand::ElementActionability")
-                .field("presentation_id", presentation_id)
-                .field("element", &params.element)
-                .finish_non_exhaustive(),
-            UiCommand::Motion {
-                presentation_id,
-                request,
-                ..
-            } => f
-                .debug_struct("UiCommand::Motion")
-                .field("presentation_id", presentation_id)
-                .field("request", request)
+                .field("filters", filters)
                 .finish_non_exhaustive(),
             UiCommand::Navigation(command) => f
                 .debug_tuple("UiCommand::Navigation")
@@ -606,9 +440,12 @@ impl UiCommandSender {
                 // Backpressure must retry its debt after admission locks retire.
                 let wake = catch_unwind(AssertUnwindSafe(|| self.retry_wake_debt()));
                 if let Err(wake_payload) = wake {
-                    // Retain the opaque rejected envelope once delivery failed;
-                    // competing capture destructors cannot replace that failure.
-                    std::mem::forget(rejected);
+                    // The rejected envelope is destroyed under containment; a
+                    // destructor that panics does not replace the wake failure
+                    // (ADR-0281 §3).
+                    if let Err(dropped) = catch_unwind(AssertUnwindSafe(|| drop(rejected))) {
+                        flui_foundation::panic::discard_payload(dropped);
+                    }
                     resume_unwind(wake_payload);
                 }
                 Err(CommandSendError::ChannelFull { capacity, rejected })
@@ -676,19 +513,19 @@ impl UiRuntime {
         self.redraw_pending.swap(false, Ordering::AcqRel)
     }
 
-    /// An agent job's user code panicked with `payload`. The reply fails
+    /// An agent job's user code panicked with `payload`. The reply gets `answer`
     /// first, so the agent learns of it whatever happens next; then a queued
     /// tail gets a future owner turn, since this one is unwinding; then the
     /// original panic resumes, never replaced by a later one.
-    fn fail_agent_job<T>(
+    pub(super) fn fail_agent_job<T>(
         &self,
         reply: &super::agent::ReplySender<T>,
         element: Option<flui_protocol::ElementId>,
-        failure: super::AgentError,
+        answer: Result<T, super::AgentError>,
         payload: Box<dyn std::any::Any + Send>,
     ) -> ! {
         let answered = catch_unwind(AssertUnwindSafe(|| {
-            super::agent::send_reply(reply, element, Err(failure));
+            super::agent::send_reply(reply, element, answer);
         }))
         .err();
         let mut first_panic = Some(payload);
@@ -816,266 +653,29 @@ impl UiRuntime {
                         Err(payload) => self.rearm_after_command_panic(payload),
                     }
                 }
-                UiCommand::Motion {
+                UiCommand::Agent {
                     presentation_id,
-                    request,
-                    reply,
-                } => {
-                    let result = self
-                        .presentations
-                        .get(presentation_id)
-                        .ok_or(super::AgentError::PresentationGone)
-                        .and_then(|presentation| {
-                            presentation
-                                .apply_motion(request)
-                                .map(|(state, demand)| {
-                                    if demand {
-                                        // An accepted inspection sample outlives
-                                        // animation pause or run completion.
-                                        presentation
-                                            .clock()
-                                            .mark_demand(flui_scheduler::DemandKind::Host);
-                                    }
-                                    (state, demand)
-                                })
-                                .map_err(|_| super::AgentError::InvalidArgument {
-                                    reason: "motion rate must be finite and non-negative",
-                                })
-                        });
-                    let demand = result.as_ref().is_ok_and(|(_, demand)| *demand);
-                    if result == Err(super::AgentError::PresentationGone) {
-                        report.dropped_stale += 1;
-                    } else {
-                        report.invoked += 1;
-                    }
-                    super::agent::send_reply(&reply, None, result.map(|(state, _)| state));
-                    if demand {
-                        self.wake_frame();
-                    }
-                }
-                UiCommand::SemanticsRead {
-                    presentation_id,
-                    query,
-                    issued,
-                    reply,
-                } => {
-                    let result = self.serve_semantics_read(presentation_id, &query, issued);
-                    if result == Err(super::AgentError::PresentationGone) {
-                        report.dropped_stale += 1;
-                    } else {
-                        report.invoked += 1;
-                    }
-                    super::agent::send_reply(&reply, query.root, result);
-                }
-                UiCommand::SemanticsAnnouncements {
-                    presentation_id,
-                    params,
-                    reply,
-                } => {
-                    let result = self.serve_semantics_announcements(presentation_id, &params);
-                    if result == Err(super::AgentError::PresentationGone) {
-                        report.dropped_stale += 1;
-                    } else {
-                        report.invoked += 1;
-                    }
-                    super::agent::send_reply(&reply, None, result);
-                }
-                UiCommand::SemanticsAgentAction {
-                    presentation_id,
-                    request,
-                    issued,
-                    reply,
-                } => {
-                    let element = request.element;
-                    let reached_handler = std::cell::Cell::new(false);
-                    let served = catch_unwind(AssertUnwindSafe(|| {
-                        self.serve_semantics_act(
-                            presentation_id,
-                            &request,
-                            issued,
-                            &reached_handler,
-                        )
-                    }));
-                    match served {
-                        Ok(result) => {
-                            if result == Err(super::AgentError::PresentationGone) {
-                                report.dropped_stale += 1;
-                            } else {
-                                report.invoked += 1;
-                            }
-                            super::agent::send_reply(&reply, Some(element), result);
-                        }
-                        Err(payload) => {
-                            let failure = if reached_handler.get() {
-                                super::AgentError::HandlerPanicked { element }
-                            } else {
-                                super::AgentError::ResolvePanicked { element }
-                            };
-                            self.fail_agent_job(&reply, Some(element), failure, payload);
-                        }
-                    }
-                }
-                UiCommand::SemanticsAgentActionRead {
-                    presentation_id,
-                    request,
-                    snapshot,
-                    issued,
-                    reply,
-                } => {
-                    let element = request.element;
-                    let reached_handler = std::cell::Cell::new(false);
-                    let served = catch_unwind(AssertUnwindSafe(|| {
-                        self.serve_semantics_act_read(
-                            presentation_id,
-                            &request,
-                            snapshot,
-                            issued,
-                            &reached_handler,
-                        )
-                    }));
-                    match served {
-                        Ok(Ok(Served::Answered(outcome))) => {
-                            report.invoked += 1;
-                            super::agent::send_reply(&reply, Some(element), Ok(outcome));
-                        }
-                        Ok(Ok(Served::Reading(pending))) => {
-                            report.invoked += 1;
-                            // The reading is owed once the effect settled; the
-                            // reply waits with it.
-                            self.park_act_read(presentation_id, pending, reply);
-                        }
-                        Ok(Err(error)) => {
-                            if error == super::AgentError::PresentationGone {
-                                report.dropped_stale += 1;
-                            } else {
-                                report.invoked += 1;
-                            }
-                            super::agent::send_reply(&reply, Some(element), Err(error));
-                        }
-                        Err(payload) => {
-                            let failure = if reached_handler.get() {
-                                super::AgentError::HandlerPanicked { element }
-                            } else {
-                                super::AgentError::ResolvePanicked { element }
-                            };
-                            self.fail_agent_job(&reply, Some(element), failure, payload);
-                        }
-                    }
-                }
-                UiCommand::SemanticsAgentWait {
-                    presentation_id,
-                    params,
-                    reply,
-                } => {
-                    // It answers itself: now if it holds, else after a frame or its deadline.
-                    if self.park_agent_wait(presentation_id, *params, reply) {
-                        report.invoked += 1;
-                    } else {
-                        report.dropped_stale += 1;
-                    }
-                }
-                UiCommand::SemanticsAgentSubscribe {
+                    call,
+                } => self.serve_window_call(presentation_id, call, &mut report),
+                UiCommand::AgentSubscribe {
                     presentation_id,
                     filters,
                     reply,
                 } => {
-                    if self.subscribe_agent_events(presentation_id, filters, &reply) {
-                        report.invoked += 1;
-                    } else {
+                    let window = super::agent::window_of(presentation_id);
+                    let Some(state) = self.presentations.get(presentation_id) else {
+                        reply.send(Err(super::AgentError::PresentationGone.into_error(window)));
                         report.dropped_stale += 1;
-                    }
-                }
-                UiCommand::SemanticsAgentInspect {
-                    presentation_id,
-                    target,
-                    params,
-                    reply,
-                } => {
-                    if matches!(target, flui_view::dev_agent::InspectTarget::Layers) {
-                        if self.park_agent_layer_read(presentation_id, &params, reply) {
-                            report.invoked += 1;
-                        } else {
-                            report.dropped_stale += 1;
-                        }
                         continue;
-                    }
-                    // A render object's `debug_name` or an `inspect` override is app code: a
-                    // panic in it answers the request, then continues on the owner thread.
-                    let served = catch_unwind(AssertUnwindSafe(|| {
-                        self.serve_agent_inspect(presentation_id, target, &params)
-                    }));
-                    let result = match served {
-                        Ok(result) => result,
-                        Err(payload) => {
-                            self.fail_agent_job(
-                                &reply,
-                                None,
-                                super::AgentError::InspectPanicked,
-                                payload,
-                            );
-                        }
                     };
-                    if result == Err(super::AgentError::PresentationGone) {
-                        report.dropped_stale += 1;
-                    } else {
-                        report.invoked += 1;
-                    }
-                    super::agent::send_reply(&reply, None, result);
-                }
-                UiCommand::SemanticsLocate {
-                    presentation_id,
-                    params,
-                    reply,
-                } => {
-                    let result = self.serve_semantics_locate(presentation_id, &params);
-                    if result == Err(super::AgentError::PresentationGone) {
-                        report.dropped_stale += 1;
-                    } else {
-                        report.invoked += 1;
-                    }
-                    super::agent::send_reply(&reply, None, result);
-                }
-                UiCommand::ElementActionability {
-                    presentation_id,
-                    params,
-                    reply,
-                } => {
-                    let element = params.element.element;
-                    let mut hit_panic = None;
-                    let served = catch_unwind(AssertUnwindSafe(|| {
-                        self.serve_element_actionability(presentation_id, &params, &mut hit_panic)
-                    }));
-                    // A render object that panicked in the hit-test is the
-                    // first failure; a panic while resolving, after it, is
-                    // traced and not the one that continues.
-                    let mut first_panic = hit_panic;
-                    let hit_failed = first_panic.is_some();
-                    let result = match served {
-                        Ok(result) => Some(result),
-                        Err(payload) => {
-                            preserve_first_input_panic(
-                                &mut first_panic,
-                                Some(payload),
-                                "element actionability resolve",
-                            );
-                            None
-                        }
-                    };
-                    if let Some(payload) = first_panic {
-                        let failure = if hit_failed {
-                            super::AgentError::HitTestPanicked { element }
-                        } else {
-                            super::AgentError::ResolvePanicked { element }
-                        };
-                        self.fail_agent_job(&reply, Some(element), failure, payload);
-                    }
-                    let result = result.expect("BUG: no panic leaves the served result");
-                    if result == Err(super::AgentError::PresentationGone) {
-                        report.dropped_stale += 1;
-                    } else {
-                        report.invoked += 1;
-                    }
-                    super::agent::send_reply(&reply, Some(element), result);
+                    let reply = super::agent::ReplySender::new(
+                        reply,
+                        window,
+                        super::agent::issued_of(state),
+                        |_, _| {},
+                    );
+                    self.subscribe_agent_events(state, filters, &reply);
+                    report.invoked += 1;
                 }
                 UiCommand::Navigation(command) => match command.apply_on_owner() {
                     Ok(_) => {
@@ -1103,24 +703,23 @@ impl UiRuntime {
                         }));
                         report.dropped_stale += 1;
                         if let Err(payload) = diagnosed {
-                            // Diagnostics failed before the opaque envelope
-                            // could be retired. Retain it so aggregate drop
-                            // glue cannot replace that panic.
-                            std::mem::forget(apply);
+                            // Diagnostics failed: the envelope is destroyed
+                            // under containment before the failure resumes
+                            // (ADR-0281 §3).
+                            flui_foundation::panic::drop_contained(apply);
                             self.rearm_after_command_panic(payload);
                         }
 
                         // The stale envelope can contain several hostile
                         // captured destructors. Ensure an already-queued FIFO
                         // tail has a future owner turn before its opaque drop
-                        // glue runs; two field panics cannot be contained by
-                        // an outer catch in Rust.
+                        // glue runs.
                         if self.has_queued_work()
                             && let Err(payload) = catch_unwind(AssertUnwindSafe(|| {
                                 self.sender_prototype.wake_owner();
                             }))
                         {
-                            std::mem::forget(apply);
+                            flui_foundation::panic::drop_contained(apply);
                             self.rearm_after_command_panic(payload);
                         }
                         if let Err(payload) = catch_unwind(AssertUnwindSafe(|| drop(apply))) {
@@ -1158,11 +757,9 @@ impl UiRuntime {
                     self.redraw_pending.store(true, Ordering::Release);
                     let command_panic = match outcome {
                         Err(payload) => {
-                            // Once the callback has panicked, destroying an
-                            // opaque aggregate capture bundle can abort inside
-                            // generated drop glue before any outer catch
-                            // regains control.
-                            std::mem::forget(apply);
+                            // The envelope is destroyed under containment
+                            // after the callback failed too (ADR-0281 §3).
+                            flui_foundation::panic::drop_contained(apply);
                             Some(payload)
                         }
                         Ok(()) => catch_unwind(AssertUnwindSafe(|| drop(apply))).err(),

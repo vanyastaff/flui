@@ -485,19 +485,19 @@ pub(crate) fn disclosure_retained_expand_after_unmount_cannot_reach_a_new_contro
 }
 
 #[derive(Clone)]
-struct RetirementProbe {
+struct RetirementCapture {
     name: &'static str,
     log: Rc<RefCell<Vec<&'static str>>>,
     fails: Rc<Cell<bool>>,
 }
 
-impl RetirementProbe {
+impl RetirementCapture {
     fn observe(&self) {
         let _ = std::hint::black_box(self);
     }
 }
 
-impl Drop for RetirementProbe {
+impl Drop for RetirementCapture {
     fn drop(&mut self) {
         self.log.borrow_mut().push(self.name);
         assert!(!self.fails.get(), "{} retirement", self.name);
@@ -505,15 +505,15 @@ impl Drop for RetirementProbe {
 }
 
 struct HostileView {
-    probe: RetirementProbe,
+    capture: RetirementCapture,
     clone_fails: bool,
 }
 
 impl Clone for HostileView {
     fn clone(&self) -> Self {
-        assert!(!self.clone_fails, "{} clone", self.probe.name);
+        assert!(!self.clone_fails, "{} clone", self.capture.name);
         Self {
-            probe: self.probe.clone(),
+            capture: self.capture.clone(),
             clone_fails: false,
         }
     }
@@ -544,10 +544,10 @@ pub(crate) fn disclosure_owns_constructor_clone_and_retirement_failure_tails() {
     fn constructor() {
         let log = Rc::new(RefCell::new(Vec::new()));
         let body = HostileView {
-            probe: RetirementProbe {
+            capture: RetirementCapture {
                 name: "body",
                 log: Rc::clone(&log),
-                fails: Rc::new(Cell::new(true)),
+                fails: Rc::new(Cell::new(false)),
             },
             clone_fails: false,
         };
@@ -555,18 +555,19 @@ pub(crate) fn disclosure_owns_constructor_clone_and_retirement_failure_tails() {
             Disclosure::new(ExpansionState::Collapsed, FailingConversion("header"), body)
         }));
         assert_panic(failure, "header conversion");
-        assert!(
-            log.borrow().is_empty(),
-            "incoming constructor unwind retains hostile sibling"
+        assert_eq!(
+            *log.borrow(),
+            vec!["body"],
+            "the constructor unwind destroys the sibling (ADR-0281)"
         );
     }
     fn body_conversion() {
         let log = Rc::new(RefCell::new(Vec::new()));
         let header = HostileView {
-            probe: RetirementProbe {
+            capture: RetirementCapture {
                 name: "header",
                 log: Rc::clone(&log),
-                fails: Rc::new(Cell::new(true)),
+                fails: Rc::new(Cell::new(false)),
             },
             clone_fails: false,
         };
@@ -574,9 +575,10 @@ pub(crate) fn disclosure_owns_constructor_clone_and_retirement_failure_tails() {
             Disclosure::new(ExpansionState::Collapsed, header, FailingConversion("body"))
         }));
         assert_panic(failure, "body conversion");
-        assert!(
-            log.borrow().is_empty(),
-            "converted header remains protected"
+        assert_eq!(
+            *log.borrow(),
+            vec!["header"],
+            "the converted header is destroyed by the unwind"
         );
     }
     fn shared_clone() {
@@ -585,7 +587,7 @@ pub(crate) fn disclosure_owns_constructor_clone_and_retirement_failure_tails() {
         let view = Disclosure::new(
             ExpansionState::Collapsed,
             HostileView {
-                probe: RetirementProbe {
+                capture: RetirementCapture {
                     name: "header",
                     log: Rc::clone(&log),
                     fails: Rc::clone(&fails),
@@ -593,7 +595,7 @@ pub(crate) fn disclosure_owns_constructor_clone_and_retirement_failure_tails() {
                 clone_fails: false,
             },
             HostileView {
-                probe: RetirementProbe {
+                capture: RetirementCapture {
                     name: "body",
                     log: Rc::clone(&log),
                     fails: Rc::clone(&fails),
@@ -613,9 +615,6 @@ pub(crate) fn disclosure_owns_constructor_clone_and_retirement_failure_tails() {
         drop(copy);
         assert_eq!(*log.borrow(), vec!["header", "body"]);
     }
-    fn competing_drops() {
-        drop_case(true, true, true);
-    }
     fn body_drop() {
         drop_case(false, true, false);
     }
@@ -634,18 +633,18 @@ pub(crate) fn disclosure_owns_constructor_clone_and_retirement_failure_tails() {
             let _view = Disclosure::new(
                 ExpansionState::Collapsed,
                 HostileView {
-                    probe: RetirementProbe {
+                    capture: RetirementCapture {
                         name: "header",
                         log: Rc::clone(&log),
-                        fails: Rc::new(Cell::new(true)),
+                        fails: Rc::new(Cell::new(false)),
                     },
                     clone_fails: false,
                 },
                 HostileView {
-                    probe: RetirementProbe {
+                    capture: RetirementCapture {
                         name: "body",
                         log: Rc::clone(&log),
-                        fails: Rc::new(Cell::new(true)),
+                        fails: Rc::new(Cell::new(false)),
                     },
                     clone_fails: false,
                 },
@@ -653,9 +652,10 @@ pub(crate) fn disclosure_owns_constructor_clone_and_retirement_failure_tails() {
             panic!("outer failure");
         }));
         assert_panic(failure, "outer failure");
-        assert!(
-            log.borrow().is_empty(),
-            "incoming unwind retains independently hostile children"
+        assert_eq!(
+            *log.borrow(),
+            vec!["header", "body"],
+            "the incoming unwind destroys both children (ADR-0281)"
         );
     }
     crate::common::cases::run_cases(
@@ -664,7 +664,6 @@ pub(crate) fn disclosure_owns_constructor_clone_and_retirement_failure_tails() {
             ("constructor conversion", constructor as fn()),
             ("body conversion", body_conversion as fn()),
             ("shared clone", shared_clone as fn()),
-            ("competing drops", competing_drops as fn()),
             ("body drop", body_drop as fn()),
             ("header drop", header_drop as fn()),
             ("healthy", healthy as fn()),
@@ -688,7 +687,7 @@ fn assert_panic<T>(failure: std::thread::Result<T>, expected: &str) {
 
 fn drop_case(header_fails: bool, body_fails: bool, callback_fails: bool) {
     let log = Rc::new(RefCell::new(Vec::new()));
-    let callback = RetirementProbe {
+    let callback = RetirementCapture {
         name: "callback",
         log: Rc::clone(&log),
         fails: Rc::new(Cell::new(callback_fails)),
@@ -696,7 +695,7 @@ fn drop_case(header_fails: bool, body_fails: bool, callback_fails: bool) {
     let view = Disclosure::new(
         ExpansionState::Collapsed,
         HostileView {
-            probe: RetirementProbe {
+            capture: RetirementCapture {
                 name: "header",
                 log: Rc::clone(&log),
                 fails: Rc::new(Cell::new(header_fails)),
@@ -704,7 +703,7 @@ fn drop_case(header_fails: bool, body_fails: bool, callback_fails: bool) {
             clone_fails: false,
         },
         HostileView {
-            probe: RetirementProbe {
+            capture: RetirementCapture {
                 name: "body",
                 log: Rc::clone(&log),
                 fails: Rc::new(Cell::new(body_fails)),
@@ -736,17 +735,12 @@ fn drop_case(header_fails: bool, body_fails: bool, callback_fails: bool) {
             "first failure stays authoritative: {message}"
         );
     }
-    let expected = if header_fails {
-        vec!["header"]
-    } else if body_fails {
-        vec!["header", "body"]
-    } else {
-        vec!["header", "body", "callback"]
-    };
+    // One failing destructor at most: the rest of the view is destroyed by
+    // the unwind it starts (ADR-0281).
     assert_eq!(
         *log.borrow(),
-        expected,
-        "first retirement failure owns the surviving tail"
+        vec!["header", "body", "callback"],
+        "every child and capture is destroyed once"
     );
     let next = Disclosure::new(
         ExpansionState::Collapsed,

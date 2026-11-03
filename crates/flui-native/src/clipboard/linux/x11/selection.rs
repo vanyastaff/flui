@@ -1398,7 +1398,7 @@ pub(super) fn run(mut selections: Selections, commands: Receiver<Command>, bell:
 }
 
 /// Report a panic the thread contained. The payload may own anything; it is
-/// kept rather than dropped where its destructor could fail too (ADR-0127).
+/// destroyed under containment (ADR-0281).
 fn contained(payload: Box<dyn std::any::Any + Send>) {
     report(|| {
         tracing::error!(
@@ -1406,13 +1406,13 @@ fn contained(payload: Box<dyn std::any::Any + Send>) {
             crate::owner::panic_boundary::panic_payload_message(payload.as_ref())
         );
     });
-    std::mem::forget(payload);
+    flui_foundation::panic::discard_payload(payload);
 }
 
-/// Run a diagnostic: a subscriber that panics is contained, its payload kept.
+/// Run a diagnostic: a subscriber that panics is contained, its payload discarded.
 fn report(diagnostic: impl FnOnce()) {
     if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(diagnostic)) {
-        std::mem::forget(payload);
+        flui_foundation::panic::discard_payload(payload);
     }
 }
 

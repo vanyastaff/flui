@@ -220,42 +220,22 @@ pub struct StaticChildren {
     delegate_pair: std::cell::OnceCell<(ItemBuilder, FindIndexByKey)>,
 }
 
-/// Outgoing independent envelopes stay owned until their own retirement starts.
-struct RetiringStaticChildren {
-    children: Vec<BoxedView>,
-    map: Option<ChildMap>,
-    delegate_pair: Option<(ItemBuilder, FindIndexByKey)>,
-}
-
-impl Drop for RetiringStaticChildren {
-    fn drop(&mut self) {
-        if std::thread::panicking() {
-            std::mem::forget(std::mem::take(&mut self.children));
-            std::mem::forget(self.map.take());
-            std::mem::forget(self.delegate_pair.take());
-        }
-    }
-}
-
 impl Drop for StaticChildren {
     fn drop(&mut self) {
-        // Empty physical ownership before the first opaque destructor runs.
-        // The guard also protects an incoming unwind without retiring captures.
-        let mut outgoing = RetiringStaticChildren {
-            children: std::mem::take(&mut self.children),
-            map: self.map.take(),
-            delegate_pair: self.delegate_pair.take(),
-        };
-        if std::thread::panicking() {
-            return;
+        // Empty physical ownership before the first opaque destructor runs,
+        // then destroy every child in insertion order and the mapper, each
+        // under containment: a failure does not skip its successors, and the
+        // first one is the one raised (ADR-0281 §3).
+        let children = std::mem::take(&mut self.children);
+        let map = self.map.take();
+        let delegate_pair = self.delegate_pair.take();
+        let mut first = flui_foundation::panic::FirstPanic::new();
+        for child in children {
+            first.contain(|| drop(child));
         }
-        // Vec's ordinary field destruction visits children in insertion order.
-        outgoing.children.reverse();
-        while let Some(child) = outgoing.children.pop() {
-            drop(child);
-        }
-        drop(outgoing.map.take());
-        drop(outgoing.delegate_pair.take());
+        first.contain(|| drop(map));
+        first.contain(|| drop(delegate_pair));
+        first.resume();
     }
 }
 

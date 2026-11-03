@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use flui_interaction::{
-    ClipboardBackend, ClipboardCapability, ClipboardHandle, PrimaryClaim, PrimaryClaims,
+    ClipboardBackend, ClipboardCapability, ClipboardHandle, PrimaryClaim,
     PrimarySelectionCapability, PrimarySelectionHandle,
 };
 use flui_platform::capability::{
@@ -759,41 +759,4 @@ pub(crate) fn a_claim_whose_predecessor_panics_as_it_drops_is_withdrawn() {
         "the claim made while the predecessor dropped holds the selection"
     );
     drop(first);
-}
-
-/// The environment variable naming the case a child process of
-/// `primary_claims_keep_their_captures_while_unwinding` runs.
-pub(crate) const PRIMARY_UNWIND_CHILD: &str = "FLUI_PRIMARY_UNWIND_CHILD";
-
-/// One case of a claim whose captures panic as they drop, met while
-/// another panic unwinds: dropping them then would abort the process, so
-/// the claim is withdrawn and its captures are kept (ADR-0127). The parent
-/// runs each in a child process, where an abort is a failed exit.
-pub(crate) fn a_claim_unwound_keeps_its_captures(case: &str) {
-    let held = || {
-        let capture = PanicOnDrop;
-        move || {
-            let _ = &capture;
-            Some("held".to_owned())
-        }
-    };
-    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match case {
-        // A widget's claim guard drops in the unwind.
-        "claim" => {
-            let mut host = HeadlessHost::new(window());
-            let selection = acquire_capability::<PrimarySelectionCapability>(&mut host)
-                .expect("the headless host provides a primary selection");
-            let _claim = selection.claim(held());
-            panic!("the first failure");
-        }
-        // A backend's claims drop in the unwind with a claim still current.
-        "claims" => {
-            let mut claims = PrimaryClaims::new();
-            let (_current, _) = claims.claim(Rc::new(held()));
-            panic!("the first failure");
-        }
-        _ => unreachable!("no case {case}"),
-    }))
-    .expect_err("the case panics");
-    assert_eq!(failure.downcast_ref::<&str>(), Some(&"the first failure"));
 }

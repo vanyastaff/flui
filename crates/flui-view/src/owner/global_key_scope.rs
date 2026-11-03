@@ -121,41 +121,18 @@ pub(super) struct ClaimIdentity {
     marker: Rc<()>,
 }
 
-/// One scope or comparison owner of one independently guarded key envelope.
-pub(crate) struct ScopedKeyOwner(Option<Rc<OwnedGlobalKey>>);
+/// One scope or comparison owner of one shared key envelope. The envelope is
+/// destroyed normally when its last owner drops (ADR-0281).
+#[derive(Clone)]
+pub(crate) struct ScopedKeyOwner(Rc<OwnedGlobalKey>);
 
 impl ScopedKeyOwner {
     fn new(key: Box<dyn ViewKey>) -> Self {
-        Self(Some(Rc::new(OwnedGlobalKey::new(key))))
+        Self(Rc::new(OwnedGlobalKey::new(key)))
     }
 
     fn as_ref(&self) -> &dyn ViewKey {
-        self.0
-            .as_ref()
-            .expect("BUG: live scoped key is occupied")
-            .as_ref()
-            .as_ref()
-    }
-
-    fn retain(mut self) {
-        std::mem::forget(self.0.take());
-    }
-}
-
-impl Clone for ScopedKeyOwner {
-    fn clone(&self) -> Self {
-        Self(self.0.clone())
-    }
-}
-
-impl Drop for ScopedKeyOwner {
-    fn drop(&mut self) {
-        let key = self.0.take();
-        if std::thread::panicking() {
-            std::mem::forget(key);
-        } else {
-            drop(key);
-        }
+        self.0.as_ref().as_ref()
     }
 }
 
@@ -172,14 +149,10 @@ fn refuse_unstable_comparison() -> ! {
 fn retire_snapshot(snapshot: Vec<SnapshotClaim>) {
     let mut first = None;
     for claim in snapshot {
-        if first.is_some() || std::thread::panicking() {
-            claim.key.retain();
-        } else {
-            crate::lifecycle::preserve(
-                &mut first,
-                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(claim.key))).err(),
-            );
-        }
+        crate::lifecycle::preserve(
+            &mut first,
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(claim.key))).err(),
+        );
     }
     if let Some(payload) = first {
         std::panic::resume_unwind(payload);
@@ -490,14 +463,10 @@ impl GlobalKeyScope {
         let reclaimed = removed.len();
         let mut first = None;
         for key in removed {
-            if first.is_some() || std::thread::panicking() {
-                std::mem::forget(key);
-            } else {
-                crate::lifecycle::preserve(
-                    &mut first,
-                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(key))).err(),
-                );
-            }
+            crate::lifecycle::preserve(
+                &mut first,
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(key))).err(),
+            );
         }
         if let Some(payload) = first {
             std::panic::resume_unwind(payload);

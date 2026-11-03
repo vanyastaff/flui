@@ -2,6 +2,8 @@
 
 - **Status:** Accepted (2026-11-02)
 - **Date:** 2026-11-02
+- **Amended:** 2026-11-02: §5 and §6, the press takers cut out of a move area and the widgets that
+  mark the regions; §7, the Win32 frame. 2026-11-03: §8, the AppKit title bar.
 - **Amends:** [ADR-0217](ADR-0217-interaction-module-layers-and-pointer-assembly.md) §5: input
   regions gain the chrome kinds the title-bar follow-up named, and their availability is
   answered per kind.
@@ -110,6 +112,52 @@ otherwise, and filters as a native host does.
 §4. **Recording format.** A recorded backend profile carries the four availabilities;
 `flui-testing`'s recording format moves to version 3 and refuses version 2.
 
+§5. **Press takers are cut out of a move area.** A render object says it takes presses with
+`InputRegionSink::claim_presses` from `describe_input_regions`; `RenderListener` does when its
+widget has a pointer-down handler or recognizers in the gesture arena, a hover-only listener does
+not. While the walk is under a node that reported a `WindowMove` region, such a node adds a
+`WindowContent` region over its box after its own regions, so a button or a field in the bar keeps
+its presses and nobody marks it by hand. `InputRegionSink::claim_presses_over` takes presses on
+part of the box only: `RenderParagraph` says it over the glyphs of each routed link, so a link in
+the bar is pressed and the text around it moves the window. A caption button or resize region between the two keeps
+its subtree's presses its own (the system answers them), and
+`InputRegionSink::pass_presses_through` keeps a subtree moving the window until a move area below
+it starts cutting out again: `RenderPressPassThrough` says it, and so does an ignoring
+`RenderIgnorePointer` or `RenderSliverIgnorePointer`, whose subtree no press reaches. Inside a
+cut-out such a node adds a `WindowMove` region over its box, so a handle inside a button still
+moves the window.
+
+§6. **Widgets.** `flui-widgets` marks the regions: `WindowTitleBar` (`WindowMove`),
+`WindowCaptionButton::{minimize, maximize, close}` (`CaptionButton`, a `RawButton` named after
+what it does now, acting through the window's `WindowHandle`), `WindowResizeArea::new(edge)`
+(`WindowResize`, only while the window is in its normal mode) and `WindowMovePassThrough`. Each
+reads the window's frame through a `WindowHandle` subscription and marks nothing while the system
+draws the title bar, so one tree runs on every frame and host. Ordering the caption buttons after
+the platform's convention belongs to the title bars the design packages build from these parts.
+
+§7. **Win32.** A window with `AppTitleBar` keeps the overlapped style, so the system still
+resizes, snaps, animates and offers its window menu. `WM_NCCALCSIZE` keeps the client the default
+procedure computes but moves its top to the window's (a maximized window's to the monitor's), so
+the caption and the top border go and the side and bottom borders stay. `WM_NCHITTEST` keeps the
+default answer over those borders and otherwise answers from the regions the last composited frame
+handed `set_input_regions`, through `chrome_hit`: a resize band of the sizing frame's thickness
+along the top of a resizable window that is not maximized, then `HTCAPTION`, the resize edges and
+`HTMINBUTTON`, `HTMAXBUTTON` (the snap layouts) and `HTCLOSE`. The non-client pointer messages over
+a caption button reach the application's button as client ones and never the default procedure, so
+the application's tap decides. A `WindowFrame::None` window answers from the regions without the
+band. A fullscreen window answers as the system does.
+
+§8. **AppKit.** A window with `AppTitleBar` keeps `NSWindowStyleMaskTitled` and adds
+`NSWindowStyleMaskFullSizeContentView` with a transparent, untitled title bar, so the content
+reaches the top, the system still resizes, tiles, zooms and enters full screen, and the traffic
+lights stay the system's. `SystemControls` hides them or moves them by an offset, the bar growing
+down to keep them inside it and the offset mirrored in a right-to-left layout. A left press on a
+`Move` region calls `performWindowDragWithEvent:`, and a second click of it does what
+`AppleActionOnDoubleClick` (or the older `AppleMiniaturizeOnDoubleClick`) names: zoom, minimize
+or nothing. Every other press reaches the application. AppKit keeps the resize borders and the
+caption buttons, so its input capabilities answer only `window_move`, and the other chrome kinds
+stay `Unavailable`.
+
 ### Consequences
 
 - Good, because the system's callback reads a slice and returns: no framework code, no lock
@@ -121,8 +169,8 @@ otherwise, and filters as a native host does.
 - Bad, because the answer can be one frame behind a layout change: a press during the frame
   that moves a button is resolved against the previous frame's regions. A frame is the
   granularity every other input path has too.
-- Neutral, because the native hosts do not answer from the regions yet; until they do, their
-  capabilities leave the chrome kinds `Unavailable` and their windows open
+- Neutral, because only Win32 and AppKit of the native hosts answer from the regions; until the
+  others do, their capabilities leave the chrome kinds `Unavailable` and their windows open
   `WindowFrame::AppTitleBar` with the system's frame (`WindowFrame::at_open`).
 
 ### Confirmation
@@ -134,6 +182,26 @@ otherwise, and filters as a native host does.
   `headless_without_any_kind_refuses_input_regions` in `flui-native` pin the filtering and the
   refusal; the window conformance check
   `per_frame_verbs_report_unsupported_exactly_when_unavailable` reads `honours_input_regions`.
+- `harness_input_regions_cut_press_takers_out_of_a_move_area`, `harness_press_pass_through_disabled_cuts_out_again` and
+  `harness_input_regions_follow_the_order_a_parent_paints_in` in `render_object_harness` pin §5
+  and §2's paint order.
+- The `window_chrome` table in `flui-widgets` pins §6 through the headless kit: the regions a bar
+  with a button, a hover area, a pass-through and a close button publishes, nothing under the
+  system's frame, a frame change, no resize border while maximized, and the caption buttons
+  minimizing, maximizing, restoring and asking to close under the names they announce.
+- The pure halves of `flui-native`'s Win32 window and input, on the Linux CI host
+  (`the_hit_test_answers_from_the_regions_below_the_top_band`,
+  `only_pointer_messages_over_a_caption_button_become_the_applications`,
+  `the_client_reaches_the_top_and_a_maximized_one_stays_on_the_monitor`), and on Windows
+  `an_app_title_bar_drops_the_caption_and_keeps_the_content` and
+  `the_system_hit_test_answers_from_the_chrome_regions` in `native_window_commands`, pin §7.
+- The pure halves of `flui-native`'s AppKit window and input, on the Linux CI host
+  (`each_frame_asks_its_style_of_the_window`,
+  `moved_traffic_lights_stay_inside_a_bar_that_grows_down`,
+  `a_left_press_on_the_bar_moves_the_window_and_a_second_click_asks_the_setting`,
+  `a_double_click_on_the_bar_does_what_system_settings_says`), and
+  `the_desktop_hosts_honour_the_chrome_regions_they_answer` for the kinds each host honours, pin
+  §8.
 
 ## Pros and cons of the options
 

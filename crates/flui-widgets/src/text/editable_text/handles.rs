@@ -168,6 +168,10 @@ pub(super) enum Shown {
     Caret,
     /// One under each end of the selection.
     Selection,
+    /// None: the caret, published for the toolbar over it alone, as a
+    /// long press that placed it leaves a field that shows no caret
+    /// handle. It goes with the toolbar.
+    CaretToolbar,
 }
 
 /// What a long press under way holds.
@@ -379,12 +383,31 @@ impl FieldHandles {
         // Taken away first, so a menu turned off leaves no toolbar.
         self.hide_toolbar(&mut failure);
         self.show_toolbar(&mut failure);
+        self.drop_bare_caret(&mut failure);
         failure.resume();
     }
 
     fn hide_toolbar(&self, failure: &mut FirstPanic) {
         if self.menu.stop_toolbar() {
             self.refresh(failure);
+        }
+    }
+
+    /// The toolbar was dismissed (an item chosen, a tap away): a caret
+    /// published for it alone goes with it.
+    fn toolbar_dismissed(&self, failure: &mut FirstPanic) {
+        if self.shown.get() == Some(Shown::CaretToolbar) {
+            self.hide(failure);
+        } else {
+            self.hide_toolbar(failure);
+        }
+    }
+
+    /// A caret published for the toolbar alone goes when no toolbar shows
+    /// over it: the menu has none, or a wake failed before it showed.
+    fn drop_bare_caret(&self, failure: &mut FirstPanic) {
+        if self.shown.get() == Some(Shown::CaretToolbar) && !self.menu.toolbar_shown() {
+            self.hide(failure);
         }
     }
 
@@ -481,7 +504,7 @@ impl FieldHandles {
     /// or a long press shows the magnifier over the end it moves.
     pub(super) fn published_links(&self) -> (Option<LayerLink>, Option<LayerLink>) {
         match (self.shown.get(), self.pressing.get()) {
-            (Some(Shown::Caret), _) => (Some(self.links[0]), None),
+            (Some(Shown::Caret | Shown::CaretToolbar), _) => (Some(self.links[0]), None),
             (Some(Shown::Selection), _) | (None, Some(_)) => {
                 (Some(self.links[0]), Some(self.links[1]))
             }
@@ -580,18 +603,23 @@ impl FieldHandles {
     }
 
     /// Shows the handles a touch left: the caret's while nothing is
-    /// selected, when the field shows one, else the selection's. Without an
-    /// overlay there are none, which a debug build reports once.
-    pub(super) fn show_for_touch(self: &Rc<Self>, failure: &mut FirstPanic) {
+    /// selected, when the field shows one, else the selection's. A field
+    /// that shows no caret handle publishes the caret alone when
+    /// `bare_caret`, for a toolbar the caller shows. Without an overlay
+    /// there are none, which a debug build reports once.
+    pub(super) fn show_for_touch(self: &Rc<Self>, bare_caret: bool, failure: &mut FirstPanic) {
         let Some((selection, caret, revision)) = self.controller_state() else {
             return;
         };
         let shown = if selection.is_empty() {
-            if !self.caret_handle.get().shows_on_tap() {
+            if self.caret_handle.get().shows_on_tap() {
+                Shown::Caret
+            } else if bare_caret {
+                Shown::CaretToolbar
+            } else {
                 self.hide(failure);
                 return;
             }
-            Shown::Caret
         } else {
             Shown::Selection
         };
@@ -819,15 +847,26 @@ impl FieldHandles {
     }
 
     /// The long-pressing touch lifted or was cancelled: its magnifier goes,
-    /// and the handles show for what it selected.
+    /// and the handles show for what it selected, with the toolbar as the
+    /// menu's policy says: over the selection a word press left, or over
+    /// the caret a caret press left, though the field shows no handle for
+    /// it.
     pub(super) fn long_press_ended(self: &Rc<Self>, failure: &mut FirstPanic) {
-        let pressed = self.press.borrow_mut().take().is_some();
+        let press = self.press.borrow_mut().take();
         let magnified = self.pressing.take().is_some();
-        if pressed {
-            self.show_for_touch(failure);
-            if self.shown.get() == Some(Shown::Selection) && self.menu.policy().after_long_press() {
+        if let Some(press) = press {
+            let toolbar = self.menu.policy().after_long_press();
+            let caret = press == Press::Caret;
+            self.show_for_touch(caret && toolbar, failure);
+            let over = match self.shown.get() {
+                Some(Shown::Selection) => true,
+                Some(Shown::Caret | Shown::CaretToolbar) => caret,
+                None => false,
+            };
+            if toolbar && over {
                 self.show_toolbar(failure);
             }
+            self.drop_bare_caret(failure);
         }
         if magnified {
             if self.shown.get().is_none() {
@@ -1217,7 +1256,7 @@ impl StatelessView for HandlesView {
                 let sides: &[(HandleSide, usize)] = match handles.shown.get() {
                     Some(Shown::Caret) => &[(HandleSide::Collapsed, 0)],
                     Some(Shown::Selection) => &[(HandleSide::Start, 0), (HandleSide::End, 1)],
-                    None => &[],
+                    Some(Shown::CaretToolbar) | None => &[],
                 };
                 let mut shown: Vec<BoxedView> = sides
                     .iter()
@@ -1350,7 +1389,7 @@ fn drag_magnifier(handles: &Rc<FieldHandles>, ctx: &dyn BuildContext) -> Option<
 /// see [`crate::text::toolbar`]. Choosing an item takes it away.
 fn toolbar(handles: &Rc<FieldHandles>) -> Option<BoxedView> {
     let (first, last) = match handles.shown.get()? {
-        Shown::Caret => (HandleSide::Collapsed, HandleSide::Collapsed),
+        Shown::Caret | Shown::CaretToolbar => (HandleSide::Collapsed, HandleSide::Collapsed),
         Shown::Selection => (HandleSide::Start, HandleSide::End),
     };
     let start = handles.end_line(first)?;
@@ -1366,7 +1405,7 @@ fn toolbar(handles: &Rc<FieldHandles>) -> Option<BoxedView> {
     let hide: Rc<dyn Fn()> = Rc::new(move || {
         if let Some(handles) = weak.upgrade() {
             let mut failure = FirstPanic::new();
-            handles.hide_toolbar(&mut failure);
+            handles.toolbar_dismissed(&mut failure);
             failure.resume();
         }
     });

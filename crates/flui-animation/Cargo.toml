@@ -55,7 +55,7 @@ serde_json = { workspace = true }
 [features]
 default = []
 ## Structured lifecycle events and animation CPU spans; off in ordinary graphs.
-diagnostics = []
+diagnostics = ["flui-foundation/creation-site"]
 ## Enable serde serialization/deserialization support for animation types.
 serde = ["dep:serde", "smallvec/serde", "flui-painting/serde"]
 

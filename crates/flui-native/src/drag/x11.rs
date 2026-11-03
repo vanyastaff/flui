@@ -871,8 +871,8 @@ impl X11Drag {
         }));
         // A request accepted before the handler failed is still answered,
         // each in its own containment: a waker that panics leaves the rest
-        // answered, and the first failure goes on; a later one is retained
-        // rather than dropped (ADR-0127 §2). The diagnostics go last, each
+        // answered, and the first failure goes on; a later one is discarded
+        // under containment (ADR-0281 §2). The diagnostics go last, each
         // contained too: a subscriber is user code.
         let mut failure = dispatched.err();
         let mut contain = |step: &mut dyn FnMut()| {
@@ -880,7 +880,7 @@ impl X11Drag {
                 if failure.is_none() {
                     failure = Some(payload);
                 } else {
-                    std::mem::forget(payload);
+                    flui_foundation::panic::discard_payload(payload);
                 }
             }
         };
@@ -1270,7 +1270,7 @@ impl X11Drag {
 
     /// Retire the dropped offer `id` the window will not conclude, and
     /// finish it unaccepted; an offer the window concluded already is gone.
-    /// A failure on the way is retained: the window's goes on.
+    /// A failure on the way is discarded: the window's goes on.
     fn abandon_drop(&self, id: DataTransferId) {
         let mut after = After::default();
         let finished = {
@@ -1291,7 +1291,7 @@ impl X11Drag {
             self.send(source, self.atoms.finished, model::finished(window, None));
         }
         if let Err(failure) = self.try_finish(after) {
-            std::mem::forget(failure);
+            flui_foundation::panic::discard_payload(failure);
         }
     }
 

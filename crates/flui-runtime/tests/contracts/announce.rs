@@ -180,12 +180,12 @@ fn an_idle_presentation_speaks_an_announcement() {
     // The announcer nodes stay out of an agent's reads; the journal is where
     // it hears what was said, one entry per announcement.
     let agent = runtime
-        .semantics_agent(runtime.presentation_id())
+        .dev_agent_window(runtime.presentation_id())
         .expect("the runtime hosts its primary presentation");
-    let window = flui_protocol::WindowId::from_u64(runtime.presentation_id().as_u64())
-        .expect("a presentation id is non-zero");
     let mut reply = agent
-        .announcements(flui_protocol::AnnouncementsParams::new(window))
+        .call::<flui_protocol::method::SemanticsAnnouncements>(
+            flui_protocol::AnnouncementsParams::new(agent.id()),
+        )
         .expect("the inbox has room");
     let _ = runtime.drain_commands();
     let journal = reply

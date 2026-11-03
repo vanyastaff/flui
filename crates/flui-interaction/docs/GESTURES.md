@@ -444,7 +444,7 @@ returns `Cancelled`, or `Idle` when there is none. It does not disable the
 recognizer. `cancel_all` attempts every supplied recognizer before resuming the
 first failure. Last-owner destruction withdraws contacts silently and retires
 captures outside state borrows, preserving an incoming or previously caught
-failure according to ADR-0127.
+failure according to ADR-0281.
 
 ## Ownership and threading
 

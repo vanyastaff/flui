@@ -185,10 +185,36 @@ fn ordinary_facade_graph_excludes_test_support() {
             "hot reload in default={defaults} normal graph:\n{graph}"
         );
         // Persisted documents bring no serialization crate: an application
-        // encodes its documents with its own.
+        // encodes its documents with its own. Only the driver agent, which
+        // every debug app hosts (ADR-0239), speaks JSON.
+        let dependents = Command::new(env!("CARGO"))
+            .args([
+                "tree",
+                "--offline",
+                "--edges",
+                "normal",
+                "--invert",
+                "serde_json",
+                "--depth",
+                "1",
+                "--prefix",
+                "none",
+                "--format",
+                "{p}",
+            ])
+            .current_dir(project.path())
+            .output()
+            .expect("inspect what reaches serde_json");
+        let dependents = String::from_utf8_lossy(&dependents.stdout);
+        let strays: Vec<&str> = dependents
+            .lines()
+            .skip(1)
+            .filter(|line| !line.is_empty() && !line.starts_with("flui-app "))
+            .collect();
         assert!(
-            !graph.lines().any(|line| line.starts_with("serde_json ")),
-            "`serde_json` in default={defaults} normal graph:\n{graph}"
+            strays.is_empty(),
+            "`serde_json` reached past the driver agent in default={defaults} normal graph: \
+             {strays:?}\n{graph}"
         );
     }
 }

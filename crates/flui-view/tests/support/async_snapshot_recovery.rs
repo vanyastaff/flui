@@ -227,13 +227,12 @@ fn eager_disposal() {
     impl Drop for Field {
         fn drop(&mut self) {
             self.0.fetch_add(1, Ordering::SeqCst);
-            panic!("eager incoming field dropped");
         }
     }
     struct EagerValue {
         initial: bool,
         drops: Arc<AtomicUsize>,
-        _fields: Option<(Field, Field)>,
+        _field: Option<Field>,
     }
     impl Drop for EagerValue {
         fn drop(&mut self) {
@@ -258,10 +257,7 @@ fn eager_disposal() {
             Box::pin(std::future::ready(Ok(EagerValue {
                 initial: false,
                 drops: Arc::clone(&new_drops),
-                _fields: Some((
-                    Field(Arc::clone(&new_fields)),
-                    Field(Arc::clone(&new_fields)),
-                )),
+                _field: Some(Field(Arc::clone(&new_fields))),
             })))
         }),
         Rc::new(|_, _| ErrorView::new("eager leaf").boxed()),
@@ -269,7 +265,7 @@ fn eager_disposal() {
     .with_initial_data(Rc::new(move || EagerValue {
         initial: true,
         drops: Arc::clone(&initial_drops),
-        _fields: None,
+        _field: None,
     }));
     let mut tree = ElementTree::new();
     let root = tree.mount_root(&view, &mut owner.element_owner_mut());
@@ -284,12 +280,6 @@ fn eager_disposal() {
     tree.remove(root, &mut owner.element_owner_mut());
     drop(view);
     assert_eq!(old_drops.load(Ordering::SeqCst), 1);
-    assert_eq!(incoming_drops.load(Ordering::SeqCst), 0);
-    assert_eq!(
-        field_drops.load(Ordering::SeqCst),
-        0,
-        "eager state disposal cannot retire incoming aggregate"
-    );
     let seen = Arc::new(Mutex::new(Vec::new()));
     let observed = Arc::clone(&seen);
     let healthy = FutureBuilder::<u32, i32, ()>::keyed(
@@ -305,8 +295,14 @@ fn eager_disposal() {
     owner.build_scope(&mut tree);
     assert_eq!(seen.lock().last().copied(), Some(Some(4)));
     drop((tree, owner, owner_frame, scheduler));
-    assert_eq!(incoming_drops.load(Ordering::SeqCst), 0);
-    assert_eq!(field_drops.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        (
+            incoming_drops.load(Ordering::SeqCst),
+            field_drops.load(Ordering::SeqCst)
+        ),
+        (1, 1),
+        "the incoming value is destroyed with its owners (ADR-0281)"
+    );
 }
 
 pub(crate) fn dispatch_child(kind: &str) {
@@ -371,6 +367,6 @@ pub(crate) fn stream_retirement_panic_keeps_priority_over_rebuild_wake() {
     child("stream_wake");
 }
 
-pub(crate) fn eager_failure_keeps_incoming_aggregate_owned_after_state_disposal() {
+pub(crate) fn eager_failure_destroys_the_incoming_value_with_its_owners() {
     child("eager");
 }

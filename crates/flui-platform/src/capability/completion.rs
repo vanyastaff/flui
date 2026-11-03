@@ -2,16 +2,16 @@
 //! system finishes later (ADR-0152 §2, item 5).
 
 use std::{
-    cell::{Cell, RefCell},
+    cell::RefCell,
     fmt,
     future::Future,
-    panic::{AssertUnwindSafe, catch_unwind, resume_unwind},
     pin::Pin,
     rc::Rc,
     sync::Arc,
     task::{Context, Poll, Waker},
 };
 
+use flui_foundation::panic::{FirstPanic, commit};
 use parking_lot::Mutex;
 
 use super::owner::{OwnerJob, OwnerPoster, OwnerRetired, PendingCompletions, PendingSlot};
@@ -30,9 +30,8 @@ pub enum Abandoned {
 
 type Outcome<T> = Result<T, Abandoned>;
 type Shared<T> = Arc<Mutex<Option<Outcome<T>>>>;
-// `FnMut`, called at most once: a panic in it leaves its captures in the box,
-// which is then kept rather than destroyed mid-unwind, where a capture whose
-// `Drop` panics too would abort the process.
+// `FnMut`, called at most once: its captures outlive the call, so they are
+// dropped after it under containment, a panic included (ADR-0281).
 type Waiting<T> = Box<dyn FnMut(Outcome<T>)>;
 
 /// The owner side of one completion.
@@ -40,19 +39,26 @@ struct Local<T> {
     /// Where the resolving side leaves the outcome; read only by the settle
     /// job, on the owner thread.
     shared: Shared<T>,
+    /// Changed through [`commit`] wherever the change runs or destroys user
+    /// code (the waiting closure, a waker): that code runs after the borrow
+    /// ends (ADR-0287).
+    state: RefCell<LocalState<T>>,
+}
+
+/// What the owner keeps of one completion.
+struct LocalState<T> {
     /// The outcome once it settled at an owner turn, until it is taken.
-    settled: RefCell<Option<Outcome<T>>>,
+    settled: Option<Outcome<T>>,
     /// Whether the outcome was handed out; a completion settles once.
-    taken: Cell<bool>,
-    on_complete: RefCell<Option<Waiting<T>>>,
-    waker: RefCell<Option<Waker>>,
+    taken: bool,
+    on_complete: Option<Waiting<T>>,
+    waker: Option<Waker>,
 }
 
 /// The owner-local half a settle job reaches through the owner's
 /// [`PendingCompletions`].
-/// Both take `&self`: the caller holds the owning reference and keeps it
-/// rather than dropping it when the call panics, since the state may hold an
-/// answer whose destructor panics too.
+/// Both take `&self`: the caller holds the owning reference and drops it
+/// after the call, under containment when the call panicked (ADR-0281).
 pub(super) trait Settle {
     /// The outcome arrived: run the waiting closure, or keep the outcome for
     /// `poll`. Runs at an owner turn with no borrow of the table held.
@@ -63,37 +69,36 @@ pub(super) trait Settle {
 
 impl<T: 'static> Settle for Local<T> {
     fn settle(&self) {
-        let outcome = self
-            .settled
-            .borrow_mut()
-            .take()
-            .or_else(|| self.shared.lock().take());
-        let Some(outcome) = outcome else { return };
-        let on_complete = self.on_complete.borrow_mut().take();
-        if let Some(mut on_complete) = on_complete {
-            self.taken.set(true);
-            if let Err(payload) = catch_unwind(AssertUnwindSafe(|| on_complete(outcome))) {
-                // Kept, not destroyed during this unwind (see `Waiting`).
-                std::mem::forget(on_complete);
-                resume_unwind(payload);
+        commit(&self.state, |state, out| {
+            let Some(outcome) = state.settled.take().or_else(|| self.shared.lock().take()) else {
+                return;
+            };
+            if let Some(mut on_complete) = state.on_complete.take() {
+                state.taken = true;
+                let mut outcome = Some(outcome);
+                out.call(move || {
+                    if let Some(outcome) = outcome.take() {
+                        on_complete(outcome);
+                    }
+                });
+            } else {
+                state.settled = Some(outcome);
+                if let Some(waker) = state.waker.take() {
+                    out.wake(waker);
+                }
             }
-            drop(on_complete);
-        } else {
-            *self.settled.borrow_mut() = Some(outcome);
-            let waker = self.waker.borrow_mut().take();
-            if let Some(waker) = waker {
-                waker.wake();
-            }
-        }
+        });
     }
 
     fn abandon_on_retire(&self) {
-        let on_complete = self.on_complete.borrow_mut().take();
-        drop(on_complete);
-        let waker = self.waker.borrow_mut().take();
-        if let Some(waker) = waker {
-            waker.wake();
-        }
+        commit(&self.state, |state, out| {
+            if let Some(on_complete) = state.on_complete.take() {
+                out.release(on_complete);
+            }
+            if let Some(waker) = state.waker.take() {
+                out.wake(waker);
+            }
+        });
     }
 }
 
@@ -182,10 +187,12 @@ impl CompletionSource {
         let shared: Shared<T> = Arc::new(Mutex::new(None));
         let local = Rc::new(Local {
             shared: Arc::clone(&shared),
-            settled: RefCell::new(None),
-            taken: Cell::new(false),
-            on_complete: RefCell::new(None),
-            waker: RefCell::new(None),
+            state: RefCell::new(LocalState {
+                settled: None,
+                taken: false,
+                on_complete: None,
+                waker: None,
+            }),
         });
         let id = self.pending.insert(Rc::clone(&local) as Rc<dyn Settle>);
         let completion = Completion {
@@ -220,18 +227,15 @@ impl<T: 'static> Inner<T> {
     /// The outcome, once: the settled value, or `OwnerRetired` when the owner
     /// retired before it settled.
     fn take(&self) -> Option<Outcome<T>> {
-        if self.local.taken.get() {
+        let mut state = self.local.state.borrow_mut();
+        if state.taken {
             return None;
         }
-        let outcome = self
-            .local
+        let outcome = state
             .settled
-            .borrow_mut()
             .take()
             .or_else(|| self.retired().then_some(Err(Abandoned::OwnerRetired)));
-        if outcome.is_some() {
-            self.local.taken.set(true);
-        }
+        state.taken = outcome.is_some();
         outcome
     }
 }
@@ -259,9 +263,8 @@ pub struct Completion<T: 'static> {
 impl<T: 'static> Completion<T> {
     /// Runs `f` once, with the outcome, at an owner turn boundary.
     ///
-    /// `f` is an `FnMut` called at most once: if it panics, its captures are
-    /// kept rather than dropped during the unwind, so a capture whose `Drop`
-    /// also panics cannot abort the process.
+    /// `f` is an `FnMut` called at most once, so its captures outlive its call
+    /// and are dropped contained after it, a panic included (ADR-0281).
     ///
     /// When the outcome has already settled, `f` runs at the owner's next
     /// turn, not inside this call.
@@ -269,18 +272,17 @@ impl<T: 'static> Completion<T> {
         let Some(inner) = self.inner.take() else {
             return;
         };
-        if inner.local.taken.get() {
+        let (taken, ready) = {
+            let state = inner.local.state.borrow();
+            (state.taken, state.settled.is_some())
+        };
+        if taken || (!ready && inner.retired()) {
+            // Handed out already, or no owner is left to run `f`.
             return;
         }
-        if inner.retired() {
-            let ready = inner.local.settled.borrow().is_some();
-            if !ready {
-                // No owner is left to run `f`.
-                return;
-            }
-        }
-        *inner.local.on_complete.borrow_mut() = Some(Box::new(f));
-        if inner.local.settled.borrow().is_some() {
+        // Nothing waits yet: a completion is consumed by its one wait.
+        inner.local.state.borrow_mut().on_complete = Some(Box::new(f));
+        if ready {
             // Settled before anyone waited: deliver at the next turn.
             if let Some(id) = inner
                 .source
@@ -290,7 +292,13 @@ impl<T: 'static> Completion<T> {
                 let posted = inner.source.poster.post_job(settle_job(id));
                 if posted.is_err() {
                     drop(inner.source.pending.take(id));
-                    drop(inner.local.on_complete.borrow_mut().take());
+                    // The owner retired meanwhile: `f` is destroyed unrun,
+                    // after the borrow ends.
+                    commit(&inner.local.state, |state, out| {
+                        if let Some(refused) = state.on_complete.take() {
+                            out.release(refused);
+                        }
+                    });
                 }
             }
         }
@@ -329,10 +337,14 @@ impl<T: 'static> fmt::Debug for Completion<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let state = match &self.inner {
             None => "consumed",
-            Some(inner) if inner.local.taken.get() => "taken",
-            Some(inner) if inner.local.settled.borrow().is_some() => "settled",
-            Some(inner) if inner.retired() => "owner retired",
-            Some(_) => "pending",
+            Some(inner) => match &*inner.local.state.borrow() {
+                LocalState { taken: true, .. } => "taken",
+                LocalState {
+                    settled: Some(_), ..
+                } => "settled",
+                _ if inner.retired() => "owner retired",
+                _ => "pending",
+            },
         };
         f.debug_struct("Completion").field("state", &state).finish()
     }
@@ -352,12 +364,15 @@ impl<T: 'static> Future for CompletionFuture<T> {
         if let Some(outcome) = inner.take() {
             return Poll::Ready(outcome);
         }
-        // The new waker is cloned before any borrow, and the replaced one drops
-        // after it ends: either may re-enter the owner and settle this
-        // completion, finding no waker yet, so the outcome is read again.
+        // The new waker is cloned before the borrow, and the replaced one is
+        // destroyed after it ends: either may re-enter the owner and settle
+        // this completion, so the outcome is read again after both.
         let waker = cx.waker().clone();
-        let replaced = inner.local.waker.replace(Some(waker));
-        drop(replaced);
+        commit(&inner.local.state, |state, out| {
+            if let Some(replaced) = state.waker.replace(waker) {
+                out.release(replaced);
+            }
+        });
         match inner.take() {
             Some(outcome) => Poll::Ready(outcome),
             None => Poll::Pending,
@@ -383,12 +398,11 @@ fn settle_job(id: SlotId) -> OwnerJob {
         let settle = scope.completions().take(id);
         // The table's borrow ended above: the waiting closure may create
         // completions of its own.
-        if let Some(settle) = settle
-            && let Err(payload) = catch_unwind(AssertUnwindSafe(|| settle.settle()))
-        {
-            // Kept, not destroyed during this unwind (see `Settle`).
-            std::mem::forget(settle);
-            resume_unwind(payload);
+        if let Some(settle) = settle {
+            let mut first = FirstPanic::new();
+            first.contain(|| settle.settle());
+            first.contain(|| drop(settle));
+            first.resume();
         }
     })
 }

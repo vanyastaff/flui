@@ -108,9 +108,10 @@ On an exceptional path the observer is not called and not dropped:
   observer's `Arc` is retained with it.
 
 Such a stream ends without `detached()`, as it does today for an observer that panicked. A path
-that holds a failure and still drops the owner would be a defect of that path, not of this rule;
-`a_close_that_holds_a_failure_never_detaches` (`flui-runtime`) closes a presentation that holds a
-caught failure and asserts that `detached()` was not called and the observer is still alive. A
+that holds a failure and still drops the owner would be a defect of that path, not of this rule.
+Since ADR-0281 §3 the close destroys the owner under containment instead, and
+`a_close_that_holds_a_failure_detaches_once` (`flui-runtime`) asserts that `detached()` is
+called once and the observer released. A
 `dispose` that panics is not such a close: it is contained where it runs (ADR-0040 §6), the close
 stays healthy, the owner drops, and the stream ends with `detached()`.
 
@@ -189,8 +190,8 @@ holds the states planted in it.
   observer calls `detached()` once; after `clear_tree_observer` the drop calls nothing; no event
   follows `detached()`; an owner dropped during an unwind calls nothing and retains the observer;
   the owner's key-retirement rows keep passing, since the slot's field order is unchanged.
-- `a_close_that_holds_a_failure_never_detaches` (`flui-runtime`, new): the presentation is
-  retained whole, its owner never dropped, `detached()` never called.
+- `a_close_that_holds_a_failure_detaches_once` (`flui-runtime`, new): the presentation is
+  destroyed under containment (ADR-0281 §3), `detached()` called once.
 - `stale_handles_refuse_after_the_runtime_drops` (new), one row per handle type.
 - §2, three new tests: `acceptance_app_close_releases_every_owner_after_navigation` (the
   acceptance app through the facade: Home, Note, Settings and back, then close; every ledger's

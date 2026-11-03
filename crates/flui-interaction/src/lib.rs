@@ -123,10 +123,9 @@
 // Public items keep their contract documentation at the API boundary.
 #![deny(missing_docs)]
 
-// Layer 0: values, identities and containment retain values.
+// Layer 0: values and identities.
 pub mod events;
 pub mod ids;
-mod retain;
 
 // Layer 1: close policy and containment.
 mod close;

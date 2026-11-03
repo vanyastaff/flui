@@ -1283,15 +1283,15 @@ impl FocusManager {
     /// The complete tree is detached and its key, geometry, context and policy
     /// ownership moved out before final listeners run. Listener removal still
     /// takes effect during that final delivery; registration on a closed owner
-    /// is inert. Healthy captures retire independently. After the first failure,
-    /// remaining notifications are skipped and outgoing captures are retained
-    /// without invoking arbitrary destruction.
+    /// is inert. Each outgoing capture is destroyed exactly once. After the
+    /// first failure, remaining notifications are skipped and later captures
+    /// are destroyed under containment, their failures discarded.
     ///
     /// The first panic propagates after the terminal state is committed. During
     /// an already active unwind, notifications are skipped and outgoing captures
-    /// are retained so the outer failure remains authoritative instead.
-    /// As with other containment boundaries, a user value whose own aggregate
-    /// destruction double-panics can abort before any outer catch is reached.
+    /// are destroyed under containment so the outer failure remains
+    /// authoritative. A destructor that panics while it is itself unwinding
+    /// aborts, as in std (ADR-0281).
     ///
     /// Primary focus is always cleared to `None`, even when `close` runs
     /// reentrantly from inside a focus-change listener — unlike
@@ -1669,73 +1669,12 @@ mod tests {
                 queued_requests_are_dropped_when_the_manager_closes_mid_drain,
             ),
         ];
-        if let Ok(case) = std::env::var(HOSTILE_CHILD) {
-            let (_, run) = HOSTILE_CASES
-                .iter()
-                .find(|(name, _)| *name == case)
-                .expect("a known hostile case");
-            run();
-            std::process::exit(CHILD_COMPLETED);
-        }
         for &(name, case) in cases {
             if let Err(payload) = std::panic::catch_unwind(case) {
                 eprintln!("matrix case `{name}` failed");
                 std::panic::resume_unwind(payload);
             }
         }
-    }
-
-    /// Names the single hostile case a child process of
-    /// `focus_failure_and_reentrancy_matrix` runs instead of the matrix.
-    const HOSTILE_CHILD: &str = "FLUI_FOCUS_HOSTILE_CHILD";
-    /// A child that ran its case to completion exits with this status, so a
-    /// filter that matched no test (status 0) does not pass for one.
-    const CHILD_COMPLETED: i32 = 86;
-    const HOSTILE_CASES: &[(&str, fn())] = &[("closed_rejections_child", closed_rejections_child)];
-
-    /// Run one hostile case in a child process: what it guards against is an
-    /// abort, which would otherwise take the whole test binary down.
-    fn run_hostile_case_in_child(case: &str) {
-        let mut child = std::process::Command::new(std::env::current_exe().expect("test binary"))
-            .args([
-                "--exact",
-                "focus::manager::tests::focus_failure_and_reentrancy_matrix",
-                "--nocapture",
-            ])
-            .env(HOSTILE_CHILD, case)
-            .env("RUST_BACKTRACE", "0")
-            .env("RUST_LIB_BACKTRACE", "0")
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::piped())
-            .spawn()
-            .expect("spawn hostile case");
-        let mut stderr = child.stderr.take().expect("child stderr");
-        let stderr_reader = std::thread::spawn(move || {
-            let mut output = Vec::new();
-            std::io::Read::read_to_end(&mut stderr, &mut output).expect("read child stderr");
-            output
-        });
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
-        let status = loop {
-            if let Some(status) = child.try_wait().expect("poll hostile case") {
-                break status;
-            }
-            if std::time::Instant::now() >= deadline {
-                child.kill().expect("stop timed-out hostile case");
-                child.wait().expect("reap hostile case");
-                stderr_reader.join().expect("child stderr reader");
-                panic!("hostile case `{case}` timed out");
-            }
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        };
-        let stderr = stderr_reader.join().expect("child stderr reader");
-        assert_eq!(
-            status.code(),
-            Some(CHILD_COMPLETED),
-            "hostile case `{case}` failed: {status}
-{}",
-            String::from_utf8_lossy(&stderr)
-        );
     }
 
     struct CloseCapture {
@@ -1895,26 +1834,21 @@ mod tests {
                 terminal.get(),
                 "every capture sees the complete closed tree after {expected}"
             );
-            if callback_failure.is_some() {
-                assert!(
-                    drops.borrow().is_empty(),
-                    "captures retained after {expected}"
-                );
-            } else {
-                assert_eq!(
-                    drops.borrow().last().copied(),
-                    Some(expected),
-                    "retirement stops at the first destructor failure"
-                );
-                assert_eq!(
-                    drops
-                        .borrow()
-                        .iter()
-                        .filter(|label| panicking_drops.contains(label))
-                        .count(),
-                    1
-                );
-            }
+            // Every capture is destroyed once, after a callback failure and
+            // past a failing destructor alike (ADR-0281 §3).
+            let mut destroyed = drops.borrow().clone();
+            destroyed.sort_unstable();
+            let mut all = [
+                "node listener",
+                "manager listener",
+                "global handler",
+                "key handler",
+                "rect provider",
+                "context",
+                "policy",
+            ];
+            all.sort_unstable();
+            assert_eq!(destroyed, all, "every capture destroyed after {expected}");
             assert!(matches!(
                 nodes[1].request_focus(),
                 FocusRequestOutcome::OwnerClosed
@@ -2096,10 +2030,6 @@ mod tests {
     }
 
     fn closed_rejections_preserve_outer_failure_and_healthy_retirement() {
-        run_hostile_case_in_child("closed_rejections_child");
-    }
-
-    fn closed_rejections_child() {
         use std::panic::{AssertUnwindSafe, catch_unwind};
 
         for kind in 0..7 {

@@ -149,7 +149,6 @@ fn semantics_listener_retirement_child(mode: &str) {
         let fail = match mode {
             "physical-A" | "snapshot-A" => label == "semantics A",
             "physical-B" | "snapshot-B" => label == "semantics B",
-            "physical-pair" | "physical-incoming" | "snapshot-callback" | "snapshot-pair" => true,
             _ => false,
         };
         let capture = SemanticsCapture {
@@ -213,10 +212,7 @@ fn semantics_listener_retirement_child(mode: &str) {
         outcome
     } else {
         catch_unwind(AssertUnwindSafe(|| {
-            if mode == "physical-incoming" {
-                let _binding = binding;
-                std::panic::panic_any("incoming semantics failure");
-            } else if mode == "physical-shared" {
+            if mode == "physical-shared" {
                 let alias = binding.clone();
                 drop(binding);
                 assert!(drops.lock().expect("drop log").is_empty());
@@ -231,12 +227,12 @@ fn semantics_listener_retirement_child(mode: &str) {
         }))
     };
     let (payload, expected_drops): (Option<&'static str>, &[&'static str]) = match mode {
-        "physical-A" | "physical-pair" | "snapshot-A" | "snapshot-pair" => {
-            (Some("semantics A"), &["semantics A"])
-        }
+        "physical-A" | "snapshot-A" => (Some("semantics A"), &["semantics A", "semantics B"]),
         "physical-B" | "snapshot-B" => (Some("semantics B"), &["semantics A", "semantics B"]),
-        "physical-incoming" => (Some("incoming semantics failure"), &[]),
-        "snapshot-callback" => (Some("semantics callback first"), &[]),
+        "snapshot-callback" => (
+            Some("semantics callback first"),
+            &["semantics A", "semantics B"],
+        ),
         "registered-callback" => (Some("registered callback first"), &[]),
         "physical-healthy"
         | "physical-shared"
@@ -285,14 +281,15 @@ fn semantics_listener_retirement_child(mode: &str) {
         );
         drop(binding);
     } else if mode == "registered-callback" {
-        // The panicking snapshot retains its thread-shared clones, so the
-        // binding's own drop leaves both captures retained.
+        // The panicking snapshot destroys its clones; the binding's own drop
+        // then destroys both captures (ADR-0281).
         let binding = retained_binding.expect("caller keeps the binding");
         assert_eq!(*events.lock().expect("event log"), [("semantics A", true)]);
         drop(binding);
-        assert!(
-            drops.lock().expect("drop log").is_empty(),
-            "a panicking snapshot retains thread-shared captures"
+        assert_eq!(
+            *drops.lock().expect("drop log"),
+            ["semantics A", "semantics B"],
+            "the last owner destroys every capture"
         );
     } else if mode == "physical-reentry" {
         let replacement = SEMANTICS_OWNER
@@ -331,15 +328,12 @@ pub(crate) fn semantics_listener_retirement_preserves_independent_envelopes() {
         "physical-healthy",
         "physical-A",
         "physical-B",
-        "physical-pair",
-        "physical-incoming",
         "physical-shared",
         "physical-reentry",
         "physical-duplicates",
         "snapshot-healthy",
         "snapshot-A",
         "snapshot-B",
-        "snapshot-pair",
         "snapshot-callback",
         "snapshot-nested",
         "registered-callback",

@@ -1239,13 +1239,12 @@ fn dispatch_native_inputs(inputs: Vec<(Rc<dyn LoopWindow>, NativeDispatch)>) {
             }
         }
         // Callback reentry can close the window and release its final other
-        // owner. After a failure, its opaque captures must not retire here.
-        if first.is_some() {
-            std::mem::forget(window);
-        } else if let Err(payload) =
+        // owner: its captures retire here, contained, after a failure too;
+        // the first failure goes on (ADR-0281).
+        if let Err(payload) =
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(window)))
         {
-            first = Some(payload);
+            flui_foundation::panic::FirstPanic::fold(&mut first, Some(payload));
         }
     }
     if let Some(payload) = first {

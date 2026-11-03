@@ -84,9 +84,9 @@ struct InputTarget {
 }
 
 /// Keep the earliest input-phase panic when cleanup or wake work also
-/// unwinds. Secondary panic payloads are intentionally leaked because their
-/// destructors are arbitrary user code and must not replace or abort the
-/// original failure while it is being resumed.
+/// unwinds. Secondary panic payloads are discarded under containment
+/// (ADR-0281 §2), so a destructor that panics does not replace the original
+/// failure.
 pub(super) fn preserve_first_input_panic(
     first: &mut Option<Box<dyn std::any::Any + Send>>,
     candidate: Option<Box<dyn std::any::Any + Send>>,
@@ -105,13 +105,12 @@ pub(super) fn preserve_first_input_panic(
             );
         }))
         .err();
-        // A panic payload may itself panic while being dropped. Leaking only
-        // secondary exceptional payloads keeps the original failure stable,
-        // including when the tracing subscriber itself panics.
+        // The tracing subscriber is user code; its panic is discarded like
+        // the secondary payload, and the first failure stays.
         if let Some(payload) = telemetry_panic {
-            std::mem::forget(payload);
+            flui_foundation::panic::discard_payload(payload);
         }
-        std::mem::forget(candidate);
+        flui_foundation::panic::discard_payload(candidate);
     }
 }
 

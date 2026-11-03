@@ -89,8 +89,8 @@
 //!
 //! [`TaskToken`] cancels on drop: the future is removed from the driver and
 //! dropped, so it is never polled again and its destructors run. During an
-//! existing unwind the detached future is retained instead: running opaque
-//! destruction then could abort the process. A `Waker` held by a cancelled or
+//! existing unwind the detached future is destroyed under containment and a
+//! panic from it discarded (ADR-0281). A `Waker` held by a cancelled or
 //! retired task is inert — it finds the task's flags closed and does nothing.
 //!
 //! The UI runtime's teardown retires every remaining task explicitly
@@ -115,6 +115,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
 use std::task::{Context, Poll, Wake, Waker};
 
+use flui_foundation::panic::FirstPanic;
 use parking_lot::Mutex;
 
 /// A future the driver polls on the owner thread.
@@ -311,7 +312,7 @@ impl TaskStore {
     fn spawn(self: &Rc<Self>, future: BoxedTask) -> TaskToken {
         let Some(id) = self.next_task_id() else {
             // Capacity refusal is authoritative over rejected opaque destruction.
-            mem::forget(future);
+            flui_foundation::panic::drop_contained(future);
             panic!("AsyncDriver task identities exhausted; refusing identity reuse");
         };
         let flags = Arc::new(TaskFlags::new(true, true));
@@ -335,7 +336,7 @@ impl TaskStore {
 
     fn spawn_eager(self: &Rc<Self>, mut future: BoxedTask) -> Option<TaskToken> {
         let Some(id) = self.next_task_id() else {
-            mem::forget(future);
+            flui_foundation::panic::drop_contained(future);
             panic!("AsyncDriver task identities exhausted; refusing identity reuse");
         };
         // Starts NOT ready and NOT admitted: we are about to poll it
@@ -352,7 +353,7 @@ impl TaskStore {
             Err(payload) => {
                 flags.cancelled.store(true, Ordering::Release);
                 flags.retired.store(true, Ordering::Release);
-                mem::forget(future);
+                flui_foundation::panic::drop_contained(future);
                 resume_unwind(payload);
             }
         };
@@ -475,9 +476,8 @@ impl TaskStore {
                 Ok(outcome) => outcome,
                 Err(payload) => {
                     flags.cancelled.store(true, Ordering::Release);
-                    mem::forget(future);
-                    // PumpGuard removes the empty slot and restores siblings;
-                    // none of its recovery values run user destruction.
+                    flui_foundation::panic::drop_contained(future);
+                    // PumpGuard removes the empty slot and restores siblings.
                     resume_unwind(payload);
                 }
             };
@@ -578,78 +578,43 @@ pub(crate) struct RetiringTasks {
 }
 
 impl RetiringTasks {
-    /// Drop tasks then the hook, preserving the first failure. During an
-    /// existing unwind retain opaque values: an outer catch cannot rescue
-    /// double-panicking aggregate drop glue.
+    /// Drop task futures, then deadline wakers, then the hook, each under
+    /// containment. The first destructor panic is returned unless
+    /// `preserve_failure` says an enclosing owner already holds one; a later
+    /// panic is discarded (ADR-0281).
     pub(crate) fn retire_preserving_failure(
         self,
         preserve_failure: bool,
         failure_signal: &crate::wake_delivery::FailureSignal,
     ) -> Option<RetirePanic> {
-        self.retire_impl(preserve_failure, Some(failure_signal))
-    }
-
-    fn retire_impl(
-        self,
-        preserve_failure: bool,
-        failure_signal: Option<&crate::wake_delivery::FailureSignal>,
-    ) -> Option<RetirePanic> {
-        let mut first: Option<RetirePanic> = None;
-        let mut retire = |value| {
-            if preserve_failure
-                || first.is_some()
-                || failure_signal.is_some_and(crate::wake_delivery::FailureSignal::get)
-                || std::thread::panicking()
-            {
-                mem::forget(value);
-            } else if let Err(payload) = release_opaque(value) {
-                if let Some(signal) = failure_signal {
-                    signal.set(true);
-                }
-                if first.is_none() {
-                    first = Some(payload);
-                } else {
-                    flui_foundation::panic::discard_payload(payload);
-                }
+        fn retire<T>(
+            first: &mut FirstPanic,
+            signal: &crate::wake_delivery::FailureSignal,
+            value: T,
+        ) {
+            if let Err(payload) = release_opaque(value) {
+                signal.set(true);
+                first.record(payload);
             }
-        };
+        }
+        let mut first = FirstPanic::new();
         for (_, mut task) in self.tasks {
             if let Some(future) = task.future.take() {
-                retire(future);
+                retire(&mut first, failure_signal, future);
             }
         }
         // A deadline's waker is not woken at teardown: its task is gone.
         for waker in self.wakers {
-            if preserve_failure
-                || first.is_some()
-                || failure_signal.is_some_and(crate::wake_delivery::FailureSignal::get)
-                || std::thread::panicking()
-            {
-                mem::forget(waker);
-            } else if let Err(payload) = release_opaque(waker) {
-                if let Some(signal) = failure_signal {
-                    signal.set(true);
-                }
-                first = Some(payload);
-            }
+            retire(&mut first, failure_signal, waker);
         }
         // Its captures die here, not with the last outstanding waker.
-        if let Some(hook) = self.hook {
-            // A hook has a different envelope type than a task future.
-            if preserve_failure
-                || first.is_some()
-                || failure_signal.is_some_and(crate::wake_delivery::FailureSignal::get)
-                || std::thread::panicking()
-            {
-                mem::forget(hook);
-            } else if let Err(payload) = release_opaque(hook) {
-                if let Some(signal) = failure_signal {
-                    signal.set(true);
-                }
-                first = Some(payload);
-            }
+        retire(&mut first, failure_signal, self.hook);
+        let first = first.into_payload()?;
+        if preserve_failure {
+            flui_foundation::panic::discard_payload(first);
+            return None;
         }
-        first
+        Some(first)
     }
 }
 
@@ -759,8 +724,8 @@ impl TaskToken {
     ///
     /// Propagates a panic raised by the removed future's own destructor —
     /// called directly, this is an ordinary panic with an ordinary
-    /// backtrace. During an existing unwind this type's `Drop` detaches and
-    /// retains the future instead of running its destructor.
+    /// backtrace. During an existing unwind this type's `Drop` detaches the
+    /// future and discards a panic from its destructor instead.
     pub fn cancel(&self) {
         self.flags.cancelled.store(true, Ordering::Release);
         if let Some(store) = self.store.upgrade() {
@@ -779,11 +744,9 @@ impl Drop for TaskToken {
     /// Cancels the task, same as an explicit [`cancel`](Self::cancel) call —
     /// except while the thread is already unwinding.
     ///
-    /// During an existing unwind even catching the future's Drop cannot
-    /// contain two of its fields panicking in succession. Detach its slot and
-    /// retain the opaque future without invoking any user destruction. This
-    /// also retains any resources and nested tokens it owns; cancellation of
-    /// this task is guaranteed, recursive destruction of its captures is not.
+    /// While the thread is unwinding the slot is detached and the future
+    /// destroyed under containment instead, a panic from it discarded: the
+    /// incoming unwind stays the failure that propagates (ADR-0281).
     fn drop(&mut self) {
         if std::thread::panicking() {
             self.flags.cancelled.store(true, Ordering::Release);
@@ -791,7 +754,7 @@ impl Drop for TaskToken {
                 && let Some(mut task) = store.remove(self.id)
                 && let Some(future) = task.future.take()
             {
-                mem::forget(future);
+                flui_foundation::panic::drop_contained(future);
             }
         } else {
             self.cancel();
@@ -886,8 +849,7 @@ impl AsyncDriver {
     /// Installation retries undelivered demand. The displaced `Arc` is
     /// dropped only after the hook lock is released, since its captured state
     /// is user code that may re-enter the driver. Once the UI runtime is gone or
-    /// retired the hook is refused and dropped at once (retained instead
-    /// during an existing unwind).
+    /// retired the hook is refused and dropped at once.
     ///
     /// # Panics
     ///
@@ -924,8 +886,8 @@ impl AsyncDriver {
     /// `u64::MAX` is reserved for permanent exhaustion, shared by both spawn
     /// methods and all driver clones. Catching the panic or removing tasks never
     /// permits another admission. On exhausted admission, the rejected future is
-    /// retained without polling it or running its destructor, preserving the
-    /// capacity failure. Accepted futures retain their ordinary lifetime policy.
+    /// destroyed under containment without being polled, and the capacity
+    /// failure is raised (ADR-0281).
     ///
     /// Propagates a panic from a refused future's destructor.
     #[must_use = "dropping the TaskToken immediately cancels the task"]
@@ -999,15 +961,8 @@ impl AsyncDriver {
 }
 
 /// Release an opaque owned value — a future or a hook, whose drop glue is
-/// user code — under the retention policy shared by cancellation and
-/// retirement: during an existing unwind it is retained (forgotten), since a
-/// destructor panicking then aborts the process; otherwise it is dropped
-/// under a catch and the panic, if any, handed back.
+/// user code — under a catch, handing the panic back, if any (ADR-0281).
 fn release_opaque<T>(value: T) -> Result<(), RetirePanic> {
-    if std::thread::panicking() {
-        mem::forget(value);
-        return Ok(());
-    }
     catch_unwind(AssertUnwindSafe(move || drop(value)))
 }
 
@@ -1017,7 +972,7 @@ fn release_opaque<T>(value: T) -> Result<(), RetirePanic> {
 /// Ownership is made safe first ([`release_opaque`]); the diagnostic runs
 /// afterwards under its own catch, so a panicking subscriber can neither
 /// abort an unwind nor replace the destructor's panic. A diagnostic panic is
-/// retained, never raised.
+/// discarded, never raised.
 fn refuse(
     future: BoxedTask,
     failure_slot: Option<&RefCell<Option<Weak<crate::wake_delivery::FailureSignal>>>>,
@@ -1039,7 +994,12 @@ fn refuse(
         flui_foundation::panic::discard_payload(payload);
     }
     if let Err(payload) = released {
-        resume_unwind(payload);
+        if std::thread::panicking() {
+            // The incoming unwind stays the failure that propagates.
+            flui_foundation::panic::discard_payload(payload);
+        } else {
+            resume_unwind(payload);
+        }
     }
     token
 }
@@ -1185,7 +1145,11 @@ mod tests {
                 }
             }
             assert_eq!(rejected_polls.load(Ordering::Relaxed), 0);
-            assert_eq!(rejected_drops.load(Ordering::Relaxed), 0);
+            assert_eq!(
+                rejected_drops.load(Ordering::Relaxed),
+                8,
+                "each refused future is destroyed"
+            );
 
             let (first, _, finish, waker) = &accepted[0];
             finish.store(true, Ordering::Release);
@@ -1482,14 +1446,14 @@ mod tests {
         );
     }
 
-    /// A failed destructor closes failure custody; later opaque futures are
-    /// retained rather than risking aggregate double-panic destruction.
-    fn retirement_retains_the_tail_and_keeps_the_first_panic() {
-        struct Probe {
+    /// A failed destructor does not stop retirement: later futures are still
+    /// destroyed under containment, and the first panic is the one returned.
+    fn retirement_destroys_the_tail_and_keeps_the_first_panic() {
+        struct Capture {
             drops: Rc<Cell<usize>>,
             panic_with: Option<&'static str>,
         }
-        impl Drop for Probe {
+        impl Drop for Capture {
             fn drop(&mut self) {
                 self.drops.set(self.drops.get() + 1);
                 if let Some(message) = self.panic_with {
@@ -1504,12 +1468,12 @@ mod tests {
         let tokens: Vec<_> = [None, Some("first"), None, Some("second")]
             .into_iter()
             .map(|panic_with| {
-                let probe = Probe {
+                let capture = Capture {
                     drops: Rc::clone(&drops),
                     panic_with,
                 };
                 driver.spawn_local(Box::pin(async move {
-                    let _probe = probe;
+                    let _capture = capture;
                     std::future::pending::<()>().await;
                 }))
             })
@@ -1523,13 +1487,13 @@ mod tests {
         );
         assert_eq!(
             drops.get(),
-            2,
-            "the healthy prefix and first failing capture retire"
+            4,
+            "every capture is destroyed, the second failure discarded"
         );
         assert!(tokens.iter().all(TaskToken::is_cancelled));
         assert!(frame.retire().is_none(), "retirement is idempotent");
         drop(tokens);
-        assert_eq!(drops.get(), 2);
+        assert_eq!(drops.get(), 4);
 
         let late = driver.spawn_local(Box::pin(async {}));
         assert!(late.is_cancelled(), "a retired store admits nothing");
@@ -1619,8 +1583,8 @@ mod tests {
                     cancel_propagates_the_removed_futures_panic as fn(),
                 ),
                 (
-                    "retirement_retains_the_tail_and_keeps_the_first_panic",
-                    retirement_retains_the_tail_and_keeps_the_first_panic as fn(),
+                    "retirement_destroys_the_tail_and_keeps_the_first_panic",
+                    retirement_destroys_the_tail_and_keeps_the_first_panic as fn(),
                 ),
                 (
                     "a_scheduler_has_one_live_owner_frame",

@@ -616,7 +616,7 @@ impl UiRuntime {
     /// it, even though that pump will render nothing for the gated
     /// presentation itself.
     ///
-    /// A wait an agent parked (`SemanticsAgent::wait`) counts through its deadline, so a window
+    /// A wait an agent parked (`wait.until`) counts through its deadline, so a window
     /// that draws nothing still times it out.
     #[must_use]
     pub fn next_wake(&self) -> Option<web_time::Instant> {

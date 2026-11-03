@@ -362,8 +362,8 @@ impl OwnerFrame {
     /// A UI runtime's teardown calls it in its own order, before it resumes any
     /// earlier failure, so the captures of both queues are dropped on the
     /// owner exactly once. Returns the first panic a destructor raised; later
-    /// ones are retained, never dropped. During an existing unwind the values
-    /// are retained without running their destructors. Idempotent; `Drop`
+    /// ones are discarded. A destructor that panics while the thread is
+    /// already unwinding aborts, as in std (ADR-0281). Idempotent; `Drop`
     /// calls it for an owner that did not.
     #[must_use = "the first destructor panic is returned for the owner to raise"]
     pub fn retire(&self) -> Option<RetirePanic> {
@@ -377,6 +377,10 @@ impl OwnerCleanup {
     }
 
     fn retire_impl(&self) -> Option<RetirePanic> {
+        // A failure the owner already held before any destructor ran stays
+        // first: a destructor panic is then discarded, not returned to be
+        // raised (ADR-0281 §3).
+        let held = self.preserving_execution_failure();
         self.execution.retire();
         let mut callbacks = Vec::new();
         if let Some(lane) = self.post_frame.upgrade() {
@@ -393,18 +397,18 @@ impl OwnerCleanup {
             .map(|tasks| tasks.detach_for_retirement());
         let mut first: Option<RetirePanic> = None;
         for entry in callbacks {
-            if std::thread::panicking() || self.preserving_execution_failure() || first.is_some() {
-                std::mem::forget(entry);
-                continue;
-            }
             if let Err(payload) = catch_unwind(AssertUnwindSafe(move || drop(entry))) {
                 self.record_execution_failure();
-                keep_first(&mut first, payload);
+                if held {
+                    flui_foundation::panic::discard_payload(payload);
+                } else {
+                    keep_first(&mut first, payload);
+                }
             }
         }
         if let Some(tasks) = tasks
             && let Some(payload) = tasks.retire_preserving_failure(
-                self.preserving_execution_failure() || first.is_some(),
+                held || first.is_some(),
                 &self.execution_failure_signal(),
             )
         {
@@ -559,19 +563,15 @@ pub enum OwnerFrameError {
 /// owning UI runtime is gone or retired.
 #[must_use = "a returned value is an obligation: meet it or drop it"]
 pub enum PostFrameRejection<T> {
-    /// The queue closed with no failure in custody: the value is the
+    /// The queue closed: the value is the
     /// caller's again, never run.
     Returned(T),
-    /// The owner closed with a caught failure in custody, or the thread is
-    /// unwinding: the value is retained, neither run nor dropped.
-    Retained,
 }
 
 impl<T> std::fmt::Debug for PostFrameRejection<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Returned(_) => f.write_str("PostFrameRejection::Returned(..)"),
-            Self::Retained => f.write_str("PostFrameRejection::Retained"),
         }
     }
 }
@@ -801,26 +801,32 @@ impl PresentationFrameScope {
 
     fn close_in_custody(&self, cleanup: &OwnerCleanup) -> Option<RetirePanic> {
         let retired = self.detach_callbacks();
+        // A failure the owner already held before any destructor ran stays
+        // first: a destructor panic is then discarded, not returned to be
+        // raised (ADR-0281 §3).
+        let held = cleanup.preserving_execution_failure();
         let mut first = None;
         for entry in retired {
-            if std::thread::panicking() || first.is_some() || cleanup.preserving_execution_failure()
-            {
-                std::mem::forget(entry);
-            } else if let Err(payload) = catch_unwind(AssertUnwindSafe(move || drop(entry))) {
+            if let Err(payload) = catch_unwind(AssertUnwindSafe(move || drop(entry))) {
                 cleanup.record_execution_failure();
-                keep_first(&mut first, payload);
+                if held {
+                    flui_foundation::panic::discard_payload(payload);
+                } else {
+                    keep_first(&mut first, payload);
+                }
             }
         }
         first
     }
 
-    /// Revoke and retain only this scope's callbacks when the enclosing owner
-    /// already preserves a failure. No capture destructor or diagnostic runs;
-    /// healthy sibling queues remain owned and deliverable.
+    /// Revoke and destroy only this scope's callbacks when the enclosing owner
+    /// already holds a failure. Each capture is destroyed under containment
+    /// and a panic from it discarded, so the enclosing failure stays first
+    /// (ADR-0281); healthy sibling queues remain owned and deliverable.
     #[doc(hidden)]
     pub fn close_preserving(&self) {
         for entry in self.detach_callbacks() {
-            std::mem::forget(entry.callback);
+            flui_foundation::panic::drop_contained(entry);
         }
     }
 
@@ -924,9 +930,10 @@ impl PostFrameHandle {
     /// one completion batch.
     ///
     /// The callback may capture `Rc`/`RefCell` state. On error (the owning
-    /// UI runtime is gone or retired) the callback is never invoked. Healthy
-    /// rejection drops it normally; active owner failure custody or an existing
-    /// unwind retains its opaque capture envelope instead.
+    /// UI runtime is gone or retired) the callback is never invoked; it is
+    /// dropped under containment, and a panic from its destructor propagates
+    /// unless the owner already holds a failure or the thread is unwinding.
+    /// A panic from its destructor is discarded in those cases (ADR-0281).
     ///
     /// Eligible registrations run in callback identity order. A blocked
     /// presentation never holds back a completed sibling or runtime callback.
@@ -956,10 +963,7 @@ impl PostFrameHandle {
     /// with a closed queue: `run(value, timing)` runs after the next eligible
     /// completion, and a closed queue hands `value` back unrun so the caller
     /// can meet it another way. `run` is a plain function, so the refusal has
-    /// no captures of its own to dispose. When the owner closed with a caught
-    /// failure in custody (or the thread is unwinding), `value` is retained,
-    /// neither returned, run nor dropped, as `schedule` retains a refused
-    /// envelope (ADR-0182).
+    /// no captures of its own to dispose.
     ///
     /// # Errors
     ///
@@ -971,12 +975,6 @@ impl PostFrameHandle {
     ) -> Result<(), PostFrameRejection<T>> {
         match self.admit(value, |value| Box::new(move |timing| run(value, timing))) {
             Ok(()) => Ok(()),
-            Err((value, Some(lane)))
-                if crate::scheduler::execution::execution_failure_held(&lane.execution_failure) =>
-            {
-                std::mem::forget(value);
-                Err(PostFrameRejection::Retained)
-            }
             Err((value, _)) => Err(PostFrameRejection::Returned(value)),
         }
     }
@@ -1194,15 +1192,15 @@ mod tests {
 
     /// Retirement drops queued owner-local callbacks once, unrun, keeps the
     /// first destructor panic, and closes the queue to later registrations.
-    fn retirement_retains_failed_callback_tail_and_closes_the_queue() {
-        struct Probe {
+    fn retirement_destroys_failed_callback_tail_and_closes_the_queue() {
+        struct Capture {
             drops: Rc<Cell<usize>>,
             panics: bool,
         }
-        impl Drop for Probe {
+        impl Drop for Capture {
             fn drop(&mut self) {
                 self.drops.set(self.drops.get() + 1);
-                assert!(!self.panics, "callback capture probe");
+                assert!(!self.panics, "callback capture failure");
             }
         }
 
@@ -1212,14 +1210,14 @@ mod tests {
         let drops = Rc::new(Cell::new(0));
         let ran = Rc::new(Cell::new(false));
         for panics in [true, false] {
-            let probe = Probe {
+            let capture = Capture {
                 drops: Rc::clone(&drops),
                 panics,
             };
             let ran = Rc::clone(&ran);
             handle
                 .schedule(move |_| {
-                    let _probe = probe;
+                    let _capture = capture;
                     ran.set(true);
                 })
                 .expect("lane alive");
@@ -1227,13 +1225,9 @@ mod tests {
         let first = owner.retire().expect("a capture's destructor panicked");
         assert_eq!(
             first.downcast_ref::<&str>().copied(),
-            Some("callback capture probe")
+            Some("callback capture failure")
         );
-        assert_eq!(
-            drops.get(),
-            1,
-            "the first failure retains the remaining opaque capture"
-        );
+        assert_eq!(drops.get(), 2, "the remaining capture is still destroyed");
         assert!(!ran.get(), "a retired callback never runs");
         assert_eq!(handle.schedule(|_| {}), Err(PostFrameScheduleError::Closed));
         assert_eq!(
@@ -1249,7 +1243,7 @@ mod tests {
             !ran.get(),
             "a refused frame must not revive retired callbacks"
         );
-        assert_eq!(drops.get(), 1, "refusal must not retire the retained tail");
+        assert_eq!(drops.get(), 2, "refusal destroys nothing twice");
     }
 
     #[test]
@@ -1266,8 +1260,8 @@ mod tests {
                     post_frame_panic_preserves_uninvoked_mixed_tail_before_reentrant_work as fn(),
                 ),
                 (
-                    "retirement_retains_failed_callback_tail_and_closes_the_queue",
-                    retirement_retains_failed_callback_tail_and_closes_the_queue as fn(),
+                    "retirement_destroys_failed_callback_tail_and_closes_the_queue",
+                    retirement_destroys_failed_callback_tail_and_closes_the_queue as fn(),
                 ),
             ],
         );

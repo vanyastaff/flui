@@ -16,6 +16,9 @@
 use std::any::Any;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+mod commit;
+pub use commit::{Obligation, Outbox, commit, commit_into};
+
 /// The text of a panic payload, when it has any.
 ///
 /// `panic!("literal")` produces a `&'static str` payload; `panic!("{}", x)`
@@ -59,6 +62,17 @@ pub fn discard_payload(payload: Box<dyn Any + Send>) {
         {
             pending = Some(next);
         }
+    }
+}
+
+/// Destroy `value` after a caught failure that stays the first one: its
+/// destructor runs contained and a panic it raises is discarded with
+/// [`discard_payload`] (ADR-0281 §3).
+pub fn drop_contained<T>(value: T) {
+    if let Err(payload) =
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || drop(value)))
+    {
+        discard_payload(payload);
     }
 }
 
@@ -123,10 +137,17 @@ impl FirstPanic {
         self.0.take()
     }
 
-    /// Raise the held panic, if there is one.
+    /// Raise the held panic, if there is one. Called while the thread is
+    /// already unwinding (from a `Drop` an earlier failure runs), the
+    /// unwinding failure is the first one: the held panic is discarded
+    /// instead of raised, where raising it would abort (ADR-0281 §4).
     pub fn resume(mut self) {
         if let Some(payload) = self.0.take() {
-            std::panic::resume_unwind(payload);
+            if std::thread::panicking() {
+                discard_payload(payload);
+            } else {
+                std::panic::resume_unwind(payload);
+            }
         }
     }
 }

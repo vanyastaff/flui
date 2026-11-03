@@ -131,15 +131,12 @@ impl HitWalk {
     /// Discards path entries the walk no longer reports — a rejected
     /// re-walk's, or the visual path an expanded one replaces.
     ///
-    /// An entry's metadata is user data whose destructor may panic. Until the
-    /// walk holds a failure each entry is dropped with that panic contained
-    /// like a node's; once it holds one, the rest are retained rather than
-    /// run, so a later destructor cannot disturb the failure being reported.
+    /// An entry's metadata is user data whose destructor may panic. Each entry
+    /// is dropped with that panic contained like a node's, after a failure
+    /// too; the first failure stays the one reported (ADR-0281).
     pub(super) fn discard(&mut self, entries: impl IntoIterator<Item = HitTestEntry>) {
         for entry in entries {
-            if self.first_panic.is_some() {
-                std::mem::forget(entry);
-            } else if let Err(payload) =
+            if let Err(payload) =
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(entry)))
             {
                 self.contain_panic(payload);

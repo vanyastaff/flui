@@ -71,6 +71,10 @@ pub(crate) trait ViewInput {
     /// the input method declined): convert it and dispatch what it carries
     /// through the view.
     fn event(&self, view: &ContentView<'_>, event: &NSEvent);
+
+    /// The window's input regions, in its logical coordinates, at its `scale`:
+    /// what a press on a title bar the application draws is answered from.
+    fn set_input_regions(&self, regions: &[flui_platform::input_regions::InputRegion], scale: f64);
 }
 
 /// The text input's part of one content view: the document AppKit's input
@@ -158,6 +162,101 @@ impl ContentView<'_> {
     pub(crate) fn text(&self) -> &dyn ViewText {
         &*self.context.text
     }
+
+    /// The view's input.
+    pub(crate) fn input(&self) -> &dyn ViewInput {
+        &*self.context.input
+    }
+
+    /// Move the window for the press `event` starts, as its system title bar
+    /// does: AppKit tracks the drag until the button goes up, snapping to the
+    /// screen's edges and between Spaces. The press reaches nobody else.
+    pub(crate) fn drag_window(&self, event: &NSEvent) {
+        // SAFETY: `view` is a live NSView on the main thread; `window` is its
+        // window or nil, and `performWindowDragWithEvent:` (macOS 10.11) takes
+        // the mouse-down event AppKit hands the view for this call.
+        unsafe {
+            let window: *mut AnyObject = msg_send![self.view, window];
+            if let Some(window) = window.as_ref() {
+                let _: () = msg_send![window, performWindowDragWithEvent: event];
+            }
+        }
+    }
+
+    /// Zoom the window, or put it back, as the system title bar's
+    /// double-click does.
+    pub(crate) fn zoom_window(&self) {
+        let nobody = std::ptr::null_mut::<AnyObject>();
+        // SAFETY: `view` is a live NSView on the main thread; `window` is its
+        // window or nil. `performZoom:` is an NSWindow action whose sender may
+        // be nil.
+        unsafe {
+            let window: *mut AnyObject = msg_send![self.view, window];
+            if let Some(window) = window.as_ref() {
+                let _: () = msg_send![window, performZoom: nobody];
+            }
+        }
+    }
+
+    /// Minimize the window into the Dock, as the system title bar's
+    /// double-click does when the user set it so.
+    pub(crate) fn minimize_window(&self) {
+        let nobody = std::ptr::null_mut::<AnyObject>();
+        // SAFETY: as for `zoom_window`: `performMiniaturize:` is an NSWindow
+        // action whose sender may be nil.
+        unsafe {
+            let window: *mut AnyObject = msg_send![self.view, window];
+            if let Some(window) = window.as_ref() {
+                let _: () = msg_send![window, performMiniaturize: nobody];
+            }
+        }
+    }
+
+    /// What the user set a double-click on a title bar to do, in System
+    /// Settings: `AppleActionOnDoubleClick` (`Maximize`, `Minimize` or
+    /// `None`), and the older `AppleMiniaturizeOnDoubleClick` where it is set.
+    pub(crate) fn title_bar_double_click_setting() -> (Option<String>, Option<bool>) {
+        use objc2_foundation::NSString;
+        // SAFETY: `standardUserDefaults` answers the shared defaults object;
+        // `stringForKey:` answers an NSString or nil, and `objectForKey:` an
+        // object or nil, both autoreleased; the keys are NSStrings this call
+        // keeps alive.
+        unsafe {
+            let defaults: *mut AnyObject =
+                msg_send![objc2::class!(NSUserDefaults), standardUserDefaults];
+            let Some(defaults) = defaults.as_ref() else {
+                return (None, None);
+            };
+            let action_key = NSString::from_str("AppleActionOnDoubleClick");
+            let action: Option<Retained<NSString>> =
+                msg_send![defaults, stringForKey: &*action_key];
+            let minimize_key = NSString::from_str("AppleMiniaturizeOnDoubleClick");
+            let set: *mut AnyObject = msg_send![defaults, objectForKey: &*minimize_key];
+            let minimize = if set.is_null() {
+                None
+            } else {
+                let on: Bool = msg_send![defaults, boolForKey: &*minimize_key];
+                Some(on.as_bool())
+            };
+            (action.map(|action| action.to_string()), minimize)
+        }
+    }
+}
+
+/// Hand the input of `view`, a FLUIContentView, the window's input regions in
+/// its logical coordinates, at the window's `scale`. A view this class did
+/// not build takes nothing.
+pub(crate) fn set_input_regions(
+    view: &AnyObject,
+    regions: &[flui_platform::input_regions::InputRegion],
+    scale: f64,
+) {
+    // SAFETY: `view` is a live NSView the caller holds, on the main thread.
+    let _taken = unsafe {
+        with_content_view(std::ptr::from_ref(view).cast_mut(), |view| {
+            view.input().set_input_regions(regions, scale);
+        })
+    };
 }
 
 /// The ivar name holding the boxed [`ViewContext`].

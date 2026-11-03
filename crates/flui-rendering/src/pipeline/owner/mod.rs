@@ -1295,7 +1295,9 @@ mod tests {
         std::panic::set_hook(prev);
 
         // The frame produces an error of the Poisoned variant.
-        let err = result.expect_err("paint should panic, surface as Err");
+        let err = result
+            .expect_err("paint should panic, surface as Err")
+            .into_error();
         match err {
             RenderError::Poisoned { phase, .. } => {
                 assert_eq!(phase, PoisonPhase::Paint, "phase should be Paint");
@@ -1393,4 +1395,60 @@ mod tests {
     //   - dirty.needs_layout receives exactly the boundary id
     //   - re-marking an already-dirty node is a no-op
     //   - stale RenderIds (post-removal) terminate the walk silently
+
+    /// An error that names a node leaves the owner with the path from that node up through its
+    /// ancestors and where the node's view was created; one that names no node, or a node that is
+    /// gone, carries no path.
+    ///
+    /// Fails when the owner wraps without a context: the path is empty, the site is unknown.
+    #[test]
+    fn an_error_naming_a_node_carries_its_path_and_creation_site() {
+        let mut owner = PipelineOwner::new(crate::pipeline::TextContextHandle::standalone());
+        let root = owner.set_root_render_object(Box::new(SemanticBox::labeled("root")));
+        let middle = owner
+            .render_tree_mut()
+            .insert_box_child(root, Box::new(SemanticBox::labeled("middle")))
+            .expect("middle inserts");
+        let leaf = owner
+            .render_tree_mut()
+            .insert_box_child(middle, Box::new(SemanticBox::labeled("leaf")))
+            .expect("leaf inserts");
+        let site = flui_foundation::CreationSite::here();
+        owner
+            .render_tree_mut()
+            .get_mut(leaf)
+            .expect("leaf is in the tree")
+            .set_creation_site(site);
+
+        let named = owner.in_tree(crate::error::RenderError::layout_cycle(leaf));
+        let path: Vec<_> = named
+            .context()
+            .path()
+            .iter()
+            .map(flui_foundation::PathEntry::id)
+            .collect();
+        assert_eq!(
+            path,
+            [leaf, middle, root].map(flui_foundation::inspect::InspectId::from),
+            "the node first, then its ancestors"
+        );
+        assert_eq!(named.context().site().line(), site.line());
+        assert!(
+            named.to_string().contains(" < "),
+            "the message names the ancestors: {named}"
+        );
+
+        let anonymous = owner.in_tree(crate::error::RenderError::InvalidParentChild);
+        assert!(
+            anonymous.context().path().is_empty(),
+            "an error that names no node has no path"
+        );
+        let gone = owner.in_tree(crate::error::RenderError::NodeNotFound(
+            flui_foundation::RenderId::new_gen(999, std::num::NonZeroU32::MIN),
+        ));
+        assert!(
+            gone.context().is_empty(),
+            "a node that is not in the tree has no path"
+        );
+    }
 }

@@ -1,21 +1,35 @@
 //! Consumer failure boundaries for frame-completion executor envelopes.
 use std::future::Future;
-use std::io::Read;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::task::{Context, Poll, Wake, Waker};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use flui_scheduler::{FrameCompletionFuture, FrameOutcome, IdleDeadline, UpdateScheduler};
 
-struct Bomb(Arc<AtomicUsize>);
+/// Counts its drop and, when armed, panics from it. A waker holds at most one
+/// armed capture: a second destructor panicking while the first unwinds
+/// aborts, as in std (ADR-0281).
+struct Bomb {
+    drops: Arc<AtomicUsize>,
+    armed: bool,
+}
 impl Drop for Bomb {
     fn drop(&mut self) {
-        self.0.fetch_add(1, Ordering::Relaxed);
-        panic!("executor retirement");
+        self.drops.fetch_add(1, Ordering::Relaxed);
+        assert!(!self.armed, "executor retirement");
     }
+}
+/// `count` captures counted into `drops`, the first of them armed.
+fn bombs(count: usize, drops: &Arc<AtomicUsize>) -> Vec<Bomb> {
+    (0..count)
+        .map(|index| Bomb {
+            drops: Arc::clone(drops),
+            armed: index == 0,
+        })
+        .collect()
 }
 struct Probe {
     calls: Arc<AtomicUsize>,
@@ -92,20 +106,19 @@ fn delivery(case: &str) {
     let hostile = !case.starts_with("telemetry")
         && case != "competing wake failure"
         && case != "later successful envelope";
+    let first_captures = if retirement {
+        1
+    } else if hostile {
+        2
+    } else {
+        0
+    };
     let first_waker = Waker::from(Arc::new(Probe {
         calls: Arc::clone(&first_calls),
         action: Box::new(move || {
             assert!(retirement || preserve, "wake primary");
         }),
-        _captures: (0..if retirement {
-            1
-        } else if hostile {
-            2
-        } else {
-            0
-        })
-            .map(|_| Bomb(Arc::clone(&drops)))
-            .collect(),
+        _captures: bombs(first_captures, &drops),
     }));
     register(&mut first, &first_waker);
     drop(first_waker);
@@ -117,10 +130,7 @@ fn delivery(case: &str) {
             assert!(!competition, "competing wake");
         }),
         _captures: if case == "later successful envelope" {
-            vec![
-                Bomb(Arc::clone(&secondary_drops)),
-                Bomb(Arc::clone(&secondary_drops)),
-            ]
+            bombs(2, &secondary_drops)
         } else {
             Vec::new()
         },
@@ -209,8 +219,20 @@ fn delivery(case: &str) {
         1,
         "competing failures must not starve the final waiter"
     );
-    assert_eq!(drops.load(Ordering::Relaxed), usize::from(retirement));
-    assert_eq!(secondary_drops.load(Ordering::Relaxed), 0);
+    assert_eq!(
+        drops.load(Ordering::Relaxed),
+        first_captures,
+        "a woken envelope is destroyed, a failure included"
+    );
+    assert_eq!(
+        secondary_drops.load(Ordering::Relaxed),
+        if case == "later successful envelope" {
+            2
+        } else {
+            0
+        },
+        "a later envelope is destroyed behind the first failure"
+    );
     assert!(
         Pin::new(&mut later)
             .poll(&mut Context::from_waker(Waker::noop()))
@@ -237,6 +259,9 @@ fn delivery(case: &str) {
     }
 }
 
+/// A future dropped during an unwind destroys its waker with it. Its captures
+/// are unarmed: a destructor panicking during the unwind aborts, as in std
+/// (ADR-0281).
 fn pending_cancellation_during_unwind() {
     let scheduler = UpdateScheduler::new();
     let drops = Arc::new(AtomicUsize::new(0));
@@ -244,7 +269,12 @@ fn pending_cancellation_during_unwind() {
     let waker = Waker::from(Arc::new(Probe {
         calls: Arc::new(AtomicUsize::new(0)),
         action: Box::new(|| {}),
-        _captures: vec![Bomb(Arc::clone(&drops)), Bomb(Arc::clone(&drops))],
+        _captures: (0..2)
+            .map(|_| Bomb {
+                drops: Arc::clone(&drops),
+                armed: false,
+            })
+            .collect(),
     }));
     register(&mut future, &waker);
     drop(waker);
@@ -255,7 +285,11 @@ fn pending_cancellation_during_unwind() {
         })),
         "outer primary",
     );
-    assert_eq!(drops.load(Ordering::Relaxed), 0);
+    assert_eq!(
+        drops.load(Ordering::Relaxed),
+        2,
+        "the cancelled waker is destroyed during the unwind"
+    );
     assert_next_frame(&scheduler);
 }
 
@@ -275,63 +309,23 @@ const CASES: &[&str] = &[
     "post-frame preserves successful envelope",
     "pending cancellation unwind",
 ];
-pub(crate) fn selected_child() -> bool {
-    let Ok(case) = std::env::var("FLUI_FRAME_COMPLETION_CASE") else {
-        return false;
-    };
-    assert!(CASES.contains(&case.as_str()), "known child case");
-    if case == "pending cancellation unwind" {
-        pending_cancellation_during_unwind();
-    } else {
-        delivery(&case);
-    }
-    true
-}
+/// Runs every case in this process: no case aborts, since each envelope
+/// holds at most one armed capture (ADR-0281).
 pub(crate) fn completion_wake_ownership_and_recovery() {
-    let mut failures = Vec::new();
-    for case in CASES {
-        let mut child =
-            std::process::Command::new(std::env::current_exe().expect("test executable"))
-                .args([
-                    "--exact",
-                    "end_of_frame_lifecycle::end_of_frame_demand_matrix",
-                    "--nocapture",
-                ])
-                .env("FLUI_FRAME_COMPLETION_CASE", case)
-                .env("RUST_BACKTRACE", "0")
-                .stdout(std::process::Stdio::piped())
-                .stderr(std::process::Stdio::piped())
-                .spawn()
-                .expect("completion recovery child");
-        let mut stdout = child.stdout.take().expect("stdout pipe");
-        let mut stderr = child.stderr.take().expect("stderr pipe");
-        let stdout_reader = std::thread::spawn(move || {
-            let mut text = String::new();
-            stdout.read_to_string(&mut text).expect("child stdout");
-            text
-        });
-        let stderr_reader = std::thread::spawn(move || {
-            let mut text = String::new();
-            stderr.read_to_string(&mut text).expect("child stderr");
-            text
-        });
-        let started = Instant::now();
-        while child.try_wait().expect("child status").is_none() {
-            if started.elapsed() > Duration::from_secs(10) {
-                child.kill().expect("kill hung child");
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        let status = child.wait().expect("child exit");
-        let stdout = stdout_reader.join().expect("stdout reader");
-        let stderr = stderr_reader.join().expect("stderr reader");
-        if !status.success()
-            || !stdout.contains("running 1 test")
-            || !stdout.contains("test result: ok. 1 passed; 0 failed;")
-        {
-            failures.push(format!("{case}: {status}\n{stdout}\n{stderr}"));
-        }
-    }
-    assert!(failures.is_empty(), "{}", failures.join("\n"));
+    let failures: Vec<&str> = CASES
+        .iter()
+        .copied()
+        .filter(|case| {
+            catch_unwind(|| {
+                if *case == "pending cancellation unwind" {
+                    pending_cancellation_during_unwind();
+                } else {
+                    delivery(case);
+                }
+            })
+            .map_err(flui_foundation::panic::discard_payload)
+            .is_err()
+        })
+        .collect();
+    assert!(failures.is_empty(), "failing cases: {failures:?}");
 }

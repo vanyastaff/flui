@@ -224,8 +224,8 @@ mod mapping {
                     tracing::debug!(%error, index, "a representation could not be served");
                 }
                 Err(payload) => {
-                    // A payload whose destructor panics must not unwind from here.
-                    std::mem::forget(payload);
+                    // Discarded under containment (ADR-0281).
+                    flui_foundation::panic::discard_payload(payload);
                     crate::owner::panic_boundary::contain_owner_callback(|| {
                         tracing::error!("a drag's provider panicked");
                     });

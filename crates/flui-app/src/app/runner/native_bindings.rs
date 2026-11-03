@@ -62,7 +62,7 @@ impl Drop for PreparedNativeWindow {
         );
         if let Some(first) = first {
             if std::thread::panicking() {
-                std::mem::forget(first);
+                flui_foundation::panic::discard_payload(first);
             } else {
                 std::panic::resume_unwind(first);
             }
@@ -334,7 +334,7 @@ impl Drop for NativeState {
         self.retirement.drain(&mut failure);
         if let Some(failure) = failure {
             if std::thread::panicking() {
-                std::mem::forget(failure);
+                flui_foundation::panic::discard_payload(failure);
             } else {
                 std::panic::resume_unwind(failure);
             }

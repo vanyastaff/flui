@@ -22,9 +22,9 @@ use flui_view::prelude::{Signal, SignalWriteExt};
 use flui_view::{BoxedView, BuildContext, ViewExt};
 use flui_widgets::{
     Actions, CallbackAction, CaretHandle, Column, ContextMenuArea, DefaultSelectionControls,
-    Directionality, EditableText, Focus, GestureCommand, HandleInfo, Intent, ScrollController,
-    Scrollable, SelectionHandles, SelectionMenuPolicy, ShowContextMenuIntent, SizedBox, Text,
-    TextEditingController, WidgetsApp,
+    Directionality, EditableText, Focus, GestureCommand, HandleInfo, Intent, LongPressSelection,
+    ScrollController, Scrollable, SelectionHandles, SelectionMenuPolicy, ShowContextMenuIntent,
+    SizedBox, Text, TextEditingController, WidgetsApp,
 };
 
 use crate::common::{LaidOut, SignalProbe, lay_out, tight};
@@ -889,4 +889,58 @@ pub(crate) fn a_field_rebuilt_without_its_menu_takes_its_toolbar_away() {
     scene.settle();
     assert_eq!(scene.toolbar(), Vec::<String>::new());
     assert_eq!(scene.controller.selection(), 6..10, "the selection stays");
+}
+
+/// Under [`LongPressSelection::Caret`], the caret a long press placed shows
+/// the toolbar over it once the touch lifts, with what a caret allows,
+/// though the field shows no handle for it; choosing an item performs it
+/// and takes the toolbar away. A field that shows a caret handle shows
+/// both, and a policy that shows nothing after a long press shows neither.
+///
+/// Red-check: show the toolbar after a long press only over a selection
+/// (none over the caret); show it with a handle under the caret (one
+/// follower too many).
+pub(crate) fn a_caret_long_press_shows_the_toolbar_over_the_caret() {
+    let followers = |scene: &Scene| {
+        scene
+            .laid
+            .find_all_by_render_type("RenderFollowerLayer")
+            .len()
+    };
+    let caret = |handle: CaretHandle, policy: SelectionMenuPolicy| {
+        let mut scene = Scene::with(
+            move |field| {
+                field
+                    .caret_handle(handle)
+                    .long_press(LongPressSelection::Caret)
+                    .menu_policy(policy)
+            },
+            None,
+        );
+        scene.long_press(scene.along(width_of("alpha be")));
+        assert_eq!(
+            scene.controller.selection(),
+            8..8,
+            "the press placed a caret"
+        );
+        scene
+    };
+
+    let mut bare = caret(CaretHandle::NEVER, SelectionMenuPolicy::ALWAYS);
+    assert_eq!(bare.toolbar(), strings(&["Paste", "Select all"]));
+    let handled = caret(CaretHandle::on_tap(), SelectionMenuPolicy::ALWAYS);
+    assert_eq!(handled.toolbar(), strings(&["Paste", "Select all"]));
+    assert_eq!(
+        followers(&bare) + 1,
+        followers(&handled),
+        "no handle under the caret of a field that shows none"
+    );
+
+    bare.tap(bare.center_of(Role::Button, "Select all"));
+    assert_eq!(bare.controller.selection(), 0..WORDS.len());
+    assert_eq!(bare.toolbar(), Vec::<String>::new());
+
+    let quiet = caret(CaretHandle::NEVER, SelectionMenuPolicy::NEVER);
+    assert_eq!(quiet.toolbar(), Vec::<String>::new());
+    assert_eq!(followers(&quiet), 0, "nothing follows the caret");
 }

@@ -108,19 +108,18 @@ impl FanOut {
 impl Drop for FanOut {
     /// The owner retired before the host answered, dropping the waiting
     /// closure unrun: the readers go with it, each drop contained, and the
-    /// next read starts afresh. While the thread unwinds they are leaked
-    /// rather than dropped into a second panic.
+    /// next read starts afresh. While the thread already unwinds, the first
+    /// failure is discarded rather than raised into a second panic.
     fn drop(&mut self) {
+        let incoming_failure = std::thread::panicking();
         let readers = self.take_readers();
-        if std::thread::panicking() {
-            std::mem::forget(readers);
-            return;
-        }
         let mut failure = FirstPanic::new();
         for reader in readers {
             failure.contain(|| drop(reader));
         }
-        failure.resume();
+        if !incoming_failure {
+            failure.resume();
+        }
     }
 }
 

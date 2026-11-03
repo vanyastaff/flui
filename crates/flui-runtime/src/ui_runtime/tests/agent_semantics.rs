@@ -6,20 +6,20 @@
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::AtomicU32;
 
+use flui_protocol::method;
 use flui_protocol::{
-    ActionName, ActionRequest, ElementId, ErrorCode, ReadQuery, Retry, Tree, outline,
+    ActParams, ActionName, EffectKind, ElementId, ElementRef, ErrorCode, ErrorObject, HandleKind,
+    ReadParams, ReadQuery, Retry, Tree, outline,
 };
 use flui_semantics::{
     AccessibilityNodeId, SemanticsAction, SemanticsConfiguration, SemanticsNode, SemanticsOwner,
     SemanticsRole,
 };
 use flui_view::Signal;
+use flui_view::dev_agent::{AgentAnswer, AgentWindow};
 use flui_widgets::{Column, RawButton, Text, column};
 
 use super::*;
-
-static_assertions::assert_impl_all!(SemanticsAgent: Clone, Send, Sync);
-static_assertions::assert_impl_all!(AgentReply<Tree>: Send);
 
 /// A count, its text, and a button that increments it. Once `hide_at` is
 /// reached the button is replaced by a text, taking its element out of the
@@ -111,15 +111,38 @@ pub(super) fn frame(ui_runtime: &UiRuntime, sink: &mut ScriptedSink) {
 /// the UI runtime first: the drain enters it itself, so an act still reaches a
 /// handler that lives in the UI runtime's interaction lane. Takes the answer the
 /// drain produced.
-pub(super) fn answer<T>(ui_runtime: &UiRuntime, mut reply: AgentReply<T>) -> Result<T, AgentError> {
+#[expect(
+    clippy::result_large_err,
+    reason = "the protocol's error object is the answer under test"
+)]
+pub(super) fn answer<T>(
+    ui_runtime: &UiRuntime,
+    mut reply: AgentAnswer<T>,
+) -> Result<T, ErrorObject> {
     let _report = ui_runtime.drain_commands();
     reply
         .try_take()
         .expect("the drain answers every request it serves")
 }
 
-pub(super) fn read(ui_runtime: &UiRuntime, agent: &SemanticsAgent) -> Tree {
-    let reply = agent.read(ReadQuery::new()).expect("the inbox has room");
+/// The parameters of a read of `window` scoped by `query`.
+pub(super) fn read_params(window: &AgentWindow, query: ReadQuery) -> ReadParams {
+    ReadParams::new(window.id()).with_query(query)
+}
+
+/// The parameters of `action` on the element `element` of `window`.
+pub(super) fn act_params(
+    window: &AgentWindow,
+    element: ElementId,
+    action: ActionName,
+) -> ActParams {
+    ActParams::new(ElementRef::new(window.id(), element), action)
+}
+
+pub(super) fn read(ui_runtime: &UiRuntime, window: &AgentWindow) -> Tree {
+    let reply = window
+        .call::<method::SemanticsRead>(ReadParams::new(window.id()))
+        .expect("the inbox has room");
     answer(ui_runtime, reply).expect("the committed tree reads")
 }
 
@@ -160,25 +183,28 @@ fn install_node(
 fn an_agent_reads_a_widget_tree_as_wire_nodes_that_round_trip_through_json() {
     let ui_runtime = UiRuntime::for_test();
     let _presses = counter(&ui_runtime, None);
-    let agent = ui_runtime
-        .semantics_agent(ui_runtime.presentation_id())
+    let window = ui_runtime
+        .dev_agent_window(ui_runtime.presentation_id())
         .expect("the ui_runtime hosts its primary presentation");
     let mut sink = ScriptedSink::always_presents();
     frame(&ui_runtime, &mut sink);
 
-    let tree = read(&ui_runtime, &agent);
-    let window = ui_runtime.presentation_id().as_u64();
+    let tree = read(&ui_runtime, &window);
+    let window_number = ui_runtime.presentation_id().as_u64();
     let button = find(&tree, "Increment");
     let root = &tree.roots[0];
     assert_eq!(
         outline(&tree.roots),
         format!(
-            "- window [ref={}] [window=w{window}]\n  - label \"Count: 0\" [ref={}]\n  - button \
+            "- window [ref={}] [window=w{window_number}]\n  - label \"Count: 0\" [ref={}]\n  - button \
              \"Increment\" [ref={}] [actions=invoke,focus]\n",
             root.id, root.children[0].id, button.id
         )
     );
-    assert_eq!(root.window.map(flui_protocol::WindowId::get), Some(window));
+    assert_eq!(
+        root.window.map(flui_protocol::WindowId::get),
+        Some(window_number)
+    );
     assert_eq!(button.rect, None, "no screen rect is claimed in process");
     let rect = button.surface_rect.expect("a laid-out button has bounds");
     assert!(
@@ -195,17 +221,18 @@ fn an_agent_reads_a_widget_tree_as_wire_nodes_that_round_trip_through_json() {
 fn an_agent_tap_reaches_the_widgets_handler_and_writes_its_signal() {
     let ui_runtime = UiRuntime::for_test();
     let presses = counter(&ui_runtime, None);
-    let agent = ui_runtime
-        .semantics_agent(ui_runtime.presentation_id())
+    let window = ui_runtime
+        .dev_agent_window(ui_runtime.presentation_id())
         .expect("the ui_runtime hosts its primary presentation");
     let mut sink = ScriptedSink::always_presents();
     frame(&ui_runtime, &mut sink);
-    let button = find(&read(&ui_runtime, &agent), "Increment").id;
+    let button = find(&read(&ui_runtime, &window), "Increment").id;
 
-    let reply = agent
-        .act(ActionRequest::new(button, ActionName::Invoke))
+    let reply = window
+        .call::<method::SemanticsAct>(act_params(&window, button, ActionName::Invoke))
         .expect("the inbox has room");
-    assert_eq!(answer(&ui_runtime, reply), Ok(()));
+    let outcome = answer(&ui_runtime, reply).expect("the tap runs");
+    assert_eq!(outcome.effect.kind, EffectKind::Ran);
     assert_eq!(
         presses.load(Ordering::Relaxed),
         1,
@@ -218,7 +245,7 @@ fn an_agent_tap_reaches_the_widgets_handler_and_writes_its_signal() {
         "no frame replays the tap"
     );
 
-    let tree = read(&ui_runtime, &agent);
+    let tree = read(&ui_runtime, &window);
     find(&tree, "Count: 1");
     assert_eq!(
         find(&tree, "Increment").id,
@@ -240,8 +267,8 @@ fn a_read_before_the_first_semantics_frame_is_busy_and_that_frame_was_requested(
     );
     let _ = ui_runtime.presentations.primary().take_redraw_pending();
 
-    let agent = ui_runtime
-        .semantics_agent(ui_runtime.presentation_id())
+    let window = ui_runtime
+        .dev_agent_window(ui_runtime.presentation_id())
         .expect("the ui_runtime hosts its primary presentation");
     assert!(
         ui_runtime.presentations.primary().take_redraw_pending(),
@@ -249,33 +276,35 @@ fn a_read_before_the_first_semantics_frame_is_busy_and_that_frame_was_requested(
     );
     ui_runtime.presentations.primary().mark_redraw_pending();
 
-    let early = agent.read(ReadQuery::new()).expect("the inbox has room");
-    let early = answer(&ui_runtime, early);
-    assert_eq!(early, Err(AgentError::NoTreeYet));
-    let error = early.expect_err("checked above");
-    assert_eq!(
-        (error.code(), error.retry()),
-        (ErrorCode::Busy, Retry::Soon)
+    let early = window
+        .call::<method::SemanticsRead>(ReadParams::new(window.id()))
+        .expect("the inbox has room");
+    let error = answer(&ui_runtime, early).expect_err("no tree is committed yet");
+    assert_eq!((error.code, error.retry), (ErrorCode::Busy, Retry::Soon));
+    assert!(
+        error.message.contains("no semantics tree"),
+        "busy because no tree is committed, not because the inbox is full: {}",
+        error.message
     );
 
     frame(&ui_runtime, &mut sink);
-    find(&read(&ui_runtime, &agent), "Increment");
+    find(&read(&ui_runtime, &window), "Increment");
 }
 
 #[test]
 fn dropping_the_last_agent_stops_semantics_collection() {
     let ui_runtime = UiRuntime::for_test();
     let _presses = counter(&ui_runtime, None);
-    let agent = ui_runtime
-        .semantics_agent(ui_runtime.presentation_id())
+    let window = ui_runtime
+        .dev_agent_window(ui_runtime.presentation_id())
         .expect("the ui_runtime hosts its primary presentation");
-    let clone = agent.clone();
+    let clone = window.clone();
     let mut sink = ScriptedSink::always_presents();
     frame(&ui_runtime, &mut sink);
     let pipeline = ui_runtime.pipeline_for_test();
     assert!(pipeline.with(|p| p.semantics_owner().is_some()));
 
-    drop(agent);
+    drop(window);
     ui_runtime.request_redraw();
     frame(&ui_runtime, &mut sink);
     assert!(
@@ -283,7 +312,9 @@ fn dropping_the_last_agent_stops_semantics_collection() {
         "a live clone keeps collection on"
     );
 
-    let unanswered = clone.read(ReadQuery::new()).expect("the inbox has room");
+    let unanswered = clone
+        .call::<method::SemanticsRead>(ReadParams::new(clone.id()))
+        .expect("the inbox has room");
     drop(clone);
     ui_runtime.request_redraw();
     frame(&ui_runtime, &mut sink);
@@ -298,33 +329,34 @@ fn dropping_the_last_agent_stops_semantics_collection() {
 fn an_action_on_a_node_that_left_the_tree_is_gone_not_retargeted() {
     let ui_runtime = UiRuntime::for_test();
     let presses = counter(&ui_runtime, Some(1));
-    let agent = ui_runtime
-        .semantics_agent(ui_runtime.presentation_id())
+    let window = ui_runtime
+        .dev_agent_window(ui_runtime.presentation_id())
         .expect("the ui_runtime hosts its primary presentation");
     let mut sink = ScriptedSink::always_presents();
     frame(&ui_runtime, &mut sink);
-    let button = find(&read(&ui_runtime, &agent), "Increment").id;
+    let button = find(&read(&ui_runtime, &window), "Increment").id;
 
-    let first = agent
-        .act(ActionRequest::new(button, ActionName::Invoke))
+    let first = window
+        .call::<method::SemanticsAct>(act_params(&window, button, ActionName::Invoke))
         .expect("the inbox has room");
-    assert_eq!(answer(&ui_runtime, first), Ok(()));
+    let outcome = answer(&ui_runtime, first).expect("the tap runs");
+    assert_eq!(outcome.effect.kind, EffectKind::Ran);
     frame(&ui_runtime, &mut sink);
     frame(&ui_runtime, &mut sink);
-    find(&read(&ui_runtime, &agent), "Done");
+    find(&read(&ui_runtime, &window), "Done");
 
-    let again = agent
-        .act(ActionRequest::new(button, ActionName::Invoke))
+    let again = window
+        .call::<method::SemanticsAct>(act_params(&window, button, ActionName::Invoke))
         .expect("the inbox has room");
-    let again = answer(&ui_runtime, again);
+    let again = answer(&ui_runtime, again).expect_err("the button left the tree");
     assert_eq!(
-        again,
-        Err(AgentError::NodeNotFound {
-            element: button,
-            issued: true
-        })
+        (again.code, again.kind, again.handle.as_deref()),
+        (
+            ErrorCode::Gone,
+            Some(HandleKind::Element),
+            Some(button.to_string().as_str())
+        )
     );
-    assert_eq!(again.map_err(|e| e.code()), Err(ErrorCode::Gone));
     frame(&ui_runtime, &mut sink);
     assert_eq!(
         presses.load(Ordering::Relaxed),
@@ -333,28 +365,28 @@ fn an_action_on_a_node_that_left_the_tree_is_gone_not_retargeted() {
     );
 
     let never = ElementId::from_u64(u64::MAX).expect("non-zero");
-    let unknown = agent
-        .act(ActionRequest::new(never, ActionName::Invoke))
+    let unknown = window
+        .call::<method::SemanticsAct>(act_params(&window, never, ActionName::Invoke))
         .expect("the inbox has room");
     assert_eq!(
-        answer(&ui_runtime, unknown).map_err(|e| e.code()),
+        answer(&ui_runtime, unknown).map_err(|e| e.code),
         Err(ErrorCode::UnknownHandle),
         "a handle no read reported was never issued"
     );
 
     // A read scoped to either handle answers as an action on it does.
-    let scoped_gone = agent
-        .read(ReadQuery::new().with_root(button))
+    let scoped_gone = window
+        .call::<method::SemanticsRead>(read_params(&window, ReadQuery::new().with_root(button)))
         .expect("the inbox has room");
     assert_eq!(
-        answer(&ui_runtime, scoped_gone).map_err(|e| e.code()),
+        answer(&ui_runtime, scoped_gone).map_err(|e| e.code),
         Err(ErrorCode::Gone)
     );
-    let scoped_unknown = agent
-        .read(ReadQuery::new().with_root(never))
+    let scoped_unknown = window
+        .call::<method::SemanticsRead>(read_params(&window, ReadQuery::new().with_root(never)))
         .expect("the inbox has room");
     assert_eq!(
-        answer(&ui_runtime, scoped_unknown).map_err(|e| e.code()),
+        answer(&ui_runtime, scoped_unknown).map_err(|e| e.code),
         Err(ErrorCode::UnknownHandle)
     );
 }
@@ -438,13 +470,13 @@ fn a_panic_while_resolving_is_not_reported_as_the_handlers() {
             }),
         );
     });
-    let agent = ui_runtime
-        .semantics_agent(ui_runtime.presentation_id())
+    let window = ui_runtime
+        .dev_agent_window(ui_runtime.presentation_id())
         .expect("the ui_runtime hosts its primary presentation");
-    let button = find(&read(&ui_runtime, &agent), "Press").id;
+    let button = find(&read(&ui_runtime, &window), "Press").id;
 
-    let mut act = agent
-        .act(ActionRequest::new(button, ActionName::Invoke))
+    let mut act = window
+        .call::<method::SemanticsAct>(act_params(&window, button, ActionName::Invoke))
         .expect("the inbox has room");
     let pipeline = ui_runtime.pipeline_for_test();
     let unwound = catch_unwind(AssertUnwindSafe(|| {
@@ -457,10 +489,14 @@ fn a_panic_while_resolving_is_not_reported_as_the_handlers() {
     let failed = act
         .try_take()
         .expect("the reply was answered before unwinding");
-    assert_eq!(failed, Err(AgentError::ResolvePanicked { element: button }));
-    let error = failed.expect_err("checked above");
-    assert!(!error.may_have_run());
-    assert_eq!(error.code(), ErrorCode::Platform);
+    let error = failed.expect_err("the panic is the answer");
+    assert!(
+        error.message.contains("resolving the action"),
+        "the failure is the resolving's, not the handler's: {}",
+        error.message
+    );
+    assert_eq!(error.effect, None, "no part of the action ran");
+    assert_eq!(error.code, ErrorCode::Platform);
     assert_eq!(ran.load(Ordering::Relaxed), 0, "no handler ran");
 }
 
@@ -468,91 +504,53 @@ fn a_panic_while_resolving_is_not_reported_as_the_handlers() {
 fn an_agent_for_a_closed_presentation_answers_gone() {
     let mut ui_runtime = UiRuntime::for_test();
     let second = ui_runtime.install_second_presentation_for_test();
-    let agent = ui_runtime
-        .semantics_agent(second)
-        .expect("the ui_runtime hosts the second presentation");
-    let dev_window = ui_runtime
+    let window = ui_runtime
         .dev_agent_window(second)
         .expect("the ui_runtime hosts the second presentation");
     let again = ui_runtime
         .dev_agent_window(second)
         .expect("the ui_runtime hosts the second presentation");
-    assert_eq!(dev_window.id(), again.id());
-    assert!(dev_window.is_open());
-    // A call on another thread that upgraded the window's port and is still
-    // enqueueing when the presentation closes.
-    let in_flight = {
-        let state = ui_runtime
-            .presentations
-            .get(second)
-            .expect("the ui_runtime hosts the second presentation");
-        let slot = state.dev_agent.borrow();
-        Arc::clone(&slot.as_ref().expect("a window was vended").agent)
-    };
+    assert_eq!(window.id(), again.id());
+    assert!(window.is_open());
+    // A request admitted before the presentation closes, still in the inbox.
+    let mut queued = window
+        .call::<method::SemanticsRead>(ReadParams::new(window.id()))
+        .expect("the inbox has room");
     assert!(ui_runtime.close_presentation_entered(second));
-    assert!(ui_runtime.semantics_agent(second).is_none());
     assert!(ui_runtime.dev_agent_window(second).is_none());
     assert!(
         !again.is_open(),
         "the development agent went with its presentation"
     );
-    let fault = dev_window
-        .read(ReadQuery::new())
+    let fault = window
+        .call::<method::SemanticsRead>(ReadParams::new(window.id()))
         .expect_err("a closed window answers at once");
     assert_eq!(
-        (fault.code(), fault.kind()),
+        (fault.code, fault.kind),
+        (ErrorCode::Gone, Some(HandleKind::Window))
+    );
+    assert!(!window.is_open());
+    let element = ElementId::from_u64(1).expect("non-zero");
+    let fault = window
+        .call::<method::SemanticsAct>(act_params(&window, element, ActionName::Invoke))
+        .expect_err("an action on a closed window answers at once");
+    assert_eq!(fault.code, ErrorCode::Gone);
+
+    let report = ui_runtime.drain_commands();
+    assert_eq!(
+        (report.invoked, report.dropped_stale),
+        (0, 1),
+        "only the request admitted before the close is in the inbox"
+    );
+    let gone = queued.try_take().expect("answered");
+    let error = gone.expect_err("the window closed before the owner served it");
+    assert_eq!(
+        (error.code, error.kind, error.handle.as_deref()),
         (
             ErrorCode::Gone,
-            Some(flui_view::dev_agent::HandleKind::Window)
+            Some(HandleKind::Window),
+            Some(window.id().to_string().as_str())
         )
-    );
-    assert!(
-        !dev_window.is_open(),
-        "closed, though the in-flight call still holds the port"
-    );
-    let element = ElementId::from_u64(1).expect("non-zero");
-    let fault = dev_window
-        .act(ActionRequest::new(element, ActionName::Invoke))
-        .expect_err("an action on a closed window answers at once");
-    assert_eq!(fault.code(), ErrorCode::Gone);
-    // The in-flight call, past the window's own check, reaches the port only
-    // now: the port admits nothing either.
-    {
-        use flui_view::__runtime::AgentPort as _;
-        let read = in_flight
-            .read(ReadQuery::new())
-            .expect_err("a closed port admits no read");
-        let act = in_flight
-            .act(ActionRequest::new(element, ActionName::Invoke))
-            .expect_err("a closed port admits no action");
-        for fault in [read, act] {
-            assert_eq!(
-                (fault.code(), fault.kind()),
-                (
-                    ErrorCode::Gone,
-                    Some(flui_view::dev_agent::HandleKind::Window)
-                )
-            );
-        }
-        let report = ui_runtime.drain_commands();
-        assert_eq!(
-            (report.invoked, report.dropped_stale),
-            (0, 0),
-            "nothing was enqueued"
-        );
-    }
-    drop(in_flight);
-
-    let reply = agent.read(ReadQuery::new()).expect("the inbox has room");
-    let report = ui_runtime.drain_commands();
-    assert_eq!(report.dropped_stale, 1);
-    let mut reply = reply;
-    let gone = reply.try_take().expect("answered");
-    assert_eq!(gone, Err(AgentError::PresentationGone));
-    let error = gone.expect_err("checked above");
-    assert_eq!(
-        (error.code(), error.handle_kind()),
-        (ErrorCode::Gone, Some("window"))
     );
 }
 
@@ -560,14 +558,24 @@ fn an_agent_for_a_closed_presentation_answers_gone() {
 fn a_full_inbox_answers_busy() {
     let ui_runtime =
         new_runtime_with_capacity(2, Arc::new(|| {})).expect("runtime with a tiny inbox");
-    let agent = ui_runtime
-        .semantics_agent(ui_runtime.presentation_id())
+    let window = ui_runtime
+        .dev_agent_window(ui_runtime.presentation_id())
         .expect("the ui_runtime hosts its primary presentation");
-    let _first = agent.read(ReadQuery::new()).expect("first fits");
-    let _second = agent.read(ReadQuery::new()).expect("second fits");
-    let full = agent.read(ReadQuery::new()).expect_err("the inbox is full");
-    assert_eq!(full, AgentError::InboxFull);
-    assert_eq!((full.code(), full.retry()), (ErrorCode::Busy, Retry::Soon));
+    let _first = window
+        .call::<method::SemanticsRead>(ReadParams::new(window.id()))
+        .expect("first fits");
+    let _second = window
+        .call::<method::SemanticsRead>(ReadParams::new(window.id()))
+        .expect("second fits");
+    let full = window
+        .call::<method::SemanticsRead>(ReadParams::new(window.id()))
+        .expect_err("the inbox is full");
+    assert_eq!((full.code, full.retry), (ErrorCode::Busy, Retry::Soon));
+    assert!(
+        full.message.contains("inbox is full"),
+        "busy because the inbox is full: {}",
+        full.message
+    );
 }
 
 /// A handler's panic is contained in the right order: the act reply fails
@@ -586,16 +594,18 @@ fn a_panicking_handler_fails_its_act_reply_first_and_the_queued_read_is_served_n
             std::rc::Rc::new(|_call| panic!("handler boom")),
         );
     });
-    let agent = ui_runtime
-        .semantics_agent(ui_runtime.presentation_id())
+    let window = ui_runtime
+        .dev_agent_window(ui_runtime.presentation_id())
         .expect("the ui_runtime hosts its primary presentation");
-    let button = find(&read(&ui_runtime, &agent), "Boom").id;
+    let button = find(&read(&ui_runtime, &window), "Boom").id;
     assert_eq!(button, element(render_id));
 
-    let mut act = agent
-        .act(ActionRequest::new(button, ActionName::Invoke))
+    let mut act = window
+        .call::<method::SemanticsAct>(act_params(&window, button, ActionName::Invoke))
         .expect("the inbox has room");
-    let mut queued = agent.read(ReadQuery::new()).expect("the inbox has room");
+    let mut queued = window
+        .call::<method::SemanticsRead>(ReadParams::new(window.id()))
+        .expect("the inbox has room");
     let wakes_before = wakes.load(Ordering::Relaxed);
 
     let unwound = catch_unwind(AssertUnwindSafe(|| ui_runtime.drain_commands()))
@@ -608,8 +618,13 @@ fn a_panicking_handler_fails_its_act_reply_first_and_the_queued_read_is_served_n
     let failed = act
         .try_take()
         .expect("the act reply was answered before unwinding");
-    assert_eq!(failed, Err(AgentError::HandlerPanicked { element: button }));
-    assert!(failed.expect_err("checked above").may_have_run());
+    let error = failed.expect_err("the handler's panic is the answer");
+    assert_eq!(error.code, ErrorCode::Platform);
+    assert_eq!(
+        error.effect.map(|effect| effect.kind),
+        Some(EffectKind::MayHaveRun),
+        "the handler may have run in part"
+    );
     assert!(
         queued.try_take().is_none(),
         "the read waits for the next drain"
@@ -631,13 +646,21 @@ fn a_dropped_reply_receiver_does_not_fail_the_drain() {
         config.set_role(SemanticsRole::Button);
         config.add_action(SemanticsAction::Click, std::rc::Rc::new(|_| {}));
     });
-    let agent = ui_runtime
-        .semantics_agent(ui_runtime.presentation_id())
+    let window = ui_runtime
+        .dev_agent_window(ui_runtime.presentation_id())
         .expect("the ui_runtime hosts its primary presentation");
-    drop(agent.read(ReadQuery::new()).expect("the inbox has room"));
     drop(
-        agent
-            .act(ActionRequest::new(element(render_id), ActionName::Invoke))
+        window
+            .call::<method::SemanticsRead>(ReadParams::new(window.id()))
+            .expect("the inbox has room"),
+    );
+    drop(
+        window
+            .call::<method::SemanticsAct>(act_params(
+                &window,
+                element(render_id),
+                ActionName::Invoke,
+            ))
             .expect("the inbox has room"),
     );
     let report = ui_runtime.drain_commands();
@@ -657,25 +680,32 @@ fn agent_traces_carry_no_label_or_value() {
         config.set_label(LABEL);
         config.add_action(SemanticsAction::SetValue, std::rc::Rc::new(|_| {}));
     });
-    let agent = ui_runtime
-        .semantics_agent(ui_runtime.presentation_id())
+    let window = ui_runtime
+        .dev_agent_window(ui_runtime.presentation_id())
         .expect("the ui_runtime hosts its primary presentation");
     let target = element(render_id);
-    drop(agent.read(ReadQuery::new()).expect("the inbox has room"));
     drop(
-        agent
-            .act(ActionRequest::set_value(target, VALUE))
+        window
+            .call::<method::SemanticsRead>(ReadParams::new(window.id()))
             .expect("the inbox has room"),
     );
     drop(
-        agent
-            .act(ActionRequest::new(target, ActionName::Toggle))
+        window
+            .call::<method::SemanticsAct>(ActParams::set_value(
+                ElementRef::new(window.id(), target),
+                VALUE,
+            ))
+            .expect("the inbox has room"),
+    );
+    drop(
+        window
+            .call::<method::SemanticsAct>(act_params(&window, target, ActionName::Toggle))
             .expect("the inbox has room"),
     );
 
     let (_report, log) = flui_testing::log_capture::capture(|| ui_runtime.drain_commands());
     assert_eq!(
-        log.count_containing("dropping a semantics agent reply nobody waits for"),
+        log.count_containing("dropping a development agent reply nobody waits for"),
         3,
         "vacuous-pass guard: every dropped answer is traced\n{log}"
     );
@@ -689,17 +719,4 @@ fn agent_traces_carry_no_label_or_value() {
     );
     assert!(!log.contains(LABEL), "a label reached the log\n{log}");
     assert!(!log.contains(VALUE), "a value reached the log\n{log}");
-    assert!(
-        !format!(
-            "{:?}",
-            UiCommand::SemanticsAgentAction {
-                presentation_id: ui_runtime.presentation_id(),
-                request: ActionRequest::set_value(target, VALUE),
-                issued: true,
-                reply: crossbeam_channel::bounded(1).0,
-            }
-        )
-        .contains(VALUE),
-        "a queued action's Debug leaves its value out"
-    );
 }

@@ -1161,7 +1161,7 @@ fn requests_are_answered_though_the_handler_and_a_waker_fail() {
         flui_foundation::panic::payload_text(&*failure),
         Some("the handler fails as the drag leaves")
     );
-    std::mem::forget(failure);
+    flui_foundation::panic::discard_payload(failure);
     for request in [&mut failing, &mut other] {
         assert!(
             std::pin::Pin::new(request)
