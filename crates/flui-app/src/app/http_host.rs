@@ -1,41 +1,38 @@
 //! The built-in HTTP capability (ADR-0280).
 //!
-//! On a native host a request is sent from the run's IO lane, whose default
-//! pool runs inside a Tokio runtime, so `reqwest` drives it there and its
-//! connections stay in one pool per run. On the web the page's `fetch` sends
-//! it, and the exchange holds a slot of the IO lane until it ends, so a full
-//! or stopping lane refuses it as it refuses a native request. Either way the
-//! caller's future only waits on a channel: it needs no runtime of its own.
-//! Dropping it, or the response's body, abandons the exchange.
+//! On a native desktop host a request is sent from the run's IO lane, whose
+//! default pool runs inside a Tokio runtime, so `reqwest` drives it there and
+//! its connections stay in one pool per run. On the web the page's `fetch`
+//! sends it, and on Android the system's `HttpURLConnection`; there the
+//! exchange holds a slot of the IO lane until it ends, so a full or stopping
+//! lane refuses it as it refuses a desktop request. Either way the caller's
+//! future only waits on a channel: it needs no runtime of its own. Dropping
+//! it, or the response's body, abandons the exchange.
 //!
-//! Where FLUI has no client yet (Android, a native host on its embedder's
-//! executors) a request answers [`HttpError::NotYetOnThisHost`]: a gap of
-//! FLUI's, reported as such and never skipped.
+//! Where FLUI has no client yet (a desktop host on its embedder's executors)
+//! a request answers [`HttpError::NotYetOnThisHost`]: a gap of FLUI's,
+//! reported as such and never skipped.
+//!
+//! [`HttpError::NotYetOnThisHost`]: flui_platform::http::HttpError::NotYetOnThisHost
 
 use std::sync::Arc;
 
 use flui_platform::Unsupported;
 use flui_platform::capability::{CapabilityProvider, ProviderContext};
-use flui_platform::http::{
-    Http, HttpAuthority, HttpCapability, HttpClient, HttpError, HttpFuture, HttpHost,
-};
-use flui_platform::http::{HttpRequest, HttpResponse};
+use flui_platform::http::{Http, HttpCapability};
 
 use super::capability::ExecutionSlot;
 
 /// The built-in HTTP provider over the run's lanes.
 pub(crate) struct HostHttp {
-    #[cfg_attr(
-        target_os = "android",
-        expect(dead_code, reason = "Android has no HTTP client yet")
-    )]
     slot: ExecutionSlot,
     /// One connection pool per run, built on the first request.
     #[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
     client: Arc<std::sync::OnceLock<Result<reqwest::Client, String>>>,
-    /// The page's `fetch`, one authority per run.
-    #[cfg(target_arch = "wasm32")]
-    fetch: Http,
+    /// The host's own stack, one authority per run: the page's `fetch`, or
+    /// Android's `HttpURLConnection`.
+    #[cfg(any(target_os = "android", target_arch = "wasm32"))]
+    system: Http,
 }
 
 impl HostHttp {
@@ -45,63 +42,36 @@ impl HostHttp {
             #[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
             client: Arc::default(),
             #[cfg(target_arch = "wasm32")]
-            fetch: Http::new(Arc::new(flui_native::http::FetchClient::new())),
+            system: Http::new(Arc::new(flui_native::http::FetchClient::new())),
+            #[cfg(target_os = "android")]
+            system: Http::new(Arc::new(flui_native::http::UrlConnectionClient::new())),
         }
     }
 }
 
 impl CapabilityProvider<HttpCapability> for HostHttp {
     fn provide(&self, _cx: &ProviderContext<'_>) -> Result<Http, Unsupported> {
-        #[cfg(target_os = "android")]
-        return Ok(Http::new(Arc::new(NotYet(Arc::new(HttpHost::Android)))));
-        #[cfg(not(target_os = "android"))]
-        {
-            let services = self.slot.borrow().clone().ok_or_else(|| {
-                // Before the host installs a UI runtime it has no lanes.
-                Unsupported::of::<HttpCapability>(flui_platform::UnsupportedReason::Unavailable)
-            })?;
-            #[cfg(target_arch = "wasm32")]
-            return Ok(Http::new(Arc::new(held::LaneHeld::new(
-                services,
-                self.fetch.clone(),
-            ))));
-            #[cfg(not(target_arch = "wasm32"))]
-            Ok(Http::new(Arc::new(lanes::LaneHttp::new(
-                services,
-                Arc::clone(&self.client),
-            ))))
-        }
+        let services = self.slot.borrow().clone().ok_or_else(|| {
+            // Before the host installs a UI runtime it has no lanes.
+            Unsupported::of::<HttpCapability>(flui_platform::UnsupportedReason::Unavailable)
+        })?;
+        #[cfg(any(target_os = "android", target_arch = "wasm32"))]
+        return Ok(Http::new(Arc::new(held::LaneHeld::new(
+            services,
+            self.system.clone(),
+        ))));
+        #[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
+        Ok(Http::new(Arc::new(lanes::LaneHttp::new(
+            services,
+            Arc::clone(&self.client),
+        ))))
     }
 }
 
-/// A client on a host whose FLUI has none yet.
-#[cfg_attr(
-    not(target_os = "android"),
-    expect(
-        dead_code,
-        reason = "only Android has no client: elsewhere a gap answers from the lane"
-    )
-)]
-/// Its authority is its own: it answers nothing a cache could share.
-struct NotYet(Arc<HttpHost>);
-
-impl HttpClient for NotYet {
-    fn authority(&self) -> HttpAuthority {
-        HttpAuthority::of(&self.0)
-    }
-
-    fn send(&self, _request: HttpRequest) -> HttpFuture<HttpResponse> {
-        let host = *self.0;
-        Box::pin(std::future::ready(Err(HttpError::NotYetOnThisHost {
-            host,
-        })))
-    }
-}
-
-/// A client whose exchanges each hold a slot of the run's IO lane: the web's
-/// `fetch` runs in the page, not on the lane, and is admitted by it all the
-/// same.
-#[cfg(any(target_arch = "wasm32", all(test, not(target_os = "android"))))]
+/// A client whose exchanges each hold a slot of the run's IO lane: the host's
+/// own stack (the page's `fetch`, Android's `HttpURLConnection`) runs off the
+/// lane, and is admitted by it all the same.
+#[cfg(any(target_arch = "wasm32", target_os = "android", test))]
 mod held {
     use std::pin::Pin;
     use std::sync::Weak;
