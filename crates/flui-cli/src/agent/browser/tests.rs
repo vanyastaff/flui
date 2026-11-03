@@ -369,7 +369,7 @@ fn drives_a_page(executable: &Path, dialect: Dialect) {
     std::fs::write(site.path().join("index.html"), APP_PAGE).expect("the page is written");
     let server = crate::serve::DevServer::start(site.path().to_path_buf(), 0)
         .expect("the dev server starts");
-    let (_browser, mut link) =
+    let (browser, mut link) =
         LaunchedBrowser::start(executable, dialect, true).expect("the browser starts and links");
 
     let project = tempfile::tempdir().expect("a project directory");
@@ -401,6 +401,10 @@ fn drives_a_page(executable: &Path, dialect: Dialect) {
         Some(format!("after:{token}")),
         "the reloaded page was given its launch again"
     );
+
+    let profile = browser.profile().to_path_buf();
+    drop(browser);
+    assert!(!profile.exists(), "the browser's profile outlived it");
 }
 
 #[test]

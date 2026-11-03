@@ -23,6 +23,9 @@ const START_TIMEOUT: Duration = Duration::from_secs(30);
 /// How long connecting to the browser's WebSocket may take.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// How long removing the profile is tried while the browser's helpers still write into it.
+const PROFILE_REMOVAL: Duration = Duration::from_secs(5);
+
 /// Why a browser could not be started and linked.
 #[derive(Debug)]
 pub(crate) enum LaunchError {
@@ -97,6 +100,12 @@ impl LaunchedBrowser {
         Ok((browser, link))
     }
 
+    /// The profile the browser runs in, gone once the browser is dropped.
+    #[cfg(test)]
+    pub(crate) fn profile(&self) -> &Path {
+        self.profile.path()
+    }
+
     /// The WebSocket the browser says it listens on.
     fn wait_for_url(
         &mut self,
@@ -132,6 +141,18 @@ impl Drop for LaunchedBrowser {
         // Ended before its profile goes, which a running browser holds.
         let _ = self.child.kill();
         let _ = self.child.wait();
+        // The browser's helper processes outlive it for a moment and write into the profile
+        // as they go, which fails a removal that races them: it is tried again until they
+        // are gone.
+        let deadline = Instant::now() + PROFILE_REMOVAL;
+        loop {
+            match std::fs::remove_dir_all(self.profile.path()) {
+                Ok(()) => break,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => break,
+                Err(_) if Instant::now() >= deadline => break,
+                Err(_) => thread::sleep(Duration::from_millis(50)),
+            }
+        }
     }
 }
 
@@ -279,5 +300,37 @@ mod tests {
             active_port(profile.path()).as_deref(),
             Some("ws://127.0.0.1:41234/devtools/browser/0a-1b")
         );
+    }
+
+    #[test]
+    fn the_profile_goes_with_the_browser_while_its_helpers_still_write_into_it() {
+        let profile = tempfile::tempdir().expect("a temporary directory");
+        let path = profile.path().to_path_buf();
+        // The test's own binary stands in for the browser; a thread for its helpers, which
+        // keep writing into the profile after it ended.
+        let child = Command::new(std::env::current_exe().expect("the test's own binary"))
+            .arg("--list")
+            .stdout(Stdio::null())
+            .spawn()
+            .expect("the stand-in starts");
+        let (writing, started) = mpsc::channel::<()>();
+        let helpers = {
+            let path = path.clone();
+            thread::spawn(move || {
+                let until = Instant::now() + Duration::from_millis(200);
+                let mut written = 0_u32;
+                while written < 64 || Instant::now() < until {
+                    let _ = std::fs::write(path.join(written.to_string()), b"state");
+                    written = written.wrapping_add(1);
+                    if written == 64 {
+                        let _ = writing.send(());
+                    }
+                }
+            })
+        };
+        started.recv().expect("the helpers write into the profile");
+        drop(LaunchedBrowser { child, profile });
+        helpers.join().expect("the helpers end");
+        assert!(!path.exists(), "the profile outlived its browser");
     }
 }
