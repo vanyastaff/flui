@@ -165,7 +165,8 @@ the contract crate `flui-protocol`, the CLI's one FLUI dependency: the launch
 variables and the shortest token (`launch`), the hello, the method names and
 each method's parameter type.
 
-- **Launch.** `flui run --agent` is admitted only on this desktop. A debug
+- **Launch.** `flui run --agent` is admitted on this desktop and on an Android
+  device. A debug
   build needs nothing of the application; a profile other than `dev` (whose
   debug assertions it cannot be sure of) builds with the `driver` feature of
   the `flui` facade, or of `flui-app` for an app that names the runtime crate,
@@ -176,6 +177,15 @@ each method's parameter type.
   unless a newer run replaced it. The same feature goes to `cargo build` and
   `cargo run`, or cargo would build twice. The token is in the app's
   environment and the file, never in the `--json` stream.
+- **Android.** The app binds the abstract socket `@flui-agent-<hex>` (ADR-0288
+  §6), which only the device reaches, so the session holds an
+  `adb forward tcp:0 localabstract:<name>` and the file names that loopback
+  port (`Endpoint::Forwarded`) where a desktop session names the app's own
+  endpoint (`Endpoint::Local`). `am start` hands the app the endpoint and the
+  token as the intent's string extras; `adb`'s connections arrive as the
+  shell's user, which the app admits. The forward is removed with the session,
+  after the app is stopped. A release build gets the `driver` feature through
+  `cargo ndk`. The token stays out of every rendered `adb` command.
 - **Serve.** `flui mcp` speaks MCP over stdio (hand-written JSON-RPC: four
   tools, no SDK, so the CLI's graph does not grow) and forwards each call as
   one protocol method, its parameters checked against the method's parameter
@@ -192,6 +202,10 @@ each method's parameter type.
   `an_optimized_agent_build_turns_on_the_driver_feature_and_a_debug_one_needs_none`
   the feature rule (Unix; the Windows pipe is covered by `flui-app`'s agent
   tests and not yet by a CLI run).
+  `mcp_reaches_an_android_app_through_its_forwarded_port` drives `flui mcp`
+  over a forwarded port, and
+  `an_android_session_forwards_a_port_to_a_fresh_abstract_socket_and_removes_it`
+  pins the `adb` calls and the intent extras with an `adb` that logs them.
 
 ### Native iOS selection and launch
 

@@ -245,7 +245,9 @@ is answered `shutting_down`. This replaces §5's "first conversation past its he
 
 The desktop transport moved in the change that accepted this ADR, the hook host moved into the
 loop in the next (§7), and the role came into the hello after it (§8). The Android transport
-came next (§6, with the launch read through the platform, §7). Then, each in its own change:
-`flui run --agent` on Android (the extras, and the client over `adb forward`), the web transport
-(the page's export, driven from the JS event loop), and held input per connection (a lease the
-session owns, released when it is dropped).
+came next (§6, with the launch read through the platform, §7), and then `flui run --agent` on
+Android: the endpoint and the token as `am start` extras, and a session file that names the
+loopback port `adb forward` holds instead of the app's own endpoint, which only the device
+reaches. Then, each in its own change: the web transport (the page's export, driven from the JS
+event loop), and held input per connection (a lease the session owns, released when it is
+dropped).
