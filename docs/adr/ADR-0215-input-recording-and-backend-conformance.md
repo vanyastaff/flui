@@ -120,15 +120,18 @@ and put `serde` on the Stable contract crate.
    registration, so a stale handle dropped after a replacement never removes the new tap.
    Registration generations are never reused; at the terminal value registration returns
    `Err(IdExhausted)` permanently instead of wrapping.
-2. **DTO, not vocabulary.** The event vocabulary carries no `serde`. `flui-testing` holds private
-   mirror enums with pinned `#[serde(rename)]` spellings; unknown fields are skipped within a major format version, an unknown variant is an error;
-   `From<&InputRecord>` and `TryFrom<Dto>` over every `InputRecord` variant (`Input` with its
-   nested `HostInput` DTO, including the accesskit `ActionRequest` payload, `Decision`,
-   `Preferences`, `Gap` and `End`). Because the vocabulary and `InputRecord` are
-   `#[non_exhaustive]`, a downstream `match` cannot be exhaustive, so drift is caught by a
-   generated table of one sample per vocabulary variant and per record variant that must
-   round-trip through the DTO; regeneration is gated as ADR-0143 §4's key
-   tables are.
+2. **DTO, not vocabulary.** The event vocabulary carries no `serde`. `flui_protocol::input_recording`
+   holds the mirror types (`Header`, `Row` and what they nest) with pinned `#[serde(rename)]`
+   spellings, plain public data a reader such as the driver reads without the runtime; unknown
+   fields are skipped within a major format version, an unknown variant is an error.
+   `flui-runtime` holds the conversions, `InputRecord::to_wire` and `from_wire` over every
+   `InputRecord` variant (`Input` with its nested `HostInput`, including the accesskit
+   `ActionRequest` payload, `Decision`, `Deadline`, `Preferences`, `Gap` and `End`), the header's
+   pieces, and `WireError`, the typed refusal; `flui-testing` holds the writer, the reader and
+   replay. Because the vocabulary is `#[non_exhaustive]`, a downstream `match` cannot be
+   exhaustive, so drift is caught by a generated table of one sample per vocabulary variant and
+   per record variant that must round-trip through the wire form; regeneration is gated as
+   ADR-0143 §4's key tables are.
 3. **Format.** JSON Lines: one header object, then one object per row, framed by `serde_json`
    and a newline. `RecordingReader<R: BufRead>` is an iterator of `Result<Record,
    RecordingError>`; `RecordingWriter<W: Write>` writes. `RecordingError::{Io, Json { line,

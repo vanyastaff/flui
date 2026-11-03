@@ -6,16 +6,14 @@ use std::io::{BufRead, Write};
 use flui_interaction::GestureProfiles;
 use flui_platform::WindowId;
 use flui_platform::pointer::{DeviceId, PointerKind};
+use flui_protocol::input_recording as rec;
 use flui_runtime::{InputRecord, PreferencesRow};
-use serde::{Deserialize, Serialize};
-
-use super::dto::{
-    DeviceDto, DtoError, PointerKindDto, PreferencesDto, ProfileDto, RowDto, profiles, profiles_dto,
+use flui_runtime::{
+    WireError, device_from_wire, device_to_wire, profiles_from_wire, profiles_to_wire,
 };
+use serde::Serialize;
 
-/// The recording format's major version. It changes only with an
-/// incompatible change; unknown fields are skipped within one version.
-pub const FORMAT_VERSION: u32 = 3;
+pub use rec::FORMAT_VERSION;
 
 /// Why a recording could not be written, read or replayed.
 #[derive(Debug, thiserror::Error)]
@@ -74,29 +72,9 @@ pub enum RecordingError {
     },
 }
 
-/// Whether text is kept in a recording (ADR-0215 §5).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum Privacy {
-    /// Key text, IME strings, assistive action text, window titles and device
-    /// names are replaced, and each row that lost text is marked redacted.
-    #[default]
-    Redact,
-    /// Keep all text: the one explicit opt-in per recording, the
-    /// `--keep-text` of a recording tool.
-    KeepText,
-}
+pub use flui_runtime::Privacy;
 
-/// Which clock the recorded times count on.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[non_exhaustive]
-pub enum RecordingClock {
-    /// A virtual clock a test advanced; times count from its start.
-    #[serde(rename = "virtual")]
-    Virtual,
-    /// The process's monotonic event timeline.
-    #[serde(rename = "monotonic")]
-    Monotonic,
-}
+pub use rec::Clock as RecordingClock;
 
 /// A window the recording addresses, with the scale it started at and the
 /// gesture presets its contacts were admitted with.
@@ -232,125 +210,94 @@ impl RecordingHeader {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-struct WindowDto {
-    window: u64,
-    scale_factor: f64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    title: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    gestures: Option<Vec<ProfileDto>>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct HeaderDto {
-    flui_recording: u32,
-    clock: RecordingClock,
-    #[serde(default)]
-    windows: Vec<WindowDto>,
-    #[serde(default)]
-    devices: Vec<DeviceDto>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    preferences: Option<PreferencesDto>,
-    #[serde(default)]
-    keep_text: bool,
-}
-
-const REDACTED_NAME: &str = super::dto::REDACTED;
-
-impl HeaderDto {
-    fn try_new(header: &RecordingHeader, privacy: Privacy) -> Result<Self, DtoError> {
-        let keep = privacy == Privacy::KeepText;
-        let text = |text: &Option<String>| {
-            text.as_ref().map(|text| {
-                if keep {
-                    text.clone()
-                } else {
-                    REDACTED_NAME.to_owned()
-                }
-            })
-        };
-        Ok(Self {
-            flui_recording: FORMAT_VERSION,
-            clock: header.clock,
-            windows: header
-                .windows
-                .iter()
-                .map(|window| {
-                    Ok(WindowDto {
-                        window: window.window.get().get(),
-                        scale_factor: window.scale_factor,
-                        title: text(&window.title),
-                        gestures: window
-                            .gesture_profiles
-                            .as_ref()
-                            .map(profiles_dto)
-                            .transpose()?,
-                    })
-                })
-                .collect::<Result<_, DtoError>>()?,
-            devices: header
-                .devices
-                .iter()
-                .map(|device| {
-                    Ok(DeviceDto {
-                        device: device.device.get().get(),
-                        kind: PointerKindDto::try_from(device.kind)?,
-                        name: text(&device.name),
-                    })
-                })
-                .collect::<Result<_, DtoError>>()?,
-            preferences: header
-                .preferences
-                .as_ref()
-                .map(PreferencesDto::try_from)
-                .transpose()?,
-            keep_text: keep,
+/// `header` as its first line is written under `privacy`.
+fn header_to_wire(header: &RecordingHeader, privacy: Privacy) -> Result<rec::Header, WireError> {
+    let keep = privacy == Privacy::KeepText;
+    let text = |text: &Option<String>| {
+        text.as_ref().map(|text| {
+            if keep {
+                text.clone()
+            } else {
+                rec::REDACTED.to_owned()
+            }
         })
-    }
-
-    fn into_header(self, line: u64) -> Result<RecordingHeader, RecordingError> {
-        let devices = self
+    };
+    Ok(rec::Header {
+        flui_recording: FORMAT_VERSION,
+        clock: header.clock,
+        windows: header
+            .windows
+            .iter()
+            .map(|window| {
+                Ok(rec::Window {
+                    window: window.window.get().get(),
+                    scale_factor: window.scale_factor,
+                    title: text(&window.title),
+                    gestures: window
+                        .gesture_profiles
+                        .as_ref()
+                        .map(profiles_to_wire)
+                        .transpose()?,
+                })
+            })
+            .collect::<Result<_, WireError>>()?,
+        devices: header
             .devices
             .iter()
-            .map(|dto| {
-                super::dto::device_from(dto)
-                    .map(|(device, kind)| RecordedDevice {
-                        device,
-                        kind,
-                        name: dto.name.clone(),
-                    })
-                    .map_err(|error| dto_error(line, error))
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        Ok(RecordingHeader {
-            clock: self.clock,
-            windows: self
-                .windows
-                .into_iter()
-                .map(|window| {
-                    Ok(RecordedWindow {
-                        window: super::dto::window_id(window.window)?,
-                        scale_factor: window.scale_factor,
-                        title: window.title,
-                        gesture_profiles: window.gestures.map(profiles).transpose()?,
-                    })
+            .map(|device| device_to_wire(device.device, device.kind, text(&device.name)))
+            .collect::<Result<_, WireError>>()?,
+        preferences: header
+            .preferences
+            .as_ref()
+            .map(PreferencesRow::to_wire)
+            .transpose()?,
+        keep_text: keep,
+    })
+}
+
+/// The header `header` records, with errors reported against `line`.
+fn header_from_wire(header: rec::Header, line: u64) -> Result<RecordingHeader, RecordingError> {
+    let devices = header
+        .devices
+        .iter()
+        .map(|device| {
+            device_from_wire(device)
+                .map(|(id, kind)| RecordedDevice {
+                    device: id,
+                    kind,
+                    name: device.name.clone(),
                 })
-                .collect::<Result<_, DtoError>>()
-                .map_err(|error| dto_error(line, error))?,
-            devices,
-            preferences: self
-                .preferences
-                .map(PreferencesRow::try_from)
-                .transpose()
-                .map_err(|error| dto_error(line, error))?,
-            privacy: if self.keep_text {
-                Privacy::KeepText
-            } else {
-                Privacy::Redact
-            },
+                .map_err(|error| wire_error(line, error))
         })
-    }
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(RecordingHeader {
+        clock: header.clock,
+        windows: header
+            .windows
+            .into_iter()
+            .map(|window| {
+                Ok(RecordedWindow {
+                    window: WindowId::try_from_raw(window.window)
+                        .ok_or_else(|| WireError::Invalid("window id 0".into()))?,
+                    scale_factor: window.scale_factor,
+                    title: window.title,
+                    gesture_profiles: window.gestures.map(profiles_from_wire).transpose()?,
+                })
+            })
+            .collect::<Result<_, WireError>>()
+            .map_err(|error| wire_error(line, error))?,
+        devices,
+        preferences: header
+            .preferences
+            .map(PreferencesRow::from_wire)
+            .transpose()
+            .map_err(|error| wire_error(line, error))?,
+        privacy: if header.keep_text {
+            Privacy::KeepText
+        } else {
+            Privacy::Redact
+        },
+    })
 }
 
 /// One row read back, with where it was and whether text was redacted.
@@ -384,8 +331,8 @@ impl<W: Write> RecordingWriter<W> {
     /// cannot be written.
     pub fn try_new(mut out: W, header: &RecordingHeader) -> Result<Self, RecordingError> {
         let privacy = header.privacy;
-        let dto = HeaderDto::try_new(header, privacy).map_err(|error| dto_error(1, error))?;
-        write_line(&mut out, 1, &dto)?;
+        let header_line = header_to_wire(header, privacy).map_err(|error| wire_error(1, error))?;
+        write_line(&mut out, 1, &header_line)?;
         Ok(Self {
             out,
             privacy,
@@ -411,7 +358,7 @@ impl<W: Write> RecordingWriter<W> {
     /// prepared fails with the line it was to be written to.
     pub(crate) fn write_row(&mut self, row: PreparedRow) -> Result<(), RecordingError> {
         self.line += 1;
-        let row = row.map_err(|error| dto_error(self.line, error))?;
+        let row = row.map_err(|error| wire_error(self.line, error))?;
         write_line(&mut self.out, self.line, &row)
     }
 
@@ -427,15 +374,11 @@ impl<W: Write> RecordingWriter<W> {
 }
 
 /// A row converted for writing, or why it could not be.
-pub(crate) type PreparedRow = Result<RowDto, DtoError>;
+pub(crate) type PreparedRow = Result<rec::Row, WireError>;
 
 /// `record` as written under `privacy`.
 pub(crate) fn prepare(record: &InputRecord, privacy: Privacy) -> PreparedRow {
-    let mut row = RowDto::try_from(record)?;
-    if privacy == Privacy::Redact {
-        row.redact();
-    }
-    Ok(row)
+    record.to_wire(privacy)
 }
 
 fn write_line(
@@ -478,7 +421,7 @@ impl<R: BufRead> RecordingReader<R> {
         let value: serde_json::Value = serde_json::from_str(&buffer)
             .map_err(|source| RecordingError::Json { line: 1, source })?;
         let found = value
-            .get("flui_recording")
+            .get(rec::VERSION_KEY)
             .and_then(serde_json::Value::as_u64)
             .and_then(|version| u32::try_from(version).ok())
             .unwrap_or(0);
@@ -488,9 +431,10 @@ impl<R: BufRead> RecordingReader<R> {
                 supported: FORMAT_VERSION,
             });
         }
-        let header = serde_json::from_value::<HeaderDto>(value)
-            .map_err(|source| json_error(1, source))?
-            .into_header(1)?;
+        let header = header_from_wire(
+            serde_json::from_value::<rec::Header>(value).map_err(|source| json_error(1, source))?,
+            1,
+        )?;
         Ok(Self {
             input,
             header,
@@ -528,17 +472,17 @@ impl<R: BufRead> Iterator for RecordingReader<R> {
             }
             let line = self.line;
             return Some(
-                serde_json::from_str::<RowDto>(&self.buffer)
+                serde_json::from_str::<rec::Row>(&self.buffer)
                     .map_err(|source| json_error(line, source))
                     .and_then(|row| {
                         let redacted = row.is_redacted();
-                        InputRecord::try_from(row)
+                        InputRecord::from_wire(row)
                             .map(|record| Record {
                                 line,
                                 record,
                                 redacted,
                             })
-                            .map_err(|error| dto_error(line, error))
+                            .map_err(|error| wire_error(line, error))
                     }),
             );
         }
@@ -559,13 +503,49 @@ fn json_error(line: u64, source: serde_json::Error) -> RecordingError {
     RecordingError::Json { line, source }
 }
 
-fn dto_error(line: u64, error: DtoError) -> RecordingError {
+/// A conversion failure of line `line`, as the recording's own error.
+fn wire_error(line: u64, error: WireError) -> RecordingError {
     match error {
-        DtoError::UnknownSpelling(tag) => RecordingError::UnknownVariant { line, tag },
-        DtoError::Invalid(what) => RecordingError::Json {
+        WireError::UnknownSpelling(tag) => RecordingError::UnknownVariant { line, tag },
+        WireError::Invalid(what) => RecordingError::Json {
             line,
             source: <serde_json::Error as serde::de::Error>::custom(what),
         },
-        DtoError::Unmirrored(what) => RecordingError::Unmirrored { line, what },
+        WireError::Unmirrored(what) => RecordingError::Unmirrored { line, what },
+        // A refusal a later `flui-runtime` adds: the row is malformed all the same.
+        other => RecordingError::Json {
+            line,
+            source: <serde_json::Error as serde::de::Error>::custom(other),
+        },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use flui_runtime::WireError;
+
+    use super::{RecordingClock, RecordingError, RecordingHeader, RecordingWriter};
+
+    /// A row the wire form does not mirror (the vocabulary grew, and the
+    /// conversion did not follow) fails with the line it was to be written
+    /// to.
+    #[test]
+    fn an_unmirrored_variant_is_a_typed_error_not_a_panic() {
+        let mut writer =
+            RecordingWriter::try_new(Vec::new(), &RecordingHeader::new(RecordingClock::Virtual))
+                .expect("header");
+        let error = writer
+            .write_row(Err(WireError::Unmirrored("accesskit::Action")))
+            .expect_err("an unmirrored row is not written");
+        assert!(
+            matches!(
+                error,
+                RecordingError::Unmirrored {
+                    line: 2,
+                    what: "accesskit::Action"
+                }
+            ),
+            "{error:?}"
+        );
     }
 }

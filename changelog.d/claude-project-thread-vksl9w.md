@@ -51,6 +51,10 @@
   hello asks to drive, as one naming no role does, is refused `not_driver` (retry `soon`) until
   the first goes. Under `FLUI_AGENT_EXIT_ON_DISCONNECT` the app exits with the connection admitted
   as its driver, and a later driver is refused `shutting_down`.
+- **The input recording's wire types are `flui_protocol::input_recording`** (ADR-0215 §2):
+  `Header`, `Row` and what they nest, plain data a reader reads without the runtime.
+  `flui_runtime::{Privacy, WireError}` and `InputRecord::to_wire`/`from_wire` convert to and from
+  them; `flui_testing::recording` keeps its API (`RecordingClock` and `Privacy` are re-exports).
 
 ### Added
 
