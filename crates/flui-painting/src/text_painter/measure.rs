@@ -62,6 +62,8 @@ impl TextPainter {
             .as_ref()
             .and_then(InlineSpan::style)
             .and_then(crate::text_layout::paint_color);
+        // A fresh layout: its run colours are those of the text it shaped,
+        // and `set_text` keeps them current while the layout is cached.
         let paragraph = Arc::new(layout.to_shaped(root));
 
         // Precompute intrinsic widths (shape once, query many).
@@ -86,20 +88,29 @@ impl TextPainter {
         Ok(())
     }
 
-    /// The colour each shaped run carries, relative to the root. Baked into
-    /// the layout at shape time, so `set_text` treats a change to one as a
-    /// layout change.
-    pub(super) fn span_colors(text: &InlineSpan) -> Vec<Option<crate::styling::Color>> {
-        let root = text.style().and_then(crate::text_layout::paint_color);
+    /// The colour each span `text` is shaped from paints with, in shaping
+    /// order: what a layout of `text` holds as its run colours
+    /// (`crate::parley_text::span_paint_color` over the spans
+    /// [`collect_authored_spans`] gives, the root's style the default).
+    pub(super) fn span_paint_colors(text: &InlineSpan) -> Vec<Option<crate::styling::Color>> {
+        let root = text.style();
         collect_authored_spans(text)
             .iter()
-            .map(|(_, style)| {
-                style
-                    .as_ref()
-                    .and_then(crate::text_layout::paint_color)
-                    .filter(|color| Some(*color) != root)
-            })
-            .collect()
+            .map(|(_, style)| crate::parley_text::span_paint_color(style.as_ref(), root))
+            .collect::<Vec<Option<crate::styling::Color>>>()
+    }
+
+    /// `colors` relative to `root`: a span painted in the root's colour is
+    /// `None`, as the paragraph command paints it. Two texts whose relative
+    /// colours agree paint one cached paragraph alike.
+    pub(super) fn relative_to_root(
+        colors: &[Option<crate::styling::Color>],
+        root: Option<crate::styling::Color>,
+    ) -> Vec<Option<crate::styling::Color>> {
+        colors
+            .iter()
+            .map(|color| color.filter(|color| Some(*color) != root))
+            .collect::<Vec<Option<crate::styling::Color>>>()
     }
 
     /// Shapes resolved typography on Parley through `text_cx`. Every span
