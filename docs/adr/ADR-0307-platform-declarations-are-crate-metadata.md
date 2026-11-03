@@ -1,9 +1,13 @@
 # ADR-0307: Platform declarations are crate metadata
 
 - **Status:** Accepted (2026-11-03). Implemented in `flui-cli`: the reader, the version-1 keys
-  (`android.permissions`, `apple.privacy.accessed-apis`), the generated Android manifest, the
-  iOS privacy manifest, the verify mode of `flui doctor` and `flui add`.
+  (`android.permissions`, `apple.privacy.accessed-apis`) and the version-2 keys (`android.dex`,
+  `android.java`), the generated Android manifest, the iOS privacy manifest, the verify mode of
+  `flui doctor` and `flui add`.
 - **Date:** 2026-11-03
+- **Amended:** 2026-11-03: version 2 adds `android.dex` and `android.java`, the Java classes a
+  crate ships, so the packagers take `FluiActivity` from the `flui-native` the application links
+  (ADR-0255 decision 4).
 - **Supersedes:** [ADR-0154](ADR-0154-capability-crates.md) §7 (where declarations live and
   their keys: a versioned `declares` table in any crate, in place of the illustrative schema) and,
   in §8, the step of `flui add` that writes declarations; the rest of ADR-0154 stands
@@ -92,6 +96,20 @@ category = "NSPrivacyAccessedAPICategoryFileTimestamp"
 reasons = ["C617.1"]
 ```
 
+- Version 2 adds `android.dex` and `android.java`, the compiled Java classes a crate ships and the
+  directory of their sources, each a path inside the crate (relative, `/`-separated, never `..`)
+  that must name a file or a directory. A crate stating `schema = 1` cannot use them, so an older
+  CLI refuses such a crate by its version, not by an unknown key.
+
+```toml
+[package.metadata.flui.declares]
+schema = 2
+
+[package.metadata.flui.declares.android]
+dex = "android/classes.dex"
+java = "android/java"
+```
+
 - A key arrives with the first crate that needs it. A key an older CLI could safely ignore needs no
   new version; one whose absence would build a wrong app raises `schema`.
 - `features.<name>` must name a feature of the crate.
@@ -112,6 +130,10 @@ join is a set per key, in a fixed order, with the crates that asked for each ent
   Both the SDK-tools packager and Gradle read that file. The CLI writes it only when it changed,
   and it carries a generated-file header. A file at that path without the header is refused, not
   overwritten, so a hand edit is never lost silently.
+  The dex files the graph declares (`android.dex`) go into the APK the packager without Gradle
+  builds as `classes.dex`, `classes2.dex`, …, in crate order; a Gradle build gets the source
+  directories (`android.java`) as `flui.javaSources` in `gradle.properties`, which the scaffolded
+  script adds to its `main` source set, and a script that does not read them is refused.
 - **Apple.** The iOS packager writes the bundle's `PrivacyInfo.xcprivacy` from the accessed APIs
   the graph of the application's target declares, joined with the application's own
   `<project>/platforms/ios/PrivacyInfo.xcprivacy`: per category, the reasons of every crate and of the
@@ -194,6 +216,13 @@ a key arrives with its first consumer.
   run, a crate without a plugin undone with its lockfile, an unknown name, a crate added from the
   checkout); `commands::add::tests::a_feature_joins_the_facade_dependency_in_any_shape`;
   `flui-system`'s `the_declared_plugin_is_the_crates_default_plugin`.
+- `declarations::tests::a_crates_dex_and_java_sources_resolve_under_the_crate` (crate order, paths
+  under each crate, a disabled feature's dex); the malformed cases include a version-2 key under
+  `schema = 1`, a path out of the crate and paths naming nothing.
+- `android_manifest::tests::the_manifest_declares_what_the_linked_crates_need` also finds the dex
+  `flui-native` declares to be the checked-in one, and its Java sources;
+  `android_package::tests::libraries_and_dex_files_are_appended_where_the_platform_reads_them`;
+  `gradle_project::tests::gradle_compiles_the_java_sources_the_crates_declare`.
 - `cargo xtask workspace` accepts `declares` and `capability` among the `[package.metadata.flui]`
   keys.
 
@@ -229,6 +258,8 @@ a key arrives with its first consumer.
 3. Done: the verify mode, `flui doctor`'s Project section and `--manifest`.
 4. Done: `flui add <capability>` and `[package.metadata.flui.capability] plugin`, declared by
    `flui-system`.
+5. Done: version 2, `android.dex` and `android.java`, declared by `flui-native` for `FluiActivity`,
+   `FluiHost` and `FluiView` (ADR-0255 decisions 1 and 4).
 
 ## More information
 

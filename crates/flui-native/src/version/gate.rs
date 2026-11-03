@@ -560,16 +560,6 @@ pub(crate) mod android {
         const SINCE: u64 = 31;
     }
 
-    /// `dalvik.system.InMemoryDexClassLoader` (API 26). Without it `FluiView`'s dex is loaded with
-    /// a `DexClassLoader` over a read-only copy in the code cache.
-    #[derive(Debug, Clone, Copy)]
-    pub(crate) struct InMemoryDex;
-
-    impl Gate for InMemoryDex {
-        type Version = AndroidApi;
-        const SINCE: u64 = 26;
-    }
-
     /// `View.setSystemGestureExclusionRects` (API 29). Without it input regions report
     /// `Unavailable` and none is sent to the decor view.
     #[derive(Debug, Clone, Copy)]
@@ -716,10 +706,10 @@ pub(crate) mod testing {
 mod tests {
     use super::android::{
         AndroidApi, BackgroundBlur, ClipExtras, ContextDisplay, DisplayCutout, DragSource,
-        EnvelopeEffects, GestureExclusion, HapticComposition, InMemoryDex, InsetsByType,
-        InsetsController, LocaleList, PointerIcons, RoundPrimitives, ScaledScrollFactor,
-        SegmentFeedback, StylusHandwriting, SystemContrast, SystemGestureInsets, TextWeight,
-        TouchpadGestures, VibrationTouchUsage,
+        EnvelopeEffects, GestureExclusion, HapticComposition, InsetsByType, InsetsController,
+        LocaleList, PointerIcons, RoundPrimitives, ScaledScrollFactor, SegmentFeedback,
+        StylusHandwriting, SystemContrast, SystemGestureInsets, TextWeight, TouchpadGestures,
+        VibrationTouchUsage,
     };
     use super::testing::row;
 
@@ -771,7 +761,6 @@ mod tests {
             unknown,
         ));
         failures.extend(row::<DragSource>("DragSource", api(23), api(24), unknown));
-        failures.extend(row::<InMemoryDex>("InMemoryDex", api(25), api(26), unknown));
         failures.extend(row::<PointerIcons>(
             "PointerIcons",
             api(23),

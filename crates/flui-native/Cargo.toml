@@ -936,13 +936,19 @@ targets = [
 
 # What the core's hosts need from the application's manifests (ADR-0307).
 [package.metadata.flui.declares]
-schema = 1
+schema = 2
 
 # Haptic patterns play on the Vibrator, which needs this install-time
 # permission; semantic feedback goes through the view without it
 # (`haptics::android`).
 [package.metadata.flui.declares.android]
 permissions = ["android.permission.VIBRATE"]
+# The Java classes of the Android host (`FluiActivity`, `FluiHost`, `FluiView`),
+# compiled from `java` into the checked-in dex (`cargo xtask android-dex`):
+# `flui build` packs the dex into the APK and hands Gradle the sources
+# (ADR-0255 decisions 1 and 4).
+dex = "android/classes.dex"
+java = "android/java"
 
 # Apple's required-reason APIs the core calls on iOS and macOS. UIKit event
 # timestamps are placed on the frame clock through `systemUptime`

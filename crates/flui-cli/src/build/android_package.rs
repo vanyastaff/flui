@@ -1,5 +1,5 @@
-//! An APK without Gradle: the SDK's own `build-tools` do everything a
-//! `hasCode="false"` NativeActivity app needs.
+//! An APK without Gradle: the SDK's own `build-tools` do everything a FLUI
+//! app needs, whose Java classes come compiled with the crates it links.
 //!
 //! 1. `aapt2 link` turns `AndroidManifest.xml` into a base archive (no
 //!    resources: the manifest carries no icon, the platform's default one
@@ -7,6 +7,9 @@
 //! 2. The native libraries go in as `lib/<abi>/lib<name>.so`, stored
 //!    uncompressed: with `targetSdk >= 23` the platform maps them straight
 //!    out of the archive instead of extracting, which needs page alignment.
+//!    The dex files the linked crates declare go in as `classes.dex`,
+//!    `classes2.dex`, … (`flui-native`'s holds `FluiActivity`, ADR-0255), so
+//!    no `javac` or `d8` runs.
 //! 3. `zipalign -P 16` provides that alignment for 16 KB pages, which Google
 //!    Play requires of 64-bit libraries (a 4 KB alignment fails to map on a
 //!    16 KB device); `-P` needs build-tools 35.
@@ -36,6 +39,9 @@ pub(crate) struct ApkSpec<'a> {
     pub(crate) package: &'a str,
     /// `(abi, path)` for every native library, e.g. `("arm64-v8a", …/libapp.so)`.
     pub(crate) native_libs: &'a [(String, PathBuf)],
+    /// The dex files the linked crates declare, in the order they are
+    /// numbered (`classes.dex`, `classes2.dex`, …).
+    pub(crate) dex: &'a [PathBuf],
     /// Scratch directory for the intermediate archives.
     pub(crate) work_dir: &'a Path,
     /// Where the signed APK is written.
@@ -150,7 +156,7 @@ impl BuildTools {
             spec.min_sdk,
         )))
         .await?;
-        add_native_libs(&base, spec.native_libs)?;
+        add_code(&base, spec.native_libs, spec.dex)?;
         process::run(Command::new(&self.zipalign).args(zipalign_args(&base, &aligned))).await?;
 
         let keystore = debug_keystore_path()?;
@@ -275,8 +281,19 @@ fn lib_entry_name(abi: &str, lib: &Path) -> BuildResult<String> {
     Ok(format!("lib/{abi}/{file}"))
 }
 
-/// Append the libraries to the archive `aapt2` produced, uncompressed.
-fn add_native_libs(apk: &Path, libs: &[(String, PathBuf)]) -> BuildResult<()> {
+/// The archive entry of the `index`th dex (from 0): `classes.dex`,
+/// `classes2.dex`, …, the names the platform's class loader reads.
+fn dex_entry_name(index: usize) -> String {
+    match index {
+        0 => "classes.dex".to_owned(),
+        n => format!("classes{}.dex", n + 1),
+    }
+}
+
+/// Append the libraries and the dex files, numbered in their order, to the
+/// archive `aapt2` produced, uncompressed: the platform reads a stored dex as
+/// it reads a compressed one.
+fn add_code(apk: &Path, libs: &[(String, PathBuf)], dex: &[PathBuf]) -> BuildResult<()> {
     let zip_error =
         |error: zip::result::ZipError| BuildError::Other(format!("{}: {error}", apk.display()));
     let file = std::fs::OpenOptions::new()
@@ -284,12 +301,19 @@ fn add_native_libs(apk: &Path, libs: &[(String, PathBuf)]) -> BuildResult<()> {
         .write(true)
         .open(apk)?;
     let mut writer = ZipWriter::new_append(file).map_err(zip_error)?;
-    let options = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+    let stored = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
     for (abi, lib) in libs {
         writer
-            .start_file(lib_entry_name(abi, lib)?, options)
+            .start_file(lib_entry_name(abi, lib)?, stored)
             .map_err(zip_error)?;
         std::io::copy(&mut BufReader::new(File::open(lib)?), &mut writer)?;
+    }
+
+    for (index, path) in dex.iter().enumerate() {
+        writer
+            .start_file(dex_entry_name(index), stored)
+            .map_err(zip_error)?;
+        std::io::copy(&mut BufReader::new(File::open(path)?), &mut writer)?;
     }
     let mut file = writer.finish().map_err(zip_error)?;
     file.flush()?;
@@ -449,8 +473,10 @@ mod tests {
         ]);
     }
 
+    /// The libraries go in stored under their ABI, and each declared dex
+    /// under the name the class loader reads, in order.
     #[test]
-    fn native_libraries_are_appended_stored_under_their_abi() {
+    fn libraries_and_dex_files_are_appended_where_the_platform_reads_them() {
         let dir = tempfile::tempdir().expect("temp");
         let apk = dir.path().join("base.apk");
         {
@@ -463,14 +489,34 @@ mod tests {
         }
         let lib = dir.path().join("libapp.so");
         std::fs::write(&lib, b"\x7fELF").expect("lib");
-        add_native_libs(&apk, &[("arm64-v8a".into(), lib)]).expect("append");
+        let first = dir.path().join("first.dex");
+        std::fs::write(&first, b"dex\n035\0first").expect("dex");
+        let second = dir.path().join("second.dex");
+        std::fs::write(&second, b"dex\n035\0second").expect("dex");
+        add_code(&apk, &[("arm64-v8a".into(), lib)], &[first, second]).expect("append");
         let mut names = archive_entries(&apk).expect("entries");
         names.sort();
-        assert_eq!(names, ["AndroidManifest.xml", "lib/arm64-v8a/libapp.so"]);
+        assert_eq!(
+            names,
+            [
+                "AndroidManifest.xml",
+                "classes.dex",
+                "classes2.dex",
+                "lib/arm64-v8a/libapp.so"
+            ]
+        );
         let mut archive = ZipArchive::new(File::open(&apk).expect("open")).expect("zip");
         let entry = archive
             .by_name("lib/arm64-v8a/libapp.so")
             .expect("lib entry");
         assert_eq!(entry.compression(), CompressionMethod::Stored);
+        drop(entry);
+        let mut contents = Vec::new();
+        std::io::Read::read_to_end(
+            &mut archive.by_name("classes2.dex").expect("the second dex"),
+            &mut contents,
+        )
+        .expect("read");
+        assert_eq!(contents, b"dex\n035\0second");
     }
 }

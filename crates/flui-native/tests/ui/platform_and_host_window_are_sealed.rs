@@ -18,7 +18,7 @@ use flui_native::{
 use flui_platform::data_transfer::DataTransferSource;
 use flui_platform::{
     CursorError, CursorIcon, DisplaySnapshot, PlatformWindow,
-    AppDataDir, SystemPreferences,
+    AppDataDir, LaunchKey, SystemPreferences,
     AdmittedCommand, ApplyError, WindowCapabilities, WindowGeometry, WindowId,
     WindowHandler, WindowOptions, WindowState,
 };
@@ -120,6 +120,10 @@ impl Platform for OutsidePlatform {
 
     fn app_path(&self) -> Result<PathBuf, PlatformError> {
         Ok(PathBuf::new())
+    }
+
+    fn launch_value(&self, _: LaunchKey) -> Option<String> {
+        None
     }
 
     fn data_store(&self, _: &AppDataDir) -> Option<DataStore> {
