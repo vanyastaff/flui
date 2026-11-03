@@ -10,7 +10,6 @@
 use flui_painting::paint::BlendMode;
 
 use super::generated::advanced_blend;
-use crate::shader_composer::{ComposableSource, compose_wgsl_shader};
 
 // ── Byte-identity gate (generated `BlendUniforms` vs the WGSL block) ──────────
 
@@ -167,26 +166,13 @@ impl AdvancedBlendPipeline {
             immediate_size: 0,
         });
 
-        // Compose advanced_blend.wgsl by resolving its `#import blend_helpers` via naga_oil.
-        // The Composer registers blend_helpers.wgsl as a composable module, then
-        // produces a fully resolved naga::Module that wgpu accepts via ShaderSource::Naga.
-        // Panics are intentional here: a composition failure at pipeline-init is a
-        // programming error (bad WGSL or missing import), not a recoverable runtime
-        // condition — it matches the behaviour of the previous concat!/create_shader_module
-        // path which also panicked (wgpu panics on shader validation failure).
-        let composed_source = compose_wgsl_shader(
-            &[ComposableSource {
-                source: include_str!("../shaders/blend_helpers.wgsl"),
-                file_path: "shaders/blend_helpers.wgsl",
-            }],
-            include_str!("../shaders/advanced_blend.wgsl"),
-            "shaders/advanced_blend.wgsl",
-        )
-        .expect("blend_helpers.wgsl #import in advanced_blend.wgsl must resolve: check for WGSL syntax errors or a missing #define_import_path");
-
+        // `build.rs` resolved the shader's `blend_helpers` import with WESL, so
+        // this is plain WGSL; a broken import fails the build, not this call.
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Advanced Blend Shader"),
-            source: composed_source,
+            source: wgpu::ShaderSource::Wgsl(
+                crate::shaders::composed_wgsl!("advanced_blend").into(),
+            ),
         });
 
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {

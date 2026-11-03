@@ -879,14 +879,9 @@ pub(super) fn create_unit_quad_pipeline_with_targets(
     } else {
         std::borrow::Cow::Borrowed(spec.shader_source)
     };
-    let shader_source = if source.contains("#import color_filter") {
-        crate::shader_composer::compose_filter_shader(&source, spec.shader_label)
-    } else {
-        wgpu::ShaderSource::Wgsl(source)
-    };
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some(spec.shader_label),
-        source: shader_source,
+        source: wgpu::ShaderSource::Wgsl(source),
     });
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some(spec.pipeline_label),

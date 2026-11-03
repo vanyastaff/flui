@@ -10,13 +10,13 @@
 //! - `WgpuBindGroup0` / `WgpuBindGroup0Entries` — typed bind-group helpers.
 //! - `ModeUniforms::new` — pad-free constructor (zero-fills `_pad*` automatically).
 //!
-//! ## `#import blend_helpers`
+//! ## The `color_filter` import
 //!
-//! `mode.wgsl` carries `#import blend_helpers::{…}`.  `wgsl_bindgen` resolves it
-//! at codegen time (via the `shaders/` import scan dir set in `build.rs`) so it
-//! can parse the shader and emit the bindings.  The blend-helper functions
-//! themselves generate nothing — only the uniform struct and bind group do.
-//! The runtime pipeline still composes the shader module via `compose_wgsl_shader`.
+//! `mode.wgsl` imports `package::color_filter::filter_mode` (WESL), which in
+//! turn imports the blend helpers. `build.rs` composes it into plain WGSL
+//! first; `wgsl_bindgen` reads that composed copy, and the runtime pipeline
+//! includes the same copy. The imported functions generate nothing — only the
+//! uniform struct and bind group do.
 //!
 //! ## Byte-identity guarantee
 //!
