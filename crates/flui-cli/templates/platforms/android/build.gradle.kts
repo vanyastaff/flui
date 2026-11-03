@@ -4,13 +4,14 @@ plugins {
 
 android {
     namespace = "{{package_name}}"
-    compileSdk = 35
+    // `flui build` writes both properties into gradle.properties.
+    compileSdk = providers.gradleProperty("flui.targetSdk").get().toInt()
     ndkVersion = "29.0.14206865"
 
     defaultConfig {
         applicationId = "{{package_name}}"
         minSdk = providers.gradleProperty("flui.minSdk").get().toInt()
-        targetSdk = 35
+        targetSdk = providers.gradleProperty("flui.targetSdk").get().toInt()
         versionCode = 1
         versionName = "1.0"
     }

@@ -11,3 +11,9 @@ No Xcode project is required.
 Use `xcrun simctl list devices available` to select a simulator UDID. Xcode and
 the corresponding Rust iOS target must be installed. Application identity and
 version come from `flui.toml`, falling back to Cargo package metadata.
+
+The bundle carries a `PrivacyInfo.xcprivacy` declaring the privacy-sensitive
+APIs FLUI itself calls. An application that tracks users, collects data or
+calls further such APIs puts its own `PrivacyInfo.xcprivacy` in this
+directory: `flui build ios` keeps its tracking and collected-data entries and joins
+its accessed APIs with FLUI's.
