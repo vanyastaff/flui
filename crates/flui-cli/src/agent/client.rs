@@ -10,7 +10,8 @@
 //! instead of a stuck `flui mcp`. A request takes the first line that answers its id: an
 //! event, or a late answer to an earlier request that timed out, is passed over.
 
-use std::io::{Read as _, Write};
+use std::io::{self, Read, Write};
+use std::net::TcpStream;
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -20,10 +21,10 @@ use flui_protocol::session::Hello;
 use flui_protocol::version::PROTOCOL_VERSION;
 use flui_protocol::{ErrorCode, Greeting, Request, RequestId, ServerLine};
 use interprocess::local_socket::traits::Stream as _;
-use interprocess::local_socket::{Name, RecvHalf, SendHalf, Stream};
+use interprocess::local_socket::{Name, Stream};
 use serde_json::Value;
 
-use super::Credentials;
+use super::{Credentials, Endpoint};
 
 /// How the CLI names itself in its hello.
 const CLIENT: &str = concat!("flui-cli/", env!("CARGO_PKG_VERSION"));
@@ -73,11 +74,8 @@ impl Connection {
     }
 
     fn connect_once(credentials: &Credentials) -> Result<Self, String> {
-        let name = name(&credentials.endpoint)
-            .map_err(|e| format!("bad endpoint address {}: {e}", credentials.endpoint))?;
-        let stream = Stream::connect(name)
+        let (receiving, sending) = open(&credentials.endpoint)
             .map_err(|e| format!("could not connect to {}: {e}", credentials.endpoint))?;
-        let (receiving, sending) = stream.split();
 
         let (outgoing, to_write) = mpsc::channel::<String>();
         let (lines, incoming) = mpsc::channel();
@@ -197,7 +195,7 @@ fn wire(error: &flui_protocol::ErrorObject) -> Failure {
 /// Writes each line handed over until the connection drops it or a write fails; a failure
 /// is reported once, on the lines' channel.
 fn send(
-    mut stream: SendHalf,
+    mut stream: Box<dyn Write + Send>,
     lines: &mpsc::Receiver<String>,
     failures: &mpsc::Sender<Result<String, Failure>>,
 ) {
@@ -211,7 +209,7 @@ fn send(
 
 /// Reads every line the app sends until it closes, a read fails or a line runs past
 /// [`MAX_REPLY`]; the end is reported once, on the lines' channel.
-fn receive(mut stream: RecvHalf, lines: &mpsc::Sender<Result<String, Failure>>) {
+fn receive(mut stream: Box<dyn Read + Send>, lines: &mpsc::Sender<Result<String, Failure>>) {
     let mut reader = LineReader::new(MAX_REPLY);
     let mut chunk = vec![0_u8; 64 << 10];
     loop {
@@ -259,8 +257,28 @@ fn write_line(stream: &mut impl Write, line: &str) -> Result<(), Failure> {
         .map_err(|e| Failure::Transport(format!("the request may not have arrived: {e}")))
 }
 
+/// How long a connection to a forwarded port may take to open. `adb` accepts at once, even
+/// before the app binds its socket; a port nobody holds is refused at once.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// A connection to `endpoint`, as the halves its reader and its writer own.
+fn open(endpoint: &Endpoint) -> io::Result<(Box<dyn Read + Send>, Box<dyn Write + Send>)> {
+    match endpoint {
+        Endpoint::Local(address) => {
+            let (receiving, sending) = Stream::connect(name(address)?)?.split();
+            Ok((Box::new(receiving), Box::new(sending)))
+        }
+        Endpoint::Forwarded(address) => {
+            let stream = TcpStream::connect_timeout(address, CONNECT_TIMEOUT)?;
+            // One line is one request: send it whole, now.
+            stream.set_nodelay(true)?;
+            Ok((Box::new(stream.try_clone()?), Box::new(stream)))
+        }
+    }
+}
+
 /// The endpoint's name for `address`, as the app binds it.
-pub(crate) fn name(address: &str) -> std::io::Result<Name<'_>> {
+fn name(address: &str) -> io::Result<Name<'_>> {
     #[cfg(windows)]
     {
         use interprocess::local_socket::{GenericNamespaced, ToNsName as _};

@@ -15,6 +15,9 @@ ellipsis. One shaper, one font door, and a shaped paragraph on the wire make
 - **Amended:** 2026-10-11 — original font-system doors are explicitly historical; live font registration and paragraph authority remain ADR-0092.
 - **Amended:** 2026-11-03 — a span recolour rebuilds the paragraph from the measuring layout
   without shaping (Part 2).
+- **Superseded-by:** [ADR-0309](ADR-0309-every-text-paint-attribute-crosses-the-display-list.md)
+  for Part 2's "one `Paragraph` op on the wire" only: a paragraph also crosses as the shadows
+  its spans cast and the rectangles of their backgrounds.
 - **Deciders:** @vanyastaff
 - **Original scope (2026-09-18):** `flui-painting`'s font-system surface (`SharedFontSystem`,
   `Shaper`, `fonts`), its `TextLayout`/`TextPainter` paint path, the

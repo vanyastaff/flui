@@ -364,10 +364,9 @@ pub(crate) fn every_style_and_span_field_is_classified_by_what_the_shaped_paragr
     use cursor_icon::CursorIcon;
     use flui_foundation::TextSizingIntent;
     use flui_foundation::geometry::Offset;
-    use flui_painting::styling::Color;
+    use flui_painting::styling::{Color, Shadow};
     use flui_painting::typography::{
-        FontFeature, FontStyle, FontVariation, FontWeight, InlineSpan, TextLink, TextShadow,
-        TextStyle,
+        FontFeature, FontStyle, FontVariation, FontWeight, InlineSpan, TextLink, TextStyle,
     };
     use flui_painting::{Canvas, DrawOp, Invalidation, TextContext};
 
@@ -385,13 +384,17 @@ pub(crate) fn every_style_and_span_field_is_classified_by_what_the_shaped_paragr
     fn recorded(painter: &TextPainter) -> (Arc<ShapedParagraph>, Color) {
         let mut canvas = Canvas::new();
         painter.paint(&mut canvas, Offset::ZERO);
-        let DrawOp::Paragraph {
-            paragraph, color, ..
-        } = &canvas.finish()[0].op
-        else {
-            unreachable!("paint records a Paragraph");
-        };
-        (Arc::clone(paragraph), *color)
+        // The span's background and shadow are recorded before its glyphs.
+        canvas
+            .finish()
+            .iter()
+            .find_map(|command| match &command.op {
+                DrawOp::Paragraph {
+                    paragraph, color, ..
+                } => Some((Arc::clone(paragraph), *color)),
+                _ => None,
+            })
+            .expect("paint records a Paragraph")
     }
     /// Everything a paragraph's glyphs land on: its text, size, lines, ink,
     /// spans, and each run's face, glyphs and variation coordinates.
@@ -433,8 +436,6 @@ pub(crate) fn every_style_and_span_field_is_classified_by_what_the_shaped_paragr
         font_family_fallback,
         font_features,
         font_variations,
-        foreground,
-        background,
         shadows,
     } = TextStyle {
         color: Some(Color::RED),
@@ -450,9 +451,7 @@ pub(crate) fn every_style_and_span_field_is_classified_by_what_the_shaped_paragr
         font_family_fallback: vec!["serif".to_owned()],
         font_features: vec![FontFeature::enable("smcp")],
         font_variations: vec![FontVariation::new("wght", 700.0)],
-        foreground: Some(Color::GREEN),
-        background: Some(Color::rgb(10, 200, 250)),
-        shadows: vec![TextShadow::new(Color::BLACK, 1.0, 1.0, 2.0)],
+        shadows: Some(vec![Shadow::new(Color::BLACK, Offset::new(1.0, 1.0), 2.0)]),
     };
     let TextSpan {
         text,
@@ -609,27 +608,9 @@ pub(crate) fn every_style_and_span_field_is_classified_by_what_the_shaped_paragr
             None,
         ),
         (
-            "child foreground",
-            child_style(TextStyle {
-                foreground,
-                ..TextStyle::new()
-            }),
-            Layout,
-            None,
-        ),
-        (
             "child background_color",
             child_style(TextStyle {
                 background_color,
-                ..TextStyle::new()
-            }),
-            Paint,
-            None,
-        ),
-        (
-            "child background",
-            child_style(TextStyle {
-                background,
                 ..TextStyle::new()
             }),
             Paint,
@@ -656,18 +637,6 @@ pub(crate) fn every_style_and_span_field_is_classified_by_what_the_shaped_paragr
             ),
             Paint,
             color,
-        ),
-        (
-            "root foreground",
-            root(
-                TextStyle {
-                    foreground,
-                    ..root_style.clone()
-                },
-                base_child.clone(),
-            ),
-            Paint,
-            foreground,
         ),
         (
             "span text",

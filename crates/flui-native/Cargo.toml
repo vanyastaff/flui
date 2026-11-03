@@ -904,6 +904,7 @@ crate-level = [
     "testing",
     "journal",
     "process",
+    "page_export",
 ]
 # No platform file names another feature's: a window's text input,
 # accessibility, actuator and chrome come from the host table, a feature keeps

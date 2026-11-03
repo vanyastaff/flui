@@ -4,8 +4,10 @@
 //!
 //! Desktop and iOS Simulator apps read the environment variables; the iOS Simulator passes
 //! them through `simctl launch` as `SIMCTL_CHILD_` variables. An Android app reads the intent
-//! extras `am start` carried. A web app has neither: the driver's preload script installs the
-//! token before the module starts, and no URL carries it.
+//! extras `am start` carried. A web app has neither: the driver's preload script installs an
+//! object of the extras' names and values as `globalThis.__FLUI_LAUNCH__` before the module
+//! starts (its endpoint is the name of the global the agent defines, `__flui_agent`), and no URL
+//! carries the token.
 //!
 //! Each variable is its extra's name in the environment's spelling, uppercase with `_` for `.`,
 //! so an app reads both under one key (ADR-0288 §7).

@@ -65,6 +65,7 @@ impl TextPainter {
         // A fresh layout: its run colours are those of the text it shaped,
         // and `set_text` keeps them current while the layout is cached.
         let paragraph = Arc::new(layout.to_shaped(root));
+        let decor = super::decor::SpanDecor::of(&resolved.spans);
 
         // Precompute intrinsic widths (shape once, query many).
         let (min_intrinsic_width, max_intrinsic_width) =
@@ -82,6 +83,7 @@ impl TextPainter {
             did_exceed_max_lines: metrics.did_exceed_max_lines,
             paragraph,
             layout,
+            decor,
             min_intrinsic_width,
             max_intrinsic_width,
         });
@@ -93,8 +95,17 @@ impl TextPainter {
     /// (`crate::parley_text::span_paint_color` over the spans
     /// [`collect_authored_spans`] gives, the root's style the default).
     pub(super) fn span_paint_colors(text: &InlineSpan) -> Vec<Option<crate::styling::Color>> {
+        Self::paint_colors_of(text, &collect_authored_spans(text))
+    }
+
+    /// [`Self::span_paint_colors`] over `spans`, the spans
+    /// [`collect_authored_spans`] gives for `text`.
+    pub(super) fn paint_colors_of(
+        text: &InlineSpan,
+        spans: &[(String, Option<crate::typography::TextStyle>)],
+    ) -> Vec<Option<crate::styling::Color>> {
         let root = text.style();
-        collect_authored_spans(text)
+        spans
             .iter()
             .map(|(_, style)| crate::parley_text::span_paint_color(style.as_ref(), root))
             .collect::<Vec<Option<crate::styling::Color>>>()

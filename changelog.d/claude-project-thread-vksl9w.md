@@ -92,6 +92,25 @@
   with `flui_platform::LaunchKey`: the value the process was launched with under a dotted key,
   the launching intent's string extra on Android and the environment variable the key spells
   elsewhere. `flui_native::current_user_id` on Linux and Android.
+- **`flui run --agent` on an Android device**: the app is started with the agent's endpoint
+  (an abstract socket) and token as `am start` extras, and `flui mcp` reaches it through the
+  loopback port of an `adb forward` the run holds and removes when it ends. A release build
+  gets the `driver` feature. The session file's `endpoint` is now typed: `{"local": …}` or
+  `{"forwarded": "127.0.0.1:<port>"}`, and `run.agent.ready` carries `forwarded` on Android.
+- **The driver agent in a page** (ADR-0288 §6): a debug app on the web whose launch object names
+  an endpoint serves its window through the global it names: `connect(onLine)` returns
+  `{ version, send(line), close() }`, and every line the app writes reaches `onLine`
+  (`onLine(null)` when the app ends the connection). A WebDriver BiDi driver connects through
+  `script.callFunction` with a channel as `onLine`. Under `flui.agent.exit_on_disconnect` the
+  page's loop quits when its driver goes.
+- **`flui_native::page_export`** (wasm32): `PageExport`, a versioned global
+  (`PAGE_EXPORT_VERSION`) whose script connections reach a `PageExportHandler` as
+  `PageConnection`s, with `PageLine` as the application's end; and `PageTimer`, a re-armable
+  timeout on the page's event loop.
+- **A page's launch values**: the web platform takes the object the launcher's preload installs
+  as `globalThis.__FLUI_LAUNCH__` (`flui_platform::PAGE_LAUNCH_GLOBAL`) as it starts, removes
+  it, and answers `Platform::launch_value` from its copy; a malformed object fails the start.
+  `LaunchKey::is_spelling` checks a key read at run time.
 
 ### Removed
 

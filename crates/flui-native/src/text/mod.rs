@@ -34,8 +34,11 @@ use flui_platform::text_store::TextStoreHost;
 use crate::host::{Absent, position};
 
 pub(crate) mod android;
-#[cfg(any(target_os = "macos", target_os = "ios", test))]
+#[cfg(any(target_os = "macos", target_os = "ios", test, feature = "testing"))]
 pub(crate) mod apple;
+#[cfg(feature = "testing")]
+#[doc(hidden)]
+pub mod conformance;
 pub(crate) mod headless;
 #[cfg(any(
     target_os = "android",
@@ -45,16 +48,36 @@ pub(crate) mod headless;
     x11_host,
     target_arch = "wasm32",
     windows,
-    test
+    test,
+    feature = "testing"
 ))]
 pub(crate) mod host_queue;
-#[cfg(any(target_os = "android", target_arch = "wasm32", test))]
+#[cfg(any(
+    target_os = "android",
+    target_arch = "wasm32",
+    test,
+    feature = "testing"
+))]
+#[cfg_attr(
+    not(any(target_os = "android", target_arch = "wasm32", test)),
+    allow(
+        dead_code,
+        reason = "off Android and the Web only the conformance table's mirror reaches it"
+    )
+)]
 pub(crate) mod ime;
 #[cfg(any(wayland_host, x11_host, test))]
 pub(crate) mod linux;
 pub(crate) mod sizing;
 pub(crate) mod web;
-#[cfg(any(windows, test))]
+#[cfg(any(windows, test, feature = "testing"))]
+#[cfg_attr(
+    not(any(windows, test)),
+    allow(
+        dead_code,
+        reason = "off Windows only the conformance table's TSF document reaches it"
+    )
+)]
 pub(crate) mod windows;
 
 /// What one window holds of the text feature, made by its table's text

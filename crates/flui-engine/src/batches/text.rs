@@ -36,7 +36,9 @@ impl DrawBatcher {
     /// larger axis's size.
     ///
     /// `color` paints every glyph whose run carries no span colour; a span
-    /// colour wins. Both are scaled by `opacity`.
+    /// colour wins. Both are scaled by `opacity`. A [`GlyphInk::Silhouette`]
+    /// paints every glyph in `color`, a colour glyph's coverage included, as
+    /// a text shadow does (ADR-0309 §3).
     ///
     /// A run whose face the rasterizer cannot register (its blob holds no
     /// face at the run's index) is not drawn; the rest of the paragraph is.
@@ -57,6 +59,7 @@ impl DrawBatcher {
         paragraph: &ShapedParagraph,
         position: Point<f64>,
         color: Color,
+        ink: GlyphInk,
     ) {
         if segment.recording_result().is_err() {
             return;
@@ -108,7 +111,10 @@ impl DrawBatcher {
                     continue;
                 }
 
-                let mut fill = glyph.color.unwrap_or(color);
+                let mut fill = match ink {
+                    GlyphInk::Text => glyph.color.unwrap_or(color),
+                    GlyphInk::Silhouette => color,
+                };
                 if opacity < 1.0 {
                     fill = fill.with_opacity(f64::from(fill.opacity() * opacity));
                 }
@@ -118,6 +124,9 @@ impl DrawBatcher {
                     slot.color_page,
                     fill,
                 );
+                if ink == GlyphInk::Silhouette {
+                    instance = instance.silhouette(slot.color_page);
+                }
                 if let Placement::Affine { linear, origin } = placement {
                     instance = instance.with_affine(linear, origin);
                 }
@@ -134,6 +143,15 @@ impl DrawBatcher {
             }
         }
     }
+}
+
+/// How a paragraph's glyphs take colour: see [`DrawBatcher::draw_paragraph`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum GlyphInk {
+    /// Span colours over the paragraph colour, colour glyphs as drawn.
+    Text,
+    /// Every glyph's coverage in the paragraph colour: a text shadow.
+    Silhouette,
 }
 
 /// How a paragraph's quads are placed: see [`DrawBatcher::draw_paragraph`].

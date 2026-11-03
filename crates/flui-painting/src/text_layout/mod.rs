@@ -30,10 +30,50 @@ pub use error::TextLayoutError;
 pub use host::HostFonts;
 pub use system_fallback::{FaceRef, ScriptCode, SystemFallback};
 
-/// The colour a style paints its glyphs with: `foreground` wins over
-/// `color`.
+/// What a style paints, as opposed to the geometry it shapes
+/// (ADR-0309): the twin of [`TextStyle::layout_affecting_eq`]. Both name
+/// every field, so a field added to `TextStyle` does not compile until it
+/// is classified there and, if it paints, painted here.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) struct SpanPaint<'a> {
+    /// The glyph colour.
+    pub(crate) glyph: Option<crate::styling::Color>,
+    /// The colour filled behind the span's line boxes.
+    pub(crate) background: Option<crate::styling::Color>,
+    /// The shadows the span's glyphs cast; `None` inherits.
+    pub(crate) shadows: Option<&'a [crate::styling::Shadow<f64>]>,
+}
+
+impl<'a> SpanPaint<'a> {
+    pub(crate) fn of(style: &'a TextStyle) -> Self {
+        let TextStyle {
+            color,
+            background_color,
+            shadows,
+            // Shaped: `layout_affecting_eq` compares them.
+            font_size: _,
+            sizing: _,
+            font_weight: _,
+            font_style: _,
+            letter_spacing: _,
+            word_spacing: _,
+            height: _,
+            font_family: _,
+            font_family_fallback: _,
+            font_features: _,
+            font_variations: _,
+        } = style;
+        Self {
+            glyph: *color,
+            background: *background_color,
+            shadows: shadows.as_deref(),
+        }
+    }
+}
+
+/// The colour a style paints its glyphs with.
 pub(crate) fn paint_color(style: &TextStyle) -> Option<crate::styling::Color> {
-    style.foreground.or(style.color)
+    SpanPaint::of(style).glyph
 }
 
 /// Text layout result containing computed metrics.
