@@ -13,6 +13,8 @@
 - **Amended:** 2026-10-31 — §2: reorder offers its moves in a context menu opened from the drag
   handle by default, with visible move controls as an opt-in; its move keys are bound by the row,
   beside the reserved-key filter.
+- **Amended:** 2026-11-03 — §2: a reorderable grid adds the moves across its rows, by the rows
+  the grid laid out last, and its handle keeps the contact from the grid's scroll.
 - **Related:** [ADR-0023](ADR-0023-actions-shortcuts-seam.md),
   [ADR-0079](ADR-0079-keyboard-activation-and-focus-for-assistive-technology.md),
   [ADR-0172](ADR-0172-host-owned-system-preferences.md),
@@ -120,6 +122,16 @@ A row binds its moves to Alt with the arrows, Home and End through its own `Shor
 command keys: §3 drops the keys the platform reserves (§1.2's list) from gesture commands, and
 those keys edit text. The binding sits above the row's focus, so a text field inside the row
 handles them first.
+
+A grid's tile has six moves: to start and end, the two arrows along the grid's rows (one
+position, from a row's end to the next row's start), and the two across them (a whole row, onto
+the last tile when the next row is short). Each arrow names the direction the tile moves on
+screen, so the row width and the order of the rows are those of the grid's last layout, read from
+its delegate, not configured apart from it; a grid of one tile per row offers no row moves, which
+would repeat the moves along it. The handle drags a tile any way and claims the contact with
+`PanClaim::None` (ADR-0208 rule 1), so a press that moves along the grid's scroll axis drags the
+tile instead of scrolling. `assert_gesture_alternatives` reaches a grid's tile by walking its
+rows with the arrows onto the tile the assistive path invokes.
 
 ### 3. Behaviour the alternatives share
 
