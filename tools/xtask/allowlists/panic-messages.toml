@@ -1,0 +1,217 @@
+# Production `expect` and `panic!` sites whose message names no invariant, written by
+# `cargo xtask panic-messages --seed`. A message starts with `BUG: <invariant>` or names
+# the `try_` twin (docs/PANIC-POLICY.md). Counts are exact and only go down: the scan
+# fails when a file grows past its entry or shrinks below it.
+reason = "written before the rule had a gate; each site gets a `BUG:` message or a typed error"
+
+[[allow]]
+path = "crates/flui-animation/src/curve/penner.rs"
+count = 1
+
+[[allow]]
+path = "crates/flui-animation/src/curve/split.rs"
+count = 1
+
+[[allow]]
+path = "crates/flui-app/src/app/runner/android.rs"
+count = 1
+
+[[allow]]
+path = "crates/flui-app/src/app/runner/desktop.rs"
+count = 1
+
+[[allow]]
+path = "crates/flui-app/src/app/runner/mod.rs"
+count = 1
+
+[[allow]]
+path = "crates/flui-app/src/app/runner/web.rs"
+count = 1
+
+[[allow]]
+path = "crates/flui-engine/src/effects_pipeline.rs"
+count = 1
+
+[[allow]]
+path = "crates/flui-engine/src/offscreen/blit.rs"
+count = 1
+
+[[allow]]
+path = "crates/flui-engine/src/pipeline_set.rs"
+count = 1
+
+[[allow]]
+path = "crates/flui-engine/src/texture_pool.rs"
+count = 3
+
+[[allow]]
+path = "crates/flui-foundation/src/id.rs"
+count = 3
+
+[[allow]]
+path = "crates/flui-foundation/src/key.rs"
+count = 4
+
+[[allow]]
+path = "crates/flui-foundation/src/notifier.rs"
+count = 1
+
+[[allow]]
+path = "crates/flui-foundation/src/notifier_generic.rs"
+count = 1
+
+[[allow]]
+path = "crates/flui-hot-reload/src/driver.rs"
+count = 1
+
+[[allow]]
+path = "crates/flui-interaction/src/pointer/sampling_clock.rs"
+count = 1
+
+[[allow]]
+path = "crates/flui-native/src/owner/apple/macos/content_view.rs"
+count = 2
+
+[[allow]]
+path = "crates/flui-native/src/task.rs"
+count = 1
+
+[[allow]]
+path = "crates/flui-native/src/window/apple/macos/delegate.rs"
+count = 2
+
+[[allow]]
+path = "crates/flui-objects/src/layout/custom_multi_child_layout.rs"
+count = 2
+
+[[allow]]
+path = "crates/flui-painting/src/paint/image.rs"
+count = 1
+
+[[allow]]
+path = "crates/flui-painting/src/text_painter/measure.rs"
+count = 3
+
+[[allow]]
+path = "crates/flui-platform/src/event_time.rs"
+count = 1
+
+[[allow]]
+path = "crates/flui-platform/src/storage.rs"
+count = 1
+
+[[allow]]
+path = "crates/flui-rendering/src/pipeline/scheduler.rs"
+count = 2
+
+[[allow]]
+path = "crates/flui-rendering/src/storage/node.rs"
+count = 2
+
+[[allow]]
+path = "crates/flui-rendering/src/storage/tree.rs"
+count = 5
+
+[[allow]]
+path = "crates/flui-rendering/src/view/render_view.rs"
+count = 1
+
+[[allow]]
+path = "crates/flui-rendering/src/virtualization/sumtree.rs"
+count = 6
+
+[[allow]]
+path = "crates/flui-runtime/src/renderer_binding.rs"
+count = 2
+
+[[allow]]
+path = "crates/flui-scheduler/src/async_driver.rs"
+count = 2
+
+[[allow]]
+path = "crates/flui-scheduler/src/frame_clock.rs"
+count = 1
+
+[[allow]]
+path = "crates/flui-scheduler/src/task.rs"
+count = 1
+
+[[allow]]
+path = "crates/flui-view/src/binding/tree_cell.rs"
+count = 3
+
+[[allow]]
+path = "crates/flui-view/src/element/behavior.rs"
+count = 3
+
+[[allow]]
+path = "crates/flui-view/src/key/global_key.rs"
+count = 1
+
+[[allow]]
+path = "crates/flui-view/src/owner/global_key_scope.rs"
+count = 3
+
+[[allow]]
+path = "crates/flui-view/src/tree/element_tree.rs"
+count = 8
+
+[[allow]]
+path = "crates/flui-view/src/tree/id_reconcile.rs"
+count = 2
+
+[[allow]]
+path = "crates/flui-widgets/src/form/form_field.rs"
+count = 1
+
+[[allow]]
+path = "crates/flui-widgets/src/form/mod.rs"
+count = 1
+
+[[allow]]
+path = "crates/flui-widgets/src/interaction/focus.rs"
+count = 1
+
+[[allow]]
+path = "crates/flui-widgets/src/media_query.rs"
+count = 1
+
+[[allow]]
+path = "crates/flui-widgets/src/navigator/transition_route.rs"
+count = 1
+
+[[allow]]
+path = "crates/flui-widgets/src/overlay/entry.rs"
+count = 1
+
+[[allow]]
+path = "crates/flui-widgets/src/overlay/mod.rs"
+count = 1
+
+[[allow]]
+path = "packages/flui-material/src/ink_well.rs"
+count = 1
+
+[[allow]]
+path = "packages/flui-material/src/scaffold.rs"
+count = 1
+
+[[allow]]
+path = "packages/flui-material/src/scaffold_messenger.rs"
+count = 1
+
+[[allow]]
+path = "packages/flui-material/src/tab_bar_view.rs"
+count = 2
+
+[[allow]]
+path = "packages/flui-material/src/tab_controller.rs"
+count = 1
+
+[[allow]]
+path = "packages/flui-material/src/tabs.rs"
+count = 4
+
+[[allow]]
+path = "packages/flui-material/src/theme.rs"
+count = 1
