@@ -1,11 +1,19 @@
 # ADR-0087: One raster contract in `flui-layer` with wgpu and CPU backends; retained layer identity drives damage
 
-- **Status:** Accepted in part (2026-09-29): §3 and §4, as amended below; §1, §2 and §5 remain
-  Proposed
+- **Status:** Accepted (2026-09-29) for §3 and §4, as amended below; §1, §2 and §5 were never
+  accepted, and ADR-0305 replaces them (2026-11-03)
 - **Date:** 2026-09-25
 - **Superseded-by:** [ADR-0100](ADR-0100-prepared-gpu-work-and-retained-frame-commit.md)
   for §4's retained-image update/failure policy; candidate isolation replaces
   modification of the previous committed image during an incomplete frame.
+- **Superseded-by:** [ADR-0304](ADR-0304-the-scene-is-retained-and-damage-is-its-patchs-footprint.md)
+  for §3 only (the whole-scene differ as the producer, `ContentToken`, the one-rectangle `Partial`,
+  the off switch that retains nothing, and the amended sentence that `run_paint` always descends
+  from the root and an outer boundary refuses reuse while a nested one is dirty)
+- **Superseded-by:** [ADR-0305](ADR-0305-one-gpu-context-serves-every-surface-through-a-raster-executor.md)
+  for §1, §2 and §5 only: wgpu stays the only rasteriser, `RasterBackend` stays in `flui-engine`
+  as the raster executor's GPU-free seam, and there is no CPU backend, conformance suite or
+  timing for them.
 - **Amends (on acceptance):** [ADR-0006](ADR-0006-c-ir-record-replay-seam.md) §5 (the scene-level backend trait
   and the GPU-free lowering move to `flui-layer`; the Command IR stays in the engine),
   [ADR-0061](ADR-0061-damage-needs-layer-identity.md) (names the producer: retained boundary

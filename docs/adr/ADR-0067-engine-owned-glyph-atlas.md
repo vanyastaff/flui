@@ -13,6 +13,12 @@ wire are gone.*
   blob and face, and the atlas rasterizes through `SwashRasterizer` behind `GlyphRasterizer`)
 - **Date:** 2026-09-18
 - **Amended:** 2026-10-11 — original cosmic-text surfaces are identified as historical; ADR-0092 owns current neutral runs and font identity.
+- **Amended:** 2026-11-03 — by
+  [ADR-0305](ADR-0305-one-gpu-context-serves-every-surface-through-a-raster-executor.md) §1: one
+  atlas per `GpuContext` serves every window, and the frame a slot is stamped with is a queue
+  submission: the counter advances once per submission, and a slot used at or after the start of
+  the oldest shown window's latest frame is immune from eviction. Eviction before growth and the
+  growth rule are unchanged.
 - **Deciders:** @vanyastaff
 - **Original scope (2026-09-18):** `flui_painting::{TextLayout::placed_glyphs, SharedFontSystem::rasterize, GlyphKey, PlacedGlyph, GlyphImage}`;
   `flui_engine::{glyph_atlas, batches::text, GlyphInstance, DrawSegment::glyph_batch, Phase::Glyph}`.

@@ -4,6 +4,9 @@
 - **Date:** 2026-10-30
 - **Related:** [ADR-0232](ADR-0232-annotated-regions-and-overlay-style.md) (the annotation lookup
   places a follower through the same resolution)
+- **Amended by:** [ADR-0304](ADR-0304-the-scene-is-retained-and-damage-is-its-patchs-footprint.md)
+  (§1: resolution takes the retained scene and the follower's node and entry, and finds the common
+  ancestor by stored depth; the rule and the cases that resolve to `None` are unchanged)
 
 ## Context and problem statement
 
