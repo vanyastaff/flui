@@ -16,6 +16,9 @@
 use std::any::Any;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+mod commit;
+pub use commit::{Obligation, Outbox, commit, commit_into};
+
 /// The text of a panic payload, when it has any.
 ///
 /// `panic!("literal")` produces a `&'static str` payload; `panic!("{}", x)`

@@ -399,6 +399,20 @@ a payload or capture whose destructor panics while the thread unwinds aborts,
 as in std.
 
 
+### Owners commit state before running user code
+
+[ADR-0287](../../docs/adr/ADR-0287-owner-state-is-committed-before-user-code-runs.md).
+`panic::commit` borrows an owner's `RefCell` for one mutation and hands it the
+state and an `Outbox`, never the cell; `Outbox` has no public constructor. User
+code the change owes is queued there (`call`, `wake`, `release`) and runs after
+the borrow ends, in order, each item contained, the first panic resumed once
+every item ran. A mutation that panics runs none of its calls but still wakes
+its wakers. `commit_into` does the same inside an operation's `PanicRecovery`.
+`panic::Obligation` claims an owed flag and sets it again unless the delivery
+discharges it. `TicketSource<K>` issues opaque `Ticket<K>`s from an `IdMint`
+and accepts an answer only for the current ticket, once. Pinned by
+`commit_then_call_contract`.
+
 ## `Matrix4::lerp` decomposes in `f64` and borrows orientation for a collapsed axis
 
 [ADR-0149](../../docs/adr/ADR-0149-interpolation-contracts.md) item 3.
