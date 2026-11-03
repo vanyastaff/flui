@@ -379,7 +379,7 @@ pub struct CarouselState {
     shared: Rc<Shared>,
     snap: Option<SharedSnapPolicy>,
     scroll_listener: Option<(Rc<dyn Listenable>, ListenerId)>,
-    pause_listener: Option<(CarouselController, u64)>,
+    pause_listener: Option<(CarouselController, ListenerId)>,
     focus: Rc<FocusNode>,
     focus_manager: Option<(Rc<FocusManager>, ListenerId)>,
     lifecycle: Option<LifecycleSubscription>,
