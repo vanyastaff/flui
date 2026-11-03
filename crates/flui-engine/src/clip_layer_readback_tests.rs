@@ -709,6 +709,7 @@ fn clip_layers_read_back_as_the_clip_contract_specifies() {
     transformed_nested_clip_on_antialiased_path();
     nested_exact_clip_geometry_and_coverage();
     hard_clip_membership_scales_to_a_full_hd_frame();
+    an_antialiased_clip_resolves_its_interior_without_sampling();
     command_transform_changes_preserve_captured_clips();
     inline_picture_replay_owns_its_root_clips();
     display_list_and_save_layer_scopes_own_their_clips();
@@ -1309,6 +1310,182 @@ fn path_clip_fill_rules_and_implicit_close() {
     );
 }
 
+/// A window-sized antialiased clip pays its samples only along its edges.
+/// Mask pixels whose every sample passes every leaf take full coverage
+/// without walking the tape (`MaskInterior`), are charged one unit each, and
+/// read back byte for byte as sampling resolves them.
+fn an_antialiased_clip_resolves_its_interior_without_sampling() {
+    use flui_foundation::geometry::{Point, RRect, RSuperellipse, Radius};
+    use flui_painting::paint::{ClipOp, Path};
+    let Some(renderer) = crate::test_support::renderer_or_skip() else {
+        return;
+    };
+    let blue = Paint::fill(Color::BLUE).with_anti_alias(false);
+    let at = |frame: &[u8], width: u32, x: u32, y: u32| {
+        let offset = ((y * width + x) * 4) as usize;
+        [
+            frame[offset],
+            frame[offset + 1],
+            frame[offset + 2],
+            frame[offset + 3],
+        ]
+    };
+
+    // Sixteen leaves of one window-sized rounded rectangle: sampled whole,
+    // the mask is 1024·1024·64·16 = 1,073,741,824 membership units, over the
+    // frame's 1e9 limit, so the frame and the full-surface group were
+    // refused; at the edges' cost both fit.
+    let side = 1024;
+    let full = Rect::from_xywh(0.0, 0.0, f64::from(side), f64::from(side));
+    let window = RRect::from_rect_circular(full, 32.0);
+    for group in [false, true] {
+        let tree = canvas_clip_tree(|canvas| {
+            for _ in 0..16 {
+                canvas.clip_rrect_ext(window, ClipOp::Intersect, Clip::AntiAlias);
+            }
+            if group {
+                canvas.save_layer_alpha(None, 128);
+            }
+            canvas.draw_rect(full, &blue);
+            if group {
+                canvas.restore();
+            }
+        });
+        let frame = renderer
+            .render_layer_tree(&tree, (side, side))
+            .unwrap_or_else(|error| {
+                panic!("a window-sized antialiased clip (group {group}) is admitted: {error}")
+            });
+        let center = at(&frame, side, 512, 512);
+        assert!(
+            center[2] == 255
+                && if group {
+                    center[0] > 100 && center[0] < 160
+                } else {
+                    center[0] == 0
+                },
+            "the interior is covered (group {group}): {center:?}"
+        );
+        assert_eq!(
+            at(&frame, side, 0, 0),
+            [255, 255, 255, 255],
+            "the corner outside the arc stays clear (group {group})"
+        );
+    }
+
+    // The same scene with and without a leaf the interior test cannot read
+    // (a path, here a triangle around the whole frame, which every sample is
+    // inside) must read back identically: the leaf changes no coverage and
+    // turns the fast path off.
+    let side = 256;
+    let frame_rect = Rect::from_xywh(0.0, 0.0, f64::from(side), f64::from(side));
+    type Scene = fn(&mut Canvas);
+    let rows: [(&str, Scene); 6] = [
+        ("a rounded rectangle at fractional edges", |canvas| {
+            canvas.clip_rrect_ext(
+                RRect::from_rect_circular(Rect::from_xywh(8.5, 8.25, 239.0, 238.5), 24.0),
+                ClipOp::Intersect,
+                Clip::AntiAlias,
+            );
+        }),
+        ("a superellipse", |canvas| {
+            canvas.clip_rsuperellipse_ext(
+                RSuperellipse::from_rect_circular(Rect::from_xywh(4.75, 6.5, 240.0, 236.0), 40.0),
+                ClipOp::Intersect,
+                Clip::AntiAlias,
+            );
+        }),
+        ("a scaled and translated rounded rectangle", |canvas| {
+            canvas.translate(0.25, 0.75);
+            canvas.scale(1.5, 1.25);
+            canvas.clip_rrect_ext(
+                RRect::from_rect_circular(Rect::from_xywh(4.0, 4.0, 160.0, 190.0), 12.0),
+                ClipOp::Intersect,
+                Clip::AntiAlias,
+            );
+        }),
+        ("elliptical corners", |canvas| {
+            canvas.clip_rrect_ext(
+                RRect::from_rect_and_corners(
+                    Rect::from_xywh(2.5, 3.5, 250.0, 248.0),
+                    Radius::new(40.0, 8.0),
+                    Radius::new(6.0, 30.0),
+                    Radius::new(20.0, 20.0),
+                    Radius::new(3.0, 50.0),
+                ),
+                ClipOp::Intersect,
+                Clip::AntiAlias,
+            );
+        }),
+        ("a subtracted hole", |canvas| {
+            canvas.clip_rrect_ext(
+                RRect::from_rect_circular(Rect::from_xywh(8.5, 8.5, 239.0, 239.0), 16.0),
+                ClipOp::Intersect,
+                Clip::AntiAlias,
+            );
+            canvas.clip_rect_ext(
+                Rect::from_xywh(60.5, 100.25, 80.0, 40.0),
+                ClipOp::Difference,
+                Clip::AntiAlias,
+            );
+        }),
+        ("hard and antialiased leaves", |canvas| {
+            canvas.clip_rect_ext(
+                Rect::from_xywh(3.5, 3.5, 250.0, 250.0),
+                ClipOp::Intersect,
+                Clip::HardEdge,
+            );
+            canvas.clip_rrect_ext(
+                RRect::from_rect_circular(Rect::from_xywh(0.25, 0.25, 255.0, 255.0), 32.0),
+                ClipOp::Intersect,
+                Clip::AntiAlias,
+            );
+        }),
+    ];
+    for (row, push) in rows {
+        let render = |with_path: bool| {
+            let tree = canvas_clip_tree(|canvas| {
+                if with_path {
+                    let mut around = Path::new();
+                    around.move_to(Point::new(-1000.0, -1000.0));
+                    around.line_to(Point::new(3000.0, -1000.0));
+                    around.line_to(Point::new(-1000.0, 3000.0));
+                    around.close();
+                    canvas.clip_path_ext(&around, ClipOp::Intersect, Clip::AntiAlias);
+                }
+                push(canvas);
+                canvas.draw_rect(frame_rect, &blue);
+            });
+            renderer
+                .render_layer_tree(&tree, (side, side))
+                .unwrap_or_else(|error| panic!("{row} renders: {error}"))
+        };
+        let (fast, sampled) = (render(false), render(true));
+        assert_eq!(
+            at(&fast, side, 128, 64),
+            [0, 0, 255, 255],
+            "{row}: the clip's inside is covered"
+        );
+        assert!(
+            fast.as_chunks::<4>()
+                .0
+                .iter()
+                .any(|px| px[0] > 0 && px[0] < 255),
+            "{row}: some edge pixel is partially covered, so the rows below compare sampled coverage"
+        );
+        if let Some(index) =
+            (0..fast.len() / 4).find(|i| fast[i * 4..i * 4 + 4] != sampled[i * 4..i * 4 + 4])
+        {
+            let (x, y) = (index as u32 % side, index as u32 / side);
+            panic!(
+                "{row}: pixel ({x}, {y}) reads {:?} with the interior skipped, {:?} sampled",
+                at(&fast, side, x, y),
+                at(&sampled, side, x, y)
+            );
+        }
+    }
+}
+
 /// A routine full-HD hard-clipped frame fits the bounded work allowance.
 /// Evaluating the same pixel-centre membership 64 times needlessly refuses it.
 fn hard_clip_membership_scales_to_a_full_hd_frame() {
@@ -1375,6 +1552,7 @@ fn lazy_pipeline_admission_recovers() {
             attachment_to_root: [1.0, 0.0, 0.0, 1.0],
             translation: [0.0; 4],
             extent_counts: [4, 4, 0, 0],
+            interior: [0; 4],
         };
         let prepare = |pipeline: &mut ClipMaskPipeline,
                        resources: &mut GpuResources,

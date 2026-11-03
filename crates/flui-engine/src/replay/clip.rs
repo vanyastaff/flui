@@ -384,20 +384,16 @@ impl GpuReplay {
                 path_range: [0; 4],
             });
         }
-        let edge_visits = tape
-            .nodes
-            .iter()
-            .filter(|n| n.meta[0] == 3)
-            .map(|n| n.path_range[1] as usize)
-            .sum();
-        let all_hard = tape.nodes.iter().all(|node| node.meta[2] == 1);
-        let work = crate::clip_mask::work_units(extent, tape.nodes.len(), edge_visits, all_hard)?;
-        segment.budget.admit_clip_work(work)?;
         let mapping = MaskMapping {
             attachment_to_root: [m[0] as f32, m[1] as f32, m[2] as f32, m[3] as f32],
             translation: [m[4] as f32, m[5] as f32, origin.0 as f32, origin.1 as f32],
             extent_counts: [extent.0, extent.1, 0, 0],
+            interior: [0; 4],
         };
+        // The work of the mask the pipeline will resolve: the same tape and
+        // mapping, so the interior admitted here is the one it skips.
+        let (work, _) = crate::clip_mask::membership_work(&tape.nodes, &mapping)?;
+        segment.budget.admit_clip_work(work)?;
         crate::clip_mask::validate_device_limits(device)?;
         if self.clip_mask_pipeline.is_none() {
             resources.reserve_prepared(PreparedCost {
@@ -554,7 +550,7 @@ mod tests {
             footprint,
         ) {
             MaskCrop::Region { extent, .. } => {
-                crate::clip_mask::work_units(extent, 1, 0, false).expect("in range")
+                crate::clip_mask::work_units(extent, 0, 1, 0, false).expect("in range")
             }
             MaskCrop::Empty => 0,
         };

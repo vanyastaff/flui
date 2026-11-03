@@ -1356,6 +1356,23 @@ path and corner evaluation before driver compilation. No cache key contains
 coordinates, node count, edge count or sample count. Each newly materialized
 pipeline is admitted as a prepared object before creation.
 
+A mask resolves its uniform interior without sampling. `uniform_interior`
+finds, from the tape and mapping the shader reads in their `f32` values, a box
+of mask pixels whose whole square lies inside every intersected node (a
+rectangle's bounds, or the larger arm of a rounded rectangle or superellipse
+clear of its corners) and outside every subtracted node's bounds, by more than
+the rounding of the shader's `f32` arithmetic. The shader returns full coverage
+there, which is what all 64 samples resolve to, and admission charges one unit
+for each such pixel. Rotated or skewed mappings, path nodes and non-finite
+values have no interior and sample every pixel. Caller and pipeline derive the
+work from the same function (`membership_work`), so the interior admitted is
+the interior skipped. `the_uniform_interior_is_where_every_sample_is_inside`
+evaluates every interior pixel through an `f32` mirror of the shader, and
+`an_antialiased_clip_resolves_its_interior_without_sampling` admits a
+window-sized clip at sixteen antialiased leaves (frame and full-surface group)
+and reads six clip shapes back byte for byte against the same scene with the
+interior turned off.
+
 `clip_layers_read_back_as_the_clip_contract_specifies` pins hard/AA and mixed
 clips, curved membership, fill rules, transformed paths, subtraction, invalid
 payload recovery and full-HD hard clipping. Its private quota row also refuses
