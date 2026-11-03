@@ -27,7 +27,7 @@ use wayland_client::{
     Connection, Dispatch, QueueHandle, WEnum, delegate_noop, event_created_child,
 };
 use wayland_protocols::xdg::shell::client::xdg_surface::{self, XdgSurface};
-use wayland_protocols::xdg::shell::client::xdg_toplevel::XdgToplevel;
+use wayland_protocols::xdg::shell::client::xdg_toplevel::{self, XdgToplevel};
 use wayland_protocols::xdg::shell::client::xdg_wm_base::{self, XdgWmBase};
 
 /// What the drag offers.
@@ -120,6 +120,11 @@ struct State {
     /// Held for its button presses.
     _pointer: WlPointer,
     buffer: Option<WlBuffer>,
+    /// The size the last `configure` of the toplevel named, zero where it
+    /// left the size to the client.
+    configured: (i32, i32),
+    /// The size of the buffer attached.
+    drawn: Option<(i32, i32)>,
     shown: bool,
     /// Pipes the source holds open, writing nothing.
     held: Vec<OwnedFd>,
@@ -152,6 +157,8 @@ fn run(offered: &Offered, stop: &AtomicBool, tell: &mpsc::Sender<Heard>, shown: 
         device: None,
         _pointer: seat.get_pointer(&handle, ()),
         buffer: None,
+        configured: (0, 0),
+        drawn: None,
         shown: false,
         held: Vec::new(),
     };
@@ -203,7 +210,6 @@ delegate_noop!(State: ignore WlShmPool);
 delegate_noop!(State: ignore WlBuffer);
 
 delegate_noop!(State: ignore WlDataDeviceManager);
-delegate_noop!(State: ignore XdgToplevel);
 delegate_noop!(State: ignore WlDataOffer);
 
 impl Dispatch<XdgWmBase, ()> for State {
@@ -221,6 +227,21 @@ impl Dispatch<XdgWmBase, ()> for State {
     }
 }
 
+impl Dispatch<XdgToplevel, ()> for State {
+    fn event(
+        state: &mut Self,
+        _: &XdgToplevel,
+        event: xdg_toplevel::Event,
+        (): &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        if let xdg_toplevel::Event::Configure { width, height, .. } = event {
+            state.configured = (width, height);
+        }
+    }
+}
+
 impl Dispatch<XdgSurface, ()> for State {
     fn event(
         state: &mut Self,
@@ -234,31 +255,43 @@ impl Dispatch<XdgSurface, ()> for State {
             return;
         };
         xdg_surface.ack_configure(serial);
-        if state.buffer.is_none() {
-            // A small grey square: the compositor stretches nothing, but a
-            // surface with a buffer is shown and takes the pointer.
-            let (width, height) = (256_i32, 256_i32);
-            let len = usize::try_from(width * height * 4).expect("a small buffer");
-            let memory =
-                rustix::fs::memfd_create("flui-drag-source", rustix::fs::MemfdFlags::CLOEXEC)
-                    .expect("a memfd");
-            rustix::fs::ftruncate(&memory, u64::try_from(len).expect("fits"))
-                .expect("the memfd is sized");
-            rustix::io::write(&memory, &vec![0x80_u8; len]).expect("the buffer is painted");
-            let pool =
-                state
-                    .shm
-                    .create_pool(memory.as_fd(), i32::try_from(len).expect("fits"), queue, ());
-            let buffer =
-                pool.create_buffer(0, width, height, width * 4, Format::Xrgb8888, queue, ());
-            pool.destroy();
-            state.surface.attach(Some(&buffer), 0, 0);
-            state.surface.damage(0, 0, width, height);
-            state.buffer = Some(buffer);
-            state.shown = true;
+        // The size the compositor tiled the toplevel at, or a square of
+        // the client's choice where it left the size to the client: a
+        // buffer that fills the tile takes the pointer wherever the
+        // compositor places it.
+        let size = match state.configured {
+            (width, height) if width > 0 && height > 0 => (width, height),
+            _ => (256, 256),
+        };
+        if state.drawn != Some(size) {
+            state.paint(size, queue);
         }
         state.surface.commit();
         let _ = &state.compositor;
+    }
+}
+
+impl State {
+    /// Attach a grey buffer of `size` to the surface.
+    fn paint(&mut self, (width, height): (i32, i32), queue: &QueueHandle<Self>) {
+        let len = usize::try_from(width * height * 4).expect("a buffer of a tile's size");
+        let memory = rustix::fs::memfd_create("flui-drag-source", rustix::fs::MemfdFlags::CLOEXEC)
+            .expect("a memfd");
+        rustix::fs::ftruncate(&memory, u64::try_from(len).expect("fits"))
+            .expect("the memfd is sized");
+        rustix::io::write(&memory, &vec![0x80_u8; len]).expect("the buffer is painted");
+        let pool =
+            self.shm
+                .create_pool(memory.as_fd(), i32::try_from(len).expect("fits"), queue, ());
+        let buffer = pool.create_buffer(0, width, height, width * 4, Format::Xrgb8888, queue, ());
+        pool.destroy();
+        self.surface.attach(Some(&buffer), 0, 0);
+        self.surface.damage(0, 0, width, height);
+        if let Some(old) = self.buffer.replace(buffer) {
+            old.destroy();
+        }
+        self.drawn = Some((width, height));
+        self.shown = true;
     }
 }
 
