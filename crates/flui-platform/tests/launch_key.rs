@@ -28,6 +28,8 @@ fn a_launch_key_is_a_dotted_lowercase_name_with_an_environment_spelling() {
     ];
     for (key, environment) in cases {
         let parsed = LaunchKey::try_new(key);
+        // A key read at run time is checked by the same rules.
+        assert_eq!(LaunchKey::is_spelling(key), parsed.is_some(), "{key:?}");
         assert_eq!(
             parsed.map(LaunchKey::environment_variable).as_deref(),
             environment,

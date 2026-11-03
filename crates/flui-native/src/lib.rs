@@ -218,7 +218,11 @@ pub use input::event_timestamp_ns;
 pub mod journal;
 mod lifecycle;
 pub mod os;
+// A page's script connections to the application, and the page's timer: the
+// web's development-agent endpoint (ADR-0288 §6).
 mod owner;
+#[cfg(target_arch = "wasm32")]
+pub mod page_export;
 mod platform;
 mod preferences;
 #[cfg(any(windows, unix))]

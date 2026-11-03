@@ -2,13 +2,22 @@
 //!
 //! What started the process hands it values it reads once, as it starts: the environment of a
 //! desktop process, the variables `simctl launch` passes an iOS Simulator app, the string
-//! extras of the intent that started an Android Activity. Each host reads a key in its own
-//! spelling, so a value is asked for once, by one [`LaunchKey`], on every host.
+//! extras of the intent that started an Android Activity, the object a page's preload script
+//! installs ([`PAGE_LAUNCH_GLOBAL`]). Each host reads a key in its own spelling, so a value is
+//! asked for once, by one [`LaunchKey`], on every host.
 
 use std::fmt;
 
 /// The longest launch key, in bytes.
 pub const MAX_LAUNCH_KEY_LEN: usize = 128;
+
+/// The global a page's launch values are installed under: an object whose string properties
+/// are the values, each named by its key's dotted spelling
+/// (`{"flui.agent.token": "…"}`). The launcher's preload script installs it before the
+/// application's module starts; the web platform copies it as it starts and deletes it, so a
+/// script the page loads later cannot read it. A global that is not such an object fails the
+/// platform's start.
+pub const PAGE_LAUNCH_GLOBAL: &str = "__FLUI_LAUNCH__";
 
 /// The key a launch value is read under, in its dotted spelling (`flui.agent.token`).
 ///
@@ -34,9 +43,20 @@ impl LaunchKey {
     /// key named in a constant is checked as the crate compiles.
     #[must_use]
     pub const fn try_new(key: &'static str) -> Option<Self> {
+        if Self::is_spelling(key) {
+            Some(Self(key))
+        } else {
+            None
+        }
+    }
+
+    /// Whether `key` keeps the rules on [`LaunchKey`]: a key a host can be launched with. A
+    /// host that receives its keys at run time (a page's launch object) checks each with it.
+    #[must_use]
+    pub const fn is_spelling(key: &str) -> bool {
         let bytes = key.as_bytes();
         if bytes.is_empty() || bytes.len() > MAX_LAUNCH_KEY_LEN || !bytes[0].is_ascii_lowercase() {
-            return None;
+            return false;
         }
         let mut index = 0;
         while index < bytes.len() {
@@ -44,11 +64,11 @@ impl LaunchKey {
             let allowed = byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_';
             let dot_between = byte == b'.' && index + 1 < bytes.len() && bytes[index + 1] != b'.';
             if !allowed && !dot_between {
-                return None;
+                return false;
             }
             index += 1;
         }
-        Some(Self(key))
+        true
     }
 
     /// The key's dotted spelling, which an Android intent extra is named with.
