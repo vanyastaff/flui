@@ -435,6 +435,9 @@ pub struct AgentReply<T> {
     /// What the agent learns from a successful answer.
     record: fn(&T, &Mutex<IssuedHandles>),
     delivered: bool,
+    /// Held while someone can still take the answer: a parked wait whose
+    /// asker is gone is let go at the owner's next look.
+    asker: Arc<()>,
 }
 
 impl<T> AgentReply<T> {
@@ -547,6 +550,7 @@ impl SemanticsAgent {
                 issued: Arc::clone(&self.issued),
                 record,
                 delivered: false,
+                asker: Arc::new(()),
             },
         )
     }
@@ -687,6 +691,7 @@ impl SemanticsAgent {
 
     fn wait_command(&self, params: WaitParams) -> (UiCommand, AgentReply<WaitOutcome>) {
         let (reply, answer) = self.reply(record_issued_wait);
+        let reply = super::agent_wait::WaitReply::new(reply, Arc::downgrade(&answer.asker));
         (
             UiCommand::SemanticsAgentWait {
                 presentation_id: self.sender.presentation_id,
