@@ -654,14 +654,27 @@ pub enum RasterAck {
 
 /// Why a [`RasterAck::Dropped`] frame never presented.
 ///
-/// `#[non_exhaustive]`: the planned threaded raster owner can abandon a
-/// still-pending frame mid-shutdown instead of finishing it — something
-/// this module's synchronous baseline never does (see [`RasterOwner::pump`],
-/// which always finishes a pending frame through the ordinary render path
-/// before it can observe shutdown with an empty mailbox). That reason joins
-/// this enum additively when that owner lands, instead of being reserved
-/// here unconstructed.
-#[non_exhaustive]
+/// Closed, for ADR-0068 §2's reason: a consumer turns the reason into a
+/// decision, so a new reason must fail to compile at every match instead of
+/// falling into a default. The abandon reason a threaded raster owner would
+/// add (a still-pending frame dropped mid-shutdown, which this synchronous
+/// owner never does: [`RasterOwner::pump`] finishes a pending frame before it
+/// can observe shutdown) is classified in `requires_retry` when it lands.
+///
+/// ```
+/// use flui_engine::FrameDropReason;
+///
+/// // Matched from outside this crate with no wildcard arm: this stops
+/// // compiling (E0004) if the enum is marked `#[non_exhaustive]` again.
+/// fn name(reason: FrameDropReason) -> &'static str {
+///     match reason {
+///         FrameDropReason::Superseded => "superseded",
+///         FrameDropReason::RenderFailed => "render failed",
+///         FrameDropReason::RetryableRenderError => "retryable render error",
+///     }
+/// }
+/// assert_eq!(name(FrameDropReason::Superseded), "superseded");
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FrameDropReason {
     /// A newer [`RasterHandle::submit`] replaced this frame in the mailbox
@@ -677,12 +690,43 @@ pub enum FrameDropReason {
     RetryableRenderError,
 }
 
+impl FrameDropReason {
+    /// Whether a frame dropped for this reason is owed a paced retry
+    /// (ADR-0101). `false` is terminal for the frame: the raster lane reports
+    /// it failed and the UI runtime drops its input epochs without a repaint,
+    /// so a reason that leaves owed content unshown answers `true`.
+    /// Exhaustive, so a new reason is classified here before it reaches
+    /// [`RasterCompletion::retry_required`].
+    const fn requires_retry(self) -> bool {
+        match self {
+            Self::RetryableRenderError => true,
+            Self::Superseded | Self::RenderFailed => false,
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Errors
 // ---------------------------------------------------------------------------
 
 /// Errors returned by [`RasterHandle::submit`].
-#[non_exhaustive]
+///
+/// Closed, for ADR-0068 §2's reason: the submitting lane turns the refusal
+/// into a frame verdict.
+///
+/// ```
+/// use flui_engine::RasterSubmitError;
+///
+/// // Matched from outside this crate with no wildcard arm: this stops
+/// // compiling (E0004) if the enum is marked `#[non_exhaustive]` again.
+/// fn is_permanent(error: RasterSubmitError) -> bool {
+///     match error {
+///         RasterSubmitError::ShuttingDown | RasterSubmitError::OwnerGone => true,
+///         RasterSubmitError::AddressMismatch { .. } => false,
+///     }
+/// }
+/// assert!(is_permanent(RasterSubmitError::OwnerGone));
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum RasterSubmitError {
     /// [`RasterHandle::shutdown`] has already been called; no further
@@ -1065,7 +1109,29 @@ impl ReclaimMemory for RasterHandle {
 ///
 /// Every variant carrying a frame identity echoes the pending frame's full
 /// `address`, mirroring [`RasterAck`]'s echo-never-mint contract.
-#[non_exhaustive]
+///
+/// Closed, for ADR-0068 §2's reason: the raster lane turns each outcome into
+/// a frame verdict, so a new outcome must fail to compile there instead of
+/// falling into a default. The struct variants stay `#[non_exhaustive]`, so a
+/// new field is additive and a match names them with `..`.
+///
+/// ```
+/// use flui_engine::PumpOutcome;
+///
+/// // Matched from outside this crate with no wildcard arm: this stops
+/// // compiling (E0004) if the enum is marked `#[non_exhaustive]` again.
+/// fn carries_a_frame(outcome: PumpOutcome) -> bool {
+///     match outcome {
+///         PumpOutcome::Idle | PumpOutcome::ShutdownComplete => false,
+///         PumpOutcome::Presented { .. }
+///         | PumpOutcome::Dropped { .. }
+///         | PumpOutcome::SurfaceOutdated { .. }
+///         | PumpOutcome::ResourceOutdated { .. }
+///         | PumpOutcome::DeviceLost { .. } => true,
+///     }
+/// }
+/// assert!(!carries_a_frame(PumpOutcome::Idle));
+/// ```
 #[must_use]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PumpOutcome {
@@ -1545,13 +1611,15 @@ impl<B: RasterBackend> RasterOwner<B> {
         self.mailbox.set_last_completion(RasterCompletion {
             epoch: frame.snapshot.stamp.epoch,
             disposition,
-            retry_required: matches!(
-                outcome,
-                PumpOutcome::Dropped {
-                    reason: FrameDropReason::RetryableRenderError,
-                    ..
-                }
-            ),
+            retry_required: match outcome {
+                PumpOutcome::Dropped { reason, .. } => reason.requires_retry(),
+                PumpOutcome::Idle
+                | PumpOutcome::Presented { .. }
+                | PumpOutcome::SurfaceOutdated { .. }
+                | PumpOutcome::ResourceOutdated { .. }
+                | PumpOutcome::DeviceLost { .. }
+                | PumpOutcome::ShutdownComplete => false,
+            },
         });
 
         // `outcome` computed without unwinding: disarm `wake_guard` so the
