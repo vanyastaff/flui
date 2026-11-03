@@ -720,4 +720,7 @@ capture (ADR-0230), pinned by
 the largest box its constraints allow and draws its texture there; a new frame
 revision repaints it, which is how a frame fed through the presentation's
 `TextureRegistry` reaches the screen without other changes (ADR-0233), pinned by
-`harness_texture_fills_its_box_and_repaints_per_frame`.
+`harness_texture_fills_its_box_and_repaints_per_frame`. It is not a repaint boundary;
+the `Texture` widget puts one above it, so a frame repaints the texture alone and a
+hidden texture stops repainting after one frame, pinned by `a_fed_frame_damages_only_the_texture`
+and `a_hidden_texture_stops_painting_after_one_frame` in flui-runtime.

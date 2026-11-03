@@ -14,6 +14,7 @@ use crate::gesture_settings::SettingsScope;
 use flui_foundation::geometry::EdgeInsets;
 use flui_interaction::events::PointerKind;
 use flui_interaction::{GestureSettings, GestureSettingsSource};
+use flui_painting::paint::TextureId;
 use flui_painting::styling::Color;
 use flui_platform::TargetPlatform;
 use flui_view::{IntoView, ViewExt};
@@ -21,7 +22,7 @@ use flui_widgets::row;
 use flui_widgets::{
     AbsorbPointer, Center, ColoredBox, ContentShape, GestureDetector, HitShape, HitSlop,
     InsertPosition, Overlay, OverlayEntry, OverlayHandle, Positioned, RepaintBoundary, SizedBox,
-    Stack,
+    Stack, Texture,
 };
 
 /// A `side`-square tap target that counts its taps.
@@ -113,9 +114,16 @@ pub(crate) fn a_visual_hit_beats_a_neighbours_slop() {
 }
 
 /// A target in its own composited layer above the page cannot take a tap
-/// that visually lands on the page; in the page's layer it can.
+/// that visually lands on the page; in the page's layer it can. A `Texture`
+/// page is a layer of its own, so a slop over it stays off it.
 pub(crate) fn slop_does_not_leave_its_composited_layer() {
-    fn overlay(isolated: bool, taps: &Arc<AtomicUsize>) -> LaidOut {
+    #[derive(Clone, Copy, Debug)]
+    enum Page {
+        Plain,
+        Texture,
+    }
+
+    fn overlay(kind: Page, isolated: bool, taps: &Arc<AtomicUsize>) -> LaidOut {
         let content = Stack::new(row![
             Positioned::new(
                 HitSlop::new()
@@ -130,30 +138,43 @@ pub(crate) fn slop_does_not_leave_its_composited_layer() {
         } else {
             content.into_view().boxed()
         };
+        let page = match kind {
+            Page::Plain => page().into_view().boxed(),
+            Page::Texture => Texture::new(TextureId::new(1)).into_view().boxed(),
+        };
         lay_out(
-            Stack::new(row![SizedBox::new(200.0, 200.0).child(page()), layer]),
+            Stack::new(row![SizedBox::new(200.0, 200.0).child(page), layer]),
             tight(200.0, 200.0),
         )
     }
 
-    let shared = Arc::new(AtomicUsize::new(0));
-    tap(&overlay(false, &shared), 80.0, 100.0);
-    assert_eq!(
-        counts(&[&shared]),
-        [1],
-        "same layer: the slop takes the tap"
-    );
-
-    let isolated = Arc::new(AtomicUsize::new(0));
-    let laid = overlay(true, &isolated);
-    tap(&laid, 80.0, 100.0);
-    assert_eq!(
-        counts(&[&isolated]),
-        [0],
-        "the tap landed in the page's layer"
-    );
-    tap(&laid, 100.0, 100.0);
-    assert_eq!(counts(&[&isolated]), [1], "a visual hit still works");
+    // The page, whether the target is isolated, and the taps at (80, 100),
+    // in the slop beside the target, that the target takes.
+    for (kind, isolated, slop_taps, why) in [
+        (Page::Plain, false, 1, "same layer: the slop takes the tap"),
+        (Page::Plain, true, 0, "the tap landed in the page's layer"),
+        (
+            Page::Texture,
+            false,
+            0,
+            "the tap landed on the texture's layer",
+        ),
+    ] {
+        let taps = Arc::new(AtomicUsize::new(0));
+        let laid = overlay(kind, isolated, &taps);
+        tap(&laid, 80.0, 100.0);
+        assert_eq!(
+            counts(&[&taps]),
+            [slop_taps],
+            "{kind:?} page, target isolated {isolated}: {why}"
+        );
+        tap(&laid, 100.0, 100.0);
+        assert_eq!(
+            counts(&[&taps]),
+            [slop_taps + 1],
+            "{kind:?} page, target isolated {isolated}: a visual hit still works"
+        );
+    }
 }
 
 /// A target's slop stays inside its overlay entry: a toast in the entry above
