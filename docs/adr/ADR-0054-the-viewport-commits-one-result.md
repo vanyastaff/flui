@@ -3,6 +3,8 @@
 - **Status:** Accepted
 - **Date:** 2026-09-04
 - **Amended:** 2026-10-11 — implemented geometric clip coverage closes the former rectangular-AA limitation; viewport commitment/degradation rules are unchanged.
+- **Amended:** 2026-11-03 — decision 2 reaches below the viewport: a lazy sliver records only a
+  measured child extent, never a stand-in (see "Implementation notes").
 - **Related:** [ADR-0017](ADR-0017-build-during-layout-callback-seam.md) (+ amendment), [ADR-0053](ADR-0053-one-lazy-child-lifecycle-for-multi-box-slivers.md); issue #537; #833 (the per-pixel rebuild) and #834 (the pipeline's positioned-this-pass stamp)
 
 ## Context
@@ -72,6 +74,14 @@ committed that loop's result were inconsistent with each other and with Flutter
 - Every setter added here returns no impact on equality. The per-pixel rebuild of the viewport
   subtree on scroll (#833) and the slivers' hit-test child-count snapshot (replaced by #834's
   placed-generation stamp) are closed separately.
+- A degraded pass drops the scroll-offset correction a sliver already drained (from a list, a
+  wrapper, an earlier healthy attempt or the carousel), so a child that shrinks on failure and
+  regrows on recovery still drifts the first visible item: the shrink is dropped and the regrowth
+  is applied. The walk already strips `scroll_offset_correction` from a stand-in sliver
+  geometry, so no correction can come from a stand-in; the planned fix applies corrections in a
+  degraded pass and commits the corrected pixels while still withholding viewport and content
+  dimensions. A sliver-local deferral is rejected: the sliver cannot tell whether the viewport
+  took its correction.
 
 ## Status of the decisions
 
@@ -87,6 +97,20 @@ is closed by the implemented geometric expression/coverage paths described below
 its caller a stand-in, or a poisoned node that served one), a layout context reports whether that
 count moved during its node's pass, and both viewports publish no scroll dimensions from such a
 pass, at any depth below the viewport.
+
+**A stand-in is not a measurement.** Withholding dimensions at the viewport is not enough when a
+lazy sliver keeps its own record of child extents: the virtualizer's measured extents feed the
+anchor correction and the estimate of every item outside the band, so a stand-in written there
+moves the first visible item on the failing frame and again on recovery. A box child's layout
+therefore answers with `BoxChildSize` through `SliverLayoutContext::measure_box_child`:
+`Measured` when the child's own layout ran (a failed descendant below it is that child's own
+business), `StandIn` when the walk substituted the value (a failed layout, a poisoned node served
+its stand-in, no child in the slot). `RenderSliverList` records only `Measured`, so an item keeps
+its previous extent or its estimate while it is broken. Pinned by
+`harness_sliver_list_failed_child_keeps_its_extent_through_recovery`,
+`harness_sliver_list_poisoned_child_that_never_laid_out_keeps_its_estimate` and
+`harness_sliver_list_measures_a_resident_laid_out_over_a_failed_descendant` (the last one guards
+against classifying by the degradation count, which would also reject a healthy resident).
 
 **Decision 3.**
 

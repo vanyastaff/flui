@@ -347,6 +347,7 @@ mod event_loop {
 
     use cursor_icon::CursorIcon;
     use flui_platform::data_transfer::DataTransferSource;
+    use flui_platform::drag::PlatformDragSource;
     use flui_platform::{
         CursorError, DisplayId, DisplaySnapshot, SessionEndAnswer, SessionEndPhase, SystemNotice,
         WindowId,
@@ -442,10 +443,15 @@ mod event_loop {
         /// under the user input `last_input` records last.
         fn clipboard(last_input: LastInput, devices: DataDevices) -> Arc<dyn WaylandClipboard>;
 
-        /// Drag and drop over the windows, made on the owner thread, hearing
-        /// the drags through `devices` and calling `wake` to have the loop send
-        /// what another thread asked of a drag.
-        fn drag(devices: DataDevices, wake: Box<dyn Fn() + Send + Sync>) -> Arc<dyn WaylandDrag>;
+        /// Drag and drop over and from the windows, made on the owner thread,
+        /// hearing the drags through `devices`, starting sessions under the
+        /// pointer grabs `last_input` holds, and calling `wake` to have the
+        /// loop send what another thread asked of a drag.
+        fn drag(
+            devices: DataDevices,
+            last_input: LastInput,
+            wake: Box<dyn Fn() + Send + Sync>,
+        ) -> Arc<dyn WaylandDrag>;
 
         /// The channel the loop's system notices take to the application.
         fn notices(app: &Arc<AppDelivery>) -> Arc<dyn NoticeChannel>;
@@ -766,14 +772,19 @@ mod event_loop {
         /// A window opened: drags over it are offered to it from now on.
         fn attach(&self, window: DragWindow);
 
-        /// The window `id` closed: a drag over it ends with nothing told.
+        /// The window `id` closed: a drag over it ends with nothing told, and
+        /// a session it started ends cancelled.
         fn detach(&self, id: WindowId);
 
         /// Tell the windows what the drags over them did since the last
         /// turn, and answer each drag's source.
         fn deliver(&self);
 
-        /// The loop ends: the drags' offers and the windows go.
+        /// The window `window`'s way to start a drag session.
+        fn source(self: Arc<Self>, window: WindowId) -> Arc<dyn PlatformDragSource>;
+
+        /// The loop ends: the drags' offers, a running session and the
+        /// windows go.
         fn release(&self);
     }
 
@@ -880,19 +891,105 @@ mod event_loop {
     /// input records it as its events come, and a window names it on the
     /// activation token it asks for. Nothing recorded, a token names no input
     /// and asks the compositor for the user's attention instead of the focus.
+    ///
+    /// Beside it, the press that began each seat's pointer grab while a button
+    /// is held: a drag starts only under the serial of the grab its origin
+    /// surface holds.
     #[derive(Clone, Default)]
-    pub(crate) struct LastInput(Arc<OwnerCell<Option<SeatInput>>>);
+    pub(crate) struct LastInput(Arc<OwnerCell<Inputs>>);
+
+    /// What [`LastInput`] keeps.
+    #[derive(Default)]
+    struct Inputs {
+        last: Option<SeatInput>,
+        /// Each seat's grab: the press that began it and how many buttons
+        /// hold it now.
+        grabs: Vec<(SeatInput, u32)>,
+        /// The grab whose last button went up last, by its seat and the
+        /// serial of its press: a drag started under it never began, since
+        /// a drag takes the pointer from its surface before any release.
+        released: Option<(WlSeat, u32)>,
+    }
 
     impl LastInput {
         /// The seats report `input`, which is now the last: a key, a button
         /// or a touch going down, or the keyboard entering a surface.
         pub(crate) fn record(&self, input: SeatInput) {
-            self.0.with(|last| *last = Some(input));
+            self.0.with(|inputs| inputs.last = Some(input));
         }
 
         /// The last input; `None` before any, or off the owner thread.
         pub(crate) fn latest(&self) -> Option<SeatInput> {
-            self.0.with(|last| last.clone()).flatten()
+            self.0.with(|inputs| inputs.last.clone()).flatten()
+        }
+
+        /// A button of `press.seat`'s pointer went down: the first one held
+        /// begins the seat's grab, on `press.surface` under `press.serial`.
+        pub(crate) fn pressed(&self, press: SeatInput) {
+            self.0.with(|inputs| {
+                match inputs
+                    .grabs
+                    .iter_mut()
+                    .find(|(grab, _)| grab.seat == press.seat)
+                {
+                    Some((_, held)) => *held = held.saturating_add(1),
+                    None => inputs.grabs.push((press, 1)),
+                }
+            });
+        }
+
+        /// A button of `seat`'s pointer went up: the last one held ends the
+        /// seat's grab.
+        pub(crate) fn released(&self, seat: &WlSeat) {
+            self.0.with(|inputs| {
+                let mut ended = None;
+                inputs.grabs.retain_mut(|(grab, held)| {
+                    if grab.seat == *seat {
+                        *held = held.saturating_sub(1);
+                        if *held == 0 {
+                            ended = Some((grab.seat.clone(), grab.serial));
+                        }
+                    }
+                    *held > 0
+                });
+                if ended.is_some() {
+                    inputs.released = ended;
+                }
+            });
+        }
+
+        /// Whether the grab `seat`'s press `serial` began ended with a
+        /// release that reached its surface; `false` off the owner thread.
+        pub(crate) fn released_grab(&self, seat: &WlSeat, serial: u32) -> bool {
+            self.0
+                .with(|inputs| {
+                    inputs
+                        .released
+                        .as_ref()
+                        .is_some_and(|(held, at)| held == seat && *at == serial)
+                })
+                .unwrap_or(false)
+        }
+
+        /// `seat`'s pointer left its surface, which ends any grab it held:
+        /// no release reaches a surface the pointer left.
+        pub(crate) fn left(&self, seat: &WlSeat) {
+            self.0
+                .with(|inputs| inputs.grabs.retain(|(grab, _)| grab.seat != *seat));
+        }
+
+        /// The press that began a grab `surface` holds now; `None` when no
+        /// button is held there, or off the owner thread.
+        pub(crate) fn grab_on(&self, surface: &WlSurface) -> Option<SeatInput> {
+            self.0
+                .with(|inputs| {
+                    inputs
+                        .grabs
+                        .iter()
+                        .find(|(grab, _)| grab.surface == *surface)
+                        .map(|(grab, _)| grab.clone())
+                })
+                .flatten()
         }
     }
 
@@ -1574,6 +1671,7 @@ mod event_loop {
                 let waker = Arc::downgrade(&waker);
                 H::drag(
                     devices.clone(),
+                    last_input.clone(),
                     Box::new(move || {
                         if let Some(waker) = waker.upgrade() {
                             waker.wake();
@@ -2109,6 +2207,10 @@ mod event_loop {
     }
 
     impl host::Services for WaylandLoop {
+        fn launch_value(&self, key: flui_platform::LaunchKey) -> Option<String> {
+            host::environment_launch_value(key)
+        }
+
         fn background_executor(&self) -> Arc<dyn PlatformExecutor> {
             Arc::clone(&self.executor) as _
         }
@@ -2313,6 +2415,47 @@ mod event_loop {
                 .join()
                 .expect("the other thread");
             assert_eq!(off_owner, None, "off the owner thread");
+        }
+
+        /// A grab is the first press a seat's pointer holds, kept until its
+        /// last button goes up or the pointer leaves its surface, and only a
+        /// release names the grab it ended.
+        #[test]
+        fn a_grab_is_the_first_press_held_until_its_last_release() {
+            let (ours, _theirs) = std::os::unix::net::UnixStream::pair().expect("a socket pair");
+            let Ok(connection) = Connection::from_socket(ours) else {
+                eprintln!("no libwayland-client to load; the case was not run");
+                return;
+            };
+            let backend = connection.backend().downgrade();
+            let seat = WlSeat::inert(backend.clone());
+            let surface = WlSurface::inert(backend);
+            let press = |serial| UserInput {
+                seat: seat.clone(),
+                serial,
+                surface: surface.clone(),
+            };
+            let grabs = LastInput::default();
+            let serial = |grabs: &LastInput| grabs.grab_on(&surface).map(|grab| grab.serial);
+            assert_eq!(serial(&grabs), None, "no button held");
+            grabs.pressed(press(3));
+            grabs.pressed(press(4));
+            assert_eq!(serial(&grabs), Some(3), "the grab's first press");
+            grabs.released(&seat);
+            assert_eq!(serial(&grabs), Some(3), "a button still holds it");
+            grabs.released(&seat);
+            assert_eq!(serial(&grabs), None, "the last release ends it");
+            assert!(
+                grabs.released_grab(&seat, 3),
+                "a release ended the grab of 3"
+            );
+            grabs.pressed(press(9));
+            grabs.left(&seat);
+            assert_eq!(serial(&grabs), None, "a leave ends it");
+            assert!(
+                !grabs.released_grab(&seat, 9),
+                "no release reached the surface the grab of 9 left"
+            );
         }
     }
 }

@@ -3,24 +3,30 @@
 //! endpoint, with no code in the application.
 //!
 //! The runner installs it beside the application's own development hooks
-//! when the launch names an endpoint (`served::Launch::from_env`); with none,
-//! nothing is created: no thread, no socket. The agent is a
+//! when the launch names an endpoint, read through the platform's launch
+//! values (ADR-0288 §7): the environment on the desktop and the iOS
+//! Simulator, the launching intent's extras on Android. With none, nothing is
+//! created: no thread, no socket. The agent is a
 //! [`DevAgentHook`](flui_view::dev_agent::DevAgentHook): the host attaches it
 //! when the loop starts and hands it each window with content. The
 //! conversation is [`flui_runtime::agent`]'s (ADR-0288): this module keeps the
-//! launch and the desktop transport, which hands each connection's bytes to a
-//! [`Session`](flui_runtime::agent::Session) and writes what it answers. Every
-//! operation goes through the window's owner inbox, so nothing here touches a
-//! tree, and no thread waits on an answer: the owner's answer wakes the
-//! connection's thread.
+//! launch and the local-socket transport, which hands each connection's bytes
+//! to a [`Session`](flui_runtime::agent::Session) and writes what it answers.
+//! Every operation goes through the window's owner inbox, so nothing here
+//! touches a tree, and no thread waits on an answer: the owner's answer wakes
+//! the connection's thread.
 //!
 //! # The endpoint
 //!
 //! A named pipe on Windows (`\\.\pipe\<name>`, the current user's only,
 //! remote clients refused) and a Unix domain socket elsewhere (a path whose
 //! parent directory the current user owns with mode `0700`; the socket file
-//! is removed when the agent stops). No TCP port. A bind failure is logged,
-//! and the application keeps running without an agent.
+//! is removed when the agent stops). On Linux and Android an address `@name`
+//! is the abstract socket `name`, the only kind on Android, where a driver
+//! reaches it through `adb forward`: any process of the system reaches an
+//! abstract socket, so a connection whose peer is not the app's user, root,
+//! or on Android the shell is closed unread. No TCP port. A bind failure is
+//! logged, and the application keeps running without an agent.
 //!
 //! The token keeps out other users and remote callers. It does not keep out
 //! other processes of the same user, which can read the application's
@@ -29,20 +35,28 @@
 //! # Exit on disconnect
 //!
 //! A launch with [`EXIT_ON_DISCONNECT_ENV`](flui_protocol::launch::EXIT_ON_DISCONNECT_ENV)
-//! makes the first connection that passed its hello the app's driver: when it
+//! makes the connection admitted as the app's driver (ADR-0288 §8) the one it exits with: when it
 //! closes, the app quits, past every close guard, and the process exits with
 //! [`EXIT_DISCONNECTED`](flui_protocol::launch::EXIT_DISCONNECTED) once the
 //! teardown has written what the application persisted.
 
-// The server is built where it has a transport: a debug build, or one with
-// the `driver` feature, on a system with local sockets. The web and Android
-// transports are not built yet.
-#[cfg(all(
-    any(debug_assertions, feature = "driver"),
-    any(unix, windows),
-    not(target_os = "android")
-))]
+// The server is built where it has a transport (`cfg(driver_agent)`, set by
+// `build.rs`): a debug build, or one with the `driver` feature, on a system
+// with local sockets. The web transport is not built yet.
+#[cfg(driver_agent)]
 mod served;
+
+// `build.rs` reads the profile's debug assertions from Cargo; a build it
+// misread fails here rather than shipping, or leaving out, the agent.
+#[cfg(any(
+    all(driver_agent, not(any(debug_assertions, feature = "driver"))),
+    all(
+        not(driver_agent),
+        any(debug_assertions, feature = "driver"),
+        any(unix, windows)
+    )
+))]
+compile_error!("BUG: build.rs set `driver_agent` against this build's profile and features");
 
 use std::fmt;
 use std::sync::Arc;
@@ -60,18 +74,26 @@ pub(crate) struct Disconnect {
 }
 
 impl Disconnect {
-    /// Ask the loop to quit with `quit` when the driver goes.
+    /// Ask the loop to quit with `quit` when the driver goes; at once when it
+    /// went before the loop could arm this.
     // The served agent's tests arm it on iOS too.
     #[cfg_attr(
-        any(
-            target_arch = "wasm32",
-            target_os = "android",
-            all(target_os = "ios", not(test))
-        ),
-        expect(dead_code, reason = "only the desktop loop exits when its driver goes")
+        any(target_arch = "wasm32", all(target_os = "ios", not(test))),
+        expect(
+            dead_code,
+            reason = "only the desktop and Android loops exit when their driver goes"
+        )
     )]
     pub(crate) fn arm(&self, quit: impl Fn() + Send + Sync + 'static) {
         *self.quit.lock() = Some(Box::new(quit));
+        // Read after the quit is stored: `fire` sets the flag before it takes
+        // the quit, so one of the two takes it, and only one.
+        if self.happened() {
+            let quit = self.quit.lock().take();
+            if let Some(quit) = quit {
+                quit();
+            }
+        }
     }
 
     /// Whether the driver went and the loop was asked to quit for it.
@@ -81,11 +103,7 @@ impl Disconnect {
 
     /// The driver went: ask the loop to quit, once.
     #[cfg_attr(
-        not(all(
-            any(debug_assertions, feature = "driver"),
-            any(unix, windows),
-            not(target_os = "android")
-        )),
+        not(driver_agent),
         expect(dead_code, reason = "only a served agent's driver disconnects")
     )]
     fn fire(&self) {
@@ -117,39 +135,27 @@ impl fmt::Debug for Disconnect {
 }
 
 /// Install the driver agent on `config` after the application's own hooks,
-/// when this build carries it and the environment names an endpoint;
-/// otherwise `config` is left alone and nothing is created. `disconnect` is
-/// what the driver's going does under `EXIT_ON_DISCONNECT`.
+/// when this build carries it and the launch values `value` reads name an endpoint
+/// (ADR-0288 §7); otherwise `config` is left alone and nothing is created.
+/// `disconnect` is what the driver's going does under `EXIT_ON_DISCONNECT`.
 #[cfg_attr(
-    any(target_arch = "wasm32", target_os = "android"),
-    expect(
-        dead_code,
-        reason = "the page's and Android's runners install no agent yet"
-    )
+    target_arch = "wasm32",
+    expect(dead_code, reason = "the page's runner installs no agent yet")
 )]
-pub(crate) fn install_from_env(config: &mut crate::AppConfig, disconnect: &Arc<Disconnect>) {
-    #[cfg(all(
-        any(debug_assertions, feature = "driver"),
-        any(unix, windows),
-        not(target_os = "android")
-    ))]
-    if let Some(launch) = served::Launch::from_env() {
+pub(crate) fn install_from_launch(
+    config: &mut crate::AppConfig,
+    value: impl Fn(flui_platform::LaunchKey) -> Option<String>,
+    disconnect: &Arc<Disconnect>,
+) {
+    #[cfg(driver_agent)]
+    if let Some(launch) = served::Launch::read(value) {
         served::install(config, launch, disconnect);
     }
-    #[cfg(not(all(
-        any(debug_assertions, feature = "driver"),
-        any(unix, windows),
-        not(target_os = "android")
-    )))]
-    let _ = (config, disconnect);
+    #[cfg(not(driver_agent))]
+    let _ = (config, value, disconnect);
 }
 
-#[cfg(all(
-    test,
-    any(debug_assertions, feature = "driver"),
-    any(unix, windows),
-    not(target_os = "android")
-))]
+#[cfg(all(test, driver_agent))]
 mod tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -185,6 +191,20 @@ mod tests {
         }
         fn enter(&self, _: &Id) {}
         fn exit(&self, _: &Id) {}
+    }
+
+    #[test]
+    fn a_driver_that_went_before_the_loop_armed_still_ends_it_once() {
+        let disconnect = Disconnect::default();
+        disconnect.fire();
+        let quits = Arc::new(AtomicUsize::new(0));
+        let counted = Arc::clone(&quits);
+        disconnect.arm(move || {
+            counted.fetch_add(1, Ordering::SeqCst);
+        });
+        assert_eq!(quits.load(Ordering::SeqCst), 1, "arming asks the quit");
+        disconnect.fire();
+        assert_eq!(quits.load(Ordering::SeqCst), 1, "and only once");
     }
 
     #[test]

@@ -418,6 +418,10 @@ impl host::Loop for MacOSLoop {
 }
 
 impl host::Services for MacOSLoop {
+    fn launch_value(&self, key: flui_platform::LaunchKey) -> Option<String> {
+        host::environment_launch_value(key)
+    }
+
     fn background_executor(&self) -> Arc<dyn PlatformExecutor> {
         Arc::clone(&self.background_executor) as Arc<dyn PlatformExecutor>
     }

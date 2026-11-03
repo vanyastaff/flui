@@ -13,6 +13,8 @@ ellipsis. One shaper, one font door, and a shaped paragraph on the wire make
   a `ShapedParagraph`)
 - **Date:** 2026-09-18
 - **Amended:** 2026-10-11 — original font-system doors are explicitly historical; live font registration and paragraph authority remain ADR-0092.
+- **Amended:** 2026-11-03 — a span recolour rebuilds the paragraph from the measuring layout
+  without shaping (Part 2).
 - **Deciders:** @vanyastaff
 - **Original scope (2026-09-18):** `flui-painting`'s font-system surface (`SharedFontSystem`,
   `Shaper`, `fonts`), its `TextLayout`/`TextPainter` paint path, the
@@ -105,6 +107,19 @@ the UI runtime's `TextContext` at scene assembly (`PerformanceOverlayLayer::reco
 and the engine replays them, and a hand-driven painter shapes a paragraph
 itself and calls `draw_paragraph`.
 
+**Amended 2026-11-03: a span recolour shapes nothing.** A colour is not shaped:
+Parley splits shaping items on font properties, never on the brush. The brush a
+glyph run carries is the index of its paint run (adjacent non-empty spans that
+paint one colour), and the layout keeps each paint run's colour beside its runs.
+`TextPainter::set_text` gives a span recolour's colours to the cached layout and
+builds a new `Arc<ShapedParagraph>` from that same layout, so painted-as-measured
+still holds by the identity of the layout that measured (ADR-0092 §4), and the
+recolour is `Invalidation::Paint`. A root-only recolour keeps the very `Arc`, as
+before. A recolour that gives two spans of one paint run different colours
+splits a glyph run, which only a new layout does: it stays
+`Invalidation::Layout`. The sentences above that make every span recolour a
+layout change record the original decision.
+
 ## Consequences
 
 - `max_lines`, the ellipsis, per-span styling: painted as measured, by
@@ -155,7 +170,7 @@ empty host database receives Roboto and both icon faces:
 
 Part 2: `a_truncated_paragraph_paints_exactly_the_lines_it_measured`
 (records the measured `Arc`, one line, ellipsis in the text) and
-`root_recolor_keeps_the_shaped_buffer_and_span_recolor_reshapes_once`
+`a_recolour_paints_what_a_fresh_layout_paints`
 (`crates/flui-painting/tests/text_overflow_unit.rs`);
 that `max_lines: 1` reaches the composited picture as one line through the
 `Text` widget is **Unasserted:** no test pins this (the widget wires

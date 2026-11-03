@@ -211,6 +211,26 @@ fn reorderable_list() {
                 "reorderable::moving_a_row_to_the_end_of_a_long_list_keeps_its_focus",
                 crate::reorderable::moving_a_row_to_the_end_of_a_long_list_keeps_its_focus,
             ),
+            (
+                "reorderable::a_dragged_row_lifts_and_the_rows_make_room",
+                crate::reorderable::a_dragged_row_lifts_and_the_rows_make_room,
+            ),
+            (
+                "reorderable::a_dropped_row_lands_from_where_it_was_let_go",
+                crate::reorderable::a_dropped_row_lands_from_where_it_was_let_go,
+            ),
+            (
+                "reorderable::a_cancelled_drag_returns_the_row_to_its_place",
+                crate::reorderable::a_cancelled_drag_returns_the_row_to_its_place,
+            ),
+            (
+                "reorderable::a_move_command_slides_the_rows",
+                crate::reorderable::a_move_command_slides_the_rows,
+            ),
+            (
+                "reorderable::reduced_motion_moves_the_rows_at_once",
+                crate::reorderable::reduced_motion_moves_the_rows_at_once,
+            ),
         ],
     );
 }
@@ -227,6 +247,10 @@ fn reorderable_grid() {
                 "reorderable_grid::a_tile_dragged_by_its_handle_moves_onto_another_tile",
                 crate::reorderable_grid::a_tile_dragged_by_its_handle_moves_onto_another_tile
                     as fn(),
+            ),
+            (
+                "reorderable_grid::a_dragged_tile_makes_room_across_the_rows",
+                crate::reorderable_grid::a_dragged_tile_makes_room_across_the_rows,
             ),
             (
                 "reorderable_grid::the_grid_moves_go_along_a_row_and_by_a_row",

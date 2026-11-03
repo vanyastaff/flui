@@ -12,12 +12,10 @@ use super::{
     owner_dispatch::{ExitWatchdog, TeardownStep, teardown_platform_ui_runtime_logged},
 };
 use crate::app::agent::Disconnect;
-use crate::app::dev_agent::DevAgentAttachments;
 use crate::app::{
     AppConfig, AppRunError, Application, StartupWindow,
     application::WindowErrorObserver,
     application_control::{AppHandle, AppWindowError, Ingress, contain},
-    dev_agent::DevAgent,
     hot_reload::{WorkerReload, WorkerWatcherGuard},
 };
 use flui_native::{HostWindow, PendingWindow, PlatformProxy, WindowOpen};
@@ -61,9 +59,6 @@ pub(in crate::app) struct MainController {
     error: Option<WindowErrorObserver>,
     fatal: Rc<RefCell<Option<AppRunError>>>,
     watcher: Option<WorkerWatcherGuard>,
-    /// The loop's development agent attachment; dropping it detaches the
-    /// hook.
-    agent: Option<DevAgentAttachments>,
 }
 // Each field is dropped on its own, so one that panics does not keep the
 // rest; the first panic resumes once all are gone (ADR-0258 §5), and the
@@ -74,8 +69,6 @@ impl Drop for MainController {
         let mut first = flui_foundation::panic::FirstPanic::new();
         let watcher = self.watcher.take();
         first.contain(|| drop(watcher));
-        let agent = self.agent.take();
-        first.contain(|| drop(agent));
         let installer = self.installer.take();
         first.contain(|| drop(installer));
         let observer = self.error.take();
@@ -665,9 +658,14 @@ pub(super) fn shutdown_main_window() {
         (
             runtime.main_controller.take(),
             runtime.main_ingress.take(),
-            runtime.loop_dev_agent.take(),
+            runtime.loop_dev_agent.end(),
         )
     });
+    // The loop's hooks detach and drop first, outside the borrow and
+    // contained like the controller's: an agent stops before the windows it
+    // serves go, so its driver sees the connection end rather than each
+    // window answer `gone`.
+    super::terminal::contain_terminal("development agents' release", || drop(dev_agent));
     if let Some(ingress) = ingress {
         ingress.close();
     }
@@ -675,9 +673,6 @@ pub(super) fn shutdown_main_window() {
         super::terminal::contain_terminal("main window cancellation", || controller.cancel());
         super::terminal::contain_terminal("main window retirement", || drop(controller));
     }
-    // The hooks' last references may run their `Drop`, outside the borrow and
-    // contained like the controller's.
-    super::terminal::contain_terminal("development agents' release", || drop(dev_agent));
 }
 
 /// Retires the loop's main window and UI runtimes when dropped: after
@@ -864,6 +859,8 @@ where
                 ..
             } = application;
             let proxy = owner.proxy();
+            // What the driver agent's launch is read through.
+            let launch = owner.shared();
             let ingress = Ingress::new(proxy, startup == StartupWindow::Open);
             let handle = ingress.handle();
             install_owner_platform(owner)?;
@@ -898,18 +895,16 @@ where
                     let _ = ingress.quit_now();
                 }
             });
-            crate::app::agent::install_from_env(&mut config, &ended);
-            // A stale value would be one a loop on this thread failed to clear;
-            // it drops here, outside the borrow.
-            let _stale = APP_RUNTIME.with(|slot| {
-                std::mem::replace(
-                    &mut slot.borrow_mut().loop_dev_agent,
-                    config.dev_agent.clone(),
-                )
-            });
+            crate::app::agent::install_from_launch(
+                &mut config,
+                |key| launch.launch_value(key),
+                &ended,
+            );
+            // The loop takes the hooks and owns them until it ends
+            // (`shutdown_main_window`).
+            super::dev_agents::start(&config);
             let reload = WorkerReload::from_config(&config);
             let watcher = reload.spawn_watcher(runtime_wake_callback());
-            let agent = config.dev_agent.as_ref().and_then(DevAgent::attach);
             let installer_config = config.clone();
             let identity = APP_RUNTIME.with(|slot| Arc::clone(&slot.borrow().loop_identity));
             let factory_identity = Arc::clone(&identity);
@@ -948,7 +943,6 @@ where
                     error: window_error,
                     fatal: recorded,
                     watcher,
-                    agent,
                 });
             });
             for service in &config.services {
@@ -1040,7 +1034,6 @@ mod tests {
                 error: observer,
                 fatal: Rc::new(RefCell::new(None)),
                 watcher: None,
-                agent: None,
             });
         });
         install_platform_quit_hook();
@@ -1533,18 +1526,8 @@ mod tests {
         .on_ready(move |handle| {
             assert_eq!(observed.get(), (1, 0, 0), "attached when the loop starts");
             assert!(
-                APP_RUNTIME.with(|slot| slot
-                    .borrow()
-                    .main_controller
-                    .as_ref()
-                    .expect("controller installed")
-                    .agent
-                    .is_some()),
-                "the loop holds the attachment"
-            );
-            assert!(
-                super::super::desktop::window_dev_agent(&AppConfig::new()).is_some(),
-                "a window opened with a configuration that names no hook is handed to the loop's"
+                super::super::dev_agents::is_serving(),
+                "the loop holds the hooks, which every window it installs is handed to"
             );
             for _ in 0..2 {
                 let mut request = handle.request_show_main_window().expect("admit retry");
@@ -1567,7 +1550,7 @@ mod tests {
             "loop teardown detached the hook exactly once"
         );
         assert!(
-            super::super::desktop::window_dev_agent(&AppConfig::new()).is_none(),
+            !super::super::dev_agents::is_serving(),
             "the loop's end released its hooks"
         );
     }

@@ -308,52 +308,154 @@ pub(crate) fn a_bounded_save_layer_extent_is_its_mapped_bounds() {
     assert_eq!(bounded(&list), Rect::from_ltrb(4.0, 0.0, 36.0, 32.0));
 }
 
-/// Which blends change a destination their source leaves transparent, and
-/// which colour filters paint a transparent pixel: the two answers a damage
-/// producer widens a layer's composite by.
-pub(crate) fn transparent_source_and_transparent_black_predicates() {
+/// Every blend mode's coverage class, checked against what `Color::blend`,
+/// the CPU blend the damage and filter predicates stand for, does with it: a
+/// transparent source, the destination factor, coverage folded into the
+/// source against coverage interpolated, and a source over a transparent
+/// destination. The list is complete by construction, so no mode escapes.
+pub(crate) fn every_blend_mode_is_classified_by_its_cpu_blend() {
+    use flui_painting::paint::{ColorFilter, CoverageClass};
+
+    fn premultiplied(color: Color) -> [f32; 4] {
+        let [r, g, b, a] = color.to_rgba_f32_array();
+        [r * a, g * a, b * a, a]
+    }
+    fn close(a: [f32; 4], b: [f32; 4], tolerance: f32) -> bool {
+        a.iter().zip(b).all(|(a, b)| (a - b).abs() <= tolerance)
+    }
+    let opaque = Color::rgba(200, 120, 60, 255);
+    let translucent = Color::rgba(40, 180, 220, 128);
+    let coverage = 0.5;
+
+    for &mode in flui_painting::testing::EVERY_BLEND_MODE {
+        let class = mode.coverage_class();
+        // Coverage folded into the source alpha, and the coverage-correct
+        // `mix(destination, blend(source, destination), coverage)`.
+        let folded = |source: Color, destination: Color| {
+            let [r, g, b, a] = source.to_rgba_f32_array();
+            let source = Color::from_rgba_f32_array([r, g, b, a * coverage]);
+            premultiplied(source.blend(destination, mode))
+        };
+        let mixed = |source: Color, destination: Color| -> [f32; 4] {
+            let destination_pm = premultiplied(destination);
+            let full = premultiplied(source.blend(destination, mode));
+            std::array::from_fn(|i| destination_pm[i] + (full[i] - destination_pm[i]) * coverage)
+        };
+
+        // A transparent source keeps the destination.
+        let keeps = match class {
+            CoverageClass::Absorbing | CoverageClass::Saturating | CoverageClass::Advanced => true,
+            CoverageClass::Replacing | CoverageClass::Masking => false,
+        };
+        for destination in [opaque, translucent] {
+            let kept = close(
+                premultiplied(Color::TRANSPARENT.blend(destination, mode)),
+                premultiplied(destination),
+                1e-4,
+            );
+            assert_eq!(
+                kept, keeps,
+                "{mode:?} is {class:?}: a transparent source over {destination:?}"
+            );
+        }
+
+        // The destination factor: a faint black source contributes nothing
+        // of its own, so what is left of an opaque destination is that factor
+        // times the destination.
+        let faint = Color::rgba(0, 0, 0, 64);
+        let left = premultiplied(faint.blend(opaque, mode));
+        let destination = premultiplied(opaque);
+        let alpha = 64.0 / 255.0;
+        let scaled = |k: f32| -> [f32; 4] { std::array::from_fn(|i| destination[i] * k) };
+        let rgb = |c: [f32; 4]| [c[0], c[1], c[2], 0.0];
+        let factor_matches = match class {
+            // `One` or `1 - srcAlpha`.
+            CoverageClass::Absorbing => {
+                close(rgb(left), rgb(destination), 2.0 / 255.0)
+                    || close(rgb(left), rgb(scaled(1.0 - alpha)), 2.0 / 255.0)
+            }
+            // `One`, plus a source that adds nothing.
+            CoverageClass::Saturating => close(rgb(left), rgb(destination), 2.0 / 255.0),
+            // `Zero`.
+            CoverageClass::Replacing => close(rgb(left), [0.0; 4], 1e-4),
+            // `srcAlpha`.
+            CoverageClass::Masking => close(rgb(left), rgb(scaled(alpha)), 2.0 / 255.0),
+            // A blend function of the destination colour: no single factor.
+            CoverageClass::Advanced => true,
+        };
+        assert!(
+            factor_matches,
+            "{mode:?} is {class:?}, but a faint black source leaves {left:?} of {destination:?}"
+        );
+
+        // Folding coverage into the source agrees with interpolating it,
+        // except where the class says it cannot.
+        let translucent_green = Color::rgba(0, 220, 40, 128);
+        let light = Color::rgba(200, 200, 200, 255);
+        match class {
+            CoverageClass::Absorbing | CoverageClass::Advanced => {
+                for source in [translucent_green, light] {
+                    for destination in [opaque, translucent] {
+                        let (folded, mixed) =
+                            (folded(source, destination), mixed(source, destination));
+                        assert!(
+                            close(folded, mixed, 2.0 / 255.0),
+                            "{mode:?} is {class:?}: {source:?} over {destination:?} folds to \
+                             {folded:?}, interpolates to {mixed:?}"
+                        );
+                    }
+                }
+            }
+            // The sum saturates: folding agrees only below the clamp.
+            CoverageClass::Saturating => {
+                assert!(
+                    close(
+                        folded(translucent_green, opaque),
+                        mixed(translucent_green, opaque),
+                        2.0 / 255.0
+                    ),
+                    "{mode:?}: below the clamp, folding is exact"
+                );
+                let (folded, mixed) = (folded(light, opaque), mixed(light, opaque));
+                assert!(
+                    (folded[0] - mixed[0]).abs() >= 16.0 / 255.0,
+                    "{mode:?}: past the clamp, folding saturates early ({folded:?} against \
+                     {mixed:?})"
+                );
+            }
+            // The exact gap is 100/255 in red; assert well inside it.
+            CoverageClass::Replacing | CoverageClass::Masking => {
+                let (folded, mixed) = (
+                    folded(translucent_green, opaque),
+                    mixed(translucent_green, opaque),
+                );
+                assert!(
+                    mixed[0] - folded[0] >= 64.0 / 255.0,
+                    "{mode:?} is {class:?}: folding should lose the uncovered destination \
+                     ({folded:?} against {mixed:?})"
+                );
+            }
+        }
+
+        // The dual question: a source over a transparent destination.
+        assert_eq!(
+            ColorFilter::mode(Color::BLUE, mode).modifies_transparent_black(),
+            Color::BLUE
+                .blend(Color::TRANSPARENT, mode)
+                .to_rgba_f32_array()[3]
+                > 0.0,
+            "{mode:?}: a blue filter over a transparent pixel"
+        );
+    }
+}
+
+/// Which colour filters paint a transparent pixel: the answer a damage
+/// producer widens a filter layer's footprint by. The blend half,
+/// `ColorFilter::Mode` per blend mode, is
+/// `every_blend_mode_is_classified_by_its_cpu_blend`.
+pub(crate) fn transparent_black_predicates() {
     use flui_painting::paint::{BlendMode, ColorFilter};
 
-    let changing = [
-        BlendMode::Clear,
-        BlendMode::Src,
-        BlendMode::SrcIn,
-        BlendMode::DstIn,
-        BlendMode::SrcOut,
-        BlendMode::DstATop,
-        BlendMode::Modulate,
-    ];
-    for mode in [
-        BlendMode::SrcOver,
-        BlendMode::Dst,
-        BlendMode::DstOver,
-        BlendMode::DstOut,
-        BlendMode::SrcATop,
-        BlendMode::Xor,
-        BlendMode::Plus,
-        BlendMode::Screen,
-        BlendMode::Multiply,
-    ] {
-        assert!(
-            mode.keeps_destination_under_transparent_source(),
-            "{mode:?}"
-        );
-    }
-    for mode in changing {
-        assert!(
-            !mode.keeps_destination_under_transparent_source(),
-            "{mode:?}"
-        );
-    }
-
-    let mode = |blend_mode| ColorFilter::Mode {
-        color: Color::BLUE,
-        blend_mode,
-    };
-    assert!(mode(BlendMode::Src).modifies_transparent_black());
-    assert!(mode(BlendMode::SrcOver).modifies_transparent_black());
-    assert!(!mode(BlendMode::SrcIn).modifies_transparent_black());
-    assert!(!mode(BlendMode::Modulate).modifies_transparent_black());
     assert!(
         !ColorFilter::Mode {
             color: Color::TRANSPARENT,

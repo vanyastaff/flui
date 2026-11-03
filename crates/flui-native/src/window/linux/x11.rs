@@ -400,6 +400,7 @@ pub(crate) mod support {
         pub maximized_horz: u32,
         pub maximized_vert: u32,
         pub fullscreen: u32,
+        pub moveresize: u32,
     }
 
     /// What the window manager supports, as the root window says.
@@ -411,6 +412,9 @@ pub(crate) mod support {
         pub maximizes: bool,
         /// It puts a window in fullscreen.
         pub fullscreen: bool,
+        /// It moves and resizes a window from a press on a title bar or a
+        /// border the application draws (`_NET_WM_MOVERESIZE`).
+        pub moves_and_resizes: bool,
     }
 
     impl WindowManagerSupport {
@@ -424,11 +428,15 @@ pub(crate) mod support {
                 managed,
                 maximizes: lists(atoms.maximized_horz) && lists(atoms.maximized_vert),
                 fullscreen: lists(atoms.fullscreen),
+                moves_and_resizes: lists(atoms.moveresize),
             }
         }
     }
 
-    /// What an X11 window honours under `support`.
+    /// What an X11 window honours under `support`. A title bar of the
+    /// application's is a window without decorations that the window manager
+    /// moves and resizes at the window's request (ADR-0286 §10), so it needs a
+    /// window manager that takes `_NET_WM_MOVERESIZE`.
     pub(crate) fn capabilities(support: WindowManagerSupport) -> WindowCapabilities {
         let device = CapabilityAbsence::NotOnThisDevice;
         let mut capabilities = WindowCapabilities::ALL
@@ -441,14 +449,14 @@ pub(crate) mod support {
             // completion to that connection alone: no other client learns when
             // the window's frames reached the screen.
             .without_presentation_feedback(CapabilityAbsence::NotOnThisPlatform)
-            // The window manager draws the title bar; one of the
-            // application's, moved through `_NET_WM_MOVERESIZE`, is not yet here.
-            .without_app_title_bar(CapabilityAbsence::NotYetOnThisHost)
             // X11 has no on-screen keyboard protocol and no system gesture
             // edges.
             .without_keyboard_inset(CapabilityAbsence::NotOnThisPlatform)
             .without_system_gestures(CapabilityAbsence::NotOnThisPlatform);
         capabilities.frame_rate_hint = Availability::Unavailable;
+        if !support.moves_and_resizes {
+            capabilities = capabilities.without_app_title_bar(device);
+        }
         if !support.managed {
             capabilities =
                 capabilities.unavailable(&WindowCommand::SetMode(WindowMode::Minimized), device);
@@ -475,12 +483,14 @@ pub(crate) mod support {
             maximized_horz: 302,
             maximized_vert: 303,
             fullscreen: 304,
+            moveresize: 305,
         };
 
         /// What a window manager lists decides what a window honours: with no
         /// window manager, or one that does not list a hint, the command is
         /// refused as missing on this device; what the server does itself is
-        /// always honoured; the material and the frame-rate hint never are.
+        /// always honoured; the material and the frame-rate hint never are, and a
+        /// title bar of the application's only where `_NET_WM_MOVERESIZE` is.
         #[test]
         fn what_the_window_manager_supports_is_what_a_window_honours() {
             use Availability::{Native, Unavailable};
@@ -521,7 +531,7 @@ pub(crate) mod support {
                 (
                     "everything",
                     true,
-                    &[302, 303, 304, 999],
+                    &[302, 303, 304, 305, 999],
                     [Native, Native, Native, Native],
                 ),
             ];
@@ -553,7 +563,12 @@ pub(crate) mod support {
                 }
                 assert_eq!(honoured.frame_rate_hint, Unavailable, "{case}");
                 assert_eq!(honoured.material, Unavailable, "{case}");
-                assert_eq!(honoured.app_title_bar, Unavailable, "{case}");
+                let moves = *managed && supported.contains(&ATOMS.moveresize);
+                assert_eq!(
+                    honoured.app_title_bar,
+                    if moves { Native } else { Unavailable },
+                    "{case}: a title bar of the application's"
+                );
             }
         }
 

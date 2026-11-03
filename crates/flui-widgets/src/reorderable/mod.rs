@@ -4,10 +4,17 @@
 //! Moving an item is a drag-and-drop session that never leaves the window
 //! ([`DragReach::Window`]): an item's handle starts it at once, and on touch
 //! and pen a long press on the item starts it too. Every item is a drop target
-//! that takes only drags of its own list or grid, so the item under the
-//! pointer is where the dragged item lands, and edge autoscroll comes from the
-//! scrollable. The dragged item keeps its state while it is scrolled out of
-//! the built band: its drag holds the item alive.
+//! that takes only drags of its own list or grid, and edge autoscroll comes
+//! from the scrollable. The dragged item keeps its state while it is scrolled
+//! out of the built band: its drag holds the item alive.
+//!
+//! While a drag runs, the dragged item leaves a gap where a drop would put
+//! it, at the item the pointer is over, and the items between make room; what
+//! the drag shows lifts from the item's place
+//! ([`proxy_decorator`](ReorderableList::proxy_decorator)). A drop or
+//! a cancel lands the item in its place from where it was let go, and a move
+//! command slides the items the same way: every slide takes 250 ms, and under
+//! reduced motion lands on its next frame.
 //!
 //! The same moves have a path without a drag (ADR-0216): each item carries the
 //! commands that apply to it — "Move to the start", "Move to the end" and one
@@ -24,25 +31,35 @@
 
 use std::any::Any;
 use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use std::fmt;
 use std::hash::Hash;
 use std::rc::Rc;
+use std::time::Duration;
+
+use flui_animation::{
+    Animation, AnimationController, DrivenController, MotionSpec, Vsync, VsyncUpdate,
+};
 
 use flui_foundation::ValueKey;
 use flui_foundation::ViewKey;
 use flui_foundation::geometry::Axis;
-use flui_foundation::geometry::Size;
+use flui_foundation::geometry::{Offset, Point, Size};
 use flui_interaction::drag::{DragItem, DragReach, DragView};
 use flui_interaction::gesture::PanClaim;
 use flui_interaction::{MultiDragAxis, PointerKindSet};
-use flui_objects::SubtreeAnchor;
+use flui_objects::{Placement, PlacementSlot, SubtreeAnchor};
 use flui_painting::styling::{Border, BorderSide, BorderStyle, BoxDecoration, Color};
 use flui_rendering::constraints::SliverConstraints;
 use flui_rendering::delegates::{SliverGridDelegate, SliverGridLayout};
 use flui_rendering::pipeline::WeakPipelineCell;
 
 use crate::__private::AnchoredBox;
-use crate::{DecoratedBox, DefaultFocusRingStyle};
+use crate::animated::VsyncScope;
+use crate::interaction::FeedbackFrame;
+use crate::{
+    AnimatedBuilder, DecoratedBox, DefaultFocusRingStyle, Opacity, PhysicalModel, Transform,
+};
 use flui_painting::typography::TextDirection;
 use flui_platform::data_transfer::TransferActions;
 use flui_platform::keyboard::NamedKey;
@@ -50,7 +67,7 @@ use flui_rendering::hit_testing::HitTestBehavior;
 use flui_rendering::semantics::{Announcer, Urgency};
 use flui_view::element::ElementKind;
 use flui_view::prelude::*;
-use flui_view::{EventCx, EventOutcome, WriterSource};
+use flui_view::{EventCx, EventOutcome, RebuildHandle, WriterSource};
 
 use crate::interaction::actions::{ambient_action_chain, resolve};
 use crate::interaction::{
@@ -114,8 +131,9 @@ pub enum ReorderCause {
 pub struct ReorderPreview {
     /// Where the dragged item is.
     pub from: usize,
-    /// The item the drag is over, which a drop now would move it to; `None`
-    /// once it left the items.
+    /// Where a drop now would move the item: the position of the item the
+    /// drag is over, counted in the order the list shows while it makes
+    /// room; `None` once the drag left the list.
     pub over: Option<usize>,
 }
 
@@ -205,6 +223,7 @@ type ItemFn = Rc<dyn Fn(&ReorderableItem<'_>) -> BoxedView>;
 type ReorderFn = Rc<dyn Fn(&mut EventCx<'_>, Reorder)>;
 type PreviewFn = Rc<dyn Fn(&mut EventCx<'_>, ReorderPreview)>;
 type LabelFn = Rc<dyn Fn(usize) -> String>;
+type DecoratorFn = Rc<dyn Fn(BoxedView, usize, Rc<dyn Animation<f64>>) -> BoxedView>;
 
 /// How the items are laid out.
 #[derive(Clone)]
@@ -227,6 +246,7 @@ struct Config {
     key_of: KeyFn,
     item: ItemFn,
     feedback: Option<ItemFn>,
+    proxy_decorator: Option<DecoratorFn>,
     on_reorder: ReorderFn,
     on_reorder_preview: Option<PreviewFn>,
     item_label: Option<LabelFn>,
@@ -255,6 +275,7 @@ impl Config {
             key_of: Rc::new(move |index| Rc::new(ValueKey::new(key(index))) as Rc<dyn ViewKey>),
             item: Rc::new(move |row| item(row).into_view().boxed()),
             feedback: None,
+            proxy_decorator: None,
             on_reorder: Rc::new(move |cx, change| on_reorder(cx, change).report()),
             on_reorder_preview: None,
             item_label: None,
@@ -369,6 +390,22 @@ impl ReorderableList {
         feedback: impl Fn(&ReorderableItem<'_>) -> V + 'static,
     ) -> Self {
         self.config.feedback(feedback);
+        self
+    }
+
+    /// Dress what a drag of a row shows under the pointer as it lifts:
+    /// `decorator` gets that view, the row's index and the lift, which runs
+    /// from 0 to 1 over 150 ms as the drag starts (at once under reduced
+    /// motion). By default the view rises to elevation 6 and grows to
+    /// 102 %.
+    #[must_use]
+    pub fn proxy_decorator<V: IntoView>(
+        mut self,
+        decorator: impl Fn(BoxedView, usize, Rc<dyn Animation<f64>>) -> V + 'static,
+    ) -> Self {
+        self.config.proxy_decorator = Some(Rc::new(move |proxy, index, lift| {
+            decorator(proxy, index, lift).into_view().boxed()
+        }));
         self
     }
 
@@ -524,6 +561,22 @@ impl ReorderableGrid {
         feedback: impl Fn(&ReorderableItem<'_>) -> V + 'static,
     ) -> Self {
         self.config.feedback(feedback);
+        self
+    }
+
+    /// Dress what a drag of a tile shows under the pointer as it lifts:
+    /// `decorator` gets that view, the tile's index and the lift, which runs
+    /// from 0 to 1 over 150 ms as the drag starts (at once under reduced
+    /// motion). By default the view rises to elevation 6 and grows to
+    /// 102 %.
+    #[must_use]
+    pub fn proxy_decorator<V: IntoView>(
+        mut self,
+        decorator: impl Fn(BoxedView, usize, Rc<dyn Animation<f64>>) -> V + 'static,
+    ) -> Self {
+        self.config.proxy_decorator = Some(Rc::new(move |proxy, index, lift| {
+            decorator(proxy, index, lift).into_view().boxed()
+        }));
         self
     }
 
@@ -746,13 +799,92 @@ struct RowPayload {
     key: Rc<dyn ViewKey>,
 }
 
-/// One running drag of a row: what its preview last said.
+/// How long a dragged item's lift takes.
+const LIFT: Duration = Duration::from_millis(150);
+/// How long a row takes to make room, land or go to its new place.
+const SLIDE: Duration = Duration::from_millis(250);
+/// The elevation and scale the default proxy decorator lifts to.
+const LIFT_ELEVATION: f64 = 6.0;
+const LIFT_SCALE: f64 = 1.02;
+
+/// One running drag of a row.
 struct RowDrag {
     key: Rc<dyn ViewKey>,
+    /// Where a drop now moves the item. For the lead drag a position in the
+    /// order the rows are shown in, which keeps a gap there; for any other
+    /// the index of the row it is over.
     over: Option<usize>,
     /// Whether a row reported the drag over it since the list last looked:
     /// the rows answer a move before the list around them does.
     row_reported: bool,
+    /// The row whose report last moved the gap. It slides away under the
+    /// pointer, so its reports are not heard until another row reports.
+    shifted: Option<Rc<dyn ViewKey>>,
+    /// The lift the proxy decorator reads.
+    lift: DrivenController,
+    /// How far the proxy was from the dragged item's row when the drag
+    /// ended, in the window's space: the row lands from there.
+    landing: Option<Offset<f64>>,
+    /// Where the drag was when it last left the list, for the drop that
+    /// follows its own leave; cleared when it is over a row again.
+    left_over: Option<usize>,
+}
+
+/// Where the lead drag shows its item: the rows between `from` and `over`
+/// each move one position toward `from`, and the item, painted as a gap,
+/// sits at `over`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Gap {
+    from: usize,
+    over: usize,
+}
+
+impl Gap {
+    /// The index of the item shown at position `slot`.
+    fn item_at(gap: Option<Self>, slot: usize) -> usize {
+        match gap {
+            Some(Self { from, over }) if slot == over => from,
+            Some(Self { from, over }) if from < over && (from..over).contains(&slot) => slot + 1,
+            Some(Self { from, over }) if over < from && (over + 1..=from).contains(&slot) => {
+                slot - 1
+            }
+            _ => slot,
+        }
+    }
+
+    /// The position item `index` is shown at.
+    fn slot_of(gap: Option<Self>, index: usize) -> usize {
+        match gap {
+            Some(Self { from, over }) if index == from => over,
+            Some(Self { from, over }) if from < over && (from + 1..=over).contains(&index) => {
+                index - 1
+            }
+            Some(Self { from, over }) if over < from && (over..from).contains(&index) => index + 1,
+            _ => index,
+        }
+    }
+}
+
+/// What the list keeps for one item while the item is in it: the record its
+/// slides read, and the node its row's content is published in. Both follow
+/// the item wherever it is shown.
+#[derive(Clone)]
+struct ItemRecord {
+    key: Rc<dyn ViewKey>,
+    slot: Rc<PlacementSlot>,
+    anchor: SubtreeAnchor,
+}
+
+/// The items' records by the hash of their keys.
+type Records = HashMap<u64, Vec<ItemRecord>>;
+
+/// The record of `key` among `records`.
+fn record_in(records: &Records, key: &dyn ViewKey) -> Option<ItemRecord> {
+    records
+        .get(&key.key_hash())?
+        .iter()
+        .find(|record| record.key.key_eq(key))
+        .cloned()
 }
 
 /// One mounted list or grid, as its rows share it.
@@ -763,12 +895,24 @@ struct Shared {
     grid: Rc<Cell<Option<GridShape>>>,
     /// The drags of this list's rows that run now, one per dragged item:
     /// two contacts may drag two rows at once, each with its own preview.
+    /// The first is the lead, whose item the rows make room for.
     drags: RefCell<Vec<RowDrag>>,
+    /// The clock every slide of the rows shares: rows making room for a
+    /// drag, an item landing, an item a command moved.
+    clock: RefCell<DrivenController>,
+    /// Advances whenever the order the rows are shown in changes; the rows
+    /// slide only across a change of it.
+    generation: Cell<u64>,
+    /// Each item's record, rebuilt from the keys by each build.
+    records: RefCell<Records>,
+    vsync: RefCell<Option<Vsync>>,
+    rebuild: RefCell<Option<RebuildHandle>>,
     writer: RefCell<Option<WriterSource>>,
     announcer: RefCell<Option<Announcer>>,
     /// The localizations the list was last built with, for its announcements.
     strings: RefCell<Option<std::sync::Arc<BoxedWidgetsLocalizations>>>,
-    /// The render tree the rows lay out in, for the size of a dragged row.
+    /// The render tree the rows lay out in, for the size and place of a
+    /// dragged row.
     pipeline: RefCell<Option<WeakPipelineCell>>,
 }
 
@@ -780,6 +924,22 @@ impl Shared {
         }
     }
 
+    fn schedule_rebuild(&self) {
+        let rebuild = self.rebuild.borrow().clone();
+        if let Some(rebuild) = rebuild {
+            rebuild.schedule(flui_view::RebuildReason::StateChange);
+        }
+    }
+
+    /// The order the rows are shown in changed: they slide on the next
+    /// layout.
+    fn reshown(&self) {
+        // The generation names no order: the sliver only compares it with the
+        // one its last settled pass saw.
+        self.generation.set(self.generation.get().wrapping_add(1));
+        self.schedule_rebuild();
+    }
+
     /// The laid-out size of the row published into `anchor`, or `None` when it
     /// is not laid out or a layout pass is running.
     fn row_size(&self, anchor: &SubtreeAnchor) -> Option<Size> {
@@ -788,36 +948,141 @@ impl Shared {
         owner.try_with_layout(|owner| owner.box_size(id))?
     }
 
-    /// Where the model has the item keyed `key` now: an earlier move may have
-    /// changed it since the rows were built. The view is cloned out of its
-    /// cell first, since `key_of` is app code.
-    fn index_now(&self, key: &dyn ViewKey) -> Option<usize> {
-        let view = self.view.borrow().clone();
-        view.index_of(key)
-    }
-    /// Run `change` on the state of the drag of `key`, started if new; the
-    /// cell is released before the caller runs app code.
-    fn with_drag<R>(&self, key: &Rc<dyn ViewKey>, change: impl FnOnce(&mut RowDrag) -> R) -> R {
-        let mut drags = self.drags.borrow_mut();
-        let at = drags
-            .iter()
-            .position(|drag| drag.key.key_eq(&**key))
-            .unwrap_or_else(|| {
-                drags.push(RowDrag {
-                    key: Rc::clone(key),
-                    over: None,
-                    row_reported: false,
-                });
-                drags.len() - 1
-            });
-        change(&mut drags[at])
+    /// Where the top-left corner of the node published into `anchor` is
+    /// painted in the window, or `None` when it is not laid out.
+    fn painted_at(&self, anchor: &SubtreeAnchor) -> Option<Offset<f64>> {
+        let id = anchor.get()?;
+        let owner = self.pipeline.borrow().as_ref()?.upgrade()?;
+        owner
+            .try_with(|owner| owner.local_to_global(id, Point::new(0.0, 0.0), None))
+            .flatten()
+            .map(|at| Offset::new(at.x, at.y))
+            .filter(|at| at.dx.is_finite() && at.dy.is_finite())
     }
 
-    /// A drag of `key` is over `over` now; the preview hears of each change,
-    /// per dragged item.
-    fn hover(&self, key: &Rc<dyn ViewKey>, over: Option<usize>) {
-        if !self.with_drag(key, |drag| std::mem::replace(&mut drag.over, over) != over) {
+    /// The record of the item keyed `key`, while it is in the list.
+    fn record(&self, key: &dyn ViewKey) -> Option<ItemRecord> {
+        record_in(&self.records.borrow(), key)
+    }
+
+    /// Where the lead drag shows its item now; `None` while no drag is over
+    /// a row, which shows every row where the model has it.
+    fn gap(&self, view: &Config) -> Option<Gap> {
+        let (key, over) = {
+            let drags = self.drags.borrow();
+            let lead = drags.first()?;
+            (Rc::clone(&lead.key), lead.over?)
+        };
+        let from = view.index_of(&*key)?;
+        (over < view.item_count).then_some(Gap { from, over })
+    }
+
+    /// Whether `key` is the lead drag's item, which its row shows as a gap.
+    fn is_gap(&self, key: &dyn ViewKey) -> bool {
+        self.drags
+            .borrow()
+            .first()
+            .is_some_and(|lead| lead.key.key_eq(key))
+    }
+
+    /// A drag of `key` started: any state left from an earlier drag of it is
+    /// forgotten, and its lift begins.
+    fn started(&self, key: &Rc<dyn ViewKey>) {
+        let lift = {
+            let vsync = self.vsync.borrow();
+            AnimationController::builder(LIFT)
+                .debug_label("Reorderable.lift")
+                .build_on(vsync.as_ref())
+        };
+        if let Err(error) = lift.controller().forward() {
+            tracing::warn!(%error, "a reorderable item's lift did not start; it shows lifted");
+            let _ = lift.controller().set_value(1.0);
+        }
+        let replaced = {
+            let mut drags = self.drags.borrow_mut();
+            let replaced = drags
+                .iter()
+                .position(|drag| drag.key.key_eq(&**key))
+                .map(|at| drags.remove(at));
+            drags.push(RowDrag {
+                key: Rc::clone(key),
+                over: None,
+                row_reported: false,
+                shifted: None,
+                lift,
+                landing: None,
+                left_over: None,
+            });
+            replaced
+        };
+        if let Some(mut replaced) = replaced {
+            replaced.lift.dispose();
+        }
+        // The row becomes the gap the proxy leaves.
+        self.schedule_rebuild();
+    }
+
+    /// The lift of the drag of `key`; at rest, lifted, when it has none.
+    fn lift(&self, key: &dyn ViewKey) -> Rc<dyn Animation<f64>> {
+        let lift = self
+            .drags
+            .borrow()
+            .iter()
+            .find(|drag| drag.key.key_eq(key))
+            .map(|drag| drag.lift.controller().clone());
+        match lift {
+            Some(lift) => Rc::new(lift),
+            None => Rc::new(flui_animation::UNIT_END_ANIMATION),
+        }
+    }
+
+    /// What a drag of the item at `index`, keyed `key`, shows under the
+    /// pointer: `proxy` dressed by the decorator.
+    fn proxy(&self, proxy: BoxedView, index: usize, key: &dyn ViewKey) -> BoxedView {
+        let lift = self.lift(key);
+        let decorator = self.view.borrow().proxy_decorator.clone();
+        match decorator {
+            Some(decorator) => decorator(proxy, index, lift),
+            None => lifted(proxy, lift),
+        }
+    }
+
+    /// Run `change` on the state of the drag of `key`, if it runs; the cell
+    /// is released before the caller runs app code.
+    fn with_drag<R>(
+        &self,
+        key: &dyn ViewKey,
+        change: impl FnOnce(&mut RowDrag, bool) -> R,
+    ) -> Option<R> {
+        let mut drags = self.drags.borrow_mut();
+        let at = drags.iter().position(|drag| drag.key.key_eq(key))?;
+        Some(change(&mut drags[at], at == 0))
+    }
+
+    /// The drag of `key` is over `over` now; the preview hears of each
+    /// change, per dragged item, and a change of the lead's moves the gap.
+    fn hover(&self, key: &Rc<dyn ViewKey>, over: Option<usize>, shifted: Option<&Rc<dyn ViewKey>>) {
+        let Some((changed, lead, replaced)) = self.with_drag(&**key, |drag, lead| {
+            let changed = std::mem::replace(&mut drag.over, over) != over;
+            if over.is_some() {
+                drag.left_over = None;
+            }
+            let replaced = if changed {
+                std::mem::replace(&mut drag.shifted, shifted.cloned())
+            } else {
+                None
+            };
+            (changed, lead, replaced)
+        }) else {
             return;
+        };
+        // Dropped once the cell is released: a key's destructor is app code.
+        drop(replaced);
+        if !changed {
+            return;
+        }
+        if lead {
+            self.reshown();
         }
         let view = self.view.borrow().clone();
         let (Some(preview), Some(from)) = (view.on_reorder_preview.clone(), view.index_of(&**key))
@@ -827,30 +1092,120 @@ impl Shared {
         self.write(|cx| preview(cx, ReorderPreview { from, over }));
     }
 
-    /// Note that a row answered the drag of `key` in this move.
-    fn row_reported(&self, key: &Rc<dyn ViewKey>) {
-        self.with_drag(key, |drag| drag.row_reported = true);
+    /// A drag of `key` is over the row of the item keyed `row`.
+    ///
+    /// The lead drag puts its item where that row is shown, and the rows
+    /// between make room; over its own row, the gap, it stays where it is.
+    /// Any other drag is over the row's item.
+    fn over_row(&self, key: &Rc<dyn ViewKey>, row: &Rc<dyn ViewKey>) {
+        let view = self.view.borrow().clone();
+        let gap = self.gap(&view);
+        let Some(item) = view.index_of(&**row) else {
+            return;
+        };
+        let Some((report, cleared)) = self.with_drag(&**key, |drag, lead| {
+            drag.row_reported = true;
+            if !lead {
+                return (Some((Some(item), None)), None);
+            }
+            if row.key_eq(&**key) {
+                let cleared = drag.shifted.take();
+                return (Some((drag.over.or(Some(item)), None)), cleared);
+            }
+            if drag
+                .shifted
+                .as_ref()
+                .is_some_and(|shifted| shifted.key_eq(&**row))
+            {
+                return (None, None);
+            }
+            (
+                Some((Some(Gap::slot_of(gap, item)), Some(Rc::clone(row)))),
+                None,
+            )
+        }) else {
+            return;
+        };
+        // Dropped once the cell is released: a key's destructor is app code.
+        drop(cleared);
+        if let Some((over, shifted)) = report {
+            self.hover(key, over, shifted.as_ref());
+        }
     }
+
     /// Whether a row answered the drag of `key` since the list last asked.
     fn take_row_reported(&self, key: &dyn ViewKey) -> bool {
-        self.drags
-            .borrow_mut()
-            .iter_mut()
-            .find(|drag| drag.key.key_eq(key))
-            .is_some_and(|drag| std::mem::take(&mut drag.row_reported))
+        self.with_drag(key, |drag, _| std::mem::take(&mut drag.row_reported))
+            .unwrap_or(false)
     }
 
-    /// Forget any state left from an earlier drag of `key`, telling no one.
-    fn forget(&self, key: &dyn ViewKey) {
-        self.drags.borrow_mut().retain(|drag| !drag.key.key_eq(key));
+    /// The drag of `key` moved over no row inside the list: the lead keeps
+    /// its gap, which a drop there takes, and any other is over nothing.
+    fn over_no_row(&self, key: &Rc<dyn ViewKey>) {
+        if self.with_drag(&**key, |_, lead| lead) == Some(false) {
+            self.hover(key, None, None);
+        }
     }
 
-    /// The drag of `key` ended: over no row, and forgotten.
+    /// The drag of `key` was let go over the list: the item goes where the
+    /// drag shows it.
+    fn dropped(&self, cx: &mut EventCx<'_>, key: &dyn ViewKey) {
+        if let Some(Some(to)) = self.with_drag(key, |drag, _| drag.over.or(drag.left_over)) {
+            let _ = self.reorder(cx, key, to, ReorderCause::Drag);
+        }
+    }
+
+    /// The proxy of the drag of `key` was at `proxy` in the window when the
+    /// drag ended: the item's row lands from there. Read before anything the
+    /// end changes is laid out, while the row is painted where it was.
+    fn proxy_ended(&self, key: &dyn ViewKey, proxy: Offset<f64>) {
+        let painted = self
+            .record(key)
+            .and_then(|record| self.painted_at(&record.anchor));
+        if let Some(painted) = painted {
+            let _ = self.with_drag(key, |drag, _| drag.landing = Some(proxy - painted));
+        }
+    }
+
+    /// The drag of `key` ended, dropped or not: its row lands from where the
+    /// proxy was, the rows close the gap, and the drag is forgotten.
     fn ended(&self, key: &Rc<dyn ViewKey>) {
-        self.hover(key, None);
-        self.drags
-            .borrow_mut()
-            .retain(|drag| !drag.key.key_eq(&**key));
+        let preview = self
+            .with_drag(&**key, |drag, _| drag.over.is_some())
+            .unwrap_or(false);
+        let ended = {
+            let mut drags = self.drags.borrow_mut();
+            drags
+                .iter()
+                .position(|drag| drag.key.key_eq(&**key))
+                .map(|at| drags.remove(at))
+        };
+        let Some(mut ended) = ended else {
+            return;
+        };
+        ended.lift.dispose();
+        self.reshown();
+        if let (Some(landing), Some(record)) = (ended.landing, self.record(&**key)) {
+            record.slot.displace(landing, self.generation.get());
+        }
+        // The preview hears that the drag is over no row now.
+        let view = self.view.borrow().clone();
+        if preview
+            && let (Some(callback), Some(from)) =
+                (view.on_reorder_preview.clone(), view.index_of(&**key))
+        {
+            self.write(|cx| callback(cx, ReorderPreview { from, over: None }));
+        }
+    }
+
+    /// The drag of `key` left the list: over no row, and the gap closes.
+    /// Where it was is kept for a drop: the drag machinery tells every
+    /// target but the one dropped on that the drag left before the drop.
+    fn left(&self, key: &Rc<dyn ViewKey>) {
+        let _ = self.with_drag(&**key, |drag, _| {
+            drag.left_over = drag.over.or(drag.left_over);
+        });
+        self.hover(key, None, None);
     }
 
     /// Move the item keyed `key` to `to`, and announce its new position;
@@ -884,6 +1239,8 @@ impl Shared {
                 ),
             }
         };
+        // The rows slide to the order the app's rebuild gives them.
+        self.reshown();
         (view.on_reorder)(cx, Reorder { from, to, cause });
         let announcer = self.announcer.borrow().clone();
         if let Some(announcer) = announcer {
@@ -895,10 +1252,20 @@ impl Shared {
 
 impl Shared {
     fn new(view: &Config) -> Rc<Self> {
+        let clock = AnimationController::builder(SLIDE)
+            .debug_label("Reorderable.slide")
+            .build_on(None);
+        // At rest until the first slide.
+        let _ = clock.controller().set_value(1.0);
         Rc::new(Self {
             view: RefCell::new(view.clone()),
             grid: Rc::new(Cell::new(None)),
             drags: RefCell::new(Vec::new()),
+            clock: RefCell::new(clock),
+            generation: Cell::new(0),
+            records: RefCell::new(HashMap::new()),
+            vsync: RefCell::new(None),
+            rebuild: RefCell::new(None),
             writer: RefCell::new(None),
             announcer: RefCell::new(None),
             strings: RefCell::new(None),
@@ -911,6 +1278,56 @@ impl Shared {
         *self.writer.borrow_mut() = Some(ctx.writer_source());
         *self.announcer.borrow_mut() = ctx.announcer();
         *self.pipeline.borrow_mut() = ctx.pipeline_owner().map(|owner| owner.downgrade());
+        *self.rebuild.borrow_mut() = Some(ctx.rebuild_handle());
+        let vsync = VsyncScope::maybe_of(ctx);
+        let rebound = {
+            let mut clock = self.clock.borrow_mut();
+            let mut drags = self.drags.borrow_mut();
+            VsyncUpdate::run(|update| {
+                update.rebind_controller(&mut clock, vsync.as_ref());
+                for drag in drags.iter_mut() {
+                    update.rebind_controller(&mut drag.lift, vsync.as_ref());
+                }
+            })
+        };
+        // Logged once the cells are released: a subscriber is app code.
+        if let Err(error) = rebound {
+            tracing::error!(%error, "a reorderable list lost its frame registry");
+        }
+        *self.vsync.borrow_mut() = vsync;
+    }
+
+    /// Stop every clock: the list leaves the tree.
+    fn dispose(&self) {
+        let drags = std::mem::take(&mut *self.drags.borrow_mut());
+        for mut drag in drags {
+            drag.lift.dispose();
+        }
+        self.clock.borrow_mut().dispose();
+    }
+
+    /// The items' records in the order the rows are shown in, kept for the
+    /// items still in the list and made for the new ones.
+    fn records_in(&self, view: &Config, gap: Option<Gap>) -> Rc<[Rc<PlacementSlot>]> {
+        let previous = std::mem::take(&mut *self.records.borrow_mut());
+        let mut records = Records::with_capacity(view.item_count);
+        let slots = (0..view.item_count)
+            .map(|slot| {
+                let key = (view.key_of)(Gap::item_at(gap, slot));
+                let record = record_in(&previous, &*key).unwrap_or_else(|| ItemRecord {
+                    key: Rc::clone(&key),
+                    slot: Rc::new(PlacementSlot::new()),
+                    anchor: SubtreeAnchor::new(),
+                });
+                let placement = Rc::clone(&record.slot);
+                records.entry(key.key_hash()).or_default().push(record);
+                placement
+            })
+            .collect();
+        *self.records.borrow_mut() = records;
+        // Dropped once the cell is released: a key's destructor is app code.
+        drop(previous);
+        slots
     }
 
     /// The list or grid of `view`'s rows in its scrollable, as one drop
@@ -918,9 +1335,15 @@ impl Shared {
     fn build(self: &Rc<Self>, view: &Config, ctx: &dyn BuildContext) -> BoxedView {
         *self.strings.borrow_mut() = BoxedWidgetsLocalizations::maybe_of(ctx);
         let _prev = self.view.replace(view.clone());
+        let gap = self.gap(view);
+        let placement = Placement::new(
+            self.clock.borrow().controller().clone(),
+            MotionSpec::default().with_duration(SLIDE),
+            self.records_in(view, gap),
+            self.generation.get(),
+        );
         let shared = Rc::clone(self);
         let config = view.clone();
-        let left = Rc::clone(self);
         let scrollable = Scrollable::new()
             .scroll_direction(view.scroll_direction)
             .viewport_builder(Rc::new(move |position| {
@@ -928,22 +1351,31 @@ impl Shared {
                 let rows = config.clone();
                 let keys = config.clone();
                 let grid = Rc::clone(&shared.grid);
-                let row = move |index: usize| {
-                    (index < rows.item_count).then(|| {
+                let row = move |slot: usize| {
+                    (slot < rows.item_count).then(|| {
+                        let index = Gap::item_at(gap, slot);
+                        let key = (rows.key_of)(index);
+                        let record = shared.record(&*key);
                         ReorderRow {
                             index,
-                            key: (rows.key_of)(index),
+                            hidden: shared.is_gap(&*key),
+                            anchor: record.map_or_else(SubtreeAnchor::new, |record| record.anchor),
+                            key,
                             list: Rc::clone(&shared),
                         }
                         .boxed()
                     })
+                };
+                let find = move |key: &dyn ViewKey| {
+                    keys.index_of(key).map(|index| Gap::slot_of(gap, index))
                 };
                 match &config.layout {
                     Layout::List {
                         item_extent_estimate,
                     } => ListView::builder(config.item_count, *item_extent_estimate, row)
                         .scroll_direction(config.scroll_direction)
-                        .find_index_by_key(move |key| keys.index_of(key))
+                        .find_index_by_key(find)
+                        .placement(placement.clone())
                         .focusable(true)
                         .position(position)
                         .boxed(),
@@ -954,7 +1386,8 @@ impl Shared {
                         };
                         GridView::builder(recorder, config.item_count, row)
                             .scroll_direction(config.scroll_direction)
-                            .find_index_by_key(move |key| keys.index_of(key))
+                            .find_index_by_key(find)
+                            .placement(placement.clone())
                             .focusable(true)
                             .position(position)
                             .boxed()
@@ -963,31 +1396,68 @@ impl Shared {
             }))
             .boxed();
         // The rows report where a drag is. The list, which answers each move
-        // after the rows under it, reports "over none" for a move no row
-        // answered (the space after the last row) and when the drag leaves
-        // it; a row's own leave would report it between two rows.
+        // after the rows under it, hears a move no row answered (the space
+        // after the last row) and the drag leaving it; a row's own leave
+        // would report it between two rows. A drop the rows do not take
+        // lands where the lead drag shows its item.
         let between = Rc::clone(self);
+        let dropped = Rc::clone(self);
+        let left = Rc::clone(self);
         DropTarget::bare(
             move |drag: &DragView<'_>| {
-                if let Some(payload) = drag.value::<RowPayload>()
-                    && Rc::ptr_eq(&payload.list, &between)
-                    && !between.take_row_reported(&*payload.key)
-                {
-                    between.hover(&payload.key, None);
+                let payload = drag.value::<RowPayload>()?;
+                if !Rc::ptr_eq(&payload.list, &between) {
+                    return None;
                 }
-                None
+                if !between.take_row_reported(&*payload.key) {
+                    between.over_no_row(&payload.key);
+                }
+                between
+                    .with_drag(&*payload.key, |drag, _| drag.over.is_some())
+                    .unwrap_or(false)
+                    .then_some(TransferActions::MOVE)
             },
             move |_hover| scrollable.clone(),
         )
+        .on_drop(move |cx, drag, _at, _action| {
+            if let Some(payload) = drag.value::<RowPayload>()
+                && Rc::ptr_eq(&payload.list, &dropped)
+            {
+                dropped.dropped(cx, &*payload.key);
+            }
+        })
         .on_leave(move |drag| {
             if let Some(payload) = drag.value::<RowPayload>()
                 && Rc::ptr_eq(&payload.list, &left)
             {
-                left.hover(&payload.key, None);
+                left.left(&payload.key);
             }
         })
         .boxed()
     }
+}
+
+/// The default proxy decorator: `proxy` rises to elevation 6 and grows to
+/// 102 % as `lift` runs.
+fn lifted(proxy: BoxedView, lift: Rc<dyn Animation<f64>>) -> BoxedView {
+    let listenable: Rc<dyn flui_foundation::Listenable> = lift.clone();
+    AnimatedBuilder::new(listenable, move || {
+        let t = lift.value();
+        let t = if t.is_finite() {
+            t.clamp(0.0, 1.0)
+        } else {
+            1.0
+        };
+        let scale = 1.0 + (LIFT_SCALE - 1.0) * t;
+        PhysicalModel::new(Color::TRANSPARENT)
+            .elevation(LIFT_ELEVATION * t)
+            .child(
+                Transform::scale(scale, scale)
+                    .alignment(flui_painting::Alignment::CENTER)
+                    .child(proxy.clone()),
+            )
+    })
+    .boxed()
 }
 
 /// Persistent state of a [`ReorderableList`].
@@ -1030,6 +1500,10 @@ impl ViewState<ReorderableList> for ReorderableListState {
 
     fn build(&self, view: &ReorderableList, ctx: &dyn BuildContext) -> impl IntoView {
         self.shared.build(&view.config, ctx)
+    }
+
+    fn dispose(&mut self) {
+        self.shared.dispose();
     }
 }
 
@@ -1075,6 +1549,10 @@ impl ViewState<ReorderableGrid> for ReorderableGridState {
     fn build(&self, view: &ReorderableGrid, ctx: &dyn BuildContext) -> impl IntoView {
         self.shared.build(&view.config, ctx)
     }
+
+    fn dispose(&mut self) {
+        self.shared.dispose();
+    }
 }
 
 // ============================================================================
@@ -1085,20 +1563,32 @@ impl ViewState<ReorderableGrid> for ReorderableGridState {
 struct HandleSource {
     list: Rc<Shared>,
     key: Rc<dyn ViewKey>,
+    index: usize,
     feedback: BoxedView,
+    /// Where the row's content is published: the box the proxy shows and
+    /// the row lands in.
+    content: SubtreeAnchor,
     menu: bool,
     /// Where a press on the handle moves to drag ([`Config::handle_axis`]).
     axis: MultiDragAxis,
 }
 
 impl HandleSource {
-    /// A draggable of the row, started by `devices` with `trigger`.
-    fn draggable(&self, child: BoxedView, devices: PointerKindSet) -> Draggable {
+    /// A draggable of the row, started by `devices`; its child sits in the
+    /// row's content at the place `child_offset` reads as a drag starts.
+    fn draggable(
+        &self,
+        child: BoxedView,
+        devices: PointerKindSet,
+        child_offset: Rc<dyn Fn() -> Offset<f64>>,
+    ) -> Draggable {
         let list = Rc::clone(&self.list);
         let key = Rc::clone(&self.key);
         let (started, started_key) = (Rc::clone(&self.list), Rc::clone(&self.key));
         let (ended, ended_key) = (Rc::clone(&self.list), Rc::clone(&self.key));
-        let feedback = self.feedback.clone();
+        let (shown, shown_key) = (Rc::clone(&self.list), Rc::clone(&self.key));
+        let (landed, landed_key) = (Rc::clone(&self.list), Rc::clone(&self.key));
+        let (feedback, index) = (self.feedback.clone(), self.index);
         Draggable::bare(
             move || {
                 vec![DragItem::new().with_value(RowPayload {
@@ -1110,8 +1600,12 @@ impl HandleSource {
         )
         .devices(devices)
         .reach(DragReach::Window)
-        .feedback(move || feedback.clone())
-        .on_drag_started(move |_cx| started.forget(&*started_key))
+        .feedback(move || shown.proxy(feedback.clone(), index, &*shown_key))
+        .feedback_frame(FeedbackFrame {
+            child_offset,
+            ended: Rc::new(move |proxy| landed.proxy_ended(&*landed_key, proxy)),
+        })
+        .on_drag_started(move |_cx| started.started(&started_key))
         // A drag that ends anywhere, dropped or not, is over no row now.
         .on_drag_end(move |_cx, _outcome| {
             ended.ended(&ended_key);
@@ -1129,8 +1623,20 @@ impl HandleSource {
             .behavior(HitTestBehavior::Opaque)
             .child(child)
             .boxed();
+        // The proxy lifts from the row's content, not from the handle: the
+        // handle's place in the content is read as the drag starts.
+        let at = SubtreeAnchor::new();
+        let child = AnchoredBox::new(at.clone(), child).boxed();
+        let (list, content) = (Rc::clone(&self.list), self.content.clone());
+        let child_offset =
+            Rc::new(
+                move || match (list.painted_at(&at), list.painted_at(&content)) {
+                    (Some(handle), Some(content)) => handle - content,
+                    _ => Offset::ZERO,
+                },
+            );
         let handle = self
-            .draggable(child, PointerKindSet::all())
+            .draggable(child, PointerKindSet::all(), child_offset)
             .axis(self.axis)
             .boxed();
         let handle = match self.axis {
@@ -1212,9 +1718,15 @@ fn beside_handle(content: BoxedView, handle: BoxedView, side: f64, view: &Config
 /// long press that drags it.
 #[derive(Clone)]
 struct ReorderRow {
+    /// The item's index in the app's model, wherever the row is shown.
     index: usize,
     key: Rc<dyn ViewKey>,
     list: Rc<Shared>,
+    /// Whether the row is the gap the lead drag's item leaves: laid out and
+    /// still a drop target, but not painted.
+    hidden: bool,
+    /// Where the row's content is published, kept for the item.
+    anchor: SubtreeAnchor,
 }
 
 impl View for ReorderRow {
@@ -1242,14 +1754,16 @@ impl StatelessView for ReorderRow {
         // What the drag shows under the pointer. Never the row's own content
         // built again: that would mount a second copy of whatever the row
         // owns alone (a field's focus node, a controller).
+        let anchor = self.anchor.clone();
         let bare_source = HandleSource {
             list: Rc::clone(&self.list),
             key: Rc::clone(&self.key),
+            index,
             feedback: SizedBox::shrink().boxed(),
+            content: anchor.clone(),
             menu,
             axis: view.handle_axis(),
         };
-        let anchor = SubtreeAnchor::new();
         let feedback = match &view.feedback {
             Some(feedback) => feedback(&ReorderableItem {
                 index,
@@ -1283,7 +1797,11 @@ impl StatelessView for ReorderRow {
         };
         let content = if view.long_press {
             source
-                .draggable(content, PointerKindSet::TOUCH | PointerKindSet::PEN)
+                .draggable(
+                    content,
+                    PointerKindSet::TOUCH | PointerKindSet::PEN,
+                    Rc::new(|| Offset::ZERO),
+                )
                 .trigger(flui_interaction::drag::DragTrigger::LongPress)
                 .boxed()
         } else {
@@ -1291,7 +1809,8 @@ impl StatelessView for ReorderRow {
         };
 
         // The row publishes its render node, so a drag without a label shows
-        // a plate of the row's size.
+        // a plate of the row's size, the proxy lifts from it and the row
+        // lands from where the proxy was let go.
         let content = AnchoredBox::new(anchor, content).boxed();
         let token = Rc::clone(&self.list);
         let hover = Rc::clone(&self.list);
@@ -1302,23 +1821,18 @@ impl StatelessView for ReorderRow {
                 if !Rc::ptr_eq(&payload.list, &token) {
                     return None;
                 }
-                // Where the model has this row now, as for the drop.
-                hover.row_reported(&payload.key);
-                if let Some(over) = hover.index_now(&*row) {
-                    hover.hover(&payload.key, Some(over));
-                }
+                hover.over_row(&payload.key, &row);
                 Some(TransferActions::MOVE)
             },
             move |_hover| content.clone(),
         )
         .on_drop({
             let list = Rc::clone(&self.list);
-            let dropped_on = Rc::clone(&self.key);
             move |cx, drag, _at, _action| {
                 if let Some(payload) = drag.value::<RowPayload>()
-                    && let Some(to) = list.index_now(&*dropped_on)
+                    && Rc::ptr_eq(&payload.list, &list)
                 {
-                    let _ = list.reorder(cx, &*payload.key, to, ReorderCause::Drag);
+                    list.dropped(cx, &*payload.key);
                 }
             }
         });
@@ -1379,11 +1893,14 @@ impl StatelessView for ReorderRow {
             .fold(Shortcuts::new(row), |shortcuts, (_, intent, key, _)| {
                 shortcuts.shortcut(key.clone(), *intent)
             });
-        Actions::new(row).action(RowMoves {
+        let row = Actions::new(row).action(RowMoves {
             list: Rc::clone(&self.list),
             key: Rc::clone(&self.key),
             rtl,
-        })
+        });
+        // Always the same wrapper, so the row keeps its state when it becomes
+        // the gap and when it lands.
+        Opacity::new(if self.hidden { 0.0 } else { 1.0 }).child(row)
     }
 }
 

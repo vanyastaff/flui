@@ -15,7 +15,29 @@
 //! assert_eq!(list.len(), 1);
 //! ```
 
+use crate::paint::BlendMode;
 use crate::{Canvas, DisplayList, FontCollection, HostFontFeed, HostFonts, TextContext};
+
+/// Lists the variants once for both [`EVERY_BLEND_MODE`] and a match with no
+/// wildcard arm: a variant missing from the list fails to compile (E0004), and
+/// a repeated one is `unreachable_patterns`.
+macro_rules! every_blend_mode {
+    ($($variant:ident),+ $(,)?) => {
+        /// Every [`BlendMode`] variant, in declaration order: what a test of a
+        /// blend classification iterates, so no mode escapes it.
+        pub const EVERY_BLEND_MODE: &[BlendMode] = &[$(BlendMode::$variant),+];
+
+        const _: () = match BlendMode::SrcOver {
+            $(BlendMode::$variant)|+ => (),
+        };
+    };
+}
+
+every_blend_mode![
+    Clear, Src, Dst, SrcOver, DstOver, SrcIn, DstIn, SrcOut, DstOut, SrcATop, DstATop, Xor, Plus,
+    Modulate, Screen, Overlay, Darken, Lighten, ColorDodge, ColorBurn, HardLight, SoftLight,
+    Difference, Exclusion, Multiply, Hue, Saturation, Color, Luminosity,
+];
 
 /// The FLUI Probe Mono face at weight 100: a generated family no host
 /// carries, which maps `A` one em wide. A consumer's tests register it on a

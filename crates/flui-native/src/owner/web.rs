@@ -792,6 +792,12 @@ impl host::Loop for WebLoop {
 }
 
 impl host::Services for WebLoop {
+    // The page's preload is read by the web transport, the first that needs it.
+    fn launch_value(&self, key: flui_platform::LaunchKey) -> Option<String> {
+        let _ = key;
+        None
+    }
+
     fn background_executor(&self) -> Arc<dyn PlatformExecutor> {
         self.with_state(|s| s.background_executor.clone())
     }

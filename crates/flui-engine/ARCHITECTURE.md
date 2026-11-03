@@ -688,6 +688,13 @@ Each logical primitive composites before the next overlapping operation.
 SSAA Plus resolves a separate geometry plane with the same downsample mapping.
 [ADR-0103](../../docs/adr/ADR-0103-portable-independent-primitive-coverage.md)
 replaces the former direct-draw capability decision.
+Every routing predicate here (`destination_alpha_scale_for`,
+`coverage_must_not_fold`, `is_tile_safe_for_ssaa` and the portable-path checks)
+is an exhaustive match on `BlendMode::coverage_class` from `flui-painting`, the one
+classification of the modes, so a new mode is classified once and every path
+follows it. `coverage_class_names_the_destination_factor_blend_state_for_uses`
+ties each class to the destination factor `blend_state_for` gives it and to
+`Color::blend`.
 `coverage_blend_reads_back_as_specified` checks the portable result, including
 transparent Clear, gradient alpha and intrinsic edges, crop ordering and saturated
 SSAA Plus. `WgpuPainter::render_to_texture` creates its own base-mip view from a
@@ -1181,9 +1188,19 @@ is idempotent; multiplying already-resolved
 R8 masks is not the expression algebra. Each encoded target gets frozen mapping,
 mask and consumer uniforms. A scaled SSAA/offscreen attachment resamples geometry
 in its attachment sample domain rather than resizing a root-resolution R8 mask.
-Conservative regional crop limits allocation, while cumulative membership work
-is admitted across the frame with a 1 billion unit ceiling. Both lowering CPU
-scratch and GPU allocations enter existing admission/completion ownership.
+A mask is read only by fragments that pass their draw's hardware scissor, so it
+is resolved over the clip's root bounds mapped into the attachment, cut to the
+footprint of the draws that read it: the bounding box of their scissors, clamped
+to the attachment as replay clamps them (`MaskFootprint`, `mask_crop`). A partial
+frame's damage and a clip's enclosing rectangle are such scissors, so neither
+pays for pixels no draw writes; analytic shadows draw under their recorded
+scissor like every other instanced kind. A footprint no draw reaches fails
+closed to the empty mask, and a cached mask answers only crops it contains.
+`a_partial_frame_resolves_clip_coverage_only_inside_its_damage` renders a
+full-window clip whose whole-window mask is over the work ceiling, for every
+kind of draw that reads a mask. Cumulative membership work is admitted across
+the frame with a 1 billion unit ceiling. Both lowering CPU scratch and GPU
+allocations enter existing admission/completion ownership.
 
 SaveLayer separates inherited composite membership from membership introduced
 inside its input. A prefix belongs to one group boundary and must not attenuate
@@ -1300,6 +1317,18 @@ scene through headless capture. With feature `testing` and
 `FLUI_READBACK_DUMP_DIR` set, `layer_effects_capture_as_specified` also writes
 named direct/mask, full/partial, scaled/rebased and follower-state PNG witnesses.
 Screenshots complement the numerical readbacks; they do not replace them.
+
+### 22. The raster seam's outcome enums are closed
+
+`PresentDisposition`, `PumpOutcome`, `FrameDropReason` and `RasterSubmitError` carry
+no enum-level `#[non_exhaustive]`, for ADR-0068 §2's reason: the raster lane in
+`flui-app` turns each into a frame verdict, and a variant added later must stop
+compiling at that match instead of falling into a default that drops owed work.
+`PumpOutcome`'s struct variants keep their variant-level `#[non_exhaustive]`, so a
+new field stays additive. `FrameDropReason::requires_retry` is the one place a drop
+reason is classified for `RasterCompletion::retry_required` (ADR-0101); `false` is
+terminal for the frame. Each enum's doc example matches it from outside the crate
+with no wildcard arm, so marking it `#[non_exhaustive]` again fails that example.
 
 
 ### Reflected and scaled primitive bounds remain local

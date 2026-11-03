@@ -44,6 +44,7 @@ pub use actions::{
 };
 pub use animated_cross_fade::{AnimatedCrossFade, AnimatedCrossFadeState, CrossFadeState};
 pub use companion::{CompanionGap, CompanionLink, CompanionRegistration};
+pub(crate) use draggable::FeedbackFrame;
 pub use draggable::{DragAnchor, DragCommands, Draggable, DraggableState};
 pub use drop_target::{DropCommands, DropHover, DropTarget, DropTargetState};
 pub use focus::{

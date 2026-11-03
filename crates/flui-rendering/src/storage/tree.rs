@@ -3,7 +3,7 @@
 //! This module provides efficient storage and tree operations for render
 //! objects.
 
-use super::node_slab::{NodeSlab, SlabLease};
+use super::node_slab::{NodeSlab, TreeLease};
 use flui_foundation::RenderId;
 
 use super::node::RenderNode;
@@ -38,70 +38,63 @@ use crate::protocol::{BoxProtocol, RenderObject, SliverProtocol};
 /// ```
 #[derive(Debug)]
 pub struct RenderTree {
-    /// Slab storage for nodes (0-based indexing internally).
+    /// Slot storage for nodes. It mints every [`RenderId`] and empties every
+    /// slot, so a slot's generation and its occupant never disagree: a
+    /// removed node's ids go stale, and a slot that runs out of generations
+    /// retires instead of reissuing one.
     nodes: NodeSlab,
-
-    /// Per-slot generation counters, parallel to `nodes` (indexed by slot).
-    ///
-    /// D2 ABA safety: the slab reuses freed slots, so a bare index would let
-    /// a stale [`RenderId`] silently address a different node (wrong-node
-    /// dirty marks; stale retained content under a new widget). Each slot's
-    /// generation is bumped when the slot is freed; ids are minted against
-    /// the slot's current generation, and every accessor routes through the
-    /// single private [`Self::resolve`] check. Mirrors `ElementTree`'s
-    /// scheme (`ElementId`).
-    generations: Vec<core::num::NonZeroU32>,
 
     /// Root node ID (None if tree is empty).
     root: Option<RenderId>,
 }
 
-/// Materialises disjoint `&mut RenderNode` borrows for the given slab
-/// `indices`, in input order, from a **single** `iter_mut` pass.
+/// Materialises disjoint `&mut RenderNode` borrows for `ids`, in input
+/// order, from a **single** `iter_mut` pass.
 ///
-/// Safe split-borrow: `slab::IterMut` yields each occupied slot's
+/// Safe split-borrow: the slab's `iter_mut` yields each occupied slot's
 /// `&mut RenderNode` exactly once out of one traversal, so the returned
 /// references are disjoint by construction and no `unsafe` is needed.
-/// (The previous implementation derived each element through a fresh
-/// `(*raw_slab).get_mut(idx)` — every such deref re-tags the whole slab
-/// allocation as `Unique` and invalidates the references produced by
-/// the earlier iterations: Stacked Borrows UB, reported by miri.)
+/// (Deriving each element through a fresh slab `get_mut` would re-tag the
+/// whole allocation per element and invalidate the earlier references:
+/// Stacked Borrows UB, reported by miri.)
 ///
-/// Returns `None` if `indices` contains duplicates or any index has no
-/// occupied slot.
+/// Returns `None` if `ids` contains duplicates or any id is stale.
 ///
 /// # Complexity
 ///
 /// O(slab len + N) average and worst case — one traversal with an
 /// early break once all N slots are found, plus an O(N) `HashMap`
-/// build for the index→position lookup.
+/// build for the id→position lookup.
 fn collect_disjoint_mut<'a>(
     nodes: &'a mut NodeSlab,
-    indices: &[usize],
+    ids: &[RenderId],
 ) -> Option<Vec<&'a mut RenderNode>> {
-    // slab index → output position. Duplicate indices collapse the map;
-    // report them as `None` (the caller's id-uniqueness contract).
-    let want: std::collections::HashMap<usize, usize> = indices.iter().copied().zip(0..).collect();
-    if want.len() != indices.len() {
+    // id → output position. Duplicate ids collapse the map; report them as
+    // `None` (the caller's id-uniqueness contract).
+    if !ids.iter().all(|&id| nodes.contains(id)) {
+        return None;
+    }
+    let want: std::collections::HashMap<RenderId, usize> = ids.iter().copied().zip(0..).collect();
+    if want.len() != ids.len() {
         return None;
     }
 
-    let mut slots: Vec<Option<&'a mut RenderNode>> = Vec::with_capacity(indices.len());
-    slots.resize_with(indices.len(), || None);
+    let mut slots: Vec<Option<&'a mut RenderNode>> = Vec::with_capacity(ids.len());
+    slots.resize_with(ids.len(), || None);
 
-    let mut remaining = indices.len();
-    for (idx, node) in nodes.iter_mut() {
+    let mut remaining = ids.len();
+    for (id, node) in nodes.iter_mut() {
         if remaining == 0 {
             break;
         }
-        if let Some(&pos) = want.get(&idx) {
+        if let Some(&pos) = want.get(&id) {
             slots[pos] = Some(node);
             remaining -= 1;
         }
     }
 
-    // A missing index leaves its slot `None`, which collapses the
-    // whole collect to `None`.
+    // A stale id leaves its slot `None`, which collapses the whole collect
+    // to `None`.
     slots.into_iter().collect()
 }
 
@@ -125,63 +118,6 @@ pub struct ChildrenUpdate {
     pub donors: Vec<RenderId>,
 }
 
-/// A layout walk's access to a [`RenderTree`]: resolves ids (generation-checked) and hands out
-/// nodes one at a time, with no per-walk collection of the subtree. See [`SlabLease`] for the
-/// invariants; this adds the id check.
-pub(crate) struct TreeLease<'a> {
-    slab: SlabLease<'a>,
-    generations: &'a [core::num::NonZeroU32],
-}
-
-impl TreeLease<'_> {
-    /// `true` when `child` is a current id and its header names `parent`. Reads headers only, so it is
-    /// sound while `parent`'s node is borrowed by the walk.
-    pub(crate) fn is_child_of(&self, child: RenderId, parent: RenderId) -> bool {
-        self.parent(child) == Some(parent)
-    }
-
-    /// The parent of a current id, from its header. Reads no node, so it is sound while the node
-    /// (or any other) is borrowed by the walk. A stale id has no header worth trusting, so the
-    /// generation check comes first.
-    pub(crate) fn parent(&self, id: RenderId) -> Option<RenderId> {
-        if self.generations.get(id.index() as usize).copied() != Some(id.generation()) {
-            return None;
-        }
-        self.slab.parent(id.index() as usize)
-    }
-
-    pub(crate) fn is_in_flight(&self, id: RenderId) -> bool {
-        self.generations.get(id.index() as usize).copied() == Some(id.generation())
-            && self.slab.is_in_flight(id.index() as usize)
-    }
-
-    /// Sets the in-flight bit; `false` if the id is stale or the bit was already set.
-    pub(crate) fn try_enter(&self, id: RenderId) -> bool {
-        self.generations.get(id.index() as usize).copied() == Some(id.generation())
-            && self.slab.try_enter(id.index() as usize)
-    }
-
-    pub(crate) fn leave(&self, id: RenderId) {
-        if self.generations.get(id.index() as usize).copied() == Some(id.generation()) {
-            self.slab.leave(id.index() as usize);
-        }
-    }
-
-    /// The node `id` names. The caller holds no live `&mut` for it: it is not in flight, or the
-    /// caller is its walk frame.
-    pub(crate) fn node(&self, id: RenderId) -> Option<*mut RenderNode> {
-        if self.generations.get(id.index() as usize).copied() != Some(id.generation()) {
-            return None;
-        }
-        self.slab.node(id.index() as usize)
-    }
-
-    /// Slots in the slab: an upper bound on how many nodes a walk can reach.
-    pub(crate) fn capacity(&self) -> usize {
-        self.generations.len()
-    }
-}
-
 impl Default for RenderTree {
     fn default() -> Self {
         Self::new()
@@ -193,7 +129,6 @@ impl RenderTree {
     pub fn new() -> Self {
         Self {
             nodes: NodeSlab::new(),
-            generations: Vec::new(),
             root: None,
         }
     }
@@ -202,95 +137,20 @@ impl RenderTree {
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
             nodes: NodeSlab::with_capacity(capacity),
-            generations: Vec::with_capacity(capacity),
             root: None,
         }
-    }
-
-    // ========================================================================
-    // Generational id plumbing (D2)
-    // ========================================================================
-
-    /// Resolves an id to its slab slot, or `None` when the id is stale
-    /// (slot freed and possibly reused) or the slot is vacant.
-    ///
-    /// THE single staleness check: every accessor must route through here;
-    /// nothing outside this block may index the slab from an id directly.
-    #[inline]
-    fn resolve(&self, id: RenderId) -> Option<usize> {
-        let index = id.index() as usize;
-        (self.generations.get(index).copied() == Some(id.generation())
-            && self.nodes.contains(index))
-        .then_some(index)
-    }
-
-    /// Mints the id for a freshly inserted slot, growing the generation
-    /// table as needed (new slots start at generation 1).
-    ///
-    /// # Panics
-    ///
-    /// Panics if the slab exceeds `u32::MAX` slots — the id's index field
-    /// is 32 bits (same cap as `ElementTree`).
-    #[inline]
-    fn mint(&mut self, slab_index: usize) -> RenderId {
-        if slab_index >= self.generations.len() {
-            self.generations
-                .resize(slab_index + 1, core::num::NonZeroU32::MIN);
-        }
-        let index = u32::try_from(slab_index)
-            .expect("render tree exceeds u32::MAX slots; RenderId index field is 32 bits");
-        RenderId::new_gen(index, self.generations[slab_index])
     }
 
     /// Writes `child_id`'s parent link into its slot header, the only place the link lives, so
     /// the layout lease and every other reader see one value.
     fn set_parent_link(&mut self, child_id: RenderId, parent: Option<RenderId>) {
-        if let Some(index) = self.resolve(child_id) {
-            self.nodes.set_parent(index, parent);
-        }
+        self.nodes.set_parent(child_id, parent);
     }
 
     /// Takes the exclusive borrow of the tree for a layout walk, which then acquires nodes one at
     /// a time as it reaches them. See [`TreeLease`].
     pub(crate) fn lease(&mut self) -> TreeLease<'_> {
-        TreeLease {
-            slab: self.nodes.lease(),
-            generations: &self.generations,
-        }
-    }
-
-    /// The id currently identifying `slab_index` (read-only mint for
-    /// iteration over occupied slots).
-    #[inline]
-    fn id_at(&self, slab_index: usize) -> RenderId {
-        let generation = self
-            .generations
-            .get(slab_index)
-            .copied()
-            .unwrap_or(core::num::NonZeroU32::MIN);
-        let index = u32::try_from(slab_index)
-            .expect("render tree exceeds u32::MAX slots; RenderId index field is 32 bits");
-        RenderId::new_gen(index, generation)
-    }
-
-    /// Bumps a freed slot's generation so every outstanding id minted
-    /// against the old occupant becomes stale.
-    ///
-    /// # Panics
-    ///
-    /// Panics if a single slot is recycled `u32::MAX - 1` times — at that
-    /// point stale-id safety can no longer be guaranteed (wrap-around would
-    /// resurrect the oldest ids). Same retire-by-panic policy as
-    /// `ElementTree::bump_generation`.
-    #[inline]
-    fn bump_generation(&mut self, slab_index: usize) {
-        let slot = &mut self.generations[slab_index];
-        let next = slot
-            .get()
-            .checked_add(1)
-            .expect("render slot generation overflow: slot recycled u32::MAX times");
-        *slot = core::num::NonZeroU32::new(next)
-            .expect("generation+1 of a NonZeroU32 is always non-zero");
+        self.nodes.lease()
     }
 
     // ========================================================================
@@ -316,7 +176,7 @@ impl RenderTree {
     /// Checks if a node exists in the tree.
     #[inline]
     pub fn contains(&self, id: RenderId) -> bool {
-        self.resolve(id).is_some()
+        self.nodes.contains(id)
     }
 
     /// Returns the number of nodes in the tree.
@@ -333,19 +193,17 @@ impl RenderTree {
 
     /// Returns a reference to a node.
     ///
-    /// Returns `None` for vacant slots AND for stale ids whose slot was
-    /// freed (and possibly reused) — the generation check in
-    /// `Self::resolve`.
+    /// Returns `None` for a stale id: its node was removed, and its slot
+    /// may hold another node under a later generation.
     #[inline]
     pub fn get(&self, id: RenderId) -> Option<&RenderNode> {
-        self.nodes.get(self.resolve(id)?)
+        self.nodes.get(id)
     }
 
     /// Returns a mutable reference to a node (generation-checked).
     #[inline]
     pub fn get_mut(&mut self, id: RenderId) -> Option<&mut RenderNode> {
-        let index = self.resolve(id)?;
-        self.nodes.get_mut(index)
+        self.nodes.get_mut(id)
     }
 
     /// Returns mutable references to two distinct nodes simultaneously.
@@ -375,10 +233,7 @@ impl RenderTree {
             return None;
         }
 
-        let a_idx = self.resolve(a)?;
-        let b_idx = self.resolve(b)?;
-
-        let mut nodes = collect_disjoint_mut(&mut self.nodes, &[a_idx, b_idx])?;
+        let mut nodes = collect_disjoint_mut(&mut self.nodes, &[a, b])?;
         let b_ref = nodes.pop()?;
         let a_ref = nodes.pop()?;
         Some((a_ref, b_ref))
@@ -390,21 +245,18 @@ impl RenderTree {
     /// Used by variable-arity layout where a parent's `perform_layout`
     /// must read its own fields while writing into each child's slot.
     /// Returns `None` if any id is missing or any pair of ids collide
-    /// (duplicate ids resolve to duplicate slab slots, which
-    /// `collect_disjoint_mut` rejects — two distinct live ids can
-    /// never share a slot because each slot stores one generation).
+    /// (`collect_disjoint_mut` rejects duplicates; two distinct current
+    /// ids never share a slot, because a slot holds one generation).
     pub fn get_parent_and_children_mut<'a>(
         &'a mut self,
         parent_id: RenderId,
         child_ids: &[RenderId],
     ) -> Option<(&'a mut RenderNode, Vec<&'a mut RenderNode>)> {
-        let mut indices = Vec::with_capacity(child_ids.len() + 1);
-        indices.push(self.resolve(parent_id)?);
-        for &c in child_ids {
-            indices.push(self.resolve(c)?);
-        }
+        let mut ids = Vec::with_capacity(child_ids.len() + 1);
+        ids.push(parent_id);
+        ids.extend_from_slice(child_ids);
 
-        let mut nodes = collect_disjoint_mut(&mut self.nodes, &indices)?;
+        let mut nodes = collect_disjoint_mut(&mut self.nodes, &ids)?;
         let children = nodes.split_off(1);
         let parent_ref = nodes.pop()?;
         Some((parent_ref, children))
@@ -413,8 +265,7 @@ impl RenderTree {
     /// Inserts `node` without a parent and returns its id; the caller links it and
     /// sets the root.
     pub fn insert(&mut self, node: RenderNode) -> RenderId {
-        let slab_index = self.nodes.insert(node);
-        self.mint(slab_index)
+        self.nodes.insert(node)
     }
 
     /// Inserts a Box protocol render object into the tree (no parent).
@@ -449,9 +300,8 @@ impl RenderTree {
         // tree accepts it directly because the sliver layout bridge
         // handles the cross-protocol dispatch.
         let child_node = RenderNode::new_box_at_depth(render_object, child_depth);
-        let child_slab_index = self.nodes.insert(child_node);
-        let child_id = self.mint(child_slab_index);
-        self.nodes.set_parent(child_slab_index, Some(parent_id));
+        let child_id = self.nodes.insert(child_node);
+        self.nodes.set_parent(child_id, Some(parent_id));
 
         if let Some(parent) = self.get_mut(parent_id) {
             parent.add_child(child_id);
@@ -472,9 +322,8 @@ impl RenderTree {
         let child_depth = child_depth(self.get(parent_id)?.depth());
 
         let child_node = RenderNode::new_sliver_at_depth(render_object, child_depth);
-        let child_slab_index = self.nodes.insert(child_node);
-        let child_id = self.mint(child_slab_index);
-        self.nodes.set_parent(child_slab_index, Some(parent_id));
+        let child_id = self.nodes.insert(child_node);
+        self.nodes.set_parent(child_id, Some(parent_id));
 
         if let Some(parent) = self.get_mut(parent_id) {
             parent.add_child(child_id);
@@ -749,20 +598,16 @@ impl RenderTree {
             parent.remove_child(id);
         }
 
-        let index = self.resolve(id)?;
-        let removed = self.nodes.try_remove(index);
-        if removed.is_some() {
-            // Invalidate every outstanding id minted against this slot.
-            self.bump_generation(index);
-        }
-        removed
+        // Every id of the removed node goes stale: the slot advances its
+        // generation, or retires when none is left.
+        self.nodes.remove(id)
     }
 
-    /// Removes a node and all its descendants recursively.
-    ///
-    /// Returns the number of nodes removed; children are removed before
-    /// their parent.
-    pub fn remove_recursive(&mut self, id: RenderId) -> usize {
+    /// Takes `id` and every descendant out of the tree, children before
+    /// their parent, and returns the nodes for the caller to drop after its
+    /// own bookkeeping. Every id of the subtree is stale when this returns,
+    /// and no render object's destructor has run.
+    pub(crate) fn take_subtree(&mut self, id: RenderId) -> Vec<RenderNode> {
         // Iterative: collect the subtree up front (explicit-stack
         // pre-order with cycle protection), then remove in REVERSE
         // collection order — in reversed pre-order every child comes
@@ -771,26 +616,45 @@ impl RenderTree {
         // 1 MiB Windows main-thread stack on deep chains (the same
         // crash class the pipeline walks hit at ~1000 levels).
         let subtree = self.collect_subtree_ids(id);
-        let mut count = 0;
+        let mut nodes = Vec::with_capacity(subtree.len());
         for &node_id in subtree.iter().rev() {
-            if self.remove_shallow(node_id).is_some() {
-                count += 1;
-            }
+            nodes.extend(self.remove_shallow(node_id));
         }
+        nodes
+    }
+
+    /// Removes a node and all its descendants.
+    ///
+    /// Returns the number of nodes removed. The whole subtree leaves the
+    /// tree before the first destructor runs, children's destructors before
+    /// their parent's; a destructor that panics leaves the rest to drop
+    /// during the unwind, as std drops a `Vec`.
+    pub fn remove_recursive(&mut self, id: RenderId) -> usize {
+        let nodes = self.take_subtree(id);
+        let count = nodes.len();
+        drop(nodes);
         count
+    }
+
+    /// Ages the slot the next insert takes to the last generation an id can
+    /// carry, so a test reaches generation exhaustion without `u32::MAX`
+    /// removals. `false` when no slot is free.
+    #[doc(hidden)]
+    #[cfg(any(test, feature = "testing"))]
+    pub fn age_next_free_slot_for_test(&mut self) -> bool {
+        self.nodes.age_free_head()
     }
 
     /// Clears all nodes from the tree.
     ///
-    /// Bumps every slot generation so ALL outstanding ids become stale —
-    /// otherwise an id minted before `clear` would alias the first
-    /// post-clear occupant of its slot.
+    /// Every id minted before is stale afterwards: each slot advances its
+    /// generation, or retires when none is left, so no id aliases a node
+    /// inserted after the clear. The tree is empty before the first
+    /// destructor runs.
     pub fn clear(&mut self) {
-        self.nodes.clear();
-        for slab_index in 0..self.generations.len() {
-            self.bump_generation(slab_index);
-        }
         self.root = None;
+        let nodes = self.nodes.take_all();
+        drop(nodes);
     }
 
     /// Reserves capacity for additional nodes.
@@ -805,13 +669,13 @@ impl RenderTree {
     /// Returns the parent ID of a node.
     #[inline]
     pub fn parent(&self, id: RenderId) -> Option<RenderId> {
-        self.nodes.parent(self.resolve(id)?)
+        self.nodes.parent(id)
     }
 
     /// `true` when `id` is a current node with no parent.
     #[inline]
     pub fn is_root(&self, id: RenderId) -> bool {
-        self.resolve(id).is_some() && self.parent(id).is_none()
+        self.contains(id) && self.parent(id).is_none()
     }
 
     /// Returns the children IDs of a node.
@@ -947,7 +811,7 @@ impl RenderTree {
             .nodes
             .iter()
             .filter(|(_, node)| node.needs_layout())
-            .map(|(idx, node)| (self.id_at(idx), node.depth() as usize))
+            .map(|(id, node)| (id, node.depth() as usize))
             .collect();
 
         // Sort by depth (shallow first)
@@ -965,7 +829,7 @@ impl RenderTree {
             .nodes
             .iter()
             .filter(|(_, node)| node.needs_paint())
-            .map(|(idx, node)| (self.id_at(idx), node.depth() as usize))
+            .map(|(id, node)| (id, node.depth() as usize))
             .collect();
 
         // Sort by depth (shallow first)
@@ -980,7 +844,7 @@ impl RenderTree {
 
     /// Returns an iterator over all node IDs.
     pub fn ids(&self) -> impl Iterator<Item = RenderId> + '_ {
-        self.nodes.iter().map(|(idx, _)| self.id_at(idx))
+        self.nodes.iter().map(|(id, _)| id)
     }
 
     /// Returns an iterator over all nodes.
@@ -995,21 +859,12 @@ impl RenderTree {
 
     /// Returns an iterator over (RenderId, &RenderNode) pairs.
     pub fn iter(&self) -> impl Iterator<Item = (RenderId, &RenderNode)> + '_ {
-        self.nodes.iter().map(|(idx, node)| (self.id_at(idx), node))
+        self.nodes.iter()
     }
 
     /// Returns a mutable iterator over (RenderId, &mut RenderNode) pairs.
     pub fn iter_mut(&mut self) -> impl Iterator<Item = (RenderId, &mut RenderNode)> + '_ {
-        let generations = &self.generations;
-        self.nodes.iter_mut().map(move |(idx, node)| {
-            let generation = generations
-                .get(idx)
-                .copied()
-                .unwrap_or(core::num::NonZeroU32::MIN);
-            let index = u32::try_from(idx)
-                .expect("render tree exceeds u32::MAX slots; RenderId index field is 32 bits");
-            (RenderId::new_gen(index, generation), node)
-        })
+        self.nodes.iter_mut()
     }
 
     // ========================================================================
@@ -1200,6 +1055,28 @@ mod tests {
         assert!(lease.is_child_of(reused, root));
     }
 
+    #[test]
+    fn lease_resolves_no_id_of_a_retired_slot() {
+        let mut tree = RenderTree::new();
+        let parent = tree.insert_box(make_leaf());
+        let first = tree.insert_box_child(parent, make_leaf()).expect("first");
+        drop(tree.remove_shallow(first).expect("first removed"));
+        assert!(tree.age_next_free_slot_for_test(), "a slot is free");
+        let last = tree.insert_box_child(parent, make_leaf()).expect("last");
+        let removed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            tree.remove_shallow(last).is_some()
+        }));
+        let next = tree.insert_box_child(parent, make_leaf()).expect("next");
+
+        let lease = tree.lease();
+        assert!(lease.node(last).is_none(), "the last id names no node");
+        assert!(!lease.is_child_of(last, parent));
+        assert!(!lease.try_enter(last), "the last id claims nothing");
+        assert!(!lease.is_in_flight(last));
+        assert!(lease.node(next).is_some());
+        assert!(matches!(removed, Ok(true)), "the last id is removed");
+    }
+
     /// Minimal leaf stub — concrete objects live in `flui_objects`.
     /// This test only needs "something with RenderObject<BoxProtocol>" to
     /// exercise the slab slot / generation / ABA mechanics.
@@ -1228,9 +1105,9 @@ mod tests {
         Box::new(LeafStub)
     }
 
-    /// D2 — ABA regression: after a slot is freed and reused, the OLD id
-    /// must be stale everywhere (get/get_mut/contains/remove/subtree), and
-    /// the NEW id must work. Pre-D2 the bare index aliased the new occupant.
+    /// After a slot is freed and reused, the old id is stale everywhere
+    /// (get/get_mut/contains/remove/subtree) and the new id works: a bare
+    /// index would alias the new occupant.
     #[test]
     fn stale_id_does_not_alias_reused_slot() {
         let mut tree = RenderTree::new();

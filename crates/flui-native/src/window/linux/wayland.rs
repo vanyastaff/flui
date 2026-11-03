@@ -798,9 +798,72 @@ pub(crate) mod frame {
         entered.iter().copied().find(|output| live(*output))
     }
 
+    /// What the compositor said about whether it draws a window.
+    #[derive(Clone, Copy, Debug)]
+    pub(crate) struct Sight {
+        /// The window acknowledged a configure.
+        pub(crate) configured: bool,
+        /// The compositor answered a frame callback of the window's: it
+        /// mapped the window at least once.
+        pub(crate) shown: bool,
+        /// The surface is on an output now.
+        pub(crate) on_output: bool,
+        /// The compositor suspended the window.
+        pub(crate) suspended: bool,
+    }
+
+    impl Sight {
+        /// Whether the window is occluded: not configured yet, suspended, or
+        /// shown once and on no output now. A configured window the
+        /// compositor has not shown yet is on no output either, since a
+        /// surface enters one only once it is mapped with its first frame; it
+        /// is not occluded, or it would never be given that frame.
+        pub(crate) fn occluded(self) -> bool {
+            !self.configured || self.suspended || (self.shown && !self.on_output)
+        }
+    }
+
     #[cfg(test)]
     mod tests {
         use super::*;
+
+        /// A configured window is occluded once the compositor suspends it,
+        /// or once it showed the window and the window is on no output; a
+        /// window it has not shown yet waits for its first frame unoccluded,
+        /// on no output.
+        #[test]
+        fn a_window_is_occluded_once_shown_and_off_every_output() {
+            for (case, configured, shown, on_output, suspended, expected) in [
+                ("not configured", false, false, false, false, true),
+                (
+                    "configured, before its first frame",
+                    true,
+                    false,
+                    false,
+                    false,
+                    false,
+                ),
+                ("shown, on an output", true, true, true, false, false),
+                ("shown, on no output", true, true, false, false, true),
+                (
+                    "suspended before its first frame",
+                    true,
+                    false,
+                    false,
+                    true,
+                    true,
+                ),
+                ("suspended on an output", true, true, true, true, true),
+            ] {
+                let sight = Sight {
+                    configured,
+                    shown,
+                    on_output,
+                    suspended,
+                };
+                assert_eq!(sight.occluded(), expected, "{case}");
+            }
+        }
 
         /// A frame waits on the callback its present armed until the
         /// compositor answers or the grace runs out; a present that committed
@@ -1389,7 +1452,7 @@ mod toplevel {
     use super::decoration::{Decoration, Drawn, FrameDrawer};
     #[cfg(any(test, feature = "testing"))]
     use super::foreign::PortalParent;
-    use super::frame::{Pacing, first_live, waiting_on_callback};
+    use super::frame::{Pacing, Sight, first_live, waiting_on_callback};
     use super::presented;
     use super::scale::{ScaleTold, buffer_scale};
     use crate::executor::BackgroundExecutor;
@@ -1709,6 +1772,9 @@ mod toplevel {
         reports_presentation: bool,
         activation: Activation,
         closed: bool,
+        /// The compositor answered a frame callback of the window's: it
+        /// mapped the window at least once.
+        shown: bool,
     }
 
     impl Sample<'_> {
@@ -1760,8 +1826,17 @@ mod toplevel {
                 // What the compositor says it draws: a surface it maps (a
                 // configured window with a frame) enters an output, and one
                 // it does not draw (covered, on a hidden workspace, its
-                // outputs off, minimized) is suspended.
-                occluded: !applied.configured || entered.is_none() || states.suspended,
+                // outputs off, minimized) is suspended. A configured window
+                // the compositor has not shown yet enters no output until it
+                // draws its first frame, so it is not occluded: it would
+                // otherwise never be given that frame.
+                occluded: Sight {
+                    configured: applied.configured,
+                    shown: self.shown,
+                    on_output: entered.is_some(),
+                    suspended: states.suspended,
+                }
+                .occluded(),
                 hovered: self.hovered,
                 active: states.activated,
                 capabilities: presented::reported(
@@ -2017,6 +2092,7 @@ mod toplevel {
                     Activation::Missing
                 },
                 closed: self.closed.get(),
+                shown: self.record.frame_shown.load(Ordering::Acquire),
             }
             .state()
         }
@@ -2040,6 +2116,7 @@ mod toplevel {
                 reports_presentation: false,
                 activation: Activation::Missing,
                 closed: false,
+                shown: false,
             }
             .output_and_scale()
             .1
@@ -2829,9 +2906,10 @@ mod toplevel {
             Some(Arc::clone(&self.facets.chrome))
         }
 
-        /// No drag session starts from a Wayland window yet (`wl_data_device`).
+        /// Sessions start from the window under the pointer grab it holds
+        /// (`wl_data_source`).
         fn drag_source(&self) -> Option<Arc<dyn flui_platform::drag::PlatformDragSource>> {
-            None
+            Some(Arc::clone(&self.drag).source(self.id))
         }
     }
 
@@ -3306,6 +3384,9 @@ mod toplevel {
         pub(crate) activation_tokens: u32,
         /// How many of them the window handed back.
         pub(crate) activations: u32,
+        /// Whether the compositor answered a frame callback of the window's:
+        /// it showed the window at least once.
+        pub(crate) shown: bool,
     }
 
     /// The frame a window draws itself, as it last sent it, for a test.
@@ -3337,6 +3418,7 @@ mod toplevel {
                 outputs: told.outputs.clone(),
                 activation_tokens,
                 activations,
+                shown: self.record.frame_shown.load(Ordering::Acquire),
             }
         }
 

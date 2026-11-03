@@ -96,7 +96,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         if !changed {
             return self
                 .has_dirty_nodes()
-                .then(|| self.notifier.read().deferred_visual_update());
+                .then(|| self.notifier.visual_update());
         }
         let measured = self.text_measurers.take();
         for id in measured {
@@ -108,7 +108,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
             }
         }
         self.has_dirty_nodes()
-            .then(|| self.notifier.read().deferred_visual_update())
+            .then(|| self.notifier.visual_update())
     }
 
     /// Sets the callback for when a visual update is needed.
@@ -116,11 +116,11 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     where
         F: Fn() + Send + Sync + 'static,
     {
-        let outgoing = { self.notifier.write().replace_need_visual_update(callback) };
+        let outgoing = self.notifier.replace_need_visual_update(callback);
         let wake = self
             .local_dirty
             .has_pending()
-            .then(|| self.notifier.read().deferred_visual_update());
+            .then(|| self.notifier.visual_update());
         let mut recovery = flui_foundation::panic::PanicRecovery::new();
         if let Some(wake) = wake {
             wake.notify_with(&mut recovery.scope());
@@ -134,12 +134,10 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     where
         F: Fn() + Send + Sync + 'static,
     {
-        let outgoing = {
-            self.notifier
-                .write()
-                .replace_semantics_owner_created(callback)
-        };
-        drop(outgoing);
+        let outgoing = self.notifier.replace_semantics_owner_created(callback);
+        let mut recovery = flui_foundation::panic::PanicRecovery::new();
+        recovery.retire(outgoing);
+        recovery.finish();
     }
 
     /// Sets the callback for when semantics owner is disposed.
@@ -147,19 +145,17 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     where
         F: Fn() + Send + Sync + 'static,
     {
-        let outgoing = {
-            self.notifier
-                .write()
-                .replace_semantics_owner_disposed(callback)
-        };
-        drop(outgoing);
+        let outgoing = self.notifier.replace_semantics_owner_disposed(callback);
+        let mut recovery = flui_foundation::panic::PanicRecovery::new();
+        recovery.retire(outgoing);
+        recovery.finish();
     }
 
     /// Requests a visual update.
     ///
     /// Called by render objects when they need to be re-rendered.
     pub fn request_visual_update(&self) {
-        self.notifier.read().fire_need_visual_update();
+        self.notifier.visual_update().notify();
     }
 
     // ========================================================================
@@ -315,8 +311,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
             };
         });
         if needs_wake {
-            let wake = { self.notifier.read().deferred_visual_update() };
-            wake.notify_with(recovery);
+            self.notifier.visual_update().notify_with(recovery);
         }
     }
 
@@ -702,9 +697,13 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     ///    tear down an `attach`-time subscription;
     /// 3. evict every id from ALL dirty queues (live + mid-phase) so
     ///    no phase walks a freed slot's stale entry;
-    /// 4. cascade-remove the nodes (each freed slot's generation bumps
-    ///    — outstanding ids go stale);
-    /// 5. clear `root_id` when the root itself was removed.
+    /// 4. take the subtree out of the tree, children first (each slot
+    ///    advances its generation or retires, so outstanding ids go stale);
+    /// 5. clear `root_id` when the root itself was removed, and invalidate
+    ///    the former parent;
+    /// 6. drop the removed nodes, last: a render object's destructor runs
+    ///    against a committed tree and owner, so one that panics loses no
+    ///    bookkeeping.
     ///
     /// `Drop` on render objects remains strictly node-local (decoded
     /// images, shaped text, GPU handles).
@@ -755,7 +754,8 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         self.retained_boundaries
             .retain(|id, _| !removed.contains(id));
 
-        let count = self.render_tree.remove_recursive(id);
+        let removed_nodes = self.render_tree.take_subtree(id);
+        let count = removed_nodes.len();
         if self.root_id == Some(id) {
             self.root_id = None;
         }
@@ -763,6 +763,9 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
             self.note_render_child_membership_changed(parent_id);
         }
         tracing::debug!(?id, count, "remove_render_object: subtree disposed");
+        // Destructors run last, against a committed tree and owner (ADR-0252,
+        // ADR-0287): one that panics leaves nothing half-removed.
+        drop(removed_nodes);
         count
     }
 
@@ -1960,17 +1963,23 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     /// `false` → `true` transition (unless one was already installed via
     /// [`Self::set_semantics_owner`] — e.g. a platform binding that needs
     /// its own update callback — in which case that owner is kept as-is),
-    /// firing the already-scaffolded
-    /// [`fire_semantics_owner_created`](crate::pipeline::notifier::VisualUpdateNotifier::fire_semantics_owner_created).
-    /// Disposes the owner on the `true` → `false` transition, firing
-    /// `fire_semantics_owner_disposed`. Enablement is a single boolean flag
-    /// that gates `run_semantics`.
+    /// then delivering the callback installed with
+    /// [`Self::set_on_semantics_owner_created`]. Disposes the owner on the
+    /// `true` → `false` transition, then delivers the callback installed with
+    /// [`Self::set_on_semantics_owner_disposed`]. Enablement is a single
+    /// boolean flag that gates `run_semantics`.
     ///
     /// A freshly-created owner has an empty tree even though the render
     /// tree may already hold content built while semantics was off, so this
     /// also seeds the root as needing a semantics rebuild (mirrors
     /// `insert()`'s "new nodes need layout and paint" seeding) — without
     /// it, nothing would ever push the first `run_semantics` assembly pass.
+    ///
+    /// The transition is committed before any user code runs (ADR-0287): the
+    /// flag, the owner, the root's seed, and on disable the owner's
+    /// teardown. The lifecycle callback and the visual-update wake run after
+    /// that, contained, and every one of them runs even when an earlier one
+    /// or the teardown panics; the first panic is resumed at the end.
     ///
     /// A lazily-created owner publishes through the callback installed via
     /// [`Self::set_semantics_update_callback`] — the composition root's wire
@@ -1983,7 +1992,8 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         let was_enabled = self
             .semantics_enabled
             .swap(enabled, std::sync::atomic::Ordering::Relaxed);
-        if enabled && !was_enabled {
+        let mut recovery = flui_foundation::panic::PanicRecovery::new();
+        let (event, wake) = if enabled && !was_enabled {
             if self.semantics_owner.is_none() {
                 let callback = self
                     .semantics_update_callback
@@ -1997,16 +2007,33 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
                 }
                 self.semantics_owner = Some(owner);
             }
-            self.notifier.read().fire_semantics_owner_created();
-            if let Some(root_id) = self.root_id {
-                self.mark_needs_semantics(root_id);
-            }
+            let seeded = self.root_id.is_some_and(|root| {
+                self.render_tree.get(root).is_some_and(|node| {
+                    self.scheduler
+                        .commit_node_needing_semantics(root, usize::from(node.depth()))
+                })
+            });
+            (
+                self.notifier.semantics_owner_created(),
+                seeded.then(|| self.notifier.visual_update()),
+            )
         } else if !enabled && was_enabled {
             if let Some(mut owner) = self.semantics_owner.take() {
-                owner.dispose();
+                // Teardown drops the tree's action handlers and stops the
+                // announcement listener: user code, after the flag and the
+                // owner slot are already committed.
+                recovery.run(|| owner.dispose());
+                recovery.retire(owner);
             }
-            self.notifier.read().fire_semantics_owner_disposed();
+            (self.notifier.semantics_owner_disposed(), None)
+        } else {
+            return;
+        };
+        event.notify_with(&mut recovery.scope());
+        if let Some(wake) = wake {
+            wake.notify_with(&mut recovery.scope());
         }
+        recovery.finish();
     }
 
     /// Installs the platform-publish callback for this pipeline's semantics

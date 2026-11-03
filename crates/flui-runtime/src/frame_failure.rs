@@ -28,8 +28,8 @@
 use std::any::{Any, TypeId};
 use std::fmt;
 
-use flui_foundation::PresentationAddress;
 use flui_foundation::panic::{is_internal_invariant, payload_text};
+use flui_foundation::{PresentationAddress, TreeContext};
 use flui_rendering::RenderError;
 use flui_view::{LifecycleHook, RecoveredAt, RecoveredPanic as ViewRecoveredPanic};
 
@@ -155,6 +155,7 @@ impl FrameFailureDetail {
             hook,
             payload_text,
             internal_invariant,
+            context,
             ..
         } = recovered;
         self.recovered_panic_kind_from_parts(
@@ -163,6 +164,7 @@ impl FrameFailureDetail {
             hook,
             payload_text,
             internal_invariant,
+            context,
         )
     }
 
@@ -175,6 +177,7 @@ impl FrameFailureDetail {
         hook: LifecycleHook,
         payload_text: Option<Box<str>>,
         internal_invariant: bool,
+        context: TreeContext,
     ) -> FrameFailureKind {
         FrameFailureKind::RecoveredPanic {
             at,
@@ -182,7 +185,14 @@ impl FrameFailureDetail {
             hook,
             message: self.recovered_text(payload_text),
             internal_invariant,
+            context,
         }
+    }
+
+    /// Apply the retention policy to a recovered panic's tree context, as
+    /// [`Self::pipeline_text`] does to the context inside a pipeline error.
+    pub(crate) fn context_text(self, context: &TreeContext) -> PanicText {
+        self.materialize(|| context.to_string().into_boxed_str())
     }
 }
 
@@ -376,7 +386,7 @@ pub enum FrameFailureKind {
     /// armed retry.
     Pipeline {
         /// The pipeline's own typed error with the path to the node it names, when it names one
-        /// ([`TreeContext`](flui_foundation::TreeContext)). The UI runtime applies
+        /// ([`TreeContext`]). The UI runtime applies
         /// [`FrameFailureDetail`] only when formatting this error for
         /// `tracing`; a registered handler retains the typed value. Its
         /// fields and `Debug` output may contain sensitive text, so handler
@@ -401,6 +411,13 @@ pub enum FrameFailureKind {
         message: PanicText,
         /// Classification computed from the raw payload at the recovery seam.
         internal_invariant: bool,
+        /// Where in the element tree the panic happened: the panicked view
+        /// and its ancestors by kind, outermost last, and where the panicked
+        /// view was created. Empty when the element and its parent were both
+        /// gone by the drain and the seam could not read the path itself.
+        /// Like [`Self::Pipeline`]'s error, the typed value is retained under
+        /// every [`FrameFailureDetail`]; only its `tracing` text follows it.
+        context: TreeContext,
     },
     /// The presentation's frame reached the raster backend and could not be
     /// shown because the GPU device is lost. The frame is retried after the

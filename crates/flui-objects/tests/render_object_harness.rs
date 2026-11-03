@@ -2099,8 +2099,7 @@ fn harness_icon_pending_layout_withdraws_old_glyph_geometry() {
             0,
         )
     });
-    let (owner, result) = run.owner_mut().take_idle().run_frame();
-    *run.owner_mut() = owner;
+    let result = run.owner_mut().run_frame_in_place();
     assert!(matches!(
         result.map_err(flui_foundation::TreeError::into_error),
         Err(flui_rendering::RenderError::TextPreparationPending(_))
@@ -6212,9 +6211,7 @@ fn harness_rejected_semantics_drafts_preserve_the_error_and_destroy_the_callback
         let root = run.root();
         run.owner_mut().mark_needs_semantics(root);
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let (owner, result) = run.owner_mut().take_idle().run_frame();
-            *run.owner_mut() = owner;
-            result
+            run.owner_mut().run_frame_in_place()
         }));
         assert!(
             outcome.is_ok(),
@@ -6512,8 +6509,7 @@ fn harness_custom_paint_region_failure_keeps_all_anchors_and_retries() {
         run.owner_mut().mark_needs_semantics(id);
     }
     // Use the fallible public frame entry instead of the harness's success-only pump.
-    let (owner, result) = run.owner_mut().take_idle().run_frame();
-    *run.owner_mut() = owner;
+    let result = run.owner_mut().run_frame_in_place();
     let error = result.expect_err("duplicate keys refuse the complete pass");
     assert!(
         error.to_string().contains("duplicate semantics region key"),
@@ -6543,8 +6539,7 @@ fn harness_custom_paint_region_failure_keeps_all_anchors_and_retries() {
         let id = run.id(label);
         run.owner_mut().mark_needs_semantics(id);
     }
-    let (owner, result) = run.owner_mut().take_idle().run_frame();
-    *run.owner_mut() = owner;
+    let result = run.owner_mut().run_frame_in_place();
     assert!(result.is_err());
     assert_eq!(semantics_content(&run), updated);
     lists[0].borrow_mut().pop();
@@ -9751,6 +9746,67 @@ fn harness_sliver_grid_placement_slides_tiles_between_cells() {
     assert_eq!((run.offset(a).dx, run.offset(b).dx), (0.0, 100.0));
 }
 
+/// An owner's push: under the generation it names, the item is painted the
+/// push away, on both axes, and slides home on the run it starts; a push no
+/// armed pass carries lands at once.
+///
+/// Fails without the push: the item would sit at its laid-out offset.
+fn harness_sliver_list_placement_displace_slides_an_item_home() {
+    let (clock, driver, motion) = placement_clock();
+    let slots: Rc<[Rc<PlacementSlot>]> = placement_slots(2).into();
+    let mut list = RenderSliverList::new(2, 48.0);
+    let _ = list.set_placement(Some(&Placement::new(
+        clock.clone(),
+        motion.clone(),
+        Rc::clone(&slots),
+        0,
+    )));
+    let mut run = RenderTester::mount(viewport(
+        sliver_node(list)
+            .label("list")
+            .child(seeded(box_node(RenderColoredBox::red(300.0, 48.0)), "a", 0))
+            .child(seeded(box_node(RenderColoredBox::red(300.0, 48.0)), "b", 1)),
+    ))
+    .with_size(Size::new(300.0, 400.0))
+    .run_frame();
+    let (a, b) = (run.id("a"), run.id("b"));
+
+    slots[1].displace(Offset::new(30.0, 20.0), 1);
+    let pushed = Placement::new(clock, motion, Rc::clone(&slots), 1);
+    run.update::<RenderSliverList>(run.id("list"), |list| {
+        let _ = list.set_placement(Some(&pushed));
+    });
+    run.pump();
+    assert_eq!(
+        run.offset(b),
+        Offset::new(30.0, 68.0),
+        "painted the push away"
+    );
+    assert_eq!(
+        run.offset(a),
+        Offset::new(0.0, 0.0),
+        "an item not pushed stays"
+    );
+    driver.tick_at(Duration::from_millis(50));
+    run.pump();
+    assert_eq!(run.offset(b), Offset::new(15.0, 58.0), "half way home");
+    driver.tick_at(Duration::from_millis(100));
+    run.pump();
+    assert_eq!(run.offset(b), Offset::new(0.0, 48.0), "home");
+
+    // A push for a generation already applied lands at once.
+    slots[0].displace(Offset::new(0.0, 40.0), 1);
+    run.update::<RenderColoredBox>(b, |item| {
+        let _ = item.set_preferred_size(Size::new(300.0, 50.0));
+    });
+    run.pump();
+    assert_eq!(
+        run.offset(a),
+        Offset::new(0.0, 0.0),
+        "no armed pass carries it"
+    );
+}
+
 fn harness_sliver_offstage_hidden_reports_zero_geometry() {
     let run = RenderTester::mount(viewport(
         sliver_node(RenderSliverOffstage::hidden())
@@ -10063,6 +10119,207 @@ fn harness_viewport_degraded_pass_does_not_move_the_scroll_position() {
         "the frame after the failure still reads a stand-in and still \
          publishes nothing"
     );
+}
+
+/// A viewport at 250 px over a lazy list of 100 px items, with `item1` built
+/// from `fragile`. The anchor (the first visible item) is `item2`, painted at
+/// -50.
+fn lazy_list_over_a_fragile_item(
+    position: &flui_rendering::view::ScrollPosition,
+    fragile: PanicAfterNBoxLayouts,
+    tail: bool,
+) -> TreeNode {
+    let item = |label: &'static str, index: usize| {
+        seeded(box_node(RenderColoredBox::red(300.0, 100.0)), label, index)
+    };
+    let mut list = sliver_node(RenderSliverList::new(20, 100.0))
+        .label("list")
+        .child(item("item0", 0))
+        .child(seeded(box_node(fragile), "item1", 1))
+        .child(item("item2", 2))
+        .child(item("item3", 3));
+    if tail {
+        list = list.child(item("item4", 4));
+    }
+    box_node(RenderViewport::with_offset(
+        AxisDirection::TopToBottom,
+        AxisDirection::LeftToRight,
+        position.clone(),
+    ))
+    .label("viewport")
+    .child(list)
+}
+
+/// A lazy list keeps a failed item's last real extent while the item fails and
+/// when it recovers: the walk's stand-in is not recorded as the item's size.
+///
+/// Pass 2 fails `item1` and grows `item3` (below the anchor) to 130 px. The
+/// anchor stays at -50 and `item4` moves by the growth alone. Pass 3 lets
+/// `item1` recover: no correction, the anchor still at -50.
+///
+/// Fails without the fix: pass 2 records `item1` at 0 px, so the anchor jumps
+/// to -150 and `item4` to 80; pass 3 re-measures it at 100 px against that 0,
+/// and the correction scrolls to 350. Classifying by "a descendant degraded
+/// since the pass began" fails too: `item3`, laid out after the failure, would
+/// not be recorded and `item4` would stay at 150.
+fn harness_sliver_list_failed_child_keeps_its_extent_through_recovery() {
+    use flui_rendering::view::{ScrollPosition, ViewportOffset};
+    use std::sync::atomic::Ordering::SeqCst;
+
+    let position = ScrollPosition::new(250.0);
+    let layouts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let fragile = PanicAfterNBoxLayouts {
+        size: Size::new(300.0, 100.0),
+        layouts: Arc::clone(&layouts),
+        healthy_layouts: 1,
+    };
+    let mut run = RenderTester::mount(lazy_list_over_a_fragile_item(&position, fragile, true))
+        .with_size(Size::new(300.0, 400.0))
+        .run_layout();
+    let (item1, item2, item3, item4, viewport) = (
+        run.id("item1"),
+        run.id("item2"),
+        run.id("item3"),
+        run.id("item4"),
+        run.id("viewport"),
+    );
+    assert_eq!(position.pixels(), 250.0);
+    assert_eq!(run.offset(item2).dy, -50.0, "precondition: the anchor");
+    assert_eq!(run.offset(item4).dy, 150.0);
+
+    // Pass 2: item1 fails; item3, below the anchor, grows by 30 px.
+    run.update::<RenderColoredBox>(item3, |b| {
+        assert_eq!(
+            b.set_preferred_size(Size::new(300.0, 130.0)),
+            flui_rendering::RenderUpdateImpact::LAYOUT
+        );
+    });
+    run.owner_mut().mark_needs_layout(item1);
+    run.owner_mut().mark_needs_layout(viewport);
+    let _ = run.owner_mut().run_layout();
+    assert!(
+        layouts.load(SeqCst) >= 2,
+        "item1 was laid out again and failed"
+    );
+    assert_eq!(position.pixels(), 250.0);
+    assert_eq!(
+        run.offset(item2).dy,
+        -50.0,
+        "the failed item keeps its last real extent, so the anchor stays"
+    );
+    assert_eq!(
+        run.offset(item4).dy,
+        180.0,
+        "an item measured after the failure is still recorded"
+    );
+
+    // Pass 3: item1 recovers at the size it had.
+    layouts.store(0, SeqCst);
+    run.owner_mut().mark_needs_layout(item1);
+    run.owner_mut().mark_needs_layout(viewport);
+    let _ = run.owner_mut().run_layout();
+    assert_eq!(
+        position.pixels(),
+        250.0,
+        "a recovery to the size the item had owes no correction"
+    );
+    assert_eq!(run.offset(item2).dy, -50.0, "the anchor is where it was");
+}
+
+/// A lazy list keeps the estimate for an item that has never laid out and is
+/// poisoned: the walk's stand-in is not recorded, on the failing pass or on a
+/// later pass that serves the poisoned item without laying it out.
+///
+/// Fails without the fix: the first pass records `item1` at 0 px and the
+/// anchor sits at -150. Classifying only a failed call as a stand-in fails the
+/// second pass: the poisoned item's served stand-in is recorded at 0 px.
+fn harness_sliver_list_poisoned_child_that_never_laid_out_keeps_its_estimate() {
+    use flui_rendering::view::{ScrollPosition, ViewportOffset};
+
+    let position = ScrollPosition::new(250.0);
+    let layouts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let fragile = PanicAfterNBoxLayouts {
+        size: Size::new(300.0, 100.0),
+        layouts: Arc::clone(&layouts),
+        healthy_layouts: 0,
+    };
+    let mut run = RenderTester::mount(lazy_list_over_a_fragile_item(&position, fragile, false))
+        .with_size(Size::new(300.0, 400.0))
+        .run_layout();
+    let (item2, viewport) = (run.id("item2"), run.id("viewport"));
+    assert!(
+        layouts.load(std::sync::atomic::Ordering::SeqCst) >= 1,
+        "item1 was laid out and failed"
+    );
+    assert_eq!(position.pixels(), 250.0);
+    assert_eq!(
+        run.offset(item2).dy,
+        -50.0,
+        "the failing item keeps its 100 px estimate"
+    );
+
+    run.owner_mut().mark_needs_layout(viewport);
+    let _ = run.owner_mut().run_layout();
+    assert_eq!(
+        run.offset(item2).dy,
+        -50.0,
+        "a poisoned item served its stand-in keeps its estimate too"
+    );
+}
+
+/// A resident laid out over a failed descendant is measured: its own layout
+/// ran, and its size is the one it paints at. Only a size the walk substituted
+/// for the resident's own layout is a stand-in.
+///
+/// Passes without the fix as well; it guards the classification. Treating any
+/// degradation during the child's call as a stand-in fails it: the padded row
+/// would keep its 100 px estimate and the rows after it would sit at 100 and
+/// 200 instead of 40 and 140.
+fn harness_sliver_list_measures_a_resident_laid_out_over_a_failed_descendant() {
+    let layouts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let row = seeded(
+        box_node(RenderPadding::all(20.0)).child(box_node(PanicAfterNBoxLayouts {
+            size: Size::new(300.0, 100.0),
+            layouts: Arc::clone(&layouts),
+            healthy_layouts: 0,
+        })),
+        "item0",
+        0,
+    );
+    let mut run = RenderTester::mount(viewport_with_scroll(
+        0.0,
+        sliver_node(RenderSliverList::new(3, 100.0))
+            .label("list")
+            .child(row)
+            .child(seeded(
+                box_node(RenderColoredBox::red(300.0, 100.0)),
+                "item1",
+                1,
+            ))
+            .child(seeded(
+                box_node(RenderColoredBox::red(300.0, 100.0)),
+                "item2",
+                2,
+            )),
+    ))
+    .with_size(Size::new(300.0, 400.0))
+    .run_layout();
+    let (item0, item1, item2, viewport) = (
+        run.id("item0"),
+        run.id("item1"),
+        run.id("item2"),
+        run.id("viewport"),
+    );
+    assert_eq!(run.box_geometry(item0), Size::new(300.0, 40.0));
+    assert_eq!(run.offset(item1).dy, 40.0);
+    assert_eq!(run.offset(item2).dy, 140.0);
+
+    // The poisoned descendant's skip, then a cache a degraded pass built.
+    for pass in 2..=3 {
+        run.owner_mut().mark_needs_layout(viewport);
+        let _ = run.owner_mut().run_layout();
+        assert_eq!(run.offset(item1).dy, 40.0, "pass {pass}");
+    }
 }
 
 /// A viewport skips laying out a child that is entirely beyond its window and
@@ -11201,8 +11458,7 @@ fn harness_flow_keeps_hitting_its_last_presentation_after_a_failed_repaint() {
     fail.set(true);
     let root = run.root();
     run.mark_needs_paint(root);
-    let (owner, frame) = run.owner_mut().take_idle().run_frame();
-    *run.owner_mut() = owner;
+    let frame = run.owner_mut().run_frame_in_place();
     assert!(frame.is_err(), "the repaint fails");
     assert!(
         run.hit(25.0, 20.0).contains(&second),
@@ -14527,6 +14783,7 @@ fn family_sliver_lists() {
         ("sliver_list_anchor_correction_emits_in_both_scroll_directions", harness_sliver_list_anchor_correction_emits_in_both_scroll_directions),
         ("sliver_list_placement_slides_moved_children_into_place", harness_sliver_list_placement_slides_moved_children_into_place),
         ("sliver_grid_placement_slides_tiles_between_cells", harness_sliver_grid_placement_slides_tiles_between_cells),
+        ("sliver_list_placement_displace_slides_an_item_home", harness_sliver_list_placement_displace_slides_an_item_home),
         ("sliver_main_axis_group_composes_scroll_extents_and_places_children", harness_sliver_main_axis_group_composes_scroll_extents_and_places_children),
         ("sliver_cross_axis_group_allocates_tracks_in_both_physical_axes", harness_sliver_cross_axis_group_allocates_tracks_in_both_physical_axes),
         ("sliver_cross_axis_group_refuses_unrepresentable_tracks_and_missing_content_extent", harness_sliver_cross_axis_group_refuses_unrepresentable_tracks_and_missing_content_extent),
@@ -14645,6 +14902,18 @@ fn family_recovery() {
             (
                 "viewport_does_not_serve_a_cache_built_by_a_degraded_pass",
                 harness_viewport_does_not_serve_a_cache_built_by_a_degraded_pass,
+            ),
+            (
+                "sliver_list_failed_child_keeps_its_extent_through_recovery",
+                harness_sliver_list_failed_child_keeps_its_extent_through_recovery,
+            ),
+            (
+                "sliver_list_poisoned_child_that_never_laid_out_keeps_its_estimate",
+                harness_sliver_list_poisoned_child_that_never_laid_out_keeps_its_estimate,
+            ),
+            (
+                "sliver_list_measures_a_resident_laid_out_over_a_failed_descendant",
+                harness_sliver_list_measures_a_resident_laid_out_over_a_failed_descendant,
             ),
         ],
     );

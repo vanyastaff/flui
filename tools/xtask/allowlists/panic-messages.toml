@@ -109,10 +109,6 @@ path = "crates/flui-rendering/src/storage/node.rs"
 count = 2
 
 [[allow]]
-path = "crates/flui-rendering/src/storage/tree.rs"
-count = 5
-
-[[allow]]
 path = "crates/flui-rendering/src/view/render_view.rs"
 count = 1
 

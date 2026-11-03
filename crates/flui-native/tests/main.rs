@@ -52,6 +52,9 @@ mod headless_redraw;
 mod input_capabilities;
 #[path = "input_regions.rs"]
 mod input_regions;
+#[cfg(not(target_arch = "wasm32"))]
+#[path = "launch_values.rs"]
+mod launch_values;
 #[path = "native_recording/mod.rs"]
 mod native_recording;
 #[path = "preferences.rs"]

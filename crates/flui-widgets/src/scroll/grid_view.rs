@@ -86,6 +86,9 @@ pub struct GridView {
     focusable: bool,
     /// The accessible name of a focusable grid while it has no tiles.
     empty_label: Option<Arc<str>>,
+    /// Slides moved items into their new places (a reorderable list's
+    /// rows); only the lazy variant honours it.
+    placement: Option<flui_objects::Placement>,
 }
 
 impl GridView {
@@ -110,6 +113,7 @@ impl GridView {
             semantics_label: None,
             focusable: false,
             empty_label: None,
+            placement: None,
         }
     }
 
@@ -135,6 +139,7 @@ impl GridView {
             semantics_label: None,
             focusable: false,
             empty_label: None,
+            placement: None,
         }
     }
 
@@ -165,6 +170,7 @@ impl GridView {
             semantics_label: None,
             focusable: false,
             empty_label: None,
+            placement: None,
         }
     }
 
@@ -175,6 +181,12 @@ impl GridView {
     #[must_use]
     pub fn repaint_boundaries(mut self, add: bool) -> Self {
         self.add_repaint_boundaries = add;
+        self
+    }
+
+    /// Slide moved items into their new places along `placement`.
+    pub(crate) fn placement(mut self, placement: flui_objects::Placement) -> Self {
+        self.placement = Some(placement);
         self
     }
 
@@ -286,7 +298,8 @@ impl fmt::Debug for GridView {
             .field("shrink_wrap", &self.shrink_wrap)
             .field("focusable", &self.focusable)
             .field("semantics_label", &self.semantics_label)
-            .field("empty_label", &self.empty_label);
+            .field("empty_label", &self.empty_label)
+            .field("placement", &self.placement);
         if self.builder_source.is_some() {
             s.field("builder_source", &self.builder_source);
         } else {
@@ -336,6 +349,10 @@ impl StatelessView for GridView {
                     delegate.item_count,
                     builder,
                 );
+                let sliver = match &self.placement {
+                    Some(placement) => sliver.placement(placement.clone()),
+                    None => sliver,
+                };
                 match &delegate.find_index_by_key {
                     Some(find) => {
                         let find = Rc::clone(find);

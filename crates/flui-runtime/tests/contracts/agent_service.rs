@@ -101,8 +101,8 @@ fn service(limits: Limits, on_driver_gone: Option<Box<dyn Fn() + Send + Sync>>) 
 
 /// A host showing [`Counter`] whose window `service` serves.
 fn shown(service: &Service) -> (HeadlessHost, HeadlessDevAgent, Arc<AtomicU32>) {
-    let agent = HeadlessDevAgent::attach(Served(service.clone()));
-    let mut host = HeadlessHost::new(HeadlessWindow::new(200, 200)).with_dev_agent(&agent);
+    let mut agent = HeadlessDevAgent::attach(Served(service.clone()));
+    let mut host = HeadlessHost::new(HeadlessWindow::new(200, 200)).with_dev_agent(&mut agent);
     let presses = Arc::new(AtomicU32::new(0));
     host.attach(&Counter {
         presses: Arc::clone(&presses),
@@ -118,10 +118,18 @@ fn line(value: &Value) -> Vec<u8> {
     bytes
 }
 
+/// A hello presenting `token`; with `role`, asking for it.
+fn hello_as(token: &str, role: Option<&str>) -> Vec<u8> {
+    let mut hello =
+        json!({ "token": token, "protocol": PROTOCOL_VERSION.to_string(), "client": "test" });
+    if let Some(role) = role {
+        hello["role"] = json!(role);
+    }
+    line(&json!({ "hello": hello }))
+}
+
 fn hello(token: &str) -> Vec<u8> {
-    line(&json!({
-        "hello": { "token": token, "protocol": PROTOCOL_VERSION.to_string(), "client": "test" }
-    }))
+    hello_as(token, None)
 }
 
 /// Every line the session has to transmit now.
@@ -136,20 +144,31 @@ fn press_go(id: u64) -> Vec<u8> {
     line(&json!({ "id": id, "method": "semantics.act", "params": params }))
 }
 
-/// A conversation past its hello, at `now`.
+/// A conversation past its hello, at `now`, asking to drive.
 fn greeted(service: &Service, now: Instant, waker: &Waker) -> Session {
+    greeted_as(service, now, waker, None).0
+}
+
+/// A conversation past a hello asking for `role`, at `now`, and the hello's answer.
+fn greeted_as(
+    service: &Service,
+    now: Instant,
+    waker: &Waker,
+    role: Option<&str>,
+) -> (Session, Value) {
     let mut session = service
         .accept(now)
         .expect("the service takes a conversation");
-    session.receive(&hello(TOKEN), now);
+    session.receive(&hello_as(TOKEN, role), now);
     session.poll(now, waker);
-    let welcome = transmitted(&mut session);
+    let mut welcome = transmitted(&mut session);
     assert_eq!(welcome.len(), 1, "one line answers the hello: {welcome:?}");
     assert_eq!(
         welcome[0]["hello"]["protocol"],
-        PROTOCOL_VERSION.to_string()
+        PROTOCOL_VERSION.to_string(),
+        "{welcome:?}"
     );
-    session
+    (session, welcome.remove(0))
 }
 
 /// Requests run in order, one at a time, each answered once the window's owner drains it: the
@@ -297,8 +316,89 @@ fn the_service_takes_conversations_up_to_its_limit_and_none_once_stopped() {
     assert_eq!(service.accept(now).err(), Some(Refused::Stopped));
 }
 
-/// The first conversation past its hello is the app's driver: its end runs the obligation, once,
-/// and another's does not; a service that stopped runs it no more.
+/// The hello's answer to a conversation refused at its hello, and where that leaves it.
+fn refused_hello(service: &Service, now: Instant, waker: &Waker, role: Option<&str>) -> Value {
+    let mut session = service.accept(now).expect("a conversation");
+    session.receive(&hello_as(TOKEN, role), now);
+    session.poll(now, waker);
+    let refusal = transmitted(&mut session);
+    assert_eq!(refusal.len(), 1, "one line refuses the hello: {refusal:?}");
+    assert!(refusal[0].get("hello").is_none(), "{refusal:?}");
+    assert_ne!(session.status(), Status::Open, "{refusal:?}");
+    refusal[0]["error"].clone()
+}
+
+/// One conversation drives the app at a time: a second driver's hello is refused `not_driver`
+/// until the first goes. An observer is admitted beside the driver, told only the methods it
+/// may call, and refused `not_driver` when it acts, which reaches the app no more.
+#[test]
+fn one_driver_at_a_time_and_an_observer_only_reads() {
+    let service = service(Limits::default(), None);
+    let (mut host, _agent, presses) = shown(&service);
+    let waker = Waker::from(Arc::new(Wakes::default()));
+    let now = Instant::now();
+    let (mut driver, welcome) = greeted_as(&service, now, &waker, None);
+    let methods = &welcome["hello"]["capabilities"]["methods"];
+    assert!(
+        methods
+            .as_array()
+            .is_some_and(|methods| methods.contains(&json!("semantics.act"))),
+        "the driver may act: {methods}"
+    );
+
+    let refused = refused_hello(&service, now, &waker, Some("driver"));
+    assert_eq!(refused["code"], "not_driver", "{refused}");
+    assert_eq!(refused["retry"], "soon", "{refused}");
+
+    let (mut observer, welcome) = greeted_as(&service, now, &waker, Some("observer"));
+    let methods = &welcome["hello"]["capabilities"]["methods"];
+    assert!(
+        methods.as_array().is_some_and(|methods| {
+            methods.contains(&json!("semantics.read"))
+                && methods.contains(&json!("events.subscribe"))
+                && !methods.contains(&json!("semantics.act"))
+        }),
+        "an observer is told it reads and subscribes: {methods}"
+    );
+    observer.receive(&press_go(1), now);
+    observer.poll(now, &waker);
+    let _ = host.pump(Duration::ZERO);
+    observer.poll(now, &waker);
+    let answer = transmitted(&mut observer);
+    assert_eq!(answer.len(), 1, "{answer:?}");
+    assert_eq!(answer[0]["id"], 1, "{answer:?}");
+    assert_eq!(answer[0]["error"]["code"], "not_driver", "{answer:?}");
+    assert_eq!(answer[0]["error"]["retry"], "never", "{answer:?}");
+    assert_eq!(
+        presses.load(Ordering::SeqCst),
+        0,
+        "an observer's act never ran"
+    );
+
+    driver.receive(&press_go(2), now);
+    driver.poll(now, &waker);
+    let _ = host.pump(Duration::ZERO);
+    driver.poll(now, &waker);
+    let answer = transmitted(&mut driver);
+    assert!(
+        answer[0].get("result").is_some(),
+        "the driver acts: {answer:?}"
+    );
+    assert_eq!(presses.load(Ordering::SeqCst), 1);
+
+    drop(observer);
+    let refused = refused_hello(&service, now, &waker, None);
+    assert_eq!(
+        refused["code"], "not_driver",
+        "an observer's end frees no seat: {refused}"
+    );
+    drop(driver);
+    let (_next, _) = greeted_as(&service, now, &waker, None);
+}
+
+/// The driver's end runs the obligation, once, and an observer's does not; after it the app is
+/// ending, and a driver's hello is answered `shutting_down`. A service that stopped runs it no
+/// more.
 #[test]
 fn the_drivers_end_runs_its_obligation_once_and_not_after_a_stop() {
     let gone = Arc::new(AtomicUsize::new(0));
@@ -312,15 +412,20 @@ fn the_drivers_end_runs_its_obligation_once_and_not_after_a_stop() {
     let waker = Waker::from(Arc::new(Wakes::default()));
     let now = Instant::now();
     let driver = greeted(&service, now, &waker);
-    let observer = greeted(&service, now, &waker);
+    let (observer, _) = greeted_as(&service, now, &waker, Some("observer"));
     drop(observer);
     assert_eq!(
         gone.load(Ordering::SeqCst),
         0,
-        "another conversation's end asks nothing"
+        "an observer's end asks nothing"
     );
     drop(driver);
     assert_eq!(gone.load(Ordering::SeqCst), 1, "the driver's end asks once");
+    let refused = refused_hello(&service, now, &waker, None);
+    assert_eq!(refused["code"], "shutting_down", "{refused}");
+    let (observer, _) = greeted_as(&service, now, &waker, Some("observer"));
+    drop(observer);
+    assert_eq!(gone.load(Ordering::SeqCst), 1, "no driver came after");
 
     let stopped_gone = Arc::new(AtomicUsize::new(0));
     let counted = Arc::clone(&stopped_gone);
@@ -349,7 +454,8 @@ fn a_subscription_streams_the_windows_events_as_it_publishes_them() {
     let wakes = Arc::new(Wakes::default());
     let waker = Waker::from(Arc::clone(&wakes));
     let now = Instant::now();
-    let mut session = greeted(&service, now, &waker);
+    // It watches as an observer while the driver below acts.
+    let (mut session, _) = greeted_as(&service, now, &waker, Some("observer"));
 
     let subscribe = json!({
         "id": 1,

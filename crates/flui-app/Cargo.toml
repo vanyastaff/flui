@@ -223,3 +223,12 @@ globals = [
     { item = "app::runner::secondary_window::PENDING_SECONDARY_WINDOW_OPENS", exit = "ADR-0083", reason = "secondary-window open requests queued beside the host cell; they fold into the runtime" },
     { item = "app::runner::secondary_window::POLLING_PENDING_WINDOWS", exit = "ADR-0083", reason = "reentrancy flag of the secondary-window queue; it folds into the runtime" },
 ]
+
+# What the application's manifests need for flui-app's features (ADR-0307).
+[package.metadata.flui.declares]
+schema = 1
+
+# The built-in HTTP capability sends through Android's `HttpURLConnection`,
+# which refuses every exchange without this permission.
+[package.metadata.flui.declares.features.http.android]
+permissions = ["android.permission.INTERNET"]

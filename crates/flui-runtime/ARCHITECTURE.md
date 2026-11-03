@@ -994,26 +994,26 @@ already admitted command keeps its place in the inbox. The bounded child rows
 in `agent_port_admission_matrix` exercise both public reads and actions, then
 verify that later calls answer `gone`. The windows hold the presentation's semantics handle strongly instead of the presentation, so the
 cost lasts exactly as long as the hook keeps a window: a hook that does not serve is handed none,
-and one that detaches or panics drops its windows, and collection stops on the next frame. `flui-app`'s desktop and iOS runners
-and `flui_testing::HeadlessDevAgent` drive the hook through `dev_agent::DevAgentHost`; the
-conversation over it is `agent::Service`'s (ADR-0288), which `flui-app`'s driver agent (ADR-0239)
-drives over its endpoint, one host per hook. Pinned by
+and one that detaches or panics drops its windows, and collection stops on the next frame. `flui-app`'s runners
+and `flui_testing::HeadlessDevAgent` drive the hooks through `dev_agent::DevAgentHost`, one per
+loop; the conversation over it is `agent::Service`'s (ADR-0288), which `flui-app`'s driver agent
+(ADR-0239) drives over its endpoint. Pinned by
 `an_agent_for_a_closed_presentation_answers_gone`, `dev_agent_host_contains_its_hook` and
 `flui-app`'s `the_driver_agent_contains_every_failure`.
 
 ### The development agent host lives in the runtime
 
-**Rule.** `dev_agent::DevAgentHost` is the only code that calls an installed `DevAgentHook`:
-attach once per loop (a second attach while attached is refused, and a hook whose `attach`
-answers that it does not serve stays unattached and is never detached), hand over each window with
-content, detach when the loop's `DevAgentAttachment` drops. The attachment is `!Send + !Sync`,
-so that detach runs on the owner thread like every other call. Each call lends the hook out of its
-slot with no lock held, so a hook that re-enters the host finds the slot empty, and a detach that
-arrives meanwhile runs when the call returns; a panic drops the hook (its `Drop` contained too,
-its payload forgotten, a deferred detach's included) and every later call does nothing; a hook
-still held when the last host clone goes is dropped under the same containment; nothing
-is vended while the hook is not attached, so a hook that does not serve or failed to attach costs
-no semantics work, and a window's semantics work ends once the hook drops its `AgentWindow`.
+**Rule.** `dev_agent::DevAgentHost` is the only code that calls an installed `DevAgentHook`, and
+an event loop owns it (ADR-0288 §7): `DevAgentHost::attach` attaches the hooks the loop took when
+it starts (a hook whose `attach` answers that it does not serve, or panics, is dropped and never
+detached), each window with content is handed to every hook in order, and dropping the host
+detaches each hook, then drops it. The host is `!Send + !Sync` and a plain value: every call that
+runs a hook takes `&mut self`, so a hook cannot reach the host, nothing re-enters it, and no lock
+is held while a hook runs. A panic drops that hook alone (its `Drop` contained too, its payload
+discarded under containment) and the others keep being served; the host's own drop, unwinding or
+not, detaches and drops under the same containment. Nothing is vended while no hook serves, so a
+hook that does not serve or failed to attach costs no semantics work, and a window's semantics
+work ends once the hooks drop its `AgentWindow`.
 
 **Why here.** Two hosts drive it, `flui-app`'s windowed runners and `flui-testing`'s headless
 UI runtime, and the headless one is the only one CI executes (a windowed install creates a GPU
@@ -1027,7 +1027,7 @@ extensions are the VM's. Pinned by `dev_agent_host_contains_its_hook` (`src/dev_
 
 **Rule.** `agent::Service` serves the windows a development-agent hook is handed (the hook calls
 `Service::window_opened`) to every conversation it accepts: the token, `Limits`, the app's
-introduction and the driver's claim are the service's, and a `Session` is one conversation. A
+introduction and the driver's seat are the service's, and a `Session` is one conversation. A
 session never reads, writes, sleeps, spawns or reads a clock. A transport hands it what it read
 (`receive`, `peer_closed`) with the current instant, writes what `transmit` gives, and calls
 `poll` again when the waker it passed is woken or `next_deadline` passes; it closes the
@@ -1036,10 +1036,12 @@ version check, refusals and the linger after one, the queue cap (waiting, runnin
 untransmitted answers), timeouts (`reply_timeout` plus a wait's own), subscriptions and the
 dispatch over the protocol's table are the session's. Requests run in order, one at a time.
 Events are taken between answers, in turn from each stream, while fewer than 64 lines wait; past
-1024 waiting lines the client is not reading and the conversation closes. The driver's
-obligation runs once, contained, when the first conversation past its hello is dropped while the
-service is not stopped. A waker the session registers is woken by the seam after the answer or
-event is in place (`flui_view` §"The development-agent hook lives here too"); the registry wakes
+1024 waiting lines the client is not reading and the conversation closes. One conversation holds
+the driver's seat at a time: a hello naming no role, or `driver`, takes it, a second is refused
+`not_driver`, and an observer reads and subscribes beside it and is refused `not_driver` when it
+acts (ADR-0288 §8). The driver's obligation runs once, contained, when the driver's conversation
+is dropped while the service is not stopped. A waker the session registers is woken by the seam
+after the answer or event is in place (`flui_view` §"The development-agent hook lives here too"); the registry wakes
 it when a window opens and when the service stops, after its lock is released.
 
 **Why here.** Every host serves the same protocol: the desktop sockets, Android, the web page and a

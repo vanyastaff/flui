@@ -371,22 +371,31 @@ impl Reactive {
         Ok(slot)
     }
 
+    /// Takes a free slot under its next generation, or a new slot. A slot
+    /// whose generation is exhausted never returns to the free list (see
+    /// [`Self::release_index`]), so no handle of an earlier occupant can match
+    /// the new one.
     fn claim_index(inner: &mut Inner, value: Option<Box<dyn Any>>) -> u32 {
         if let Some(index) = inner.free.pop() {
             let node = &mut inner.nodes[index as usize];
-            node.generation = node.generation.wrapping_add(1);
+            node.generation = node
+                .generation
+                .checked_add(1)
+                .expect("BUG: a slot whose generation is exhausted is never freed");
             node.live = true;
             node.value = value;
             node.element_readers.clear();
             index
         } else {
+            let index = u32::try_from(inner.nodes.len())
+                .expect("BUG: a reactive graph holds at most u32::MAX signal slots");
             inner.nodes.push(Node {
                 generation: 0,
                 live: true,
                 value,
                 element_readers: Membership::default(),
             });
-            (inner.nodes.len() - 1) as u32
+            index
         }
     }
 
@@ -555,7 +564,11 @@ impl Reactive {
         let node = &mut inner.nodes[index as usize];
         node.live = false;
         let retired = node.value.take();
-        inner.free.push(index);
+        // A slot at its last generation retires: reusing it would wrap the
+        // generation back to one an old handle carries.
+        if node.generation != u32::MAX {
+            inner.free.push(index);
+        }
         retired
     }
 
@@ -769,10 +782,14 @@ impl Reactive {
             .iter()
             .enumerate()
             .filter(|(_, node)| node.live)
-            .map(|(index, node)| SlotInfo {
-                slot: SignalSlot::new(self.id, index as u32, node.generation),
-                readers: node.element_readers.to_vec(),
-                owner: owners.get(&(index as u32)).copied(),
+            .map(|(index, node)| {
+                let index =
+                    u32::try_from(index).expect("BUG: signal slot indices fit u32 at claim");
+                SlotInfo {
+                    slot: SignalSlot::new(self.id, index, node.generation),
+                    readers: node.element_readers.to_vec(),
+                    owner: owners.get(&index).copied(),
+                }
             })
             .collect()
     }
@@ -1463,8 +1480,38 @@ mod tests {
                     "unmounting_an_element_releases_what_it_owned_and_its_reads",
                     unmounting_an_element_releases_what_it_owned_and_its_reads as fn(),
                 ),
+                (
+                    "a_signal_slot_at_its_last_generation_is_retired_not_reused",
+                    a_signal_slot_at_its_last_generation_is_retired_not_reused as fn(),
+                ),
             ],
         );
+    }
+
+    fn a_signal_slot_at_its_last_generation_is_retired_not_reused() {
+        let (r, _) = graph_with_inbox();
+        let first = r.signal(1u8);
+        let index = first.slot().index();
+        r.release(first.slot());
+        r.inner.borrow_mut().nodes[index as usize].generation = u32::MAX - 1;
+        let last = r.signal(2u8);
+        assert_eq!(last.slot().index(), index, "the freed slot is taken again");
+        r.release(last.slot());
+
+        let next = r.signal(3u8);
+        assert_ne!(
+            next.slot().index(),
+            index,
+            "a slot at its last generation is never handed out again"
+        );
+        assert!(matches!(
+            first.peek(&r, |v| *v),
+            Err(SignalError::Released { .. })
+        ));
+        assert!(matches!(
+            last.peek(&r, |v| *v),
+            Err(SignalError::Released { .. })
+        ));
     }
 
     fn releasing_a_slot_from_its_panicking_update_remains_authoritative() {

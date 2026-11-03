@@ -105,7 +105,23 @@ impl PipelineOwner<PaintPhase> {
 
         self.scheduler.enter_phase(PhaseKind::Paint);
         self.local_dirty.begin_paint();
+        // A panic that unwinds out of the pass (a `tracing` subscriber, a
+        // visual-update callback) leaves the paint queue as the error arm
+        // does, for the retry to run on; the phase is left before it resumes,
+        // so the next frame does not route its marks as mid-paint ones.
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.paint_in_phase())) {
+            Ok(result) => result,
+            Err(payload) => {
+                let _ = self.local_dirty.end_paint();
+                let _ = self.scheduler.exit_phase(PhaseKind::Paint);
+                std::panic::resume_unwind(payload)
+            }
+        }
+    }
 
+    /// The paint pass proper, between entering and leaving the phase: see
+    /// [`Self::run_paint`].
+    fn paint_in_phase(&mut self) -> crate::error::RenderResult<()> {
         // Retained output was recorded for another pixel ratio (text shaping and hairline
         // snapping depend on it), so none of it is replayed: every capture goes and the root,
         // served without one, repaints the whole tree.
@@ -1063,8 +1079,8 @@ impl PipelineOwner<PaintPhase> {
             // snapshot was taken.
             composer.seal_picture();
             painted.map(|()| {
-                // `None` evicts: a subtree that GAINED a Leader/Follower must
-                // not be served its pre-link form. See `capture`.
+                // `None` evicts: a subtree that GAINED a follower must not be
+                // served its pre-link form. See `capture`.
                 let captured = composer.capture(boundary_root, content);
                 composer.retained_captures.push((boundary_id, captured));
             })
@@ -1600,13 +1616,13 @@ impl FragmentComposer {
     /// Called after the boundary's own paint finished and its trailing picture
     /// run was sealed, so the tree under `root` is complete.
     ///
-    /// Returns `None` when the subtree contains a `Leader` or `Follower`.
-    /// The tree re-indexes a grafted leader by itself, but a follower also
-    /// needs the `RenderId` correlation (`follower_correlations`) that the
-    /// flattened form does not carry, so its hit-test offset would go stale
-    /// on every reused frame. Refusing to retain either is the bounded
-    /// answer; carrying the correlation through the capture is the complete
-    /// one.
+    /// Returns `None` when the region holds a `Follower` (see
+    /// [`capture_refuses`]): a follower needs the `RenderId` correlation
+    /// (`follower_correlations`) that the flattened form does not carry, so
+    /// its hit-test offset would go stale on every reused frame. Refusing it
+    /// is the bounded answer; carrying the correlation through the capture is
+    /// the complete one. A `Leader` is captured: replay pushes it through
+    /// `LayerTree::push_child`, which indexes it as a painted one.
     ///
     /// A nested repaint boundary's `OffsetLayer` becomes a [`NestedSlot`] and its
     /// content is not copied: the nested boundary keeps its own capture.
@@ -1647,7 +1663,7 @@ impl FragmentComposer {
                 continue;
             }
             let layer = node.layer();
-            if layer.as_leader().is_some() || layer.as_follower().is_some() {
+            if capture_refuses(layer) {
                 return None;
             }
             if let Some(&(render_id, origin)) = self.effect_owner.get(&id) {
@@ -1903,3 +1919,36 @@ fn clip_layer(clip: PaintClip, origin: Offset) -> Layer {
 
 /// The slots a parent painted its children from, in the order it painted them.
 pub(super) type ChildPaintOrder = SmallVec<[usize; 4]>;
+
+/// Whether [`capture`](FragmentComposer::capture) refuses a region that holds
+/// `layer`.
+///
+/// A `Follower` is placed for hit-testing and input regions through the
+/// `(RenderId, LayerId, origin)` correlation `record_follower_correlation`
+/// writes only while the follower paints, and a capture does not carry it.
+/// A `Leader` is replayed: `LayerTree::push_child` indexes it again when
+/// replay pushes it. Every variant is named, so a new layer kind is decided
+/// here before it can be captured.
+fn capture_refuses(layer: &Layer) -> bool {
+    match layer {
+        Layer::Follower(_) => true,
+        Layer::Canvas(_)
+        | Layer::Picture(_)
+        | Layer::Texture(_)
+        | Layer::PlatformView(_)
+        | Layer::PerformanceOverlay(_)
+        | Layer::ClipRect(_)
+        | Layer::ClipRRect(_)
+        | Layer::ClipPath(_)
+        | Layer::ClipSuperellipse(_)
+        | Layer::Offset(_)
+        | Layer::Transform(_)
+        | Layer::Opacity(_)
+        | Layer::ColorFilter(_)
+        | Layer::ImageFilter(_)
+        | Layer::ShaderMask(_)
+        | Layer::BackdropFilter(_)
+        | Layer::Leader(_)
+        | Layer::AnnotatedRegion(_) => false,
+    }
+}

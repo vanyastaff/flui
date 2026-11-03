@@ -575,8 +575,12 @@ fn damage_extent_contract() {
                 damage_extent::a_bounded_save_layer_extent_is_its_mapped_bounds,
             ),
             (
-                "transparent_source_and_transparent_black_predicates",
-                damage_extent::transparent_source_and_transparent_black_predicates,
+                "every_blend_mode_is_classified_by_its_cpu_blend",
+                damage_extent::every_blend_mode_is_classified_by_its_cpu_blend,
+            ),
+            (
+                "transparent_black_predicates",
+                damage_extent::transparent_black_predicates,
             ),
         ],
     );
@@ -722,8 +726,12 @@ fn text_contract() {
                 text_overflow_unit::a_truncated_paragraph_paints_exactly_the_lines_it_measured,
             ),
             (
-                "root_recolor_keeps_the_shaped_buffer",
-                text_overflow_unit::root_recolor_keeps_the_shaped_buffer_and_span_recolor_reshapes_once,
+                "a_recolour_paints_what_a_fresh_layout_paints",
+                text_overflow_unit::a_recolour_paints_what_a_fresh_layout_paints,
+            ),
+            (
+                "every_style_and_span_field_is_classified_by_what_the_shaped_paragraph_holds",
+                text_overflow_unit::every_style_and_span_field_is_classified_by_what_the_shaped_paragraph_holds,
             ),
             (
                 "bidirectional_text_lays_out",

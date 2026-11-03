@@ -525,13 +525,20 @@ impl RenderParagraph {
         self
     }
 
-    /// Replaces the text span and returns the invalidation level.
+    /// Replaces the text span and returns what the change invalidates.
     ///
-    /// - [`Invalidation::Layout`] — text content changed; caller must
-    ///   mark the node layout-dirty.
-    /// - [`Invalidation::Paint`] — only paint attributes changed (color,
-    ///   shadow); caller can mark paint-dirty only (cheaper).
-    /// - [`Invalidation::None`] — no observable change.
+    /// - [`RenderUpdateImpact::LAYOUT`](flui_rendering::RenderUpdateImpact::LAYOUT)
+    ///   with `SEMANTICS`: the glyph geometry changed (text content, font
+    ///   selection, sizes, spacing), or a span's colour did, which its shaped
+    ///   runs carry.
+    /// - [`RenderUpdateImpact::PAINT`](flui_rendering::RenderUpdateImpact::PAINT):
+    ///   only the root colour, or a field shaping does not read, changed.
+    /// - [`RenderUpdateImpact::NONE`](flui_rendering::RenderUpdateImpact::NONE):
+    ///   no observable change.
+    ///
+    /// A change to the span runs or the semantics text adds
+    /// [`RenderUpdateImpact::SEMANTICS`](flui_rendering::RenderUpdateImpact::SEMANTICS)
+    /// to any of them.
     pub fn set_text(&mut self, text: impl Into<InlineSpan>) -> flui_rendering::RenderUpdateImpact {
         let text = text.into();
         let runs = SpanRuns::of(&text);

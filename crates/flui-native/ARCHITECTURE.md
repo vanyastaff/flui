@@ -95,7 +95,8 @@ trait depends on `flui-platform` instead.
   names (`WindowsPlatform`, `HeadlessPlatform`, …) are `HostPlatform` over each
   table, and what a host offers beyond `Platform` (headless test controls, a
   scene registration) is an inherent method on `HostPlatform<H>` for the `H`
-  whose loop it is. The executor, the application path, URL and path opening,
+  whose loop it is. The executor, the application path, the launch values (an
+  Android intent's extras, the environment elsewhere; ADR-0288 §7), URL and path opening,
   the file prompts and the compositor name are no position: the loop carries
   them (`host::Services`) until the system capability crate takes them.
   The Android host has no public platform name: it starts over the Activity
@@ -373,9 +374,10 @@ trait depends on `flui-platform` instead.
   registration, which answer the key route the window hands its text input,
   `CanvasKeys`),
   `WinitHost::clipboard`, `WinitHost::drag` (`FileDrops`), `WaylandHost::drag`
-  (`WaylandDrag`: the drops on the windows, which the seats' data devices hear)
-  and `WinitHost::input` (`LoopInput`: the session's pointers and keys as the
-  loop's events and turns bring them), `AndroidHost::clipboard`,
+  (`WaylandDrag`: the drops on the windows, which the seats' data devices hear,
+  and the sessions the windows start) and `WinitHost::input` (`LoopInput`: the
+  session's pointers and keys as the loop's events and turns bring them),
+  `AndroidHost::clipboard`,
   `AndroidHost::transfer` (`ViewTransfer`, made for `FluiView`) and
   `AndroidHost::input` (`ActivityInput`: the native queue's motion and key
   events and the scroll factors), `HeadlessHost::devices`

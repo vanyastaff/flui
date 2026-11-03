@@ -1,7 +1,7 @@
 # ADR-0288: The development agent is one sans-IO service; transports only move lines
 
-- **Status:** Accepted (2026-11-03). Implemented: §§1–6. §7 (the hook host owned by the loop
-  and one launch source) and §8 (the driver's role in the hello) land in their own changes.
+- **Status:** Accepted (2026-11-03). Implemented: §§1–8, the desktop and Android transports;
+  the web's is to come.
 - **Date:** 2026-11-03
 - **Supersedes in part:** [ADR-0239](ADR-0239-every-debug-app-hosts-the-driver-agent.md) §1,
   where the server lives: the conversation is `flui-runtime`'s, and `flui-app` keeps the desktop
@@ -9,7 +9,8 @@
   a session is polled. Unchanged: the build rule, the launch, the endpoints and their
   credentials, owner-inbox execution and `may_have_run` on a timed-out act.
 - **Amends:** [ADR-0095](ADR-0095-agent-protocol-schema-crate.md) §3, the seam: an
-  `AgentAnswer` and an `AgentEvents` tell a waker when they can be read.
+  `AgentAnswer` and an `AgentEvents` tell a waker when they can be read; and
+  [ADR-0238](ADR-0238-flui-driver-protocol.md) §3, the error codes: `not_driver` (§8).
 - **Related:** [ADR-0238](ADR-0238-flui-driver-protocol.md) (the protocol);
   [ADR-0287](ADR-0287-owner-state-is-committed-before-user-code-runs.md) (user code runs after
   the state is committed); [ADR-0083](ADR-0083-one-frame-transaction-in-flui-runtime.md) (what
@@ -115,16 +116,43 @@ until the session's waker or deadline wakes it:
   discarding what the client has not read yet. The connection's thread reads without blocking
   and looks for input every 10 ms while nothing else wakes it; answers and events wake it at once.
 
-Android, the web and a headless run drive the same `Session` over their own transport.
+Android is the Unix transport over an abstract socket. On Linux and Android an address `@name`
+names the abstract socket `name`, the only kind Android's driver reaches, through
+`adb forward … localabstract:name`. An abstract socket has no file, so no directory keeps it the
+user's, and any process of the system reaches it; on Android any other app could also start this
+one with an endpoint and a token of its choosing. So each accepted connection's peer is read
+(`SO_PEERCRED`) before anything else, and one whose effective user is not the app's own, root, or
+on Android the shell (`adb forward` connects as it) is closed unread. The web and a headless run
+drive the same `Session` over their own transport.
 
-§7. **The loop owns the hooks, and the launch has one source.** `DevAgentHost` becomes a value
-the event loop owns, with no `Arc<Mutex>`, each hook still contained. `LaunchSource` (`Env`,
-`AndroidExtras`, `WebPreload`) feeds one `Launch::try_from_source`, and `flui-app`'s build script
-names one cfg for the install sites.
+§7. **The loop owns the hooks.** `DevAgentHost` is a value the event loop owns, with no
+`Arc<Mutex>`: `DevAgentHost::attach(hooks)` attaches the hooks the loop took from its
+configuration, every call that runs a hook takes `&mut self`, so a hook cannot reach the host and
+nothing re-enters it, and dropping the host detaches each hook, then drops it, each contained. A
+configuration holds each hook until the first loop that starts with it takes it. `flui-app` keeps
+the host in the loop's state and lends it out for each call, so no borrow of that state is held
+while a hook runs, and drops it as the loop ends, before the windows it serves are retired; a
+loop that ends while the host is lent has the lender drop it. `flui-app`'s
+build script names the build that compiles the agent once, `cfg(driver_agent)`, from what Cargo
+reports of the profile's debug assertions and the `driver` feature. The launch is read through
+one seam, `Platform::launch_value(LaunchKey)`: a `LaunchKey` is a dotted name
+(`flui.agent.token`), and each host reads it in its own spelling, the launching intent's string
+extra of that name on Android, the environment variable it spells (`FLUI_AGENT_TOKEN`)
+elsewhere, an iOS Simulator app's included (`simctl launch` hands it
+`SIMCTL_CHILD_FLUI_AGENT_TOKEN` as `FLUI_AGENT_TOKEN`). The web reads none until its
+transport brings the page's preload. One key names both spellings, so a runner reads the launch
+the same way on every host.
 
-§8. **A role in the hello.** `Greeting.role` is `Driver` (the default) or `Observer`, in protocol
-0.9 and its golden. One driver is admitted per app; an observer reads and subscribes, and never
-claims input, leases or exit on disconnect. It replaces §5's "first conversation past its hello".
+§8. **A role in the hello.** The hello names what its client may do: `Hello.role`, a
+`ClientRole` of `driver` (the default, which a hello may leave out) or `observer`, in protocol
+0.9 and its golden. It sits beside the token and the protocol because it is part of what the
+client presents, not a second key of the greeting line. One conversation holds the driver's seat
+at a time; a second driver's hello is refused with a new code, `not_driver`, retry `soon`, and
+closed. An observer reads and subscribes beside the driver: its hello lists only the methods it
+may call, and a call of its that acts is answered `not_driver`. An observer never claims input,
+a lease or the exit on disconnect. When the driver's conversation ends the seat is free again,
+or, with §5's obligation, the obligation runs and the app is ending, so a later driver's hello
+is answered `shutting_down`. This replaces §5's "first conversation past its hello".
 
 ### Consequences
 
@@ -158,6 +186,32 @@ claims input, leases or exit on disconnect. It replaces §5's "first conversatio
   installed regardless.
 - `flui-app`'s socket suite (`the_driver_agent_contains_every_failure`) drives the desktop
   transport end to end.
+- A hook cannot reach its host: `DevAgentHost` is `!Send` and `!Sync`, and every call that runs a
+  hook takes it by `&mut` (compiler). `flui-runtime`'s `dev_agent_host_contains_its_hook` drops a
+  hook that panics in any call, alone, keeps the others served in order, and contains a detach or
+  a drop that panics while the host goes.
+- `flui-app`'s `a_loop_takes_every_installed_hook_once_and_one_that_panics_is_dropped_alone`
+  takes three hooks from one configuration, finds a clone of it holding none, and finds the hook
+  that panicked in `attach` dropped without a detach;
+  `a_host_lent_when_its_loop_ends_is_handed_back_to_be_dropped` ends a loop while its host is
+  lent and finds the host dropped, its hook detached once, when it comes back.
+- `flui-app`'s build script and the agent's module agree on `cfg(driver_agent)`: a
+  `compile_error!` fires in a build where the alias and `any(debug_assertions, feature = "driver")`
+  on a system with a local-socket transport differ.
+- `flui-runtime`'s `one_driver_at_a_time_and_an_observer_only_reads` refuses a second driver's
+  hello `not_driver` until the first goes, lists an observer only the methods that read, and
+  answers its act `not_driver` without running it; `the_drivers_end_runs_its_obligation_once_and_not_after_a_stop`
+  runs the obligation for the driver alone and answers a later driver `shutting_down`.
+  `flui-protocol`'s `a_hello_names_its_role_only_when_it_observes` pins the spelling, and the
+  0.9 golden holds `ClientRole` and `not_driver`.
+- The Android transport's socket runs on the Linux host: the socket suite's
+  `an_abstract_socket_serves_its_user_and_closes_others_unread` serves a client over `@name` and
+  closes unread a peer its rule refuses; `an_abstract_socket_admits_its_user_root_and_on_android_the_shell`
+  pins the rule. `flui-native`'s `a_headless_platform_reads_launch_values_from_the_environment`
+  and `flui-app`'s `the_launch_is_read_through_its_keys` read the launch through its keys, and
+  each key's environment spelling is the variable the protocol names. The Android intent read
+  and the abstract socket on a device are compile-checked for `aarch64-linux-android` and run on
+  a device by the owner.
 
 ## Pros and cons of the options
 
@@ -189,7 +243,9 @@ claims input, leases or exit on disconnect. It replaces §5's "first conversatio
 
 ## Migration
 
-The desktop transport moved in the change that accepted this ADR. Then, each in its own change:
-§7, §8, the Android transport (an abstract socket, the same code as Unix), the web transport (the
-page's export, driven from the JS event loop), and held input per connection (a lease the session
-owns, released when it is dropped).
+The desktop transport moved in the change that accepted this ADR, the hook host moved into the
+loop in the next (§7), and the role came into the hello after it (§8). The Android transport
+came next (§6, with the launch read through the platform, §7). Then, each in its own change:
+`flui run --agent` on Android (the extras, and the client over `adb forward`), the web transport
+(the page's export, driven from the JS event loop), and held input per connection (a lease the
+session owns, released when it is dropped).

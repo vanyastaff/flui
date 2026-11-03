@@ -24,7 +24,9 @@ use web_time::Instant;
 
 use super::super::Disconnect;
 use super::connection::{self, Closer};
-use super::launch::Launch;
+#[cfg(unix)]
+use super::launch::abstract_name;
+use super::launch::{Launch, PeerRule};
 
 /// How long stopping waits for the agent's threads.
 const STOP_WAIT: Duration = Duration::from_secs(2);
@@ -192,11 +194,18 @@ pub(super) fn listen(
     let (threads_tx, threads_done) = mpsc::channel::<()>();
     let accepting = service.clone();
     let accepting_transport = Arc::clone(&transport);
+    let peers = launch.peers;
     let acceptor = std::thread::Builder::new()
         .name("flui-agent-accept".into())
         .spawn(move || {
             let _done = (acceptor_tx, threads_tx.clone());
-            accept_loop(&listener, &accepting, &accepting_transport, &threads_tx);
+            accept_loop(
+                &listener,
+                peers,
+                &accepting,
+                &accepting_transport,
+                &threads_tx,
+            );
         })?;
     Ok(Running {
         service,
@@ -208,7 +217,13 @@ pub(super) fn listen(
     })
 }
 
-fn accept_loop(listener: &Listener, service: &Service, transport: &Arc<Transport>, done: &Done) {
+fn accept_loop(
+    listener: &Listener,
+    peers: Option<PeerRule>,
+    service: &Service,
+    transport: &Arc<Transport>,
+    done: &Done,
+) {
     loop {
         let accepted = listener.accept();
         if transport.stop.load(Ordering::SeqCst) {
@@ -216,7 +231,7 @@ fn accept_loop(listener: &Listener, service: &Service, transport: &Arc<Transport
             return;
         }
         match accepted {
-            Ok(stream) => admit(stream, service, transport, done),
+            Ok(stream) => admit(stream, peers, service, transport, done),
             Err(error) => {
                 super::trace(
                     || tracing::debug!(kind = ?error.kind(), "agent endpoint accept failed"),
@@ -227,7 +242,21 @@ fn accept_loop(listener: &Listener, service: &Service, transport: &Arc<Transport
     }
 }
 
-fn admit(stream: Stream, service: &Service, transport: &Arc<Transport>, done: &Done) {
+fn admit(
+    stream: Stream,
+    peers: Option<PeerRule>,
+    service: &Service,
+    transport: &Arc<Transport>,
+    done: &Done,
+) {
+    if let Some(rule) = peers
+        && !peer_admitted(&stream, rule)
+    {
+        super::trace(|| {
+            tracing::debug!("agent endpoint: a peer the socket does not admit; closing it unread");
+        });
+        return;
+    }
     let session = match service.accept(Instant::now()) {
         Ok(session) => session,
         Err(refused) => {
@@ -249,6 +278,26 @@ fn admit(stream: Stream, service: &Service, transport: &Arc<Transport>, done: &D
         });
 }
 
+/// Whether `rule` admits `stream`'s peer, by its effective user ID; a peer whose credentials
+/// cannot be read is not admitted.
+fn peer_admitted(stream: &Stream, rule: PeerRule) -> bool {
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    {
+        use interprocess::local_socket::traits::StreamCommon as _;
+        stream
+            .peer_creds()
+            .ok()
+            .and_then(|credentials| credentials.euid())
+            .is_some_and(rule)
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "android")))]
+    {
+        // Only Linux and Android bind abstract sockets, the endpoints a rule guards.
+        let _ = (stream, rule);
+        false
+    }
+}
+
 /// The endpoint's name for `address`.
 fn name(address: &str) -> io::Result<Name<'_>> {
     #[cfg(windows)]
@@ -261,6 +310,12 @@ fn name(address: &str) -> io::Result<Name<'_>> {
     }
     #[cfg(unix)]
     {
+        #[cfg(any(target_os = "linux", target_os = "android"))]
+        if let Some(name) = abstract_name(address) {
+            use interprocess::local_socket::ToNsName as _;
+            use interprocess::os::unix::local_socket::AbstractNsUdSocket;
+            return name.to_ns_name::<AbstractNsUdSocket>();
+        }
         use interprocess::local_socket::{GenericFilePath, ToFsName as _};
         address.to_fs_name::<GenericFilePath>()
     }
@@ -301,6 +356,14 @@ fn bind(address: &str) -> io::Result<Listener> {
     use std::os::unix::fs::MetadataExt as _;
     use std::path::Path;
 
+    // An abstract socket has no file and no directory to check: the peer rule keeps it the
+    // current user's.
+    if abstract_name(address).is_some() {
+        return ListenerOptions::new()
+            .name(name(address)?)
+            .nonblocking(ListenerNonblockingMode::Neither)
+            .create_sync();
+    }
     let path = Path::new(address);
     let parent = path
         .parent()

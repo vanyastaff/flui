@@ -543,6 +543,12 @@ pub(crate) trait LoopWindows: OpenWindows {
     /// the root window may concern every window.
     fn event(&self, event: &Event);
 
+    /// A pointer event the server sent, asked before the input hears it:
+    /// `true` when a window took it for its chrome (a press on a title bar or
+    /// a resize border the application draws, and that press's release), so
+    /// the input never hears it (ADR-0286 §10).
+    fn chrome_event(&self, event: &Event) -> bool;
+
     /// Deliver a frame request to every window that asked for one since the
     /// last call.
     fn deliver_frames(&self);
@@ -778,6 +784,11 @@ impl X11Loop {
             // first. A handler's panic in what the text input or the input
             // delivered still leaves the windows the event, a focus change
             // they follow too; the first panic is raised again after.
+            // A press a window takes for its chrome reaches neither the text
+            // input nor the input, nor does its release.
+            if self.windows.chrome_event(&event) {
+                continue;
+            }
             let mut failure = FirstPanic::new();
             failure.contain(|| self.text.event(&event));
             if failure.contain(|| self.input.event(&event)) != Some(true) {
@@ -1153,6 +1164,10 @@ fn no_file_prompt() -> PlatformError {
 }
 
 impl host::Services for X11Loop {
+    fn launch_value(&self, key: flui_platform::LaunchKey) -> Option<String> {
+        host::environment_launch_value(key)
+    }
+
     fn background_executor(&self) -> Arc<dyn PlatformExecutor> {
         Arc::clone(&self.background_executor) as Arc<dyn PlatformExecutor>
     }

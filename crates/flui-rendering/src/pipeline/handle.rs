@@ -24,13 +24,12 @@
 //! When the receiving owner drops, outstanding handles receive
 //! `Err(SendError::OwnerGone)` on their next `request_mark_dirty`.
 
-use std::{num::NonZeroU64, sync::Arc};
+use std::num::NonZeroU64;
 
 use crossbeam_channel::{Receiver, Sender, TrySendError, bounded};
 use flui_foundation::RenderId;
-use parking_lot::RwLock;
 
-use super::notifier::VisualUpdateNotifier;
+use super::notifier::SharedNotifier;
 
 // ---------------------------------------------------------------------------
 // Private channel protocol
@@ -133,7 +132,7 @@ pub(super) struct DirtySender {
     /// idles still produces the frame that observes it. Enqueue-only
     /// (the pre-wake shape) was the "GIF frozen until you scroll" bug:
     /// the channel filled and nothing ever drained it.
-    notifier: Arc<RwLock<VisualUpdateNotifier>>,
+    notifier: SharedNotifier,
 }
 
 impl std::fmt::Debug for DirtySender {
@@ -150,7 +149,7 @@ impl DirtySender {
     /// `PipelineOwner::new` wires this up.
     pub(super) fn new_pair(
         capacity: usize,
-        notifier: Arc<RwLock<VisualUpdateNotifier>>,
+        notifier: SharedNotifier,
     ) -> (Self, Receiver<DirtyRequest>) {
         let (tx, rx) = bounded(capacity);
         (
@@ -180,8 +179,11 @@ impl DirtySender {
                 // frame whose `drain_pending_dirty` observes this request
                 // (same contract as a local dirty mark firing the
                 // notifier). Idempotent — a pending frame absorbs
-                // repeated wakes.
-                self.notifier.read().fire_need_visual_update();
+                // repeated wakes. The request is committed to the channel
+                // first, and the wake runs on this thread with no notifier
+                // guard held, so it may re-enter a handle or wait for the
+                // owner thread while that thread replaces the callback.
+                self.notifier.visual_update().notify();
                 Ok(())
             }
             Err(TrySendError::Full(_)) => Err(SendError::ChannelFull {

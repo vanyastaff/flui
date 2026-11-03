@@ -47,10 +47,11 @@ use std::{
 };
 
 use flui_foundation::{
-    ElementId,
+    CreationSite, ElementId, TreeContext,
     panic::{is_internal_invariant, payload_text},
 };
 
+use crate::tree::ElementTree;
 use crate::view::FrameworkError;
 
 /// Which `ViewState`/view lifecycle hook a [`RecoveredPanic`] was caught
@@ -278,9 +279,55 @@ pub struct RecoveredPanic {
     /// never decides whether a panic is routed, only how it reads once
     /// routed.
     pub internal_invariant: bool,
+    /// Where in the element tree the panic happened: the panicked element and its ancestors, each
+    /// by view kind, and where the panicked view was created.
+    ///
+    /// The site is recorded by the seam that caught the panic, while the element is still at
+    /// hand. The path is read from the live tree, by the seam when it is about to remove the
+    /// element and otherwise by `WidgetsBinding::take_recovered_panics`: it starts at the
+    /// panicked element when that is still a node, else at the parent the record names, else at
+    /// a lazy delegate's host. Empty when none of those is a node any more; a drain straight from
+    /// [`BuildOwner::take_recovered_panics`](super::BuildOwner::take_recovered_panics), which has
+    /// no tree, leaves the path to the seam.
+    pub context: TreeContext,
 }
 
 impl RecoveredPanic {
+    /// The same record with `site` as where the panicked view was created.
+    #[must_use]
+    pub(crate) fn with_site(mut self, site: CreationSite) -> Self {
+        self.context = TreeContext::new(self.context.path().iter().copied(), site);
+        self
+    }
+
+    /// Fill the context's path from `tree` when it has none yet, starting at the panicked
+    /// element, else at the parent this record names, else at a lazy delegate's host, whichever
+    /// is a current node first. A site the seam left unknown is taken from the starting element
+    /// when that is the panicked element itself.
+    pub(crate) fn locate_in(&mut self, tree: &ElementTree) {
+        if !self.context.path().is_empty() {
+            return;
+        }
+        let host = match self.at {
+            RecoveredAt::LazyDelegate { host, .. } => Some(host),
+            RecoveredAt::Element { .. } | RecoveredAt::Substituted { .. } => None,
+        };
+        let Some(start) = [self.element(), self.parent(), host]
+            .into_iter()
+            .flatten()
+            .find(|&id| tree.contains(id))
+        else {
+            return;
+        };
+        let found = tree.tree_context(start);
+        let site = if self.context.site().location().is_none() && Some(start) == self.element() {
+            found.site()
+        } else {
+            self.context.site()
+        };
+        self.context = TreeContext::new(found.path().iter().copied(), site);
+    }
+
     /// The panicking element, when one existed — see [`RecoveredAt::element`].
     pub fn element(&self) -> Option<ElementId> {
         self.at.element()
@@ -345,6 +392,7 @@ impl RecoveredPanic {
             payload_text: source_payload_text.map(Box::<str>::from),
             internal_invariant: source_payload_text.is_some_and(is_internal_invariant),
             error,
+            context: TreeContext::default(),
         }
     }
 }
@@ -368,6 +416,18 @@ impl StagedRecoveredPanic {
 
     pub(crate) fn into_recovered(self) -> RecoveredPanic {
         *self.0
+    }
+
+    /// Fill the record's path from `tree` while its element is still a node: for a seam about
+    /// to remove that element, after which the drain could not find it.
+    pub(crate) fn locate_in(&mut self, tree: &ElementTree) {
+        if self
+            .0
+            .element()
+            .is_some_and(|element| tree.contains(element))
+        {
+            self.0.locate_in(tree);
+        }
     }
 }
 

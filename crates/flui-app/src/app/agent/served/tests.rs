@@ -141,6 +141,12 @@ fn connect(address: &str) -> io::Result<Stream> {
         use interprocess::local_socket::{GenericNamespaced, ToNsName as _};
         address.to_ns_name::<GenericNamespaced>()?
     };
+    #[cfg(target_os = "linux")]
+    if let Some(name) = address.strip_prefix('@') {
+        use interprocess::local_socket::ToNsName as _;
+        use interprocess::os::unix::local_socket::AbstractNsUdSocket;
+        return Stream::connect(name.to_ns_name::<AbstractNsUdSocket>()?);
+    }
     #[cfg(unix)]
     let name = {
         use interprocess::local_socket::{GenericFilePath, ToFsName as _};
@@ -183,10 +189,15 @@ impl Client {
         json!({ "hello": { "token": token, "protocol": PROTOCOL_VERSION.to_string(), "client": "test" } })
     }
 
-    /// Connected and past the hello; the hello's answer.
-    fn greeted(address: &str) -> (Self, Value) {
+    /// Connected and past a hello asking for `role`, `None` for the driver's; the hello's
+    /// answer.
+    fn greeted_as(address: &str, role: Option<&str>) -> (Self, Value) {
         let mut client = Self::connect(address);
-        client.send(&Self::hello_line(TOKEN));
+        let mut hello = Self::hello_line(TOKEN);
+        if let Some(role) = role {
+            hello["hello"]["role"] = json!(role);
+        }
+        client.send(&hello);
         match client.recv(RECV) {
             Recv::Line(welcome) => (client, welcome),
             Recv::Closed => panic!("the agent closed the connection at the hello"),
@@ -194,8 +205,17 @@ impl Client {
         }
     }
 
+    /// Connected and past the hello, as the driver; the hello's answer.
+    fn greeted(address: &str) -> (Self, Value) {
+        Self::greeted_as(address, None)
+    }
+
     fn hello(address: &str) -> Self {
-        let (client, welcome) = Self::greeted(address);
+        Self::hello_as(address, None)
+    }
+
+    fn hello_as(address: &str, role: Option<&str>) -> Self {
+        let (client, welcome) = Self::greeted_as(address, role);
         assert_eq!(
             welcome["hello"]["protocol"],
             json!(PROTOCOL_VERSION.to_string()),
@@ -408,9 +428,10 @@ struct Owner {
 
 impl Owner {
     fn new(agent: DriverAgent) -> Self {
-        let agent = HeadlessDevAgent::attach(agent);
+        let mut agent = HeadlessDevAgent::attach(agent);
         let presses = Arc::new(AtomicU32::new(0));
-        let ui_runtime = HeadlessHost::new(HeadlessWindow::new(400, 300)).with_dev_agent(&agent);
+        let ui_runtime =
+            HeadlessHost::new(HeadlessWindow::new(400, 300)).with_dev_agent(&mut agent);
         ui_runtime
             .attach(&Counter {
                 presses: Arc::clone(&presses),
@@ -425,7 +446,7 @@ impl Owner {
     }
 
     fn open_second(&mut self) {
-        let agent = self.agent.as_ref().expect("the agent is attached");
+        let agent = self.agent.as_mut().expect("the agent is attached");
         let second = HeadlessHost::new(HeadlessWindow::new(400, 300)).with_dev_agent(agent);
         second
             .attach(&Counter {
@@ -669,7 +690,9 @@ fn a_client_leaving_mid_request_does_not_stall_the_next() {
     let mut owner = Owner::new(agent);
     let at = address.address;
     owner.drive(move |owner| {
-        let mut leaving = Client::hello(&at);
+        // An observer, so the next client is admitted as the driver however soon the agent
+        // sees this one go.
+        let mut leaving = Client::hello_as(&at, Some("observer"));
         let window = leaving.only_window();
         owner.ask(Command::Pause);
         leaving
@@ -1041,8 +1064,8 @@ fn the_driver_going_asks_one_exit_when_launched_to() {
 
         let mut driver = Client::hello(&at);
         driver.only_window();
-        // An inspector beside the driver comes and goes: the app stays.
-        let mut inspector = Client::hello(&at);
+        // An inspector observing beside the driver comes and goes: the app stays.
+        let mut inspector = Client::hello_as(&at, Some("observer"));
         inspector.only_window();
         drop(inspector);
         std::thread::sleep(Duration::from_millis(100));
@@ -1061,7 +1084,11 @@ fn the_driver_going_asks_one_exit_when_launched_to() {
             );
             std::thread::sleep(Duration::from_millis(5));
         }
-        let mut second = Client::hello(&at);
+        // The app is ending: another driver is refused, an observer still reads.
+        let (refused, answer) = Client::greeted(&at);
+        assert_eq!(answer["error"]["code"], "shutting_down", "{answer}");
+        drop(refused);
+        let mut second = Client::hello_as(&at, Some("observer"));
         second.only_window();
         drop(second);
         std::thread::sleep(Duration::from_millis(100));
@@ -1208,6 +1235,40 @@ fn unbounded_timeouts_wait_without_a_deadline() {
     assert_eq!(owner.presses(), 1, "the button's handler ran once");
 }
 
+/// An abstract socket (`@name`), Android's endpoint, serves a peer of the app's user, and closes
+/// unread a connection whose peer its rule does not admit.
+#[cfg(target_os = "linux")]
+fn an_abstract_socket_serves_its_user_and_closes_others_unread() {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("the clock is after the epoch")
+        .as_nanos();
+    let at = format!("@flui-agent-test-{}-{nanos}", std::process::id());
+    let launch = || Launch::try_new(at.clone(), TOKEN.to_owned(), false).expect("a long token");
+
+    let (agent, _, _) = driver_agent(launch());
+    let mut owner = Owner::new(agent);
+    assert!(owner.is_attached(), "the abstract socket is bound");
+    let served = at.clone();
+    owner.drive(move |_| {
+        let mut client = Client::hello(&served);
+        let _ = client.only_window();
+    });
+    drop(owner);
+
+    let (agent, _, _) = driver_agent(launch().with_peer_rule(|_| false));
+    let mut owner = Owner::new(agent);
+    let refused = at.clone();
+    owner.drive(move |_| {
+        let mut stranger = Client::connect(&refused);
+        stranger.send(&Client::hello_line(TOKEN));
+        assert!(
+            stranger.closed_unread(),
+            "a peer the rule refuses is closed before its hello is read"
+        );
+    });
+}
+
 /// Runs every row, then fails naming each row that failed.
 fn run_cases(cases: &[(&str, fn())]) {
     let mut failures = Vec::new();
@@ -1288,5 +1349,89 @@ fn the_driver_agent_contains_every_failure() {
             "unbounded_timeouts_wait_without_a_deadline",
             unbounded_timeouts_wait_without_a_deadline,
         ),
+        #[cfg(target_os = "linux")]
+        (
+            "an_abstract_socket_serves_its_user_and_closes_others_unread",
+            an_abstract_socket_serves_its_user_and_closes_others_unread,
+        ),
     ]);
+}
+
+#[test]
+fn the_launch_is_read_through_its_keys() {
+    use flui_protocol::launch::{ENDPOINT_ENV, EXIT_ON_DISCONNECT_ENV, TOKEN_ENV};
+
+    use super::launch::{ENDPOINT, EXIT_ON_DISCONNECT, TOKEN as TOKEN_KEY};
+
+    // A desktop reads the variables a driver sets, under the keys an Android
+    // launch names its extras with.
+    for (key, variable) in [
+        (ENDPOINT, ENDPOINT_ENV),
+        (TOKEN_KEY, TOKEN_ENV),
+        (EXIT_ON_DISCONNECT, EXIT_ON_DISCONNECT_ENV),
+    ] {
+        assert_eq!(key.environment_variable(), variable, "{key}");
+    }
+
+    let read = |endpoint: Option<&str>, token: &str, exit: Option<&str>| {
+        Launch::read(|key| {
+            let value = if key == ENDPOINT {
+                endpoint
+            } else if key == TOKEN_KEY {
+                Some(token)
+            } else if key == EXIT_ON_DISCONNECT {
+                exit
+            } else {
+                panic!("the launch reads no other key: {key}")
+            };
+            value.map(str::to_owned)
+        })
+    };
+    let at = "/run/user/agent.sock";
+    assert!(read(None, TOKEN, None).is_none(), "no endpoint, no agent");
+    assert!(read(Some(at), "short", None).is_none(), "a short token");
+    let plain = read(Some(at), TOKEN, None).expect("a launch");
+    assert_eq!(plain.address, at);
+    assert!(!plain.exit_on_disconnect());
+    assert!(
+        read(Some(at), TOKEN, Some("1"))
+            .expect("a launch")
+            .exit_on_disconnect()
+    );
+    assert!(
+        !read(Some(at), TOKEN, Some("true"))
+            .expect("a launch")
+            .exit_on_disconnect(),
+        "only `1` turns the exit on"
+    );
+    assert!(plain.peers.is_none(), "a socket file needs no peer rule");
+    let abstract_launch = read(Some("@flui-agent-1"), TOKEN, None).expect("a launch");
+    assert_eq!(
+        abstract_launch.peers.is_some(),
+        cfg!(any(target_os = "linux", target_os = "android")),
+        "an abstract socket admits only the peers its rule does"
+    );
+}
+
+#[test]
+fn an_abstract_socket_admits_its_user_root_and_on_android_the_shell() {
+    use super::launch::peer_admitted;
+
+    const OWN: u32 = 10_123;
+    for (peer, android, admitted) in [
+        (OWN, false, true),
+        (OWN, true, true),
+        (0, false, true),
+        (0, true, true),
+        (2000, true, true),
+        (2000, false, false),
+        (10_124, true, false),
+        (1000, false, false),
+    ] {
+        assert_eq!(
+            peer_admitted(peer, OWN, android),
+            admitted,
+            "peer {peer}, android {android}"
+        );
+    }
 }

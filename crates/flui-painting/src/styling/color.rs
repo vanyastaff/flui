@@ -912,72 +912,95 @@ impl Color {
     pub fn blend(&self, dst: Color, mode: crate::paint::BlendMode) -> Color {
         use crate::paint::BlendMode;
 
-        // Preserve exact identities before premultiplication can underflow.
-        match mode {
-            BlendMode::Src => return *self,
-            BlendMode::Dst => return dst,
-            BlendMode::SrcOver => return self.blend_over(dst),
-            BlendMode::DstOver => return dst.blend_over(*self),
-            _ => {}
-        }
-
         let [src_r, src_g, src_b, src_a] = self.to_rgba_f32_array();
         let [dst_r, dst_g, dst_b, dst_a] = dst.to_rgba_f32_array();
+        let source = [src_r, src_g, src_b];
+        let backdrop = [dst_r, dst_g, dst_b];
 
         // The output color is accumulated premultiplied, then un-premultiplied
-        // once at the end. (`src_pm`/`dst_pm` are used by the Modulate and
-        // Porter-Duff branches; the advanced branch reads straight channels.)
+        // once at the end. The Modulate and Porter-Duff formulas read the
+        // premultiplied channels; the advanced ones read straight channels.
         let src_pm = [src_r * src_a, src_g * src_a, src_b * src_a];
         let dst_pm = [dst_r * dst_a, dst_g * dst_a, dst_b * dst_a];
 
-        let (out_r_pm, out_g_pm, out_b_pm, out_a) = if matches!(mode, BlendMode::Modulate) {
-            // Modulate is the component-wise product of the premultiplied colors
-            // (Skia `kModulate`): r = s * d on every channel.
-            (
-                src_pm[0] * dst_pm[0],
-                src_pm[1] * dst_pm[1],
-                src_pm[2] * dst_pm[2],
-                src_a * dst_a,
-            )
-        } else if let Some((fa, fb)) = porter_duff_factors(mode, src_a, dst_a) {
-            // Porter-Duff coverage blend: r = Fa * src_premul + Fb * dst_premul
-            // (and the same for alpha).
-            (
+        // Porter-Duff coverage blend: r = Fa * src_premul + Fb * dst_premul
+        // (and the same for alpha).
+        let coverage = |fa: f32, fb: f32| {
+            [
                 (src_pm[0] * fa + dst_pm[0] * fb).clamp(0.0, 1.0),
                 (src_pm[1] * fa + dst_pm[1] * fb).clamp(0.0, 1.0),
                 (src_pm[2] * fa + dst_pm[2] * fb).clamp(0.0, 1.0),
                 (src_a * fa + dst_a * fb).clamp(0.0, 1.0),
-            )
-        } else {
-            // Separable / non-separable blend modes composite source-over with a
-            // per-mode blend function B(Cb, Cs) (W3C Compositing and Blending
-            // Level 1, §10–11):
-            //   co = αs·(1-αb)·Cs + αs·αb·B(Cb,Cs) + (1-αs)·αb·Cb   (premultiplied)
-            //   αo = αs + αb·(1-αs)
-            let backdrop = [dst_r, dst_g, dst_b];
-            let source = [src_r, src_g, src_b];
-            let blended = if matches!(
-                mode,
-                BlendMode::Hue | BlendMode::Saturation | BlendMode::Color | BlendMode::Luminosity
-            ) {
-                nonseparable_blend(mode, backdrop, source)
-            } else {
-                [
-                    separable_blend(mode, backdrop[0], source[0]),
-                    separable_blend(mode, backdrop[1], source[1]),
-                    separable_blend(mode, backdrop[2], source[2]),
-                ]
-            };
-
+            ]
+        };
+        // Separable and non-separable modes composite source-over with a
+        // per-mode blend function B(Cb, Cs) (W3C Compositing and Blending
+        // Level 1, §10–11):
+        //   co = αs·(1-αb)·Cs + αs·αb·B(Cb,Cs) + (1-αs)·αb·Cb   (premultiplied)
+        //   αo = αs + αb·(1-αs)
+        let advanced = |blended: [f32; 3]| {
             let composite = |cs: f32, cb: f32, b: f32| {
                 src_a * (1.0 - dst_a) * cs + src_a * dst_a * b + (1.0 - src_a) * dst_a * cb
             };
-            (
+            [
                 composite(source[0], backdrop[0], blended[0]),
                 composite(source[1], backdrop[1], blended[1]),
                 composite(source[2], backdrop[2], blended[2]),
                 src_a + dst_a * (1.0 - src_a),
-            )
+            ]
+        };
+        // A separable B(cb, cs) applies to each channel on its own.
+        let separable = |blend: fn(f32, f32) -> f32| {
+            advanced([
+                blend(backdrop[0], source[0]),
+                blend(backdrop[1], source[1]),
+                blend(backdrop[2], source[2]),
+            ])
+        };
+
+        // One arm per mode, with no wildcard, so a new mode has no formula
+        // until it is given one here.
+        let [out_r_pm, out_g_pm, out_b_pm, out_a] = match mode {
+            // Exact identities, kept before premultiplication can underflow.
+            BlendMode::Src => return *self,
+            BlendMode::Dst => return dst,
+            BlendMode::SrcOver => return self.blend_over(dst),
+            BlendMode::DstOver => return dst.blend_over(*self),
+            BlendMode::Clear => coverage(0.0, 0.0),
+            BlendMode::SrcIn => coverage(dst_a, 0.0),
+            BlendMode::DstIn => coverage(0.0, src_a),
+            BlendMode::SrcOut => coverage(1.0 - dst_a, 0.0),
+            BlendMode::DstOut => coverage(0.0, 1.0 - src_a),
+            BlendMode::SrcATop => coverage(dst_a, 1.0 - src_a),
+            BlendMode::DstATop => coverage(1.0 - dst_a, src_a),
+            BlendMode::Xor => coverage(1.0 - dst_a, 1.0 - src_a),
+            BlendMode::Plus => coverage(1.0, 1.0),
+            // Modulate is the component-wise product of the premultiplied
+            // colors (Skia `kModulate`): r = s * d on every channel.
+            BlendMode::Modulate => [
+                src_pm[0] * dst_pm[0],
+                src_pm[1] * dst_pm[1],
+                src_pm[2] * dst_pm[2],
+                src_a * dst_a,
+            ],
+            BlendMode::Multiply => separable(|cb, cs| cb * cs),
+            BlendMode::Screen => separable(|cb, cs| cb + cs - cb * cs),
+            // overlay(cb, cs) == hardlight(cs, cb).
+            BlendMode::Overlay => separable(|cb, cs| hard_light(cs, cb)),
+            BlendMode::Darken => separable(f32::min),
+            BlendMode::Lighten => separable(f32::max),
+            BlendMode::ColorDodge => separable(color_dodge),
+            BlendMode::ColorBurn => separable(color_burn),
+            BlendMode::HardLight => separable(hard_light),
+            BlendMode::SoftLight => separable(soft_light),
+            BlendMode::Difference => separable(|cb, cs| (cb - cs).abs()),
+            BlendMode::Exclusion => separable(|cb, cs| cb + cs - 2.0 * cb * cs),
+            BlendMode::Hue => advanced(set_lum(set_sat(source, sat(backdrop)), lum(backdrop))),
+            BlendMode::Saturation => {
+                advanced(set_lum(set_sat(backdrop, sat(source)), lum(backdrop)))
+            }
+            BlendMode::Color => advanced(set_lum(source, lum(backdrop))),
+            BlendMode::Luminosity => advanced(set_lum(backdrop, lum(source))),
         };
 
         if out_a <= 0.0 {
@@ -1079,80 +1102,42 @@ pub fn linear_to_srgb(c: f32) -> f32 {
 
 // ===== Blend-mode evaluation helpers (used by `Color::blend`) =====
 
-/// Porter-Duff source/destination coverage factors `(Fa, Fb)` for `mode`, given
-/// source alpha `sa` and destination alpha `da`. The composited premultiplied
-/// result is `Fa·src + Fb·dst` for every channel (and for alpha).
-///
-/// Returns `None` for modes that are not a coverage-factor blend — `Modulate`
-/// (a component product) and the advanced separable/non-separable modes — which
-/// [`Color::blend`] dispatches down its other branches.
-fn porter_duff_factors(mode: crate::paint::BlendMode, sa: f32, da: f32) -> Option<(f32, f32)> {
-    use crate::paint::BlendMode;
-    Some(match mode {
-        BlendMode::Clear => (0.0, 0.0),
-        BlendMode::Src => (1.0, 0.0),
-        BlendMode::Dst => (0.0, 1.0),
-        BlendMode::SrcOver => (1.0, 1.0 - sa),
-        BlendMode::DstOver => (1.0 - da, 1.0),
-        BlendMode::SrcIn => (da, 0.0),
-        BlendMode::DstIn => (0.0, sa),
-        BlendMode::SrcOut => (1.0 - da, 0.0),
-        BlendMode::DstOut => (0.0, 1.0 - sa),
-        BlendMode::SrcATop => (da, 1.0 - sa),
-        BlendMode::DstATop => (1.0 - da, sa),
-        BlendMode::Xor => (1.0 - da, 1.0 - sa),
-        BlendMode::Plus => (1.0, 1.0),
-        _ => return None,
-    })
+// The W3C separable blend functions `B(cb, cs)` for one channel take the
+// backdrop `cb` and the source `cs`, both straight, in `[0, 1]`.
+
+/// W3C `ColorDodge(cb, cs)`: brighten the backdrop to reflect the source.
+fn color_dodge(cb: f32, cs: f32) -> f32 {
+    if cb <= 0.0 {
+        0.0
+    } else if cs >= 1.0 {
+        1.0
+    } else {
+        (cb / (1.0 - cs)).min(1.0)
+    }
 }
 
-/// W3C separable blend function `B(cb, cs)` for one channel, where `cb` is the
-/// backdrop and `cs` the source (both straight, in `[0, 1]`). Only the separable
-/// advanced modes are defined here; the four non-separable HSL modes are handled
-/// by [`nonseparable_blend`], and Porter-Duff modes never reach this function.
-fn separable_blend(mode: crate::paint::BlendMode, cb: f32, cs: f32) -> f32 {
-    use crate::paint::BlendMode;
-    match mode {
-        BlendMode::Multiply => cb * cs,
-        BlendMode::Screen => cb + cs - cb * cs,
-        // overlay(cb, cs) == hardlight(cs, cb).
-        BlendMode::Overlay => hard_light(cs, cb),
-        BlendMode::Darken => cb.min(cs),
-        BlendMode::Lighten => cb.max(cs),
-        BlendMode::ColorDodge => {
-            if cb <= 0.0 {
-                0.0
-            } else if cs >= 1.0 {
-                1.0
-            } else {
-                (cb / (1.0 - cs)).min(1.0)
-            }
-        }
-        BlendMode::ColorBurn => {
-            if cb >= 1.0 {
-                1.0
-            } else if cs <= 0.0 {
-                0.0
-            } else {
-                1.0 - ((1.0 - cb) / cs).min(1.0)
-            }
-        }
-        BlendMode::HardLight => hard_light(cb, cs),
-        BlendMode::SoftLight => {
-            if cs <= 0.5 {
-                cb - (1.0 - 2.0 * cs) * cb * (1.0 - cb)
-            } else {
-                let d = if cb <= 0.25 {
-                    ((16.0 * cb - 12.0) * cb + 4.0) * cb
-                } else {
-                    cb.sqrt()
-                };
-                cb + (2.0 * cs - 1.0) * (d - cb)
-            }
-        }
-        BlendMode::Difference => (cb - cs).abs(),
-        BlendMode::Exclusion => cb + cs - 2.0 * cb * cs,
-        _ => cs,
+/// W3C `ColorBurn(cb, cs)`: darken the backdrop to reflect the source.
+fn color_burn(cb: f32, cs: f32) -> f32 {
+    if cb >= 1.0 {
+        1.0
+    } else if cs <= 0.0 {
+        0.0
+    } else {
+        1.0 - ((1.0 - cb) / cs).min(1.0)
+    }
+}
+
+/// W3C `SoftLight(cb, cs)`: darken or lighten depending on the source.
+fn soft_light(cb: f32, cs: f32) -> f32 {
+    if cs <= 0.5 {
+        cb - (1.0 - 2.0 * cs) * cb * (1.0 - cb)
+    } else {
+        let d = if cb <= 0.25 {
+            ((16.0 * cb - 12.0) * cb + 4.0) * cb
+        } else {
+            cb.sqrt()
+        };
+        cb + (2.0 * cs - 1.0) * (d - cb)
     }
 }
 
@@ -1163,19 +1148,6 @@ fn hard_light(cb: f32, cs: f32) -> f32 {
         2.0 * cb * cs
     } else {
         1.0 - 2.0 * (1.0 - cb) * (1.0 - cs)
-    }
-}
-
-/// W3C non-separable blend (`Hue`, `Saturation`, `Color`, `Luminosity`) over the
-/// whole RGB triple; `cb` is the backdrop and `cs` the source.
-fn nonseparable_blend(mode: crate::paint::BlendMode, cb: [f32; 3], cs: [f32; 3]) -> [f32; 3] {
-    use crate::paint::BlendMode;
-    match mode {
-        BlendMode::Hue => set_lum(set_sat(cs, sat(cb)), lum(cb)),
-        BlendMode::Saturation => set_lum(set_sat(cb, sat(cs)), lum(cb)),
-        BlendMode::Color => set_lum(cs, lum(cb)),
-        BlendMode::Luminosity => set_lum(cb, lum(cs)),
-        _ => cs,
     }
 }
 

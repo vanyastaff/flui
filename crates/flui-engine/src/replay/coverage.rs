@@ -11,22 +11,28 @@ use crate::{
     render_target::RenderTarget,
     resources::GpuResources,
 };
-use flui_painting::paint::BlendMode;
+use flui_painting::paint::{BlendMode, CoverageClass};
 use std::sync::Arc;
 use wgpu::util::DeviceExt;
 
+/// Whether a tessellated draw with `mode` under anti-aliased coverage needs
+/// the portable compositor: `Plus` always, since no blend factor undoes its
+/// clamp, and the `Replacing` and `Masking` modes when the device has no
+/// second blend source to carry the coverage.
 pub(super) fn needs_portable(device: &wgpu::Device, mode: BlendMode) -> bool {
-    mode == BlendMode::Plus
-        || (!device
+    match mode.coverage_class() {
+        CoverageClass::Saturating => true,
+        CoverageClass::Replacing | CoverageClass::Masking => !device
             .features()
-            .contains(wgpu::Features::DUAL_SOURCE_BLENDING)
-            && crate::pipeline_cache::destination_alpha_scale_for(mode).is_some())
+            .contains(wgpu::Features::DUAL_SOURCE_BLENDING),
+        CoverageClass::Absorbing | CoverageClass::Advanced => false,
+    }
 }
 
 // Decoded image pipelines have one color output. Even on dual-source devices,
 // destination-sensitive image coverage uses the shared portable compositor.
 pub(super) fn image_needs_portable(mode: BlendMode) -> bool {
-    mode == BlendMode::Plus || crate::pipeline_cache::destination_alpha_scale_for(mode).is_some()
+    crate::pipeline_cache::coverage_must_not_fold(mode)
 }
 
 pub(super) fn run_needs_portable(
@@ -408,11 +414,8 @@ impl GpuReplay {
         let (Some(buffer), Some(stops)) = (buffer, stops) else {
             return Ok(());
         };
-        for run in runs.iter().filter(|run| {
-            (run.start as usize) < range.end && (run.start + run.count) as usize > range.start
-        }) {
-            let start = range.start.max(run.start as usize);
-            let end = range.end.min((run.start + run.count) as usize);
+        for (piece, run) in crate::command_ir::spans_within(runs, range.clone()) {
+            let (start, end) = (piece.start, piece.end);
             // Isolation is per instance: a shared mode does not make overlapping
             // operations one operator. Native runs retain their instancing.
             if !needs_portable(device, run.blend) {

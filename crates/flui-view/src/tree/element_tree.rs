@@ -1659,7 +1659,6 @@ impl ElementTree {
     pub fn contains(&self, id: ElementId) -> bool {
         self.resolve_index(id).is_some()
     }
-
     /// Extract the element out of node `id`'s slot, leaving a transient
     /// `None` hole (see [`ElementNode::element`]).
     ///
@@ -1720,14 +1719,20 @@ impl ElementTree {
             return;
         };
         let node = &self.nodes[index];
-        owner.record_hook_panic(
-            Some(id),
-            node.parent(),
+        let mut panic = crate::RecoveredPanic::from_payload(
+            crate::RecoveredAt::Element {
+                element: id,
+                parent: node.parent(),
+            },
             node.element().view_type_id(),
             crate::LifecycleHook::Dispose,
             payload.as_ref(),
             "running an unmount hook",
-        );
+        )
+        .with_site(node.element().creation_site());
+        // The element is freed right after its hooks run; read its path while it is a node.
+        panic.locate_in(self);
+        owner.push_recovered_panic(panic);
         flui_foundation::panic::discard_payload(payload);
     }
     /// Release every inherited edge and lifecycle marker on permanent teardown.

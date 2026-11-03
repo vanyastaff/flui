@@ -1,9 +1,20 @@
 # ADR-0089: Stable signatures carry no upstream type except raw-window-handle
 
-- **Status:** Proposed
-- **Superseded-by:** [ADR-0203](ADR-0203-semantics-vocabulary.md), in part: §3's narrower semantics
-  vocabulary and its flags; FLUI's roles and actions now cover ARIA 1.2 where AccessKit has a
-  counterpart, and role-bearing flags are roles. The rule that stable signatures carry no
+- **Status:** Accepted (2026-11-03). §1, §2, §3 as ADR-0203 narrows it, §4, §5 and §6 are the
+  rule: CI runs `cargo xtask api-closure` and its `--self-test` in the `api-contracts` job
+  (`.github/workflows/ci.yml:719-725`), and `AGENTS.md:95` cites §2 as a rule. Not implemented:
+  §5's moves. `flui::testing::a11y` still re-exports `accesskit`
+  (`crates/flui-testing/src/a11y.rs:34`, reached through `src/testing.rs:11` behind the
+  `testing` feature, `Cargo.toml:834`), and `flui::android_activity` is still a facade item on
+  Android (`src/lib.rs:313`); `flui-sdk` has no `gpu` module (`crates/flui-sdk/src/lib.rs:31-34`,
+  `:49-330`), so `pub use ::wgpu` stays in the internal `flui-engine`
+  (`crates/flui-engine/src/lib.rs:231`), which no Stable crate re-exports. `cargo xtask
+  api-closure` builds each Stable package once, on the host with its default features
+  (`tools/xtask/src/api_closure.rs:175-180`, `:529-530`, `Cargo.toml:840`), so the `testing`
+  re-export and the Android item are outside what CI checks.
+- **Superseded-by:** [ADR-0203](ADR-0203-semantics-vocabulary.md) for §3's narrower semantics
+  vocabulary and its flags only (FLUI's roles and actions now cover ARIA 1.2 where AccessKit has
+  a counterpart, and role-bearing flags are roles). The rule that stable signatures carry no
   upstream type stands.
 - **Amended:** 2026-10-30 — §6's loader also feeds `cargo xtask send-positions`, the list of
   `Send` and `Sync` positions in the facade's API (ADR-0136); synthetic auto-trait impls are not

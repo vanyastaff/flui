@@ -652,6 +652,7 @@ impl DrawBatcher {
             ),
             state.clip_chain(),
         );
+        DrawSegment::push_scissor_region(&mut segment.shadow_scissors, state.current_scissor());
     }
 
     /// Dispatch a shader paint over `geometry` — a filled rect/rrect/circle's
