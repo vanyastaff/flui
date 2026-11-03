@@ -65,7 +65,7 @@ jobs:
   # checks — fast source gate: `cargo xtask checks --strict` (fmt, typos,
   # Taplo, markdown links, workspace layers and manifests, toolchain, WGSL
   # uniformity, the docs-only allowlist, font assets),
-  # xtask's own tests (which include the lane classification and
+  # xtask's own tests (which include every gate's self-test, the lane classification and
   # the `ci` aggregator's skip rule), and the workflow linters. It builds only
   # xtask, never the workspace, so a malformed PR fails before any workspace
   # build starts. It has no `if:`: a docs-only PR, which skips every compile

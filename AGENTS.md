@@ -11,7 +11,9 @@ What the code doesn't tell you about FLUI, an open-source declarative UI framewo
   differs from Flutter is usually deliberate (ADR-0027). Other frameworks (Flutter, Compose,
   SwiftUI, egui, Xilem, GPUI, …) are a checklist of edge cases, read with `gh` or a shallow
   clone into the gitignored `.flutter/` / `.gpui/`.
-- **Rules are types:** the compiler first, a clippy lint next, a grep last.
+- **Rules are types:** the compiler first, a clippy lint next, then a tool CI already runs or a
+  test of the owning crate; an `xtask` gate is the last rung, admitted by its ADR (ADR-0303). An
+  exception is `#[expect(lint, reason = "…")]` at the site.
 - **The frame path is synchronous:** no `async` in build/layout/paint, no lock on per-node state
   touched in `perform_layout`/`paint`, none in a public signature.
 - **Layers, not micro-crates:** a feature inside a layer is a module; shared code moves down.

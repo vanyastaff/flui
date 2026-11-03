@@ -11,8 +11,8 @@ use super::exec::{Cmd, Runner, installed, parsed};
 use crate::{
     android_dex, change_scope, changelog, docs_links, docs_paths, file_length, fonts, globals,
     icon_import, inspect_debug, key_vocabulary, markers, module_dag, panic_boundary,
-    panic_messages, perf, platform_floor, recording_vocabulary, send_impls, testing, toolchain,
-    try_new, wgsl, workspace,
+    panic_messages, platform_floor, recording_vocabulary, send_impls, testing, toolchain, try_new,
+    wgsl, workspace,
 };
 
 /// A formatter or linter that is a binary of its own, not a cargo step.
@@ -101,8 +101,11 @@ type InProcess = fn(&[&str]) -> anyhow::Result<ExitCode>;
 
 /// This crate's own checks, in the order they run: each `cargo xtask`
 /// command line and the command it names. lychee is skippable like
-/// [`TOOLS`], so `--strict` reaches `docs-links` too.
-fn in_process(strict: bool) -> [(&'static str, InProcess); 39] {
+/// [`TOOLS`], so `--strict` reaches `docs-links` too. A gate's
+/// `--self-test` is not here: it is a test of this crate
+/// (`every_self_test_reports_exactly_its_planted_findings`), so
+/// `cargo test -p xtask` runs it (ADR-0303 §4).
+fn in_process(strict: bool) -> [(&'static str, InProcess); 24] {
     [
         (
             if strict {
@@ -113,40 +116,17 @@ fn in_process(strict: bool) -> [(&'static str, InProcess); 39] {
             |args| docs_links::docs_links(&parsed(args)?),
         ),
         ("docs-paths", |args| docs_paths::docs_paths(&parsed(args)?)),
-        ("workspace --self-test", |args| {
-            workspace::workspace(&parsed(args)?)
-        }),
         ("workspace", |args| workspace::workspace(&parsed(args)?)),
-        ("reach --self-test", |args| workspace::reach(&parsed(args)?)),
         ("reach", |args| workspace::reach(&parsed(args)?)),
-        ("module-dag --self-test", |args| {
-            module_dag::module_dag(&parsed(args)?)
-        }),
         ("module-dag", |args| module_dag::module_dag(&parsed(args)?)),
         ("toolchain", |args| toolchain::toolchain(&parsed(args)?)),
-        ("wgsl --self-test", |args| wgsl::wgsl(&parsed(args)?)),
         ("wgsl", |args| wgsl::wgsl(&parsed(args)?)),
-        ("globals --self-test", |args| {
-            globals::globals(&parsed(args)?)
-        }),
         ("globals", |args| globals::globals(&parsed(args)?)),
-        ("panic-boundary --self-test", |args| {
-            panic_boundary::panic_boundary(&parsed(args)?)
-        }),
         ("panic-boundary", |args| {
             panic_boundary::panic_boundary(&parsed(args)?)
         }),
-        ("send-impls --self-test", |args| {
-            send_impls::send_impls(&parsed(args)?)
-        }),
         ("send-impls", |args| send_impls::send_impls(&parsed(args)?)),
-        ("try-new --self-test", |args| {
-            try_new::try_new(&parsed(args)?)
-        }),
         ("try-new", |args| try_new::try_new(&parsed(args)?)),
-        ("panic-messages --self-test", |args| {
-            panic_messages::panic_messages(&parsed(args)?)
-        }),
         ("panic-messages", |args| {
             panic_messages::panic_messages(&parsed(args)?)
         }),
@@ -165,23 +145,11 @@ fn in_process(strict: bool) -> [(&'static str, InProcess); 39] {
         ("icon-import material", |args| {
             icon_import::icon_import(&parsed(args)?)
         }),
-        ("file-length --self-test", |args| {
-            file_length::file_length(&parsed(args)?)
-        }),
         ("file-length", |args| {
             file_length::file_length(&parsed(args)?)
         }),
-        ("markers --self-test", |args| {
-            markers::markers(&parsed(args)?)
-        }),
         ("markers", |args| markers::markers(&parsed(args)?)),
-        ("testing --self-test", |args| {
-            testing::testing(&parsed(args)?)
-        }),
         ("testing", |args| testing::testing(&parsed(args)?)),
-        ("key-vocabulary --self-test", |args| {
-            key_vocabulary::key_vocabulary(&parsed(args)?)
-        }),
         ("key-vocabulary", |args| {
             key_vocabulary::key_vocabulary(&parsed(args)?)
         }),
@@ -194,10 +162,6 @@ fn in_process(strict: bool) -> [(&'static str, InProcess); 39] {
         ("platform-floor", |args| {
             platform_floor::platform_floor(&parsed(args)?)
         }),
-        ("perf --self-test", |args| perf::perf(&parsed(args)?)),
-        ("changelog --self-test", |args| {
-            changelog::changelog(&parsed(args)?)
-        }),
         ("changelog --check", |args| {
             changelog::changelog(&parsed(args)?)
         }),
@@ -206,9 +170,80 @@ fn in_process(strict: bool) -> [(&'static str, InProcess); 39] {
 
 #[cfg(test)]
 mod tests {
-    use clap::Parser as _;
+    use std::collections::BTreeSet;
+
+    use clap::{CommandFactory as _, Parser as _};
 
     use super::*;
+    use crate::{perf, send_positions};
+
+    /// Every gate's self-test: the gate run over its planted violations,
+    /// failing unless exactly the planted findings come back (ADR-0078 §4).
+    const SELF_TESTS: [(&str, InProcess); 16] = [
+        ("workspace", |args| workspace::workspace(&parsed(args)?)),
+        ("reach", |args| workspace::reach(&parsed(args)?)),
+        ("module-dag", |args| module_dag::module_dag(&parsed(args)?)),
+        ("wgsl", |args| wgsl::wgsl(&parsed(args)?)),
+        ("globals", |args| globals::globals(&parsed(args)?)),
+        ("panic-boundary", |args| {
+            panic_boundary::panic_boundary(&parsed(args)?)
+        }),
+        ("send-impls", |args| send_impls::send_impls(&parsed(args)?)),
+        ("send-positions", |args| {
+            send_positions::send_positions(&parsed(args)?)
+        }),
+        ("try-new", |args| try_new::try_new(&parsed(args)?)),
+        ("panic-messages", |args| {
+            panic_messages::panic_messages(&parsed(args)?)
+        }),
+        ("file-length", |args| {
+            file_length::file_length(&parsed(args)?)
+        }),
+        ("markers", |args| markers::markers(&parsed(args)?)),
+        ("testing", |args| testing::testing(&parsed(args)?)),
+        ("key-vocabulary", |args| {
+            key_vocabulary::key_vocabulary(&parsed(args)?)
+        }),
+        ("perf", |args| perf::perf(&parsed(args)?)),
+        ("changelog", |args| changelog::changelog(&parsed(args)?)),
+    ];
+
+    /// The self-tests that need more than this crate: `api-closure` reads the
+    /// nightly rustdoc JSON of the workspace, so CI's `api-contracts` job
+    /// runs it beside the gate.
+    const SELF_TESTS_ELSEWHERE: [&str; 1] = ["api-closure"];
+
+    fn every_self_test_reports_exactly_its_planted_findings() {
+        for (command, self_test) in SELF_TESTS {
+            match self_test(&["--self-test"]) {
+                Ok(code) => assert_eq!(
+                    code,
+                    ExitCode::SUCCESS,
+                    "`cargo xtask {command} --self-test` failed"
+                ),
+                Err(error) => panic!("`cargo xtask {command} --self-test`: {error:#}"),
+            }
+        }
+    }
+
+    fn every_command_with_a_self_test_is_listed() {
+        let with_flag: BTreeSet<String> = crate::Cli::command()
+            .get_subcommands()
+            .filter(|command| {
+                command
+                    .get_arguments()
+                    .any(|argument| argument.get_long() == Some("self-test"))
+            })
+            .map(|command| command.get_name().to_owned())
+            .collect();
+        let listed: BTreeSet<String> = SELF_TESTS
+            .iter()
+            .map(|(command, _)| *command)
+            .chain(SELF_TESTS_ELSEWHERE)
+            .map(str::to_owned)
+            .collect();
+        assert_eq!(with_flag, listed);
+    }
 
     fn in_process_arguments_parse_like_the_command_line() {
         let args: wgsl::WgslArgs = parsed(["--self-test"]).expect("parses");
@@ -224,42 +259,27 @@ mod tests {
             [
                 "docs-links",
                 "docs-paths",
-                "workspace --self-test",
                 "workspace",
-                "reach --self-test",
                 "reach",
-                "module-dag --self-test",
                 "module-dag",
                 "toolchain",
-                "wgsl --self-test",
                 "wgsl",
-                "globals --self-test",
                 "globals",
-                "panic-boundary --self-test",
                 "panic-boundary",
-                "send-impls --self-test",
                 "send-impls",
-                "try-new --self-test",
                 "try-new",
-                "panic-messages --self-test",
                 "panic-messages",
                 "inspect-debug",
                 "paths-filter",
                 "font-assets --package-list",
                 "icon-import material",
-                "file-length --self-test",
                 "file-length",
-                "markers --self-test",
                 "markers",
-                "testing --self-test",
                 "testing",
-                "key-vocabulary --self-test",
                 "key-vocabulary",
                 "recording-vocabulary",
                 "android-dex",
                 "platform-floor",
-                "perf --self-test",
-                "changelog --self-test",
                 "changelog --check",
             ]
         );
@@ -279,6 +299,14 @@ mod tests {
         crate::table_test::run_table(
             "checks_contract",
             &[
+                (
+                    "every_self_test_reports_exactly_its_planted_findings",
+                    every_self_test_reports_exactly_its_planted_findings as fn(),
+                ),
+                (
+                    "every_command_with_a_self_test_is_listed",
+                    every_command_with_a_self_test_is_listed as fn(),
+                ),
                 (
                     "in_process_arguments_parse_like_the_command_line",
                     in_process_arguments_parse_like_the_command_line as fn(),
