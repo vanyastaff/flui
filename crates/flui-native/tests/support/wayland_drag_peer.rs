@@ -1,7 +1,9 @@
-//! Another application dragging on the harness's compositor: a client of
-//! its own on a thread of its own, with one toplevel, which starts a drag
-//! from its surface when its pointer button goes down there, as a file
-//! manager or a browser would, and reports what its data source hears.
+//! Another application dragging and dropping on the harness's compositor: a
+//! client of its own on a thread of its own, with one toplevel, as a file
+//! manager or a browser would be. As a source it starts a drag from its
+//! surface when its pointer button goes down there and reports what its data
+//! source hears; as a target it accepts a type of the drags over it, reads
+//! a drop's bytes and finishes it, and reports what its data device hears.
 
 use std::os::fd::{AsFd as _, OwnedFd};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -15,7 +17,7 @@ use wayland_client::protocol::wl_buffer::WlBuffer;
 use wayland_client::protocol::wl_compositor::WlCompositor;
 use wayland_client::protocol::wl_data_device::{self, WlDataDevice};
 use wayland_client::protocol::wl_data_device_manager::{DndAction, WlDataDeviceManager};
-use wayland_client::protocol::wl_data_offer::WlDataOffer;
+use wayland_client::protocol::wl_data_offer::{self, WlDataOffer};
 use wayland_client::protocol::wl_data_source::{self, WlDataSource};
 use wayland_client::protocol::wl_pointer::{self, WlPointer};
 use wayland_client::protocol::wl_registry::WlRegistry;
@@ -24,13 +26,22 @@ use wayland_client::protocol::wl_shm::{Format, WlShm};
 use wayland_client::protocol::wl_shm_pool::WlShmPool;
 use wayland_client::protocol::wl_surface::WlSurface;
 use wayland_client::{
-    Connection, Dispatch, QueueHandle, WEnum, delegate_noop, event_created_child,
+    Connection, Dispatch, Proxy as _, QueueHandle, WEnum, delegate_noop, event_created_child,
 };
 use wayland_protocols::xdg::shell::client::xdg_surface::{self, XdgSurface};
 use wayland_protocols::xdg::shell::client::xdg_toplevel::XdgToplevel;
 use wayland_protocols::xdg::shell::client::xdg_wm_base::{self, XdgWmBase};
 
-/// What the drag offers.
+/// What the peer does.
+#[derive(Clone)]
+pub(crate) enum Role {
+    /// Start a drag offering this from a press on its surface.
+    Source(Offered),
+    /// Take drops over its surface.
+    Target(Wanted),
+}
+
+/// What a drag offers.
 #[derive(Clone)]
 pub(crate) struct Offered {
     /// Each MIME type and the bytes it is answered with; `None` holds the
@@ -40,7 +51,16 @@ pub(crate) struct Offered {
     pub(crate) actions: DndAction,
 }
 
-/// What the drag's data source heard.
+/// What a target takes.
+#[derive(Clone)]
+pub(crate) struct Wanted {
+    /// The type it accepts where a drag offers it; `None` refuses every drag.
+    pub(crate) mime: Option<String>,
+    /// The action it takes.
+    pub(crate) action: DndAction,
+}
+
+/// What the peer's data source or data device heard.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Heard {
     /// The drag started.
@@ -57,10 +77,18 @@ pub(crate) enum Heard {
     Finished,
     /// The drag ended untaken.
     Cancelled,
+    /// A drag entered the target, offering these types.
+    Entered(Vec<String>),
+    /// The drag left the target.
+    Left,
+    /// The drag was dropped on the target.
+    Dropped,
+    /// The target read these bytes of the drop and finished it.
+    Received(Vec<u8>),
 }
 
-/// The client, until dropped.
-pub(crate) struct DragSource {
+/// The peer, until dropped.
+pub(crate) struct Peer {
     stop: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
     heard: mpsc::Receiver<Heard>,
@@ -68,20 +96,20 @@ pub(crate) struct DragSource {
     log: std::cell::RefCell<Vec<Heard>>,
 }
 
-impl DragSource {
-    /// Connect and show a toplevel, which drags `offered` from a press on
-    /// it; returns once the compositor shows it.
-    pub(crate) fn open(offered: Offered) -> Self {
+impl Peer {
+    /// Connect and show a toplevel playing `role`; returns once the
+    /// compositor shows it.
+    pub(crate) fn open(role: Role) -> Self {
         let stop = Arc::new(AtomicBool::new(false));
         let (tell, heard) = mpsc::channel();
         let (shown, is_shown) = mpsc::channel();
         let thread = std::thread::spawn({
             let stop = Arc::clone(&stop);
-            move || run(&offered, &stop, &tell, &shown)
+            move || run(&role, &stop, &tell, &shown)
         });
         is_shown
             .recv_timeout(Duration::from_secs(10))
-            .expect("the drag source's toplevel is shown");
+            .expect("the peer's toplevel is shown");
         Self {
             stop,
             thread: Some(thread),
@@ -90,7 +118,7 @@ impl DragSource {
         }
     }
 
-    /// Everything the source heard so far, in order.
+    /// Everything the peer heard so far, in order.
     pub(crate) fn heard(&self) -> Vec<Heard> {
         let mut log = self.log.borrow_mut();
         log.extend(self.heard.try_iter());
@@ -98,7 +126,7 @@ impl DragSource {
     }
 }
 
-impl Drop for DragSource {
+impl Drop for Peer {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Release);
         if let Some(thread) = self.thread.take() {
@@ -108,7 +136,7 @@ impl Drop for DragSource {
 }
 
 struct State {
-    offered: Offered,
+    role: Role,
     tell: mpsc::Sender<Heard>,
     compositor: WlCompositor,
     shm: WlShm,
@@ -121,9 +149,11 @@ struct State {
     shown: bool,
     /// Pipes the source holds open, writing nothing.
     held: Vec<OwnedFd>,
+    /// The offer of the drag over the target.
+    over: Option<WlDataOffer>,
 }
 
-fn run(offered: &Offered, stop: &AtomicBool, tell: &mpsc::Sender<Heard>, shown: &mpsc::Sender<()>) {
+fn run(role: &Role, stop: &AtomicBool, tell: &mpsc::Sender<Heard>, shown: &mpsc::Sender<()>) {
     let connection = Connection::connect_to_env().expect("the harness's compositor answers");
     let (globals, mut queue) =
         registry_queue_init::<State>(&connection).expect("the registry answers");
@@ -138,10 +168,10 @@ fn run(offered: &Offered, stop: &AtomicBool, tell: &mpsc::Sender<Heard>, shown: 
     let surface = compositor.create_surface(&handle, ());
     let xdg_surface = wm_base.get_xdg_surface(&surface, &handle, ());
     let toplevel = xdg_surface.get_toplevel(&handle, ());
-    toplevel.set_title("drag source".to_owned());
+    toplevel.set_title("drag peer".to_owned());
     surface.commit();
     let mut state = State {
-        offered: offered.clone(),
+        role: role.clone(),
         tell: tell.clone(),
         compositor,
         shm,
@@ -152,20 +182,21 @@ fn run(offered: &Offered, stop: &AtomicBool, tell: &mpsc::Sender<Heard>, shown: 
         buffer: None,
         shown: false,
         held: Vec::new(),
+        over: None,
     };
     state.device = Some(state.manager.get_data_device(&seat, &handle, ()));
     let mut told_shown = false;
     while !stop.load(Ordering::Acquire) {
         queue
             .dispatch_pending(&mut state)
-            .expect("the drag source dispatches");
+            .expect("the peer dispatches");
         if state.shown && !told_shown {
             // The buffer is on screen once the compositor answered.
             queue.roundtrip(&mut state).expect("a roundtrip");
             let _ = shown.send(());
             told_shown = true;
         }
-        connection.flush().expect("the drag source flushes");
+        connection.flush().expect("the peer flushes");
         if let Some(guard) = queue.prepare_read() {
             let fd = guard.connection_fd();
             let mut descriptors = [PollFd::new(&fd, PollFlags::IN)];
@@ -202,7 +233,6 @@ delegate_noop!(State: ignore WlBuffer);
 
 delegate_noop!(State: ignore WlDataDeviceManager);
 delegate_noop!(State: ignore XdgToplevel);
-delegate_noop!(State: ignore WlDataOffer);
 
 impl Dispatch<XdgWmBase, ()> for State {
     fn event(
@@ -277,11 +307,14 @@ impl Dispatch<WlPointer, ()> for State {
         else {
             return;
         };
+        let Role::Source(offered) = &state.role else {
+            return;
+        };
         let source = state.manager.create_data_source(queue, ());
-        for (mime, _) in &state.offered.types {
+        for (mime, _) in &offered.types {
             source.offer(mime.clone());
         }
-        source.set_actions(state.offered.actions);
+        source.set_actions(offered.actions);
         state
             .device
             .as_ref()
@@ -293,19 +326,101 @@ impl Dispatch<WlPointer, ()> for State {
 
 impl Dispatch<WlDataDevice, ()> for State {
     fn event(
-        _: &mut Self,
+        state: &mut Self,
         _: &WlDataDevice,
-        _: wl_data_device::Event,
+        event: wl_data_device::Event,
         (): &(),
-        _: &Connection,
+        connection: &Connection,
         _: &QueueHandle<Self>,
     ) {
-        // Its own drag over its own surface, and selections: not the case's.
+        // A source's own drag over its own surface, and selections: not the
+        // case's.
+        let Role::Target(wanted) = &state.role else {
+            return;
+        };
+        match event {
+            wl_data_device::Event::Enter {
+                serial,
+                id: Some(offer),
+                ..
+            } => {
+                let types = offer
+                    .data::<OfferTypes>()
+                    .map(|types| types.0.lock().expect("the types").clone())
+                    .unwrap_or_default();
+                let accepted = wanted.mime.clone().filter(|mime| types.contains(mime));
+                offer.set_actions(wanted.action, wanted.action);
+                offer.accept(serial, accepted);
+                state.over = Some(offer);
+                let _ = state.tell.send(Heard::Entered(types));
+            }
+            wl_data_device::Event::Leave => {
+                if let Some(offer) = state.over.take() {
+                    offer.destroy();
+                }
+                let _ = state.tell.send(Heard::Left);
+            }
+            wl_data_device::Event::Drop => {
+                let _ = state.tell.send(Heard::Dropped);
+                let (Some(offer), Some(mime)) = (state.over.take(), wanted.mime.clone()) else {
+                    return;
+                };
+                let (reader, writer) = rustix::pipe::pipe().expect("a pipe");
+                offer.receive(mime, writer.as_fd());
+                drop(writer);
+                connection.flush().expect("the peer flushes");
+                let bytes = read_all(&reader);
+                offer.finish();
+                offer.destroy();
+                let _ = state.tell.send(Heard::Received(bytes));
+            }
+            _ => {}
+        }
     }
 
     event_created_child!(State, WlDataDevice, [
-        wayland_client::protocol::wl_data_device::EVT_DATA_OFFER_OPCODE => (WlDataOffer, ()),
+        wayland_client::protocol::wl_data_device::EVT_DATA_OFFER_OPCODE => (WlDataOffer, OfferTypes::default()),
     ]);
+}
+
+/// The types an offer named.
+#[derive(Default)]
+struct OfferTypes(std::sync::Mutex<Vec<String>>);
+
+impl Dispatch<WlDataOffer, OfferTypes> for State {
+    fn event(
+        _: &mut Self,
+        _: &WlDataOffer,
+        event: wl_data_offer::Event,
+        types: &OfferTypes,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        if let wl_data_offer::Event::Offer { mime_type } = event {
+            types.0.lock().expect("the types").push(mime_type);
+        }
+    }
+}
+
+/// Everything `reader` holds until its writer closes it, waiting at most ten
+/// seconds for each part.
+fn read_all(reader: &OwnedFd) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    let mut buffer = [0_u8; 4096];
+    loop {
+        let mut descriptors = [PollFd::new(reader, PollFlags::IN)];
+        let timeout = Timespec {
+            tv_sec: 10,
+            tv_nsec: 0,
+        };
+        if poll(&mut descriptors, Some(&timeout)).unwrap_or(0) == 0 {
+            return bytes;
+        }
+        match rustix::io::read(reader, &mut buffer) {
+            Ok(0) | Err(_) => return bytes,
+            Ok(count) => bytes.extend_from_slice(&buffer[..count]),
+        }
+    }
 }
 
 impl Dispatch<WlDataSource, ()> for State {
@@ -323,12 +438,14 @@ impl Dispatch<WlDataSource, ()> for State {
                 dnd_action: WEnum::Value(action),
             } => Heard::Action(action),
             wl_data_source::Event::Send { mime_type, fd } => {
-                let answer = state
-                    .offered
-                    .types
-                    .iter()
-                    .find(|(mime, _)| *mime == mime_type)
-                    .and_then(|(_, bytes)| bytes.clone());
+                let answer = match &state.role {
+                    Role::Source(offered) => offered
+                        .types
+                        .iter()
+                        .find(|(mime, _)| *mime == mime_type)
+                        .and_then(|(_, bytes)| bytes.clone()),
+                    Role::Target(_) => None,
+                };
                 match answer {
                     Some(bytes) => {
                         std::thread::spawn(move || {

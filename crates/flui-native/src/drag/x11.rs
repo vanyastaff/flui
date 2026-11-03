@@ -109,7 +109,7 @@ const MAX_ACTIONS: u32 = 16;
 /// The protocol, its actions and its types, with no server call: plain
 /// functions over atoms and bytes.
 pub(crate) mod model {
-    use flui_platform::data_transfer::{TransferActions, TransferFormat};
+    use flui_platform::data_transfer::TransferActions;
     use x11rb::NONE;
     use x11rb::protocol::xproto::{Atom, Timestamp, Window};
 
@@ -361,24 +361,6 @@ pub(crate) mod model {
                 Some(Self::Finished { target, action })
             } else {
                 None
-            }
-        }
-    }
-
-    /// The type names a representation of `format` is offered under, the
-    /// most precise first: text in UTF-8 under the names every toolkit
-    /// reads, every other format under its media type.
-    pub(crate) fn names_of(format: &TransferFormat) -> Vec<String> {
-        match format {
-            TransferFormat::Text => vec![
-                "UTF8_STRING".to_owned(),
-                "text/plain;charset=utf-8".to_owned(),
-                "text/plain".to_owned(),
-            ],
-            TransferFormat::Html => vec!["text/html".to_owned()],
-            TransferFormat::UriList => vec!["text/uri-list".to_owned()],
-            TransferFormat::Image { mime } | TransferFormat::Custom { mime } => {
-                vec![mime.as_str().to_owned()]
             }
         }
     }

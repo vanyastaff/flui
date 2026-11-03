@@ -1,4 +1,4 @@
-//! Drops on the native Wayland host's windows from another client of a real
+//! Drag and drop between the native Wayland host's windows and another client of a real
 //! compositor: a sway (wlroots) on an X server of the harness's own, whose
 //! seat's pointer the harness drives through sway's own `seat cursor`
 //! commands, so the compositor runs a real drag from the other client's
@@ -35,8 +35,8 @@ mod sway_x11;
 mod wayland_clients;
 
 #[cfg(target_os = "linux")]
-#[path = "support/wayland_drag_source.rs"]
-mod wayland_drag_source;
+#[path = "support/wayland_drag_peer.rs"]
+mod wayland_drag_peer;
 
 #[cfg(target_os = "linux")]
 mod cases {
@@ -45,25 +45,30 @@ mod cases {
     use std::task::{Context, Poll, Waker};
     use std::time::{Duration, Instant};
 
-    use flui_foundation::DataTransferId;
+    use std::cell::Cell;
+    use std::num::{NonZeroU32, NonZeroU64};
+    use std::rc::Rc;
+
+    use flui_foundation::{DataTransferId, DragSessionId, UiRuntimeId};
     use flui_native::Platform as _;
     use flui_platform::data_transfer::{
-        DropFeedback, RepresentationIndex, TransferActions, TransferError, TransferFormat,
-        TransferLimits, TransferPayload, TransferRequest,
+        DropFeedback, RepresentationDescriptor, RepresentationIndex, TransferActions,
+        TransferError, TransferFormat, TransferLimits, TransferPayload, TransferRequest,
     };
-    use flui_platform::{DragDropEvent, PlatformInput};
+    use flui_platform::drag::{DragSessionKey, OsDragEnd, OsDragRequest, ProcessNonce};
+    use flui_platform::{DragDropEvent, PlatformInput, PointerEvent};
     use flui_testing::window_commands::AdmitAndApply as _;
     use wayland_client::protocol::wl_data_device_manager::DndAction;
 
     use super::sway_x11::Session;
     use super::wayland_clients::{Client, STEP};
-    use super::wayland_drag_source::{DragSource, Heard, Offered};
+    use super::wayland_drag_peer::{Heard, Offered, Peer, Role, Wanted};
 
     /// The size of the output window sway's X11 backend opens.
     const OUTPUT: (u16, u16) = (1024, 768);
-    /// A point on the drag source's surface, which sway centres in the right
+    /// A point on the peer's surface, which sway centres in the right
     /// half.
-    const ON_SOURCE: (i16, i16) = (768, 384);
+    const ON_PEER: (i16, i16) = (768, 384);
     /// A point on the window, in the left half.
     const ON_WINDOW: (i16, i16) = (256, 400);
     /// The plain text type the sources offer.
@@ -100,6 +105,18 @@ mod cases {
             trial(
                 "a_fetch_is_held_to_its_limit_and_its_deadline",
                 a_fetch_is_held_to_its_limit_and_its_deadline,
+            ),
+            trial(
+                "a_session_from_the_window_drops_on_another_client",
+                a_session_from_the_window_drops_on_another_client,
+            ),
+            trial(
+                "a_refused_session_ends_cancelled",
+                a_refused_session_ends_cancelled,
+            ),
+            trial(
+                "a_session_after_the_release_ends_cancelled",
+                a_session_after_the_release_ends_cancelled,
             ),
         ];
         libtest_mimic::run(&arguments, trials).exit();
@@ -185,25 +202,25 @@ mod cases {
         })
     }
 
-    /// Open the drag source beside the window, and turn the window until
+    /// Open the peer beside the window, and turn the window until
     /// sway shows both: sway applies a new layout only once every window in
-    /// it drew at its new size, and puts no pointer on the source before.
-    fn open_source(target: &Client, offered: Offered) -> DragSource {
-        let source = DragSource::open(offered);
-        target.until("sway to tile the source beside the window", || {
+    /// it drew at its new size, and puts no pointer on the peer before.
+    fn open_peer(target: &Client, role: Role) -> Peer {
+        let peer = Peer::open(role);
+        target.until("sway to tile the peer beside the window", || {
             target.window.state().content_size.width < f64::from(OUTPUT.0) / 2.0
         });
         // The frame drawn at the new size reaches sway on the next turns.
         for _ in 0..10 {
             target.turn();
         }
-        source
+        peer
     }
 
     /// Start a drag from the source and bring it over the window, which
     /// hears `Entered`.
-    fn drag_over(client: &Client, pointer: &Pointer, source: &DragSource) -> DataTransferId {
-        pointer.to(ON_SOURCE);
+    fn drag_over(client: &Client, pointer: &Pointer, source: &Peer) -> DataTransferId {
+        pointer.to(ON_PEER);
         client.turn();
         pointer.press();
         let deadline = Instant::now() + STEP;
@@ -211,7 +228,7 @@ mod cases {
             client.turn();
             assert!(Instant::now() < deadline, "the drag never started");
         }
-        pointer.glide(client, ON_SOURCE, ON_WINDOW);
+        pointer.glide(client, ON_PEER, ON_WINDOW);
         client.until("the drag to enter the window", || entered(client).is_some());
         entered(client).expect("entered above")
     }
@@ -233,7 +250,7 @@ mod cases {
     }
 
     /// Turn `client` until `source` heard `what`.
-    fn until_heard(client: &Client, source: &DragSource, what: &Heard) {
+    fn until_heard(client: &Client, source: &Peer, what: &Heard) {
         let deadline = Instant::now() + STEP;
 
         loop {
@@ -256,12 +273,12 @@ mod cases {
     fn an_accepted_drop_is_fetched_and_finished(_: &Session) {
         let target = Client::open("target");
         let pointer = Pointer::new();
-        let source = open_source(
+        let source = open_peer(
             &target,
-            Offered {
+            Role::Source(Offered {
                 types: vec![(TEXT.to_owned(), Some(b"dragged text".to_vec()))],
                 actions: DndAction::Copy | DndAction::Move,
-            },
+            }),
         );
         let id = drag_over(&target, &pointer, &source);
         let Some(DragDropEvent::Entered {
@@ -343,21 +360,21 @@ mod cases {
     fn a_refused_drop_cancels_its_source(_: &Session) {
         let target = Client::open("target");
         let pointer = Pointer::new();
-        let source = open_source(
+        let source = open_peer(
             &target,
-            Offered {
+            Role::Source(Offered {
                 types: vec![(TEXT.to_owned(), Some(b"refused".to_vec()))],
                 actions: DndAction::Copy,
-            },
+            }),
         );
         let first = drag_over(&target, &pointer, &source);
-        pointer.glide(&target, ON_WINDOW, ON_SOURCE);
+        pointer.glide(&target, ON_WINDOW, ON_PEER);
         target.until("the drag to leave", || {
             drags(&target)
                 .iter()
                 .any(|event| matches!(event, DragDropEvent::Exited { id } if *id == first))
         });
-        pointer.glide(&target, ON_SOURCE, ON_WINDOW);
+        pointer.glide(&target, ON_PEER, ON_WINDOW);
         target.until("the drag to enter again", || {
             entered(&target).is_some_and(|again| again != first)
         });
@@ -383,15 +400,15 @@ mod cases {
     fn a_fetch_is_held_to_its_limit_and_its_deadline(_: &Session) {
         let target = Client::open("target");
         let pointer = Pointer::new();
-        let source = open_source(
+        let source = open_peer(
             &target,
-            Offered {
+            Role::Source(Offered {
                 types: vec![
                     (TEXT.to_owned(), Some(b"longer than ten bytes".to_vec())),
                     ("application/x-flui-silent".to_owned(), None),
                 ],
                 actions: DndAction::Copy,
-            },
+            }),
         );
         let id = drag_over(&target, &pointer, &source);
         let transfer = target.platform.data_transfer();
@@ -436,5 +453,178 @@ mod cases {
         transfer.conclude_drop(id);
         until_heard(&target, &source, &Heard::Finished);
         target.window.close_for_cleanup();
+    }
+
+    /// The text a window's sessions offer.
+    const DRAGGED: &[u8] = b"dragged from the window";
+
+    /// A session offering text and its identity, allowing a copy or a move,
+    /// counting the provider's answers in `served` and telling `ended` how
+    /// it ended.
+    fn session(served: &Rc<Cell<u32>>, ended: &Rc<Cell<Option<OsDragEnd>>>) -> OsDragRequest {
+        let key = DragSessionKey::new(
+            ProcessNonce::from_raw(NonZeroU64::new(0xF1A1).expect("non-zero")),
+            UiRuntimeId::new_gen(3, NonZeroU32::new(2).expect("non-zero")),
+            DragSessionId::from_wire(NonZeroU64::new(7).expect("non-zero")),
+        );
+        let (served, ended) = (Rc::clone(served), Rc::clone(ended));
+        OsDragRequest {
+            key,
+            pointer: None,
+            representations: vec![
+                RepresentationDescriptor {
+                    format: TransferFormat::Text,
+                    declared_len: None,
+                },
+                key.representation(),
+            ],
+            allowed: TransferActions::COPY | TransferActions::MOVE,
+            provider: Box::new(move |RepresentationIndex(index)| {
+                served.set(served.get() + 1);
+                match index {
+                    0 => Ok(TransferPayload::Text(
+                        String::from_utf8(DRAGGED.to_vec()).expect("UTF-8"),
+                    )),
+                    _ => Err(TransferError::Cancelled),
+                }
+            }),
+            on_end: Box::new(move |end| ended.set(Some(end))),
+        }
+    }
+
+    /// Press on the window and start a session from it under that press,
+    /// once the press reached the window.
+    fn start_session(
+        client: &Client,
+        pointer: &Pointer,
+        served: &Rc<Cell<u32>>,
+        ended: &Rc<Cell<Option<OsDragEnd>>>,
+    ) {
+        let drag = client
+            .window
+            .drag_source()
+            .expect("a Wayland window starts sessions");
+        assert!(
+            drag.start(session(served, ended)).is_err(),
+            "no session starts with no button held"
+        );
+        pointer.to(ON_WINDOW);
+        client.turn();
+        pointer.press();
+        client.until("a session to start under the press", || {
+            drag.start(session(served, ended)).is_ok()
+        });
+    }
+
+    /// Turn `client` until `peer` heard something `what` matches.
+    fn until_peer(client: &Client, peer: &Peer, what: &str, matches: impl Fn(&Heard) -> bool) {
+        let deadline = Instant::now() + STEP;
+        loop {
+            let heard = peer.heard();
+            if heard.iter().any(&matches) {
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "the peer never heard {what}; heard {heard:?}"
+            );
+            client.turn();
+        }
+    }
+
+    /// A session started from a press on the window carries its text to
+    /// another client: the client sees the types it offers, takes a copy at
+    /// the drop, reads the text the provider serves, and the session ends
+    /// dropped with the copy.
+    fn a_session_from_the_window_drops_on_another_client(_: &Session) {
+        let client = Client::open("drag source");
+        let pointer = Pointer::new();
+        let peer = open_peer(
+            &client,
+            Role::Target(Wanted {
+                mime: Some(TEXT.to_owned()),
+                action: DndAction::Copy,
+            }),
+        );
+        let (served, ended) = (Rc::new(Cell::new(0)), Rc::new(Cell::new(None)));
+        start_session(&client, &pointer, &served, &ended);
+        pointer.glide(&client, ON_WINDOW, ON_PEER);
+        until_peer(
+            &client,
+            &peer,
+            "the session enter",
+            |heard| matches!(heard, Heard::Entered(types) if types.iter().any(|offered| offered == TEXT)),
+        );
+        pointer.release();
+        until_peer(&client, &peer, "the text", |heard| {
+            *heard == Heard::Received(DRAGGED.to_vec())
+        });
+        client.until("the session to end", || ended.get().is_some());
+        assert_eq!(
+            ended.get(),
+            Some(OsDragEnd::Dropped(TransferActions::COPY)),
+            "dropped with the copy the client took"
+        );
+        assert_eq!(served.get(), 1, "the provider served the one read");
+        client.window.close_for_cleanup();
+    }
+
+    /// A session released over a client that takes none of its types ends
+    /// cancelled, its provider never asked.
+    fn a_refused_session_ends_cancelled(_: &Session) {
+        let client = Client::open("drag source");
+        let pointer = Pointer::new();
+        let peer = open_peer(
+            &client,
+            Role::Target(Wanted {
+                mime: None,
+                action: DndAction::Copy,
+            }),
+        );
+        let (served, ended) = (Rc::new(Cell::new(0)), Rc::new(Cell::new(None)));
+        start_session(&client, &pointer, &served, &ended);
+        pointer.glide(&client, ON_WINDOW, ON_PEER);
+        until_peer(&client, &peer, "the session enter", |heard| {
+            matches!(heard, Heard::Entered(_))
+        });
+        pointer.release();
+        client.until("the session to end", || ended.get().is_some());
+        assert_eq!(ended.get(), Some(OsDragEnd::Cancelled));
+        assert_eq!(served.get(), 0, "nothing was read");
+        client.window.close_for_cleanup();
+    }
+
+    /// A session started under a press the user already let go of, which
+    /// the window had not yet heard, ends cancelled: sway cancels the source
+    /// of a drag it refuses, and a compositor that says nothing has the
+    /// session end as the release reaches the window.
+    fn a_session_after_the_release_ends_cancelled(_: &Session) {
+        let client = Client::open("drag source");
+        let pointer = Pointer::new();
+        let drag = client
+            .window
+            .drag_source()
+            .expect("a Wayland window starts sessions");
+        pointer.to(ON_WINDOW);
+        client.turn();
+        pointer.press();
+        client.until("the press to reach the window", || {
+            client.handler.inputs().iter().any(|input| match input {
+                PlatformInput::Pointer(PointerEvent::Down(_)) => true,
+                PlatformInput::PointerFrame(frame) => frame
+                    .events()
+                    .iter()
+                    .any(|event| matches!(event, PointerEvent::Down(_))),
+                _ => false,
+            })
+        });
+        // sway has the release before the window reads it.
+        pointer.release();
+        let (served, ended) = (Rc::new(Cell::new(0)), Rc::new(Cell::new(None)));
+        drag.start(session(&served, &ended))
+            .expect("the window has heard no release yet");
+        client.until("the session to end", || ended.get().is_some());
+        assert_eq!(ended.get(), Some(OsDragEnd::Cancelled));
+        client.window.close_for_cleanup();
     }
 }

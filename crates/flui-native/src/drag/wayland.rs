@@ -1,5 +1,5 @@
-//! Drag and drop on the native Wayland host's windows, as targets
-//! (`wl_data_device` up to version 3, ADR-0038, ADR-0211).
+//! Drag and drop on the native Wayland host's windows, as targets and as
+//! sources (`wl_data_device` up to version 3, ADR-0038, ADR-0211).
 //!
 //! [`SeatDrag`] is the platform's one [`DataTransferSource`] and the loop's
 //! `WaylandDrag`. A window tells it as it opens and closes; the drags over
@@ -35,6 +35,10 @@
 //! no completer is completed under it: a window's handler, which may ask for
 //! the payload or conclude the drop at once, and a request's waker run with
 //! nothing of the transfer held.
+//!
+//! A window starts a session from a press it holds (`source`): the seat's
+//! device drags a data source of its own, which serves the session's
+//! representations, one session at a time.
 
 #![forbid(unsafe_code)]
 
@@ -50,6 +54,7 @@ use flui_platform::data_transfer::{
     RepresentationIndex, TransferActions, TransferCompleter, TransferError, TransferLimits,
     TransferPayload, TransferRequest,
 };
+use flui_platform::drag::PlatformDragSource;
 use flui_platform::{DragDropEvent, PlatformInput, WindowId};
 use parking_lot::Mutex;
 use wayland_client::Proxy as _;
@@ -59,10 +64,12 @@ use wayland_client::protocol::wl_seat::WlSeat;
 use web_time::Instant;
 
 use crate::drag::offers::{Kind, OfferTable, representations, too_large};
-use crate::owner::linux::wayland::{DragWindow, WaylandDrag};
+use crate::owner::linux::wayland::{DragWindow, LastInput, WaylandDrag};
 use crate::owner::slot::OwnerCell;
 use crate::transfer::linux::wayland::pipe::{self, PipeError};
 use crate::transfer::linux::wayland::{DataDevices, DragListener, DragWire, OfferData};
+
+mod source;
 
 /// How long a fetch waits for the source to write its answer.
 const TRANSFER_TIMEOUT: Duration = Duration::from_secs(5);
@@ -308,10 +315,18 @@ struct Shared {
     state: Mutex<State>,
     /// What the seats' devices recorded, delivered on the loop's turn.
     wires: OwnerCell<VecDeque<(WlSeat, DragWire)>>,
+    /// The seats' data devices, which start a session's drag.
+    devices: DataDevices,
+    /// The seats' pointer grabs, which a session starts under.
+    last_input: LastInput,
+    /// The session the windows started, and what its source heard.
+    sources: OwnerCell<source::Sources>,
+    /// The writes of a session's data under way.
+    writers: pipe::Writers,
 }
 
-/// The Wayland host's drag and drop: its windows as drag targets. See the
-/// module docs.
+/// The Wayland host's drag and drop: its windows as drag targets and as the
+/// sources of drag sessions. See the module docs.
 pub(crate) struct SeatDrag {
     shared: Arc<Shared>,
 }
@@ -338,13 +353,22 @@ impl DragListener for Shared {
 }
 
 impl SeatDrag {
-    /// The drag on the owner thread, hearing the drags through `devices` and
-    /// calling `wake` to have the loop send what another thread asked.
-    pub(crate) fn new(devices: &DataDevices, wake: Box<dyn Fn() + Send + Sync>) -> Arc<Self> {
+    /// The drag on the owner thread, hearing the drags through `devices`,
+    /// starting sessions under the grabs `last_input` holds, and calling
+    /// `wake` to have the loop send what another thread asked.
+    pub(crate) fn new(
+        devices: &DataDevices,
+        last_input: LastInput,
+        wake: Box<dyn Fn() + Send + Sync>,
+    ) -> Arc<Self> {
         let shared = Arc::new(Shared {
             wake,
             state: Mutex::new(State::default()),
             wires: OwnerCell::new(),
+            devices: devices.clone(),
+            last_input,
+            sources: OwnerCell::new(),
+            writers: pipe::Writers::new(source::MAX_WRITERS),
         });
         let listener: Weak<Shared> = Arc::downgrade(&shared);
         devices.listen_drags(listener);
@@ -776,6 +800,7 @@ impl WaylandDrag for SeatDrag {
             removed
         };
         drop(removed);
+        self.window_closed(id);
         self.finish(after);
     }
 
@@ -783,6 +808,11 @@ impl WaylandDrag for SeatDrag {
         while let Some((seat, wire)) = self.shared.wires.with(VecDeque::pop_front).flatten() {
             self.wire(seat, wire);
         }
+        self.deliver_sources();
+    }
+
+    fn source(self: Arc<Self>, window: WindowId) -> Arc<dyn PlatformDragSource> {
+        Arc::new(source::WindowDragSource { drag: self, window })
     }
 
     fn release(&self) {
@@ -805,6 +835,7 @@ impl WaylandDrag for SeatDrag {
         };
         self.shared.wires.with(VecDeque::clear);
         drop(windows);
+        self.release_session();
         if let Err(failure) = self.try_finish(after) {
             std::mem::forget(failure);
         }

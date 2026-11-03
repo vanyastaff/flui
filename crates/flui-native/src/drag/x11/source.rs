@@ -50,7 +50,7 @@ use x11rb::{COPY_FROM_PARENT, CURRENT_TIME, NONE};
 
 use super::model::{self, Reply};
 use super::{Atoms, X11Drag};
-use crate::drag::offers::bytes_of;
+use crate::drag::offers::{bytes_of, names_of};
 use crate::owner::linux::x11::WindowRef;
 use crate::owner::panic_boundary::contain_owner_callback;
 
@@ -177,7 +177,7 @@ impl X11Drag {
             let Ok(index) = u16::try_from(index) else {
                 break;
             };
-            for name in model::names_of(&descriptor.format) {
+            for name in names_of(&descriptor.format) {
                 if let Some(atom) = self.intern(&name)
                     && types.iter().all(|(held, _)| *held != atom)
                 {
