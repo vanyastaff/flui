@@ -175,10 +175,9 @@ fn blur_effect(sigma_x: f64, sigma_y: f64, matrix: &[f64; 16]) -> EngineResult<B
 /// the 4x4 column-major `matrix`, as a map from a device output pixel to
 /// the device backdrop pixel it shows.
 ///
-/// The device map is `matrix · transform⁻¹ · matrix⁻¹`. Only an
-/// axis-aligned map with positive scales, sampled nearest or bilinearly, has a
-/// lowering; anything else fails the frame rather than drawing the backdrop
-/// untransformed.
+/// The device map is `matrix · transform⁻¹ · matrix⁻¹`, any affine map:
+/// rotation and shear resample like scale. A sampling without a lowering
+/// fails the frame rather than drawing the backdrop untransformed.
 fn resample_effect(
     transform: &ImageTransform,
     sampling: ImageSampling,
@@ -208,16 +207,25 @@ fn resample_effect(
         }
         .into());
     }
-    if !axis_roundoff(yx, xx) || !axis_roundoff(xy, yy) || xx <= 0.0 || yy <= 0.0 {
-        return Err(EngineError::UnsupportedBackdropFilter {
-            reason: "a backdrop transform requires an axis-aligned map with positive scales",
-        });
-    }
-    Ok(BackdropEffect::Resample {
-        scale: [xx, yy],
-        offset: [x0, y0],
-        filter,
-    })
+    Ok(BackdropEffect::Resample { map, filter })
+}
+
+/// The bounding box of `rect` mapped through `map`.
+fn mapped_bounds(map: glam::DAffine2, rect: Rect<f64>) -> Rect<f64> {
+    let corners = [
+        (rect.left(), rect.top()),
+        (rect.right(), rect.top()),
+        (rect.left(), rect.bottom()),
+        (rect.right(), rect.bottom()),
+    ]
+    .map(|(x, y)| map.transform_point2(glam::DVec2::new(x, y)));
+    let low = corners
+        .iter()
+        .fold(glam::DVec2::INFINITY, |low, &corner| low.min(corner));
+    let high = corners
+        .iter()
+        .fold(glam::DVec2::NEG_INFINITY, |high, &corner| high.max(corner));
+    Rect::from_ltrb(low.x, low.y, high.x, high.y)
 }
 
 /// Whether `off_axis` is only rounding beside `on_axis`.
@@ -342,14 +350,13 @@ impl GpuReplay {
             return Ok(());
         };
         output = cropped;
-        // The backdrop rect each effect reads, and the part of it the output
-        // shows. A blur reads its kernel halo even outside the output/damage
-        // clip; a resample reads the rect its map sends the output to. The
-        // attachment edge is a transparent decal boundary.
-        // `pad` is the transparent texels a resample's copy keeps past the
-        // attachment edge, left, top, right and bottom, so a bilinear tap
-        // there blends with transparency instead of repeating the edge.
-        let (read, shown, taps, pad) = match op.effect {
+        // The backdrop rect each effect reads, its taps per pixel, and the
+        // transparent texels its copy keeps past the attachment edge (left,
+        // top, right, bottom). A blur reads its kernel halo even outside the
+        // output/damage clip; a resample reads the box its map sends the
+        // output to, and its pad makes a tap past the attachment read
+        // transparency instead of repeating the edge.
+        let (read, taps, pad) = match op.effect {
             BackdropEffect::Blur(sigma) => {
                 let radius = sigma.map(|sigma| f64::from((sigma * 1.732_050_8).ceil()));
                 let read = Rect::from_ltrb(
@@ -363,57 +370,41 @@ impl GpuReplay {
                     .and_then(|radii| radii.checked_mul(2))
                     .and_then(|taps| taps.checked_add(2))
                     .ok_or(EngineError::PreparedResourceOverflow)?;
-                (read, output, taps, [0_u32; 4])
+                (read, taps, [0_u32; 4])
             }
-            BackdropEffect::Resample {
-                scale,
-                offset,
-                filter,
-            } => {
+            BackdropEffect::Resample { map, filter } => {
                 let reach = filter.reach();
-                let to_source = |rect: Rect<f64>| {
-                    Rect::from_ltrb(
-                        rect.left() * scale[0] + offset[0],
-                        rect.top() * scale[1] + offset[1],
-                        rect.right() * scale[0] + offset[0],
-                        rect.bottom() * scale[1] + offset[1],
-                    )
-                };
                 // Output whose source lies past the readable attachment shows
-                // nothing: crop the output to what maps inside it, keeping
-                // the `reach` past the edge where a sample still reads the
-                // edge texel.
+                // nothing: crop the output to the box the inverse sends the
+                // source it can show to, keeping the `reach` past the edge
+                // where a sample still reads the edge texel.
                 let support = Rect::from_ltrb(
                     readable.left() - reach,
                     readable.top() - reach,
                     readable.right() + reach,
                     readable.bottom() + reach,
                 );
-                let Some(source) = to_source(output)
+                let Some(source) = mapped_bounds(map, output)
                     .intersect(&support)
                     .filter(|rect| !rect.is_empty())
                 else {
                     return Ok(());
                 };
-                let back = Rect::from_ltrb(
-                    (source.left() - offset[0]) / scale[0],
-                    (source.top() - offset[1]) / scale[1],
-                    (source.right() - offset[0]) / scale[0],
-                    (source.bottom() - offset[1]) / scale[1],
-                );
+                let back = mapped_bounds(map.inverse(), source);
                 let Some(cropped) = output.intersect(&back).filter(|rect| !rect.is_empty()) else {
                     return Ok(());
                 };
                 output = cropped;
-                let shown = to_source(output);
-                // A sample at the shown rect's edge reads texels `reach` past
-                // it, so the copy takes that halo too; past the attachment the
-                // halo is transparent.
+                let shown = mapped_bounds(map, output);
+                // A sample at the shown box's edge reads texels `reach` past
+                // it, so the copy takes that halo too. Past the attachment the
+                // halo is one transparent texel: the resample clamps there, so
+                // a sample further out reads transparency as well.
                 let halo = Rect::from_ltrb(
-                    (shown.left() - reach).floor(),
-                    (shown.top() - reach).floor(),
-                    (shown.right() + reach).ceil(),
-                    (shown.bottom() + reach).ceil(),
+                    (shown.left() - reach).floor().max(readable.left() - 1.0),
+                    (shown.top() - reach).floor().max(readable.top() - 1.0),
+                    (shown.right() + reach).ceil().min(readable.right() + 1.0),
+                    (shown.bottom() + reach).ceil().min(readable.bottom() + 1.0),
                 );
                 let read = Rect::from_ltrb(
                     halo.left().max(readable.left()),
@@ -429,7 +420,7 @@ impl GpuReplay {
                 ]
                 .map(|texels| texels.max(0.0) as u32);
                 // Each output pixel reads its filter's taps.
-                (read, shown, filter.taps(), pad)
+                (read, filter.taps(), pad)
             }
         };
         if read.is_empty() {
@@ -468,28 +459,46 @@ impl GpuReplay {
         let pixels = (texture_size.0 as usize)
             .checked_mul(texture_size.1 as usize)
             .ok_or(EngineError::PreparedResourceOverflow)?;
-        // A blur's taps run over its copy; a resample's run per output
-        // pixel, which a magnifier has far more of than texels it copies.
-        let sampled = match op.effect {
-            BackdropEffect::Blur(_) => pixels,
-            BackdropEffect::Resample { .. } => {
-                let covered = (output.width().ceil() as usize)
-                    .checked_mul(output.height().ceil() as usize)
-                    .ok_or(EngineError::PreparedResourceOverflow)?;
-                covered.max(pixels)
+        // A resample draws into a texture over the whole pixels the output
+        // touches, which a magnifier has far more of than texels it copies;
+        // its taps run per pixel of that texture.
+        let out_box = Rect::from_ltrb(
+            output.left().floor(),
+            output.top().floor(),
+            output.right().ceil(),
+            output.bottom().ceil(),
+        );
+        let out_size = (out_box.width() as u32, out_box.height() as u32);
+        if matches!(op.effect, BackdropEffect::Resample { .. }) {
+            let longest = out_size.0.max(out_size.1);
+            if longest > limit {
+                return Err(EngineError::PreparedResourceLimit {
+                    resource: "backdrop resample dimension",
+                    requested: longest as usize,
+                    limit: limit as usize,
+                });
             }
+        }
+        let covered = (out_size.0 as usize)
+            .checked_mul(out_size.1 as usize)
+            .ok_or(EngineError::PreparedResourceOverflow)?;
+        let (sampled, textures) = match op.effect {
+            // Source, H and V textures.
+            BackdropEffect::Blur(_) => (pixels, pixels.checked_mul(3)),
+            // The copy and the resampled output.
+            BackdropEffect::Resample { .. } => (covered, pixels.checked_add(covered)),
         };
         op.context.budget.admit_effect_work(
             sampled
                 .checked_mul(taps)
                 .ok_or(EngineError::PreparedResourceOverflow)?,
         )?;
-        let bytes = pixels
-            .checked_mul(12)
+        let bytes = textures
+            .and_then(|texels| texels.checked_mul(4))
             .and_then(|bytes| bytes.checked_add(64))
             .ok_or(EngineError::PreparedResourceOverflow)?;
-        // Source/H/V textures+views, two immutable uniforms, samplers, bindings
-        // and the generated per-pass bind-group layouts.
+        // Textures and views, the immutable uniforms, samplers, bindings and
+        // the generated per-pass bind-group layouts.
         // Pool reuse is charged conservatively per operation; the legacy idle pool is excluded.
         resources.reserve_prepared(PreparedCost {
             gpu_bytes: bytes,
@@ -554,46 +563,70 @@ impl GpuReplay {
             f64::from(dimensions.0),
             f64::from(dimensions.1),
         );
-        let filtered = match op.effect {
-            BackdropEffect::Blur(sigma) => crate::blur::apply_blur(
-                sigma[0],
-                sigma[1],
-                &source,
-                read_bounds,
-                (
-                    i64::from(left) + self.attachment_origin.0,
-                    i64::from(top) + self.attachment_origin.1,
+        // The copy's origin sits `pad` texels before the copied rect.
+        let copy_origin = glam::DVec2::new(
+            root_x + f64::from(left) - f64::from(pad[0]),
+            root_y + f64::from(top) - f64::from(pad[1]),
+        );
+        // The filtered texture, its device origin and its size: the composite
+        // shows it texel for texel over the output.
+        let (filtered, origin, size) = match op.effect {
+            BackdropEffect::Blur(sigma) => (
+                crate::blur::apply_blur(
+                    sigma[0],
+                    sigma[1],
+                    &source,
+                    read_bounds,
+                    (
+                        i64::from(left) + self.attachment_origin.0,
+                        i64::from(top) + self.attachment_origin.1,
+                    ),
+                    dimensions,
+                    surface_format,
+                    &pipelines.blur,
+                    resources,
+                    device,
+                    encoder,
                 ),
-                dimensions,
-                surface_format,
-                &pipelines.blur,
-                resources,
-                device,
-                encoder,
+                copy_origin,
+                texture_size,
             ),
-            // The composite's sampler does the resampling.
-            BackdropEffect::Resample { .. } => source,
+            BackdropEffect::Resample { map, filter } => {
+                // From a texel of the output box to the device pixel it
+                // covers, through the map, to a texel of the copy.
+                let out_origin = glam::DVec2::new(out_box.left(), out_box.top());
+                let texel_map = glam::DAffine2::from_translation(-copy_origin)
+                    * map
+                    * glam::DAffine2::from_translation(out_origin);
+                (
+                    crate::resample::apply_resample(
+                        texel_map,
+                        filter.filter_mode(),
+                        &source,
+                        texture_size,
+                        out_size,
+                        surface_format,
+                        &pipelines.resample,
+                        resources,
+                        device,
+                        encoder,
+                    ),
+                    out_origin,
+                    out_size,
+                )
+            }
         };
-        // The texture's origin sits `pad` texels before the copied rect.
-        let origin_x = root_x + f64::from(left) - f64::from(pad[0]);
-        let origin_y = root_y + f64::from(top) - f64::from(pad[1]);
         let uv = [
-            ((shown.left() - origin_x) / f64::from(texture_size.0)) as f32,
-            ((shown.top() - origin_y) / f64::from(texture_size.1)) as f32,
-            ((shown.right() - origin_x) / f64::from(texture_size.0)) as f32,
-            ((shown.bottom() - origin_y) / f64::from(texture_size.1)) as f32,
+            ((output.left() - origin.x) / f64::from(size.0)) as f32,
+            ((output.top() - origin.y) / f64::from(size.1)) as f32,
+            ((output.right() - origin.x) / f64::from(size.0)) as f32,
+            ((output.bottom() - origin.y) / f64::from(size.1)) as f32,
         ];
-        // A resampled backdrop is read through its filter, also where the
-        // composite blends through the destination-reading path.
-        let sampling = match op.effect {
-            BackdropEffect::Blur(_) => wgpu::FilterMode::Nearest,
-            BackdropEffect::Resample { filter, .. } => filter.filter_mode(),
-        };
         self.composite_group_texture(
             filtered,
             output,
             uv,
-            sampling,
+            wgpu::FilterMode::Nearest,
             1.0,
             [1.0; 3],
             op.blend,

@@ -1639,6 +1639,10 @@ fn layer_effects_capture_as_specified() {
             "magnified backdrop",
             backdrop_transform::magnified_backdrop_doubles_the_stripes_it_covers,
         ),
+        (
+            "turned backdrop",
+            backdrop_transform::turned_backdrop_turns_the_stripes_it_covers,
+        ),
         #[cfg(feature = "testing")]
         (
             "backdrop resize attachment coordinates",

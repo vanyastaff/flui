@@ -222,47 +222,29 @@ pub(super) fn magnified_backdrop_doubles_the_stripes_it_covers(renderer: &Headle
         })
     ));
 
-    // A magnifier's taps run per output pixel, not per texel it copies: 15
-    // panes of 4096 x 4096 magnified 1024 times copy a few texels each but
-    // sample about 67 million times each, past the billion the frame admits.
+    // A magnifier costs its output, not the texels it copies: a pane of
+    // 4096 x 4096 magnified 1024 times copies a few texels but resamples
+    // them into a 64 MiB texture over its output. Three such panes fit the
+    // 256 MiB the frame may prepare; five take 320 MiB, past it.
     let side = 4096.0;
-    let mut zoomed = LayerTree::new(picture(Rect::from_xywh(0.0, 0.0, side, side), Color::WHITE));
-    for _ in 0..15 {
-        zoomed.push_child(
-            zoomed.root(),
-            Layer::from(BackdropFilterLayer::new(
-                ImageFilter::try_magnify(Point::new(side / 2.0, side / 2.0), 1024.0)
-                    .expect("a valid scale"),
-                BlendMode::SrcOver,
-                Rect::from_xywh(0.0, 0.0, side, side),
-            )),
-        );
-    }
-    assert!(matches!(
-        renderer.render_layer_tree(&zoomed, (4096, 4096)),
-        Err(crate::EngineError::PreparedResourceLimit {
-            resource: "cumulative effect sampling work",
-            ..
-        })
-    ));
-    // Under a blend that reads the destination, each pane also copies the
-    // destination under its output: five such 4096 x 4096 copies take 320
-    // MiB, past the 256 MiB the frame may prepare, though each pane copies
-    // only a few backdrop texels.
-    let mut multiplied =
-        LayerTree::new(picture(Rect::from_xywh(0.0, 0.0, side, side), Color::WHITE));
-    for _ in 0..5 {
-        multiplied.push_child(
-            multiplied.root(),
-            Layer::from(BackdropFilterLayer::new(
-                ImageFilter::try_magnify(Point::new(side / 2.0, side / 2.0), 1024.0)
-                    .expect("a valid scale"),
-                BlendMode::Multiply,
-                Rect::from_xywh(0.0, 0.0, side, side),
-            )),
-        );
-    }
-    let outcome = renderer.render_layer_tree(&multiplied, (4096, 4096));
+    let zoomed = |panes: usize, blend: BlendMode| {
+        let mut tree = LayerTree::new(picture(Rect::from_xywh(0.0, 0.0, side, side), Color::WHITE));
+        for _ in 0..panes {
+            tree.push_child(
+                tree.root(),
+                Layer::from(BackdropFilterLayer::new(
+                    ImageFilter::try_magnify(Point::new(side / 2.0, side / 2.0), 1024.0)
+                        .expect("a valid scale"),
+                    blend,
+                    Rect::from_xywh(0.0, 0.0, side, side),
+                )),
+            );
+        }
+        renderer.render_layer_tree(&tree, (4096, 4096))
+    };
+    let fits = zoomed(3, BlendMode::SrcOver);
+    assert!(fits.is_ok(), "{:?}", fits.map(|bytes| bytes.len()));
+    let outcome = zoomed(5, BlendMode::SrcOver);
     assert!(
         matches!(
             outcome,
@@ -274,27 +256,20 @@ pub(super) fn magnified_backdrop_doubles_the_stripes_it_covers(renderer: &Headle
         "{:?}",
         outcome.map(|bytes| bytes.len())
     );
-    // A rotated map has no lowering: the frame fails instead of drawing the
-    // backdrop untransformed.
-    let rotated = Matrix4::translation(32.0, 32.0, 0.0)
-        * Matrix4::rotation_z(0.3)
-        * Matrix4::translation(-32.0, -32.0, 0.0);
-    let turned = ImageFilter::Transform {
-        transform: ImageTransform::try_new(
-            rotated.m[0],
-            rotated.m[1],
-            rotated.m[4],
-            rotated.m[5],
-            rotated.m[12],
-            rotated.m[13],
-        )
-        .expect("a rotation is invertible"),
-        sampling: ImageSampling::Linear,
-    };
-    assert!(matches!(
-        renderer.render_layer_tree(&scene(Matrix4::IDENTITY, turned), (SIDE, SIDE)),
-        Err(crate::EngineError::UnsupportedBackdropFilter { .. })
-    ));
+    // Under a blend that reads the destination, each pane also copies the
+    // destination under its output: three panes then take 384 MiB.
+    let outcome = zoomed(3, BlendMode::Multiply);
+    assert!(
+        matches!(
+            outcome,
+            Err(crate::EngineError::PreparedResourceLimit {
+                resource: "GPU payload bytes",
+                ..
+            })
+        ),
+        "{:?}",
+        outcome.map(|bytes| bytes.len())
+    );
     // On a layer's own content a transform filter fails the frame too.
     let mut content = LayerTree::new(Layer::from(ImageFilterLayer::new(magnify)));
     content.push_child(content.root(), stripes());
@@ -307,5 +282,88 @@ pub(super) fn magnified_backdrop_doubles_the_stripes_it_covers(renderer: &Headle
         &capture(renderer, &scene(Matrix4::IDENTITY, ImageFilter::blur(0.0))),
         (22, 32),
         WHITE,
+    );
+}
+
+/// A transform turning by `angle` about the middle of the pane.
+fn turn(angle: f64, sampling: ImageSampling) -> ImageFilter {
+    let turned = Matrix4::translation(32.0, 32.0, 0.0)
+        * Matrix4::rotation_z(angle)
+        * Matrix4::translation(-32.0, -32.0, 0.0);
+    ImageFilter::Transform {
+        transform: ImageTransform::try_new(
+            turned.m[0],
+            turned.m[1],
+            turned.m[4],
+            turned.m[5],
+            turned.m[12],
+            turned.m[13],
+        )
+        .expect("a rotation is invertible"),
+        sampling,
+    }
+}
+
+pub(super) fn turned_backdrop_turns_the_stripes_it_covers(renderer: &HeadlessRenderer) {
+    // Turned a quarter about 32, pixel (x, y) of the pane shows the backdrop
+    // at (y, 64 - x): the vertical stripes lie across it. Down the column
+    // x = 32 they alternate every 4 px; along the row y = 32 every pixel
+    // shows x = 32.5, in the black stripe 32..36.
+    for sampling in [ImageSampling::Nearest, ImageSampling::Linear] {
+        let quarter = capture(
+            renderer,
+            &scene(
+                Matrix4::IDENTITY,
+                turn(std::f64::consts::FRAC_PI_2, sampling),
+            ),
+        );
+        dump_named("backdrop-transform-quarter", &quarter);
+        for (y, expected) in [(18, BLACK), (21, WHITE), (25, BLACK), (29, WHITE)] {
+            expect_pixel(&quarter, (32, y), expected);
+        }
+        // Unturned, 22 and 29 are white: the row is black only turned.
+        for x in [18, 22, 25, 29, 40, 45] {
+            expect_pixel(&quarter, (x, 32), BLACK);
+        }
+        // Beside the pane the stripes stay.
+        expect_pixel(&quarter, (13, 32), WHITE);
+        expect_pixel(&quarter, (54, 32), WHITE);
+    }
+
+    // At an angle no axis survives: each pixel of the pane shows the stripe
+    // under its centre turned back by 0.3. Where the four texels a bilinear
+    // read blends lie in one stripe, the pixel takes that stripe's colour.
+    let angle: f64 = 0.3;
+    let turned = capture(
+        renderer,
+        &scene(Matrix4::IDENTITY, turn(angle, ImageSampling::Linear)),
+    );
+    dump_named("backdrop-transform-turned", &turned);
+    let plain = capture(renderer, &scene(Matrix4::IDENTITY, ImageFilter::blur(0.0)));
+    let (mut checked, mut moved) = (0, 0);
+    for y in 17..47 {
+        for x in 17..47 {
+            let (px, py) = (f64::from(x) + 0.5 - 32.0, f64::from(y) + 0.5 - 32.0);
+            // The inverse turn sends the centre back by `angle`.
+            let source = 32.0 + px * angle.cos() + py * angle.sin();
+            let edge = (source / 4.0).round() * 4.0;
+            if (source - edge).abs() < 1.0 {
+                continue;
+            }
+            let expected = if (source / 4.0).floor() as i64 % 2 == 0 {
+                BLACK
+            } else {
+                WHITE
+            };
+            expect_pixel(&turned, (x, y), expected);
+            checked += 1;
+            if pixel(&plain, x, y) != expected {
+                moved += 1;
+            }
+        }
+    }
+    assert!(
+        checked > 400 && moved > 100,
+        "{checked} pixels checked, {moved} differ from the unturned backdrop"
     );
 }
