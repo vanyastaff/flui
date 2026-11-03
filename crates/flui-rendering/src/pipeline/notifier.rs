@@ -76,7 +76,7 @@ impl DeferredVisualUpdate {
 /// `Send + Sync` so the notifier itself is `Send + Sync`, matching the
 /// pipeline-owner trait bound.
 ///
-/// The pipeline shares its notifier through [`SharedNotifier`] and never
+/// The pipeline shares its notifier through a crate-private handle and never
 /// fires through it: it takes an owned snapshot of a callback and runs it
 /// after the lock is released. `fire_*` is for a notifier the caller owns
 /// outright.
