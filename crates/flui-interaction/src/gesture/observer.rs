@@ -555,7 +555,7 @@ impl ObserverHub {
             match woke {
                 Ok(()) => drop(window),
                 Err(payload) => {
-                    crate::containment::destroy_contained(window);
+                    crate::containment::drop_contained(window);
                     flui_foundation::panic::discard_payload(payload);
                 }
             }

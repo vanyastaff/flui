@@ -647,9 +647,7 @@ where
         if let Err(payload) = std::panic::catch_unwind(AssertUnwindSafe(|| drop(replaced))) {
             // The refused value is still destroyed, under containment; the
             // retirement failure stays the one resumed (ADR-0281 §3).
-            if let Err(later) = std::panic::catch_unwind(AssertUnwindSafe(|| drop(refused))) {
-                flui_foundation::panic::discard_payload(later);
-            }
+            flui_foundation::panic::drop_contained(refused);
             std::panic::resume_unwind(payload);
         }
         drop(refused);
@@ -1318,9 +1316,7 @@ pub(crate) struct PreparedService {
 
 impl PreparedService {
     pub(crate) fn refuse(self) {
-        if let Err(payload) = std::panic::catch_unwind(AssertUnwindSafe(|| drop(self))) {
-            flui_foundation::panic::discard_payload(payload);
-        }
+        flui_foundation::panic::drop_contained(self);
     }
 }
 

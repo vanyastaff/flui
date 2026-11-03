@@ -90,11 +90,7 @@ pub(crate) fn retire_map<K, V>(values: std::collections::HashMap<K, V>) {
     first.resume();
 }
 
-/// Destroy `value` after a caught failure: a panic its destructor raises is
-/// discarded, so the caller's first failure stays the one raised (ADR-0281 §3).
-pub(crate) fn drop_contained<T>(value: T) {
-    FirstPanic::new().contain(|| drop(value));
-}
+pub(crate) use flui_foundation::panic::drop_contained;
 
 /// A shared map empties itself only at its physical last release, preserving
 /// independently owned aliases until then.

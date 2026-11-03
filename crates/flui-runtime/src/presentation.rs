@@ -2420,7 +2420,8 @@ impl PresentationState {
             });
         }
         // Reached in preserving mode, or when the healthy disposal above
-        // failed part way: what the tree still owns is retained.
+        // failed part way: what the tree still owns is not disposed; it is
+        // destroyed with the binding, each destructor contained.
         if failure.preserving() {
             self.withdraw_retained_ownership(&mut failure, lane);
         }
@@ -2545,7 +2546,11 @@ impl<'a> PresentationCloseRecovery<'a> {
         terminal: &'a Cell<flui_interaction::__runtime::CloseMode>,
         window: flui_interaction::__runtime::CloseWindow,
     ) -> Self {
-        if mode == flui_interaction::__runtime::CloseMode::PreservingFailure {
+        // An incoming unwind is a held failure, as in `flui-interaction`'s
+        // close: optional callbacks are skipped, values are still destroyed.
+        if mode == flui_interaction::__runtime::CloseMode::PreservingFailure
+            || std::thread::panicking()
+        {
             terminal.set(flui_interaction::__runtime::CloseMode::PreservingFailure);
         }
         if terminal.get() == flui_interaction::__runtime::CloseMode::PreservingFailure {

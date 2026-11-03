@@ -79,13 +79,8 @@ impl Drop for MainController {
         first.contain(|| drop(installer));
         let observer = self.error.take();
         first.contain(|| drop(observer));
-        if std::thread::panicking() {
-            if let Some(payload) = first.into_payload() {
-                flui_foundation::panic::discard_payload(payload);
-            }
-        } else {
-            first.resume();
-        }
+        // Discarded instead of resumed during an unwind.
+        first.resume();
     }
 }
 enum CompletionState {

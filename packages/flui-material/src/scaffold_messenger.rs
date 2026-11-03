@@ -458,12 +458,16 @@ impl MessengerCore {
                 })),
             );
         }
-        // The handles are destroyed under containment: the first wake failure
-        // stays the one raised (ADR-0281 §3).
-        remember_completion_failure(
-            &mut first,
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(handles))),
-        );
+        // Each handle is destroyed on its own under containment: dropped as
+        // one Vec, a second panicking destructor would run during the first's
+        // unwind and abort. The first wake failure stays the one raised
+        // (ADR-0281 §3).
+        for handle in handles {
+            remember_completion_failure(
+                &mut first,
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || drop(handle))),
+            );
+        }
         if let Some(payload) = first {
             std::panic::resume_unwind(payload);
         }
@@ -609,11 +613,7 @@ impl MessengerCore {
             // The completed entry owns no remaining queue obligation; it is
             // destroyed under containment so its destructor cannot replace
             // the first failure (ADR-0281 §3).
-            if let Err(later) =
-                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(popped)))
-            {
-                flui_sdk::foundation::panic::discard_payload(later);
-            }
+            flui_sdk::foundation::panic::drop_contained(popped);
             drop(advancing_guard);
             std::panic::resume_unwind(payload);
         }

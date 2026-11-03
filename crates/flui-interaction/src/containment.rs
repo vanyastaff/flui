@@ -4,23 +4,13 @@
 //! whose mandatory cleanup must finish before a failure propagates.
 //! [`RoutePanic`] holds the first such failure until that cleanup is done.
 //! A value withdrawn after a caught failure is still destroyed, with its
-//! destructor under containment ([`destroy_contained`], ADR-0281 §3).
+//! destructor under containment ([`drop_contained`], ADR-0281 §3).
 
 use std::any::Any;
 use std::fmt;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 
-/// Destroy `value` after an earlier failure was caught or while one unwinds.
-///
-/// Its destructor can run user code, so it runs under containment: a panic it
-/// raises is a competing failure and is discarded, so the first failure stays
-/// the one propagated (ADR-0281 §3). A destructor that panics while the thread
-/// is already unwinding aborts, as in std (ADR-0281 §1).
-pub(crate) fn destroy_contained<T>(value: T) {
-    if let Err(payload) = catch_unwind(AssertUnwindSafe(move || drop(value))) {
-        flui_foundation::panic::discard_payload(payload);
-    }
-}
+pub(crate) use flui_foundation::panic::drop_contained;
 
 /// The first panic captured while invoking a resolved pointer route, as
 /// [`InteractionDispatchHandle::invoke_pointer_route`](crate::pointer::InteractionDispatchHandle::invoke_pointer_route)

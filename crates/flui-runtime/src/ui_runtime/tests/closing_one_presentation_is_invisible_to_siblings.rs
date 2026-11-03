@@ -1368,12 +1368,11 @@ pub(crate) fn run_presentation_close_child(kind: &str) {
         );
         assert!(focus.is_closed());
         assert_eq!(input.ensure_open(), Err(TextInputError::OwnerGone));
-        // A held failure skips optional disposal; an unwind alone does not
-        // (ADR-0281 §1).
-        assert_eq!(
+        // A held failure, an incoming unwind included, skips optional
+        // disposal; the values are still destroyed (ADR-0281 §3).
+        assert!(
             seen.borrow().is_empty(),
-            !outer_unwind,
-            "only a forest that holds a failure skips optional disposal"
+            "recovering forest skips optional disposal"
         );
         assert_eq!(opaque_drops.load(Ordering::Relaxed), 2);
         if let Some((arena, entry)) = saved_arena {
@@ -1489,13 +1488,9 @@ pub(crate) fn run_presentation_close_child(kind: &str) {
             "input closes before healthy widget disposal"
         );
     } else {
-        // A held failure skips optional disposal; an unwind alone does not
-        // (ADR-0281 §1).
-        assert_eq!(
-            seen.borrow().is_empty(),
-            !outer_close,
-            "only a close that holds a failure skips optional disposal"
-        );
+        // A held failure, an incoming unwind included, skips optional
+        // disposal; the values are still destroyed (ADR-0281 §3).
+        assert!(seen.borrow().is_empty(), "recovery skips optional disposal");
     }
     assert_eq!(
         input.ensure_open(),
@@ -1579,7 +1574,7 @@ pub(crate) fn run_presentation_close_child(kind: &str) {
         !ui_runtime.close_presentation_entered(a),
         "repeated close is inert"
     );
-    assert_eq!(seen.borrow().len(), usize::from(healthy || outer_close));
+    assert_eq!(seen.borrow().len(), usize::from(healthy));
     assert_eq!(
         focus_calls.get(),
         usize::from(!cursor_failure && !prior_failure && !outer_close)

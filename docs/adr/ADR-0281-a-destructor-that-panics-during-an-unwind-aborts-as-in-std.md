@@ -99,8 +99,12 @@ the owner-turn boundary of ADR-0258.
   after a caught failure") drops a retired value after a caught failure and keeps the first
   failure when its destructor panics; row "later payload with a panicking destructor" discards a
   payload whose destructor panics and still runs the next callback.
-- Until the migration ends, `rg 'thread::panicking\(\)' crates packages src` counts the sites
-  still to remove. A new one is a review finding against this ADR.
+- `std::thread::panicking()` never decides whether a value is destroyed. It only makes an
+  incoming unwind count as a held failure: a failure caught during it is discarded instead of
+  resumed out of a destructor, where `resume_unwind` would abort (`FirstPanic::resume`,
+  `PanicRecovery::new`), and optional callbacks are skipped (`flui-interaction`'s `ClosePanic`,
+  `flui-runtime`'s `RecoveryState`). A read that guards a `mem::forget` or skips a destructor is
+  a review finding against this ADR.
 
 ## Pros and cons of the options
 
@@ -134,8 +138,9 @@ one crate at a time, from the bottom of the tiers up:
 1. `flui-foundation::panic`: delete `retain_opaque_payload`, make `FirstPanic::fold` drop and
    make the three `retire` methods contain the destructor. Each caller of `retain_opaque_payload`
    drops its payload instead.
-2. Each crate removes its `thread::panicking()` branches and `mem::forget` of user-owned values
-   in the same change that deletes its child-process double-panic tests.
+2. Each crate removes the `thread::panicking()` branches that skip a destructor and its
+   `mem::forget` of user-owned values in the same change that deletes its child-process
+   double-panic tests.
 3. `docs/PANIC-POLICY.md` loses the retention paragraph once the last crate is done.
 
 ## More information

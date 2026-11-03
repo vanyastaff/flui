@@ -28,13 +28,14 @@ pub enum CloseMode {
 
 /// A terminal mode outlives an owner without retaining that owner or its callbacks.
 ///
-/// Two policies hang off it. Values a preserving close withdrew stay under
-/// retention wherever their last owner later lands ([`Self::preserved`]).
-/// Values offered to or invoked through the closed owner afterwards follow
-/// [`Self::mode`], which is preserving only while a close of this owner is in
-/// progress, so a destructor that reenters during that close cannot destroy
-/// what the close owes its failure; once the close returns and its failure is
-/// caught, rejections through stale handles retire normally again.
+/// Two policies hang off it. A close of an owner whose earlier close ran, or
+/// turned, preserving is preserving too ([`Self::preserved`]), so its
+/// optional callbacks stay skipped. Values offered to or invoked through the
+/// closed owner afterwards follow [`Self::mode`], which is preserving only
+/// while a close of this owner is in progress, so a panic from a destructor
+/// that reenters during that close is discarded behind the failure the close
+/// owes (ADR-0281 §3); once the close returns and its failure is caught,
+/// rejections through stale handles retire as ordinary ones again.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct CloseTombstone(Arc<TombstoneState>);
 

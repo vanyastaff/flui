@@ -377,6 +377,10 @@ impl OwnerCleanup {
     }
 
     fn retire_impl(&self) -> Option<RetirePanic> {
+        // A failure the owner already held before any destructor ran stays
+        // first: a destructor panic is then discarded, not returned to be
+        // raised (ADR-0281 §3).
+        let held = self.preserving_execution_failure();
         self.execution.retire();
         let mut callbacks = Vec::new();
         if let Some(lane) = self.post_frame.upgrade() {
@@ -395,12 +399,16 @@ impl OwnerCleanup {
         for entry in callbacks {
             if let Err(payload) = catch_unwind(AssertUnwindSafe(move || drop(entry))) {
                 self.record_execution_failure();
-                keep_first(&mut first, payload);
+                if held {
+                    flui_foundation::panic::discard_payload(payload);
+                } else {
+                    keep_first(&mut first, payload);
+                }
             }
         }
         if let Some(tasks) = tasks
             && let Some(payload) = tasks.retire_preserving_failure(
-                self.preserving_execution_failure() || first.is_some(),
+                held || first.is_some(),
                 &self.execution_failure_signal(),
             )
         {
@@ -793,11 +801,19 @@ impl PresentationFrameScope {
 
     fn close_in_custody(&self, cleanup: &OwnerCleanup) -> Option<RetirePanic> {
         let retired = self.detach_callbacks();
+        // A failure the owner already held before any destructor ran stays
+        // first: a destructor panic is then discarded, not returned to be
+        // raised (ADR-0281 §3).
+        let held = cleanup.preserving_execution_failure();
         let mut first = None;
         for entry in retired {
             if let Err(payload) = catch_unwind(AssertUnwindSafe(move || drop(entry))) {
                 cleanup.record_execution_failure();
-                keep_first(&mut first, payload);
+                if held {
+                    flui_foundation::panic::discard_payload(payload);
+                } else {
+                    keep_first(&mut first, payload);
+                }
             }
         }
         first
@@ -810,7 +826,7 @@ impl PresentationFrameScope {
     #[doc(hidden)]
     pub fn close_preserving(&self) {
         for entry in self.detach_callbacks() {
-            crate::async_driver::retire_after_failure(entry);
+            flui_foundation::panic::drop_contained(entry);
         }
     }
 

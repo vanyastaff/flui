@@ -595,16 +595,17 @@ size and actual loose-parent layout, with bottom indicator-band coordinates.
 
 After a dismissed entry is popped, its completion, the next entrance and
 scaffold rebuild delivery are independent attempts. The earliest caught failure
-propagates after the advancement guard is released; secondary opaque payloads
-are retained. Scaffold rebuild handles are snapshotted before host callbacks,
-so those callbacks cannot run under the registration RefCell borrow. A caught
-failure retains the completed entry and failed-delivery handles rather than
-running opaque teardown in competition with the authoritative failure.
+propagates after the advancement guard is released; a later payload is
+discarded. Scaffold rebuild handles are snapshotted before host callbacks,
+so those callbacks cannot run under the registration RefCell borrow. After a
+caught failure the completed entry and each delivered handle are still
+destroyed, one at a time under containment, so a panicking destructor is
+discarded behind the first failure (ADR-0281 §3).
 
 This does not contain a callback body's panic competing with its consumed
-`FnOnce` captures' destruction before control returns, or a double panic during
-ordinary aggregate retirement. Display-timer cancellation before the pop retains
-its separate existing failure boundary.
+`FnOnce` captures' destruction before control returns: that destructor runs
+during the callback's unwind and aborts, as in std (ADR-0281 §1).
+Display-timer cancellation before the pop keeps its separate failure boundary.
 
 `overlay_contracts` row
 `a_completion_panic_still_advances_the_accepted_snack_bar_queue` observes the

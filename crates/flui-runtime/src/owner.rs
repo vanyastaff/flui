@@ -119,14 +119,16 @@ type Failure = Option<Box<dyn std::any::Any + Send>>;
 pub enum RecoveryState {
     /// No failure has occurred in this operation.
     Healthy,
-    /// A failure is already held: retire every withdrawn value under
-    /// containment (ADR-0281 §3); optional callbacks must not run.
+    /// A failure is already held, caught or unwinding: retire every withdrawn
+    /// value under containment (ADR-0281 §3); optional callbacks must not run.
     PreservingFailure,
 }
 
 impl RecoveryState {
+    /// An incoming unwind is a held failure: it decides only that optional
+    /// callbacks are skipped, never that a value goes undestroyed.
     fn current(failure: &Failure) -> Self {
-        if failure.is_some() {
+        if failure.is_some() || std::thread::panicking() {
             Self::PreservingFailure
         } else {
             Self::Healthy

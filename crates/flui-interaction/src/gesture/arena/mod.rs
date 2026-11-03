@@ -2045,7 +2045,7 @@ impl GestureArena {
         let vote = vote.into();
         if self.shared.owner_closed.get() {
             if self.shared.close_mode.mode() == CloseMode::PreservingFailure {
-                crate::containment::destroy_contained(member);
+                crate::containment::drop_contained(member);
             } else {
                 Self::retire_member_with_recovery(&self.shared.recovery, member, recovery);
             }

@@ -270,7 +270,7 @@ pub(super) fn retire_tickets_capturing_panic(
         // No ticket runs while the thread unwinds; its captures are still
         // destroyed, under containment (ADR-0281 §3).
         if std::thread::panicking() {
-            crate::containment::destroy_contained(ticket.0);
+            crate::containment::drop_contained(ticket.0);
             continue;
         }
         // Required quiescence still runs after a caught earlier failure.
@@ -282,7 +282,7 @@ pub(super) fn retire_tickets_capturing_panic(
         if preserving_failure {
             // The earlier failure stays the first; a panicking destructor
             // here is discarded behind it.
-            crate::containment::destroy_contained(ticket.0);
+            crate::containment::drop_contained(ticket.0);
         } else {
             RoutePanic::preserve_first(
                 first,

@@ -312,7 +312,7 @@ impl TaskStore {
     fn spawn(self: &Rc<Self>, future: BoxedTask) -> TaskToken {
         let Some(id) = self.next_task_id() else {
             // Capacity refusal is authoritative over rejected opaque destruction.
-            retire_after_failure(future);
+            flui_foundation::panic::drop_contained(future);
             panic!("AsyncDriver task identities exhausted; refusing identity reuse");
         };
         let flags = Arc::new(TaskFlags::new(true, true));
@@ -336,7 +336,7 @@ impl TaskStore {
 
     fn spawn_eager(self: &Rc<Self>, mut future: BoxedTask) -> Option<TaskToken> {
         let Some(id) = self.next_task_id() else {
-            retire_after_failure(future);
+            flui_foundation::panic::drop_contained(future);
             panic!("AsyncDriver task identities exhausted; refusing identity reuse");
         };
         // Starts NOT ready and NOT admitted: we are about to poll it
@@ -353,7 +353,7 @@ impl TaskStore {
             Err(payload) => {
                 flags.cancelled.store(true, Ordering::Release);
                 flags.retired.store(true, Ordering::Release);
-                retire_after_failure(future);
+                flui_foundation::panic::drop_contained(future);
                 resume_unwind(payload);
             }
         };
@@ -476,7 +476,7 @@ impl TaskStore {
                 Ok(outcome) => outcome,
                 Err(payload) => {
                     flags.cancelled.store(true, Ordering::Release);
-                    retire_after_failure(future);
+                    flui_foundation::panic::drop_contained(future);
                     // PumpGuard removes the empty slot and restores siblings.
                     resume_unwind(payload);
                 }
@@ -754,7 +754,7 @@ impl Drop for TaskToken {
                 && let Some(mut task) = store.remove(self.id)
                 && let Some(future) = task.future.take()
             {
-                retire_after_failure(future);
+                flui_foundation::panic::drop_contained(future);
             }
         } else {
             self.cancel();
@@ -964,14 +964,6 @@ impl AsyncDriver {
 /// user code — under a catch, handing the panic back, if any (ADR-0281).
 fn release_opaque<T>(value: T) -> Result<(), RetirePanic> {
     catch_unwind(AssertUnwindSafe(move || drop(value)))
-}
-
-/// Destroy `value` after a failure that takes priority over its destructor:
-/// the destructor runs contained and a panic from it is discarded (ADR-0281).
-pub(crate) fn retire_after_failure<T>(value: T) {
-    if let Err(payload) = release_opaque(value) {
-        flui_foundation::panic::discard_payload(payload);
-    }
 }
 
 /// Release a future a dead driver cannot admit, on the calling (owner)

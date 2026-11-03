@@ -560,7 +560,7 @@ impl TextInputOwner {
             if installed {
                 self.gate.defer_failure(payload);
             } else {
-                crate::containment::destroy_contained(client);
+                crate::containment::drop_contained(client);
                 std::panic::resume_unwind(payload);
             }
         }
@@ -604,7 +604,7 @@ impl TextInputOwner {
             // The outgoing store's commit may have closed the owner.
             if let Err(error) = self.ensure_open() {
                 if let Some(payload) = calls.into_failure() {
-                    crate::containment::destroy_contained(client);
+                    crate::containment::drop_contained(client);
                     std::panic::resume_unwind(payload);
                 }
                 let mut failure = ClosePanic::for_rejection(self.close_mode.mode());

@@ -7,8 +7,8 @@
 //! sees nothing. That is what lets a window take an input callback that
 //! captures an `Rc`: no other thread can ever run, move or drop it.
 //!
-//! A slot dropped on its owner drops its value there, unless the drop is part
-//! of an unwind, which retains the value instead. A slot dropped elsewhere
+//! A slot dropped on its owner drops its value there, under containment and
+//! during an unwind too (ADR-0281). A slot dropped elsewhere
 //! cannot: it leaves its key with the owner's table, which drops the value at
 //! its next use on the owner thread (a window's next delivery, the next slot
 //! made there). The table leaks rather than drops what it still holds when the

@@ -893,7 +893,7 @@ trait depends on `flui-platform` instead.
   unannounced, out of an `extern "C-unwind"` one unwind through AppKit's or
   libdispatch's frames; `os_entry` logs it with its text, under the entry's
   name and with `args` (what the OS called with, `Copy + Debug`: a message
-  and its window, the delegate), contains the log, retains the payload, then
+  and its window, the delegate), contains the log, discards the payload (ADR-0281 §2), then
   answers what `AfterPanic` says: `Answer(fn(A) -> R)`, a failure the OS
   understands made from the arguments only after a panic and capturing
   nothing (a broadcast receiver grants a session-end query it could not

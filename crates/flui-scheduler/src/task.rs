@@ -198,11 +198,7 @@ impl Task {
         F: FnOnce() + 'static,
     {
         let Some(id) = allocate() else {
-            if let Err(payload) =
-                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(callback)))
-            {
-                flui_foundation::panic::discard_payload(payload);
-            }
+            flui_foundation::panic::drop_contained(callback);
             panic!("Task identities exhausted; refusing identity reuse");
         };
         Self {

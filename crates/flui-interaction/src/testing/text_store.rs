@@ -438,7 +438,7 @@ impl TextStore for InMemoryTextStore {
         let mut before = OwnerCalls::new();
         self.flush_notifications(&mut before);
         if let Some(payload) = before.into_failure() {
-            crate::containment::destroy_contained(grant);
+            crate::containment::drop_contained(grant);
             resume_unwind(payload);
         }
         // The gate the last grant settled under, read by the arbiter before

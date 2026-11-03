@@ -765,7 +765,7 @@ impl HapticsHost {
         state.report_after_the_play(WITHDRAWN_UNDELIVERED);
         let observers = std::mem::take(&mut *state.observers.borrow_mut());
         for slot in observers {
-            crate::containment::destroy_contained(slot.observer);
+            crate::containment::drop_contained(slot.observer);
         }
     }
 }

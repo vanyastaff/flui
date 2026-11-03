@@ -1109,7 +1109,7 @@ impl UiRuntime {
                             // Diagnostics failed: the envelope is destroyed
                             // under containment before the failure resumes
                             // (ADR-0281 §3).
-                            retire_after_failure(apply);
+                            flui_foundation::panic::drop_contained(apply);
                             self.rearm_after_command_panic(payload);
                         }
 
@@ -1122,7 +1122,7 @@ impl UiRuntime {
                                 self.sender_prototype.wake_owner();
                             }))
                         {
-                            retire_after_failure(apply);
+                            flui_foundation::panic::drop_contained(apply);
                             self.rearm_after_command_panic(payload);
                         }
                         if let Err(payload) = catch_unwind(AssertUnwindSafe(|| drop(apply))) {
@@ -1162,7 +1162,7 @@ impl UiRuntime {
                         Err(payload) => {
                             // The envelope is destroyed under containment
                             // after the callback failed too (ADR-0281 §3).
-                            retire_after_failure(apply);
+                            flui_foundation::panic::drop_contained(apply);
                             Some(payload)
                         }
                         Ok(()) => catch_unwind(AssertUnwindSafe(|| drop(apply))).err(),
@@ -1195,14 +1195,5 @@ impl UiRuntime {
         // escapes with the debt still armed for a later ingress/boundary.
         self.sender_prototype.retry_wake_debt();
         report
-    }
-}
-
-/// Destroy a withdrawn command envelope after its operation already failed:
-/// its destructor runs under containment, and a panic it raises is discarded
-/// so the first failure stays the one resumed (ADR-0281 §3).
-fn retire_after_failure<T>(value: T) {
-    if let Err(payload) = catch_unwind(AssertUnwindSafe(|| drop(value))) {
-        flui_foundation::panic::discard_payload(payload);
     }
 }

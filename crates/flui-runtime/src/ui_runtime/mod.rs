@@ -439,7 +439,9 @@ impl Drop for UiRuntime {
             );
         }
         for presentation in &presentations {
-            let mode = if first.is_some() {
+            // An incoming unwind is a held failure: optional callbacks are
+            // skipped, values are still destroyed (ADR-0281 §3).
+            let mode = if first.is_some() || std::thread::panicking() {
                 flui_interaction::__runtime::CloseMode::PreservingFailure
             } else {
                 flui_interaction::__runtime::CloseMode::Ordinary

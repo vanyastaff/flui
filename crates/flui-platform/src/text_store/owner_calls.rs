@@ -43,7 +43,7 @@
 //! Presentation close (`TextInputOwner::close_with_mode` and its `Drop`)
 //! keeps its close-mode containment (ADR-0123), which retires the same
 //! values the same way, under containment; it takes a failure parked for its
-//! next turn too, ahead of its own, raised by an ordinary close and retained
+//! next turn too, ahead of its own, raised by an ordinary close and discarded
 //! by a preserving one or by `Drop`. Its platform and host calls and each
 //! client owner it retires run through [`OwnerCalls::run_parking`] first
 //! (`close_host_call`), so a failure one of them parked while its own panic

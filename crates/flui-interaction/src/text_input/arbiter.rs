@@ -154,7 +154,7 @@ impl LockArbiter {
                 LockTiming::Sync => Some(grant),
             };
             if let Some(grant) = refused {
-                crate::containment::destroy_contained(grant);
+                crate::containment::drop_contained(grant);
             }
             resume_unwind(payload);
         }

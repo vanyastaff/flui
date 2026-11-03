@@ -423,19 +423,19 @@ fn finish_read<R>(
             Ok(Ok(())) => match disposed {
                 Ok(()) => Ok(result),
                 Err(payload) => {
-                    discard_secondary(result);
+                    crate::panic::drop_contained(result);
                     Err(payload)
                 }
             },
             Ok(Err(error)) => {
-                discard_secondary(result);
+                crate::panic::drop_contained(result);
                 if let Err(payload) = disposed {
                     std::panic::resume_unwind(payload);
                 }
                 return Err(error);
             }
             Err(payload) => {
-                discard_secondary(result);
+                crate::panic::drop_contained(result);
                 if let Err(secondary) = disposed {
                     crate::panic::discard_payload(secondary);
                 }
@@ -504,7 +504,7 @@ fn finish_subscription<R>(
                 // `R` is arbitrary user-owned state. Dispose it before
                 // resuming the subscription panic, but do not let its
                 // destructor replace that earlier failure.
-                discard_secondary(result);
+                crate::panic::drop_contained(result);
                 std::panic::resume_unwind(payload)
             }
         },
@@ -514,16 +514,6 @@ fn finish_subscription<R>(
             }
             std::panic::resume_unwind(payload)
         }
-    }
-}
-
-/// Retire a value while another failure already has chronological priority.
-///
-/// Its destructor runs under containment, and a panic it raises is discarded:
-/// the earlier failure stays the one that propagates (ADR-0281 §3).
-fn discard_secondary<T>(value: T) {
-    if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(value))) {
-        crate::panic::discard_payload(payload);
     }
 }
 

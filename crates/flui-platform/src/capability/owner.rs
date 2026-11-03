@@ -19,8 +19,8 @@ pub struct OwnerRetired;
 ///
 /// The owner [runs](Self::run) it at its next turn with its [`OwnerScope`].
 /// It is an `FnMut` called at most once, so a job that panics keeps its
-/// captures instead of dropping them during the unwind, where a capture whose
-/// `Drop` panics too would abort the process.
+/// captures until [`Self::run`] has caught the panic; they are then destroyed
+/// under containment instead of during the unwind (ADR-0281 §3).
 pub struct OwnerJob(Box<dyn FnMut(&OwnerScope<'_>) + Send>);
 
 impl OwnerJob {

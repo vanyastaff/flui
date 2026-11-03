@@ -88,6 +88,11 @@ impl WakeDelivery {
             let failure_signal = state.failure_signal.as_ref().and_then(Weak::upgrade);
             (token, hook, failure_signal)
         };
+        // Whether the owner turn already held a caught failure before this
+        // delivery ran any user code: a destructor panic at retirement is then
+        // a later failure and is discarded. Taken now, so a signal this
+        // delivery's own hook sets is not mistaken for an earlier one.
+        let held = failure_signal.as_ref().is_some_and(|signal| signal.get());
         let mut first_panic = None;
         // Keep both owning envelopes until delivery bookkeeping is closed.
         // Switching hooks must not run the displaced callback's capture Drop.
@@ -147,7 +152,8 @@ impl WakeDelivery {
                 // Retire both envelopes after the active entry is removed,
                 // each under containment: a hook can uninstall itself, so this
                 // may be the last owner of its captures. A destructor panic is
-                // a competing failure and the first one stays (ADR-0281).
+                // a competing failure: the first one stays, and one the owner
+                // turn already held stays first too (ADR-0281).
                 for envelope in [Some(hook), compensation_hook] {
                     if let Err(payload) =
                         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(envelope)))
@@ -155,7 +161,11 @@ impl WakeDelivery {
                         if let Some(signal) = &failure_signal {
                             signal.set(true);
                         }
-                        FirstPanic::fold(&mut first_panic, Some(payload));
+                        if held {
+                            flui_foundation::panic::discard_payload(payload);
+                        } else {
+                            FirstPanic::fold(&mut first_panic, Some(payload));
+                        }
                     }
                 }
                 if let Some(payload) = first_panic {

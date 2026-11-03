@@ -190,6 +190,97 @@ fn nested_cancellation_failure_propagates_from_a_healthy_turn() {
     assert_eq!(owner.pump_background(|| {}), Ok(0));
 }
 
+/// Counts its drops and panics in each, as a capture with a faulty `Drop`.
+struct FailingCapture(Rc<Cell<usize>>);
+impl Drop for FailingCapture {
+    fn drop(&mut self) {
+        self.0.set(self.0.get() + 1);
+        panic!("capture destroyed behind a held failure");
+    }
+}
+
+/// A presentation closed in an owner turn that already caught a failure
+/// destroys its queued callback; a panic from the capture's destructor is a
+/// later failure and is discarded, so the turn's own failure stays first.
+fn presentation_close_behind_a_held_failure_discards_a_capture_panic() {
+    let scheduler = UpdateScheduler::new();
+    let owner = OwnerFrame::try_new(&scheduler).expect("fresh owner");
+    let drops = Rc::new(Cell::new(0));
+    let now = Instant::now();
+    owner
+        .drive_frame(
+            now,
+            IdleDeadline::far_future(now),
+            || {
+                catch_nested_refusal_failure(&owner);
+                let presentation = owner.presentation_scope();
+                let capture = FailingCapture(Rc::clone(&drops));
+                presentation
+                    .post_frame_handle()
+                    .schedule(move |_| {
+                        let _ = &capture;
+                    })
+                    .expect("live presentation accepts the callback");
+                drop(presentation);
+            },
+            || {},
+        )
+        .expect("the held failure is the turn's first; the capture panic is discarded");
+    assert_eq!(drops.get(), 1, "the queued capture is destroyed");
+    assert_eq!(owner.pump_background(|| {}), Ok(0));
+}
+
+thread_local! {
+    /// The scheduler a frame hook reaches to uninstall itself: the hook must
+    /// be `Send + Sync`, the scheduler is owner-local.
+    static HOOK_SCHEDULER: RefCell<Option<UpdateScheduler>> = const { RefCell::new(None) };
+}
+
+/// A frame hook that uninstalls itself while the owner turn already holds a
+/// caught failure leaves the delivery as its last owner; a panic from its
+/// capture's destructor is a later failure and is discarded, not raised out
+/// of `request_frame`.
+fn self_uninstalling_hook_behind_a_held_failure_discards_a_capture_panic() {
+    struct SendCapture(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+    impl Drop for SendCapture {
+        fn drop(&mut self) {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            panic!("hook capture destroyed behind a held failure");
+        }
+    }
+    let scheduler = UpdateScheduler::new();
+    let owner = OwnerFrame::try_new(&scheduler).expect("fresh owner");
+    HOOK_SCHEDULER.with(|slot| *slot.borrow_mut() = Some(scheduler.clone()));
+    let drops = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let capture = SendCapture(std::sync::Arc::clone(&drops));
+    scheduler.set_on_frame_scheduled(Some(std::sync::Arc::new(move || {
+        let _ = &capture;
+        HOOK_SCHEDULER.with(|slot| {
+            if let Some(scheduler) = slot.borrow().as_ref() {
+                scheduler.set_on_frame_scheduled(None);
+            }
+        });
+    })));
+    let now = Instant::now();
+    owner
+        .drive_frame(
+            now,
+            IdleDeadline::far_future(now),
+            || {
+                catch_nested_refusal_failure(&owner);
+                scheduler.request_frame();
+            },
+            || {},
+        )
+        .expect("the held failure is the turn's first; the capture panic is discarded");
+    HOOK_SCHEDULER.with(|slot| slot.borrow_mut().take());
+    assert_eq!(
+        drops.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "the uninstalled hook is destroyed"
+    );
+}
+
 fn callbacks_and_task_polls_refuse_nested_owner_turns() {
     fn refuse(owner: &OwnerFrame, calls: &Cell<usize>) {
         let now = Instant::now();
@@ -440,6 +531,14 @@ fn owner_retirement_custody_contract() {
             (
                 "nested cancellation failure propagates from a healthy turn",
                 nested_cancellation_failure_propagates_from_a_healthy_turn,
+            ),
+            (
+                "presentation close behind a held failure",
+                presentation_close_behind_a_held_failure_discards_a_capture_panic,
+            ),
+            (
+                "self-uninstalling hook behind a held failure",
+                self_uninstalling_hook_behind_a_held_failure_discards_a_capture_panic,
             ),
             (
                 "nested callback and task entry",
