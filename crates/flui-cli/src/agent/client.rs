@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 use flui_protocol::framing::LineReader;
 use flui_protocol::session::Hello;
 use flui_protocol::version::PROTOCOL_VERSION;
-use flui_protocol::{Greeting, Request, RequestId, ServerLine};
+use flui_protocol::{ErrorCode, Greeting, Request, RequestId, ServerLine};
 use interprocess::local_socket::traits::Stream as _;
 use interprocess::local_socket::{Name, RecvHalf, SendHalf, Stream};
 use serde_json::Value;
@@ -111,11 +111,19 @@ impl Connection {
         })?;
         match connection.next(Instant::now() + REPLY_TIMEOUT) {
             Ok(ServerLine::Hello { .. }) => Ok(connection),
-            // A `version` refusal names what the app speaks.
-            Ok(ServerLine::Failed { id: None, error }) => Err(format!(
-                "the app refused protocol {PROTOCOL_VERSION}: {}",
-                error.message
-            )),
+            // A `version` refusal names what the app speaks; a `not_driver` one, that another
+            // client drives the app (ADR-0288 §8).
+            Ok(ServerLine::Failed { id: None, error }) => Err(match error.code {
+                ErrorCode::Version => format!(
+                    "the app refused protocol {PROTOCOL_VERSION}: {}",
+                    error.message
+                ),
+                ErrorCode::NotDriver => format!(
+                    "another client drives the app; close it and try again ({})",
+                    error.message
+                ),
+                _ => format!("the app refused the connection: {error}"),
+            }),
             Ok(_) => Err("the peer did not answer with a hello; it is not a flui agent".into()),
             Err(Failure::Transport(why) | Failure::Unsent(why)) => Err(refused(why)),
             Err(Failure::Wire(error)) => Err(error.to_string()),

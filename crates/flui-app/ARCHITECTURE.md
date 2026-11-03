@@ -159,7 +159,7 @@ the dispatch layer moves there too.
   10 ms while nothing else wakes it. No thread waits on an answer. An app
   launched without an endpoint runs no agent thread
   (`an_app_launched_without_an_endpoint_starts_no_agent`). Under
-  `EXIT_ON_DISCONNECT` the first connection past its hello is the driver: when
+  `EXIT_ON_DISCONNECT` the connection admitted as the driver (ADR-0288 §8) is the one: when
   it closes, the loop quits past every close guard and the process exits with
   `EXIT_DISCONNECTED` after the teardown; the agent detaching asks no exit.
   `the_driver_agent_contains_every_failure` covers the refusals, timeouts,

@@ -646,6 +646,18 @@
         }
       ]
     },
+    "ClientRole": {
+      "oneOf": [
+        {
+          "const": "driver",
+          "type": "string"
+        },
+        {
+          "const": "observer",
+          "type": "string"
+        }
+      ]
+    },
     "CloseParams": {
       "properties": {
         "keep_app": {
@@ -1063,6 +1075,10 @@
         },
         {
           "const": "version",
+          "type": "string"
+        },
+        {
+          "const": "not_driver",
           "type": "string"
         },
         {
@@ -1548,6 +1564,9 @@
         },
         "protocol": {
           "$ref": "#/$defs/ProtocolVersion"
+        },
+        "role": {
+          "$ref": "#/$defs/ClientRole"
         },
         "token": {
           "type": "string"
@@ -5242,6 +5261,10 @@
       },
       {
         "const": "version",
+        "type": "string"
+      },
+      {
+        "const": "not_driver",
         "type": "string"
       },
       {

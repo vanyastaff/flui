@@ -47,6 +47,10 @@
   locked, and one that panics is dropped alone. `flui_runtime::dev_agent::DevAgentHost::attach`
   takes the hooks and its calls take `&mut self`; `HeadlessHost::with_dev_agent` takes the
   `HeadlessDevAgent` by `&mut`.
+- **The driver agent admits one driver at a time** (ADR-0288 §8): a second connection whose
+  hello asks to drive, as one naming no role does, is refused `not_driver` (retry `soon`) until
+  the first goes. Under `FLUI_AGENT_EXIT_ON_DISCONNECT` the app exits with the connection admitted
+  as its driver, and a later driver is refused `shutting_down`.
 
 ### Added
 
@@ -74,6 +78,10 @@
 - **`AgentAnswer::register` and `AgentEvents::register`** (`flui-view`'s development-agent
   seam): the last waker registered is woken once when the answer or an event can be read, and
   when the owner goes.
+- **`flui_protocol::ClientRole` and `Hello::role`**: a hello names `driver` (the default) or
+  `observer`; an observer reads and subscribes beside the driver, its hello lists only the
+  methods that read, and a call of its that acts is refused with the new
+  `ErrorCode::NotDriver`. `flui mcp` says when another client drives the app.
 
 ### Removed
 
