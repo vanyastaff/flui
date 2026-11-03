@@ -17,7 +17,7 @@
 //!     -> MainEvent::InitWindow       -> on_ready(), create surface
 //!     -> MainEvent::TerminateWindow  -> surface released
 //!     -> MainEvent::LowMemory        -> memory pressure `Critical`
-//!     -> Resume/Pause/Stop/LowMemory -> memory pressure from the trim level (JNI)
+//!     -> FluiHost's queue (onTrimMemory) -> memory pressure from the level
 //!     -> MainEvent::Stop/SaveState   -> session end notice (once per start-to-stop cycle)
 //!     -> MainEvent::Destroy          -> break loop
 //!     -> the choreographer's frame  -> dispatch_frame() (ADR-0269)
@@ -63,11 +63,11 @@ use flui_platform::{MemoryPressureLevel, SessionEndPhase, SystemNotice, WindowEx
 use parking_lot::Mutex;
 
 use crate::host;
-use crate::owner::android::java_view;
 use crate::owner::android::{
     ActivityInput, ActivityPreferences, ActivityWindowId, ActivityWindowIds, AndroidHost,
     HostDisplays,
 };
+use crate::owner::android::{java_host, java_view};
 
 use crate::{
     error::BootstrapError,
@@ -242,7 +242,7 @@ pub struct AndroidLoop {
     /// What each of the Activity's lifecycle callbacks means, as the table
     /// made it ([`AndroidHost::activity`]).
     activity_callbacks: Box<dyn ActivityCallbacks>,
-    /// Where the trim level and the low-memory call hand system notices.
+    /// Where the system's memory calls hand system notices.
     notices: Arc<dyn NoticeChannel>,
     pub(crate) window: Arc<Mutex<Option<Arc<dyn ActivityWindow>>>>,
     background_executor: Arc<SimpleExecutor>,
@@ -254,6 +254,9 @@ pub struct AndroidLoop {
     /// The system preference source the table made
     /// ([`AndroidHost::preferences`]).
     pub(crate) preferences: Arc<dyn ActivityPreferences>,
+    /// The owner's end of `FluiHost`'s queue, bound on the Java main thread
+    /// at start (ADR-0255 decision 2).
+    host_queue: Arc<java_host::HostQueue>,
     /// `FluiView`, installed on the Java main thread at start (ADR-0247).
     pub(crate) java_view: Arc<java_view::JavaView>,
     /// The displays, as the table made them; shared with the window.
@@ -308,13 +311,15 @@ impl AndroidLoop {
             H::input_method(),
             H::transfer,
         );
+        let host_queue = java_host::HostQueue::start(app.clone(), Arc::downgrade(&owner_signal));
         let owner = Arc::downgrade(&owner_signal);
         let preferences = H::preferences(&app, api, &owner_signal);
         let clipboard = H::clipboard(&app, api);
-        let activity_callbacks = H::activity(&app);
+        let activity_callbacks = H::activity();
         let app_delivery = Arc::new(AppDelivery::new());
         Self {
             java_view,
+            host_queue,
             app,
             notices: H::notices(&app_delivery),
             app_delivery,
@@ -398,6 +403,7 @@ impl AndroidLoop {
             retiring.retire_java_view();
         }
         self.java_view.detach();
+        self.host_queue.detach();
     }
 
     /// Deliver what `FluiView` reported since the last turn, in order, on the
@@ -460,6 +466,18 @@ impl AndroidLoop {
                     }
                 }
             }
+        }
+    }
+
+    /// Deliver what `FluiActivity` queued since the last turn, in order, on
+    /// the owner thread, whether or not the Activity is resumed: a trim level
+    /// matters most in the background.
+    fn deliver_host_entries(&self) {
+        for entry in self.host_queue.take() {
+            let event = match entry {
+                java_host::HostEntry::TrimMemory(level) => ActivityEvent::TrimMemory(level),
+            };
+            self.activity_callbacks.react(event).deliver(self);
         }
     }
 
@@ -997,6 +1015,7 @@ impl host::Loop for AndroidLoop {
                 self.java_view.set_scale(window.scale());
             }
             self.deliver_view_events();
+            self.deliver_host_entries();
             let resumed = self.activity.resumed.load(Ordering::SeqCst);
             if resumed {
                 self.process_input_events();

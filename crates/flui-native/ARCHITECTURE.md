@@ -678,7 +678,7 @@ trait depends on `flui-platform` instead.
     notice, so its lifecycle is `Absent<Lifecycle>`: its application handler
     is never asked about either.
   - What the Activity's callbacks mean is the lifecycle feature's
-    (`lifecycle::android`, with the trim level it reads), behind the looper's
+    (`lifecycle::android`, `onTrimMemory` from `FluiHost`'s queue included), behind the looper's
     `ActivityCallbacks` hook; the looper keeps their vocabulary
     (`owner::android::activity_callbacks`). What else a loop hears in its own
     callbacks stays in `owner/`: the macOS reply to
@@ -4795,7 +4795,7 @@ real loop, woken by posted mouse moves rather than the system pointer, and
 or from another process (Explorer, a browser), a held mouse button, pen or
 touch, and a whole `flui-app` with two runtimes.
 
-### Android's Java side is `FluiActivity` and `FluiView`, in the APK
+### Android's Java side is `FluiActivity`, its queue and `FluiView`, in the APK
 
 The Java classes (`FluiActivity`, `FluiHost`, `FluiView` and its helpers) are compiled from
 `android/java` into `android/classes.dex`, checked against the sources by `cargo xtask
@@ -4815,6 +4815,17 @@ view could not start must still end); every native method only queues a `ViewEve
 owner, which delivers them in order each loop turn, and contains a panic before it reaches the
 JVM. The view holds a `Box<Weak<JavaView>>` as its handle; `detach` clears the view's copy and
 then frees it, both on the Java main thread, the only thread that calls the view's natives.
+
+`FluiActivity` forwards what `NativeActivity` drops into a queue in `FluiHost` (ADR-0255 decision
+2); today that is `onTrimMemory`. The queue is a Java static: it buffers an entry that arrives
+before `android_main` runs or between two platforms of one process, and holds at most one entry
+per trim level. `java_host::HostQueue` registers `nativeWake` and binds its wake handle (a
+`Box<Arc<Inbox>>`) on the Java main thread when the platform starts, and an entry queued before
+wakes it at once; each later entry wakes the owner, which takes the inbox's flag and only then
+drains the queue through JNI, each loop turn, resumed or not. At the loop's exit `FluiHost`
+forgets the handle, unless a later platform bound its own since, and the handle is freed, both
+on the Java main thread, the only thread that passes it to `nativeWake`. The Java side queues
+and wakes and never waits for the owner; the lock guards the deque alone.
 
 The window's `TextStoreHost` is `text::android::AndroidTextInput`. The input method edits the
 view's mirror; `text::android::ime::Mirror` turns each report into one edit against the
@@ -5038,11 +5049,10 @@ Remote Desktop Services at logon), lock and unlock stay unreported for the proce
 means. The window's published state is refreshed before its observer is told.
 
 **Choice:** `onStart`/`onStop` give visibility, `onResume`/`onPause` the execution
-state, `onWindowFocusChanged` focus; none implies another. NativeActivity has no
-`onTrimMemory`, so `lastTrimLevel` is read through JNI (`owner/android/memory.rs`) on
-`LowMemory`, `Pause`, `Stop` and `Resume`, never on a timer, and a level is
-remembered when it is read: notices are not replayed, so a level seen before the
-host listens is not announced later. The session ends once per start-to-stop
+state, `onWindowFocusChanged` focus; none implies another. `onLowMemory` is `Critical`, and
+each `onTrimMemory`, which `FluiActivity` forwards through `FluiHost`'s queue, is the level its
+value asks for, delivered as it arrives, a repeated level included: every call asks for memory
+back again. The session ends once per start-to-stop
 cycle, by whichever of `Stop` and `SaveState` comes first (the order differs
 below and above API 28; a Back that finishes the Activity never saves state),
 so the notice repeats on every trip to the background and asks for saving. The
@@ -5050,4 +5060,5 @@ application's handler is asked through the call point, and stays bound when it
 panics.
 
 **Verified by:** `android_lifecycle_mapping*` and `app_delivery_contracts` on
-the host; the `MainEvent` match and the JNI read run only on a device.
+the host, and `the_host_queue_is_read_as_the_java_classes_lay_it_out`; the `MainEvent` match
+and the queue's JNI run only on a device.
