@@ -4,6 +4,7 @@
 //! `build`, `run`, `doctor`). Commands are registered in the clap `Cli` enum
 //! and dispatched from `main.rs`.
 
+pub(crate) mod add;
 pub(crate) mod analyze;
 pub(crate) mod build;
 pub(crate) mod clean;

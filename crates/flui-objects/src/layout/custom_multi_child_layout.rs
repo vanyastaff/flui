@@ -117,10 +117,15 @@ impl flui_foundation::inspect::Inspect for RenderCustomMultiChildLayoutBox {
     }
 
     fn inspect(&self, out: &mut flui_foundation::inspect::Fields<'_>) {
-        // A user delegate: only its `Debug` describes it.
+        #[expect(
+            deprecated,
+            reason = "a user layout delegate has only its `Debug` text"
+        )]
         out.value(
             "delegate",
-            flui_foundation::inspect::Value::Debug(&self.delegate),
+            flui_foundation::inspect::Value::Debug(flui_foundation::inspect::Untyped::new(
+                &self.delegate,
+            )),
         );
     }
 }

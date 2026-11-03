@@ -1,11 +1,12 @@
 # ADR-0307: Platform declarations are crate metadata
 
-- **Status:** Accepted (2026-11-03). Partly implemented: the reader, the version-1 keys
-  (`android.permissions`, `apple.privacy.accessed-apis`), the generated Android manifest and the
-  iOS privacy manifest are in `flui-cli`; the verify mode and `flui add` follow (see Migration).
+- **Status:** Accepted (2026-11-03). Implemented in `flui-cli`: the reader, the version-1 keys
+  (`android.permissions`, `apple.privacy.accessed-apis`), the generated Android manifest, the
+  iOS privacy manifest, the verify mode of `flui doctor` and `flui add`.
 - **Date:** 2026-11-03
-- **Supersedes:** [ADR-0154](ADR-0154-capability-crates.md) §7 only (where declarations live and
-  their keys: a versioned `declares` table in any crate, in place of the illustrative schema)
+- **Supersedes:** [ADR-0154](ADR-0154-capability-crates.md) §7 (where declarations live and
+  their keys: a versioned `declares` table in any crate, in place of the illustrative schema) and,
+  in §8, the step of `flui add` that writes declarations; the rest of ADR-0154 stands
 - **Related:** [ADR-0255](ADR-0255-mobile-and-web-hosts.md) decision 6 (the generated Android
   manifest); [ADR-0280](ADR-0280-http-is-a-capability-of-the-host.md) (the HTTP capability, whose Android
   stack needs the network permission); [ADR-0088](ADR-0088-official-packages-sdk-and-facade.md)
@@ -120,6 +121,44 @@ join is a set per key, in a fixed order, with the crates that asked for each ent
   (`scripts/cocoapods/privacy_manifest_utils.rb`, `add_aggregated_privacy_manifest`: every pod's
   accessed APIs, the core's and the application's, joined per category with the reasons
   deduplicated), which settles the check ADR-0154 §7 left for this change.
+- **Manifests the CLI does not write.** `flui doctor` reads the same declarations. In a FLUI
+  project, `project.declarations` fails on a table `flui build` would refuse, and
+  `project.android-manifest` fails on a hand-written Android manifest, listing what it lacks.
+  `flui doctor --manifest <PATH>`, repeatable, checks an `AndroidManifest.xml` or an XML
+  `PrivacyInfo.xcprivacy` the CLI does not write, such as an embedding project's, against the
+  graph of the project in the current directory for that manifest's targets: one
+  `project.manifest` check per path, each missing entry named with the crates that declare it and
+  the line to add. The ids are stable, for `--json` readers. An Android file is read as written:
+  Gradle's manifest merger is not run, so a file that is not the merged manifest carries a note
+  saying entries library manifests merge in are not seen. A `uses-permission` marked
+  `tools:node="remove"` counts as absent.
+
+### 5. `flui add` links a capability crate, which states its plugin
+
+ADR-0154 §8's `flui add <capability>` no longer writes declarations: the crate carries them. A
+capability crate states how an application registers it in `[package.metadata.flui.capability]`,
+whose one key in this version is `plugin`, the path of its `Plugin` type from the crate root. The
+type implements `Default`. A string holding an expression would be checked by nothing; a type path
+is checked by a test of the crate itself, which compares the declared path with the type's and
+needs `Plugin + Default` of it, so the declaration cannot go stale.
+
+```toml
+[package.metadata.flui.capability]
+plugin = "SystemPlugin"
+```
+
+`flui add <name>` resolves `name` as the facade feature that enables one optional crate
+(`system` → `flui-system`) and enables it in `Cargo.toml`, keeping the file's formatting; without
+the facade, or for a name the facade does not carry and the application already depends on, it is
+a crate name, added with `cargo add` from the FLUI checkout the application's other FLUI
+dependencies come from when that checkout has it. It then reads the linked crate's table and
+prints the registration line, `.plugin(flui::services::system::SystemPlugin::default())`, or
+`flui_system::…` without the facade, with what the crate declares for the manifests. It does not
+edit the application's source. A change whose crate states no plugin is undone, `Cargo.lock`
+included. Linking a linked capability changes nothing. An unknown name fails with the facade's
+capability features. `--json` emits one `add.done` event. `name`, which ADR-0154 §7 sketched as
+`Capability::NAME`, is not a key: a crate such as `flui-system` provides several capabilities, and
+a key arrives with its first consumer.
 
 ### Consequences
 
@@ -147,7 +186,16 @@ join is a set per key, in a fixed order, with the crates that asked for each ent
   manifest joins the application's own") reads FLUI's own workspace built for `aarch64-apple-ios`
   and finds `35F9.1` and `C617.1`, joined with an application's reasons.
 - `declarations::tests::a_privacy_reason_is_an_approved_reason_code`.
-- `cargo xtask workspace` accepts `declares` among the `[package.metadata.flui]` keys.
+- `cli_doctor::doctor_lists_what_a_manifest_lacks_of_the_crates_declarations` (the project's
+  declarations and hand-written Android manifest; `--manifest` files lacking an entry, one removing
+  it with `tools:node`, complete ones, a merged one without the note, privacy manifests, a binary
+  property list).
+- `cli_add::add_links_a_capability_and_shows_its_registration` (a facade feature enabled, a second
+  run, a crate without a plugin undone with its lockfile, an unknown name, a crate added from the
+  checkout); `commands::add::tests::a_feature_joins_the_facade_dependency_in_any_shape`;
+  `flui-system`'s `the_declared_plugin_is_the_crates_default_plugin`.
+- `cargo xtask workspace` accepts `declares` and `capability` among the `[package.metadata.flui]`
+  keys.
 
 ## Pros and cons of the options
 
@@ -178,8 +226,9 @@ join is a set per key, in a fixed order, with the crates that asked for each ent
    `PrivacyInfo.xcprivacy` is still joined. The macOS bundle has no privacy manifest yet; when it
    gets one, `flui-native`'s read of the global `NSUserDefaults` (the title bar's double-click
    setting) needs a declared reason.
-3. The verify mode, a `flui doctor` check for projects whose manifests the CLI does not write.
-4. `flui add <capability>`.
+3. Done: the verify mode, `flui doctor`'s Project section and `--manifest`.
+4. Done: `flui add <capability>` and `[package.metadata.flui.capability] plugin`, declared by
+   `flui-system`.
 
 ## More information
 

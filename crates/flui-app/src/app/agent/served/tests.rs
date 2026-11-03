@@ -1261,7 +1261,19 @@ fn an_abstract_socket_serves_its_user_and_closes_others_unread() {
     let refused = at.clone();
     owner.drive(move |_| {
         let mut stranger = Client::connect(&refused);
-        stranger.send(&Client::hello_line(TOKEN));
+        let mut hello = serde_json::to_vec(&Client::hello_line(TOKEN)).expect("serializes");
+        hello.push(b'\n');
+        // The agent closes a refused peer without reading, so the hello can find the connection
+        // already closed; that write failing is the same outcome as the hello left unread.
+        if let Err(error) = stranger.send_bytes(&hello) {
+            assert!(
+                matches!(
+                    error.kind(),
+                    io::ErrorKind::BrokenPipe | io::ErrorKind::ConnectionReset
+                ),
+                "the hello finds the connection open or closed: {error}"
+            );
+        }
         assert!(
             stranger.closed_unread(),
             "a peer the rule refuses is closed before its hello is read"

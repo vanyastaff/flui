@@ -230,21 +230,37 @@ fn sliver_list_geometry(laid: &LaidOut) -> flui_rendering::constraints::SliverGe
 /// build, and the band completes over the following frames exactly as the
 /// old post-paint service path would have.
 pub(crate) fn lazy_list_view_builder_pathological_extents_defer_instead_of_panicking() {
+    pathological_extents_defer(0);
+}
+
+/// The same list under nine pass-through `LayoutBuilder`s: the nesting and
+/// the band share the frame's fixpoint, and neither the nine builder passes
+/// nor the band's passes count against its bound (ADR-0308).
+pub(crate) fn lazy_list_view_builder_pathological_extents_under_nested_layout_builders_defer_instead_of_panicking()
+ {
+    pathological_extents_defer(9);
+}
+
+fn pathological_extents_defer(nesting: usize) {
     const ITEM_COUNT: usize = 400;
     const ENTRY: usize = 25;
     const SEED: f64 = 200.0;
-    let height_of = |i: usize| -> f64 {
-        if i < ENTRY {
-            SEED
-        } else {
-            (SEED / 2_f64.powi((i - ENTRY) as i32 + 1)).max(0.25)
-        }
-    };
-    let mut laid = lay_out(
+    let list: Rc<dyn Fn() -> flui_view::BoxedView> = Rc::new(|| {
+        let height_of = |i: usize| -> f64 {
+            if i < ENTRY {
+                SEED
+            } else {
+                (SEED / 2_f64.powi((i - ENTRY) as i32 + 1)).max(0.25)
+            }
+        };
         ListView::builder(ITEM_COUNT, SEED, move |i| {
             (i < ITEM_COUNT).then(|| SizedBox::new(200.0, height_of(i)).boxed())
         })
-        .offset(ENTRY as f64 * SEED),
+        .offset(ENTRY as f64 * SEED)
+        .boxed()
+    });
+    let mut laid = lay_out(
+        crate::layout_builder::inside_layout_builders(nesting, list),
         tight(200.0, 600.0),
     );
     // Whatever the first frame managed, the following frames finish the band.
@@ -253,10 +269,11 @@ pub(crate) fn lazy_list_view_builder_pathological_extents_defer_instead_of_panic
     }
     // Past the entry point the remaining 375 items sum to under 200 px, so a
     // settled band reaches the list's end: every one of them is resident
-    // (one boundary + one box each, plus the viewport and the sliver). The
-    // 25 items above the entry are never measured — they stay hinted — so the
-    // total extent is deliberately not asserted here.
-    let resident_items = laid.render_node_count().saturating_sub(2) / 2;
+    // (one boundary + one box each, plus the viewport, the sliver and one
+    // node per enclosing builder). The 25 items above the entry are never
+    // measured — they stay hinted — so the total extent is deliberately not
+    // asserted here.
+    let resident_items = laid.render_node_count().saturating_sub(2 + nesting) / 2;
     assert!(
         resident_items >= ITEM_COUNT - ENTRY,
         "the band must reach the list's end over a few frames; resident items={resident_items}"

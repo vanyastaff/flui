@@ -47,18 +47,25 @@ use parking_lot::Mutex;
 use super::{BuildOwner, build_owner::BuildScopeTarget};
 use crate::tree::ElementTree;
 
-/// Upper bound on layout↔build passes within one frame.
+/// Passes of one layout↔build fixpoint that made no progress before it stops
+/// (ADR-0308).
 ///
 /// Steady state is a single pass: `needs_build` is edge-triggered, so a builder
-/// whose constraints did not change never re-dirties its element. Every scope
-/// whose constraints were published by the same layout pass drains from its own
-/// bucket in one service step, regardless of nesting depth. Another pass is
-/// needed only when a newly mounted nested builder first publishes constraints.
-/// Reaching the bound means builder output keeps changing incoming constraints.
-///
-/// The loop is bounded so a release
-/// build degrades to a stale frame rather than hanging the UI thread.
-const MAX_LAYOUT_BUILD_PASSES: usize = 10;
+/// whose constraints did not change never re-dirties its element. Nesting
+/// costs one pass per level: a freshly mounted builder publishes only when it
+/// is first laid out, a rebuilt builder hands each inner builder a new view
+/// that drains in the next pass, and a resize settles constraint-dependent
+/// levels one at a time. Such passes are progress and are not charged (see
+/// [`classify_pass`]). A charged pass rebuilt a scope that already built in
+/// this fixpoint with no ancestor rebuilt in the pass before it: the builder's
+/// output changes its own constraints.
+const MAX_CHARGED_PASSES: usize = 10;
+
+/// Every pass of one fixpoint, charged or not: the guard against a hang when
+/// build-during-layout nesting keeps growing (a builder that mounts a fresh
+/// builder below itself on every pass). Legitimate content reaches it only at
+/// about this many levels of nesting.
+const MAX_FIXPOINT_PASSES: usize = 256;
 
 /// How many fixpoint passes may service lazy-sliver child requests in one
 /// frame before the rest is deferred to the next frame.
@@ -66,9 +73,102 @@ const MAX_LAYOUT_BUILD_PASSES: usize = 10;
 /// A band settles in two or three passes once the extent estimate adapts
 /// (request the band → lay it out → one more round when the measured sizes
 /// move the band edge); the budget leaves headroom for a heterogeneous list
-/// whose mean keeps shifting, and stays below `MAX_LAYOUT_BUILD_PASSES` so a
-/// settling band can never be what trips the layout-builder `BUG:` path.
+/// whose mean keeps shifting. A pass that services a band is never charged
+/// against [`MAX_CHARGED_PASSES`]: this budget is what bounds those passes.
 pub(crate) const MAX_LAZY_BAND_PASSES: usize = 6;
+
+/// What one pass of the layout↔build fixpoint did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PassOutcome {
+    /// Nothing rebuilt and no lazy band was serviced: the tree is settled.
+    Settled,
+    /// Another pass is needed and this one made progress (see [`classify_pass`]).
+    Advanced,
+    /// Another pass is needed and nothing but a scope rebuilding on its own
+    /// explains it.
+    Charged,
+}
+
+/// How a layout↔build fixpoint ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FixpointEnd {
+    /// No builder and no lazy band needs another pass.
+    Settled,
+    /// [`MAX_CHARGED_PASSES`] passes made no progress.
+    Repeating,
+    /// [`MAX_FIXPOINT_PASSES`] passes ran.
+    PassCap,
+}
+
+/// What one layout-builder service did: whether anything rebuilt, and which
+/// build-during-layout scopes rebuilt as their own target.
+struct LayoutBuilderService {
+    any_rebuilt: bool,
+    rebuilt_scopes: HashSet<ElementId>,
+}
+
+impl LayoutBuilderService {
+    fn of(any_rebuilt: bool) -> Self {
+        Self {
+            any_rebuilt,
+            rebuilt_scopes: HashSet::new(),
+        }
+    }
+}
+
+/// Whether a pass made progress.
+///
+/// A pass with work is [`PassOutcome::Advanced`] when it serviced a lazy band
+/// ([`MAX_LAZY_BAND_PASSES`] bounds those), or when every scope it rebuilt is
+/// explained:
+///
+/// - the scope's first build in this fixpoint (`built_earlier` holds the
+///   scopes built by the passes before this one): a fresh mount, or the
+///   cascade a rebuilt outer builder starts;
+/// - a proper ancestor of the scope rebuilt in the previous pass (`previous`):
+///   a resize settling nested constraint-dependent builders one level a pass.
+///   The walk starts at the parent, or every self-oscillation would explain
+///   itself;
+/// - the scope is no longer in the tree (`alive`), so it cannot rebuild again.
+///
+/// Anything else, including global work alone, is [`PassOutcome::Charged`].
+/// An oscillating scope is charged even when its output mounts a fresh inner
+/// builder in the same pass. A run of uncharged repeats strictly deepens the
+/// shallowest rebuilt scope, so it is no longer than the tree is deep; fresh
+/// scopes need the tree to grow, which [`MAX_FIXPOINT_PASSES`] bounds.
+fn classify_pass(
+    service: &LayoutBuilderService,
+    serviced_lazy: bool,
+    built_earlier: &HashSet<ElementId>,
+    previous: &HashSet<ElementId>,
+    alive: impl Fn(ElementId) -> bool,
+    parent_of: impl Fn(ElementId) -> Option<ElementId>,
+) -> PassOutcome {
+    if !service.any_rebuilt && !serviced_lazy {
+        return PassOutcome::Settled;
+    }
+    if serviced_lazy {
+        return PassOutcome::Advanced;
+    }
+    let explained = |scope: ElementId| {
+        if !built_earlier.contains(&scope) || !alive(scope) {
+            return true;
+        }
+        let mut ancestor = parent_of(scope);
+        while let Some(id) = ancestor {
+            if previous.contains(&id) {
+                return true;
+            }
+            ancestor = parent_of(id);
+        }
+        false
+    };
+    if !service.rebuilt_scopes.is_empty() && service.rebuilt_scopes.iter().all(|s| explained(*s)) {
+        PassOutcome::Advanced
+    } else {
+        PassOutcome::Charged
+    }
+}
 
 /// A live build-during-layout node: the element to rebuild, and the cell its
 /// render object publishes constraints into.
@@ -190,6 +290,17 @@ impl BuildOwner {
         tree: &mut ElementTree,
         pipeline: &PipelineCell,
     ) -> bool {
+        self.service_layout_builders_in_pass(tree, pipeline)
+            .any_rebuilt
+    }
+
+    /// [`Self::service_layout_builders`], reporting also which scopes rebuilt
+    /// as their own target, the fixpoint's progress signal.
+    fn service_layout_builders_in_pass(
+        &mut self,
+        tree: &mut ElementTree,
+        pipeline: &PipelineCell,
+    ) -> LayoutBuilderService {
         // Layout-time rebuilds run their builds through
         // `drain_prepared_build_target` directly, never through `build_scope`,
         // so they would otherwise fall outside every `build` span and a
@@ -217,7 +328,7 @@ impl BuildOwner {
 
         if self.layout_builder_registry.is_empty() {
             if !self.has_partitioned_builds() {
-                return false;
+                return LayoutBuilderService::of(false);
             }
 
             // The last scope can disappear after the frame's global build has
@@ -237,7 +348,7 @@ impl BuildOwner {
                 self.finalize_tree(tree);
             }
             self.collapse_empty_build_scope_queues();
-            return drain.any_rebuilt;
+            return LayoutBuilderService::of(drain.any_rebuilt);
         }
 
         // Prune stale entries and collect the ones that need a build, in one
@@ -288,7 +399,7 @@ impl BuildOwner {
             // Keep the scoped queues genuinely lazy on clean frames. In
             // particular, do not allocate scratch/bucket state merely because
             // a live layout builder is registered.
-            return false;
+            return LayoutBuilderService::of(false);
         }
 
         // One authoritative routing pass per service call. Work quarantined by
@@ -328,7 +439,7 @@ impl BuildOwner {
                 self.finalize_tree(tree);
             }
             self.collapse_empty_build_scope_queues();
-            return any_rebuilt;
+            return LayoutBuilderService::of(any_rebuilt);
         }
         ready_scopes
             .sort_by_key(|scope| tree.get(*scope).map_or(0, crate::tree::ElementNode::depth));
@@ -369,7 +480,10 @@ impl BuildOwner {
 
         self.finalize_tree(tree);
         self.collapse_empty_build_scope_queues();
-        any_rebuilt
+        LayoutBuilderService {
+            any_rebuilt,
+            rebuilt_scopes,
+        }
     }
 
     /// Run one frame, settling every build-during-layout node before paint.
@@ -401,14 +515,14 @@ impl BuildOwner {
     ///
     /// # Non-convergence
     ///
-    /// Bounded at `MAX_LAYOUT_BUILD_PASSES`. Exceeding it means a builder's
-    /// output changes the constraints that builder receives, or a lazy sliver's
-    /// band never settles (a fresh band is requested on every pass). A lazy
-    /// list normally settles in two or three passes: request the band, lay out
-    /// the built children, and — when measured extents differ from the
-    /// estimates enough to move the band edge — one more round. In debug this is a
-    /// `BUG:` panic (an internal-invariant violation per `docs/PANIC-POLICY.md`);
-    /// in release it logs and paints the last settled tree rather than spinning.
+    /// Nesting costs a pass per level and is not charged; a pass is charged
+    /// only when a scope rebuilds again with nothing above it rebuilt (see
+    /// `classify_pass`, ADR-0308). After `MAX_CHARGED_PASSES` charged passes,
+    /// or `MAX_FIXPOINT_PASSES` passes in all, the frame logs one error and
+    /// paints the last laid-out tree, in every profile: a builder whose output
+    /// changes its own constraints is application content, not a FLUI
+    /// invariant (`docs/PANIC-POLICY.md`). A lazy band has its own budget,
+    /// `MAX_LAZY_BAND_PASSES`, and defers the rest to the next frame.
     pub fn run_frame_with_layout_builders(
         &mut self,
         tree: &mut ElementTree,
@@ -440,7 +554,15 @@ impl BuildOwner {
     ) -> Result<(), flui_foundation::TreeError<flui_rendering::error::RenderError>> {
         let mut lazy_passes: usize = 0;
         let mut lazy_budget_exhausted = false;
-        let converged = {
+        // The scopes built by this fixpoint's passes so far, and by the pass
+        // before the current one: the progress signal of `classify_pass`.
+        // Per settle call, so the focus re-settle of a frame has its own.
+        let mut built_earlier: HashSet<ElementId> = HashSet::new();
+        let mut previous: HashSet<ElementId> = HashSet::new();
+        let converged: Result<
+            FixpointEnd,
+            flui_foundation::TreeError<flui_rendering::error::RenderError>,
+        > = {
             let owner = &mut *self;
             drive_fixpoint(|| {
                 // Layout checked out…
@@ -460,17 +582,14 @@ impl BuildOwner {
                 // builder inside a lazy item and a lazy list inside a layout
                 // builder each need the other's output laid out before the
                 // frame can settle. `|`, not `||`, on purpose.
-                let rebuilt_layout_builders = owner.service_layout_builders(tree, pipeline);
-                // The lazy seam has its own, softer budget. A layout builder
-                // that never settles is a bug (its output changes its own
-                // constraints); a lazy band that needs more passes than the
-                // budget is *content* — an estimate so far from the measured
-                // extents that the band keeps growing — and content must not
-                // panic a debug build. Past the budget the loop stops
-                // servicing, converges on the layout builders alone, and the
-                // frame's post-`run_frame` call defers the rest to the next
-                // frame: the old multi-frame settle as the fallback, never
-                // the `BUG:` path.
+                let service = owner.service_layout_builders_in_pass(tree, pipeline);
+                // The lazy seam has its own budget. A lazy band that needs
+                // more passes than the budget is content — an estimate so far
+                // from the measured extents that the band keeps growing.
+                // Past the budget the loop stops servicing, converges on the
+                // layout builders alone, and the frame's post-`run_frame`
+                // call defers the rest to the next frame: the old multi-frame
+                // settle as the fallback.
                 let serviced_lazy_children = if lazy_passes < owner.lazy_band_pass_budget {
                     let did_work = owner.service_child_requests_between_passes(tree, pipeline);
                     if did_work {
@@ -481,7 +600,17 @@ impl BuildOwner {
                     lazy_budget_exhausted = true;
                     false
                 };
-                Ok(rebuilt_layout_builders | serviced_lazy_children)
+                let outcome = classify_pass(
+                    &service,
+                    serviced_lazy_children,
+                    &built_earlier,
+                    &previous,
+                    |scope| tree.contains(scope),
+                    |scope| tree.get(scope).and_then(crate::tree::ElementNode::parent),
+                );
+                built_earlier.extend(service.rebuilt_scopes.iter().copied());
+                previous = service.rebuilt_scopes;
+                Ok(outcome)
             })
         };
         if lazy_budget_exhausted {
@@ -498,33 +627,42 @@ impl BuildOwner {
             // post-frame service, as the deferral intends.
             self.service_child_requests_evict_only(tree, pipeline);
         }
-        tracing::debug!(lazy_passes, "layout<->build fixpoint settled");
-
-        match converged {
-            Err(e) => return Err(e),
-            Ok(false) => report_non_convergence(),
-            Ok(true) => {}
+        // Lazy eviction runs first, so the error below reports a tree that is
+        // ready to paint, and no checkout or lock is held when a subscriber
+        // (user code) sees it.
+        match converged? {
+            FixpointEnd::Settled => {
+                tracing::debug!(lazy_passes, "layout<->build fixpoint settled");
+            }
+            end => report_unsettled(end),
         }
         Ok(())
     }
 }
 
-/// Drive `pass` until it reports no further pass is needed, or the bound trips.
+/// Drive `pass` until it reports the tree settled, or a bound trips.
 ///
-/// `pass` returns `true` when **another** iteration is required. Returns
-/// `Ok(true)` on convergence, `Ok(false)` when [`MAX_LAYOUT_BUILD_PASSES`] was
-/// exhausted without converging. Errors short-circuit.
+/// Charged passes count cumulatively, not consecutively, so an oscillation
+/// interleaved with progress is still caught. Errors short-circuit.
 ///
 /// Factored out of [`BuildOwner::run_frame_with_layout_builders`] so the bound —
 /// the thing standing between a buggy builder and a hung UI thread — is unit
 /// testable without a pipeline.
-fn drive_fixpoint<E>(mut pass: impl FnMut() -> Result<bool, E>) -> Result<bool, E> {
-    for _ in 0..MAX_LAYOUT_BUILD_PASSES {
-        if !pass()? {
-            return Ok(true);
+fn drive_fixpoint<E>(mut pass: impl FnMut() -> Result<PassOutcome, E>) -> Result<FixpointEnd, E> {
+    let mut charged = 0_usize;
+    for _ in 0..MAX_FIXPOINT_PASSES {
+        match pass()? {
+            PassOutcome::Settled => return Ok(FixpointEnd::Settled),
+            PassOutcome::Advanced => {}
+            PassOutcome::Charged => {
+                charged += 1;
+                if charged == MAX_CHARGED_PASSES {
+                    return Ok(FixpointEnd::Repeating);
+                }
+            }
         }
     }
-    Ok(false)
+    Ok(FixpointEnd::PassCap)
 }
 
 /// Test-only access to the otherwise crate-private registry.
@@ -570,26 +708,26 @@ impl BuildOwner {
     }
 }
 
-/// Debug: panic. Release: log and let the caller paint the last settled tree.
-///
-/// Split out so the release path is `#[cold]` and the debug path is a single
-/// unconditional panic rather than a `cfg!` branch clippy has to reason about.
+/// One error for a fixpoint that stopped before it settled; the caller paints
+/// the last laid-out tree. Not a panic in any profile: only application
+/// content (a builder whose output feeds back into its own constraints, or
+/// nesting that keeps growing) reaches it (`docs/PANIC-POLICY.md`, ADR-0308).
 #[cold]
-fn report_non_convergence() {
-    #[cfg(debug_assertions)]
-    panic!(
-        "BUG: layout<->build fixpoint failed to converge after {MAX_LAYOUT_BUILD_PASSES} passes \
-         — a layout builder's output is changing its own incoming constraints, or a lazy \
-         sliver's band never settles (every serviced pass requests a new band)"
-    );
-
-    #[cfg(not(debug_assertions))]
-    tracing::error!(
-        max_passes = MAX_LAYOUT_BUILD_PASSES,
-        "layout<->build fixpoint failed to converge — a layout builder's output is changing \
-         its own incoming constraints, or a lazy sliver's band never settles; painting the \
-         last settled tree"
-    );
+fn report_unsettled(end: FixpointEnd) {
+    match end {
+        FixpointEnd::Settled => {}
+        FixpointEnd::Repeating => tracing::error!(
+            max_charged_passes = MAX_CHARGED_PASSES,
+            "layout<->build fixpoint did not settle: a layout builder keeps rebuilding with \
+             nothing above it rebuilt, so its output changes its own incoming constraints; \
+             painting the last laid-out tree"
+        ),
+        FixpointEnd::PassCap => tracing::error!(
+            max_passes = MAX_FIXPOINT_PASSES,
+            "layout<->build fixpoint did not settle: build-during-layout nesting kept growing \
+             for every pass; painting the last laid-out tree"
+        ),
+    }
 }
 
 #[cfg(test)]
@@ -673,16 +811,124 @@ mod tests {
 
     // ── the bound ───────────────────────────────────────────────────────────
 
-    /// The anti-hang guarantee: a builder that never settles terminates the loop
-    /// at the bound instead of spinning forever.
-    fn layout_builder_fixpoint_is_bounded_and_never_spins() {
+    /// Drives `outcomes` (repeated from the start when exhausted) through the
+    /// fixpoint and returns how it ended and after how many passes.
+    fn drive(outcomes: &[PassOutcome]) -> (FixpointEnd, usize) {
         let mut passes = 0;
-        let converged = drive_fixpoint(|| {
+        let end = drive_fixpoint(|| {
+            let outcome = outcomes[passes % outcomes.len()];
             passes += 1;
-            Ok::<bool, ()>(true)
+            Ok::<PassOutcome, ()>(outcome)
         });
-        assert_eq!(converged, Ok(false), "must report non-convergence");
-        assert_eq!(passes, MAX_LAYOUT_BUILD_PASSES);
+        (end.expect("no pass fails"), passes)
+    }
+
+    /// The anti-hang guarantees: a builder that keeps rebuilding stops at the
+    /// charged bound, nesting that keeps growing stops at the pass cap, and
+    /// progress alone is never charged.
+    fn layout_builder_fixpoint_is_bounded_and_never_spins() {
+        use PassOutcome::{Advanced, Charged, Settled};
+        assert_eq!(
+            drive(&[Charged]),
+            (FixpointEnd::Repeating, MAX_CHARGED_PASSES),
+            "a scope that keeps rebuilding on its own"
+        );
+        let mut deep = vec![Advanced; 3 * MAX_CHARGED_PASSES];
+        deep.push(Settled);
+        assert_eq!(
+            drive(&deep),
+            (FixpointEnd::Settled, 3 * MAX_CHARGED_PASSES + 1),
+            "nesting three times deeper than the charged bound settles"
+        );
+        assert_eq!(
+            drive(&[Advanced]),
+            (FixpointEnd::PassCap, MAX_FIXPOINT_PASSES),
+            "nesting that keeps growing"
+        );
+        assert_eq!(
+            drive(&[Charged, Advanced]),
+            (FixpointEnd::Repeating, 2 * MAX_CHARGED_PASSES - 1),
+            "charged passes count cumulatively through progress"
+        );
+    }
+
+    /// A pass is progress when every scope it rebuilt is new to the fixpoint,
+    /// gone, or under an ancestor the previous pass rebuilt; anything else is
+    /// charged, an oscillating scope included when a fresh scope rebuilt
+    /// beside it.
+    fn layout_builder_pass_progress_is_explained_by_a_fresh_or_ancestor_build() {
+        use PassOutcome::{Advanced, Charged, Settled};
+        let id = ElementId::new;
+        // 1 ← 2 ← 3 ← 4: element 4's parent is 3, and so on; 9 is gone.
+        let parents: HashMap<ElementId, ElementId> =
+            [(id(2), id(1)), (id(3), id(2)), (id(4), id(3))].into();
+        let classify = |rebuilt: &[usize], earlier: &[usize], previous: &[usize], lazy: bool| {
+            let set = |ids: &[usize]| ids.iter().map(|n| id(*n)).collect::<HashSet<ElementId>>();
+            let service = LayoutBuilderService {
+                any_rebuilt: !rebuilt.is_empty(),
+                rebuilt_scopes: set(rebuilt),
+            };
+            classify_pass(
+                &service,
+                lazy,
+                &set(earlier),
+                &set(previous),
+                |scope| scope != id(9),
+                |scope| parents.get(&scope).copied(),
+            )
+        };
+        let rows: [(&str, PassOutcome, PassOutcome); 9] = [
+            ("nothing rebuilt", classify(&[], &[], &[], false), Settled),
+            (
+                "fresh scopes",
+                classify(&[3, 4], &[1, 2], &[2], false),
+                Advanced,
+            ),
+            (
+                "a repeat under a grandparent the previous pass rebuilt",
+                classify(&[4], &[1, 4], &[2], false),
+                Advanced,
+            ),
+            (
+                "a repeat with no ancestor rebuilt",
+                classify(&[2], &[2], &[3], false),
+                Charged,
+            ),
+            (
+                "an oscillating scope beside a fresh one",
+                classify(&[2, 3], &[2], &[], false),
+                Charged,
+            ),
+            (
+                "a scope is not its own ancestor",
+                classify(&[2], &[2], &[2], false),
+                Charged,
+            ),
+            (
+                "a scope gone from the tree",
+                classify(&[9], &[9], &[], false),
+                Advanced,
+            ),
+            ("a lazy band", classify(&[2], &[2], &[], true), Advanced),
+            (
+                "global work alone",
+                classify_pass(
+                    &LayoutBuilderService::of(true),
+                    false,
+                    &HashSet::new(),
+                    &HashSet::new(),
+                    |_| true,
+                    |_| None,
+                ),
+                Charged,
+            ),
+        ];
+        let failures: Vec<String> = rows
+            .iter()
+            .filter(|(_, got, expected)| got != expected)
+            .map(|(row, got, expected)| format!("{row}: {got:?}, expected {expected:?}"))
+            .collect();
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
     }
 
     // ── registry ────────────────────────────────────────────────────────────
@@ -744,6 +990,11 @@ mod tests {
                 (
                     "layout_builder_fixpoint_is_bounded_and_never_spins",
                     layout_builder_fixpoint_is_bounded_and_never_spins as fn(),
+                ),
+                (
+                    "layout_builder_pass_progress_is_explained_by_a_fresh_or_ancestor_build",
+                    layout_builder_pass_progress_is_explained_by_a_fresh_or_ancestor_build
+                        as fn(),
                 ),
                 (
                     "layout_builder_service_schedules_build_commits_cell_and_marks_layout",

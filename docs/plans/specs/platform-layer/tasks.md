@@ -4753,7 +4753,7 @@ graph LR
   пакет при создании: `flui build` пишет `flui.applicationId` в `gradle.properties`, шаблон его
   читает, другой литерал отказывается (`a_build_script_states_what_flui_toml_states_or_is_refused`,
   `gradle_states_the_package_once`).
-- [ ] **LY56** (не закрыта: verify и `flui add` — следующими PR) — решения координатора
+- [x] **LY56** — решения координатора
   2026-11-03, ADR-0307 (заменяет ADR-0154 §7): декларации — `[package.metadata.flui.declares]` с
   обязательным `schema = 1` у любого крейта графа, не только у капабилити; `capability.name` —
   только связь с `Capability::NAME`; нужды ядра не литералами в CLI; INTERNET — у фичи `http`
@@ -4769,7 +4769,20 @@ graph LR
   `flui-native` объявляет `35F9.1` и `C617.1`, `flui-assets` — `C617.1`; константа iOS-упаковщика
   удалена, собственный `PrivacyInfo.xcprivacy` приложения по-прежнему объединяется; правило
   объединения сверено с `privacy_manifest_utils.rb` React Native. Тесты: `publication_contract`,
-  `a_privacy_reason_is_an_approved_reason_code`.
+  `a_privacy_reason_is_an_approved_reason_code`. Verify (решение координатора: вариант A и
+  `--json` со стабильными id): секция Project в `flui doctor` (`project.declarations`,
+  `project.android-manifest`) и повторяемый `--manifest <PATH>` (`project.manifest`) для
+  AndroidManifest.xml и XML PrivacyInfo.xcprivacy, которые CLI не пишет; merger Gradle вне рамок,
+  у Android-файла, который не merged, есть `note`. Тест:
+  `doctor_lists_what_a_manifest_lacks_of_the_crates_declarations`. `flui add <capability>`
+  (решение координатора: `[package.metadata.flui.capability] plugin` — путь типа от корня крейта,
+  тип реализует `Default`, тест самого крейта сверяет путь): фича фасада через `toml_edit` или
+  `cargo add` из checkout FLUI, строка `.plugin(…::default())`, декларации крейта, откат с
+  lockfile, если плагина нет; `flui-system` объявляет `SystemPlugin`. Тесты:
+  `add_links_a_capability_and_shows_its_registration`,
+  `a_feature_joins_the_facade_dependency_in_any_shape`,
+  `the_declared_plugin_is_the_crates_default_plugin`. Устройство: Android-прогон APK с сетью и
+  вибрацией, iOS-загрузка в App Store Connect с privacy manifest.
 
 ## Отступление от порядка, решённое владельцем
 

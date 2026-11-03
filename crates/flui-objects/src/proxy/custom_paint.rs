@@ -265,7 +265,7 @@ impl flui_foundation::inspect::Inspect for RenderCustomPaint {
     }
 
     fn inspect(&self, out: &mut flui_foundation::inspect::Fields<'_>) {
-        use flui_foundation::inspect::{Unit, Value};
+        use flui_foundation::inspect::{Unit, Untyped, Value};
         out.field("has_painter", &self.painter.is_some())
             .default(&false);
         out.field("has_foreground_painter", &self.foreground_painter.is_some())
@@ -283,8 +283,19 @@ impl flui_foundation::inspect::Inspect for RenderCustomPaint {
         // field values back out (e.g. a themed color reaching the real
         // painter instance a build produced) without this render object
         // needing to know anything about what a painter actually paints.
-        out.value("painter", Value::Debug(&self.painter));
-        out.value("foreground_painter", Value::Debug(&self.foreground_painter));
+        #[expect(
+            deprecated,
+            reason = "a painter is a user trait object with no typed value"
+        )]
+        out.value("painter", Value::Debug(Untyped::new(&self.painter)));
+        #[expect(
+            deprecated,
+            reason = "a painter is a user trait object with no typed value"
+        )]
+        out.value(
+            "foreground_painter",
+            Value::Debug(Untyped::new(&self.foreground_painter)),
+        );
     }
 }
 

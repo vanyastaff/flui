@@ -10,7 +10,7 @@
 
 use flui_foundation::ElementId;
 use flui_foundation::inspect::{
-    Fields, Inspect, InspectId, InspectTree, Level, Link, Links, NodeView, ToValue, Value,
+    Fields, Inspect, InspectId, InspectTree, Level, Link, Links, NodeView, ToValue, Untyped, Value,
     kind_args_of, kind_of,
 };
 
@@ -93,7 +93,11 @@ impl InspectTree for ElementTree {
         };
         out.field("element", element.debug_kind());
         if let Some(key) = node.key() {
-            out.value("key", Value::Debug(&key));
+            #[expect(
+                deprecated,
+                reason = "a view Key is an open set of user key types with no typed value"
+            )]
+            out.value("key", Value::Debug(Untyped::new(&key)));
         }
         out.field("lifecycle", &element.lifecycle())
             .default(&Lifecycle::Active);

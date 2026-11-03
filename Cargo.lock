@@ -1836,6 +1836,7 @@ dependencies = [
  "interprocess",
  "notify-debouncer-mini",
  "predicates",
+ "roxmltree",
  "rustix 1.1.5",
  "serde",
  "serde_json",
@@ -2366,6 +2367,7 @@ dependencies = [
  "raw-window-handle",
  "serde",
  "thiserror 2.0.21",
+ "toml",
  "zbus 6.1.0",
  "zruntime",
 ]

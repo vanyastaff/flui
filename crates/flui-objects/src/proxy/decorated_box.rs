@@ -126,10 +126,15 @@ impl flui_foundation::inspect::Inspect for RenderDecoratedBox {
     }
 
     fn inspect(&self, out: &mut flui_foundation::inspect::Fields<'_>) {
-        // `BoxDecoration` has no typed mapping; it is described by its `Debug`.
+        #[expect(
+            deprecated,
+            reason = "BoxDecoration is a composite with no typed value"
+        )]
         out.value(
             "decoration",
-            flui_foundation::inspect::Value::Debug(&self.decoration),
+            flui_foundation::inspect::Value::Debug(flui_foundation::inspect::Untyped::new(
+                &self.decoration,
+            )),
         );
         out.field("position", &self.position)
             .default(&DecorationPosition::Background);
