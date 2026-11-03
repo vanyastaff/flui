@@ -126,6 +126,9 @@ fn reactivity_and_dependencies() {
             ("localizations::the_global_delegate_makes_an_rtl_locale_subtree_rtl", crate::localizations::the_global_delegate_makes_an_rtl_locale_subtree_rtl),
             ("hot_reload_state::perform_reassemble_rebuilds_in_place_and_preserves_state", crate::hot_reload_state::perform_reassemble_rebuilds_in_place_and_preserves_state),
             ("layout_builder::layout_builder_constraint_change_rebuilds_in_the_same_frame", crate::layout_builder::layout_builder_constraint_change_rebuilds_in_the_same_frame),
+            ("layout_builder::nested_layout_builders_settle_on_their_first_frame", crate::layout_builder::nested_layout_builders_settle_on_their_first_frame),
+            ("layout_builder::nested_constraint_dependent_layout_builders_settle_after_a_resize", crate::layout_builder::nested_constraint_dependent_layout_builders_settle_after_a_resize),
+            ("layout_builder::a_layout_builder_feeding_its_own_constraints_paints_without_panicking", crate::layout_builder::a_layout_builder_feeding_its_own_constraints_paints_without_panicking),
         ],
     );
 }
@@ -1114,6 +1117,7 @@ fn lazy_slivers() {
             ("lazy_list::lazy_list_view_builder_exhausted_pass_budget_defers_the_rest_to_the_next_frame", crate::lazy_list::lazy_list_view_builder_exhausted_pass_budget_defers_the_rest_to_the_next_frame),
             ("lazy_list::lazy_list_view_builder_keyed_row_moving_with_the_viewport_keeps_state", crate::lazy_list::lazy_list_view_builder_keyed_row_moving_with_the_viewport_keeps_state),
             ("lazy_list::lazy_list_view_builder_pathological_extents_defer_instead_of_panicking", crate::lazy_list::lazy_list_view_builder_pathological_extents_defer_instead_of_panicking),
+            ("lazy_list::lazy_list_view_builder_pathological_extents_under_nested_layout_builders_defer_instead_of_panicking", crate::lazy_list::lazy_list_view_builder_pathological_extents_under_nested_layout_builders_defer_instead_of_panicking),
             ("lazy_list::lazy_list_view_builder_stateful_items_init_and_dispose_with_the_band", crate::lazy_list::lazy_list_view_builder_stateful_items_init_and_dispose_with_the_band),
             ("lazy_list::replacing_nested_lazy_hosts_disposes_every_resident_once", crate::lazy_list::replacing_nested_lazy_hosts_disposes_every_resident_once),
             ("lazy_grid::lazy_grid_view_builder_places_tiles_at_oracle_positions", crate::lazy_grid::lazy_grid_view_builder_places_tiles_at_oracle_positions),

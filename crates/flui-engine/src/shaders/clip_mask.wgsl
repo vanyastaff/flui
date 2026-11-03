@@ -15,6 +15,9 @@ struct MaskMapping {
     attachment_to_root: vec4<f32>,
     translation: vec4<f32>,
     extent_counts: vec4<u32>,
+    // Mask pixels [x0, x1) x [y0, y1) at full coverage: every sample passes
+    // every node.
+    interior: vec4<u32>,
 };
 @group(0) @binding(0) var<uniform> nodes: array<ClipNode, 64>;
 @group(0) @binding(1) var<uniform> edges: array<vec4<f32>, 512>;
@@ -75,6 +78,12 @@ fn contains(n: ClipNode, root: vec2<f32>) -> bool {
 }
 @fragment fn fs_main(@builtin(position) position: vec4<f32>) -> @location(0) f32 {
     let pixel = floor(position.xy);
+    // The host proved every sample of every node agrees here (`MaskInterior`),
+    // so full coverage is the answer the samples would give.
+    let texel = vec2<u32>(pixel);
+    if (all(texel >= mapping.interior.xy) && all(texel < mapping.interior.zw)) {
+        return 1.0;
+    }
     let center = root_point(pixel + vec2<f32>(0.5));
     // Keep the sample count uniform-driven: constant nested loops can cause
     // costly driver expansion. Hard leaves use the same center; AA leaves

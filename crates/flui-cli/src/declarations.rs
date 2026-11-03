@@ -23,6 +23,9 @@ use serde::Deserialize;
 
 use crate::build::error::{BuildError, BuildResult};
 
+pub(crate) mod capability;
+pub(crate) mod verify;
+
 /// The newest `schema` this CLI reads.
 pub(crate) const SCHEMA: u32 = 1;
 
@@ -284,6 +287,17 @@ impl Declarations {
             joined.add(package, &features)?;
         }
         Ok(joined)
+    }
+
+    /// What `package` alone declares, with `features` enabled.
+    ///
+    /// # Errors
+    ///
+    /// As [`Declarations::collect`], for this one crate's table.
+    pub(crate) fn of_package(package: &Package, features: &[&str]) -> BuildResult<Self> {
+        let mut declarations = Self::default();
+        declarations.add(package, features)?;
+        Ok(declarations)
     }
 
     /// Add what `package` declares, with `features` enabled.

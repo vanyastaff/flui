@@ -941,8 +941,10 @@ trait depends on `flui-platform` instead.
   stays open for test doubles.
 - **The winit fallback is a desktop backend.** Its module, public re-exports
   and `arboard` clipboard dependency are available only on Windows, macOS and
-  Linux under `winit-backend`. The `desktop` selector enables `wayland`, the
-  native Wayland host, which adds nothing off Linux; the other native desktop
+  Linux under `winit-backend`, and `current_platform` never picks it on Linux,
+  where the native Wayland and X11 hosts replaced it (ADR-0151 §11). The
+  `desktop` selector enables `wayland` and `x11`, the native Linux hosts,
+  which add nothing off Linux; the other native desktop
   backends are selected by target OS. Enabling every feature on Android or iOS keeps the native backend;
   it does not enable desktop clipboard code. The required-target and
   all-features `cargo xtask cross-typecheck` configurations compile this
@@ -1172,9 +1174,8 @@ trait depends on `flui-platform` instead.
   the loop and given to the first window its table holds (`WindowTable::register`),
   so a window that failed to open leaves it; the variable stays set, as unsetting it
   races every thread reading the environment, and `xdg_open` leaves it out
-  of the opener it starts. `current_platform` picks the winit host
-  while it is built (the native hosts carry no input yet) and the native
-  Wayland host for a Wayland session otherwise.
+  of the opener it starts. `current_platform` picks the native Wayland host
+  for a Wayland session (`choose_linux_host`).
 - **Linux host events reach the owner through an inbox, and a machine that
   waits for the application waits for delivery, not for receipt.** Two sources
   run beside the owner and never run application code: an async logind task
@@ -3832,7 +3833,7 @@ portal of `preferences::linux` and the logind and pressure sources of
 `lifecycle::linux`, through the hooks the Wayland loop holds them by too
 (`owner::linux::{LinuxPreferences, LinuxNotices}`); every window hands out the
 AT-SPI bridge of `accessibility::linux`. `current_platform` picks the host for
-an X11 session when the winit host is not built (`choose_linux_host`).
+an X11 session (`choose_linux_host`).
 Text input is `Absent` in the table until the host's later parts fill it; the
 clipboard is the clipboard feature's, on a connection and thread of its own.
 

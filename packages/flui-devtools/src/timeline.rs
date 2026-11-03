@@ -520,6 +520,10 @@ impl Timeline {
     /// Get all recorded events, oldest first. A timeline [over](Self::over) a capture includes
     /// the framework spans the capture holds.
     pub fn get_events(&self) -> Vec<TimelineEvent> {
+        #[cfg_attr(
+            not(feature = "profiling"),
+            expect(unused_mut, reason = "only a profiling build appends captured frames")
+        )]
         let mut events = self.inner.lock().get_events();
         #[cfg(feature = "profiling")]
         if let Some(capture) = &self.capture {
@@ -790,7 +794,8 @@ fn captured_event(span: &crate::capture::CapturedSpan) -> TimelineEvent {
     }
 }
 
-#[cfg(test)]
+// The one test reads frames from a `Capture`, which only `profiling` builds.
+#[cfg(all(test, feature = "profiling"))]
 mod tests {
     use super::*;
     use crate::capture::Capture;
