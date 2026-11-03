@@ -443,6 +443,40 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         }
     }
 
+    /// Where `id` is in the render tree, as an error names it: the node, then its parents up to
+    /// [`TREE_CONTEXT_DEPTH`](flui_foundation::TREE_CONTEXT_DEPTH), each by its render object's
+    /// debug name and id, with where the node's view was created. Empty for an id that is not a
+    /// current node.
+    #[must_use]
+    pub fn tree_context(&self, id: flui_foundation::RenderId) -> flui_foundation::TreeContext {
+        let tree = &self.render_tree;
+        let Some(node) = tree.get(id) else {
+            return flui_foundation::TreeContext::default();
+        };
+        let site = node.creation_site();
+        let path = std::iter::successors(Some(id), |&at| tree.parent(at)).filter_map(|at| {
+            tree.get(at).map(|node| {
+                flui_foundation::PathEntry::new(
+                    node.debug_name(),
+                    flui_foundation::inspect::InspectId::from(at),
+                )
+            })
+        });
+        flui_foundation::TreeContext::new(path, site)
+    }
+
+    /// `error` with the context of the node it names, when it names one.
+    pub(super) fn in_tree(
+        &self,
+        error: crate::error::RenderError,
+    ) -> flui_foundation::TreeError<crate::error::RenderError> {
+        let context = error
+            .node()
+            .map(|id| self.tree_context(id))
+            .unwrap_or_default();
+        flui_foundation::TreeError::new(error, context)
+    }
+
     /// Returns a reference to the render tree.
     pub fn render_tree(&self) -> &crate::storage::RenderTree {
         &self.render_tree

@@ -413,7 +413,10 @@ impl BuildOwner {
         &mut self,
         tree: &mut ElementTree,
         pipeline: &PipelineCell,
-    ) -> flui_rendering::error::RenderResult<Option<flui_rendering::layer::LayerTree>> {
+    ) -> Result<
+        Option<flui_rendering::layer::LayerTree>,
+        flui_foundation::TreeError<flui_rendering::error::RenderError>,
+    > {
         self.settle_layout_with_builders(tree, pipeline)?;
         pipeline.run_frame()
     }
@@ -434,7 +437,7 @@ impl BuildOwner {
         &mut self,
         tree: &mut ElementTree,
         pipeline: &PipelineCell,
-    ) -> flui_rendering::error::RenderResult<()> {
+    ) -> Result<(), flui_foundation::TreeError<flui_rendering::error::RenderError>> {
         let mut lazy_passes: usize = 0;
         let mut lazy_budget_exhausted = false;
         let converged = {

@@ -82,8 +82,8 @@ fn rejected_text_recovers(recovery: Recovery) {
             assert!(matches!(
                 &report.kind,
                 flui_runtime::frame_failure::FrameFailureKind::Pipeline {
-                    error: flui_rendering::RenderError::TextLayout(_),
-                }
+                    error,
+                } if matches!(error.error(), flui_rendering::RenderError::TextLayout(_))
             ));
             reports.fetch_add(1, Ordering::SeqCst);
             if matches!(recovery, Recovery::FailureHandler) {
@@ -181,8 +181,8 @@ fn a_competing_text_loan_waits_for_an_explicit_input_change() {
             assert!(matches!(
                 &report.kind,
                 flui_runtime::frame_failure::FrameFailureKind::Pipeline {
-                    error: flui_rendering::RenderError::TextContextBusy,
-                }
+                    error,
+                } if matches!(error.error(), flui_rendering::RenderError::TextContextBusy)
             ));
             reports.fetch_add(1, Ordering::SeqCst);
         },
@@ -308,8 +308,8 @@ fn text_frame_completion_waits_for_measurement(pending: bool) {
             assert!(matches!(
                 &report.kind,
                 flui_runtime::frame_failure::FrameFailureKind::Pipeline {
-                    error: flui_rendering::RenderError::TextPreparationPending(requests),
-                } if !requests.requests.is_empty()
+                    error,
+                } if matches!(error.error(), flui_rendering::RenderError::TextPreparationPending(requests) if !requests.requests.is_empty())
             ));
             reports.fetch_add(1, Ordering::SeqCst);
         },
@@ -371,8 +371,8 @@ fn an_unregistered_capture_parks_until_its_provider_changes() {
             assert!(matches!(
                 &report.kind,
                 flui_runtime::frame_failure::FrameFailureKind::Pipeline {
-                    error: flui_rendering::RenderError::TextPreparationPending(requests),
-                } if !requests.requests.is_empty()
+                    error,
+                } if matches!(error.error(), flui_rendering::RenderError::TextPreparationPending(requests) if !requests.requests.is_empty())
             ));
             reports.fetch_add(1, Ordering::SeqCst);
         },
@@ -756,9 +756,11 @@ fn parked_partial_text_geometry_is_unavailable_to_the_real_ime_store() {
     let reports = Arc::clone(&pending_reports);
     runtime.set_frame_failure_handler(Some(flui_runtime::frame_failure::FrameFailureHandler::new(
         move |report| {
-            let flui_runtime::frame_failure::FrameFailureKind::Pipeline {
-                error: flui_rendering::RenderError::TextPreparationPending(preparation),
-            } = &report.kind
+            let flui_runtime::frame_failure::FrameFailureKind::Pipeline { error } = &report.kind
+            else {
+                panic!("expected a pipeline failure");
+            };
+            let flui_rendering::RenderError::TextPreparationPending(preparation) = error.error()
             else {
                 panic!("expected the later sibling's missing captured size");
             };
