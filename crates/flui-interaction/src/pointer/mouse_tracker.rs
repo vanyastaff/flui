@@ -44,7 +44,6 @@ use crate::{
     events::{CursorIcon, PointerEvent, PointerInfo, PointerKind},
     ids::{InputSurface, RegionId},
     pointer::interaction_lane::MouseRegionCell,
-    retain::Retain,
 };
 
 /// Device ID type (re-exported from events).
@@ -172,20 +171,11 @@ impl ResolvedMouseTrackerAnnotation {
     }
 }
 
-impl Retain for ResolvedMouseTrackerAnnotation {
-    fn retain(mut self) {
-        if let Some(cell) = self.cell.take() {
-            let mut failure = crate::close::ClosePanic::new();
-            MouseRegionCell::retire(cell, &mut failure, true);
-        }
-    }
-}
-
 impl Drop for ResolvedMouseTrackerAnnotation {
     fn drop(&mut self) {
         if let Some(cell) = self.cell.take() {
             let mut failure = crate::close::ClosePanic::new();
-            MouseRegionCell::retire(cell, &mut failure, self.latch.retains_withdrawn());
+            MouseRegionCell::retire(cell, &mut failure);
             failure.finish();
         }
     }
@@ -997,7 +987,7 @@ impl MouseTracker {
                 let delivered = RoutePanic::capture(|| callback(pointer, position));
                 RoutePanic::preserve_first(&mut first_panic, delivered, "mouse hover callback");
             }
-            let cleanup = RoutePanic::capture(|| latch.release(callback));
+            let cleanup = RoutePanic::capture(|| drop(callback));
             RoutePanic::preserve_first(&mut first_panic, cleanup, "mouse hover snapshot cleanup");
         }
         first_panic
@@ -1330,8 +1320,8 @@ impl DeviceWork {
 
     /// Run the batch. A callback may close its presentation reentrantly, so
     /// each snapshot is rechecked against its owner's latch (and the cursor
-    /// callback against this tracker) right before it runs, and released
-    /// under that close's retention policy afterwards (ADR-0127).
+    /// callback against this tracker) right before it runs, and destroyed
+    /// under the batch's containment afterwards (ADR-0281 §3).
     fn invoke(self, failure: &mut crate::close::ClosePanic) {
         for (callback, latch) in self.exit_callbacks {
             if !latch.is_closed() {
@@ -1339,11 +1329,7 @@ impl DeviceWork {
                     callback(self.pointer, self.position);
                 });
             }
-            if failure.preserving() {
-                callback.retain();
-            } else {
-                failure.invoke(|| latch.release(callback));
-            }
+            failure.retire(callback);
         }
         for (callback, latch) in self.enter_callbacks {
             if !latch.is_closed() {
@@ -1351,11 +1337,7 @@ impl DeviceWork {
                     callback(self.pointer, self.position);
                 });
             }
-            if failure.preserving() {
-                callback.retain();
-            } else {
-                failure.invoke(|| latch.release(callback));
-            }
+            failure.retire(callback);
         }
         if let Some(observation) = self.cursor_observation {
             let callback = {
@@ -1416,15 +1398,7 @@ impl DeviceWork {
                         }
                     }
                 }
-                let preserved = {
-                    let inner = self.tracker.borrow();
-                    inner.closed && inner.close_mode.preserved()
-                };
-                if preserved {
-                    callback.retain();
-                } else {
-                    failure.retire(callback);
-                }
+                failure.retire(callback);
             }
         }
         for annotation in self.retired_annotations {

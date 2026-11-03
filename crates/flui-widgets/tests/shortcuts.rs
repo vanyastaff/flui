@@ -337,7 +337,6 @@ pub(crate) mod tab_tests {
     impl Drop for CandidateCapture {
         fn drop(&mut self) {
             self.0.set(self.0.get() + 1);
-            panic!("detached candidate aggregate capture");
         }
     }
 
@@ -356,7 +355,8 @@ pub(crate) mod tab_tests {
         }
     }
 
-    /// What this case guards against is an abort, so it runs in a child process.
+    /// A capture destroyed during the failed traversal would abort on a
+    /// regression, so the case runs in a child process.
     pub(crate) fn tab_traversal_preserves_failure_before_policy_and_candidate_retirement() {
         let mut child = std::process::Command::new(std::env::current_exe().expect("test binary"))
             .args([
@@ -406,8 +406,7 @@ pub(crate) mod tab_tests {
         use std::panic::{AssertUnwindSafe, catch_unwind};
 
         for (panic_sort, panic_capture, expected, expected_policy_drops) in [
-            (true, true, "first traversal sort failure", 0),
-            (true, false, "first traversal sort failure", 0),
+            (true, false, "first traversal sort failure", 1),
             (false, true, "first policy capture retirement", 1),
         ] {
             let scope = FocusScopeNode::with_debug_label("policy-retirement-scope");
@@ -467,8 +466,8 @@ pub(crate) mod tab_tests {
             assert_eq!(policy_drops.get(), expected_policy_drops);
             assert_eq!(
                 candidate_drops.get(),
-                0,
-                "detached candidate ownership stays out of the failed unwind"
+                2,
+                "the detached candidate's captures are destroyed once (ADR-0281)"
             );
             assert!(
                 left.has_primary_focus(),

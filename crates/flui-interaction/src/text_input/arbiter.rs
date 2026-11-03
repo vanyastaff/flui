@@ -48,7 +48,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 
 use flui_platform::text_store::{
     CommitGate, DEFERRED_LOCK_CAPACITY, LockGrant, LockOutcome, LockTiming, OwnerCalls,
-    RetainOnFailure, TextStoreError,
+    TextStoreError,
 };
 
 /// The lock state machine every text store embeds.
@@ -144,8 +144,8 @@ impl LockArbiter {
         // Earlier requests first, so this one cannot overtake them. When one
         // of them fails, this request is still accepted work: an
         // asynchronous one waits behind the failed grant's tail, and a
-        // synchronous one, which cannot wait, is retained unrun (ADR-0127);
-        // neither is destroyed during the unwind.
+        // synchronous one, which cannot wait, is destroyed unrun under
+        // containment behind the earlier failure (ADR-0281 §3).
         let mut earlier = OwnerCalls::new();
         earlier.run(|| self.drain(open, settle));
         if let Some(payload) = earlier.into_failure() {
@@ -154,7 +154,7 @@ impl LockArbiter {
                 LockTiming::Sync => Some(grant),
             };
             if let Some(grant) = refused {
-                RetainOnFailure::retain(grant);
+                crate::containment::drop_contained(grant);
             }
             resume_unwind(payload);
         }
@@ -311,7 +311,7 @@ impl LockArbiter {
     /// # Panics
     ///
     /// Resumes the first panic a dropped grant's captures raised; the grants
-    /// after it are retained (ADR-0127).
+    /// after it are still destroyed, each contained (ADR-0281).
     pub fn clear(&self) -> usize {
         let dropped = std::mem::take(&mut *self.queue.borrow_mut());
         let count = dropped.len();
@@ -379,7 +379,8 @@ impl LockArbiter {
 
 impl Drop for LockArbiter {
     /// Grants still queued when the store goes are its requesters' code:
-    /// retired inside a scope, retained during an unwind (ADR-0127).
+    /// destroyed each under containment; during an unwind their first failure
+    /// is discarded, not resumed (ADR-0281).
     fn drop(&mut self) {
         let queued = std::mem::take(self.queue.get_mut());
         let mut calls = OwnerCalls::new();

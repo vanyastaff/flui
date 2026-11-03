@@ -158,11 +158,12 @@ pub(crate) fn cross_thread_signal_write_opens_the_owner_writer_source() {
     assert_eq!(sig_a.peek(&graph_a, |v| *v), Ok(1));
 }
 
-/// A command whose write panics inside its `EventCx` keeps its envelope:
-/// the captures are retained, never destroyed during the unwind (ADR-0086,
-/// revised 2026-09-28). The write before the panic stays applied, and the
-/// next command writes normally and disposes its own envelope.
-pub(crate) fn a_panicking_signal_write_keeps_its_envelope() {
+/// A command whose write panics inside its `EventCx` keeps its envelope out
+/// of the unwind, then destroys it once under containment (ADR-0281 §3). The
+/// write before the panic stays applied, the command's panic is the one
+/// resumed, and the next command writes normally and disposes its own
+/// envelope.
+pub(crate) fn a_panicking_signal_write_destroys_its_envelope() {
     struct Counted(Arc<AtomicUsize>);
     impl Drop for Counted {
         fn drop(&mut self) {
@@ -193,8 +194,8 @@ pub(crate) fn a_panicking_signal_write_keeps_its_envelope() {
     );
     assert_eq!(
         panicking_drops.load(Ordering::Relaxed),
-        0,
-        "the panicking envelope's captures are retained, not destroyed"
+        1,
+        "the panicking envelope's captures are destroyed once"
     );
     assert_eq!(signal.peek(&graph, |value| *value), Ok(7));
 

@@ -12,9 +12,7 @@ pub fn run_cases(cases: &[Case]) {
                 .or_else(|| payload.downcast_ref::<&str>().copied())
                 .unwrap_or("opaque panic payload");
             failures.push(format!("{name}: {text}"));
-            // Opaque payloads may contain multiple destructors that panic;
-            // dropping such an aggregate can abort even inside catch_unwind.
-            std::mem::forget(payload);
+            flui_foundation::panic::discard_payload(payload);
         }
     }
     assert!(

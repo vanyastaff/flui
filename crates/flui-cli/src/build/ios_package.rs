@@ -216,7 +216,16 @@ impl Drop for Work {
                     path.display()
                 ));
             }) {
-                std::mem::forget(payload);
+                // Destroyed under containment, as `flui_foundation::panic::
+                // discard_payload` does (ADR-0281).
+                let mut pending = Some(payload);
+                while let Some(payload) = pending.take() {
+                    if let Err(next) =
+                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(payload)))
+                    {
+                        pending = Some(next);
+                    }
+                }
             }
         }
     }

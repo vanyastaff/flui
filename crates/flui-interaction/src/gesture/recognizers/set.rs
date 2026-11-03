@@ -3,9 +3,7 @@ use super::{
     callback_containment::finish_containment,
     recognizer::{GestureRecognizer, admits_device},
 };
-use crate::{
-    containment::RoutePanic, events::PointerEvent, pointer::PointerDispatch, retain::Retain,
-};
+use crate::{containment::RoutePanic, events::PointerEvent, pointer::PointerDispatch};
 use std::rc::{Rc, Weak};
 
 type Admission = Rc<dyn Fn(PointerDispatch<'_>) -> bool>;
@@ -76,16 +74,8 @@ impl RecognizerSet {
                 }
             });
             RoutePanic::preserve_first(&mut first, candidate, "recognizer attachment");
-            if first.is_some() {
-                recognizer.retain();
-            } else {
-                let candidate = RoutePanic::capture(|| drop(recognizer));
-                RoutePanic::preserve_first(
-                    &mut first,
-                    candidate,
-                    "recognizer attachment retirement",
-                );
-            }
+            let candidate = RoutePanic::capture(|| drop(recognizer));
+            RoutePanic::preserve_first(&mut first, candidate, "recognizer attachment retirement");
         }
         finish_containment(first, incoming_failure);
     }

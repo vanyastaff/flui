@@ -150,7 +150,7 @@ fn multi_contact_events_keep_independent_pointer_identity() {
         ),
     ] {
         if let Err(payload) = std::panic::catch_unwind(case) {
-            std::mem::forget(payload);
+            flui_foundation::panic::discard_payload(payload);
             failures.push(name);
         }
     }

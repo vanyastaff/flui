@@ -193,8 +193,7 @@ impl UiRuntime {
             if let Err(payload) = catch_unwind(AssertUnwindSafe(|| {
                 presentation.pipeline().report_semantics_diagnostics();
             })) {
-                // Forgotten, not dropped: its `Drop` may panic too.
-                std::mem::forget(payload);
+                flui_foundation::panic::discard_payload(payload);
                 // What it left unreported went back to the pipeline, which
                 // no pending-work check counts: schedule the frame that
                 // retries it.

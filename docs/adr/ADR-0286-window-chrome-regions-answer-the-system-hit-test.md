@@ -3,7 +3,7 @@
 - **Status:** Accepted (2026-11-02)
 - **Date:** 2026-11-02
 - **Amended:** 2026-11-02: §5 and §6, the press takers cut out of a move area and the widgets that
-  mark the regions; §7, the Win32 frame.
+  mark the regions; §7, the Win32 frame. 2026-11-03: §8, the AppKit title bar.
 - **Amends:** [ADR-0217](ADR-0217-interaction-module-layers-and-pointer-assembly.md) §5: input
   regions gain the chrome kinds the title-bar follow-up named, and their availability is
   answered per kind.
@@ -147,6 +147,17 @@ a caption button reach the application's button as client ones and never the def
 the application's tap decides. A `WindowFrame::None` window answers from the regions without the
 band. A fullscreen window answers as the system does.
 
+§8. **AppKit.** A window with `AppTitleBar` keeps `NSWindowStyleMaskTitled` and adds
+`NSWindowStyleMaskFullSizeContentView` with a transparent, untitled title bar, so the content
+reaches the top, the system still resizes, tiles, zooms and enters full screen, and the traffic
+lights stay the system's. `SystemControls` hides them or moves them by an offset, the bar growing
+down to keep them inside it and the offset mirrored in a right-to-left layout. A left press on a
+`Move` region calls `performWindowDragWithEvent:`, and a second click of it does what
+`AppleActionOnDoubleClick` (or the older `AppleMiniaturizeOnDoubleClick`) names: zoom, minimize
+or nothing. Every other press reaches the application. AppKit keeps the resize borders and the
+caption buttons, so its input capabilities answer only `window_move`, and the other chrome kinds
+stay `Unavailable`.
+
 ### Consequences
 
 - Good, because the system's callback reads a slice and returns: no framework code, no lock
@@ -158,8 +169,8 @@ band. A fullscreen window answers as the system does.
 - Bad, because the answer can be one frame behind a layout change: a press during the frame
   that moves a button is resolved against the previous frame's regions. A frame is the
   granularity every other input path has too.
-- Neutral, because only Win32 of the native hosts answers from the regions; until the others do,
-  their capabilities leave the chrome kinds `Unavailable` and their windows open
+- Neutral, because only Win32 and AppKit of the native hosts answer from the regions; until the
+  others do, their capabilities leave the chrome kinds `Unavailable` and their windows open
   `WindowFrame::AppTitleBar` with the system's frame (`WindowFrame::at_open`).
 
 ### Confirmation
@@ -184,6 +195,13 @@ band. A fullscreen window answers as the system does.
   `the_client_reaches_the_top_and_a_maximized_one_stays_on_the_monitor`), and on Windows
   `an_app_title_bar_drops_the_caption_and_keeps_the_content` and
   `the_system_hit_test_answers_from_the_chrome_regions` in `native_window_commands`, pin §7.
+- The pure halves of `flui-native`'s AppKit window and input, on the Linux CI host
+  (`each_frame_asks_its_style_of_the_window`,
+  `moved_traffic_lights_stay_inside_a_bar_that_grows_down`,
+  `a_left_press_on_the_bar_moves_the_window_and_a_second_click_asks_the_setting`,
+  `a_double_click_on_the_bar_does_what_system_settings_says`), and
+  `the_desktop_hosts_honour_the_chrome_regions_they_answer` for the kinds each host honours, pin
+  §8.
 
 ## Pros and cons of the options
 

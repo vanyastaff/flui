@@ -2,6 +2,8 @@
 
 - **Status:** Accepted
 - **Date:** 2026-10-07
+- **Superseded-by:** [ADR-0281](ADR-0281-a-destructor-that-panics-during-an-unwind-aborts-as-in-std.md),
+  where native ticket callbacks and captures are retained after a failure: they are destroyed under containment.
 - **Related:** [ADR-0098](ADR-0098-owned-f64-geometry-values.md),
   [ADR-0159](ADR-0159-gesture-arena-owner-delivery.md),
   [ADR-0161](ADR-0161-immutable-owner-local-gesture-recognizers.md),
@@ -153,15 +155,15 @@ The interaction `binding_input_contract_matrix` includes
 `native_staged_generation_survives_geometry_and_reentry`; these cover isolated
 and competing failure, exact same-source replacement and healthy recovery.
 `native_close_preserves_retirement_ownership` covers healthy and preserving close,
-including first-failure capture retention.
+including capture destruction after the first failure (ADR-0281).
 `native_same_actor_terminal_reentry_preserves_new_generation` covers End and
 Cancelled, dormant and recognized actors, fresh-probe and raw-observer reentry,
 failure and subsequent same-source recovery.
-`native_cancellation_retains_captures_after_prior_capture_failure` specifies
-required native cleanup, safe capture retention and fresh same-source recovery
+`native_cancellation_destroys_captures_after_prior_capture_failure` specifies
+required native cleanup, capture destruction and fresh same-source recovery
 through both public pointer-sequence cancellation methods.
-`native_claim_prior_observation_failure_preserves_captures` covers prior observer
-failure competing with losing cleanup and winner delivery, retained safe captures
+`native_claim_prior_observation_failure_destroys_captures` covers prior observer
+failure competing with losing cleanup and winner delivery, destroyed captures
 and healthy subsequent admission.
 Existing Scale tables retain the default two-contact contract. These owned-event
 witnesses do not claim physical trackpad or touchscreen execution on every backend.

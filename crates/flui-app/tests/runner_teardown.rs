@@ -1634,8 +1634,8 @@ pub(crate) fn dispose_panic_on_last_window_close_resumes_after_flush() {
 
 /// R13: a callback capture whose `Drop` panics as the last window closes (the
 /// window's lifecycle releases its observers before the tree is disposed)
-/// is the exit's failure; what the tree still owns is retained, so no more
-/// application code runs and a later `dispose` that would panic never does;
+/// is the exit's failure; what the tree still owns is not disposed, so a
+/// later `dispose` that would panic never runs;
 /// the services, the pools and the loop's return still follow.
 pub(crate) fn capture_drop_panic_keeps_the_first_failure_and_still_flushes() {
     let disposed = Rc::new(std::cell::Cell::new(0));
@@ -1659,7 +1659,7 @@ pub(crate) fn capture_drop_panic_keeps_the_first_failure_and_still_flushes() {
         "the first failure is the exit's"
     );
     assert_eq!(report.code(), flui_app::testing::EXIT_CODE_PANIC);
-    assert_eq!(disposed.get(), 0, "the tree was retained, not disposed");
+    assert_eq!(disposed.get(), 0, "the tree was not disposed");
     assert_eq!(
         report.teardown, TEARDOWN_ORDER,
         "the services, the pools and the loop's return followed the failure"

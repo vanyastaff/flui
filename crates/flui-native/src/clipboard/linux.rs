@@ -5,7 +5,7 @@
 //! and an X11 selection as targets. Both primary selections hold the
 //! application's lazily offered selection too ([`offered`]): a closure
 //! asked for its text only when another client reads it, and asked and
-//! dropped as ADR-0127 has a callback asked and dropped.
+//! dropped under containment (ADR-0281).
 
 pub(crate) mod offered;
 #[cfg(wayland_host)]

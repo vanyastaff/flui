@@ -327,8 +327,8 @@ fn replacing_builder_callback_preserves_retirement_failure() {
     assert_eq!(old_drops.get(), 1);
     assert_eq!(
         incoming_drops.get(),
-        0,
-        "incoming capture must be retained after failure"
+        1,
+        "incoming capture is destroyed after the old capture's failure"
     );
 
     let healthy_drops = Rc::new(Cell::new(0));

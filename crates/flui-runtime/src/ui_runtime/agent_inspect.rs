@@ -462,8 +462,8 @@ fn reading_of(mut root: SnapshotNode) -> InspectReading {
 }
 
 /// The first panic of several stages that each ran to the end, or `None` when none panicked. The
-/// others are leaked rather than dropped: a payload's destructor is user code and must not replace
-/// the failure being resumed.
+/// others are discarded under containment (ADR-0281 §2): a payload's destructor is user code and
+/// must not replace the failure being resumed.
 pub(crate) fn first_panic_of(
     stages: impl IntoIterator<Item = Option<Box<dyn std::any::Any + Send>>>,
 ) -> Option<Box<dyn std::any::Any + Send>> {

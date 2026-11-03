@@ -751,7 +751,10 @@ mod retirement_tests {
     }
 
     // A mounted actor contains build failures. The private entry seam isolates
-    // physical destruction, including an incoming unwind and independent tails.
+    // physical destruction, including an incoming unwind and the tail after a
+    // first entry's failing destructor: every capture is destroyed once and
+    // the first failure is the one raised (ADR-0281). Only the first entry's
+    // destructors fail, so no second panic starts during the unwind.
     fn exercise(child_failure: bool, transition_failure: bool, incoming: bool) {
         let vsync = Vsync::new();
         let armed = Rc::new(Cell::new(false));
@@ -762,7 +765,7 @@ mod retirement_tests {
             let transition = Capture {
                 drops: drops[index * 2 + 1].clone(),
                 armed: armed.clone(),
-                fails: transition_failure,
+                fails: transition_failure && index == 0,
                 label: "switcher transition retirement",
             };
             let builder: AnimatedSwitcherTransitionBuilder =
@@ -771,7 +774,7 @@ mod retirement_tests {
                 Capture {
                     drops: drops[index * 2].clone(),
                     armed: armed.clone(),
-                    fails: child_failure,
+                    fails: child_failure && index == 0,
                     label: "switcher child retirement",
                 }
                 .boxed(),
@@ -817,16 +820,7 @@ mod retirement_tests {
             }
             None => assert!(outcome.is_ok()),
         }
-        let expected_drops = if incoming {
-            [0, 0, 0, 0]
-        } else if child_failure {
-            [1, 0, 0, 0]
-        } else if transition_failure {
-            [1, 1, 0, 0]
-        } else {
-            [1, 1, 1, 1]
-        };
-        assert_eq!(drops.each_ref().map(|count| count.get()), expected_drops);
+        assert_eq!(drops.each_ref().map(|count| count.get()), [1, 1, 1, 1]);
         assert!(
             vsync.is_empty(),
             "every driver releases its seat, including the tail"
@@ -849,12 +843,8 @@ mod retirement_tests {
         exercise(false, true, false);
         healthy();
     }
-    fn competing() {
-        exercise(true, true, false);
-        healthy();
-    }
     fn incoming() {
-        exercise(true, true, true);
+        exercise(false, false, true);
         healthy();
     }
 
@@ -864,7 +854,6 @@ mod retirement_tests {
                 ("healthy", healthy),
                 ("child_failure", child_failure),
                 ("transition_failure", transition_failure),
-                ("competing", competing),
                 ("incoming", incoming),
             ]);
         }

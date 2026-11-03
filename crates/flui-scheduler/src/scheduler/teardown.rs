@@ -55,13 +55,9 @@ impl Retirement<'_> {
     }
 
     fn retire<T>(&mut self, value: T) {
-        if self.preserve_failure
-            || self.first.is_some()
-            || self.signal.get()
-            || std::thread::panicking()
-        {
-            std::mem::forget(value);
-        } else if let Err(payload) = catch_unwind(AssertUnwindSafe(|| drop(value))) {
+        // Contained after any earlier failure too: a destructor panic competes
+        // and the first failure stays (ADR-0281).
+        if let Err(payload) = catch_unwind(AssertUnwindSafe(|| drop(value))) {
             self.observe(payload);
         }
     }
@@ -98,11 +94,8 @@ impl Drop for SchedulerInner {
         let tasks = self.task_queue.detach_for_retirement();
         let hook = self.wake.on_frame_scheduled.lock().take();
         let waiters = self.frame.completion_waiters.get_mut().drain();
-        let mut delivery = crate::completion_wake::WakeBatch::with_failure_signal(
-            "scheduler teardown",
-            incoming,
-            signal,
-        );
+        let mut delivery =
+            crate::completion_wake::WakeBatch::with_failure_signal("scheduler teardown", signal);
 
         for notifier in waiters {
             let Some(state) = notifier.state.upgrade() else {
@@ -155,7 +148,7 @@ impl Drop for SchedulerInner {
             } else {
                 // Ordinary Drop cannot re-raise into a potentially unwinding
                 // owner. Explicit execution release receives the failure above.
-                crate::completion_wake::retain_reported(payload, "scheduler teardown");
+                crate::completion_wake::discard_reported(payload, "scheduler teardown");
             }
         }
     }

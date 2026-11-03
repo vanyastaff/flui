@@ -155,16 +155,13 @@ impl LifecycleDelivery {
                     );
                 }
                 // A callback may remove its last registered owner while running.
-                // Preserve an earlier failure before retiring its opaque captures.
-                if first.is_some() {
-                    std::mem::forget(callback);
-                } else {
-                    preserve_first_failure(
-                        &custody,
-                        &mut first,
-                        catch_unwind(AssertUnwindSafe(|| drop(callback))),
-                    );
-                }
+                // Its captures retire contained; an earlier failure stays first
+                // (ADR-0281).
+                preserve_first_failure(
+                    &custody,
+                    &mut first,
+                    catch_unwind(AssertUnwindSafe(|| drop(callback))),
+                );
             }
         }
         if let Some(first) = first {

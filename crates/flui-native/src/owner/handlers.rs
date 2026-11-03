@@ -300,9 +300,9 @@ mod tests {
                 assert!(outcome.is_ok());
             }
             assert_eq!(invoked.load(Ordering::SeqCst), 1);
-            // `call` still forgets the displaced handler after a failed call
-            // (a crate-local retention, ADR-0127 §2).
-            assert_eq!(dropped.load(Ordering::SeqCst), 0);
+            // `call` drops the displaced handler after a failed call too,
+            // contained (ADR-0281).
+            assert_eq!(dropped.load(Ordering::SeqCst), 1);
         }
     }
 
@@ -326,11 +326,11 @@ mod tests {
                 crate::owner::panic_boundary::retain_off_owner_resource(
                     self.resource.take().expect("resource"),
                     || {
+                        // One failing payload field: a second one whose
+                        // destructor panics while the first unwinds aborts,
+                        // as in std (ADR-0281 §1).
                         if fail_report {
-                            std::panic::panic_any((
-                                Resource(Arc::clone(&report_drops)),
-                                Resource(report_drops),
-                            ));
+                            std::panic::panic_any(Resource(report_drops));
                         }
                     },
                 );
@@ -350,8 +350,13 @@ mod tests {
             assert!(!already_unwinding, "original teardown failure");
             drop(guard);
         }));
+        // The resource stays off its owner thread; the report's payload is
+        // discarded under containment (ADR-0281 §2).
         assert_eq!(resource_drops.load(Ordering::SeqCst), 0);
-        assert_eq!(report_drops.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            report_drops.load(Ordering::SeqCst),
+            usize::from(fail_report)
+        );
         if already_unwinding {
             assert_eq!(
                 *result

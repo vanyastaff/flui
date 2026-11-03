@@ -16,7 +16,6 @@ use flui_painting::text_boundaries::{
 use flui_foundation::ListenerId;
 use flui_foundation::notifier::{ChangeNotifier, Listenable, ListenerCallback};
 use flui_interaction::text_input::{EditGeneration, committed_text};
-use flui_platform::text_store::RetainOnFailure;
 
 // ============================================================================
 // ControllerInner
@@ -337,15 +336,6 @@ impl std::fmt::Debug for TextEditingController {
 impl Default for TextEditingController {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-impl RetainOnFailure for TextEditingController {
-    /// Forgotten whole: its listener list holds owner closures, and other
-    /// handles to it (`listenable`) hide whether this clone is their last
-    /// owner (ADR-0127).
-    fn retain(self) {
-        std::mem::forget(self);
     }
 }
 

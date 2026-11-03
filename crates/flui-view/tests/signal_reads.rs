@@ -344,8 +344,8 @@ pub(crate) fn owner_release_commits_the_batch_before_the_first_destructor_failur
     );
     assert_eq!(
         (drops.get(), tail_drops.get()),
-        (1, 0),
-        "later opaque retirement is retained"
+        (1, 1),
+        "the later value is destroyed under containment; the first failure is raised"
     );
     assert!(matches!(
         first.peek(&graph, |_| ()),
@@ -468,8 +468,8 @@ pub(crate) fn owner_release_refuses_signals_its_destructors_reintroduce() {
     );
     assert_eq!(
         attempts.get(),
-        1,
-        "the release ends after one pass; the refused producer is retained"
+        2,
+        "the release ends after one pass; the refused producer is destroyed once and its own refusal is bounded"
     );
     assert_eq!(graph.live_slot_count(), 0);
     let next = graph.signal(3u32);
@@ -719,8 +719,8 @@ pub(crate) fn a_partially_committed_panicking_update_rebuilds_its_mounted_reader
 // A handle of the wrong type
 // ============================================================================
 
-// Released loan values may have aggregate drop glue that aborts the process.
-// Exercise those negative variants in children, keeping the family table alive.
+// Released loan values run user destructors after a caught failure; each case
+// runs in a child so a regression that aborts fails one row, not the table.
 const LOAN_CHILD_CASE: &str = "FLUI_SIGNAL_RELEASED_LOAN_CASE";
 
 fn released_loan_child(case: &str) {
@@ -740,19 +740,19 @@ fn released_loan_child(case: &str) {
     );
 }
 
-pub(crate) fn released_update_retains_aggregate_before_resuming_failure() {
+pub(crate) fn released_update_destroys_its_value_before_resuming_failure() {
     released_loan_child("update aggregate");
 }
 
-pub(crate) fn released_read_retains_aggregate_before_resuming_failure() {
+pub(crate) fn released_read_destroys_its_value_before_resuming_failure() {
     released_loan_child("read aggregate");
 }
 
-pub(crate) fn released_update_retains_nested_release_obligations() {
+pub(crate) fn released_update_runs_nested_release_obligations() {
     released_loan_child("update nested");
 }
 
-pub(crate) fn released_read_retains_nested_release_obligations() {
+pub(crate) fn released_read_runs_nested_release_obligations() {
     released_loan_child("read nested");
 }
 
@@ -773,11 +773,10 @@ pub(crate) fn run_released_loan_child() -> bool {
         return false;
     };
     if case == "release during unwind" {
-        struct Bomb(Rc<Cell<usize>>);
-        impl Drop for Bomb {
+        struct Counted(Rc<Cell<usize>>);
+        impl Drop for Counted {
             fn drop(&mut self) {
                 self.0.set(self.0.get() + 1);
-                panic!("secondary release destructor");
             }
         }
         struct ReleaseOnUnwind(flui_view::Reactive, flui_view::SignalSlot);
@@ -790,7 +789,7 @@ pub(crate) fn run_released_loan_child() -> bool {
         let graph = owner.signal_graph().clone();
         let writer = owner.writer_source();
         let drops = Rc::new(Cell::new(0));
-        let signal = graph.signal(Bomb(Rc::clone(&drops)));
+        let signal = graph.signal(Counted(Rc::clone(&drops)));
         let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let _release = ReleaseOnUnwind(graph.clone(), signal.slot());
             panic!("primary release failure");
@@ -800,7 +799,11 @@ pub(crate) fn run_released_loan_child() -> bool {
             flui_foundation::panic::payload_text(&*failure),
             Some("primary release failure")
         );
-        assert_eq!(drops.get(), 0, "opaque value retained during unwind");
+        assert_eq!(
+            drops.get(),
+            1,
+            "the released value is destroyed during the unwind"
+        );
         assert_eq!(graph.live_slot_count(), 0);
         let next = graph.signal(3u32);
         writer
@@ -849,11 +852,7 @@ pub(crate) fn run_released_loan_child() -> bool {
         slot: next.slot(),
         drops: Rc::clone(&nested_drops),
     });
-    let signal = graph.signal((
-        Bomb(Rc::clone(&drops), true),
-        Bomb(Rc::clone(&drops), callback_fails),
-        obligation,
-    ));
+    let signal = graph.signal((Bomb(Rc::clone(&drops), true), obligation));
     let capture_drops = Rc::new(Cell::new(0));
     let capture = Bomb(Rc::clone(&capture_drops), true);
     let callback_graph = graph.clone();
@@ -883,20 +882,30 @@ pub(crate) fn run_released_loan_child() -> bool {
             "released value destructor"
         })
     );
-    assert_eq!(drops.get(), usize::from(!callback_fails));
+    assert_eq!(drops.get(), 1, "the released value is destroyed");
     assert_eq!(
         capture_drops.get(),
-        0,
-        "capture destruction stays secondary"
+        1,
+        "the callback's capture is destroyed under containment"
     );
-    assert_eq!(nested_drops.get(), 0, "nested obligations remain retained");
+    assert_eq!(
+        nested_drops.get(),
+        usize::from(nested),
+        "a nested release obligation runs with its value"
+    );
     assert!(matches!(
         signal.peek(&graph, |_| ()),
         Err(flui_view::SignalError::Released { .. })
     ));
+    assert_eq!(
+        next.peek(&graph, |value| *value).is_ok(),
+        !nested,
+        "a nested obligation released its slot"
+    );
+    let fresh = graph.signal(10u32);
     writer
-        .write(|cx| next.update(cx, |value| *value += 1))
+        .write(|cx| fresh.update(cx, |value| *value += 1))
         .expect("next live update");
-    assert_eq!(next.peek(&graph, |value| *value), Ok(11));
+    assert_eq!(fresh.peek(&graph, |value| *value), Ok(11));
     true
 }

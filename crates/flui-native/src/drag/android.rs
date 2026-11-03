@@ -874,7 +874,7 @@ fn serve(
         provider(RepresentationIndex(index)).ok()
     }))
     .unwrap_or_else(|payload| {
-        std::mem::forget(payload);
+        flui_foundation::panic::discard_payload(payload);
         contain_owner_callback(|| {
             tracing::error!(target: "flui_native::android", "a drag's provider panicked");
         });

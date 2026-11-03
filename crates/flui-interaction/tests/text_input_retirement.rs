@@ -939,6 +939,22 @@ fn text_input_retirement_allows_reentry_and_preserves_recovery() {
             "pull host and reentrant retirement",
             pull_host_hears_each_focus_change_when_a_capture_detaches_on_retirement,
         ),
+        (
+            "callback after a failed store",
+            callback_after_a_failed_store_is_destroyed,
+        ),
+        (
+            "client rejected by a closing store",
+            client_rejected_by_a_closing_store_is_destroyed_after_its_failure,
+        ),
+        (
+            "owner drop during unwind",
+            owner_dropped_during_an_unwind_destroys_its_store,
+        ),
+        (
+            "preserving close",
+            preserving_close_destroys_the_store_and_releases_the_platform,
+        ),
     ];
     let failed = RefCell::new(Vec::new());
     for &(name, case) in cases {
@@ -954,33 +970,25 @@ fn text_input_retirement_allows_reentry_and_preserves_recovery() {
     );
 }
 
-/// One field of a store whose destruction panics twice: dropping it at all
-/// after a failure, or during an unwind, aborts the process.
-struct AggregateField(Arc<AtomicUsize>);
+/// A capture that counts its destruction.
+struct Counted(Arc<AtomicUsize>);
 
-impl Drop for AggregateField {
+impl Drop for Counted {
     fn drop(&mut self) {
         self.0.fetch_add(1, Ordering::Relaxed);
-        panic!("aggregate store field");
     }
 }
 
-fn aggregate_store(drops: &Arc<AtomicUsize>) -> Rc<dyn TextStore> {
+fn counted_store(drops: &Arc<AtomicUsize>) -> Rc<dyn TextStore> {
     Rc::new(DroppingStore {
         inner: InMemoryTextStore::new(""),
-        _probe: (
-            AggregateField(Arc::clone(drops)),
-            AggregateField(Arc::clone(drops)),
-        ),
+        _probe: Counted(Arc::clone(drops)),
     })
 }
 
-/// A session callback whose capture double-panics when destroyed.
-fn aggregate_callback(client: TextInputClient, drops: &Arc<AtomicUsize>) -> TextInputClient {
-    let capture = (
-        AggregateField(Arc::clone(drops)),
-        AggregateField(Arc::clone(drops)),
-    );
+/// A session callback whose capture counts its destruction.
+fn counted_callback(client: TextInputClient, drops: &Arc<AtomicUsize>) -> TextInputClient {
+    let capture = Counted(Arc::clone(drops));
     client.on_session_start(move || {
         let _keep_alive = &capture;
     })
@@ -993,12 +1001,14 @@ fn panicking_store(message: &'static str) -> Rc<dyn TextStore> {
     })
 }
 
-fn callback_after_a_failed_store_is_retained() {
+/// A store whose destructor fails first: the callback is still destroyed,
+/// the store's failure propagates, and the owner attaches the next client.
+fn callback_after_a_failed_store_is_destroyed() {
     let (owner, platform) = owner();
     let handle = owner.handle();
     let drops = Arc::new(AtomicUsize::new(0));
     let token = handle
-        .attach(aggregate_callback(
+        .attach(counted_callback(
             TextInputClient::new(panicking_store("store retirement")),
             &drops,
         ))
@@ -1010,7 +1020,11 @@ fn callback_after_a_failed_store_is_retained() {
         Some("store retirement")
     );
     flui_foundation::panic::discard_payload(failure);
-    assert_eq!(drops.load(Ordering::Relaxed), 0, "the callback is retained");
+    assert_eq!(
+        drops.load(Ordering::Relaxed),
+        1,
+        "the callback is destroyed"
+    );
     let next = handle.attach(client()).expect("recovery attach");
     assert!(owner.is_attached(next));
     assert_eq!(*platform.allowed.lock(), [true, false, true]);
@@ -1048,7 +1062,7 @@ impl TextStore for ProbedClosingStore {
     }
 }
 
-fn client_rejected_by_a_closing_store_is_retained_after_its_failure() {
+fn client_rejected_by_a_closing_store_is_destroyed_after_its_failure() {
     let (owner, platform) = owner();
     let handle = owner.handle();
     let drops = Arc::new(AtomicUsize::new(0));
@@ -1057,7 +1071,7 @@ fn client_rejected_by_a_closing_store_is_retained_after_its_failure() {
         owner: Rc::downgrade(&owner),
         _probe: OnDrop(Box::new(|| panic!("rejected store retirement"))),
     });
-    let rejected = aggregate_callback(TextInputClient::new(store), &drops);
+    let rejected = counted_callback(TextInputClient::new(store), &drops);
     let failure = catch_unwind(AssertUnwindSafe(|| handle.attach(rejected)))
         .expect_err("the rejected store's failure propagates");
     assert_eq!(
@@ -1065,18 +1079,22 @@ fn client_rejected_by_a_closing_store_is_retained_after_its_failure() {
         Some("rejected store retirement")
     );
     flui_foundation::panic::discard_payload(failure);
-    assert_eq!(drops.load(Ordering::Relaxed), 0, "the callback is retained");
+    assert_eq!(
+        drops.load(Ordering::Relaxed),
+        1,
+        "the callback is destroyed"
+    );
     assert_eq!(handle.ensure_open(), Err(TextInputError::Closed));
     assert_eq!(handle.attach(client()), Err(TextInputError::Closed));
     assert!(platform.allowed.lock().is_empty());
 }
 
-fn owner_dropped_during_an_unwind_retains_its_store() {
+fn owner_dropped_during_an_unwind_destroys_its_store() {
     let (owner, platform) = owner();
     let handle = owner.handle();
     let drops = Arc::new(AtomicUsize::new(0));
     handle
-        .attach(TextInputClient::new(aggregate_store(&drops)))
+        .attach(TextInputClient::new(counted_store(&drops)))
         .expect("initial attach");
     let failure = catch_unwind(AssertUnwindSafe(move || {
         let _owner = owner;
@@ -1088,24 +1106,24 @@ fn owner_dropped_during_an_unwind_retains_its_store() {
         Some("outer failure")
     );
     flui_foundation::panic::discard_payload(failure);
-    assert_eq!(drops.load(Ordering::Relaxed), 0, "the store is retained");
+    assert_eq!(drops.load(Ordering::Relaxed), 1, "the store is destroyed");
     assert_eq!(handle.ensure_open(), Err(TextInputError::OwnerGone));
     assert_eq!(*platform.allowed.lock(), [true, false]);
 }
 
-/// A preserving close retains the user's store but releases the platform
+/// A preserving close destroys the user's store and releases the platform
 /// capability, a framework-owned handle that can keep the native window alive.
-fn preserving_close_releases_the_platform() {
+fn preserving_close_destroys_the_store_and_releases_the_platform() {
     use flui_interaction::__runtime::{CloseMode, close_text_input};
 
     let (owner, platform) = owner();
     let handle = owner.handle();
     let drops = Arc::new(AtomicUsize::new(0));
     handle
-        .attach(TextInputClient::new(aggregate_store(&drops)))
+        .attach(TextInputClient::new(counted_store(&drops)))
         .expect("initial attach");
     close_text_input(&owner, CloseMode::PreservingFailure);
-    assert_eq!(drops.load(Ordering::Relaxed), 0, "the store is retained");
+    assert_eq!(drops.load(Ordering::Relaxed), 1, "the store is destroyed");
     assert_eq!(*platform.allowed.lock(), [true, false]);
     assert_eq!(
         Arc::strong_count(&platform),
@@ -1114,70 +1132,4 @@ fn preserving_close_releases_the_platform() {
     );
     assert_eq!(handle.ensure_open(), Err(TextInputError::Closed));
     drop(owner);
-}
-
-/// Selects the single case a child process of the test below runs.
-const RETENTION_CHILD: &str = "FLUI_TEXT_INPUT_RETENTION_CHILD";
-/// A child that ran its case to completion exits with this status, so a
-/// filter that matched no test (status 0) does not pass for one.
-const CHILD_COMPLETED: i32 = 86;
-
-#[test]
-fn text_input_owners_are_retained_after_a_failure_and_during_unwind() {
-    let cases: &[(&str, fn())] = &[
-        (
-            "callback after a failed store",
-            callback_after_a_failed_store_is_retained,
-        ),
-        (
-            "client rejected by a closing store",
-            client_rejected_by_a_closing_store_is_retained_after_its_failure,
-        ),
-        (
-            "owner drop during unwind",
-            owner_dropped_during_an_unwind_retains_its_store,
-        ),
-        (
-            "preserving close releases the platform",
-            preserving_close_releases_the_platform,
-        ),
-    ];
-    if let Ok(selected) = std::env::var(RETENTION_CHILD) {
-        let (_, case) = cases
-            .iter()
-            .find(|(name, _)| *name == selected)
-            .expect("a known retention case");
-        case();
-        std::process::exit(CHILD_COMPLETED);
-    }
-    // Without retention each case aborts, so each runs in its own process.
-    let mut failures = Vec::new();
-    for &(name, _) in cases {
-        let output = std::process::Command::new(std::env::current_exe().expect("test binary"))
-            .args([
-                "--exact",
-                "text_input_retirement::text_input_owners_are_retained_after_a_failure_and_during_unwind",
-                "--nocapture",
-            ])
-            .env(RETENTION_CHILD, name)
-            .env("RUST_BACKTRACE", "0")
-            .output()
-            .expect("run retention child");
-        if output.status.code() != Some(CHILD_COMPLETED) {
-            failures.push(format!(
-                "{name}: {}
-{}",
-                output.status,
-                String::from_utf8_lossy(&output.stderr)
-            ));
-        }
-    }
-    assert!(
-        failures.is_empty(),
-        "{}",
-        failures.join(
-            "
-"
-        )
-    );
 }

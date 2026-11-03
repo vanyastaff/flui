@@ -219,7 +219,7 @@ fn retiring_owner_cancels_the_active_local_tail() {
     }
 }
 
-fn retirement_orders_healthy_captures_and_retains_tail_after_failure() {
+fn retirement_orders_captures_and_destroys_tail_after_failure() {
     struct Capture {
         name: &'static str,
         log: Log,
@@ -279,15 +279,11 @@ fn retirement_orders_healthy_captures_and_retains_tail_after_failure() {
         owner
             .drive_frame(Instant::now(), far_deadline(), || {}, || {})
             .expect("live owner frame");
-        let expected = if failures[0] {
-            vec!["older"]
-        } else {
-            vec!["older", "middle", "newer"]
-        };
+        let expected = vec!["older", "middle", "newer"];
         assert_eq!(
             log.get(),
             expected,
-            "healthy captures retire in registration order; a failure retains the unretired tail"
+            "captures retire in registration order; a failure leaves none behind"
         );
         assert!(owner.retire().is_none());
         assert!(lane.schedule(|_| {}).is_err());
@@ -702,7 +698,7 @@ fn reentrant_partial_geometry_blocks_an_already_selected_tail() {
     );
 }
 
-fn preserving_scope_close_retains_captures_and_keeps_siblings_deliverable() {
+fn preserving_scope_close_destroys_captures_and_keeps_siblings_deliverable() {
     struct Capture {
         log: Log,
         fail: bool,
@@ -710,7 +706,7 @@ fn preserving_scope_close_retains_captures_and_keeps_siblings_deliverable() {
     impl Drop for Capture {
         fn drop(&mut self) {
             self.log.push("capture dropped");
-            assert!(!self.fail, "capture retirement must be retained");
+            assert!(!self.fail, "capture destruction failure");
         }
     }
     for capture_failure in [false, true] {
@@ -728,14 +724,14 @@ fn preserving_scope_close_retains_captures_and_keeps_siblings_deliverable() {
             .expect("a callback accepted");
         let first_failure = catch_unwind(AssertUnwindSafe(|| panic!("prior owner failure")))
             .expect_err("prior owner failed");
-        // Caught failure makes thread::panicking false. Explicit preservation
-        // must nevertheless keep opaque callback captures out of destruction.
+        // The owner already holds a failure: preserving close destroys the
+        // captures under containment and discards their own panic (ADR-0281).
         a.withdraw();
         a.close_preserving();
         assert!(a.post_frame_handle().schedule(|_| {}).is_err());
         assert!(a.close().is_none());
         drop(a);
-        assert_eq!(log.get(), [] as [&str; 0]);
+        assert_eq!(log.get(), ["capture dropped"]);
         b.enter_segment().expect("b starts");
         let sibling = log.clone();
         b.post_frame_handle()
@@ -746,7 +742,7 @@ fn preserving_scope_close_retains_captures_and_keeps_siblings_deliverable() {
             .drive_frame(Instant::now(), far_deadline(), || {}, || {})
             .expect("live owner frame");
         assert!(owner.retire().is_none());
-        assert_eq!(log.get(), ["healthy sibling"]);
+        assert_eq!(log.get(), ["capture dropped", "healthy sibling"]);
         assert_eq!(
             flui_foundation::panic::payload_text(first_failure.as_ref()),
             Some("prior owner failure")
@@ -832,15 +828,16 @@ fn withdrawal_defers_capture_retirement_until_other_authority_is_closed() {
         owner
             .drive_frame(Instant::now(), far_deadline(), || {}, || {})
             .expect("live owner frame");
-        let mut expected = vec!["other authority retired", "first capture"];
-        if !failures[0] {
-            expected.push("second capture");
-        }
-        expected.push("sibling healthy");
+        let expected = vec![
+            "other authority retired",
+            "first capture",
+            "second capture",
+            "sibling healthy",
+        ];
         assert_eq!(
             log.get(),
             expected,
-            "a first failure retains the opaque capture tail"
+            "captures behind a first failure are destroyed too"
         );
     }
 }
@@ -915,33 +912,22 @@ fn closing_a_scope_retires_its_active_tail_without_losing_siblings() {
                     "second retirement"
                 })
             );
-            assert_eq!(
-                log.get(),
-                if failures[0] {
-                    vec!["first retirement"]
-                } else {
-                    vec!["first retirement", "second retirement"]
-                }
-            );
+            assert_eq!(log.get(), ["first retirement", "second retirement"]);
         }
         owner
             .drive_frame(Instant::now(), far_deadline(), || {}, || {})
             .expect("live owner frame");
-        let mut expected = vec!["first retirement"];
-        if !failures[0] {
-            expected.push("second retirement");
-        }
-        expected.push("b survives");
+        let expected = vec!["first retirement", "second retirement", "b survives"];
         assert_eq!(
             log.get(),
             expected,
-            "healthy sibling debt survives retained failed scope tail"
+            "healthy sibling debt survives a failed scope tail"
         );
         assert!(a.post_frame_handle().schedule(|_| {}).is_err());
     }
 }
 
-fn scope_retirement_inherits_live_owner_failure_custody() {
+fn scope_retirement_after_live_owner_failure_destroys_captures() {
     use flui_scheduler::{OwnerFrame, PostFrameScheduleError};
     use std::cell::Cell;
     use std::rc::{Rc, Weak};
@@ -1033,8 +1019,8 @@ fn scope_retirement_inherits_live_owner_failure_custody() {
             }
             assert_eq!(
                 drops.get(),
-                0,
-                "scope retirement retains opaque tail after a caught owner failure, mode {mode}"
+                1,
+                "scope retirement destroys its tail after a caught owner failure, mode {mode}"
             );
         };
         if mode == 3 {
@@ -1052,8 +1038,8 @@ fn scope_retirement_inherits_live_owner_failure_custody() {
         );
         assert_eq!(
             drops.get(),
-            1,
-            "a later healthy refusal has independent custody"
+            2,
+            "a later healthy refusal has its own destruction"
         );
         let log = Log::default();
         b.enter_segment().expect("sibling starts");
@@ -1075,12 +1061,12 @@ fn post_frame_ordering_matrix() {
         "post_frame_ordering_matrix",
         &[
             (
-                "scope_retirement_inherits_live_owner_failure_custody",
-                scope_retirement_inherits_live_owner_failure_custody as fn(),
+                "scope_retirement_after_live_owner_failure_destroys_captures",
+                scope_retirement_after_live_owner_failure_destroys_captures as fn(),
             ),
             (
-                "preserving_scope_close_retains_captures_and_keeps_siblings_deliverable",
-                preserving_scope_close_retains_captures_and_keeps_siblings_deliverable as fn(),
+                "preserving_scope_close_destroys_captures_and_keeps_siblings_deliverable",
+                preserving_scope_close_destroys_captures_and_keeps_siblings_deliverable as fn(),
             ),
             (
                 "withdrawal_defers_capture_retirement_until_other_authority_is_closed",
@@ -1115,8 +1101,8 @@ fn post_frame_ordering_matrix() {
                 closing_a_scope_retires_its_active_tail_without_losing_siblings as fn(),
             ),
             (
-                "retirement_orders_healthy_captures_and_retains_tail_after_failure",
-                retirement_orders_healthy_captures_and_retains_tail_after_failure as fn(),
+                "retirement_orders_captures_and_destroys_tail_after_failure",
+                retirement_orders_captures_and_destroys_tail_after_failure as fn(),
             ),
             (
                 "retiring_owner_cancels_the_active_local_tail",

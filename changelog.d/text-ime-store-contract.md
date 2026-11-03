@@ -24,9 +24,9 @@
   on the document's text (`open(text, composition)`), records each edit with the text before
   it and the inserted text (`replace(text, edit, inserted)`), and reads the text it is given
   for `origin(text)` and `committed(text)`.
-- **`text_store::OwnerCalls` and `RetainOnFailure`** (`flui-platform`): the one
+- **`text_store::OwnerCalls`** (`flui-platform`): the one
   containment a store, its arbiter and its presentation run owner code in: each call contained,
-  the first failure in time authoritative, snapshots retired or retained (ADR-0127).
+  the first failure in time authoritative, snapshots dropped under containment (ADR-0281).
   `OwnerCalls::parking_gate` names the gate a settle scope parks in, so a store's flush after
   its grants runs behind the gate the last grant settled under.
 - **`LockArbiter::owner_gate`** (`flui-platform`): the gate an owner installed, which a

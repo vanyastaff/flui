@@ -80,6 +80,22 @@ pub(crate) const fn system_frame_or_none(decorated: bool) -> flui_platform::Wind
     }
 }
 
+/// The frame a window reports whose window system says only whether its own
+/// title bar is on (`titled`), on a host that takes a title bar of the
+/// application's: one the application asked to draw reads back as it was asked
+/// for while the window keeps its title bar, the others as
+/// [`system_frame_or_none`] says.
+#[cfg(any(windows, target_os = "macos"))]
+pub(crate) const fn reported_frame(
+    titled: bool,
+    asked: flui_platform::WindowFrame,
+) -> flui_platform::WindowFrame {
+    match asked {
+        flui_platform::WindowFrame::AppTitleBar(_) if titled => asked,
+        _ => system_frame_or_none(titled),
+    }
+}
+
 /// `size` held to `constraints` the way a resize by the user is: raised to the
 /// minimum, then lowered to the maximum, each axis on its own, so a maximum
 /// below the minimum wins. A window system that applies a size as given

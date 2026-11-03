@@ -937,8 +937,8 @@ fn binding_input_contract_matrix() {
             hover_healthy_metadata_retirement,
         ),
         (
-            "hover_callback_retains_metadata",
-            hover_callback_failure_retains_metadata,
+            "hover_callback_destroys_metadata",
+            hover_callback_failure_destroys_metadata,
         ),
         (
             "hover_callback_first_before_metadata_drop",
@@ -1099,7 +1099,7 @@ fn binding_input_contract_matrix() {
         ),
         (
             "native_claim_prior_observation_failure",
-            native_claim_prior_observation_failure_preserves_captures,
+            native_claim_prior_observation_failure_destroys_captures,
         ),
         (
             "native_staged_owner_cleanup",
@@ -1135,7 +1135,7 @@ fn binding_input_contract_matrix() {
         ),
         (
             "native_cancellation_prior_capture_failure",
-            native_cancellation_retains_captures_after_prior_capture_failure,
+            native_cancellation_destroys_captures_after_prior_capture_failure,
         ),
         ("native_focus_loss", native_focus_loss_releases_lease),
         (
@@ -1321,8 +1321,8 @@ fn assert_hover_path_retirement(callback_fails: bool, failing_metadata: usize) {
             );
             assert_eq!(
                 drops.load(Ordering::SeqCst),
-                0,
-                "failed delivery retains last-owner opaque metadata before any destructor runs"
+                entries,
+                "failed delivery destroys last-owner opaque metadata after the callback failure"
             );
         } else if failing_metadata != 0 {
             let first = outcome.expect_err("metadata retirement failed after healthy delivery");
@@ -1332,8 +1332,8 @@ fn assert_hover_path_retirement(callback_fails: bool, failing_metadata: usize) {
             );
             assert_eq!(
                 drops.load(Ordering::SeqCst),
-                1,
-                "the first failed metadata retirement retains later entries"
+                entries,
+                "the first failed metadata retirement still destroys later entries"
             );
         } else {
             assert_eq!(outcome.expect("healthy hover delivery"), 2);
@@ -1374,7 +1374,7 @@ fn assert_hover_path_retirement(callback_fails: bool, failing_metadata: usize) {
 fn hover_healthy_metadata_retirement() {
     assert_hover_path_retirement(false, 0);
 }
-fn hover_callback_failure_retains_metadata() {
+fn hover_callback_failure_destroys_metadata() {
     assert_hover_path_retirement(true, 0);
 }
 fn hover_callback_failure_stays_first_before_metadata_drop() {
@@ -1509,8 +1509,8 @@ fn assert_queued_hover_retirement(mismatch: bool, failing_metadata: usize) {
             );
             assert_eq!(
                 drops.load(Ordering::SeqCst),
-                1,
-                "later opaque metadata is retained after the first failure"
+                2,
+                "later opaque metadata is destroyed after the first failure"
             );
         }
         assert_eq!(
@@ -3436,7 +3436,7 @@ fn native_staged_retirement_preserves_delivery_and_failure() {
     }
 }
 
-fn native_cancellation_retains_captures_after_prior_capture_failure() {
+fn native_cancellation_destroys_captures_after_prior_capture_failure() {
     use flui_foundation::geometry::{Offset, Point};
     use flui_interaction::events::make_down_event;
     use flui_interaction::pointer::EventPropagation;
@@ -3541,8 +3541,8 @@ fn native_cancellation_retains_captures_after_prior_capture_failure() {
                 );
                 assert_eq!(
                     drops.get(),
-                    usize::from(!fail_capture),
-                    "the first caught failure controls subsequent opaque native capture retirement"
+                    1,
+                    "the native capture is destroyed once, after any prior capture failure"
                 );
                 fail.set(false);
                 cancel();
@@ -3556,7 +3556,7 @@ fn native_cancellation_retains_captures_after_prior_capture_failure() {
                 );
                 assert_eq!(
                     drops.get(),
-                    usize::from(!fail_capture) + 1,
+                    2,
                     "healthy recovery retires only its fresh capture"
                 );
             });
@@ -3564,7 +3564,7 @@ fn native_cancellation_retains_captures_after_prior_capture_failure() {
     }
 }
 
-fn native_claim_prior_observation_failure_preserves_captures() {
+fn native_claim_prior_observation_failure_destroys_captures() {
     use flui_foundation::geometry::Point;
     use flui_interaction::gesture::{PanZoomDisposition, ScaleGestureRecognizer};
     use flui_interaction::pointer::EventPropagation;
@@ -3698,8 +3698,8 @@ fn native_claim_prior_observation_failure_preserves_captures() {
             );
             assert_eq!(
                 drops.get(),
-                usize::from(!observer_failure),
-                "opaque losing captures inherit the earlier observation failure"
+                1,
+                "opaque losing captures are destroyed after the earlier observation failure"
             );
             binding.handle_pointer_event(&update(), |_| HitTestResult::new());
             binding.handle_pointer_event(&packet(PanZoomPhase::End), |_| HitTestResult::new());
@@ -3713,7 +3713,7 @@ fn native_claim_prior_observation_failure_preserves_captures() {
             );
             assert_eq!(
                 drops.get(),
-                usize::from(!observer_failure) + 1,
+                2,
                 "a fresh healthy claim destroys its capture normally"
             );
         });
@@ -3997,64 +3997,112 @@ fn native_close_preserves_retirement_ownership() {
         let calls = Rc::new(Cell::new(0));
         lane.enter(|| {
             let (first, tail, called) = (first_drops.clone(), tail_drops.clone(), calls.clone());
-            let target = handle.register_pan_zoom(move |dispatch| {
-                if dispatch.local.phase == PanZoomPhase::Start {
-                    let first = Capture { drops: first.clone() };
-                    let called = called.clone();
-                    assert!(dispatch.on_retirement(move || {
-                        let _keep = &first;
-                        called.set(called.get() + 1);
-                        assert!(!callback_failure, "native close body failure");
-                    }));
-                    let tail = Capture { drops: tail.clone() };
-                    assert!(dispatch.on_retirement(move || {
-                        let _keep = &tail;
-                        assert!(!tail_failure, "native close tail failure");
-                    }));
-                }
-                EventPropagation::Continue
-            }).expect("staged native target");
+            let target = handle
+                .register_pan_zoom(move |dispatch| {
+                    if dispatch.local.phase == PanZoomPhase::Start {
+                        let first = Capture {
+                            drops: first.clone(),
+                        };
+                        let called = called.clone();
+                        assert!(dispatch.on_retirement(move || {
+                            let _keep = &first;
+                            called.set(called.get() + 1);
+                            assert!(!callback_failure, "native close body failure");
+                        }));
+                        let tail = Capture {
+                            drops: tail.clone(),
+                        };
+                        assert!(dispatch.on_retirement(move || {
+                            let _keep = &tail;
+                            assert!(!tail_failure, "native close tail failure");
+                        }));
+                    }
+                    EventPropagation::Continue
+                })
+                .expect("staged native target");
             let mut path = HitTestResult::new();
             path.add(HitTestEntry::new(RenderId::new(2)).pan_zoom_target(target));
-            binding.handle_pointer_event(&PointerEvent::PanZoom(PanZoomEvent::new(
-                PointerInfo::new(PointerId::try_from(840_u64).expect("source"), PointerKind::Trackpad),
-                EventTime::from_nanos(0), PointerPosition::try_new(Point::ZERO).expect("position"), PanZoomPhase::Start,
-            )), |_| path.clone());
+            binding.handle_pointer_event(
+                &PointerEvent::PanZoom(PanZoomEvent::new(
+                    PointerInfo::new(
+                        PointerId::try_from(840_u64).expect("source"),
+                        PointerKind::Trackpad,
+                    ),
+                    EventTime::from_nanos(0),
+                    PointerPosition::try_new(Point::ZERO).expect("position"),
+                    PanZoomPhase::Start,
+                )),
+                |_| path.clone(),
+            );
             if prior_failure {
                 let tokens = Rc::new(RefCell::new(Vec::new()));
                 let held = tokens.clone();
-                let pointer = handle.register_pointer(move |dispatch| {
-                    match dispatch.local {
-                        PointerEvent::Down(_) => held.borrow_mut().push(dispatch.capture().expect("capture")),
+                let pointer = handle
+                    .register_pointer(move |dispatch| match dispatch.local {
+                        PointerEvent::Down(_) => {
+                            held.borrow_mut().push(dispatch.capture().expect("capture"));
+                        }
                         PointerEvent::Cancel(_) => panic!("pre-native close failure"),
                         _ => {}
-                    }
-                }).expect("captured pointer");
+                    })
+                    .expect("captured pointer");
                 let mut contact_path = HitTestResult::new();
                 contact_path.add(hit_entry(pointer));
-                binding.handle_pointer_event(&make_down_event_for_id(
-                    PointerId::try_from(841_u64).expect("independent contact"), Offset::ZERO, PointerKind::Touch,
-                ).expect("Down"), |_| contact_path.clone());
+                binding.handle_pointer_event(
+                    &make_down_event_for_id(
+                        PointerId::try_from(841_u64).expect("independent contact"),
+                        Offset::ZERO,
+                        PointerKind::Touch,
+                    )
+                    .expect("Down"),
+                    |_| contact_path.clone(),
+                );
                 // No input follows release: its deferred loss is first delivered by close.
                 tokens.borrow_mut().clear();
             }
             if preserving {
-                let original = catch_unwind(|| panic!("original caller failure")).expect_err("caller failed");
-                flui_interaction::__runtime::close_gestures(&binding, flui_interaction::__runtime::CloseMode::PreservingFailure);
-                assert_eq!(original.downcast_ref::<&str>(), Some(&"original caller failure"));
+                let original =
+                    catch_unwind(|| panic!("original caller failure")).expect_err("caller failed");
+                flui_interaction::__runtime::close_gestures(
+                    &binding,
+                    flui_interaction::__runtime::CloseMode::PreservingFailure,
+                );
+                assert_eq!(
+                    original.downcast_ref::<&str>(),
+                    Some(&"original caller failure")
+                );
             } else {
-                let result = catch_unwind(AssertUnwindSafe(|| flui_interaction::__runtime::close_gestures(
-                    &binding, flui_interaction::__runtime::CloseMode::Ordinary)));
+                let result = catch_unwind(AssertUnwindSafe(|| {
+                    flui_interaction::__runtime::close_gestures(
+                        &binding,
+                        flui_interaction::__runtime::CloseMode::Ordinary,
+                    );
+                }));
                 if prior_failure || callback_failure {
-                    assert_eq!(result.expect_err("close failure").downcast_ref::<&str>(), Some(&if prior_failure {
-                        "pre-native close failure"
-                    } else { "native close body failure" }));
-                } else { result.expect("healthy close"); }
+                    assert_eq!(
+                        result.expect_err("close failure").downcast_ref::<&str>(),
+                        Some(&if prior_failure {
+                            "pre-native close failure"
+                        } else {
+                            "native close body failure"
+                        })
+                    );
+                } else {
+                    result.expect("healthy close");
+                }
             }
-            assert_eq!((first_drops.get(), tail_drops.get()), if preserving || prior_failure || callback_failure {
-                (0, 0)
-            } else { (1, 1) }, "opaque captures retain the close's first failure ownership policy after containment");
-            if preserving { assert_eq!(calls.get(), 0, "preserving close does not invoke opaque retirement hooks"); }
+            assert_eq!(
+                (first_drops.get(), tail_drops.get()),
+                (1, 1),
+                "opaque captures are destroyed once whatever failure the close saw (ADR-0281)"
+            );
+            if preserving {
+                assert_eq!(
+                    calls.get(),
+                    0,
+                    "preserving close does not invoke opaque retirement hooks"
+                );
+            }
         });
     }
 }
@@ -4867,43 +4915,38 @@ fn pointer_router_competing_retirement_preserves_first_failure_and_recovery() {
 
     const SELECTED: &str = "FLUI_POINTER_ROUTER_RETIREMENT_CASE";
     let cases = [
-        ("pointer_one", RouterCleanup::Pointer, false, false),
-        ("pointer_two", RouterCleanup::Pointer, true, false),
-        ("pointer_unwind", RouterCleanup::Pointer, true, true),
-        ("global_one", RouterCleanup::Global, false, false),
-        ("global_two", RouterCleanup::Global, true, false),
-        ("global_unwind", RouterCleanup::Global, true, true),
-        ("all_one", RouterCleanup::All, false, false),
-        ("all_two", RouterCleanup::All, true, false),
-        ("all_unwind", RouterCleanup::All, true, true),
+        ("pointer_one", RouterCleanup::Pointer, false),
+        ("pointer_two", RouterCleanup::Pointer, true),
+        ("global_one", RouterCleanup::Global, false),
+        ("global_two", RouterCleanup::Global, true),
+        ("all_one", RouterCleanup::All, false),
+        ("all_two", RouterCleanup::All, true),
     ];
     if let Ok(selected) = std::env::var(SELECTED) {
         if selected == "saved_route_entries" {
             assert_saved_route_entry_retirement();
             return;
         }
-        if let Some((competing, active_unwind)) = match selected.as_str() {
-            "owner_one" => Some((false, false)),
-            "owner_two" => Some((true, false)),
-            "owner_unwind" => Some((true, true)),
+        if let Some(competing) = match selected.as_str() {
+            "owner_one" => Some(false),
+            "owner_two" => Some(true),
             _ => None,
         } {
-            assert_router_owner_retirement(competing, active_unwind);
+            assert_router_owner_retirement(competing);
             return;
         }
-        let &(_, cleanup, competing, active_unwind) = cases
+        let &(_, cleanup, competing) = cases
             .iter()
-            .find(|(name, _, _, _)| *name == selected)
+            .find(|(name, _, _)| *name == selected)
             .expect("known router retirement child case");
-        assert_router_retirement_recovery(cleanup, competing, active_unwind);
+        assert_router_retirement_recovery(cleanup, competing);
         return;
     }
 
     let mut failures = Vec::new();
-    for name in cases.iter().map(|(name, _, _, _)| *name).chain([
+    for name in cases.iter().map(|(name, _, _)| *name).chain([
         "owner_one",
         "owner_two",
-        "owner_unwind",
         "saved_route_entries",
     ]) {
         let mut child = Command::new(std::env::current_exe().expect("test executable"))
@@ -4948,7 +4991,7 @@ fn pointer_router_competing_retirement_preserves_first_failure_and_recovery() {
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
-fn assert_router_retirement_recovery(cleanup: RouterCleanup, competing: bool, active_unwind: bool) {
+fn assert_router_retirement_recovery(cleanup: RouterCleanup, competing: bool) {
     use std::cell::Cell;
     use std::panic::{AssertUnwindSafe, catch_unwind};
     use std::rc::{Rc, Weak};
@@ -4974,16 +5017,6 @@ fn assert_router_retirement_recovery(cleanup: RouterCleanup, competing: bool, ac
             std::panic::panic_any(self.message);
         }
     }
-    struct UnwindCleanup {
-        binding: Rc<GestureBinding>,
-        cleanup: RouterCleanup,
-    }
-    impl Drop for UnwindCleanup {
-        fn drop(&mut self) {
-            self.cleanup.remove(self.binding.pointer_router());
-        }
-    }
-
     let binding = Rc::new(GestureBinding::new());
     let deliveries = Rc::new(Cell::new(0));
     let first_drops = Rc::new(Cell::new(0));
@@ -5034,39 +5067,26 @@ fn assert_router_retirement_recovery(cleanup: RouterCleanup, competing: bool, ac
     }
 
     let removal = catch_unwind(AssertUnwindSafe(|| {
-        if active_unwind {
-            let _cleanup = UnwindCleanup {
-                binding: Rc::clone(&binding),
-                cleanup,
-            };
-            panic!("outer failure owns unwind");
-        }
         cleanup.remove(binding.pointer_router());
     }));
     let payload = removal.expect_err("the first failure must propagate");
     assert_eq!(
         payload.downcast_ref::<&str>(),
-        Some(&if active_unwind {
-            "outer failure owns unwind"
-        } else {
-            "first route capture failure"
-        })
+        Some(&"first route capture failure")
     );
-    assert_eq!(first_drops.get(), usize::from(!active_unwind));
-    assert_eq!(second_drops.get(), 0, "the opaque tail must be retained");
+    flui_foundation::panic::discard_payload(payload);
+    assert_eq!(first_drops.get(), 1);
+    assert_eq!(
+        second_drops.get(),
+        usize::from(competing),
+        "the tail after the first failure is destroyed"
+    );
     assert_eq!(
         Rc::strong_count(&shared),
         1,
         "a clone another owner still holds is released, not leaked"
     );
 
-    if active_unwind {
-        let deliveries = Rc::clone(&deliveries);
-        binding.pointer_router().add_route(
-            PointerId::new(core::num::NonZeroU64::MIN),
-            Rc::new(move |_| deliveries.set(deliveries.get() + 1)),
-        );
-    }
     binding.handle_pointer_event(
         &make_down_event(Offset::ZERO, PointerKind::Touch).expect("finite input"),
         |_| HitTestResult::new(),
@@ -5075,15 +5095,16 @@ fn assert_router_retirement_recovery(cleanup: RouterCleanup, competing: bool, ac
         &make_up_event(Offset::ZERO, PointerKind::Touch).expect("finite input"),
         |_| HitTestResult::new(),
     );
+    // Each destroyed capture registered one healthy route before failing.
     assert_eq!(
         deliveries.get(),
-        2,
-        "next contact reaches only the healthy route"
+        2 * (1 + usize::from(competing)),
+        "next contact reaches only the healthy routes"
     );
     binding.pointer_router().clear();
 }
 
-fn assert_router_owner_retirement(competing: bool, active_unwind: bool) {
+fn assert_router_owner_retirement(competing: bool) {
     use std::cell::Cell;
     use std::panic::{AssertUnwindSafe, catch_unwind};
     use std::rc::{Rc, Weak};
@@ -5136,29 +5157,20 @@ fn assert_router_owner_retirement(competing: bool, active_unwind: bool) {
             owner.add_global_handler(handler);
         }
     }
-    let retirement = catch_unwind(AssertUnwindSafe(move || {
-        if active_unwind {
-            let _last_owner = owner;
-            panic!("outer owner failure");
-        }
-        drop(owner);
-    }));
+    let retirement = catch_unwind(AssertUnwindSafe(move || drop(owner)));
     let payload = retirement.expect_err("original owner failure must propagate");
     assert_eq!(
         payload.downcast_ref::<&str>(),
-        Some(&if active_unwind {
-            "outer owner failure"
-        } else {
-            "first owner capture failure"
-        })
+        Some(&"first owner capture failure")
     );
-    assert_eq!(first_drops.get(), usize::from(!active_unwind));
+    flui_foundation::panic::discard_payload(payload);
+    assert_eq!(first_drops.get(), 1);
     assert_eq!(
         second_drops.get(),
-        0,
-        "the owner retirement tail is retained"
+        usize::from(competing),
+        "the owner retirement tail is destroyed"
     );
-    assert_eq!(missing_owner.get(), !active_unwind);
+    assert!(missing_owner.get());
     assert!(
         weak_owner.upgrade().is_none(),
         "retired owner cannot resurrect"
@@ -5166,8 +5178,9 @@ fn assert_router_owner_retirement(competing: bool, active_unwind: bool) {
 }
 
 /// A saved route that holds the last owner of two targets' captures: when the
-/// first capture's destructor fails, the second is retained rather than
-/// dropped during that unwind, and the lane serves the next route.
+/// first capture's destructor fails, the second is still destroyed under
+/// containment, the first failure propagates, and the lane serves the next
+/// route (ADR-0281 §3).
 fn assert_saved_route_entry_retirement() {
     use std::panic::{AssertUnwindSafe, catch_unwind};
     use std::sync::Arc;
@@ -5222,7 +5235,8 @@ fn assert_saved_route_entry_retirement() {
             failure.downcast_ref::<&str>(),
             Some(&"first route capture failure")
         );
-        assert_eq!(drops.load(Ordering::Relaxed), 1, "the second is retained");
+        flui_foundation::panic::discard_payload(failure);
+        assert_eq!(drops.load(Ordering::Relaxed), 2, "both are destroyed");
 
         let delivered = std::rc::Rc::new(std::cell::Cell::new(0));
         let counter = std::rc::Rc::clone(&delivered);
@@ -5272,7 +5286,6 @@ fn drag_callback_ownership_and_retirement() {
             "two dispose failures",
             drag_dispose_preserves_first_capture_failure,
         ),
-        ("dispose active unwind", drag_dispose_during_active_unwind),
         (
             "previous caller failure",
             drag_caller_keeps_previously_caught_failure,
@@ -5286,16 +5299,12 @@ fn drag_callback_ownership_and_retirement() {
             drag_final_callback_owner_preserves_first_failure,
         ),
         (
-            "owner active unwind",
-            drag_final_callback_owner_during_active_unwind,
-        ),
-        (
             "callback self dispose",
             drag_callback_can_dispose_its_own_recognizer,
         ),
         (
             "callback body and capture",
-            drag_callback_body_failure_retains_its_capture,
+            drag_callback_body_failure_destroys_its_capture_with_the_owner,
         ),
         (
             "rejection diagnostic failure",
@@ -5551,19 +5560,15 @@ fn drag_dispose_closes_callback_admission() {
 }
 
 fn drag_dispose_preserves_first_capture_failure() {
-    drag_independent_capture_failures(false, false);
-}
-fn drag_dispose_during_active_unwind() {
-    drag_independent_capture_failures(false, true);
+    drag_independent_capture_failures(false);
 }
 fn drag_final_callback_owner_preserves_first_failure() {
-    drag_independent_capture_failures(true, false);
-}
-fn drag_final_callback_owner_during_active_unwind() {
-    drag_independent_capture_failures(true, true);
+    drag_independent_capture_failures(true);
 }
 
-fn drag_independent_capture_failures(final_owner: bool, active_unwind: bool) {
+/// Two captures whose destructors fail: both are destroyed, the second under
+/// containment, and the first failure propagates (ADR-0281 §3).
+fn drag_independent_capture_failures(final_owner: bool) {
     use flui_interaction::gesture::GestureArena;
     use flui_interaction::{DragAxis, DragGestureRecognizer};
     use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -5594,33 +5599,22 @@ fn drag_independent_capture_failures(final_owner: bool, active_unwind: bool) {
             let alias = Rc::clone(&recognizer);
             drop(recognizer);
             assert_eq!((first_drops.get(), second_drops.get()), (0, 0));
-            if active_unwind {
-                let _owner = alias;
-                panic!("incoming drag failure");
-            }
             drop(alias);
         } else {
-            if active_unwind {
-                let _builder = builder;
-                panic!("incoming drag failure");
-            }
             drop(builder);
         }
     }));
     let payload = outcome.expect_err("first drag failure propagates");
     assert_eq!(
         payload.downcast_ref::<&str>(),
-        Some(&if active_unwind {
-            "incoming drag failure"
-        } else {
-            "first drag capture failure"
-        })
+        Some(&"first drag capture failure")
     );
-    assert_eq!(first_drops.get(), usize::from(!active_unwind));
+    flui_foundation::panic::discard_payload(payload);
+    assert_eq!(first_drops.get(), 1);
     assert_eq!(
         second_drops.get(),
-        0,
-        "independent tail capture is retained"
+        1,
+        "independent tail capture is destroyed"
     );
     fresh_drag_completes_after_retirement();
 }
@@ -5694,7 +5688,7 @@ fn drag_callbacks_live_until_the_final_shared_owner() {
 fn drag_callback_can_dispose_its_own_recognizer() {
     drag_self_dispose_from_callback(false);
 }
-fn drag_callback_body_failure_retains_its_capture() {
+fn drag_callback_body_failure_destroys_its_capture_with_the_owner() {
     drag_self_dispose_from_callback(true);
 }
 
@@ -5713,7 +5707,6 @@ fn drag_self_dispose_from_callback(body_failure: bool) {
     let observed = drops.clone();
     let probe = DragRetirementProbe(Box::new(move || {
         observed.set(observed.get() + 1);
-        assert!(!body_failure, "drag body capture failure");
     }));
     let recognizer = DragGestureRecognizer::builder(GestureArena::new(), DragAxis::Horizontal)
         .on_down(move |_| {
@@ -5742,7 +5735,11 @@ fn drag_self_dispose_from_callback(body_failure: bool) {
                 .downcast_ref::<&str>(),
             Some(&"drag callback body failure")
         );
-        assert_eq!(drops.get(), 0, "failed body retains its opaque capture");
+        assert_eq!(
+            drops.get(),
+            0,
+            "the callback field still owns the capture after a failed body"
+        );
     } else {
         outcome.expect("callback self disposal is reentrant");
         assert_eq!(
@@ -5755,8 +5752,8 @@ fn drag_self_dispose_from_callback(body_failure: bool) {
     drop(recognizer);
     assert_eq!(
         drops.get(),
-        usize::from(!body_failure),
-        "only healthy final ownership retires the opaque capture"
+        1,
+        "final ownership destroys the capture, after a failed body too"
     );
     fresh_drag_completes_after_retirement();
 }
@@ -6291,9 +6288,10 @@ impl Drop for CaptureProbe {
 
 /// A scroll, pan-zoom, path-clip or shader-mask callback that closes its
 /// presentation and then panics leaves its snapshot and target cell as the
-/// capture's last owners: they are retained, not destroyed by that unwind.
+/// capture's last owners: the capture is still destroyed exactly once
+/// (ADR-0281).
 #[test]
-fn non_pointer_invocation_retains_its_snapshot_across_a_reentrant_close() {
+fn non_pointer_invocation_destroys_its_snapshot_across_a_reentrant_close() {
     use flui_foundation::geometry::{Offset, Rect, Size};
     use flui_interaction::__runtime::{CloseMode, close_dispatch, presentation_dispatch};
     use flui_interaction::PointerId;
@@ -6369,10 +6367,9 @@ fn non_pointer_invocation_retains_its_snapshot_across_a_reentrant_close() {
             "{kind}"
         );
         flui_foundation::panic::discard_payload(failure);
-        assert_eq!(
-            dropped.get(),
-            None,
-            "{kind}: the capture is retained, not destroyed by the unwind"
+        assert!(
+            dropped.get().is_some(),
+            "{kind}: the capture is destroyed, not retained"
         );
         assert_eq!(
             owner.check_ui_runtime(),

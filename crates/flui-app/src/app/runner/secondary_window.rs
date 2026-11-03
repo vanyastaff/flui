@@ -582,8 +582,8 @@ pub(super) fn cancel_pending_secondary_windows() {
             error,
             "cancelled window reply",
         );
-        // Settle framework liveness before retaining an opaque envelope after
-        // failure. Its installer/configuration captures may have arbitrary Drop.
+        // Settle framework liveness before the envelope is destroyed (under
+        // containment, after a failure too: ADR-0281 §3).
         let error = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             completion.config.reservation.0.settle();
         }))
@@ -593,17 +593,13 @@ pub(super) fn cancel_pending_secondary_windows() {
             error,
             "cancelled window reservation",
         );
-        if panic.is_some() || std::thread::panicking() {
-            std::mem::forget(completion);
-        } else {
-            let error =
-                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(completion))).err();
-            crate::app::lifecycle_state::preserve_first_lifecycle_panic(
-                &mut panic,
-                error,
-                "cancelled window retirement",
-            );
-        }
+        let error =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(completion))).err();
+        crate::app::lifecycle_state::preserve_first_lifecycle_panic(
+            &mut panic,
+            error,
+            "cancelled window retirement",
+        );
     }
     if let Some(payload) = panic {
         std::panic::resume_unwind(payload);
@@ -1078,7 +1074,7 @@ fn finish_open_secondary_window(
                     super::discard_window(window.as_ref(), "an uninstalled secondary window");
                 }))
             {
-                std::mem::forget(payload);
+                flui_foundation::panic::discard_payload(payload);
             }
         }
     }

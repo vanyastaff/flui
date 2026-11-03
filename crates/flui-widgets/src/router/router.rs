@@ -4,7 +4,6 @@
 use std::any::type_name;
 use std::cell::{Cell, RefCell};
 use std::fmt;
-use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::rc::{Rc, Weak};
 use std::sync::Arc;
 use std::time::Duration;
@@ -304,21 +303,17 @@ impl<R: Routable> Drop for RouterState<R> {
 impl<R: Routable> RouterState<R> {
     /// Seed each initial value as a page, bottom to top.
     ///
-    /// The taken values stay in terminal slots — the unseeded tail and the
-    /// value being seeded — until each one's page commits, so a failure while
-    /// seeding (a route-identity refusal, a panicking page builder) retains
-    /// them rather than dropping user values during unwind (ADR-0127). Pages
-    /// seeded before the failure stay committed.
+    /// Pages seeded before a failure (a route-identity refusal, a panicking
+    /// page builder) stay committed; the value being seeded and the unseeded
+    /// tail are destroyed normally by the unwind (ADR-0281).
     fn seed_initial_pages(&mut self) {
-        let mut remaining = Terminal::new(std::mem::take(&mut self.initial).into_iter());
-        for route in &mut *remaining {
-            let mut route = Terminal::new(route);
+        for route in std::mem::take(&mut self.initial) {
             let page = self.shared.page_route(&route);
             let id = self.shared.navigator.seed_page(page);
             self.shared
                 .stack
                 .borrow_mut()
-                .push(RouterEntry::new(id, route.take_value()));
+                .push(RouterEntry::new(id, route));
         }
     }
 }
@@ -403,27 +398,14 @@ impl<R> RouterEntry<R> {
     }
 }
 
-/// Outgoing route values are retired without a stack borrow. An earlier
-/// observer failure owns unwind: retain these opaque values rather than
-/// invoking a competing destructor. On a healthy path, retire individually
-/// and retain the unprocessed tail if one destructor fails. A route value
-/// whose own fields double-panic before the catch remains outside containment.
+/// Outgoing route values are retired without a stack borrow, each under
+/// containment: a failing destructor does not skip the rest, and the first
+/// failure is raised (ADR-0281 §3).
 pub(super) struct RouterRetiredValues<T>(pub(super) Vec<T>);
 
 impl<T> Drop for RouterRetiredValues<T> {
     fn drop(&mut self) {
-        let entries = std::mem::take(&mut self.0);
-        if std::thread::panicking() {
-            std::mem::forget(entries);
-            return;
-        }
-        let mut entries = entries.into_iter();
-        while let Some(entry) = entries.next() {
-            if let Err(payload) = catch_unwind(AssertUnwindSafe(|| drop(entry))) {
-                std::mem::forget(entries);
-                resume_unwind(payload);
-            }
-        }
+        crate::support::retirement::retire_values(std::mem::take(&mut self.0));
     }
 }
 
@@ -677,7 +659,7 @@ mod seed_tests {
     use crate::navigator::RouteId;
     use crate::support::child_process::child_test;
 
-    /// A route value whose destructor panics once armed, unless it is the
+    /// A route value that counts its destruction once armed, unless it is the
     /// base page that seeds successfully.
     #[derive(Clone)]
     struct InitialValue {
@@ -696,7 +678,6 @@ mod seed_tests {
         fn drop(&mut self) {
             if self.armed.load(Ordering::SeqCst) && self.index > 0 {
                 self.drops.fetch_add(1, Ordering::SeqCst);
-                panic!("competing initial route destruction");
             }
         }
     }
@@ -713,9 +694,9 @@ mod seed_tests {
 
     child_test! {
         /// Route-identity refusal while seeding the initial stack keeps the
-        /// pages already seeded, and retains the value being seeded and the
-        /// unseeded tail instead of dropping them during unwind.
-        fn seeding_refusal_retains_the_initial_tail() {
+        /// pages already seeded, and destroys the value being seeded and the
+        /// unseeded tail (ADR-0281).
+        fn seeding_refusal_destroys_the_initial_tail() {
             let armed = Arc::new(AtomicBool::new(false));
             let drops = Arc::new(AtomicUsize::new(0));
             let value = |index| InitialValue {
@@ -729,14 +710,17 @@ mod seed_tests {
             drop(router);
             RouteId::leave_process_identities(1);
             armed.store(true, Ordering::SeqCst);
-            let failure = catch_unwind(AssertUnwindSafe(|| state.seed_initial_pages()))
-                .expect_err("the second seed is refused");
+            let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                state.seed_initial_pages();
+            }))
+            .expect_err("the second seed is refused");
             assert_eq!(
                 flui_foundation::panic::payload_text(failure.as_ref()),
                 Some("BUG: route identity capacity exhausted"),
                 "the capacity failure stays authoritative"
             );
-            assert_eq!(drops.load(Ordering::SeqCst), 0, "no initial value dropped during unwind");
+            // The refused value, the clone its page holds, and the tail.
+            assert_eq!(drops.load(Ordering::SeqCst), 3, "the refused value and the tail are destroyed");
             armed.store(false, Ordering::SeqCst);
             assert_eq!(state.shared.stack.borrow().len(), 1, "the seeded page stays committed");
             assert_eq!(state.shared.navigator.route_ids().len(), 1);

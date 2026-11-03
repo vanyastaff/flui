@@ -36,8 +36,8 @@ impl Drop for DropCounted {
         self.0.fetch_add(1, Ordering::SeqCst);
     }
 }
-fn aggregate(drops: &Arc<AtomicUsize>) -> (Bomb, Bomb) {
-    (bomb(drops, "first capture"), bomb(drops, "second capture"))
+fn capture(drops: &Arc<AtomicUsize>) -> Bomb {
+    bomb(drops, "capture")
 }
 fn assert_first(payload: Box<dyn std::any::Any + Send>, expected: &str) {
     assert_eq!(
@@ -56,7 +56,7 @@ fn cancelled_failure(opaque_payload: bool, terminal: bool) {
     let capture_drops = Arc::new(AtomicUsize::new(0));
     let payload_drops = Arc::new(AtomicUsize::new(0));
     let payload_drops_in_callback = Arc::clone(&payload_drops);
-    let captures = aggregate(&capture_drops);
+    let captures = capture(&capture_drops);
     let (_, first) = handle
         .subscribe(move |_| {
             let _keep = &captures;
@@ -89,7 +89,7 @@ fn cancelled_failure(opaque_payload: bool, terminal: bool) {
     } else {
         assert_first(payload, "lifecycle body first");
     }
-    assert_eq!(capture_drops.load(Ordering::SeqCst), 0);
+    assert_eq!(capture_drops.load(Ordering::SeqCst), 1);
     assert_eq!(
         payload_drops.load(Ordering::SeqCst),
         usize::from(opaque_payload),
@@ -113,7 +113,7 @@ fn cancelled_failure(opaque_payload: bool, terminal: bool) {
     drop(healthy);
     drop(token);
     drop(source);
-    assert_eq!(capture_drops.load(Ordering::SeqCst), 0);
+    assert_eq!(capture_drops.load(Ordering::SeqCst), 1);
 }
 
 fn nested_cancellation_after_caught_failure() {
@@ -149,7 +149,7 @@ fn nested_cancellation_after_caught_failure() {
         })
         .expect("cancelling callback");
     let capture_drops = Arc::new(AtomicUsize::new(0));
-    let captures = aggregate(&capture_drops);
+    let captures = capture(&capture_drops);
     let (_, third) = handle
         .subscribe(move |_| {
             let _keep = &captures;
@@ -176,7 +176,7 @@ fn nested_cancellation_after_caught_failure() {
             (4, Hidden)
         ]
     );
-    assert_eq!(capture_drops.load(Ordering::SeqCst), 0);
+    assert_eq!(capture_drops.load(Ordering::SeqCst), 1);
     source.commit(Resumed).expect("next healthy operation");
     source.drain();
     assert_eq!(
@@ -204,11 +204,11 @@ fn nested_cancellation_after_caught_failure() {
     assert_eq!(
         ordinary_drops.load(Ordering::SeqCst),
         1,
-        "caught-failure retention ends with the original drain"
+        "a cancellation after recovery retires its captures normally"
     );
     drop((first, second, healthy));
     drop(source);
-    assert_eq!(capture_drops.load(Ordering::SeqCst), 0);
+    assert_eq!(capture_drops.load(Ordering::SeqCst), 1);
 }
 
 fn rejected_after_caught_failure() {
@@ -240,7 +240,7 @@ fn rejected_after_caught_failure() {
                 source
                     .commit_terminal(Detached)
                     .expect("terminal FIFO event");
-                let captures = aggregate(&capture_drops);
+                let captures = capture(&capture_drops);
                 let called = Arc::clone(&calls);
                 let result = rejected_handle.subscribe(move |_| {
                     let _keep = &captures;
@@ -261,11 +261,11 @@ fn rejected_after_caught_failure() {
     assert_first(payload, "earlier rejected-admission failure");
     assert_eq!(*events.borrow(), [Inactive, Hidden, Detached]);
     assert_eq!(bodies.load(Ordering::SeqCst), 0);
-    assert_eq!(drops.load(Ordering::SeqCst), 0);
+    assert_eq!(drops.load(Ordering::SeqCst), 1);
     source.finish_close();
     assert_eq!(handle.snapshot(), Err(LifecycleClosed));
     drop((first, second, healthy, source));
-    assert_eq!(drops.load(Ordering::SeqCst), 0);
+    assert_eq!(drops.load(Ordering::SeqCst), 1);
     ordinary_rejected_callback_and_next_source();
 }
 
@@ -278,7 +278,7 @@ fn rejected_during_independent_unwind(dead: bool) {
     }
     impl Drop for RejectOnDrop {
         fn drop(&mut self) {
-            let captures = aggregate(&self.captures);
+            let captures = DropCounted(Arc::clone(&self.captures));
             let called = Arc::clone(&self.bodies);
             let result = self.handle.subscribe(move |_| {
                 let _keep = &captures;
@@ -311,7 +311,7 @@ fn rejected_during_independent_unwind(dead: bool) {
     }))
     .expect_err("independent unwind remains authoritative");
     assert_first(payload, "independent rejection failure");
-    assert_eq!(drops.load(Ordering::SeqCst), 0);
+    assert_eq!(drops.load(Ordering::SeqCst), 1);
     assert_eq!(bodies.load(Ordering::SeqCst), 0);
     assert_eq!(refusals.load(Ordering::SeqCst), 1);
     if let Some(source) = source {
@@ -375,7 +375,7 @@ fn release_retirement_failure() {
             let _keep = &first_capture;
         })
         .expect("first");
-    let later_captures = aggregate(&later_drops);
+    let later_captures = capture(&later_drops);
     let (_, later) = handle
         .subscribe(move |_| {
             let _keep = &later_captures;
@@ -387,20 +387,20 @@ fn release_retirement_failure() {
     assert_eq!(first_drops.load(Ordering::SeqCst), 1);
     assert_eq!(
         later_drops.load(Ordering::SeqCst),
-        0,
-        "later aggregate never retires after first failure"
+        1,
+        "later envelopes are still destroyed after the first failure"
     );
     assert_eq!(handle.snapshot(), Err(LifecycleClosed));
     source.finish_close();
     drop((first, later));
-    assert_eq!(later_drops.load(Ordering::SeqCst), 0);
+    assert_eq!(later_drops.load(Ordering::SeqCst), 1);
 }
 
 fn independent_unwind(drop_source: bool) {
     let source = LifecycleSource::new();
     let handle = source.handle();
     let drops = Arc::new(AtomicUsize::new(0));
-    let captures = aggregate(&drops);
+    let captures = DropCounted(Arc::clone(&drops));
     let (_, token) = handle
         .subscribe(move |_| {
             let _keep = &captures;
@@ -431,7 +431,7 @@ fn independent_unwind(drop_source: bool) {
 }
 fn assert_independent(payload: Box<dyn std::any::Any + Send>, drops: &AtomicUsize) {
     assert_first(payload, "independent first");
-    assert_eq!(drops.load(Ordering::SeqCst), 0);
+    assert_eq!(drops.load(Ordering::SeqCst), 1);
 }
 
 pub(crate) fn dispatch_child(kind: &str) {
@@ -480,22 +480,22 @@ fn child(kind: &str) {
         "lifecycle recovery failed: {output:?}"
     );
 }
-pub(crate) fn self_cancelled_callback_failure_retains_its_capture_aggregate() {
+pub(crate) fn self_cancelled_callback_failure_destroys_its_capture() {
     child("cancel");
 }
-pub(crate) fn self_cancellation_drops_its_payload_and_retains_capture_aggregates() {
+pub(crate) fn self_cancellation_drops_its_payload_and_its_capture() {
     child("cancel_opaque");
 }
 pub(crate) fn terminal_release_keeps_the_earlier_callback_failure() {
     child("terminal");
 }
-pub(crate) fn release_retains_later_envelopes_after_first_retirement_failure() {
+pub(crate) fn release_destroys_later_envelopes_after_first_retirement_failure() {
     child("retirement");
 }
-pub(crate) fn subscription_retirement_during_unwind_retains_its_envelope() {
+pub(crate) fn subscription_retirement_during_unwind_destroys_its_envelope() {
     child("token_unwind");
 }
-pub(crate) fn source_retirement_during_unwind_retains_its_envelopes() {
+pub(crate) fn source_retirement_during_unwind_destroys_its_envelopes() {
     child("source_unwind");
 }
 
@@ -536,17 +536,17 @@ pub(crate) fn caught_failure_protects_nested_pending_subscription_retirement() {
     child("nested_cancel");
 }
 
-pub(crate) fn caught_failure_retains_rejected_lifecycle_callback() {
+pub(crate) fn caught_failure_destroys_rejected_lifecycle_callback() {
     child("rejected_caught");
 }
-pub(crate) fn live_source_rejection_during_unwind_retains_captures() {
+pub(crate) fn live_source_rejection_during_unwind_destroys_captures() {
     child("rejected_live_unwind");
 }
-pub(crate) fn dead_source_rejection_during_unwind_retains_captures() {
+pub(crate) fn dead_source_rejection_during_unwind_destroys_captures() {
     child("rejected_dead_unwind");
 }
 
-pub(crate) fn preserving_close_retains_rejections_only_while_it_is_in_progress() {
+pub(crate) fn preserving_close_destroys_rejections_during_and_after_it() {
     struct CountDrop(Arc<AtomicUsize>);
     impl Drop for CountDrop {
         fn drop(&mut self) {
@@ -569,14 +569,14 @@ pub(crate) fn preserving_close_retains_rejections_only_while_it_is_in_progress()
         reject();
         assert_eq!(
             drops.load(Ordering::SeqCst),
-            0,
-            "a preserving close in progress retains a rejected callback"
+            1,
+            "a preserving close in progress destroys a rejected callback"
         );
     }
     reject();
     assert_eq!(
         drops.load(Ordering::SeqCst),
-        1,
+        2,
         "once the close returns, a stale handle's rejection retires normally"
     );
 }

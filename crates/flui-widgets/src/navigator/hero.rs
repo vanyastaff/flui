@@ -428,7 +428,6 @@ mod registry_tests {
                 "terminal_failure",
                 "terminal_alias",
                 "terminal_incoming",
-                "terminal_competing",
             ],
         ) else {
             return;
@@ -444,9 +443,7 @@ mod registry_tests {
             use std::sync::atomic::{AtomicUsize, Ordering};
             let counts = [Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0))];
             for (index, drops) in counts.iter().enumerate() {
-                let fail_drop = case == "terminal_incoming"
-                    || case == "terminal_competing"
-                    || (case == "terminal_failure" && index == 0);
+                let fail_drop = case == "terminal_failure" && index == 0;
                 registry
                     .register(
                         HeroTag::new(Key {
@@ -468,13 +465,20 @@ mod registry_tests {
                 return;
             }
             let incoming = case == "terminal_incoming";
-            let fails = incoming || case == "terminal_failure" || case == "terminal_competing";
+            let fails = incoming || case == "terminal_failure";
             let failure = catch_unwind(AssertUnwindSafe(move || {
                 let registry = registry;
                 assert!(!incoming, "incoming Hero registry failure");
                 drop(registry);
             }));
-            assert_eq!(counts[0].load(Ordering::SeqCst), usize::from(!incoming));
+            // Every key is destroyed once, after the first key's failure and
+            // on an incoming unwind too (ADR-0281).
+            assert_eq!(counts[0].load(Ordering::SeqCst), 1);
+            assert_eq!(
+                counts[1].load(Ordering::SeqCst),
+                1,
+                "retirement destroys every key"
+            );
             if fails {
                 let failure = failure.expect_err("terminal retirement reports its first failure");
                 let expected = if incoming {
@@ -483,18 +487,8 @@ mod registry_tests {
                     "first Hero key retirement failure"
                 };
                 super::super::hero_controller::terminal_tests::assert_failure(failure, expected);
-                assert_eq!(
-                    counts[1].load(Ordering::SeqCst),
-                    0,
-                    "the outgoing tail preserves the first failure"
-                );
             } else {
                 failure.expect("healthy retirement succeeds");
-                assert_eq!(
-                    counts[1].load(Ordering::SeqCst),
-                    1,
-                    "healthy retirement releases every key"
-                );
             }
             return;
         }

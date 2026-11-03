@@ -411,7 +411,7 @@ was flushed before the panic resumed is what tells the fix from the old code, no
   unwinds out of the platform's call (the call point's `or_resume`), which on Win32, AppKit and
   UIKit is the abort. `cargo xtask panic-boundary` keeps every OS entry behind `os_entry`
   (ADR-0151 §16).
-- §5: `user_drop_panic_inside_an_unwind_is_retained` (a child: `dispose` panics and a future's
+- §5: `a_runtime_dropped_inside_an_unwind_destroys_its_values` (a child: `dispose` panics and a future's
   `Drop` panics during the same unwind, without an abort).
 - §6: `a_repeating_paint_panic_backs_off_but_keeps_retrying` (the three properties, one row per
   frame interval: 1/60, 1/120 and 1/240 s), `a_single_paint_panic_redraws_without_input`,

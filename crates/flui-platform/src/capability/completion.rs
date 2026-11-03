@@ -5,13 +5,13 @@ use std::{
     cell::{Cell, RefCell},
     fmt,
     future::Future,
-    panic::{AssertUnwindSafe, catch_unwind, resume_unwind},
     pin::Pin,
     rc::Rc,
     sync::Arc,
     task::{Context, Poll, Waker},
 };
 
+use flui_foundation::panic::FirstPanic;
 use parking_lot::Mutex;
 
 use super::owner::{OwnerJob, OwnerPoster, OwnerRetired, PendingCompletions, PendingSlot};
@@ -30,9 +30,8 @@ pub enum Abandoned {
 
 type Outcome<T> = Result<T, Abandoned>;
 type Shared<T> = Arc<Mutex<Option<Outcome<T>>>>;
-// `FnMut`, called at most once: a panic in it leaves its captures in the box,
-// which is then kept rather than destroyed mid-unwind, where a capture whose
-// `Drop` panics too would abort the process.
+// `FnMut`, called at most once: its captures outlive the call, so they are
+// dropped after it under containment, a panic included (ADR-0281).
 type Waiting<T> = Box<dyn FnMut(Outcome<T>)>;
 
 /// The owner side of one completion.
@@ -50,9 +49,8 @@ struct Local<T> {
 
 /// The owner-local half a settle job reaches through the owner's
 /// [`PendingCompletions`].
-/// Both take `&self`: the caller holds the owning reference and keeps it
-/// rather than dropping it when the call panics, since the state may hold an
-/// answer whose destructor panics too.
+/// Both take `&self`: the caller holds the owning reference and drops it
+/// after the call, under containment when the call panicked (ADR-0281).
 pub(super) trait Settle {
     /// The outcome arrived: run the waiting closure, or keep the outcome for
     /// `poll`. Runs at an owner turn with no borrow of the table held.
@@ -72,12 +70,10 @@ impl<T: 'static> Settle for Local<T> {
         let on_complete = self.on_complete.borrow_mut().take();
         if let Some(mut on_complete) = on_complete {
             self.taken.set(true);
-            if let Err(payload) = catch_unwind(AssertUnwindSafe(|| on_complete(outcome))) {
-                // Kept, not destroyed during this unwind (see `Waiting`).
-                std::mem::forget(on_complete);
-                resume_unwind(payload);
-            }
-            drop(on_complete);
+            let mut first = FirstPanic::new();
+            first.contain(|| on_complete(outcome));
+            first.contain(|| drop(on_complete));
+            first.resume();
         } else {
             *self.settled.borrow_mut() = Some(outcome);
             let waker = self.waker.borrow_mut().take();
@@ -259,9 +255,8 @@ pub struct Completion<T: 'static> {
 impl<T: 'static> Completion<T> {
     /// Runs `f` once, with the outcome, at an owner turn boundary.
     ///
-    /// `f` is an `FnMut` called at most once: if it panics, its captures are
-    /// kept rather than dropped during the unwind, so a capture whose `Drop`
-    /// also panics cannot abort the process.
+    /// `f` is an `FnMut` called at most once, so its captures outlive its call
+    /// and are dropped contained after it, a panic included (ADR-0281).
     ///
     /// When the outcome has already settled, `f` runs at the owner's next
     /// turn, not inside this call.
@@ -383,12 +378,11 @@ fn settle_job(id: SlotId) -> OwnerJob {
         let settle = scope.completions().take(id);
         // The table's borrow ended above: the waiting closure may create
         // completions of its own.
-        if let Some(settle) = settle
-            && let Err(payload) = catch_unwind(AssertUnwindSafe(|| settle.settle()))
-        {
-            // Kept, not destroyed during this unwind (see `Settle`).
-            std::mem::forget(settle);
-            resume_unwind(payload);
+        if let Some(settle) = settle {
+            let mut first = FirstPanic::new();
+            first.contain(|| settle.settle());
+            first.contain(|| drop(settle));
+            first.resume();
         }
     })
 }

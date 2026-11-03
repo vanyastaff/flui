@@ -304,11 +304,7 @@ pub struct GeneratedRoute {
 impl Drop for GeneratedRoute {
     fn drop(&mut self) {
         if let Some(unpushed) = self.push.take() {
-            if std::thread::panicking() {
-                std::mem::forget(unpushed);
-            } else {
-                unpushed.dispose_unpushed();
-            }
+            unpushed.dispose_unpushed();
         }
     }
 }

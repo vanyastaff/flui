@@ -148,18 +148,6 @@ impl Default for PrimaryClaims {
     }
 }
 
-impl Drop for PrimaryClaims {
-    fn drop(&mut self) {
-        // Dropped while unwinding, the current claim's captures are kept
-        // rather than dropped into a second panic (ADR-0127).
-        if std::thread::panicking()
-            && let Some(current) = self.current.take()
-        {
-            std::mem::forget(current);
-        }
-    }
-}
-
 impl fmt::Debug for PrimaryClaims {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("PrimaryClaims")
@@ -180,8 +168,8 @@ impl fmt::Debug for PrimaryClaims {
 /// `Drop`), so the handle does it once no borrow of the backend is held and
 /// the new claim has its guard: a panicking capture then unwinds through
 /// that guard, which withdraws the claim, instead of leaving it current with
-/// no owner. While unwinding, the handle keeps what it was given rather than
-/// dropping it into a second panic (ADR-0127).
+/// no owner. A capture that panics while the thread already unwinds aborts,
+/// as in std (ADR-0281).
 pub trait PrimarySelectionBackend: 'static {
     /// Offer `text` as the primary selection, replacing any claim before:
     /// the claim's number, and what the replaced claim offered.
@@ -294,11 +282,6 @@ impl Drop for PrimaryClaim {
         // A read asked after the release never joins one that saw the text.
         if released.is_some() {
             self.reads.0.changed();
-        }
-        // While unwinding, what the claim offered is withdrawn but kept, not
-        // dropped into a second panic (ADR-0127).
-        if std::thread::panicking() {
-            std::mem::forget(released);
         }
     }
 }

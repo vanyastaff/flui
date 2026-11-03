@@ -91,11 +91,6 @@ impl AdoptedTransition {
 }
 
 /// The hooks a navigator holds for the routes it installs, durations read.
-///
-/// Each slot is its own [`Terminal`](super::lifecycle::Terminal): when the
-/// last owners of both builders have a panicking `Drop`, the first failure
-/// unwinds past the second slot, which then retains its builder instead of
-/// dropping it into a second panic.
 #[derive(Default)]
 pub(crate) struct AdoptedTransitions {
     /// For page routes (`PageRoute`).
@@ -130,14 +125,12 @@ impl PageTransitionHooks {
     /// navigator lock held.
     pub(crate) fn adopt(self) -> AdoptedTransitions {
         use super::lifecycle::Terminal;
-        // Secured before either builder runs user code, so a panic in the
-        // first leaves the second retained rather than unwound.
+        // A panic in the first builder destroys the second during the unwind
+        // (ADR-0281).
         let Self { page, popup } = self;
-        let mut page = Terminal::new(page);
-        let mut popup = Terminal::new(popup);
         AdoptedTransitions {
-            page: Terminal::new(page.take_value().map(AdoptedTransition::resolve)),
-            popup: Terminal::new(popup.take_value().map(AdoptedTransition::resolve)),
+            page: Terminal::new(page.map(AdoptedTransition::resolve)),
+            popup: Terminal::new(popup.map(AdoptedTransition::resolve)),
         }
     }
 

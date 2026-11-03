@@ -295,8 +295,8 @@ impl OwnerJobs {
     /// providers kept for the runtime (`RuntimeLocals`) ends, last, so a
     /// completion's closure dropped above still finds its provider's state.
     /// Returns the first panic for the runtime's teardown to keep with its
-    /// own first failure; after it, or while the thread unwinds, a queued job
-    /// is leaked rather than dropped.
+    /// own first failure; a later panic is discarded, and every queued job is
+    /// still dropped (ADR-0281 §3).
     #[must_use = "the first panic of a retirement belongs to the runtime's teardown"]
     pub(crate) fn retire(&self) -> Option<Box<dyn std::any::Any + Send>> {
         // Close admission first: a post that races this retirement is either
@@ -304,13 +304,9 @@ impl OwnerJobs {
         drop(self.admission.lock().take());
         let mut first = self.pending.retire();
         while let Ok(job) = self.rx.try_recv() {
-            if first.is_some() || std::thread::panicking() {
-                std::mem::forget(job);
-            } else if let Err(payload) =
-                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(job)))
-            {
-                first = Some(payload);
-            }
+            let failure =
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(job))).err();
+            flui_foundation::panic::FirstPanic::fold(&mut first, failure);
         }
         let locals = self.locals.retire();
         match (first, locals) {

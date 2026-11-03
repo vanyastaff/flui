@@ -35,19 +35,16 @@ use flui_foundation::{ElementId, ViewKey};
 
 use super::global_key_scope::ClaimIdentity;
 
-/// One independently owned key envelope. Ordinary destruction remains observable;
-/// an existing unwind retains this envelope before its user destructor can run.
-pub(super) struct OwnedGlobalKey(Option<Box<dyn ViewKey>>);
+/// One independently owned key envelope, destroyed normally (ADR-0281).
+pub(super) struct OwnedGlobalKey(Box<dyn ViewKey>);
 
 impl OwnedGlobalKey {
     pub(super) fn new(key: Box<dyn ViewKey>) -> Self {
-        Self(Some(key))
+        Self(key)
     }
 
     pub(super) fn as_ref(&self) -> &dyn ViewKey {
-        self.0
-            .as_deref()
-            .expect("BUG: live key envelope is occupied")
+        &*self.0
     }
 }
 
@@ -61,17 +58,6 @@ impl Deref for OwnedGlobalKey {
 impl std::fmt::Debug for OwnedGlobalKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.as_ref().debug_fmt(f)
-    }
-}
-
-impl Drop for OwnedGlobalKey {
-    fn drop(&mut self) {
-        let key = self.0.take();
-        if std::thread::panicking() {
-            std::mem::forget(key);
-        } else {
-            drop(key);
-        }
     }
 }
 

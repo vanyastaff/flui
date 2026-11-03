@@ -1,5 +1,5 @@
-//! Opaque future destructors must not replace an already authoritative failure.
-//! Abort-capable cases run in child processes so every table row still executes.
+//! Opaque future destructors run under containment and never replace an
+//! already authoritative failure (ADR-0281).
 
 use flui_scheduler::{OwnerFrame, TaskToken, UpdateScheduler};
 use std::cell::RefCell;
@@ -11,12 +11,18 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
 
-struct DropBomb(Arc<AtomicUsize>);
+/// Counts its drop and, when armed, panics from it. One aggregate holds at
+/// most one armed capture: a second destructor panicking while the first
+/// unwinds aborts, as in std (ADR-0281).
+struct DropBomb {
+    drops: Arc<AtomicUsize>,
+    armed: bool,
+}
 
 impl Drop for DropBomb {
     fn drop(&mut self) {
-        self.0.fetch_add(1, Ordering::Relaxed);
-        panic!("future destructor");
+        self.drops.fetch_add(1, Ordering::Relaxed);
+        assert!(!self.armed, "future destructor");
     }
 }
 
@@ -70,7 +76,12 @@ fn probe(
     Box::pin(ProbeFuture {
         outcome,
         observed: Arc::clone(observed),
-        _bombs: (0..bombs).map(|_| DropBomb(Arc::clone(drops))).collect(),
+        _bombs: (0..bombs)
+            .map(|index| DropBomb {
+                drops: Arc::clone(drops),
+                armed: index == 0,
+            })
+            .collect(),
         _nested: nested,
     })
 }
@@ -126,8 +137,8 @@ fn poll_failure(eager: bool, bombs: usize) {
     }
     assert_eq!(
         drops.load(Ordering::Relaxed),
-        0,
-        "no opaque Drop after poll failure"
+        bombs,
+        "the failed future is destroyed after its poll failure"
     );
     let stale = observed
         .lock()
@@ -172,7 +183,11 @@ fn token_during_unwind() {
         })),
         "outer failure",
     );
-    assert_eq!(drops.load(Ordering::Relaxed), 0);
+    assert_eq!(
+        drops.load(Ordering::Relaxed),
+        2,
+        "the detached future is destroyed during the unwind"
+    );
     assert_eq!(driver.pending_task_count(), 0);
     assert_next_task(&frame);
 }
@@ -185,14 +200,14 @@ fn retirement(cancel: bool, nested: bool) {
     let nested_drops = Arc::new(AtomicUsize::new(0));
     let observed = Arc::new(Mutex::new(None));
     let cancellation = Rc::new(RefCell::new(None));
-    let nested = nested
+    let nested_task = nested
         .then(|| driver.spawn_local(probe(Outcome::Pending, 2, &nested_drops, &observed, None)));
     let outcome = if cancel {
         Outcome::Cancel(Rc::clone(&cancellation))
     } else {
         Outcome::Ready
     };
-    let token = driver.spawn_local(probe(outcome, 1, &drops, &observed, nested));
+    let token = driver.spawn_local(probe(outcome, 1, &drops, &observed, nested_task));
     *cancellation.borrow_mut() = Some(token);
     let sibling = driver.spawn_local(Box::pin(async {}));
     assert_panic(
@@ -202,7 +217,11 @@ fn retirement(cancel: bool, nested: bool) {
         "future destructor",
     );
     assert_eq!(drops.load(Ordering::Relaxed), 1);
-    assert_eq!(nested_drops.load(Ordering::Relaxed), 0);
+    assert_eq!(
+        nested_drops.load(Ordering::Relaxed),
+        if nested { 2 } else { 0 },
+        "the nested token destroys its future too"
+    );
     assert_eq!(driver.pending_task_count(), 1);
     assert_eq!(frame.ready_task_count(), 1);
     assert_eq!(frame.pump_background(|| {}).expect("live owner turn"), 1);
@@ -243,7 +262,11 @@ fn spawn_hook_failure(eager: bool) {
         0,
         "failed spawn must not orphan a task"
     );
-    assert_eq!(drops.load(Ordering::Relaxed), 0);
+    assert_eq!(
+        drops.load(Ordering::Relaxed),
+        2,
+        "the refused future is destroyed"
+    );
     driver.set_request_frame(|| {});
     assert_next_task(&frame);
 }
@@ -272,7 +295,10 @@ fn hook_retirement() {
     let frame = OwnerFrame::try_new(&scheduler).expect("the scheduler has no live owner frame");
     let driver = frame.async_driver();
     let drops = Arc::new(AtomicUsize::new(0));
-    let bomb = DropBomb(Arc::clone(&drops));
+    let bomb = DropBomb {
+        drops: Arc::clone(&drops),
+        armed: true,
+    };
     driver.set_request_frame(move || {
         let _capture = &bomb;
     });
@@ -438,8 +464,8 @@ fn independent_owner_turn_preserves_pending_demand() {
     }
 }
 
-/// During an existing unwind the hook's captures are retained, not dropped:
-/// a capture panicking in `Drop` then would abort the process.
+/// During an existing unwind the hook's captures are destroyed under
+/// containment, and the incoming unwind stays the failure (ADR-0281).
 fn hook_retirement_during_unwind() {
     let drops = Arc::new(AtomicUsize::new(0));
     assert_panic(
@@ -447,7 +473,10 @@ fn hook_retirement_during_unwind() {
             let scheduler = UpdateScheduler::new();
             let frame =
                 OwnerFrame::try_new(&scheduler).expect("the scheduler has no live owner frame");
-            let bomb = DropBomb(Arc::clone(&drops));
+            let bomb = DropBomb {
+                drops: Arc::clone(&drops),
+                armed: true,
+            };
             frame.async_driver().set_request_frame(move || {
                 let _capture = &bomb;
             });
@@ -456,7 +485,7 @@ fn hook_retirement_during_unwind() {
         })),
         "outer failure",
     );
-    assert_eq!(drops.load(Ordering::Relaxed), 0);
+    assert_eq!(drops.load(Ordering::Relaxed), 1);
 }
 
 /// A subscriber whose every event panics.
@@ -492,9 +521,9 @@ impl Drop for SpawnOnDrop {
     }
 }
 
-/// A spawn refused because the UI runtime is gone makes the rejected future safe
-/// before any diagnostic runs: retained during an unwind, dropped once
-/// otherwise, and a panicking subscriber changes neither.
+/// A spawn refused because the UI runtime is gone destroys the rejected future
+/// under containment before any diagnostic runs, during an unwind too, and a
+/// panicking subscriber changes neither (ADR-0281).
 fn refused_spawn() {
     let dead = {
         let scheduler = UpdateScheduler::new();
@@ -517,8 +546,8 @@ fn refused_spawn() {
         );
         assert_eq!(
             drops.load(Ordering::Relaxed),
-            0,
-            "retained during the unwind"
+            2,
+            "destroyed under containment during the unwind"
         );
 
         let late = Arc::new(AtomicUsize::new(0));
@@ -569,36 +598,5 @@ fn async_driver_unwind_matrix() {
         ),
         ("refused_spawn", refused_spawn),
     ];
-    if let Ok(selected) = std::env::var("FLUI_ASYNC_UNWIND_CASE") {
-        let (_, case) = cases
-            .iter()
-            .find(|(name, _)| *name == selected)
-            .expect("known child case");
-        case();
-        return;
-    }
-    let mut failures = Vec::new();
-    for (name, _) in cases {
-        let output = std::process::Command::new(std::env::current_exe().expect("test executable"))
-            .args([
-                "async_driver_unwind::async_driver_unwind_matrix",
-                "--exact",
-                "--nocapture",
-            ])
-            .env("FLUI_ASYNC_UNWIND_CASE", name)
-            .output()
-            .expect("child test process");
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        if !output.status.success()
-            || !stdout.contains("running 1 test")
-            || !stdout.contains("test result: ok. 1 passed; 0 failed;")
-        {
-            failures.push(format!(
-                "{name}: {}\n{}",
-                String::from_utf8_lossy(&output.stdout),
-                String::from_utf8_lossy(&output.stderr)
-            ));
-        }
-    }
-    assert!(failures.is_empty(), "{}", failures.join("\n"));
+    crate::run_table("async driver unwind", cases);
 }

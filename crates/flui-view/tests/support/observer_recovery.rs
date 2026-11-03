@@ -1,4 +1,4 @@
-//! Public observer callbacks run in children, with payloads dropped and captures retained.
+//! Public observer callbacks run in children; payloads and failed captures are destroyed.
 use flui_foundation::observe::{ElementMounted, ElementRebuilt, TreeObserver};
 use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
 use flui_view::{BuildOwner, ElementTree, RebuildReason};
@@ -26,7 +26,7 @@ struct FailingObserver {
     aggregate_payload: bool,
     fail_detach: bool,
     payload_drops: Arc<AtomicUsize>,
-    _captures: Option<(Bomb, Bomb)>,
+    _captures: Option<Bomb>,
     calls: Arc<AtomicUsize>,
     detached: Arc<AtomicUsize>,
 }
@@ -91,12 +91,7 @@ fn run_child(kind: &str) {
         aggregate_payload: payload,
         fail_detach: detach,
         payload_drops: Arc::clone(&payload_drops),
-        _captures: captures.then(|| {
-            (
-                Bomb(Arc::clone(&capture_drops)),
-                Bomb(Arc::clone(&capture_drops)),
-            )
-        }),
+        _captures: captures.then(|| Bomb(Arc::clone(&capture_drops))),
         calls: Arc::clone(&calls),
         detached: Arc::clone(&detached),
     }));
@@ -136,8 +131,8 @@ fn run_child(kind: &str) {
     assert_eq!(payload_drops.load(Ordering::SeqCst), usize::from(payload));
     assert_eq!(
         capture_drops.load(Ordering::SeqCst),
-        0,
-        "last failed observer envelope is retained"
+        usize::from(captures),
+        "the failed observer envelope is destroyed under containment"
     );
     assert_eq!(
         telemetry_drops.load(Ordering::SeqCst),
@@ -176,7 +171,7 @@ fn run_child(kind: &str) {
     );
     owner.clear_tree_observer();
     drop(owner);
-    assert_eq!(capture_drops.load(Ordering::SeqCst), 0);
+    assert_eq!(capture_drops.load(Ordering::SeqCst), usize::from(captures));
 }
 
 fn child(kind: &str) {
@@ -229,10 +224,10 @@ pub(crate) fn dispatch_child(kind: &str) {
 pub(crate) fn emission_drops_its_payload() {
     child("emit_payload");
 }
-pub(crate) fn emission_retains_failed_capture_envelope() {
+pub(crate) fn emission_destroys_failed_capture_envelope() {
     child("emit_capture");
 }
-pub(crate) fn emission_drops_competing_payload_and_retains_captures() {
+pub(crate) fn emission_drops_competing_payload_and_its_captures() {
     child("emit_payload_capture");
 }
 pub(crate) fn emission_contains_reporting_failure() {
@@ -244,7 +239,7 @@ pub(crate) fn emission_contains_all_opaque_obligations() {
 pub(crate) fn detach_drops_its_payload() {
     child("detach_payload");
 }
-pub(crate) fn detach_retains_failed_capture_envelope() {
+pub(crate) fn detach_destroys_failed_capture_envelope() {
     child("detach_capture");
 }
 pub(crate) fn detach_contains_all_opaque_obligations() {

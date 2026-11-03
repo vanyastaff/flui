@@ -137,7 +137,11 @@ fn callable_retirement_preserves_the_first_failure() {
             Some("preparation retirement")
         );
         assert_eq!(preparation_drops.get(), 1);
-        assert_eq!(pipeline_drops.get(), 0, "later opaque callable is retained");
+        assert_eq!(
+            pipeline_drops.get(),
+            1,
+            "the later callable is destroyed behind the first failure"
+        );
         if !refused {
             owner
                 .drive_frame(now, IdleDeadline::far_future(now), || {}, || {})
@@ -146,7 +150,7 @@ fn callable_retirement_preserves_the_first_failure() {
     }
 }
 
-fn invocation_failure_retains_both_callable_envelopes() {
+fn invocation_failure_destroys_both_callable_envelopes() {
     for fail_preparation in [true, false] {
         let scheduler = UpdateScheduler::new();
         let owner = OwnerFrame::try_new(&scheduler).expect("owner");
@@ -198,8 +202,8 @@ fn invocation_failure_retains_both_callable_envelopes() {
             "pipeline invocation"
         };
         assert_eq!(failure.downcast_ref::<&str>(), Some(&expected));
-        assert_eq!(preparation_drops.get(), 0);
-        assert_eq!(pipeline_drops.get(), 0);
+        assert_eq!(preparation_drops.get(), 1, "destroyed after the catch");
+        assert_eq!(pipeline_drops.get(), 1, "destroyed after the catch");
         assert!(
             !delivered.get(),
             "failure does not invoke the accepted tail"
@@ -236,7 +240,7 @@ impl Drop for ProducedResult {
     }
 }
 
-fn terminal_release_closes_authority_and_preserves_result_custody() {
+fn terminal_release_closes_authority_and_destroys_the_result() {
     for fail in [false, true] {
         let scheduler = UpdateScheduler::new();
         let owner = OwnerFrame::try_new(&scheduler).expect("owner");
@@ -276,7 +280,11 @@ fn terminal_release_closes_authority_and_preserves_result_custody() {
                 failure.downcast_ref::<&str>(),
                 Some(&"terminal capture retirement")
             );
-            assert_eq!(result_drops.get(), 0, "output remains in failure custody");
+            assert_eq!(
+                result_drops.get(),
+                1,
+                "the output is destroyed behind the first failure"
+            );
         } else {
             let output = result.expect("healthy retirement").expect("admitted turn");
             assert_eq!(result_drops.get(), 0);
@@ -312,12 +320,12 @@ fn admitted_frame_preparation_contract() {
             callable_retirement_preserves_the_first_failure,
         ),
         (
-            "invocation_failure_retains_both_callable_envelopes",
-            invocation_failure_retains_both_callable_envelopes,
+            "invocation_failure_destroys_both_callable_envelopes",
+            invocation_failure_destroys_both_callable_envelopes,
         ),
         (
-            "terminal_release_closes_authority_and_preserves_result_custody",
-            terminal_release_closes_authority_and_preserves_result_custody,
+            "terminal_release_closes_authority_and_destroys_the_result",
+            terminal_release_closes_authority_and_destroys_the_result,
         ),
     ];
     if let Ok(selected) = std::env::var("FLUI_OWNER_EXECUTION_CASE") {
