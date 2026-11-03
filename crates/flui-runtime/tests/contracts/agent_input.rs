@@ -322,7 +322,7 @@ fn input_the_window_cannot_play_as_asked_is_refused_whole() {
             vec![InputSource::Keys {
                 id: "keyboard".to_owned(),
                 actions: vec![KeyAction::Down {
-                    key: "Shfit".to_owned(),
+                    key: "NoSuchKey".to_owned(),
                 }],
             }],
             ErrorCode::InvalidArgument,
