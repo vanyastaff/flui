@@ -884,10 +884,12 @@ pub(crate) fn magnifiers(laid: &LaidOut) -> Vec<flui_foundation::geometry::Rect<
 
 /// A drag of the caret's handle shows the scope's magnifier over the caret
 /// as it moves, its bottom centre a gap above the line at the caret, and
-/// takes it away with the drag; a desktop platform shows none by default.
+/// takes it away with the drag; a desktop platform shows none by default,
+/// and the field's own choice wins over the scope's.
 ///
 /// Red-check: leave the magnifier out of the handles (none during the
-/// drag), or keep it after the drag (one after the release).
+/// drag), keep it after the drag (one after the release), or ignore the
+/// field's own choice (the scope's look).
 pub(crate) fn a_handle_drag_shows_the_magnifier_over_the_dragged_end() {
     use flui_widgets::{MagnifierInfo, PlainMagnifier};
 
@@ -955,4 +957,22 @@ pub(crate) fn a_handle_drag_shows_the_magnifier_over_the_dragged_end() {
         "the host is a desktop"
     );
     assert!(shown.is_empty(), "a desktop shows none: {shown:?}");
+
+    // The field's own choice wins over the scope's.
+    let mut scene = Scene::build(Some(|c| c.magnifier(PlainMagnifier::rounded())), |field| {
+        field
+            .caret_handle(CaretHandle::on_tap())
+            .magnifier(PlainMagnifier::capsule())
+    });
+    let ((shown, _), _) = drag_caret(&mut scene);
+    let sizes = shown
+        .iter()
+        .map(|loupe| (loupe.width(), loupe.height()))
+        .collect::<Vec<_>>();
+    assert_eq!(sizes, [(80.0, 48.0)], "the field's own look");
+    let mut scene = Scene::build(Some(|c| c.magnifier(PlainMagnifier::rounded())), |field| {
+        field.caret_handle(CaretHandle::on_tap()).no_magnifier()
+    });
+    let ((shown, _), _) = drag_caret(&mut scene);
+    assert!(shown.is_empty(), "the field turned it off: {shown:?}");
 }

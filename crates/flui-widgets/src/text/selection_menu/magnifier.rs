@@ -164,7 +164,7 @@ impl SelectionMagnifier for PlainMagnifier {
     }
 }
 
-/// Whether a scope set a magnifier or turned it off.
+/// Whether a widget or scope set a magnifier or turned it off.
 #[derive(Clone)]
 pub(crate) enum MagnifierChoice {
     Show(Rc<dyn SelectionMagnifier>),
