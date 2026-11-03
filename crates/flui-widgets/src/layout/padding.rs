@@ -3,7 +3,7 @@
 use flui_foundation::geometry::EdgeInsets;
 use flui_objects::RenderPadding;
 use flui_rendering::protocol::BoxProtocol;
-use flui_view::{Child, IntoView, RenderView, impl_render_view};
+use flui_view::{Child, CreationSite, IntoView, RenderView, impl_render_view};
 
 /// A widget that insets its child by the given [`EdgeInsets`].
 ///
@@ -19,30 +19,36 @@ use flui_view::{Child, IntoView, RenderView, impl_render_view};
 /// ```
 #[derive(Clone, Debug)]
 pub struct Padding {
-    padding: EdgeInsets,
+    insets: EdgeInsets,
     child: Child,
+    site: CreationSite,
 }
 
 impl Padding {
     /// Create padding from explicit [`EdgeInsets`], with no child yet.
+    #[track_caller]
     pub fn new(padding: EdgeInsets) -> Self {
         Self {
-            padding,
+            insets: padding,
             child: Child::empty(),
+            site: CreationSite::here(),
         }
     }
 
     /// Uniform padding on all four sides.
+    #[track_caller]
     pub fn all(value: f64) -> Self {
         Self::new(EdgeInsets::all(value))
     }
 
     /// Symmetric padding: `horizontal` on left/right, `vertical` on top/bottom.
+    #[track_caller]
     pub fn symmetric(horizontal: f64, vertical: f64) -> Self {
         Self::new(EdgeInsets::symmetric(vertical, horizontal))
     }
 
     /// Padding on individually-named sides (unspecified sides are zero).
+    #[track_caller]
     pub fn only(left: f64, top: f64, right: f64, bottom: f64) -> Self {
         Self::new(EdgeInsets::new(top, right, bottom, left))
     }
@@ -63,7 +69,7 @@ impl RenderView for Padding {
         &self,
         _ctx: &flui_view::RenderObjectContext<'_>,
     ) -> Self::RenderObject {
-        RenderPadding::new(self.padding)
+        RenderPadding::new(self.insets)
     }
 
     fn update_render_object(
@@ -72,11 +78,11 @@ impl RenderView for Padding {
         render_object: &mut Self::RenderObject,
     ) -> flui_rendering::RenderUpdateImpact {
         let mut impact = flui_rendering::RenderUpdateImpact::NONE;
-        impact |= render_object.set_padding(self.padding);
+        impact |= render_object.set_padding(self.insets);
         impact
     }
 
     flui_view::single_child_view_children!();
 }
 
-impl_render_view!(Padding);
+impl_render_view!(Padding, site = site);
