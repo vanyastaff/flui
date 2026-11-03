@@ -57,7 +57,7 @@ mod clipboard;
 mod cursor_area;
 mod handles;
 mod menu;
-use crate::text::{MagnifierChoice, MenuSettings, SelectionMagnifier, ShowSelectionMenu};
+use crate::text::{MagnifierChoice, MenuSettings, ShowSelectionMenu};
 use cursor_area::CursorAreaLoop;
 
 pub use handles::CaretHandle;
@@ -583,44 +583,6 @@ impl EditableText {
     /// [`DefaultSelectionControls`]' or [`DotHandles`] in the opaque active
     /// selection colour, as a [`SelectionArea`](crate::SelectionArea) does.
     ///
-    /// A touch selection (a long press, which the same touch extends by
-    /// words, a double tap or a drag) shows a handle under each end, and a
-    /// tap one under the caret as [`Self::caret_handle`] says; dragging a
-    /// handle moves its end. They show in the nearest
-    /// [`Overlay`](crate::Overlay), and none without one.
-    #[must_use]
-    pub fn handles(mut self, handles: impl SelectionHandles) -> Self {
-        self.handles = Some(Rc::new(handles));
-        self
-    }
-
-    /// Show `magnifier` while a finger drags a handle, in place of the
-    /// nearest [`DefaultSelectionControls`]' or the platform's
-    /// ([`PlainMagnifier::for_platform`](crate::text::PlainMagnifier::for_platform)).
-    #[must_use]
-    pub fn magnifier(mut self, magnifier: impl SelectionMagnifier) -> Self {
-        self.magnifier = Some(MagnifierChoice::Show(Rc::new(magnifier)));
-        self
-    }
-
-    /// Show no magnifier while a finger drags a handle, though a
-    /// [`DefaultSelectionControls`] above or the platform gives one.
-    #[must_use]
-    pub fn no_magnifier(mut self) -> Self {
-        self.magnifier = Some(MagnifierChoice::Hide);
-        self
-    }
-
-    /// Whether a tap shows a handle under the caret, in place of the
-    /// nearest [`DefaultSelectionControls`]' choice or the platform's
-    /// ([`CaretHandle::default`]).
-    #[must_use]
-    pub fn caret_handle(mut self, caret_handle: CaretHandle) -> Self {
-        self.caret_handle = Some(caret_handle);
-        self
-    }
-
-    /// Override the caret color (default black).
     #[must_use]
     pub fn caret_color(mut self, color: Color) -> Self {
         self.caret_color = color;
