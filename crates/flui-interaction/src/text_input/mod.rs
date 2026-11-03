@@ -68,12 +68,11 @@ use flui_foundation::geometry::Bounds;
 use flui_platform::ImeEvent;
 use flui_platform::PlatformTextInput;
 use flui_platform::text_store::{
-    CommitGate, CompositionEnd, LockOutcome, OwnerCalls, RetainOnFailure, TextChange, TextStore,
-    TextStoreHost, TextStoreObserver, commit_composition_in_place, project_ime_event,
+    CommitGate, CompositionEnd, LockOutcome, OwnerCalls, TextChange, TextStore, TextStoreHost,
+    TextStoreObserver, commit_composition_in_place, project_ime_event,
 };
 
 use crate::close::{CloseMode, ClosePanic, CloseTombstone};
-use crate::retain::Retain;
 
 mod arbiter;
 mod clipboard;
@@ -104,13 +103,6 @@ pub struct ClientToken(NonZeroU64);
 pub struct TextInputClient {
     store: Rc<dyn TextStore>,
     on_session_start: Option<Rc<dyn Fn()>>,
-}
-
-impl Retain for TextInputClient {
-    fn retain(self) {
-        Retain::retain(self.on_session_start);
-        Retain::retain(self.store);
-    }
 }
 
 impl TextInputClient {
@@ -203,15 +195,6 @@ enum HostOp {
     Complete(Rc<dyn TextStore>),
 }
 
-impl Retain for HostOp {
-    fn retain(self) {
-        match self {
-            Self::Focus(store) => Retain::retain(store),
-            Self::Complete(store) => Retain::retain(store),
-        }
-    }
-}
-
 /// Counts one owner call on the host for as long as it runs, unwinding
 /// included; the queue is drained explicitly, never from here.
 struct HostCall<'a>(&'a Cell<u32>);
@@ -302,18 +285,10 @@ impl TextStoreObserver for PushStatusObserver {
     }
 }
 
-impl RetainOnFailure for TextInputClient {
-    fn retain(self) {
-        RetainOnFailure::retain(self.on_session_start);
-        RetainOnFailure::retain(self.store);
-    }
-}
-
 /// Retire the independent client owners separately, in the client's field
-/// order (store, then session callback), inside `calls`: after a failure, and
-/// while the thread is already unwinding, they are retained rather than
-/// destroyed (ADR-0127). With `gate`, a failure their destruction parks there
-/// (a store dropped while it settles a grant) is taken too.
+/// order (store, then session callback), under the retirement of `calls`.
+/// With `gate`, a failure their destruction parks there (a store dropped
+/// while it settles a grant) is taken too.
 fn retire_client_owners(
     client: TextInputClient,
     calls: &mut OwnerCalls,
@@ -346,14 +321,10 @@ fn retire_rejected(failure: &mut ClosePanic, client: TextInputClient) {
 
 /// Release a local clone of the framework-owned platform capability before
 /// any user-owned value retires, so the clone is never destroyed by a later
-/// unwind; only an unwind already in progress retains it (ADR-0127).
+/// unwind. Its destructor runs inside `calls` (ADR-0281 §3).
 /// The pull host's clone is released the same way.
 fn release_platform<T>(platform: T, calls: &mut OwnerCalls) {
-    if std::thread::panicking() {
-        std::mem::forget(platform);
-    } else {
-        calls.run(|| drop(platform));
-    }
+    calls.run(|| drop(platform));
 }
 
 /// Run a call of a close on the platform or the pull host (or a client
@@ -384,15 +355,11 @@ fn close_host_call<T>(
 }
 
 /// Retire `value`, an owner a close withdrew, inside the close's `failure`:
-/// retained once a failure is owed, otherwise destroyed through
-/// [`close_host_call`], so a failure its destruction's unwind parks in
-/// `gate` is kept behind that destruction's own.
-fn close_retire<T: Retain>(gate: &CommitGate, failure: &mut ClosePanic, value: T) {
-    if failure.preserving() {
-        value.retain();
-    } else {
-        close_host_call(gate, failure, || drop(value));
-    }
+/// destroyed through [`close_host_call`], so a failure its destruction's
+/// unwind parks in `gate` is kept behind that destruction's own. Once a
+/// failure is owed, a panic of its destructor is discarded (ADR-0281 §3).
+fn close_retire<T>(gate: &CommitGate, failure: &mut ClosePanic, value: T) {
+    close_host_call(gate, failure, || drop(value));
 }
 
 fn retire_stores(stores: Vec<Rc<dyn TextStore>>, calls: &mut OwnerCalls, gate: &CommitGate) {
@@ -577,7 +544,7 @@ impl TextInputOwner {
         // Before the client is reachable through `dispatch`, so no lock is
         // ever requested on a store that does not yet follow the frame. The
         // store is user code: a failure there rejects the client, which is
-        // retained rather than destroyed during the unwind (ADR-0127). The
+        // destroyed under containment (ADR-0281). The
         // store may request grants of stores behind this owner's gate, whose
         // settles park their failures there: one parked during a call that
         // then panics came first, and is the one raised. When the store took
@@ -593,7 +560,7 @@ impl TextInputOwner {
             if installed {
                 self.gate.defer_failure(payload);
             } else {
-                RetainOnFailure::retain(client);
+                crate::containment::drop_contained(client);
                 std::panic::resume_unwind(payload);
             }
         }
@@ -637,7 +604,7 @@ impl TextInputOwner {
             // The outgoing store's commit may have closed the owner.
             if let Err(error) = self.ensure_open() {
                 if let Some(payload) = calls.into_failure() {
-                    RetainOnFailure::retain(client);
+                    crate::containment::drop_contained(client);
                     std::panic::resume_unwind(payload);
                 }
                 let mut failure = ClosePanic::for_rejection(self.close_mode.mode());
@@ -1283,8 +1250,8 @@ impl TextInputOwner {
             }
             _ => {}
         }
-        // Framework-owned: released even when the clients below are retained.
-        failure.release(backend);
+        // Framework-owned: released before the clients below.
+        failure.retire(backend);
         if let Some(active) = active {
             let TextInputClient {
                 store,
@@ -1410,7 +1377,7 @@ impl Drop for TextInputOwner {
         // retires on its own, as a close retires them: one collection
         // dropped whole would destroy the rest during the first's unwind,
         // and a second panicking destructor would abort. After a failure
-        // the tail is retained (ADR-0127).
+        // the tail is still destroyed, each contained (ADR-0281).
         for op in host_ops {
             close_retire(&self.gate, &mut failure, op);
         }
@@ -1426,7 +1393,7 @@ impl Drop for TextInputOwner {
             }
             _ => {}
         }
-        failure.release(backend);
+        failure.retire(backend);
         if let Some(active) = active {
             let TextInputClient {
                 store,

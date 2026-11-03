@@ -661,7 +661,7 @@ impl flui_animation::Animatable for FailingRectMapping {
 
     fn transform(&self, t: f64) -> Rect {
         assert!(
-            !(self.armed.get() && matches!(self.phase, "transform" | "competing")),
+            !(self.armed.get() && self.phase == "transform"),
             "mapping evaluation"
         );
         flui_animation::Animatable::transform(&self.endpoints, t)
@@ -672,7 +672,7 @@ impl Drop for FailingRectMapping {
     fn drop(&mut self) {
         self.drops.set(self.drops.get() + 1);
         assert!(
-            !(self.armed.get() && matches!(self.phase, "drop" | "competing")),
+            !(self.armed.get() && self.phase == "drop"),
             "mapping retirement"
         );
     }
@@ -722,21 +722,16 @@ fn rect_mapping_failure(phase: &'static str) {
     } else {
         let expected = match phase {
             "factory" => "factory evaluation",
-            "transform" | "competing" => "mapping evaluation",
+            "transform" => "mapping evaluation",
             "drop" => "mapping retirement",
             _ => panic!("unknown failure phase"),
         };
         let failure = result.expect_err("the authored failure propagates");
         assert_eq!(failure.downcast_ref::<&str>().copied(), Some(expected));
-        if matches!(phase, "transform" | "competing" | "factory") {
-            assert_eq!(
-                drops.get(),
-                before,
-                "incoming failure retains opaque mapping ownership"
-            );
-        } else {
-            assert_eq!(drops.get(), before + 1);
-        }
+        // A mapping that was built is destroyed once, by the evaluation
+        // failure's unwind or by its own failing destructor (ADR-0281).
+        let built = usize::from(phase != "factory");
+        assert_eq!(drops.get(), before + built);
     }
     assert_rect_close(
         flight.shuttle_rect(),
@@ -761,7 +756,6 @@ fn hero_rect_mapping_failures_preserve_recovery() {
             "factory" => "factory",
             "transform" => "transform",
             "drop" => "drop",
-            "competing" => "competing",
             _ => panic!("unknown mapping case"),
         };
         rect_mapping_failure(phase);
@@ -769,7 +763,7 @@ fn hero_rect_mapping_failures_preserve_recovery() {
     }
     child_process::run_rows(
         "hero_flight::hero_rect_mapping_failures_preserve_recovery",
-        &["healthy", "factory", "transform", "drop", "competing"],
+        &["healthy", "factory", "transform", "drop"],
     );
 }
 

@@ -172,8 +172,8 @@ impl fmt::Debug for ChangeNotifier {
 
 impl ChangeNotifier {
     /// Carry a failure this notifier's current delivery already holds into
-    /// `recovery`, so a withdrawal made during that delivery retains captures
-    /// instead of destroying them on a failed path.
+    /// `recovery`, so a withdrawal made during that delivery retires its
+    /// captures under containment and that failure stays the first.
     pub fn inherit_failure(&self, recovery: &mut RecoveryScope<'_>) {
         self.inner.inherit_failure(recovery);
     }
@@ -421,11 +421,9 @@ impl Listenable for ChangeNotifier {
 /// the listener channel.
 ///
 /// Dropping the notifier drops the value, then its handle on the shared
-/// channel. While the thread is panicking (already, or because the value's
-/// destructor panicked) the value and the last channel owner's listener
-/// captures are retained rather than dropped (ADR-0127), but the handle is
-/// still released so clones keep working. The value is likewise retained when
-/// [`into_value`](Self::into_value) fails to dispose the channel.
+/// channel, as std drops a struct's fields: a destructor that panics while
+/// the thread is already unwinding aborts (ADR-0281). A clone keeps the
+/// shared channel working.
 ///
 /// Borrowed data inside `T` must outlive the notifier: declare the notifier
 /// after its referent, or keep the referent alive longer. `T: 'static` is not
@@ -466,31 +464,16 @@ pub struct ValueNotifier<T> {
     notifier: Option<ChangeNotifier>,
 }
 
-/// The value and channel withdrawn from a `ValueNotifier`. Dropped while the
-/// thread is panicking, it retains the value (ADR-0127) and drops the channel
-/// handle: a clone may still share the channel, and the last owner's listener
-/// storage retains its own captures during an unwind.
+/// The value and channel withdrawn from a `ValueNotifier`, dropped in field
+/// order: the value, then the channel handle.
 struct RetiringValueNotifier<T> {
     value: Option<T>,
     notifier: Option<ChangeNotifier>,
 }
 
-impl<T> Drop for RetiringValueNotifier<T> {
-    fn drop(&mut self) {
-        if std::thread::panicking() {
-            std::mem::forget(self.value.take());
-        }
-    }
-}
-
 impl<T> Drop for ValueNotifier<T> {
     fn drop(&mut self) {
-        let mut retiring = self.extract_owned();
-        if !std::thread::panicking() {
-            // Value, then channel.
-            drop(retiring.value.take());
-            drop(retiring.notifier.take());
-        }
+        drop(self.extract_owned());
     }
 }
 

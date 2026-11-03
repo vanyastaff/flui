@@ -201,9 +201,8 @@ impl GestureRecognizer for HoldGestureRecognizer {
                 return;
             };
             self.announced.set(Some(id));
-            let preserving = recovery.has_failure();
             arena.invoke_with_recovery(FailureClass::Delivery, recovery, |_| {
-                let mut notices = CallbackSequence::preserving_failure(preserving);
+                let mut notices = CallbackSequence::new();
                 notices.call(self.callbacks.on_hold.clone(), |callback| {
                     callback(HoldDetails {
                         global_position,

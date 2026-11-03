@@ -87,8 +87,8 @@ pub(crate) enum AfterPanic<A, R> {
 /// The panic is logged first, with its text, under `entry` and with `args`
 /// (unless they are `()`), so a failure that follows (an answer that panics
 /// too, the abort) never hides it; the log is contained like any owner
-/// callback, since a subscriber is user code. The payload is then retained
-/// rather than dropped: its destructor is user code too. An answer that
+/// callback, since a subscriber is user code. The payload is then discarded
+/// under containment: its destructor is user code too. An answer that
 /// panics leaves nothing to give the OS, so the process ends. `args` are
 /// `Copy`, so nothing of them is destroyed outside the boundary either.
 ///
@@ -148,37 +148,29 @@ fn end_process(entry: &'static str, args: Option<&dyn std::fmt::Debug>, why: &'s
     std::process::abort()
 }
 
-/// Contain owner callback and capture cleanup panics without dropping hostile
-/// payloads; the panic is logged with its text.
+/// Contain owner callback and capture cleanup panics; the panic is logged with
+/// its text and its payload destroyed under containment (ADR-0281).
 pub(crate) fn contain_owner_callback(body: impl FnOnce()) {
-    let _ = owner_callback_panicked(body);
-}
-
-/// [`contain_owner_callback`], answering whether `body` panicked, so a caller
-/// retiring several values retains the rest after the first failure
-/// (ADR-0127 §2).
-pub(crate) fn owner_callback_panicked(body: impl FnOnce()) -> bool {
     let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(body)) else {
-        return false;
+        return;
     };
-    if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+    if let Err(secondary) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         tracing::error!(
             panic = flui_foundation::panic::payload_text(&*payload),
             "contained owner callback or cleanup panic"
         );
     })) {
-        std::mem::forget(payload);
+        flui_foundation::panic::discard_payload(secondary);
     }
-    std::mem::forget(payload);
-    true
+    flui_foundation::panic::discard_payload(payload);
 }
 
 /// [`os_entry`]'s containment, for one step inside an entry that answers its
 /// failure itself (a broadcast subscriber, a drag provider the OLE data
 /// object serves): `None` when `body` panicked. The panic is logged with its
 /// text, under `entry`, the log contained like any owner callback, and its
-/// payload is then retained rather than dropped, since a payload's destructor
-/// is user code that would unwind into the OS (ADR-0127 §2).
+/// payload is then discarded under containment, since a payload's destructor
+/// is user code that would unwind into the OS (ADR-0281).
 #[cfg(any(
     target_os = "windows",
     target_os = "macos",
@@ -189,7 +181,7 @@ pub(crate) fn contain_os_entry<R>(entry: &'static str, body: impl FnOnce() -> R)
     contained(entry, None, body)
 }
 
-/// `body`, or `None` once its panic is logged and its payload retained.
+/// `body`, or `None` once its panic is logged and its payload discarded.
 #[cfg(any(
     target_os = "windows",
     target_os = "macos",

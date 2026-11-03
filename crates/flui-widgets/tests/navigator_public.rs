@@ -30,16 +30,16 @@ use flui_widgets::{
     Route, RouteContentBuilder, RouteId, RouteKey, RouteRequest, RouteSettings,
 };
 
-/// A restored raw route owner can abort during parser unwind, so each row runs
-/// in a bounded child process while still calling the public default producer.
+/// A prefix parser failure in the public default producer destroys the routes
+/// it already accepted (ADR-0281), the parser's failure is the one raised, and
+/// the next parse succeeds. The counters are process-global, so the case runs
+/// in a child process.
 #[test]
-fn default_back_stack_parser_retirement_competition() {
+fn default_back_stack_parser_failure_destroys_accepted_routes() {
     use std::sync::atomic::AtomicBool;
 
     if let Some(case) = child_process::selected_case() {
         static PARSER_FAILS: AtomicBool = AtomicBool::new(true);
-        static FULL_FAILS: AtomicBool = AtomicBool::new(false);
-        static PREFIX_FAILS: AtomicBool = AtomicBool::new(false);
         static FULL_DROPS: AtomicUsize = AtomicUsize::new(0);
         static PREFIX_DROPS: AtomicUsize = AtomicUsize::new(0);
 
@@ -47,16 +47,12 @@ fn default_back_stack_parser_retirement_competition() {
         struct ParsedRoute(&'static str);
         impl Drop for ParsedRoute {
             fn drop(&mut self) {
-                let (drops, fails) = if self.0 == "/a/b" {
-                    (&FULL_DROPS, &FULL_FAILS)
+                let drops = if self.0 == "/a/b" {
+                    &FULL_DROPS
                 } else {
-                    (&PREFIX_DROPS, &PREFIX_FAILS)
+                    &PREFIX_DROPS
                 };
                 drops.fetch_add(1, Ordering::Relaxed);
-                assert!(
-                    !fails.load(Ordering::Relaxed),
-                    "competing parsed route retirement"
-                );
             }
         }
         impl Routable for ParsedRoute {
@@ -79,15 +75,7 @@ fn default_back_stack_parser_retirement_competition() {
             }
         }
 
-        assert!(matches!(
-            case.as_str(),
-            "parser" | "full" | "prefix" | "both"
-        ));
-        FULL_FAILS.store(matches!(case.as_str(), "full" | "both"), Ordering::Relaxed);
-        PREFIX_FAILS.store(
-            matches!(case.as_str(), "prefix" | "both"),
-            Ordering::Relaxed,
-        );
+        assert_eq!(case, "parser");
         let path = RoutePath::parse("/a/b").expect("fixture path");
         let failure = std::panic::catch_unwind(|| {
             let _ = ParsedRoute::back_stack(&path);
@@ -99,18 +87,16 @@ fn default_back_stack_parser_retirement_competition() {
         );
         assert_eq!(
             FULL_DROPS.load(Ordering::Relaxed),
-            0,
-            "accepted full route retained during parser unwind"
+            1,
+            "the accepted full route is destroyed by the parser unwind"
         );
         assert_eq!(
             PREFIX_DROPS.load(Ordering::Relaxed),
-            0,
-            "accepted prefix tail retained during parser unwind"
+            1,
+            "the accepted root prefix is destroyed by the parser unwind"
         );
 
         PARSER_FAILS.store(false, Ordering::Relaxed);
-        FULL_FAILS.store(false, Ordering::Relaxed);
-        PREFIX_FAILS.store(false, Ordering::Relaxed);
         let stack = ParsedRoute::back_stack(&path).expect("next healthy default parse");
         assert_eq!(
             stack.iter().map(|route| route.0).collect::<Vec<_>>(),
@@ -119,20 +105,20 @@ fn default_back_stack_parser_retirement_competition() {
         drop(stack);
         assert_eq!(
             FULL_DROPS.load(Ordering::Relaxed),
-            1,
+            2,
             "healthy full route retires normally"
         );
         assert_eq!(
             PREFIX_DROPS.load(Ordering::Relaxed),
-            2,
+            3,
             "healthy prefix routes retire normally"
         );
         child_process::pass();
     }
 
     child_process::run_rows(
-        "navigator_public::default_back_stack_parser_retirement_competition",
-        &["parser", "full", "prefix", "both"],
+        "navigator_public::default_back_stack_parser_failure_destroys_accepted_routes",
+        &["parser"],
     );
 }
 

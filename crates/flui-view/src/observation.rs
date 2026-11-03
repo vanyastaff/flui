@@ -48,11 +48,12 @@ struct State<E> {
 }
 
 impl<E> State<E> {
-    /// Whether a rejected or cancelled callback is retained rather than
-    /// dropped: after a caught drain failure, or while a preserving close is
-    /// still in progress. Once that close returns, stale handles retire their
-    /// callbacks normally again (ADR-0123).
-    fn retains_retired(&self) -> bool {
+    /// Whether an earlier failure owns the unwind, so a rejected or cancelled
+    /// callback is destroyed under containment instead of reporting its own
+    /// destructor panic: after a caught drain failure, or while a preserving
+    /// close is still in progress. Once that close returns, stale handles
+    /// retire their callbacks normally again (ADR-0123, ADR-0281).
+    fn has_prior_failure(&self) -> bool {
         self.retirement_failed || (self.preserving_close && (self.closing > 0 || self.draining))
     }
 }
@@ -261,15 +262,7 @@ impl<E: Clone + 'static> Observation<E> {
         for listener in listeners {
             listener.active.set(false);
             let callback = listener.callback.borrow_mut().take();
-            let (failed, preserving) = {
-                let state = self.inner.state.borrow();
-                (state.retirement_failed, state.preserving_close)
-            };
-            if failed || preserving {
-                std::mem::forget(callback);
-            } else {
-                retire_callback(callback, first);
-            }
+            retire_callback(callback, first);
             if first.is_some() {
                 let mut state = self.inner.state.borrow_mut();
                 state.retirement_failed = true;
@@ -310,7 +303,7 @@ impl<E: Clone + 'static> WeakObservation<E> {
         };
         let mut state = inner.state.borrow_mut();
         if state.phase != Phase::Open {
-            let prior_failure = state.retains_retired();
+            let prior_failure = state.has_prior_failure();
             drop(state);
             retire_rejected_callback(callback, prior_failure);
             return Err(LifecycleClosed);
@@ -336,7 +329,7 @@ impl<E: Clone + 'static> Drop for Subscription<E> {
         listener.active.set(false);
         let (removed, prior_failure) = self.source.upgrade().map_or((None, false), |source| {
             let mut state = source.state.borrow_mut();
-            let prior_failure = state.retains_retired();
+            let prior_failure = state.has_prior_failure();
             let removed = state
                 .listeners
                 .iter()
@@ -347,12 +340,12 @@ impl<E: Clone + 'static> Drop for Subscription<E> {
         // A leased callback is dropped by the dispatcher after invocation.
         let callback = listener.callback.borrow_mut().take();
         drop(removed);
-        let mut first = None;
         if prior_failure {
-            std::mem::forget(callback);
-        } else {
-            retire_callback(callback, &mut first);
+            crate::drop_contained(callback);
+            return;
         }
+        let mut first = None;
+        retire_callback(callback, &mut first);
         if let Some(payload) = first {
             resume_unwind(payload);
         }
@@ -370,24 +363,22 @@ pub(crate) fn preserve(first: &mut Option<Panic>, next: Option<Panic>) {
     flui_foundation::panic::FirstPanic::fold(first, next);
 }
 
-// Rejected admission owns the generic callback too. It must release source
-// borrows before ordinary retirement, and cannot compete with an earlier failure.
+// Rejected admission owns the generic callback too. It releases source borrows
+// first; after an earlier failure its destructor runs under containment and
+// cannot compete with that failure (ADR-0281 §3).
 fn retire_rejected_callback<E>(callback: Callback<E>, prior_failure: bool) {
-    if prior_failure || std::thread::panicking() {
-        std::mem::forget(callback);
+    if prior_failure {
+        crate::drop_contained(callback);
     } else {
         drop(callback);
     }
 }
 
-/// Retire one envelope only while no failure already owns the unwind.
+/// Retire one envelope under containment: the first failure stays in `first`,
+/// a later destructor panic is discarded (ADR-0281 §3).
 fn retire_callback<E>(callback: Option<Callback<E>>, first: &mut Option<Panic>) {
-    if first.is_some() || std::thread::panicking() {
-        std::mem::forget(callback);
-    } else {
-        preserve(
-            first,
-            catch_unwind(AssertUnwindSafe(|| drop(callback))).err(),
-        );
-    }
+    preserve(
+        first,
+        catch_unwind(AssertUnwindSafe(|| drop(callback))).err(),
+    );
 }

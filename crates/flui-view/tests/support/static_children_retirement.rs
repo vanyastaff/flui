@@ -1,4 +1,4 @@
-//! Independent static children and the mapper retire without competing unwinds.
+//! Static children and the mapper are all destroyed; the first failure is raised.
 use std::{
     cell::RefCell,
     panic::{AssertUnwindSafe, catch_unwind},
@@ -75,10 +75,9 @@ pub(crate) fn dispatch_child(kind: &str) {
         drop(delegate);
     }));
     let expected: &[&str] = match kind {
-        "healthy" | "mapper" => &["first", "second", "mapper"],
-        "first" | "competition" => &["first"],
-        "second" => &["first", "second"],
-        "incoming" => &[],
+        "healthy" | "mapper" | "first" | "second" | "competition" | "incoming" => {
+            &["first", "second", "mapper"]
+        }
         _ => panic!("unknown static retirement child {kind}"),
     };
     assert_eq!(seen.borrow().as_slice(), expected);
@@ -113,10 +112,10 @@ fn run(kind: &str) {
 pub(crate) fn healthy_static_children_release_in_order() {
     run("healthy");
 }
-pub(crate) fn first_static_child_failure_retains_successors() {
+pub(crate) fn first_static_child_failure_destroys_successors() {
     run("first");
 }
-pub(crate) fn later_static_child_failure_retains_mapper() {
+pub(crate) fn later_static_child_failure_destroys_mapper() {
     run("second");
 }
 pub(crate) fn static_mapper_failure_keeps_ordinary_child_retirement() {
@@ -125,6 +124,6 @@ pub(crate) fn static_mapper_failure_keeps_ordinary_child_retirement() {
 pub(crate) fn competing_static_children_and_mapper_keep_first_failure() {
     run("competition");
 }
-pub(crate) fn incoming_unwind_retains_static_children_and_mapper() {
+pub(crate) fn incoming_unwind_destroys_static_children_and_mapper() {
     run("incoming");
 }

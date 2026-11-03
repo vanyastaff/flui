@@ -254,19 +254,6 @@ struct FrameCompletionState {
     waker: Option<Waker>,
 }
 
-// A cancelled waiter can own the final executor envelope. During unrelated
-// unwind, invoking its opaque destruction could abort before any catch returns.
-impl Drop for FrameCompletionState {
-    fn drop(&mut self) {
-        let waker = self.waker.take();
-        if std::thread::panicking() {
-            std::mem::forget(waker);
-        } else {
-            drop(waker);
-        }
-    }
-}
-
 /// Future that resolves when a frame completes
 ///
 /// This is returned by `UpdateScheduler::end_of_frame()` and allows awaiting
@@ -1524,7 +1511,6 @@ impl UpdateScheduler {
             let notify_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 self.notify_frame_completion(
                     FrameOutcome::Completed { timing },
-                    callback_result.is_err(),
                     Some(&owner.execution_failure_signal()),
                 );
             }));
@@ -1617,7 +1603,7 @@ impl UpdateScheduler {
     /// [`request_frame`](Self::request_frame) itself.
     ///
     /// Idempotent: a no-op when no frame is open.
-    fn abort_frame_impl(&self, preserve_failure: bool) {
+    fn abort_frame_impl(&self) {
         if self.phase() == SchedulerPhase::Idle {
             return;
         }
@@ -1635,7 +1621,7 @@ impl UpdateScheduler {
         self.retain_pending_post_frame_cancellations();
 
         if let Some(timing) = timing {
-            self.notify_frame_completion(FrameOutcome::Aborted { timing }, preserve_failure, None);
+            self.notify_frame_completion(FrameOutcome::Aborted { timing }, None);
         }
 
         // One-shot callbacks, microtasks and tasks queued behind the one that
@@ -2425,25 +2411,19 @@ impl UpdateScheduler {
     /// caller still observes it — matching `end_frame_impl`'s own
     /// catch-then-resume shape for a panicking post-frame callback, just
     /// upstream of it here. A SECOND (or later) waker's panic cannot be
-    /// re-raised too -- `resume_unwind` takes one payload -- so it is routed
-    /// through [`drop`] instead, retaining the opaque payload
-    /// without invoking its possibly-panicking destruction.
+    /// re-raised too -- `resume_unwind` takes one payload -- so it is
+    /// discarded under containment (ADR-0281).
     fn notify_frame_completion(
         &self,
         outcome: FrameOutcome,
-        preserve_failure: bool,
         failure_signal: Option<&crate::wake_delivery::FailureSignal>,
     ) {
         let waiters = self.inner.frame.completion_waiters.borrow_mut().drain();
 
         let mut delivery = if let Some(signal) = failure_signal {
-            crate::completion_wake::WakeBatch::with_failure_signal(
-                "frame completion",
-                preserve_failure,
-                signal,
-            )
+            crate::completion_wake::WakeBatch::with_failure_signal("frame completion", signal)
         } else {
-            crate::completion_wake::WakeBatch::new("frame completion", preserve_failure)
+            crate::completion_wake::WakeBatch::new("frame completion")
         };
         for notifier in waiters {
             // `upgrade()` at loop-body scope, never inside the
@@ -2675,15 +2655,11 @@ impl UpdateScheduler {
                 &mut first,
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| callback(&timings))),
             );
-            if first.is_some() {
-                std::mem::forget(callback);
-            } else {
-                observer_delivery::preserve_first_failure(
-                    &custody,
-                    &mut first,
-                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(callback))),
-                );
-            }
+            observer_delivery::preserve_first_failure(
+                &custody,
+                &mut first,
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(callback))),
+            );
         }
         if let Some(first) = first {
             std::panic::resume_unwind(first);

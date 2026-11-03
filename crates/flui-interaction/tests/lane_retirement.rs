@@ -198,8 +198,8 @@ fn failures_across_storage_families() {
             assert_eq!(failure.downcast_ref::<&str>(), Some(&"first"), "{family:?}");
             assert_eq!(
                 log.borrow().as_slice(),
-                ["first"],
-                "{family:?}: tail retained"
+                ["first", "tail"],
+                "{family:?}: tail destroyed after the first failure"
             );
             assert_eq!(
                 handle.check_ui_runtime(),
@@ -223,7 +223,12 @@ fn first_failure_covers_later_storage_families() {
     });
     let failure = catch_unwind(AssertUnwindSafe(|| drop(lane))).expect_err("first route failure");
     assert_eq!(failure.downcast_ref::<&str>(), Some(&"first"));
-    assert_eq!(log.borrow().as_slice(), ["first"]);
+    assert_eq!(log.borrow().first(), Some(&"first"));
+    assert_eq!(
+        log.borrow().iter().filter(|name| **name == "tail").count(),
+        FAMILIES.len(),
+        "every later family is destroyed after the first failure"
+    );
     assert_surviving_lane(&survivor);
 }
 
@@ -250,10 +255,10 @@ fn mouse_callbacks_retire_individually() {
     });
     let failure = catch_unwind(AssertUnwindSafe(|| drop(lane))).expect_err("enter failure");
     assert_eq!(failure.downcast_ref::<&str>(), Some(&"enter"));
-    assert_eq!(log.borrow().as_slice(), ["enter"]);
+    assert_eq!(log.borrow().as_slice(), ["enter", "exit", "hover"]);
 }
 
-fn existing_unwind_retains_every_family() {
+fn existing_unwind_destroys_every_family() {
     let survivor = InteractionLane::try_new().expect("survivor");
     let log = Rc::new(RefCell::new(Vec::new()));
     let failure = catch_unwind(AssertUnwindSafe(|| {
@@ -263,15 +268,19 @@ fn existing_unwind_retains_every_family() {
                 register(
                     &lane.dispatch_handle(),
                     family,
-                    capture(&log, "unsafe drop", true),
+                    capture(&log, "dropped", false),
                 );
             }
         });
         std::panic::panic_any("body failure");
     }))
     .expect_err("body failure");
+    assert_eq!(
+        log.borrow().as_slice(),
+        ["dropped"; FAMILIES.len()],
+        "every withdrawn capture is destroyed during the unwind (ADR-0281)"
+    );
     assert_eq!(failure.downcast_ref::<&str>(), Some(&"body failure"));
-    assert!(log.borrow().is_empty());
     assert_surviving_lane(&survivor);
 }
 
@@ -504,9 +513,12 @@ fn saved_mouse_cell_follows_terminal_retirement_policy() {
         );
         tracker.unregister_annotation(region);
         assert_eq!(
-            log.borrow().contains(&"saved mouse"),
-            !preserving,
-            "last framework snapshot follows its withdrawn capture policy"
+            log.borrow()
+                .iter()
+                .filter(|name| **name == "saved mouse")
+                .count(),
+            1,
+            "the last framework snapshot destroys its capture once: preserving {preserving}"
         );
     }
 }
@@ -540,12 +552,16 @@ fn late_mouse_retirement_preserves_original_lane_failure() {
         original.downcast_ref::<&str>(),
         Some(&"original lane failure")
     );
-    let late = catch_unwind(AssertUnwindSafe(|| tracker.unregister_annotation(region)));
-    assert!(
-        late.is_ok(),
-        "a late final framework snapshot must retain captures from the failed close"
+    // The tracker's final snapshot is the capture's last owner: unregistering
+    // destroys it, and its own failure surfaces from that later call, apart
+    // from the lane failure already caught.
+    let late = catch_unwind(AssertUnwindSafe(|| tracker.unregister_annotation(region)))
+        .expect_err("the late snapshot's destructor failure propagates");
+    assert_eq!(late.downcast_ref::<&str>(), Some(&"late mouse destructor"));
+    assert_eq!(
+        log.borrow().as_slice(),
+        ["original lane failure", "late mouse destructor"]
     );
-    assert_eq!(log.borrow().as_slice(), ["original lane failure"]);
     assert_surviving_lane(&InteractionLane::try_new().expect("survivor"));
 }
 
@@ -567,10 +583,14 @@ fn raw_rejection_observes_only_the_active_close_window() {
         })
     }));
     assert_eq!(
-        outcome.expect("active preserving close must not destroy rejected capture"),
+        outcome.expect("an active preserving close discards the rejected capture's failure"),
         Err(InteractionDispatchError::OwnerGone)
     );
-    assert!(log.borrow().is_empty());
+    assert_eq!(
+        log.borrow().as_slice(),
+        ["unsafe rejected capture"],
+        "the rejected capture is destroyed under containment"
+    );
     assert_eq!(
         original.downcast_ref::<&str>(),
         Some(&"outer close failure")
@@ -583,7 +603,10 @@ fn raw_rejection_observes_only_the_active_close_window() {
         }),
         Err(InteractionDispatchError::OwnerGone)
     );
-    assert_eq!(log.borrow().as_slice(), ["healthy post-close rejection"]);
+    assert_eq!(
+        log.borrow().as_slice(),
+        ["unsafe rejected capture", "healthy post-close rejection"]
+    );
     assert_surviving_lane(&InteractionLane::try_new().expect("survivor"));
 }
 
@@ -750,7 +773,11 @@ fn competing_payloads() {
     let failure = catch_unwind(AssertUnwindSafe(|| drop(lane)))
         .expect_err("first destructor failure propagates");
     assert_eq!(failure.downcast_ref::<&str>(), Some(&"first"));
-    assert_eq!(*log.borrow(), ["first"], "the failing tail is retained");
+    assert_eq!(
+        *log.borrow(),
+        ["first", "second"],
+        "the failing tail is destroyed and its failure discarded"
+    );
 }
 
 #[test]
@@ -772,8 +799,8 @@ fn lane_terminal_retirement_contract() {
                 mouse_callbacks_retire_individually,
             ),
             (
-                "existing_unwind_retains_every_family",
-                existing_unwind_retains_every_family,
+                "existing_unwind_destroys_every_family",
+                existing_unwind_destroys_every_family,
             ),
             (
                 "non_last_payload_owners_are_released",

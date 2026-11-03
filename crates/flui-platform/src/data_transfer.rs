@@ -371,8 +371,8 @@ enum RequestState {
 /// cancels the delivery, observed by [`TransferCompleter::is_cancelled`].
 ///
 /// Executor clone, wake and retirement run outside the claim slot's locks.
-/// Caught wake failures preserve the delivery and retain opaque executor
-/// ownership; ordinary successful retirement still runs destructors.
+/// Caught wake failures preserve the delivery; the withdrawn executor
+/// envelope is still destroyed under containment (ADR-0281).
 #[must_use = "dropping a TransferRequest cancels the delivery"]
 #[derive(Debug)]
 pub struct TransferRequest {
@@ -452,8 +452,8 @@ impl std::future::Future for TransferRequest {
 /// [`TransferError::SourceGone`].
 ///
 /// The claim slot preserves an existing unwind if executor delivery also
-/// panics, retaining exceptional opaque ownership rather than dropping it
-/// during continuation.
+/// panics, discarding the later failure; the executor envelope is still
+/// destroyed (ADR-0281).
 #[derive(Debug)]
 pub struct TransferCompleter {
     slot: ClaimSlot<Result<TransferPayload, TransferError>>,

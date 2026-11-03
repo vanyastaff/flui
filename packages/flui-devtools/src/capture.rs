@@ -274,8 +274,8 @@ fn deliver_contained<T>(capture: &Capture, sinks: Vec<Sink<T>>, value: &T) -> Op
             if first_panic.is_none() {
                 first_panic = Some(payload);
             } else {
-                // Forgotten, not dropped: its `Drop` may panic too.
-                std::mem::forget(payload);
+                // A later failure: destroyed under containment (ADR-0281 §2).
+                flui_sdk::foundation::panic::discard_payload(payload);
             }
         }
     }
@@ -287,19 +287,17 @@ fn deliver_contained<T>(capture: &Capture, sinks: Vec<Sink<T>>, value: &T) -> Op
 /// the first failure is reported as an error event and not raised.
 fn deliver<T>(capture: &Capture, sinks: Vec<Sink<T>>, value: &T) {
     if let Some(payload) = deliver_contained(capture, sinks, value) {
-        let text = payload
-            .downcast_ref::<&str>()
-            .map(|text| (*text).to_owned())
-            .or_else(|| payload.downcast_ref::<String>().cloned())
-            .unwrap_or_else(|| "a non-text panic payload".to_owned());
+        let text = flui_sdk::foundation::panic::payload_text(&*payload)
+            .unwrap_or("a non-text panic payload")
+            .to_owned();
         // A subscriber is user code too.
         if let Err(failed) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             tracing::error!(target: "flui.devtools", "a capture sink panicked: {text}");
         })) {
-            std::mem::forget(failed);
+            flui_sdk::foundation::panic::discard_payload(failed);
         }
-        // Forgotten, not dropped: its `Drop` may panic too.
-        std::mem::forget(payload);
+        // Reported, not raised: destroyed under containment (ADR-0281 §2).
+        flui_sdk::foundation::panic::discard_payload(payload);
     }
 }
 
@@ -1327,7 +1325,7 @@ mod tests {
         struct PanicOnDrop;
         impl Drop for PanicOnDrop {
             fn drop(&mut self) {
-                assert!(std::thread::panicking(), "payload destructor");
+                panic!("payload destructor");
             }
         }
         struct BadReporter;

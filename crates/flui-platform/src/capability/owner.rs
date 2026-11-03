@@ -1,7 +1,6 @@
 //! The way back to the owner thread.
 
 use std::any::Any;
-use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::{cell::RefCell, fmt, rc::Rc, sync::Arc};
 
 use flui_foundation::panic::FirstPanic;
@@ -20,8 +19,8 @@ pub struct OwnerRetired;
 ///
 /// The owner [runs](Self::run) it at its next turn with its [`OwnerScope`].
 /// It is an `FnMut` called at most once, so a job that panics keeps its
-/// captures instead of dropping them during the unwind, where a capture whose
-/// `Drop` panics too would abort the process.
+/// captures until [`Self::run`] has caught the panic; they are then destroyed
+/// under containment instead of during the unwind (ADR-0281 §3).
 pub struct OwnerJob(Box<dyn FnMut(&OwnerScope<'_>) + Send>);
 
 impl OwnerJob {
@@ -38,14 +37,15 @@ impl OwnerJob {
 
     /// Run the job on the owner thread.
     ///
-    /// A panic in the job resumes here with its captures kept, not dropped.
+    /// A panic in the job resumes here once its captures are dropped, under
+    /// containment: a panic from their destructor is discarded behind the
+    /// job's (ADR-0281).
     pub fn run(self, scope: &OwnerScope<'_>) {
         let mut job = self.0;
-        if let Err(payload) = catch_unwind(AssertUnwindSafe(|| job(scope))) {
-            std::mem::forget(job);
-            resume_unwind(payload);
-        }
-        drop(job);
+        let mut first = FirstPanic::new();
+        first.contain(|| job(scope));
+        first.contain(|| drop(job));
+        first.resume();
     }
 }
 
@@ -81,8 +81,9 @@ impl OwnerPoster {
 
     /// Runs `f` once, at the owner's next turn.
     ///
-    /// `f` is an `FnMut` called at most once: if it panics, its captures are
-    /// kept rather than dropped during the unwind (see [`OwnerJob`]).
+    /// `f` is an `FnMut` called at most once, so its captures outlive its
+    /// call and are dropped contained after it, a panic included (see
+    /// [`OwnerJob`]).
     ///
     /// # Errors
     ///
@@ -158,8 +159,9 @@ impl PendingCompletions {
     /// Each completion is retired under its own catch, so a capture whose
     /// `Drop` panics, or a waker that panics, leaves the others retired and
     /// woken. The first such panic is returned for the owner to resume with
-    /// its own first failure; while the thread is already unwinding, what is
-    /// left is leaked instead, as a second panic would abort.
+    /// its own first failure; a later one is discarded. A destructor that
+    /// panics while the thread is already unwinding aborts, as in std
+    /// (ADR-0281).
     #[must_use = "the first panic of a retirement belongs to the owner's teardown"]
     pub fn retire(&self) -> Option<Box<dyn Any + Send>> {
         let pending: Vec<_> = {
@@ -174,26 +176,14 @@ impl PendingCompletions {
         };
         // Run with no borrow held: a waiting closure's captures and a waker
         // may run user code that re-enters this table.
-        let mut first = None;
+        let mut first = FirstPanic::new();
         for settle in pending {
-            if std::thread::panicking() {
-                std::mem::forget(settle);
-                continue;
-            }
-            let failure = match catch_unwind(AssertUnwindSafe(|| settle.abandon_on_retire())) {
-                // The last reference may hold an answer that never drained.
-                Ok(()) => catch_unwind(AssertUnwindSafe(move || drop(settle))).err(),
-                Err(payload) => {
-                    // Kept, not destroyed: the answer it holds may panic too.
-                    std::mem::forget(settle);
-                    Some(payload)
-                }
-            };
-            // A later payload is retained, not dropped: its destructor may
-            // panic too.
-            FirstPanic::fold(&mut first, failure);
+            first.contain(|| settle.abandon_on_retire());
+            // The last reference may hold an answer that never drained; it is
+            // dropped after a failure too, and a later panic is discarded.
+            first.contain(|| drop(settle));
         }
-        first
+        first.into_payload()
     }
 
     /// Whether the owner has retired.

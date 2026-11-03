@@ -84,8 +84,8 @@ fn finished_and_cancelled_futures_preserve_caught_failure_custody() {
         assert_eq!(owner.pump_background(|| {}), Ok(2));
         assert_eq!(
             drops.get(),
-            0,
-            "finished opaque future is retained after the caught failure"
+            1,
+            "the finished future is destroyed after a caught failure"
         );
         assert_eq!(sibling_polls.get(), 1);
         assert_eq!(owner.pump_background(|| {}), Ok(1));
@@ -131,11 +131,154 @@ fn cancelling_transient_work_preserves_caught_failure_custody() {
         .expect("caught nested failure does not abort the outer frame");
     assert_eq!(
         drops.get(),
-        0,
-        "cancelled opaque capture inherits active failure custody"
+        1,
+        "the cancelled capture is destroyed after a caught failure"
     );
     assert_eq!(sibling_calls.get(), 1);
     assert_eq!(owner.pump_background(|| {}), Ok(0));
+}
+
+/// Cancelling A in a healthy owner turn drops a capture that cancels B, whose
+/// capture's destructor panics. That panic is the turn's first failure: the
+/// outer retirement must not read the signal the nested one just set as an
+/// earlier failure and discard it.
+fn nested_cancellation_failure_propagates_from_a_healthy_turn() {
+    struct CancelsOnDrop {
+        scheduler: UpdateScheduler,
+        other: Rc<Cell<Option<flui_scheduler::CallbackId>>>,
+    }
+    impl Drop for CancelsOnDrop {
+        fn drop(&mut self) {
+            if let Some(other) = self.other.take() {
+                self.scheduler.cancel_frame_callback(other);
+            }
+        }
+    }
+    let scheduler = UpdateScheduler::new();
+    let owner = OwnerFrame::try_new(&scheduler).expect("fresh owner");
+    let other = Rc::new(Cell::new(None));
+    let outer = CancelsOnDrop {
+        scheduler: scheduler.clone(),
+        other: Rc::clone(&other),
+    };
+    let a = scheduler.schedule_frame_callback(Box::new(move |_| {
+        let _ = &outer;
+    }));
+    let inner = RejectedCapture;
+    other.set(Some(scheduler.schedule_frame_callback(Box::new(
+        move |_| {
+            let _ = &inner;
+        },
+    ))));
+    let now = Instant::now();
+    let failure = catch_unwind(AssertUnwindSafe(|| {
+        owner.drive_frame(
+            now,
+            IdleDeadline::far_future(now),
+            || {
+                scheduler.cancel_frame_callback(a);
+            },
+            || {},
+        )
+    }))
+    .expect_err("the nested destructor's failure propagates");
+    assert_eq!(
+        flui_foundation::panic::payload_text(&*failure),
+        Some("nested refused capture failure")
+    );
+    flui_foundation::panic::discard_payload(failure);
+    assert_eq!(owner.pump_background(|| {}), Ok(0));
+}
+
+/// Counts its drops and panics in each, as a capture with a faulty `Drop`.
+struct FailingCapture(Rc<Cell<usize>>);
+impl Drop for FailingCapture {
+    fn drop(&mut self) {
+        self.0.set(self.0.get() + 1);
+        panic!("capture destroyed behind a held failure");
+    }
+}
+
+/// A presentation closed in an owner turn that already caught a failure
+/// destroys its queued callback; a panic from the capture's destructor is a
+/// later failure and is discarded, so the turn's own failure stays first.
+fn presentation_close_behind_a_held_failure_discards_a_capture_panic() {
+    let scheduler = UpdateScheduler::new();
+    let owner = OwnerFrame::try_new(&scheduler).expect("fresh owner");
+    let drops = Rc::new(Cell::new(0));
+    let now = Instant::now();
+    owner
+        .drive_frame(
+            now,
+            IdleDeadline::far_future(now),
+            || {
+                catch_nested_refusal_failure(&owner);
+                let presentation = owner.presentation_scope();
+                let capture = FailingCapture(Rc::clone(&drops));
+                presentation
+                    .post_frame_handle()
+                    .schedule(move |_| {
+                        let _ = &capture;
+                    })
+                    .expect("live presentation accepts the callback");
+                drop(presentation);
+            },
+            || {},
+        )
+        .expect("the held failure is the turn's first; the capture panic is discarded");
+    assert_eq!(drops.get(), 1, "the queued capture is destroyed");
+    assert_eq!(owner.pump_background(|| {}), Ok(0));
+}
+
+thread_local! {
+    /// The scheduler a frame hook reaches to uninstall itself: the hook must
+    /// be `Send + Sync`, the scheduler is owner-local.
+    static HOOK_SCHEDULER: RefCell<Option<UpdateScheduler>> = const { RefCell::new(None) };
+}
+
+/// A frame hook that uninstalls itself while the owner turn already holds a
+/// caught failure leaves the delivery as its last owner; a panic from its
+/// capture's destructor is a later failure and is discarded, not raised out
+/// of `request_frame`.
+fn self_uninstalling_hook_behind_a_held_failure_discards_a_capture_panic() {
+    struct SendCapture(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+    impl Drop for SendCapture {
+        fn drop(&mut self) {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            panic!("hook capture destroyed behind a held failure");
+        }
+    }
+    let scheduler = UpdateScheduler::new();
+    let owner = OwnerFrame::try_new(&scheduler).expect("fresh owner");
+    HOOK_SCHEDULER.with(|slot| *slot.borrow_mut() = Some(scheduler.clone()));
+    let drops = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let capture = SendCapture(std::sync::Arc::clone(&drops));
+    scheduler.set_on_frame_scheduled(Some(std::sync::Arc::new(move || {
+        let _ = &capture;
+        HOOK_SCHEDULER.with(|slot| {
+            if let Some(scheduler) = slot.borrow().as_ref() {
+                scheduler.set_on_frame_scheduled(None);
+            }
+        });
+    })));
+    let now = Instant::now();
+    owner
+        .drive_frame(
+            now,
+            IdleDeadline::far_future(now),
+            || {
+                catch_nested_refusal_failure(&owner);
+                scheduler.request_frame();
+            },
+            || {},
+        )
+        .expect("the held failure is the turn's first; the capture panic is discarded");
+    HOOK_SCHEDULER.with(|slot| slot.borrow_mut().take());
+    assert_eq!(
+        drops.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "the uninstalled hook is destroyed"
+    );
 }
 
 fn callbacks_and_task_polls_refuse_nested_owner_turns() {
@@ -234,8 +377,8 @@ fn lifecycle_removal_preserves_caught_failure() {
         .expect("outer frame");
     assert_eq!(
         drops.get(),
-        0,
-        "removed lifecycle capture inherits active custody"
+        1,
+        "the removed lifecycle capture is destroyed after a caught failure"
     );
 }
 
@@ -267,8 +410,8 @@ fn hook_replacement_preserves_caught_failure() {
         .expect("outer frame");
     assert_eq!(
         drops.load(std::sync::atomic::Ordering::SeqCst),
-        0,
-        "displaced final hook inherits active custody"
+        1,
+        "the displaced hook is destroyed after a caught failure"
     );
 }
 
@@ -294,7 +437,11 @@ fn explicit_task_cancellation_preserves_caught_failure() {
         .expect("outer frame");
     assert!(token.is_cancelled());
     assert_eq!(owner.async_driver().pending_task_count(), 0);
-    assert_eq!(drops.get(), 0, "removed future inherits active custody");
+    assert_eq!(
+        drops.get(),
+        1,
+        "the removed future is destroyed after a caught failure"
+    );
 }
 
 fn eager_completion_preserves_caught_failure() {
@@ -323,8 +470,8 @@ fn eager_completion_preserves_caught_failure() {
         .expect("outer frame");
     assert_eq!(
         drops.get(),
-        0,
-        "eagerly completed future inherits active custody"
+        1,
+        "the eagerly completed future is destroyed after a caught failure"
     );
 }
 
@@ -338,8 +485,8 @@ fn owner_retirement_custody_contract() {
                 active_retired_post_frame_rejection_custody as fn(),
             ),
             (
-                "active retired post-frame rejection is not returned",
-                active_retired_post_frame_rejection_is_not_returned,
+                "active retired post-frame rejection is returned",
+                active_retired_post_frame_rejection_is_returned,
             ),
             (
                 "healthy closed post-frame rejection returns the callback",
@@ -380,6 +527,18 @@ fn owner_retirement_custody_contract() {
             (
                 "transient cancellation custody",
                 cancelling_transient_work_preserves_caught_failure_custody,
+            ),
+            (
+                "nested cancellation failure propagates from a healthy turn",
+                nested_cancellation_failure_propagates_from_a_healthy_turn,
+            ),
+            (
+                "presentation close behind a held failure",
+                presentation_close_behind_a_held_failure_discards_a_capture_panic,
+            ),
+            (
+                "self-uninstalling hook behind a held failure",
+                self_uninstalling_hook_behind_a_held_failure_discards_a_capture_panic,
             ),
             (
                 "nested callback and task entry",
@@ -482,15 +641,15 @@ fn active_retired_post_frame_rejection_custody() {
     );
     assert_eq!(
         drops.get(),
-        0,
-        "retired lane retains rejected capture under active custody"
+        1,
+        "the retired lane destroys a capture it refuses after a caught failure"
     );
     assert_healthy_post_frame_rejection_retires(&handle);
 }
 
-/// `schedule_or_return` under active failure custody retains the callback:
-/// it neither comes back to the caller nor runs nor drops.
-fn active_retired_post_frame_rejection_is_not_returned() {
+/// `schedule_or_return` after a caught failure returns the callback, never
+/// run, as a healthy rejection does (ADR-0281).
+fn active_retired_post_frame_rejection_is_returned() {
     let scheduler = UpdateScheduler::new();
     let owner = OwnerFrame::try_new(&scheduler).expect("fresh owner");
     let handle = owner.post_frame_handle();
@@ -504,15 +663,14 @@ fn active_retired_post_frame_rejection_is_not_returned() {
             let rejection = handle
                 .schedule_or_return(owed, |(_capture, ran), _| ran.set(true))
                 .expect_err("the retired lane refuses");
-            assert!(
-                matches!(rejection, flui_scheduler::PostFrameRejection::Retained),
-                "custody keeps the callback, got {rejection:?}"
-            );
+            let flui_scheduler::PostFrameRejection::Returned(owed) = rejection;
+            assert_eq!(drops.get(), 0, "returned, not retired");
+            drop(owed);
         }),
         Ok(0)
     );
-    assert!(!ran.get(), "a retained callback never runs");
-    assert_eq!(drops.get(), 0, "a retained callback is never dropped");
+    assert!(!ran.get(), "a returned callback never runs");
+    assert_eq!(drops.get(), 1, "the caller's drop retires it");
 }
 
 /// A healthy closed queue hands the callback back, unrun and undropped, and
@@ -528,9 +686,7 @@ fn healthy_closed_post_frame_rejection_returns_the_callback() {
     let rejection = handle
         .schedule_or_return(owed, |(_capture, ran), _| ran.set(true))
         .expect_err("the retired lane refuses");
-    let flui_scheduler::PostFrameRejection::Returned(owed) = rejection else {
-        panic!("a healthy close returns the value, got {rejection:?}");
-    };
+    let flui_scheduler::PostFrameRejection::Returned(owed) = rejection;
     assert_eq!(drops.get(), 0, "returned, not retired");
     drop(owed);
     assert!(!ran.get(), "the queue never ran it");
@@ -575,8 +731,8 @@ fn closed_scheduler_post_frame_rejection_custody() {
     );
     assert_eq!(
         drops.get(),
-        0,
-        "live lane retains rejection after scheduler closure"
+        1,
+        "the live lane destroys a capture it refuses after scheduler closure"
     );
     assert_healthy_post_frame_rejection_retires(&handle);
 }
@@ -600,8 +756,8 @@ fn standalone_retired_post_frame_rejection_custody() {
     assert!(owner.retire().is_none());
     assert_eq!(
         drops.get(),
-        0,
-        "standalone closed retirement shares post-frame custody"
+        1,
+        "standalone closed retirement destroys its post-frame captures"
     );
     assert_healthy_post_frame_rejection_retires(&handle);
 }
@@ -671,8 +827,8 @@ fn closed_execution_publishes_task_custody(frame: bool) {
         }
         assert_eq!(
             drops.get(),
-            0,
-            "closed execution still shares eager task custody, frame={frame}"
+            1,
+            "closed execution destroys the eager task's capture, frame={frame}"
         );
         let healthy_drops = Rc::new(Cell::new(0));
         let capture = RemovedCapture(Rc::clone(&healthy_drops));
@@ -746,13 +902,13 @@ fn closed_scheduler_retirement(spawn_refused: bool) {
     assert!(owner.retire().is_none());
     assert_eq!(
         tail_drops.get(),
-        0,
-        "detached cancelled tail retains caught failure custody"
+        1,
+        "the detached cancelled tail is destroyed after a caught failure"
     );
     assert_eq!(
         rejected_drops.get(),
-        0,
-        "closed scheduler still shares task refusal custody"
+        usize::from(spawn_refused),
+        "the closed scheduler destroys a refused task"
     );
     assert!(first.is_cancelled());
     assert_eq!(driver.pending_task_count(), 0);
@@ -807,8 +963,8 @@ fn owner_drop_preserves_first_failure_through_terminal_release() {
     assert!(producer.borrow().is_none());
     assert_eq!(
         terminal_drops.get(),
-        0,
-        "terminal producer capture retains incoming owner failure"
+        1,
+        "the terminal producer capture is destroyed behind the owner failure"
     );
 }
 
@@ -907,8 +1063,8 @@ fn recursive_retirement_shares_caught_failure() {
     assert!(owner.retire().is_none());
     assert_eq!(
         drops.get(),
-        0,
-        "recursive retirement cannot reset earlier custody"
+        1,
+        "recursive retirement destroys the cancelled futures"
     );
     assert_eq!(driver.pending_task_count(), 0);
     assert!(first.is_cancelled());
@@ -1036,8 +1192,8 @@ fn standalone_retirement_publishes_producer_custody() {
     assert!(owner.retire().is_none());
     assert_eq!(
         drops.get(),
-        0,
-        "standalone cleanup shares custody with producer removals"
+        1,
+        "standalone cleanup destroys producer removals"
     );
     assert_healthy_refusal_retires(&owner);
 }
@@ -1106,8 +1262,8 @@ fn retired_task_admission_preserves_caught_failure(mode: u8) {
         );
         assert_eq!(
             drops.get(),
-            0,
-            "retired admission retains opaque future, mode {mode}"
+            1,
+            "a retired admission destroys its future, mode {mode}"
         );
         assert_eq!(driver.pending_task_count(), 0);
         assert_eq!(owner.pump_background(|| {}), Err(ExecutionError::Retired));

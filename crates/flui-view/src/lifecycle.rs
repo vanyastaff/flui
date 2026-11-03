@@ -53,12 +53,12 @@ impl LifecycleHandle {
     /// Cancellation releases callback captures outside source borrows; an active
     /// callback releases its captures after returning if it was cancelled. A
     /// capture-destructor panic cannot undo cancellation or skip siblings, and
-    /// does not replace an earlier callback panic. After a caught failure, or
-    /// during an independent unwind, retiring callback envelopes are retained.
-    /// Otherwise they have ordinary Rust destruction semantics: two panicking
-    /// fields in the first retired envelope can abort before containment.
-    /// Rejected callbacks follow the same exceptional-retention rule and retire
-    /// only after the source borrow has been released.
+    /// does not replace an earlier callback panic. After a caught failure,
+    /// retiring callback envelopes are destroyed under containment and the
+    /// first failure stays the one resumed (ADR-0281). A destructor that
+    /// panics while the thread unwinds aborts, as in std. Rejected callbacks
+    /// follow the same rule and retire only after the source borrow has been
+    /// released.
     ///
     /// # Errors
     /// Returns [`LifecycleClosed`] once terminal close begins or the owner dies.
@@ -181,9 +181,10 @@ impl LifecycleSource {
         self.notices.commit(notice, Phase::Open, |_| true)
     }
     /// Hold the in-progress window of a terminal close until the returned
-    /// guard drops. While it is held, a preserving close retains callbacks
-    /// rejected or cancelled through stale handles; afterwards they retire
-    /// normally. The host holds it across the whole presentation close.
+    /// guard drops. While it is held, a preserving close destroys callbacks
+    /// rejected or cancelled through stale handles under containment;
+    /// afterwards they retire normally. The host holds it across the whole
+    /// presentation close.
     #[must_use = "the close window ends when the guard drops"]
     pub fn close_window(&self) -> LifecycleCloseWindow {
         LifecycleCloseWindow {

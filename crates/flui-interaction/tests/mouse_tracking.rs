@@ -732,13 +732,13 @@ fn assert_region_retirement_recovery(competing: bool) {
     assert_eq!(first_drops.get(), 1);
     assert_eq!(
         second_drops.get(),
-        0,
-        "the retired tail is retained after the first failure"
+        1,
+        "the retired tail is destroyed after the first failure"
     );
     assert_eq!(
         healthy_drops.get(),
-        0,
-        "healthy opaque captures obey the same retention policy"
+        1,
+        "healthy opaque captures are destroyed after the first failure"
     );
 
     let log = Log::default();

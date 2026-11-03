@@ -8,7 +8,7 @@
 //! `Reported`, never published. Input focus is a separate thing the
 //! application moves.
 
-use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
+use flui_foundation::panic::FirstPanic;
 use std::rc::Rc;
 
 use crate::{AccessibilityNodeId, AssistiveFocusHandler, SemanticsOwner};
@@ -99,27 +99,14 @@ impl AssistiveFocusChange {
 
     /// Tell each handler, those left before those entered. A handler that
     /// panics does not keep the rest from being told; the first panic is
-    /// resumed once all have been. After a failure the remaining handlers
-    /// are kept rather than dropped, as every retirement after a failure is
-    /// (ADR-0127).
+    /// resumed once all have been. Each handler is dropped after its call
+    /// under the same containment, a failure included (ADR-0281).
     pub fn invoke(self) {
-        let mut first = None;
+        let mut first = FirstPanic::new();
         for (handler, within) in self.calls {
-            if let Err(payload) = catch_unwind(AssertUnwindSafe(|| handler(within))) {
-                if first.is_none() {
-                    first = Some(payload);
-                } else {
-                    flui_foundation::panic::discard_payload(payload);
-                }
-            }
-            if first.is_some() {
-                std::mem::forget(handler);
-            } else if let Err(payload) = catch_unwind(AssertUnwindSafe(|| drop(handler))) {
-                first = Some(payload);
-            }
+            first.contain(|| handler(within));
+            first.contain(|| drop(handler));
         }
-        if let Some(payload) = first {
-            resume_unwind(payload);
-        }
+        first.resume();
     }
 }

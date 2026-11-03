@@ -497,6 +497,74 @@ fn native_close_failure_preserves_first_error_and_does_not_restore_the_runtime()
         .expect("next runtime is routable");
 }
 
+/// Counts its state's `dispose` calls.
+#[derive(Clone, StatefulView)]
+struct DisposeProbe {
+    disposed: Rc<Cell<usize>>,
+}
+
+struct DisposeProbeState {
+    disposed: Rc<Cell<usize>>,
+}
+
+impl flui_view::StatefulView for DisposeProbe {
+    type State = DisposeProbeState;
+
+    fn create_state(&self) -> Self::State {
+        DisposeProbeState {
+            disposed: Rc::clone(&self.disposed),
+        }
+    }
+}
+
+impl flui_view::ViewState<DisposeProbe> for DisposeProbeState {
+    fn build(&self, _: &DisposeProbe, _: &dyn flui_view::BuildContext) -> impl flui_view::IntoView {
+        flui_widgets::SizedBox::square(20.0)
+    }
+
+    fn dispose(&mut self) {
+        self.disposed.set(self.disposed.get() + 1);
+    }
+}
+
+/// An incoming unwind is a held failure: a UI runtime dropped during one
+/// skips its optional callbacks (`dispose`) and the unwinding failure stays
+/// the one caught; dropped healthy, it disposes its tree (ADR-0281).
+fn a_runtime_dropped_during_an_unwind_skips_dispose() {
+    for incoming in [false, true] {
+        let runtime = runtime();
+        let disposed = Rc::new(Cell::new(0));
+        runtime
+            .attach_root_widget_with_size_to(
+                runtime.presentation_id(),
+                &DisposeProbe {
+                    disposed: Rc::clone(&disposed),
+                },
+                100.0,
+                100.0,
+            )
+            .expect("mount dispose probe");
+        let id = runtime.presentation_id();
+        runtime.enter(|runtime| runtime.presentation_widgets_for_test(id).draw_frame());
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+            let _runtime = runtime;
+            if incoming {
+                std::panic::panic_any("outer runtime shutdown");
+            }
+        }));
+        if incoming {
+            let failure = result.expect_err("the outer failure unwinds");
+            assert_eq!(
+                failure.downcast_ref::<&str>().copied(),
+                Some("outer runtime shutdown")
+            );
+            assert_eq!(disposed.get(), 0, "no dispose runs during an unwind");
+        } else {
+            assert!(result.is_ok(), "a healthy drop does not panic");
+            assert_eq!(disposed.get(), 1, "a healthy drop disposes the tree");
+        }
+    }
+}
 #[test]
 fn owner_close_contract() {
     crate::table_test::run_table(
@@ -515,6 +583,10 @@ fn owner_close_contract() {
                 "native_close_failure_preserves_first_error_and_does_not_restore_the_runtime",
                 native_close_failure_preserves_first_error_and_does_not_restore_the_runtime
                     as fn(),
+            ),
+            (
+                "a_runtime_dropped_during_an_unwind_skips_dispose",
+                a_runtime_dropped_during_an_unwind_skips_dispose,
             ),
         ],
     );

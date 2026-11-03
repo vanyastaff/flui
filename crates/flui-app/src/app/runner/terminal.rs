@@ -8,9 +8,10 @@ use std::any::Any;
 use super::host::APP_RUNTIME;
 
 /// Hold `payload` as the loop's terminal failure, unless one is held
-/// already: the first stays, a later one is logged and retained. The slot
+/// already: the first stays, a later one is logged and discarded. The slot
 /// keeps text: an inert payload (`&'static str`, `String`) as it is, an
-/// opaque one's description, with the payload itself retained (ADR-0127).
+/// opaque one's description, the payload itself discarded under containment
+/// (ADR-0281 §2).
 pub(super) fn hold_terminal(payload: Box<dyn Any + Send>, during: &'static str) {
     let held = if payload.is::<&'static str>() || payload.is::<String>() {
         payload

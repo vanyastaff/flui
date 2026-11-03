@@ -512,7 +512,7 @@ pub(super) fn contain(first: &mut Failure, run: impl FnOnce()) {
 pub(super) fn finish(first: Failure) {
     if let Some(first) = first {
         if std::thread::panicking() {
-            std::mem::forget(first);
+            flui_foundation::panic::discard_payload(first);
         } else {
             std::panic::resume_unwind(first);
         }

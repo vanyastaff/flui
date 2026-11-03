@@ -1126,10 +1126,9 @@ impl HeadlessHost {
                     "a panic unwound out of the pump after a contained frame failure; the \
                      contained failure is raised and the later panic is discarded"
                 );
-                // The payload is an arbitrary user value whose destructor may
-                // itself panic; dropping it here could replace or abort the
-                // unwind of the first failure, so it is leaked instead.
-                std::mem::forget(payload);
+                // The contained failure is raised; the later payload is
+                // destroyed under containment (ADR-0281).
+                flui_foundation::panic::discard_payload(payload);
                 panic!("{failure}")
             }
         }
@@ -1188,7 +1187,7 @@ impl HeadlessHost {
                         "flushing queued pointer moves panicked after the input dispatch \
                          panicked; only the first panic is resumed"
                     );
-                    std::mem::forget(later);
+                    flui_foundation::panic::discard_payload(later);
                     resume_unwind(first);
                 }
                 (Err(payload), Ok(())) | (Ok(()), Err(payload)) => resume_unwind(payload),

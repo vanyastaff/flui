@@ -252,17 +252,16 @@ impl host::NativePrimarySelection for X11Clipboard {
 impl Drop for X11Clipboard {
     /// Stops the thread and waits for it: its connection closes, and with it
     /// the selections the application owned. The application's closures
-    /// drop after, in one protected sequence (ADR-0127).
+    /// drop after, in one contained sequence (ADR-0281).
     fn drop(&mut self) {
         self.send(Command::Stop);
         if let Some(thread) = self.thread.get_mut().take()
             && let Err(payload) = thread.join()
         {
             // The thread contains its own panics; one that escaped anyway
-            // is kept rather than dropped here, where its destructor could
-            // fail during an unwind (ADR-0127).
+            // is discarded under containment (ADR-0281).
             tracing::error!("the X11 clipboard's thread panicked");
-            std::mem::forget(payload);
+            flui_foundation::panic::discard_payload(payload);
         }
         let held = self
             .offer

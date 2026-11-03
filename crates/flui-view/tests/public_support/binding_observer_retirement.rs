@@ -1,4 +1,4 @@
-//! Public binding observer owners and snapshots, isolated for abort-capable rows.
+//! Public binding observer owners and snapshots, one child process per row.
 #![expect(
     clippy::arc_with_non_send_sync,
     reason = "WidgetsBinding observers are owner-local Arc capabilities"
@@ -278,12 +278,8 @@ pub(crate) fn dispatch_child(case: &str) {
             ));
             assert_eq!(counts(&calls), [2, 0]);
         }
-        "physical-healthy" | "physical-a" | "physical-b" | "physical-pair"
-        | "physical-incoming" => {
-            let fail = [
-                matches!(case, "physical-a" | "physical-pair" | "physical-incoming"),
-                matches!(case, "physical-b" | "physical-pair" | "physical-incoming"),
-            ];
+        "physical-healthy" | "physical-a" | "physical-b" | "physical-incoming" => {
+            let fail = [case == "physical-a", case == "physical-b"];
             let Fixture { binding, drops, .. } = fixture(fail, ObserverOptions::default());
             let failure = if case == "physical-incoming" {
                 catch(move || {
@@ -298,9 +294,9 @@ pub(crate) fn dispatch_child(case: &str) {
                     assert!(failure.is_none());
                     assert_eq!(counts(&drops), [1, 1]);
                 }
-                "physical-a" | "physical-pair" => {
+                "physical-a" => {
                     assert_failure(failure, "first observer retirement");
-                    assert_eq!(counts(&drops), [1, 0]);
+                    assert_eq!(counts(&drops), [1, 1]);
                 }
                 "physical-b" => {
                     assert_failure(failure, "second observer retirement");
@@ -308,7 +304,7 @@ pub(crate) fn dispatch_child(case: &str) {
                 }
                 _ => {
                     assert_failure(failure, "incoming binding failure");
-                    assert_eq!(counts(&drops), [0, 0]);
+                    assert_eq!(counts(&drops), [1, 1]);
                 }
             }
             let fresh = WidgetsBinding::new();
@@ -335,12 +331,9 @@ pub(crate) fn dispatch_child(case: &str) {
             drop(observer);
             assert_eq!(drops.get(), 1);
         }
-        "snapshot-healthy" | "snapshot-a" | "snapshot-b" | "snapshot-pair" | "snapshot-body" => {
+        "snapshot-healthy" | "snapshot-a" | "snapshot-b" | "snapshot-body" => {
             let body = case == "snapshot-body";
-            let fail = [
-                matches!(case, "snapshot-a" | "snapshot-pair" | "snapshot-body"),
-                matches!(case, "snapshot-b" | "snapshot-pair" | "snapshot-body"),
-            ];
+            let fail = [case == "snapshot-a", case == "snapshot-b"];
             let f = fixture(
                 fail,
                 ObserverOptions {
@@ -353,12 +346,12 @@ pub(crate) fn dispatch_child(case: &str) {
             let failure = catch(|| f.binding.handle_metrics_changed());
             if body {
                 assert_failure(failure, "first binding observer callback");
-                assert_eq!(counts(&f.drops), [0, 0]);
+                assert_eq!(counts(&f.drops), [1, 1]);
                 assert_eq!(counts(&f.calls), [1, 0]);
             } else {
                 if fail[0] {
                     assert_failure(failure, "first observer retirement");
-                    assert_eq!(counts(&f.drops), [1, 0]);
+                    assert_eq!(counts(&f.drops), [1, 1]);
                 } else if fail[1] {
                     assert_failure(failure, "second observer retirement");
                     assert_eq!(counts(&f.drops), [1, 1]);
@@ -383,7 +376,7 @@ pub(crate) fn dispatch_child(case: &str) {
         }
         "lifecycle-compete" => {
             let f = fixture(
-                [true, true],
+                [false, false],
                 ObserverOptions {
                     replace: true,
                     body: true,
@@ -410,7 +403,7 @@ pub(crate) fn dispatch_child(case: &str) {
                     .handle_app_lifecycle_state_changed(AppLifecycleState::Resumed);
             });
             assert_failure(failure, "first binding observer callback");
-            assert_eq!(counts(&f.drops), [0, 0]);
+            assert_eq!(counts(&f.drops), [1, 1]);
             assert_eq!(scoped.get(), 1, "scoped drain follows legacy failure");
             armed.set(false);
             f.binding
@@ -449,25 +442,11 @@ pub(crate) fn dispatch_child(case: &str) {
             let mode = parts[2];
             assert!(matches!(
                 mode,
-                "healthy"
-                    | "a"
-                    | "b"
-                    | "pair"
-                    | "incoming"
-                    | "future"
-                    | "future-pair"
-                    | "future-incoming"
+                "healthy" | "a" | "b" | "incoming" | "future" | "future-incoming"
             ));
-            let fail = [
-                matches!(
-                    mode,
-                    "a" | "pair" | "incoming" | "future-pair" | "future-incoming"
-                ),
-                matches!(
-                    mode,
-                    "b" | "pair" | "incoming" | "future-pair" | "future-incoming"
-                ),
-            ];
+            // One destructor fails per row: a second failing destructor in
+            // the same unwind aborts, as in std (ADR-0281).
+            let fail = [mode == "a", mode == "b"];
             let f = fixture(
                 fail,
                 ObserverOptions {
@@ -476,10 +455,9 @@ pub(crate) fn dispatch_child(case: &str) {
                     ..ObserverOptions::default()
                 },
             );
-            f.future_state.fail.store(
-                matches!(mode, "future" | "future-pair" | "future-incoming"),
-                Ordering::Relaxed,
-            );
+            f.future_state
+                .fail
+                .store(mode == "future", Ordering::Relaxed);
             let incoming = matches!(mode, "incoming" | "future-incoming");
             let route = RouteInformation::new("/pending");
             let failure = match parts[1] {
@@ -500,43 +478,16 @@ pub(crate) fn dispatch_child(case: &str) {
                 }
                 "incoming" | "future-incoming" => {
                     assert_failure(failure, "incoming cancellation failure");
-                    assert_eq!(retired, [0, 0]);
+                    assert_eq!(retired, [1, 1]);
                     assert_eq!(
                         f.future_state.drops.load(Ordering::Relaxed),
-                        0,
-                        "independent future envelope retained during incoming unwind"
+                        1,
+                        "the pending future is destroyed during the incoming unwind"
                     );
                 }
                 "future" => {
                     assert_failure(failure, "pending observer future retirement");
                     assert_eq!(f.future_state.drops.load(Ordering::Relaxed), 1);
-                }
-                "future-pair" => {
-                    let failure = failure.expect("one independent cancellation failure");
-                    let message = flui_foundation::panic::payload_text(failure.as_ref());
-                    assert!(matches!(
-                        message,
-                        Some(
-                            "first observer retirement"
-                                | "second observer retirement"
-                                | "pending observer future retirement"
-                        )
-                    ));
-                    assert_eq!(
-                        retired.iter().sum::<usize>()
-                            + f.future_state.drops.load(Ordering::Relaxed),
-                        1,
-                        "first independent failure protects future and observer successors"
-                    );
-                }
-                "pair" => {
-                    let failure = failure.expect("one cancellation retirement failure");
-                    let message = flui_foundation::panic::payload_text(failure.as_ref());
-                    assert!(matches!(
-                        message,
-                        Some("first observer retirement" | "second observer retirement")
-                    ));
-                    assert_eq!(retired.iter().sum::<usize>(), 1);
                 }
                 "a" => {
                     assert_failure(failure, "first observer retirement");
@@ -564,13 +515,11 @@ pub(crate) fn binding_observer_ownership_and_notifications() {
         "physical-healthy",
         "physical-a",
         "physical-b",
-        "physical-pair",
         "physical-incoming",
         "physical-alias",
         "snapshot-healthy",
         "snapshot-a",
         "snapshot-b",
-        "snapshot-pair",
         "snapshot-body",
         "lifecycle-compete",
         "async-delivery",
@@ -578,18 +527,14 @@ pub(crate) fn binding_observer_ownership_and_notifications() {
         "async-pop-healthy",
         "async-pop-a",
         "async-pop-b",
-        "async-pop-pair",
         "async-pop-incoming",
         "async-pop-future",
-        "async-pop-future-pair",
         "async-pop-future-incoming",
         "async-push-healthy",
         "async-push-a",
         "async-push-b",
-        "async-push-pair",
         "async-push-incoming",
         "async-push-future",
-        "async-push-future-pair",
         "async-push-future-incoming",
     ];
     let selected = std::env::var("FLUI_BINDING_OBSERVER_RETIREMENT_CONTROL").ok();

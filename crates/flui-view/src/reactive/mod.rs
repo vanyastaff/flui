@@ -84,6 +84,7 @@ use std::fmt;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
+use flui_foundation::panic::FirstPanic;
 pub use flui_foundation::read_scope::{
     ReadGraph, ReadScope, ReaderSink, ScopeRef, Signal, SignalError, SignalSender, SignalSlot,
 };
@@ -216,7 +217,7 @@ struct Inner {
     /// Elements whose `release_element` is running: they admit no new owned
     /// slot.
     retiring: SmallVec<[ElementId; 1]>,
-    /// A refused value's destructor is running: a refusal it causes retains
+    /// A refused value's destructor is running: a refusal it causes leaks
     /// its value instead of running another destructor.
     destroying_refused: bool,
 }
@@ -389,13 +390,13 @@ impl Reactive {
         }
     }
 
-    /// Destroy a value [`Self::alloc`] refused, outside the graph borrow; during
-    /// an unwind it is retained instead (ADR-0127).
+    /// Destroy a value [`Self::alloc`] refused, outside the graph borrow.
     ///
-    /// A refusal made while another refused value's destructor runs retains
-    /// its value too: a destructor that recreates itself would otherwise turn
-    /// each refusal into another destructor and another refusal, without
-    /// bound. One refused destructor runs at a time per graph.
+    /// A refusal made while another refused value's destructor runs leaks its
+    /// value: a destructor that recreates itself would otherwise turn each
+    /// refusal into another destructor and another refusal, without bound.
+    /// One refused destructor runs at a time per graph. This bounds recursion;
+    /// it is not failure-path retention (ADR-0281).
     fn refuse<T>(&self, refused: (SignalError, T)) -> SignalError {
         /// Ends the destroying window even when the destructor unwinds.
         struct Destroying<'a>(&'a RefCell<Inner>);
@@ -408,9 +409,9 @@ impl Reactive {
         let (error, value) = refused;
         let nested = std::mem::replace(&mut self.inner.borrow_mut().destroying_refused, true);
         if nested {
-            // Retained before the diagnostic: a subscriber that panics must
-            // not unwind this value's destructor into another refusal.
-            discard_secondary(value);
+            // Leaked before the diagnostic: running this destructor would
+            // recreate the value and refuse it again, without bound.
+            std::mem::forget(value);
             tracing::debug!(
                 target: "flui.signals",
                 %error,
@@ -419,7 +420,7 @@ impl Reactive {
             return error;
         }
         let _destroying = Destroying(&self.inner);
-        drop(RetainOnUnwind(Some(value)));
+        drop(value);
         error
     }
 
@@ -481,10 +482,10 @@ impl Reactive {
     /// widget-owned state (`BuildContextExt::signal` calls this with the
     /// building element).
     ///
-    /// A refused value is dropped after the graph borrow ends, or retained if
-    /// the thread is already unwinding or the refusal comes from another
-    /// refused value's destructor (ADR-0127): a value whose `Drop` recreates
-    /// itself through this call runs its destructor once, not without bound.
+    /// A refused value is dropped after the graph borrow ends, or leaked when
+    /// the refusal comes from another refused value's destructor: a value whose
+    /// `Drop` recreates itself through this call runs its destructor once, not
+    /// without bound.
     ///
     /// # Errors
     ///
@@ -503,9 +504,9 @@ impl Reactive {
     }
 
     /// [`Reactive::try_signal_owned_by`], panicking on refusal. The refused
-    /// value is still held when the panic starts, so the unwind retains it
-    /// rather than dropping it (ADR-0127): a destructor that recreates itself
-    /// cannot recurse through its own refusal.
+    /// value is destroyed before the panic starts, as by
+    /// [`Reactive::try_signal_owned_by`]: a destructor that recreates itself
+    /// runs once, not without bound, and not during the unwind.
     ///
     /// # Panics
     ///
@@ -515,8 +516,8 @@ impl Reactive {
     pub fn signal_owned_by<T: 'static>(&self, owner: ElementId, value: T) -> Signal<T> {
         match self.alloc(value, Some(owner)) {
             Ok(slot) => Signal::from_slot(slot),
-            Err((error, value)) => {
-                let _refused = RetainOnUnwind(Some(value));
+            Err(refused) => {
+                let error = self.refuse(refused);
                 panic!(
                     "Reactive::signal_owned_by: {error} (use try_signal_owned_by for a fallible creation)"
                 )
@@ -528,10 +529,9 @@ impl Reactive {
     /// handle use reports [`SignalError::Released`]. A no-op for a handle that
     /// is already stale. Release is authoritative even while the slot's value
     /// is loaned to its own read or update closure. Successful completion retires
-    /// that loan normally; after a callback failure, its opaque value is retained
-    /// to preserve the first failure. Destruction runs after the graph borrow
-    /// ends; release during active unwind retains the value instead. No readers
-    /// are invalidated.
+    /// that loan normally; after a callback failure its value is destroyed under
+    /// containment and the first failure is kept (ADR-0281). Destruction runs
+    /// after the graph borrow ends. No readers are invalidated.
     pub fn release(&self, slot: SignalSlot) {
         let retired = {
             let mut inner = self.inner.borrow_mut();
@@ -560,8 +560,9 @@ impl Reactive {
     }
 
     /// Bookkeeping is already committed for the whole release batch. Arbitrary
-    /// destructors run without a graph borrow; after the first failure, opaque
-    /// values are retained rather than running more user drop glue.
+    /// destructors run without a graph borrow, each under containment; after
+    /// the first failure the rest are still destroyed and the first failure
+    /// is the one resumed (ADR-0281 §3).
     fn retire_released(values: impl IntoIterator<Item = Option<Box<dyn Any>>>) {
         let mut first = None;
         Self::retire_released_into(values, &mut first);
@@ -577,14 +578,10 @@ impl Reactive {
         first: &mut Option<Box<dyn Any + Send>>,
     ) {
         for value in values {
-            if first.is_some() || std::thread::panicking() {
-                discard_secondary(value);
-            } else {
-                retain_first_panic(
-                    first,
-                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(value))),
-                );
-            }
+            FirstPanic::fold(
+                first,
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(value))).err(),
+            );
         }
     }
 
@@ -813,12 +810,12 @@ impl Loan<'_> {
             self.graph.put_back(self.slot, &mut self.value);
         }));
         if let Err(payload) = restored {
-            discard_secondary(self.value.take());
+            crate::drop_contained(self.value.take());
             std::panic::resume_unwind(payload);
         }
         let retired = self.value.take();
         if preserve_failure {
-            discard_secondary(retired);
+            crate::drop_contained(retired);
         } else {
             drop(retired);
         }
@@ -895,15 +892,7 @@ impl Reactive {
         slot: SignalSlot,
         mut f: impl FnMut(&T) -> R,
     ) -> Result<R, SignalError> {
-        let loan = match self.loan(slot) {
-            Ok(loan) => loan,
-            Err(error) => {
-                if std::thread::panicking() {
-                    std::mem::forget(f);
-                }
-                return Err(error);
-            }
-        };
+        let loan = self.loan(slot)?;
         let typed = loan
             .value
             .as_deref()
@@ -919,8 +908,8 @@ impl Reactive {
         match outcome {
             Ok(result) => {
                 if let Err(payload) = finalized {
-                    std::mem::forget(f);
-                    discard_secondary(result);
+                    crate::drop_contained(f);
+                    crate::drop_contained(result);
                     std::panic::resume_unwind(payload);
                 }
                 // Restore the loan before destroying the opaque capture
@@ -931,14 +920,14 @@ impl Reactive {
                 let disposed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(f)));
                 match disposed {
                     Err(payload) => {
-                        discard_secondary(result);
+                        crate::drop_contained(result);
                         std::panic::resume_unwind(payload)
                     }
                     Ok(()) => Ok(result),
                 }
             }
             Err(payload) => {
-                std::mem::forget(f);
+                crate::drop_contained(f);
                 if let Err(secondary) = finalized {
                     flui_foundation::panic::discard_payload(secondary);
                 }
@@ -964,14 +953,9 @@ impl Reactive {
         }));
         let mut loan = match prepared {
             Ok(Ok(loan)) => loan,
-            Ok(Err(error)) => {
-                if std::thread::panicking() {
-                    std::mem::forget(f);
-                }
-                return Err(error);
-            }
+            Ok(Err(error)) => return Err(error),
             Err(payload) => {
-                std::mem::forget(f);
+                crate::drop_contained(f);
                 std::panic::resume_unwind(payload)
             }
         };
@@ -988,8 +972,9 @@ impl Reactive {
         // there would destroy its captures while the updater panic is still
         // unwinding, and a panicking capture destructor would abort the
         // process before `catch_unwind` can return. A panicking updater's
-        // opaque bundle is retained; a successful updater is destroyed only
-        // after loan restoration and invalidation are durable.
+        // captures are destroyed under containment afterwards; a successful
+        // updater is destroyed only after loan restoration and invalidation
+        // are durable.
         let finalized = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             loan.finish(outcome.is_err());
         }));
@@ -998,8 +983,8 @@ impl Reactive {
         match outcome {
             Ok(result) => {
                 if let Err(payload) = finalized {
-                    std::mem::forget(f);
-                    discard_secondary(result);
+                    crate::drop_contained(f);
+                    crate::drop_contained(result);
                     if let Err(secondary) = invalidated {
                         flui_foundation::panic::discard_payload(secondary);
                     }
@@ -1007,27 +992,26 @@ impl Reactive {
                 }
                 if let Err(payload) = invalidated {
                     // Invalidation is chronologically earlier than opaque
-                    // callback teardown. Retain the capture bundle so a
-                    // destructor panic cannot replace this payload or abort
-                    // inside aggregate drop glue.
-                    std::mem::forget(f);
-                    discard_secondary(result);
+                    // callback teardown: the captures are destroyed under
+                    // containment, so a destructor panic cannot replace it.
+                    crate::drop_contained(f);
+                    crate::drop_contained(result);
                     std::panic::resume_unwind(payload)
                 }
                 // All graph protocol state is durable before user captures
-                // are destroyed. Even uncontainable aggregate drop glue can
+                // are destroyed, so a panicking destructor can
                 // no longer bypass loan restoration or reader invalidation.
                 let disposed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(f)));
                 match disposed {
                     Ok(()) => Ok(result),
                     Err(payload) => {
-                        discard_secondary(result);
+                        crate::drop_contained(result);
                         std::panic::resume_unwind(payload)
                     }
                 }
             }
             Err(payload) => {
-                std::mem::forget(f);
+                crate::drop_contained(f);
                 if let Err(secondary) = finalized {
                     flui_foundation::panic::discard_payload(secondary);
                 }
@@ -1073,38 +1057,6 @@ impl ReadGraph for Reactive {
                 }
                 std::panic::resume_unwind(payload)
             }
-        }
-    }
-}
-
-fn discard_secondary<T>(value: T) {
-    // `T` may be an aggregate whose second field panics while the first
-    // field's destructor is already unwinding. No outer catch can contain
-    // that generated drop glue, so exceptional-path retirement must leak it.
-    std::mem::forget(value);
-}
-
-/// Holds a refused value: dropped normally, or retained when it is dropped by
-/// an unwind (ADR-0127).
-struct RetainOnUnwind<T>(Option<T>);
-
-impl<T> Drop for RetainOnUnwind<T> {
-    fn drop(&mut self) {
-        let value = self.0.take();
-        if std::thread::panicking() {
-            discard_secondary(value);
-        } else {
-            drop(value);
-        }
-    }
-}
-
-fn retain_first_panic(first: &mut Option<Box<dyn Any + Send>>, outcome: std::thread::Result<()>) {
-    if let Err(payload) = outcome {
-        if first.is_none() {
-            *first = Some(payload);
-        } else {
-            flui_foundation::panic::discard_payload(payload);
         }
     }
 }
@@ -1164,10 +1116,9 @@ pub trait SignalWriteExt<T: 'static>: Copy + sealed::Sealed {
     /// The replacement is committed before the retired value is destroyed.
     /// Reader invalidation still runs after a contained destructor failure,
     /// so a panicking `T::drop` cannot hide the committed value from existing
-    /// readers. A retired value gets its own panic boundary; pending values
-    /// that remain after an earlier panic are retained because opaque
-    /// aggregate drop glue cannot be contained generically. The
-    /// chronologically first panic keeps priority.
+    /// readers. A retired value gets its own panic boundary; values that
+    /// remain after an earlier panic are destroyed under containment
+    /// (ADR-0281). The chronologically first panic keeps priority.
     ///
     /// # Errors
     ///
@@ -1184,10 +1135,10 @@ pub trait SignalWriteExt<T: 'static>: Copy + sealed::Sealed {
     /// destroys the loaned value and reader set, so there is no surviving
     /// commit to invalidate. This method does not provide transactional
     /// rollback. The updater is accepted as [`FnMut`] even though it is
-    /// invoked exactly once: retaining it across the protected invocation
-    /// lets successful capture destruction happen separately, while a panic
-    /// retains the opaque capture bundle instead of risking aggregate drop
-    /// glue during recovery.
+    /// invoked exactly once: keeping it across the protected invocation lets
+    /// its captures be destroyed only after the loan is restored and readers
+    /// are invalidated; after a panic they are destroyed under containment
+    /// and the updater's panic is the one resumed (ADR-0281).
     ///
     /// # Errors
     ///
@@ -1200,8 +1151,8 @@ pub trait SignalWriteExt<T: 'static>: Copy + sealed::Sealed {
 
     /// Replace the value only if it differs; an equal write marks nobody.
     /// Returns whether a write happened. A comparison panic commits nothing;
-    /// the proposed value is then retained on that exceptional path so its
-    /// destructor cannot replace or double-panic over the comparison failure.
+    /// the proposed value is then destroyed under containment, so its
+    /// destructor cannot replace the comparison failure (ADR-0281).
     ///
     /// # Errors
     ///
@@ -1227,14 +1178,9 @@ impl<T: 'static> SignalWriteExt<T> for Signal<T> {
         }));
         let mut loan = match prepared {
             Ok(Ok(loan)) => loan,
-            Ok(Err(error)) => {
-                if std::thread::panicking() {
-                    discard_secondary(pending.take());
-                }
-                return Err(error);
-            }
+            Ok(Err(error)) => return Err(error),
             Err(payload) => {
-                discard_secondary(pending.take());
+                crate::drop_contained(pending.take());
                 std::panic::resume_unwind(payload)
             }
         };
@@ -1265,16 +1211,16 @@ impl<T: 'static> SignalWriteExt<T> for Signal<T> {
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| graph.mark(slot)));
 
         let mut first = None;
-        retain_first_panic(&mut first, finalized);
+        FirstPanic::fold(&mut first, finalized.err());
         if let Some(payload) = first {
-            discard_secondary(retired);
+            crate::drop_contained(retired);
             if let Err(secondary) = invalidated {
                 flui_foundation::panic::discard_payload(secondary);
             }
             std::panic::resume_unwind(payload);
         }
         if let Err(payload) = invalidated {
-            discard_secondary(retired);
+            crate::drop_contained(retired);
             std::panic::resume_unwind(payload)
         }
         let disposed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(retired)));
@@ -1309,14 +1255,9 @@ impl<T: 'static> SignalWriteExt<T> for Signal<T> {
         }));
         let equal = match compared {
             Ok(Ok(equal)) => equal,
-            Ok(Err(error)) => {
-                if std::thread::panicking() {
-                    discard_secondary(pending.take());
-                }
-                return Err(error);
-            }
+            Ok(Err(error)) => return Err(error),
             Err(payload) => {
-                discard_secondary(pending.take());
+                crate::drop_contained(pending.take());
                 std::panic::resume_unwind(payload)
             }
         };
@@ -1645,12 +1586,11 @@ mod tests {
         let signal = r.signal(0u8);
         let reader = ElementId::new(1);
         r.register_element_reader(signal.slot(), reader);
-        let first_capture = DropBomb("first updater capture destructor probe");
-        let second_capture = DropBomb("second updater capture destructor probe");
+        let capture = DropBomb("updater capture destructor probe");
 
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             signal.update(&w(&r), move |value| {
-                let _capture_bundle_stays_owned_by_the_updater = (&first_capture, &second_capture);
+                let _capture_stays_owned_by_the_updater = &capture;
                 *value = 1;
                 panic!("updater probe");
             })

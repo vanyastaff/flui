@@ -65,9 +65,6 @@ destroyed the same way, with `flui_foundation::panic::discard_payload`. A destru
 already unwinding aborts the process, as in std; FLUI does not leak values or
 panic payloads to prevent it
 ([ADR-0281](adr/ADR-0281-a-destructor-that-panics-during-an-unwind-aborts-as-in-std.md)).
-Not implemented everywhere yet: crates still retain such values on failed
-paths, as [ADR-0127](adr/ADR-0127-exceptional-path-retention.md) required,
-until ADR-0281's migration removes those sites.
 
 ## Callback panics and exit codes
 
@@ -94,7 +91,7 @@ the AppKit and UIKit entries that have none, the end of the process
 | `build` | the subtree becomes an `ErrorView`; the process runs on |
 | An input handler, post-frame callback, lifecycle observer, command, or close-request handler | one `CallbackPanic` report; the UI runtime and the process run on |
 | Layout or paint | one `frame_failure` report per failure; the frame is retried with backoff, at most one attempt per `FAILURE_RETRY_CAP` (1 s) once the streak is long |
-| Closing a UI runtime that is not the last | one `CallbackPanic` report; what was not yet destroyed is retained |
+| Closing a UI runtime that is not the last | one `CallbackPanic` report; the rest is destroyed without further `dispose` calls, each destructor contained |
 | `dispose` or a `Drop` while the last window closes, or at loop exit | the flush registry is written, services and pools stop, then exit 101 with the panic's text |
 | Application code at exit (a destructor, `on_quit`) that blocks until `EXIT_WATCHDOG` (15 s from the start of the exit) | the watchdog writes the flush registry, then ends the process with 124 (`EXIT_CODE_HUNG`), without destructors |
 | A `BUG:` invariant inside an application operation | contained like any panic on the paths above, with `internal_invariant` set in its report |

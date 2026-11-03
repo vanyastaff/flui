@@ -857,8 +857,8 @@ impl Drop for DropFlag {
 }
 
 /// Withdrawn after a failure, the host runs none of its observers' code: a
-/// pending outcome is not delivered, and the observer is retained, so its
-/// captures are never dropped, not even with the host.
+/// pending outcome is not delivered, and each observer is destroyed under
+/// containment at withdrawal, without being called (ADR-0281).
 #[test]
 fn withdrawing_runs_no_observer_code() {
     let f = fixture();
@@ -874,7 +874,7 @@ fn withdrawing_runs_no_observer_code() {
     let _ = f.queue();
     f.host.withdraw();
     assert_eq!(calls.get(), 0, "no outcome is delivered");
-    assert!(!dropped.get(), "the observer is retained");
+    assert!(dropped.get(), "the observer is destroyed at withdrawal");
     assert!(!f.host.has_pending_delivery());
     assert_eq!(f.host.next_wake(), None, "the queue was resolved");
     assert_eq!(
@@ -886,7 +886,7 @@ fn withdrawing_runs_no_observer_code() {
     let Fixture { host, handle, .. } = f;
     drop(handle);
     drop(host);
-    assert!(!dropped.get(), "not even with the host");
+    assert!(dropped.get(), "and stays destroyed with the host");
     assert_eq!(calls.get(), 0);
 }
 

@@ -87,7 +87,13 @@ impl<A, R> Slot<A, R> {
                 Some(result)
             }
             Err(payload) => {
-                std::mem::forget(displaced);
+                // Destroyed under containment; the route's failure stays the
+                // one resumed (ADR-0281 §3).
+                if let Err(later) =
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(displaced)))
+                {
+                    flui_foundation::panic::discard_payload(later);
+                }
                 std::panic::resume_unwind(payload)
             }
         }

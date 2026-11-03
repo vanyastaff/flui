@@ -1,6 +1,7 @@
 //! What the AppKit and UIKit windows report and are asked, as pure rules:
 //! where an `NSWindow` is (`frame`), which mode it is in and how to reach
-//! another (`mode`), whether its surface is seen (`surface`), and which
+//! another (`mode`), how a frame styles it and where its traffic lights go
+//! (`title_bar`), whether its surface is seen (`surface`), and which
 //! screen edges a UIKit window defers its system gestures on
 //! (`screen_edges`).
 //!
@@ -1190,6 +1191,199 @@ pub(crate) mod mode {
     }
 }
 
+#[cfg(any(target_os = "macos", test))]
+pub(crate) mod title_bar {
+    //! How an `NSWindow` whose application draws the title bar is styled
+    //! (ADR-0286 §8), and where its traffic lights go when the application
+    //! moves them.
+    //!
+    //! The title bar of such a window is the system's, made transparent, with
+    //! the content view reaching under it (`fullSizeContentView`), so AppKit
+    //! keeps the frame: the shadow, the rounded corners, the resize borders,
+    //! full screen and tiling. Moving the buttons down grows the title bar's
+    //! container by as much, as AppKit lays the buttons out from its bottom
+    //! edge, so they stay inside it and keep answering.
+
+    use flui_foundation::geometry::Point;
+    use flui_platform::{ControlsOffset, SystemControls, WindowFrame};
+
+    /// The style a frame asks of an `NSWindow`.
+    #[derive(Debug, Clone, Copy, PartialEq)]
+    pub(crate) struct FrameStyle {
+        /// `NSWindowStyleMaskTitled`: the window has the system's title bar
+        /// and traffic lights, drawn or not.
+        pub(crate) titled: bool,
+        /// `NSWindowStyleMaskFullSizeContentView`, a transparent title bar
+        /// and a hidden title: the application draws under the bar.
+        pub(crate) app_title_bar: bool,
+        /// The traffic lights over the application's bar; `None` on a system
+        /// title bar or no frame.
+        pub(crate) controls: Option<SystemControls>,
+    }
+
+    impl FrameStyle {
+        /// The style `frame` asks for.
+        pub(crate) const fn of(frame: WindowFrame) -> Self {
+            match frame {
+                WindowFrame::AppTitleBar(bar) => Self {
+                    titled: true,
+                    app_title_bar: true,
+                    controls: Some(bar.system_controls()),
+                },
+                WindowFrame::None => Self {
+                    titled: false,
+                    app_title_bar: false,
+                    controls: None,
+                },
+                // `System`, and a frame the contract gains later.
+                _ => Self {
+                    titled: true,
+                    app_title_bar: false,
+                    controls: None,
+                },
+            }
+        }
+    }
+
+    /// Where the system lays the traffic lights out, read once before
+    /// anything moved them: the title bar container's height, and each
+    /// button's origin in it (AppKit's bottom-left coordinates), close,
+    /// minimize and zoom.
+    #[derive(Debug, Clone, Copy, PartialEq)]
+    pub(crate) struct ControlsLayout {
+        pub(crate) bar_height: f64,
+        pub(crate) buttons: [Point<f64>; 3],
+    }
+
+    impl ControlsLayout {
+        /// The layout moved by `offset`: the bar grows down by `offset.down()`
+        /// and the buttons, which keep their distance from its bottom edge,
+        /// come down with it; they move `offset.along()` toward the trailing
+        /// edge, which is the left one in a right-to-left layout.
+        pub(crate) fn moved(self, offset: ControlsOffset, right_to_left: bool) -> Self {
+            let along = if right_to_left {
+                -offset.along()
+            } else {
+                offset.along()
+            };
+            Self {
+                bar_height: self.bar_height + offset.down(),
+                buttons: self
+                    .buttons
+                    .map(|origin| Point::new(origin.x + along, origin.y)),
+            }
+        }
+
+        /// The layout `controls` ask for: the system's own, or moved by an
+        /// offset; `None` when the buttons are hidden.
+        pub(crate) fn for_controls(
+            self,
+            controls: SystemControls,
+            right_to_left: bool,
+        ) -> Option<Self> {
+            match controls {
+                SystemControls::Offset(offset) => Some(self.moved(offset, right_to_left)),
+                SystemControls::Hidden => None,
+                // `Shown`, and controls the contract gains later.
+                _ => Some(self),
+            }
+        }
+
+        /// The bottom edge of the bar's container in a window `window_height`
+        /// points tall: the container hangs from the window's top edge.
+        pub(crate) fn bar_bottom(self, window_height: f64) -> f64 {
+            window_height - self.bar_height
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use flui_foundation::geometry::Point;
+        use flui_platform::{AppTitleBar, ControlsOffset, SystemControls, WindowFrame};
+
+        use super::{ControlsLayout, FrameStyle};
+
+        #[test]
+        fn each_frame_asks_its_style_of_the_window() {
+            let offset =
+                SystemControls::Offset(ControlsOffset::try_new(12.0, 8.0).expect("a valid offset"));
+            let cases = [
+                (WindowFrame::System, (true, false, None)),
+                (WindowFrame::None, (false, false, None)),
+                (
+                    WindowFrame::AppTitleBar(AppTitleBar::new()),
+                    (true, true, Some(SystemControls::Shown)),
+                ),
+                (
+                    WindowFrame::AppTitleBar(
+                        AppTitleBar::new().with_system_controls(SystemControls::Hidden),
+                    ),
+                    (true, true, Some(SystemControls::Hidden)),
+                ),
+                (
+                    WindowFrame::AppTitleBar(AppTitleBar::new().with_system_controls(offset)),
+                    (true, true, Some(offset)),
+                ),
+            ];
+            for (frame, (titled, app_title_bar, controls)) in cases {
+                assert_eq!(
+                    FrameStyle::of(frame),
+                    FrameStyle {
+                        titled,
+                        app_title_bar,
+                        controls
+                    },
+                    "{frame:?}"
+                );
+            }
+        }
+
+        #[test]
+        fn moved_traffic_lights_stay_inside_a_bar_that_grows_down() {
+            let system = ControlsLayout {
+                bar_height: 28.0,
+                buttons: [
+                    Point::new(7.0, 6.0),
+                    Point::new(27.0, 6.0),
+                    Point::new(47.0, 6.0),
+                ],
+            };
+            let offset = ControlsOffset::try_new(12.0, 10.0).expect("a valid offset");
+            let shown = system.for_controls(SystemControls::Shown, false);
+            assert_eq!(shown, Some(system), "shown, the system's own layout");
+            assert_eq!(
+                shown.map(|layout| layout.bar_bottom(600.0)),
+                Some(572.0),
+                "the bar hangs from the window's top edge"
+            );
+            assert_eq!(system.for_controls(SystemControls::Hidden, false), None);
+
+            let moved = system
+                .for_controls(SystemControls::Offset(offset), false)
+                .expect("moved buttons are shown");
+            assert_eq!(moved.bar_height, 38.0, "the bar grows by the offset down");
+            assert_eq!(moved.bar_bottom(600.0), 562.0);
+            assert_eq!(
+                moved.buttons,
+                [
+                    Point::new(19.0, 6.0),
+                    Point::new(39.0, 6.0),
+                    Point::new(59.0, 6.0)
+                ],
+                "the buttons keep their height above the bar's bottom, so they come down with it"
+            );
+
+            let mirrored = system
+                .for_controls(SystemControls::Offset(offset), true)
+                .expect("moved buttons are shown");
+            assert_eq!(
+                mirrored.buttons[0],
+                Point::new(-5.0, 6.0),
+                "right to left, the trailing edge is the left one"
+            );
+        }
+    }
+}
 #[cfg(any(target_os = "macos", test))]
 pub(crate) mod surface {
     //! When an `NSWindow`'s surface is seen, from its occlusion state. The

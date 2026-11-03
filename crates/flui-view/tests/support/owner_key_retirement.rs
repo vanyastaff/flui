@@ -1,4 +1,4 @@
-//! Public owner and key envelopes retire without competing with a prior failure.
+//! Public owner and key envelopes are destroyed; the first failure is raised (ADR-0281).
 use flui_foundation::observe::TreeObserver;
 use flui_foundation::{ElementId, ViewKey};
 use flui_rendering::{
@@ -48,19 +48,19 @@ fn physical(kind: &str) {
     let mut owner = BuildOwner::new();
     let _signal = owner.signal_graph().signal(Leaf {
         name: "graph",
-        fail: matches!(kind, "graph" | "all"),
+        fail: kind == "graph",
         events: events.clone(),
     });
     owner.set_tree_observer(Arc::new(Observer {
         _leaf: Leaf {
             name: "observer",
-            fail: matches!(kind, "observer" | "pair" | "all"),
+            fail: kind == "observer",
             events: events.clone(),
         },
     }));
     let callback = Leaf {
         name: "callback",
-        fail: matches!(kind, "callback" | "pair" | "all"),
+        fail: kind == "callback",
         events: events.clone(),
     };
     owner.set_on_build_scheduled(move || {
@@ -73,23 +73,20 @@ fn physical(kind: &str) {
         }
         drop(owner);
     }));
-    let expected: &[&str] = match kind {
-        "healthy" | "callback" => &["graph", "observer", "callback"],
-        "graph" | "all" => &["graph"],
-        "observer" | "pair" => &["graph", "observer"],
-        "incoming" => &[],
-        _ => panic!("unknown physical row"),
-    };
-    assert_eq!(&*events.lock().expect("events"), expected);
+    assert_eq!(
+        &*events.lock().expect("events"),
+        &["graph", "observer", "callback"],
+        "every owner envelope is destroyed in field order"
+    );
     if kind == "healthy" {
         assert!(result.is_ok());
     } else {
         let payload = result.expect_err("first owner failure");
         let first = if kind == "incoming" {
             "incoming owner failure"
-        } else if matches!(kind, "graph" | "all") {
+        } else if kind == "graph" {
             "graph owner leaf failed"
-        } else if matches!(kind, "observer" | "pair") {
+        } else if kind == "observer" {
             "observer owner leaf failed"
         } else {
             "callback owner leaf failed"
@@ -107,11 +104,7 @@ fn physical(kind: &str) {
 }
 
 pub(crate) fn dispatch_child(kind: &str) {
-    if kind == "physical-key" {
-        physical_key(false);
-    } else if kind == "physical-key-pair" {
-        physical_key(true);
-    } else if let Some(kind) = kind.strip_prefix("physical:") {
+    if let Some(kind) = kind.strip_prefix("physical:") {
         physical(kind);
     } else if let Some(kind) = kind.strip_prefix("release:") {
         release(kind);
@@ -142,12 +135,6 @@ pub(crate) fn physical_observer_failure() {
 pub(crate) fn physical_callback_failure() {
     bounded("physical:callback");
 }
-pub(crate) fn physical_observer_callback_competition() {
-    bounded("physical:pair");
-}
-pub(crate) fn physical_graph_observer_callback_competition() {
-    bounded("physical:all");
-}
 pub(crate) fn physical_incoming_failure() {
     bounded("physical:incoming");
 }
@@ -173,9 +160,7 @@ struct KeyControl {
     frame: AtomicBool,
     verification_phase: AtomicBool,
     fail_storage: AtomicBool,
-    fail_storage_at: AtomicUsize,
     fail_verification: AtomicBool,
-    storage_drops: AtomicUsize,
     verification_drops: AtomicUsize,
     events: Events,
 }
@@ -196,9 +181,7 @@ impl KeyControl {
             frame: AtomicBool::new(false),
             verification_phase: AtomicBool::new(false),
             fail_storage: AtomicBool::new(false),
-            fail_storage_at: AtomicUsize::new(0),
             fail_verification: AtomicBool::new(false),
-            storage_drops: AtomicUsize::new(0),
             verification_drops: AtomicUsize::new(0),
             events: events.clone(),
         })
@@ -330,12 +313,7 @@ impl Drop for TestKey {
                     self.control.fail_verification.load(Ordering::SeqCst),
                 )
             } else {
-                let count = self.control.storage_drops.fetch_add(1, Ordering::SeqCst) + 1;
-                (
-                    "storage",
-                    self.control.fail_storage.load(Ordering::SeqCst)
-                        || self.control.fail_storage_at.load(Ordering::SeqCst) == count,
-                )
+                ("storage", self.control.fail_storage.load(Ordering::SeqCst))
             };
             self.control.events.lock().expect("events").push(label);
             assert!(!fail, "{label} frame key retirement failed");
@@ -383,14 +361,12 @@ fn release(kind: &str) {
     let (mut owner, scope, events) = rig();
     let key = TestKey::new(1, &events);
     owner.register_global_key(&key, element(1));
-    key.control.fail_local.store(
-        matches!(kind, "local" | "pair" | "incoming"),
-        Ordering::SeqCst,
-    );
-    key.control.fail_scope.store(
-        matches!(kind, "scoped" | "pair" | "incoming"),
-        Ordering::SeqCst,
-    );
+    key.control
+        .fail_local
+        .store(kind == "local", Ordering::SeqCst);
+    key.control
+        .fail_scope
+        .store(kind == "scoped", Ordering::SeqCst);
     key.control
         .reenter_drop
         .store(kind == "reentry", Ordering::SeqCst);
@@ -409,9 +385,7 @@ fn release(kind: &str) {
     }));
     assert_eq!(owner.element_for_global_key(&key), None);
     let expected: &[&str] = match kind {
-        "local" | "pair" => &["local"],
-        "incoming" => &[],
-        "healthy" | "scoped" | "reentry" => &["local", "scoped"],
+        "healthy" | "local" | "scoped" | "reentry" | "incoming" => &["local", "scoped"],
         _ => panic!("unknown release row"),
     };
     assert_eq!(&*events.lock().expect("events"), expected);
@@ -449,18 +423,10 @@ fn cloning(kind: &str) {
     let key = TestKey::new(1, &events);
     match kind {
         "local" => key.control.fail_clone.store(1, Ordering::SeqCst),
-        "scoped" => {
-            key.control.fail_clone.store(2, Ordering::SeqCst);
-            key.control.fail_local.store(true, Ordering::SeqCst);
-        }
+        "scoped" => key.control.fail_clone.store(2, Ordering::SeqCst),
         "read" => key.control.read_clone.store(2, Ordering::SeqCst),
         "compete" => key.control.compete_clone.store(2, Ordering::SeqCst),
         "local-compete" => key.control.compete_clone.store(1, Ordering::SeqCst),
-        "compete-drop" => {
-            key.control.compete_clone.store(2, Ordering::SeqCst);
-            key.control.fail_local.store(true, Ordering::SeqCst);
-            key.control.fail_scope.store(true, Ordering::SeqCst);
-        }
         _ => panic!("unknown clone row"),
     }
     let result = catch_unwind(AssertUnwindSafe(|| {
@@ -479,17 +445,14 @@ fn cloning(kind: &str) {
                 "key clone 2 failed"
             }));
             assert_eq!(scope.claim_count(), 0);
-            assert!(
-                events.lock().expect("events").is_empty(),
-                "prepared key preserved during clone unwind"
+            let expected: &[&str] = if kind == "local" { &[] } else { &["local"] };
+            assert_eq!(
+                &*events.lock().expect("events"),
+                expected,
+                "a prepared key is destroyed during the clone unwind"
             );
         } else {
-            if kind == "compete-drop" {
-                assert_eq!(panic_text(payload.as_ref()), "scoped key retirement failed");
-                assert_eq!(&*events.lock().expect("events"), &["scoped"]);
-            } else {
-                assert!(panic_text(payload.as_ref()).contains("already claimed"));
-            }
+            assert!(panic_text(payload.as_ref()).contains("already claimed"));
             assert_eq!(scope.claim_count(), 1);
             assert_eq!(key.control.reentries.load(Ordering::SeqCst), 1);
             owner.unregister_global_key(&key); // stale owner cannot release competitor.
@@ -522,8 +485,6 @@ fn rollback() {
         .fail_local_admission
         .store(true, Ordering::SeqCst);
     let incoming = TestKey::new(2, &events);
-    incoming.control.fail_local.store(true, Ordering::SeqCst);
-    incoming.control.fail_scope.store(true, Ordering::SeqCst);
     let result = catch_unwind(AssertUnwindSafe(|| {
         owner.register_global_key(&incoming, element(2));
     }));
@@ -532,9 +493,10 @@ fn rollback() {
         panic_text(payload.as_ref()),
         "local admission comparison failed"
     );
-    assert!(
-        events.lock().expect("events").is_empty(),
-        "incoming failure retains both prepared key envelopes"
+    assert_eq!(
+        *events.lock().expect("events"),
+        ["local", "scoped"],
+        "the refused prepared keys are destroyed during the unwind"
     );
     existing.control.forbidden_eq.store(false, Ordering::SeqCst);
     existing
@@ -589,45 +551,6 @@ fn identity() {
     assert_eq!(scope.claim_count(), 0);
     next_claim(&first, &scope);
 }
-fn physical_key(pair: bool) {
-    let (mut owner, scope, events) = rig();
-    let first = TestKey::new(1, &events);
-    let second = TestKey::new(2, &events);
-    owner.register_global_key(&first, element(1));
-    if pair {
-        owner.register_global_key(&second, element(2));
-    }
-    first.control.fail_local.store(true, Ordering::SeqCst);
-    second.control.fail_local.store(true, Ordering::SeqCst);
-    owner.set_tree_observer(Arc::new(Observer {
-        _leaf: Leaf {
-            name: "observer",
-            fail: true,
-            events: events.clone(),
-        },
-    }));
-    let result = catch_unwind(AssertUnwindSafe(|| drop(owner)));
-    assert_eq!(
-        panic_text(result.expect_err("first key failure").as_ref()),
-        "local key retirement failed"
-    );
-    let expected: &[&str] = if pair {
-        &["scoped", "scoped", "local"]
-    } else {
-        &["scoped", "local"]
-    };
-    assert_eq!(&*events.lock().expect("events"), expected);
-    assert_eq!(scope.claim_count(), 0);
-    first.control.fail_local.store(false, Ordering::SeqCst);
-    next_claim(&first, &scope);
-    finish_rig();
-}
-pub(crate) fn physical_key_observer_competition() {
-    bounded("physical-key");
-}
-pub(crate) fn physical_registry_key_competition() {
-    bounded("physical-key-pair");
-}
 pub(crate) fn key_release_healthy_order() {
     bounded("release:healthy");
 }
@@ -636,9 +559,6 @@ pub(crate) fn key_release_local_failure() {
 }
 pub(crate) fn key_release_scope_failure() {
     bounded("release:scoped");
-}
-pub(crate) fn key_release_competition() {
-    bounded("release:pair");
 }
 pub(crate) fn key_release_incoming_failure() {
     bounded("release:incoming");
@@ -698,13 +618,11 @@ fn row(keys: &[Arc<TestKey>]) -> super::dense_reconcile_containment::DenseRow {
     }
 }
 fn reset_frame(key: &TestKey) {
-    key.control.storage_drops.store(0, Ordering::SeqCst);
     key.control.verification_drops.store(0, Ordering::SeqCst);
     key.control.verification_phase.store(true, Ordering::SeqCst);
 }
 fn disarm_frame(key: &TestKey) {
     key.control.fail_storage.store(false, Ordering::SeqCst);
-    key.control.fail_storage_at.store(0, Ordering::SeqCst);
     key.control.fail_verification.store(false, Ordering::SeqCst);
     key.control
         .verification_phase
@@ -752,43 +670,16 @@ fn frame(kind: &str) {
     for key in &keys {
         reset_frame(key);
     }
+    // One key fails: a second failing destructor in the same unwind aborts,
+    // as in std (ADR-0281).
     match kind {
-        "storage" | "pair" | "incoming" | "physical" => {
-            for key in &keys {
-                key.control.fail_storage.store(true, Ordering::SeqCst);
-            }
-        }
-        "displacement" | "displacement-pair" => {
-            for key in &keys {
-                key.control.fail_storage_at.store(2, Ordering::SeqCst);
-            }
-        }
-        "healthy" | "verification" | "displacement-healthy" => {}
+        "storage" => keys[0].control.fail_storage.store(true, Ordering::SeqCst),
+        "verification" => keys[0]
+            .control
+            .fail_verification
+            .store(true, Ordering::SeqCst),
+        "healthy" | "incoming" | "displacement-healthy" => {}
         _ => panic!("unknown frame row"),
-    }
-    if matches!(
-        kind,
-        "verification" | "pair" | "incoming" | "displacement-pair"
-    ) {
-        for key in &keys {
-            key.control.fail_verification.store(true, Ordering::SeqCst);
-        }
-    }
-    if kind == "physical" {
-        let result = catch_unwind(AssertUnwindSafe(|| drop(owner)));
-        assert_eq!(
-            panic_text(result.expect_err("scoped key failure").as_ref()),
-            "storage frame key retirement failed"
-        );
-        assert_eq!(&*events.lock().expect("events"), &["storage"]);
-        assert_eq!(scope.claim_count(), 0);
-        for key in &keys {
-            disarm_frame(key);
-        }
-        next_claim(&keys[0], &scope);
-        drop(tree);
-        finish_rig();
-        return;
     }
     struct Finalize<'a>(&'a mut BuildOwner, &'a mut ElementTree);
     impl Drop for Finalize<'_> {
@@ -816,11 +707,10 @@ fn frame(kind: &str) {
         );
     }
     let expected: &[&str] = match kind {
-        "healthy" => &["storage", "storage", "verification", "verification"],
-        "storage" | "pair" => &["storage"],
-        "verification" => &["storage", "storage", "verification"],
-        "incoming" => &[],
-        "displacement" | "displacement-pair" => &["storage", "storage", "storage"],
+        "storage" => &["storage", "storage", "verification"],
+        "healthy" | "verification" | "incoming" => {
+            &["storage", "storage", "verification", "verification"]
+        }
         "displacement-healthy" => &[
             "storage",
             "storage",
@@ -863,20 +753,8 @@ pub(crate) fn reservation_storage_failure() {
 pub(crate) fn verification_key_failure() {
     bounded("frame:verification");
 }
-pub(crate) fn reservation_verification_competition() {
-    bounded("frame:pair");
-}
 pub(crate) fn reservation_verification_incoming_failure() {
     bounded("frame:incoming");
-}
-pub(crate) fn owner_scope_failure_retains_reservations() {
-    bounded("frame:physical");
-}
-pub(crate) fn displacement_key_competition() {
-    bounded("frame:displacement");
-}
-pub(crate) fn displacement_verification_competition() {
-    bounded("frame:displacement-pair");
 }
 pub(crate) fn displacement_verification_healthy_order() {
     bounded("frame:displacement-healthy");
@@ -884,7 +762,4 @@ pub(crate) fn displacement_verification_healthy_order() {
 
 pub(crate) fn local_clone_competing_owner_reentry() {
     bounded("clone:local-compete");
-}
-pub(crate) fn competing_owner_and_rejected_key_retirement() {
-    bounded("clone:compete-drop");
 }

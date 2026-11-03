@@ -89,24 +89,7 @@ impl<Arg> Drop for ListenerStorage<Arg> {
         callbacks.extend(std::mem::take(self.entries.get_mut()));
         let deferred = std::mem::take(self.deferred.get_mut());
         retire_callbacks(callbacks);
-        if std::thread::panicking() {
-            std::mem::forget(deferred);
-        } else {
-            drop(deferred);
-        }
-    }
-}
-
-/// Separate callback envelopes must never become one aggregate drop boundary.
-struct RetiringListeners<Arg>(Vec<(ListenerId, OwnedCallback<Arg>)>);
-
-impl<Arg> Drop for RetiringListeners<Arg> {
-    fn drop(&mut self) {
-        if std::thread::panicking() {
-            // A callback already failed. Its untouched successors must not
-            // introduce another destructor failure while that panic propagates.
-            std::mem::forget(std::mem::take(&mut self.0));
-        }
+        drop(deferred);
     }
 }
 
@@ -114,26 +97,12 @@ fn retire_listeners<Arg>(listeners: HashMap<ListenerId, OwnedCallback<Arg>>) {
     retire_callbacks(listeners.into_iter().collect());
 }
 
-fn retire_callbacks<Arg>(callbacks: Vec<(ListenerId, OwnedCallback<Arg>)>) {
-    if std::thread::panicking() {
-        // Preserve an incoming unwind without running opaque captures at all.
-        std::mem::forget(callbacks);
-        return;
-    }
-    let mut retiring = RetiringListeners(callbacks);
-    retiring.0.sort_unstable_by_key(|(id, _)| *id);
-    retiring.0.reverse();
-    while let Some((_, callback)) = retiring.0.pop() {
-        drop(callback);
-    }
-}
-
-fn retire_listener<Arg>(listener: Option<OwnedCallback<Arg>>) {
-    if std::thread::panicking() {
-        std::mem::forget(listener);
-    } else {
-        drop(listener);
-    }
+/// Drop callbacks in registration order. If one destructor panics, the rest
+/// are still destroyed and the first panic propagates; one that panics during
+/// that unwind aborts, as in std (ADR-0281).
+fn retire_callbacks<Arg>(mut callbacks: Vec<(ListenerId, OwnedCallback<Arg>)>) {
+    callbacks.sort_unstable_by_key(|(id, _)| *id);
+    drop(callbacks);
 }
 
 /// A generic, typed, hardened notification channel. See module docs.
@@ -143,9 +112,9 @@ fn retire_listener<Arg>(listener: Option<OwnedCallback<Arg>>) {
 /// performed elsewhere — matching `ChangeNotifier`'s semantics.
 ///
 /// Removal, clearing, disposal and final-owner destruction drop callbacks
-/// outside the borrow, in registration order. After the first destructor panic,
-/// or while the thread is already panicking, the remaining callbacks are
-/// retained rather than dropped (ADR-0127).
+/// outside the borrow, in registration order. If a destructor panics, the
+/// rest are still dropped and the first panic propagates; one that panics
+/// while the thread is already unwinding aborts, as in std (ADR-0281).
 pub struct Notifier<Arg> {
     listeners: Rc<ListenerStorage<Arg>>,
     next_id: Rc<Cell<usize>>,
@@ -379,7 +348,7 @@ impl<Arg> Notifier<Arg> {
 
     /// Hand `capture` to this channel's delivery in progress: it retires with
     /// the round's own removed listeners, when the outermost delivery ends,
-    /// and is retained if the round fails. Returns it when no delivery is in
+    /// under the round's containment. Returns it when no delivery is in
     /// progress, for the caller to retire now.
     ///
     /// An owner of several channels uses this to keep a capture withdrawn
@@ -393,8 +362,8 @@ impl<Arg> Notifier<Arg> {
     }
 
     /// Carry a failure this channel's current delivery already holds into
-    /// `recovery`, so a withdrawal made during that delivery retains captures
-    /// instead of destroying them on a failed path.
+    /// `recovery`, so a withdrawal made during that delivery retires its
+    /// captures under containment and that failure stays the first.
     pub fn inherit_failure(&self, recovery: &mut RecoveryScope<'_>) {
         if self.listeners.delivery_depth.get() != 0 && self.listeners.failed.load(Ordering::Relaxed)
         {
@@ -416,7 +385,7 @@ impl<Arg> Notifier<Arg> {
                 self.listeners.retired.borrow_mut().push((id, callback));
             }
         } else {
-            retire_listener(callback);
+            drop(callback);
         }
     }
 
@@ -442,12 +411,11 @@ impl<Arg> Notifier<Arg> {
     /// *added* during a notify round are NOT fired in that round — only in the
     /// next one (same round-N-vs-round-N+1 rule as `notify_listeners`).
     /// Arguments are borrowed: notification never clones or destroys the value.
-    /// After a caught listener panic, its payload and callback snapshot are
-    /// retained rather than running opaque capture destructors. On a successful
-    /// round, callbacks retire normally; the first retirement panic propagates
-    /// with remaining envelopes retained. A single callback whose own capture
-    /// aggregate double-panics during ordinary destruction remains subject to
-    /// Rust's abort semantics, as does double-panic inside user callback code.
+    /// A caught listener panic is held while the rest of the round runs; the
+    /// snapshot's callbacks then retire one at a time under the round's
+    /// containment, and the first panic propagates. A capture aggregate that
+    /// panics again while one of its fields unwinds aborts, as in std
+    /// (ADR-0281).
     pub fn notify(&self, arg: &Arg) {
         if self.check_disposed() {
             return;
@@ -530,11 +498,10 @@ impl<Arg> Notifier<Arg> {
                 .map(|(&id, cb)| (id, Rc::clone(cb)))
                 .collect();
             snapshot.sort_unstable_by_key(|(id, _)| *id);
-            let mut snapshot = std::mem::ManuallyDrop::new(snapshot);
             // Membership and capture custody precede optional observer reentry.
             // An observer failure joins the same round, preserving the tail.
             recovery.run(before);
-            for (id, callback) in snapshot.iter() {
+            for (id, callback) in &snapshot {
                 // Skip a listener individually removed mid-notify (by an earlier
                 // callback), and skip the tail once the channel is disposed.
                 if self.is_disposed.get() || !self.listeners.entries.borrow().contains_key(id) {
@@ -557,13 +524,13 @@ impl<Arg> Notifier<Arg> {
                     });
                 }
             }
-            // Retire separate envelopes one at a time. If one destructor fails,
-            // the remaining snapshot must not add another failure during unwind.
+            // Retire separate envelopes one at a time, each under the round's
+            // containment: a destructor panic is a competing failure (ADR-0281).
             snapshot.reverse();
             while let Some((_, callback)) = snapshot.pop() {
                 recovery.retire_callout_capture(callback);
             }
-            drop(std::mem::ManuallyDrop::into_inner(snapshot));
+            drop(snapshot);
             if self.listeners.delivery_depth.get() == 1 {
                 loop {
                     let mut retired = std::mem::take(&mut *self.listeners.retired.borrow_mut());

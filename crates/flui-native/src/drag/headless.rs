@@ -103,11 +103,12 @@ impl DataTransferSource for DragDouble {
         let served =
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| serve(representation)));
         if let Err(displaced) = provider.restore(serve) {
-            // The slot is the session's own, so nothing else fills it.
-            std::mem::forget(displaced);
+            // The slot is the session's own, so nothing else fills it; a
+            // refused provider is dropped, contained (ADR-0281).
+            crate::owner::panic_boundary::contain_owner_callback(|| drop(displaced));
         }
         let result = served.unwrap_or_else(|payload| {
-            std::mem::forget(payload);
+            flui_foundation::panic::discard_payload(payload);
             crate::owner::panic_boundary::contain_owner_callback(|| {
                 tracing::error!("the drag's provider panicked; the request fails");
             });

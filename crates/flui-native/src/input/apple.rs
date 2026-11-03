@@ -7,6 +7,9 @@
 //!   `tests/`;
 //! - `wheel`: AppKit's wheel step; pure, built for macOS and for tests on
 //!   every host;
+//! - `title_bar`: where a left press on a title bar the application draws
+//!   goes, and what a double-click on it does; pure, built for macOS and for
+//!   tests on every host;
 //! - `macos`: each content view's input (the owner's content view is the
 //!   responder its window's input arrives at), and the translation of its
 //!   `NSEvent`s (`events`);
@@ -671,6 +674,166 @@ pub(crate) mod force {
     }
 }
 
+#[cfg(any(target_os = "macos", test))]
+pub(crate) mod title_bar {
+    //! A press on a title bar the application draws (ADR-0286 §8): where the
+    //! chrome regions put a left press, and what a double-click on the bar
+    //! does after the user's setting. AppKit reads the setting and moves the
+    //! window; this decides.
+
+    #![forbid(unsafe_code)]
+
+    use flui_foundation::geometry::DevicePoint;
+    use flui_platform::input_regions::{ChromeHit, DeviceInputRegion, chrome_hit};
+
+    /// What a left press on the window does.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub(crate) enum Press {
+        /// It reaches the application.
+        App,
+        /// It moves the window, as the system's title bar does.
+        Drag,
+        /// The second click of a double-click on the bar: the user's setting decides
+        /// ([`double_click`]).
+        DoubleClick,
+    }
+
+    /// What a double-click on the title bar does, after System Settings.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub(crate) enum DoubleClick {
+        Zoom,
+        Minimize,
+        Nothing,
+    }
+
+    /// The press at `(x, y)`, the window's logical coordinates from its top-left corner,
+    /// whose `click_count`-th click it is, against `regions` projected at `scale`. A
+    /// point that is no device pixel reaches the application.
+    pub(crate) fn press(
+        regions: &[DeviceInputRegion],
+        x: f64,
+        y: f64,
+        scale: f64,
+        click_count: isize,
+    ) -> Press {
+        let Some(point) = device_point(x, y, scale) else {
+            return Press::App;
+        };
+        match chrome_hit(regions, point) {
+            // AppKit counts on through a triple click; each second one is a double-click.
+            ChromeHit::Move if click_count >= 2 && click_count % 2 == 0 => Press::DoubleClick,
+            ChromeHit::Move => Press::Drag,
+            // The system draws the caption buttons and the resize borders: a region of
+            // theirs is the application's drawing, and its press is the application's.
+            _ => Press::App,
+        }
+    }
+
+    /// The device pixel `(x, y)` lies in, `None` when it is not finite or past `i32`.
+    fn device_point(x: f64, y: f64, scale: f64) -> Option<DevicePoint> {
+        let pixel = |value: f64| {
+            let device = (value * scale).floor();
+            (device.is_finite() && device >= f64::from(i32::MIN) && device <= f64::from(i32::MAX))
+                .then(|| {
+                    #[expect(
+                        clippy::cast_possible_truncation,
+                        reason = "the value is a whole number inside i32's range, checked above"
+                    )]
+                    let device = device as i32;
+                    device
+                })
+        };
+        Some(DevicePoint::new(pixel(x)?, pixel(y)?))
+    }
+
+    /// What a double-click on the bar does: `action` is `AppleActionOnDoubleClick`
+    /// (`Maximize`, `Minimize` or `None`), `minimize` the older
+    /// `AppleMiniaturizeOnDoubleClick`, read only where the newer key is not set. Unset,
+    /// the bar zooms, as on a system title bar.
+    pub(crate) fn double_click(action: Option<&str>, minimize: Option<bool>) -> DoubleClick {
+        match action {
+            Some("Maximize" | "Fill") => DoubleClick::Zoom,
+            Some("Minimize") => DoubleClick::Minimize,
+            Some("None") => DoubleClick::Nothing,
+            _ if minimize == Some(true) => DoubleClick::Minimize,
+            _ => DoubleClick::Zoom,
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use flui_foundation::geometry::{DevicePoint, DeviceRect};
+        use flui_platform::input_regions::{CaptionButton, DeviceInputRegion, InputRegionKind};
+
+        use super::{DoubleClick, Press, double_click, press};
+
+        #[test]
+        fn a_left_press_on_the_bar_moves_the_window_and_a_second_click_asks_the_setting() {
+            let region = |kind, left, right| {
+                DeviceInputRegion::new(
+                    kind,
+                    DeviceRect::from_min_max(
+                        DevicePoint::new(left, 0),
+                        DevicePoint::new(right, 56),
+                    ),
+                )
+            };
+            let regions = [
+                region(InputRegionKind::WindowMove, 0, 800),
+                region(InputRegionKind::WindowContent, 200, 260),
+                region(
+                    InputRegionKind::CaptionButton(CaptionButton::Close),
+                    700,
+                    760,
+                ),
+            ];
+            // (x, y, scale, clicks): logical points on a 2x screen.
+            let cases = [
+                ((10.0, 10.0, 2.0, 1), Press::Drag),
+                ((10.0, 10.0, 2.0, 2), Press::DoubleClick),
+                ((10.0, 10.0, 2.0, 3), Press::Drag),
+                ((10.0, 10.0, 2.0, 4), Press::DoubleClick),
+                ((110.0, 10.0, 2.0, 1), Press::App),
+                ((110.0, 10.0, 2.0, 2), Press::App),
+                ((360.0, 10.0, 2.0, 1), Press::App),
+                ((10.0, 40.0, 2.0, 1), Press::App),
+                ((99.9, 10.0, 2.0, 1), Press::Drag),
+                ((f64::NAN, 10.0, 2.0, 1), Press::App),
+                ((1e12, 10.0, 2.0, 1), Press::App),
+            ];
+            for ((x, y, scale, clicks), expected) in cases {
+                assert_eq!(
+                    press(&regions, x, y, scale, clicks),
+                    expected,
+                    "({x}, {y}) at {scale}x, click {clicks}"
+                );
+            }
+        }
+
+        #[test]
+        fn a_double_click_on_the_bar_does_what_system_settings_says() {
+            let cases = [
+                ((Some("Maximize"), None), DoubleClick::Zoom),
+                ((Some("Fill"), None), DoubleClick::Zoom),
+                ((Some("Minimize"), None), DoubleClick::Minimize),
+                ((Some("None"), Some(true)), DoubleClick::Nothing),
+                ((Some("Maximize"), Some(true)), DoubleClick::Zoom),
+                ((None, Some(true)), DoubleClick::Minimize),
+                ((None, Some(false)), DoubleClick::Zoom),
+                ((None, None), DoubleClick::Zoom),
+                ((Some("Unknown"), None), DoubleClick::Zoom),
+            ];
+            for ((action, minimize), expected) in cases {
+                assert_eq!(
+                    double_click(action, minimize),
+                    expected,
+                    "{action:?}, {minimize:?}"
+                );
+            }
+        }
+    }
+}
+
 #[cfg(any(target_os = "ios", test))]
 pub(crate) mod indirect {
     //! An iPad's trackpad and mouse, as UIKit's gesture recognizers report
@@ -953,29 +1116,89 @@ pub(crate) mod samples {
 pub(crate) mod macos {
     //! The macOS input: the mouse, trackpad and keyboard events each window's
     //! content view (the owner's `content_view`) hands its input, translated
-    //! into the owned pointer vocabulary (`events`).
+    //! into the owned pointer vocabulary (`events`). A left press on a move
+    //! area of a title bar the application draws moves the window instead
+    //! (`title_bar`).
 
     use std::cell::RefCell;
 
-    use objc2_app_kit::NSEvent;
+    use flui_platform::input_regions::InputRegion;
+    use objc2_app_kit::{NSEvent, NSEventType};
 
+    use crate::input::apple::title_bar::{self, DoubleClick, Press};
+    use crate::input::regions::ProjectedInputRegions;
     use crate::owner::apple::macos::content_view::{ContentView, ViewInput};
     use events::MacInputState;
 
     /// The input of one content view: its pointer contacts, its trackpad
-    /// gesture session and its scrolling, made with the view and dropped with
-    /// it.
+    /// gesture session and its scrolling, and the window's chrome regions a
+    /// left press is answered from, made with the view and dropped with it.
     #[derive(Default)]
-    pub(crate) struct ViewInputs(RefCell<MacInputState>);
+    pub(crate) struct ViewInputs {
+        state: RefCell<MacInputState>,
+        chrome: RefCell<ChromeRegions>,
+    }
+
+    /// The window's input regions in device pixels, and the scale they were
+    /// projected at, which a press is projected at too.
+    #[derive(Default)]
+    struct ChromeRegions {
+        projected: ProjectedInputRegions,
+        scale: f64,
+    }
+
+    impl ViewInputs {
+        /// What the left press `event` does: a press on a move area of a title
+        /// bar the application draws moves the window, and reaches nobody.
+        fn title_bar_press(&self, view: &ContentView<'_>, event: &NSEvent) -> Press {
+            if event.r#type() != NSEventType::LeftMouseDown {
+                return Press::App;
+            }
+            let location = event.locationInWindow();
+            let chrome = self.chrome.borrow();
+            title_bar::press(
+                chrome.projected.sent(),
+                location.x,
+                view.height() - location.y,
+                chrome.scale,
+                event.clickCount(),
+            )
+        }
+    }
 
     impl ViewInput for ViewInputs {
         fn event(&self, view: &ContentView<'_>, event: &NSEvent) {
+            // Each AppKit call below runs with no borrow held: the drag runs a
+            // tracking loop of its own, and the window's callbacks may re-enter.
+            match self.title_bar_press(view, event) {
+                Press::App => {}
+                Press::Drag => return view.drag_window(event),
+                Press::DoubleClick => {
+                    let (action, minimize) = ContentView::title_bar_double_click_setting();
+                    match title_bar::double_click(action.as_deref(), minimize) {
+                        DoubleClick::Zoom => view.zoom_window(),
+                        DoubleClick::Minimize => view.minimize_window(),
+                        DoubleClick::Nothing => {}
+                    }
+                    return;
+                }
+            }
             let height = view.height();
             // Converted before anything is dispatched, with the borrow
             // released: a callback may re-enter the view.
-            let inputs = self.0.borrow_mut().convert(event, height);
+            let inputs = self.state.borrow_mut().convert(event, height);
             for input in inputs {
                 view.dispatch_input(input);
+            }
+        }
+
+        fn set_input_regions(&self, regions: &[InputRegion], scale: f64) {
+            let mut chrome = self.chrome.borrow_mut();
+            // A scale the projection refuses keeps the regions and the scale
+            // they were projected at.
+            let _changed = chrome.projected.update(regions, scale, None);
+            if scale.is_finite() && scale > 0.0 {
+                chrome.scale = scale;
             }
         }
     }
