@@ -165,13 +165,13 @@ fn add_links_a_capability_and_shows_its_registration() {
 
     let unknown = flui()
         .current_dir(&app)
-        .args(["add", "sytem"])
+        .args(["add", "location"])
         .output()
         .expect("flui add");
     assert_eq!(unknown.status.code(), Some(2), "{unknown:?}");
     let stderr = String::from_utf8_lossy(&unknown.stderr);
     assert!(
-        stderr.contains("no capability feature `sytem`; it offers system"),
+        stderr.contains("no capability feature `location`; it offers system"),
         "{stderr}"
     );
 
