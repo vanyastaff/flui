@@ -186,6 +186,10 @@ path = "crates/flui-native/src/drag/headless.rs"
 count = 1
 
 [[allow]]
+path = "crates/flui-native/src/drag/wayland.rs"
+count = 2
+
+[[allow]]
 path = "crates/flui-native/src/drag/web.rs"
 count = 1
 
