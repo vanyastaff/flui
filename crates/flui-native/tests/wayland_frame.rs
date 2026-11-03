@@ -5,6 +5,8 @@
 //! mouse drives it: a press on the title bar moves the window, a press on a
 //! margin resizes it, the buttons maximize and close it, each through the
 //! compositor's own grab, which it starts only for the serial of the press.
+//! Around a title bar of the application's the frame keeps its margins, and the
+//! presses on the bar the application marks move and maximize the window.
 //!
 //! Its own harness: it starts Xvfb and Weston before anything connects and
 //! names that Weston for the process (`support/weston_x11.rs`). A run without
@@ -24,12 +26,16 @@ mod cases {
     use std::rc::Rc;
     use std::time::{Duration, Instant};
 
-    use flui_foundation::geometry::Size;
+    use flui_foundation::geometry::{Rect, Size};
     use flui_native::testing::wayland::{
         client_frame_report, compositor_report, last_input_serial, present, run_for,
     };
     use flui_native::{HostWindow, Platform as _, WaylandPlatform};
-    use flui_platform::{WindowCommand, WindowFrame, WindowMode, WindowOptions};
+    use flui_platform::input_regions::{InputRegion, InputRegionKind};
+    use flui_platform::pointer::PointerEvent;
+    use flui_platform::{
+        AppTitleBar, PlatformInput, WindowCommand, WindowFrame, WindowMode, WindowOptions,
+    };
     use flui_testing::window_commands::AdmitAndApply as _;
     use flui_testing::window_handler::{HandlerCall, RecordingWindowHandler};
     use x11rb::connection::Connection as _;
@@ -66,7 +72,7 @@ mod cases {
             .flatten()
             .map(std::sync::Arc::new);
         type Case = fn(&Session);
-        let cases: [(&str, Case); 3] = [
+        let cases: [(&str, Case); 4] = [
             (
                 "a_window_draws_its_own_frame_where_the_compositor_draws_none",
                 a_window_draws_its_own_frame_where_the_compositor_draws_none,
@@ -78,6 +84,10 @@ mod cases {
             (
                 "the_frame_buttons_maximize_and_close_the_window",
                 the_frame_buttons_maximize_and_close_the_window,
+            ),
+            (
+                "a_title_bar_of_the_applications_moves_and_resizes_through_the_compositor",
+                a_title_bar_of_the_applications_moves_and_resizes_through_the_compositor,
             ),
         ];
         let trials = cases
@@ -105,15 +115,18 @@ mod cases {
 
     impl Opened {
         fn new(title: &str) -> Self {
+            Self::open(
+                WindowOptions::default()
+                    .with_title(title)
+                    .with_size(Size::new(CONTENT.0, CONTENT.1)),
+            )
+        }
+
+        fn open(options: WindowOptions) -> Self {
             let platform = WaylandPlatform::try_new().expect("the harness's Weston answers");
             let handler = RecordingWindowHandler::new();
             let window = platform
-                .open_window(
-                    WindowOptions::default()
-                        .with_title(title)
-                        .with_size(Size::new(CONTENT.0, CONTENT.1)),
-                    Rc::clone(&handler) as _,
-                )
+                .open_window(options, Rc::clone(&handler) as _)
                 .expect("a Wayland window opens");
             let opened = Self {
                 platform,
@@ -517,5 +530,167 @@ mod cases {
             let calls = opened.handler.calls();
             calls.contains(&HandlerCall::CloseRequested) && calls.contains(&HandlerCall::Closed)
         });
+    }
+
+    /// Where the content of `opened` lies on the output: its top left
+    /// corner, found by hovering the pointer over a grid finer than the
+    /// window until the window hears it, as its content draws nothing a shot
+    /// could find.
+    fn content_origin(opened: &Opened, mouse: &Mouse<'_>) -> (i32, i32) {
+        let moves = |opened: &Opened| {
+            opened
+                .handler
+                .inputs()
+                .into_iter()
+                .filter_map(|input| match input {
+                    PlatformInput::Pointer(PointerEvent::Move(moved)) => {
+                        Some(moved.current().position.get())
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        for y in (40..i32::from(OUTPUT.1)).step_by(80) {
+            for x in (40..i32::from(OUTPUT.0)).step_by(80) {
+                let heard = moves(opened).len();
+                mouse.move_to((x, y));
+                opened.turn(Duration::from_millis(40));
+                if let Some(at) = moves(opened).get(heard..).and_then(<[_]>::last) {
+                    return (x - at.x.round() as i32, y - at.y.round() as i32);
+                }
+            }
+        }
+        panic!("the pointer reached the window nowhere on the output");
+    }
+
+    /// A window whose application draws its title bar asks Weston for no
+    /// frame and keeps the margins of its own around its content. A drag on
+    /// the bar the application marks moves it through the compositor's grab
+    /// with the press's serial, a drag on its corner margin resizes it, a
+    /// double-click on the bar maximizes it, and none of those presses
+    /// reaches the handler, while a click on the content does (ADR-0286
+    /// §11).
+    fn a_title_bar_of_the_applications_moves_and_resizes_through_the_compositor(session: &Session) {
+        let opened = Opened::open(
+            WindowOptions::default()
+                .with_title("app title bar")
+                .with_size(Size::new(CONTENT.0, CONTENT.1))
+                .with_frame(WindowFrame::AppTitleBar(AppTitleBar::new())),
+        );
+        let screen = session.screen();
+        let mouse = Mouse { screen: &screen };
+        let state = opened.window.state();
+        assert!(
+            matches!(state.frame, WindowFrame::AppTitleBar(_)),
+            "{:?}",
+            state.frame
+        );
+        assert_eq!(
+            state.outer.size.height, CONTENT.1,
+            "no title bar of the host's"
+        );
+        let report = client_frame_report(opened.window.as_ref()).expect("a Wayland window");
+        assert_eq!(
+            report
+                .pieces
+                .iter()
+                .map(|(piece, _)| *piece)
+                .collect::<Vec<_>>(),
+            ["top", "bottom", "left", "right"],
+            "the margins alone"
+        );
+        assert_eq!(report.geometry, Some((0.0, 0.0, CONTENT.0, CONTENT.1)));
+        let bar = InputRegion::new(
+            InputRegionKind::WindowMove,
+            Rect::from_ltrb(0.0, 0.0, CONTENT.0, 32.0),
+        );
+        opened
+            .window
+            .set_input_regions(&[bar])
+            .expect("the Wayland host takes chrome regions");
+
+        // A drag on the bar: the move starts once the pointer has travelled,
+        // with the serial of the press.
+        let (left, top) = content_origin(&opened, &mouse);
+        eprintln!("the content is at ({left}, {top})");
+        let grab = (left + 200, top + 16);
+        mouse.move_to(grab);
+        opened.turn(Duration::from_millis(100));
+        mouse.press(1);
+        opened.turn(Duration::from_millis(100));
+        let pressed = last_input_serial(&opened.platform).expect("the press is input");
+        for step in 1..=10 {
+            mouse.move_to((grab.0 + 8 * step, grab.1 + 5 * step));
+            opened.turn(Duration::from_millis(30));
+        }
+        mouse.release(1);
+        opened.turn(Duration::from_millis(100));
+        let report = client_frame_report(opened.window.as_ref()).expect("a Wayland window");
+        assert!(
+            report.requests.contains(&("move", pressed)),
+            "a move with the press's serial {pressed}: {:?}",
+            report.requests
+        );
+        let (left, top) = content_origin(&opened, &mouse);
+        assert_eq!(
+            (left, top),
+            (grab.0 - 200 + 80, grab.1 - 16 + 50),
+            "the window follows the drag of its bar"
+        );
+
+        // A drag on the margin past the content's lower right corner.
+        let corner = (left + CONTENT.0 as i32 + 4, top + CONTENT.1 as i32 + 4);
+        mouse.move_to(corner);
+        opened.turn(Duration::from_millis(100));
+        mouse.press(1);
+        opened.turn(Duration::from_millis(100));
+        for step in 1..=10 {
+            mouse.move_to((corner.0 + 6 * step, corner.1 + 4 * step));
+            opened.turn(Duration::from_millis(30));
+        }
+        mouse.release(1);
+        opened.turn_until("the window at its new size", |opened| {
+            let size = opened.window.state().content_size;
+            (size.width - (CONTENT.0 + 60.0)).abs() <= 1.0
+                && (size.height - (CONTENT.1 + 40.0)).abs() <= 1.0
+        });
+
+        // A double-click on the bar.
+        mouse.move_to((left + 200, top + 16));
+        opened.turn(Duration::from_millis(100));
+        for _ in 0..2 {
+            mouse.press(1);
+            opened.turn(Duration::from_millis(30));
+            mouse.release(1);
+            opened.turn(Duration::from_millis(30));
+        }
+        opened.turn_until("the window maximized", |opened| {
+            opened.window.state().mode == WindowMode::Maximized
+        });
+
+        let presses = |opened: &Opened| {
+            opened
+                .handler
+                .inputs()
+                .into_iter()
+                .filter(|input| {
+                    matches!(
+                        input,
+                        PlatformInput::Pointer(PointerEvent::Down(_) | PointerEvent::Up(_))
+                    )
+                })
+                .count()
+        };
+        assert_eq!(presses(&opened), 0, "the chrome took them");
+
+        // A click on the content is the application's.
+        mouse.move_to((200, 200));
+        opened.turn(Duration::from_millis(100));
+        mouse.press(1);
+        opened.turn(Duration::from_millis(50));
+        mouse.release(1);
+        opened.turn_until("the click on the content", |opened| presses(opened) == 2);
+        opened.window.close_for_cleanup();
+        opened.turn(Duration::from_millis(50));
     }
 }
