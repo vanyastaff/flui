@@ -43,7 +43,11 @@
 //! - **IME** (ADR-0090): a key pressed while the platform's input method
 //!   composes arrives marked as the input method's, so Escape cancels the
 //!   composition before any shortcut, focus traversal or drag cancellation
-//!   sees it.
+//!   sees it; and a composition reaches the field in one order on every
+//!   input method path: each preedit, picked candidate, commit and cancel
+//!   leaves the same text, composing range and caret, as one edit of the
+//!   field. A backend whose path FLUI has not driven yet reports the rows as
+//!   its `docs/gaps.md` entry ([`RowOutcome::Gap`]).
 //!
 //! A row the backend cannot take part in (the clock rows of a backend with no
 //! performance counter, the trackpad rows of a backend without trackpad
@@ -51,14 +55,17 @@
 
 mod drag_rows;
 mod haptic_rows;
+mod ime_rows;
 mod key_rows;
 mod rows;
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::rc::Rc;
 use std::time::Duration;
 
 use flui_platform::input_capabilities::InputCapabilities;
 use flui_platform::pointer::PointerKind;
+use flui_platform::text_store::TextStore;
 /// The input a backend delivers, re-exported for implementors.
 pub use flui_runtime::HostInput;
 
@@ -111,6 +118,12 @@ pub trait BackendUnderTest {
     fn drag_start(&self) -> flui_platform::drag::OsDragStart {
         flui_platform::drag::OsDragStart::OnLeavingWindow
     }
+
+    /// Focus `store` as the field the backend's input method edits, for the
+    /// IME rows. No default: a backend says whether its input method path is
+    /// driven, still a gap, or absent by design, so a missing path fails
+    /// loudly as its gap instead of passing as not applicable.
+    fn focus_text_store(&mut self, store: Rc<dyn TextStore>) -> TextInputPath;
 }
 
 /// The clocks a backend stamps its readings on (ADR-0207 §2).
@@ -206,6 +219,52 @@ pub enum Step {
     /// A key pressed and released while the platform's input method composes
     /// in the focused field.
     ComposingKey(KeyStep),
+    /// One step of the platform's input method composing in the field
+    /// [`BackendUnderTest::focus_text_store`] focused.
+    Composition(CompositionStep),
+}
+
+/// What the platform's input method does to the focused field, one step of
+/// a composition (ADR-0090).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum CompositionStep {
+    /// The composing text becomes `text`, in place of what it was, with the
+    /// caret `caret` UTF-16 code units into it: a composition starts with the
+    /// first, and a picked candidate is one more.
+    Preedit {
+        /// The composing text.
+        text: &'static str,
+        /// The caret, in UTF-16 code units from the start of `text`.
+        caret: usize,
+    },
+    /// The composition ends with `text` committed in its place.
+    Commit {
+        /// The committed text.
+        text: &'static str,
+    },
+    /// The composition is cancelled: its text leaves the field.
+    Cancel,
+}
+
+/// An entry of `docs/gaps.md`: something FLUI has not built yet on a
+/// backend, so a row it leaves undone is reported as that gap, never as
+/// passed or not applicable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GapEntry(pub u16);
+
+/// How a backend's input method reaches the field a row focuses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum TextInputPath {
+    /// The backend's input method path now edits the field: each
+    /// [`Step::Composition`] reading is decoded into the edits it makes.
+    Focused,
+    /// The backend has an input method FLUI has not driven through the table
+    /// yet: the rows are reported as this gap.
+    Gap(GapEntry),
+    /// The backend has no input method by design, and why.
+    None(&'static str),
 }
 
 /// A key a step presses.
@@ -357,6 +416,10 @@ pub enum RowOutcome {
     Held,
     /// The row does not apply to this backend, and why.
     NotApplicable(&'static str),
+    /// The backend has the feature the row checks, but FLUI has not built
+    /// it there yet: the `docs/gaps.md` entry. Not a failure of the table,
+    /// and not a pass either: a backend's suite names the gaps it expects.
+    Gap(GapEntry),
     /// The backend's output broke the row: what did not hold.
     Failed(String),
 }
@@ -375,7 +438,7 @@ impl ConformanceReport {
             .iter()
             .filter_map(|(name, _, outcome)| match outcome {
                 RowOutcome::Failed(message) => Some((*name, message.as_str())),
-                RowOutcome::Held | RowOutcome::NotApplicable(_) => None,
+                RowOutcome::Held | RowOutcome::NotApplicable(_) | RowOutcome::Gap(_) => None,
             })
     }
 
