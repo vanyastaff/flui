@@ -1,8 +1,8 @@
 # ADR-0307: Platform declarations are crate metadata
 
 - **Status:** Accepted (2026-11-03). Partly implemented: the reader, the version-1 keys
-  (`android.permissions`) and the generated Android manifest are in `flui-cli`; Apple's privacy
-  manifest, the verify mode and `flui add` follow (see Migration).
+  (`android.permissions`, `apple.privacy.accessed-apis`), the generated Android manifest and the
+  iOS privacy manifest are in `flui-cli`; the verify mode and `flui add` follow (see Migration).
 - **Date:** 2026-11-03
 - **Supersedes:** [ADR-0154](ADR-0154-capability-crates.md) §7 only (where declarations live and
   their keys: a versioned `declares` table in any crate, in place of the illustrative schema)
@@ -78,8 +78,19 @@ permissions = ["android.permission.INTERNET"]
   flui-cli"; a key the CLI does not know is refused with the crate's name and the key. The reader's
   types use `deny_unknown_fields`. They are private to the `flui` binary, so `#[non_exhaustive]`
   would change nothing: the version number is what keeps the schema open.
-- Version 1 has `android.permissions` and `features.<feature>.android.permissions`. A permission is
-  two or more dot-separated ASCII Java identifiers, so no value can break out of its attribute.
+- Version 1 has `android.permissions` and `apple.privacy.accessed-apis`, at the top and under
+  `features.<feature>`. A permission is two or more dot-separated ASCII Java identifiers, so no
+  value can break out of its attribute. An accessed API is a `category`, one of Apple's five
+  required-reason categories by its manifest name, and one or more `reasons`, each an
+  approved-reason code (four upper-case hexadecimal digits, `.`, a number). Neither is a free
+  string.
+
+```toml
+[[package.metadata.flui.declares.apple.privacy.accessed-apis]]
+category = "NSPrivacyAccessedAPICategoryFileTimestamp"
+reasons = ["C617.1"]
+```
+
 - A key arrives with the first crate that needs it. A key an older CLI could safely ignore needs no
   new version; one whose absence would build a wrong app raises `schema`.
 - `features.<name>` must name a feature of the crate.
@@ -100,13 +111,20 @@ join is a set per key, in a fixed order, with the crates that asked for each ent
   Both the SDK-tools packager and Gradle read that file. The CLI writes it only when it changed,
   and it carries a generated-file header. A file at that path without the header is refused, not
   overwritten, so a hand edit is never lost silently.
-- **Apple** (next change): the privacy manifest's accessed APIs come from the same tables, and the
-  CLI's constant goes.
+- **Apple.** The iOS packager writes the bundle's `PrivacyInfo.xcprivacy` from the accessed APIs
+  the graph of the application's target declares, joined with the application's own
+  `<project>/platforms/ios/PrivacyInfo.xcprivacy`: per category, the reasons of every crate and of the
+  application. Tracking and collected data stay the application's. A Rust crate links statically
+  into the executable, so no per-SDK privacy bundle exists and the application's manifest carries
+  the union. That is the rule React Native applies to the pods it links
+  (`scripts/cocoapods/privacy_manifest_utils.rb`, `add_aggregated_privacy_manifest`: every pod's
+  accessed APIs, the core's and the application's, joined per category with the reasons
+  deduplicated), which settles the check ADR-0154 §7 left for this change.
 
 ### Consequences
 
-- Good, because an application declares exactly what it links: no `flui-assets`, no file-timestamp
-  reason; the `http` feature off, no network permission.
+- Good, because an application declares exactly what it links: the `http` feature off, no network
+  permission; a crate that reads no file timestamps adds no reason for them.
 - Good, because the Android network permission, missing until now, is declared by the crate whose
   provider needs it, and HTTP works on Android.
 - Good, because a third party's crate declares its own needs the same way, with no change to the
@@ -125,6 +143,10 @@ join is a set per key, in a fixed order, with the crates that asked for each ent
   workspace built for Android and finds `VIBRATE` and `INTERNET`, so removing either crate's
   declaration fails it.
 - `android_manifest::tests::the_manifest_is_rewritten_only_when_flui_wrote_it`.
+- `ios_package::tests::publication_contract` ("privacy manifest declares what flui calls", "privacy
+  manifest joins the application's own") reads FLUI's own workspace built for `aarch64-apple-ios`
+  and finds `35F9.1` and `C617.1`, joined with an application's reasons.
+- `declarations::tests::a_privacy_reason_is_an_approved_reason_code`.
 - `cargo xtask workspace` accepts `declares` among the `[package.metadata.flui]` keys.
 
 ## Pros and cons of the options
@@ -151,9 +173,11 @@ join is a set per key, in a fixed order, with the crates that asked for each ent
 
 1. This change: the reader, `android.permissions`, the generated Android manifest, `flui-native`'s
    `VIBRATE` and `flui-app`'s `http`-feature `INTERNET`.
-2. Apple's privacy manifest: `apple.privacy.accessed-apis` in `flui-native` and `flui-assets`; the
-   iOS packager's constant goes, and the application's own `PrivacyInfo.xcprivacy` is still joined.
-   The aggregation rule for statically linked code (ADR-0154 §7, Confirmation) is checked then.
+2. Done: Apple's privacy manifest, `apple.privacy.accessed-apis` in `flui-native` and
+   `flui-assets`; the iOS packager's constant is gone, and the application's own
+   `PrivacyInfo.xcprivacy` is still joined. The macOS bundle has no privacy manifest yet; when it
+   gets one, `flui-native`'s read of the global `NSUserDefaults` (the title bar's double-click
+   setting) needs a declared reason.
 3. The verify mode, a `flui doctor` check for projects whose manifests the CLI does not write.
 4. `flui add <capability>`.
 

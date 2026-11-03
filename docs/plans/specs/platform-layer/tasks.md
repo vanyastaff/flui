@@ -4753,7 +4753,7 @@ graph LR
   пакет при создании: `flui build` пишет `flui.applicationId` в `gradle.properties`, шаблон его
   читает, другой литерал отказывается (`a_build_script_states_what_flui_toml_states_or_is_refused`,
   `gradle_states_the_package_once`).
-- [ ] **LY56** (не закрыта: privacy Apple, verify и `flui add` — следующими PR) — решения координатора
+- [ ] **LY56** (не закрыта: verify и `flui add` — следующими PR) — решения координатора
   2026-11-03, ADR-0307 (заменяет ADR-0154 §7): декларации — `[package.metadata.flui.declares]` с
   обязательным `schema = 1` у любого крейта графа, не только у капабилити; `capability.name` —
   только связь с `Capability::NAME`; нужды ядра не литералами в CLI; INTERNET — у фичи `http`
@@ -4764,7 +4764,12 @@ graph LR
   `flui-native`, INTERNET — фича `http` у `flui-app` (HTTP на Android падал с
   `SecurityException`). Тесты: `declarations_are_joined_over_the_graph_the_target_links`,
   `a_malformed_declaration_is_refused_by_crate`, `the_manifest_declares_what_the_linked_crates_need`,
-  `the_manifest_is_rewritten_only_when_flui_wrote_it`.
+  `the_manifest_is_rewritten_only_when_flui_wrote_it`. Privacy Apple: ключ
+  `apple.privacy.accessed-apis` (закрытый enum из пяти категорий, код причины проверяется),
+  `flui-native` объявляет `35F9.1` и `C617.1`, `flui-assets` — `C617.1`; константа iOS-упаковщика
+  удалена, собственный `PrivacyInfo.xcprivacy` приложения по-прежнему объединяется; правило
+  объединения сверено с `privacy_manifest_utils.rb` React Native. Тесты: `publication_contract`,
+  `a_privacy_reason_is_an_approved_reason_code`.
 
 ## Отступление от порядка, решённое владельцем
 
