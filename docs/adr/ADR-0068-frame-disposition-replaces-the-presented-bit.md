@@ -2,6 +2,9 @@
 
 - **Status:** Accepted
 - **Date:** 2026-09-17
+- **Superseded-by:** [ADR-0304](ADR-0304-the-scene-is-retained-and-damage-is-the-footprint-of-its-patch.md)
+  for §3's repaint half only: a `NotShown` retry republishes the held scene version instead of
+  calling `mark_needs_full_repaint_for`; the wake half (`wake_frame()`) stands.
 - **Related:** [ADR-0044](ADR-0044-driver-loop-hybrid.md) §7 (wall-clock wake); [ADR-0058](ADR-0058-the-platform-paces-production-not-a-sleep.md) (the fallback gate)
 
 *A `Result<bool>` cannot say "this frame owed the screen something and did not

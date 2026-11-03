@@ -10,6 +10,7 @@ fn layout_failure_matrix() {
         ("layout_poison::fresh_invalidation_lifts_poison_and_layout_recovers", crate::layout_poison::fresh_invalidation_lifts_poison_and_layout_recovers),
         ("layout_poison::single_transient_failure_does_not_poison", crate::layout_poison::single_transient_failure_does_not_poison),
         ("layout_poison::a_poisoned_leaf_stands_in_with_its_last_committed_size_not_zero", crate::layout_poison::a_poisoned_leaf_stands_in_with_its_last_committed_size_not_zero),
+        ("layout_poison::a_failed_dirty_root_keeps_the_rest_of_its_batch", crate::layout_poison::a_failed_dirty_root_keeps_the_rest_of_its_batch),
         ("layout_cycle_guard::callback_reentry_poisons_structural_cycle", crate::layout_cycle_guard::callback_reentry_poisons_structural_cycle),
         ("layout_cycle_guard::drop_guard_clears_id_on_perform_layout_panic", crate::layout_cycle_guard::drop_guard_clears_id_on_perform_layout_panic),
         ("layout_dirty_root::descendant_err_preserves_parent_needs_layout", crate::layout_dirty_root::descendant_err_preserves_parent_needs_layout),

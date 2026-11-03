@@ -53,6 +53,7 @@ fn install_collecting_handler(ui_runtime: &UiRuntime) -> Arc<Mutex<Vec<ObservedF
                 hook,
                 message,
                 internal_invariant,
+                ..
             } => ObservedKind::Recovered {
                 at: *at,
                 view_type_id: *view_type_id,

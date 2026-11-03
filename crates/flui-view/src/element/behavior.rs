@@ -740,6 +740,7 @@ where
             if let Err(payload) = init {
                 owner.record_armed_lifecycle_panic(
                     core.self_id(),
+                    core.creation_site(),
                     TypeId::of::<V>(),
                     LifecycleHook::InitState,
                     payload.as_ref(),
@@ -755,6 +756,7 @@ where
                 if let Err(payload) = update {
                     owner.record_armed_lifecycle_panic(
                         core.self_id(),
+                        core.creation_site(),
                         TypeId::of::<V>(),
                         LifecycleHook::Update,
                         payload.as_ref(),
@@ -777,6 +779,7 @@ where
             if let Err(payload) = applied {
                 owner.record_armed_lifecycle_panic(
                     core.self_id(),
+                    core.creation_site(),
                     TypeId::of::<V>(),
                     LifecycleHook::ApplyView,
                     payload.as_ref(),
@@ -844,7 +847,7 @@ where
         if let Err(payload) = std::panic::catch_unwind(AssertUnwindSafe(|| self.state.dispose())) {
             owner.record_hook_panic(
                 core.self_id(),
-                None,
+                core.creation_site(),
                 TypeId::of::<V>(),
                 LifecycleHook::Dispose,
                 payload.as_ref(),
@@ -883,6 +886,7 @@ where
         if let Err(payload) = std::panic::catch_unwind(AssertUnwindSafe(|| self.state.activate())) {
             owner.record_armed_lifecycle_panic(
                 core.self_id(),
+                core.creation_site(),
                 TypeId::of::<V>(),
                 LifecycleHook::Activate,
                 payload.as_ref(),
@@ -915,7 +919,7 @@ where
         {
             owner.record_hook_panic(
                 core.self_id(),
-                None,
+                core.creation_site(),
                 TypeId::of::<V>(),
                 LifecycleHook::Deactivate,
                 payload.as_ref(),
@@ -978,6 +982,7 @@ where
         if let Err(payload) = outcome {
             owner.record_armed_lifecycle_panic(
                 core.self_id(),
+                core.creation_site(),
                 TypeId::of::<V>(),
                 LifecycleHook::DidChangeDependencies,
                 payload.as_ref(),
@@ -1224,7 +1229,7 @@ where
         if let Some(payload) = recovered {
             owner.record_hook_panic(
                 core.self_id(),
-                None,
+                core.creation_site(),
                 TypeId::of::<V>(),
                 LifecycleHook::UnmountRenderObject,
                 payload.as_ref(),

@@ -157,9 +157,14 @@ impl WindowFixture for WaylandFixture {
             focused: has(ACTIVATED),
             active: has(ACTIVATED),
             // A toplevel is shown until it closes; whether the compositor
-            // draws it is its occlusion.
+            // draws it is its occlusion. A window it has not shown yet is on
+            // no output and waits for its first frame unoccluded.
             visible: true,
-            occluded: Some(report.configures == 0 || report.outputs.is_empty() || has(SUSPENDED)),
+            occluded: Some(
+                report.configures == 0
+                    || has(SUSPENDED)
+                    || (report.shown && report.outputs.is_empty()),
+            ),
             material: None,
         }
     }
@@ -438,6 +443,38 @@ fn an_occluded_window_is_given_its_frame_once_shown() {
         1,
         "the frame asked for while occluded comes once the window is shown"
     );
+}
+
+/// A configured window the compositor has not shown yet is on no output (a
+/// surface enters one only once it is mapped with a frame), and it is not
+/// occluded: an application holds frames back from an occluded window, so it
+/// would never draw the frame that maps it.
+#[test]
+fn a_window_waits_for_its_first_frame_unoccluded() {
+    let case = "a_window_waits_for_its_first_frame_unoccluded";
+    let Some(platform) = platform(case) else {
+        return;
+    };
+    let handler = RecordingWindowHandler::new();
+    let window = platform
+        .open_window(
+            WindowOptions::default().with_title("first frame"),
+            Rc::clone(&handler) as _,
+        )
+        .expect("a Wayland window opens");
+    run_for(&platform, Duration::from_millis(300)).expect("the loop turns");
+    let report = compositor_report(window.as_ref()).expect("a Wayland window");
+    assert!(
+        report.configures > 0 && !report.shown && report.outputs.is_empty(),
+        "configured, not shown and on no output before its first frame: {report:?}"
+    );
+    let state = window.state();
+    assert!(
+        state.visible && !state.occluded,
+        "a window before its first frame is not occluded: {state:?}"
+    );
+    window.close_for_cleanup();
+    run_for(&platform, Duration::from_millis(100)).expect("the loop turns");
 }
 
 /// `xdg_toplevel.state`'s `activated`.

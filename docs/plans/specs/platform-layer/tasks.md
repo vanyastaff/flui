@@ -4727,7 +4727,7 @@ graph LR
   строк, которым нужен X11/Wayland-сервер; doctest'ы `flui-platform`, `flui-interaction`,
   `flui-testing`, `flui-sdk`; clippy `-p flui-native --target x86_64-pc-windows-msvc
   --all-targets`; `xtask checks`.
-- [ ] **LY52** — в части: шов. `StorageCapability` и `StorageHandle` (newtype над `Arc<dyn Storage>`)
+- [x] **LY52** — шов. `StorageCapability` и `StorageHandle` (newtype над `Arc<dyn Storage>`)
   в `flui_view::persist` рядом с `Persisted`; встроенный провайдер во `flui-app`
   (`capability.rs`, `StorageSlot`) поверх `HostStorage`: без `with_storage_dir` — `NotRegistered`,
   без корня данных — `NotOnThisPlatform`; `placement_recorder` пишет в тот же стор.
@@ -4746,7 +4746,13 @@ graph LR
   `option_env!` (тесты `created_application_builds_with_its_identifier`,
   `build_brings_the_cargo_env_in_line_with_the_app_identifier`). Остаток (решение координатора
   2026-10-30): один канонический `AppId` в `flui.toml`, формы платформ (bundle id Apple, пакет
-  Android) выводятся из него явными протестированными функциями в одном месте.
+  Android) выводятся из него явными протестированными функциями в одном месте. Сделан: `[app] id`
+  и `AppId` в `flui-cli/src/app_id.rs` (`android_package`, `apple_bundle_id`, тесты
+  `each_platform_form_is_derived_from_the_one_identifier`,
+  `the_cli_and_the_framework_accept_the_same_identifiers`); путь Gradle больше не замораживает
+  пакет при создании: `flui build` пишет `flui.applicationId` в `gradle.properties`, шаблон его
+  читает, другой литерал отказывается (`a_build_script_states_what_flui_toml_states_or_is_refused`,
+  `gradle_states_the_package_once`).
 
 ## Отступление от порядка, решённое владельцем
 

@@ -1,11 +1,24 @@
 # ADR-0102: Immutable geometric clips and effect coverage ownership
 
-- **Status:** Proposed; implementation and local gates pass, pending PR acceptance.
+- **Status:** Accepted (2026-11-03). §1–§7 are the rule: the clip chain is
+  `crates/flui-engine/src/clip_chain.rs:15` (`MAX_CLIP_DEPTH`) over
+  `crates/flui-engine/src/clip_geometry.rs`, the mask limits are
+  `crates/flui-engine/src/clip_mask.rs:244`, and the regions are pinned by the rows under
+  "Pinned by" in [ADR-0099](ADR-0099-save-layer-region-and-blend.md) and by
+  `hard_clip_membership_scales_to_a_full_hd_frame`
+  (`crates/flui-engine/src/clip_layer_readback_tests.rs:1314`). Not implemented: nothing in
+  §1–§7; the portable direct-draw path §5 names is ADR-0103's. Not run: the clip and coverage
+  readbacks on a browser or a mobile GPU.
 - **Date:** 2026-10-01
 - **Superseded-by:** [ADR-0103](ADR-0103-portable-independent-primitive-coverage.md)
-  for direct-primitive capability admission; the other decisions remain in force.
-- **Supersedes:** [ADR-0099](ADR-0099-save-layer-region-and-blend.md),
-  [ADR-0057](ADR-0057-coverage-correct-blending-is-capability-gated.md)
+  for §5's direct-primitive capability admission only (the refusal of a direct destructive draw
+  under an AA clip now applies to a view-only target, which has no destination to read,
+  `crates/flui-engine/src/replay/ordered.rs:60-66`; a device without the feature draws through
+  ADR-0103's portable path); the other decisions remain in force.
+- **Supersedes:** [ADR-0099](ADR-0099-save-layer-region-and-blend.md) §1–§4 (this record's §6
+  restates the region, the whole-region blend, the damage and the shader-mask rule);
+  [ADR-0057](ADR-0057-coverage-correct-blending-is-capability-gated.md) for its folded fallback
+  on a device without `DUAL_SOURCE_BLENDING` only (this record's §5)
 - **Related:** [ADR-0057](ADR-0057-coverage-correct-blending-is-capability-gated.md),
   [ADR-0098](ADR-0098-owned-f64-geometry-values.md),
   [ADR-0100](ADR-0100-prepared-gpu-work-and-retained-frame-commit.md)
@@ -18,8 +31,8 @@ mandatory for accepted rendering. Direct unsupported Tess/Gradient draws under
 an AA expression return `UnsupportedCoverageBlend` during ordered admission,
 before that segment emits GPU work. The error is nonretryable; callers may change
 the scene or choose an isolated group whose sampleable destination supports the
-portable full-result mix. Group compositing uses the portable path; a general
-portable direct-primitive coverage plane remains required follow-up work.
+portable full-result mix. Group compositing uses the portable path; the portable
+direct-primitive coverage plane is ADR-0103's.
 `featureless_direct_aa_refusal_recovers` exercises the public painter refusal,
 unchanged target and next valid frame. It passes in the required native GPU run; the merge gate remains separate.
 
@@ -71,8 +84,8 @@ removes source pixels the effect could have brought into the visible region.
    path. If the
    device cannot carry the independent coverage channel, a direct destructive
    draw under an AA clip is rejected with `UnsupportedCoverageBlend`, rather than
-   silently changing its edge. A portable direct-draw fallback needs independent
-   geometric coverage, including for transparent paint, and remains required work.
+   silently changing its edge. The portable direct-draw path, which needs independent
+   geometric coverage including for transparent paint, is ADR-0103's.
 6. **Region and damage.** A save layer's region is its local bounds mapped through
    the admitted transform and cut by its inherited clip; without bounds it is
    the clip. Its recorded blend operates over the entire region, including pixels
@@ -114,7 +127,8 @@ or a platform event-translation path has executed.
 The [wgpu 30.0.1 feature documentation](https://docs.rs/wgpu/30.0.1/wgpu/struct.Features.html)
 lists dual-source blending on both WebGPU and native backends. Backend name is
 not sufficient admission evidence: use the requested device feature set. The
-portable direct coverage path remains required for devices without that feature.
+portable direct coverage path of ADR-0103 serves devices without that feature
+(`needs_portable`, `crates/flui-engine/src/replay/coverage.rs:18-24`).
 
 An entirely HardEdge expression evaluates its common pixel center once, instead
 of redundantly evaluating the same membership 64 times. Mixed expressions retain

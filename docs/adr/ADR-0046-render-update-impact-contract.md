@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-08-10
+- **Amended:** 2026-11-03 — the value carries a fifth effect, `COMPOSITED_LAYER_UPDATE` (bit `1 << 4`, no paint bit), applied after paint and refused when paint is requested; the application order has five steps; the non-Active cases of `RenderBehavior::on_update` are stated exactly; and the same value travels through `LocalRenderInvalidationHandle::request_update` ([ADR-0190](ADR-0190-owner-local-render-invalidation.md)). The decision is unchanged: setters return the impact and the owner applies it once.
 - **Issue:** [#534 — Make render-view updates return explicit invalidation impact](https://github.com/vanyastaff/flui/issues/534)
 
 *Render-view updates report the exact rendering phases invalidated by changed
@@ -79,14 +80,20 @@ The field and individual bits are private. The only named base values are:
 - `PAINT`: paint;
 - `LAYOUT`: layout and eventual paint;
 - `COMPOSITING_BITS`: compositing-bits update and paint;
-- `SEMANTICS`: semantics.
+- `SEMANTICS`: semantics;
+- `COMPOSITED_LAYER_UPDATE`: rebuild only the layers the render object itself
+  pushes, reusing the enclosing repaint boundary's retained output for everything
+  else. It does not include the paint bit: nothing painted
+  (`crates/flui-rendering/src/update.rs:34`).
 
 The private representation assigns layout to `1 << 0`, paint to `1 << 1`,
-compositing to `1 << 2`, and semantics to `1 << 3`. `LAYOUT` and
+compositing to `1 << 2`, semantics to `1 << 3`, and the composited-layer update
+to `1 << 4` (`crates/flui-rendering/src/update.rs:5`). `LAYOUT` and
 `COMPOSITING_BITS` additionally include the paint bit.
 
 The public const queries are `is_none`, `needs_layout`, `needs_paint`,
-`needs_compositing_bits_update`, and `needs_semantics_update`. `union`,
+`needs_compositing_bits_update`, `needs_composited_layer_update`, and
+`needs_semantics_update`. `union`,
 `BitOr`, and `BitOrAssign` combine independent effects. There is no raw-bits
 constructor, bits accessor, ordering, iterator, parser, or fallible result.
 `Default` is exactly `NONE`.
@@ -155,6 +162,7 @@ with no observable render change returns `NONE`.
 ```rust
 pub fn mark_needs_compositing_bits_update(&mut self, render_id: RenderId);
 pub fn mark_needs_semantics(&mut self, render_id: RenderId);
+pub fn mark_needs_composited_layer_update(&mut self, render_id: RenderId);
 
 pub fn apply_render_update_impact(
     &mut self,
@@ -168,7 +176,30 @@ It applies each requested phase at most once, in this order:
 1. layout through `mark_needs_layout`;
 2. compositing bits through `mark_needs_compositing_bits_update`;
 3. paint only when layout was not requested;
-4. semantics through `mark_needs_semantics`.
+4. the composited-layer update through `mark_needs_composited_layer_update`,
+   only when paint was not requested, so a setter that reports both paint and a
+   layer change gets the paint (the condition, not the call order, decides);
+5. semantics through `mark_needs_semantics`.
+
+`crates/flui-rendering/src/pipeline/owner/accessors.rs:1920` is the single
+implementation of this order. `mark_needs_composited_layer_update` degrades to a
+paint mark when no ancestor boundary owns retained output to patch, and refuses
+itself when the node already needs paint or already carries the update
+(`accessors.rs:1884`; `crates/flui-rendering/src/pipeline/scheduler.rs:552`).
+
+Self-marking render objects hand the same value to
+`LocalRenderInvalidationHandle::request_update(RenderUpdateImpact)`
+(`crates/flui-rendering/src/pipeline/local_invalidation.rs:175`), which admits
+every phase of the impact together before it wakes the frame driver
+([ADR-0190](ADR-0190-owner-local-render-invalidation.md)). That lane does not
+call `apply_render_update_impact`: the frame-entry drain replays each admitted
+phase through its own commit path, layout, compositing, paint, semantics, then
+the composited-layer update (`accessors.rs:265`). Paint still wins there,
+because the layer update refuses itself on a node that needs paint. The truth
+table of the named constants, including that `COMPOSITED_LAYER_UPDATE` does not
+imply paint, is pinned by the unit test
+`named_impacts_have_the_documented_truth_table`
+(`crates/flui-rendering/src/update.rs:114`).
 
 The layout branch deliberately suppresses the immediate paint mark. Layout's
 normal completion schedules the necessary paint, avoiding duplicate dirty
@@ -254,12 +285,16 @@ not manufactured invalidation.
 `RenderBehavior::on_update` is an Active-element operation. Inspection of the
 current lifecycle paths found no legitimate non-Active invocation: ordinary
 reconciliation updates Active elements, and GlobalKey retake paths activate a
-candidate before calling `update`. Therefore a missing `PipelineOwner` is a
-broken invariant, not evidence of detachment, and panics with
-`expect("BUG: active RenderBehavior must have a PipelineOwner during update")`.
-Absence of the behavior's `RenderId`, absence of the corresponding node, or a
-concrete render-object type mismatch likewise panics with an
-`expect("BUG: …")` message naming that invariant.
+candidate before calling `update`. Therefore a `RenderId` without a
+`PipelineOwner` is a broken invariant, not evidence of detachment, and panics
+with `BUG: active RenderBehavior must have a PipelineOwner during update`; a
+`PipelineOwner` without a `RenderId` panics with `BUG: RenderBehavior with a
+PipelineOwner must own a RenderId during update`. The one tolerated state is an
+element mounted with neither, a render-less test tree, which minted no render
+object in `on_mount`: the update logs at trace level and does nothing
+(`crates/flui-view/src/element/behavior.rs:1243`). Absence of the corresponding
+node or a concrete render-object type mismatch panics with an `expect("BUG: …")`
+message naming that invariant.
 
 Across two non-overlapping `PipelineCell::with_mut` transactions,
 `RenderBehavior`:

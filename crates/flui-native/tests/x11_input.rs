@@ -55,6 +55,10 @@ pub(crate) const CASES: &[(&str, fn())] = &[
         "an_xtest_escape_cancels_a_drag_after_the_focus_moved",
         an_xtest_escape_cancels_a_drag_after_the_focus_moved,
     ),
+    (
+        "a_title_bar_of_the_applications_moves_and_resizes_through_the_window_manager",
+        a_title_bar_of_the_applications_moves_and_resizes_through_the_window_manager,
+    ),
 ];
 
 /// `dead_acute` (`keysymdef.h`).
@@ -886,4 +890,103 @@ fn an_xtest_escape_cancels_a_drag_after_the_focus_moved() {
     }
     assert_eq!(*ended.borrow(), Some(OsDragEnd::Cancelled));
     xtest.send(BUTTON_RELEASE_EVENT, 1, (0, 0));
+}
+
+/// A window whose application draws its title bar opens without the window
+/// manager's decorations. A drag on its bar moves it through the window
+/// manager, a drag on its right edge widens it, a double-click on the bar
+/// maximizes it, and none of those presses reaches the handler, while a click
+/// on its content does (ADR-0286 §10).
+fn a_title_bar_of_the_applications_moves_and_resizes_through_the_window_manager() {
+    use flui_foundation::geometry::{Rect, Size};
+    use flui_platform::input_regions::{InputRegion, InputRegionKind};
+    use flui_platform::{AppTitleBar, WindowFrame, WindowMode, WindowOptions};
+
+    park_pointer();
+    let handler = RecordingWindowHandler::new();
+    let mut fixture = X11Fixture::open_with_options(
+        WindowOptions::default()
+            .with_title("app title bar")
+            .with_size(Size::new(400.0, 300.0))
+            .with_frame(WindowFrame::AppTitleBar(AppTitleBar::new())),
+        Rc::clone(&handler) as Rc<dyn flui_platform::WindowHandler>,
+    );
+    assert!(
+        matches!(fixture.window.state().frame, WindowFrame::AppTitleBar(_)),
+        "openbox moves a window at its request: {:?}",
+        fixture.window.state().frame
+    );
+    let bar = InputRegion::new(
+        InputRegionKind::WindowMove,
+        Rect::from_ltrb(0.0, 0.0, 400.0, 32.0),
+    );
+    fixture
+        .window
+        .set_input_regions(&[bar])
+        .expect("the X11 host takes chrome regions");
+    fixture.settle();
+
+    // A drag on the bar: the move starts once the pointer has travelled.
+    let before = fixture.window.state().outer;
+    let xtest = Xtest::new(&fixture);
+    xtest.move_to(200, 16);
+    xtest.send(BUTTON_PRESS_EVENT, 1, (0, 0));
+    for step in 1..=6 {
+        xtest.move_to(200 + step * 10, 16 + step * 5);
+    }
+    xtest.send(BUTTON_RELEASE_EVENT, 1, (0, 0));
+    fixture.settle();
+    let moved = fixture.window.state().outer;
+    let (from, to) = (
+        before.position.expect("a position"),
+        moved.position.expect("a position"),
+    );
+    assert!(
+        to.x > from.x + 30.0 && to.y > from.y + 15.0,
+        "the bar moved the window: {from:?} to {to:?}"
+    );
+    assert_eq!(moved.size, before.size);
+
+    // A drag on the right edge, inside the band along it.
+    let xtest = Xtest::new(&fixture);
+    xtest.move_to(398, 150);
+    xtest.send(BUTTON_PRESS_EVENT, 1, (0, 0));
+    for step in 1..=5 {
+        xtest.move_to(398 + step * 10, 150);
+    }
+    xtest.send(BUTTON_RELEASE_EVENT, 1, (0, 0));
+    fixture.settle();
+    let widened = fixture.window.state().content_size;
+    assert!(
+        widened.width > 430.0 && widened.height == 300.0,
+        "the edge widened the window: {widened:?}"
+    );
+
+    // A double-click on the bar.
+    let xtest = Xtest::new(&fixture);
+    xtest.move_to(200, 16);
+    xtest.click(1);
+    xtest.click(1);
+    fixture.settle();
+    assert_eq!(fixture.window.state().mode, WindowMode::Maximized);
+
+    let presses = |handler: &RecordingWindowHandler| {
+        pointer_events(handler)
+            .iter()
+            .filter_map(line)
+            .filter(|line| line.starts_with("down") || line.starts_with("up"))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        presses(&handler),
+        Vec::<String>::new(),
+        "the chrome took them"
+    );
+
+    // A click on the content is the application's.
+    let xtest = Xtest::new(&fixture);
+    xtest.move_to(200, 200);
+    xtest.click(1);
+    assert_eq!(presses(&handler), ["down PRIMARY", "up PRIMARY"]);
+    xtest.move_to_root(1270, 1010);
 }

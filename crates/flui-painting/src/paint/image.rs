@@ -475,6 +475,43 @@ pub enum ColorFilter {
     SrgbToLinearGamma,
 }
 
+/// Whether a source blended with `mode` over a transparent destination keeps
+/// a non-zero source factor, so an opaque source stays visible there: the
+/// dual of [`BlendMode::keeps_destination_under_transparent_source`].
+const fn source_reaches_a_transparent_destination(mode: BlendMode) -> bool {
+    match mode {
+        BlendMode::Clear
+        | BlendMode::Dst
+        | BlendMode::SrcIn
+        | BlendMode::DstIn
+        | BlendMode::DstOut
+        | BlendMode::SrcATop
+        | BlendMode::Modulate => false,
+        BlendMode::Src
+        | BlendMode::SrcOver
+        | BlendMode::DstOver
+        | BlendMode::SrcOut
+        | BlendMode::DstATop
+        | BlendMode::Xor
+        | BlendMode::Plus
+        | BlendMode::Screen
+        | BlendMode::Overlay
+        | BlendMode::Darken
+        | BlendMode::Lighten
+        | BlendMode::ColorDodge
+        | BlendMode::ColorBurn
+        | BlendMode::HardLight
+        | BlendMode::SoftLight
+        | BlendMode::Difference
+        | BlendMode::Exclusion
+        | BlendMode::Multiply
+        | BlendMode::Hue
+        | BlendMode::Saturation
+        | BlendMode::Color
+        | BlendMode::Luminosity => true,
+    }
+}
+
 impl ColorFilter {
     /// Whether the filter turns a transparent black pixel into a visible
     /// one, so a layer it filters changes pixels its children never inked.
@@ -489,17 +526,7 @@ impl ColorFilter {
     pub fn modifies_transparent_black(&self) -> bool {
         match self {
             ColorFilter::Mode { color, blend_mode } => {
-                !color.is_transparent()
-                    && !matches!(
-                        blend_mode,
-                        BlendMode::Clear
-                            | BlendMode::Dst
-                            | BlendMode::SrcIn
-                            | BlendMode::DstIn
-                            | BlendMode::DstOut
-                            | BlendMode::SrcATop
-                            | BlendMode::Modulate
-                    )
+                !color.is_transparent() && source_reaches_a_transparent_destination(*blend_mode)
             }
             ColorFilter::Matrix(matrix) => matrix.modifies_transparent_black(),
             ColorFilter::LinearToSrgbGamma | ColorFilter::SrgbToLinearGamma => false,

@@ -1,31 +1,34 @@
 # ADR-0081: Workspace tiers, reach facts and stability kinds
 
-- **Status:** Accepted in part (2026-09-26): §1 (tiers, `order`, the direction rule,
-  `edge-exceptions`) and the `tier-kind` declarations of §3. §2 (reach) is implemented and
-  checked by `cargo xtask reach` but remains Proposed until the owner decides three points it
-  assumes: `pkg`'s OS globs, whose `android-*`/`android_*` make
-  `flui-hot-reload → android_log-sys` an entry of its own; `flui-engine`'s standing `grant` for
-  `wgpu`; and that the ungated graph was red through three edges, none of them through
-  `flui-native`, where [the migration plan](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/plans/2026-09-25-architecture-migration-plan.md) expected only `flui-native` edges. ADR-0082's
-  trait move landed first, so the first run on `main` needed no `flui-native` entry. The
-  kind rules of §3 (core never names official, in any dependency kind; an official package's
-  normal and build edges go to `flui-sdk` and the contract crates; an edge between official
-  packages, in any kind, is declared) are implemented and checked
-  by `cargo xtask workspace`, with today's refused edges seeded as `edge-exceptions` in place of
-  a separate allowlist (ADR-0088 §2), but remain Proposed until the owner accepts them. §4 and
-  §5 remain Proposed. The §1 deletions of `flui-tree` and `flui-localizations` landed
-  2026-09-26. §4.2 is implemented (2026-09-29): `runtime-internals` is gone and its items are
-  at `flui_view::__runtime`; the facade and the SDK shadow it.
+- **Status:** Accepted (2026-11-03) for §1, §2, §3 and §4.2; §4.1 and §5 are Proposed.
+  `cargo xtask checks` runs `workspace` and `reach`, each with its `--self-test`
+  (`tools/xtask/src/tasks/checks.rs:116-121`): every library crate declares `tier`,
+  `tier-kind` and `order`, the kind rule is `tools/xtask/src/workspace.rs:15-20`, and the
+  facade's four `edge-exceptions` are at `Cargo.toml:741-746`. `runtime-internals` is in no
+  manifest; its items are at `flui_view::__runtime` (`crates/flui-view/src/lib.rs:169`), which
+  the facade shadows behind a `compile_fail,E0603` doctest (`src/lib.rs:293-307`). §2 rests on
+  three points, decided with it: `pkg`'s OS globs stand, so `flui-hot-reload →
+  android_log-sys` is an entry of its own (`crates/flui-hot-reload/Cargo.toml:83-86`, exit
+  ADR-0094); `flui-engine`'s standing `grant` for `wgpu` stands
+  (`crates/flui-engine/Cargo.toml:204-206`); and no `reach-exceptions` entry names
+  `flui-native`, because the three edges the gate reports without entries are the ones those
+  entries and that grant excuse. Not implemented: the `layer` key and ADR-0041's layer rule are
+  still checked beside the tiers (`Cargo.toml:97`, `crates/flui-engine/Cargo.toml:200`,
+  `tools/xtask/src/workspace.rs:25-31`). Proposed: §4.1, which no rule of `cargo xtask
+  workspace` checks (no `cfg` names `signals = []`, `crates/flui-view/Cargo.toml:124`); and §5,
+  whose roadmap file under docs/ is not in the tree, whose frame-entry check does not exist (ADR-0083
+  §2), and whose workspace version `0.2.0` is `0.2.0-dev` today (`Cargo.toml:183`).
 - **Date:** 2026-09-25
-- **Superseded-by:** [ADR-0154](ADR-0154-capability-crates.md) for §3 in part (the kinds gain `capability`) and §2 in part (the reach table gains its row).
+- **Superseded-by:** [ADR-0154](ADR-0154-capability-crates.md) for §3's list of kinds and §2's
+  reach table only (the kinds gain `capability`; the reach table gains its row).
 - **Amended:** 2026-10-11 — current manifest inventory and testing/runtime order are distinguished from the original tier-migration evidence; qualified acceptance remains unchanged.
-- **Amended by (on acceptance):** [ADR-0098](ADR-0098-owned-f64-geometry-values.md) (§8) — `flui-geometry` and
+- **Amended-by:** [ADR-0098](ADR-0098-owned-f64-geometry-values.md) (§8) — `flui-geometry` and
   `flui-types` are deleted; the V tier's values live in `flui-foundation` and their owners
   above it, so the tier table and the `mint` findings below name crates that no longer exist.
-- **Supersedes in part:** [ADR-0041](ADR-0041-workspace-topology-contract.md) through the
-  accepted §1 (the numbered layer table, "a crate is a layer" as the only reason for a crate, and
-  the "Localization direction is locked" paragraph, which end when the `layer` key is removed;
-  until then tiers are checked beside layers). The manifest-as-source rule, the
+- **Supersedes:** [ADR-0041](ADR-0041-workspace-topology-contract.md), through §1 of this
+  record, for the numbered layer table, "a crate is a layer" as the only reason for a crate,
+  and the "Localization direction is locked" paragraph only (they end when the `layer` key is
+  removed; until then tiers are checked beside layers). The manifest-as-source rule, the
   `allowed-dependents`/`allowed-dev-dependents` mechanism, the dev-edge exemption and the
   rejected alternatives stand. ADR-0041's "No `flui-runtime` without two consumers" paragraph
   is superseded separately by [ADR-0083](ADR-0083-one-frame-transaction-in-flui-runtime.md).

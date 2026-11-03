@@ -1,24 +1,41 @@
 # ADR-0083: One frame transaction lives in `flui-runtime` above `flui-widgets`
 
-- **Status:** Accepted in part (2026-09-26): §1's placement (tier K, kind `internal`, above
-  `flui-widgets`, a normal graph that reaches none of the K set) and the first three moves (see
-  `## Migration`). Move 4 has moved; its acceptance waits on CI's `cross-typecheck`,
-  `wasm-check` and `wasm-test`, which this host cannot run. §1's ordering before `flui-testing` is
-  in place: `flui-testing` sits above the runtime (order 6). §1's ownership list is accepted for the items
-  those moves placed (the presentation lanes, the frame sink seam, `PerformanceStats`,
-  `ExecutionServices`, and the UI runtime core: `UiRuntime`, `PresentationState`, the presentation
-  forest, the per-presentation lifecycle, frame-failure reporting and its ADR-0048
-  containment); §1's frame transaction is accepted as `UiRuntime::pump`, which every runner
-  drives (the first half of move 5), with the same CI wait for its Android, iOS and wasm sites.
-  §4 is accepted in part (move 6a): `flui-testing` sits above the runtime and absorbs
-  `flui_widgets::testing`, and its widget harness drives `UiRuntime::pump` on a manual clock with a
-  headless sink; `HeadlessBinding::pump_frame` remains for the raw-owner suites until move 6b.
-  The rest of §1 and §2, §3, the rest of §4 and §5 remain Proposed.
+- **Status:** Accepted (2026-11-03) for §1, §3, §4 and §5; §2 is Proposed. `flui-runtime` is
+  tier K, kind `internal`, `order = 4` (`crates/flui-runtime/Cargo.toml:143-145`), with
+  `allowed-dependents = ["flui-app", "flui-testing"]` (`:151`), and `cargo xtask reach` keeps the
+  K set out of its graph (`tools/xtask/src/tasks/checks.rs:120-121`). It owns `UiRuntime::pump`
+  and `pump_background` (`crates/flui-runtime/src/ui_runtime/pump.rs:216`, `:328`), pinned by
+  `pump_post_frame_callback_observes_this_frames_committed_layout`
+  (`crates/flui-runtime/src/ui_runtime/tests/pump_transaction.rs:22`), and `OwnerHost`
+  (`crates/flui-runtime/src/owner.rs:44`), whose work is a closed vocabulary
+  (`crates/flui-runtime/src/owner/runtime_dispatch.rs:13`). The web runner and the
+  device-recovery wrapper the other runners call drive the pump
+  (`crates/flui-app/src/app/runner/web.rs:326`,
+  `crates/flui-app/src/app/runner/device_recovery.rs:430`). `flui-testing` sits above the
+  runtime (`order = 6`, `crates/flui-testing/Cargo.toml:141`) and absorbs `flui_widgets::testing`
+  as `flui_testing::widgets` (`crates/flui-testing/src/lib.rs:131`); `flui-widgets` reaches it
+  only on a dev edge (`reach-forbid`, `crates/flui-widgets/Cargo.toml:241`). Not implemented:
+  §3's one cell: beside `APP_RUNTIME` (`crates/flui-app/src/app/runner/host.rs:830`), `flui-app`
+  keeps three secondary-window thread-locals
+  (`crates/flui-app/src/app/runner/secondary_window.rs:507`, `:511`, `:521`), each a `globals`
+  entry whose exit is this record (`crates/flui-app/Cargo.toml:222-224`); and §4's deletions:
+  `HeadlessBinding::pump_frame`, `run_pipeline`, `pump_presentation` and `pump_all` still exist
+  (`crates/flui-testing/src/lib.rs:1113`, `:1250`, `:1552`, `:1586`). Proposed: §2, which no
+  gate checks: there is no `cargo xtask frame-entry`, and
+  `WidgetsBinding::draw_frame` is `pub` (`crates/flui-view/src/binding.rs:1100`).
+- **Superseded-by:** [ADR-0182](ADR-0182-complete-owner-execution.md) for scheduler execution
+  authority and the raw background sequence only. The runtime now submits preparation and
+  pipeline through complete owner operations.
+- **Superseded-by:** [ADR-0136](ADR-0136-owner-local-ui-surfaces.md) §2 for the lane-specific
+  frame entry API only (the `drive_frame_with_lane` and `end_frame_with_lane` names in §1, §2
+  and "Migration"; §2's reachability rule stands): `drive_frame(&OwnerFrame, ..)` replaces the
+  former lane-specific driver. `UiRuntime::pump` retains the transaction; its background arm
+  calls `finish_async_pump()` then `OwnerFrame::poll_ready()`.
 - **Date:** 2026-09-25
 - **Amended:** 2026-10-11 — the current animation clock and complete-turn owner APIs are distinguished from migration-era scheduler signatures.
-- **Supersedes in part:** [ADR-0041](ADR-0041-workspace-topology-contract.md)
-  (the paragraph "No `flui-runtime` without two consumers")
-- **Amends (on acceptance):** [ADR-0027](ADR-0027-owner-affine-ui-realms.md) §9 (the public
+- **Supersedes:** [ADR-0041](ADR-0041-workspace-topology-contract.md)
+  for the paragraph "No `flui-runtime` without two consumers" only
+- **Amends:** [ADR-0027](ADR-0027-owner-affine-ui-realms.md) §9 (the public
   UI runtime/runtime surface); [ADR-0037](ADR-0037-presentation-ownership-domains.md) §1 and §4 (the
   composition and `PresentationState` leave `flui-app`) and §12 (the two-production-consumer
   condition, §5 below); [ADR-0044](ADR-0044-driver-loop-hybrid.md)
@@ -38,15 +55,6 @@
   index in [`design/decisions.md`](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/design/decisions.md)
 
 ## Context
-
-**Superseded-by:** [ADR-0182](ADR-0182-complete-owner-execution.md) for scheduler
-execution authority and the raw background sequence. The runtime now submits
-preparation and pipeline through complete owner operations.
-
-**Superseded-by:** [ADR-0136 §2](ADR-0136-owner-local-ui-surfaces.md) for the frame
-entry API: `drive_frame(&OwnerFrame, ..)` replaces the former lane-specific driver
-named in this record's migration history. `UiRuntime::pump` retains the transaction;
-its background arm calls `finish_async_pump()` then `OwnerFrame::poll_ready()`.
 
 A frame is produced by two different implementations.
 

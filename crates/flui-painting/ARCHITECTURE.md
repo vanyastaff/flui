@@ -25,12 +25,12 @@ Design decisions are recorded under [Mapping decisions](#mapping-decisions).
 | Parley shaping | `parley_text/{shape,caret}.rs` | `TextContext::shape`: a `ParagraphSpec` (styled spans, width, line height, direction, `max_lines`, ellipsis) to a `ParagraphLayout` whose `metrics()` read the laid-out lines, whose `to_shaped()` is the paragraph paint records, and whose caret, hit-test, selection, line and word queries `TextPainter` answers from (decision 15) |
 | Text boundaries | `text_boundaries.rs` | Grapheme and word boundaries over ICU4X, the segmenters Parley clusters with: what hit-testing snaps to and word selection picks from, and what `flui-widgets`' editor steps through (ADR-0092 §6); each query segments from the start of its line |
 | Raster side | `glyphs/{mod,key,registry,swash}.rs` | `GlyphKey` (a face named by font blob), `FontRegistry` (faces and interned variation instances), `SwashRasterizer` (the engine's atlas draws through it), `GlyphRasterizer`, `PlacedGlyph`, `GlyphImage` |
-| Paint values | `paint/{style,path,shader,effects,image,clipping,blend_mode,canvas}.rs` | `Paint`, `Path` (with its shape hint), shaders, filters, images, clip and blend modes: the vocabulary the recorder records |
+| Paint values | `paint/{style,path,shader,effects,image,clipping,blend_mode,canvas}.rs` | `Paint`, `Path` (with its shape hint), shaders, filters, images, clip and blend modes: the vocabulary the recorder records. `BlendMode::coverage_class` is the one classification coverage, compositing and damage route on; it and every blend predicate derived from it, `ColorFilter::modifies_transparent_black` and `Color::blend` name every mode with no wildcard arm |
 | Style values | `styling/*.rs`, `lerp_impls.rs` | `Color` (straight-alpha sRGB; `lerp` in premultiplied Oklab), borders, radii, decorations, gradients, shadows |
 | Text values | `typography/*.rs` | `TextStyle`, spans, alignment, decoration, metrics |
 | Layout-facing values | `alignment.rs`, `box_fit.rs`, `text_painter/baseline.rs` | `Alignment` and its directional form, `BoxFit`/`BoxShape`/`FittedSizes`, `TextBaseline` |
 | Decorations | `decoration.rs`, `table_border.rs` | `paint_box_decoration` / `box_decoration_hit_test`, `paint_table_border` |
-| Test support | `testing/mod.rs` | `record` and the collection and host-scan queries tests read (`testing` feature) |
+| Test support | `testing/mod.rs` | `record`, the collection and host-scan queries tests read, and `EVERY_BLEND_MODE`, a list a compile-time match keeps complete (`testing` feature) |
 
 ---
 
@@ -52,9 +52,18 @@ own root clips end with it. An empty picture records nothing. The engine's
 The wire carries no serde ([ADR-0066](../../docs/adr/ADR-0066-display-list-command-representation.md)).
 
 `Paint` is interned per canvas: each `draw_*` scans a small `Vec<Arc<Paint>>`
-for an equal paint and shares the `Arc`. `Path` is copy-on-write
-(`Arc<Vec<PathCommand>>`), so recording a caller's path copies nothing.
-`DrawOp` is at most 128 bytes and `DrawCommand` 192;
+for an equal paint and shares the `Arc` (`Canvas::intern_paint`,
+`src/canvas/mod.rs:88`). `Path` is copy-on-write over `Arc<kurbo::BezPath>`
+(`src/paint/path.rs:75`): a path inside a `DrawOp` (`ClipPath`, `Path`,
+`Shadow`) holds that `Arc` plus an inline shape hint (at most an `RRect`), a
+fill type and a cached bounds, and recording a caller's path copies no
+geometry. `PathCommand` (`src/paint/path.rs:24`) is the element
+`Path::commands` yields (`src/paint/path.rs:600`), not the storage.
+`DrawCommand.transform` is a full `Matrix4`, sixteen `f64` (128 bytes), so every
+command carries that much beside its `DrawOp`
+(`src/display_list/command.rs:30`;
+`crates/flui-foundation/src/geometry/matrix4.rs:124`). No test in the crate
+pins a size for `DrawOp` or `DrawCommand`, and no budget is stated here;
 `display_list_record` (criterion) measures the recording cost.
 
 `Canvas::finish` is infallible: an unbalanced save fires a `debug_assert`
@@ -106,7 +115,11 @@ colour the layout keeps beside the runs: a root recolour keeps the very `Arc`,
 a span recolour builds a new paragraph from the cached layout without shaping,
 and only a recolour that gives one paint run's spans different colours lays
 out again (ADR-0065, amended 2026-11-03). `describe_spans` prints the colour a
-span paints with. A `ShapedParagraph` names no
+span paints with. `TextStyle::layout_affecting_eq` and
+`TextSpan::layout_affecting_eq` destructure every field with no `..`, so a new
+field is classified as shaping or not before it compiles;
+`every_style_and_span_field_is_classified_by_what_the_shaped_paragraph_holds` checks
+each classification against the shaped paragraph. A `ShapedParagraph` names no
 shaper: its text, size, baselines and ink bounds, a face table of
 `FontBlob`s (the font bytes and the blob id keys name them by), and runs of
 glyph ids and logical positions with each run's face, size, variation

@@ -4,6 +4,10 @@
 - **Amended by:** [ADR-0092](ADR-0092-per-realm-text-over-parley.md) (`DrawOp::Paragraph`
   carries an `Arc<ShapedParagraph>`)
 - **Date:** 2026-09-18
+- **Superseded-by:** [ADR-0306](ADR-0306-display-list-commands-hold-local-geometry-under-interned-transforms.md)
+  for "The command is `{ transform, op }`" and "The op has a budget" only (a command holds a
+  list-private id of an interned transform instead of its own matrix, `draw_picture` is deleted,
+  and the size budget is asserted at compile time with `Path` one pointer)
 - **Related:** follows [ADR-0065](ADR-0065-painting-owns-shaping-text-crosses-the-display-list-shaped.md)
 
 *A recorded command is `{ transform, op }`: the absolute transform it was
