@@ -32,9 +32,11 @@
 //! In a page the endpoint is a global the launch names (`__flui_agent`, say):
 //! `connect(onLine)` opens a connection whose lines reach `onLine`, and
 //! returns `send(line)` and `close()` (flui-native's
-//! `page_export`, built for wasm32 alone). A WebDriver BiDi driver calls
-//! it through `script.callFunction` with a channel as `onLine`. Each
-//! connection's conversation runs as a task of the page's executor.
+//! `page_export`, built for wasm32 alone). A driver calls it through the
+//! browser's remote protocol: `flui run --agent` passes a WebDriver BiDi
+//! channel as `onLine` in Firefox and a DevTools binding in the Chromium
+//! family. Each connection's conversation runs as a task of the page's
+//! executor.
 //!
 //! The token keeps out other users and remote callers. It does not keep out
 //! other processes of the same user, which can read the application's

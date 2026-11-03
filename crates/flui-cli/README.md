@@ -200,6 +200,7 @@ the app): `flui run --scene --scene-crate <crate> --package <android.package>`.
 flui run --agent                         # debug build, on this desktop
 flui run --agent --release               # release build with the `driver` feature
 flui run --agent --device emulator-5554  # debug build, on an Android device
+flui run --agent --device browser:chrome --headless  # debug build, in a page
 ```
 
 `flui run --agent` gives the app a private local endpoint (a Unix socket in a
@@ -210,10 +211,17 @@ gets the `driver` feature of `flui` (or of `flui-app` for an app that names the
 runtime crate), under the key the app names it by. On an Android device the
 app binds an abstract socket (`@flui-agent-…`), which `am start` names in the
 intent's extras with the token, and the session file names the loopback port
-that `adb forward` carries to it; the forward is removed when the run ends. It
-refuses a browser and the iOS Simulator. With `--json` it emits
-`run.agent.ready {endpoint, session}`, with `forwarded` (the port's address)
-on Android; the token stays out of the stream.
+that `adb forward` carries to it; the forward is removed when the run ends. In
+a browser the command starts the browser itself, in a profile of its own
+(without a window under `--headless`), installs the page's launch object before
+the app's module runs, and serves the session's local endpoint by carrying each
+connection to the page: Firefox through WebDriver BiDi, Chrome, Chromium, Edge,
+Brave and Opera through the DevTools protocol, neither needing a driver of its
+own. A reload ends the page's connections and `flui mcp` connects again. It
+refuses Safari, which has neither protocol without `safaridriver`, and the iOS
+Simulator. With `--json` it emits `run.agent.ready {endpoint, session}`, with
+`forwarded` (the port's address) on Android and `relayed` (the endpoint this
+command serves) in a browser; the token stays out of the stream.
 
 The agent's client launches `flui mcp` in the same project, for example in an
 MCP client's configuration:
@@ -332,8 +340,8 @@ object with an `event` field; human text, if any, goes to stderr.
 | `emulator`, `emulators.summary`, `emulator.launch` | `emulators` |
 | `create.start`, `create.file`, `create.done` | `create` (also with `--dry-run`) |
 | `run.start`, `run.build.start`, `run.build.done`, `run.app.start`, `run.app.log`, `run.app.exit`, `run.change`, `run.reload`, `run.app.stop`, `run.stop` | `run` |
-| `run.web.serve {url, dir}`, `run.web.open {browser, url}`, `run.reload {kind: "page"}` | `run --device browser:…` |
-| `run.agent.ready {endpoint, session, forwarded?}` | `run --agent` (`forwarded` on Android) |
+| `run.web.serve {url, dir}`, `run.web.open {browser, url, agent?}`, `run.reload {kind: "page"}` | `run --device browser:…` |
+| `run.agent.ready {endpoint, session, forwarded?, relayed?}` | `run --agent` (`forwarded` on Android, `relayed` in a browser) |
 | `build.start`, `build.phase`, `build.done` | `build` |
 | `test.start`, `test.done`, `analyze.done`, `format.done` | `test`, `analyze`, `format` |
 | `clean.removed`, `clean.done` | `clean` |

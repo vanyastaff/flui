@@ -1,7 +1,7 @@
 # ADR-0288: The development agent is one sans-IO service; transports only move lines
 
 - **Status:** Accepted (2026-11-03). Implemented: §§1–8, the desktop, Android and web
-  transports.
+  transports, each driven by `flui run --agent`.
 - **Date:** 2026-11-03
 - **Supersedes in part:** [ADR-0239](ADR-0239-every-debug-app-hosts-the-driver-agent.md) §1,
   where the server lives: the conversation is `flui-runtime`'s, and `flui-app` keeps the desktop
@@ -129,9 +129,15 @@ The web has no thread and no socket: the page's event loop is the transport. The
 global (`__flui_agent`), and `flui-native`'s `PageExport` defines it as
 `{ version, connect(onLine) }`; `connect` returns `{ version, send(line), close() }`, both objects
 carrying the shape's version (`PAGE_EXPORT_VERSION`, 1) so the shape can grow without breaking a
-driver that reads it. Every line the app writes reaches `onLine` as a string, `onLine(null)` tells
-the script the app ended the connection, and a WebDriver BiDi driver passes a channel as `onLine`
-and calls `send` through `script.callFunction`. A connection the service does not accept (one past
+driver that reads it (`flui_protocol::launch::PAGE_EXPORT_VERSION`, which `flui-app` checks
+against `flui-native`'s at compile time). Every line the app writes reaches `onLine` as a string,
+`onLine(null)` tells the script the app ended the connection, and a driver reaches it through the
+browser's own remote protocol: `flui run --agent` speaks WebDriver BiDi to Firefox (a channel as
+`onLine`, `send` called through `script.callFunction`) and the DevTools protocol to the Chromium
+family (a binding, `Runtime.callFunctionOn`), neither needing a driver of its own, behind one
+`BrowserLink` of `flui-cli`'s; Safari has neither (`docs/gaps.md` entry 42). The command serves
+the session's usual local endpoint and carries each connection to the page, so `flui mcp` does
+not change. A connection the service does not accept (one past
 `Limits::max_connections`, or any once it stopped) makes `connect` throw the refusal; a second
 driver is refused by its hello, as on every transport (§8). Each connection's conversation is a
 task of the page's executor: a line the script sends is handed to the session at once (a line
@@ -257,7 +263,12 @@ is answered `shutting_down`. This replaces §5's "first conversation past its he
   `a_page_conversation_ends_when_its_script_stops_listening_or_no_timer_keeps_its_deadline`,
   `a_page_conversation_keeps_its_session_deadline_through_the_timer`,
   `a_line_sent_while_the_session_runs_closes_the_conversation` and
-  `a_stopped_service_ends_its_page_conversations_without_the_driver_going`. A served page in a
+  `a_stopped_service_ends_its_page_conversations_without_the_driver_going`. `flui-cli`'s
+  `chromium_is_driven_over_the_devtools_protocol` and `firefox_is_driven_over_webdriver_bidi`
+  start the browser, install the launch and carry a connection to a page standing in for the app,
+  through a reload, where the browser is installed; the relay runs against a tab of the test's
+  own in `a_client_waits_for_the_page_export_and_is_carried_to_a_connection_of_its_own` and
+  `a_page_connection_ends_with_its_client_and_every_one_with_a_reload`. A FLUI app served in a
   browser is run by the owner.
 
 ## Pros and cons of the options
@@ -295,7 +306,7 @@ loop in the next (§7), and the role came into the hello after it (§8). The And
 came next (§6, with the launch read through the platform, §7), and then `flui run --agent` on
 Android: the endpoint and the token as `am start` extras, and a session file that names the
 loopback port `adb forward` holds instead of the app's own endpoint, which only the device
-reaches. The web transport came after it (§6, with the page's launch object, §7). Then, each in
-its own change: `flui run --agent` in a browser (a WebDriver BiDi client that installs the
-preload and bridges `flui mcp` to the channel), and held input per connection (a lease the
-session owns, released when it is dropped).
+reaches. The web transport came after it (§6, with the page's launch object, §7), and then
+`flui run --agent` in a browser: the browser started with its remote protocol on, the launch
+installed by a preload, and the session's endpoint carried to the page. Then held input per
+connection (a lease the session owns, released when it is dropped).

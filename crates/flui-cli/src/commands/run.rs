@@ -14,6 +14,9 @@
 //! line by line as `run.app.log` so a tool driving `flui run` sees everything
 //! on one machine-readable stream.
 
+use crate::agent::browser::launch::LaunchedBrowser;
+use crate::agent::browser::relay::Relay;
+use crate::agent::browser::{self, Dialect};
 use crate::agent::{self, Session};
 use crate::build::{BuilderContextBuilder, Platform, Profile, WebBuilder};
 use crate::config::{FluiConfig, HotReloadConfig};
@@ -136,7 +139,7 @@ fn run_session(
                         .into(),
             });
         }
-        let mut strategy = BrowserSession::new(browser.clone(), release, hot_reload, web)?;
+        let mut strategy = BrowserSession::new(browser.clone(), release, hot_reload, web, agent)?;
         return dev_loop(&mut strategy);
     }
     if hot_reload {
@@ -173,23 +176,38 @@ fn run_session(
     Ok(())
 }
 
-/// What `--agent` needs before anything is built: this desktop or an Android
-/// device, and an application. Then the session (endpoint, token, session
-/// file) it will launch the app with; an Android app's endpoint is an
-/// abstract socket that `adb forward` carries a loopback port to. A debug
-/// build serves the agent as it is; a profile without debug assertions
-/// builds with the `driver` feature.
+/// What `--agent` needs before anything is built: this desktop, an Android
+/// device or a browser with a remote protocol of its own, and an application.
+/// Then the session (endpoint, token, session file) it will launch the app
+/// with; an Android app's endpoint is an abstract socket that `adb forward`
+/// carries a loopback port to, a page's app's a global this command reaches
+/// through the browser. A debug build serves the agent as it is; a profile
+/// without debug assertions builds with the `driver` feature.
 fn start_agent_session(
     project: &Project,
     target: &Target,
     release: bool,
     profile: Option<&str>,
 ) -> CliResult<Session> {
-    if !matches!(target, Target::Host | Target::Android(_)) {
+    if let Target::Browser(browser) = target
+        && Dialect::of(&browser.id).is_none()
+    {
+        return Err(CliError::Unsupported {
+            what: format!("`flui run --agent` in {}", browser.name),
+            reason: "it has no remote protocol of its own (WebDriver BiDi or the DevTools \
+                     protocol) to reach the page through; run it in Firefox, Chrome, Chromium \
+                     or Edge (docs/gaps.md entry 42)"
+                .into(),
+        });
+    }
+    if !matches!(
+        target,
+        Target::Host | Target::Android(_) | Target::Browser(_)
+    ) {
         return Err(CliError::Unsupported {
             what: format!("`flui run --agent` on {}", target.label()),
-            reason: "the agent endpoint is a local socket, a pipe or an Android abstract socket; \
-                     run it on this desktop or an Android device"
+            reason: "the agent endpoint is a local socket, a pipe, an Android abstract socket \
+                     or a page's global; run it on this desktop, an Android device or a browser"
                 .into(),
         });
     }
@@ -229,6 +247,12 @@ fn start_agent_session(
             &find_adb()?,
             &device.serial,
         )?,
+        Target::Browser(_) => Session::create_relayed(
+            &start,
+            workspace.as_deref(),
+            target_dir.as_deref(),
+            browser::PAGE_EXPORT,
+        )?,
         _ => Session::create(&start, workspace.as_deref(), target_dir.as_deref())?,
     };
     if let Some(feature) = driver_feature {
@@ -242,8 +266,14 @@ fn start_agent_session(
         "endpoint": session.app_endpoint(),
         "session": session.file(),
     });
-    if let agent::Endpoint::Forwarded(address) = &session.credentials().endpoint {
-        ready["forwarded"] = serde_json::json!(address);
+    match (&session.credentials().endpoint, target) {
+        (agent::Endpoint::Forwarded(address), _) => {
+            ready["forwarded"] = serde_json::json!(address);
+        }
+        (agent::Endpoint::Local(address), Target::Browser(_)) => {
+            ready["relayed"] = serde_json::json!(address);
+        }
+        (agent::Endpoint::Local(_), _) => {}
     }
     ui::emit("run.agent.ready", &ready);
     Ok(session)
@@ -1182,6 +1212,8 @@ pub(crate) struct WebOptions {
     pub(crate) port: u16,
     /// Open the browser on the first successful build.
     pub(crate) open: bool,
+    /// With `--agent`: start the browser without a window.
+    pub(crate) headless: bool,
 }
 
 /// `flui run --device browser:…`: the web build served from its output
@@ -1189,6 +1221,10 @@ pub(crate) struct WebOptions {
 /// a page reload through [`DevServer::reload`]. No child process: the page
 /// is the running app, so [`ReloadStrategy::is_running`] is "the last build
 /// succeeded".
+///
+/// With `--agent` this command starts the browser itself, with its remote
+/// protocol on, installs the page's launch object before the app runs, and
+/// carries the session's endpoint to the page ([`DrivenBrowser`]).
 struct BrowserSession {
     root: PathBuf,
     browser: Browser,
@@ -1199,6 +1235,18 @@ struct BrowserSession {
     runtime: tokio::runtime::Runtime,
     server: Option<DevServer>,
     built: bool,
+    /// `--agent`: the session whose endpoint is carried to the page. Dropped
+    /// after the browser it drives.
+    driving: Option<DrivenBrowser>,
+    agent: Option<Session>,
+}
+
+/// The browser `--agent` started and the relay that carries the session's
+/// endpoint to its page. The relay goes first, ending its page connections
+/// while the browser is still there.
+struct DrivenBrowser {
+    relay: Relay,
+    _browser: LaunchedBrowser,
 }
 
 impl BrowserSession {
@@ -1207,7 +1255,14 @@ impl BrowserSession {
         release: bool,
         hot_reload: bool,
         options: WebOptions,
+        agent: Option<Session>,
     ) -> CliResult<Self> {
+        if agent.is_some() && !options.open {
+            return Err(CliError::Unsupported {
+                what: "`flui run --agent --no-open` in a browser".into(),
+                reason: "the agent reaches the page through the browser this command starts".into(),
+            });
+        }
         Ok(Self {
             root: std::env::current_dir()?,
             browser,
@@ -1217,11 +1272,62 @@ impl BrowserSession {
             runtime: tokio::runtime::Runtime::new().context("start the build runtime")?,
             server: None,
             built: false,
+            driving: None,
+            agent,
         })
     }
 
+    /// Starts the browser on `url` with its remote protocol on, the launch
+    /// object installed before the app's module runs, and the session's
+    /// endpoint carried to the page. A browser started before goes first.
+    fn drive(&mut self, url: &str) -> CliResult<()> {
+        let Some(session) = &self.agent else {
+            return Ok(());
+        };
+        self.driving = None;
+        let dialect = Dialect::of(&self.browser.id).ok_or_else(|| CliError::Unsupported {
+            what: format!("`flui run --agent` in {}", self.browser.name),
+            reason: "it has no remote protocol of its own (docs/gaps.md entry 42)".into(),
+        })?;
+        let executable = browser::launch::executable(&self.browser.launch)
+            .with_context(|| format!("find the executable of {}", self.browser.name))?;
+        let (launched, mut link) =
+            LaunchedBrowser::start(&executable, dialect, self.options.headless)
+                .with_context(|| format!("start {} for the agent", self.browser.name))?;
+        link.open(&browser::preload(&session.page_launch()), url)
+            .context("open the app in the browser")?;
+        let agent::Endpoint::Local(endpoint) = &session.credentials().endpoint else {
+            return Err(CliError::Unsupported {
+                what: "a page's agent behind a forwarded endpoint".into(),
+                reason: "a page's session serves a local endpoint".into(),
+            });
+        };
+        session.clear_endpoint();
+        let relay = Relay::start(link, endpoint, session.app_endpoint().to_owned())
+            .context("serve the agent's endpoint")?;
+        ui::info(format!(
+            "Opened {url} in {} for the agent (connect with `flui mcp`)",
+            self.browser.name
+        ))?;
+        ui::emit(
+            "run.web.open",
+            &serde_json::json!({ "browser": self.browser.id, "url": url, "agent": true }),
+        );
+        self.driving = Some(DrivenBrowser {
+            relay,
+            _browser: launched,
+        });
+        Ok(())
+    }
+
     fn builder(&self) -> (WebBuilder, crate::build::BuilderContext) {
+        let driver_feature = self
+            .agent
+            .as_ref()
+            .and_then(Session::driver_feature)
+            .map(str::to_owned);
         let ctx = BuilderContextBuilder::new(self.root.clone())
+            .with_features(driver_feature)
             .with_platform(Platform::Web {
                 target: "web".to_string(),
             })
@@ -1308,6 +1414,16 @@ impl ReloadStrategy for BrowserSession {
         }
         if let Some(server) = &self.server {
             server.reload();
+            // The agent's browser was closed, or its tab: the build starts another.
+            let gone = self.agent.is_some()
+                && !self
+                    .driving
+                    .as_ref()
+                    .is_some_and(|driven| driven.relay.is_serving());
+            if gone {
+                let url = server.url();
+                self.drive(&url)?;
+            }
             return Ok(());
         }
         let server = DevServer::start(self.output_dir(), self.options.port)
@@ -1318,12 +1434,14 @@ impl ReloadStrategy for BrowserSession {
             &serde_json::json!({ "url": url, "dir": server.root() }),
         );
         ui::success(format!("Serving at {}", style(&url).cyan().underlined()))?;
-        if self.options.open {
+        self.server = Some(server);
+        if self.agent.is_some() {
+            self.drive(&url)?;
+        } else if self.options.open {
             open_browser(&self.browser, &url)?;
         } else {
             ui::info(format!("Open {url} in {}", self.browser.name))?;
         }
-        self.server = Some(server);
         Ok(())
     }
 
