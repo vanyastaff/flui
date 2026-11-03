@@ -427,7 +427,8 @@ impl AndroidBuilder {
 /// The Gradle-less delivery: `aapt2` + `zipalign` + `apksigner` from the
 /// SDK's build-tools, see `android_package.rs`.
 impl AndroidBuilder {
-    /// What the crates linked for the ABIs built declare (ADR-0307).
+    /// What the crates linked for the ABIs built, with the features the build
+    /// turns on, declare (ADR-0307).
     fn declarations(&self, ctx: &BuilderContext) -> BuildResult<crate::declarations::Declarations> {
         let crate::build::platform::Platform::Android { targets } = &ctx.platform else {
             return Err(BuildError::InvalidPlatform {
@@ -435,7 +436,11 @@ impl AndroidBuilder {
             });
         };
         let triples: Vec<&str> = targets.iter().map(|abi| rust_target(abi)).collect();
-        crate::declarations::Declarations::collect(&self.workspace_root, &triples)
+        crate::declarations::Declarations::collect_with_features(
+            &self.workspace_root,
+            &triples,
+            &ctx.features,
+        )
     }
 
     /// Writes `platforms/android/app/src/main/AndroidManifest.xml`, which

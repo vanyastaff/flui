@@ -317,11 +317,30 @@ impl Declarations {
     /// The failure of `cargo metadata`, or [`BuildError::InvalidConfig`] for a
     /// crate whose declarations are malformed.
     pub(crate) fn collect(app_dir: &Path, targets: &[&str]) -> BuildResult<Self> {
+        Self::collect_with_features(app_dir, targets, &[])
+    }
+
+    /// [`Declarations::collect`] for a build that also turns on `features`
+    /// (each as `cargo --features` takes it, such as `flui/driver`): the
+    /// parts those features enable count.
+    ///
+    /// # Errors
+    ///
+    /// As [`Declarations::collect`].
+    pub(crate) fn collect_with_features(
+        app_dir: &Path,
+        targets: &[&str],
+        features: &[String],
+    ) -> BuildResult<Self> {
         let mut joined = Self::default();
         for target in targets {
+            let mut options = vec!["--filter-platform".to_owned(), (*target).to_owned()];
+            if !features.is_empty() {
+                options.extend(["--features".to_owned(), features.join(",")]);
+            }
             let metadata = cargo_metadata::MetadataCommand::new()
                 .current_dir(app_dir)
-                .other_options(vec!["--filter-platform".to_owned(), (*target).to_owned()])
+                .other_options(options)
                 .exec()
                 .map_err(|error| {
                     BuildError::Other(format!("cargo metadata for {target}: {error}"))
@@ -693,6 +712,46 @@ mod tests {
                 .any(|(permission, _)| permission == "android.permission.READ_CONTACTS"),
             "a dependency the target links contributes: {linux:?}"
         );
+    }
+
+    /// A feature the build turns on beyond the defaults, as `flui run --agent`
+    /// turns on `flui/driver`, brings in what it enables, named by the
+    /// application's feature or by the dependency's.
+    #[test]
+    fn the_features_a_build_turns_on_count() {
+        let project = fixture(&[
+            (
+                "app",
+                &manifest(
+                    "app",
+                    "[workspace]\n[features]\nextra = [\"lib/extra\"]\n\
+                     [dependencies]\nlib = { path = \"../lib\" }\n",
+                ),
+            ),
+            (
+                "lib",
+                &manifest(
+                    "lib",
+                    "[features]\nextra = []\n\
+                     [package.metadata.flui.declares]\nschema = 1\n\
+                     [package.metadata.flui.declares.features.extra.android]\n\
+                     permissions = [\"android.permission.INTERNET\"]\n",
+                ),
+            ),
+        ]);
+        let app = project.path().join("app");
+        let target = ["aarch64-linux-android"];
+        let internet = vec![(
+            "android.permission.INTERNET".to_owned(),
+            vec!["lib".to_owned()],
+        )];
+        let defaults = Declarations::collect(&app, &target).expect("declarations");
+        assert_eq!(permissions(&defaults), []);
+        for features in [["extra".to_owned()], ["lib/extra".to_owned()]] {
+            let on = Declarations::collect_with_features(&app, &target, &features)
+                .expect("declarations");
+            assert_eq!(permissions(&on), internet, "{features:?}");
+        }
     }
 
     /// Each crate's dex and Java sources reach the APK resolved under that
