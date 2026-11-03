@@ -21,6 +21,12 @@ use super::super::super::Disconnect;
 use super::super::launch::Launch;
 use super::{Conversation, Peer, converse};
 
+// A driver reads the export's shape from the protocol crate, and the page serves flui-native's.
+const _: () = assert!(
+    flui_native::page_export::PAGE_EXPORT_VERSION == flui_protocol::launch::PAGE_EXPORT_VERSION,
+    "the page export's version is the one the protocol tells drivers"
+);
+
 /// The export the launch named, and the service its connections hold conversations with.
 ///
 /// The export is the page's: it lives in a task of the page's executor, which drops it once

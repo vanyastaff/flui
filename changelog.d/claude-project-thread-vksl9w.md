@@ -111,6 +111,16 @@
   as `globalThis.__FLUI_LAUNCH__` (`flui_platform::PAGE_LAUNCH_GLOBAL`) as it starts, removes
   it, and answers `Platform::launch_value` from its copy; a malformed object fails the start.
   `LaunchKey::is_spelling` checks a key read at run time.
+- **`flui run --agent` in a browser** (`--device browser:chrome`, `firefox`, `edge`, `chromium`,
+  `brave`, `opera`): the run starts the browser with its remote protocol on and a profile of its
+  own, installs the launch in each top-level document before the app's module runs, and carries
+  every `flui mcp` connection to the session's usual local endpoint on to a connection of the
+  page's; a reload ends them, and the client connects again. Firefox is driven over WebDriver
+  BiDi and the Chromium family over the DevTools protocol, with no driver binary. `--headless`
+  runs the browser without a window; Safari is refused (`docs/gaps.md` entry 42).
+  `run.agent.ready` carries `relayed` in a browser.
+- **`flui_protocol::launch::PAGE_LAUNCH_GLOBAL` and `PAGE_EXPORT_VERSION`**: the global a
+  driver installs a page's launch under, and the version of the export it connects through.
 
 ### Removed
 

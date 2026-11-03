@@ -98,6 +98,11 @@ which = { workspace = true }
 getrandom = { workspace = true }
 interprocess = { workspace = true }
 flui-protocol = { workspace = true, features = ["serde"] }
+# `flui run --agent` in a browser: the WebSocket the browser's own remote
+# protocol (WebDriver BiDi in Firefox, the DevTools protocol in Chromium) is
+# spoken over. A loopback `ws://` connection to a browser this command
+# started, so the client handshake alone: no TLS.
+tungstenite = { version = "0.30", default-features = false, features = ["handshake"] }
 
 # Terminal drawing (`ui.rs`) and the prompts of `flui create` / `platform
 # remove`. `console` alone draws the bar, the glyphs and the spinner;
@@ -115,15 +120,22 @@ roxmltree = { workspace = true }
 # Terminal mode for `flui run`'s hot-keys (see commands/run.rs `raw_mode`):
 # canonical mode and echo off for the session, restored on every exit path.
 # `rustix` gives safe termios wrappers, so the CLI stays free of `unsafe` on
-# Unix.
+# Unix, and the effective user, as root runs Chromium only without its sandbox.
 [target.'cfg(unix)'.dependencies]
-rustix = { version = "1.1", default-features = false, features = ["std", "termios", "stdio"] }
+rustix = { version = "1.1", default-features = false, features = [
+    "std",
+    "termios",
+    "stdio",
+    "process",
+] }
 
 # `SetHandleInformation`: the CLI's own stdio handles are made
 # non-inheritable at startup (see `proc::keep_own_stdio_private`), the one
-# `unsafe` call in the crate; std has no safe way to do it.
+# `unsafe` call in the crate; std has no safe way to do it. `widestring` spells
+# the DACL of the pipe `flui run --agent` serves a page's app on.
 [target.'cfg(windows)'.dependencies]
 windows = { workspace = true, features = ["Win32_Foundation"] }
+widestring = { workspace = true }
 
 [dev-dependencies]
 assert_cmd = "2.0"

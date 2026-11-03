@@ -18,6 +18,7 @@
 //! the wire types are `flui-protocol`'s, the contract crate the app's server
 //! reads too.
 
+pub(crate) mod browser;
 pub(crate) mod client;
 pub(crate) mod forward;
 pub(crate) mod mcp;
@@ -160,7 +161,8 @@ pub(crate) fn target_dir_override() -> Option<PathBuf> {
 pub(crate) struct Session {
     credentials: Credentials,
     /// The address the app binds: the endpoint of [`Self::credentials`] on
-    /// the desktop, `@name` for an Android app's abstract socket.
+    /// the desktop, `@name` for an Android app's abstract socket, the global
+    /// a page's app defines its export as.
     app_endpoint: String,
     /// What keeps the endpoint; removed on drop.
     _held: Held,
@@ -243,6 +245,20 @@ impl Session {
         })
     }
 
+    /// A new session for an app in a page this command's browser loads: the app defines its
+    /// export as the global `export`, and this command serves a fresh local endpoint that
+    /// carries each connection there ([`browser::relay`]). The rest is [`Self::create`]'s.
+    pub(crate) fn create_relayed(
+        start: &Path,
+        workspace_root: Option<&Path>,
+        target_dir: Option<&Path>,
+        export: &str,
+    ) -> CliResult<Self> {
+        let mut session = Self::create(start, workspace_root, target_dir)?;
+        export.clone_into(&mut session.app_endpoint);
+        Ok(session)
+    }
+
     /// Building with `feature` (`<key>/`[`DRIVER_FEATURE`], by the key the
     /// application names the crate under), for a profile without debug assertions.
     pub(crate) fn with_driver_feature(mut self, feature: String) -> Self {
@@ -255,7 +271,8 @@ impl Session {
     }
 
     /// The address the app binds: a pipe name or a socket path on the
-    /// desktop, `@name` for an Android app's abstract socket.
+    /// desktop, `@name` for an Android app's abstract socket, a global
+    /// in a page.
     pub(crate) fn app_endpoint(&self) -> &str {
         &self.app_endpoint
     }
@@ -303,9 +320,18 @@ impl Session {
     )]
     pub(crate) fn clear_endpoint(&self) {
         #[cfg(unix)]
-        if matches!(self.credentials.endpoint, Endpoint::Local(_)) {
-            let _ = fs::remove_file(&self.app_endpoint);
+        if let Endpoint::Local(address) = &self.credentials.endpoint {
+            let _ = fs::remove_file(address);
         }
+    }
+
+    /// The launch values a page's app is given in its launch object: the global it defines its
+    /// export as, and the token.
+    pub(crate) fn page_launch(&self) -> [(&str, &str); 2] {
+        [
+            (ENDPOINT_EXTRA, &self.app_endpoint),
+            (TOKEN_EXTRA, &self.credentials.token),
+        ]
     }
 }
 
