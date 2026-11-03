@@ -567,3 +567,35 @@ pub(crate) fn reorderable_grid() {
         },
     ));
 }
+
+/// A dragged tile's gap moves in reading order: the tiles between make room,
+/// the tile at a row's start sliding up to the end of the row above over
+/// 250 ms, and a drop puts the tile where its gap was.
+pub(crate) fn a_dragged_tile_makes_room_across_the_rows() {
+    let board = Board::numbered(8);
+    let mut laid = board.mount();
+    let four = |laid: &LaidOut| laid.absolute_offset(laid.find_text("4").expect("tile 4"));
+    let from = four(&laid);
+    let (start, target) = (tile_at(0, 4, HANDLE_Y), tile_at(5, 4, CONTENT_Y));
+    laid.dispatch_pointer_down(start.0, start.1);
+    laid.dispatch_pointer_move(start.0 + 14.0, start.1 + 14.0);
+    laid.dispatch_pointer_move(target.0, target.1);
+    laid.pump();
+    laid.pump_for(Duration::from_millis(16));
+    laid.pump_for(Duration::from_millis(125));
+    let mid = four(&laid);
+    settle(&mut laid);
+    let to = four(&laid);
+    assert_eq!(
+        to,
+        from + Offset::new(3.0 * TILE, -TILE),
+        "to the end of the row above"
+    );
+    assert!(
+        mid.dx > from.dx && mid.dx < to.dx && mid.dy < from.dy && mid.dy > to.dy,
+        "on its way: {mid:?} from {from:?} to {to:?}"
+    );
+    laid.dispatch_pointer_up(target.0, target.1);
+    settle(&mut laid);
+    assert_eq!(board.moves(), [(0, 5, ReorderCause::Drag)]);
+}
