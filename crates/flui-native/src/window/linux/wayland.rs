@@ -1400,9 +1400,9 @@ mod toplevel {
     use crate::owner::linux::PortalSlot;
     use crate::owner::linux::wayland::activation::ActivationToken;
     use crate::owner::linux::wayland::{
-        LastInput, LiveOutputs, LoopWaker, LoopWindow, OutputFacts, OutputName, PresentationTime,
-        SeatWindow, WaylandDisplays, WaylandInput, WaylandLoop, WaylandState, WindowSeed,
-        WindowTable,
+        DragWindow, LastInput, LiveOutputs, LoopWaker, LoopWindow, OutputFacts, OutputName,
+        PresentationTime, SeatWindow, WaylandDisplays, WaylandDrag, WaylandInput, WaylandLoop,
+        WaylandState, WindowSeed, WindowTable,
     };
     use crate::owner::window_delivery::{Publication, Retirement, WindowDelivery};
     use crate::text::WindowTextInput;
@@ -1676,6 +1676,8 @@ mod toplevel {
         live: LiveOutputs,
         /// The seats' input, which the window joined as it opened.
         input: Arc<dyn WaylandInput>,
+        /// Drag and drop, which the window joined as it opened.
+        drag: Arc<dyn WaylandDrag>,
         applied: RefCell<Applied>,
         closed: Cell<bool>,
         /// Whether the accessibility bridge was last told the window is the
@@ -1796,6 +1798,7 @@ mod toplevel {
                 notices,
                 frames,
                 input,
+                drag,
                 executor,
             } = owner.seed()?;
             let record = Arc::new(ToplevelRecord::new());
@@ -1936,6 +1939,7 @@ mod toplevel {
                 table,
                 waker,
                 input,
+                drag,
                 applied: RefCell::new(applied),
                 closed: Cell::new(false),
                 bridge_focus: Cell::new(false),
@@ -1946,6 +1950,11 @@ mod toplevel {
             // hears its snapshot, and its input from the compositor's first
             // event.
             let state = Arc::downgrade(&window.state);
+            window.drag.attach(DragWindow {
+                id,
+                surface: window.surface.0.clone(),
+                delivery: Arc::clone(&window.delivery),
+            });
             window.input.attach(SeatWindow {
                 id,
                 surface: window.surface.0.clone(),
@@ -2432,6 +2441,7 @@ mod toplevel {
         /// go of the handler, then destroy the role objects.
         fn retire(&self) {
             self.input.detach(self.id);
+            self.drag.detach(self.id);
             if let Some(client_frame) = self.client_frame.borrow_mut().take() {
                 client_frame.destroy();
             }

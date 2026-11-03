@@ -3,7 +3,7 @@
 use std::fmt;
 
 use flui_view::prelude::StatelessView;
-use flui_view::{BuildContext, IntoView};
+use flui_view::{BuildContext, CreationSite, IntoView};
 
 use crate::flex::Expanded;
 use crate::layout::SizedBox;
@@ -21,18 +21,26 @@ use crate::layout::SizedBox;
 #[derive(Clone, StatelessView)]
 pub struct Spacer {
     flex: i32,
+    #[view(site)]
+    site: CreationSite,
 }
 
 impl Default for Spacer {
     fn default() -> Self {
-        Self { flex: 1 }
+        // A trait fn cannot be `#[track_caller]`: the site is this line.
+        Self::at(CreationSite::here())
     }
 }
 
 impl Spacer {
+    fn at(site: CreationSite) -> Self {
+        Self { flex: 1, site }
+    }
+
     /// A spacer with flex factor `1`.
+    #[track_caller]
     pub fn new() -> Self {
-        Self::default()
+        Self::at(CreationSite::here())
     }
 
     /// Set the flex factor — this spacer's share of the remaining main-axis
@@ -46,7 +54,9 @@ impl Spacer {
 
 impl fmt::Debug for Spacer {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Spacer").field("flex", &self.flex).finish()
+        f.debug_struct("Spacer")
+            .field("flex", &self.flex)
+            .finish_non_exhaustive()
     }
 }
 

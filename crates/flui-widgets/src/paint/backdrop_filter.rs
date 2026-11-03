@@ -7,8 +7,8 @@ use flui_rendering::layer::BackdropGroupKey;
 use flui_rendering::protocol::BoxProtocol;
 use flui_view::prelude::{BuildContext, BuildContextExt, StatefulView, StatelessView, ViewState};
 use flui_view::{
-    BoxedView, Child, InheritedView, IntoView, RenderView, View, ViewExt, impl_inherited_view,
-    impl_render_view,
+    BoxedView, Child, CreationSite, InheritedView, IntoView, RenderView, View, ViewExt,
+    impl_inherited_view, impl_render_view,
 };
 
 /// Filters whatever is already painted behind its child — a frosted-glass
@@ -24,10 +24,13 @@ pub struct BackdropFilter {
     enabled: bool,
     grouped: bool,
     child: Child,
+    #[view(site)]
+    site: CreationSite,
 }
 
 impl BackdropFilter {
     /// Filters the backdrop with `filter`, composited with `SrcOver`.
+    #[track_caller]
     pub fn new(filter: ImageFilter) -> Self {
         Self {
             filter,
@@ -35,6 +38,7 @@ impl BackdropFilter {
             enabled: true,
             grouped: false,
             child: Child::empty(),
+            site: CreationSite::here(),
         }
     }
 
@@ -135,13 +139,17 @@ impl_render_view!(RawBackdropFilter);
 #[derive(Clone, Debug, StatefulView)]
 pub struct BackdropGroup {
     child: BoxedView,
+    #[view(site)]
+    site: CreationSite,
 }
 
 impl BackdropGroup {
     /// Groups the backdrop filters in `child`.
+    #[track_caller]
     pub fn new(child: impl IntoView) -> Self {
         Self {
             child: child.into_view().boxed(),
+            site: CreationSite::here(),
         }
     }
 

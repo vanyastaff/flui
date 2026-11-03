@@ -741,13 +741,13 @@ futures-lite = "2.6"
 # which no other crate of the tree speaks.
 wayland-protocols-misc = { version = "0.3", features = ["client"] }
 
-# Main-thread winit ownership plus one private D-Bus service per process.
+# The native X11 host on the harness's X server plus one private D-Bus service per process.
 # libtest-mimic supplies the Cargo/nextest protocol without a custom parser.
 [[test]]
 name = "linux_preferences"
 path = "tests/linux_preferences.rs"
 harness = false
-required-features = ["winit-backend"]
+required-features = ["x11"]
 
 # An OS extension on another host's windows, the winit host's among them: its
 # own harness, because winit builds its event loop on the main thread only.
@@ -792,6 +792,12 @@ required-features = ["wayland"]
 [[test]]
 name = "wayland_primary_selection"
 path = "tests/wayland_primary_selection.rs"
+harness = false
+required-features = ["wayland"]
+
+[[test]]
+name = "wayland_drag"
+path = "tests/wayland_drag.rs"
 harness = false
 required-features = ["wayland"]
 

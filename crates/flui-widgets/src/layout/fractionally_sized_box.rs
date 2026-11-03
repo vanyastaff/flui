@@ -4,25 +4,33 @@
 use flui_objects::{FractionFactor, RenderFractionallySizedBox};
 use flui_painting::Alignment;
 use flui_rendering::protocol::BoxProtocol;
-use flui_view::{Child, IntoView, RenderView, impl_render_view};
+use flui_view::{Child, CreationSite, IntoView, RenderView, impl_render_view};
 
 /// Sizes its child to a fraction of the available space along each axis.
 ///
 /// Backed by `RenderFractionallySizedBox`. A `None` factor leaves that axis at the
 /// incoming constraint; factors must be finite and `>= 0`. Defaults to
 /// `Alignment::CENTER`.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct FractionallySizedBox {
     width_factor: Option<f64>,
     height_factor: Option<f64>,
     alignment: Option<Alignment>,
     child: Child,
+    site: CreationSite,
 }
 
 impl FractionallySizedBox {
     /// An empty `FractionallySizedBox`; set factors with the builders below.
+    #[track_caller]
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            width_factor: None,
+            height_factor: None,
+            alignment: None,
+            child: Child::empty(),
+            site: CreationSite::here(),
+        }
     }
 
     /// Size the child's width to `factor` × the available width.
@@ -72,6 +80,13 @@ impl FractionallySizedBox {
     }
 }
 
+impl Default for FractionallySizedBox {
+    fn default() -> Self {
+        // A trait fn cannot be `#[track_caller]`: the site is this line.
+        Self::new()
+    }
+}
+
 impl RenderView for FractionallySizedBox {
     type Protocol = BoxProtocol;
     type RenderObject = RenderFractionallySizedBox;
@@ -98,4 +113,4 @@ impl RenderView for FractionallySizedBox {
     flui_view::single_child_view_children!();
 }
 
-impl_render_view!(FractionallySizedBox);
+impl_render_view!(FractionallySizedBox, site = site);

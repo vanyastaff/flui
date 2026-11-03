@@ -5,7 +5,7 @@ use flui_painting::styling::Color;
 use flui_painting::typography::{FontVariation, TextStyle};
 use flui_rendering::protocol::BoxProtocol;
 use flui_view::prelude::StatelessView;
-use flui_view::{BuildContext, IntoView, RenderView, ViewExt, impl_render_view};
+use flui_view::{BuildContext, CreationSite, IntoView, RenderView, ViewExt, impl_render_view};
 
 use crate::icon::symbol_effect::{ContentKey, SymbolEffectHost};
 use crate::icon::{IconData, IconTheme, IconThemeData, SymbolEffect};
@@ -44,30 +44,52 @@ use crate::{MediaQuery, Semantics};
 /// - **`IconThemeData::opacity`** folding into the resolved color.
 /// - Font weight, blend mode, and per-call shadow/text-direction
 ///   overrides are not supported yet.
-#[derive(Clone, Debug, Default, StatelessView)]
+#[derive(Clone, Debug, StatelessView)]
 pub struct Icon {
     data: Option<IconData>,
     size: Option<f64>,
     color: Option<Color>,
     semantic_label: Option<String>,
     effect: Option<SymbolEffect>,
+    #[view(site)]
+    site: CreationSite,
+}
+
+impl Default for Icon {
+    fn default() -> Self {
+        // A trait fn cannot be `#[track_caller]`: the site is this line.
+        Self::empty(CreationSite::here())
+    }
 }
 
 impl Icon {
+    fn empty(site: CreationSite) -> Self {
+        Self {
+            data: None,
+            size: None,
+            color: None,
+            semantic_label: None,
+            effect: None,
+            site,
+        }
+    }
+
     /// An icon drawing the glyph described by `data`.
     #[must_use]
+    #[track_caller]
     pub fn new(data: IconData) -> Self {
         Self {
             data: Some(data),
-            ..Self::default()
+            ..Self::empty(CreationSite::here())
         }
     }
 
     /// An icon with no glyph: reserves an empty `size × size` square and
     /// draws nothing.
     #[must_use]
+    #[track_caller]
     pub fn none() -> Self {
-        Self::default()
+        Self::empty(CreationSite::here())
     }
 
     /// Override the icon's side length in logical pixels. Defaults to the

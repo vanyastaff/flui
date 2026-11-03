@@ -7,8 +7,8 @@ use flui_objects::{RenderWrap, WrapAlignment, WrapCrossAlignment};
 use flui_painting::paint::Clip;
 use flui_painting::typography::TextDirection;
 use flui_rendering::protocol::BoxProtocol;
-use flui_view::BoxedView;
 use flui_view::seq::ViewSeq;
+use flui_view::{BoxedView, CreationSite};
 
 use crate::Directionality;
 use crate::support::generic_render_view_element;
@@ -56,11 +56,13 @@ pub struct Wrap<C = Vec<BoxedView>> {
     cross_axis_alignment: WrapCrossAlignment,
     clip_behavior: Clip,
     children: C,
+    site: CreationSite,
 }
 
 impl<C> Wrap<C> {
     /// Creates a horizontal `Wrap` with all alignments defaulting to
     /// [`WrapAlignment::Start`] and zero spacing.
+    #[track_caller]
     pub fn new(children: C) -> Self {
         Self {
             direction: Axis::Horizontal,
@@ -71,6 +73,7 @@ impl<C> Wrap<C> {
             cross_axis_alignment: WrapCrossAlignment::Start,
             clip_behavior: Clip::None,
             children,
+            site: CreationSite::here(),
         }
     }
 
@@ -151,7 +154,7 @@ impl<C: ViewSeq> fmt::Debug for Wrap<C> {
             .field("cross_axis_alignment", &self.cross_axis_alignment)
             .field("clip_behavior", &self.clip_behavior)
             .field("children", &self.children.len())
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -161,6 +164,10 @@ where
 {
     fn create_element(&self) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::stateless(self)
+    }
+
+    fn creation_site(&self) -> flui_view::CreationSite {
+        self.site
     }
 }
 

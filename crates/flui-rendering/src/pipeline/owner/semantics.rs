@@ -1582,20 +1582,53 @@ fn plan_graft_pass(
     // own anchor would sit above it and swallow this one), which is what
     // makes the recomputed context and the "nothing above changes" argument
     // in the module doc hold.
-    let survivors = anchors.iter().copied().filter(|&anchor| {
-        let mut cursor = tree.parent(anchor);
-        while let Some(ancestor) = cursor {
-            if anchors.contains(&ancestor) {
-                return false;
+    let mut survivors: Vec<(Vec<usize>, RenderId)> = anchors
+        .iter()
+        .copied()
+        .filter(|&anchor| {
+            let mut cursor = tree.parent(anchor);
+            while let Some(ancestor) = cursor {
+                if anchors.contains(&ancestor) {
+                    return false;
+                }
+                cursor = tree.parent(ancestor);
             }
-            cursor = tree.parent(ancestor);
-        }
-        true
-    });
+            true
+        })
+        .map(|anchor| (preorder_path(tree, anchor), anchor))
+        .collect();
+
+    // Assemble the survivors in render preorder, the order the full walk
+    // visits them in. The set above iterates in hash order, and the plan
+    // records refusals (last one wins) and action handlers in visit order,
+    // so a hash order would make a graft name a different host than a
+    // rebuild of the same tree.
+    survivors.sort_unstable_by(|(left, _), (right, _)| left.cmp(right));
 
     survivors
-        .map(|anchor| plan_graft_anchor(tree, pipeline_root, owner, anchor, regions))
+        .into_iter()
+        .map(|(_, anchor)| plan_graft_anchor(tree, pipeline_root, owner, anchor, regions))
         .collect()
+}
+
+/// `id`'s position in render preorder, as its child index at each level from
+/// the root down: comparing two paths lexicographically orders the nodes as a
+/// preorder walk visits them. Survivors never contain one another, so no path
+/// is a prefix of another's.
+fn preorder_path(tree: &RenderTree, id: RenderId) -> Vec<usize> {
+    let mut path = Vec::new();
+    let mut cursor = id;
+    while let Some(parent) = tree.parent(cursor) {
+        let index = tree
+            .children(parent)
+            .iter()
+            .position(|&child| child == cursor)
+            .expect("BUG: a node is among its parent's children");
+        path.push(index);
+        cursor = parent;
+    }
+    path.reverse();
+    path
 }
 
 /// The nearest ancestor of `mark` (strictly above it) that is unmarked and
