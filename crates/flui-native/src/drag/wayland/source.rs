@@ -10,7 +10,7 @@
 //! icon and ends it on Escape.
 //!
 //! The source's events reach [`Sources`] through its dispatch, which records
-//! them, and [`super::SeatDrag::deliver`] handles them on the loop's turn,
+//! them, and [`SeatDrag::deliver`](super::WaylandDrag::deliver) handles them on the loop's turn,
 //! with no cell borrowed:
 //!
 //! - **`send`** asks for a type into a pipe: the provider serves the
