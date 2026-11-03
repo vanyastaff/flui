@@ -7,8 +7,8 @@ use flui_objects::RenderListBody;
 use flui_painting::typography::TextDirection;
 use flui_rendering::constraints::AxisDirection;
 use flui_rendering::protocol::BoxProtocol;
-use flui_view::BoxedView;
 use flui_view::seq::ViewSeq;
+use flui_view::{BoxedView, CreationSite};
 
 use crate::localization::Directionality;
 use crate::support::generic_render_view_element;
@@ -38,15 +38,18 @@ pub struct ListBody<C = Vec<BoxedView>> {
     main_axis: Axis,
     reverse: bool,
     children: C,
+    site: CreationSite,
 }
 
 impl<C> ListBody<C> {
     /// Creates a vertical top-to-bottom list body with the given children.
+    #[track_caller]
     pub fn new(children: C) -> Self {
         Self {
             main_axis: Axis::Vertical,
             reverse: false,
             children,
+            site: CreationSite::here(),
         }
     }
 
@@ -87,7 +90,7 @@ impl<C: ViewSeq> fmt::Debug for ListBody<C> {
             .field("main_axis", &self.main_axis)
             .field("reverse", &self.reverse)
             .field("children", &self.children.len())
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -97,6 +100,10 @@ where
 {
     fn create_element(&self) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::stateless(self)
+    }
+
+    fn creation_site(&self) -> CreationSite {
+        self.site
     }
 }
 

@@ -24,8 +24,10 @@
 use std::any::{Any, TypeId};
 use std::cell::Cell;
 use std::fmt;
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::mpsc::SyncSender;
 use std::sync::{Arc, Weak};
+use std::task::Waker;
 use std::time::Duration;
 
 use flui_protocol::method::WindowMethod;
@@ -144,11 +146,18 @@ impl fmt::Debug for WindowCall {
 /// Where the owner sends one call's answer. `Clone`, so an owner that keeps
 /// a request can still answer it if serving it panics; the first answer
 /// sent is the one taken.
+///
+/// Sending wakes the waker the asker registered, and so does the last clone
+/// going unsent, which the answer reads as the owner gone. A waker is
+/// `Send + Sync` and cannot reach the owner's state, so it may run while the
+/// owner holds that state borrowed; its panic is contained (see [`WakeSlot`]).
 pub struct Reply<T> {
     tx: SyncSender<Result<T, ErrorObject>>,
     /// The asker's answer holds the other end: once it is dropped nobody
     /// takes the answer.
     asker: Weak<()>,
+    /// Shared by every clone: woken on a send, and when the last clone drops.
+    wake: Arc<WakeOnDrop>,
 }
 
 impl<T> Clone for Reply<T> {
@@ -156,6 +165,7 @@ impl<T> Clone for Reply<T> {
         Self {
             tx: self.tx.clone(),
             asker: Weak::clone(&self.asker),
+            wake: Arc::clone(&self.wake),
         }
     }
 }
@@ -164,7 +174,11 @@ impl<T> Reply<T> {
     /// Send the answer. `false` when nobody takes it: the asker dropped its
     /// answer, or an answer was sent already. The value is then dropped here.
     pub fn send(&self, answer: Result<T, ErrorObject>) -> bool {
-        self.tx.try_send(answer).is_ok()
+        let sent = self.tx.try_send(answer).is_ok();
+        if sent {
+            self.wake.0.wake();
+        }
+        sent
     }
 
     /// Whether anyone can still take the answer.
@@ -182,16 +196,79 @@ impl<T> fmt::Debug for Reply<T> {
     }
 }
 
+/// Wakes its slot when the last reply that shares it drops: the answer can
+/// be taken then, as the owner gone if nothing was sent.
+struct WakeOnDrop(Arc<WakeSlot>);
+
+impl Drop for WakeOnDrop {
+    fn drop(&mut self) {
+        self.0.wake();
+    }
+}
+
+/// The one waker an answer or a stream wakes when it can be read: the last
+/// registered, woken once, and registered again by whoever wants the next
+/// wake. No lock is held while a waker is cloned, woken or dropped.
+#[derive(Default)]
+pub struct WakeSlot(parking_lot::Mutex<Option<Waker>>);
+
+impl WakeSlot {
+    /// Keep `waker` for the next wake, in place of the one kept before.
+    pub fn register(&self, waker: &Waker) {
+        let kept = self
+            .0
+            .lock()
+            .as_ref()
+            .is_some_and(|held| held.will_wake(waker));
+        if kept {
+            return;
+        }
+        let candidate = waker.clone();
+        let displaced = self.0.lock().replace(candidate);
+        drop(displaced);
+    }
+
+    /// Wake the kept waker, if any. A waker that panics is contained and
+    /// reported, never resumed into the owner that woke it: what it announces
+    /// is already in place, and an agent's failure does not fail the app it
+    /// serves (ADR-0288 §3).
+    pub fn wake(&self) {
+        let woken = self.0.lock().take();
+        if let Some(waker) = woken
+            && let Err(payload) = catch_unwind(AssertUnwindSafe(|| waker.wake()))
+        {
+            let reported = catch_unwind(AssertUnwindSafe(|| {
+                tracing::error!(
+                    panic = flui_foundation::panic::payload_text(payload.as_ref()),
+                    "a development agent's waker panicked; its answer or event stays readable"
+                );
+            }));
+            if let Err(second) = reported {
+                flui_foundation::panic::discard_payload(second);
+            }
+            flui_foundation::panic::discard_payload(payload);
+        }
+    }
+}
+
+impl fmt::Debug for WakeSlot {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("WakeSlot").finish_non_exhaustive()
+    }
+}
+
 /// A reply and the answer it fills, for a request the runtime answers that
 /// is not a window method (a subscription).
 pub fn reply_pair<T>() -> (Reply<T>, AgentAnswer<T>) {
     let (tx, rx) = std::sync::mpsc::sync_channel(1);
     let asker = Arc::new(());
+    let wake = Arc::new(WakeSlot::default());
     let reply = Reply {
         tx,
         asker: Arc::downgrade(&asker),
+        wake: Arc::new(WakeOnDrop(Arc::clone(&wake))),
     };
-    (reply, AgentAnswer::new(rx, asker))
+    (reply, AgentAnswer::new(rx, asker, wake))
 }
 
 /// The queue behind an [`AgentEvents`], which the runtime fills.
@@ -204,6 +281,9 @@ pub trait EventSource: Send {
 
     /// Whether the stream ended and every event it queued was taken.
     fn is_finished(&self) -> bool;
+
+    /// Wake `waker` once an event is queued or the stream ends (see [`WakeSlot`]).
+    fn register(&mut self, waker: &Waker);
 }
 
 /// Wraps a runtime's queue as the [`AgentEvents`] a hook receives.

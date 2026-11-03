@@ -144,10 +144,15 @@ the dispatch layer moves there too.
   (`flui_protocol::launch`); with none, nothing is created. Each hook has a
   host of its own, so one that panics is dropped alone and the others keep
   being served (`every_installed_hook_is_attached_and_one_that_panics_is_dropped_alone`).
-  The agent serves the current protocol, and every older one no break separates
-  from it, over a current-user named pipe or a Unix socket
-  in a `0700` directory; every operation goes through the window's owner inbox
-  and waits a bounded time, and a full connection answers `busy`. Under
+  The conversation is `flui_runtime::agent`'s (ADR-0288); `flui-app` keeps the
+  launch and the desktop transport, a current-user named pipe or a Unix socket
+  in a `0700` directory. The acceptor blocks in `accept`, and each
+  connection's thread parks until the session's waker or deadline wakes it:
+  on Unix a reader thread blocks on the socket and a stop shuts it down; a
+  Windows pipe takes no timeout, so its connection looks for input every
+  10 ms while nothing else wakes it. No thread waits on an answer. An app
+  launched without an endpoint runs no agent thread
+  (`an_app_launched_without_an_endpoint_starts_no_agent`). Under
   `EXIT_ON_DISCONNECT` the first connection past its hello is the driver: when
   it closes, the loop quits past every close guard and the process exits with
   `EXIT_DISCONNECTED` after the teardown; the agent detaching asks no exit.

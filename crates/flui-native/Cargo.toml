@@ -796,6 +796,12 @@ harness = false
 required-features = ["wayland"]
 
 [[test]]
+name = "wayland_drag"
+path = "tests/wayland_drag.rs"
+harness = false
+required-features = ["wayland"]
+
+[[test]]
 name = "wayland_text_input"
 path = "tests/wayland_text_input.rs"
 harness = false

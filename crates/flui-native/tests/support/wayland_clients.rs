@@ -56,6 +56,8 @@ impl Answers {
 pub(crate) struct Client {
     pub(crate) platform: Rc<WaylandPlatform>,
     pub(crate) window: Rc<dyn HostWindow>,
+    /// What its window heard.
+    pub(crate) handler: Rc<RecordingWindowHandler>,
     answers: Answers,
 }
 
@@ -65,15 +67,17 @@ impl Client {
     pub(crate) fn open(title: &str) -> Self {
         let platform =
             Rc::new(WaylandPlatform::try_new().expect("the harness's compositor answers"));
+        let handler = RecordingWindowHandler::new();
         let window = platform
             .open_window(
                 WindowOptions::default().with_title(title),
-                RecordingWindowHandler::new() as _,
+                Rc::clone(&handler) as _,
             )
             .expect("a Wayland window opens");
         let client = Self {
             platform,
             window,
+            handler,
             answers: Answers::new(),
         };
         client.until("its window to have the keyboard", || {
@@ -101,7 +105,11 @@ impl Client {
             if done() {
                 return;
             }
-            assert!(Instant::now() < deadline, "timed out waiting for {what}");
+            assert!(
+                Instant::now() < deadline,
+                "timed out waiting for {what}; the window heard {:?}",
+                self.handler.inputs()
+            );
         }
     }
 

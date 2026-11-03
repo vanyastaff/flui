@@ -50,6 +50,7 @@ use x11rb::{COPY_FROM_PARENT, CURRENT_TIME, NONE};
 
 use super::model::{self, Reply};
 use super::{Atoms, X11Drag};
+use crate::drag::offers::bytes_of;
 use crate::owner::linux::x11::WindowRef;
 use crate::owner::panic_boundary::contain_owner_callback;
 
@@ -1027,7 +1028,7 @@ impl X11Drag {
             contain_owner_callback(|| drop(provider));
         }
         match served? {
-            Ok(payload) => Some(model::bytes_of(payload)),
+            Ok(payload) => Some(bytes_of(payload)),
             Err(error) => {
                 tracing::debug!(%error, "a drag's provider refused a conversion");
                 None

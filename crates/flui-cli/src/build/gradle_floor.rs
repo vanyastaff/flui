@@ -1,8 +1,10 @@
-//! The Android floor in a Gradle project (ADR-0244 §10): `flui.toml` states
-//! it, `flui build` writes it into `gradle.properties` as `flui.minSdk`, and
-//! the scaffolded `app/build.gradle.kts` reads that property. A literal
-//! `minSdk` in the build script that differs would be a second place the
-//! floor is stated, so the build refuses it.
+//! The Android API levels in a Gradle project. The floor (ADR-0244 §10):
+//! `flui.toml` states it, `flui build` writes it into `gradle.properties` as
+//! `flui.minSdk`, and the scaffolded `app/build.gradle.kts` reads that
+//! property. A literal `minSdk` in the build script that differs would be a
+//! second place the floor is stated, so the build refuses it. The `targetSdk`
+//! (ADR-0255 decision 7) is FLUI's, written as `flui.targetSdk` beside it, and
+//! the scaffolded script reads it as its `targetSdk` and `compileSdk`.
 
 use std::path::Path;
 
@@ -10,11 +12,14 @@ use crate::build::error::{BuildError, BuildResult};
 
 /// The property the scaffolded `app/build.gradle.kts` reads its `minSdk` from.
 const PROPERTY: &str = "flui.minSdk";
+/// The property the scaffolded `app/build.gradle.kts` reads its `targetSdk`
+/// and `compileSdk` from.
+const TARGET_PROPERTY: &str = "flui.targetSdk";
 
-/// Writes `api` into the project's `gradle.properties` and refuses a `minSdk`
-/// in `app/build.gradle.kts` that neither reads that property nor states
-/// `api` itself.
-pub(crate) fn state_min_sdk(android_dir: &Path, api: u32) -> BuildResult<()> {
+/// Writes `api` and `target` into the project's `gradle.properties` and
+/// refuses a `minSdk` in `app/build.gradle.kts` that neither reads that
+/// property nor states `api` itself.
+pub(crate) fn state_sdk_levels(android_dir: &Path, api: u32, target: u32) -> BuildResult<()> {
     let script = android_dir.join("app").join("build.gradle.kts");
     let text = std::fs::read_to_string(&script).unwrap_or_default();
     let refused = min_sdk_assignments(&text)
@@ -41,40 +46,40 @@ pub(crate) fn state_min_sdk(android_dir: &Path, api: u32) -> BuildResult<()> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
         Err(error) => return Err(error.into()),
     };
-    let restated = restate(&text, api);
+    let restated = restate(&restate(&text, PROPERTY, api), TARGET_PROPERTY, target);
     if restated != text {
         std::fs::write(&properties, restated)?;
     }
     Ok(())
 }
 
-/// `text` (a `gradle.properties`) stating `flui.minSdk=api`: the existing
+/// `text` (a `gradle.properties`) stating `property=value`: the existing
 /// line replaced, or one appended.
-fn restate(text: &str, api: u32) -> String {
+fn restate(text: &str, property: &str, value: u32) -> String {
     let mut found = false;
     let mut lines: Vec<String> = text
         .lines()
         .map(|line| {
-            if property_value(line).is_some() {
+            if states(line, property) {
                 found = true;
-                format!("{PROPERTY}={api}")
+                format!("{property}={value}")
             } else {
                 line.to_owned()
             }
         })
         .collect();
     if !found {
-        lines.push(format!("{PROPERTY}={api}"));
+        lines.push(format!("{property}={value}"));
     }
     let mut restated = lines.join("\n");
     restated.push('\n');
     restated
 }
 
-/// The value of a `flui.minSdk` line, `None` for any other line.
-fn property_value(line: &str) -> Option<&str> {
-    let (key, value) = line.split_once('=')?;
-    (key.trim() == PROPERTY).then(|| value.trim())
+/// Whether `line` assigns `property`.
+fn states(line: &str, property: &str) -> bool {
+    line.split_once('=')
+        .is_some_and(|(key, _)| key.trim() == property)
 }
 
 /// What a Gradle build script's `minSdk` assignment states.
@@ -221,27 +226,35 @@ fn without_comments(script: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{MinSdk, min_sdk_assignments, restate};
+    use super::{MinSdk, PROPERTY, TARGET_PROPERTY, min_sdk_assignments, restate};
 
-    /// `flui.minSdk` is replaced or appended, other lines kept; a `minSdk`
-    /// assignment reads as a literal (its comment dropped), the property, or
-    /// an expression the build cannot verify.
+    /// `flui.minSdk` and `flui.targetSdk` are each replaced or appended, other
+    /// lines kept, one never taken for the other; a `minSdk` assignment reads
+    /// as a literal (its comment dropped), the property, or an expression the
+    /// build cannot verify.
     #[test]
     fn gradle_states_the_floor_once() {
         let mut failures = Vec::new();
         for (text, expected) in [
             (
                 "android.useAndroidX=true\nflui.minSdk=23\n",
-                "android.useAndroidX=true\nflui.minSdk=26\n",
+                "android.useAndroidX=true\nflui.minSdk=26\nflui.targetSdk=36\n",
             ),
             (
                 "android.useAndroidX=true\n",
-                "android.useAndroidX=true\nflui.minSdk=26\n",
+                "android.useAndroidX=true\nflui.minSdk=26\nflui.targetSdk=36\n",
             ),
-            ("", "flui.minSdk=26\n"),
-            ("flui.minSdk = 23\n# kept\n", "flui.minSdk=26\n# kept\n"),
+            ("", "flui.minSdk=26\nflui.targetSdk=36\n"),
+            (
+                "flui.minSdk = 23\n# kept\nflui.targetSdk = 35\n",
+                "flui.minSdk=26\n# kept\nflui.targetSdk=36\n",
+            ),
+            (
+                "flui.targetSdk=35\nflui.minSdk=23\n",
+                "flui.targetSdk=36\nflui.minSdk=26\n",
+            ),
         ] {
-            let found = restate(text, 26);
+            let found = restate(&restate(text, PROPERTY, 26), TARGET_PROPERTY, 36);
             if found != expected {
                 failures.push(format!("{text:?}: {found:?}"));
             }

@@ -14,23 +14,31 @@
 //!   surfaces and whenever it changes while the keyboard is in one. The
 //!   device keeps the last, and every [`DeviceListener`] hears that one
 //!   arrived.
-//! - **A drag's offer** (`enter`) is let go of at `leave` or `drop`.
+//! - **A drag** over one of the client's surfaces reaches the seat's device as
+//!   `enter` with its offer, then `motion`, and `leave` or `drop`. The
+//!   [`DragListener`] hears each, and the offer of an `enter` is its own
+//!   from then on; with no listener the offer is let go of at `leave` or
+//!   `drop`.
 //!
 //! The dispatch records what the compositor said and runs no handler; a
 //! listener hears it with nothing of the devices held.
 
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Weak};
 
 use wayland_client::protocol::wl_data_device::{self, WlDataDevice};
-use wayland_client::protocol::wl_data_device_manager::{self, WlDataDeviceManager};
+use wayland_client::protocol::wl_data_device_manager::{self, DndAction, WlDataDeviceManager};
 use wayland_client::protocol::wl_data_offer::{self, WlDataOffer};
 use wayland_client::protocol::wl_data_source::WlDataSource;
 use wayland_client::protocol::wl_registry::WlRegistry;
 use wayland_client::protocol::wl_seat::WlSeat;
+use wayland_client::protocol::wl_surface::WlSurface;
 use wayland_client::{Connection, Dispatch, Proxy, QueueHandle, event_created_child};
 
 use crate::owner::linux::wayland::WaylandState;
 use crate::owner::slot::OwnerCell;
+
+pub(crate) mod pipe;
 
 /// The newest `wl_data_device_manager`: version 3 adds the drag actions,
 /// version 2 lets a device be released.
@@ -51,6 +59,36 @@ pub(crate) trait DeviceListener: Send + Sync {
     fn selection_arrived(&self);
 }
 
+/// What a seat's device was told of a drag over one of the client's
+/// surfaces.
+#[derive(Debug)]
+pub(crate) enum DragWire {
+    /// The drag entered `surface` at (`x`, `y`), surface-local, under
+    /// `serial`, offering `offer`: the listener's from now on, `None` for a
+    /// drag that offers nothing.
+    Enter {
+        serial: u32,
+        surface: WlSurface,
+        x: f64,
+        y: f64,
+        offer: Option<WlDataOffer>,
+    },
+    /// The pointer moved to (`x`, `y`) on the surface entered.
+    Motion { x: f64, y: f64 },
+    /// The drag left the surface, or its source gave up.
+    Leave,
+    /// The user dropped on the surface entered.
+    Drop,
+}
+
+/// What the drag feature hears of the devices: called by a dispatch on the
+/// owner thread, with nothing of the devices held. It records what it hears
+/// and runs no handler.
+pub(crate) trait DragListener: Send + Sync {
+    /// `seat`'s device was told `wire`.
+    fn dragged(&self, seat: &WlSeat, wire: DragWire);
+}
+
 /// The seats' data devices, as the loop and the features reach them. Cloned
 /// handles reach the same devices. See the module docs.
 #[derive(Clone)]
@@ -62,6 +100,8 @@ pub(crate) struct DataDevices {
 struct Shared {
     state: OwnerCell<State>,
     listeners: OwnerCell<Vec<Weak<dyn DeviceListener>>>,
+    /// The drag feature, which takes the offers of the drags.
+    drags: OwnerCell<Option<Weak<dyn DragListener>>>,
 }
 
 #[derive(Default)]
@@ -80,7 +120,8 @@ struct SeatDevice {
     device: WlDataDevice,
     /// The offer of the seat's selection; `None` when it holds none.
     selection: Option<WlDataOffer>,
-    /// The offer of a drag over one of the client's surfaces.
+    /// The offer of a drag over one of the client's surfaces, held here only
+    /// while no [`DragListener`] takes it.
     dragged: Option<WlDataOffer>,
 }
 
@@ -113,6 +154,7 @@ impl DataDevices {
             shared: Arc::new(Shared {
                 state: OwnerCell::new(),
                 listeners: OwnerCell::new(),
+                drags: OwnerCell::new(),
             }),
         }
     }
@@ -123,6 +165,12 @@ impl DataDevices {
         self.shared
             .listeners
             .with(|listeners| listeners.push(listener));
+    }
+
+    /// `listener` hears the drags over the client's surfaces from now on,
+    /// while it lives, and takes their offers.
+    pub(crate) fn listen_drags(&self, listener: Weak<dyn DragListener>) {
+        self.shared.drags.with(|drags| *drags = Some(listener));
     }
 
     /// The compositor announced global `name`: bind it if it is the data
@@ -315,13 +363,24 @@ pub(crate) struct OfferData {
     /// [`MAX_TYPES`], none longer than [`MAX_TYPE_LEN`], however often the
     /// owner repeats an `offer` event.
     types: OwnerCell<Vec<String>>,
+    /// The actions a drag's source permits (`source_actions`, version 3),
+    /// [`UNTOLD`] before the compositor told them.
+    source_actions: AtomicU32,
+    /// The action the compositor chose for a drag (`action`, version 3),
+    /// [`UNTOLD`] before it chose one.
+    action: AtomicU32,
 }
+
+/// An action set the compositor has not told: no `DndAction` has every bit.
+const UNTOLD: u32 = u32::MAX;
 
 impl OfferData {
     /// An offer's data, made by the dispatch on the owner thread.
     pub(crate) fn new() -> Self {
         Self {
             types: OwnerCell::new(),
+            source_actions: AtomicU32::new(UNTOLD),
+            action: AtomicU32::new(UNTOLD),
         }
     }
 
@@ -343,6 +402,24 @@ impl OfferData {
     pub(crate) fn types<R>(&self, f: impl FnOnce(&[String]) -> R) -> Option<R> {
         self.types.with(|types| f(types))
     }
+
+    /// The actions a drag's source permits; `None` before the compositor
+    /// told them, as below version 3 it never does.
+    pub(crate) fn source_actions(&self) -> Option<DndAction> {
+        told(self.source_actions.load(Ordering::Acquire))
+    }
+
+    /// The action the compositor chose for a drag; `None` before it chose
+    /// one, as below version 3 it never does.
+    pub(crate) fn action(&self) -> Option<DndAction> {
+        told(self.action.load(Ordering::Acquire))
+    }
+}
+
+/// The actions `bits` name, unless [`UNTOLD`]; bits no action has are
+/// dropped.
+fn told(bits: u32) -> Option<DndAction> {
+    (bits != UNTOLD).then(|| DndAction::from_bits_truncate(bits))
 }
 
 impl Dispatch<WlDataDeviceManager, ()> for WaylandState {
@@ -369,6 +446,61 @@ impl Dispatch<WlDataDevice, DeviceData> for WaylandState {
     ) {
         let Some(shared) = data.shared.upgrade() else {
             return;
+        };
+        let drags = shared
+            .drags
+            .with(|drags| drags.as_ref().and_then(Weak::upgrade))
+            .flatten();
+        let wire = match (&drags, event) {
+            (
+                Some(_),
+                wl_data_device::Event::Enter {
+                    serial,
+                    surface,
+                    x,
+                    y,
+                    id,
+                },
+            ) => Ok(DragWire::Enter {
+                serial,
+                surface,
+                x,
+                y,
+                offer: id,
+            }),
+            (Some(_), wl_data_device::Event::Motion { x, y, .. }) => Ok(DragWire::Motion { x, y }),
+            (Some(_), wl_data_device::Event::Leave) => Ok(DragWire::Leave),
+            (Some(_), wl_data_device::Event::Drop) => Ok(DragWire::Drop),
+            (_, event) => Err(event),
+        };
+        let event = match wire {
+            Ok(wire) => {
+                let seat = shared
+                    .state
+                    .with(|state| {
+                        state
+                            .devices
+                            .iter()
+                            .find(|held| held.device == *device)
+                            .map(|held| held.seat.clone())
+                    })
+                    .flatten();
+                match (drags, seat) {
+                    // Heard with nothing of the devices held.
+                    (Some(drags), Some(seat)) => drags.dragged(&seat, wire),
+                    // A device let go of: its drag's offer goes with it.
+                    (_, _) => {
+                        if let DragWire::Enter {
+                            offer: Some(offer), ..
+                        } = wire
+                        {
+                            offer.destroy();
+                        }
+                    }
+                }
+                return;
+            }
+            Err(event) => event,
         };
         let selection = matches!(&event, wl_data_device::Event::Selection { id: Some(_) });
         let replaced = shared
@@ -429,8 +561,15 @@ impl Dispatch<WlDataOffer, OfferData> for WaylandState {
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
-        if let wl_data_offer::Event::Offer { mime_type } = event {
-            data.offer(mime_type);
+        match event {
+            wl_data_offer::Event::Offer { mime_type } => data.offer(mime_type),
+            wl_data_offer::Event::SourceActions { source_actions } => data
+                .source_actions
+                .store(u32::from(source_actions), Ordering::Release),
+            wl_data_offer::Event::Action { dnd_action } => {
+                data.action.store(u32::from(dnd_action), Ordering::Release);
+            }
+            _ => {}
         }
     }
 }
