@@ -19,7 +19,9 @@ mod text_store;
 pub use animated_default_text_style::AnimatedDefaultTextStyle;
 pub use controller::TextEditingController;
 pub use default_text_style::DefaultTextStyle;
-pub use editable_text::{CaretHandle, EditableText, EditableTextState, SubmitCallback};
+pub use editable_text::{
+    CaretHandle, EditableText, EditableTextState, LongPressSelection, SubmitCallback,
+};
 pub use rich_text::RichText;
 pub use selection_area::{
     DotHandles, HandleInfo, HandleSide, SelectError, SelectedText, SelectionArea, SelectionChange,
@@ -32,8 +34,8 @@ pub use selection_menu::{
     ToolbarItemsState,
 };
 pub(crate) use selection_menu::{
-    MenuHost, MenuSettings, ShowSelectionMenu, ToolbarAnchors, editing_commands, magnifier,
-    reading_commands, show_menu_action, toolbar,
+    MagnifierChoice, MenuHost, MenuSettings, ShowSelectionMenu, ToolbarAnchors, editing_commands,
+    magnifier, reading_commands, show_menu_action, toolbar,
 };
 pub use selection_style::{DefaultSelectionStyle, SelectionStyle};
 pub use text::Text;

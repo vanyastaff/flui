@@ -1643,6 +1643,10 @@ fn layer_effects_capture_as_specified() {
             "turned backdrop",
             backdrop_transform::turned_backdrop_turns_the_stripes_it_covers,
         ),
+        (
+            "layer transform",
+            backdrop_transform::layer_transform_moves_and_turns_its_content,
+        ),
         #[cfg(feature = "testing")]
         (
             "backdrop resize attachment coordinates",

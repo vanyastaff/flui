@@ -9,18 +9,19 @@
 //!
 //! | Binding | Stage | Type              | Content                        |
 //! |---------|-------|-------------------|--------------------------------|
-//! | 0       | FS    | Uniform buffer    | `ResampleUniforms` (48 bytes)  |
+//! | 0       | FS    | Uniform buffer    | `ResampleUniforms` (64 bytes)  |
 //! | 1       | FS    | 2D float texture  | Source (premultiplied RGBA)    |
 //! | 2       | FS    | Filtering sampler | Nearest or linear, clamped     |
 
 use super::generated::resample;
 
-/// The generated `ResampleUniforms` is the 48 bytes `resample.wgsl` declares.
+/// The generated `ResampleUniforms` is the 64 bytes `resample.wgsl` declares.
 const _RESAMPLE_UNIFORMS_LAYOUT_CHECK: () = {
-    assert!(std::mem::size_of::<resample::ResampleUniforms>() == 48);
+    assert!(std::mem::size_of::<resample::ResampleUniforms>() == 64);
     assert!(std::mem::offset_of!(resample::ResampleUniforms, map_x) == 0);
     assert!(std::mem::offset_of!(resample::ResampleUniforms, map_y) == 16);
-    assert!(std::mem::offset_of!(resample::ResampleUniforms, source_size) == 32);
+    assert!(std::mem::offset_of!(resample::ResampleUniforms, decal) == 32);
+    assert!(std::mem::offset_of!(resample::ResampleUniforms, source_size) == 48);
 };
 
 /// Render pipeline for the resample pass.

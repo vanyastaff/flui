@@ -14,7 +14,7 @@
 //! | gamma.wgsl          | gamma_generated.rs            | 16 bytes     | color_filter   |
 //! | blur.wgsl           | blur_generated.rs             | 32 bytes     | —              |
 //! | morphology.wgsl     | morphology_generated.rs       | 48 bytes     | —              |
-//! | resample.wgsl       | resample_generated.rs         | 48 bytes     | —              |
+//! | resample.wgsl       | resample_generated.rs         | 64 bytes     | —              |
 //! | color_matrix.wgsl   | color_matrix_generated.rs     | 80 bytes     | color_filter   |
 //! | effects/mode.wgsl   | mode_generated.rs             | 32 bytes     | color_filter   |
 //! | image_source_filter_layout.wgsl | image_source_filter_generated.rs | 112 bytes | color_filter |

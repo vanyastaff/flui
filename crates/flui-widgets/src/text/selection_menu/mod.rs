@@ -16,7 +16,7 @@ mod toolbar;
 mod toolbar_items;
 
 pub(crate) use self::host::{MenuHost, MenuSettings, ShowSelectionMenu, show_menu_action};
-use self::magnifier::MagnifierChoice;
+pub(crate) use self::magnifier::MagnifierChoice;
 pub(crate) use self::magnifier::magnifier;
 pub use self::magnifier::{MagnifierInfo, PlainMagnifier, SelectionMagnifier};
 pub(crate) use self::toolbar::{ToolbarAnchors, toolbar};
@@ -36,7 +36,7 @@ use crate::interaction::{
     SelectAllTextIntent,
 };
 use crate::localization::{BoxedWidgetsLocalizations, WidgetsLocalizations};
-use crate::text::editable_text::CaretHandle;
+use crate::text::editable_text::{CaretHandle, LongPressSelection};
 use crate::text::selection_area::SelectionHandles;
 
 /// How a selection's menu looks: the floating toolbar a touch shows and
@@ -229,6 +229,7 @@ pub struct DefaultSelectionControls {
 pub(crate) struct SelectionControls {
     handles: Option<Rc<dyn SelectionHandles>>,
     caret_handle: Option<CaretHandle>,
+    long_press: Option<LongPressSelection>,
     /// `Some(MenuChoice::Hide)` turns the menu off.
     menu: Option<MenuChoice>,
     policy: Option<SelectionMenuPolicy>,
@@ -244,6 +245,7 @@ impl SelectionControls {
         Self {
             handles: self.handles.clone().or_else(|| outer.handles.clone()),
             caret_handle: self.caret_handle.or(outer.caret_handle),
+            long_press: self.long_press.or(outer.long_press),
             menu: self.menu.clone().or_else(|| outer.menu.clone()),
             policy: self.policy.or(outer.policy),
             magnifier: self.magnifier.clone().or_else(|| outer.magnifier.clone()),
@@ -258,6 +260,10 @@ impl SelectionControls {
 
     pub(crate) fn handles(&self) -> Option<Rc<dyn SelectionHandles>> {
         self.handles.clone()
+    }
+
+    pub(crate) fn long_press(&self) -> Option<LongPressSelection> {
+        self.long_press
     }
 
     pub(crate) fn caret_handle(&self) -> Option<CaretHandle> {
@@ -281,10 +287,15 @@ impl SelectionControls {
         self.policy
     }
 
-    /// The magnifier of a handle drag: the one a scope set, none where a
-    /// scope turned it off, else the platform's ([`PlainMagnifier::for_platform`]).
-    pub(crate) fn magnifier(controls: Option<&Self>) -> Option<Rc<dyn SelectionMagnifier>> {
-        match controls.and_then(|controls| controls.magnifier.as_ref()) {
+    /// The magnifier of a handle drag: the widget's `own` choice, else the
+    /// one a scope set, none where either turned it off, else the
+    /// platform's ([`PlainMagnifier::for_platform`]).
+    pub(crate) fn magnifier(
+        own: Option<&MagnifierChoice>,
+        controls: Option<&Self>,
+    ) -> Option<Rc<dyn SelectionMagnifier>> {
+        let choice = own.or_else(|| controls.and_then(|controls| controls.magnifier.as_ref()));
+        match choice {
             Some(MagnifierChoice::Show(magnifier)) => Some(Rc::clone(magnifier)),
             Some(MagnifierChoice::Hide) => None,
             None => PlainMagnifier::for_platform(TargetPlatform::current())
@@ -301,6 +312,7 @@ impl fmt::Debug for DefaultSelectionControls {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("DefaultSelectionControls")
             .field("caret_handle", &self.own.caret_handle)
+            .field("long_press", &self.own.long_press)
             .field("policy", &self.own.policy)
             .field(
                 "commands",
@@ -336,6 +348,14 @@ impl DefaultSelectionControls {
     #[must_use]
     pub fn caret_handle(mut self, caret_handle: CaretHandle) -> Self {
         self.own.caret_handle = Some(caret_handle);
+        self
+    }
+
+    /// What a touch long press in an editable text beneath selects, in
+    /// place of the platform's ([`LongPressSelection::default`]).
+    #[must_use]
+    pub fn long_press(mut self, selection: LongPressSelection) -> Self {
+        self.own.long_press = Some(selection);
         self
     }
 
@@ -403,10 +423,20 @@ impl DefaultSelectionControls {
         Self::controls_of(ctx).and_then(|controls| controls.caret_handle())
     }
 
-    /// The magnifier a handle drag under `ctx` shows, registering a
-    /// dependency on the scopes above.
-    pub(crate) fn magnifier_of(ctx: &dyn BuildContext) -> Option<Rc<dyn SelectionMagnifier>> {
-        SelectionControls::magnifier(Self::controls_of(ctx).as_deref())
+    /// What a long press selects as the nearest scope above `ctx` sets,
+    /// registering a dependency on it.
+    pub fn long_press_of(ctx: &dyn BuildContext) -> Option<LongPressSelection> {
+        Self::controls_of(ctx).and_then(|controls| controls.long_press())
+    }
+
+    /// The magnifier a handle drag of a widget under `ctx` shows: the
+    /// widget's `own` choice, else the scopes', registering a dependency on
+    /// the scopes above.
+    pub(crate) fn magnifier_of(
+        ctx: &dyn BuildContext,
+        own: Option<&MagnifierChoice>,
+    ) -> Option<Rc<dyn SelectionMagnifier>> {
+        SelectionControls::magnifier(own, Self::controls_of(ctx).as_deref())
     }
 
     /// Everything the scopes above `ctx` set, registering a dependency.
