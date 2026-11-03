@@ -30,7 +30,7 @@
   the context's, once per context); [ADR-0067](ADR-0067-engine-owned-glyph-atlas.md) (one atlas
   per context, aged by queue submission); [ADR-0257](ADR-0257-frame-timing-and-latency.md)
   decision 4 (the per-window frame latency is the slot's setting)
-- **Related:** [ADR-0304](ADR-0304-the-scene-is-retained-and-damage-is-its-patchs-footprint.md)
+- **Related:** [ADR-0304](ADR-0304-the-scene-is-retained-and-damage-is-the-footprint-of-its-patch.md)
   (the scene state a frame carries, which a coalesced frame folds);
   [ADR-0244](ADR-0244-os-version-floors-and-gates.md) decision 1 (the backend probe, run once);
   [ADR-0100](ADR-0100-prepared-gpu-work-and-retained-frame-commit.md) (the device domain and the

@@ -6,7 +6,7 @@
 - **Superseded-by:** [ADR-0100](ADR-0100-prepared-gpu-work-and-retained-frame-commit.md)
   for §4's retained-image update/failure policy; candidate isolation replaces
   modification of the previous committed image during an incomplete frame.
-- **Superseded-by:** [ADR-0304](ADR-0304-the-scene-is-retained-and-damage-is-its-patchs-footprint.md)
+- **Superseded-by:** [ADR-0304](ADR-0304-the-scene-is-retained-and-damage-is-the-footprint-of-its-patch.md)
   for §3 only (the whole-scene differ as the producer, `ContentToken`, the one-rectangle `Partial`,
   the off switch that retains nothing, and the amended sentence that `run_paint` always descends
   from the root and an outer boundary refuses reuse while a nested one is dirty)

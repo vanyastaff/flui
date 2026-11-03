@@ -15,7 +15,7 @@
   32-byte `Path`); its "Gradients are shader paints" and "Serde is off the wire" stand.
 - **Related:** [ADR-0098](ADR-0098-owned-f64-geometry-values.md) §2 (kept: the list records `f64`
   and the engine narrows once, after composing);
-  [ADR-0304](ADR-0304-the-scene-is-retained-and-damage-is-its-patchs-footprint.md) (a retained
+  [ADR-0304](ADR-0304-the-scene-is-retained-and-damage-is-the-footprint-of-its-patch.md) (a retained
   chunk holds one render object's list, and its recording cache keys on the composed placement);
   [ADR-0092](ADR-0092-per-realm-text-over-parley.md) §4 (the paragraph payload, unchanged);
   [ADR-0115](ADR-0115-image-source-affine-paint-boundary.md) (the image-region op, now boxed);

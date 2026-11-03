@@ -4,7 +4,7 @@
 - **Date:** 2026-10-21
 - **Amended:** 2026-11-03 — §6: only a follower's region is refused a capture; a leader is
   replayed and re-indexed by the layer tree
-- **Superseded-by:** [ADR-0304](ADR-0304-the-scene-is-retained-and-damage-is-its-patchs-footprint.md)
+- **Superseded-by:** [ADR-0304](ADR-0304-the-scene-is-retained-and-damage-is-the-footprint-of-its-patch.md)
   for §2 and §6 only (a replay that mints every clean boundary's nodes into a new layer tree each
   frame, and that per-frame tree with its eviction of boundaries that hold a follower)
 - **Amends:** `crates/flui-layer/ARCHITECTURE.md` (retained paint, item 3) and the
