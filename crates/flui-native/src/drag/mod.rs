@@ -16,7 +16,7 @@
 //! - `web`: HTML drag and drop;
 //! - `winit`: the files winit reports dragged and dropped;
 //! - `wayland`: drops on the native Wayland host's windows through the seats'
-//!   data devices;
+//!   data devices, and the sessions they start;
 //! - `x11`: XDND drops on the native X11 host's windows, and the sessions they
 //!   start;
 //! - `headless`: a double that plays the operating system's side.

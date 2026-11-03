@@ -96,12 +96,10 @@ where
     // The application's development reload hook may own frames with a scene
     // plugin (`flui run --scene`); inert unless one is installed.
     let hot_reload = ScenePlugin::from_config(&config, app.internal_data_path().as_deref());
-    // Attached for the loop: the attachment detaches the hook when it drops,
-    // after `run` returns. The window is handed over once it is installed.
-    let agent = config
-        .dev_agent
-        .as_ref()
-        .and_then(crate::app::dev_agent::DevAgent::attach);
+    // The loop takes the hooks and owns them until `run` returns. The window
+    // is handed over once it is installed.
+    super::dev_agents::start(&config);
+    let agents = super::dev_agents::EndOnDrop;
 
     let platform: Box<dyn Platform> =
         flui_native::android_platform(app).map_err(crate::app::LaunchError::from_platform)?;
@@ -274,14 +272,11 @@ where
         }
         // Vended while the ui_runtime is still ours, handed over once the
         // install commits: a failed install drops it with the ui_runtime.
-        let agent_window = config
-            .dev_agent
-            .as_ref()
-            .and_then(|agent| agent.vend(&ui_runtime, ui_runtime.presentation_id()));
+        let agent_window = super::dev_agents::vend(&ui_runtime, ui_runtime.presentation_id());
         let textures = ui_runtime.texture_registry(ui_runtime.presentation_id());
         let mut installation = prepare_platform_ui_runtime(ui_runtime, std::rc::Rc::clone(&window));
         installation.text_sizing(native_sizing);
-        installation.dev_agent(config.dev_agent.clone().zip(agent_window));
+        installation.dev_agent(agent_window);
         let owner_dispatch = installation.dispatcher();
 
         // 3b. Start config-declared application services (issue #558) —
@@ -526,8 +521,10 @@ where
     }));
     // The exit is bounded end to end, as on the desktop (ADR-0258 §7).
     let watchdog = ExitWatchdog::start();
+    // The loop's hooks detach first, as on the desktop: an agent stops before
+    // the windows it serves are retired.
+    drop(agents);
     teardown_platform_ui_runtime_logged(&mut |step| watchdog.reached(step));
-    drop(agent);
     drop(watchdog);
     // The exit's outcome: a terminal failure resumes once everything above
     // ran (ADR-0258 §3).

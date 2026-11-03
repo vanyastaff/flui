@@ -358,23 +358,50 @@ impl Shared {
     /// the next activation token names. Called by a dispatch with no cell of
     /// the input borrowed.
     fn record_input(&self, seat: SeatKey, serial: u32, surface: WlSurface) {
-        let seat = self
-            .objects
-            .with(|objects| {
-                objects
-                    .seats
-                    .iter()
-                    .find(|held| held.key == seat)
-                    .map(|held| held.seat.clone())
-            })
-            .flatten();
-        if let Some(seat) = seat {
+        if let Some(seat) = self.seat_of(seat) {
             self.last_input.record(UserInput {
                 seat,
                 serial,
                 surface,
             });
         }
+    }
+
+    /// A button of `seat`'s pointer went down (`serial`, on `surface`) or
+    /// up (`None`): the grab a drag starts under. Called by a dispatch with
+    /// no cell of the input borrowed.
+    fn record_button(&self, seat: SeatKey, press: Option<(u32, WlSurface)>) {
+        let Some(seat) = self.seat_of(seat) else {
+            return;
+        };
+        match press {
+            Some((serial, surface)) => self.last_input.pressed(UserInput {
+                seat,
+                serial,
+                surface,
+            }),
+            None => self.last_input.released(&seat),
+        }
+    }
+
+    /// `seat`'s pointer left its window, ending the grab it held.
+    fn record_leave(&self, seat: SeatKey) {
+        if let Some(seat) = self.seat_of(seat) {
+            self.last_input.left(&seat);
+        }
+    }
+
+    /// The seat `key` names.
+    fn seat_of(&self, key: SeatKey) -> Option<WlSeat> {
+        self.objects
+            .with(|objects| {
+                objects
+                    .seats
+                    .iter()
+                    .find(|held| held.key == key)
+                    .map(|held| held.seat.clone())
+            })
+            .flatten()
     }
 
     /// `seat`'s keyboard entered `surface`, a window's, or left (`None`).
@@ -2031,6 +2058,7 @@ impl Dispatch<WlPointer, PointerData> for WaylandState {
                         held.focus_surface = None;
                     }
                 });
+                shared.record_leave(data.seat);
                 (arrival(None), PointerWire::Leave)
             }
             wl_pointer::Event::Motion {
@@ -2064,8 +2092,11 @@ impl Dispatch<WlPointer, PointerData> for WaylandState {
                         })
                         .flatten();
                     if let Some(surface) = surface {
-                        shared.record_input(data.seat, serial, surface);
+                        shared.record_input(data.seat, serial, surface.clone());
+                        shared.record_button(data.seat, Some((serial, surface)));
                     }
+                } else {
+                    shared.record_button(data.seat, None);
                 }
                 (
                     arrival(Some(time)),

@@ -174,10 +174,10 @@ impl PluginPipeline {
             // it's called: the
             // host expects a new opaque pointer.
             //
-            // `run_frame` returns
-            // `(PipelineOwner<Idle>, RenderResult<Option<LayerTree>>)`. On
-            // error we log and emit an empty Scene so the host's opaque
-            // pointer stays valid.
+            // `run_frame_in_place` keeps the owner in its slot on every
+            // exit, a panic included, and returns the frame's
+            // `Option<LayerTree>` or its error. On error we log and emit an
+            // empty Scene so the host's opaque pointer stays valid.
             let layer_tree = pipeline_owner.with_mut(|guard| {
                 if let Some(root_id) = guard.root_id() {
                     guard.mark_needs_paint(root_id);
@@ -190,10 +190,7 @@ impl PluginPipeline {
                 // unmeasured tree; constraints set once at mount would keep the
                 // first size after a resize.
                 guard.set_root_constraints(Some(BoxConstraints::tight(Size::new(width, height))));
-                let owner = guard.take_idle();
-                let (owner, result) = owner.run_frame();
-                *guard = owner;
-                match result {
+                match guard.run_frame_in_place() {
                     Ok(layer_tree) => layer_tree,
                     Err(e) => {
                         log(&format!("draw_frame: pipeline failed: {e:?}"));

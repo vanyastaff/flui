@@ -34,15 +34,24 @@
 //! [`EXIT_DISCONNECTED`](flui_protocol::launch::EXIT_DISCONNECTED) once the
 //! teardown has written what the application persisted.
 
-// The server is built where it has a transport: a debug build, or one with
-// the `driver` feature, on a system with local sockets. The web and Android
-// transports are not built yet.
-#[cfg(all(
-    any(debug_assertions, feature = "driver"),
-    any(unix, windows),
-    not(target_os = "android")
-))]
+// The server is built where it has a transport (`cfg(driver_agent)`, set by
+// `build.rs`): a debug build, or one with the `driver` feature, on a system
+// with local sockets. The web and Android transports are not built yet.
+#[cfg(driver_agent)]
 mod served;
+
+// `build.rs` reads the profile's debug assertions from Cargo; a build it
+// misread fails here rather than shipping, or leaving out, the agent.
+#[cfg(any(
+    all(driver_agent, not(any(debug_assertions, feature = "driver"))),
+    all(
+        not(driver_agent),
+        any(debug_assertions, feature = "driver"),
+        any(unix, windows),
+        not(target_os = "android")
+    )
+))]
+compile_error!("BUG: build.rs set `driver_agent` against this build's profile and features");
 
 use std::fmt;
 use std::sync::Arc;
@@ -81,11 +90,7 @@ impl Disconnect {
 
     /// The driver went: ask the loop to quit, once.
     #[cfg_attr(
-        not(all(
-            any(debug_assertions, feature = "driver"),
-            any(unix, windows),
-            not(target_os = "android")
-        )),
+        not(driver_agent),
         expect(dead_code, reason = "only a served agent's driver disconnects")
     )]
     fn fire(&self) {
@@ -128,28 +133,15 @@ impl fmt::Debug for Disconnect {
     )
 )]
 pub(crate) fn install_from_env(config: &mut crate::AppConfig, disconnect: &Arc<Disconnect>) {
-    #[cfg(all(
-        any(debug_assertions, feature = "driver"),
-        any(unix, windows),
-        not(target_os = "android")
-    ))]
+    #[cfg(driver_agent)]
     if let Some(launch) = served::Launch::from_env() {
         served::install(config, launch, disconnect);
     }
-    #[cfg(not(all(
-        any(debug_assertions, feature = "driver"),
-        any(unix, windows),
-        not(target_os = "android")
-    )))]
+    #[cfg(not(driver_agent))]
     let _ = (config, disconnect);
 }
 
-#[cfg(all(
-    test,
-    any(debug_assertions, feature = "driver"),
-    any(unix, windows),
-    not(target_os = "android")
-))]
+#[cfg(all(test, driver_agent))]
 mod tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};

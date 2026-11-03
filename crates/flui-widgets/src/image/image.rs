@@ -10,7 +10,9 @@ use flui_painting::paint::ImageRepeat;
 use flui_painting::{Alignment, BoxFit, ImagePlacement};
 use flui_rendering::protocol::BoxProtocol;
 use flui_view::prelude::{LifecycleContext, StatefulView, ViewState};
-use flui_view::{BoxedView, BuildContext, IntoView, RenderView, View, ViewExt, impl_render_view};
+use flui_view::{
+    BoxedView, BuildContext, CreationSite, IntoView, RenderView, View, ViewExt, impl_render_view,
+};
 
 use crate::image::provider::{DirectImageProvider, FileImage, ImageProvider, MemoryImage};
 
@@ -109,6 +111,8 @@ pub struct Image {
     width: Option<f64>,
     height: Option<f64>,
     gapless_playback: bool,
+    #[view(site)]
+    site: CreationSite,
 }
 
 impl Image {
@@ -120,6 +124,7 @@ impl Image {
     /// `provider` must be `'static` because the widget is stored in the
     /// element tree; it must be `Send + Sync` (implied by [`ImageProvider`]'s
     /// supertraits) because the tree may be accessed from multiple threads.
+    #[track_caller]
     pub fn new(provider: impl ImageProvider + 'static) -> Self {
         Self {
             provider: Arc::new(provider),
@@ -127,6 +132,7 @@ impl Image {
             width: None,
             height: None,
             gapless_playback: false,
+            site: CreationSite::here(),
         }
     }
 
@@ -135,6 +141,7 @@ impl Image {
     /// The most efficient path: `resolve()` is O(1) on every rebuild (the
     /// pixel buffer is `Arc`-backed). Prefer this when the image is decoded
     /// outside the widget tree or constructed procedurally.
+    #[track_caller]
     pub fn from_image(decoded: PixelImage) -> Self {
         Self::new(DirectImageProvider::new(decoded))
     }
@@ -145,6 +152,7 @@ impl Image {
     /// Shows the placeholder until the decode answers. Requires the
     /// `flui-widgets/images` feature; without it the widget renders an empty
     /// box.
+    #[track_caller]
     pub fn memory(bytes: impl Into<Vec<u8>>) -> Self {
         Self::new(MemoryImage::new(bytes))
     }
@@ -156,6 +164,7 @@ impl Image {
     /// Shows the placeholder until the decode answers. Requires the
     /// `flui-widgets/images` feature; without it the widget renders an empty
     /// box.
+    #[track_caller]
     pub fn file(path: impl Into<PathBuf>) -> Self {
         Self::new(FileImage::new(path))
     }
@@ -169,6 +178,7 @@ impl Image {
     ///
     /// Requires the `flui-widgets/asset-images` feature.
     #[cfg(feature = "asset-images")]
+    #[track_caller]
     pub fn asset(registry: Arc<flui_assets::AssetRegistry>, path: impl Into<String>) -> Self {
         Self::new(super::AssetImage::new(registry, path))
     }
@@ -181,6 +191,7 @@ impl Image {
     /// Requires the `flui-widgets/asset-images` feature. The URL is fetched with
     /// the host's HTTP capability (`flui_platform::http::HttpCapability`).
     #[cfg(feature = "asset-images")]
+    #[track_caller]
     pub fn network(registry: Arc<flui_assets::AssetRegistry>, url: impl Into<String>) -> Self {
         Self::new(super::NetworkImage::new(registry, url))
     }

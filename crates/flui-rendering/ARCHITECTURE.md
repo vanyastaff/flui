@@ -1119,7 +1119,7 @@ they were removed rather than adapted: they could not fail for a reason a user w
 - `PipelineOwner::<PaintPhase>::paint_subtree_impl` ([`src/pipeline/owner/paint.rs`](src/pipeline/owner/paint.rs)) wraps `render_node.paint_raw(&mut recorder, ...)` (the fragment recorder) together with the node's own effect-layer build, `own_effect_layers(render_node.paint_effects(), origin)`, in ONE `catch_unwind`. Both run only after the walk's three return gates (`skip_paint`, `needs_layout`, the sliver visibility cull): a gated-out node never builds a `PaintEffects` descriptor it will not use. Building it there matters: reached outside those gates, a node whose `needs_layout` flag is still set carries stale geometry — its last committed size, or `Size::ZERO` if it has never been laid out — so its descriptor would be built against a size this pass never computed. A panic in either half — the node's own `paint_effects`, or the walk's resolution of a `PaintClip::PathTarget` inside `own_effect_layers`'s clip arm — surfaces as `Poisoned { phase: PoisonPhase::Paint, .. }`, one poison point per node rather than two.
 - `PipelineOwner::<PaintPhase>::layer_patches_for` ([`src/pipeline/owner/paint.rs`](src/pipeline/owner/paint.rs)), the composited-layer-update patch arm, wraps the same `own_effect_layers(node.paint_effects(), slots.origin)` rebuild — run once per target being patched into a retained boundary's capture — in its own `catch_unwind`. A panic surfaces as `Poisoned { phase: PoisonPhase::LayerUpdate, .. }` and the function returns `Err` instead of `Ok(None)`: the whole frame is discarded and the queued composited-layer-update request survives on the node for the retry. Falling back to a repaint instead (the way a structural shape mismatch does, via `Ok(None)`) was rejected — the repaint would call the same panicking `paint_effects` on the same node and panic a second time.
 
-The phase entry points (`run_layout` / `run_compositing` / `run_paint` / `run_semantics`) now return `RenderResult<()>`. `run_frame` returns `(PipelineOwner<Idle>, RenderResult<Option<LayerTree>>)` -- the owner **always** comes back at Idle so frame-loop callers can mutex-replace through it on both success and error paths.
+The phase entry points (`run_layout` / `run_compositing` / `run_paint` / `run_semantics`) now return `RenderResult<()>`. `run_frame` returns `(PipelineOwner<Idle>, RenderResult<Option<LayerTree>>)` -- on an error the owner comes back at Idle with the result. A caller that keeps the owner in a slot runs `run_frame_in_place` (or `PipelineCell::run_frame` / `PipelineCell::run_layout`), which leaves the same owner in the slot on every exit, a panic included; see the next rule.
 
 `Poisoned`'s `phase` is a [`PoisonPhase`](src/error.rs) (`Layout` | `Paint` | `LayerUpdate`, rendered `"layout"` / `"paint"` / `"layer-update"` by its `Display` impl) — the enum itself is the authoritative, closed set; nothing today produces a fourth variant.
 
@@ -1134,6 +1134,18 @@ Isolation is deliberately strict: a panic in `paint_effects` (`PoisonPhase::Pain
 - **Return `(PipelineOwner<Idle>, RenderError)` tuple on error** (shape (a) in the original design) -- rejected, awkward to compose; pattern-matching on `(_, Result<_>)` is cleaner than splitting the success and error tuples.
 
 **Accepted trade-off:** `AssertUnwindSafe` is documented inline at each wrapper. The render object's internal state may be torn after a panic; the pipeline treats the node as poisoned and lets the caller drop or replace it. Process-level safety is preserved; the render tree itself is not corrupted.
+
+### A frame that unwinds keeps its owner
+
+**Rule:** some user code runs outside every per-node wrapper: a `tracing` subscriber (the phase spans and events), the visual-update wake, a render object's `always_needs_compositing`. A panic there unwinds out of the phase. `PipelineOwner::run_frame_in_place`, `PipelineCell::run_frame` and `PipelineCell::run_layout` leave the same owner in its slot on every exit: each phase runs under `catch_unwind` (`contain_phase` in [`src/pipeline/owner/construction.rs`](src/pipeline/owner/construction.rs)), the owner is written back, and only then does the panic resume (ADR-0048). The by-value `run_frame` destroys its owner with the unwind under containment (ADR-0281 §3). Before the unwind reaches the frame, each phase settles its own state:
+
+- layout leaves the phase and puts the unfinished entries of its batch back in the queue; the entry it interrupted gets the paint its new geometry owes; a walk that unwinds past the arena commits what it laid out (paint marks, poison records, child requests, retain bands) before the panic goes on. A panic below the dirty root is caught by its parent's wrapper, so one that leaves the arena came from the root's own frame, which may not have placed its children: the root keeps `NEEDS_LAYOUT` even when a child's first poison would clear it;
+- compositing writes a node's `NEEDS_COMPOSITING` only after its children and its hook answered, applies the paint marks the visited nodes staged, and keeps its queue;
+- paint leaves the phase and the local paint window and keeps its queue, as its error arm does.
+
+The phases commit before they call out (ADR-0287, by hand on the frame path): a relayout batch and the compositing walk commit their paint and semantics marks with `commit_needs_paint` / `commit_node_needing_semantics` and announce them with one wake at the end. The wake goes out on every exit, an error or a panic included; when the pass already failed, that failure is the first one and a wake that panics after it is discarded (ADR-0281 §2). The poison reports of a walk run under `FirstPanic`, so a first transition is never left unreported, and a report's panic goes on only after the dirty root's own success is recorded and its paint committed. Pinned by `a_frame_that_unwinds_leaves_the_pipeline_its_owner`, `a_layout_pass_announces_its_paint_on_every_exit` and `a_poison_report_that_panics_comes_after_the_dirty_roots_success` (`tests/frame_unwind.rs`; each row fails with its part of the containment reverted) and `a_pipeline_frame_that_unwinds_keeps_its_tree_for_the_retry` (`flui-runtime`'s `frame_failure_containment_matrix`).
+
+**Alternatives:** `take_idle`, which moved the owner out and left an empty placeholder in the slot, made an unwind lose the render tree: the retry ran on the placeholder and invalidation handles answered `OwnerGone`. It is gone; the placeholder now lives only inside `run_frame_in_place` while the owner is out, and nothing can observe it.
 
 Hit testing runs outside the frame pipeline and isolates per node instead: `PipelineOwner::hit_test` visits every node inside one `catch_unwind` (`contain_node` in [`src/pipeline/owner/accessors.rs`](src/pipeline/owner/accessors.rs)) covering all of its user hooks — `hit_test_transform`, the expanded area, `hit_test` itself (path clippers, flow delegates), the entry's targets. A node that panics is a miss: what its subtree added is dropped, it blocks nothing below, and its siblings and ancestors still decide. The first payload is held until the path is complete, then resumed from `hit_test`, so `result` already holds every other hit; later payloads are retained. `RendererBinding::hit_test_in_view` catches that resume and returns it in `ViewHitTest::Answered`, and the runtime delivers the event to the path before reporting it. A tree whose layout is withdrawn or checked out answers `ViewHitTest::TreeBusy` rather than an empty path. Pinned by `a_panicking_hit_test_is_a_miss_and_the_first_panic_resumes_after_the_path` (`hit_test_matrix`) and `a_view_hit_test_reports_a_busy_tree_and_contains_a_render_object_panic` (`flui-runtime`'s `owner_input_contract`). A pointer Down that finds the tree busy is still admitted with an empty route; refusing it belongs to the gesture binding's contact admission.
 
@@ -1374,9 +1386,9 @@ has no numeric getter or equality relation and uses no new identity registry.
 (`Rc<RefCell<flui_painting::TextContext>>`), a constructor argument: `PipelineOwner::new` and
 `new_with_capacity` take it, and there is no `Default` (ADR-0092 §10 step 3). A pipeline with no
 UI runtime behind it (a hot-reload plugin image, a test) passes `TextContextHandle::standalone`, a
-context over a collection of its own. A frame driver that moves the owner out of its slot for a
-typestate transition calls `take_idle`, whose placeholder shares the handle, so the slot a
-transition that unwinds leaves still measures through it. The layout walk passes the
+context over a collection of its own. The placeholder `run_frame_in_place` keeps in the slot while
+the owner is out for its typestate transitions shares the handle, and the owner is back before
+anything can observe the slot, an unwind included. The layout walk passes the
 cell to every box node it lays out or measures — leaves through `layout_leaf_only`, parents
 through `ErasedBoxLayoutCtx`, box intrinsics asked by a box or a sliver parent — and the
 intrinsic, dry-layout and dry-baseline query walks construct complete mutable
@@ -1409,9 +1421,9 @@ across a recursive operation through the same capability. A `RefMut` drops on
 unwind, so a panicking layout releases the loan before the
 walk's `catch_unwind` turns it into `Poisoned`. Locked by
 `a_layout_that_panics_while_holding_the_text_context_releases_it`,
-`intrinsic_and_dry_queries_measure_through_the_pipelines_context` and
-`a_taken_pipeline_leaves_an_owner_that_measures_through_the_same_context`
-(`tests/text_context.rs`), and the `compile_fail` doctests on `PipelineOwner::new`.
+`intrinsic_and_dry_queries_measure_through_the_pipelines_context`
+(`tests/text_context.rs`), `a_frame_that_unwinds_leaves_the_pipeline_its_owner`
+(`tests/frame_unwind.rs`, which checks the owner left in the cell keeps the context), and the `compile_fail` doctests on `PipelineOwner::new`.
 
 ### A font collection change re-lays out what measured text, found by its loans, not by an opt-in mixin
 

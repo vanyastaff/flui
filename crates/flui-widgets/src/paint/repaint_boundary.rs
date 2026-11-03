@@ -3,14 +3,14 @@
 use flui_foundation::SaltedKey;
 use flui_objects::RenderRepaintBoundary;
 use flui_rendering::protocol::BoxProtocol;
-use flui_view::{Child, IntoView, RenderView, View};
+use flui_view::{Child, CreationSite, IntoView, RenderView, View};
 
 /// Isolates its child into a separate compositing layer so repaints of the
 /// child (or its siblings) don't force each other to re-paint.
 ///
 /// Layout is a pass-through (the child's size); the
 /// boundary only affects paint/compositing.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct RepaintBoundary {
     child: Child,
     /// The item's key, salted, when this boundary is the per-item wrapper of
@@ -29,12 +29,30 @@ pub struct RepaintBoundary {
     /// Whether this boundary carries its child's key at all (the scrolling
     /// delegates ask for it; a plain `RepaintBoundary` stays keyless).
     salts_child_key: bool,
+    site: CreationSite,
+}
+
+impl Default for RepaintBoundary {
+    fn default() -> Self {
+        // A trait fn cannot be `#[track_caller]`: the site is this line.
+        Self::at(CreationSite::here())
+    }
 }
 
 impl RepaintBoundary {
+    fn at(site: CreationSite) -> Self {
+        Self {
+            child: Child::empty(),
+            salted_child_key: None,
+            salts_child_key: false,
+            site,
+        }
+    }
+
     /// Create a repaint boundary with no child yet.
+    #[track_caller]
     pub fn new() -> Self {
-        Self::default()
+        Self::at(CreationSite::here())
     }
 
     /// Set the isolated child.
@@ -91,6 +109,10 @@ impl View for RepaintBoundary {
         self.salted_child_key
             .as_ref()
             .map(|key| key as &dyn flui_foundation::ViewKey)
+    }
+
+    fn creation_site(&self) -> flui_view::CreationSite {
+        self.site
     }
 }
 

@@ -408,9 +408,10 @@ struct Owner {
 
 impl Owner {
     fn new(agent: DriverAgent) -> Self {
-        let agent = HeadlessDevAgent::attach(agent);
+        let mut agent = HeadlessDevAgent::attach(agent);
         let presses = Arc::new(AtomicU32::new(0));
-        let ui_runtime = HeadlessHost::new(HeadlessWindow::new(400, 300)).with_dev_agent(&agent);
+        let ui_runtime =
+            HeadlessHost::new(HeadlessWindow::new(400, 300)).with_dev_agent(&mut agent);
         ui_runtime
             .attach(&Counter {
                 presses: Arc::clone(&presses),
@@ -425,7 +426,7 @@ impl Owner {
     }
 
     fn open_second(&mut self) {
-        let agent = self.agent.as_ref().expect("the agent is attached");
+        let agent = self.agent.as_mut().expect("the agent is attached");
         let second = HeadlessHost::new(HeadlessWindow::new(400, 300)).with_dev_agent(agent);
         second
             .attach(&Counter {

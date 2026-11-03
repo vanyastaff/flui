@@ -41,6 +41,12 @@
   a session per connection that do no I/O, so every transport serves the same protocol and
   limits. The desktop transport keeps no worker thread and waits on no answer: an owner's answer
   or event is written as soon as it arrives, and an idle Unix connection never wakes.
+- **The event loop owns its development-agent hooks** (ADR-0288 §7): the first loop that starts
+  with a configuration takes its hooks, so a clone of that configuration starting another loop
+  finds none, and the loop detaches and drops them when it ends. A hook is called with nothing
+  locked, and one that panics is dropped alone. `flui_runtime::dev_agent::DevAgentHost::attach`
+  takes the hooks and its calls take `&mut self`; `HeadlessHost::with_dev_agent` takes the
+  `HeadlessDevAgent` by `&mut`.
 
 ### Added
 
@@ -77,3 +83,6 @@
   `UiRuntime::semantics_agent`**: an agent reaches a window through
   `UiRuntime::dev_agent_window`. `flui_view::dev_agent::{AgentFault, HandleKind,
   InspectTarget}` go with the per-method calls.
+- **`flui_runtime::dev_agent::DevAgentAttachment`, `DevAgentHost::new` and
+  `DevAgentHost::is_attached`**: `DevAgentHost::attach(hooks)` builds a host that serves until it
+  is dropped, and `DevAgentHost::is_serving` says whether any of its hooks serves.

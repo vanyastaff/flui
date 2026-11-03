@@ -610,9 +610,9 @@ that wires what it adds.
      `new_with_capacity` take a `TextContextHandle`, `PipelineOwner` has no `Default`, and a
      layout, intrinsic or dry-query context takes a `TextSource`, so no path builds a context
      of its own. A presentation's pipeline is built inside `PresentationState::new` from
-     `RuntimeCapabilities::text`. A frame driver that moves the owner out of its slot for a
-     typestate transition uses `PipelineOwner::take_idle`, whose placeholder shares the
-     context. A pipeline with no UI runtime behind it passes `TextContextHandle::standalone`, a
+     `RuntimeCapabilities::text`. A frame on an owner held in a slot (`PipelineOwner::run_frame_in_place`,
+     `PipelineCell::run_frame`) leaves the same owner, and so the same context, in the slot on
+     every exit, an unwind included. A pipeline with no UI runtime behind it passes `TextContextHandle::standalone`, a
      context over a collection of its own holding the bundled faces.
    - (3b) The hot-reload plugin pipeline (`flui-hot-reload`'s `pipeline.rs`) is one such
      pipeline: `app_plugin!` mounts it with a standalone context, not the host UI runtime's. The
@@ -943,8 +943,8 @@ The gate 1 prototype exists on `spike/parley_atlas` (not merged). Everything bel
   `a_layout_that_panics_while_holding_the_text_context_releases_it` and
   `intrinsic_and_dry_queries_measure_through_the_pipelines_context`.
 - Every pipeline is built with a text context (§10 step 3b): the `compile_fail` doctests on
-  `PipelineOwner::new`; in `crates/flui-rendering/tests/text_context.rs`,
-  `a_taken_pipeline_leaves_an_owner_that_measures_through_the_same_context`; in
+  `PipelineOwner::new`; in `crates/flui-rendering/tests/frame_unwind.rs`,
+  `a_frame_that_unwinds_leaves_the_pipeline_its_owner`; in
   `crates/flui-hot-reload/tests/plugin_pipeline_text.rs` (under `app-plugin`),
   `a_plugin_pipeline_measures_through_the_context_it_is_given`, and in
   `plugin_pipeline_layout.rs`, `a_plugin_pipeline_lays_out_at_the_size_of_each_frame`.
