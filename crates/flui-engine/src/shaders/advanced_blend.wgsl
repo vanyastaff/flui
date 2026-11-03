@@ -33,6 +33,8 @@
 
 // ── Uniforms ─────────────────────────────────────────────────────────────────
 
+import package::blend_helpers::{hard_light, lum, clip_color, set_lum, sat, set_sat};
+
 struct BlendUniforms {
     // Device-space pixel rectangle for the foreground layer: [x, y, w, h].
     // offset 0, size 16.
@@ -182,10 +184,8 @@ fn vs_main(@builtin(vertex_index) vi: u32) -> VsOutput {
 // ── Blend helpers ─────────────────────────────────────────────────────────────
 //
 // The 6 shared leaf helpers (hard_light, lum, clip_color, set_lum, sat,
-// set_sat) are defined in `blend_helpers.wgsl` and resolved by naga_oil at
-// pipeline-init time via `compose_wgsl_shader` in `src/wgpu/mod.rs`.
-
-#import blend_helpers::{hard_light, lum, clip_color, set_lum, sat, set_sat}
+// set_sat) are defined in `blend_helpers.wgsl` and imported at the top of this
+// file; `build.rs` resolves the import with WESL into plain WGSL.
 
 fn separable_blend(mode: u32, cb: f32, cs: f32) -> f32 {
     switch mode {

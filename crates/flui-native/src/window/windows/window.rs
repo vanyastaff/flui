@@ -1530,8 +1530,12 @@ impl PlatformWindow for WindowsWindow {
         let scale = self.state.lock().scale_factor;
         super::proc::with_window_context(self.hwnd, "set_input_regions", |ctx| {
             // `WM_NCHITTEST` borrows them only while it reads a slice and runs
-            // no code of the application's, so nothing holds them here.
-            ctx.input_regions.borrow_mut().update(regions, scale, None);
+            // no code of the application's. They are projected with nothing
+            // borrowed: a dropped region is reported through `tracing`, whose
+            // subscriber is the application's code and may pump messages.
+            let mut projected = std::mem::take(&mut *ctx.input_regions.borrow_mut());
+            let _changed = projected.update(regions, scale, None);
+            *ctx.input_regions.borrow_mut() = projected;
         });
         Ok(())
     }

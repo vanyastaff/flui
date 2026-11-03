@@ -1,4 +1,4 @@
-#import color_filter::{ImageSourceFilter, filter_mode, filter_matrix, filter_gamma}
+import package::color_filter::{ImageSourceFilter, filter_mode, filter_matrix, filter_gamma};
 @group(3) @binding(0) var<uniform> source_filter: ImageSourceFilter;
 
 // Filtering belongs to each decoded tap, before interpolation or tint.

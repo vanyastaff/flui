@@ -32,6 +32,8 @@ use crate::host::{self, WindowFacets, WindowPositions};
 use crate::host_window::HostWindow;
 use crate::owner::OpenWindowError;
 
+use crate::input::regions::ProjectedInputRegions;
+use crate::input::regions::presses::{ChromePress, ChromePresses, PressButton, ResizeBand};
 use crate::owner::window_delivery::{Publication, WindowDelivery};
 use crate::owner::winit::HostDisplays;
 use crate::owner::winit::control::ControlSender;
@@ -46,6 +48,7 @@ use crate::window::state::{
     ModeFlags, ReportedFacts, WindowStateCell, mode_of, system_frame_or_none,
 };
 use flui_platform::input_capabilities::InputCapabilities;
+use flui_platform::input_regions::ResizeEdge;
 use flui_platform::{
     AdmittedCommand, ApplyError, CursorError, DisplayId, PlatformTextInput, PlatformWindow,
     SizeConstraints, WindowAppearance, WindowCapabilities, WindowCommand, WindowFrame,
@@ -133,6 +136,8 @@ pub struct WinitWindow {
     /// minimization then goes unseen until some other event samples it.
     #[cfg(target_os = "linux")]
     minimize_unobserved: AtomicBool,
+    /// The frame the window was asked for and what a press on its chrome does.
+    chrome: Mutex<WinitChrome>,
     /// Whether winit last reported the window fully covered (`Occluded`).
     occluded: AtomicBool,
 }
@@ -192,6 +197,7 @@ impl WinitWindow {
         let constraints = SizeConstraints::new(options.min_size, options.max_size);
         let title = options.title.clone();
         let display = displays.id_of_window(&window);
+        let frame = options.frame.at_open(&capabilities);
         let initial = sample_state(
             &window,
             &RecordedState {
@@ -201,6 +207,7 @@ impl WinitWindow {
                 visible: options.visible,
                 display,
                 probed_mode: None,
+                frame,
                 reported: reported_facts(
                     &window,
                     appearance_of(&window, false),
@@ -242,6 +249,7 @@ impl WinitWindow {
             is_focused: parking_lot::Mutex::new(true),
             is_visible: parking_lot::Mutex::new(options.visible),
             occluded: AtomicBool::new(false),
+            chrome: Mutex::new(WinitChrome::new(frame)),
             delivery: Arc::new(WindowDelivery::new(handler, InputCapabilities::UNAVAILABLE)),
             facets,
             #[cfg(target_os = "linux")]
@@ -343,6 +351,7 @@ impl WinitWindow {
         // Read once: a second lock of the flag inside the literal below would
         // wait on the first one's guard, alive until the statement ends.
         let focused = *self.is_focused.lock();
+        let frame = self.chrome.lock().frame;
         let mut state = sample_state(
             &self.window,
             &RecordedState {
@@ -352,6 +361,7 @@ impl WinitWindow {
                 visible: *self.is_visible.lock(),
                 display: self.display(),
                 probed_mode: self.probed_mode(),
+                frame,
                 reported: ReportedFacts {
                     occluded: self.occluded.load(Ordering::Acquire),
                     ..reported_facts(
@@ -571,6 +581,8 @@ struct RecordedState<'a> {
     /// The mode the window system reports directly, where winit's flags fall
     /// short of it (X11 minimization).
     probed_mode: Option<WindowMode>,
+    /// The frame the window was last asked for.
+    frame: WindowFrame,
     /// The facts beyond geometry; their capabilities are what the window
     /// honours now (an X11 window whose minimization goes unseen says so).
     reported: ReportedFacts,
@@ -622,6 +634,56 @@ fn device_size(size: winit::dpi::PhysicalSize<u32>) -> Size<i32> {
     Size::new(clamp(size.width), clamp(size.height))
 }
 
+/// A winit window's frame as asked and the chrome a press on it is answered
+/// from (ADR-0286 §9).
+#[derive(Debug)]
+struct WinitChrome {
+    /// The frame the window was last asked for: a title bar of the
+    /// application's is a window without decorations that reads back as asked.
+    frame: WindowFrame,
+    /// The regions of the last composited frame, in device pixels.
+    projected: ProjectedInputRegions,
+    /// The last press on the bar, which the next may make a double-click of.
+    presses: ChromePresses,
+}
+
+impl WinitChrome {
+    fn new(frame: WindowFrame) -> Self {
+        Self {
+            frame,
+            projected: ProjectedInputRegions::default(),
+            presses: ChromePresses::default(),
+        }
+    }
+}
+
+/// The frame a winit window reports, which winit says only whether its
+/// decorations are on: a title bar the application asked to draw reads back
+/// as asked while they are off, the others as [`system_frame_or_none`] says.
+const fn reported_frame(decorated: bool, asked: WindowFrame) -> WindowFrame {
+    match asked {
+        WindowFrame::AppTitleBar(_) if !decorated => asked,
+        _ => system_frame_or_none(decorated),
+    }
+}
+
+/// The direction winit resizes a window from `edge` in, `None` for an edge
+/// it has no direction for.
+const fn resize_direction(edge: ResizeEdge) -> Option<winit::window::ResizeDirection> {
+    use winit::window::ResizeDirection;
+    match edge {
+        ResizeEdge::Top => Some(ResizeDirection::North),
+        ResizeEdge::Bottom => Some(ResizeDirection::South),
+        ResizeEdge::Left => Some(ResizeDirection::West),
+        ResizeEdge::Right => Some(ResizeDirection::East),
+        ResizeEdge::TopLeft => Some(ResizeDirection::NorthWest),
+        ResizeEdge::TopRight => Some(ResizeDirection::NorthEast),
+        ResizeEdge::BottomLeft => Some(ResizeDirection::SouthWest),
+        ResizeEdge::BottomRight => Some(ResizeDirection::SouthEast),
+        _ => None,
+    }
+}
+
 /// The window as winit and `facts` describe it.
 fn sample_state(window: &Window, facts: &RecordedState<'_>) -> WindowState {
     let capabilities = facts.reported.capabilities;
@@ -656,7 +718,7 @@ fn sample_state(window: &Window, facts: &RecordedState<'_>) -> WindowState {
     .with_title(Some(facts.title.to_owned()))
     .with_constraints(facts.constraints)
     .with_resizable(window.is_resizable())
-    .with_frame(system_frame_or_none(window.is_decorated()))
+    .with_frame(reported_frame(window.is_decorated(), facts.frame))
     .with_display(facts.display);
     facts.reported.onto(state)
 }
@@ -812,6 +874,7 @@ impl PlatformWindow for WinitWindow {
             }
             WindowCommand::SetResizable(resizable) => self.window.set_resizable(resizable),
             WindowCommand::SetFrame(frame) => {
+                self.chrome.lock().frame = frame;
                 self.window.set_decorations(frame.has_system_title_bar());
             }
             WindowCommand::SetMode(mode) => self.enter_mode(mode)?,
@@ -866,16 +929,21 @@ impl PlatformWindow for WinitWindow {
         Err(absence.into())
     }
 
-    /// The input regions are the system's edge gestures a region keeps out
-    /// (`InputRegionKind::SystemGestureExclusion`), and no desktop window
-    /// system winit runs on lets a window exclude them.
+    /// The chrome regions a press on a window without decorations is answered
+    /// from (ADR-0286 §9), projected at the window's scale now. No desktop
+    /// window system winit runs on lets a window exclude the system's edge
+    /// gestures, so those regions are kept and never read.
     fn set_input_regions(
         &self,
-        _regions: &[flui_platform::input_regions::InputRegion],
+        regions: &[flui_platform::input_regions::InputRegion],
     ) -> Result<(), flui_platform::Unsupported> {
-        Err(flui_platform::Unsupported::new(
-            flui_platform::UnsupportedReason::NotOnThisPlatform,
-        ))
+        let scale = self.window.scale_factor();
+        // Projected with the chrome unlocked: a dropped region is reported
+        // through `tracing`, whose subscriber is the application's code.
+        let mut projected = std::mem::take(&mut self.chrome.lock().projected);
+        let _changed = projected.update(regions, scale, None);
+        self.chrome.lock().projected = projected;
+        Ok(())
     }
 
     fn text_input(&self) -> Option<Arc<dyn PlatformTextInput>> {
@@ -947,6 +1015,98 @@ impl LoopWindow for WinitWindow {
 
     fn inner(&self) -> &Arc<Window> {
         &self.window
+    }
+
+    /// A press at `position` (physical pixels from the content's top-left
+    /// corner) on a window whose application draws the title bar: moves,
+    /// resizes or maximizes the window, or opens its menu, and is then taken
+    /// from the application. winit is read before the chrome is locked and
+    /// called after it is released.
+    fn press_chrome(
+        &self,
+        position: winit::dpi::PhysicalPosition<f64>,
+        button: winit::event::MouseButton,
+    ) -> bool {
+        let button = match button {
+            winit::event::MouseButton::Left => PressButton::Primary,
+            winit::event::MouseButton::Right => PressButton::Secondary,
+            _ => return false,
+        };
+        let Some(point) = crate::input::regions::presses::device_point(position.x, position.y)
+        else {
+            return false;
+        };
+        let scale = self.window.scale_factor();
+        let resizable_now = self.window.is_resizable()
+            && !self.window.is_maximized()
+            && self.window.fullscreen().is_none();
+        let size = self.window.inner_size();
+        let press = {
+            let mut chrome = self.chrome.lock();
+            let band = match chrome.frame {
+                WindowFrame::AppTitleBar(_) => {
+                    ResizeBand::of(device_size(size), scale, resizable_now)
+                }
+                // One with no frame draws its own resize areas, and one with the
+                // system's has its title bar there.
+                WindowFrame::None => None,
+                _ => return false,
+            };
+            let WinitChrome {
+                projected, presses, ..
+            } = &mut *chrome;
+            presses.press(
+                projected.sent(),
+                point,
+                button,
+                band,
+                std::time::Instant::now(),
+                scale,
+            )
+        };
+        let refused = match press {
+            ChromePress::App => return false,
+            // The move starts once the pointer travels (`chrome_moved`).
+            ChromePress::Move => None,
+            ChromePress::Resize(edge) => {
+                let Some(direction) = resize_direction(edge) else {
+                    return false;
+                };
+                self.window.drag_resize_window(direction).err()
+            }
+            ChromePress::ToggleMaximize => {
+                self.window.set_maximized(!self.window.is_maximized());
+                self.refresh_state();
+                None
+            }
+            ChromePress::WindowMenu => {
+                self.window.show_window_menu(position);
+                None
+            }
+        };
+        if let Some(error) = refused {
+            tracing::debug!(%error, ?press, "the window system refused a press on the title bar");
+            return false;
+        }
+        true
+    }
+
+    /// The pointer is at `position` with a taken press on the bar held: the
+    /// window system moves the window once it has travelled far enough.
+    fn chrome_moved(&self, position: winit::dpi::PhysicalPosition<f64>) {
+        let Some(point) = crate::input::regions::presses::device_point(position.x, position.y)
+        else {
+            return;
+        };
+        let scale = self.window.scale_factor();
+        let starts = self.chrome.lock().presses.moved(point, scale);
+        if starts && let Err(error) = self.window.drag_window() {
+            tracing::debug!(%error, "the window system refused to move the window");
+        }
+    }
+
+    fn chrome_released(&self) {
+        self.chrome.lock().presses.released();
     }
 
     /// The window may differ from its last snapshot: read it again, and raise
@@ -1123,9 +1283,9 @@ impl LoopWindows for WinitWindows {
                 plan.content_size.height,
             ))
             .with_resizable(options.resizable)
-            // No title bar of the application's on winit yet: one asked for
-            // opens with the system's frame.
-            .with_decorations(options.frame != WindowFrame::None)
+            // A title bar of the application's opens with no decorations: the
+            // window answers presses on its chrome itself (ADR-0286 §9).
+            .with_decorations(options.frame.has_system_title_bar())
             .with_visible(options.visible && !plan.created_unmapped())
             .with_maximized(plan.mode == WindowMode::Maximized);
         if plan.mode == WindowMode::Fullscreen {

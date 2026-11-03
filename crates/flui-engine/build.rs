@@ -3,7 +3,7 @@
 //! ## Generated filter bindings
 //!
 //! Generates Rust bindings for the transfer-filter shaders (gamma, blur,
-//! morphology, resample, color_matrix) and the naga_oil-composed shaders (mode,
+//! morphology, resample, color_matrix) and the WESL-composed shaders (mode,
 //! advanced_blend), plus decoded-image source filters, into `OUT_DIR`. The
 //! consumer includes each generated file and owns its runtime pipeline.
 //!
@@ -20,27 +20,22 @@
 //! | image_source_filter_layout.wgsl | image_source_filter_generated.rs | 112 bytes | color_filter |
 //! | advanced_blend.wgsl | advanced_blend_generated.rs   | 128 bytes    | blend_helpers  |
 //!
-//! ## `#import` resolution for the composed shaders
+//! ## Import resolution for the composed shaders
 //!
-//! Composed shaders import `color_filter` or `blend_helpers`.
-//! `wgsl_bindgen` resolves imports by
-//! file-path convention (it maps the module name `blend_helpers` to a
-//! `blend_helpers.wgsl` file found under the workspace root, the importing
-//! file's directory, or an additional scan directory — see
-//! `bevy_util::ModulePathResolver`).  `blend_helpers.wgsl` lives in
-//! `src/shaders/`, so:
+//! Composed shaders import `color_filter` or `blend_helpers` with WESL
+//! (`import package::color_filter::filter_mode;`, a module per file under
+//! `src/shaders/`). `compose_wesl_shaders` resolves them with the `wesl`
+//! compiler into plain WGSL at `OUT_DIR/shaders/<same path>.wgsl`, before any
+//! binding is generated, so:
 //!
-//! - `advanced_blend.wgsl` is in `shaders/` too → its workspace root is
-//!   `shaders/` and the import resolves with no extra scan directory.
-//! - `mode.wgsl` is in `shaders/effects/` → its workspace root stays `effects/`
-//!   (so the generated module is named `mode`, not `effects::mode`) and
-//!   `shaders/` is added as an import scan directory so `blend_helpers.wgsl` is
-//!   discoverable.
+//! - the pipelines include that finished WGSL (`shaders::composed_wgsl!`), and
+//!   no shader composer runs or ships at run time;
+//! - `wgsl_bindgen` reads the composed copy and never resolves an import
+//!   itself. Its workspace root for `effects/mode.wgsl` is the composed
+//!   `effects/`, so the generated module is named `mode`, not `effects::mode`.
 //!
 //! Only the uniform structs + bind-group layout are taken from the generated
-//! bindings; the pipelines still build their shader module at runtime via
-//! `compose_wgsl_shader` (naga_oil), so the runtime composition path is
-//! unchanged.
+//! bindings.
 //!
 //! ## Inner-attribute post-processing
 //!
@@ -146,23 +141,37 @@ const SHADER_CONFIGS: &[ShaderConfig] = &[
     },
 ];
 
-// ── naga_oil-composed shaders (#import blend_helpers) ─────────────────────────
+// ── WESL-composed shaders (`import package::…`) ───────────────────────────────
 
-/// Configuration for one composed shader whose `#import` must be resolved at
-/// codegen time so `wgsl_bindgen` can parse it.
+/// Every shader that imports a shared module, as a WESL module path under
+/// `src/shaders/` (`effects/mode` is `effects/mode.wgsl`).
+///
+/// `compose_wesl_shaders` resolves each one into plain WGSL at
+/// `OUT_DIR/shaders/<path>.wgsl`; the runtime pipelines include that output
+/// through `shaders::composed_wgsl!`, and `wgsl_bindgen` reads it too.
+const WESL_ENTRIES: &[&str] = &[
+    "advanced_blend",
+    "effects/color_matrix",
+    "effects/gamma",
+    "effects/mode",
+    // A fragment of the decoded-image assemblies in `shaders/mod.rs`: it has
+    // no entry point, so the compiler keeps every declaration it makes.
+    "image_source_filter",
+    "image_source_filter_layout",
+];
+
+/// Configuration for one composed shader whose bindings `wgsl_bindgen`
+/// generates from its composed output.
 struct ComposedShaderConfig {
-    /// Entry shader path relative to `src/shaders/`.
+    /// Entry shader path relative to `OUT_DIR/shaders/` (the composed copy of
+    /// `src/shaders/`).
     entry_rel: &'static str,
     /// Output file name written into `OUT_DIR`.
     out_file: &'static str,
-    /// Workspace root relative to `src/shaders/`.  Empty string = `shaders/`
-    /// itself.  Chosen so the generated module name is flat (`mode`, not
-    /// `effects::mode`).
+    /// Workspace root relative to `OUT_DIR/shaders/`.  Empty string = that
+    /// directory itself.  Chosen so the generated module name is flat (`mode`,
+    /// not `effects::mode`).
     workspace_rel: &'static str,
-    /// Import scan directories relative to `src/shaders/` (empty string =
-    /// `shaders/`).  Needed when `blend_helpers.wgsl` is not under the workspace
-    /// root or the entry's own directory.
-    scan_rel: &'static [&'static str],
     /// Binding overrides for this shader.
     overrides: BindingOverrides,
     /// Per-field Rust-type overrides as `(struct_regex, field_regex, rust_type)`.
@@ -177,14 +186,12 @@ struct ComposedShaderConfig {
     field_type_overrides: &'static [(&'static str, &'static str, &'static str)],
 }
 
-/// All naga_oil-composed shaders (P3).  Both sample texel-aligned premultiplied
-/// data with a nearest sampler.
+/// The composed shaders whose bindings are generated.
 const COMPOSED_SHADER_CONFIGS: &[ComposedShaderConfig] = &[
     ComposedShaderConfig {
         entry_rel: "image_source_filter_layout.wgsl",
         out_file: "image_source_filter_generated.rs",
         workspace_rel: "",
-        scan_rel: &[],
         overrides: NEAREST_SRC,
         field_type_overrides: &[],
     },
@@ -192,7 +199,6 @@ const COMPOSED_SHADER_CONFIGS: &[ComposedShaderConfig] = &[
         entry_rel: "effects/gamma.wgsl",
         out_file: "gamma_generated.rs",
         workspace_rel: "effects",
-        scan_rel: &[""],
         overrides: NEAREST_SRC,
         field_type_overrides: &[],
     },
@@ -200,7 +206,6 @@ const COMPOSED_SHADER_CONFIGS: &[ComposedShaderConfig] = &[
         entry_rel: "effects/color_matrix.wgsl",
         out_file: "color_matrix_generated.rs",
         workspace_rel: "effects",
-        scan_rel: &[""],
         overrides: NEAREST_SRC,
         field_type_overrides: &[],
     },
@@ -209,8 +214,6 @@ const COMPOSED_SHADER_CONFIGS: &[ComposedShaderConfig] = &[
         out_file: "mode_generated.rs",
         // Workspace root = effects/ keeps the generated module named `mode`.
         workspace_rel: "effects",
-        // blend_helpers.wgsl lives one level up in shaders/.
-        scan_rel: &[""],
         overrides: NEAREST_SRC,
         // mode.wgsl has no vec3 field — no override needed.
         field_type_overrides: &[],
@@ -218,11 +221,10 @@ const COMPOSED_SHADER_CONFIGS: &[ComposedShaderConfig] = &[
     ComposedShaderConfig {
         entry_rel: "advanced_blend.wgsl",
         out_file: "advanced_blend_generated.rs",
-        // advanced_blend.wgsl and blend_helpers.wgsl share shaders/ → no scan dir.
+        // advanced_blend.wgsl sits at the root of shaders/.
         // Filterable: a backdrop resampled through a transform is read
         // bilinearly as its foreground; the rest bind a nearest sampler.
         workspace_rel: "",
-        scan_rel: &[],
         overrides: BindingOverrides {
             texture_regex: "foreground_tex|backdrop_tex",
             texture_filterable: true,
@@ -253,6 +255,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let padding_regex =
         Regex::new(r"^_pad\d*$").expect("literal regex '^_pad\\d*$' is always valid");
 
+    // One watch over the whole shader tree: a change to any module can change
+    // a composed shader, and every output below derives from these sources.
+    println!("cargo:rerun-if-changed={}", shader_root.display());
+
+    let composed_root = out_dir.join("shaders");
+    compose_wesl_shaders(&shader_root, &composed_root)?;
+
     for cfg in SHADER_CONFIGS {
         let entry_path = effects_dir.join(cfg.shader_name);
         let out_path = out_dir.join(cfg.out_file);
@@ -262,32 +271,63 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             &out_path,
             &cfg.overrides,
             &[],
-            &[],
             padding_regex.clone(),
         )?;
     }
 
     for cfg in COMPOSED_SHADER_CONFIGS {
-        let entry_path = shader_root.join(cfg.entry_rel);
+        let entry_path = composed_root.join(cfg.entry_rel);
         let out_path = out_dir.join(cfg.out_file);
-        let workspace_root = join_rel(&shader_root, cfg.workspace_rel);
-        let scan_dirs: Vec<PathBuf> = cfg
-            .scan_rel
-            .iter()
-            .map(|rel| join_rel(&shader_root, rel))
-            .collect();
-        let scan_refs: Vec<&Path> = scan_dirs.iter().map(PathBuf::as_path).collect();
+        let workspace_root = join_rel(&composed_root, cfg.workspace_rel);
         run_wgsl_bindgen(
             &workspace_root,
             &entry_path,
             &out_path,
             &cfg.overrides,
-            &scan_refs,
             cfg.field_type_overrides,
             padding_regex.clone(),
         )?;
     }
 
+    Ok(())
+}
+
+/// Resolve every [`WESL_ENTRIES`] module into plain WGSL under `composed_root`.
+///
+/// - Names are not mangled: the composed shader keeps the entry points,
+///   uniform structs and bindings as written, which the pipelines and the
+///   generated bindings name. Two modules defining one name is then a
+///   redefinition error from naga, at build time for the generated shaders and
+///   in the pipeline tests for the rest.
+/// - Declarations no entry point reaches are stripped, except in the entry
+///   module itself (`keep_main`), so a fragment such as `image_source_filter`
+///   keeps the functions its assembly calls.
+/// - WESL's own validation needs its `eval` feature; naga validates instead.
+fn compose_wesl_shaders(
+    shader_root: &Path,
+    composed_root: &Path,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let options = wesl::CompileOptions {
+        mangler: wesl::ManglerKind::None,
+        keep_main: true,
+        validate: false,
+        ..wesl::CompileOptions::default()
+    };
+    let compiler =
+        wesl::Compiler::new_with_resolver(options, wesl::resolver::FileResolver::new(shader_root));
+    for entry in WESL_ENTRIES {
+        let module_path = format!("package::{}", entry.replace('/', "::"))
+            .parse::<wesl::syntax::ModulePath>()
+            .map_err(|error| format!("WESL module path for `{entry}`: {error}"))?;
+        let composed = compiler
+            .compile_module(&module_path)
+            .map_err(|error| format!("composing `{entry}` with WESL:\n{error}"))?;
+        let out_path = composed_root.join(format!("{entry}.wgsl"));
+        if let Some(parent) = out_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::write(&out_path, composed.to_string())?;
+    }
     Ok(())
 }
 
@@ -302,23 +342,16 @@ fn join_rel(base: &Path, rel: &str) -> PathBuf {
 
 /// Run `wgsl_bindgen` for one shader and post-process the output.
 ///
-/// `scan_dirs` are extra import-resolution roots (empty for self-contained
-/// shaders, so their generated output is identical to the pre-P3 single-shader
-/// path).
+/// The shader has no imports left: it is either self-contained or the
+/// composed output of [`compose_wesl_shaders`].
 fn run_wgsl_bindgen(
     workspace_root: &Path,
     entry_path: &Path,
     out_path: &Path,
     overrides: &BindingOverrides,
-    scan_dirs: &[&Path],
     field_type_overrides: &[(&str, &str, &str)],
     padding_regex: Regex,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    // wgsl_bindgen emits cargo:rerun-if-changed for every resolved shader file
-    // (including imports) via emit_rerun_if_change(true) below. This manual emit
-    // for the entry is harmless but makes the dependency explicit at a glance.
-    println!("cargo:rerun-if-changed={}", entry_path.display());
-
     // Texture-filterability override: wgsl_bindgen defaults to `filterable: true`,
     // so non-filterable textures must be overridden (and the sampler matched).
     let texture_override = OverrideTextureFilterability {
@@ -361,20 +394,14 @@ fn run_wgsl_bindgen(
         .override_sampler_type(vec![sampler_override])
         .override_struct_field_type(struct_field_overrides)
         .add_custom_padding_field_regexp(padding_regex)
-        .emit_rerun_if_change(true)
+        // `main` watches the whole source tree; a watch on the composed copies in
+        // OUT_DIR, which this script rewrites, would rerun it on every build.
+        .emit_rerun_if_change(false)
         .output(
             out_path
                 .to_str()
                 .expect("OUT_DIR + filename is valid UTF-8"),
         );
-    for scan_dir in scan_dirs {
-        builder.additional_scan_dir((
-            None,
-            scan_dir
-                .to_str()
-                .expect("CARGO_MANIFEST_DIR + scan subpath is valid UTF-8"),
-        ));
-    }
     builder.build()?.generate()?;
 
     // wgsl_bindgen 0.22 emitted `#![allow(...)]` at the top of every generated

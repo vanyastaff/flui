@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use flui_foundation::ListenerId;
 use flui_foundation::notifier::{ChangeNotifier, Listenable, ListenerObserver};
-use flui_foundation::panic::payload_text;
+use flui_foundation::panic::{FirstPanic, commit, payload_text};
 use flui_platform::{
     CopiedAside, StorageError, StorageFuture, Stored, StoredVersion, Unsupported,
     UnsupportedReason, WriteMode,
@@ -409,9 +409,9 @@ impl<D: Document> Persisted<D> {
     pub fn set(&self, value: D) -> Result<Revision, PersistError> {
         let document = &self.document;
         let (revision, mode) = document.next_write()?;
-        let Some((_, publisher)) = &document.registry else {
+        if document.registry.is_none() {
             return Err(PersistError::Storage(NO_REGISTRY.into()));
-        };
+        }
         let body = match catch_unwind(AssertUnwindSafe(|| value.encode())) {
             Ok(body) => body,
             Err(payload) => {
@@ -423,13 +423,17 @@ impl<D: Document> Persisted<D> {
                     during: CodecStep::Encode,
                     message,
                 };
-                document.fail(error.clone());
+                // The failure is recorded before the value's drop, which is
+                // application code; each is contained, the first failure kept.
+                let mut first = FirstPanic::new();
+                first.contain(|| document.fail(error.clone()));
+                first.contain(|| drop(value));
+                first.resume();
                 return Err(error);
             }
         };
         let bytes: Arc<[u8]> = Arc::from(framed::<D>(revision, &body));
-        let replaced = {
-            let mut state = document.state.borrow_mut();
+        commit(&document.state, |state, out| {
             // A load still in flight read the file before this edit: its
             // result is not applied over it.
             state.generation = state.generation.wrapping_add(1);
@@ -440,19 +444,18 @@ impl<D: Document> Persisted<D> {
             loaded.revision = revision;
             let replaced = std::mem::replace(&mut loaded.value, Rc::new(value));
             state.failure = None;
-            document.clear_busy(&mut state);
+            document.clear_busy(state);
             state.published = Some(Published {
                 bytes: Arc::clone(&bytes),
                 mode,
                 revision,
             });
             state.status = SaveStatus::Saving;
-            replaced
-        };
-        publisher.publish(bytes, mode, revision);
-        // The replaced value is dropped after this edit is published, so an
-        // edit its drop makes is published after this one and wins.
-        then_retire(|| document.refresh(), replaced);
+            out.call(publish_then_refresh(document, bytes, mode, revision));
+            // Destroyed after this edit is published, so an edit its drop
+            // makes is published after this one and wins.
+            out.release(replaced);
+        });
         Ok(revision)
     }
 
@@ -644,49 +647,53 @@ impl<D: Document> OpenDocument<D> {
         outcome: Result<Loaded<D>, PersistError>,
         read: Option<StoredVersion>,
     ) -> Result<Rc<D>, PersistError> {
-        let mut state = self.state.borrow_mut();
-        let latest = state.generation == generation;
-        if latest {
-            // Bytes written before this load belong to the value it replaces:
-            // the status follows the load, not their write.
-            state.published = None;
-            state.unreadable = outcome.is_err().then_some(read).flatten();
-        }
-        let (result, replaced) = match outcome {
-            Ok(loaded) => {
-                let value = Rc::clone(&loaded.value);
-                let replaced = if latest {
-                    state.status = SaveStatus::Clean;
-                    state.committed_at_load = baseline;
-                    state.loaded.replace(loaded)
-                } else {
-                    Some(loaded)
-                };
-                (Ok(value), replaced)
+        commit(&self.state, |state, out| {
+            let latest = state.generation == generation;
+            if latest {
+                // Bytes written before this load belong to the value it
+                // replaces: the status follows the load, not their write.
+                state.published = None;
+                state.unreadable = outcome.is_err().then_some(read).flatten();
             }
-            Err(error) => {
-                let replaced = if latest {
-                    state.status = match &error {
-                        PersistError::NewerVersion { found, supported } => {
-                            SaveStatus::ReadOnly(ReadOnlyReason::NewerVersion {
-                                found: *found,
-                                supported: *supported,
-                            })
-                        }
-                        other => SaveStatus::NotLoaded(Some(other.clone())),
+            let (result, replaced) = match outcome {
+                Ok(loaded) => {
+                    let value = Rc::clone(&loaded.value);
+                    let replaced = if latest {
+                        state.status = SaveStatus::Clean;
+                        state.committed_at_load = baseline;
+                        state.loaded.replace(loaded)
+                    } else {
+                        Some(loaded)
                     };
-                    state.loaded.take()
-                } else {
-                    None
-                };
-                (Err(error), replaced)
+                    (Ok(value), replaced)
+                }
+                Err(error) => {
+                    let replaced = if latest {
+                        state.status = match &error {
+                            PersistError::NewerVersion { found, supported } => {
+                                SaveStatus::ReadOnly(ReadOnlyReason::NewerVersion {
+                                    found: *found,
+                                    supported: *supported,
+                                })
+                            }
+                            other => SaveStatus::NotLoaded(Some(other.clone())),
+                        };
+                        state.loaded.take()
+                    } else {
+                        None
+                    };
+                    (Err(error), replaced)
+                }
+            };
+            // Announced before the replaced value's drop: a drop that panics
+            // leaves the settled load told.
+            let document = Rc::clone(self);
+            out.call(move || document.announce());
+            if let Some(replaced) = replaced {
+                out.release(replaced);
             }
-        };
-        drop(state);
-        // Announced before the replaced value's drop: a drop that panics
-        // leaves the settled load told.
-        then_retire(|| self.announce(), replaced);
-        result
+            result
+        })
     }
 
     /// The revision and write mode of the next value `set` writes, or why
@@ -774,10 +781,10 @@ impl<D: Document> OpenDocument<D> {
     /// Load [`Document::initial`] and hand it to the registry, written only
     /// over the stored version `base`.
     fn write_initial(self: &Rc<Self>, base: StoredVersion) {
-        let Some((_, publisher)) = &self.registry else {
+        if self.registry.is_none() {
             self.fail(PersistError::Storage(NO_REGISTRY.into()));
             return;
-        };
+        }
         // A panic in it is contained and recorded: the fresh start is left
         // failed and retryable, never `Saving` with nothing to finish it.
         let value = match contained_initial::<D>() {
@@ -795,12 +802,16 @@ impl<D: Document> OpenDocument<D> {
                     .to_owned();
                 flui_foundation::panic::discard_payload(payload);
                 // The failure is recorded before the value's drop, which is
-                // application code and may panic in turn.
-                self.fail(PersistError::Panicked {
-                    during: CodecStep::Encode,
-                    message,
+                // application code; each is contained, the first failure kept.
+                let mut first = FirstPanic::new();
+                first.contain(|| {
+                    self.fail(PersistError::Panicked {
+                        during: CodecStep::Encode,
+                        message,
+                    });
                 });
-                drop(value);
+                first.contain(|| drop(value));
+                first.resume();
                 return;
             }
         };
@@ -808,27 +819,28 @@ impl<D: Document> OpenDocument<D> {
         let revision = Revision::new(1);
         let bytes: Arc<[u8]> = Arc::from(framed::<D>(revision, &body));
         let mode = WriteMode::IfUnchanged(base);
-        let replaced = {
-            let mut state = self.state.borrow_mut();
+        commit(&self.state, |state, out| {
             state.restart = None;
             state.unreadable = None;
             state.failure = None;
-            self.clear_busy(&mut state);
+            self.clear_busy(state);
             state.published = Some(Published {
                 bytes: Arc::clone(&bytes),
                 mode,
                 revision,
             });
             state.status = SaveStatus::Saving;
-            state.loaded.replace(Loaded {
+            let replaced = state.loaded.replace(Loaded {
                 value: Rc::new(value),
                 base,
                 revision,
-            })
-        };
-        publisher.publish(bytes, mode, revision);
-        // A replaced value is dropped after the initial value is published.
-        then_retire(|| self.refresh(), replaced);
+            });
+            out.call(publish_then_refresh(self, bytes, mode, revision));
+            // Destroyed after the initial value is published.
+            if let Some(replaced) = replaced {
+                out.release(replaced);
+            }
+        });
     }
 
     /// End a busy store's retries: the next refusal starts from the first
@@ -884,14 +896,18 @@ impl<D: Document> OpenDocument<D> {
     /// Bring the status in line with the registry, keep the close hold the
     /// status calls for, and keep the watch running while a write is in
     /// flight.
+    ///
+    /// The released hold and the stale watch are destroyed, the watch
+    /// started and the listeners' delivery queued after the borrow ends,
+    /// each contained: a hold whose release signals a panicking owner leaves
+    /// the watch started all the same.
     fn refresh(self: &Rc<Self>) {
-        let (released, stale_watch, spawn) = {
-            let mut state = self.state.borrow_mut();
+        commit(&self.state, |state, out| {
             if let (Some(_), Some((_, publisher))) = (&state.published, &self.registry) {
                 let flush = publisher.state();
                 match &flush {
                     FlushState::Clean => {
-                        self.clear_busy(&mut state);
+                        self.clear_busy(state);
                         if matches!(state.failure, Some(PersistError::Storage(_))) {
                             state.failure = None;
                         }
@@ -939,9 +955,7 @@ impl<D: Document> OpenDocument<D> {
                 SaveStatus::Failed(_) => Some(HoldKind::Decision),
                 _ => None,
             };
-            let released = if state.hold.as_ref().map(|(kind, _)| *kind) == wanted {
-                None
-            } else {
+            if state.hold.as_ref().map(|(kind, _)| *kind) != wanted {
                 let taken = wanted.zip(self.guard.as_ref()).map(|(kind, guard)| {
                     let hold = match kind {
                         HoldKind::Work => guard.hold(),
@@ -949,45 +963,49 @@ impl<D: Document> OpenDocument<D> {
                     };
                     (kind, hold)
                 });
-                std::mem::replace(&mut state.hold, taken)
-            };
+                // A hold's release signals the owner.
+                if let Some(released) = std::mem::replace(&mut state.hold, taken) {
+                    out.release(released);
+                }
+            }
             let saving = state.status == SaveStatus::Saving;
             // Listeners follow the registry too: another document of this
             // name may commit, which changes `committed()` here.
             let watched = saving || self.announcer.notifier.has_listeners();
-            let spawn = watched && !state.watching && self.driver.is_some();
-            let stale_watch = if spawn {
+            if watched && !state.watching && self.driver.is_some() && self.registry.is_some() {
                 state.watching = true;
-                state.watch.take()
-            } else {
-                None
-            };
-            (released, stale_watch, spawn)
-        };
-        // Released after the borrow: a hold's release signals the owner.
-        drop(released);
-        drop(stale_watch);
-        if spawn && let (Some(driver), Some((registry, _))) = (&self.driver, &self.registry) {
-            // Spawning wakes the frame hook, which may panic; the task is then
-            // cancelled, and nothing is left watching, so the next refresh
-            // spawns it again. While a panic already unwinds, the hook's is
-            // kept, not raised.
-            let spawned = catch_unwind(AssertUnwindSafe(|| {
-                driver.spawn_local(Box::pin(watch(Rc::downgrade(self), registry.clone())))
-            }));
-            match spawned {
-                Ok(token) => self.state.borrow_mut().watch = Some(token),
-                Err(payload) => {
-                    self.state.borrow_mut().watching = false;
-                    if std::thread::panicking() {
-                        flui_foundation::panic::discard_payload(payload);
-                        return;
-                    }
-                    resume_unwind(payload);
+                if let Some(stale) = state.watch.take() {
+                    out.release(stale);
                 }
+                let document = Rc::clone(self);
+                out.call(move || document.start_watch());
+            }
+            let document = Rc::clone(self);
+            out.call(move || document.announce());
+        });
+    }
+
+    /// Run the watch [`refresh`](Self::refresh) marked as running. Spawning
+    /// wakes the frame hook, which may panic; the task is then cancelled and
+    /// nothing is left watching, so the next refresh starts it again.
+    fn start_watch(self: &Rc<Self>) {
+        let (Some(driver), Some((registry, _))) = (&self.driver, &self.registry) else {
+            return;
+        };
+        let spawned = catch_unwind(AssertUnwindSafe(|| {
+            driver.spawn_local(Box::pin(watch(Rc::downgrade(self), registry.clone())))
+        }));
+        match spawned {
+            Ok(token) => commit(&self.state, |state, out| {
+                if let Some(stale) = state.watch.replace(token) {
+                    out.release(stale);
+                }
+            }),
+            Err(payload) => {
+                self.state.borrow_mut().watching = false;
+                resume_unwind(payload);
             }
         }
-        self.announce();
     }
 
     /// The registry's last confirmed write of this value, by any document.
@@ -1076,21 +1094,20 @@ impl<D: Document> OpenDocument<D> {
     }
 }
 
-/// Run `step`, then drop `replaced`, a value the step's edit replaced, whose
-/// drop is application code: it runs with no borrow held and after the step,
-/// even when the step panics, so a panic in either never drops the other
-/// while unwinding. The drop's panic is raised over the step's, which is
-/// kept.
-fn then_retire<T>(step: impl FnOnce(), replaced: T) {
-    let stepped = catch_unwind(AssertUnwindSafe(step));
-    if let Err(payload) = catch_unwind(AssertUnwindSafe(|| drop(replaced))) {
-        if let Err(first) = stepped {
-            flui_foundation::panic::discard_payload(first);
+/// The step an edit queues: hand `bytes` to the registry, then bring the
+/// status, the close hold and the watch in line.
+fn publish_then_refresh<D: Document>(
+    document: &Rc<OpenDocument<D>>,
+    bytes: Arc<[u8]>,
+    mode: WriteMode,
+    revision: Revision,
+) -> impl FnMut() + 'static {
+    let document = Rc::clone(document);
+    move || {
+        if let Some((_, publisher)) = &document.registry {
+            publisher.publish(Arc::clone(&bytes), mode, revision);
         }
-        resume_unwind(payload);
-    }
-    if let Err(payload) = stepped {
-        resume_unwind(payload);
+        document.refresh();
     }
 }
 
