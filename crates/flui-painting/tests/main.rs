@@ -722,8 +722,8 @@ fn text_contract() {
                 text_overflow_unit::a_truncated_paragraph_paints_exactly_the_lines_it_measured,
             ),
             (
-                "root_recolor_keeps_the_shaped_buffer",
-                text_overflow_unit::root_recolor_keeps_the_shaped_buffer_and_span_recolor_reshapes_once,
+                "a_recolour_paints_what_a_fresh_layout_paints",
+                text_overflow_unit::a_recolour_paints_what_a_fresh_layout_paints,
             ),
             (
                 "bidirectional_text_lays_out",

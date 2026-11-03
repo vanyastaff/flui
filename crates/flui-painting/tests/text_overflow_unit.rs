@@ -109,21 +109,50 @@ pub(crate) fn a_truncated_paragraph_paints_exactly_the_lines_it_measured() {
     assert!(std::sync::Arc::ptr_eq(layout, second));
 }
 
-/// A root-only recolour is a paint change: the shaped layout is kept (same
-/// `Arc`) and the new colour rides on the paragraph command. A span recolour
-/// is baked into the layout and so is a layout change: the next layout
-/// shapes again, once.
-pub(crate) fn root_recolor_keeps_the_shaped_buffer_and_span_recolor_reshapes_once() {
+/// A recolour paints what a fresh layout of the new text paints, and shapes
+/// again only when it must: a root-only recolour keeps the painted paragraph
+/// (the same `Arc`), a span recolour rebuilds it from the kept layout, and
+/// only a recolour that splits a run of one colour lays out again.
+///
+/// Each row lays a painter out on `before`, recolours it to `after`, and
+/// compares what it paints with a fresh painter laid out on `after`: the
+/// placed glyphs with their colours, the size, the span descriptions and the
+/// command's colour. A paint-only row then lays out again under the same
+/// constraints and must keep the recoloured paragraph.
+pub(crate) fn a_recolour_paints_what_a_fresh_layout_paints() {
     use flui_foundation::geometry::Offset;
-    use flui_painting::{Canvas, DrawOp, Invalidation};
+    use flui_painting::glyphs::{PlacedGlyph, SwashRasterizer};
+    use flui_painting::{Canvas, DrawOp, Invalidation, TextContext};
     use flui_painting::{styling::Color, typography::TextStyle};
+    use std::sync::Arc;
 
-    fn styled(root: Color, child: Color) -> TextSpan {
-        TextSpan::new("Hello, ")
-            .with_style(TextStyle::new().with_color(root))
-            .with_child(TextSpan::new("FLUI").with_style(TextStyle::new().with_color(child)))
+    let red = Color::rgb(255, 0, 0);
+    let blue = Color::rgb(0, 0, 255);
+    let green = Color::rgb(0, 255, 0);
+
+    fn spans(root: (&str, Color), child: (&str, Color)) -> TextSpan {
+        TextSpan::new(root.0)
+            .with_style(TextStyle::new().with_color(root.1))
+            .with_child(TextSpan::new(child.0).with_style(TextStyle::new().with_color(child.1)))
     }
-    fn recorded(painter: &TextPainter) -> (std::sync::Arc<ShapedParagraph>, Color) {
+    fn styled(root: Color, child: Color) -> TextSpan {
+        spans(("Hello, ", root), ("FLUI", child))
+    }
+    // The cut falls inside the child: a short root and a child that wraps.
+    fn cut_in_child(root: Color, child: Color) -> TextSpan {
+        spans(("A ", root), ("several words that wrap", child))
+    }
+    // The cut falls inside the root; the child is past it.
+    fn cut_in_root(root: Color, child: Color) -> TextSpan {
+        spans(("several words that wrap ", root), ("tail", child))
+    }
+
+    struct Painted {
+        paragraph: Arc<ShapedParagraph>,
+        color: Color,
+        glyphs: Vec<PlacedGlyph>,
+    }
+    fn painted(painter: &TextPainter, rasterizer: &mut SwashRasterizer) -> Painted {
         let mut canvas = Canvas::new();
         painter.paint(&mut canvas, Offset::ZERO);
         let DrawOp::Paragraph {
@@ -132,50 +161,193 @@ pub(crate) fn root_recolor_keeps_the_shaped_buffer_and_span_recolor_reshapes_onc
         else {
             unreachable!("paint records a Paragraph");
         };
-        (std::sync::Arc::clone(paragraph), *color)
+        let glyphs = paragraph
+            .runs()
+            .flat_map(|run| {
+                let key = rasterizer
+                    .fonts_mut()
+                    .prepare_run(&run)
+                    .expect("a shaped face registers");
+                run.placed_glyphs(key, (0.0, 0.0), 1.0)
+                    .collect::<Vec<PlacedGlyph>>()
+            })
+            .collect::<Vec<PlacedGlyph>>();
+        Painted {
+            paragraph: Arc::clone(paragraph),
+            color: *color,
+            glyphs,
+        }
     }
 
-    let red = Color::rgb(255, 0, 0);
-    let blue = Color::rgb(0, 0, 255);
-    let green = Color::rgb(0, 255, 0);
-    let mut painter = TextPainter::new()
-        .with_text(styled(red, blue))
-        .with_text_direction(TextDirection::Ltr);
-    painter
-        .layout(&mut text_cx(), 0.0, f64::INFINITY)
-        .expect("valid fixture lays out");
-    let (first, first_color) = recorded(&painter);
-    assert_eq!(first_color, red);
+    // One context for every painter: the faces, and so the glyph keys, are
+    // the same ones.
+    let mut cx: TextContext = text_cx();
+    let mut rasterizer = SwashRasterizer::new();
+    fn painter_on(text: TextSpan, cx: &mut TextContext, width: f64, truncate: bool) -> TextPainter {
+        let mut painter = TextPainter::new()
+            .with_text(text)
+            .with_text_direction(TextDirection::Ltr);
+        if truncate {
+            painter.set_max_lines(Some(1));
+            painter.set_ellipsis(Some("…".to_string()));
+        }
+        painter
+            .layout(cx, 0.0, width)
+            .expect("valid fixture lays out");
+        painter
+    }
 
-    // Root recolour: paint-only, same shaped buffer, new colour on the op.
+    struct Row {
+        name: &'static str,
+        steps: Vec<(TextSpan, Invalidation)>,
+        before: TextSpan,
+        width: f64,
+        truncate: bool,
+        /// Whether a paint-only step keeps the paragraph painted before it.
+        keeps: Vec<bool>,
+    }
+    let wide = f64::INFINITY;
+    let narrow = 90.0;
+    let rows = [
+        Row {
+            name: "a root recolour keeps the painted paragraph",
+            before: styled(red, blue),
+            steps: vec![(styled(green, blue), Invalidation::Paint)],
+            width: wide,
+            truncate: false,
+            keeps: vec![true],
+        },
+        Row {
+            name: "a span recolour repaints from the kept layout",
+            before: styled(red, blue),
+            steps: vec![(styled(red, green), Invalidation::Paint)],
+            width: wide,
+            truncate: false,
+            keeps: vec![false],
+        },
+        Row {
+            name: "a recolour that splits a run of one colour lays out again",
+            before: styled(red, red),
+            steps: vec![(styled(red, green), Invalidation::Layout)],
+            width: wide,
+            truncate: false,
+            keeps: vec![false],
+        },
+        Row {
+            name: "the ellipsis takes the recolour of the span it follows",
+            before: cut_in_child(red, blue),
+            steps: vec![(cut_in_child(red, green), Invalidation::Paint)],
+            width: narrow,
+            truncate: true,
+            keeps: vec![false],
+        },
+        Row {
+            name: "a recolour of a span the ellipsis dropped",
+            before: cut_in_root(red, blue),
+            steps: vec![(cut_in_root(red, green), Invalidation::Paint)],
+            width: narrow,
+            truncate: true,
+            keeps: vec![false],
+        },
+        Row {
+            name: "a span takes the colour the root had",
+            before: styled(red, blue),
+            steps: vec![(styled(green, red), Invalidation::Paint)],
+            width: wide,
+            truncate: false,
+            keeps: vec![false],
+        },
+        Row {
+            name: "a span takes the root's colour",
+            before: styled(red, blue),
+            steps: vec![(styled(red, red), Invalidation::Paint)],
+            width: wide,
+            truncate: false,
+            keeps: vec![false],
+        },
+        Row {
+            name: "a root recolour after a span recolour keeps its paragraph",
+            before: styled(red, blue),
+            steps: vec![
+                (styled(red, green), Invalidation::Paint),
+                (styled(blue, green), Invalidation::Paint),
+            ],
+            width: wide,
+            truncate: false,
+            keeps: vec![false, true],
+        },
+    ];
+
+    for row in rows {
+        let name = row.name;
+        let mut painter = painter_on(row.before, &mut cx, row.width, row.truncate);
+        let mut previous = painted(&painter, &mut rasterizer);
+        for ((after, expected), keeps) in row.steps.into_iter().zip(row.keeps) {
+            assert_eq!(
+                painter.set_text(Some(after.clone().into())),
+                expected,
+                "{name}: what the recolour invalidates"
+            );
+            if expected == Invalidation::Layout {
+                painter
+                    .layout(&mut cx, 0.0, row.width)
+                    .expect("valid fixture lays out");
+            }
+            let recoloured = painted(&painter, &mut rasterizer);
+            let fresh = painted(
+                &painter_on(after, &mut cx, row.width, row.truncate),
+                &mut rasterizer,
+            );
+            assert_eq!(recoloured.glyphs, fresh.glyphs, "{name}: placed glyphs");
+            assert_eq!(
+                recoloured.paragraph.size(),
+                fresh.paragraph.size(),
+                "{name}: size"
+            );
+            assert_eq!(
+                recoloured.paragraph.describe_spans(),
+                fresh.paragraph.describe_spans(),
+                "{name}: spans"
+            );
+            assert_eq!(recoloured.color, fresh.color, "{name}: command colour");
+            assert_eq!(
+                Arc::ptr_eq(&previous.paragraph, &recoloured.paragraph),
+                keeps,
+                "{name}: whether the painted paragraph is kept"
+            );
+            if expected == Invalidation::Paint {
+                // A layout under the same constraints is a cache hit, and
+                // paints the recoloured paragraph.
+                painter
+                    .layout(&mut cx, 0.0, row.width)
+                    .expect("valid fixture lays out");
+                let again = painted(&painter, &mut rasterizer);
+                assert!(
+                    Arc::ptr_eq(&recoloured.paragraph, &again.paragraph),
+                    "{name}: the next layout keeps the recoloured paragraph"
+                );
+            }
+            previous = recoloured;
+        }
+    }
+
+    // The ellipsis glyph, last of the truncated line, paints in the colour
+    // of the span it follows, and the cut fell inside that span.
+    let mut painter = painter_on(cut_in_child(red, blue), &mut cx, narrow, true);
+    let before = painted(&painter, &mut rasterizer);
+    assert!(
+        before.paragraph.text().ends_with('…') && before.paragraph.text().contains("A s"),
+        "the cut falls inside the child, got {:?}",
+        before.paragraph.text()
+    );
     assert_eq!(
-        painter.set_text(Some(styled(green, blue).into())),
+        painter.set_text(Some(cut_in_child(red, green).into())),
         Invalidation::Paint
     );
-    let (second, second_color) = recorded(&painter);
-    assert!(
-        std::sync::Arc::ptr_eq(&first, &second),
-        "a root recolour must not reshape"
-    );
-    assert_eq!(second_color, green);
-
-    // Span recolour: the colour is baked into the layout, so it is a layout
-    // change and the next layout shapes once.
+    let after = painted(&painter, &mut rasterizer);
     assert_eq!(
-        painter.set_text(Some(styled(green, red).into())),
-        Invalidation::Layout
-    );
-    painter
-        .layout(&mut text_cx(), 0.0, f64::INFINITY)
-        .expect("valid fixture lays out");
-    let (third, _) = recorded(&painter);
-    assert!(
-        !std::sync::Arc::ptr_eq(&second, &third),
-        "a span recolour reshapes"
-    );
-    let runs = third.describe_spans();
-    assert!(
-        runs.iter().any(|run| run.contains("color=#ff0000ff")),
-        "the span's own colour reaches the shaped run, got {runs:?}"
+        after.glyphs.last().map(|glyph| glyph.color),
+        Some(Some(green)),
+        "the ellipsis paints in the recoloured child's colour"
     );
 }

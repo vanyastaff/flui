@@ -100,8 +100,13 @@ style's family is resolved by one rule (decision 8).
 `TextPainter::paint` records `DrawOp::Paragraph { paragraph, offset, color }`
 with the very `Arc<ShapedParagraph>` its cache holds (ADR-0065, ADR-0092 §4):
 the engine rasterises those runs and shapes nothing. The root colour rides on
-the command; a span's own colour is carried by its runs, so a span recolour is
-a layout change and a root recolour is not. A `ShapedParagraph` names no
+the command; a span's own colour is carried by its runs. A glyph run's brush is
+the index of its paint run (adjacent non-empty spans of one colour), whose
+colour the layout keeps beside the runs: a root recolour keeps the very `Arc`,
+a span recolour builds a new paragraph from the cached layout without shaping,
+and only a recolour that gives one paint run's spans different colours lays
+out again (ADR-0065, amended 2026-11-03). `describe_spans` prints the colour a
+span paints with. A `ShapedParagraph` names no
 shaper: its text, size, baselines and ink bounds, a face table of
 `FontBlob`s (the font bytes and the blob id keys name them by), and runs of
 glyph ids and logical positions with each run's face, size, variation
