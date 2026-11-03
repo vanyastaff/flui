@@ -92,8 +92,8 @@ impl AndroidHost for Android {
     }
 
     /// The lifecycle feature's reading of the Activity's callbacks.
-    fn activity(app: &AndroidApp) -> Box<dyn ActivityCallbacks> {
-        Box::new(ActivityRule::new(app))
+    fn activity() -> Box<dyn ActivityCallbacks> {
+        Box::new(ActivityRule::default())
     }
 
     /// The input feature's translation of the Activity's queue.
