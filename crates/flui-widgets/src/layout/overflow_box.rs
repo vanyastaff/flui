@@ -3,7 +3,7 @@
 use flui_objects::{OverflowBoxFit, RenderConstrainedOverflowBox};
 use flui_painting::Alignment;
 use flui_rendering::protocol::BoxProtocol;
-use flui_view::{Child, IntoView, RenderView, impl_render_view};
+use flui_view::{Child, CreationSite, IntoView, RenderView, impl_render_view};
 
 /// Lays its child out as if it lived in a box with different constraints,
 /// potentially allowing the child to overflow the parent's available space.
@@ -23,11 +23,13 @@ pub struct OverflowBox {
     max_height: Option<f64>,
     fit: OverflowBoxFit,
     child: Child,
+    site: CreationSite,
 }
 
 impl OverflowBox {
     /// Creates the widget with center alignment, no constraint overrides, and
     /// `OverflowBoxFit::Max` (claims all available parent space).
+    #[track_caller]
     pub fn new() -> Self {
         Self {
             alignment: Alignment::CENTER,
@@ -37,6 +39,7 @@ impl OverflowBox {
             max_height: None,
             fit: OverflowBoxFit::Max,
             child: Child::empty(),
+            site: CreationSite::here(),
         }
     }
 
@@ -92,6 +95,7 @@ impl OverflowBox {
 
 impl Default for OverflowBox {
     fn default() -> Self {
+        // A trait fn cannot be `#[track_caller]`: the site is this line.
         Self::new()
     }
 }
@@ -132,4 +136,4 @@ impl RenderView for OverflowBox {
     flui_view::single_child_view_children!();
 }
 
-impl_render_view!(OverflowBox);
+impl_render_view!(OverflowBox, site = site);

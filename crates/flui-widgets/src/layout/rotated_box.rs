@@ -2,7 +2,7 @@
 
 use flui_objects::RenderRotatedBox;
 use flui_rendering::protocol::BoxProtocol;
-use flui_view::{Child, IntoView, RenderView, impl_render_view};
+use flui_view::{Child, CreationSite, IntoView, RenderView, impl_render_view};
 
 /// Rotates its child by a whole number of clockwise 90° turns.
 ///
@@ -19,14 +19,17 @@ pub struct RotatedBox {
     /// 4 when constructing the paint matrix.
     quarter_turns: i32,
     child: Child,
+    site: CreationSite,
 }
 
 impl RotatedBox {
     /// Creates the widget with the given clockwise quarter-turn count.
+    #[track_caller]
     pub fn new(quarter_turns: i32) -> Self {
         Self {
             quarter_turns,
             child: Child::empty(),
+            site: CreationSite::here(),
         }
     }
 
@@ -62,4 +65,4 @@ impl RenderView for RotatedBox {
     flui_view::single_child_view_children!();
 }
 
-impl_render_view!(RotatedBox);
+impl_render_view!(RotatedBox, site = site);

@@ -3,7 +3,7 @@
 
 use flui_objects::RenderIgnoreBaseline;
 use flui_rendering::protocol::BoxProtocol;
-use flui_view::{Child, IntoView, RenderView, impl_render_view};
+use flui_view::{Child, CreationSite, IntoView, RenderView, impl_render_view};
 
 /// Hides `child`'s baseline from the parent, so a baseline-aligning parent
 /// treats this subtree as having no baseline at all.
@@ -17,17 +17,20 @@ use flui_view::{Child, IntoView, RenderView, impl_render_view};
 ///
 /// A single-child render widget over `RenderIgnoreBaseline` with no
 /// configuration of its own.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct IgnoreBaseline {
     child: Child,
+    site: CreationSite,
 }
 
 impl IgnoreBaseline {
     /// Creates a childless baseline-hiding wrapper.
     #[must_use]
+    #[track_caller]
     pub fn new() -> Self {
         Self {
             child: Child::empty(),
+            site: CreationSite::here(),
         }
     }
 
@@ -36,6 +39,13 @@ impl IgnoreBaseline {
     pub fn child(mut self, child: impl IntoView) -> Self {
         self.child = Child::some(child.into_view());
         self
+    }
+}
+
+impl Default for IgnoreBaseline {
+    fn default() -> Self {
+        // A trait fn cannot be `#[track_caller]`: the site is this line.
+        Self::new()
     }
 }
 
@@ -63,4 +73,4 @@ impl RenderView for IgnoreBaseline {
     flui_view::single_child_view_children!();
 }
 
-impl_render_view!(IgnoreBaseline);
+impl_render_view!(IgnoreBaseline, site = site);

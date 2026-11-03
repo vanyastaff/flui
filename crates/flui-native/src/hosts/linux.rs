@@ -7,10 +7,12 @@
 //! input, X11 with XInput 2 and XKB. Wayland fills the clipboard and primary
 //! selection positions with its seats' selections, X11 with the `CLIPBOARD`
 //! and `PRIMARY` selections on a connection of its own. Wayland fills the
-//! text position with its seats' `zwp_text_input_v3`, X11 the drag position
-//! with XDND drops on its windows. X11's text input and Wayland's drag and
-//! drop are `Absent` until each host speaks their protocols; a desktop has
-//! no haptics and no system bars.
+//! text position with its seats' `zwp_text_input_v3` and the drag position
+//! with drops on its windows through `wl_data_device`; X11 fills the drag
+//! position with XDND drops on its windows and the sessions they start.
+//! X11's text input is `Absent` until the host speaks its protocol, and no
+//! Wayland window starts a drag yet; a desktop has no haptics and no system
+//! bars.
 
 use std::sync::Arc;
 
@@ -63,9 +65,11 @@ mod wayland {
     use crate::clipboard::linux::wayland::SeatClipboard;
     use crate::display::linux::protocol::Environment;
     use crate::display::linux::wayland::WaylandDisplaySource;
+    use crate::drag::wayland::SeatDrag;
     use crate::input::linux::wayland::SeatInput;
     use crate::owner::linux::wayland::{
-        LastInput, WaylandClipboard, WaylandDisplays, WaylandHost, WaylandInput, WaylandLoop,
+        LastInput, WaylandClipboard, WaylandDisplays, WaylandDrag, WaylandHost, WaylandInput,
+        WaylandLoop,
     };
     use crate::text::linux::wayland::{SeatTexts, WaylandText};
     use crate::transfer::linux::wayland::DataDevices;
@@ -86,7 +90,7 @@ mod wayland {
         type Accessibility = UnixAccessibility;
         type Clipboard = WaylandLoop;
         type PrimarySelection = WaylandLoop;
-        type Drag = Absent<position::Drag>;
+        type Drag = WaylandLoop;
         // A desktop compositor has no haptic hardware to drive.
         type Haptics = Absent<position::Haptics>;
         type Preferences = WaylandLoop;
@@ -111,6 +115,11 @@ mod wayland {
         /// The seats' selection, through `wl_data_device`.
         fn clipboard(last_input: LastInput, devices: DataDevices) -> Arc<dyn WaylandClipboard> {
             Arc::new(SeatClipboard::new(last_input, devices))
+        }
+
+        /// Drops on the windows, which the seats' data devices hear.
+        fn drag(devices: DataDevices, wake: Box<dyn Fn() + Send + Sync>) -> Arc<dyn WaylandDrag> {
+            SeatDrag::new(&devices, wake)
         }
 
         fn notices(app: &Arc<AppDelivery>) -> Arc<dyn NoticeChannel> {
