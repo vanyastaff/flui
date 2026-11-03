@@ -398,16 +398,21 @@ fn bind(endpoint: &str) -> io::Result<Listener> {
 #[cfg(windows)]
 fn current_user_sid() -> io::Result<String> {
     let output = crate::proc::output_with_timeout(
-        std::process::Command::new("whoami").args(["/user", "/fo", "csv", "/nh"]),
+        std::process::Command::new("whoami").arg("/user"),
         Duration::from_secs(10),
     )?;
-    // `"machine\user","S-1-5-21-…"`
-    String::from_utf8_lossy(&output.stdout)
-        .trim()
-        .rsplit(',')
-        .next()
-        .map(|field| field.trim().trim_matches('"'))
-        .filter(|sid| sid.starts_with("S-1-"))
+    sid_in_whoami(&String::from_utf8_lossy(&output.stdout))
         .map(str::to_owned)
         .ok_or_else(|| io::Error::other("`whoami /user` named no SID"))
+}
+
+/// The SID in `whoami /user`'s table, whose last row is `machine\user  S-1-5-21-…`. The headings
+/// are in the system's language and a user's name may hold spaces, so the SID is the last word
+/// that starts as one does.
+#[cfg(any(windows, test))]
+pub(super) fn sid_in_whoami(table: &str) -> Option<&str> {
+    table
+        .split_whitespace()
+        .rev()
+        .find(|word| word.starts_with("S-1-"))
 }

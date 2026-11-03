@@ -122,7 +122,12 @@ roxmltree = { workspace = true }
 # `rustix` gives safe termios wrappers, so the CLI stays free of `unsafe` on
 # Unix, and the effective user, as root runs Chromium only without its sandbox.
 [target.'cfg(unix)'.dependencies]
-rustix = { version = "1.1", default-features = false, features = ["std", "termios", "stdio", "process"] }
+rustix = { version = "1.1", default-features = false, features = [
+    "std",
+    "termios",
+    "stdio",
+    "process",
+] }
 
 # `SetHandleInformation`: the CLI's own stdio handles are made
 # non-inheritable at startup (see `proc::keep_own_stdio_private`), the one

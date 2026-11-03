@@ -64,6 +64,31 @@ fn the_page_scripts_install_the_launch_and_report_by_connection() {
     }
 }
 
+#[test]
+fn the_pipe_admits_the_user_whoami_names_by_sid() {
+    let sid = "S-1-5-21-1004336348-1177238915-682003330-1001";
+    for (table, expected) in [
+        (
+            format!(
+                "\r\nUSER INFORMATION\r\n----------------\r\n\r\nUser Name      SID\r\n\
+                 ============== =============================================\r\n\
+                 desk\\user      {sid}\r\n"
+            ),
+            Some(sid),
+        ),
+        (
+            format!(
+                "\r\nBENUTZERINFORMATIONEN\r\n\r\nBenutzername   SID\r\n\
+                 desk\\a b c     {sid}\r\n"
+            ),
+            Some(sid),
+        ),
+        ("\r\nUSER INFORMATION\r\n".to_owned(), None),
+    ] {
+        assert_eq!(relay::sid_in_whoami(&table), expected, "{table}");
+    }
+}
+
 /// What the test's tab was asked, and what its page does.
 #[derive(Default)]
 struct Page {
