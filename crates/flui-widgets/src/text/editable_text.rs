@@ -36,7 +36,7 @@ use flui_rendering::pipeline::PipelineCell;
 use flui_rendering::protocol::BoxProtocol;
 use flui_rendering::semantics::TextSelection;
 use flui_view::prelude::*;
-use flui_view::{BoxedView, RenderView, impl_render_view};
+use flui_view::{BoxedView, CreationSite, RenderView, impl_render_view};
 
 use crate::AnimatedBuilder;
 use crate::interaction::actions::{
@@ -459,6 +459,8 @@ pub struct EditableText {
     pub(super) menu: MenuSettings,
     pub(super) magnifier: Option<MagnifierChoice>,
     pub(super) long_press: Option<LongPressSelection>,
+    #[view(site)]
+    site: CreationSite,
 }
 
 /// The field's name, placeholder, validity and whether it is required, as its semantics node
@@ -481,6 +483,7 @@ pub(crate) type TextChanged = Rc<dyn Fn(&mut EventCx<'_>, &str)>;
 impl EditableText {
     /// Create an `EditableText` driven by `controller` and `focus_node`.
     #[must_use]
+    #[track_caller]
     pub fn new(controller: TextEditingController, focus_node: Rc<FocusNode>) -> Self {
         Self {
             controller,
@@ -504,6 +507,7 @@ impl EditableText {
             menu: MenuSettings::default(),
             magnifier: None,
             long_press: None,
+            site: CreationSite::here(),
         }
     }
 

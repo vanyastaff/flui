@@ -4,7 +4,7 @@
 use flui_animation::MotionSpec;
 use flui_painting::typography::{TextAlign, TextStyle};
 use flui_view::prelude::{BuildContext, StatelessView};
-use flui_view::{BoxedView, IntoView, ViewExt};
+use flui_view::{BoxedView, CreationSite, IntoView, ViewExt};
 
 use crate::animated::MotionBuilder;
 use crate::{AnimatedLerp, DefaultTextStyle};
@@ -35,11 +35,14 @@ pub struct AnimatedDefaultTextStyle {
     max_lines: Option<u32>,
     motion: MotionSpec,
     child: BoxedView,
+    #[view(site)]
+    site: CreationSite,
 }
 
 impl AnimatedDefaultTextStyle {
     /// Apply `style` to `child`'s text, animating later changes with the
     /// default motion.
+    #[track_caller]
     pub fn new(style: TextStyle, child: impl IntoView) -> Self {
         Self {
             style,
@@ -47,6 +50,7 @@ impl AnimatedDefaultTextStyle {
             max_lines: None,
             motion: MotionSpec::default(),
             child: child.into_view().boxed(),
+            site: CreationSite::here(),
         }
     }
 

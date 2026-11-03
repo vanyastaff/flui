@@ -4,7 +4,7 @@ use flui_objects::RenderDecoratedBox;
 use flui_painting::styling::BoxDecoration;
 use flui_painting::styling::Color;
 use flui_rendering::protocol::BoxProtocol;
-use flui_view::{Child, IntoView, RenderView, impl_render_view};
+use flui_view::{Child, CreationSite, IntoView, RenderView, impl_render_view};
 
 /// Paints a solid `color` filling its bounds, behind its child.
 ///
@@ -16,15 +16,18 @@ pub struct ColoredBox {
     color: Color,
     anti_alias: bool,
     child: Child,
+    site: CreationSite,
 }
 
 impl ColoredBox {
     /// Create a `ColoredBox` painting the given solid `color`.
+    #[track_caller]
     pub fn new(color: Color) -> Self {
         Self {
             color,
             anti_alias: true,
             child: Child::empty(),
+            site: CreationSite::here(),
         }
     }
 
@@ -79,4 +82,4 @@ impl RenderView for ColoredBox {
     flui_view::single_child_view_children!();
 }
 
-impl_render_view!(ColoredBox);
+impl_render_view!(ColoredBox, site = site);
