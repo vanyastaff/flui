@@ -15,6 +15,20 @@ fn main() {
         wayland_host: { all(target_os = "linux", feature = "wayland") },
         // The native X11 host.
         x11_host: { all(target_os = "linux", feature = "x11") },
+        // The `ureq` HTTP client: the native hosts without a system stack
+        // (Linux and the BSDs), under the `http` feature.
+        ureq_host: {
+            all(
+                feature = "http",
+                not(any(
+                    target_arch = "wasm32",
+                    target_os = "android",
+                    target_os = "windows",
+                    target_os = "macos",
+                    target_os = "ios"
+                ))
+            )
+        },
         // A Linux host whose loop reads the session's own sources: the
         // Settings portal, logind and memory pressure. A Linux host joins it
         // here by its feature.
