@@ -1,18 +1,19 @@
 //! The built-in HTTP capability (ADR-0280).
 //!
-//! On Linux and Windows a request is sent from the run's IO lane, whose
-//! default pool runs inside a Tokio runtime, so `reqwest` drives it there and
-//! its connections stay in one pool per run. Elsewhere the host's own stack
-//! sends it: the page's `fetch` on the web, `HttpURLConnection` on Android and
-//! `NSURLSession` on macOS and iOS. There the exchange holds a slot of the IO
-//! lane until it ends, so a full or stopping lane refuses it as it refuses a
-//! `reqwest` request. Either way the caller's future only waits on a channel:
-//! it needs no runtime of its own. Dropping it, or the response's body,
-//! abandons the exchange.
+//! On Linux a request is sent from the run's IO lane, whose default pool runs
+//! inside a Tokio runtime, so `reqwest` drives it there and its connections
+//! stay in one pool per run. Elsewhere the host's own stack sends it: the
+//! page's `fetch` on the web, `HttpURLConnection` on Android, WinHTTP on
+//! Windows and `NSURLSession` on macOS and iOS. There the exchange holds a
+//! slot of the IO lane until it ends, so a full or stopping lane refuses it as
+//! it refuses a `reqwest` request. Either way the caller's future only waits
+//! on a channel: it needs no runtime of its own. Dropping it, or the
+//! response's body, abandons the exchange.
 //!
-//! Where FLUI has no client yet (Linux or Windows on its embedder's
-//! executors) a request answers [`HttpError::NotYetOnThisHost`]: a gap of
-//! FLUI's, reported as such and never skipped.
+//! Where FLUI has no client yet (a Linux host on its embedder's executors,
+//! where `reqwest` would find no Tokio drivers) a request answers
+//! [`HttpError::NotYetOnThisHost`]: a gap of FLUI's, reported as such and
+//! never skipped.
 //!
 //! [`HttpError::NotYetOnThisHost`]: flui_platform::http::HttpError::NotYetOnThisHost
 
@@ -30,15 +31,17 @@ pub(crate) struct HostHttp {
     /// One connection pool per run, built on the first request.
     #[cfg(not(any(
         target_os = "android",
+        target_os = "windows",
         target_os = "macos",
         target_os = "ios",
         target_arch = "wasm32"
     )))]
     client: Arc<std::sync::OnceLock<Result<reqwest::Client, String>>>,
-    /// The host's own stack, one authority per run: the page's `fetch`, or
-    /// Android's `HttpURLConnection`.
+    /// The host's own stack, one authority per run: the page's `fetch`,
+    /// Android's `HttpURLConnection`, WinHTTP or `NSURLSession`.
     #[cfg(any(
         target_os = "android",
+        target_os = "windows",
         target_os = "macos",
         target_os = "ios",
         target_arch = "wasm32"
@@ -52,6 +55,7 @@ impl HostHttp {
             slot,
             #[cfg(not(any(
                 target_os = "android",
+                target_os = "windows",
                 target_os = "macos",
                 target_os = "ios",
                 target_arch = "wasm32"
@@ -61,6 +65,8 @@ impl HostHttp {
             system: Http::new(Arc::new(flui_native::http::FetchClient::new())),
             #[cfg(target_os = "android")]
             system: Http::new(Arc::new(flui_native::http::UrlConnectionClient::new())),
+            #[cfg(target_os = "windows")]
+            system: Http::new(Arc::new(flui_native::http::WinHttpClient::new())),
             #[cfg(any(target_os = "macos", target_os = "ios"))]
             system: Http::new(Arc::new(flui_native::http::UrlSessionClient::new())),
         }
@@ -75,6 +81,7 @@ impl CapabilityProvider<HttpCapability> for HostHttp {
         })?;
         #[cfg(any(
             target_os = "android",
+            target_os = "windows",
             target_os = "macos",
             target_os = "ios",
             target_arch = "wasm32"
@@ -85,6 +92,7 @@ impl CapabilityProvider<HttpCapability> for HostHttp {
         ))));
         #[cfg(not(any(
             target_os = "android",
+            target_os = "windows",
             target_os = "macos",
             target_os = "ios",
             target_arch = "wasm32"
@@ -97,11 +105,12 @@ impl CapabilityProvider<HttpCapability> for HostHttp {
 }
 
 /// A client whose exchanges each hold a slot of the run's IO lane: the host's
-/// own stack (the page's `fetch`, Android's `HttpURLConnection`) runs off the
-/// lane, and is admitted by it all the same.
+/// own stack (the page's `fetch`, Android's `HttpURLConnection`, WinHTTP,
+/// `NSURLSession`) runs off the lane, and is admitted by it all the same.
 #[cfg(any(
     target_arch = "wasm32",
     target_os = "android",
+    target_os = "windows",
     target_os = "macos",
     target_os = "ios",
     test
@@ -195,6 +204,7 @@ mod held {
 
 #[cfg(not(any(
     target_os = "android",
+    target_os = "windows",
     target_os = "macos",
     target_os = "ios",
     target_arch = "wasm32"
@@ -521,6 +531,7 @@ mod lanes {
     test,
     not(any(
         target_os = "android",
+        target_os = "windows",
         target_os = "macos",
         target_os = "ios",
         target_arch = "wasm32"

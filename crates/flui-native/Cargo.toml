@@ -144,6 +144,8 @@ windows = { workspace = true, features = [
     # state (ADR-0211).
     "Win32_System_Com_StructuredStorage",
     "Win32_System_SystemServices",
+    # HTTP through WinHTTP (ADR-0280 §3).
+    "Win32_Networking_WinHttp",
     "Win32_System_Threading",
     "Win32_Security",
     # The development agent's pipe grants the current user's SID only
