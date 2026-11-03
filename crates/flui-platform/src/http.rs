@@ -620,15 +620,12 @@ pub enum HttpHost {
     /// (`AppConfig::with_executors`), with no Tokio reactor for the default
     /// client.
     EmbedderExecutors,
-    /// Android, until its provider sets up the platform's trust store.
-    Android,
 }
 
 impl fmt::Display for HttpHost {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
             Self::EmbedderExecutors => "a host on its embedder's executors",
-            Self::Android => "Android",
         })
     }
 }
@@ -681,6 +678,13 @@ pub enum HttpError {
     /// to start, or shutting down.
     #[error("the host's lanes refused the request: {0}")]
     Refused(crate::executor::SpawnError),
+    /// The host's network stack could not run the request: its bridge to the
+    /// stack failed outside the exchange itself.
+    #[error("the host's network stack failed: {detail}")]
+    Host {
+        /// What the bridge reported.
+        detail: String,
+    },
     /// This host's FLUI has no HTTP client yet (a gap of FLUI's, not of the
     /// OS).
     #[error("HTTP is not implemented yet on {host}")]

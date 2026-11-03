@@ -112,7 +112,7 @@ pub(super) fn magnified_backdrop_doubles_the_stripes_it_covers(renderer: &Headle
     // 33.25 - 8 = 25.25, and unmagnified 26.5: both black.
     let moved = capture(
         renderer,
-        &scene(Matrix4::translation(8.0, 0.0, 0.0), magnify.clone()),
+        &scene(Matrix4::translation(8.0, 0.0, 0.0), magnify),
     );
     expect_pixel(&moved, (34, 32), WHITE);
 
@@ -270,19 +270,6 @@ pub(super) fn magnified_backdrop_doubles_the_stripes_it_covers(renderer: &Headle
         "{:?}",
         outcome.map(|bytes| bytes.len())
     );
-    // On a layer's own content a transform filter fails the frame too.
-    let mut content = LayerTree::new(Layer::from(ImageFilterLayer::new(magnify)));
-    content.push_child(content.root(), stripes());
-    assert!(matches!(
-        renderer.render_layer_tree(&content, (SIDE, SIDE)),
-        Err(crate::EngineError::UnsupportedImageFilter { .. })
-    ));
-    // The next frame draws again.
-    expect_pixel(
-        &capture(renderer, &scene(Matrix4::IDENTITY, ImageFilter::blur(0.0))),
-        (22, 32),
-        WHITE,
-    );
 }
 
 /// A transform turning by `angle` about the middle of the pane.
@@ -366,4 +353,66 @@ pub(super) fn turned_backdrop_turns_the_stripes_it_covers(renderer: &HeadlessRen
         checked > 400 && moved > 100,
         "{checked} pixels checked, {moved} differ from the unturned backdrop"
     );
+}
+
+/// `content` under a layer filter `filter`, over white.
+fn filtered(filter: ImageFilter, content: Layer) -> LayerTree {
+    let mut tree = LayerTree::new(picture(Rect::from_xywh(0.0, 0.0, 64.0, 64.0), Color::WHITE));
+    let layer = tree.push_child(tree.root(), Layer::from(ImageFilterLayer::new(filter)));
+    tree.push_child(layer, content);
+    tree
+}
+
+pub(super) fn layer_transform_moves_and_turns_its_content(renderer: &HeadlessRenderer) {
+    // Magnified 2x about 32, pixel x of the layer shows its content at
+    // (x + 32) / 2 across the whole layer: 10 shows 21.25 (white, black
+    // unmagnified), 22 shows 27.25 (black, white unmagnified) and 25 shows
+    // 28.75 (white, black unmagnified).
+    let magnify = ImageFilter::try_magnify(Point::new(32.0, 32.0), 2.0).expect("a valid scale");
+    let magnified = capture(renderer, &filtered(magnify, stripes()));
+    dump_named("layer-transform-magnified", &magnified);
+    for (x, expected) in [(10, WHITE), (22, BLACK), (25, WHITE)] {
+        expect_pixel(&magnified, (x, 32), expected);
+    }
+
+    // Turned a quarter about 32, the vertical stripes lie across the layer:
+    // row 32 shows x = 32.5 everywhere, black, and column 32 alternates.
+    let quarter = capture(
+        renderer,
+        &filtered(
+            turn(std::f64::consts::FRAC_PI_2, ImageSampling::Nearest),
+            stripes(),
+        ),
+    );
+    dump_named("layer-transform-quarter", &quarter);
+    for x in [6, 22, 29, 45, 58] {
+        expect_pixel(&quarter, (x, 32), BLACK);
+    }
+    for (y, expected) in [(18, BLACK), (21, WHITE), (54, WHITE), (58, BLACK)] {
+        expect_pixel(&quarter, (32, y), expected);
+    }
+
+    // Moved 20 px right, a square drawn at 4..12 shows at 24..32, outside
+    // the content's own bounds, and leaves the white under where it was.
+    let moved = ImageFilter::Transform {
+        transform: ImageTransform::try_new(1.0, 0.0, 0.0, 1.0, 20.0, 0.0).expect("a translation"),
+        sampling: ImageSampling::Nearest,
+    };
+    let shifted = capture(
+        renderer,
+        &filtered(
+            moved,
+            picture(Rect::from_xywh(4.0, 4.0, 8.0, 8.0), Color::BLACK),
+        ),
+    );
+    dump_named("layer-transform-moved", &shifted);
+    for (x, expected) in [
+        (6, WHITE),
+        (10, WHITE),
+        (25, BLACK),
+        (30, BLACK),
+        (34, WHITE),
+    ] {
+        expect_pixel(&shifted, (x, 8), expected);
+    }
 }

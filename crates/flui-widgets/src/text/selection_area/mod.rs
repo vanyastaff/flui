@@ -57,7 +57,7 @@ use crate::anchored_box::AnchoredBox;
 use crate::interaction::Focus;
 use crate::interaction::actions::ActionChainProvider;
 use crate::support::RefCallback;
-use crate::text::{MenuSettings, show_menu_action};
+use crate::text::{MagnifierChoice, MenuSettings, SelectionMagnifier, show_menu_action};
 use crate::{DefaultSelectionControls, Overlay, Semantics};
 
 /// What a [`SelectionArea`] holds selected, in reading order.
@@ -170,6 +170,7 @@ pub struct SelectionArea {
     handles: Option<Rc<dyn SelectionHandles>>,
     controller: Option<SelectionController>,
     menu: MenuSettings,
+    magnifier: Option<MagnifierChoice>,
 }
 
 impl std::fmt::Debug for SelectionArea {
@@ -196,6 +197,7 @@ impl SelectionArea {
             handles: None,
             controller: None,
             menu: MenuSettings::default(),
+            magnifier: None,
         }
     }
 
@@ -205,6 +207,24 @@ impl SelectionArea {
     #[must_use]
     pub fn handles(mut self, handles: impl SelectionHandles) -> Self {
         self.handles = Some(Rc::new(handles));
+        self
+    }
+
+    /// Show `magnifier` while a finger drags a handle, in place of the
+    /// nearest [`DefaultSelectionControls`]' or the platform's
+    /// ([`PlainMagnifier::for_platform`](crate::text::PlainMagnifier::for_platform)).
+    /// Fields inside the area keep their own.
+    #[must_use]
+    pub fn magnifier(mut self, magnifier: impl SelectionMagnifier) -> Self {
+        self.magnifier = Some(MagnifierChoice::Show(Rc::new(magnifier)));
+        self
+    }
+
+    /// Show no magnifier while a finger drags a handle, though a
+    /// [`DefaultSelectionControls`] above or the platform gives one.
+    #[must_use]
+    pub fn no_magnifier(mut self) -> Self {
+        self.magnifier = Some(MagnifierChoice::Hide);
         self
     }
 
@@ -335,8 +355,10 @@ impl ViewState<SelectionArea> for SelectionAreaState {
         }
     }
 
-    /// Follows the overlay the handles go in.
+    /// Follows the overlay the handles go in and the haptics a handle drag
+    /// plays.
     fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
+        *self.model.handles.haptics.borrow_mut() = ctx.haptics();
         let overlay = Overlay::maybe_of(ctx);
         let moved = match (
             self.model.handles.overlay.borrow().as_ref(),
@@ -392,7 +414,10 @@ impl ViewState<SelectionArea> for SelectionAreaState {
                 Look::Given,
             );
         self.model.handles.set_look(look);
-        (self.model.handles).set_magnifier(DefaultSelectionControls::magnifier_of(ctx));
+        (self.model.handles).set_magnifier(DefaultSelectionControls::magnifier_of(
+            ctx,
+            view.magnifier.as_ref(),
+        ));
         // The document reads its lines in the ambient direction.
         let direction = match crate::Directionality::maybe_of(ctx).unwrap_or_default() {
             TextDirection::Ltr => SemanticsTextDirection::Ltr,
