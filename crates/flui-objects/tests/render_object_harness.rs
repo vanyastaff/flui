@@ -2102,7 +2102,7 @@ fn harness_icon_pending_layout_withdraws_old_glyph_geometry() {
     let (owner, result) = run.owner_mut().take_idle().run_frame();
     *run.owner_mut() = owner;
     assert!(matches!(
-        result,
+        result.map_err(flui_foundation::TreeError::into_error),
         Err(flui_rendering::RenderError::TextPreparationPending(_))
     ));
     flui_rendering::testing::edit_render_object::<RenderIcon, _, _>(

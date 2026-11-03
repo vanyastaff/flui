@@ -1,5 +1,6 @@
-//! How a byte transport frames a binary payload (ADR-0238 §2): a header of the payload's id and
-//! length, each a little-endian `u64`, refused when it announces more than the reader takes.
+//! How a byte transport frames the protocol (ADR-0238 §2): lines of at most a reader's limit,
+//! and binary payloads behind a header of their id and length, each a little-endian `u64`,
+//! refused when it announces more than the reader takes.
 
 use flui_protocol::{BlobHeader, BlobId, FramingError};
 
@@ -73,4 +74,62 @@ fn the_exit_on_disconnect_switch_is_exactly_one() {
     }
     assert_ne!(flui_protocol::launch::EXIT_DISCONNECTED, 0);
     assert_ne!(flui_protocol::launch::EXIT_DISCONNECTED, 101);
+}
+
+/// A case's name, the pushes, the lines taken after the last one, and whether the reader
+/// refused a line as too long.
+type Case<'a> = (&'a str, &'a [&'a [u8]], &'a [&'a [u8]], bool);
+
+#[test]
+fn a_line_reader_takes_whole_lines_however_the_bytes_arrive() {
+    // Every reader here takes lines of at most 8 bytes.
+    let table: &[Case<'_>] = &[
+        ("one line", &[b"abc\n"], &[b"abc"], false),
+        ("two in one read", &[b"a\nb\n"], &[b"a", b"b"], false),
+        ("one over two reads", &[b"ab", b"c\n"], &[b"abc"], false),
+        (
+            "a carriage return is dropped",
+            &[b"abc\r\n"],
+            &[b"abc"],
+            false,
+        ),
+        ("an empty line", &[b"\n"], &[b""], false),
+        ("a line not yet ended", &[b"abc"], &[], false),
+        ("exactly the limit", &[b"12345678\n"], &[b"12345678"], false),
+        ("over the limit, ended", &[b"123456789\n"], &[], true),
+        (
+            "over the limit, not yet ended",
+            &[b"1234", b"56789"],
+            &[],
+            true,
+        ),
+        (
+            "a line before a long one",
+            &[b"ok\n123456789012"],
+            &[b"ok"],
+            true,
+        ),
+    ];
+    for (case, pushes, lines, too_long) in table {
+        let mut reader = flui_protocol::LineReader::new(8);
+        let mut taken = Vec::new();
+        let mut refused = false;
+        for push in *pushes {
+            reader.push(push);
+            loop {
+                match reader.next_line() {
+                    Ok(Some(line)) => taken.push(line),
+                    Ok(None) => break,
+                    Err(error) => {
+                        assert_eq!(error, FramingError::LineTooLong { max_len: 8 }, "{case}");
+                        refused = true;
+                        break;
+                    }
+                }
+            }
+        }
+        let expected: Vec<Vec<u8>> = lines.iter().map(|line| line.to_vec()).collect();
+        assert_eq!(taken, expected, "{case}: lines");
+        assert_eq!(refused, *too_long, "{case}: refused as too long");
+    }
 }

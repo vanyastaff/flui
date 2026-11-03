@@ -132,6 +132,10 @@ struct CoreState {
     /// of what its closures captured); the allocation itself stays reserved
     /// while this is held, so a different view can never be mistaken for it.
     source_view: Option<Weak<dyn View>>,
+
+    /// Where the view this element was mounted for was created, copied from
+    /// [`View::creation_site`] at mount (zero-sized without sites).
+    site: flui_foundation::CreationSite,
 }
 
 impl CoreState {
@@ -147,6 +151,7 @@ impl CoreState {
             element_parent: None,
             external_scheduler: None,
             source_view: None,
+            site: flui_foundation::CreationSite::unknown(),
         }
     }
 
@@ -643,6 +648,17 @@ where
     /// [`ElementBase::set_depth`](crate::view::ElementBase::set_depth).
     pub fn depth(&self) -> usize {
         self.state.depth
+    }
+
+    /// Where the mounted view was created; unknown before mount.
+    #[must_use]
+    pub fn creation_site(&self) -> flui_foundation::CreationSite {
+        self.state.site
+    }
+
+    /// Records the mounted view's creation site.
+    pub(crate) fn set_creation_site(&mut self, site: flui_foundation::CreationSite) {
+        self.state.site = site;
     }
 
     /// Get a reference to the current View.

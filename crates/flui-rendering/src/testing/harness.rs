@@ -224,7 +224,7 @@ impl RenderTester {
     pub fn try_run_frame(self) -> Result<FrameRun, RenderError> {
         let (owner, root_id, registry) = self.build();
         let (owner, result) = owner.run_frame();
-        let layer_tree = result?;
+        let layer_tree = result.map_err(flui_foundation::TreeError::into_error)?;
         Ok(FrameRun {
             owner,
             root_id,

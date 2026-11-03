@@ -208,6 +208,12 @@ pub mod notifier_generic;
 // Typed self-description of the trees (ADR-0242); replaces `debug`'s string properties.
 pub mod inspect;
 
+// Where a value was created (`#[track_caller]`), kept in debug builds or with `creation-site`.
+pub mod creation_site;
+
+// An error with the path to the node it happened at, attached by the tree's owner.
+pub mod tree_error;
+
 // ============================================================================
 // RE-EXPORTS
 // ============================================================================
@@ -224,7 +230,9 @@ pub use claim_slot::{ClaimHandle, ClaimOutcome, ClaimSlot, claim_slot};
 // Monotonic time source (OS / virtual clock) — foundational primitive injected
 // by deadline- and frame-driven subsystems (gesture arena, headless binding).
 pub use clock::{ManualClock, MonotonicClock, SystemClock, event_epoch};
+pub use creation_site::CreationSite;
 pub use sequence::{DragSessionId, IdExhausted, IdMint, InputSequenceId, MintedId};
+pub use tree_error::{PathEntry, TREE_CONTEXT_DEPTH, TreeContext, TreeError};
 // Constants
 pub use consts::{DEBUG_MODE, EPSILON, EPSILON_F32, IS_DESKTOP, IS_MOBILE, IS_WEB, RELEASE_MODE};
 // Window-runtime generation/version counters + commit-time freshness gate.

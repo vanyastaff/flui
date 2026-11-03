@@ -19,6 +19,7 @@
 // where it is compiled; the pure halves forbid it.
 #![cfg_attr(windows, expect(unsafe_code))]
 
+mod caption;
 pub mod direct_manipulation;
 
 #[cfg(windows)]
@@ -342,6 +343,7 @@ impl WindowMessages for InputWindows {
                 | WM_INPUTLANGCHANGE
                 | DM_POINTERHITTEST
         ) || (msg == WM_TIMER && InputWindow::is_touchpad_timer(wparam.0))
+            || caption_pointer(msg, wparam).is_some()
     }
 
     unsafe fn message(
@@ -366,6 +368,16 @@ impl WindowMessages for InputWindows {
         // Held for the whole message: a callback that closes the window
         // drops the entry, not the input this message reaches.
         let input = self.by_handle(hwnd);
+        if let Some(client) = caption_pointer(msg, wparam) {
+            // Over a caption button of the application's: its pointer messages
+            // are the application's button's, and the default procedure, which
+            // would track the system's own button and promote them to mouse
+            // messages, never sees them.
+            if let Some(input) = input {
+                input.pointer_message(hwnd, client, wparam);
+            }
+            return Some(LRESULT(0));
+        }
         match msg {
             DM_POINTERHITTEST => {
                 // The system offers a contact to the window under it; a
@@ -2286,3 +2298,11 @@ pub(crate) mod testing {
 
 #[cfg(all(windows, test))]
 mod tests;
+
+/// The client pointer message a non-client one over a caption button the
+/// application draws stands for ([`caption`]), `None` for any other message:
+/// the hit-test code is the high word of its `wParam`.
+#[cfg(windows)]
+fn caption_pointer(msg: u32, wparam: WPARAM) -> Option<u32> {
+    caption::client_message(msg, ((wparam.0 >> 16) & 0xffff) as u32)
+}

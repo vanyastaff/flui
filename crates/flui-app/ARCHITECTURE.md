@@ -144,7 +144,8 @@ the dispatch layer moves there too.
   (`flui_protocol::launch`); with none, nothing is created. Each hook has a
   host of its own, so one that panics is dropped alone and the others keep
   being served (`every_installed_hook_is_attached_and_one_that_panics_is_dropped_alone`).
-  The agent serves protocol 0.8 over a current-user named pipe or a Unix socket
+  The agent serves the current protocol, and every older one no break separates
+  from it, over a current-user named pipe or a Unix socket
   in a `0700` directory; every operation goes through the window's owner inbox
   and waits a bounded time, and a full connection answers `busy`. Under
   `EXIT_ON_DISCONNECT` the first connection past its hello is the driver: when

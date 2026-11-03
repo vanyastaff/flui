@@ -106,6 +106,9 @@ pub struct RenderEntry<P: Protocol> {
     /// protocol geometry or per-frame state.
     attachment: AttachmentState,
     local_invalidation: Option<crate::pipeline::LocalRenderInvalidationHandle>,
+
+    /// Where the view that made this node was created; unknown for a node no view made.
+    site: flui_foundation::CreationSite,
 }
 
 /// Custody for the user-owned render object and parent data.
@@ -178,6 +181,7 @@ impl<P: Protocol> RenderEntry<P> {
             links: NodeLinks::new(),
             attachment: AttachmentState::Detached(None),
             local_invalidation: None,
+            site: flui_foundation::CreationSite::unknown(),
         }
     }
 
@@ -189,6 +193,7 @@ impl<P: Protocol> RenderEntry<P> {
             links: NodeLinks::with_depth(depth),
             attachment: AttachmentState::Detached(None),
             local_invalidation: None,
+            site: flui_foundation::CreationSite::unknown(),
         }
     }
 
@@ -284,6 +289,19 @@ impl<P: Protocol> RenderEntry<P> {
 // ============================================================================
 
 impl<P: Protocol> RenderEntry<P> {
+    /// Where the view that made this node was created.
+    #[inline]
+    #[must_use]
+    pub fn creation_site(&self) -> flui_foundation::CreationSite {
+        self.site
+    }
+
+    /// Records where the view that made this node was created.
+    #[inline]
+    pub fn set_creation_site(&mut self, site: flui_foundation::CreationSite) {
+        self.site = site;
+    }
+
     /// Returns a reference to the render state.
     #[inline]
     pub fn state(&self) -> &RenderState<P> {

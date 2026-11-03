@@ -144,7 +144,9 @@ pub(crate) fn a_panicking_descriptor_under_a_repaint_poisons_the_frame_in_the_pa
 
     let (mut owner, result) = owner.run_frame();
     let observed = format!("{result:?}");
-    let Err(flui_rendering::error::RenderError::Poisoned { phase, .. }) = result else {
+    let Err(flui_rendering::error::RenderError::Poisoned { phase, .. }) =
+        result.map_err(flui_foundation::TreeError::into_error)
+    else {
         panic!(
             "precondition: the armed descriptor must poison this pass \
              (paint); got {observed}"

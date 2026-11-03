@@ -51,7 +51,13 @@ fn main() {
             let id = field(&line, r#""id":"#).expect("id");
             let method = field(&line, r#""method":"#).expect("method");
             let reply = match method.as_str() {
-                "windows.list" => format!(r#"{{"id":{id},"result":{{"windows":["w1"]}}}}"#),
+                "windows.list" => {
+                    // An event and a late answer to some earlier request come first: the
+                    // client takes the line that answers its own id.
+                    writeln!(writer, r#"{{"event":"gap","params":{{"missed":1}}}}"#).unwrap();
+                    writeln!(writer, r#"{{"id":999,"result":{{"windows":[]}}}}"#).unwrap();
+                    format!(r#"{{"id":{id},"result":{{"windows":["w1"]}}}}"#)
+                }
                 "semantics.read" => format!(
                     r#"{{"id":{id},"result":{{"protocol":"__PROTOCOL__","nodes":[{{"id":"e1","role":"button"}}]}}}}"#
                 ),

@@ -68,6 +68,7 @@ pub(crate) fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
         .push(parse_quote!(Self: #runtime::StatelessView));
 
     let inspect = crate::derive_stateless::inspect_method(input)?;
+    let site = crate::derive_stateless::site_method(input)?;
 
     Ok(quote! {
         #[automatically_derived]
@@ -79,6 +80,8 @@ pub(crate) fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
             }
 
             #inspect
+
+            #site
         }
     })
 }
@@ -108,6 +111,59 @@ pub(crate) fn inspect_method(input: &DeriveInput) -> syn::Result<TokenStream> {
     Ok(quote! {
         fn inspect(&self, out: &mut #foundation::inspect::Fields<'_>) {
             <Self as #foundation::inspect::Inspect>::inspect(self, out);
+        }
+    })
+}
+
+/// The `View::creation_site` method for a field marked `#[view(site)]`, returning that field,
+/// or nothing when no field carries the mark.
+///
+/// The field is a `CreationSite` filled by the type's `#[track_caller]` constructor with
+/// `CreationSite::here()`. At most one field may carry the mark, and the mark means nothing on a
+/// type that is not a struct with named fields.
+pub(crate) fn site_method(input: &DeriveInput) -> syn::Result<TokenStream> {
+    let fields = match &input.data {
+        syn::Data::Struct(data) => &data.fields,
+        _ => return Ok(TokenStream::new()),
+    };
+    let mut marked = None;
+    for (index, field) in fields.iter().enumerate() {
+        for attr in field
+            .attrs
+            .iter()
+            .filter(|attr| attr.path().is_ident("view"))
+        {
+            let mut site = false;
+            attr.parse_nested_meta(|meta| {
+                if meta.path.is_ident("site") {
+                    site = true;
+                    Ok(())
+                } else {
+                    Err(meta.error("expected `site`"))
+                }
+            })?;
+            if site {
+                if marked.is_some() {
+                    return Err(syn::Error::new_spanned(
+                        field,
+                        "only one field can be marked `#[view(site)]`",
+                    ));
+                }
+                marked = Some((index, field));
+            }
+        }
+    }
+    let Some((index, field)) = marked else {
+        return Ok(TokenStream::new());
+    };
+    let member = match &field.ident {
+        Some(ident) => syn::Member::Named(ident.clone()),
+        None => syn::Member::Unnamed(syn::Index::from(index)),
+    };
+    let foundation = crate::runtime_path::Runtime::Foundation.resolve(input.ident.span())?;
+    Ok(quote! {
+        fn creation_site(&self) -> #foundation::CreationSite {
+            self.#member
         }
     })
 }
