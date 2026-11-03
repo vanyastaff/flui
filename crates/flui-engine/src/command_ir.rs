@@ -21,6 +21,7 @@ use crate::{
         TextureInstance,
     },
     pipeline_cache::PipelineKey,
+    resample::ResampleFilter,
     texture_cache::TextureKey,
     vertex::Vertex,
 };
@@ -203,10 +204,10 @@ pub(crate) enum ImageFilterSpec {
 
 /// A lowered, flattened image-filter pass.
 ///
-/// Passes are either bounds-GROWING (Morph, Blur) or bounds-PRESERVING
-/// (ColorMatrix, Identity).  The support calculation
-/// returns the per-axis extent for each variant; `ColorMatrix` and `Identity`
-/// contribute 0.
+/// Passes are bounds-GROWING (Morph, Blur), bounds-PRESERVING (ColorMatrix,
+/// Identity) or bounds-MOVING (Resample): [`ImageFilterPass::output_support`]
+/// maps a pass's input support forward and
+/// [`ImageFilterPass::required_input`] maps its output demand back.
 ///
 /// Adding a new variant requires adding a match arm in
 /// `apply_image_filter_passes` — the compiler enforces this (no `_` catch-all).
@@ -279,6 +280,15 @@ pub(crate) enum ImageFilterPass {
     /// them with growing passes.  Both routes call `apply_color_matrix` underneath,
     /// so the pixel output is identical.
     ColorMatrix([f32; 20]),
+    /// The input seen through an affine map: the output pixel centred at `p`
+    /// shows the input at `map · p`, both in root device pixels, read through
+    /// `filter`. Moves its support to where the map's inverse sends it.
+    Resample {
+        /// From an output point to the input point it shows.
+        map: glam::DAffine2,
+        /// How the input is read between texels.
+        filter: ResampleFilter,
+    },
 }
 
 /// An isolated foreground filter, recorded without owned GPU textures.
@@ -326,7 +336,9 @@ pub(crate) struct FilterOp {
 // ─── Primitive helpers ────────────────────────────────────────────────────────
 
 impl ImageFilterPass {
-    /// Actual per-axis integer sampling support, after validating shader arithmetic.
+    /// Actual per-axis integer kernel support, after validating shader
+    /// arithmetic. A resample has none: it moves its support, which
+    /// [`Self::output_support`] and [`Self::required_input`] follow.
     pub(crate) fn support_radius(&self) -> Result<(u32, u32), crate::error::GeometryError> {
         use crate::error::GeometryError;
         let validate = |value: f32, gaussian: bool| {
@@ -372,32 +384,79 @@ impl ImageFilterPass {
                 }
                 Ok((0, 0))
             }
-            Self::Identity => Ok((0, 0)),
+            // A resample has no kernel: it moves its support instead.
+            Self::Identity | Self::Resample { .. } => Ok((0, 0)),
         }
+    }
+
+    /// The support this pass draws from input support `input`.
+    pub(crate) fn output_support(
+        &self,
+        input: Rect<f64>,
+    ) -> Result<Rect<f64>, crate::error::GeometryError> {
+        if let Self::Resample { map, filter } = self {
+            let reach = filter.reach();
+            return Ok(crate::resample::mapped_bounds(
+                map.inverse(),
+                input.inflate(reach, reach),
+            ));
+        }
+        let (x, y) = self.support_radius()?;
+        Ok(input.inflate(f64::from(x), f64::from(y)))
+    }
+
+    /// The input this pass reads to draw `output`.
+    pub(crate) fn required_input(
+        &self,
+        output: Rect<f64>,
+    ) -> Result<Rect<f64>, crate::error::GeometryError> {
+        if let Self::Resample { map, filter } = self {
+            let reach = filter.reach();
+            return Ok(crate::resample::mapped_bounds(*map, output).inflate(reach, reach));
+        }
+        let (x, y) = self.support_radius()?;
+        Ok(output.inflate(f64::from(x), f64::from(y)))
     }
 }
 
 impl ImageFilterSpec {
-    /// Validate and sum sampling supports without copying an owned chain.
-    pub(crate) fn support_extent(&self) -> Result<(f64, f64), crate::error::GeometryError> {
-        let pass = match self {
-            Self::Chain(passes) => {
-                return passes.iter().try_fold((0.0, 0.0), |(x, y), pass| {
-                    let (rx, ry) = pass.support_radius()?;
-                    Ok((x + f64::from(rx), y + f64::from(ry)))
-                });
-            }
-            Self::Blur { sigma_x, sigma_y } => ImageFilterPass::Blur {
+    /// The spec's passes, in execution order, handed to `f` without copying
+    /// an owned chain.
+    fn with_passes<R>(&self, f: impl FnOnce(&[ImageFilterPass]) -> R) -> R {
+        match self {
+            Self::Chain(passes) => f(passes),
+            Self::Blur { sigma_x, sigma_y } => f(&[ImageFilterPass::Blur {
                 sigma_x: *sigma_x,
                 sigma_y: *sigma_y,
-            },
-            Self::Morph { radius, op } => ImageFilterPass::Morph {
+            }]),
+            Self::Morph { radius, op } => f(&[ImageFilterPass::Morph {
                 radius: *radius,
                 op: *op,
-            },
-        };
-        let (x, y) = pass.support_radius()?;
-        Ok((f64::from(x), f64::from(y)))
+            }]),
+        }
+    }
+
+    /// Validate every pass's shader arithmetic.
+    pub(crate) fn validate(&self) -> Result<(), crate::error::GeometryError> {
+        self.with_passes(|passes| {
+            passes
+                .iter()
+                .try_for_each(|pass| pass.support_radius().map(drop))
+        })
+    }
+
+    /// The input the chain reads to draw `output`: each pass's demand, from
+    /// the last back to the first.
+    pub(crate) fn required_input(
+        &self,
+        output: Rect<f64>,
+    ) -> Result<Rect<f64>, crate::error::GeometryError> {
+        self.with_passes(|passes| {
+            passes
+                .iter()
+                .rev()
+                .try_fold(output, |demand, pass| pass.required_input(demand))
+        })
     }
 
     /// Move the recorded chain into its replay operation without another allocation.
@@ -1167,9 +1226,12 @@ pub(crate) enum DrawItem {
 pub(crate) enum BackdropEffect {
     /// A separable Gaussian blur with these sigmas.
     Blur([f32; 2]),
-    /// The backdrop resampled through an axis-aligned map: the output pixel
-    /// at `p` shows the backdrop at `scale * p + offset`, read bilinearly.
-    Resample { scale: [f64; 2], offset: [f64; 2] },
+    /// The backdrop resampled through an affine map: the output pixel
+    /// centred at `p` shows the backdrop at `map · p`, read through `filter`.
+    Resample {
+        map: glam::DAffine2,
+        filter: ResampleFilter,
+    },
 }
 
 /// Backdrop input is independent of the output clip and damage write region.

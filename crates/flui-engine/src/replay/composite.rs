@@ -147,6 +147,7 @@ impl GpuReplay {
             encoder,
             target.view,
             texture.view(),
+            foreground_sampling,
             scissor,
         );
         Ok(())

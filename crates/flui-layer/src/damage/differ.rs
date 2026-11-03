@@ -137,8 +137,10 @@ struct ForegroundFilter {
     parent: Option<usize>,
     /// The union of its children's extents, unclipped, in surface pixels.
     input: Option<Rect<f64>>,
-    /// How far the filter spreads its input, in surface pixels.
-    reach: f64,
+    /// The filter, which spreads or moves its input.
+    filter: ImageFilter,
+    /// Surface transform of the filter layer.
+    transform: Matrix4,
 }
 
 /// One stamped layer.
@@ -253,7 +255,8 @@ impl Frame {
                 filters.push(ForegroundFilter {
                     parent: ctx.filter,
                     input: None,
-                    reach: device_reach(filter.filter(), &ctx.transform),
+                    filter: filter.filter().clone(),
+                    transform: ctx.transform,
                 });
                 ctx.filter = Some(filters.len() - 1);
             }
@@ -414,7 +417,11 @@ impl Frame {
             let Some(input) = filters[index].input else {
                 continue;
             };
-            let Some(footprint) = input.expand(filters[index].reach).intersect(&full) else {
+            let Some(footprint) =
+                footprint(&filters[index].filter, input, &filters[index].transform)
+                    .unwrap_or(full)
+                    .intersect(&full)
+            else {
                 continue;
             };
             frame.foreground.push(footprint);
@@ -751,4 +758,32 @@ fn max_scale(transform: &Matrix4) -> f64 {
 fn is_projective(transform: &Matrix4) -> bool {
     let m = &transform.m;
     m[3].abs() > f64::EPSILON || m[7].abs() > f64::EPSILON || (m[15] - 1.0).abs() > f64::EPSILON
+}
+
+/// Where `filter` draws what it takes from `input` (surface pixels) under
+/// `transform`: spread by a kernel's reach, or moved where a transform
+/// sends it, a texel past for a bilinear read. `None` when that has no
+/// bound, under a projective ancestor.
+fn footprint(filter: &ImageFilter, input: Rect<f64>, transform: &Matrix4) -> Option<Rect<f64>> {
+    match filter {
+        ImageFilter::Transform { transform: map, .. } => {
+            if is_projective(transform) {
+                return None;
+            }
+            let [xx, yx, xy, yy, x0, y0] = map.inverse_coefficients();
+            let mut shown_to_source = Matrix4::IDENTITY;
+            shown_to_source.m[0] = xx;
+            shown_to_source.m[1] = yx;
+            shown_to_source.m[4] = xy;
+            shown_to_source.m[5] = yy;
+            shown_to_source.m[12] = x0;
+            shown_to_source.m[13] = y0;
+            let moved = *transform * shown_to_source.try_inverse()? * transform.try_inverse()?;
+            Some(moved.transform_rect(&input).expand(1.0)).filter(Rect::is_finite)
+        }
+        ImageFilter::Compose(filters) => filters
+            .iter()
+            .try_fold(input, |input, filter| footprint(filter, input, transform)),
+        _ => Some(input.expand(device_reach(filter, transform))),
+    }
 }

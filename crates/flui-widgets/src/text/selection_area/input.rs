@@ -26,10 +26,12 @@ use flui_rendering::semantics::{DocumentPosition, DocumentSelection};
 use flui_view::BoxedView;
 use flui_view::prelude::*;
 
+use super::handles::play_step;
 use super::{
     HandleSide, SelectableEntry, SelectionChangeCause, SelectionInput, SelectionModel,
     paragraph_beneath,
 };
+use crate::interaction::actions::ErasedAction;
 use crate::interaction::recognizer_attachment::RecognizerAttachment;
 use crate::interaction::{
     Action, ActionOutcome, CopySelectionTextIntent, DismissIntent, GesturePolicy, Listener,
@@ -101,8 +103,8 @@ impl CaretMemory {
 }
 
 /// Where the pointer hit a text, and on which side of a soft wrap.
-struct Hit {
-    at: DocumentPosition,
+pub(super) struct Hit {
+    pub(super) at: DocumentPosition,
     affinity: TextAffinity,
 }
 
@@ -186,7 +188,7 @@ impl SelectionModel {
     /// Where `side`'s end sits: the middle of its line, in render-root
     /// coordinates, and the line's height. The start sits on the line after
     /// it and the end on the line it ends, as the paragraph publishes them.
-    fn end_line(&self, side: HandleSide) -> Option<(Offset<f64>, f64)> {
+    pub(super) fn end_line(&self, side: HandleSide) -> Option<(Offset<f64>, f64)> {
         let ordered = self.ordered();
         let (index, at) = self.end(&ordered, side)?;
         self.with_paragraph(&ordered[index].entry, |paragraph, to_root| {
@@ -218,15 +220,22 @@ impl SelectionModel {
 
     /// A drag of `side`'s handle began with the contact at `global`: the
     /// end keeps the distance it had from the contact, so the handle does
-    /// not jump under the finger.
+    /// not jump under the finger. The toolbar goes while the handle moves.
     pub(super) fn handle_drag_started(&self, side: HandleSide, global: Offset<f64>) {
         let grip = self.end_line(side).map(|(middle, _)| middle - global);
         self.handles.grip.set(grip.map(|grip| (side, grip)));
+        self.handles.magnifier_along.set(0.0);
+        let mut failure = FirstPanic::new();
+        self.hide_toolbar(&mut failure);
+        // The magnifier shows over the end the drag holds.
+        self.handles.refresh_magnifier(&mut failure);
+        failure.resume();
     }
 
-    /// `side`'s handle was dragged to `global`: its end moves to the
-    /// position there, the other end stays, and an end never passes the
-    /// other, so the handles keep their sides.
+    /// `side`'s handle was dragged to `global`. Each step of its end plays
+    /// a selection click, and the magnifier stays under the finger; both
+    /// happen though the selection's listener fails, whose first failure is
+    /// resumed after.
     pub(super) fn handle_dragged(&self, side: HandleSide, global: Offset<f64>) {
         let Some((gripped, grip)) = self.handles.grip.get() else {
             return;
@@ -234,15 +243,44 @@ impl SelectionModel {
         if gripped != side {
             return;
         }
+        let held = global + grip;
+        let before = self.selection.borrow().clone();
+        let mut failure = FirstPanic::new();
+        failure.contain(|| self.move_dragged_end(side, held));
+        if *self.selection.borrow() != before {
+            let haptics = self.handles.haptics.borrow().clone();
+            failure.contain(|| play_step(haptics.as_ref()));
+        }
+        failure.contain(|| self.follow_finger(side, held));
+        failure.resume();
+    }
+
+    /// Keeps a drag's magnifier under the finger, which holds `side`'s end
+    /// at `held`: it sits that far along the line from where the end is
+    /// now, so it moves between characters while the end steps over them.
+    fn follow_finger(&self, side: HandleSide, held: Offset<f64>) {
+        let Some((end, _)) = self.end_line(side) else {
+            return;
+        };
+        let along = held.dx - end.dx;
+        if self.handles.magnifier_along.replace(along) != along {
+            let mut failure = FirstPanic::new();
+            self.handles.refresh_magnifier(&mut failure);
+            failure.resume();
+        }
+    }
+
+    /// Moves `side`'s end to the position at `held`; the other end stays,
+    /// and an end never passes the other, so the handles keep their sides.
+    fn move_dragged_end(&self, side: HandleSide, held: Offset<f64>) {
         let ordered = self.ordered();
         let other = match side {
             HandleSide::End => HandleSide::Start,
             _ => HandleSide::End,
         };
-        let (Some(hit), Some((_, fixed))) = (
-            self.position_at(&ordered, global + grip),
-            self.end(&ordered, other),
-        ) else {
+        let (Some(hit), Some((_, fixed))) =
+            (self.position_at(&ordered, held), self.end(&ordered, other))
+        else {
             return;
         };
         let keeps_side = match side {
@@ -295,7 +333,7 @@ impl SelectionModel {
 
     /// The position nearest `global` (render-root coordinates): in the text
     /// under it, else in the nearest text, nearer by line first.
-    fn position_at(&self, ordered: &[Ordered], global: Offset<f64>) -> Option<Hit> {
+    pub(super) fn position_at(&self, ordered: &[Ordered], global: Offset<f64>) -> Option<Hit> {
         ordered
             .iter()
             .filter_map(|text| {
@@ -364,8 +402,35 @@ impl SelectionModel {
         }
     }
 
+    /// The ends of the word around `at`.
+    pub(super) fn word_at(
+        &self,
+        ordered: &[Ordered],
+        at: &DocumentPosition,
+    ) -> (DocumentPosition, DocumentPosition) {
+        self.unit_at(ordered, at, Unit::Word)
+    }
+
+    /// `selection`'s ends in reading order: the one a reader meets first,
+    /// then the other.
+    pub(super) fn ordered_ends<'s>(
+        ordered: &[Ordered],
+        selection: &'s DocumentSelection,
+    ) -> (&'s DocumentPosition, &'s DocumentPosition) {
+        let (anchor, focus) = (selection.anchor(), selection.focus());
+        if Self::compare(ordered, focus, anchor) == Ordering::Less {
+            (focus, anchor)
+        } else {
+            (anchor, focus)
+        }
+    }
+
     /// Where `a` and `b` fall in reading order.
-    fn compare(ordered: &[Ordered], a: &DocumentPosition, b: &DocumentPosition) -> Ordering {
+    pub(super) fn compare(
+        ordered: &[Ordered],
+        a: &DocumentPosition,
+        b: &DocumentPosition,
+    ) -> Ordering {
         let rank = |at: &DocumentPosition| {
             ordered
                 .iter()
@@ -598,11 +663,14 @@ impl SelectionModel {
     /// Shift with an arrow, Home or End moves the selection's moving end: by
     /// character, by word with the platform's word modifier, to the line's
     /// edge, or a line up or down, crossing into the neighbouring text at an
-    /// edge.
+    /// edge. Any key takes a touch's toolbar away.
     pub(super) fn key(&self, cx: &mut EventCx<'_>, event: &KeyEvent) -> KeyEventResult {
         if event.state() != KeyState::Down {
             return KeyEventResult::Ignored;
         }
+        let mut failure = FirstPanic::new();
+        self.hide_toolbar(&mut failure);
+        failure.resume();
         let modifiers = command_modifiers(event.modifiers);
         if !modifiers.contains(Modifiers::SHIFT) {
             return KeyEventResult::Ignored;
@@ -782,7 +850,7 @@ fn line_of(lines: &[LineMetrics], byte: usize, upstream: bool) -> Option<&LineMe
     })
 }
 
-/// Answers the area's intents: select all, copy and dismiss.
+/// Answers the area's select all and copy.
 pub(super) struct AreaAction(pub(super) Weak<SelectionModel>);
 
 impl Action<SelectAllTextIntent> for AreaAction {
@@ -809,19 +877,41 @@ impl Action<CopySelectionTextIntent> for AreaAction {
     }
 }
 
-impl Action<DismissIntent> for AreaAction {
-    fn is_enabled(&self, _intent: &DismissIntent) -> bool {
-        self.0
+/// Esc clears a selection; with nothing selected it goes to the enclosing
+/// dismiss the area would hide (a modal route's pop), so the area's
+/// actions stay the same whatever it holds selected.
+pub(super) struct AreaDismiss {
+    pub(super) model: Weak<SelectionModel>,
+    /// The enclosing chain's answer to the intent.
+    pub(super) enclosing: Option<ErasedAction>,
+}
+
+impl AreaDismiss {
+    fn selecting(&self) -> Option<Rc<SelectionModel>> {
+        self.model
             .upgrade()
-            .is_some_and(|model| model.selection.borrow().is_some())
+            .filter(|model| model.selection.borrow().is_some())
+    }
+}
+
+impl Action<DismissIntent> for AreaDismiss {
+    fn is_enabled(&self, intent: &DismissIntent) -> bool {
+        self.selecting().is_some()
+            || self
+                .enclosing
+                .as_ref()
+                .is_some_and(|enclosing| enclosing.is_enabled(intent))
     }
 
-    fn invoke(&self, cx: &mut EventCx<'_>, _intent: &DismissIntent) -> ActionOutcome {
-        let Some(model) = self.0.upgrade() else {
-            return ActionOutcome::NotPerformed;
-        };
-        model.select(cx, None, SelectionInput::Keyboard);
-        ActionOutcome::Performed
+    fn invoke(&self, cx: &mut EventCx<'_>, intent: &DismissIntent) -> ActionOutcome {
+        if let Some(model) = self.selecting() {
+            model.select(cx, None, SelectionInput::Keyboard);
+            return ActionOutcome::Performed;
+        }
+        match &self.enclosing {
+            Some(enclosing) if enclosing.is_enabled(intent) => enclosing.invoke(cx, intent),
+            _ => ActionOutcome::NotPerformed,
+        }
     }
 }
 
@@ -856,6 +946,7 @@ impl StatefulView for SelectionGestures {
             recognizers: None,
             tap_and_drag: Rc::new(RecognizerAttachment::default()),
             touch_tap: Rc::new(RecognizerAttachment::default()),
+            secondary_tap: Rc::new(RecognizerAttachment::default()),
             touch_long_press: Rc::new(RecognizerAttachment::default()),
         }
     }
@@ -864,6 +955,7 @@ impl StatefulView for SelectionGestures {
 struct Recognizers {
     tap_and_drag: Rc<TapAndDragGestureRecognizer>,
     touch_tap: Rc<TapGestureRecognizer>,
+    secondary_tap: Rc<TapGestureRecognizer>,
     touch_long_press: Rc<LongPressGestureRecognizer>,
 }
 
@@ -871,6 +963,7 @@ impl Recognizers {
     fn cancel(&self) {
         let _ = self.tap_and_drag.cancel();
         let _ = self.touch_tap.cancel();
+        let _ = self.secondary_tap.cancel();
         let _ = self.touch_long_press.cancel();
     }
 }
@@ -882,6 +975,8 @@ pub struct SelectionGesturesState {
     recognizers: Option<Recognizers>,
     tap_and_drag: Rc<RecognizerAttachment<TapAndDragGestureRecognizer>>,
     touch_tap: Rc<RecognizerAttachment<TapGestureRecognizer>>,
+    /// Opens the popup; attached while the area shows a menu.
+    secondary_tap: Rc<RecognizerAttachment<TapGestureRecognizer>>,
     touch_long_press: Rc<RecognizerAttachment<LongPressGestureRecognizer>>,
 }
 
@@ -968,6 +1063,24 @@ impl SelectionGesturesState {
                 })
                 .build()
         };
+        // The popup opens on a secondary tap through the arena, so an
+        // enclosing `ContextMenuArea` loses that tap and one click opens
+        // one menu.
+        let secondary_tap = {
+            let tapped = weak.clone();
+            TapGestureRecognizer::builder(arena.clone())
+                .settings(settings.clone())
+                .on_secondary_tap(move |details| {
+                    let Some(model) = tapped.upgrade() else {
+                        return;
+                    };
+                    let writer = model.writer.borrow().clone();
+                    if let Some(writer) = writer {
+                        writer.write(|cx| model.secondary_tapped(cx, details.global_position));
+                    }
+                })
+                .build()
+        };
         let touch_long_press = {
             let (pressed, moved, released, cancelled) =
                 (weak.clone(), weak.clone(), weak.clone(), weak);
@@ -986,8 +1099,15 @@ impl SelectionGesturesState {
                 })
                 .on_long_press_end(move |details| {
                     if let Some(model) = released.upgrade() {
-                        model.drag_moved(details.global_position, SelectionInput::Touch);
+                        // The press ends, and its toolbar shows, though the last
+                        // move's listener panics; the first failure resumes after.
+                        let mut failure = FirstPanic::new();
+                        failure.contain(|| {
+                            model.drag_moved(details.global_position, SelectionInput::Touch);
+                        });
                         model.drag_ended(SelectionInput::Touch);
+                        failure.contain(|| model.long_press_released());
+                        failure.resume();
                     }
                 })
                 .on_long_press_cancel(move |_details| {
@@ -999,10 +1119,12 @@ impl SelectionGesturesState {
         };
         self.tap_and_drag.attach(&tap_and_drag);
         self.touch_tap.attach(&touch_tap);
+        self.secondary_tap.attach(&secondary_tap);
         self.touch_long_press.attach(&touch_long_press);
         let outgoing = self.recognizers.replace(Recognizers {
             tap_and_drag,
             touch_tap,
+            secondary_tap,
             touch_long_press,
         });
         self.built_for = Some(policy);
@@ -1025,6 +1147,7 @@ impl ViewState<SelectionGestures> for SelectionGesturesState {
     fn dispose(&mut self) {
         self.tap_and_drag.clear();
         self.touch_tap.clear();
+        self.secondary_tap.clear();
         self.touch_long_press.clear();
         if let Some(recognizers) = self.recognizers.take() {
             recognizers.cancel();
@@ -1035,7 +1158,7 @@ impl ViewState<SelectionGestures> for SelectionGesturesState {
         let shift = Rc::downgrade(&view.model);
         // The whole area takes a press, not only its glyphs: a drag may
         // start in a margin.
-        Listener::new()
+        let listener = Listener::new()
             .behavior(HitTestBehavior::Translucent)
             .on_pointer_down(move |_cx, dispatch| {
                 if let (Some(model), PointerEvent::Down(press)) = (shift.upgrade(), dispatch.local)
@@ -1048,7 +1171,14 @@ impl ViewState<SelectionGestures> for SelectionGesturesState {
             })
             .recognizer(&self.tap_and_drag)
             .recognizer(&self.touch_tap)
-            .recognizer(&self.touch_long_press)
-            .child(view.child.clone())
+            .recognizer(&self.touch_long_press);
+        // An area with no menu leaves a secondary click to whatever encloses
+        // it.
+        let listener = if view.model.handles.menu.look().is_some() {
+            listener.recognizer(&self.secondary_tap)
+        } else {
+            listener
+        };
+        listener.child(view.child.clone())
     }
 }

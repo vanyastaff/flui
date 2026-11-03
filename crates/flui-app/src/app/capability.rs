@@ -13,7 +13,7 @@ use flui_interaction::{
     PrimarySelectionBackend, PrimarySelectionCapability, PrimarySelectionHandle, SelectionText,
 };
 use flui_native::{NativeClipboard, NativePrimarySelection};
-use flui_platform::executor::{ComputeJob, Executor, IoFuture, SpawnError};
+use flui_platform::executor::{ComputeJob, Executor, IoFuture, Lane, RoomFuture, SpawnError};
 use flui_platform::{
     ClipboardRead, ClipboardWrite, Concealment, Storage, Unsupported, UnsupportedReason,
     capability::{
@@ -118,6 +118,10 @@ fn built_ins(slots: &CapabilitySlots) -> CapabilityRegistrar {
     registrar.provide::<BackgroundCapability>(HostBackground {
         slot: Rc::clone(&slots.execution),
     });
+    #[cfg(feature = "http")]
+    registrar.provide::<flui_platform::http::HttpCapability>(super::http_host::HostHttp::new(
+        Rc::clone(&slots.execution),
+    ));
     registrar.provide::<StorageCapability>(HostStorageProvider {
         slot: slots.storage.clone(),
     });
@@ -507,5 +511,12 @@ impl Executor for LoopExecutor {
             .upgrade()
             .ok_or(SpawnError::ShuttingDown)?
             .spawn_io(future)
+    }
+
+    fn room(&self, lane: Lane) -> RoomFuture {
+        match self.0.upgrade() {
+            Some(services) => services.room(lane),
+            None => RoomFuture::ready(Err(SpawnError::ShuttingDown)),
+        }
     }
 }

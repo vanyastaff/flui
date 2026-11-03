@@ -10,6 +10,18 @@
 //! the menu key or assistive technology opens its popup.
 //! [`SelectionMenuPolicy`] says which touches show the toolbar.
 
+mod host;
+mod magnifier;
+mod toolbar;
+mod toolbar_items;
+
+pub(crate) use self::host::{MenuHost, MenuSettings, ShowSelectionMenu, show_menu_action};
+pub(crate) use self::magnifier::MagnifierChoice;
+pub(crate) use self::magnifier::magnifier;
+pub use self::magnifier::{MagnifierInfo, PlainMagnifier, SelectionMagnifier};
+pub(crate) use self::toolbar::{ToolbarAnchors, toolbar};
+pub use self::toolbar_items::{ToolbarItems, ToolbarItemsController, ToolbarItemsState};
+
 use std::fmt;
 use std::rc::Rc;
 
@@ -39,7 +51,7 @@ pub trait SelectionMenu: 'static {
     /// FLUI places it above the selection, or below it where there is no
     /// room, never gives it the focus, and hides it with the selection's
     /// handles. Choosing an item is [`MenuItem::perform`]; FLUI hides the
-    /// toolbar once a press in it ends.
+    /// toolbar after the frame, however the item was chosen.
     fn toolbar(&self, items: &[MenuItem], ctx: &dyn BuildContext) -> BoxedView;
 
     /// A popup for one mounted field or area, which keeps it while this look
@@ -220,6 +232,8 @@ pub(crate) struct SelectionControls {
     /// `Some(MenuChoice::Hide)` turns the menu off.
     menu: Option<MenuChoice>,
     policy: Option<SelectionMenuPolicy>,
+    /// `Some(MagnifierChoice::Hide)` turns the magnifier off.
+    magnifier: Option<MagnifierChoice>,
     commands: Rc<[GestureCommand]>,
 }
 
@@ -232,6 +246,7 @@ impl SelectionControls {
             caret_handle: self.caret_handle.or(outer.caret_handle),
             menu: self.menu.clone().or_else(|| outer.menu.clone()),
             policy: self.policy.or(outer.policy),
+            magnifier: self.magnifier.clone().or_else(|| outer.magnifier.clone()),
             commands: outer
                 .commands
                 .iter()
@@ -264,6 +279,22 @@ impl SelectionControls {
 
     pub(crate) fn policy(&self) -> Option<SelectionMenuPolicy> {
         self.policy
+    }
+
+    /// The magnifier of a handle drag: the widget's `own` choice, else the
+    /// one a scope set, none where either turned it off, else the
+    /// platform's ([`PlainMagnifier::for_platform`]).
+    pub(crate) fn magnifier(
+        own: Option<&MagnifierChoice>,
+        controls: Option<&Self>,
+    ) -> Option<Rc<dyn SelectionMagnifier>> {
+        let choice = own.or_else(|| controls.and_then(|controls| controls.magnifier.as_ref()));
+        match choice {
+            Some(MagnifierChoice::Show(magnifier)) => Some(Rc::clone(magnifier)),
+            Some(MagnifierChoice::Hide) => None,
+            None => PlainMagnifier::for_platform(TargetPlatform::current())
+                .map(|plain| Rc::new(plain) as Rc<dyn SelectionMagnifier>),
+        }
     }
 
     pub(crate) fn commands(&self) -> &[GestureCommand] {
@@ -335,6 +366,21 @@ impl DefaultSelectionControls {
         self
     }
 
+    /// The magnifier a handle drag beneath shows, in place of the
+    /// platform's ([`PlainMagnifier::for_platform`]).
+    #[must_use]
+    pub fn magnifier(mut self, magnifier: impl SelectionMagnifier) -> Self {
+        self.own.magnifier = Some(MagnifierChoice::Show(Rc::new(magnifier)));
+        self
+    }
+
+    /// No magnifier beneath, though the platform shows one.
+    #[must_use]
+    pub fn no_magnifier(mut self) -> Self {
+        self.own.magnifier = Some(MagnifierChoice::Hide);
+        self
+    }
+
     /// Also offer `command` in the menu, after the standard commands
     /// ("Translate", "Share"). Its intent is performed through the
     /// [`Actions`](crate::Actions) chain where the field or area is mounted.
@@ -360,6 +406,16 @@ impl DefaultSelectionControls {
     /// dependency on it.
     pub fn caret_handle_of(ctx: &dyn BuildContext) -> Option<CaretHandle> {
         Self::controls_of(ctx).and_then(|controls| controls.caret_handle())
+    }
+
+    /// The magnifier a handle drag of a widget under `ctx` shows: the
+    /// widget's `own` choice, else the scopes', registering a dependency on
+    /// the scopes above.
+    pub(crate) fn magnifier_of(
+        ctx: &dyn BuildContext,
+        own: Option<&MagnifierChoice>,
+    ) -> Option<Rc<dyn SelectionMagnifier>> {
+        SelectionControls::magnifier(own, Self::controls_of(ctx).as_deref())
     }
 
     /// Everything the scopes above `ctx` set, registering a dependency.
@@ -444,6 +500,14 @@ pub(crate) fn editing_commands(ctx: &dyn BuildContext) -> [GestureCommand; 4] {
             SelectAllTextIntent,
         ),
     ]
+}
+
+/// The standard commands of a selection of static text, labelled in the
+/// locale at `ctx`: copy and select all. An enclosing answer to cut or
+/// paste has nothing to act on there, so they are not offered.
+pub(crate) fn reading_commands(ctx: &dyn BuildContext) -> [GestureCommand; 2] {
+    let [_cut, copy, _paste, select_all] = editing_commands(ctx);
+    [copy, select_all]
 }
 
 /// A menu set for a field or a subtree: shown with a look, or turned off.

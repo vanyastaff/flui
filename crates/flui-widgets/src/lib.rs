@@ -102,6 +102,7 @@ pub mod image;
 pub mod interaction;
 pub mod layout;
 pub mod localization;
+mod magnifier;
 mod media_query;
 mod popup_menu;
 // Effects, reversible transitions and `Animate`; flat re-exports below.
@@ -148,6 +149,9 @@ pub use app::{
     AppBuilder, AppForm, InheritedTheme, NavigatorForm, RouterForm, SafeArea, WidgetsApp,
     WidgetsAppState,
 };
+pub use magnifier::{
+    InvalidMagnifierScale, MagnifierDecoration, MagnifierScale, MagnifierShape, RawMagnifier,
+};
 pub use media_query::{MediaQuery, MediaQueryData};
 // `Brightness` is the value type `MediaQueryData` (and any theme's
 // brightness field) uses; re-exported here so callers need only
@@ -192,11 +196,11 @@ pub use icon::{
 };
 #[cfg(feature = "asset-images")]
 pub use image::AssetImage;
-#[cfg(feature = "network-images")]
+#[cfg(feature = "asset-images")]
 pub use image::NetworkImage;
 pub use image::{
     DecodeJob, DirectImageProvider, FileImage, Image, ImageCacheKey, ImageProvider,
-    ImageProviderError, ImageState, MemoryImage, Texture, TextureState,
+    ImageProviderError, ImageServices, ImageState, MemoryImage, Texture, TextureState,
 };
 pub use interaction::{
     AbsorbPointer, Action, ActionOutcome, Actions, ActivateIntent, ActivateLinkIntent,
@@ -323,10 +327,11 @@ pub use swipe::{
 pub use text::{
     AnimatedDefaultTextStyle, CaretHandle, DefaultSelectionControls, DefaultSelectionStyle,
     DefaultTextStyle, DotHandles, EditableText, EditableTextState, HandleInfo, HandleSide,
-    PopupOrigin, RawTextField, RawTextFieldState, RichText, SelectError, SelectedText,
-    SelectionArea, SelectionChange, SelectionChangeCause, SelectionContainer, SelectionController,
-    SelectionHandles, SelectionInput, SelectionMenu, SelectionMenuPolicy, SelectionPopup,
-    SelectionStyle, SubmitCallback, Text, TextEditingController,
+    MagnifierInfo, PlainMagnifier, PopupOrigin, RawTextField, RawTextFieldState, RichText,
+    SelectError, SelectedText, SelectionArea, SelectionChange, SelectionChangeCause,
+    SelectionContainer, SelectionController, SelectionHandles, SelectionInput, SelectionMagnifier,
+    SelectionMenu, SelectionMenuPolicy, SelectionPopup, SelectionStyle, SubmitCallback, Text,
+    TextEditingController, ToolbarItems, ToolbarItemsController, ToolbarItemsState,
 };
 pub use transitions::{
     AlignTransition, AlignTransitionState, AnimatedBuilder, AnimatedBuilderState,

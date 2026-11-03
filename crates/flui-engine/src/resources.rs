@@ -171,6 +171,7 @@ impl GpuResources {
                     (taps, 2)
                 }
                 ImageFilterPass::ColorMatrix(_) => (1, 1),
+                ImageFilterPass::Resample { filter, .. } => (filter.taps(), 1),
                 ImageFilterPass::Identity => (0, 0),
             };
             work = work

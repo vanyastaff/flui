@@ -5,6 +5,9 @@
 - **Amended:** 2026-10-19 — the registry keeps decoded images itself and asset images share the
   registry identity; the key is an opaque `ImageCacheKey` and `NetworkImageKey` is gone
   ([ADR-0250](ADR-0250-asset-registry-keeps-decoded-images.md)).
+- **Amended:** 2026-10-31 — a load brings its own HTTP client, so a network source also carries
+  the typed authority of that client, and one registry keeps two clients' images of one URL apart
+  ([ADR-0280](ADR-0280-http-is-a-capability-of-the-host.md) §6).
 - **Related:** ADR-0105 (asset runtime ownership), ADR-0107 (asset byte sources)
 
 ## Context

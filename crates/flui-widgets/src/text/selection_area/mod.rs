@@ -16,6 +16,7 @@
 mod controller;
 pub(crate) mod handles;
 mod input;
+mod menu;
 
 use std::cell::{Cell, RefCell};
 use std::ops::Range;
@@ -47,15 +48,16 @@ use flui_view::{
 pub use self::controller::{SelectError, SelectionController};
 pub use self::handles::{DotHandles, HandleInfo, HandleSide, SelectionHandles};
 use self::handles::{HandleState, Look};
-use self::input::{AreaAction, CaretMemory, PointerState, SelectionGestures};
+use self::input::{CaretMemory, PointerState, SelectionGestures};
+use self::menu::AreaChain;
 use super::primary_selection::PrimarySelectionOwner;
 use super::rich_text::ResolvedParagraph;
 use super::selection_style::{DefaultSelectionStyle, SelectionStyle};
 use crate::anchored_box::AnchoredBox;
-use crate::interaction::{
-    Actions, CopySelectionTextIntent, DismissIntent, Focus, SelectAllTextIntent,
-};
+use crate::interaction::Focus;
+use crate::interaction::actions::ActionChainProvider;
 use crate::support::RefCallback;
+use crate::text::{MagnifierChoice, MenuSettings, SelectionMagnifier, show_menu_action};
 use crate::{DefaultSelectionControls, Overlay, Semantics};
 
 /// What a [`SelectionArea`] holds selected, in reading order.
@@ -142,6 +144,12 @@ type SelectionCallback = Rc<dyn Fn(&mut EventCx<'_>, &SelectionChange)>;
 /// highlight colour. Without an overlay there are no handles, and a debug
 /// build says so.
 ///
+/// The selection menu offers copy and select all, then added commands: a
+/// secondary click, the menu key or assistive technology's
+/// `ShowContextMenu` opens it as a popup, and a long press or letting go of
+/// a dragged handle shows it as a toolbar over the selection. It looks as
+/// [`menu`](Self::menu) sets, else the nearest [`DefaultSelectionControls`].
+///
 /// # Examples
 ///
 /// ```rust
@@ -161,6 +169,8 @@ pub struct SelectionArea {
     style: Option<SelectionStyle>,
     handles: Option<Rc<dyn SelectionHandles>>,
     controller: Option<SelectionController>,
+    menu: MenuSettings,
+    magnifier: Option<MagnifierChoice>,
 }
 
 impl std::fmt::Debug for SelectionArea {
@@ -172,7 +182,7 @@ impl std::fmt::Debug for SelectionArea {
             .field("style", &self.style)
             .field("handles", &self.handles.is_some())
             .field("controller", &self.controller.is_some())
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -186,6 +196,8 @@ impl SelectionArea {
             style: None,
             handles: None,
             controller: None,
+            menu: MenuSettings::default(),
+            magnifier: None,
         }
     }
 
@@ -195,6 +207,24 @@ impl SelectionArea {
     #[must_use]
     pub fn handles(mut self, handles: impl SelectionHandles) -> Self {
         self.handles = Some(Rc::new(handles));
+        self
+    }
+
+    /// Show `magnifier` while a finger drags a handle, in place of the
+    /// nearest [`DefaultSelectionControls`]' or the platform's
+    /// ([`PlainMagnifier::for_platform`](crate::text::PlainMagnifier::for_platform)).
+    /// Fields inside the area keep their own.
+    #[must_use]
+    pub fn magnifier(mut self, magnifier: impl SelectionMagnifier) -> Self {
+        self.magnifier = Some(MagnifierChoice::Show(Rc::new(magnifier)));
+        self
+    }
+
+    /// Show no magnifier while a finger drags a handle, though a
+    /// [`DefaultSelectionControls`] above or the platform gives one.
+    #[must_use]
+    pub fn no_magnifier(mut self) -> Self {
+        self.magnifier = Some(MagnifierChoice::Hide);
         self
     }
 
@@ -281,6 +311,8 @@ impl StatefulView for SelectionArea {
                 caret: Cell::new(CaretMemory::default()),
                 handles: HandleState::default(),
                 controller: RefCell::new(self.controller.clone()),
+                chain: AreaChain::default(),
+                anchor: SubtreeAnchor::new(),
             }),
         }
     }
@@ -323,8 +355,10 @@ impl ViewState<SelectionArea> for SelectionAreaState {
         }
     }
 
-    /// Follows the overlay the handles go in.
+    /// Follows the overlay the handles go in and the haptics a handle drag
+    /// plays.
     fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
+        *self.model.handles.haptics.borrow_mut() = ctx.haptics();
         let overlay = Overlay::maybe_of(ctx);
         let moved = match (
             self.model.handles.overlay.borrow().as_ref(),
@@ -380,6 +414,10 @@ impl ViewState<SelectionArea> for SelectionAreaState {
                 Look::Given,
             );
         self.model.handles.set_look(look);
+        (self.model.handles).set_magnifier(DefaultSelectionControls::magnifier_of(
+            ctx,
+            view.magnifier.as_ref(),
+        ));
         // The document reads its lines in the ambient direction.
         let direction = match crate::Directionality::maybe_of(ctx).unwrap_or_default() {
             TextDirection::Ltr => SemanticsTextDirection::Ltr,
@@ -391,6 +429,13 @@ impl ViewState<SelectionArea> for SelectionAreaState {
             self.model.handles.refresh(&mut failure);
             failure.resume();
         }
+        // Every commit rebuilds the area, so its actions follow the
+        // selection (see `SelectionModel::action_chain`), and so does its
+        // menu.
+        let enclosing = ctx.depend_on::<ActionChainProvider, _>(|provider| provider.data().clone());
+        let chain = self.model.action_chain(enclosing);
+        self.model
+            .configure_menu(ctx, &view.menu, Rc::clone(&chain));
         let content = SelectionGestures {
             model: Rc::clone(&self.model),
             child: SelectionScope {
@@ -406,6 +451,7 @@ impl ViewState<SelectionArea> for SelectionAreaState {
             }
             .boxed(),
         };
+        let content = AnchoredBox::new(self.model.anchor.clone(), content);
         let (keys, focus_changed) = (Rc::downgrade(&self.model), Rc::downgrade(&self.model));
         // The area is focused by selecting in it, never by traversal; the
         // document node is what assistive technology reads.
@@ -422,25 +468,23 @@ impl ViewState<SelectionArea> for SelectionAreaState {
                     model.focus_changed(focused);
                 }
             });
-        let mut actions = Actions::new(focused)
-            .action::<SelectAllTextIntent>(AreaAction(Rc::downgrade(&self.model)))
-            .action::<CopySelectionTextIntent>(AreaAction(Rc::downgrade(&self.model)));
-        // Esc clears a selection; with nothing selected the area declares no
-        // dismiss, so Esc reaches the enclosing one (a modal route's pop).
-        // Every commit rebuilds the area, so this follows the selection.
-        if self.model.selection.borrow().is_some() {
-            actions = actions.action::<DismissIntent>(AreaAction(Rc::downgrade(&self.model)));
-        }
+        let actions = ActionChainProvider::new(chain, focused);
         let model = Rc::clone(&self.model);
-        Semantics::new()
+        let semantics = Semantics::new()
             .role(view.role)
             .merge_boundary(true)
             .text_direction(direction)
             .document_selection(self.model.selection.borrow().clone())
             .on_set_document_selection(move |cx, selection| {
                 model.select(cx, Some(&selection), SelectionInput::AssistiveTechnology);
-            })
-            .child(actions)
+            });
+        // Assistive technology's menu acts on the area once it holds the
+        // focus, as a secondary click gives it.
+        let focus = Rc::clone(&self.model.focus);
+        show_menu_action(semantics, &self.model.handles.menu, move |_cx| {
+            let _outcome = focus.request_focus();
+        })
+        .child(actions)
     }
 
     fn dispose(&mut self) {
@@ -456,6 +500,8 @@ impl ViewState<SelectionArea> for SelectionAreaState {
         let primary = self.model.primary.borrow().clone();
         failure.contain(|| primary.release());
         self.model.handles.hide(&mut failure);
+        let menu = Rc::clone(&self.model.handles.menu);
+        failure.contain(|| menu.close());
         failure.resume();
     }
 }
@@ -498,6 +544,10 @@ struct SelectionModel {
     caret: Cell<CaretMemory>,
     /// The touch handles.
     handles: HandleState,
+    /// The area's actions, which its menu items perform through.
+    chain: AreaChain,
+    /// The area's content, which a popup no pointer opened is placed by.
+    anchor: SubtreeAnchor,
     /// The controller the area serves, attached while it is mounted.
     controller: RefCell<Option<SelectionController>>,
 }

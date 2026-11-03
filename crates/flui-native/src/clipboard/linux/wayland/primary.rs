@@ -40,10 +40,11 @@ use wayland_protocols::wp::primary_selection::zv1::client::{
 };
 use web_time::Instant;
 
-use super::{MAX_WRITERS, OfferData, Shared, TRANSFER_TIMEOUT, transfer};
+use super::{MAX_WRITERS, Shared, TRANSFER_TIMEOUT, transfer};
 use crate::clipboard::linux::offered::{SelectionText, answer_with, ask, drop_retired};
 use crate::clipboard::text::TextForm;
 use crate::owner::linux::wayland::WaylandState;
+use crate::transfer::linux::wayland::OfferData;
 
 /// The primary selection's part of the clipboard's state, reached on the
 /// owner thread.
@@ -302,7 +303,7 @@ impl super::SeatClipboard {
                 }
                 let Some((offer, (form, mime))) = device
                     .and_then(|device| device.selection.as_ref())
-                    .and_then(|offer| Some((offer, offer.data::<OfferData>()?.preferred()?)))
+                    .and_then(|offer| Some((offer, super::preferred(offer.data::<OfferData>()?)?)))
                 else {
                     return Read::Now(Ok(None));
                 };

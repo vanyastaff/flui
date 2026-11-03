@@ -644,12 +644,16 @@ pub(crate) fn a_rebuilt_field_refreshes_its_shown_toolbar() {
     assert_eq!(scene.toolbar(), Vec::<String>::new());
 }
 
-/// Commands wider together than the window wrap onto another row of the
-/// toolbar, so every one stays inside the window and takes a tap.
+/// Commands wider together than the window leave the trailing ones behind
+/// "More", which shows them in a column with "Back"; assistive technology
+/// finds exactly the buttons that show, and choosing a hidden command
+/// performs it and takes the toolbar away. A toolbar shown again starts
+/// from its row.
 ///
-/// Red-check: lay the buttons out in one row (the last ones run past the
-/// window's right edge).
-pub(crate) fn a_toolbar_wider_than_the_window_wraps() {
+/// Red-check: lay every button out (the last ones run past the window's
+/// right edge); show the row's buttons under the column (Cut is still
+/// announced).
+pub(crate) fn a_toolbar_wider_than_the_window_moves_its_last_commands_behind_more() {
     let mut scene = Scene::with(
         |field| {
             field
@@ -658,22 +662,64 @@ pub(crate) fn a_toolbar_wider_than_the_window_wraps() {
         },
         Some(|controls| controls.command(GestureCommand::new("Shout across the room", Shout))),
     );
-    scene.long_press(scene.along(width_of("alpha be")));
-    let labels = scene.toolbar();
-    assert_eq!(labels.len(), 6);
-    let tree = scene.tree();
-    for label in &labels {
-        let node = tree
-            .find_by_role_and_label(Role::Button, label)
-            .expect("the toolbar shows the button");
-        let bounds = tree.window_bounds(&node).expect("the button has bounds");
-        assert!(
-            bounds.x0 >= 0.0 && bounds.x1 <= 400.0,
-            "{label} is inside the window: {bounds:?}"
-        );
-    }
+    let word = scene.along(width_of("alpha be"));
+    scene.long_press(word);
+    let row = scene.toolbar();
+    assert_eq!(row.first().map(String::as_str), Some("Cut"));
+    assert_eq!(row.last().map(String::as_str), Some("More"));
+    assert!(
+        !row.iter().any(|label| label == "Whisper to the far corner"),
+        "the last command is behind More: {row:?}"
+    );
+    let inside = |scene: &Scene| {
+        let tree = scene.tree();
+        for label in scene.toolbar() {
+            let node = tree
+                .find_by_role_and_label(Role::Button, &label)
+                .expect("the toolbar shows the button");
+            let bounds = tree.window_bounds(&node).expect("the button has bounds");
+            assert!(
+                bounds.x0 >= 0.0 && bounds.x1 <= 400.0 && bounds.y0 >= 0.0,
+                "{label} is inside the window: {bounds:?}"
+            );
+        }
+    };
+    inside(&scene);
+
+    scene.tap(scene.center_of(Role::Button, "More"));
+    let column = scene.toolbar();
+    assert!(
+        scene.center_of(Role::Button, "Back").dy
+            < scene
+                .center_of(Role::Button, "Whisper to the far corner")
+                .dy,
+        "Back heads the column: {column:?}"
+    );
+    assert!(
+        column.contains(&"Whisper to the far corner".to_owned())
+            && !column.contains(&"Cut".to_owned()),
+        "the column holds what the row left over: {column:?}"
+    );
+    assert_eq!(
+        column.len() + row.len(),
+        8,
+        "every command shows in one of them, beside More and Back"
+    );
+    inside(&scene);
+
+    scene.tap(scene.center_of(Role::Button, "Back"));
+    assert_eq!(scene.toolbar(), row);
+    scene.tap(scene.center_of(Role::Button, "More"));
     scene.tap(scene.center_of(Role::Button, "Whisper to the far corner"));
     assert_eq!(*scene.log.borrow(), ["whisper"]);
+    assert_eq!(scene.toolbar(), Vec::<String>::new());
+
+    scene.long_press(word);
+    assert_eq!(
+        scene.toolbar(),
+        row,
+        "a toolbar shown again starts from its row"
+    );
 }
 
 /// A field reading right to left lays its toolbar out from the right,
@@ -795,4 +841,52 @@ pub(crate) fn a_field_rebuilt_with_other_commands_closes_the_popup() {
         scene.popup(),
         strings(&["Cut", "Copy", "Paste", "Select all", "Whisper"])
     );
+}
+
+/// A field rebuilt with no menu while its toolbar shows takes the toolbar
+/// away, though its handles look the same. Only the field rebuilds.
+///
+/// Red-check: only show the toolbar again after a rebuild, without taking
+/// it away first (the old toolbar stays).
+pub(crate) fn a_field_rebuilt_without_its_menu_takes_its_toolbar_away() {
+    let controller = TextEditingController::with_text(WORDS);
+    let field_focus = FocusNode::with_debug_label("field");
+    let off = Rc::new(Cell::new(false));
+    let count: Rc<RefCell<Option<Signal<u32>>>> = Rc::default();
+    let probe = {
+        let (controller, field_focus) = (controller.clone(), Rc::clone(&field_focus));
+        let (off, count) = (Rc::clone(&off), Rc::clone(&count));
+        SignalProbe::new(move |signals| {
+            count.replace(Some(signals.count));
+            let field = EditableText::new(controller.clone(), Rc::clone(&field_focus))
+                .text_style(style())
+                .menu_policy(SelectionMenuPolicy::ALWAYS);
+            let field = if off.get() { field.no_menu() } else { field };
+            SizedBox::new(400.0, 40.0).child(field)
+        })
+    };
+    let page = Column::new((SizedBox::new(400.0, 80.0), probe.view()));
+    let mut laid = lay_out(WidgetsApp::new(page), tight(400.0, 300.0));
+    laid.enable_semantics();
+    laid.pump();
+    let mut scene = Scene {
+        laid,
+        controller,
+        field_focus,
+        elsewhere: FocusNode::with_debug_label("elsewhere"),
+        log: Rc::default(),
+        line_height: Rc::default(),
+        square: false,
+    };
+    scene.long_press(scene.along(width_of("alpha be")));
+    assert_eq!(scene.toolbar(), strings(&EDITING));
+
+    off.set(true);
+    let signal = count.borrow().expect("the probe built");
+    probe
+        .write(|cx| signal.set(cx, 1))
+        .expect("the probe's signal takes it");
+    scene.settle();
+    assert_eq!(scene.toolbar(), Vec::<String>::new());
+    assert_eq!(scene.controller.selection(), 6..10, "the selection stays");
 }

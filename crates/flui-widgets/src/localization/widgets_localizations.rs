@@ -59,6 +59,12 @@ pub trait WidgetsLocalizations: Any + fmt::Debug + Send + Sync {
     fn search_web_button_label(&self) -> &'static str;
     /// Label for "share" edit buttons and menu items.
     fn share_button_label(&self) -> &'static str;
+    /// Label of a toolbar's button that shows the commands its row has no
+    /// room for.
+    fn more_button_label(&self) -> &'static str;
+    /// Label of a toolbar's button that leaves the commands it showed and
+    /// returns to its row.
+    fn back_button_label(&self) -> &'static str;
 
     /// The accessibility hint for an unselected radio button.
     fn radio_button_unselected_label(&self) -> &'static str;
@@ -135,6 +141,12 @@ impl WidgetsLocalizations for DefaultWidgetsLocalizations {
     }
     fn share_button_label(&self) -> &'static str {
         "Share"
+    }
+    fn more_button_label(&self) -> &'static str {
+        "More"
+    }
+    fn back_button_label(&self) -> &'static str {
+        "Back"
     }
 
     fn radio_button_unselected_label(&self) -> &'static str {
