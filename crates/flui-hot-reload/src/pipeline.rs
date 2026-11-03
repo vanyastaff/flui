@@ -190,10 +190,7 @@ impl PluginPipeline {
                 // unmeasured tree; constraints set once at mount would keep the
                 // first size after a resize.
                 guard.set_root_constraints(Some(BoxConstraints::tight(Size::new(width, height))));
-                let owner = guard.take_idle();
-                let (owner, result) = owner.run_frame();
-                *guard = owner;
-                match result {
+                match guard.run_frame_in_place() {
                     Ok(layer_tree) => layer_tree,
                     Err(e) => {
                         log(&format!("draw_frame: pipeline failed: {e:?}"));

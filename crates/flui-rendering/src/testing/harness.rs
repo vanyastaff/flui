@@ -394,10 +394,10 @@ impl FrameRun {
     /// A frame with no dirty work produces no layer tree, mirroring the
     /// production idle-frame behavior.
     pub fn pump(&mut self) -> FrameReport {
-        let owner = self.owner.take_idle();
-        let (owner, result) = owner.run_frame();
-        self.owner = owner;
-        self.layer_tree = result.expect("pump frame must succeed for a well-formed test tree");
+        self.layer_tree = self
+            .owner
+            .run_frame_in_place()
+            .expect("pump frame must succeed for a well-formed test tree");
         self.report()
     }
 

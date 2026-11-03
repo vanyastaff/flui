@@ -32,12 +32,14 @@ impl PipelineOwner<Compositing> {
     ///
     /// 1. If a node does NOT have `NEEDS_COMPOSITING_BITS_UPDATE`
     ///    set, skip (parent walk already covered, or no work to do).
-    /// 2. Otherwise: save `old_needs_compositing`, clear current
-    ///    `NEEDS_COMPOSITING`, recurse into each child, OR-in each
-    ///    child's `NEEDS_COMPOSITING` result.
-    /// 3. Force `NEEDS_COMPOSITING = true` if the node is a repaint
-    ///    boundary (`IS_REPAINT_BOUNDARY`) or always needs compositing
-    ///    (`RenderObject::always_needs_compositing()`).
+    /// 2. Otherwise: save `old_needs_compositing`, recurse into each
+    ///    child, and OR each child's `NEEDS_COMPOSITING` result into the
+    ///    new value.
+    /// 3. The new value is `true` if the node is a repaint boundary
+    ///    (`IS_REPAINT_BOUNDARY`) or always needs compositing
+    ///    (`RenderObject::always_needs_compositing()`). Only then is
+    ///    `NEEDS_COMPOSITING` written, so a panic out of a child or the hook
+    ///    leaves the node's old value in place.
     /// 4. Three transition cases:
     ///    - **Lost-boundary**: if the node previously was a repaint
     ///      boundary (`WAS_REPAINT_BOUNDARY`) but no longer is, clear
@@ -75,16 +77,23 @@ impl PipelineOwner<Compositing> {
         // the compositing queue (both shared). Queue mutations are deferred
         // into `actions` and applied after the walk, so nothing mutates the
         // list mid-iteration.
+        //
+        // The walk runs user code (`always_needs_compositing`, a `tracing`
+        // subscriber). A panic out of it still applies what the visited nodes
+        // staged, because those nodes have already cleared their bits-update
+        // flag and will not stage it again; the unvisited ones keep theirs.
         let mut actions = CompositingWalkActions::default();
-        let compositing_slice = self.scheduler.compositing_queue_as_slice();
-        for node in compositing_slice {
-            self.update_subtree_compositing_bits(node.id, &mut actions);
-        }
+        let walked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            for node in self.scheduler.compositing_queue_as_slice() {
+                self.update_subtree_compositing_bits(node.id, &mut actions);
+            }
+        }));
 
         // Apply paint-queue mutations after the walk completes (under
         // disjoint `&mut self`). Remove-first, then re-enqueue, so an
         // id present in both buckets ends up correctly re-queued at the
-        // post-walk depth.
+        // post-walk depth. The marks are committed here and announced by one
+        // wake at the end, after the queue is settled (ADR-0287).
         if !actions.remove_from_paint_queue.is_empty() {
             self.scheduler
                 .retain_paint_queue(&actions.remove_from_paint_queue);
@@ -100,13 +109,22 @@ impl PipelineOwner<Compositing> {
             // churn rather than correctness. It becomes the right move only
             // once #995 makes the two agree.
         }
+        let mut paint_queued = false;
         for id in actions.mark_needs_paint {
-            self.mark_needs_paint(id);
+            paint_queued |= self.scheduler.commit_needs_paint(&self.render_tree, id);
+        }
+        if let Err(payload) = walked {
+            // The queue stays for the retry: an entry the walk finished is
+            // skipped by its clear bits-update flag.
+            std::panic::resume_unwind(payload);
         }
 
         // Retain-capacity idiom: `clear()` preserves the Vec's backing
         // capacity across frames.
         self.scheduler.clear_compositing_queue();
+        if paint_queued {
+            self.scheduler.notify_visual_update();
+        }
         Ok(())
     }
 
@@ -134,8 +152,13 @@ impl PipelineOwner<Compositing> {
             return;
         }
 
+        // The node's own flag is written once its new value is known. The
+        // recursion and `always_needs_compositing` run user code, and a panic
+        // out of either must leave this node, and every ancestor on the stack,
+        // with its old flag and its pending bits update for the retry to
+        // compare against.
         let old_needs_compositing = node.needs_compositing();
-        node.clear_needs_compositing();
+        let mut new_needs_compositing = false;
 
         // Iterate the child slice in-place — both `tree.children(id)`
         // and the recursive `update_subtree_compositing_bits` call are
@@ -157,15 +180,19 @@ impl PipelineOwner<Compositing> {
             if let Some(child) = self.render_tree.get(child_id)
                 && child.needs_compositing()
             {
-                node.mark_needs_compositing();
+                new_needs_compositing = true;
             }
         }
 
         if node.is_repaint_boundary_flag() || node.always_needs_compositing() {
+            new_needs_compositing = true;
+        }
+        if new_needs_compositing {
             node.mark_needs_compositing();
+        } else {
+            node.clear_needs_compositing();
         }
 
-        let new_needs_compositing = node.needs_compositing();
         let is_boundary = node.is_repaint_boundary_flag();
         let was_boundary = node.was_repaint_boundary();
 

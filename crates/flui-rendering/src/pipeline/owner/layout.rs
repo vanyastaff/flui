@@ -12,6 +12,7 @@ use crate::{
 };
 
 use super::{PipelineOwner, poison::LayoutFailureKind, rebind_phase, subtree_arena::SubtreeArena};
+use crate::pipeline::dirty::DirtyNode;
 
 // ============================================================================
 // Layout phase: run_layout + helpers
@@ -50,7 +51,21 @@ impl PipelineOwner<Layout> {
             tracing::debug_span!(target: "flui.frame", "layout", dirty_nodes = self.scheduler.layout_queue_len(),)
                 .entered();
 
-        // Process own dirty nodes if any
+        // Paint owed by the relayout roots is committed as each root finishes
+        // and announced by one wake once the batches are back in the scheduler:
+        // a wake is user code, so it runs only after the state it reports is
+        // committed (ADR-0287).
+        let mut paint_queued = false;
+        let outcome = self.run_layout_batches(&mut paint_queued);
+        if paint_queued {
+            self.scheduler.notify_visual_update();
+        }
+        outcome
+    }
+
+    /// Runs layout batches until no layout work is left, handing each batch
+    /// back to the scheduler however its pass ends.
+    fn run_layout_batches(&mut self, paint_queued: &mut bool) -> crate::error::RenderResult<()> {
         // While loop to handle nodes added during layout
         while self.scheduler.has_layout_work() {
             self.scheduler.enter_phase(PhaseKind::Layout);
@@ -66,240 +81,15 @@ impl PipelineOwner<Layout> {
                 self.counters.layout_passes += 1;
             }
 
-            tracing::debug!(
-                "run_layout: sorted order (shallow-first) = {:?}",
-                dirty_nodes
-                    .iter()
-                    .map(|n| (n.id, n.depth))
-                    .collect::<Vec<_>>()
-            );
-
-            // Process each dirty node.
-            //
-            // layout_dirty_root replaces the legacy
-            // layout_node_with_children no-op recursion. Each dirty
-            // entry is laid out via the pre-acquired-subtree walk
-            // protected by LayoutCycleGuard. Constraints come from
-            // cached state (post-frame-1) OR the binding-set
-            // root_constraints (frame-1 root).
-            for (index, dirty_node) in dirty_nodes.iter().enumerate() {
-                // Layout-poison backstop: a poisoned node that still
-                // landed in the dirty queue (queue pushes do not lift
-                // poison; only the mark_needs_layout walk does) is
-                // skipped.  Clearing NEEDS_LAYOUT here too keeps paint
-                // from treating the node as perpetually mid-layout.
-                if self.layout_poison.is_poisoned(dirty_node.id) {
-                    if let Some(node) = self.render_tree.get(dirty_node.id) {
-                        node.clear_needs_layout();
-                    }
-                    tracing::trace!(
-                        id = dirty_node.id.as_u64(),
-                        "run_layout: skipping layout-poisoned dirty entry",
-                    );
-                    continue;
-                }
-
-                // Skip entries whose NEEDS_LAYOUT flag was already
-                // cleared earlier in this iteration. Common case: a
-                // parent's layout_child callback recursively lays out
-                // a child whose dirty-queue entry was queued
-                // separately (e.g., insert_child_render_object
-                // enqueues both). Re-laying out the child would be
-                // redundant + potentially side-effectful.
-                let already_clean = self
-                    .render_tree
-                    .get(dirty_node.id)
-                    .is_some_and(|n| !n.needs_layout());
-                if already_clean {
-                    tracing::trace!(
-                        id = dirty_node.id.as_u64(),
-                        "run_layout: skipping dirty-queue entry whose NEEDS_LAYOUT \
-                         was already cleared this iteration",
-                    );
-                    continue;
-                }
-
-                let Some(constraints) = self.cached_or_root_constraints(dirty_node.id) else {
-                    // No constraints to lay out against. The two cases
-                    // this hits, one a bug and one routine:
-                    //   1. Root id with root_constraints unset — the
-                    //      binding should have called
-                    //      set_root_constraints BEFORE run_frame.
-                    //      set_root_constraints auto-marks root dirty
-                    //      when constraints land, so the next
-                    //      run_layout picks up the deferred work
-                    //      automatically.
-                    //   2. Non-root id with no cached constraints
-                    //      AND no parent-driven layout yet — the
-                    //      shallow-first dirty queue sort means the
-                    //      parent should have processed first; if
-                    //      it didn't (parent's perform_layout didn't
-                    //      call layout_child for this id), the entry
-                    //      is correctly dropped because the parent
-                    //      is the authority on child constraints.
-                    //      This is ORDINARY for a child mounted during
-                    //      layout (ADR-0017: `LayoutBuilder`, the
-                    //      sliver builders) that its parent chose not
-                    //      to lay out this pass — a list item built
-                    //      and found off-screen, say — and the child
-                    //      keeps NEEDS_LAYOUT until the parent does.
-                    //      A Scaffold body under a LayoutBuilder hit
-                    //      it once per launch and a scrolling
-                    //      ListView::builder once per frame, so it is
-                    //      a debug line, not a warning (measured
-                    //      2026-09-22 in the macOS lifecycle run).
-                    // Case 1 stays at warn: the root having no
-                    // constraints is a binding bug, and a launch that
-                    // draws nothing is what it looks like.
-                    if self.root_id == Some(dirty_node.id) {
-                        tracing::warn!(
-                            id = dirty_node.id.as_u64(),
-                            "run_layout: the root has no root_constraints; skipping its \
-                             dirty entry. The binding must call set_root_constraints \
-                             before run_frame (it auto-marks the root dirty)."
-                        );
-                    } else {
-                        tracing::debug!(
-                            id = dirty_node.id.as_u64(),
-                            "run_layout: non-root dirty entry has no cached constraints \
-                             and its parent did not lay it out this pass; it keeps \
-                             NEEDS_LAYOUT until the parent's perform_layout calls \
-                             ctx.layout_child for it"
-                        );
-                    }
-                    continue;
-                };
-                // One span per relayout root, not per node: the walk below it is the root's cost.
-                //
-                // A subscriber is user code and may panic as the span opens or closes. The batch is
-                // already taken from the scheduler, so either failure first puts the unlaid nodes
-                // back and leaves the phase, and only then resumes the panic.
-                let root_span = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    tracing::trace_span!(
-                        target: "flui.frame",
-                        "layout_root",
-                        node = dirty_node.id.as_u64(),
-                    )
-                    .entered()
-                })) {
-                    Ok(span) => span,
-                    Err(payload) => {
-                        let _ = self.scheduler.exit_phase(PhaseKind::Layout);
-                        self.scheduler
-                            .retain_layout_batch(&dirty_nodes[index..], false);
-                        self.scheduler.recycle_layout_batch(dirty_nodes);
-                        std::panic::resume_unwind(payload)
-                    }
-                };
-                let laid_out = self.layout_dirty_root(dirty_node.id, constraints);
-                if let Err(payload) =
-                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(root_span)))
-                {
-                    // The node was laid out; queueing it again is harmless, because an entry
-                    // whose layout flag is already clear is skipped.
-                    // Its geometry changed, so the paint it owes is marked before the panic resumes:
-                    // the retained entry is clean and the next pass skips it.
-                    if laid_out.is_ok() {
-                        self.mark_needs_paint(dirty_node.id);
-                    }
-                    let _ = self.scheduler.exit_phase(PhaseKind::Layout);
-                    self.scheduler
-                        .retain_layout_batch(&dirty_nodes[index..], false);
-                    self.scheduler.recycle_layout_batch(dirty_nodes);
-                    std::panic::resume_unwind(payload)
-                }
-                match laid_out {
-                    Ok(_) => {
-                        self.layout_poison.note_success(dirty_node.id);
-                    }
-                    Err(e) => {
-                        if e.is_recoverable_layout_error() {
-                            let _ = self.scheduler.exit_phase(PhaseKind::Layout);
-                            self.scheduler.retain_layout_batch(
-                                &dirty_nodes[index..],
-                                matches!(
-                                    e,
-                                    crate::RenderError::TextLayout(_)
-                                        | crate::RenderError::TextContextBusy
-                                ),
-                            );
-                            self.scheduler.recycle_layout_batch(dirty_nodes);
-                            return Err(e);
-                        }
-                        let kind = LayoutFailureKind::of(&e);
-                        match self.layout_poison.note_failure(
-                            dirty_node.id,
-                            kind,
-                            Some(crate::storage::ErasedConstraints::from(constraints)),
-                        ) {
-                            // Re-poison after a fresh invalidation lifted
-                            // the poison: the caller was already signaled
-                            // on the first transition, so skip the node
-                            // quietly and let the frame complete with the
-                            // healthy rest of the tree.
-                            Some(false) => {
-                                if let Some(node) = self.render_tree.get(dirty_node.id) {
-                                    node.clear_needs_layout();
-                                }
-                                tracing::debug!(
-                                    id = dirty_node.id.as_u64(),
-                                    ?kind,
-                                    "layout poison re-engaged after a fresh \
-                                     invalidation; the node still fails layout \
-                                     and stays skipped.",
-                                );
-                                continue;
-                            }
-                            // First poison transition (Some(true)) or budget
-                            // not yet exhausted (None): surface the failure —
-                            // a structural break (or an exhausted retry
-                            // budget) is a bug the embedder must see once.
-                            // This cannot storm: once poisoned, later
-                            // run_layout passes skip the node via the
-                            // backstop above, so the Err is a one-frame
-                            // signal rather than a perpetual frame drop.
-                            first @ (Some(true) | None) => {
-                                if first.is_some() {
-                                    if let Some(node) = self.render_tree.get(dirty_node.id) {
-                                        node.clear_needs_layout();
-                                    }
-                                    tracing::error!(
-                                        id = dirty_node.id.as_u64(),
-                                        ?kind,
-                                        error = ?e,
-                                        "layout poison engaged: dirty-root layout \
-                                         failed with a structural error (or \
-                                         exhausted its retry budget); the node is \
-                                         skipped in later layout passes until \
-                                         freshly invalidated (mark_needs_layout).",
-                                    );
-                                }
-                                // Drain mid-phase marks back into `dirty`
-                                // even on the error path so they survive
-                                // across phase invocations.
-                                let _ = self.scheduler.exit_phase(PhaseKind::Layout);
-                                self.scheduler.recycle_layout_batch(dirty_nodes);
-                                return Err(e);
-                            }
-                        }
-                    }
-                }
-
-                // A subtree that re-laid out must repaint, otherwise a
-                // pure-layout invalidation (setState moving a child)
-                // leaves stale pixels on screen.
-                //
-                // The mark must be per OBJECT, and the difference is not
-                // cosmetic. `mark_needs_paint` walks UP to the nearest
-                // established boundary, so marking only the relayout root
-                // reaches the boundary ABOVE the subtree and never the
-                // boundaries INSIDE it — which also re-laid out and whose
-                // content is therefore stale. A full-tree paint descent
-                // hides that; a paint pass that lets a clean boundary reuse
-                // its previous layers would show the stale pixels.
-                self.mark_needs_paint(dirty_node.id);
-            }
-            self.scheduler.recycle_layout_batch(dirty_nodes);
+            // The batch is out of the scheduler from here on. A pass that
+            // stops early, with an error or with a panic out of user code (a
+            // `tracing` subscriber, a render object, a wake), leaves the phase
+            // and puts its unfinished entries back before the failure goes on,
+            // so the retry lays out what this pass did not.
+            let mut next = 0;
+            let pass = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                self.layout_batch(&dirty_nodes, &mut next, paint_queued)
+            }));
 
             // exit_phase clears debug_doing_layout AND drains
             // mid_layout_marks back into `dirty` so the outer while
@@ -307,8 +97,260 @@ impl PipelineOwner<Layout> {
             // during this iteration's `debug_doing_layout = true`
             // window.
             let _ = self.scheduler.exit_phase(PhaseKind::Layout);
+            match pass {
+                Ok(Ok(())) => self.scheduler.recycle_layout_batch(dirty_nodes),
+                Ok(Err(stop)) => {
+                    if let Some(wait_for_input) = stop.retain {
+                        self.scheduler
+                            .retain_layout_batch(&dirty_nodes[next..], wait_for_input);
+                    }
+                    self.scheduler.recycle_layout_batch(dirty_nodes);
+                    return Err(stop.error);
+                }
+                Err(payload) => {
+                    // The entry the panic interrupted may have laid out before
+                    // it: its layout flag is clear, so the retry skips it, and
+                    // the paint its new geometry owes is committed here. An
+                    // entry that never laid out (a skipped one) over-queues one
+                    // repaint, the safe direction.
+                    if let Some(entry) = dirty_nodes.get(next)
+                        && self
+                            .render_tree
+                            .get(entry.id)
+                            .is_some_and(|node| !node.needs_layout())
+                    {
+                        *paint_queued |= self
+                            .scheduler
+                            .commit_needs_paint(&self.render_tree, entry.id);
+                    }
+                    self.scheduler
+                        .retain_layout_batch(&dirty_nodes[next..], false);
+                    self.scheduler.recycle_layout_batch(dirty_nodes);
+                    std::panic::resume_unwind(payload)
+                }
+            }
         }
 
+        Ok(())
+    }
+
+    /// Lays out one batch of relayout roots, shallow-first.
+    ///
+    /// `next` stays at the first entry not yet finished, so a pass that stops
+    /// early leaves the rest of the batch for [`Self::run_layout_batches`] to
+    /// retain. Every new paint queue entry sets `paint_queued`.
+    fn layout_batch(
+        &mut self,
+        dirty_nodes: &[DirtyNode],
+        next: &mut usize,
+        paint_queued: &mut bool,
+    ) -> Result<(), BatchStop> {
+        tracing::debug!(
+            "run_layout: sorted order (shallow-first) = {:?}",
+            dirty_nodes
+                .iter()
+                .map(|n| (n.id, n.depth))
+                .collect::<Vec<_>>()
+        );
+
+        // Process each dirty node.
+        //
+        // layout_dirty_root replaces the legacy
+        // layout_node_with_children no-op recursion. Each dirty
+        // entry is laid out via the pre-acquired-subtree walk
+        // protected by LayoutCycleGuard. Constraints come from
+        // cached state (post-frame-1) OR the binding-set
+        // root_constraints (frame-1 root).
+        for (index, dirty_node) in dirty_nodes.iter().enumerate() {
+            *next = index;
+
+            // Layout-poison backstop: a poisoned node that still
+            // landed in the dirty queue (queue pushes do not lift
+            // poison; only the mark_needs_layout walk does) is
+            // skipped.  Clearing NEEDS_LAYOUT here too keeps paint
+            // from treating the node as perpetually mid-layout.
+            if self.layout_poison.is_poisoned(dirty_node.id) {
+                if let Some(node) = self.render_tree.get(dirty_node.id) {
+                    node.clear_needs_layout();
+                }
+                tracing::trace!(
+                    id = dirty_node.id.as_u64(),
+                    "run_layout: skipping layout-poisoned dirty entry",
+                );
+                continue;
+            }
+
+            // Skip entries whose NEEDS_LAYOUT flag was already
+            // cleared earlier in this iteration. Common case: a
+            // parent's layout_child callback recursively lays out
+            // a child whose dirty-queue entry was queued
+            // separately (e.g., insert_child_render_object
+            // enqueues both). Re-laying out the child would be
+            // redundant + potentially side-effectful.
+            let already_clean = self
+                .render_tree
+                .get(dirty_node.id)
+                .is_some_and(|n| !n.needs_layout());
+            if already_clean {
+                tracing::trace!(
+                    id = dirty_node.id.as_u64(),
+                    "run_layout: skipping dirty-queue entry whose NEEDS_LAYOUT \
+                     was already cleared this iteration",
+                );
+                continue;
+            }
+
+            let Some(constraints) = self.cached_or_root_constraints(dirty_node.id) else {
+                // No constraints to lay out against. The two cases
+                // this hits, one a bug and one routine:
+                //   1. Root id with root_constraints unset — the
+                //      binding should have called
+                //      set_root_constraints BEFORE run_frame.
+                //      set_root_constraints auto-marks root dirty
+                //      when constraints land, so the next
+                //      run_layout picks up the deferred work
+                //      automatically.
+                //   2. Non-root id with no cached constraints
+                //      AND no parent-driven layout yet — the
+                //      shallow-first dirty queue sort means the
+                //      parent should have processed first; if
+                //      it didn't (parent's perform_layout didn't
+                //      call layout_child for this id), the entry
+                //      is correctly dropped because the parent
+                //      is the authority on child constraints.
+                //      This is ORDINARY for a child mounted during
+                //      layout (ADR-0017: `LayoutBuilder`, the
+                //      sliver builders) that its parent chose not
+                //      to lay out this pass — a list item built
+                //      and found off-screen, say — and the child
+                //      keeps NEEDS_LAYOUT until the parent does.
+                //      A Scaffold body under a LayoutBuilder hit
+                //      it once per launch and a scrolling
+                //      ListView::builder once per frame, so it is
+                //      a debug line, not a warning (measured
+                //      2026-09-22 in the macOS lifecycle run).
+                // Case 1 stays at warn: the root having no
+                // constraints is a binding bug, and a launch that
+                // draws nothing is what it looks like.
+                if self.root_id == Some(dirty_node.id) {
+                    tracing::warn!(
+                        id = dirty_node.id.as_u64(),
+                        "run_layout: the root has no root_constraints; skipping its \
+                         dirty entry. The binding must call set_root_constraints \
+                         before run_frame (it auto-marks the root dirty)."
+                    );
+                } else {
+                    tracing::debug!(
+                        id = dirty_node.id.as_u64(),
+                        "run_layout: non-root dirty entry has no cached constraints \
+                         and its parent did not lay it out this pass; it keeps \
+                         NEEDS_LAYOUT until the parent's perform_layout calls \
+                         ctx.layout_child for it"
+                    );
+                }
+                continue;
+            };
+            // One span per relayout root, not per node: the walk below it is the root's cost.
+            let root_span = tracing::trace_span!(
+                target: "flui.frame",
+                "layout_root",
+                node = dirty_node.id.as_u64(),
+            )
+            .entered();
+            match self.layout_relayout_root(dirty_node.id, constraints, paint_queued) {
+                Ok(_) => {
+                    self.layout_poison.note_success(dirty_node.id);
+                }
+                Err(e) => {
+                    if e.is_recoverable_layout_error() {
+                        let wait_for_input = matches!(
+                            e,
+                            crate::RenderError::TextLayout(_) | crate::RenderError::TextContextBusy
+                        );
+                        return Err(BatchStop {
+                            error: e,
+                            retain: Some(wait_for_input),
+                        });
+                    }
+                    let kind = LayoutFailureKind::of(&e);
+                    match self.layout_poison.note_failure(
+                        dirty_node.id,
+                        kind,
+                        Some(crate::storage::ErasedConstraints::from(constraints)),
+                    ) {
+                        // Re-poison after a fresh invalidation lifted
+                        // the poison: the caller was already signaled
+                        // on the first transition, so skip the node
+                        // quietly and let the frame complete with the
+                        // healthy rest of the tree.
+                        Some(false) => {
+                            if let Some(node) = self.render_tree.get(dirty_node.id) {
+                                node.clear_needs_layout();
+                            }
+                            tracing::debug!(
+                                id = dirty_node.id.as_u64(),
+                                ?kind,
+                                "layout poison re-engaged after a fresh \
+                                 invalidation; the node still fails layout \
+                                 and stays skipped.",
+                            );
+                            continue;
+                        }
+                        // First poison transition (Some(true)) or budget
+                        // not yet exhausted (None): surface the failure —
+                        // a structural break (or an exhausted retry
+                        // budget) is a bug the embedder must see once.
+                        // This cannot storm: once poisoned, later
+                        // run_layout passes skip the node via the
+                        // backstop above, so the Err is a one-frame
+                        // signal rather than a perpetual frame drop.
+                        first @ (Some(true) | None) => {
+                            if first.is_some() {
+                                if let Some(node) = self.render_tree.get(dirty_node.id) {
+                                    node.clear_needs_layout();
+                                }
+                                tracing::error!(
+                                    id = dirty_node.id.as_u64(),
+                                    ?kind,
+                                    error = ?e,
+                                    "layout poison engaged: dirty-root layout \
+                                     failed with a structural error (or \
+                                     exhausted its retry budget); the node is \
+                                     skipped in later layout passes until \
+                                     freshly invalidated (mark_needs_layout).",
+                                );
+                            }
+                            return Err(BatchStop {
+                                error: e,
+                                retain: None,
+                            });
+                        }
+                    }
+                }
+            }
+
+            // A subtree that re-laid out must repaint, otherwise a
+            // pure-layout invalidation (setState moving a child)
+            // leaves stale pixels on screen.
+            //
+            // The mark must be per OBJECT, and the difference is not
+            // cosmetic. `mark_needs_paint` walks UP to the nearest
+            // established boundary, so marking only the relayout root
+            // reaches the boundary ABOVE the subtree and never the
+            // boundaries INSIDE it — which also re-laid out and whose
+            // content is therefore stale. A full-tree paint descent
+            // hides that; a paint pass that lets a clean boundary reuse
+            // its previous layers would show the stale pixels.
+            *paint_queued |= self
+                .scheduler
+                .commit_needs_paint(&self.render_tree, dirty_node.id);
+
+            // The span closes once the root's work is committed. A subscriber
+            // that panics as it closes leaves this entry queued, and the retry
+            // skips it because its layout flag is clear.
+            drop(root_span);
+        }
+        *next = dirty_nodes.len();
         Ok(())
     }
 
@@ -502,11 +544,28 @@ impl PipelineOwner<Layout> {
     /// `catch_unwind` wrapper, the cycle set stays consistent across
     /// frames — a panic does not leak an in-flight id.
     ///
-    /// `run_layout`'s dirty-queue iteration calls this method directly.
+    /// `run_layout`'s dirty-queue iteration runs the same walk, announcing the
+    /// work of a whole batch with one wake instead of one per root.
     pub fn layout_dirty_root(
         &mut self,
         id: RenderId,
         constraints: BoxConstraints,
+    ) -> crate::error::RenderResult<Size> {
+        let mut queued = false;
+        let laid_out = self.layout_relayout_root(id, constraints, &mut queued);
+        if queued {
+            self.scheduler.notify_visual_update();
+        }
+        laid_out
+    }
+
+    /// [`Self::layout_dirty_root`] without its wake: a new paint or semantics
+    /// queue entry sets `queued`, and the caller announces the work once.
+    fn layout_relayout_root(
+        &mut self,
+        id: RenderId,
+        constraints: BoxConstraints,
+        queued: &mut bool,
     ) -> crate::error::RenderResult<Size> {
         // Layout clears flags and fills caches under any stamped walk path.
         self.scheduler.forget_layout_walks();
@@ -531,7 +590,15 @@ impl PipelineOwner<Layout> {
         // Step 4: recursive walk via the safe arena API.  Internally the arena
         // reborrows one NodePtr per call level (distinct slots; parent ≠ child
         // enforced by LayoutCycleGuard), but no `unsafe` appears here.
-        let result = arena.layout_child(id, constraints);
+        //
+        // The walk contains each render object's own hooks, but a panic can
+        // still leave it from user code outside them, a `tracing` subscriber
+        // reporting on the dirty root, say. It is caught here: the work the
+        // walk finished before the panic is committed below exactly as a
+        // completed walk's is, and only then does the panic go on.
+        let walked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            arena.layout_child(id, constraints)
+        }));
 
         // Step 5: drain the arena's request-strategy sinks (the
         // request-strategy seam's producer/removal halves).
@@ -548,74 +615,10 @@ impl PipelineOwner<Layout> {
         self.counters.nodes_laid_out += laid_out_count;
         self.counters.nodes_acquired += acquired_count;
 
-        // Needs-paint is marked per object that laid out, applied once per
-        // walk to exactly the boundaries that reached layout. Anything else is
-        // covered by `mark_needs_paint` finding its enclosing boundary.
-        for id in laid_out {
-            self.mark_needs_paint(id);
-        }
-
-        // A node that lays out re-publishes its semantics geometry. Without
-        // that, a frame that only
-        // re-laid-out publishes nothing, and a scroll — which is exactly that
-        // frame, since the viewport's offset listener requests layout and
-        // nothing else — leaves the accessibility tree describing where the
-        // content used to be.
-        //
-        // ONE mark, on the dirty root, not one per laid-out node. The arena
-        // walks the subtree of `id`, so every node that laid out is under it,
-        // and `plan_graft_pass` re-assembles a marked node's whole subtree —
-        // marking each descendant as well would be strictly redundant while
-        // costing a `fire_need_visual_update` per node (each of which asks the
-        // platform to redraw) and a per-node ancestor walk in the graft, i.e.
-        // O(N·depth) for a deep relayout. `mark_needs_semantics` is itself a
-        // no-op while semantics is disabled, so a session with no
-        // accessibility client attached pays one predictable branch.
-        self.mark_needs_semantics(id);
-
-        // Poison bookkeeping for the walk's descendant failures/successes.
-        // A success clears the node's failure record; failures are deduped
-        // to one count per node per walk (a node failing both layout and
-        // an intrinsic query in one pass burns its budget once), and on
-        // the 0 → 1 poison transition the failed node AND its direct
-        // layout parent have their NEEDS_LAYOUT flags cleared: the
-        // parent's geometry with the poisoned child's stand-in size is the
-        // same value any further retry would produce, so keeping the flag
-        // would only hide the subtree from paint without changing it.
-        for succeeded in layout_successes {
-            self.layout_poison.note_success(succeeded);
-        }
-        for (parent, failed, kind, first_report) in
-            self.layout_poison.note_failures(layout_failures)
-        {
-            if let Some(node) = self.render_tree.get(failed) {
-                node.clear_needs_layout();
-            }
-            if parent != failed
-                && let Some(node) = self.render_tree.get(parent)
-            {
-                node.clear_needs_layout();
-            }
-            if first_report {
-                tracing::error!(
-                    ?failed,
-                    ?parent,
-                    ?kind,
-                    "layout poison engaged: node failed layout with a structural \
-                     error (or exhausted its retry budget); skipping it in layout \
-                     until it is freshly invalidated (mark_needs_layout). Its last \
-                     committed geometry (or ZERO) stands in.",
-                );
-            } else {
-                tracing::debug!(
-                    ?failed,
-                    ?parent,
-                    ?kind,
-                    "layout poison re-engaged after a fresh invalidation; the \
-                     node still fails layout and stays skipped.",
-                );
-            }
-        }
+        // Everything the walk produced is committed before the first callout
+        // (ADR-0287): the child requests and retain bands, the poison records,
+        // then the paint and semantics queue entries. The poison reports run
+        // last.
 
         // Move child-build requests into the owner's observable buffer so the
         // binding layer can consume them after the frame. No tree mutation
@@ -630,6 +633,116 @@ impl PipelineOwner<Layout> {
         // itself, which is what avoids an ABA double-remove.
         self.pending_retain_bands.extend(pending_retain_bands);
 
-        result
+        // Poison bookkeeping for the walk's descendant failures/successes.
+        // A success clears the node's failure record; failures are deduped
+        // to one count per node per walk (a node failing both layout and
+        // an intrinsic query in one pass burns its budget once), and on
+        // the 0 → 1 poison transition the failed node AND its direct
+        // layout parent have their NEEDS_LAYOUT flags cleared: the
+        // parent's geometry with the poisoned child's stand-in size is the
+        // same value any further retry would produce, so keeping the flag
+        // would only hide the subtree from paint without changing it.
+        for succeeded in layout_successes {
+            self.layout_poison.note_success(succeeded);
+        }
+        let poison_reports = self.layout_poison.note_failures(layout_failures);
+        for &(parent, failed, _, _) in &poison_reports {
+            if let Some(node) = self.render_tree.get(failed) {
+                node.clear_needs_layout();
+            }
+            if parent != failed
+                && let Some(node) = self.render_tree.get(parent)
+            {
+                node.clear_needs_layout();
+            }
+        }
+
+        // Needs-paint is marked per object that laid out, applied once per
+        // walk to exactly the boundaries that reached layout. Anything else is
+        // covered by `mark_needs_paint` finding its enclosing boundary.
+        for id in laid_out {
+            *queued |= self.scheduler.commit_needs_paint(&self.render_tree, id);
+        }
+
+        // A node that lays out re-publishes its semantics geometry. Without
+        // that, a frame that only
+        // re-laid-out publishes nothing, and a scroll — which is exactly that
+        // frame, since the viewport's offset listener requests layout and
+        // nothing else — leaves the accessibility tree describing where the
+        // content used to be.
+        //
+        // ONE entry, on the dirty root, not one per laid-out node. The arena
+        // walks the subtree of `id`, so every node that laid out is under it,
+        // and `plan_graft_pass` re-assembles a marked node's whole subtree —
+        // marking each descendant as well would be strictly redundant while
+        // costing a per-node ancestor walk in the graft, i.e. O(N·depth) for a
+        // deep relayout. A session with no accessibility client attached pays
+        // one predictable branch.
+        if self.semantics_enabled()
+            && let Some(node) = self.render_tree.get(id)
+        {
+            *queued |= self
+                .scheduler
+                .commit_node_needing_semantics(id, usize::from(node.depth()));
+        }
+
+        // A poison report reaches a `tracing` subscriber, which is user code.
+        // Each report runs even when an earlier one panics, so a first
+        // transition is never left unreported, and the first panic goes on
+        // once they all have.
+        let mut reports = flui_foundation::panic::FirstPanic::new();
+        for (parent, failed, kind, first_report) in poison_reports {
+            reports.contain(|| report_layout_poison(parent, failed, kind, first_report));
+        }
+        match walked {
+            Ok(result) => {
+                reports.resume();
+                result
+            }
+            // The walk's panic came first; dropping `reports` discards a
+            // later one under containment (ADR-0281 §2).
+            Err(payload) => {
+                drop(reports);
+                std::panic::resume_unwind(payload)
+            }
+        }
+    }
+}
+
+/// Why a layout batch stopped before its last entry.
+struct BatchStop {
+    error: crate::error::RenderError,
+    /// `Some(wait_for_input)` puts the unfinished entries back in the
+    /// queue, waiting for changed input (an authored rejection) or runnable
+    /// as they are; `None` ends the batch with the error.
+    retain: Option<bool>,
+}
+
+/// Reports a node's layout poison to the `tracing` subscriber: an error on
+/// the first transition, a debug line when a fresh invalidation re-engages it.
+fn report_layout_poison(
+    parent: RenderId,
+    failed: RenderId,
+    kind: LayoutFailureKind,
+    first_report: bool,
+) {
+    if first_report {
+        tracing::error!(
+            ?failed,
+            ?parent,
+            ?kind,
+            "layout poison engaged: node failed layout with a structural \
+             error (or exhausted its retry budget); skipping it in layout \
+             until it is freshly invalidated (mark_needs_layout). Its last \
+             committed geometry (or ZERO) stands in.",
+        );
+    } else {
+        tracing::debug!(
+            ?failed,
+            ?parent,
+            ?kind,
+            "layout poison re-engaged after a fresh invalidation; the \
+             node still fails layout and stays skipped.",
+        );
     }
 }
