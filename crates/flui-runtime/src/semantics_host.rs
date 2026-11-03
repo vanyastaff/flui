@@ -12,8 +12,8 @@
 //! this module does not maintain another settings snapshot.
 //!
 //! Handle acquisition keeps semantics collected while an agent reads the
-//! tree: `UiRuntime::semantics_agent` holds one handle for all clones of the
-//! agent it vends. Announcements are not here: they are published through
+//! tree: `UiRuntime::dev_agent_window` holds one handle for all clones of the
+//! window handle it vends. Announcements are not here: they are published through
 //! the semantics tree's announcer nodes (`flui_semantics::Announcer`).
 
 use std::sync::{

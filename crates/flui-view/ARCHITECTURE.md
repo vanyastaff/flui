@@ -672,6 +672,14 @@ closed window alive. Flutter has no counterpart. Pinned by
 `a_window_answers_through_its_port_until_the_port_is_gone` and the runtime's
 `dev_agent_host_contains_its_hook`.
 
+A window takes every method one way: `AgentWindow::call::<M>` for any `M: WindowMethod`, the
+protocol's own type for a row of its method table marked `Agent(window)`, so the seam has no
+method list of its own to fall behind the table. The call crosses to the owner as a
+`__runtime::WindowCall`, which erases the method's types behind its `TypeId` and is opened only
+as the method it was made for, and is answered on a `__runtime::Reply` the owner may clone and
+answer once. Params that address another window are refused `invalid_argument` before they
+are sent. Every failure is the protocol's `ErrorObject`, so a host relays it as it came.
+
 ### The element tree inspects itself; a view only describes its configuration
 
 `ElementTree` implements ADR-0242's `InspectTree` over `dyn ElementBase`. The tree names each

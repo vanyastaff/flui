@@ -9,7 +9,6 @@
 //! window had not settled), not an error.
 
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
-use std::sync::Weak;
 use std::time::Duration;
 
 use flui_foundation::geometry::DevicePixelRatio;
@@ -28,21 +27,6 @@ use crate::presentation::PresentationState;
 pub(crate) const MAX_PARKED_WAITS: usize = 256;
 
 /// A wait, parked on its presentation until its condition holds or its deadline passes.
-/// Where a wait's outcome goes, and whether anyone can still take it.
-#[derive(Debug)]
-pub struct WaitReply {
-    reply: ReplySender<WaitOutcome>,
-    /// The asker's answer holds the other end: once it is dropped, nobody
-    /// takes the outcome and the parked wait is let go.
-    asker: Weak<()>,
-}
-
-impl WaitReply {
-    pub(super) fn new(reply: ReplySender<WaitOutcome>, asker: Weak<()>) -> Self {
-        Self { reply, asker }
-    }
-}
-
 /// Owner thread only.
 pub(crate) struct PendingWait {
     condition: Condition,
@@ -53,8 +37,6 @@ pub(crate) struct PendingWait {
     /// On the presentation's clock.
     deadline: Instant,
     reply: ReplySender<WaitOutcome>,
-    /// Gone once nobody takes the outcome.
-    asker: Weak<()>,
 }
 
 impl PendingWait {
@@ -65,7 +47,7 @@ impl PendingWait {
 
     /// Whether anyone can still take the outcome.
     fn is_awaited(&self) -> bool {
-        self.asker.strong_count() > 0
+        self.reply.is_awaited()
     }
 
     /// The window closed before the wait ended.
@@ -80,20 +62,14 @@ impl PendingWait {
 }
 
 impl UiRuntime {
-    /// The owner half of [`SemanticsAgent::wait`](super::SemanticsAgent::wait): evaluates the
-    /// condition against what the window has committed, and parks the wait when it does not hold
-    /// yet. Returns whether the presentation was still open.
+    /// The owner half of `wait.until`: evaluates the condition against what the window has
+    /// committed, and parks the wait when it does not hold yet.
     pub(super) fn park_agent_wait(
         &self,
-        presentation: flui_foundation::PresentationId,
+        state: &PresentationState,
         params: WaitParams,
-        reply: WaitReply,
-    ) -> bool {
-        let WaitReply { reply, asker } = reply;
-        let Some(state) = self.presentations.get(presentation) else {
-            send_reply(&reply, None, Err(AgentError::PresentationGone));
-            return false;
-        };
+        reply: ReplySender<WaitOutcome>,
+    ) {
         let timeout = Duration::from_millis(params.effective_timeout_ms());
         let now = state.clock().now();
         let pending = PendingWait {
@@ -102,11 +78,10 @@ impl UiRuntime {
             events: EventSet::EMPTY,
             deadline: now.checked_add(timeout).unwrap_or(now),
             reply,
-            asker,
         };
         // A condition that holds already, or a tree that cannot be read, answers here.
         let Some(pending) = self.settle_wait(state, pending, now) else {
-            return true;
+            return;
         };
         // Waits nobody takes any more hold no place against the limit.
         state
@@ -116,14 +91,13 @@ impl UiRuntime {
         let parked = state.agent_waits.borrow().len();
         if parked >= MAX_PARKED_WAITS {
             send_reply(&pending.reply, None, Err(AgentError::TooManyWaits));
-            return true;
+            return;
         }
         let keeps_frames_coming = counts_frames(&pending.condition);
         state.agent_waits.borrow_mut().push(pending);
         if keeps_frames_coming {
             self.request_redraw_for(state);
         }
-        true
     }
 
     /// Evaluates every parked wait: after the owner presented a frame (`frame`, which also counts

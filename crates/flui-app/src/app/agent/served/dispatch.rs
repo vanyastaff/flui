@@ -1,6 +1,12 @@
 //! What each method the agent serves does: parse its typed parameters, ask
 //! the window's owner, wait a bounded time for the answer, and write the
 //! typed output.
+//!
+//! A window method ([`WindowMethod`]) takes one route, generated from the
+//! protocol's table: its parameters name the window it asks, through the
+//! seam's one call, and the owner answers with the method's output or the
+//! protocol's error object. The app's own methods (`windows.list`,
+//! `events.*`) are answered here.
 
 // Every refusal here becomes the reply line itself, written once per request,
 // so the error object is returned by value: boxing it would add an allocation
@@ -15,15 +21,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use flui_protocol::method::{
-    ElementActionability, EventsSubscribe, EventsUnsubscribe, InspectLayers, InspectRender,
-    InspectWidgets, Method, MotionSet, SemanticsAct, SemanticsAnnouncements, SemanticsLocate,
-    SemanticsRead, WaitUntil, WindowsList,
+    Addressed, EventsSubscribe, EventsUnsubscribe, Method, WindowMethod, WindowsList,
 };
 use flui_protocol::{
-    ActParams, ActionRequest, Effect, EffectKind, ErrorCode, ErrorObject, HandleKind, Locator,
-    MethodEffect, MethodInfo, Pick, Retry, Subscription, Target, WindowId, WindowList,
+    Effect, EffectKind, ErrorCode, ErrorObject, HandleKind, METHODS, MethodEffect, MethodInfo,
+    Retry, ServedBy, Subscription, WindowId, WindowList,
 };
-use flui_view::dev_agent::{AgentAnswer, AgentEvents, AgentFault, AgentWindow, InspectTarget};
+use flui_view::dev_agent::{AgentAnswer, AgentEvents, AgentWindow};
 use parking_lot::Mutex;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -35,22 +39,29 @@ use super::registry::{Lookup, Registry};
 /// The longest single wait on an answer before the stop flag is looked at.
 const WAIT_SLICE: Duration = Duration::from_millis(50);
 
-/// The methods this agent answers, by wire name, in table order.
-pub(super) const SERVED: &[&str] = &[
-    ElementActionability::NAME,
+/// The methods the app answers itself, not one of its windows.
+const APPS_OWN: &[&str] = &[
     EventsSubscribe::NAME,
     EventsUnsubscribe::NAME,
-    InspectLayers::NAME,
-    InspectRender::NAME,
-    InspectWidgets::NAME,
-    MotionSet::NAME,
-    SemanticsAct::NAME,
-    SemanticsAnnouncements::NAME,
-    SemanticsLocate::NAME,
-    SemanticsRead::NAME,
-    WaitUntil::NAME,
     WindowsList::NAME,
 ];
+
+/// Whether this agent answers `method`: one of the app's own, or a window
+/// method this build's windows answer.
+pub(super) fn serves(method: &MethodInfo) -> bool {
+    method.served_by == ServedBy::Agent
+        && (APPS_OWN.contains(&method.name)
+            || flui_runtime::ui_runtime::window_answers(method.name))
+}
+
+/// The methods this agent answers, by wire name, in table order.
+pub(super) fn served() -> Vec<String> {
+    METHODS
+        .iter()
+        .filter(|method| serves(method))
+        .map(|method| method.name.to_owned())
+        .collect()
+}
 
 /// What one drain of a connection's subscriptions found.
 pub(super) struct Drained {
@@ -129,10 +140,10 @@ impl Subscribed {
                     self.reached.insert(id);
                     self.asked.push((id, answer));
                 }
-                Err(fault) if fault.retry() == Retry::Soon => {}
-                Err(fault) => {
+                Err(error) if error.retry == Retry::Soon => {}
+                Err(error) => {
                     self.reached.insert(id);
-                    refused.push((id, fault.code()));
+                    refused.push((id, error.code));
                 }
             }
         }
@@ -140,13 +151,13 @@ impl Subscribed {
         for (id, mut answer) in self.asked.drain(..) {
             match answer.try_take() {
                 Some(Ok(stream)) => self.streams.push(stream),
-                Some(Err(fault)) if fault.retry() == Retry::Soon => {
+                Some(Err(error)) if error.retry == Retry::Soon => {
                     self.reached.remove(&id);
                 }
                 // The window closed in between, or refused for good.
-                Some(Err(fault)) => {
-                    if fault.code() != ErrorCode::Gone {
-                        refused.push((id, fault.code()));
+                Some(Err(error)) => {
+                    if error.code != ErrorCode::Gone {
+                        refused.push((id, error.code));
                     }
                 }
                 None => waiting.push((id, answer)),
@@ -165,6 +176,7 @@ pub(super) struct Context<'a> {
 }
 
 /// Run `method` with `params`: its output, or the error object to answer.
+/// Run `method` with `params`: its output, or the error object to answer.
 pub(super) fn run(
     method: &MethodInfo,
     params: Value,
@@ -174,61 +186,6 @@ pub(super) fn run(
         WindowsList::NAME => {
             serve::<WindowsList>(params, |_| Ok(WindowList::new(cx.shared.registry.list())))
         }
-        SemanticsRead::NAME => serve::<SemanticsRead>(params, |params| {
-            let window = window(cx, params.window)?;
-            let root = params.query.root;
-            settle(cx, method, window.read(params.query), |fault| {
-                named(fault, params.window, root)
-            })
-        }),
-        SemanticsAct::NAME => serve::<SemanticsAct>(params, |params| act(cx, method, params)),
-        SemanticsLocate::NAME => serve::<SemanticsLocate>(params, |params| {
-            let window = locator_window(cx, &params.locator)?;
-            let id = window.id();
-            settle(cx, method, window.locate(params), |fault| {
-                named(fault, id, None)
-            })
-        }),
-        ElementActionability::NAME => serve::<ElementActionability>(params, |params| {
-            let element = params.element;
-            let window = window(cx, element.window)?;
-            settle(cx, method, window.actionability(params), |fault| {
-                named(fault, element.window, Some(element.element))
-            })
-        }),
-        WaitUntil::NAME => serve::<WaitUntil>(params, |params| {
-            let id = params.window;
-            let window = window(cx, id)?;
-            // The wait's own timeout runs on the owner; the reply waits that
-            // long and the usual bound on top.
-            let extra = Duration::from_millis(params.effective_timeout_ms());
-            settle_within(cx, method, extra, window.wait(params), |fault| {
-                named(fault, id, None)
-            })
-        }),
-        InspectWidgets::NAME => serve::<InspectWidgets>(params, |params| {
-            inspect(cx, method, InspectTarget::Widgets, params)
-        }),
-        InspectRender::NAME => serve::<InspectRender>(params, |params| {
-            inspect(cx, method, InspectTarget::Render, params)
-        }),
-        InspectLayers::NAME => serve::<InspectLayers>(params, |params| {
-            inspect(cx, method, InspectTarget::Layers, params)
-        }),
-        MotionSet::NAME => serve::<MotionSet>(params, |params| {
-            let id = params.window;
-            let window = window(cx, id)?;
-            settle(cx, method, window.motion(params.request), |fault| {
-                named(fault, id, None)
-            })
-        }),
-        SemanticsAnnouncements::NAME => serve::<SemanticsAnnouncements>(params, |params| {
-            let id = params.window;
-            let window = window(cx, id)?;
-            settle(cx, method, window.announcements(params), |fault| {
-                named(fault, id, None)
-            })
-        }),
         EventsSubscribe::NAME => {
             serve::<EventsSubscribe>(params, |params| subscribe(cx, method, params.events))
         }
@@ -248,11 +205,34 @@ pub(super) fn run(
                         "subscription {} is not this connection's",
                         subscription.subscription
                     ),
+                )
+                .with_handle(
+                    HandleKind::Subscription,
+                    subscription.subscription.to_string(),
                 ))
             }
         }),
-        _ => Err(not_supported(method)),
+        _ => window_route(method, params, cx).unwrap_or_else(|| Err(not_supported(method))),
     }
+}
+
+/// Run a window method: the route generated for each one the table declares.
+fn window_route(
+    method: &MethodInfo,
+    params: Value,
+    cx: &Context<'_>,
+) -> Option<Result<Value, ErrorObject>> {
+    macro_rules! routes {
+        ($($ty:ident = $name:literal, $effect:ident, $tier:ident, $params:ty => $output:ty;)+) => {
+            match method.name {
+                $($name => Some(serve::<flui_protocol::method::$ty>(params, |params| {
+                    ask::<flui_protocol::method::$ty>(cx, params)
+                })),)+
+                _ => None,
+            }
+        };
+    }
+    flui_protocol::for_each_window_method!(routes)
 }
 
 /// `method` is in the table but not answered here: by another side, or not
@@ -290,87 +270,17 @@ where
     })
 }
 
-fn act(
-    cx: &Context<'_>,
-    method: &MethodInfo,
-    params: ActParams,
-) -> Result<flui_protocol::ActOutcome, ErrorObject> {
-    let element = match params.target {
-        Target::Element(element) => element,
-        Target::Locator(locator) => resolve(cx, &locator)?,
-        Target::Point { .. } => {
-            let mut error = ErrorObject::new(
-                ErrorCode::NotSupported,
-                "a semantics action takes an element or a locator; a point takes input",
-            );
-            error.capability = Some("input.inject".to_owned());
-            return Err(error);
-        }
-        _ => {
-            return Err(ErrorObject::new(
-                ErrorCode::InvalidArgument,
-                "this app's agent does not know that kind of target",
-            ));
-        }
+/// Ask the window `params` address `M`, and wait for its answer: within the
+/// reply timeout, and as long again as the window may hold the request (a
+/// wait's timeout runs on the owner).
+fn ask<M: WindowMethod>(cx: &Context<'_>, params: M::Params) -> Result<M::Output, ErrorObject> {
+    let window = match params.window() {
+        Some(id) => window(cx, id)?,
+        None => only_window(cx)?,
     };
-    let window = window(cx, element.window)?;
-    let mut request = ActionRequest::new(element.element, params.action);
-    request.value = params.value;
-    settle(
-        cx,
-        method,
-        window.act_and_read(request, params.snapshot),
-        |fault| named(fault, element.window, Some(element.element)),
-    )
-}
-
-/// The one element `locator` resolves to now, as its pick says.
-fn resolve(cx: &Context<'_>, locator: &Locator) -> Result<flui_protocol::ElementRef, ErrorObject> {
-    let window = locator_window(cx, locator)?;
-    let id = window.id();
-    let strict = locator.pick == Pick::Strict;
-    let locate = flui_protocol::method::SemanticsLocate::NAME;
-    let method =
-        flui_protocol::method::find(locate).expect("BUG: semantics.locate is in the table");
-    let mut params = flui_protocol::LocateParams::new(locator.clone());
-    if strict {
-        // Two are enough to know the locator is ambiguous; ten name the
-        // candidates.
-        params.max_matches = Some(10);
-    }
-    let matches = settle(cx, method, window.locate(params), |fault| {
-        named(fault, id, None)
-    })?;
-    match matches.matches.as_slice() {
-        [] => Err(
-            ErrorObject::new(ErrorCode::NotFound, "the locator matches no element now")
-                .with_retry(Retry::WhenAppears),
-        ),
-        [only] => Ok(only.element),
-        several if strict => Err(ErrorObject::ambiguous(
-            format!("the locator matches {} elements", several.len()),
-            several
-                .iter()
-                .map(|candidate| {
-                    flui_protocol::tree::outline(std::slice::from_ref(&candidate.node))
-                })
-                .collect(),
-        )),
-        [first, ..] => Ok(first.element),
-    }
-}
-
-fn inspect(
-    cx: &Context<'_>,
-    method: &MethodInfo,
-    target: InspectTarget,
-    params: flui_protocol::InspectParams,
-) -> Result<flui_protocol::InspectReading, ErrorObject> {
-    let id = params.window;
-    let window = window(cx, id)?;
-    settle(cx, method, window.inspect(target, params), |fault| {
-        named(fault, id, None)
-    })
+    let holds = params.holds_for();
+    let method = flui_protocol::MethodInfo::of::<M>();
+    settle(cx, &method, holds, window.call::<M>(params))
 }
 
 fn subscribe(
@@ -394,9 +304,12 @@ fn subscribe(
         let Lookup::Open(window) = cx.shared.registry.lookup(id) else {
             continue;
         };
-        match settle(cx, method, window.subscribe(filters.clone()), |fault| {
-            named(fault, id, None)
-        }) {
+        match settle(
+            cx,
+            method,
+            Duration::ZERO,
+            window.subscribe(filters.clone()),
+        ) {
             Ok(stream) => streams.push(stream),
             // A window that closed in between has nothing to stream.
             Err(error) if error.code == ErrorCode::Gone => {}
@@ -423,7 +336,9 @@ fn subscribe(
 fn window(cx: &Context<'_>, id: WindowId) -> Result<AgentWindow, ErrorObject> {
     match cx.shared.registry.lookup(id) {
         Lookup::Open(window) => Ok(window),
-        Lookup::Closed => Err(fault(&AgentFault::window_gone(), Some(id.to_string()))),
+        Lookup::Closed => Err(ErrorObject::new(ErrorCode::Gone, "the window has closed")
+            .with_retry(Retry::Never)
+            .with_handle(HandleKind::Window, id.to_string())),
         Lookup::Unknown => Err(ErrorObject::new(
             ErrorCode::UnknownHandle,
             format!("window {id} was never issued"),
@@ -432,12 +347,8 @@ fn window(cx: &Context<'_>, id: WindowId) -> Result<AgentWindow, ErrorObject> {
     }
 }
 
-/// The window a locator searches: the one it names, or the app's only
-/// window.
-fn locator_window(cx: &Context<'_>, locator: &Locator) -> Result<AgentWindow, ErrorObject> {
-    if let Some(id) = locator.window {
-        return window(cx, id);
-    }
+/// The app's only window, for a locator that names none.
+fn only_window(cx: &Context<'_>) -> Result<AgentWindow, ErrorObject> {
     match cx.shared.registry.list().as_slice() {
         [only] => window(cx, *only),
         [] => Err(
@@ -451,35 +362,19 @@ fn locator_window(cx: &Context<'_>, locator: &Locator) -> Result<AgentWindow, Er
     }
 }
 
-/// Wait for the owner's answer within the reply timeout.
-fn settle<T>(
-    cx: &Context<'_>,
-    method: &MethodInfo,
-    asked: Result<AgentAnswer<T>, AgentFault>,
-    name: impl Fn(AgentFault) -> (AgentFault, Option<String>),
-) -> Result<T, ErrorObject> {
-    settle_within(cx, method, Duration::ZERO, asked, name)
-}
-
 /// Wait for the owner's answer within the reply timeout and `extra`. A
 /// timeout answers `timeout`: retry `soon` for a method that only reads, and
 /// the `may_have_run` effect for one that acts, which is still queued.
-fn settle_within<T>(
+fn settle<T>(
     cx: &Context<'_>,
     method: &MethodInfo,
     extra: Duration,
-    asked: Result<AgentAnswer<T>, AgentFault>,
-    name: impl Fn(AgentFault) -> (AgentFault, Option<String>),
+    asked: Result<AgentAnswer<T>, ErrorObject>,
 ) -> Result<T, ErrorObject> {
-    let fail = |agent_fault: AgentFault| {
-        let (agent_fault, handle) = name(agent_fault);
-        fault(&agent_fault, handle)
-    };
-    let answer = asked.map_err(fail)?;
+    let answer = asked?;
     let timeout = cx.shared.limits.reply_timeout.saturating_add(extra);
     match wait(answer, timeout, cx) {
-        Some(Ok(value)) => Ok(value),
-        Some(Err(agent_fault)) => Err(fail(agent_fault)),
+        Some(answer) => answer,
         None if method.effect == MethodEffect::ReadOnly => Err(ErrorObject::new(
             ErrorCode::Timeout,
             "the window did not answer in time",
@@ -501,7 +396,7 @@ fn wait<T>(
     mut answer: AgentAnswer<T>,
     timeout: Duration,
     cx: &Context<'_>,
-) -> Option<Result<T, AgentFault>> {
+) -> Option<Result<T, ErrorObject>> {
     let deadline = Instant::now().checked_add(timeout);
     loop {
         let left = deadline.map_or(Duration::MAX, |deadline| {
@@ -517,36 +412,4 @@ fn wait<T>(
             return None;
         }
     }
-}
-
-/// Pairs `fault` with the handle its kind names.
-fn named(
-    fault: AgentFault,
-    window: WindowId,
-    element: Option<flui_protocol::ElementId>,
-) -> (AgentFault, Option<String>) {
-    let handle = match fault.kind() {
-        Some(flui_view::dev_agent::HandleKind::Window) => Some(window.to_string()),
-        Some(flui_view::dev_agent::HandleKind::Element) => {
-            element.map(|element| element.to_string())
-        }
-        _ => None,
-    };
-    (fault, handle)
-}
-
-/// ADR-0080's error object for an owner's fault.
-pub(super) fn fault(fault: &AgentFault, handle: Option<String>) -> ErrorObject {
-    let mut error = ErrorObject::new(fault.code(), fault.message()).with_retry(fault.retry());
-    if let (Some(kind), Some(handle)) = (fault.kind(), handle) {
-        let kind = match kind {
-            flui_view::dev_agent::HandleKind::Element => HandleKind::Element,
-            flui_view::dev_agent::HandleKind::Window | _ => HandleKind::Window,
-        };
-        error = error.with_handle(kind, handle);
-    }
-    if fault.may_have_run() {
-        error = error.with_effect(Effect::new(EffectKind::MayHaveRun));
-    }
-    error
 }

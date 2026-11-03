@@ -113,7 +113,9 @@ pub use inspect::{
     InspectValue, NonFinite,
 };
 pub use locator::{LocateParams, Locator, Match, Matches, Pick, StateFilter, Target, TextMatch};
-pub use method::{METHODS, Method, MethodEffect, MethodInfo, ServedBy, Tier};
+pub use method::{
+    Addressed, METHODS, Method, MethodEffect, MethodInfo, ServedBy, Tier, WindowMethod,
+};
 pub use motion::{MotionParams, MotionRequest, MotionState};
 pub use perf::{
     Distribution, FramePhase, FrameSample, Latency, PerfBudget, PerfExpectParams, PerfReport,

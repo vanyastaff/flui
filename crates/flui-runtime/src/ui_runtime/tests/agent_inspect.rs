@@ -6,56 +6,103 @@ use std::num::NonZeroU32;
 
 use flui_foundation::PresentationId;
 use flui_foundation::inspect::{Link, NodeRef};
+use flui_protocol::method;
 use flui_protocol::{
-    ErrorCode, InspectLevel, InspectNode, InspectParams, InspectReading, WindowId,
+    ErrorCode, ErrorObject, HandleKind, InspectLevel, InspectNode, InspectParams, InspectReading,
+    Retry, WindowId,
 };
-use flui_view::dev_agent::InspectTarget;
+use flui_view::dev_agent::{AgentAnswer, AgentWindow};
 
 use super::agent_semantics::{counter, frame};
 use super::pump_transaction::manual_clock_ui_runtime;
 use super::*;
 
-static_assertions::assert_impl_all!(AgentReply<InspectReading>: Send);
+static_assertions::assert_impl_all!(AgentAnswer<InspectReading>: Send);
 
-fn window(ui_runtime: &UiRuntime) -> WindowId {
+/// The tree an inspection reads: one window method each.
+#[derive(Debug, Clone, Copy)]
+enum InspectTarget {
+    Widgets,
+    Render,
+    Layers,
+}
+
+/// Asks `window` to inspect `target` with `params`.
+#[expect(
+    clippy::result_large_err,
+    reason = "the protocol's error object is the answer under test"
+)]
+fn ask(
+    window: &AgentWindow,
+    target: InspectTarget,
+    params: InspectParams,
+) -> Result<AgentAnswer<InspectReading>, ErrorObject> {
+    match target {
+        InspectTarget::Widgets => window.call::<method::InspectWidgets>(params),
+        InspectTarget::Render => window.call::<method::InspectRender>(params),
+        InspectTarget::Layers => window.call::<method::InspectLayers>(params),
+    }
+}
+
+fn window_id(ui_runtime: &UiRuntime) -> WindowId {
     WindowId::from_u64(ui_runtime.presentation_id().as_u64())
         .expect("a presentation id packs a non-zero generation")
 }
 
-/// A counter on a manual clock, one frame in, and its agent.
-fn shown() -> (UiRuntime, SemanticsAgent) {
+/// Asserts `error` is the `gone` a closed `window` answers.
+fn assert_window_gone(error: &ErrorObject, window: WindowId) {
+    assert_eq!(
+        (error.code, error.kind, error.handle.as_deref()),
+        (
+            ErrorCode::Gone,
+            Some(HandleKind::Window),
+            Some(window.to_string().as_str())
+        )
+    );
+}
+
+/// A counter on a manual clock, one frame in, and its window.
+fn shown() -> (UiRuntime, AgentWindow) {
     let clock = flui_foundation::ManualClock::new();
     let ui_runtime = manual_clock_ui_runtime(&clock);
     let _presses = counter(&ui_runtime, None);
-    let agent = ui_runtime
-        .semantics_agent(ui_runtime.presentation_id())
+    let window = ui_runtime
+        .dev_agent_window(ui_runtime.presentation_id())
         .expect("the ui_runtime hosts its primary presentation");
     let mut sink = ScriptedSink::always_presents();
     frame(&ui_runtime, &mut sink);
-    (ui_runtime, agent)
+    (ui_runtime, window)
 }
 
+#[expect(
+    clippy::result_large_err,
+    reason = "the protocol's error object is the answer under test"
+)]
 fn inspect(
     ui_runtime: &UiRuntime,
-    agent: &SemanticsAgent,
+    window: &AgentWindow,
     target: InspectTarget,
     params: InspectParams,
-) -> Result<InspectReading, AgentError> {
-    let mut reply = agent.inspect(target, params).expect("the inbox has room");
+) -> Result<InspectReading, ErrorObject> {
+    let mut reply = ask(window, target, params).expect("the inbox has room");
     let _report = ui_runtime.drain_commands();
     reply.try_take().expect("the owner answered at the drain")
 }
 
+#[expect(
+    clippy::result_large_err,
+    reason = "the protocol's error object is the answer under test"
+)]
 fn whole(
     ui_runtime: &UiRuntime,
-    agent: &SemanticsAgent,
+    window: &AgentWindow,
     target: InspectTarget,
-) -> Result<InspectReading, AgentError> {
+) -> Result<InspectReading, ErrorObject> {
     inspect(
         ui_runtime,
-        agent,
+        window,
         target,
-        InspectParams::new(window(ui_runtime)),
+        InspectParams::new(window_id(ui_runtime)),
     )
 }
 
@@ -72,9 +119,9 @@ fn nodes(node: &InspectNode) -> Vec<&InspectNode> {
 
 #[test]
 fn each_tree_answers_with_its_own_handles() {
-    let (ui_runtime, agent) = shown();
+    let (ui_runtime, window) = shown();
     for (target, prefix) in [(InspectTarget::Widgets, 'v'), (InspectTarget::Render, 'r')] {
-        let reading = whole(&ui_runtime, &agent, target)
+        let reading = whole(&ui_runtime, &window, target)
             .unwrap_or_else(|error| panic!("{target:?}: {error}"));
         assert_eq!(reading.roots.len(), 1, "{target:?} has one root");
         let all = nodes(&reading.roots[0]);
@@ -98,29 +145,29 @@ fn each_tree_answers_with_its_own_handles() {
 
 #[test]
 fn a_subtree_is_read_by_its_handle_or_by_a_reference_to_this_window() {
-    let (ui_runtime, agent) = shown();
-    let all = whole(&ui_runtime, &agent, InspectTarget::Render).expect("the render tree");
+    let (ui_runtime, window) = shown();
+    let all = whole(&ui_runtime, &window, InspectTarget::Render).expect("the render tree");
     let child = &all.roots[0].children[0];
 
-    let mut params = InspectParams::new(window(&ui_runtime));
+    let mut params = InspectParams::new(window_id(&ui_runtime));
     params.root = Some(child.id.clone());
-    let sub = inspect(&ui_runtime, &agent, InspectTarget::Render, params).expect("a subtree");
+    let sub = inspect(&ui_runtime, &window, InspectTarget::Render, params).expect("a subtree");
     assert_eq!(sub.roots[0].id, child.id);
     assert!(sub.count < all.count, "a subtree is a part of the tree");
 
     let link = child.id.parse::<Link>().expect("a handle");
     let reference = NodeRef::new(ui_runtime.presentation_id(), link);
-    let mut params = InspectParams::new(window(&ui_runtime));
+    let mut params = InspectParams::new(window_id(&ui_runtime));
     params.root = Some(reference.to_string());
     let by_reference =
-        inspect(&ui_runtime, &agent, InspectTarget::Render, params).expect("by reference");
+        inspect(&ui_runtime, &window, InspectTarget::Render, params).expect("by reference");
     assert_eq!(by_reference, sub, "the reference reads the same subtree");
 }
 
 #[test]
 fn a_reference_to_another_window_is_unknown_and_never_read_here() {
-    let (ui_runtime, agent) = shown();
-    let all = whole(&ui_runtime, &agent, InspectTarget::Render).expect("the render tree");
+    let (ui_runtime, window) = shown();
+    let all = whole(&ui_runtime, &window, InspectTarget::Render).expect("the render tree");
     let link = all.roots[0].id.parse::<Link>().expect("a handle");
 
     let own = ui_runtime.presentation_id();
@@ -130,20 +177,34 @@ fn a_reference_to_another_window_is_unknown_and_never_read_here() {
     );
     let elsewhere = PresentationId::new_gen(own.index() + 1, own.generation());
     for other in [reused, elsewhere] {
-        let mut params = InspectParams::new(window(&ui_runtime));
+        let mut params = InspectParams::new(window_id(&ui_runtime));
         params.root = Some(NodeRef::new(other, link).to_string());
-        let error = inspect(&ui_runtime, &agent, InspectTarget::Render, params)
+        let error = inspect(&ui_runtime, &window, InspectTarget::Render, params)
             .expect_err("a reference to another window");
-        assert_eq!(error, AgentError::UnknownPresentation, "{other:?}");
-        assert_eq!(error.code(), ErrorCode::UnknownHandle);
-        assert_eq!(error.handle_kind(), Some("window"));
+        assert_eq!(error.code, ErrorCode::UnknownHandle, "{other:?}");
+        let named = flui_protocol::WindowId::from_u64(other.as_u64())
+            .expect("a presentation id is non-zero")
+            .to_string();
+        assert_eq!(
+            (error.kind, error.handle.as_deref()),
+            (
+                Some(flui_protocol::HandleKind::Window),
+                Some(named.as_str())
+            ),
+            "the error names the window the reference names: {other:?}"
+        );
+        assert!(
+            error.message.contains("another window"),
+            "{other:?}: {}",
+            error.message
+        );
     }
 }
 
 #[test]
 fn a_root_that_is_not_a_node_of_the_tree_asked_is_refused_or_gone() {
-    let (ui_runtime, agent) = shown();
-    let render = whole(&ui_runtime, &agent, InspectTarget::Render).expect("the render tree");
+    let (ui_runtime, window) = shown();
+    let render = whole(&ui_runtime, &window, InspectTarget::Render).expect("the render tree");
 
     for (root, target) in [
         (render.roots[0].id.as_str(), InspectTarget::Widgets),
@@ -151,32 +212,31 @@ fn a_root_that_is_not_a_node_of_the_tree_asked_is_refused_or_gone() {
         ("p1/", InspectTarget::Render),
         ("", InspectTarget::Render),
     ] {
-        let mut params = InspectParams::new(window(&ui_runtime));
+        let mut params = InspectParams::new(window_id(&ui_runtime));
         params.root = Some(root.to_owned());
         let error =
-            inspect(&ui_runtime, &agent, target, params).expect_err("not a handle of that tree");
-        assert_eq!(error.code(), ErrorCode::InvalidArgument, "`{root}`");
+            inspect(&ui_runtime, &window, target, params).expect_err("not a handle of that tree");
+        assert_eq!(error.code, ErrorCode::InvalidArgument, "`{root}`");
     }
 
-    let mut params = InspectParams::new(window(&ui_runtime));
+    let mut params = InspectParams::new(window_id(&ui_runtime));
     params.root = Some("r999999".to_owned());
-    let error = inspect(&ui_runtime, &agent, InspectTarget::Render, params)
+    let error = inspect(&ui_runtime, &window, InspectTarget::Render, params)
         .expect_err("no such render object");
-    assert_eq!(error.code(), ErrorCode::Gone);
-    assert_eq!(
-        error,
-        AgentError::NodeGone {
-            node: "r999999".to_owned()
-        }
+    assert_eq!(error.code, ErrorCode::Gone);
+    assert!(
+        error.message.contains("r999999"),
+        "the root that is gone is named: {}",
+        error.message
     );
 }
 
 #[test]
 fn the_limits_cut_the_tree_and_say_so() {
-    let (ui_runtime, agent) = shown();
-    let mut params = InspectParams::new(window(&ui_runtime));
+    let (ui_runtime, window) = shown();
+    let mut params = InspectParams::new(window_id(&ui_runtime));
     params.max_nodes = Some(2);
-    let cut = inspect(&ui_runtime, &agent, InspectTarget::Widgets, params).expect("a cut read");
+    let cut = inspect(&ui_runtime, &window, InspectTarget::Widgets, params).expect("a cut read");
     assert_eq!(cut.count, 2);
     assert!(cut.truncated);
     assert!(
@@ -185,10 +245,10 @@ fn the_limits_cut_the_tree_and_say_so() {
             .any(|node| node.omitted_children > 0)
     );
 
-    let mut params = InspectParams::new(window(&ui_runtime));
+    let mut params = InspectParams::new(window_id(&ui_runtime));
     params.max_depth = Some(0);
     let root_only =
-        inspect(&ui_runtime, &agent, InspectTarget::Render, params).expect("a root only");
+        inspect(&ui_runtime, &window, InspectTarget::Render, params).expect("a root only");
     assert_eq!(root_only.count, 1);
     assert!(root_only.truncated);
     assert_eq!(root_only.roots[0].children, []);
@@ -196,12 +256,12 @@ fn the_limits_cut_the_tree_and_say_so() {
 
 #[test]
 fn a_deeper_level_adds_fields() {
-    let (ui_runtime, agent) = shown();
+    let (ui_runtime, window) = shown();
     let fields = |level| {
-        let mut params = InspectParams::new(window(&ui_runtime));
+        let mut params = InspectParams::new(window_id(&ui_runtime));
         params.level = level;
         let reading =
-            inspect(&ui_runtime, &agent, InspectTarget::Render, params).expect("the render tree");
+            inspect(&ui_runtime, &window, InspectTarget::Render, params).expect("the render tree");
         nodes(&reading.roots[0])
             .iter()
             .map(|node| node.fields.len())
@@ -214,25 +274,24 @@ fn a_deeper_level_adds_fields() {
 fn a_window_that_closed_answers_gone() {
     let mut ui_runtime = UiRuntime::for_test();
     let second = ui_runtime.install_second_presentation_for_test();
-    let agent = ui_runtime
-        .semantics_agent(second)
+    let window = ui_runtime
+        .dev_agent_window(second)
         .expect("the ui_runtime hosts the second presentation");
     assert!(ui_runtime.close_presentation_entered(second));
 
-    let error = inspect(
-        &ui_runtime,
-        &agent,
+    let second_window =
+        WindowId::from_u64(second.as_u64()).expect("a presentation id packs a generation");
+    let error = ask(
+        &window,
         InspectTarget::Widgets,
-        InspectParams::new(
-            WindowId::from_u64(second.as_u64()).expect("a presentation id packs a generation"),
-        ),
+        InspectParams::new(second_window),
     )
     .expect_err("the window is gone");
-    assert_eq!(error, AgentError::PresentationGone);
+    assert_window_gone(&error, second_window);
 }
 
 /// A render object's `debug_name` is app code the read calls: its panic answers the request with
-/// `InspectPanicked` before the panic continues on the owner thread, so the agent is not told
+/// `platform` before the panic continues on the owner thread, so the agent is not told
 /// the runtime is gone.
 #[test]
 fn a_render_object_that_panics_while_read_answers_platform_before_the_owner_resumes() {
@@ -308,19 +367,19 @@ fn a_render_object_that_panics_while_read_answers_platform_before_the_owner_resu
             )
         })
         .expect("the stack attaches");
-    let agent = ui_runtime
-        .semantics_agent(ui_runtime.presentation_id())
+    let window = ui_runtime
+        .dev_agent_window(ui_runtime.presentation_id())
         .expect("the ui_runtime hosts its primary presentation");
     let mut sink = ScriptedSink::always_presents();
     frame(&ui_runtime, &mut sink);
 
     panics.store(true, Ordering::SeqCst);
-    let mut reply = agent
-        .inspect(
-            InspectTarget::Render,
-            InspectParams::new(window(&ui_runtime)),
-        )
-        .expect("the inbox has room");
+    let mut reply = ask(
+        &window,
+        InspectTarget::Render,
+        InspectParams::new(window_id(&ui_runtime)),
+    )
+    .expect("the inbox has room");
     let unwound = catch_unwind(AssertUnwindSafe(|| ui_runtime.drain_commands()));
     panics.store(false, Ordering::SeqCst);
     assert!(unwound.is_err(), "the panic continues on the owner");
@@ -328,27 +387,33 @@ fn a_render_object_that_panics_while_read_answers_platform_before_the_owner_resu
         .try_take()
         .expect("the reply was answered before unwinding")
         .expect_err("the panic is the answer");
-    assert_eq!(failed, AgentError::InspectPanicked);
-    assert_eq!(failed.code(), ErrorCode::Platform);
-    assert!(!failed.may_have_run(), "a read changes nothing");
+    assert_eq!(failed.code, ErrorCode::Platform);
+    assert!(
+        failed.message.contains("reading the tree panicked"),
+        "{}",
+        failed.message
+    );
+    assert_eq!(failed.effect, None, "a read changes nothing");
 }
 
 fn park_layers(
     ui_runtime: &UiRuntime,
-    agent: &SemanticsAgent,
+    window: &AgentWindow,
     params: InspectParams,
-) -> AgentReply<InspectReading> {
-    let reply = agent
-        .inspect(InspectTarget::Layers, params)
-        .expect("the inbox has room");
+) -> AgentAnswer<InspectReading> {
+    let reply = ask(window, InspectTarget::Layers, params).expect("the inbox has room");
     let _report = ui_runtime.drain_commands();
     reply
 }
 
 #[test]
 fn the_layers_are_read_from_the_next_scene_the_window_shows() {
-    let (ui_runtime, agent) = shown();
-    let mut parked = park_layers(&ui_runtime, &agent, InspectParams::new(window(&ui_runtime)));
+    let (ui_runtime, window) = shown();
+    let mut parked = park_layers(
+        &ui_runtime,
+        &window,
+        InspectParams::new(window_id(&ui_runtime)),
+    );
     assert!(
         parked.try_take().is_none(),
         "the read waits for a scene, it does not answer from the last one"
@@ -382,17 +447,32 @@ fn the_layers_are_read_from_the_next_scene_the_window_shows() {
 
 #[test]
 fn a_window_parks_a_bounded_number_of_layer_reads() {
-    let (ui_runtime, agent) = shown();
+    let (ui_runtime, window) = shown();
     let mut parked: Vec<_> = (0..16)
-        .map(|_| park_layers(&ui_runtime, &agent, InspectParams::new(window(&ui_runtime))))
+        .map(|_| {
+            park_layers(
+                &ui_runtime,
+                &window,
+                InspectParams::new(window_id(&ui_runtime)),
+            )
+        })
         .collect();
-    let mut refused = park_layers(&ui_runtime, &agent, InspectParams::new(window(&ui_runtime)));
+    let mut refused = park_layers(
+        &ui_runtime,
+        &window,
+        InspectParams::new(window_id(&ui_runtime)),
+    );
     let error = refused
         .try_take()
         .expect("a full list answers at once")
         .expect_err("busy");
-    assert_eq!(error.code(), ErrorCode::Busy);
-    assert!(matches!(error, AgentError::TreeBusy(_)), "{error:?}");
+    assert_eq!(error.code, ErrorCode::Busy);
+    assert_eq!(error.retry, Retry::Soon);
+    assert!(
+        error.message.starts_with("the tree is busy"),
+        "the tree is busy, not another busy: {}",
+        error.message
+    );
 
     frame(&ui_runtime, &mut ScriptedSink::always_presents());
     for read in &mut parked {
@@ -402,39 +482,50 @@ fn a_window_parks_a_bounded_number_of_layer_reads() {
 
 #[test]
 fn a_layer_read_names_a_layer_and_this_window_before_it_waits() {
-    let (ui_runtime, agent) = shown();
-    let mut params = InspectParams::new(window(&ui_runtime));
+    let (ui_runtime, window) = shown();
+    let mut params = InspectParams::new(window_id(&ui_runtime));
     params.root = Some("r1".to_owned());
-    let error = park_layers(&ui_runtime, &agent, params)
+    let error = park_layers(&ui_runtime, &window, params)
         .try_take()
         .expect("a bad root answers at once")
         .expect_err("not a layer");
-    assert_eq!(error.code(), ErrorCode::InvalidArgument);
+    assert_eq!(error.code, ErrorCode::InvalidArgument);
 
     let own = ui_runtime.presentation_id();
     let elsewhere = PresentationId::new_gen(own.index() + 1, own.generation());
     let link: Link = "l1".parse().expect("a layer handle");
-    let mut params = InspectParams::new(window(&ui_runtime));
+    let mut params = InspectParams::new(window_id(&ui_runtime));
     params.root = Some(NodeRef::new(elsewhere, link).to_string());
-    let error = park_layers(&ui_runtime, &agent, params)
+    let error = park_layers(&ui_runtime, &window, params)
         .try_take()
         .expect("another window answers at once")
         .expect_err("another window");
-    assert_eq!(error, AgentError::UnknownPresentation);
+    assert_eq!(error.code, ErrorCode::UnknownHandle);
+    let named = flui_protocol::WindowId::from_u64(elsewhere.as_u64())
+        .expect("a presentation id is non-zero")
+        .to_string();
+    assert_eq!(
+        (error.kind, error.handle.as_deref()),
+        (
+            Some(flui_protocol::HandleKind::Window),
+            Some(named.as_str())
+        )
+    );
+    assert!(
+        error.message.contains("another window"),
+        "{}",
+        error.message
+    );
 }
 
 #[test]
 fn a_layer_read_whose_window_closes_before_its_scene_is_gone() {
     let mut ui_runtime = UiRuntime::for_test();
     let second = ui_runtime.install_second_presentation_for_test();
-    let agent = ui_runtime
-        .semantics_agent(second)
+    let window = ui_runtime
+        .dev_agent_window(second)
         .expect("the ui_runtime hosts the second presentation");
-    let mut parked = park_layers(
-        &ui_runtime,
-        &agent,
-        InspectParams::new(WindowId::from_u64(second.as_u64()).expect("a generation")),
-    );
+    let mut parked = park_layers(&ui_runtime, &window, InspectParams::new(window.id()));
     assert!(parked.try_take().is_none());
 
     assert!(ui_runtime.close_presentation_entered(second));
@@ -442,7 +533,7 @@ fn a_layer_read_whose_window_closes_before_its_scene_is_gone() {
         .try_take()
         .expect("closing answers it")
         .expect_err("the window is gone");
-    assert_eq!(error, AgentError::PresentationGone);
+    assert_window_gone(&error, window.id());
 }
 
 /// A scene the sink could not show is not what the window shows: a layer read waits for the
@@ -451,8 +542,12 @@ fn a_layer_read_whose_window_closes_before_its_scene_is_gone() {
 fn a_layer_read_waits_for_a_scene_that_is_shown_not_one_the_surface_withheld() {
     use crate::sink::SubmitVerdict;
 
-    let (ui_runtime, agent) = shown();
-    let mut parked = park_layers(&ui_runtime, &agent, InspectParams::new(window(&ui_runtime)));
+    let (ui_runtime, window) = shown();
+    let mut parked = park_layers(
+        &ui_runtime,
+        &window,
+        InspectParams::new(window_id(&ui_runtime)),
+    );
     let presentation = ui_runtime
         .presentations
         .get(ui_runtime.presentation_id())
@@ -562,21 +657,21 @@ fn a_reply_that_panics_while_a_window_closes_does_not_strand_its_layer_read() {
 
     let mut ui_runtime = UiRuntime::for_test();
     let second = ui_runtime.install_second_presentation_for_test();
-    let agent = ui_runtime
-        .semantics_agent(second)
+    let window = ui_runtime
+        .dev_agent_window(second)
         .expect("the ui_runtime hosts the second presentation");
     let second_window = WindowId::from_u64(second.as_u64()).expect("a generation");
     // A wait nobody listens to any more: answering it traces, and the trace panics.
     drop(
-        agent
-            .wait(WaitParams::new(
+        window
+            .call::<method::WaitUntil>(WaitParams::new(
                 second_window,
                 Condition::Appears(Locator::named("never")),
             ))
             .expect("the inbox has room"),
     );
     let _report = ui_runtime.drain_commands();
-    let mut parked = park_layers(&ui_runtime, &agent, InspectParams::new(second_window));
+    let mut parked = park_layers(&ui_runtime, &window, InspectParams::new(second_window));
     assert!(parked.try_take().is_none());
 
     let closed = with_panicking_subscriber(&["nobody waits for"], || {
@@ -589,7 +684,7 @@ fn a_reply_that_panics_while_a_window_closes_does_not_strand_its_layer_read() {
         .try_take()
         .expect("closing answers the layer read whatever an earlier reply did")
         .expect_err("the window is gone");
-    assert_eq!(error, AgentError::PresentationGone);
+    assert_window_gone(&error, second_window);
 }
 
 /// A panic after the sink showed a scene (here, the trace that follows the commit) must not strand
@@ -598,8 +693,12 @@ fn a_reply_that_panics_while_a_window_closes_does_not_strand_its_layer_read() {
 fn a_panic_after_the_scene_is_shown_does_not_strand_its_layer_read() {
     use std::panic::{AssertUnwindSafe, catch_unwind};
 
-    let (ui_runtime, agent) = shown();
-    let mut parked = park_layers(&ui_runtime, &agent, InspectParams::new(window(&ui_runtime)));
+    let (ui_runtime, window) = shown();
+    let mut parked = park_layers(
+        &ui_runtime,
+        &window,
+        InspectParams::new(window_id(&ui_runtime)),
+    );
 
     let unwound = with_panicking_subscriber(&["tree_revision_committed"], || {
         catch_unwind(AssertUnwindSafe(|| {
@@ -619,8 +718,12 @@ fn a_panic_after_the_scene_is_shown_does_not_strand_its_layer_read() {
 fn a_sink_that_panics_on_submit_leaves_the_layer_reads_parked_for_the_next_scene() {
     use std::panic::{AssertUnwindSafe, catch_unwind};
 
-    let (ui_runtime, agent) = shown();
-    let mut parked = park_layers(&ui_runtime, &agent, InspectParams::new(window(&ui_runtime)));
+    let (ui_runtime, window) = shown();
+    let mut parked = park_layers(
+        &ui_runtime,
+        &window,
+        InspectParams::new(window_id(&ui_runtime)),
+    );
 
     let mut panicking = ScriptedSink::new(|_, _| panic!("a sink that cannot submit"));
     let unwound = catch_unwind(AssertUnwindSafe(|| frame(&ui_runtime, &mut panicking)));
@@ -642,12 +745,12 @@ fn a_sink_that_panics_on_submit_leaves_the_layer_reads_parked_for_the_next_scene
 fn the_first_panic_after_a_shown_scene_is_the_one_that_resumes() {
     use std::panic::{AssertUnwindSafe, catch_unwind};
 
-    let (ui_runtime, agent) = shown();
+    let (ui_runtime, window) = shown();
     // A read nobody waits for any more: answering it traces, and the trace panics.
     drop(park_layers(
         &ui_runtime,
-        &agent,
-        InspectParams::new(window(&ui_runtime)),
+        &window,
+        InspectParams::new(window_id(&ui_runtime)),
     ));
 
     let unwound =
@@ -747,8 +850,12 @@ impl tracing::Subscriber for PanicsOnSpanExit {
 fn a_subscriber_that_panics_as_the_submit_span_closes_does_not_lose_the_verdict() {
     use std::panic::{AssertUnwindSafe, catch_unwind};
 
-    let (ui_runtime, agent) = shown();
-    let mut parked = park_layers(&ui_runtime, &agent, InspectParams::new(window(&ui_runtime)));
+    let (ui_runtime, window) = shown();
+    let mut parked = park_layers(
+        &ui_runtime,
+        &window,
+        InspectParams::new(window_id(&ui_runtime)),
+    );
 
     let _second = tracing::Dispatch::new(tracing::subscriber::NoSubscriber::default());
     let unwound = tracing::subscriber::with_default(PanicsOnSpanExit("submit"), || {

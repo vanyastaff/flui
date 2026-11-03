@@ -12,7 +12,7 @@ use flui_protocol::framing::{LineReader, MAX_LINE};
 use flui_protocol::version::PROTOCOL_VERSION;
 use flui_protocol::{
     Capabilities, ErrorCode, ErrorObject, Greeting, Hello, HelloReply, InputPath, MethodInfo,
-    Request, RequestId, ServedBy, ServerLine,
+    Request, RequestId, ServerLine,
 };
 use interprocess::local_socket::Stream;
 use parking_lot::Mutex;
@@ -112,10 +112,7 @@ fn handshake(connection: &mut Connection, shared: &Shared) -> bool {
     }
     let mut capabilities = Capabilities::default();
     capabilities.paths = vec![InputPath::Semantic];
-    capabilities.methods = dispatch::SERVED
-        .iter()
-        .map(|name| (*name).to_owned())
-        .collect();
+    capabilities.methods = dispatch::served();
     let welcome = HelloReply::new(PROTOCOL_VERSION)
         .with_app(shared.app.clone())
         .with_capabilities(capabilities);
@@ -316,7 +313,7 @@ fn admit(line: &[u8], queue: &mut Queue) -> Option<Line> {
             "no such method",
         ));
     };
-    if method.served_by != ServedBy::Agent || !dispatch::SERVED.contains(&method.name) {
+    if !dispatch::serves(method) {
         return refuse(dispatch::not_supported(method));
     }
     if queue.held >= queue.cap {
