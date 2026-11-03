@@ -537,6 +537,7 @@ fn frame_failure_containment_matrix() {
             ("frame_failure_containment::a_panicking_handler_during_a_pipeline_report_is_delivered_once_not_re_reported", frame_failure_containment::a_panicking_handler_during_a_pipeline_report_is_delivered_once_not_re_reported as fn()),
             ("frame_failure_containment::a_panicking_semantics_report_schedules_its_retry", frame_failure_containment::a_panicking_semantics_report_schedules_its_retry as fn()),
             ("super::frame_failure_phase_tests::every_segment_phase_survives_unwind_and_retries_to_scene", super::frame_failure_phase_tests::every_segment_phase_survives_unwind_and_retries_to_scene as fn()),
+            ("super::frame_failure_phase_tests::a_pipeline_frame_that_unwinds_keeps_its_tree_for_the_retry", super::frame_failure_phase_tests::a_pipeline_frame_that_unwinds_keeps_its_tree_for_the_retry as fn()),
             ("super::frame_failure_recovery_tests::real_build_recovery_is_reported_once_in_the_same_attempt", super::frame_failure_recovery_tests::real_build_recovery_is_reported_once_in_the_same_attempt as fn()),
             ("super::frame_failure_recovery_tests::two_real_recoveries_from_one_attempt_are_delivered_in_production_queue_order", super::frame_failure_recovery_tests::two_real_recoveries_from_one_attempt_are_delivered_in_production_queue_order as fn()),
             ("super::frame_failure_recovery_tests::panicking_handler_does_not_escape_or_duplicate_recovery", super::frame_failure_recovery_tests::panicking_handler_does_not_escape_or_duplicate_recovery as fn()),

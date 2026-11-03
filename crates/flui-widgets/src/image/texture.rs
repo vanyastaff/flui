@@ -6,7 +6,9 @@ use flui_painting::paint::{FilterQuality, TextureId};
 use flui_rendering::layer::{TextureListener, TextureRegistry};
 use flui_rendering::protocol::BoxProtocol;
 use flui_view::prelude::{BuildContext, LifecycleContext, StatefulView, ViewState};
-use flui_view::{IntoView, RebuildHandle, RebuildReason, RenderView, impl_render_view};
+use flui_view::{
+    CreationSite, IntoView, RebuildHandle, RebuildReason, RenderView, impl_render_view,
+};
 
 /// Shows the newest frame of an external texture over its whole box.
 ///
@@ -22,14 +24,18 @@ use flui_view::{IntoView, RebuildHandle, RebuildReason, RenderView, impl_render_
 pub struct Texture {
     id: TextureId,
     filter_quality: FilterQuality,
+    #[view(site)]
+    site: CreationSite,
 }
 
 impl Texture {
     /// Shows texture `id`, sampled linearly.
+    #[track_caller]
     pub fn new(id: TextureId) -> Self {
         Self {
             id,
             filter_quality: FilterQuality::Low,
+            site: CreationSite::here(),
         }
     }
 

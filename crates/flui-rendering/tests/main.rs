@@ -31,6 +31,9 @@ mod layout_dirty_root;
 #[path = "subscriber_panics.rs"]
 mod subscriber_panics;
 
+#[path = "frame_unwind.rs"]
+mod frame_unwind;
+
 #[path = "leader_watch.rs"]
 mod leader_watch;
 

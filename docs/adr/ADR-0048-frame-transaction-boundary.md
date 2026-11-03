@@ -319,6 +319,12 @@ benchmarks showed no statistically supported regression above 5%.
   old geometry AND its `NEEDS_LAYOUT` mark (pipeline discipline, pre-existing).
 - Locks/borrows: parking_lot guards and `RefCell` borrows release during
   unwind; no poisoning, no deadlock on retry.
+- The render pipeline: a Pipeline segment that unwinds inside the frame (a
+  `tracing` subscriber, a visual-update callback, `always_needs_compositing`)
+  leaves the presentation's owner in its `PipelineCell`, each phase having
+  left its phase and kept its unfinished layout, compositing and paint work;
+  the retry at unchanged constraints presents
+  (`a_pipeline_frame_that_unwinds_keeps_its_tree_for_the_retry`).
 - `WidgetsBinding`'s `debug_building_dirty_elements` flag resets via RAII on
   unwind; a caught mid-`draw_frame` panic cannot wedge it `true` and turn every
   later debug-build frame into a bogus

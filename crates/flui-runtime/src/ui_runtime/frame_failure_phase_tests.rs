@@ -109,3 +109,87 @@ pub(crate) fn every_segment_phase_survives_unwind_and_retries_to_scene() {
         );
     }
 }
+
+/// Panics once, as the frame's paint span opens.
+struct PanicsAsPaintOpens {
+    armed: std::sync::atomic::AtomicBool,
+}
+
+impl tracing::Subscriber for PanicsAsPaintOpens {
+    fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+        true
+    }
+    fn max_level_hint(&self) -> Option<tracing::level_filters::LevelFilter> {
+        Some(tracing::level_filters::LevelFilter::TRACE)
+    }
+    fn new_span(&self, attributes: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        let metadata = attributes.metadata();
+        if metadata.target() == "flui.frame"
+            && metadata.name() == "paint"
+            && self.armed.swap(false, std::sync::atomic::Ordering::SeqCst)
+        {
+            panic!("a subscriber that cannot open the paint span");
+        }
+        tracing::span::Id::from_u64(1)
+    }
+    fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+    fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+    fn event(&self, _: &tracing::Event<'_>) {}
+    fn enter(&self, _: &tracing::span::Id) {}
+    fn exit(&self, _: &tracing::span::Id) {}
+}
+
+/// A panic out of a phase inside the render pipeline's frame, here a `tracing` subscriber as
+/// the paint span opens, is a Pipeline segment panic. The presentation keeps its render tree
+/// and the work the frame had not finished, so the automatic retry, at unchanged constraints,
+/// reaches Scene and presents.
+pub(crate) fn a_pipeline_frame_that_unwinds_keeps_its_tree_for_the_retry() {
+    let ui_runtime = mount();
+    let reported_phases = Arc::new(StdMutex::new(Vec::new()));
+    let reported_phases_for_handler = Arc::clone(&reported_phases);
+    ui_runtime.set_frame_failure_handler(Some(FrameFailureHandler::new(move |report| {
+        let FrameFailureKind::SegmentPanic { phase, .. } = &report.kind else {
+            panic!("the subscriber's panic must produce a SegmentPanic report");
+        };
+        reported_phases_for_handler
+            .lock()
+            .expect("reported-phase mutex")
+            .push(*phase);
+    })));
+    let mut backend = ScriptedSink::always_presents();
+
+    let subscriber = PanicsAsPaintOpens {
+        armed: std::sync::atomic::AtomicBool::new(true),
+    };
+    // A second dispatcher keeps the callsites' interest from being cached against another
+    // thread's empty default.
+    let _second = tracing::Dispatch::new(tracing::subscriber::NoSubscriber::default());
+    let first_presented = tracing::subscriber::with_default(subscriber, || {
+        tracing::callsite::rebuild_interest_cache();
+        with_quiet_panics(|| {
+            catch_unwind(AssertUnwindSafe(|| ui_runtime.render_frame(&mut backend)))
+        })
+    });
+    tracing::callsite::rebuild_interest_cache();
+    let first_presented = first_presented.expect("the pipeline panic must be contained");
+    assert!(!first_presented, "the unwound frame must not present");
+    assert_eq!(
+        *reported_phases.lock().expect("reported-phase mutex"),
+        vec![SegmentPhase::Pipeline],
+        "the subscriber's panic is a Pipeline segment panic"
+    );
+
+    assert!(
+        ui_runtime.wait_out_failure_retry_for_test(),
+        "the pipeline failure must arm its retry"
+    );
+    assert!(
+        ui_runtime.render_frame(&mut backend),
+        "the retry runs on the presentation's own tree and presents"
+    );
+    assert_eq!(
+        ui_runtime.presentations.primary().segment_phase(),
+        SegmentPhase::Scene,
+        "the retry reaches Scene"
+    );
+}

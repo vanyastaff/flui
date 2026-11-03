@@ -177,14 +177,15 @@ pub struct AppConfig {
     /// The development agent hooks the application installed with
     /// [`Self::with_dev_agent`] (ADR-0095 §3).
     ///
-    /// `None` (the default): the application installed none. The runners
-    /// attach every hook once per event loop and hand each one every window
-    /// that mounts a root view once the window is installed; a window with no
-    /// content, and a presentation opened into another window's UI runtime,
-    /// are not handed over. Every window opened with a clone of this
-    /// configuration shares the hooks, so a secondary window is served only
-    /// when opened with the application's configuration. The web runner does
-    /// the same for the page's one window and never detaches the hooks.
+    /// `None` (the default): the application installed none. The event loop
+    /// that starts with this configuration, or a clone of it, takes the hooks
+    /// and owns them until it ends (ADR-0288 §7): it attaches each when it
+    /// starts and hands each every window that mounts a root view once the
+    /// window is installed, whatever configuration the window was opened with;
+    /// a window with no content, and a presentation opened into another
+    /// window's UI runtime, are not handed over. A loop started later with a
+    /// clone finds the hooks taken. The web runner does the same for the
+    /// page's one window and never detaches the hooks.
     ///
     /// The driver agent (ADR-0239) is not one of these: in a debug build, or
     /// with the `driver` feature, the runner installs it beside them when the
@@ -545,8 +546,9 @@ impl AppConfig {
     }
 
     /// Install a development agent hook: a tool of the application's own
-    /// that reads and acts on its windows. The runners attach it once per
-    /// event loop and hand it every window that mounts a root view; see
+    /// that reads and acts on its windows. The event loop that starts with
+    /// this configuration takes it, attaches it, and hands it every window
+    /// that mounts a root view; see
     /// [`DevAgentHook`](flui_view::dev_agent::DevAgentHook) for the hook's
     /// contract. Adds to the hooks installed before, each of which keeps
     /// being served if another panics. The driver agent needs none of this:

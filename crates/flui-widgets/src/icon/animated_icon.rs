@@ -12,8 +12,8 @@ use flui_painting::Canvas;
 use flui_painting::paint::Paint;
 use flui_painting::styling::Color;
 use flui_painting::typography::TextDirection;
-use flui_view::ViewExt;
 use flui_view::prelude::*;
+use flui_view::{CreationSite, ViewExt};
 
 use super::symbol_effect::{ContentKey, SymbolEffectHost};
 use super::{AnimatedIconData, IconTheme, PathEffect, SymbolEffect};
@@ -52,6 +52,8 @@ pub struct AnimatedIcon {
     semantic_label: Option<String>,
     effect: Option<SymbolEffect>,
     path_effect: Option<PathEffect>,
+    #[view(site)]
+    site: CreationSite,
 }
 
 impl fmt::Debug for AnimatedIcon {
@@ -64,19 +66,21 @@ impl fmt::Debug for AnimatedIcon {
             .field("semantic_label", &self.semantic_label)
             .field("effect", &self.effect)
             .field("path_effect", &self.path_effect)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
 impl AnimatedIcon {
     /// `data` drawn at `progress`'s value.
     #[must_use]
+    #[track_caller]
     pub fn new(data: AnimatedIconData, progress: impl Animation<f64> + 'static) -> Self {
         Self::shared(data, Rc::new(progress))
     }
 
     /// [`new`](Self::new) over an animation already shared.
     #[must_use]
+    #[track_caller]
     pub fn shared(data: AnimatedIconData, progress: Rc<dyn Animation<f64>>) -> Self {
         Self {
             data,
@@ -86,6 +90,7 @@ impl AnimatedIcon {
             semantic_label: None,
             effect: None,
             path_effect: None,
+            site: CreationSite::here(),
         }
     }
 

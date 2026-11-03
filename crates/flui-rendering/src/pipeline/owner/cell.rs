@@ -4,9 +4,9 @@
 //! Replaces the historical `Arc<RwLock<PipelineOwner>>` shape: a
 //! `PipelineOwner` belongs to exactly one presentation running on exactly
 //! one thread, so the concurrency machinery an `RwLock` provided was never
-//! load-bearing -- it only ever guarded a checkout slot (see
-//! `BuildOwner::run_frame_with_layout_builders`, which `mem::take`s the
-//! owner out, runs a typestate phase, and puts it back).
+//! load-bearing -- it only ever guarded a checkout slot. A frame runs on the
+//! owner in place ([`PipelineCell::run_frame`], [`PipelineCell::run_layout`]),
+//! which keeps the owner in the slot on every exit, a panic included.
 
 use std::{
     cell::{Cell, RefCell},
@@ -216,9 +216,12 @@ impl PipelineCell {
     }
 
     /// Runs one frame of the owner: layout of whatever is dirty,
-    /// compositing, paint and semantics ([`PipelineOwner::run_frame`]), and
-    /// puts the owner back for the next one, on the success and the error
-    /// path alike.
+    /// compositing, paint and semantics
+    /// ([`PipelineOwner::run_frame_in_place`]). The owner stays in this cell
+    /// on every exit: success, error, and a panic that unwinds out of a phase
+    /// (a `tracing` subscriber, a visual-update callback), which resumes only
+    /// once the owner and its queued work are back, so the frame that retries
+    /// paints the same tree.
     ///
     /// # Errors
     ///
@@ -228,16 +231,30 @@ impl PipelineCell {
     /// # Panics
     ///
     /// As [`Self::with_mut`]: when a `with`/`with_mut` borrow from this cell
-    /// is live.
+    /// is live. A panic from user code inside the frame continues after the
+    /// owner is back in place.
     pub fn run_frame(
         &self,
     ) -> Result<Option<flui_layer::LayerTree>, flui_foundation::TreeError<crate::error::RenderError>>
     {
-        self.with_mut(|owner| {
-            let (idle, result) = owner.take_idle().run_frame();
-            *owner = idle;
-            result
-        })
+        self.with_mut(PipelineOwner::run_frame_in_place)
+    }
+
+    /// Drains the dirty channel and lays out whatever is dirty, without
+    /// compositing, painting or assembling semantics: one pass of the
+    /// build-during-layout fixpoint (ADR-0017). As with [`Self::run_frame`],
+    /// the owner stays in this cell on every exit, an unwind included.
+    ///
+    /// # Errors
+    ///
+    /// The pass's first layout error, with the path to the node it names.
+    ///
+    /// # Panics
+    ///
+    /// As [`Self::with_mut`]: when a `with`/`with_mut` borrow from this cell
+    /// is live.
+    pub fn run_layout(&self) -> Result<(), flui_foundation::TreeError<crate::error::RenderError>> {
+        self.with_mut(PipelineOwner::run_layout_in_place)
     }
 
     /// Reports the semantics diagnostics the last frames queued, as
@@ -384,12 +401,12 @@ mod tests {
     // ========================================================================
     //
     // Everything above this point exercises the checkout mechanism in
-    // isolation (never touches a real `RenderTree`). This test drives the
-    // exact production pattern `BuildOwner::run_frame_with_layout_builders`
-    // uses (`flui-view/src/owner/layout_builder.rs`): `with_mut` ->
-    // `mem::take` the owner out -> `run_frame` (layout -> compositing ->
-    // paint -> semantics, all real `NodePtr` reborrows inside
-    // `layout_dirty_root`) -> write the returned owner back -- so miri
-    // interprets the whole frame through the checkout seam, not just the
-    // raw `layout_dirty_root` call the older `subtree_arena` walks use.
+    // isolation (never touches a real `RenderTree`). The production pattern
+    // `BuildOwner::run_frame_with_layout_builders` uses
+    // (`flui-view/src/owner/layout_builder.rs`) is `PipelineCell::run_layout`
+    // then `PipelineCell::run_frame`, both running the owner in place (layout
+    // -> compositing -> paint -> semantics, all real `NodePtr` reborrows inside
+    // `layout_dirty_root`), so miri interprets the whole frame through the
+    // checkout seam, not just the raw `layout_dirty_root` call the older
+    // `subtree_arena` walks use.
 }
