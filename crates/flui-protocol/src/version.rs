@@ -21,6 +21,13 @@
 //!   After 1.0 it also bumps `major`, and that ADR supersedes ADR-0080. The
 //!   test sees only the schema's shape, so a new meaning is caught in review:
 //!   it goes under a new name instead, as `surface_rect` did beside `rect`.
+//!
+//! # Negotiation
+//!
+//! Because of that rule an app serves every older client of its `major` that no break
+//! separates from it ([`ProtocolVersion::serves`]), and answers the hello with its own version
+//! and capabilities. Only a client newer than the app, or one across a break, is refused
+//! `version`.
 
 use std::fmt;
 use std::str::FromStr;
@@ -42,10 +49,27 @@ impl ProtocolVersion {
     pub const fn new(major: u16, minor: u16) -> Self {
         Self { major, minor }
     }
+
+    /// Whether an app speaking `self` serves a client that says hello in `client`: the same
+    /// `major`, a `minor` no newer than the app's, and no [`BREAKING`] version after the
+    /// client's up to the app's. Every reply then reads in the client, which ignores what its
+    /// schema does not know; the hello's capabilities say which methods the app answers.
+    ///
+    /// A client newer than the app is refused `version`, with the app's version, and may say
+    /// hello again in that version if it still speaks it: the app cannot know what a newer
+    /// client's requests mean.
+    #[must_use]
+    pub fn serves(self, client: Self) -> bool {
+        client.major == self.major
+            && client <= self
+            && !BREAKING
+                .iter()
+                .any(|broke| client < broke.version && broke.version <= self)
+    }
 }
 
 /// The schema this build of the crate speaks.
-pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion::new(0, 8);
+pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion::new(0, 9);
 
 /// A published version that is not additive to the one before it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -153,8 +177,8 @@ mod tests {
 
     #[test]
     fn a_version_is_spelled_major_dot_minor_and_parses_back() {
-        assert_eq!(PROTOCOL_VERSION.to_string(), "0.8");
-        assert_eq!("0.8".parse(), Ok(PROTOCOL_VERSION));
+        assert_eq!(PROTOCOL_VERSION.to_string(), "0.9");
+        assert_eq!("0.9".parse(), Ok(PROTOCOL_VERSION));
         assert_eq!("0.1".parse(), Ok(ProtocolVersion::new(0, 1)));
         assert_eq!("12.30".parse(), Ok(ProtocolVersion::new(12, 30)));
         for refused in ["", "1", "0.01", "+0.1", "0.1.2", "0.x", " 0.1", "00.1"] {
@@ -176,10 +200,10 @@ mod tests {
     fn a_version_serializes_as_its_string() {
         assert_eq!(
             serde_json::to_value(PROTOCOL_VERSION).ok(),
-            Some(serde_json::json!("0.8"))
+            Some(serde_json::json!("0.9"))
         );
         assert_eq!(
-            serde_json::from_value::<ProtocolVersion>(serde_json::json!("0.8")).ok(),
+            serde_json::from_value::<ProtocolVersion>(serde_json::json!("0.9")).ok(),
             Some(PROTOCOL_VERSION)
         );
         assert!(serde_json::from_value::<ProtocolVersion>(serde_json::json!(0.1)).is_err());

@@ -34,7 +34,9 @@
 //!   its [`Verdict`] where it judges;
 //! - [`launch`]: the environment variables and intent extras that tell an app where its agent
 //!   listens, and the exit code of an app whose driver went;
-//! - [`framing`]: how a byte transport frames lines and binary payloads;
+//! - [`envelope`]: the lines of a conversation, a client's [`Greeting`] and [`Request`]s and every
+//!   [`ServerLine`] an app answers with;
+//! - [`framing`]: how a byte transport frames lines ([`LineReader`]) and binary payloads;
 //! - [`error`]: the fixed [`ErrorCode`]s, [`Retry`] and the [`ErrorObject`] that carries them;
 //! - `native_recording` (with `serde`): the schema of a native recording, the journal of a
 //!   backend's pointer registry before translation (ADR-0215 §4), which the core writes and
@@ -61,6 +63,7 @@ mod skip;
 pub mod act;
 pub mod audit;
 pub mod capture;
+pub mod envelope;
 pub mod error;
 pub mod events;
 pub mod framing;
@@ -89,13 +92,14 @@ pub use act::{
 };
 pub use audit::{AuditFinding, AuditParams, AuditReport, AuditRule, NotChecked};
 pub use capture::{BlobRef, CaptureMeta, CaptureParams, CaptureSource};
+pub use envelope::{Greeting, Request, RequestId, ServerLine};
 pub use error::{ErrorCode, ErrorObject, HandleKind, Retry};
 pub use events::{
     Announcement, AnnouncementEvent, AnnouncementJournal, AnnouncementUrgency, AnnouncementsParams,
     Event, EventFilter, EventKind, FrameEvent, GapEvent, InputEvent, SemanticsEvent,
     SubscribeParams, Subscription, WindowEvent,
 };
-pub use framing::{BlobHeader, BlobId, FramingError};
+pub use framing::{BlobHeader, BlobId, FramingError, LineReader};
 pub use geometry::{LogicalPoint, LogicalRect, LogicalSize};
 pub use input::{
     ActionSequence, DeviceClass, Direction, DragParams, GestureOptions, ImeAction, InputKind,
