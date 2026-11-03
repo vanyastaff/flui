@@ -402,6 +402,13 @@ enum Commands {
         check: bool,
     },
 
+    /// Link a capability crate: enable its facade feature (or `cargo add`
+    /// it), then show how to register its plugin and what it declares
+    Add {
+        /// The facade feature (e.g. `system`) or, without one, the crate name
+        capability: String,
+    },
+
     /// Generate shell completions
     Completions {
         /// Shell type (bash, zsh, fish, powershell, elvish)
@@ -822,6 +829,8 @@ fn main() {
         Commands::Format { check } => commands::format::execute(check),
 
         Commands::Completions { shell } => commands::completions::execute(shell),
+
+        Commands::Add { capability } => commands::add::execute(&capability),
     };
 
     if let Err(e) = result {

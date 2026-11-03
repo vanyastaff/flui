@@ -1,12 +1,12 @@
 # ADR-0307: Platform declarations are crate metadata
 
-- **Status:** Accepted (2026-11-03). Partly implemented: the reader, the version-1 keys
+- **Status:** Accepted (2026-11-03). Implemented in `flui-cli`: the reader, the version-1 keys
   (`android.permissions`, `apple.privacy.accessed-apis`), the generated Android manifest, the
-  iOS privacy manifest and the verify mode of `flui doctor` are in `flui-cli`; `flui add` follows
-  (see Migration).
+  iOS privacy manifest, the verify mode of `flui doctor` and `flui add`.
 - **Date:** 2026-11-03
-- **Supersedes:** [ADR-0154](ADR-0154-capability-crates.md) §7 only (where declarations live and
-  their keys: a versioned `declares` table in any crate, in place of the illustrative schema)
+- **Supersedes:** [ADR-0154](ADR-0154-capability-crates.md) §7 (where declarations live and
+  their keys: a versioned `declares` table in any crate, in place of the illustrative schema) and,
+  in §8, the step of `flui add` that writes declarations; the rest of ADR-0154 stands
 - **Related:** [ADR-0255](ADR-0255-mobile-and-web-hosts.md) decision 6 (the generated Android
   manifest); [ADR-0280](ADR-0280-http-is-a-capability-of-the-host.md) (the HTTP capability, whose Android
   stack needs the network permission); [ADR-0088](ADR-0088-official-packages-sdk-and-facade.md)
@@ -133,6 +133,33 @@ join is a set per key, in a fixed order, with the crates that asked for each ent
   saying entries library manifests merge in are not seen. A `uses-permission` marked
   `tools:node="remove"` counts as absent.
 
+### 5. `flui add` links a capability crate, which states its plugin
+
+ADR-0154 §8's `flui add <capability>` no longer writes declarations: the crate carries them. A
+capability crate states how an application registers it in `[package.metadata.flui.capability]`,
+whose one key in this version is `plugin`, the path of its `Plugin` type from the crate root. The
+type implements `Default`. A string holding an expression would be checked by nothing; a type path
+is checked by a test of the crate itself, which compares the declared path with the type's and
+needs `Plugin + Default` of it, so the declaration cannot go stale.
+
+```toml
+[package.metadata.flui.capability]
+plugin = "SystemPlugin"
+```
+
+`flui add <name>` resolves `name` as the facade feature that enables one optional crate
+(`system` → `flui-system`) and enables it in `Cargo.toml`, keeping the file's formatting; without
+the facade, or for a name the facade does not carry and the application already depends on, it is
+a crate name, added with `cargo add` from the FLUI checkout the application's other FLUI
+dependencies come from when that checkout has it. It then reads the linked crate's table and
+prints the registration line, `.plugin(flui::services::system::SystemPlugin::default())`, or
+`flui_system::…` without the facade, with what the crate declares for the manifests. It does not
+edit the application's source. A change whose crate states no plugin is undone, `Cargo.lock`
+included. Linking a linked capability changes nothing. An unknown name fails with the facade's
+capability features. `--json` emits one `add.done` event. `name`, which ADR-0154 §7 sketched as
+`Capability::NAME`, is not a key: a crate such as `flui-system` provides several capabilities, and
+a key arrives with its first consumer.
+
 ### Consequences
 
 - Good, because an application declares exactly what it links: the `http` feature off, no network
@@ -163,7 +190,12 @@ join is a set per key, in a fixed order, with the crates that asked for each ent
   declarations and hand-written Android manifest; `--manifest` files lacking an entry, one removing
   it with `tools:node`, complete ones, a merged one without the note, privacy manifests, a binary
   property list).
-- `cargo xtask workspace` accepts `declares` among the `[package.metadata.flui]` keys.
+- `cli_add::add_links_a_capability_and_shows_its_registration` (a facade feature enabled, a second
+  run, a crate without a plugin undone with its lockfile, an unknown name, a crate added from the
+  checkout); `commands::add::tests::a_feature_joins_the_facade_dependency_in_any_shape`;
+  `flui-system`'s `the_declared_plugin_is_the_crates_default_plugin`.
+- `cargo xtask workspace` accepts `declares` and `capability` among the `[package.metadata.flui]`
+  keys.
 
 ## Pros and cons of the options
 
@@ -195,7 +227,8 @@ join is a set per key, in a fixed order, with the crates that asked for each ent
    gets one, `flui-native`'s read of the global `NSUserDefaults` (the title bar's double-click
    setting) needs a declared reason.
 3. Done: the verify mode, `flui doctor`'s Project section and `--manifest`.
-4. `flui add <capability>`.
+4. Done: `flui add <capability>` and `[package.metadata.flui.capability] plugin`, declared by
+   `flui-system`.
 
 ## More information
 

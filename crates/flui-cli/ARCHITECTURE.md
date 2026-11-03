@@ -82,6 +82,14 @@ line to add, under the stable ids `project.declarations`, `project.android-manif
 `project.manifest`. The merger is not run: an Android file that is not Gradle's merged manifest
 carries a note saying so (`doctor_lists_what_a_manifest_lacks_of_the_crates_declarations`).
 
+`flui add <capability>` (`commands/add.rs`) links a capability crate: it enables the facade
+feature that carries it (`toml_edit`, the file's formatting kept) or, without the facade, runs
+`cargo add` from the FLUI checkout the app already depends on. It then reads the crate's
+`[package.metadata.flui.capability] plugin` (`declarations/capability.rs`), the path of its
+`Plugin + Default` type, and prints the registration line with what the crate declares. A change
+whose crate states no plugin is undone with its lockfile
+(`add_links_a_capability_and_shows_its_registration`).
+
 ### Local source dependencies are explicit Cargo paths
 
 `flui create NAME --local` selects the current working directory as the source
