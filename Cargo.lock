@@ -2513,6 +2513,7 @@ dependencies = [
  "raw-window-handle",
  "serde",
  "thiserror 2.0.21",
+ "toml",
  "zbus 6.1.0",
  "zruntime",
 ]

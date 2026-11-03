@@ -94,6 +94,7 @@ it. Inside the FLUI checkout, generate against the local source instead:
 | `flui analyze` | `cargo clippy --workspace --all-targets -D warnings` (`--pedantic`, `--fix`). |
 | `flui format` | `cargo fmt --all` (`--check` exits 4 when unformatted). |
 | `flui clean` | Cargo artifacts and every platform's build output; `--platform <android\|ios\|web\|desktop>` cleans one platform's output instead, and `--deep` adds what platform build tools write in `platforms/`. A directory given to `flui build --output` is yours to clean. |
+| `flui add <capability>` | Link a capability crate (`flui add system`): enables its facade feature, prints the `.plugin(…)` line that registers it and what it declares for the manifests. |
 | `flui doctor` | Environment and project checks with fix hints; `--fix` installs missing `rustup` targets, `--manifest` checks a manifest FLUI does not write. |
 | `flui devices` | Desktop, Android (`adb`), iOS simulators and browsers, with the ids `--device` takes. |
 | `flui emulators list|launch` | List and start Android AVDs and iOS simulators. |
