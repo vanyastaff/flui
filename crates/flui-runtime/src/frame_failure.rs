@@ -386,7 +386,7 @@ pub enum FrameFailureKind {
     /// armed retry.
     Pipeline {
         /// The pipeline's own typed error with the path to the node it names, when it names one
-        /// ([`TreeContext`](flui_foundation::TreeContext)). The UI runtime applies
+        /// ([`TreeContext`]). The UI runtime applies
         /// [`FrameFailureDetail`] only when formatting this error for
         /// `tracing`; a registered handler retains the typed value. Its
         /// fields and `Debug` output may contain sensitive text, so handler
