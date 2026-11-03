@@ -73,7 +73,7 @@ use crate::{
     storage::{ErasedConstraints, RenderEntry, RenderNode, RenderTree},
 };
 
-use super::poison::{FailedAttempt, LayoutFailureKind, LayoutPoison};
+use super::poison::{LayoutFailureKind, LayoutPoison};
 
 // ============================================================================
 // NodePtr — raw-pointer alias of a single &mut RenderNode borrow
@@ -946,18 +946,13 @@ unsafe fn layout_subtree_borrowed_impl(
             node.geometry_box()
                 .unwrap_or(flui_foundation::geometry::Size::ZERO)
         };
-        match arena.layout_poison.failed_attempt(id) {
-            Some(FailedAttempt::Layout(attempt))
-                if attempt == ErasedConstraints::from(constraints) =>
-            {
-                return Ok(stand_in());
-            }
-            Some(FailedAttempt::Layout(_)) => {
-                arena.poison_retries.borrow_mut().insert(id);
-            }
-            Some(FailedAttempt::IntrinsicOnly) => return Ok(stand_in()),
-            None => {} // unreachable: is_poisoned implies a record
+        if arena
+            .layout_poison
+            .serves_stand_in(id, ErasedConstraints::from(constraints))
+        {
+            return Ok(stand_in());
         }
+        arena.poison_retries.borrow_mut().insert(id);
     }
 
     // -----------------------------------------------------------------------
@@ -1839,18 +1834,13 @@ unsafe fn layout_sliver_subtree_borrowed_impl(
             let node: &crate::storage::RenderNode = unsafe { &*node_ptr };
             node.geometry_sliver().unwrap_or(SliverGeometry::ZERO)
         };
-        match arena.layout_poison.failed_attempt(id) {
-            Some(FailedAttempt::Layout(attempt))
-                if attempt == ErasedConstraints::from(constraints) =>
-            {
-                return Ok(stand_in());
-            }
-            Some(FailedAttempt::Layout(_)) => {
-                arena.poison_retries.borrow_mut().insert(id);
-            }
-            Some(FailedAttempt::IntrinsicOnly) => return Ok(stand_in()),
-            None => {} // unreachable: is_poisoned implies a record
+        if arena
+            .layout_poison
+            .serves_stand_in(id, ErasedConstraints::from(constraints))
+        {
+            return Ok(stand_in());
         }
+        arena.poison_retries.borrow_mut().insert(id);
     }
 
     // -----------------------------------------------------------------------
@@ -2040,16 +2030,25 @@ unsafe fn layout_sliver_subtree_borrowed_impl(
         let box_cb_owned =
             move |child_id: RenderId,
                   child_constraints: BoxConstraints|
-                  -> crate::error::RenderResult<flui_foundation::geometry::Size> {
+                  -> crate::error::RenderResult<crate::protocol::BoxChildSize> {
+                // Whether the walk below serves the child its stand-in instead
+                // of laying it out: the same predicate its poisoned skip asks,
+                // read before the call because the walk's failure sink may
+                // change the record. A child laid out over a failed descendant
+                // is not substituted; its size is the one it paints at.
+                let substituted = arena_for_cb
+                    .layout_poison
+                    .serves_stand_in(child_id, child_constraints.into());
                 // SAFETY: same subtree-borrow contract as the sliver child
                 // callback, but routed through the Box layout walk.
                 Ok(
                     match unsafe {
                         layout_subtree_borrowed(arena_for_cb, child_id, child_constraints)
                     } {
+                        Ok(size) if substituted => crate::protocol::BoxChildSize::StandIn(size),
                         Ok(size) => {
                             arena_for_cb.note_layout_success(child_id);
-                            size
+                            crate::protocol::BoxChildSize::Measured(size)
                         }
                         Err(err) => {
                             if err.is_recoverable_layout_error() {
@@ -2072,12 +2071,14 @@ unsafe fn layout_sliver_subtree_borrowed_impl(
                                  The failure is recorded against the child's retry \
                                  budget (layout poison).",
                             );
-                            flui_foundation::geometry::Size::ZERO
+                            crate::protocol::BoxChildSize::StandIn(
+                                flui_foundation::geometry::Size::ZERO,
+                            )
                         }
                     },
                 )
             };
-        let box_cb_ref: crate::protocol::sliver_protocol::BoxChildLayoutCallback<'_> =
+        let box_cb_ref: crate::protocol::sliver_protocol::ErasedBoxChildLayoutCallback<'_> =
             &box_cb_owned;
 
         let box_intrinsic_cb_owned = move |child_id: RenderId,

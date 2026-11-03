@@ -504,12 +504,37 @@ where
     /// [`Self::layout_sliver_child`]: Sliver render objects such as
     /// `RenderSliverToBoxAdapter` can host Box children and still drive the
     /// normal Box subtree layout walk through the pipeline.
+    ///
+    /// The size may be one the walk substituted for a child whose layout
+    /// failed. A parent that keeps the size beyond this pass (a lazy list's
+    /// measured extents) uses [`Self::measure_box_child`] instead.
     pub fn layout_box_child(
         &mut self,
         index: usize,
         constraints: BoxConstraints,
     ) -> crate::error::RenderResult<Size> {
         crate::protocol::sliver_protocol::SliverLayoutCtxErased::layout_box_child(
+            &mut self.inner,
+            index,
+            constraints,
+        )
+    }
+
+    /// Lays out a **Box** child at `index` and says whether the child
+    /// produced its size or the walk substituted one: its layout failed, or it
+    /// is layout-poisoned and served its stand-in (see [`BoxChildSize`]).
+    ///
+    /// A parent that keeps a child's size beyond this pass records only
+    /// [`BoxChildSize::Measured`]. A stand-in still positions the child in
+    /// this pass.
+    ///
+    /// [`BoxChildSize`]: crate::protocol::BoxChildSize
+    pub fn measure_box_child(
+        &mut self,
+        index: usize,
+        constraints: BoxConstraints,
+    ) -> crate::error::RenderResult<crate::protocol::BoxChildSize> {
+        crate::protocol::sliver_protocol::SliverLayoutCtxErased::measure_box_child(
             &mut self.inner,
             index,
             constraints,

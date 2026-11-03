@@ -585,6 +585,17 @@ because the item was not laid out or the change was already applied, lands at on
 list applies the cross-axis displacement too, so a landing moves on both axes.
 `harness_sliver_list_placement_displace_slides_an_item_home` pins it.
 
+### A lazy list records only measured extents
+
+`RenderSliverList`'s band walk (`sliver/virtualized_band.rs`) lays residents out
+through `measure_box_child` and writes `Virtualizer::set_measured` only for a
+`BoxChildSize::Measured` answer. A `StandIn` (the child failed, is poisoned, or
+the slot is empty) leaves the item's previous extent or its estimate in place,
+so the first visible item neither jumps when a child above it fails nor jumps
+back when it recovers (ADR-0054). The fixed-extent list, the grid and the
+carousel record no extents, so they keep `layout_box_child`. Pinned by the
+three `harness_sliver_list_*` rows in `family_recovery`.
+
 ### Lazy slivers lay out a pinned child outside the band
 
 `RenderSliverList`, `RenderSliverFixedExtentList`, `RenderSliverGrid` and

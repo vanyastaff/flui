@@ -29,7 +29,7 @@ use flui_rendering::{
     constraints::{BoxConstraints, SliverConstraints, SliverGeometry, child_paint_offset},
     context::SliverLayoutContext,
     parent_data::SliverMultiBoxAdaptorParentData,
-    protocol::ChildLayout,
+    protocol::{BoxChildSize, ChildLayout},
     virtualization::{AnchorCorrection, ScrollWindow, Virtualizer},
 };
 
@@ -113,6 +113,29 @@ pub(super) fn main_axis_extent(
         AxisDirection::TopToBottom | AxisDirection::BottomToTop => size.height,
         AxisDirection::LeftToRight | AxisDirection::RightToLeft => size.width,
     }
+}
+
+/// Lays out the resident child in `slot` and returns the extent to record
+/// for it, or `None` when the walk substituted its size.
+///
+/// A stand-in (a failed child's `Size::ZERO`, a poisoned child's last
+/// geometry) is not the child's extent: recording it would move every item
+/// below by the stand-in's error now and back again once the child recovers,
+/// and an item above the anchor would emit a correction for a size it never
+/// had. The item keeps its last measured extent, or its estimate, and the pass
+/// still positions the child with the stand-in (ADR-0054 decision 2). A child
+/// laid out over a failed descendant is measured: that is the size it paints
+/// at.
+fn resident_extent(
+    ctx: &mut SliverLayoutContext<'_, Variable, SliverMultiBoxAdaptorParentData>,
+    slot: usize,
+    box_constraints: BoxConstraints,
+    axis_direction: AxisDirection,
+) -> flui_rendering::error::RenderResult<Option<f64>> {
+    Ok(match ctx.measure_box_child(slot, box_constraints)? {
+        BoxChildSize::Measured(size) => Some(main_axis_extent(size, axis_direction)),
+        BoxChildSize::StandIn(_) => None,
+    })
 }
 
 /// Returns `offset_of(logical_i + 1) - offset_of(logical_i)`, i.e. the
@@ -316,10 +339,12 @@ where
 
         if let Some(&slot) = logical_to_slot.get(&logical_i) {
             // Present: lay out and record the real extent.
-            let size = ctx.layout_box_child(slot, box_constraints)?;
-            let extent = main_axis_extent(size, constraints.axis_direction);
-            let correction = virtualizer.set_measured(logical_i, extent, anchor);
-            accumulate_anchor_correction(pending_correction, correction);
+            if let Some(extent) =
+                resident_extent(ctx, slot, box_constraints, constraints.axis_direction)?
+            {
+                let correction = virtualizer.set_measured(logical_i, extent, anchor);
+                accumulate_anchor_correction(pending_correction, correction);
+            }
         } else {
             // Absent: strategy owns the complete decision.
             // match_same_arms: `Scheduled`'s empty body is kept separate from
@@ -411,10 +436,12 @@ where
         let newly_covered = (next_first..covered_first).chain(covered_last..next_last);
         for logical_i in newly_covered {
             if let Some(&slot) = logical_to_slot.get(&logical_i) {
-                let size = ctx.layout_box_child(slot, box_constraints)?;
-                let extent = main_axis_extent(size, constraints.axis_direction);
-                let correction = virtualizer.set_measured(logical_i, extent, anchor);
-                accumulate_anchor_correction(pending_correction, correction);
+                if let Some(extent) =
+                    resident_extent(ctx, slot, box_constraints, constraints.axis_direction)?
+                {
+                    let correction = virtualizer.set_measured(logical_i, extent, anchor);
+                    accumulate_anchor_correction(pending_correction, correction);
+                }
                 continue;
             }
             match on_absent(logical_i, dense_count, box_constraints, ctx) {
