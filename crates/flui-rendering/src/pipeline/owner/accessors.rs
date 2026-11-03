@@ -702,9 +702,13 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     ///    tear down an `attach`-time subscription;
     /// 3. evict every id from ALL dirty queues (live + mid-phase) so
     ///    no phase walks a freed slot's stale entry;
-    /// 4. cascade-remove the nodes (each freed slot's generation bumps
-    ///    — outstanding ids go stale);
-    /// 5. clear `root_id` when the root itself was removed.
+    /// 4. take the subtree out of the tree, children first (each slot
+    ///    advances its generation or retires, so outstanding ids go stale);
+    /// 5. clear `root_id` when the root itself was removed, and invalidate
+    ///    the former parent;
+    /// 6. drop the removed nodes, last: a render object's destructor runs
+    ///    against a committed tree and owner, so one that panics loses no
+    ///    bookkeeping.
     ///
     /// `Drop` on render objects remains strictly node-local (decoded
     /// images, shaped text, GPU handles).
@@ -755,7 +759,8 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         self.retained_boundaries
             .retain(|id, _| !removed.contains(id));
 
-        let count = self.render_tree.remove_recursive(id);
+        let removed_nodes = self.render_tree.take_subtree(id);
+        let count = removed_nodes.len();
         if self.root_id == Some(id) {
             self.root_id = None;
         }
@@ -763,6 +768,9 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
             self.note_render_child_membership_changed(parent_id);
         }
         tracing::debug!(?id, count, "remove_render_object: subtree disposed");
+        // Destructors run last, against a committed tree and owner (ADR-0252,
+        // ADR-0287): one that panics leaves nothing half-removed.
+        drop(removed_nodes);
         count
     }
 
