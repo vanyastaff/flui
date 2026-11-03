@@ -1,8 +1,8 @@
 # ADR-0287: Owner state is committed before user code runs
 
-- **Status:** Accepted (2026-11-03). Partly implemented: `flui-foundation` has the primitives and
-  the capability seam's `Completion` uses them; each other seam moves to them in its own change
-  (see Migration).
+- **Status:** Accepted (2026-11-03). Partly implemented: `flui-foundation` has the primitives, and
+  the capability seam's `Completion` and `Persisted` use them; each other seam moves to them in
+  its own change (see Migration).
 - **Date:** 2026-11-03
 - **Related:** [ADR-0281](ADR-0281-a-destructor-that-panics-during-an-unwind-aborts-as-in-std.md)
   (what a destructor that panics costs, and the containment after a caught failure);
@@ -161,6 +161,13 @@ owner-side state is one `RefCell` changed through `commit` wherever the change r
 user code (the waiting closure, a waker). An owner whose state lives on its own thread behind
 `&mut self` (the X11 selection thread) has no borrow to release; it keeps `FirstPanic` for its
 fan-out.
+
+`Persisted` moved next. Its `set`, a finished load and a fresh start queue their publish and
+refresh as a call and release the value they replaced after it, so the first failure of the two
+is the one that propagates; its refresh queues the release of a close hold, the start of the save
+watch and the listeners' delivery, so a release that panics no longer leaves the watch unstarted.
+Work whose failure the owner must observe itself (a spawn whose refusal resets `watching`) keeps
+its own `catch_unwind` inside the queued call.
 
 ## More information
 
