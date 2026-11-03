@@ -430,7 +430,8 @@ struct SceneState {
     reservation: Option<SceneOrigin>,
     pending: VecDeque<SceneAction>,
     draining: bool,
-    next_window: u64,
+    /// Issues the id of every window a scene opens, never one twice.
+    window_ids: flui_platform::WindowIdMint,
     next_attachment: u64,
 }
 
@@ -530,7 +531,7 @@ impl IOSLoop {
                     reservation: None,
                     pending: VecDeque::new(),
                     draining: false,
-                    next_window: 1,
+                    window_ids: flui_platform::WindowIdMint::new(),
                     next_attachment: 1,
                 }),
                 marker,
@@ -1074,15 +1075,12 @@ impl IOSLoop {
                     attachment: IOSSceneAttachmentId(attachment),
                 };
                 let fresh = if state.session.is_some() {
-                    None
+                    Ok(None)
                 } else {
-                    let id = WindowId(state.next_window);
-                    state.next_window = state
-                        .next_window
-                        .checked_add(1)
-                        .expect("BUG: window identity exhausted");
-                    state.reservation = Some(origin.clone());
-                    Some(id)
+                    state.window_ids.next().map(|id| {
+                        state.reservation = Some(origin.clone());
+                        Some(id)
+                    })
                 };
                 Some((origin, fresh))
             }
@@ -1093,6 +1091,19 @@ impl IOSLoop {
                 "rejecting unsupported additional scene before window creation"
             );
             return None;
+        };
+        let fresh = match fresh {
+            Ok(fresh) => fresh,
+            Err(exhausted) => {
+                // Nothing was reserved: the scene is refused before a window
+                // exists, rather than given an id another window had.
+                tracing::warn!(
+                    session = id.as_str(),
+                    %exhausted,
+                    "rejecting a scene: every window id was issued"
+                );
+                return None;
+            }
         };
         if let Some(id) = fresh {
             // The window delivers to its handler from its first event on, so

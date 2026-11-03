@@ -278,7 +278,7 @@ impl HeaderDto {
                 .iter()
                 .map(|window| {
                     Ok(WindowDto {
-                        window: window.window.0,
+                        window: window.window.get().get(),
                         scale_factor: window.scale_factor,
                         title: text(&window.title),
                         gestures: window
@@ -330,7 +330,7 @@ impl HeaderDto {
                 .into_iter()
                 .map(|window| {
                     Ok(RecordedWindow {
-                        window: WindowId(window.window),
+                        window: super::dto::window_id(window.window)?,
                         scale_factor: window.scale_factor,
                         title: window.title,
                         gesture_profiles: window.gestures.map(profiles).transpose()?,

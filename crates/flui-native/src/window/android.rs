@@ -625,9 +625,7 @@ impl host::Window<AndroidLoop> for AndroidWindow {
             }
             None => {}
         }
-        let id = owner.window_ids.next().ok_or(OpenWindowError::Backend {
-            message: "the Activity's window identities are used up".to_owned(),
-        })?;
+        let id = owner.window_ids.next()?;
         if let Some(mode) = options
             .os_options
             .android
@@ -696,7 +694,11 @@ impl host::Window<AndroidLoop> for AndroidWindow {
     }
 
     fn active(owner: &AndroidLoop, _: &WindowPositions<ActivityRef>) -> Option<WindowId> {
-        owner.window.lock().as_ref().map(|_| WindowId(0))
+        owner
+            .window
+            .lock()
+            .as_ref()
+            .map(|window| window.activity_id().window())
     }
 
     fn capabilities(owner: &AndroidLoop, _: &WindowPositions<ActivityRef>) -> WindowCapabilities {
@@ -731,13 +733,10 @@ fn appearance_of(night: bool) -> WindowAppearance {
 }
 
 impl PlatformWindow for AndroidWindow {
-    // Android hosts exactly one `AndroidApp` surface for the process's
-    // lifetime (see the struct docs above) — there is no second native
-    // window this identity could ever collide with, so a fixed constant is
-    // this backend's honest identity, not a stand-in for missing
-    // information.
+    /// The id the loop issued as the window opened: a later window of the
+    /// Activity, after its native window went and came back, has another.
     fn id(&self) -> WindowId {
-        WindowId(1)
+        self.id.window()
     }
 
     /// Kept and sent with every native window the Activity gets, from API 30.

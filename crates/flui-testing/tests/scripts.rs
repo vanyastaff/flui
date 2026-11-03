@@ -177,7 +177,10 @@ fn a_script_is_host_input_on_virtual_time_with_a_readable_form() {
 
     // The JSON Lines form beside it is a complete recording.
     let bytes = script
-        .write_recording(Vec::new(), flui_platform::WindowId(1))
+        .write_recording(
+            Vec::new(),
+            flui_platform::WindowId::try_from_raw(1).expect("a nonzero window id"),
+        )
         .expect("written");
     let recording = flui_testing::recording::ReplayableRecording::read(
         flui_testing::recording::RecordingReader::try_new(&bytes[..]).expect("header"),

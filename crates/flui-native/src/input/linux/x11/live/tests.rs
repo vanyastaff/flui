@@ -83,11 +83,11 @@ fn a_handler_dropped_with_its_entry_may_set_a_cursor() {
     let dropped = Rc::new(Cell::new(false));
     let first = WindowRef {
         xid,
-        id: WindowId(1),
+        id: WindowId::try_from_raw(1).expect("a nonzero window id"),
     };
     let later = WindowRef {
         xid,
-        id: WindowId(2),
+        id: WindowId::try_from_raw(2).expect("a nonzero window id"),
     };
     input.window_opened(target(&input, first, &dropped));
     input.window_opened(target(&input, later, &Rc::new(Cell::new(false))));

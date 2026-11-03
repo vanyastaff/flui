@@ -39,7 +39,7 @@ struct WakeWindow {
 
 impl flui_platform::PlatformWindow for WakeWindow {
     fn id(&self) -> flui_platform::WindowId {
-        flui_platform::WindowId(1)
+        flui_platform::WindowId::try_from_raw(1).expect("a nonzero window id")
     }
     fn request_redraw(&self) {
         wake();

@@ -735,12 +735,11 @@ ids! {
         /// by a worker or cache fails the generation check instead of
         /// silently addressing the new incarnation (ABA).
         ///
-        /// Minted by the process composition root (`AppRuntime`); the
-        /// platform layer maps native window handles to it. This is a
-        /// distinct type from flui-native's native `WindowId(pub u64)`
-        /// (`flui-native/src/window.rs`), which remains the
-        /// platform-internal native handle key — the two are not
-        /// interchangeable and neither converts implicitly to the other.
+        /// Minted by the process composition root (`AppRuntime`). This is a
+        /// distinct type from `flui_platform::WindowId`, the identity a
+        /// platform host issues each window it opens from its own mint —
+        /// the two are not interchangeable and neither converts to the
+        /// other.
         pub type UiRuntimeId Runtime;
 
         /// Data-transfer ID - **generational** key identifying one live

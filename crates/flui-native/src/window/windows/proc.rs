@@ -819,7 +819,7 @@ impl WindowProc {
                         // surface is released when the queued clear runs,
                         // so the trace is ordered after the release however
                         // the close arrived.
-                        let window_id = ctx.window_id.0;
+                        let window_id = ctx.window_id.get();
                         ctx.delivery.clear_then(move || {
                             tracing::debug!(
                                 target: "flui.platform",

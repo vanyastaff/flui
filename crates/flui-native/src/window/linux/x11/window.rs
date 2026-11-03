@@ -54,7 +54,7 @@
 use std::cell::{Cell, RefCell};
 use std::num::NonZeroU32;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
 use std::time::{Duration, Instant};
 
@@ -66,7 +66,7 @@ use flui_platform::{
     AdmittedCommand, ApplyError, CloseDecision, CursorError, DisplaySnapshot, PlatformTextInput,
     PlatformWindow, SizeConstraints, Unsupported, UnsupportedReason, WindowAppearance,
     WindowCapabilities, WindowCommand, WindowFrame, WindowGeometry, WindowHandler, WindowId,
-    WindowMode, WindowOptions, WindowState,
+    WindowIdMint, WindowMode, WindowOptions, WindowState,
 };
 use flui_semantics::platform::PlatformAccessibility;
 use parking_lot::Mutex;
@@ -103,7 +103,7 @@ use crate::owner::linux::x11::{
     Doorbell, HostDisplays, InputTarget, LoopDrag, LoopInput, LoopText, LoopWindows, WindowRef,
     WindowScale, X11Connection, X11Loop,
 };
-use crate::owner::slot::{OwnerMap, OwnerWeak};
+use crate::owner::slot::{OwnerCell, OwnerMap, OwnerWeak};
 use crate::owner::wake_deadline::FrameCount;
 use crate::owner::window_delivery::{Publication, Retirement, WindowDelivery};
 use crate::text::WindowTextInput;
@@ -1641,8 +1641,8 @@ pub struct X11Windows {
     windows: OwnerMap<WindowId, Rc<X11Window>>,
     /// The window each X id names now.
     by_xid: OwnerMap<xproto::Window, WindowId>,
-    /// The last identity given; never given again.
-    last_id: AtomicU64,
+    /// Issues the id of every window, on the owner thread, never one twice.
+    ids: OwnerCell<WindowIdMint>,
     /// A window closed since the loop last asked.
     closed: AtomicBool,
     frames: FrameCount,
@@ -1685,7 +1685,7 @@ impl X11Windows {
             atoms,
             windows: OwnerMap::new(),
             by_xid: OwnerMap::new(),
-            last_id: AtomicU64::new(0),
+            ids: OwnerCell::new(),
             closed: AtomicBool::new(false),
             frames: FrameCount::default(),
             frame_inset: Arc::new(FrameInset::default()),
@@ -1731,14 +1731,13 @@ impl X11Windows {
 
     /// The next identity, never one given before.
     fn mint_id(&self) -> Result<WindowId, OpenWindowError> {
-        self.last_id
-            .try_update(Ordering::Relaxed, Ordering::Relaxed, |last| {
-                last.checked_add(1)
-            })
-            .map(|last| WindowId(last + 1))
-            .map_err(|_| OpenWindowError::Backend {
-                message: "this X11 platform has given every window identity".into(),
-            })
+        let issued = self
+            .ids
+            .with(|ids| ids.next())
+            .ok_or_else(|| OpenWindowError::Backend {
+                message: "an X11 window opens on the thread that built its platform".into(),
+            })?;
+        Ok(issued?)
     }
 
     /// The window an X id names now.

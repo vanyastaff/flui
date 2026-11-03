@@ -579,6 +579,11 @@ pub enum OpenWindowError {
     /// This host opens no windows: its table's window position is absent.
     #[error("this host opens no windows: {0}")]
     Unsupported(#[from] flui_platform::Unsupported),
+    /// This host issued every [`WindowId`](flui_platform::WindowId) it can:
+    /// it opens no window again, rather than give one an id another window
+    /// had.
+    #[error("this host has issued every window id")]
+    IdsExhausted(#[from] flui_foundation::IdExhausted),
     /// The event loop cannot service window creation from this call site in
     /// its current lifecycle state: called before `Platform::run` started
     /// the loop, from another thread while bootstrap (`on_ready`) is still

@@ -14,7 +14,8 @@ use windows::Win32::{
 };
 
 use flui_platform::{
-    PlatformWindow, Unsupported, WindowCapabilities, WindowHandler, WindowId, WindowOptions,
+    PlatformWindow, Unsupported, WindowCapabilities, WindowHandler, WindowId, WindowIdMint,
+    WindowOptions,
 };
 
 use super::material::{self, SystemBackdrop};
@@ -39,8 +40,14 @@ use crate::window::config::WindowConfiguration;
 /// it when the window closes. Public where it is defined, as the host's table
 /// names it, and nameable only inside the crate.
 pub struct WindowSet {
-    /// The windows, on the owner thread: a window is not `Send`.
+    /// The windows, on the owner thread: a window is not `Send`. The only
+    /// way from an HWND to a [`WindowId`]: a handle not in it names no window
+    /// of this platform.
     by_handle: OwnerCell<HashMap<isize, Rc<WindowsWindow>>>,
+    /// Issues the id of every window the set opens, on the owner thread,
+    /// never one twice: Win32 recycles HWND values, so a handle is never an
+    /// id.
+    ids: OwnerCell<WindowIdMint>,
     pub(super) config: WindowConfiguration,
     /// What every window hands out of the window-level positions.
     pub(super) positions: WindowPositions<WindowRef>,
@@ -59,6 +66,7 @@ impl WindowSet {
     ) -> Self {
         Self {
             by_handle: OwnerCell::new(),
+            ids: OwnerCell::new(),
             config,
             positions,
             material: material::gate(build),
@@ -112,7 +120,8 @@ impl std::fmt::Debug for WindowSet {
             Some(windows) => out.field("windows", &windows),
             None => out.field("windows", &format_args!("<owner's>")),
         };
-        out.field("config", &self.config)
+        out.field("ids", &self.ids)
+            .field("config", &self.config)
             .field("positions", &self.positions)
             .field("material", &self.material)
             .finish()
@@ -224,7 +233,13 @@ impl crate::host::Window<WindowsLoop> for WindowsWindow {
             })?;
         tracing::info!("Opening window: {:?}", options.title);
 
+        // On the owner thread (`shares` above), which built the set.
+        let window_id = windows
+            .ids
+            .with(|ids| ids.next())
+            .expect("BUG: a window set is built on the owner thread that opens its windows")?;
         let window = WindowsWindow::try_new(
+            window_id,
             options,
             handler,
             Arc::clone(windows),
@@ -245,18 +260,24 @@ impl crate::host::Window<WindowsLoop> for WindowsWindow {
         Ok(window)
     }
 
-    fn active(owner: &WindowsLoop, _: &WindowSet) -> Option<WindowId> {
+    fn active(owner: &WindowsLoop, windows: &WindowSet) -> Option<WindowId> {
         owner.affinity.debug_assert_owner("WindowsWindow::active");
         // SAFETY: `GetForegroundWindow` takes no arguments; `hwnd` is just
-        // an opaque value compared/wrapped, never dereferenced.
-        unsafe {
-            let hwnd = GetForegroundWindow();
-            if hwnd.is_invalid() {
-                None
-            } else {
-                Some(WindowId(hwnd.0 as u64))
-            }
+        // an opaque value looked up, never dereferenced.
+        let hwnd = unsafe { GetForegroundWindow() };
+        if hwnd.is_invalid() {
+            return None;
         }
+        // Another application's window, or one of ours that closed, is in
+        // no entry: the foreground window is then none of this platform's.
+        windows
+            .by_handle
+            .with(|tracked| {
+                tracked
+                    .get(&(hwnd.0 as isize))
+                    .map(|window| window.window_id)
+            })
+            .flatten()
     }
 
     fn capabilities(_: &WindowsLoop, windows: &WindowSet) -> WindowCapabilities {

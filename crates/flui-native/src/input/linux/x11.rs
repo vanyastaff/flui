@@ -1962,7 +1962,7 @@ mod live {
     /// The surface a window's contacts belong to: its identity, which no
     /// other window of the platform has.
     fn surface_of(window: WindowRef) -> NativeSurface {
-        NativeSurface(window.id.0)
+        NativeSurface::of_window(window.id)
     }
 
     /// Deliver `deliveries` in order, each in a boundary of its own: one

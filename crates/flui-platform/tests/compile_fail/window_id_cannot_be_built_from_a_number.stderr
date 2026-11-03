@@ -1,0 +1,40 @@
+error[E0423]: cannot initialize a tuple struct which contains private fields
+ --> tests/compile_fail/window_id_cannot_be_built_from_a_number.rs:7:13
+  |
+7 |     let _ = WindowId(raw);
+  |             ^^^^^^^^
+  |
+  = note: a struct named `WindowId` exists in another namespace
+note: constructor is not visible here due to private fields
+ --> src/window.rs
+  |
+  | pub struct WindowId(NonZeroU64);
+  |                     ^^^^^^^^^^ private field
+
+error[E0277]: the trait bound `WindowId: From<NonZero<u64>>` is not satisfied
+ --> tests/compile_fail/window_id_cannot_be_built_from_a_number.rs:8:27
+  |
+8 |     let _: WindowId = raw.into();
+  |                           ^^^^ the trait `From<NonZero<u64>>` is not implemented for `WindowId`
+  |
+  = note: required for `NonZero<u64>` to implement `Into<WindowId>`
+
+error[E0277]: the trait bound `WindowId: From<u64>` is not satisfied
+ --> tests/compile_fail/window_id_cannot_be_built_from_a_number.rs:9:28
+  |
+9 |     let _: WindowId = 1u64.into();
+  |                            ^^^^ the trait `From<u64>` is not implemented for `WindowId`
+  |
+  = note: required for `u64` to implement `Into<WindowId>`
+
+error[E0599]: no associated function or constant named `new` found for struct `WindowId` in the current scope
+  --> tests/compile_fail/window_id_cannot_be_built_from_a_number.rs:10:23
+   |
+10 |     let _ = WindowId::new(1);
+   |                       ^^^ associated function or constant not found in `WindowId`
+   |
+help: there is a method `ne` with a similar name
+   |
+10 -     let _ = WindowId::new(1);
+10 +     let _ = WindowId::ne(1);
+   |

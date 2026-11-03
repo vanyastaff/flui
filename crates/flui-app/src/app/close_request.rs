@@ -693,7 +693,10 @@ mod tests {
     }
 
     fn window(id: u64) -> Rc<dyn PlatformWindow> {
-        Rc::new(TestWindow::new().with_id(id)) as Rc<dyn PlatformWindow>
+        Rc::new(
+            TestWindow::new()
+                .with_id(flui_platform::WindowId::try_from_raw(id).expect("a nonzero window id")),
+        ) as Rc<dyn PlatformWindow>
     }
 
     fn register(

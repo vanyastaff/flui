@@ -98,13 +98,13 @@ use crate::owner::apple::metal_layer::{LayerRefresh, NewRefresh};
 
 use crate::{
     owner::OpenWindowError,
-    owner::slot::OwnerWeak,
+    owner::slot::{OwnerCell, OwnerWeak},
     owner::window_delivery::{Retirement, WindowDelivery},
     window::state::{ReportedFacts, WindowStateCell, mode_of, reported_frame},
 };
 use flui_platform::{
     CursorError, DisplayId, PlatformWindow, RedrawRequester, SurfaceTarget, WindowHandler,
-    WindowId, WindowOptions, WindowReveal,
+    WindowId, WindowIdMint, WindowOptions, WindowReveal,
 };
 
 /// macOS window wrapper around NSWindow.
@@ -116,6 +116,10 @@ use flui_platform::{
 pub struct MacOSWindow {
     /// Native window handle (NSWindow*)
     ns_window: ObjcId,
+
+    /// The id the platform issued for this window, which no other window of
+    /// the platform has, whatever address AppKit gives the next `NSWindow`.
+    id: WindowId,
 
     /// This window's `FLUIContentView` (NSView*): the view that receives
     /// input, IME and appearance changes, draws on `updateLayer`, carries the
@@ -314,13 +318,14 @@ impl MacOSWindow {
     /// NSWindow.
     pub(crate) fn try_new(
         mtm: MainThreadMarker,
+        id: WindowId,
         options: WindowOptions,
         handler: Rc<dyn WindowHandler>,
         windows_map: WindowRegistry,
         windows: &MacOSWindows,
         view_hooks: ViewHooks,
     ) -> Result<Rc<Self>, OpenWindowError> {
-        Self::new_inner(mtm, options, handler, windows_map, windows, view_hooks)
+        Self::new_inner(mtm, id, options, handler, windows_map, windows, view_hooks)
     }
 
     /// Hand this window the platform's display registry, and read which display
@@ -407,6 +412,7 @@ impl MacOSWindow {
 
     fn new_inner(
         _main: MainThreadMarker,
+        id: WindowId,
         mut options: WindowOptions,
         handler: Rc<dyn WindowHandler>,
         windows_map: WindowRegistry,
@@ -628,6 +634,7 @@ impl MacOSWindow {
 
             let window = Rc::new(Self {
                 ns_window,
+                id,
                 view: ManuallyDrop::new(content_view),
                 state: Mutex::new(MacOSWindowState {
                     bounds: Bounds {
@@ -694,9 +701,9 @@ impl MacOSWindow {
 
             // Store in windows map, which the owner thread alone reaches: the
             // window is made there.
-            let window_id = ns_window as u64;
+            let native_key = ns_window as u64;
             let tracked: Rc<dyn HostWindow> = Rc::clone(&window) as _;
-            if windows_map.insert(window_id, tracked).is_err() {
+            if windows_map.insert(native_key, tracked).is_err() {
                 tracing::error!("a macOS window was made off its owner thread and is not tracked");
             }
 
@@ -1113,19 +1120,26 @@ impl crate::host_window::HostWindow for MacOSWindow {
     }
 }
 
-/// What the macOS windows open with: the table's window-level positions. The
-/// loop keeps the open windows themselves (`WindowRegistry`), because its wake
-/// pump and its stop reach them.
+/// What the macOS windows open with: the table's window-level positions and
+/// the mint of their ids. The loop keeps the open windows themselves
+/// (`WindowRegistry`), because its wake pump and its stop reach them.
 #[derive(Debug)]
 pub struct MacOSWindows {
     positions: WindowPositions<ContentViewRef>,
+    /// Issues the id of every window the platform opens, on the main thread
+    /// that built the platform, never one twice: AppKit reuses the address
+    /// of a released `NSWindow`, so an address is never an id.
+    ids: OwnerCell<WindowIdMint>,
 }
 
 impl MacOSWindows {
     /// The windows of a platform whose table's window-level positions are
-    /// `positions`.
+    /// `positions`, on the main thread that will open them.
     pub(crate) fn new(positions: WindowPositions<ContentViewRef>) -> Self {
-        Self { positions }
+        Self {
+            positions,
+            ids: OwnerCell::new(),
+        }
     }
 }
 
@@ -1178,8 +1192,15 @@ impl host::Window<MacOSLoop> for MacOSWindow {
                 message: "a macOS window opens on the main thread only".to_owned(),
             });
         };
+        let Some(id) = windows.ids.with(|ids| ids.next()) else {
+            return Err(OpenWindowError::Backend {
+                message: "a macOS window opens on the main thread that built its platform"
+                    .to_owned(),
+            });
+        };
         let window = MacOSWindow::try_new(
             main,
+            id?,
             options,
             handler,
             Arc::clone(&owner.windows),
@@ -1206,14 +1227,16 @@ impl host::Window<MacOSLoop> for MacOSWindow {
             .affinity
             .debug_assert_owner("MacOSPlatform::active_window");
         debug_assert_appkit_main_thread("MacOSPlatform::active_window");
-        // `keyWindow` answers `None` when no window is key. The window id is
-        // the native `NSWindow` pointer, the same identity `MacOSWindow`
-        // reports, so a caller can compare them.
+        // `keyWindow` answers `None` when no window is key.
         // Off the main thread no window is key to this thread's knowledge:
         // the application is read only where a marker proves it may be.
         let key_window = owner.app.get(MainThreadMarker::new()?).keyWindow()?;
-        let ptr = objc2::rc::Retained::as_ptr(&key_window) as u64;
-        Some(WindowId(ptr))
+        // The registry, keyed by `NSWindow` address, holds each open window
+        // until it closes, so the address names that window and no other;
+        // a key window not in it (a panel, a window that closed) is none of
+        // this platform's.
+        let key = objc2::rc::Retained::as_ptr(&key_window) as u64;
+        owner.windows.get(&key).map(|window| window.id())
     }
 
     fn capabilities(_: &MacOSLoop, _: &MacOSWindows) -> WindowCapabilities {
@@ -1337,7 +1360,7 @@ unsafe fn primary_screen_height() -> Option<f64> {
 
 impl PlatformWindow for MacOSWindow {
     fn id(&self) -> WindowId {
-        WindowId(self.ns_window as u64)
+        self.id
     }
 
     fn haptics(&self) -> Option<Arc<dyn flui_platform::PlatformHaptics>> {
