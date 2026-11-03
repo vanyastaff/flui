@@ -41,7 +41,6 @@ use crate::{MediaQuery, Semantics};
 /// - **Ambient `Directionality`**: `Icon` does not read
 ///   `Directionality::of` yet, so it always renders left-to-right
 ///   ([`flui_painting::typography::TextDirection::Ltr`]).
-/// - **`IconThemeData::opacity`** folding into the resolved color.
 /// - Font weight, blend mode, and per-call shadow/text-direction
 ///   overrides are not supported yet.
 #[derive(Clone, Debug, StatelessView)]
@@ -151,14 +150,24 @@ impl Icon {
     ///
     /// Numeric growth is deferred to the render object; this retains the authored size.
     fn style_for(&self, icon: &IconData, size: f64, theme: &IconThemeData) -> TextStyle {
+        let color = self.color.or(theme.color);
+        // The theme's opacity scales the resolved colour's alpha; an icon
+        // with no colour paints in the glyph default, black.
+        let color = match theme.opacity.filter(|opacity| opacity.is_finite()) {
+            Some(opacity) if opacity < 1.0 => {
+                let color = color.unwrap_or(Color::BLACK);
+                Some(color.with_opacity(f64::from(color.opacity()) * opacity.clamp(0.0, 1.0)))
+            }
+            _ => color,
+        };
         TextStyle {
-            color: self.color.or(theme.color),
+            color,
             font_size: Some(size),
             font_family: icon.font_family.clone(),
             font_family_fallback: icon.font_family_fallback.clone(),
             height: Some(1.0),
             font_variations: Self::font_variations(theme),
-            shadows: theme.shadows.clone().unwrap_or_default(),
+            shadows: theme.shadows.clone(),
             ..TextStyle::default()
         }
     }

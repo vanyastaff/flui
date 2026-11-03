@@ -28,8 +28,9 @@ pub struct Shadow<T: Unit> {
     /// The displacement of the shadow from the casting element.
     pub offset: Offset<T>,
 
-    /// The standard deviation of the Gaussian to convolve with the shadow's
-    /// shape.
+    /// How far the shadow's edge is blurred, in the casting element's units;
+    /// [`Shadow::blur_sigma`] gives the Gaussian's standard deviation, and a
+    /// text shadow converts it with [`BlurSigma::from_blur_radius`](crate::BlurSigma::from_blur_radius).
     ///
     /// A blur radius of 0.0 means the shadow has a sharp edge.
     pub blur_radius: T,

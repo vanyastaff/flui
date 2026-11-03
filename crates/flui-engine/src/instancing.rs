@@ -853,7 +853,7 @@ pub(crate) struct GlyphInstance {
     /// from.
     pub dst_rect: [f32; 4],
     /// Atlas texel origin `[u, v]` and the page kind in lane 2 (`0` mask,
-    /// `1` colour); lane 3 unused.
+    /// `1` colour, `2` colour page as coverage); lane 3 unused.
     pub atlas: [f32; 4],
     /// Straight-alpha colour `[r, g, b, a]`, opacity already folded into
     /// `a`. A colour-page glyph uses only `a`.
@@ -899,6 +899,17 @@ impl GlyphInstance {
             clip_device_to_local: [1.0, 0.0, 0.0, 1.0],
             clip_local_origin: [0.0; 4],
         }
+    }
+
+    /// The quad drawn as a silhouette (ADR-0309 §3): a colour-page glyph's
+    /// coverage, its alpha, tinted by the instance colour (page kind `2`),
+    /// as a text shadow inks an emoji. A mask glyph is a silhouette already.
+    #[must_use]
+    pub(crate) fn silhouette(mut self, color_page: bool) -> Self {
+        if color_page {
+            self.atlas[2] = 2.0;
+        }
+        self
     }
 
     /// Places the quad through `linear` (column-major `[a, b, c, d]`) and

@@ -901,6 +901,20 @@ through the UI runtime's text context, which the engine clips to the overlay's
 bounds and replays (`performance_overlay_labels_read_back`). `etagere` stays
 behind `glyph_atlas.rs` the way `lyon` stays behind `tessellator.rs`.
 
+A text shadow (`DrawOp::ParagraphShadow`, ADR-0309 §3) goes through the same
+batcher with `GlyphInk::Silhouette`: every glyph is filled with the shadow's
+colour, and a colour glyph's page is read as coverage (atlas lane `2` in
+`glyph_instanced.wgsl`), so an emoji casts a silhouette. A blurred shadow opens
+an image-filter layer around its glyphs within
+`WgpuPainter::draw_paragraph_shadow`. The layer is the glyph quads' box grown by
+the kernel, since glyphs count in a filter's source bounds like every other
+bounded primitive. The sigma is converted to device pixels with the transform's
+largest scale and clamped to `MAX_TEXT_SHADOW_DEVICE_SIGMA` (64), which keeps a
+shadow's full-resolution sampling within the frame's effect budget until a
+downsampled blur lifts it. A sigma whose square is not a normal `f32` draws the
+shadow sharp. A style value never becomes a recording error
+(`text_shadows_read_back`).
+
 `GlyphAtlas<R: GlyphRasterizer>` is generic over where bitmaps come from: it
 hashes `R::Key` and owns `R`, taking it by `&mut` on a miss and on a grow. The
 painter's is a `TextAtlas`, `GlyphAtlas<SwashRasterizer>`: the rasterizer owns

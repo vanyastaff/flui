@@ -1,6 +1,6 @@
 //! Text styling types.
 
-use crate::styling::Color;
+use crate::styling::{Color, Shadow};
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -229,9 +229,10 @@ impl StrutStyle {
 /// influence glyph shaping and layout.
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct TextStyle {
-    /// Text color.
+    /// The colour the glyphs paint in.
     pub color: Option<Color>,
-    /// Background color.
+    /// The colour filled behind the span: one rectangle per line box of its
+    /// text, painted under its shadows and glyphs (ADR-0309).
     pub background_color: Option<Color>,
     /// Font size.
     pub font_size: Option<f64>,
@@ -256,12 +257,11 @@ pub struct TextStyle {
     pub font_features: Vec<FontFeature>,
     /// Font variations.
     pub font_variations: Vec<FontVariation>,
-    /// Foreground paint (takes precedence over color).
-    pub foreground: Option<Color>,
-    /// Background paint (takes precedence over background_color).
-    pub background: Option<Color>,
-    /// Shadows.
-    pub shadows: Vec<TextShadow>,
+    /// The shadows the span's glyphs cast, painted in list order under the
+    /// glyphs: each is the glyphs' silhouette in the shadow's colour, moved
+    /// by its offset and blurred by its blur radius (ADR-0309). `None`
+    /// inherits the enclosing style's; an empty list casts none.
+    pub shadows: Option<Vec<Shadow<f64>>>,
 }
 
 impl TextStyle {
@@ -298,10 +298,8 @@ impl TextStyle {
             // compares the span colours the runs carry. Another attribute
             // baked into a run's brush must join that comparison.
             color: _,
-            foreground: _,
-            // Neither shaping nor `TextPainter::paint` reads these.
+            // Paint only: `SpanPaint::of` reads them over the kept layout.
             background_color: _,
-            background: _,
             shadows: _,
         } = self;
         *font_size == other.font_size
@@ -394,10 +392,10 @@ impl TextStyle {
         self
     }
 
-    /// Adds a shadow.
+    /// Adds a shadow after the ones the style already casts.
     #[inline]
-    pub fn with_shadow(mut self, shadow: TextShadow) -> Self {
-        self.shadows.push(shadow);
+    pub fn with_shadow(mut self, shadow: Shadow<f64>) -> Self {
+        self.shadows.get_or_insert_with(Vec::new).push(shadow);
         self
     }
 
@@ -433,40 +431,7 @@ impl TextStyle {
             } else {
                 other.font_variations.clone()
             },
-            foreground: other.foreground.or(self.foreground),
-            background: other.background.or(self.background),
-            shadows: if other.shadows.is_empty() {
-                self.shadows.clone()
-            } else {
-                other.shadows.clone()
-            },
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-/// A single shadow cast by text.
-pub struct TextShadow {
-    /// Shadow color.
-    pub color: Color,
-    /// Horizontal offset.
-    pub offset_x: f64,
-    /// Vertical offset.
-    pub offset_y: f64,
-    /// Blur radius.
-    pub blur_radius: f64,
-}
-
-impl TextShadow {
-    /// Creates a new text shadow.
-    #[inline]
-    pub fn new(color: Color, offset_x: f64, offset_y: f64, blur_radius: f64) -> Self {
-        Self {
-            color,
-            offset_x,
-            offset_y,
-            blur_radius,
+            shadows: other.shadows.clone().or_else(|| self.shadows.clone()),
         }
     }
 }

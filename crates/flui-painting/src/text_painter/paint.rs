@@ -115,7 +115,10 @@ impl TextPainter {
 
     // ===== Painting =====
 
-    /// Paints the text onto the canvas at the given offset.
+    /// Paints the text onto the canvas at the given offset: each span's
+    /// background, then the shadows spans cast in list order, then the
+    /// glyphs (ADR-0309 §2). Text with neither background nor shadow records
+    /// its paragraph op alone.
     ///
     /// # Panics
     ///
@@ -141,6 +144,9 @@ impl TextPainter {
             .style()
             .and_then(crate::text_layout::paint_color)
             .unwrap_or(crate::styling::Color::BLACK);
+        if let Some(decor) = &cache.decor {
+            decor.paint(canvas, &cache.layout, offset);
+        }
         // The very paragraph this painter measured: what the engine
         // rasterises is, by identity, what was laid out.
         canvas.draw_paragraph(&cache.paragraph, offset, color);

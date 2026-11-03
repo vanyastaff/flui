@@ -421,6 +421,23 @@ fn summarize_op(op: &DrawOp) -> DrawCommandSummary {
                 ),
             }
         }
+        // The glyphs that cast it, its colour and its blur.
+        DrawOp::ParagraphShadow {
+            paragraph,
+            offset,
+            color,
+            sigma,
+        } => DrawCommandSummary {
+            kind: DrawKind::Text,
+            line: format!(
+                "ParagraphShadow offset=({},{}) {:?} {} sigma={}",
+                f(offset.dx),
+                f(offset.dy),
+                paragraph.text(),
+                hex_color(*color),
+                f(f64::from(sigma.get())),
+            ),
+        },
 
         // ── Images ───────────────────────────────────────────────────────────
         DrawOp::ImageRegion { src, dst, .. } => DrawCommandSummary {
