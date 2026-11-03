@@ -28,7 +28,7 @@ use objc2::rc::Retained;
 use objc2_app_kit::{NSPasteboard, NSPasteboardContentsOptions, NSPasteboardType};
 use objc2_foundation::NSString;
 
-use crate::host::{NativeClipboard, SyncClipboard, host_text};
+use crate::host::{NativeClipboard, SyncClipboard, admit_utf16, host_text};
 
 use crate::owner::apple::MacOSLoop;
 
@@ -150,23 +150,26 @@ impl crate::host::Clipboard<MacOSLoop> for MacOSClipboard {
 
 impl SyncClipboard for MacOSClipboard {
     fn read_now(&self) -> ClipboardRead {
-        let text = self.with_pasteboard_on_owner(|pasteboard| {
+        self.with_pasteboard_on_owner(|pasteboard| {
             let string_type = string_type();
 
             // `types()` is `None` only when the pasteboard has no types at
             // all; a missing text type is the ordinary "no text" case.
-            let types = pasteboard.types()?;
+            let Some(types) = pasteboard.types() else {
+                return Ok(None);
+            };
             if !types.iter().any(|t| *t == *string_type) {
                 tracing::debug!("Pasteboard does not contain text");
-                return None;
+                return Ok(None);
             }
 
-            let ns_string = pasteboard.stringForType(&string_type)?;
-            let rust_string = ns_string.to_string();
-            tracing::debug!(len = rust_string.len(), "Read text from clipboard");
-            Some(rust_string)
-        });
-        text.map_or(Ok(None), host_text)
+            let Some(ns_string) = pasteboard.stringForType(&string_type) else {
+                return Ok(None);
+            };
+            // Measured in UTF-16 units before the copy into Rust.
+            admit_utf16(ns_string.length())?;
+            host_text(ns_string.to_string())
+        })
     }
 
     fn write_now(&self, write: ClipboardWrite) {
