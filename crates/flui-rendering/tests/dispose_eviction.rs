@@ -351,3 +351,172 @@ pub(crate) fn render_tree_retirement_preserves_independent_envelopes() {
         failures.join("\n")
     );
 }
+
+/// A leaf whose destructor panics with `label`, for the removal rows below.
+fn panics_when_dropped(label: &'static str) -> BoxedRenderObject {
+    Box::new(RetirementProbe {
+        label,
+        fail: true,
+        log: std::sync::Arc::default(),
+    })
+}
+
+/// A slot whose generation is exhausted leaves circulation: removing its last
+/// id commits like any other removal, the id never resolves again, and no
+/// later insert, `clear` included, hands the slot out under an id it could
+/// alias.
+pub(crate) fn an_exhausted_render_slot_retires_and_its_last_id_never_resolves_again() {
+    use flui_rendering::storage::RenderTree;
+
+    let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
+    let first = owner.set_root_render_object(Box::new(RenderColoredBox::red(10.0, 10.0)));
+    assert_eq!(owner.remove_render_object(first), 1);
+    assert!(
+        owner.render_tree_mut().age_next_free_slot_for_test(),
+        "the removal freed a slot"
+    );
+    let last = owner.set_root_render_object(Box::new(RenderColoredBox::blue(10.0, 10.0)));
+    assert_eq!(last.index(), first.index(), "the freed slot is taken again");
+
+    let removal = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        owner.remove_render_object(last)
+    }));
+    assert!(
+        matches!(removal, Ok(1)),
+        "removing a slot's last generation commits like any removal"
+    );
+    assert_eq!(owner.root_id(), None, "the removed root is cleared");
+    assert!(owner.render_tree().get(last).is_none());
+
+    let next = owner.insert(Box::new(RenderColoredBox::red(10.0, 10.0)) as BoxedRenderObject);
+    assert_ne!(
+        next.index(),
+        last.index(),
+        "a retired slot is never handed out again"
+    );
+    assert!(
+        owner.render_tree().get(last).is_none(),
+        "the last id stays stale after the next insert"
+    );
+    assert_eq!(owner.remove_render_object(last), 0);
+
+    let mut tree = RenderTree::new();
+    let first = tree.insert_box(Box::new(RenderColoredBox::red(1.0, 1.0)));
+    drop(
+        tree.remove_shallow(first)
+            .expect("the first node is removed"),
+    );
+    assert!(
+        tree.age_next_free_slot_for_test(),
+        "the removal freed a slot"
+    );
+    let last = tree.insert_box(Box::new(RenderColoredBox::red(1.0, 1.0)));
+    let removal = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        tree.remove_shallow(last).is_some()
+    }));
+    assert!(matches!(removal, Ok(true)), "the last id is removed");
+    let cleared = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| tree.clear()));
+    assert!(
+        cleared.is_ok(),
+        "clear keeps a retired slot without panicking"
+    );
+    let again = tree.insert_box(Box::new(RenderColoredBox::red(1.0, 1.0)));
+    assert_ne!(again.index(), last.index(), "a retired slot survives clear");
+}
+
+/// `RenderTree::clear` commits before any destructor runs: when one panics,
+/// the tree is already empty and no id minted before the clear resolves to a
+/// node inserted after it.
+pub(crate) fn a_clear_whose_destructor_panics_leaves_every_old_id_stale() {
+    use flui_objects::RenderPadding;
+    use flui_rendering::storage::RenderTree;
+
+    let mut tree = RenderTree::new();
+    let root = tree.insert_box(Box::new(RenderPadding::all(1.0)));
+    tree.set_root(Some(root));
+    let child = tree
+        .insert_box_child(root, panics_when_dropped("child destructor"))
+        .expect("the child attaches");
+
+    let payload = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| tree.clear()))
+        .expect_err("the destructor's panic reaches the caller");
+    assert_eq!(
+        flui_foundation::panic::payload_text(payload.as_ref()),
+        Some("child destructor")
+    );
+    flui_foundation::panic::discard_payload(payload);
+
+    assert_eq!(tree.root(), None, "the root is reset before the drop");
+    assert!(tree.is_empty(), "every node left the tree before the drop");
+    let fresh = tree.insert_box(Box::new(RenderColoredBox::red(1.0, 1.0)));
+    assert_ne!(fresh, root, "a fresh node never takes an old id");
+    assert_ne!(fresh, child, "a fresh node never takes an old id");
+    assert!(tree.get(root).is_none(), "the old root id stays stale");
+    assert!(tree.get(child).is_none(), "the old child id stays stale");
+}
+
+/// `remove_render_object` commits the tree and the owner before a removed
+/// render object's destructor runs: when one panics, the whole subtree is
+/// gone, the removed root is cleared and the surviving parent is invalidated.
+pub(crate) fn a_destructor_that_panics_during_removal_still_commits_the_owner() {
+    use flui_foundation::geometry::Size;
+    use flui_objects::RenderPadding;
+    use flui_rendering::constraints::BoxConstraints;
+
+    let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
+    let root = owner.set_root_render_object(Box::new(RenderPadding::all(1.0)));
+    let child = owner
+        .insert_child_render_object(root, panics_when_dropped("child destructor"))
+        .expect("the child attaches");
+    let payload = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        owner.remove_render_object(root)
+    }))
+    .expect_err("the destructor's panic reaches the caller");
+    assert_eq!(
+        flui_foundation::panic::payload_text(payload.as_ref()),
+        Some("child destructor")
+    );
+    flui_foundation::panic::discard_payload(payload);
+    assert_eq!(owner.root_id(), None, "the removed root is cleared");
+    assert!(
+        owner.render_tree().get(root).is_none(),
+        "the root left the tree with its child"
+    );
+    assert!(owner.render_tree().get(child).is_none());
+    assert!(owner.render_tree().is_empty());
+
+    let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
+    let parent = owner.set_root_render_object(Box::new(RenderPadding::all(1.0)));
+    let child = owner
+        .insert_child_render_object(parent, panics_when_dropped("child destructor"))
+        .expect("the child attaches");
+    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(40.0, 40.0))));
+    let (mut owner, frame) = owner.run_frame();
+    frame.expect("the first frame runs");
+    assert!(
+        !owner.has_dirty_nodes(),
+        "the first frame left nothing dirty"
+    );
+
+    let payload = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        owner.remove_render_object(child)
+    }))
+    .expect_err("the destructor's panic reaches the caller");
+    flui_foundation::panic::discard_payload(payload);
+    let parent_node = owner.render_tree().get(parent).expect("the parent stays");
+    assert!(
+        parent_node.children().is_empty(),
+        "the child left its parent"
+    );
+    assert!(
+        parent_node.needs_layout(),
+        "the parent lays out again without its child"
+    );
+    assert!(
+        owner
+            .nodes_needing_layout()
+            .iter()
+            .any(|entry| entry.id == parent),
+        "the parent's relayout is queued"
+    );
+}

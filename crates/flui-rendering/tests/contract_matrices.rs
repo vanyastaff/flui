@@ -56,6 +56,9 @@ fn lifecycle_matrix() {
         ("attach_detach_lifecycle::a_relocated_subtree_takes_its_new_depth", crate::attach_detach_lifecycle::a_relocated_subtree_takes_its_new_depth),
         ("dispose_eviction::removing_a_subtree_evicts_its_dirty_entries", crate::dispose_eviction::removing_a_subtree_evicts_its_dirty_entries),
         ("dispose_eviction::render_tree_retirement_preserves_independent_envelopes", crate::dispose_eviction::render_tree_retirement_preserves_independent_envelopes),
+        ("dispose_eviction::an_exhausted_render_slot_retires_and_its_last_id_never_resolves_again", crate::dispose_eviction::an_exhausted_render_slot_retires_and_its_last_id_never_resolves_again),
+        ("dispose_eviction::a_clear_whose_destructor_panics_leaves_every_old_id_stale", crate::dispose_eviction::a_clear_whose_destructor_panics_leaves_every_old_id_stale),
+        ("dispose_eviction::a_destructor_that_panics_during_removal_still_commits_the_owner", crate::dispose_eviction::a_destructor_that_panics_during_removal_still_commits_the_owner),
         ("pipeline_scenarios::repeated_churn_cycles_stay_clean_and_generations_protect_every_round", crate::pipeline_scenarios::repeated_churn_cycles_stay_clean_and_generations_protect_every_round),
         ("structural_invalidation::pure_reorder_marks_layout_only", crate::structural_invalidation::pure_reorder_marks_layout_only),
     ];

@@ -201,6 +201,12 @@ impl NodeSlab {
         }
     }
 
+    /// The slot the next insert takes, if one is free.
+    #[cfg(any(test, feature = "testing"))]
+    pub(super) fn free_head(&self) -> Option<usize> {
+        self.free_head.map(|head| head as usize)
+    }
+
     /// Takes the exclusive borrow for a layout walk.
     pub(super) fn lease(&mut self) -> SlabLease<'_> {
         SlabLease {

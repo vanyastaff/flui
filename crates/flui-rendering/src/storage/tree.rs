@@ -780,6 +780,19 @@ impl RenderTree {
         count
     }
 
+    /// Ages the slot the next insert takes to the last generation an id can
+    /// carry, so a test reaches generation exhaustion without `u32::MAX`
+    /// removals. `false` when no slot is free.
+    #[doc(hidden)]
+    #[cfg(any(test, feature = "testing"))]
+    pub fn age_next_free_slot_for_test(&mut self) -> bool {
+        let Some(head) = self.nodes.free_head() else {
+            return false;
+        };
+        self.generations[head] = core::num::NonZeroU32::MAX;
+        true
+    }
+
     /// Clears all nodes from the tree.
     ///
     /// Bumps every slot generation so ALL outstanding ids become stale —
@@ -1198,6 +1211,29 @@ mod tests {
         assert!(!lease.is_child_of(child, root));
         assert!(lease.node(reused).is_some());
         assert!(lease.is_child_of(reused, root));
+    }
+
+    #[test]
+    fn lease_resolves_no_id_of_a_retired_slot() {
+        let mut tree = RenderTree::new();
+        let parent = tree.insert_box(make_leaf());
+        let first = tree.insert_box_child(parent, make_leaf()).expect("first");
+        drop(tree.remove_shallow(first).expect("first removed"));
+        assert!(tree.age_next_free_slot_for_test(), "a slot is free");
+        let last = tree.insert_box_child(parent, make_leaf()).expect("last");
+        let removed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            tree.remove_shallow(last).is_some()
+        }));
+        let next = tree.insert_box_child(parent, make_leaf()).expect("next");
+
+        let lease = tree.lease();
+        assert!(lease.node(last).is_none(), "the last id names no node");
+        assert!(!lease.is_child_of(last, parent));
+        assert!(!lease.try_enter(last), "the last id claims nothing");
+        assert!(!lease.is_in_flight(last));
+        assert!(lease.node(next).is_some());
+        drop(lease);
+        assert!(matches!(removed, Ok(true)), "the last id is removed");
     }
 
     /// Minimal leaf stub — concrete objects live in `flui_objects`.

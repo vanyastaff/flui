@@ -1463,8 +1463,38 @@ mod tests {
                     "unmounting_an_element_releases_what_it_owned_and_its_reads",
                     unmounting_an_element_releases_what_it_owned_and_its_reads as fn(),
                 ),
+                (
+                    "a_signal_slot_at_its_last_generation_is_retired_not_reused",
+                    a_signal_slot_at_its_last_generation_is_retired_not_reused as fn(),
+                ),
             ],
         );
+    }
+
+    fn a_signal_slot_at_its_last_generation_is_retired_not_reused() {
+        let (r, _) = graph_with_inbox();
+        let first = r.signal(1u8);
+        let index = first.slot().index();
+        r.release(first.slot());
+        r.inner.borrow_mut().nodes[index as usize].generation = u32::MAX - 1;
+        let last = r.signal(2u8);
+        assert_eq!(last.slot().index(), index, "the freed slot is taken again");
+        r.release(last.slot());
+
+        let next = r.signal(3u8);
+        assert_ne!(
+            next.slot().index(),
+            index,
+            "a slot at its last generation is never handed out again"
+        );
+        assert!(matches!(
+            first.peek(&r, |v| *v),
+            Err(SignalError::Released { .. })
+        ));
+        assert!(matches!(
+            last.peek(&r, |v| *v),
+            Err(SignalError::Released { .. })
+        ));
     }
 
     fn releasing_a_slot_from_its_panicking_update_remains_authoritative() {
