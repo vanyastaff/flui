@@ -49,6 +49,8 @@
 //   u32  _pad[3]   → 12 bytes padding (total block = 16 bytes, align 16 ✓)
 //
 // Rust side: `GammaUniform { direction: u32, _pad: [u32; 3] }` = 16 bytes.
+import package::color_filter::filter_gamma;
+
 struct GammaUniforms {
     /// Transfer direction: 0 = SrgbToLinear, 1 = LinearToSrgb.
     direction: u32,
@@ -87,8 +89,6 @@ fn vs_main(@builtin(vertex_index) vi: u32) -> VertexOutput {
     out.uv       = vec2<f32>(us[vi], vs[vi]);
     return out;
 }
-
-#import color_filter::filter_gamma
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
