@@ -9,7 +9,10 @@ use std::task::{Wake, Waker};
 use std::time::Duration;
 
 use flui_protocol::version::PROTOCOL_VERSION;
-use flui_protocol::{ActParams, ActionName, AppInfo, Locator, Target};
+use flui_protocol::{
+    ActParams, ActionName, ActionSequence, AppInfo, InputParams, InputSource, Locator,
+    LogicalPoint, PointerAction, PointerButton, PointerDevice, Target, WindowId,
+};
 use flui_runtime::agent::{Limits, Refused, Service, ServiceConfig, Session, Status};
 use flui_testing::{HeadlessDevAgent, HeadlessHost, HeadlessWindow};
 use flui_view::Signal;
@@ -491,4 +494,99 @@ fn a_subscription_streams_the_windows_events_as_it_publishes_them() {
             "a {kind} event follows the press's frame: {events:?}"
         );
     }
+}
+
+/// What a connection's injected input holds is the connection's: it stays down between calls,
+/// and the connection's going lets it go, as a release would.
+#[test]
+fn input_a_connection_holds_is_let_go_when_it_goes() {
+    let service = service(Limits::default(), None);
+    let mut agent = HeadlessDevAgent::attach(Served(service.clone()));
+    let mut host = HeadlessHost::new(HeadlessWindow::new(200, 200)).with_dev_agent(&mut agent);
+    let seen = Arc::new(parking_lot::Mutex::new(Vec::new()));
+    let log = |name: &'static str| {
+        let seen = Arc::clone(&seen);
+        move |_: &mut flui_view::EventCx<'_>, _: flui_interaction::PointerDispatch<'_>| {
+            seen.lock().push(name);
+        }
+    };
+    host.attach(
+        &flui_widgets::Listener::new()
+            .behavior(flui_rendering::hit_testing::HitTestBehavior::Opaque)
+            .on_pointer_down(log("down"))
+            .on_pointer_up(log("up"))
+            .on_pointer_cancel(log("cancel"))
+            .child(flui_widgets::SizedBox::new(200.0, 200.0)),
+    )
+    .expect("mount");
+    let _ = host.pump(Duration::from_millis(16));
+    let waker = Waker::from(Arc::new(Wakes::default()));
+    let now = Instant::now();
+    let (mut session, welcome) = greeted_as(&service, now, &waker, None);
+    for method in ["input.inject", "input.release"] {
+        assert!(
+            welcome["hello"]["capabilities"]["methods"]
+                .as_array()
+                .is_some_and(|methods| methods.contains(&json!(method))),
+            "the hello lists {method}: {welcome}"
+        );
+    }
+
+    session.receive(
+        &line(&json!({ "id": 1, "method": "windows.list", "params": {} })),
+        now,
+    );
+    session.poll(now, &waker);
+    let listed = transmitted(&mut session);
+    let window = serde_json::from_value::<WindowId>(listed[0]["result"]["windows"][0].clone())
+        .expect("the window's id");
+    let press = InputParams::new(
+        window,
+        ActionSequence::new(vec![InputSource::Pointer {
+            id: "finger".to_owned(),
+            device: PointerDevice::Touch,
+            actions: vec![
+                PointerAction::Move {
+                    to: LogicalPoint::new(50.0, 50.0),
+                    duration_ms: 0,
+                    pressure: None,
+                },
+                PointerAction::Down {
+                    button: PointerButton::Primary,
+                    pressure: None,
+                },
+            ],
+        }]),
+    );
+    session.receive(
+        &line(&json!({ "id": 2, "method": "input.inject", "params": press })),
+        now,
+    );
+    let mut answer = Vec::new();
+    for _ in 0..10 {
+        session.poll(now, &waker);
+        answer = transmitted(&mut session);
+        if !answer.is_empty() {
+            break;
+        }
+        let _ = host.pump(Duration::from_millis(16));
+    }
+    assert_eq!(answer.len(), 1, "the press answers: {answer:?}");
+    assert_eq!(answer[0]["result"]["via"], "synthetic", "{answer:?}");
+    for _ in 0..3 {
+        let _ = host.pump(Duration::from_millis(16));
+    }
+    assert_eq!(
+        *seen.lock(),
+        ["down"],
+        "the contact stays down between calls"
+    );
+
+    drop(session);
+    let _ = host.pump(Duration::from_millis(16));
+    assert_eq!(
+        *seen.lock(),
+        ["down", "cancel"],
+        "the connection's going let its contact go"
+    );
 }

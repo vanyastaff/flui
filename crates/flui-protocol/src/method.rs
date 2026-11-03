@@ -157,7 +157,6 @@ macro_rules! addressed_by_window_field {
 addressed_by_window_field!(
     crate::audit::AuditParams,
     crate::capture::CaptureParams,
-    crate::input::InputParams,
     crate::input::JournalParams,
     crate::inspect::InspectParams,
     crate::motion::MotionParams,
@@ -168,6 +167,17 @@ addressed_by_window_field!(
     crate::wait::FramesParams,
     crate::wait::SettledParams,
 );
+
+impl Addressed for crate::input::InputParams {
+    fn window(&self) -> Option<WindowId> {
+        Some(self.window)
+    }
+
+    /// The input plays over its span before the answer.
+    fn holds_for(&self) -> Duration {
+        self.actions.span()
+    }
+}
 
 impl Addressed for crate::act::ActionabilityParams {
     fn window(&self) -> Option<WindowId> {

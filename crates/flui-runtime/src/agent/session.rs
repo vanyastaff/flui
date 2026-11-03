@@ -18,7 +18,7 @@ use serde::Serialize;
 use serde_json::Value;
 use web_time::Instant;
 
-use super::dispatch::{self, Admitted, Running, Subscriptions};
+use super::dispatch::{self, Admitted, Leases, Running, Subscriptions};
 use super::service::{Shared, Taken};
 
 /// What the service writes: a result is the method's output as a JSON value.
@@ -100,6 +100,8 @@ pub struct Session {
     waiting: VecDeque<Admitted>,
     running: Option<Running>,
     subscriptions: Subscriptions,
+    /// Its input leases: what it injected stays held until it releases it or goes.
+    leases: Leases,
     outgoing: VecDeque<Outgoing>,
     /// Answers in `outgoing`.
     unsent_answers: usize,
@@ -123,6 +125,7 @@ impl Session {
             waiting: VecDeque::new(),
             running: None,
             subscriptions: Subscriptions::default(),
+            leases: Leases::default(),
             outgoing: VecDeque::new(),
             unsent_answers: 0,
             retry_at: None,
@@ -234,6 +237,7 @@ impl Session {
                 self.running = Some(dispatch::start(
                     &self.shared,
                     &mut self.subscriptions,
+                    &mut self.leases,
                     admitted,
                     now,
                 ));
@@ -481,11 +485,13 @@ impl Session {
         self.outgoing.push_back(Outgoing { bytes, answer });
     }
 
-    /// Lets go of every request and subscription: the owners forget what they hold for them.
+    /// Lets go of every request, subscription and input lease: the owners forget what they hold
+    /// for them, and let go the input the connection holds.
     fn drop_requests(&mut self) {
         self.waiting.clear();
         self.running = None;
         self.subscriptions = Subscriptions::default();
+        self.leases = Leases::default();
         self.retry_at = None;
     }
 

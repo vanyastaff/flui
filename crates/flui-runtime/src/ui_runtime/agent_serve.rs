@@ -18,16 +18,18 @@ use flui_foundation::PresentationId;
 use flui_protocol::method::{self, Method, WindowMethod};
 use flui_protocol::{
     ActOutcome, ActParams, ActionRequest, ActionabilityParams, AnnouncementJournal,
-    AnnouncementsParams, InspectParams, InspectReading, LocateParams, Locator, Matches,
-    MotionParams, MotionState, Pick, ReadParams, Target, Tree, WaitOutcome, WaitParams, WindowId,
+    AnnouncementsParams, InputParams, InputPath, InspectParams, InspectReading, LocateParams,
+    Locator, Matches, MotionParams, MotionState, Pick, ReadParams, Released, Target, Tree,
+    WaitOutcome, WaitParams, WindowId, WindowParams,
 };
-use flui_view::__runtime::{Reply, WindowCall};
+use flui_view::__runtime::{LeaseId, Reply, WindowCall};
 
 use super::UiRuntime;
 use super::agent::{
     self, AgentError, IssuedHandles, ReplySender, Served, record_issued, record_issued_matches,
     record_issued_outcome, record_issued_wait, send_reply,
 };
+use super::agent_input;
 use super::agent_inspect::InspectTarget;
 use super::commands::DrainReport;
 use crate::presentation::PresentationState;
@@ -72,6 +74,8 @@ pub(super) struct ServeCx<'a, T> {
     /// A panic a step caught and handed back instead of unwinding (the hit-test's): the first
     /// failure, resumed once the request is answered.
     pub(super) caught: Option<Box<dyn std::any::Any + Send>>,
+    /// The input lease the call was asked through, if any.
+    pub(super) lease: Option<LeaseId>,
     /// The owner's frame is woken once the answer is sent.
     wake_after: bool,
 }
@@ -113,6 +117,7 @@ impl UiRuntime {
         &self,
         presentation: PresentationId,
         params: M::Params,
+        lease: Option<LeaseId>,
         reply: Reply<M::Output>,
         report: &mut DrainReport,
     ) {
@@ -132,6 +137,7 @@ impl UiRuntime {
             issued,
             if_panics: PanicAnswer(RefCell::new(AgentError::Panicked)),
             caught: None,
+            lease,
             wake_after: false,
         };
         #[expect(
@@ -196,11 +202,12 @@ impl UiRuntime {
     ) {
         macro_rules! dispatch {
             ($($ty:ident = $name:literal, $effect:ident, $tier:ident, $params:ty => $output:ty;)+) => {{
+                let lease = call.lease();
                 $(
                     let call = match call.open::<method::$ty>() {
                         Ok((params, reply)) => {
                             return self.run_window_method::<method::$ty>(
-                                presentation, params, reply, report,
+                                presentation, params, lease, reply, report,
                             );
                         }
                         Err(call) => call,
@@ -249,9 +256,7 @@ not_answered!(
     AuditA11y,
     CapturePresented,
     CaptureRendered,
-    InputInject,
     InputJournal,
-    InputRelease,
     PerfStart,
     PerfStop,
     WaitFrames,
@@ -268,6 +273,54 @@ impl Serve for method::SemanticsRead {
         let query = params.query;
         let issued = query.root.is_none_or(|root| cx.was_issued(root));
         Answer::Now(agent::read_tree(cx.state, cx.window, &query, issued))
+    }
+}
+
+impl Serve for method::InputInject {
+    fn record(outcome: &ActOutcome, issued: &mut IssuedHandles) {
+        record_issued_outcome(outcome, issued);
+    }
+
+    /// Plays the actions through the call's lease, one tick per frame boundary, and answers once
+    /// a frame has passed since the last one, with the reading the call asks for.
+    fn serve(cx: &mut ServeCx<'_, ActOutcome>, params: InputParams) -> Answer<ActOutcome> {
+        let Some(lease) = cx.lease else {
+            return Answer::Now(Err(AgentError::InvalidArgument {
+                reason: "input.inject is asked through an input lease",
+            }));
+        };
+        if params
+            .via
+            .is_some_and(|via| via.require && via.prefer != InputPath::Synthetic)
+        {
+            return Answer::Now(Err(AgentError::InvalidArgument {
+                reason: "input.inject is synthetic input; another path is input.perform's",
+            }));
+        }
+        let plan = match agent_input::plan(&params.actions) {
+            Ok(plan) => plan,
+            Err(error) => return Answer::Now(Err(error)),
+        };
+        let before = match agent::tree_before(cx.state, cx.window, params.snapshot) {
+            Ok(before) => before,
+            Err(error) => return Answer::Now(Err(error)),
+        };
+        cx.runtime
+            .queue_injection(cx.state, lease, plan, params.snapshot, before, cx.park());
+        Answer::Later
+    }
+}
+
+impl Serve for method::InputRelease {
+    /// Lets go what the call's lease holds once the work queued before it has run.
+    fn serve(cx: &mut ServeCx<'_, Released>, _: WindowParams) -> Answer<Released> {
+        let Some(lease) = cx.lease else {
+            return Answer::Now(Err(AgentError::InvalidArgument {
+                reason: "input.release is asked through an input lease",
+            }));
+        };
+        cx.runtime.queue_release(cx.state, lease, cx.park());
+        Answer::Later
     }
 }
 

@@ -607,6 +607,9 @@ impl UiRuntime {
              never inside the frame transaction"
         );
         let mut report = DrainReport::default();
+        // Counted before the commands are: a lease let go is released after the calls asked
+        // through it, which were enqueued before it was let go.
+        let released = self.count_released_leases();
         // Bound the pass by the pre-read length: `try_iter` is NOT a
         // snapshot — it keeps yielding messages that arrive during
         // iteration, so an unbounded loop could be extended indefinitely by
@@ -835,6 +838,10 @@ impl UiRuntime {
                     report.invoked += 1;
                 }
             }
+        }
+        // The input of the leases let go is released, every window's, before a panic continues.
+        if let Some(payload) = self.release_counted_leases(released) {
+            self.rearm_after_command_panic(payload);
         }
         // Then what providers posted back: settled completions run their
         // waiting closures here, at the owner turn, never on the thread that
