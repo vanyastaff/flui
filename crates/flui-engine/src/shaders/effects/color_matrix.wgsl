@@ -48,6 +48,8 @@
 // Because WGSL `mat4x4<f32>` is column-major, the Rust `[[f32;4];4]` blocks are
 // read as columns.  Packing column i of M into m[i] means WGSL's `u.m` equals M,
 // and `u.m * straight` computes the correct row dot-products.
+import package::color_filter::filter_matrix;
+
 struct ColorMatrixUniforms {
     /// Columns 0..3 of the 4×4 weight matrix M.
     /// WGSL reads each [f32;4] block as a column, so u.m == M.
@@ -87,8 +89,6 @@ fn vs_main(@builtin(vertex_index) vi: u32) -> VertexOutput {
     out.uv       = vec2<f32>(us[vi], vs[vi]);
     return out;
 }
-
-#import color_filter::filter_matrix
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {

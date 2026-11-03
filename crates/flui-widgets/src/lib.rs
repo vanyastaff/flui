@@ -278,8 +278,8 @@ pub use paint::{
 };
 pub use physical_model::{PhysicalModel, PhysicalShape};
 pub use reorderable::{
-    Reorder, ReorderCause, ReorderHandles, ReorderIntent, ReorderPreview, ReorderableItem,
-    ReorderableList, ReorderableListState,
+    Reorder, ReorderCause, ReorderHandles, ReorderIntent, ReorderPreview, ReorderableGrid,
+    ReorderableGridState, ReorderableItem, ReorderableList, ReorderableListState,
 };
 pub use router::{
     Routable, RouteParseError, RoutePath, Router, RouterError, RouterHandle, RouterState,

@@ -1660,8 +1660,9 @@ fn a_revision_is_named_only_by_the_document_that_stored_it() {
 }
 
 /// A set whose replaced value panics in its drop while the frame hook its
-/// announcement wakes panics too is contained: the drop's panic reaches the
-/// caller, and the edit is stored and told.
+/// announcement wakes panics too is contained: the hook's panic, the first,
+/// reaches the caller, the replaced value is still destroyed, and the edit is
+/// stored and told.
 #[test]
 fn a_set_whose_replaced_value_and_frame_hook_both_panic_is_contained() {
     let storage = MemoryStorage::new();
@@ -1688,9 +1689,10 @@ fn a_set_whose_replaced_value_and_frame_hook_both_panic_is_contained() {
     let failure = edit.expect_err("a panic reaches the caller");
     assert_eq!(
         flui_foundation::panic::payload_text(failure.as_ref()),
-        Some("the replaced value's drop panics"),
-        "the drop's panic is raised, the hook's kept"
+        Some("frame hook failure"),
+        "the first failure is raised, the drop's discarded behind it"
     );
+    assert!(!armed.get(), "the replaced value was destroyed");
 
     assert!(notes.set(Note("edited again".into())).is_ok());
     laid.pump();
@@ -1698,6 +1700,50 @@ fn a_set_whose_replaced_value_and_frame_hook_both_panic_is_contained() {
     laid.pump();
     assert_eq!(notes.status(), SaveStatus::Clean);
     assert_eq!(heard.borrow().last(), Some(&SaveStatus::Clean));
+}
+
+/// A set whose encode panics, while the frame hook its failure wakes panics
+/// and the refused value's drop panics too, is contained: the hook's panic
+/// reaches the caller, the refused value is still destroyed, and the codec's
+/// failure is recorded.
+#[test]
+fn a_refused_value_whose_drop_panics_behind_a_frame_hook_is_contained() {
+    let storage = MemoryStorage::new();
+    let (mut laid, opened) = mount_opened(&storage);
+    let notes = opened.document;
+    let driver = opened.driver.expect("a hosted presentation has a driver");
+    assert!(drive(&mut laid, notes.load()).is_ok());
+    laid.pump();
+
+    let armed = Rc::new(Cell::new(true));
+    let fire = Rc::clone(&armed);
+    ON_NOTE_DROP.with(|hook| {
+        *hook.borrow_mut() = Some(Box::new(move || {
+            assert!(!fire.replace(false), "the refused value's drop panics");
+        }));
+    });
+    driver.set_request_frame(|| panic!("frame hook failure"));
+    let edit = catch_unwind(AssertUnwindSafe(|| notes.set(Note("panic".into()))));
+    driver.set_request_frame(|| {});
+    ON_NOTE_DROP.with(|hook| hook.borrow_mut().take());
+    let failure = edit.expect_err("a panic reaches the caller");
+    assert_eq!(
+        flui_foundation::panic::payload_text(failure.as_ref()),
+        Some("frame hook failure"),
+        "the first failure is raised, the drop's discarded behind it"
+    );
+    assert!(!armed.get(), "the refused value was destroyed");
+    assert!(
+        matches!(
+            notes.status(),
+            SaveStatus::Failed(PersistError::Panicked {
+                during: CodecStep::Encode,
+                ..
+            })
+        ),
+        "{:?}",
+        notes.status()
+    );
 }
 
 /// Mount [`TwoOpeners`] over `storage` and load both documents.

@@ -43,13 +43,13 @@ impl WindowShell {
     /// do (`wp_presentation_time`, DXGI statistics): the native hosts read
     /// them, and this one does not. Nor does it report the occlusion of a
     /// touch keyboard, which Windows shows on a tablet; no desktop shell
-    /// reserves screen edges for system gestures.
+    /// reserves screen edges for system gestures. A title bar of the
+    /// application's is a window without decorations on every shell.
     pub(super) const fn capabilities(self) -> WindowCapabilities {
         self.shell_capabilities()
             .without_presentation_feedback(flui_platform::CapabilityAbsence::NotYetOnThisHost)
             .without_keyboard_inset(flui_platform::CapabilityAbsence::NotYetOnThisHost)
             .without_system_gestures(flui_platform::CapabilityAbsence::NotOnThisPlatform)
-            .without_app_title_bar(flui_platform::CapabilityAbsence::NotYetOnThisHost)
     }
 
     const fn shell_capabilities(self) -> WindowCapabilities {
@@ -429,8 +429,7 @@ mod tests {
             WindowCapabilities::ALL
                 .without_presentation_feedback(flui_platform::CapabilityAbsence::NotYetOnThisHost)
                 .without_keyboard_inset(flui_platform::CapabilityAbsence::NotYetOnThisHost)
-                .without_system_gestures(flui_platform::CapabilityAbsence::NotOnThisPlatform)
-                .without_app_title_bar(flui_platform::CapabilityAbsence::NotYetOnThisHost),
+                .without_system_gestures(flui_platform::CapabilityAbsence::NotOnThisPlatform),
             "winit reports no presentation or keyboard on any shell"
         );
 
@@ -443,7 +442,7 @@ mod tests {
             ("sets_constraints", wayland.sets_constraints, true),
             ("sets_resizable", wayland.sets_resizable, true),
             ("sets_frame", wayland.sets_frame, true),
-            ("app_title_bar", wayland.app_title_bar, false),
+            ("app_title_bar", wayland.app_title_bar, true),
             ("minimizes", wayland.minimizes, true),
             ("maximizes", wayland.maximizes, true),
             ("enters_fullscreen", wayland.enters_fullscreen, true),
@@ -657,9 +656,9 @@ mod tests {
         let table = [
             ("system", WindowFrame::System, Size::new(998.0, 670.0)),
             (
-                "app title bar, which winit cannot take",
+                "app title bar, which winit draws without decorations",
                 WindowFrame::AppTitleBar(AppTitleBar::new()),
-                Size::new(998.0, 670.0),
+                Size::new(1000.0, 700.0),
             ),
             ("none", WindowFrame::None, Size::new(1000.0, 700.0)),
         ];

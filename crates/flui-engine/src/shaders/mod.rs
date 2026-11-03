@@ -6,6 +6,23 @@
 //! (`effects/*.wgsl`, the remaining `common/*.wgsl`) stay
 //! `include_str!`-loaded by their consumers, including `effects_pipeline.rs`
 //! for the shadow pipeline.
+//!
+//! A shader that imports a shared module (`import package::color_filter::…;`)
+//! is not read from here at all: `build.rs` resolves it with WESL and its
+//! consumer includes the result through [`composed_wgsl!`].
+
+/// The plain WGSL `build.rs` composed from the WESL module at `$path` under
+/// `src/shaders/` (`"effects/mode"` is `effects/mode.wgsl`), as a `&'static str`
+/// literal, so it also nests in `concat!`.
+///
+/// Only the modules `build.rs` lists in `WESL_ENTRIES` exist; any other path
+/// fails to compile with a missing-file error.
+macro_rules! composed_wgsl {
+    ($path:literal) => {
+        include_str!(concat!(env!("OUT_DIR"), "/shaders/", $path, ".wgsl"))
+    };
+}
+pub(crate) use composed_wgsl;
 
 // Coverage-correct assemblies
 //
@@ -166,13 +183,13 @@ pub(crate) const TEXTURE_ISOLATION: &str = concat!(
 /// Decoded source filtering preserves floating channels until composition.
 pub(crate) const TEXTURE_FILTERED: &str = concat!(
     include_str!("common/clip.wgsl"),
-    include_str!("image_source_filter.wgsl"),
+    composed_wgsl!("image_source_filter"),
     include_str!("texture_instanced.wgsl"),
     "\n@fragment fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> { return folded_image(input); }\n"
 );
 pub(crate) const TEXTURE_FILTERED_ISOLATION: &str = concat!(
     include_str!("common/clip.wgsl"),
-    include_str!("image_source_filter.wgsl"),
+    composed_wgsl!("image_source_filter"),
     include_str!("texture_instanced.wgsl"),
     include_str!("texture_isolation.wgsl")
 );

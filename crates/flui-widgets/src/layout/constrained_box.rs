@@ -3,7 +3,7 @@
 use flui_objects::RenderConstrainedBox;
 use flui_rendering::constraints::BoxConstraints;
 use flui_rendering::protocol::BoxProtocol;
-use flui_view::{Child, IntoView, RenderView, impl_render_view};
+use flui_view::{Child, CreationSite, IntoView, RenderView, impl_render_view};
 
 /// Imposes additional [`BoxConstraints`] on its child.
 ///
@@ -13,14 +13,17 @@ use flui_view::{Child, IntoView, RenderView, impl_render_view};
 pub struct ConstrainedBox {
     constraints: BoxConstraints,
     child: Child,
+    site: CreationSite,
 }
 
 impl ConstrainedBox {
     /// Create a `ConstrainedBox` with the given additional constraints.
+    #[track_caller]
     pub fn new(constraints: BoxConstraints) -> Self {
         Self {
             constraints,
             child: Child::empty(),
+            site: CreationSite::here(),
         }
     }
 
@@ -56,4 +59,4 @@ impl RenderView for ConstrainedBox {
     flui_view::single_child_view_children!();
 }
 
-impl_render_view!(ConstrainedBox);
+impl_render_view!(ConstrainedBox, site = site);

@@ -13,6 +13,7 @@ mod collapsing_header;
 mod common;
 mod context_menu_area;
 mod contracts;
+mod creation_site;
 mod frame_partitions;
 mod gesture_alternatives;
 mod gesture_settings;
@@ -23,6 +24,7 @@ mod nested_scroll;
 mod pointer_vocabulary;
 mod refresh_indicator;
 mod reorderable;
+mod reorderable_grid;
 mod touchpad_pan;
 
 #[path = "absorb_pointer.rs"]

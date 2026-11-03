@@ -282,6 +282,7 @@ restoration of ADR-0093 step 8; web history, query and fragment stay there.
   `a_revision_is_named_only_by_the_document_that_stored_it`,
   `a_reload_whose_replaced_value_panics_in_drop_is_told`,
   `a_set_whose_replaced_value_and_frame_hook_both_panic_is_contained`,
+  `a_refused_value_whose_drop_panics_behind_a_frame_hook_is_contained`,
   `unmounting_the_opening_state_drops_the_listeners`.
 - `FileStore`'s own tests: the atomic replacement, the lock and `Conflict`, a copy aside under the
   first free name (`copy_aside_keeps_the_value_under_the_first_free_name`), the classification of

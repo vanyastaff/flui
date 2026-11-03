@@ -148,9 +148,8 @@ impl ColorMatrixPipeline {
 
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Color Matrix Shader"),
-            source: crate::shader_composer::compose_filter_shader(
-                include_str!("../shaders/effects/color_matrix.wgsl"),
-                "effects/color_matrix.wgsl",
+            source: wgpu::ShaderSource::Wgsl(
+                crate::shaders::composed_wgsl!("effects/color_matrix").into(),
             ),
         });
 

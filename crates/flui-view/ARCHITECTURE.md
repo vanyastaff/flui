@@ -680,6 +680,16 @@ as the method it was made for, and is answered on a `__runtime::Reply` the owner
 answer once. Params that address another window are refused `invalid_argument` before they
 are sent. Every failure is the protocol's `ErrorObject`, so a host relays it as it came.
 
+Nothing on the seam blocks to be read. `AgentAnswer::register` and `AgentEvents::register` keep
+one `std::task::Waker` each, the last registered, woken once: a reply wakes it after its answer is
+in the channel and when its last clone drops unsent, and an event queue after the event is
+queued and the hub's borrow released (`__runtime::WakeSlot`). A waker is cloned, woken and
+dropped with no lock held, and its panic is contained and traced, so the owner that sends goes
+on. There is no `impl Future`: an `.await` on the owner thread would wait for a drain that never
+comes (ADR-0288 §3). Pinned by the runtime's
+`a_conversation_answers_in_order_as_the_owner_drains_and_wakes_its_transport` and
+`a_subscription_streams_the_windows_events_as_it_publishes_them`.
+
 ### The element tree inspects itself; a view only describes its configuration
 
 `ElementTree` implements ADR-0242's `InspectTree` over `dyn ElementBase`. The tree names each

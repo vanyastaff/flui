@@ -25,10 +25,12 @@
 //! activation token names, is kept here too (`LastInput`): the input feature
 //! records it, the window feature reads it. A window's own frame reaches the
 //! input the same way (`FramePointer`): the window feature draws it, the
-//! input tells it what the pointer does over its surfaces. The clipboard
-//! binds `wl_data_device_manager` the same way and keeps a data device on each
-//! seat the input holds, which the loop hands it every turn
-//! (`WaylandClipboard`); it sets its selection under the last user input. Its
+//! input tells it what the pointer does over its surfaces. The seats' data
+//! devices are base code (`transfer::linux::wayland`): the loop feeds them the
+//! globals and the seats the input holds every turn. The clipboard
+//! (`WaylandClipboard`) reads and sets a seat's selection through them, under
+//! the last user input; drag and drop (`WaylandDrag`) hears the drags over the
+//! windows through them and tells the windows on the turn. Its
 //! windows are the window feature's (`window::linux::wayland`): the loop
 //! holds them as `LoopWindow`s and asks each to settle after every read, and
 //! the window feature implements the dispatch of its own protocol objects on
@@ -44,10 +46,10 @@ pub use event_loop::OutputName;
 pub(crate) use event_loop::ShownCursor;
 #[cfg(all(target_os = "linux", feature = "wayland"))]
 pub(crate) use event_loop::{
-    FramePointer, LastInput, LiveOutputs, LoopWaker, LoopWindow, MAX_OUTPUTS, OutputFacts,
-    PresentationTime, SeatText, SeatWindow, SeatWindowText, TextEvent, TextRecorder, TextWire,
-    WaylandClipboard, WaylandDisplays, WaylandHost, WaylandInput, WaylandLoop, WaylandState,
-    WindowSeed, WindowTable,
+    DragWindow, FramePointer, LastInput, LiveOutputs, LoopWaker, LoopWindow, MAX_OUTPUTS,
+    OutputFacts, PresentationTime, SeatText, SeatWindow, SeatWindowText, TextEvent, TextRecorder,
+    TextWire, WaylandClipboard, WaylandDisplays, WaylandDrag, WaylandHost, WaylandInput,
+    WaylandLoop, WaylandState, WindowSeed, WindowTable,
 };
 
 pub(crate) mod activation {
@@ -344,6 +346,7 @@ mod event_loop {
     use std::time::Duration;
 
     use cursor_icon::CursorIcon;
+    use flui_platform::data_transfer::DataTransferSource;
     use flui_platform::{
         CursorError, DisplayId, DisplaySnapshot, SessionEndAnswer, SessionEndPhase, SystemNotice,
         WindowId,
@@ -438,6 +441,11 @@ mod event_loop {
         /// The clipboard, made on the owner thread, which sets its selection
         /// under the user input `last_input` records last.
         fn clipboard(last_input: LastInput, devices: DataDevices) -> Arc<dyn WaylandClipboard>;
+
+        /// Drag and drop over the windows, made on the owner thread, hearing
+        /// the drags through `devices` and calling `wake` to have the loop send
+        /// what another thread asked of a drag.
+        fn drag(devices: DataDevices, wake: Box<dyn Fn() + Send + Sync>) -> Arc<dyn WaylandDrag>;
 
         /// The channel the loop's system notices take to the application.
         fn notices(app: &Arc<AppDelivery>) -> Arc<dyn NoticeChannel>;
@@ -734,6 +742,38 @@ mod event_loop {
         fn selection_offers_hint(&self) -> Option<bool>;
 
         /// The loop ends: let go of the devices and the selection.
+        fn release(&self);
+    }
+
+    /// A window as the drags over it reach it, from its open to its close.
+    pub(crate) struct DragWindow {
+        /// The window's identity.
+        pub(crate) id: WindowId,
+        /// Its `wl_surface`, which a drag enters.
+        pub(crate) surface: WlSurface,
+        /// What it hears a drag through.
+        pub(crate) delivery: Arc<WindowDelivery>,
+    }
+
+    /// What the loop and its windows ask of drag and drop: the drag
+    /// feature's (`drag::wayland`), which the table registers, and the
+    /// platform's one [`DataTransferSource`].
+    ///
+    /// Its windows' drags reach it through the seats' data devices, which
+    /// record them; [`Self::deliver`] tells the windows, with no lock of the
+    /// loop held.
+    pub(crate) trait WaylandDrag: DataTransferSource + Send + Sync {
+        /// A window opened: drags over it are offered to it from now on.
+        fn attach(&self, window: DragWindow);
+
+        /// The window `id` closed: a drag over it ends with nothing told.
+        fn detach(&self, id: WindowId);
+
+        /// Tell the windows what the drags over them did since the last
+        /// turn, and answer each drag's source.
+        fn deliver(&self);
+
+        /// The loop ends: the drags' offers and the windows go.
         fn release(&self);
     }
 
@@ -1343,6 +1383,9 @@ mod event_loop {
         /// The seats' input, which the window joins as it opens and leaves
         /// as it closes, and which shows its cursor.
         pub(crate) input: Arc<dyn WaylandInput>,
+        /// Drag and drop, which the window joins as it opens and leaves as it
+        /// closes.
+        pub(crate) drag: Arc<dyn WaylandDrag>,
         /// The loop's background work, on which a window's own frame has
         /// the host's fonts read once.
         pub(crate) executor: Arc<BackgroundExecutor>,
@@ -1381,6 +1424,7 @@ mod event_loop {
         input: Arc<dyn WaylandInput>,
         clipboard: Arc<dyn WaylandClipboard>,
         devices: DataDevices,
+        drag: Arc<dyn WaylandDrag>,
         notices: Arc<dyn NoticeChannel>,
         portal: PortalSlot,
         start_preferences: fn(&BackgroundExecutor, &Arc<OwnerSignal>) -> Arc<dyn LinuxPreferences>,
@@ -1526,6 +1570,17 @@ mod event_loop {
                     Ok(())
                 }))
             };
+            let drag = {
+                let waker = Arc::downgrade(&waker);
+                H::drag(
+                    devices.clone(),
+                    Box::new(move || {
+                        if let Some(waker) = waker.upgrade() {
+                            waker.wake();
+                        }
+                    }),
+                )
+            };
             let app = Arc::new(AppDelivery::new());
             Ok(Self {
                 protocol: WaylandProtocol {
@@ -1564,6 +1619,7 @@ mod event_loop {
                 displays: H::displays(),
                 input,
                 clipboard,
+                drag,
                 devices,
                 portal: PortalSlot::default(),
                 start_preferences: H::preferences,
@@ -1614,6 +1670,7 @@ mod event_loop {
                 notices: Arc::clone(&self.notices),
                 frames: self.frames.counter(),
                 input: Arc::clone(&self.input),
+                drag: Arc::clone(&self.drag),
                 executor: Arc::clone(&self.executor),
             })
         }
@@ -1778,6 +1835,9 @@ mod event_loop {
             // The application's selection is asked for its text here, at the
             // turn, not inside the dispatch that recorded the request.
             self.clipboard.deliver();
+            // The drags the devices recorded reach their windows, and each
+            // drag's source is answered, with no lock of the loop held.
+            self.drag.deliver();
             for window in self.windows.values() {
                 window.settle();
             }
@@ -1964,6 +2024,7 @@ mod event_loop {
             }
             self.input.release();
             self.clipboard.release();
+            self.drag.release();
             self.devices.release();
             let quit = self.app.quit_requested();
             self.app.release();
@@ -2112,6 +2173,15 @@ mod event_loop {
     impl host::Clipboard<WaylandLoop> for WaylandLoop {
         fn clipboard(owner: &WaylandLoop) -> Rc<dyn host::NativeClipboard> {
             Rc::new(Arc::clone(&owner.clipboard))
+        }
+    }
+
+    /// The drag position is the loop's: the drags over the windows, through
+    /// the drag the table registered, the platform's one data-transfer
+    /// source.
+    impl host::Drag<WaylandLoop> for WaylandLoop {
+        fn data_transfer(owner: &WaylandLoop) -> Arc<dyn DataTransferSource> {
+            Arc::clone(&owner.drag) as Arc<dyn DataTransferSource>
         }
     }
 

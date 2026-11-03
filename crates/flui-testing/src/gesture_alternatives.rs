@@ -416,7 +416,9 @@ impl<M: PartialEq + Debug + 'static> Run<'_, M> {
 
     /// Move focus to the node offering `label` as a custom action: by Tab,
     /// and when no Tab stop offers it, by the arrow keys from each stop, as
-    /// a list with roving focus is entered once and walked by its arrows.
+    /// a list or grid with roving focus is entered once and walked by its
+    /// arrows, onto the first node that offers it, the one the assistive
+    /// path invokes.
     fn focus_row(mounted: &mut Mounted<M>, label: &str) -> Option<()> {
         for _ in 0..MAX_TABS {
             press(mounted, &SingleActivator::named(NamedKey::Tab));
@@ -425,24 +427,49 @@ impl<M: PartialEq + Debug + 'static> Run<'_, M> {
                 return Some(());
             }
         }
+        let target = tree(mounted)?
+            .nodes()
+            .find(|node| offers(node, label))?
+            .id();
         for _ in 0..MAX_TABS {
             press(mounted, &SingleActivator::named(NamedKey::Tab));
             mounted.laid.pump();
-            let mut at = Self::focused(mounted);
-            for _ in 0..MAX_TABS {
-                press(mounted, &SingleActivator::named(NamedKey::ArrowDown));
-                mounted.laid.pump();
-                if Self::focus_offers(mounted, label)? {
-                    return Some(());
-                }
-                let now = Self::focused(mounted);
-                if now == at {
-                    break;
-                }
-                at = now;
+            if Self::walk_to(mounted, target) {
+                return Some(());
             }
         }
         None
+    }
+
+    /// Walk focus from where it is to `target` with the arrow keys: along a
+    /// row of a grid to its end, down a row, back along that row, and so on,
+    /// which in a list (whose cross-axis arrows move nothing) walks it down.
+    fn walk_to(mounted: &mut Mounted<M>, target: crate::a11y::NodeId) -> bool {
+        let mut along = NamedKey::ArrowRight;
+        for _ in 0..MAX_TABS {
+            for _ in 0..MAX_TABS {
+                let at = Self::focused(mounted);
+                if at == Some(target) {
+                    return true;
+                }
+                press(mounted, &SingleActivator::named(along));
+                mounted.laid.pump();
+                if Self::focused(mounted) == at {
+                    break;
+                }
+            }
+            let at = Self::focused(mounted);
+            press(mounted, &SingleActivator::named(NamedKey::ArrowDown));
+            mounted.laid.pump();
+            if Self::focused(mounted) == at {
+                return false;
+            }
+            along = match along {
+                NamedKey::ArrowRight => NamedKey::ArrowLeft,
+                _ => NamedKey::ArrowRight,
+            };
+        }
+        false
     }
 
     /// Whether the focused node offers `label` as a custom action.

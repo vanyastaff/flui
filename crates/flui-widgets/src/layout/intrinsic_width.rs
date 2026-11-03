@@ -2,7 +2,7 @@
 
 use flui_objects::RenderIntrinsicWidth;
 use flui_rendering::protocol::BoxProtocol;
-use flui_view::{Child, IntoView, RenderView, impl_render_view};
+use flui_view::{Child, CreationSite, IntoView, RenderView, impl_render_view};
 
 /// Sizes its child to the child's maximum intrinsic width.
 ///
@@ -21,15 +21,18 @@ pub struct IntrinsicWidth {
     /// query is rounded up to the nearest multiple before querying.
     step_height: Option<f64>,
     child: Child,
+    site: CreationSite,
 }
 
 impl IntrinsicWidth {
     /// Creates the widget with no step snapping.
+    #[track_caller]
     pub fn new() -> Self {
         Self {
             step_width: None,
             step_height: None,
             child: Child::empty(),
+            site: CreationSite::here(),
         }
     }
 
@@ -57,6 +60,7 @@ impl IntrinsicWidth {
 
 impl Default for IntrinsicWidth {
     fn default() -> Self {
+        // A trait fn cannot be `#[track_caller]`: the site is this line.
         Self::new()
     }
 }
@@ -86,4 +90,4 @@ impl RenderView for IntrinsicWidth {
     flui_view::single_child_view_children!();
 }
 
-impl_render_view!(IntrinsicWidth);
+impl_render_view!(IntrinsicWidth, site = site);

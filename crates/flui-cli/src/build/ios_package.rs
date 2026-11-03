@@ -492,6 +492,11 @@ pub(crate) async fn package_application(
         }
     }
     let output = ctx.output_dir.clone();
+    let app_privacy = ctx
+        .workspace_root
+        .join("platforms")
+        .join("ios")
+        .join(PRIVACY_MANIFEST);
     let cancel = Arc::new(AtomicU8::new(RUNNING));
     let _guard = CancelOnDrop(Arc::clone(&cancel));
     tokio::task::spawn_blocking(move || {
@@ -546,6 +551,34 @@ pub(crate) async fn package_application(
             "plutil",
             &["-convert".into(), "xml1".into(), info.into_os_string()],
         )?;
+        let declared = if app_privacy.is_file() {
+            let json = work.command(
+                "plutil",
+                &[
+                    "-convert".into(),
+                    "json".into(),
+                    "-o".into(),
+                    "-".into(),
+                    app_privacy.as_os_str().into(),
+                ],
+            )?;
+            Some(
+                serde_json::from_slice(&json)
+                    .map_err(|error| invalid(format!("{}: {error}", app_privacy.display())))?,
+            )
+        } else {
+            None
+        };
+        let privacy = staged.join(PRIVACY_MANIFEST);
+        fs::write(
+            &privacy,
+            serde_json::to_vec(&privacy_manifest(declared)?)
+                .map_err(|error| invalid(error.to_string()))?,
+        )?;
+        work.command(
+            "plutil",
+            &["-convert".into(), "xml1".into(), privacy.into_os_string()],
+        )?;
         let size_bytes = size(&staged)?;
         commit(&mut work, &staged, &parent.join(filename))?;
         Ok(FinalArtifacts {
@@ -556,6 +589,106 @@ pub(crate) async fn package_application(
     .await
     .map_err(|error| invalid(format!("application packaging worker failed: {error}")))?
 }
+/// The privacy manifest's file name, at the bundle root and in
+/// `platforms/ios/` when the application declares its own.
+const PRIVACY_MANIFEST: &str = "PrivacyInfo.xcprivacy";
+
+/// The privacy-sensitive APIs FLUI's own code calls on iOS, each with Apple's
+/// approved reason (App Store Connect refuses an upload whose binary calls
+/// one undeclared):
+///
+/// - system boot time, `NSProcessInfo.systemUptime`, read to place UIKit
+///   event timestamps on the frame clock (`35F9.1`: time elapsed between
+///   events within the app);
+/// - file timestamps, `stat`/`fstat`, which `std::fs` calls for every file
+///   read and `flui-assets` for asset metadata (`C617.1`: files inside the
+///   app's container).
+const FLUI_ACCESSED_APIS: [(&str, &str); 2] = [
+    ("NSPrivacyAccessedAPICategorySystemBootTime", "35F9.1"),
+    ("NSPrivacyAccessedAPICategoryFileTimestamp", "C617.1"),
+];
+
+/// The bundle's `PrivacyInfo.xcprivacy`: FLUI's accessed APIs, joined with
+/// the application's own `platforms/ios/PrivacyInfo.xcprivacy` when it has
+/// one. Tracking and collected data are the application's to declare: its
+/// values stand, and without them the manifest declares none. Accessed APIs
+/// are joined per category, the reasons of both kept.
+fn privacy_manifest(app: Option<serde_json::Value>) -> BuildResult<serde_json::Value> {
+    use serde_json::{Map, Value};
+    let mut manifest = match app {
+        None => Map::new(),
+        Some(Value::Object(map)) => map,
+        Some(_) => {
+            return Err(invalid(format!(
+                "platforms/ios/{PRIVACY_MANIFEST} is not a dictionary"
+            )));
+        }
+    };
+    manifest
+        .entry("NSPrivacyTracking")
+        .or_insert(Value::Bool(false));
+    for key in ["NSPrivacyTrackingDomains", "NSPrivacyCollectedDataTypes"] {
+        manifest
+            .entry(key)
+            .or_insert_with(|| Value::Array(Vec::new()));
+    }
+    let mut reasons: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for (category, reason) in FLUI_ACCESSED_APIS {
+        reasons
+            .entry(category.to_owned())
+            .or_default()
+            .insert(reason.to_owned());
+    }
+    let declared = match manifest.remove("NSPrivacyAccessedAPITypes") {
+        None => Vec::new(),
+        Some(Value::Array(entries)) => entries,
+        Some(_) => {
+            return Err(invalid(format!(
+                "platforms/ios/{PRIVACY_MANIFEST}: NSPrivacyAccessedAPITypes is not an array"
+            )));
+        }
+    };
+    for entry in declared {
+        let category = entry["NSPrivacyAccessedAPIType"].as_str().ok_or_else(|| {
+            invalid(format!(
+                "platforms/ios/{PRIVACY_MANIFEST}: an accessed API names no \
+                 NSPrivacyAccessedAPIType"
+            ))
+        })?;
+        let listed = entry["NSPrivacyAccessedAPITypeReasons"]
+            .as_array()
+            .ok_or_else(|| {
+                invalid(format!(
+                    "platforms/ios/{PRIVACY_MANIFEST}: {category} lists no \
+                     NSPrivacyAccessedAPITypeReasons"
+                ))
+            })?;
+        let set = reasons.entry(category.to_owned()).or_default();
+        for reason in listed {
+            let reason = reason.as_str().ok_or_else(|| {
+                invalid(format!(
+                    "platforms/ios/{PRIVACY_MANIFEST}: a reason of {category} is not a string"
+                ))
+            })?;
+            set.insert(reason.to_owned());
+        }
+    }
+    let accessed = reasons
+        .into_iter()
+        .map(|(category, reasons)| {
+            serde_json::json!({
+                "NSPrivacyAccessedAPIType": category,
+                "NSPrivacyAccessedAPITypeReasons": reasons.into_iter().collect::<Vec<_>>(),
+            })
+        })
+        .collect::<Vec<Value>>();
+    manifest.insert(
+        "NSPrivacyAccessedAPITypes".to_owned(),
+        Value::Array(accessed),
+    );
+    Ok(Value::Object(manifest))
+}
+
 /// The `Info.plist` of an application bundle.
 ///
 /// `CADisableMinimumFrameDurationOnPhone` lets an iPhone with a ProMotion
@@ -731,9 +864,119 @@ mod tests {
             );
         }
     }
+    fn accessed(manifest: &serde_json::Value) -> Vec<(String, Vec<String>)> {
+        manifest["NSPrivacyAccessedAPITypes"]
+            .as_array()
+            .expect("accessed APIs")
+            .iter()
+            .map(|entry| {
+                (
+                    entry["NSPrivacyAccessedAPIType"]
+                        .as_str()
+                        .expect("category")
+                        .to_owned(),
+                    entry["NSPrivacyAccessedAPITypeReasons"]
+                        .as_array()
+                        .expect("reasons")
+                        .iter()
+                        .map(|reason| reason.as_str().expect("reason").to_owned())
+                        .collect(),
+                )
+            })
+            .collect()
+    }
+    fn privacy_manifest_declares_what_flui_calls() {
+        let manifest = privacy_manifest(None).expect("manifest");
+        assert_eq!(
+            manifest["NSPrivacyTracking"],
+            serde_json::Value::Bool(false)
+        );
+        assert_eq!(manifest["NSPrivacyTrackingDomains"], serde_json::json!([]));
+        assert_eq!(
+            manifest["NSPrivacyCollectedDataTypes"],
+            serde_json::json!([])
+        );
+        assert_eq!(
+            accessed(&manifest),
+            [
+                (
+                    "NSPrivacyAccessedAPICategoryFileTimestamp".to_owned(),
+                    vec!["C617.1".to_owned()]
+                ),
+                (
+                    "NSPrivacyAccessedAPICategorySystemBootTime".to_owned(),
+                    vec!["35F9.1".to_owned()]
+                ),
+            ]
+        );
+    }
+    fn privacy_manifest_joins_the_applications_own() {
+        let app = serde_json::json!({
+            "NSPrivacyTracking": true,
+            "NSPrivacyTrackingDomains": ["ads.example.com"],
+            "NSPrivacyAccessedAPITypes": [
+                {
+                    "NSPrivacyAccessedAPIType": "NSPrivacyAccessedAPICategoryFileTimestamp",
+                    "NSPrivacyAccessedAPITypeReasons": ["3B52.1", "C617.1"],
+                },
+                {
+                    "NSPrivacyAccessedAPIType": "NSPrivacyAccessedAPICategoryUserDefaults",
+                    "NSPrivacyAccessedAPITypeReasons": ["CA92.1"],
+                },
+            ],
+        });
+        let manifest = privacy_manifest(Some(app)).expect("manifest");
+        assert_eq!(manifest["NSPrivacyTracking"], serde_json::Value::Bool(true));
+        assert_eq!(
+            manifest["NSPrivacyTrackingDomains"],
+            serde_json::json!(["ads.example.com"])
+        );
+        assert_eq!(
+            manifest["NSPrivacyCollectedDataTypes"],
+            serde_json::json!([])
+        );
+        assert_eq!(
+            accessed(&manifest),
+            [
+                (
+                    "NSPrivacyAccessedAPICategoryFileTimestamp".to_owned(),
+                    vec!["3B52.1".to_owned(), "C617.1".to_owned()]
+                ),
+                (
+                    "NSPrivacyAccessedAPICategorySystemBootTime".to_owned(),
+                    vec!["35F9.1".to_owned()]
+                ),
+                (
+                    "NSPrivacyAccessedAPICategoryUserDefaults".to_owned(),
+                    vec!["CA92.1".to_owned()]
+                ),
+            ]
+        );
+        for malformed in [
+            serde_json::json!(["not a dictionary"]),
+            serde_json::json!({"NSPrivacyAccessedAPITypes": {}}),
+            serde_json::json!({"NSPrivacyAccessedAPITypes": [{"NSPrivacyAccessedAPITypeReasons": []}]}),
+            serde_json::json!({"NSPrivacyAccessedAPITypes": [
+                {"NSPrivacyAccessedAPIType": "NSPrivacyAccessedAPICategoryDiskSpace"}
+            ]}),
+        ] {
+            assert!(
+                privacy_manifest(Some(malformed.clone())).is_err(),
+                "{malformed} was accepted"
+            );
+        }
+    }
     #[test]
     fn publication_contract() {
         crate::test_cases::run_cases(&[
+            (
+                "privacy manifest declares what flui calls",
+                privacy_manifest_declares_what_flui_calls,
+            ),
+            (
+                "privacy manifest joins the application's own",
+                privacy_manifest_joins_the_applications_own,
+            ),
             (
                 "info plist lifts the phone frame duration cap and reads the pointer",
                 info_plist_lifts_the_phone_frame_duration_cap_and_reads_the_pointer,

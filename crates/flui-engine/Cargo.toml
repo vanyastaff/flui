@@ -53,8 +53,6 @@ flui-platform = { workspace = true }
 
 # === GPU Rendering (wgpu backend) ===
 wgpu = { workspace = true, default-features = false }
-# Shader composition: resolves #import directives at pipeline-init time.
-naga_oil = { workspace = true }
 # `std` is required so `raw_window_handle::HandleError` impls `std::error::Error`
 # (the impl is `#[cfg(feature = "std")]` in raw-window-handle 0.6.2); that lets us
 # box a `HandleError` directly into `EngineError::SurfaceCreation` via the typed
@@ -133,6 +131,9 @@ wgpu = { workspace = true, default-features = false, features = [
 # Not compiled into the crate binary.
 wgsl_bindgen = { workspace = true }
 regex = { workspace = true }
+# Resolves the shaders' WESL `import`s into plain WGSL in OUT_DIR, so the
+# pipelines include finished WGSL and no shader composer ships in the binary.
+wesl = { workspace = true }
 
 [dev-dependencies]
 flui-objects = { workspace = true }

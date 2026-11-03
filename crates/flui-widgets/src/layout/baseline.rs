@@ -4,7 +4,7 @@
 use flui_objects::RenderBaseline;
 use flui_painting::typography::TextBaseline;
 use flui_rendering::protocol::BoxProtocol;
-use flui_view::{Child, IntoView, RenderView, impl_render_view};
+use flui_view::{Child, CreationSite, IntoView, RenderView, impl_render_view};
 
 /// Positions its child so the child's `baseline_type` baseline sits `baseline`
 /// device pixels below this box's top edge.
@@ -15,15 +15,18 @@ pub struct Baseline {
     distance: f64,
     kind: TextBaseline,
     child: Child,
+    site: CreationSite,
 }
 
 impl Baseline {
     /// Place the child's `baseline_type` baseline `baseline` pixels from the top.
+    #[track_caller]
     pub fn new(baseline: f64, baseline_type: TextBaseline) -> Self {
         Self {
             distance: baseline,
             kind: baseline_type,
             child: Child::empty(),
+            site: CreationSite::here(),
         }
     }
 
@@ -60,4 +63,4 @@ impl RenderView for Baseline {
     flui_view::single_child_view_children!();
 }
 
-impl_render_view!(Baseline);
+impl_render_view!(Baseline, site = site);

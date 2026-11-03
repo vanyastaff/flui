@@ -96,6 +96,9 @@ mod frame_clock;
 #[path = "contracts/error_view.rs"]
 mod error_view;
 
+#[path = "contracts/agent_service.rs"]
+mod agent_service;
+
 #[path = "contracts/agent_act.rs"]
 mod agent_act;
 #[path = "contracts/announce.rs"]

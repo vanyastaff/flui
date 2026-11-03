@@ -11,6 +11,8 @@
 //! error-view builder) live in their own [[test]] target instead —
 //! process isolation beats opt-in locking. See error_view_recovery.
 
+#[path = "agent_wake.rs"]
+mod agent_wake;
 #[path = "ancestor_finders.rs"]
 mod ancestor_finders;
 #[path = "support/async_snapshot_recovery.rs"]

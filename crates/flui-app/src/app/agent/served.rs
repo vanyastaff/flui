@@ -1,17 +1,16 @@
-//! The server, built where it has a transport: a debug build, or one with
-//! the `driver` feature, on a system with local sockets.
+//! The server's transport, built where it has one: a debug build, or one with the `driver`
+//! feature, on a system with local sockets. The conversation itself is
+//! [`flui_runtime::agent`]'s.
 
-mod dispatch;
+mod connection;
 mod endpoint;
 mod hook;
 mod launch;
-mod registry;
-mod session;
 
 pub(crate) use self::hook::DriverAgent;
 pub(crate) use self::launch::Launch;
 #[cfg(test)]
-pub(crate) use self::launch::Limits;
+pub(crate) use flui_runtime::agent::Limits;
 
 /// Emits what `event` traces, contained: a subscriber is user code, and one
 /// that panics must not take down the agent thread it runs on, nor the work
