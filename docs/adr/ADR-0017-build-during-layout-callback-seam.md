@@ -5,6 +5,8 @@
 - **Amended:** 2026-10-11 — the implemented between-pass boundary uses `PipelineCell` checkout, not the former shared pipeline lock; fixpoint semantics remain unchanged.
 - **Revised:** 2026-09-26 (a LayoutCallbackScope spike; the decision stands)
 - **Amended:** 2026-09-30 — the R1/R2 landing conditions no longer ask for `## Mapping decisions` entries; FLUI records no divergence from Flutter as such ([`AGENTS.md`](../../AGENTS.md) Design stance). The decision is unchanged.
+- **Superseded-by:** [ADR-0308](ADR-0308-layout-build-fixpoint-charges-only-passes-without-progress.md)
+  for §7 only (the convergence bound and its debug panic) and the §8 sentence on the `BUG:` bound
 - **Related:** ADR-0003 (lazy slivers use the same fixpoint)
 
 ## Context
