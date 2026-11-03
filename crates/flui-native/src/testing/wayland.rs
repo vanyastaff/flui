@@ -151,6 +151,9 @@ pub struct CompositorReport {
     /// How many of those tokens the window handed back to the compositor
     /// with its surface (`xdg_activation_v1.activate`).
     pub activations: u32,
+    /// Whether the compositor answered a frame callback of the window's: it
+    /// showed the window at least once.
+    pub shown: bool,
 }
 
 /// A rectangle as `(x, y, width, height)` in logical pixels.
@@ -278,6 +281,7 @@ pub fn compositor_report(window: &dyn HostWindow) -> Option<CompositorReport> {
         outputs: said.outputs,
         activation_tokens: said.activation_tokens,
         activations: said.activations,
+        shown: said.shown,
     })
 }
 
