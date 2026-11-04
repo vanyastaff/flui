@@ -2389,6 +2389,7 @@ dependencies = [
  "flui-animation",
  "flui-foundation",
  "flui-interaction",
+ "flui-log",
  "flui-native",
  "flui-objects",
  "flui-painting",
