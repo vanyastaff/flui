@@ -1,6 +1,6 @@
 # ADR-0169: Nested scroll ballistic boundary handoff
 
-- **Status:** Superseded
+- **Status:** Superseded (2026-10-13)
 - **Date:** 2026-10-08
 - **Superseded-by:** [ADR-0209](ADR-0209-nested-scroll-connection.md): the fling residual is one
   pass of the nested scroll channel, and the endpoint is the `Rc`/`Cell` scroll owner

@@ -1,6 +1,6 @@
 # ADR-0122: Glyph images establish an immutable byte-layout invariant at construction
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-10-04)
 - **Date:** 2026-10-04
 - **Supersedes:** [ADR-0067](ADR-0067-engine-owned-glyph-atlas.md), only the
   producer/atlas boundary for validating the `GlyphImage` byte layout.

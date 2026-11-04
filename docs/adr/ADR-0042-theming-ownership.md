@@ -1,6 +1,6 @@
 # ADR-0042: Theming ownership — appearance is per-presentation, selection belongs to the design system
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-08-02)
 - **Date:** 2026-08-02
 - **Amended:** 2026-09-30 — "What is untouched" states this ADR's scope without the "ported 1:1" directive it quoted; FLUI is not a Flutter port ([`AGENTS.md`](../../AGENTS.md) Design stance). The decision is unchanged.
 - **Related:** [ADR-0028](ADR-0028-design-system-decoupling-contract.md) (design-system decoupling — Material and Cupertino are independent siblings above the widget catalog); [ADR-0027](ADR-0027-owner-affine-ui-realms.md) (one UI runtime per window — why appearance is per-presentation, and why package/ownership topology is a sanctioned leapfrog zone); [ADR-0037](ADR-0037-presentation-ownership-domains.md) (per-presentation owner state); [ADR-0041](ADR-0041-workspace-topology-contract.md) (layer policy — `flui-app` is L9, the design systems are L7)

@@ -1,21 +1,6 @@
 # ADR-0304: The scene is retained, and damage is its patch's footprint
 
-- **Status:** Accepted (2026-11-03). Not implemented: paint builds a new `LayerTree` each pass and
-  clones every clean boundary's layers into it
-  (`crates/flui-rendering/src/pipeline/owner/paint.rs:197`, `:1128-1131`), refuses to retain a
-  boundary that holds a `Follower` (`paint.rs:1650-1652`; a `Leader` too until #2252) and
-  merges the runs of several render objects into one picture (`paint.rs:1500-1503`); the raster
-  lane diffs the whole
-  scene into one rectangle (`crates/flui-app/src/app/raster_lane.rs:359`,
-  `crates/flui-layer/src/scene_snapshot.rs:20-29`) certified by `ContentToken`
-  (`crates/flui-layer/src/tree/stamp.rs:30`); `FrameSink::submit` takes a whole `Scene`
-  (`crates/flui-runtime/src/sink.rs:96-103`); the engine records the whole scene every frame
-  (`crates/flui-engine/src/renderer.rs:2652`), keeps one bounding rectangle
-  (`crates/flui-engine/src/damage.rs:29-33`) and computes its own filter footprint
-  (`crates/flui-engine/src/frame_protocol.rs:215-300`); `RasterCompletion` names no scene version
-  (`crates/flui-engine/src/raster_owner.rs:94-109`); a `NotShown` retry repaints the whole tree
-  (ADR-0068 §3) and the web's `DirectSink` marks a full repaint every frame
-  (`crates/flui-app/src/app/raster_lane.rs:550-561`).
+- **Status:** Accepted (2026-11-03)
 - **Date:** 2026-11-03
 - **Supersedes:** [ADR-0061](ADR-0061-damage-needs-layer-identity.md) for its Decision and its
   2026-09-29 amendment only (damage from comparing consecutive layer trees through boundary

@@ -1,6 +1,6 @@
 # ADR-0044: The three-owner frame split and the driver-loop hybrid
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-08-06)
 - **Date:** 2026-08-06
 - **Amended:** 2026-10-11 — current runner/raster ownership and swapchain configuration are distinguished from historical accounting and the unimplemented production backpressure target.
 - **Amended by:** ADR-0058 (§4, the Wayland row)

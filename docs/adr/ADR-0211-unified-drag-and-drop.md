@@ -1,15 +1,6 @@
 # ADR-0211: Drag-and-drop runs in-window on pointer capture and escalates to the OS
 
-- **Status:** Accepted (2026-10-13). Implemented: the session core, identity, the escalation
-  decision, sessions that reach the other windows of their runtime on the source's capture, the
-  host's deferred start and delivery to receivers in the runtime, spring-loading
-  and autoscroll frames in the session core, and `Scrollable`'s edge autoscroll, run headless;
-  the Win32 OLE target and source, run on a Windows host within one process; the `Draggable`
-  and `DropTarget` widgets, the cursor, Escape and the keyboard and assistive cut, copy and
-  paste, run headless; the Web HTML target and source, run in headless Chrome with constructed
-  events; the Android target and source through `FluiView`, run on a device within one app.
-  Pending ([tasks](../plans/specs/flui-interaction/completeness/tasks.md)): every other native
-  drag source and target.
+- **Status:** Accepted (2026-10-13)
 - **Amended by:** [ADR-0247](ADR-0247-android-java-view.md) (2026-10-17): the Android target is
   `FluiView.onDragEvent`, answered from the cached feedback; the source is
   `FluiView.startDragAndDrop` (API 24) with the whole clip at the start; a drag from another app

@@ -1,6 +1,6 @@
 # ADR-0039: Event-loop affinity — a compile-time capability for main-thread platform operations
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-07-28)
 - **Date:** 2026-07-28
 - **Superseded-by:** [ADR-0196](ADR-0196-browser-host-motion-delivery.md) for §7's browser registration posture only;
   [ADR-0222](ADR-0222-window-appearance-is-a-presentation-observation.md) for §1's

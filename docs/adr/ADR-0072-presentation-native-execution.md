@@ -1,6 +1,6 @@
 # ADR-0072: Native execution is a presentation fact
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-09-19)
 - **Date:** 2026-09-19
 - **Amended:** 2026-10-11 — implemented UIKit scene/close/addressed geometry paths are separated from retained native execution limits.
 

@@ -1,7 +1,6 @@
 # ADR-0216: Every behavioural gesture has typed alternatives: a semantics action, a key and a single-pointer path
 
-- **Status:** Accepted (2026-10-13); §4 records the shape it shipped with
-  ([tasks](../plans/specs/flui-interaction/completeness/tasks.md); design §14, §18).
+- **Status:** Accepted (2026-10-13)
 - **Date:** 2026-10-13
 - **Amended:** 2026-10-18 — §1 names `AnchoredDrag`, `PageView` and `RefreshIndicator` as
   behavioural widgets and scroll views whose motion operates nothing as not behavioural.

@@ -1,6 +1,6 @@
 # ADR-0052: Lazy sliver child identity, relocation, and per-item recovery
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-09-03)
 - **Date:** 2026-09-03
 - **Related:** [ADR-0050](ADR-0050-global-key-identity-and-frame-reservations.md) (GlobalKey identity and the duplicate verdict), [ADR-0051](ADR-0051-anchor-stationary-scroll-correction.md), [ADR-0003](ADR-0003-virtualization-core-and-reentrant-build.md), [ADR-0053](ADR-0053-one-lazy-child-lifecycle-for-multi-box-slivers.md); issue #530
 

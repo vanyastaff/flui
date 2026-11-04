@@ -1,6 +1,6 @@
 # ADR-0162: Checked pointer-plane coordinates and focal displacements
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-10-07)
 - **Date:** 2026-10-07
 - **Related:** [ADR-0098](ADR-0098-owned-f64-geometry-values.md),
   [ADR-0113](ADR-0113-finite-inverse-hit-admission.md),

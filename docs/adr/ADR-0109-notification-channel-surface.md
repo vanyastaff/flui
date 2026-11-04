@@ -1,6 +1,6 @@
 # ADR-0109: Notification channels without an unused registry wrapper
 
-- **Status:** Accepted.
+- **Status:** Accepted (2026-10-04)
 - **Superseded-by:** [ADR-0178](ADR-0178-notification-first-failure-custody.md)
   for decisions 3–4's listener failure propagation and disposal behavior.
 - **Superseded-by:** [ADR-0119](ADR-0119-inert-panic-payload-retirement.md),

@@ -1,6 +1,6 @@
 # ADR-0115: Images carry source regions, affine placement and Paint through replay
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-10-04)
 - **Date:** 2026-10-04
 - **Related:** ADR-0098 (logical and device geometry)
 

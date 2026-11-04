@@ -1,6 +1,6 @@
 # ADR-0186: Spring rest distances belong to the value converter
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-10-11)
 - **Date:** 2026-10-10
 - **Superseded-by:** [ADR-0198](ADR-0198-typed-animation-admission-errors.md), the threshold-error variant only; converter ownership and rest distances remain in force.
 - **Amended:** 2026-10-11 — threshold refusal names the existing component-indexed simulation cause.

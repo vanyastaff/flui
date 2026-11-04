@@ -1,7 +1,6 @@
 # ADR-0087: One raster contract in `flui-layer` with wgpu and CPU backends; retained layer identity drives damage
 
-- **Status:** Accepted (2026-09-29) for §3 and §4, as amended below; §1, §2 and §5 were never
-  accepted, and ADR-0305 replaces them (2026-11-03)
+- **Status:** Accepted (2026-09-29)
 - **Date:** 2026-09-25
 - **Superseded-by:** [ADR-0100](ADR-0100-prepared-gpu-work-and-retained-frame-commit.md)
   for §4's retained-image update/failure policy; candidate isolation replaces

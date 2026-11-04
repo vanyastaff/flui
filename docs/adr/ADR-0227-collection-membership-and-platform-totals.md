@@ -1,6 +1,6 @@
 # ADR-0227: Collection membership and platform totals
 
-Status: Accepted
+Status: Accepted (2026-10-17)
 
 ## Context
 

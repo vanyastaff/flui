@@ -1,9 +1,6 @@
 # ADR-0210: Haptics has a semantic tier and a pattern tier, both addressed and both reporting an outcome
 
-- **Status:** Accepted (2026-10-13); implemented. The native macOS, iOS, Android and Web paths are
-  compiled but have not run on a device; the Windows pen path has run only on a host with no
-  haptic pen. §5 amended (2026-10-17): the window's default actuator on Windows is the pen in
-  range of it.
+- **Status:** Implemented (2026-10-13)
 - **Date:** 2026-10-13
 - **Supersedes:** [ADR-0031](ADR-0031-platform-haptics-capability-and-system-chrome-deferral.md)
   §1–§4 only. ADR-0031 §5, the system chrome deferral, stays in force.

@@ -1,6 +1,6 @@
 # ADR-0161: Immutable owner-local gesture recognizers
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-10-07)
 - **Date:** 2026-10-07
 - **Supersedes:** [ADR-0086](ADR-0086-signal-writes-through-event-context.md) §4,
   only its promise to preserve gesture extension signatures

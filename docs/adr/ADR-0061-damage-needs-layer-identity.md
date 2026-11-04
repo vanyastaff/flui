@@ -1,6 +1,6 @@
 # ADR-0061: Partial repaint needs cross-frame layer identity, not paint-phase bookkeeping
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-09-03)
 - **Date:** 2026-08-16
 - **Superseded-by:** [ADR-0304](ADR-0304-the-scene-is-retained-and-damage-is-the-footprint-of-its-patch.md)
   for the Decision and the 2026-09-29 amendment only (damage is the footprint of the applied scene

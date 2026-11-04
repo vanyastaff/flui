@@ -1,6 +1,6 @@
 # ADR-0066: Display-list command representation
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-09-18)
 - **Amended by:** [ADR-0092](ADR-0092-per-realm-text-over-parley.md) (`DrawOp::Paragraph`
   carries an `Arc<ShapedParagraph>`)
 - **Date:** 2026-09-18

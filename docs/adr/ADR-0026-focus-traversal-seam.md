@@ -1,6 +1,6 @@
 # ADR-0026: Focus widgets and focus traversal
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-07-10)
 - **Date:** 2026-07-11
 - **Amended:** 2026-10-11 — removed the self-referential absorption label; Focus widget and traversal rules remain in this record.
 - **Absorbs:** [retired ADR-0022](https://github.com/vanyastaff/flui/blob/aaecd27847a6338538f70e230a1aa01a018b0fd6/docs/adr/ADR-0022-focus-widget-seam.md), the Focus widget seam consolidated here.

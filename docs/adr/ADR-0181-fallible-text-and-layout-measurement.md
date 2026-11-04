@@ -1,6 +1,6 @@
 # ADR-0181: Fallible text and layout measurement
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-10-09)
 - **Date:** 2026-10-09
 - **Related:** [ADR-0092](ADR-0092-per-realm-text-over-parley.md),
   [ADR-0054](ADR-0054-the-viewport-commits-one-result.md)

@@ -1,6 +1,6 @@
 # ADR-0180: Animation status subscriptions own source-bound removal
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-10-11)
 - **Date:** 2026-10-09
 - **Related:** [ADR-0177](ADR-0177-controller-ordered-delivery.md),
   [ADR-0178](ADR-0178-notification-first-failure-custody.md),

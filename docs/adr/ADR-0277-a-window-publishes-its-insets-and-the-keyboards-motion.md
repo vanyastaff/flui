@@ -1,10 +1,6 @@
 # ADR-0277: A window publishes its insets as one value, and the frame samples the keyboard's motion
 
-- **Status:** Accepted (2026-10-30). Implemented: the value, the capabilities, the frame sampling,
-  the recording and the headless script (§1 to §3, §5), the Android keyboard with its motion and
-  its system gesture regions, the iOS keyboard with its motion and the Web keyboard (§4). Not
-  implemented: the Web safe area (§4). Not yet checked: `SYSTEM_KEYBOARD_BEZIER` against a device
-  recording (§1).
+- **Status:** Accepted (2026-10-30)
 - **Date:** 2026-10-30
 - **Supersedes:** [ADR-0254](ADR-0254-window-contract.md) decision 1 only for the snapshot field
   `safe_area`, which becomes `insets: WindowInsets`.

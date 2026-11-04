@@ -1,6 +1,6 @@
 # ADR-0228: Cross-axis slivers use explicit track allocation
 
-Status: Accepted
+Status: Accepted (2026-10-17)
 
 ## Context
 

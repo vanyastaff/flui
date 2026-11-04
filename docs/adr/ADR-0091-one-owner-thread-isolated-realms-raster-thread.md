@@ -1,7 +1,6 @@
 # ADR-0091: One owner thread hosts isolated UI runtimes; one raster thread per GpuContext
 
-- **Status:** Accepted (2026-10-30). Not implemented: [`docs/gaps.md` entry 43, ADR-0091
-  §3–§5](../gaps.md#43-accepted-adr-sections-not-built-yet)
+- **Status:** Accepted (2026-10-30)
 - **Superseded-by:** [ADR-0266](ADR-0266-one-owner-thread-ui-runtimes-isolate.md) for §1 (one owner
   thread is the model, not a stage before per-runtime threads; the spike and `OwnerExecutor` are
   withdrawn)

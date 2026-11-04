@@ -1,6 +1,6 @@
 # ADR-0020: TransitionRoute / ModalRoute seam — a queued route binding, a real `RenderTheater`, a correct `Offstage`
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-07-09)
 - **Date:** 2026-07-09
 - **Superseded in part by:** ADR-0064 (push completion: `did_push` returns a `TickerFuture`
   the navigator awaits); [ADR-0125](ADR-0125-vsync-registration-authority.md) (§1's

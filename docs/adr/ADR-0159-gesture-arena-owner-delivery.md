@@ -1,6 +1,6 @@
 # ADR-0159: Gesture arena delivery belongs to the input owner
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-10-07)
 - **Date:** 2026-10-07
 - **Superseded-by:** [ADR-0281](ADR-0281-a-destructor-that-panics-during-an-unwind-aborts-as-in-std.md),
   only where remaining user ownership follows ADR-0127's retention after the first failure: it is

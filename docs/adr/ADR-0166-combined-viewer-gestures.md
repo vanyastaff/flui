@@ -1,6 +1,6 @@
 # ADR-0166: Combined viewer gestures and native source ownership
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-10-07)
 - **Date:** 2026-10-07
 - **Superseded-by:** [ADR-0281](ADR-0281-a-destructor-that-panics-during-an-unwind-aborts-as-in-std.md),
   where native ticket callbacks and captures are retained after a failure: they are destroyed under containment.

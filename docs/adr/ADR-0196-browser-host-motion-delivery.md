@@ -1,6 +1,6 @@
 # ADR-0196: Browser host motion uses the existing owner signal
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-10-11)
 - **Date:** 2026-10-09
 - **Supersedes:** [ADR-0039](ADR-0039-event-loop-affinity-capability.md) §7's browser registration posture only.
 - **Related:** [ADR-0172](ADR-0172-host-owned-system-preferences.md),

@@ -1,6 +1,6 @@
 # ADR-0111: Admitted worker images stay mapped until process exit
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-10-04)
 - **Date:** 2026-10-04
 - **Supersedes:** [ADR-0094](ADR-0094-hot-reload-through-subsecond.md) worker image lifetime only; its development-only boundary and future replacement remain unchanged.
 

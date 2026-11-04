@@ -1,6 +1,6 @@
 # ADR-0182: The UI owner executes complete scheduler turns
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-10-10)
 - **Date:** 2026-10-10
 - **Supersedes:** ADR-0136's scheduler frame-entry API and ADR-0083's raw background execution sequence; ADR-0175's statement that scheduler frame entry points accept an owner argument.
 - **Superseded-by:** [ADR-0281](ADR-0281-a-destructor-that-panics-during-an-unwind-aborts-as-in-std.md),

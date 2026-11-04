@@ -1,6 +1,6 @@
 # ADR-0068: A frame's outcome is a three-state disposition, and a withheld frame is retained under a bound
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-09-17)
 - **Date:** 2026-09-17
 - **Superseded-by:** [ADR-0304](ADR-0304-the-scene-is-retained-and-damage-is-the-footprint-of-its-patch.md)
   for §3's repaint half only: a `NotShown` retry republishes the held scene version instead of

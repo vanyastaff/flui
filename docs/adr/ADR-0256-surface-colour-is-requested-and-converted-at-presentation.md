@@ -1,7 +1,6 @@
 # ADR-0256: A window asks for a surface colour capability, the renderer paints in one working space and converts at presentation
 
-- **Status:** Accepted (2026-10-26). Not implemented on Apple: the Metal colour spaces are in the
-  candidate list but have no run behind them (Confirmation).
+- **Status:** Accepted (2026-10-26)
 - **Amended:** 2026-10-28 — §2, §5 and §6, decided by the coordinator of the platform-layer
   feature, to whom the owner left the architecture, once the platform layer reports each
   display's colour (`DisplayInfo::color`: a `SurfaceColorSpace` and a `Headroom`).

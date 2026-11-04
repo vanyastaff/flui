@@ -1,6 +1,6 @@
 # ADR-0177: Controller transitions and run deliveries preserve commit order
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-10-09)
 - **Superseded-by:** [ADR-0178](ADR-0178-notification-first-failure-custody.md) for the shared notification failure policy and owner-local callback integration.
 - **Superseded-by:** [ADR-0193](ADR-0193-directional-phase-names.md) for settled-phase vocabulary only.
 - **Superseded-by:** [ADR-0281](ADR-0281-a-destructor-that-panics-during-an-unwind-aborts-as-in-std.md),

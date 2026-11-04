@@ -1,6 +1,6 @@
 # ADR-0223: Authored semantics regions retain presentation-owned identities
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-10-17)
 - **Date:** 2026-10-16
 - **Supersedes:** [ADR-0204](ADR-0204-synthetic-semantics-nodes.md), §1 for identity authority and authored-region action routing
 - **Superseded-by:** [ADR-0281](ADR-0281-a-destructor-that-panics-during-an-unwind-aborts-as-in-std.md),

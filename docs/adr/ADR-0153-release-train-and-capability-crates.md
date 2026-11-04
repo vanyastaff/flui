@@ -1,6 +1,6 @@
 # ADR-0153: The release train and capability crates: the contract rides the train until it proves stable
 
-- **Status:** Accepted (2026-10-20). Not implemented: [`docs/gaps.md` entry 43, ADR-0153 items 3 and 5](../gaps.md#43-accepted-adr-sections-not-built-yet)
+- **Status:** Accepted (2026-10-20)
 - **Date:** 2026-10-06
 - **Revised:** 2026-10-20 — the open question became a decision; the experiments below stay as the
   context for it. A new crate for geometry is not on the table: ADR-0098 dissolved `flui-geometry`

@@ -1,9 +1,6 @@
 # ADR-0307: Platform declarations are crate metadata
 
-- **Status:** Accepted (2026-11-03). Implemented in `flui-cli`: the reader, the version-1 keys
-  (`android.permissions`, `apple.privacy.accessed-apis`) and the version-2 keys (`android.dex`,
-  `android.java`, `android.proguard`), the generated Android manifest, the iOS privacy manifest,
-  the verify mode of `flui doctor` and `flui add`.
+- **Status:** Implemented (2026-11-03)
 - **Date:** 2026-11-03
 - **Supersedes:** [ADR-0154](ADR-0154-capability-crates.md) §7 (where declarations live and
   their keys: a versioned `declares` table in any crate, in place of the illustrative schema) and,

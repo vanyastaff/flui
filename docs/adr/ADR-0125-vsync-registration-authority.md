@@ -1,6 +1,6 @@
 # ADR-0125: Vsync registration authority and permanent capacity refusal
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-10-05)
 - **Superseded-by:** [ADR-0179](ADR-0179-controller-registration-ownership.md),
   public controller admission and explicit caller-managed controller removal only.
   [ADR-0191](ADR-0191-single-parent-animation-registries.md) supersedes child attachment refusal and topology.

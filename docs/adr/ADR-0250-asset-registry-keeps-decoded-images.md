@@ -1,6 +1,6 @@
 # ADR-0250: The asset registry keeps decoded images and schedules their decodes
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-10-20)
 - **Date:** 2026-10-19
 - **Superseded-by:** [ADR-0279](ADR-0279-image-loads-run-on-the-lanes-their-caller-holds.md)
   for §2 only how a load is aborted and what a dropped load does to its waiters, and for §3

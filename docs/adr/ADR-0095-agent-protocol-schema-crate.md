@@ -1,10 +1,6 @@
 # ADR-0095: flui-protocol is the typed schema shared by tests, devtools and agents
 
-- **Status:** Accepted (2026-09-29) for §1's crate and its schema (handles, nodes, the tree, the
-  read query, the action request, the error codes and the protocol version), §2 and §3; §1's
-  finder criteria, handle kinds beyond elements and windows, `effect` as a schema type, the
-  widget catalog and event-log shapes, the `flui-mcp` library, `flui-testing`'s query types,
-  the handle table across windows, and §§4–5 are Proposed
+- **Status:** Accepted (2026-09-29)
 - **Date:** 2026-09-25
 - **Revised:** 2026-10-11 — the FLUI schema was 0.2 under ADR-0176; negotiated MCP versions are a separate protocol.
 - **Revised:** 2026-10-12 — schema 0.3 adds the `heading` wire role (ADR-0203).
@@ -31,6 +27,8 @@
   [ADR-0089](ADR-0089-upstream-types-in-stable-signatures.md)
 - **Refs:** decision D16 in the [decision index](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/design/decisions.md); the
   [architecture review](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/2026-09-25-architecture-review/report-architecture.ru.md)
+
+> **Sections not yet accepted:** §1's finder criteria, handle kinds beyond elements and windows, `effect` as a schema type, the widget catalog and event-log shapes, the `flui-mcp` library, `flui-testing`'s query types and the handle table across windows, and §§4–5.
 
 The accepted part added `crates/flui-protocol` (tier C, order 2, `stable`), moved
 `SemanticsRole` and `SemanticsAction` into it (`flui-semantics` re-exports them), and made

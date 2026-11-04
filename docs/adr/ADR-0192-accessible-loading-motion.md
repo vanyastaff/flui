@@ -1,6 +1,6 @@
 # ADR-0192: Loading feedback remains visible when motion stops
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-10-11)
 - **Date:** 2026-10-10
 - **Supersedes:** [ADR-0195](ADR-0195-presentation-motion-policy.md), loading indicator behavior only.
 - **Related:** [ADR-0179](ADR-0179-controller-registration-ownership.md), [ADR-0191](ADR-0191-single-parent-animation-registries.md).

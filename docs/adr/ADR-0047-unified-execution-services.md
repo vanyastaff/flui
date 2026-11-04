@@ -1,6 +1,6 @@
 # ADR-0047: Unified execution services under `AppRuntime`
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-08-18)
 - **Date:** 2026-08-18
 - **Amended by:** [ADR-0097](ADR-0097-no-process-global-state-gate.md) (execution services stay
   loop-scoped; any process-global executor state is a `cargo xtask globals` entry that only

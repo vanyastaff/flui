@@ -1,6 +1,6 @@
 # ADR-0127: Retain user-owned values on exceptional paths
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-10-05)
 - **Date:** 2026-10-05
 - **Superseded-by:** [ADR-0281](ADR-0281-a-destructor-that-panics-during-an-unwind-aborts-as-in-std.md),
   §2–§4 and the hit-test metadata retention: values are destroyed normally, under containment after a caught failure.

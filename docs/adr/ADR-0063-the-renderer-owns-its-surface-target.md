@@ -1,6 +1,6 @@
 # ADR-0063: The renderer owns its surface target; raw handles are never saved
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-09-14)
 - **Date:** 2026-09-14
 - **Amends:** ADR-0045 decision 1 and §7 (see the end of this record)
 - **Superseded-by:** [ADR-0254](ADR-0254-window-contract.md), in part: the window itself as the

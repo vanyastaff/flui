@@ -1,6 +1,6 @@
 # ADR-0084: Platform capabilities are an open, typed set registered by plugins
 
-- **Status:** Proposed
+- **Status:** Superseded (2026-10-06)
 - **Superseded-by:** [ADR-0152](ADR-0152-capability-seam-revised.md) as a whole
 - **Date:** 2026-09-25
 - **Revised:** 2026-09-26 (prototype of the seam; see Context)

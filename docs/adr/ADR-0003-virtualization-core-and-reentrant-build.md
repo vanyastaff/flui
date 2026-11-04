@@ -1,6 +1,6 @@
 # ADR-0003: Protocol-agnostic virtualization core; lazy slivers build their band through the layout↔build fixpoint
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-06-13)
 - **Date:** 2026-06-12
 - **Amended:** 2026-10-11 — implementation vocabulary uses the current `f64` extents; virtualization ownership and behavior are unchanged.
 - **Related:** ADR-0017 (the layout↔build fixpoint), ADR-0051 (anchor-stationary scroll correction)

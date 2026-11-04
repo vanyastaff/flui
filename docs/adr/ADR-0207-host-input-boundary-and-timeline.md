@@ -1,10 +1,6 @@
 # ADR-0207: A UI runtime takes input through one `HostInput` boundary on one timeline, on its owner thread
 
-- **Status:** Accepted (2026-10-13); implemented. §7 was narrowed on implementation (2026-10-13):
-  a reentrant key is the event that needs a synchronous answer; reentrant pointer input keeps
-  suppressing its native default. The AppKit nested-pump row is type-checked on Windows and Linux
-  hosts and runs only in an AppKit-pumping macOS process. §1 amended (2026-10-19): assistive
-  requests cross the command inbox (see the amendment).
+- **Status:** Implemented (2026-10-13)
 - **Date:** 2026-10-13
 - **Related:** [ADR-0027](ADR-0027-owner-affine-ui-realms.md) (owner-affine runtimes, the
   runtime-local FIFO), [ADR-0082](ADR-0082-platform-api-contract-crate.md) (§4: callbacks lose

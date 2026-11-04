@@ -1,6 +1,6 @@
 # ADR-0017: Build-during-layout is a binding-driven layout↔build fixpoint, not Flutter's mid-pass `invokeLayoutCallback`
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-07-09)
 - **Date:** 2026-07-08
 - **Amended:** 2026-10-11 — the implemented between-pass boundary uses `PipelineCell` checkout, not the former shared pipeline lock; fixpoint semantics remain unchanged.
 - **Revised:** 2026-09-26 (a LayoutCallbackScope spike; the decision stands)

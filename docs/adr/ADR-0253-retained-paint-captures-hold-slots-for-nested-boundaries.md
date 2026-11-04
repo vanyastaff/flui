@@ -1,6 +1,6 @@
 # ADR-0253: A retained paint capture holds a slot for each nested boundary
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-10-20)
 - **Date:** 2026-10-21
 - **Amended:** 2026-11-03 — §6: only a follower's region is refused a capture; a leader is
   replayed and re-indexed by the layer tree

@@ -1,6 +1,6 @@
 # ADR-0221: Page transitions come from an ambient hook; policy lives in packages
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-10-13)
 - **Date:** 2026-10-13
 - **Related:** [ADR-0088](ADR-0088-official-packages-sdk-and-facade.md), [ADR-0013](ADR-0013-render-object-attach-self-dirty-handle.md)
 
