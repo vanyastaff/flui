@@ -1359,7 +1359,12 @@ beneath it are found. **Test:** `a_drag_drops_on_the_target_that_accepted_its_la
 
 ### 4. Named routes split into six untyped entry points and two typed ones, and a request that cannot be served is a typed error
 
-**Rule:** gated as [ADR-0024](../../docs/adr/ADR-0024-named-routes-seam.md) §7.3.
+**Rule:** [ADR-0024](../../docs/adr/ADR-0024-named-routes-seam.md), which
+[ADR-0093](../../docs/adr/ADR-0093-router-is-the-primary-navigation-api.md) §4
+supersedes: named routes, `RouteKey<T>` and `on_generate_route` are removed,
+with no replacement but the typed `Router`. §4–§12 describe the named-route
+code until that removal ([`docs/gaps.md`](../../docs/gaps.md) entry 43,
+"ADR-0093"); no new code builds on it.
 
 **Problem:** a name that no table entry or generator resolves, and a caller's
 result type that differs from the route's, are both failures a
@@ -1603,25 +1608,17 @@ orderings pop and then push.
   makes it name the factory's route, and the observer stream alone does not
   change when the identity is wrong. **Unasserted:** no test pins this.
 
-### 6. Named-route registration lives on the handle, and the app builder will replace the table wholesale
+### 6. Named-route registration lives on the handle alone
 
-**Rule:** as §4 above; ADR-0024.
+**Rule:** as §4 above; ADR-0024, superseded by ADR-0093.
 
 **Choice:** all three register on `NavigatorHandle` — `route(name, factory)`,
 `on_generate_route`, `on_unknown_route` — and one private `RouteRegistry`
 resolves them in order (table → generator → unknown). FLUI's
 `Navigator` widget is a thin shell over the handle and every push already goes
 through it, so a widget-level generator would need widget-diff plumbing to reach
-the same place.
-
-**Why this is recorded now, before the second registration site exists.**
-`WidgetsApp::routes(..)` is a later slice, and two registration sites with no
-defined winner is how a feature acquires an unfixable bug. The contract is fixed
-here: **the app builder replaces the table wholesale at mount; the handle
-mutators serve imperative or late registration.** A `WidgetsApp` rebuild whose
-`routes` map changed therefore clears entries a previous mount installed, and
-does *not* clear a generator or a table entry registered directly on the handle
-after mount.
+the same place. There is no second registration site: no `WidgetsApp::routes(..)`
+table is built, since ADR-0093 removes named routes rather than extending them.
 
 **Registrations are not mount-scoped, and that asymmetry with observers is
 deliberate.** `NavigatorState::dispose` detaches observers, because an observer
@@ -3028,7 +3025,7 @@ it); only the navigator form has `navigator` and `observer`, so the
 configuration of a router app with a navigator key or observers does not compile. The two forms are two
 view types, so switching one to the other remounts the shell, and the
 navigator form's `dispose` releases its navigator and observers. Owning the
-presentation's URL waits for ADR-0093 step 3's `RouterScope`. **Tests:**
+presentation's URL waits for the URL owner of ADR-0093 §5 (`RouterScope`). **Tests:**
 `tests/widgets_app_router.rs`
 (`switching_widgets_app_from_home_to_router_releases_the_navigator`,
 `widgets_app_router_navigates_by_handle_and_the_url_follows`);

@@ -1,11 +1,10 @@
 # ADR-0024: Named routes (`on_generate_route`, `push_named`, `RouteSettings.arguments`)
 
-- **Status:** Accepted (2026-07-10)
+- **Status:** Superseded (2026-11-04)
 - **Date:** 2026-07-10
-- **Amended:** 2026-10-11 — refusal vocabulary includes the implemented Router admission boundary; named-route retirement remains conditional on ADR-0093.
-- **Related:** [ADR-0093](ADR-0093-router-is-the-primary-navigation-api.md) (a proposed typed
-  Router, routes as a typed tree and the URL as source of truth, that would replace string-named
-  routes; `RouteKey<T>` of §3 would carry over, and the shipped surface below stays until then)
+- **Superseded-by:** [ADR-0093](ADR-0093-router-is-the-primary-navigation-api.md) for every
+  section: routes are a typed `Routable` enum under a `Router`, named routes and `RouteKey<T>` are
+  removed, and a typed result is `RouterHandle::push_for_result` (its §3 and §4)
 
 ## Context
 
