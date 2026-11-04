@@ -364,8 +364,7 @@ impl ChangeNotifier {
         !self.inner.is_empty()
     }
 
-    /// Subscribe with an owned
-    /// [`Subscription`](crate::notifier::Subscription): hold it, and the
+    /// Subscribe with an owned [`Subscription`]: hold it, and the
     /// listener fires on every [`notify_listeners`](Self::notify_listeners);
     /// drop it, and the listener detaches from this notifier.
     pub fn listen(&self, listener: impl Fn() + 'static) -> Subscription {
@@ -718,8 +717,7 @@ impl<T> ValueListenable<T> for ValueNotifier<T> {
 }
 
 impl<T> ValueNotifier<T> {
-    /// Subscribe with an owned
-    /// [`Subscription`](crate::notifier::Subscription): hold it, and the
+    /// Subscribe with an owned [`Subscription`]: hold it, and the
     /// listener fires on every [`set_value`](Self::set_value) that notifies;
     /// drop it, and the listener detaches from this notifier.
     pub fn listen(&self, listener: impl Fn() + 'static) -> Subscription
