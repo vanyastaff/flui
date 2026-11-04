@@ -444,7 +444,28 @@ impl ReadFailure {
     }
 }
 
+impl Header {
+    /// This header as the wire holds it, naming no device: a stream's devices are known once
+    /// its rows are, so whoever writes the stream fills them in.
+    ///
+    /// # Errors
+    ///
+    /// [`CodecError::Unmirrored`] for a value the format does not mirror.
+    pub fn to_wire(&self) -> Result<wire::Header, CodecError> {
+        header_to_wire(self, Vec::new()).map_err(|error| error.at(1))
+    }
+}
+
 impl Row {
+    /// This row as the wire holds it.
+    ///
+    /// # Errors
+    ///
+    /// [`CodecError::Unmirrored`] for a value the format does not mirror.
+    pub fn to_wire(&self) -> Result<wire::Row, CodecError> {
+        row_to_wire(self).map_err(|error| error.at(0))
+    }
+
     /// The row's name in the schema, as a replay error names it.
     pub const fn name(&self) -> &'static str {
         match self {

@@ -1575,6 +1575,28 @@ pub enum InsetCurve {
     SystemKeyboard,
 }
 
+/// One line of a native recording as a live stream of it carries it: the header first, then
+/// the rows, and a `gap` where the stream lost rows, which a replay stops at.
+///
+/// A header a stream sends names no device: the stream's devices are known once its rows are,
+/// so whoever writes the recording fills them in.
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub enum Line {
+    /// The recording's header.
+    Header(Box<Header>),
+    /// One of its rows.
+    Row(Box<Row>),
+    /// Rows the stream lost here.
+    Gap {
+        /// How many.
+        rows: u64,
+    },
+}
+
 /// One registry call, after the header.
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
