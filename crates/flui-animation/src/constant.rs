@@ -92,8 +92,14 @@ where
     T: Clone + 'static,
 {
     fn add_listener(&self, _callback: ListenerCallback) -> ListenerId {
-        // No registration is admitted. Core notifiers check the successor
-        // before minting an ID, so MAX is outside their allocated namespace.
+        // No registration is admitted. The returned id names nothing: no
+        // registration is ever looked up against it, and this impl's own
+        // `remove_listener` is the no-op that keeps the promise. A listener
+        // id the ledger could one day mint equals this value only after one
+        // channel issued every id from one to `usize::MAX`, a bound the
+        // sentinel exceeds by being unreachable there; the owned form — an
+        // inert `Subscription` — replaces both this id and its caveat with
+        // the subscriptions theme's id-API removal.
         ListenerId::new(usize::MAX)
     }
 
