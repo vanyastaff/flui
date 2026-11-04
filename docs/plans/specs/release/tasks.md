@@ -25,7 +25,7 @@
 | Фича (`docs/plans/specs/<feature>/`) | Требования | Зависит от | Блокеры и issues | Статус |
 |---|---|---|---|---|
 | `persistence`: хранение и восстановление состояния, реальный IO в loading/error/retry | R5, R6 | — | нет ADR; новый межкрейтовый контракт | — |
-| `router-restore`: стек маршрутов как список путей, deep link при старте | R5 | `persistence` (контракт) | ADR-0093 шаг 8 | — |
+| `router-restore`: стек маршрутов как список путей, deep link при старте | R5 | `persistence` (контракт) | ADR-0262 §6 | — |
 | `focus-keyboard`: полный обход с клавиатуры, активация | R8 | — | #1040; активация RawButton с клавиатуры | — |
 | `text-ime`: композиция IME в Notes, headless-строка композиции, нативный backend | R7 | `focus-keyboard` (частично) | ADR-0090 §3 (TSF), #1091, #1092 | — |
 | `render-proof`: GPU readback экранов Notes, жизненный цикл native window в Renderer | R9 | — | #1043 (critical) | — |

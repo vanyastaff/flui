@@ -10,7 +10,7 @@ struct in `crates/`.
 | `BuildContext` | `BuildContext` trait for `build`; the presentation capabilities (`rebuild_handle()`, `post_frame_handle()`, `text_input_handle()`, `focus_manager()`, ...) live on its `LifecycleContext` subtrait, which only `init_state`/`did_change_dependencies` receive (ADR-0078) | `crates/flui-view/src/context/build_context.rs` |
 | `setState(() => ...)` | A `Signal<T>` created with `ctx.signal(..)` in `init_state`, written through the `cx` of an event callback; the signal rebuilds the elements that read it | `crates/flui-view/src/reactive/`, `crates/flui-view/src/context/build_context.rs` |
 | `InheritedWidget` | `InheritedView` | `crates/flui-view/src/view/inherited.rs` |
-| `Navigator` | `Navigator` / `NavigatorHandle` / `NavigatorState` | `crates/flui-widgets/src/navigator/navigator.rs` |
+| `Navigator` | The page stack inside a `Router<R>`; pages push and pop through `RouterHandle<R>`, and `Route`, `PageRoute` and `PageTransitions` shape how a page is presented | `crates/flui-widgets/src/navigator/` |
 | `Router` | `Router<R: Routable>` + `RouterHandle<R>`, with `#[derive(Routable)]` on a route enum | `crates/flui-widgets/src/router/` |
 | `WidgetsApp` | `WidgetsApp` (`WidgetsApp::new(home)` or `WidgetsApp::router(router)`) | `crates/flui-widgets/src/app/widgets_app.rs` |
 | `MaterialApp` / `CupertinoApp` | `MaterialApp` / `CupertinoApp` | `packages/flui-material/src/app.rs`, `packages/flui-cupertino/src/app.rs` |
@@ -20,12 +20,13 @@ struct in `crates/`.
 - **`Router` is the primary navigation API.** Routes are values: a `#[derive(Routable)]` enum
   with one `#[route("…")]` pattern per variant, and a `Router<R>` that keeps the stack of route
   values, which a page pushes and pops through the `RouterHandle<R>` it takes in `init_state`
-  ([ADR-0093](https://github.com/vanyastaff/flui/blob/main/docs/adr/ADR-0093-router-is-the-primary-navigation-api.md),
-  still Proposed). `Navigator` remains underneath
-  ([ADR-0019](https://github.com/vanyastaff/flui/blob/main/docs/adr/ADR-0019-navigator-routing-seam.md));
-  the string-named routes of
-  [ADR-0024](https://github.com/vanyastaff/flui/blob/main/docs/adr/ADR-0024-named-routes-seam.md)
-  still ship, but that ADR is Deprecated in favour of the typed router.
+  ([ADR-0093](https://github.com/vanyastaff/flui/blob/main/docs/adr/ADR-0093-router-is-the-primary-navigation-api.md)).
+  `Navigator` is the Router's internal page stack, not a second way to navigate; Flutter's
+  named routes (`pushNamed`, `onGenerateRoute`) have no counterpart, since a route is a typed
+  value with a path. Dialogs, popups and menus are not navigation state: they never enter the
+  URL or the stack a Router restores. A thread that
+  needs to navigate writes a signal the page reacts to; there is no cross-thread navigation
+  command.
 - **`MaterialApp` is `WidgetsApp` plus theming.** `MaterialApp` wraps a `WidgetsApp`, resolves
   `ThemeMode` against the platform brightness, publishes the resolved `ThemeData` through
   `Theme`, and installs a `ScaffoldMessenger`. `run_app(MaterialApp::new(home), AppLaunch::new())` is the usual
