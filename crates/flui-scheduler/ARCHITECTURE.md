@@ -1065,11 +1065,12 @@ exercise it — is precisely the shape this crate deletes on sight.
 **Trade-off accepted:** none. Nothing outside this crate observed `clear`'s
 existence.
 
-### Identity exhaustion refuses reuse until explicit reset
+### Identity exhaustion refuses reuse
 
-`IdGenerator` atomically checks its increment and reserves `usize::MAX` as
-an exhaustion state. Once reached, every later allocation panics without
-wrapping through zero and restarting at one. An explicit `reset` retains its
-documented deterministic-test behavior. `update_scheduler_bounds_matrix`
-includes repeated caught exhaustion, reset, and concurrent last-value admission
-through the public API. The ordinary sequence starts at one and is unchanged.
+Ids this scheduler mints (`TaskId`, callback ids) come from the foundation
+`IdMint` family: `AtomicIdMint`, the cross-thread twin of the owner-local
+`IdMint`, shares its sealed `MintedId` contract and its refusal rule. A
+minted id is never issued again; once the id space is exhausted, every later
+issue refuses, typed (`IdExhausted`), from every thread, and stays refused.
+The registration seam turns that refusal into a `BUG:`-named panic before
+admitting work it cannot name.

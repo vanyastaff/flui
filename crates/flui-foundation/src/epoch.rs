@@ -71,9 +71,9 @@ macro_rules! epoch_counters {
                 /// exact staleness bug this type exists to prevent. No
                 /// existing counter in this codebase increments a bare `u64`
                 /// newtype this way to crib from (`Scene::frame_number` is a
-                /// passively-set field with no self-increment method;
-                /// `AsyncDriver`/`IdGenerator` increment an `AtomicU64` via
-                /// `fetch_add`, a different mechanism for a different,
+                /// passively-set field with no self-increment method; ids a
+                /// second thread mints go through `AtomicIdMint`'s
+                /// `compare_exchange`, a different mechanism for a different,
                 /// concurrently-shared counter). A per-runtime frame/surface/
                 /// resource counter increments at most once per frame, so
                 /// reaching `u64::MAX` is not a practical concern; debug

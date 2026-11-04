@@ -19,23 +19,17 @@
 use serde::{Deserialize, Serialize};
 use std::{cell::RefCell, collections::VecDeque, rc::Rc};
 
+#[cfg(test)]
 use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 
-/// Generate the next unique task ID using a global atomic counter.
-fn next_task_id() -> Option<TaskId> {
-    static COUNTER: AtomicUsize = AtomicUsize::new(1);
-    next_task_id_with_counter(&COUNTER)
-}
+use flui_foundation::AtomicIdMint;
 
-fn next_task_id_with_counter(counter: &AtomicUsize) -> Option<TaskId> {
-    counter
-        .try_update(
-            AtomicOrdering::Relaxed,
-            AtomicOrdering::Relaxed,
-            |current| current.checked_add(1),
-        )
-        .ok()
-        .map(TaskId::zip)
+/// Generate the next task identity from the process-wide mint. The mint's
+/// refusal is sticky: an issued task id is never issued again, and once the
+/// id space is exhausted every later task is refused, typed, forever.
+fn next_task_id() -> Option<TaskId> {
+    static COUNTER: AtomicIdMint<TaskId> = AtomicIdMint::new();
+    COUNTER.next().ok()
 }
 
 /// Task priority levels (higher value = higher priority).
@@ -176,12 +170,12 @@ impl Task {
     ///
     /// # Panics
     ///
-    /// Panics when the process-wide task counter exhausts identities
-    /// `1..usize::MAX`. `usize::MAX` is reserved for permanent exhaustion;
-    /// catching the panic never permits another admission through that counter.
-    /// On exhausted admission, the rejected callback is destroyed under
-    /// containment and the capacity failure is raised; a panic from its
-    /// destructor is discarded (ADR-0281).
+    /// Panics when the process-wide task mint exhausts identities: after it
+    /// issued every id `usize` names, the mint refuses with a typed
+    /// [`IdExhausted`](flui_foundation::IdExhausted), permanently, and no
+    /// admission reuses one. On an exhausted admission, the rejected callback
+    /// is destroyed under containment and the capacity failure is raised; a
+    /// panic from its destructor is discarded (ADR-0281).
     pub fn new<F>(priority: Priority, callback: F) -> Self
     where
         F: FnOnce() + 'static,
@@ -527,7 +521,7 @@ mod tests {
             }
         }
 
-        let counter = AtomicUsize::new(usize::MAX - 2);
+        let counter = AtomicIdMint::<TaskId>::starting_after(usize::MAX as u64 - 2);
         let queue = TaskQueue::new();
         let ran = Rc::new(RefCell::new(Vec::new()));
         for value in [1, 2] {
@@ -535,7 +529,7 @@ mod tests {
             queue.add_task(Task::new_with_allocator(
                 Priority::Build,
                 move || output.borrow_mut().push(value),
-                || next_task_id_with_counter(&counter),
+                || counter.next().ok(),
             ));
         }
         let rejected_drops = Rc::new(AtomicUsize::new(0));
@@ -545,7 +539,7 @@ mod tests {
                 queue.add_task(Task::new_with_allocator(
                     Priority::Build,
                     move || drop(capture),
-                    || next_task_id_with_counter(&counter),
+                    || counter.next().ok(),
                 ));
             }))
             .expect_err("exhausted task identities must refuse priority admission");
@@ -564,7 +558,7 @@ mod tests {
         assert_eq!(*ran.borrow(), vec![1, 2]);
         assert!(queue.is_empty());
         for _ in 0..4 {
-            assert!(next_task_id_with_counter(&counter).is_none());
+            assert!(counter.next().ok().is_none());
         }
 
         let output = Rc::clone(&ran);

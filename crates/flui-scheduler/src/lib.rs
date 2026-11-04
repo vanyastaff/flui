@@ -56,16 +56,15 @@
 //!
 //! ## Type-Safe IDs
 //!
-//! Foundation markers prevent ID type confusion:
+//! Foundation markers prevent ID type confusion; only a mint issues one:
 //! ```rust
-//! use flui_scheduler::id::IdGenerator;
-//! use flui_foundation::markers;
+//! use std::num::NonZeroU64;
+//! use flui_foundation::{AtomicIdMint, TaskId};
 //!
-//! let frame_gen = IdGenerator::<markers::Frame>::new();
-//! let task_gen = IdGenerator::<markers::Task>::new();
-//! let frame_id = frame_gen.next();
-//! let task_id = task_gen.next();
-//! // These are different types - can't be mixed!
+//! let task_mint = AtomicIdMint::<TaskId>::new();
+//! let task_id = task_mint.next().expect("a fresh mint has ids to issue");
+//! // An `Id` names exactly one domain - ids of different domains
+//! // are different types and can't be mixed!
 //! ```
 //!
 //! ## Example Usage
@@ -206,8 +205,8 @@ pub use frame::{
     AppLifecycleState, FrameId, FramePhase, FrameTiming, LifecycleStateCallback,
     OneShotFrameCallback, PostFrameCallback, RecurringFrameCallback, SchedulerPhase,
 };
-// Re-exports - ID types (unified with flui-foundation)
-pub use id::{CallbackId, Id, IdGenerator, Marker, markers};
+// Re-exports - ID types (unified with flui-foundation; mints included)
+pub use id::{AtomicIdMint, CallbackId, Id, Marker, markers};
 pub use scheduler::{
     FrameCompletionFuture, FrameOutcome, FrameWaker, IdleDeadline, MAX_BUILD_REENTRY_PASSES,
     SchedulerBuilder, SchedulerClosed, UpdateScheduler, WeakUpdateScheduler,

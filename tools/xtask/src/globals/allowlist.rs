@@ -32,7 +32,9 @@ pub(super) enum Class {
     /// to find its owner: one in the host, one per platform.
     Trampoline,
     /// An atomic ID counter advanced through a reference (`try_update`
-    /// behind `&NAME`), never stored, loaded or decremented directly.
+    /// behind `&NAME`), never stored, loaded or decremented directly — or a
+    /// static foundation mint (`AtomicIdMint`) whose `next` issue is the
+    /// only advance.
     Counter,
     /// Data that never changes once built: no lock, cell or atomic inside,
     /// a write-once wrapper only as the outermost type.
@@ -201,6 +203,10 @@ const NOT_A_COUNTER: [&str; 13] = [
     "compare_exchange",
 ];
 
+/// The only method a minted static may call: `next` is a mint's only
+/// advance. Every other reach into the mint is a finding.
+const MINT_ADVANCE: &str = "next";
+
 /// Types that make state mutable through a shared reference.
 const INTERIOR: [&str; 10] = [
     "Cell",
@@ -225,7 +231,27 @@ pub(super) fn class_problem(class: Class, defs: &[Def]) -> Option<String> {
         Class::Trampoline => (def.shape != Shape::ThreadLocal)
             .then(|| "a trampoline is a `thread_local!` entry".to_owned()),
         Class::Counter => {
-            if def.shape != Shape::Static || !def.ty.atomic_int {
+            if def.shape != Shape::Static {
+                return Some(
+                    "a counter is a non-`mut` `static` of an atomic integer type".to_owned(),
+                );
+            }
+            if def.ty.outer.as_deref() == Some("AtomicIdMint") {
+                let stray: Vec<&str> = def
+                    .uses
+                    .iter()
+                    .flat_map(|uses| uses.methods.iter())
+                    .map(String::as_str)
+                    .filter(|method| *method != MINT_ADVANCE)
+                    .collect();
+                return (!stray.is_empty()).then(|| {
+                    format!(
+                        "a mint's `next` is its only advance, but it is also used with `{}`",
+                        stray.join("`, `")
+                    )
+                });
+            }
+            if !def.ty.atomic_int {
                 return Some(
                     "a counter is a non-`mut` `static` of an atomic integer type".to_owned(),
                 );

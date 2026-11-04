@@ -187,19 +187,18 @@ let as_seconds: Seconds = elapsed.to_seconds();
 
 ### Type-Safe IDs
 
-Foundation IDs prevent ID type confusion at compile time:
+Foundation IDs prevent ID type confusion at compile time; only a mint issues one:
 
 ```rust
-use flui_scheduler::id::{IdGenerator, markers};
+use std::num::NonZeroU64;
+use flui_foundation::{AtomicIdMint, TaskId};
 
-let frame_gen = IdGenerator::<markers::Frame>::new();
-let task_gen = IdGenerator::<markers::Task>::new();
+let task_mint = AtomicIdMint::<TaskId>::new();
+let task_id = task_mint.next().expect("a fresh mint has ids to issue");
 
-let frame_id = frame_gen.next();
-let task_id = task_gen.next();
-
-// These are different types - can't be accidentally mixed!
-// frame_id == task_id  // Compile error!
+// An `Id` names exactly one domain - ids of different domains
+// are different types and can't be accidentally mixed!
+// task_id == frame_id  // Compile error: different domains!
 ```
 
 ### Builder Pattern

@@ -142,7 +142,7 @@ fn assert_no_scheduler_lock_held(scheduler: &UpdateScheduler) {
     let CallbackState {
         transient,
         cancelled: _,
-        id_gen: _,
+        id_mint: _,
         persistent,
         post_frame,
         microtasks,

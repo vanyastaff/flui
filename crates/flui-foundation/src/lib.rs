@@ -240,7 +240,7 @@ pub use claim_slot::{ClaimHandle, ClaimOutcome, ClaimSlot, claim_slot};
 // by deadline- and frame-driven subsystems (gesture arena, headless binding).
 pub use clock::{ManualClock, MonotonicClock, SystemClock, event_epoch};
 pub use creation_site::CreationSite;
-pub use sequence::{DragSessionId, IdExhausted, IdMint, InputSequenceId, MintedId};
+pub use sequence::{AtomicIdMint, DragSessionId, IdExhausted, IdMint, InputSequenceId, MintedId};
 pub use ticket::{Ticket, TicketSource};
 pub use tree_error::{PathEntry, TREE_CONTEXT_DEPTH, TreeContext, TreeError};
 // Constants
@@ -258,7 +258,6 @@ pub use id::{
     ElementId,
     // UpdateScheduler IDs (consumed by flui-scheduler)
     FrameCallbackId,
-    FrameId,
     // Generic ID system
     Id,
     Identifier,

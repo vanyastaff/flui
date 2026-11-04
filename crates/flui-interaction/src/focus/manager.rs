@@ -10,6 +10,7 @@ use std::{
     rc::{Rc, Weak},
 };
 
+use flui_foundation::IdMint;
 use flui_foundation::ListenerId;
 use flui_platform::EventTime;
 use flui_platform::keyboard::{Code, Key, KeyEvent, KeyState, NamedKey};
@@ -102,7 +103,9 @@ pub struct FocusManager {
     root_scope: Rc<FocusScopeNode>,
     primary_focus: RefCell<Option<Rc<FocusNode>>>,
     listeners: RefCell<Vec<(ListenerId, FocusChangeCallback)>>,
-    next_listener_id: Cell<usize>,
+    /// The owner-local mint whose refusal is sticky: a listener id is
+    /// never issued twice.
+    listener_mint: IdMint<ListenerId>,
     /// Each handler under the registration number it was added with, so a
     /// dispatch snapshot names registrations rather than allocations.
     global_key_handlers: RefCell<Vec<(u64, KeyEventHandler)>>,
@@ -212,7 +215,7 @@ impl FocusManager {
             root_scope: FocusScopeNode::new_root(manager.clone()),
             primary_focus: RefCell::new(None),
             listeners: RefCell::new(Vec::new()),
-            next_listener_id: Cell::new(1),
+            listener_mint: IdMint::new(),
             global_key_handlers: RefCell::new(Vec::new()),
             next_global_key_handler: Cell::new(0),
             unfocused_key_claims: RefCell::new(Vec::new()),
@@ -693,13 +696,10 @@ impl FocusManager {
     /// ever sees a destination that a later, already-applied transition
     /// has superseded.
     pub fn add_listener(&self, callback: FocusChangeCallback) -> ListenerId {
-        let id = ListenerId::new(self.next_listener_id.get());
-        let next = self
-            .next_listener_id
-            .get()
-            .checked_add(1)
+        let id = self
+            .listener_mint
+            .next()
             .expect("BUG: focus-manager listener ID space exhausted");
-        self.next_listener_id.set(next);
         if self.closed.get() {
             let mut failure = FocusClosePanic::for_rejection(self.close_mode.mode());
             failure.retire(callback);

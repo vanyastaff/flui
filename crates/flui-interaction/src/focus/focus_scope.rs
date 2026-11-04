@@ -14,6 +14,7 @@ use std::{
 };
 
 use super::traversal::{FocusTraversalOverrides, GroupConfig, GroupOrderCache, GroupOrderSnapshot};
+use flui_foundation::IdMint;
 use flui_foundation::ListenerId;
 use flui_foundation::geometry::Rect;
 use flui_painting::typography::TextDirection;
@@ -558,7 +559,9 @@ pub struct FocusNode {
     on_key_event: Registered<KeyEventHandler>,
     on_key_cancel: Registered<KeyCancelHandler>,
     listeners: RefCell<Vec<(ListenerId, FocusNodeChangeCallback)>>,
-    next_listener_id: Cell<usize>,
+    /// The owner-local mint whose refusal is sticky: a listener id is
+    /// never issued twice.
+    listener_mint: IdMint<ListenerId>,
     rect: Cell<Rect<f64>>,
     rect_provider: Registered<RectProvider>,
     context: Registered<NodeContext>,
@@ -720,7 +723,7 @@ impl FocusNode {
             on_key_event: Registered::new(),
             on_key_cancel: Registered::new(),
             listeners: RefCell::new(Vec::new()),
-            next_listener_id: Cell::new(1),
+            listener_mint: IdMint::new(),
             rect: Cell::new(Rect::ZERO),
             rect_provider: Registered::new(),
             context: Registered::new(),
@@ -1017,13 +1020,10 @@ impl FocusNode {
 
     /// Register a listener for focus or focusability changes on this node.
     pub(super) fn add_listener(&self, callback: FocusNodeChangeCallback) -> ListenerId {
-        let id = ListenerId::new(self.next_listener_id.get());
-        let next = self
-            .next_listener_id
-            .get()
-            .checked_add(1)
+        let id = self
+            .listener_mint
+            .next()
             .expect("BUG: focus-node listener ID space exhausted");
-        self.next_listener_id.set(next);
         if self.is_closed() {
             let mut failure = FocusClosePanic::for_rejection(self.close_mode());
             failure.retire(callback);

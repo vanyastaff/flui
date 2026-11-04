@@ -23,6 +23,7 @@ use std::{
 
 use crate::id::ListenerId;
 use crate::panic::PanicRecovery;
+use crate::sequence::IdMint;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 /// A listener callback that borrows its argument for the duration of the call.
@@ -117,7 +118,9 @@ fn retire_callbacks<Arg>(mut callbacks: Vec<(ListenerId, OwnedCallback<Arg>)>) {
 /// while the thread is already unwinding aborts, as in std (ADR-0281).
 pub struct Notifier<Arg> {
     listeners: Rc<ListenerStorage<Arg>>,
-    next_id: Rc<Cell<usize>>,
+    /// Listener identities, shared across clones: the owner-local mint whose
+    /// refusal is sticky, so a listener id is never issued twice.
+    next_id: Rc<IdMint<ListenerId>>,
     is_disposed: Rc<Cell<bool>>,
 }
 
@@ -158,7 +161,7 @@ impl<Arg> Notifier<Arg> {
                 retired: RefCell::new(Vec::new()),
                 deferred: RefCell::new(Vec::new()),
             }),
-            next_id: Rc::new(Cell::new(1)),
+            next_id: Rc::new(IdMint::new()),
             is_disposed: Rc::new(Cell::new(false)),
         }
     }
@@ -167,12 +170,9 @@ impl<Arg> Notifier<Arg> {
     /// use-after-dispose path can hand out an unregistered id without
     /// tripping this notifier's own (differently-worded) disposed check.
     pub(crate) fn mint_id(&self) -> ListenerId {
-        let id = self.next_id.get();
-        self.next_id.set(
-            id.checked_add(1)
-                .expect("BUG: listener identities exhausted"),
-        );
-        ListenerId::new(id)
+        self.next_id
+            .next()
+            .expect("BUG: listener identities exhausted")
     }
 
     /// Whether [`dispose`](Self::dispose) has been called (shared across clones).

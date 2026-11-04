@@ -7,12 +7,21 @@
 //! channel, drag sessions, recordings and observers name the same sequence by
 //! the same [`InputSequenceId`], so none of them needs a translation table.
 //!
-//! The id lives here, below the contract crates, so `flui-platform` and
-//! every consumer can name it; only the interaction layer mints it.
+//! The [`IdMint`] family is the workspace's only issuer of identities: the
+//! owner-local [`IdMint`], and its cross-thread twin [`AtomicIdMint`] for ids
+//! minted on two threads. Both share the sealed [`MintedId`]
+//! contract and the same refusal rule: an issued id is never issued again,
+//! and an exhausted mint refuses, typed, forever.
+//!
+//! The sequence id lives here, below the contract crates, so `flui-platform`
+//! and every consumer can name it; only the interaction layer mints it.
 
 use std::cell::Cell;
 use std::marker::PhantomData;
 use std::num::NonZeroU64;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+use crate::id::{FrameCallbackId, ListenerId, TaskId};
 
 /// The identity of one input sequence within the binding that minted it.
 ///
@@ -56,10 +65,19 @@ mod sealed {
     pub struct MintToken(pub(super) ());
 }
 
-/// An identity an [`IdMint`] can issue. Sealed: each implementor is an id
-/// whose only source is a mint, or the raw [`NonZeroU64`] an owner wraps in
-/// an identity type of its own whose constructor only that owner reaches.
+/// An identity an [`IdMint`] can issue. Sealed: each implementor is either
+/// an id whose only source is a mint — no `Default`, no conversion from a
+/// number — or a counter id with no slab behind it (`ListenerId`, `TaskId`,
+/// `FrameCallbackId`), whose `next` issue is still the only issuer in
+/// production.
 pub trait MintedId: sealed::Sealed + Copy {
+    /// The highest raw value a mint for this id hands out: the id type's own
+    /// space width, so every raw stays convertible where
+    /// [`MintedId::from_mint`] wraps it, and no mint site has to remember
+    /// the width.
+    #[doc(hidden)]
+    const MINT_CEILING: u64;
+
     #[doc(hidden)]
     fn from_mint(raw: NonZeroU64, token: sealed::MintToken) -> Self;
 }
@@ -67,6 +85,8 @@ pub trait MintedId: sealed::Sealed + Copy {
 impl sealed::Sealed for InputSequenceId {}
 
 impl MintedId for InputSequenceId {
+    const MINT_CEILING: u64 = u64::MAX;
+
     fn from_mint(raw: NonZeroU64, _token: sealed::MintToken) -> Self {
         Self(raw)
     }
@@ -97,6 +117,8 @@ impl DragSessionId {
 impl sealed::Sealed for DragSessionId {}
 
 impl MintedId for DragSessionId {
+    const MINT_CEILING: u64 = u64::MAX;
+
     fn from_mint(raw: NonZeroU64, _token: sealed::MintToken) -> Self {
         Self(raw)
     }
@@ -108,8 +130,54 @@ impl sealed::Sealed for NonZeroU64 {}
 /// keeps the mint and the type's constructor private to itself, so the
 /// never-reissue guarantee holds for the wrapped type too.
 impl MintedId for NonZeroU64 {
+    const MINT_CEILING: u64 = u64::MAX;
+
     fn from_mint(raw: NonZeroU64, _token: sealed::MintToken) -> Self {
         raw
+    }
+}
+
+impl sealed::Sealed for ListenerId {}
+
+/// `ListenerId` is a counter with no slab behind it, so the listener list's
+/// owner mints it from an [`IdMint`] on its own thread; a raw past
+/// `usize::MAX` would not survive the conversion, and the mint refuses it.
+impl MintedId for ListenerId {
+    const MINT_CEILING: u64 = usize::MAX as u64;
+
+    fn from_mint(raw: NonZeroU64, _token: sealed::MintToken) -> Self {
+        Self::zip(usize::try_from(raw.get()).expect(
+            "BUG: a mint issued a listener id past usize::MAX; the mint's \
+             ceiling must end at the id type's MINT_CEILING",
+        ))
+    }
+}
+
+/// `TaskId` is a counter with no slab behind it, minted from an
+/// [`AtomicIdMint`] on the scheduler, where two threads mint.
+impl sealed::Sealed for TaskId {}
+impl MintedId for TaskId {
+    const MINT_CEILING: u64 = usize::MAX as u64;
+
+    fn from_mint(raw: NonZeroU64, _token: sealed::MintToken) -> Self {
+        Self::zip(usize::try_from(raw.get()).expect(
+            "BUG: a mint issued a task id past usize::MAX; the mint's \
+             ceiling must end at the id type's MINT_CEILING",
+        ))
+    }
+}
+
+/// `FrameCallbackId` is a counter with no slab behind it, minted from an
+/// [`AtomicIdMint`] on the scheduler, where two threads mint.
+impl sealed::Sealed for FrameCallbackId {}
+impl MintedId for FrameCallbackId {
+    const MINT_CEILING: u64 = usize::MAX as u64;
+
+    fn from_mint(raw: NonZeroU64, _token: sealed::MintToken) -> Self {
+        Self::zip(usize::try_from(raw.get()).expect(
+            "BUG: a mint issued a frame-callback id past usize::MAX; the \
+             mint's ceiling must end at the id type's MINT_CEILING",
+        ))
     }
 }
 
@@ -135,23 +203,35 @@ impl<I: MintedId> IdMint<I> {
     }
 
     /// A mint whose first id is `last + 1`, so a test can reach the terminal
-    /// value without issuing every id before it. A mint started at
-    /// `u64::MAX` is already exhausted.
+    /// value without issuing every id before it. A mint started at or past
+    /// its ceiling is already exhausted.
     #[must_use]
     pub const fn starting_after(last: u64) -> Self {
         Self {
             last: Cell::new(last),
-            ceiling: u64::MAX,
+            // No wider than the id's own space: `[MintedId::MINT_CEILING]`
+            // caps the raw [`from_mint`](MintedId::from_mint) converts back.
+            ceiling: I::MINT_CEILING,
             _id: PhantomData,
         }
     }
 
     /// This mint issuing no value above `ceiling`: the values past it are
-    /// reserved for identities no mint issues. A mint whose start is at or
-    /// past its ceiling is already exhausted.
+    /// reserved for identities no mint issues. Narrows only — a ceiling
+    /// above the current one is refused in favor of the current one, which
+    /// is the id type's own ceiling or an already-narrowed reservation.
+    /// A mint whose start is at or past its ceiling is already exhausted.
     #[must_use]
     pub const fn ending_at(self, ceiling: u64) -> Self {
-        Self { ceiling, ..self }
+        Self {
+            // `u64::min` is not a const fn yet; the comparison is.
+            ceiling: if ceiling < self.ceiling {
+                ceiling
+            } else {
+                self.ceiling
+            },
+            ..self
+        }
     }
 
     /// Never issue `value` or any value below it, for an owner that hands out
@@ -196,3 +276,90 @@ impl<I: MintedId> Default for IdMint<I> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 #[error("the identity space of this mint is exhausted")]
 pub struct IdExhausted;
+
+/// The cross-thread twin of [`IdMint`]: the same sealed [`MintedId`] contract
+/// and the same refusal rule, issued from any thread.
+///
+/// For an id domain more than one thread mints: the scheduler's task and
+/// callback identities, queued from whichever thread asks. Values are
+/// increasing. Once the last value the mint may issue has been issued, every
+/// later [`next`](Self::next) refuses with [`IdExhausted`] from every thread:
+/// the mint never wraps, so a stale id can never come back as a fresh one.
+///
+/// ```rust
+/// use std::num::NonZeroU64;
+/// use flui_foundation::{AtomicIdMint, IdExhausted};
+///
+/// let mint = AtomicIdMint::<NonZeroU64>::new();
+/// let first = mint.next()?;
+/// let second = mint.next()?;
+/// assert!(first < second);
+///
+/// let pinned = AtomicIdMint::<NonZeroU64>::starting_after(u64::MAX);
+/// assert_eq!(pinned.next(), Err(IdExhausted));
+/// # Ok::<(), flui_foundation::IdExhausted>(())
+/// ```
+#[derive(Debug)]
+pub struct AtomicIdMint<I> {
+    /// The last value issued; at or past `ceiling` once exhausted.
+    last: AtomicU64,
+    /// The last value this mint may issue.
+    ceiling: u64,
+    _id: PhantomData<fn() -> I>,
+}
+
+impl<I: MintedId> AtomicIdMint<I> {
+    /// A mint whose first id is 1.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self::starting_after(0)
+    }
+
+    /// A mint whose first id is `last + 1`, so a test can reach the terminal
+    /// value without issuing every id before it. A mint started at or past
+    /// its ceiling is already exhausted.
+    #[must_use]
+    pub const fn starting_after(last: u64) -> Self {
+        Self {
+            last: AtomicU64::new(last),
+            // No wider than the id's own space: `MintedId::MINT_CEILING`
+            // caps the raw `from_mint` converts back.
+            ceiling: I::MINT_CEILING,
+            _id: PhantomData,
+        }
+    }
+
+    /// Issue the next identity, from any thread that shares `&self`.
+    ///
+    /// # Errors
+    ///
+    /// [`IdExhausted`] once the last value the mint may issue was issued; the
+    /// mint refuses permanently, from every thread, from then on.
+    pub fn next(&self) -> Result<I, IdExhausted> {
+        let mut current = self.last.load(Ordering::Relaxed);
+        loop {
+            let Some(next) = current
+                .checked_add(1)
+                .filter(|next| *next <= self.ceiling)
+                .and_then(NonZeroU64::new)
+            else {
+                return Err(IdExhausted);
+            };
+            match self.last.compare_exchange(
+                current,
+                next.get(),
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => return Ok(I::from_mint(next, sealed::MintToken(()))),
+                Err(observed) => current = observed,
+            }
+        }
+    }
+}
+
+impl<I: MintedId> Default for AtomicIdMint<I> {
+    fn default() -> Self {
+        Self::new()
+    }
+}

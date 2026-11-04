@@ -4,6 +4,7 @@
 use super::*;
 use crate::AnimationRunFuture;
 use crate::repeat::RepeatMode;
+use flui_foundation::IdMint;
 use flui_foundation::Listenable;
 
 #[path = "../tests/support/child_process.rs"]
@@ -62,7 +63,7 @@ fn disposed_status_admission_is_inert_even_after_identity_exhaustion() {
     let mut owner = AnimationController::builder(Duration::from_millis(100)).build_on(None);
     owner.dispose();
     let c = owner.controller();
-    c.inner.borrow_mut().next_listener_id = usize::MAX;
+    c.inner.borrow_mut().listener_mint = IdMint::starting_after(usize::MAX as u64);
     let drops = Rc::new(std::cell::Cell::new(0));
     struct Capture(Rc<std::cell::Cell<usize>>, AnimationController);
     impl Drop for Capture {
@@ -93,7 +94,7 @@ fn exhausted_status_identities_refuse_outside_the_state_borrow() {
             static HOOK_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
         }
         let c = controller(100);
-        c.inner.borrow_mut().next_listener_id = usize::MAX - 1;
+        c.inner.borrow_mut().listener_mint = IdMint::starting_after(usize::MAX as u64 - 1);
         let calls = Rc::new(std::cell::Cell::new(0));
         let _last = c.subscribe_status({
             let calls = Rc::clone(&calls);
@@ -144,7 +145,7 @@ fn exhausted_disposed_value_identities_refuse_outside_the_state_borrow() {
             let mut owner = AnimationController::builder(Duration::from_millis(100)).build_on(None);
             owner.dispose();
             let c = owner.controller();
-            c.inner.borrow_mut().next_listener_id = usize::MAX - 1;
+            c.inner.borrow_mut().listener_mint = IdMint::starting_after(usize::MAX as u64 - 1);
             SOURCE.with(|source| *source.borrow_mut() = Some(c.clone()));
             let previous_hook = std::panic::take_hook();
             std::panic::set_hook(Box::new(|_| {
