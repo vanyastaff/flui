@@ -1,6 +1,6 @@
 # ADR-0054: The viewport commits one result
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-09-04)
 - **Date:** 2026-09-04
 - **Amended:** 2026-10-11 — implemented geometric clip coverage closes the former rectangular-AA limitation; viewport commitment/degradation rules are unchanged.
 - **Amended:** 2026-11-03 — decision 2 reaches below the viewport: a lazy sliver records only a

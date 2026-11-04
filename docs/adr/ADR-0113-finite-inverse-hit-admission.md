@@ -1,6 +1,6 @@
 # ADR-0113: Hit traversal requires an admitted finite inverse
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-10-04)
 - **Date:** 2026-10-04
 - **Related:** ADR-0098 (owned f64 geometry values)
 

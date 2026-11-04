@@ -1,6 +1,6 @@
 # ADR-0235: The refresh indicator comes from an ambient style; the design system installs it
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-10-17)
 - **Date:** 2026-10-17
 - **Amended:** 2026-10-18, accepted by the owner — D1–D3 on the nested-scroll `RefreshIndicator`
   (ADR-0209). The indicator's slot is a band at the pull's leading edge (the top of a vertical

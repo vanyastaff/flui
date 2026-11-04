@@ -1,6 +1,6 @@
 # ADR-0220: Animation misuse diagnostics
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-10-13)
 - **Date:** 2026-10-13
 - **Related:** [ADR-0198](ADR-0198-typed-animation-admission-errors.md), [ADR-0202](ADR-0202-animation-observation-through-tracing.md)
 

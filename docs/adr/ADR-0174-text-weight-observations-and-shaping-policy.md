@@ -1,6 +1,6 @@
 # ADR-0174: Text-weight observations and shaping policy
 
-- **Status:** Accepted (2026-11-03). Not run: the UIKit source on an iOS device or simulator ([`docs/platform-parity.md`, System preferences](../platform-parity.md#system-preferences))
+- **Status:** Accepted (2026-11-03)
 - **Date:** 2026-10-08
 - **Revised:** 2026-11-03 — Android native execution ran on a Galaxy S21 (`docs/platform-parity.md:342`).
 - **Revised:** 2026-10-11 — motion consumer integration is implemented independently under ADR-0195; native text-weight execution limits remain.

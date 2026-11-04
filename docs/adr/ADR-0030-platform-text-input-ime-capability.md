@@ -1,6 +1,6 @@
 # ADR-0030: Platform text input (IME)
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-07-17)
 - **Date:** 2026-07-17
 - **Amended:** 2026-10-11 — commit-on-blur is implemented under ADR-0142; its remaining composition-exit and anchor obligations stay outstanding.
 - **Absorbs:** ADR-0032, ADR-0033

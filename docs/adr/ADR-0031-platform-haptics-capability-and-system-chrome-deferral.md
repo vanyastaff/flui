@@ -1,6 +1,6 @@
 # ADR-0031: Platform haptics capability, and system chrome deferral
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-07-17)
 - **Date:** 2026-07-17
 - **Superseded-by:** [ADR-0210](ADR-0210-two-tier-haptics.md), §1–§4 only; §5 (system chrome
   deferral) stands, except the overlay style: [ADR-0232](ADR-0232-annotated-regions-and-overlay-style.md)

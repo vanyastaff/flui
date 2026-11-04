@@ -1,6 +1,6 @@
 # ADR-0075: Derived state and effects on the UI runtime-scoped signal graph
 
-- **Status:** Proposed
+- **Status:** Proposed (2026-09-22)
 - **Date:** 2026-09-22
 - **Split from:** ADR-0074
 

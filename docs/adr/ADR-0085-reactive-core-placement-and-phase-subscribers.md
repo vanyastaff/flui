@@ -1,8 +1,6 @@
 # ADR-0085: The reactive graph is UI runtime-owned and stays in `flui-view`; reads go through a `ReadScope` contract in `flui-foundation`
 
-- **Status:** Accepted (2026-11-03) for §1, §2, §5 and the contract of §6 (its first item);
-  §3, §4 and the rest of §6 are Proposed. Not implemented:
-  [`docs/gaps.md` entry 43, ADR-0085 §5](../gaps.md#43-accepted-adr-sections-not-built-yet).
+- **Status:** Accepted (2026-11-03)
 - **Date:** 2026-09-25
 - **Revised:** 2026-09-26 (prototype of the read contract; see Context. Then §2 and §5 shipped,
   with the drivers, `RebuildSink`, `ScopeRef::detached` and `SignalError::NoGraph` moved to §6
@@ -25,6 +23,8 @@
 - **Refs:** decision D4 and owner decision 5 in [`design/decisions.md`](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/design/decisions.md);
   the panel record in
   [`report-decisions.ru.md` §5](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/2026-09-25-architecture-review/report-decisions.ru.md)
+
+> **Sections not yet accepted:** §3, §4 and the part of §6 after its first item.
 
 ADR-0074 decided *what* a signal is. This record decides *where the graph lives*, *who owns an
 instance of it*, and *what may read it*. It keeps ADR-0074's semantics (read-is-subscribe in

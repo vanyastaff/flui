@@ -1,6 +1,6 @@
 # ADR-0143: FLUI owns its pointer and keyboard event vocabulary
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-10-06)
 - **Date:** 2026-10-06
 - **Amended by:** [ADR-0217](ADR-0217-interaction-module-layers-and-pointer-assembly.md) (`PanZoomTransform` loses its pan component; a two-finger pan is `Scroll` with phases)
 - **Related:** [ADR-0089](ADR-0089-upstream-types-in-stable-signatures.md) §4 (this record is

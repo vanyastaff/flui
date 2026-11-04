@@ -1,6 +1,6 @@
 # ADR-0225: Viewport reveal follows registered semantics ancestry
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-10-17)
 - **Date:** 2026-10-16
 - **Related:** [ADR-0168](ADR-0168-descendant-reveal-through-scroll-ancestors.md)
 

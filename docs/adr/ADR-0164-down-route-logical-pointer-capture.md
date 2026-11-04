@@ -1,6 +1,6 @@
 # ADR-0164: Down-route logical pointer capture
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-10-07)
 - **Date:** 2026-10-07
 - **Related:** [ADR-0143](ADR-0143-flui-owned-input-event-vocabulary.md)
   (owned contact identity and terminal events),

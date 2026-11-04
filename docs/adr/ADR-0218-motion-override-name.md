@@ -1,6 +1,6 @@
 # ADR-0218: The application motion setting is named `MotionOverride`
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-10-13)
 - **Date:** 2026-10-13
 - **Supersedes:** [ADR-0195](ADR-0195-presentation-motion-policy.md), the application setting's name only.
 - **Related:** [ADR-0172](ADR-0172-host-owned-system-preferences.md)

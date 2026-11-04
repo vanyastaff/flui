@@ -1,6 +1,6 @@
 # ADR-0105: Asset validation and bridged load progress
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-10-03)
 - **Date:** 2026-10-03
 - **Superseded-by:** [ADR-0279](ADR-0279-image-loads-run-on-the-lanes-their-caller-holds.md)
   for the second and third paragraphs of "Decision" only (the bridge's runtime)

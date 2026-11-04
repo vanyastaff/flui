@@ -1,6 +1,6 @@
 # ADR-0184: Coordinate mapping preserves admitted pointer readings
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-10-10)
 - **Date:** 2026-10-10
 - **Related:** [ADR-0143](ADR-0143-flui-owned-input-event-vocabulary.md),
   [ADR-0098](ADR-0098-owned-f64-geometry-values.md)

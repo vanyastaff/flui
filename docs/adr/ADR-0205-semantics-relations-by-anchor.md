@@ -1,6 +1,6 @@
 # ADR-0205: Semantics relations name their targets by anchor, resolved at publication
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-10-12)
 - **Date:** 2026-10-12
 - **Superseded-by:** [ADR-0263](ADR-0263-semantics-relations-follow-aria.md) for §3 only (every ARIA
   relation with an AccessKit property is a `SemanticsRelation`)

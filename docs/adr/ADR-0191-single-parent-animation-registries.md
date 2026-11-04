@@ -1,6 +1,6 @@
 # ADR-0191: Animation registries have one parent
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-10-11)
 - **Date:** 2026-10-10
 - **Supersedes:** [ADR-0175](ADR-0175-owner-local-scheduling-and-animation.md), shared descendant topology only; [ADR-0125](ADR-0125-vsync-registration-authority.md), child attachment returning `Option` only.
 - **Related:** [ADR-0179](ADR-0179-controller-registration-ownership.md), [ADR-0195](ADR-0195-presentation-motion-policy.md).

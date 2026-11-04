@@ -1,6 +1,6 @@
 # ADR-0112: Gesture completion carries an explicit terminal reason
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-10-04)
 - **Date:** 2026-10-04
 - **Related:** ADR-0086 (event-context callback delivery), ADR-0088 (the package-author surface)
 

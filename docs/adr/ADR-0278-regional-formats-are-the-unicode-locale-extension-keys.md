@@ -1,6 +1,6 @@
 # ADR-0278: The user's regional formats are the Unicode locale extension keys, carried beside the locale
 
-- **Status:** Accepted (2026-10-31). Implemented on every host (§3).
+- **Status:** Implemented (2026-10-31)
 - **Date:** 2026-10-31
 - **Related:** [ADR-0172](ADR-0172-host-owned-system-preferences.md)
   (system preferences are a host observation the runtime accepts as one snapshot),

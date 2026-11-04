@@ -1,6 +1,6 @@
 # ADR-0025: The `LocalHistoryRoute` seam
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-07-10)
 - **Date:** 2026-07-11
 
 ## Context

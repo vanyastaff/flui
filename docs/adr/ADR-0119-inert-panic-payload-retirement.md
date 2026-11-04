@@ -1,6 +1,6 @@
 # ADR-0119: Release known inert panic payloads while retaining opaque failures
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-10-04)
 - **Date:** 2026-10-04
 - **Superseded-by:** [ADR-0281](ADR-0281-a-destructor-that-panics-during-an-unwind-aborts-as-in-std.md)
   in full: payloads are dropped normally.

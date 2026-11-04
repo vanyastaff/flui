@@ -1,6 +1,6 @@
 # ADR-0234: Layout baselines compose through committed child offsets
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-10-17)
 - **Date:** 2026-10-16
 - **Related:** [ADR-0098](ADR-0098-owned-f64-geometry-values.md)
 

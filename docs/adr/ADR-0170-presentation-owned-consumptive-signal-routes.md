@@ -1,6 +1,6 @@
 # ADR-0170: Presentation-owned consumptive signal routes
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-10-07)
 - **Date:** 2026-10-07
 - **Superseded in part by:** [ADR-0209](ADR-0209-nested-scroll-connection.md) §5 (a burst
   expires after the preset's idle time, and a phased one that never ends after the longer phased

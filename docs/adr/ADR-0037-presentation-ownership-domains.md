@@ -1,6 +1,6 @@
 # ADR-0037: Presentation ownership domains — three physical owners, no mediation layer
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-07-23)
 - **Date:** 2026-07-23
 - **Supersedes:** ADR-0030 in part — its original text-input ownership (process-global
   registry, opaque window handle, application IME bridge), since removed from that record

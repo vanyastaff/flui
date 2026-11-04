@@ -1,6 +1,6 @@
 # ADR-0028: Design-system decoupling contract
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-07-16)
 - **Date:** 2026-07-16
 - **Amended:** 2026-09-23 — enforced through the design systems' own manifests
   (`allowed-dependents`, `allowed-dev-dependents`) instead of a registry.

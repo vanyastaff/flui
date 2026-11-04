@@ -1,6 +1,6 @@
 # ADR-0050: GlobalKey identity, per-frame reservations, and the duplicate verdict
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-08-24)
 - **Date:** 2026-08-24
 - **Supersedes in part:** ADR-0043 §2 (hash-keyed `GlobalKey` authorities become key-identity-keyed)
 - **Related:** [ADR-0043](ADR-0043-presentation-bundled-trees-and-realm-globalkey-scope.md) (the two `GlobalKey` authorities — this ADR corrects its "key hash → …" wording to "key → …" and adds the per-frame ledgers alongside them); [ADR-0027](ADR-0027-owner-affine-ui-realms.md) (owner-affine UI runtimes)

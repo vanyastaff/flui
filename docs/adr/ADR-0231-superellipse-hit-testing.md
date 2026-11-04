@@ -1,6 +1,6 @@
 # ADR-0231: A superellipse clip hit-tests the curve it draws
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-10-17)
 - **Date:** 2026-10-17
 
 ## Context

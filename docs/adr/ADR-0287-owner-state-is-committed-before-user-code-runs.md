@@ -1,10 +1,6 @@
 # ADR-0287: Owner state is committed before user code runs
 
-- **Status:** Accepted (2026-11-03). Partly implemented: `flui-foundation` has the primitives, and
-  the capability seam's `Completion` and `Persisted` use them; each other seam moves to them in
-  its own change (see Migration). Every hand-written `catch_unwind` left carries an
-  `ADR-0287:` expectation of `clippy::disallowed_methods` (ADR-0303 §6), so those expectations are
-  the migration's remaining count.
+- **Status:** Accepted (2026-11-03)
 - **Date:** 2026-11-03
 - **Superseded-by:** [ADR-0303](ADR-0303-a-rule-takes-the-first-rung-that-states-it-and-an-xtask-gate-is-the-last.md) §6 for the last bullet of Confirmation
   only: the hand-written `catch_unwind` calls are a `clippy.toml` entry with an expectation at

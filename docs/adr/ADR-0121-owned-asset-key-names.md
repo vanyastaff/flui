@@ -1,6 +1,6 @@
 # ADR-0121: Asset names have shared ownership
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-10-04)
 - **Date:** 2026-10-04
 - **Implements:** ADR-0097's proposed removal of the asset interner
 - **Related:** ADR-0107 (asset sources), ADR-0120 (typed cache retention)

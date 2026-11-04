@@ -6,7 +6,7 @@ wire are gone.*
 
 ---
 
-- **Status:** Accepted (landed 2026-09-18)
+- **Status:** Implemented (2026-09-18)
 - **Superseded-by:** [ADR-0122](ADR-0122-validated-glyph-image.md), only the
   producer/atlas byte-layout validation boundary; other decisions remain in force.
 - **Amended by:** [ADR-0092](ADR-0092-per-realm-text-over-parley.md) (`GlyphKey` names a font

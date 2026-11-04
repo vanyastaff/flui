@@ -1,6 +1,6 @@
 # ADR-0187: Missing inherited lookups depend on ancestry
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-10-11)
 - **Date:** 2026-10-10
 - **Related:** [ADR-0074](ADR-0074-realm-scoped-signals.md).
 

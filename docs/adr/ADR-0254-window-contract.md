@@ -1,12 +1,6 @@
 # ADR-0254: One window truth: a state snapshot, admitted commands, one handler and an owner-local window
 
-- **Status:** Accepted (2026-10-20). Decisions 1 to 5 are implemented: the snapshot, admitted
-  commands, the per-frame verbs and the material command, the window handler and the
-  `AppHandler` passed to `Platform::run`, and the owner-local window with its surface target and
-  redraw requester. What remains of decisions 6 to 8 lands as separate changes, in the order of
-  the platform-layer feature's tasks. A platform's row in `docs/platform-parity.md` moves only
-  after a run on that platform (Confirmation): the AppKit and UIKit hosts of decision 5 are
-  type-checked here and run on a Mac separately.
+- **Status:** Accepted (2026-10-20)
 - **Date:** 2026-10-20
 - **Superseded-by:** [ADR-0277](ADR-0277-a-window-publishes-its-insets-and-the-keyboards-motion.md)
   in part: the snapshot field `safe_area` is `insets: WindowInsets`.

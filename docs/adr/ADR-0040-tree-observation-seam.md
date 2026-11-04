@@ -1,6 +1,6 @@
 # ADR-0040: Tree observation seam — dependency-inverted devtools access
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-07-28)
 - **Date:** 2026-07-28
 - **Amended:** 2026-09-27 by [ADR-0088](ADR-0088-official-packages-sdk-and-facade.md) — §8's
   foundation-only dependency and the test's place in `flui-testing` no longer hold:

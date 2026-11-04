@@ -1,6 +1,6 @@
 # ADR-0165: Focus policy groups and directional traversal
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-10-07)
 - **Date:** 2026-10-07
 - **Supersedes:** [ADR-0026](ADR-0026-focus-traversal-seam.md) §2's scope-only
   resolver and §3's scope-only parent retry; its widget and scope-history contracts remain

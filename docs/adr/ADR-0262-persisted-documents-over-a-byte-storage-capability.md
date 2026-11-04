@@ -1,13 +1,6 @@
 # ADR-0262: Application state persists as versioned documents the application encodes, written through the host's flush registry over a byte-storage capability
 
-- **Status:** Proposed. The contract is in place and not wired: `Storage`, `StorageName`,
-  `WriteMode`, `StoredVersion`, `Stored` and `StorageError` (`crates/flui-platform/src/storage.rs`),
-  `FileStore` (`crates/flui-native/src/storage/file_store.rs`), `Document`, `DecodeError`,
-  `Revision`, `PersistError` with `CodecStep`, `SaveStatus` and `Persisted`
-  (`crates/flui-view/src/persist/`), `AppConfig::with_storage_dir`, and `Router::from_stack` with
-  `RouterHandle::stack`, which carry the top route only. `Persisted::load` resolves to
-  `StorageError::Unsupported`, `set` refuses every value, and storage still reaches a UI runtime
-  through `LifecycleContext::storage`.
+- **Status:** Proposed (2026-10-28)
 - **Date:** 2026-10-28
 - **Superseded-by:** [ADR-0281](ADR-0281-a-destructor-that-panics-during-an-unwind-aborts-as-in-std.md),
   §4's retention of the codec's panic payload only: the payload is dropped.

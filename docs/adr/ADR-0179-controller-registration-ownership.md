@@ -1,6 +1,6 @@
 # ADR-0179: Controller registrations belong to driven owners
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-10-09)
 - **Date:** 2026-10-08
 - **Amended:** 2026-10-11 — independent token and topology authorities are linked by scope; driven ownership remains unchanged.
 - **Supersedes:** [ADR-0125](ADR-0125-vsync-registration-authority.md), public

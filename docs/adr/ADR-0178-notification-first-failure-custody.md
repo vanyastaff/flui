@@ -1,6 +1,6 @@
 # ADR-0178: Notification delivery preserves the enclosing first failure
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-10-09)
 - **Date:** 2026-10-08
 - **Supersedes:** [ADR-0109](ADR-0109-notification-channel-surface.md), decisions 3–4's
   swallowed listener failure and snapshot disposal behavior.

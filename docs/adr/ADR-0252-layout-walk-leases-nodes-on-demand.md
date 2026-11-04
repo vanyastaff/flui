@@ -1,6 +1,6 @@
 # ADR-0252: The layout walk leases nodes on demand, so its cost follows the work
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-10-20)
 - **Date:** 2026-10-21
 - **Amends:** the render-tree storage entry of `crates/flui-rendering/ARCHITECTURE.md`
   ("Render-tree storage uses a `Slab<RenderNode>`")

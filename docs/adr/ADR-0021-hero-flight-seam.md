@@ -1,6 +1,6 @@
 # ADR-0021: Hero flight seam — an overlay copy, ancestor-relative geometry, a post-frame measurement
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-07-09)
 - **Date:** 2026-07-09
 - **Superseded in part by:** ADR-0078 (capability acquisition)
 - **Amended:** 2026-11-03 — gesture-driven flights (edge swipe-back) and flights across nested navigators are implemented and stated as §9; the "not carried" entries for them are removed. §1 to §7 are unchanged, and §8's public surface lists `Hero::transition_on_user_gestures`.

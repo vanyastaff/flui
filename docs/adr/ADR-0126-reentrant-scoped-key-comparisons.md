@@ -1,6 +1,6 @@
 # ADR-0126: Reentrant scoped key comparisons
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-10-05)
 - **Date:** 2026-10-05
 - **Supersedes:** [ADR-0043](ADR-0043-presentation-bundled-trees-and-realm-globalkey-scope.md), only its §3 exhaustive outcome claim for custom key callbacks
 - **Related:** [ADR-0050](ADR-0050-global-key-identity-and-frame-reservations.md)

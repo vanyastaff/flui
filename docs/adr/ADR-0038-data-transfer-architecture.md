@@ -1,6 +1,6 @@
 # ADR-0038: Data transfer — clipboard reachability, representations and system drag-and-drop
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-07-28)
 - **Date:** 2026-07-28
 - **Absorbs:** ADR-0034
 - **Amended by:** [ADR-0082](ADR-0082-platform-api-contract-crate.md) (§4: the transport and its

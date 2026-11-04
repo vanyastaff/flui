@@ -1,6 +1,6 @@
 # ADR-0080: The agent protocol is one wire contract over MCP, backend-neutral
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-09-24)
 - **Date:** 2026-09-24
 - **Amended by:** [ADR-0095](ADR-0095-agent-protocol-schema-crate.md) §3 (the in-process
   transport this ADR left open: a local endpoint `flui mcp` will proxy)

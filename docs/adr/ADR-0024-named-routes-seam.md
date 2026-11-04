@@ -1,6 +1,6 @@
 # ADR-0024: Named routes (`on_generate_route`, `push_named`, `RouteSettings.arguments`)
 
-- **Status:** Deprecated
+- **Status:** Accepted (2026-07-10)
 - **Date:** 2026-07-10
 - **Amended:** 2026-10-11 — refusal vocabulary includes the implemented Router admission boundary; named-route retirement remains conditional on ADR-0093.
 - **Related:** [ADR-0093](ADR-0093-router-is-the-primary-navigation-api.md) (a proposed typed

@@ -1,6 +1,6 @@
 # ADR-0249: The Android event loop blocks until something wakes it
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-10-20)
 - **Date:** 2026-10-19
 - **Supersedes:** [ADR-0236](ADR-0236-display-snapshot-and-refresh-period.md) decision 7's Android
   sentence (an idle poll derived from the display period), and

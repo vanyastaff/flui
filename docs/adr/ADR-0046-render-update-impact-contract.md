@@ -1,6 +1,6 @@
 # ADR-0046: Return explicit impact from render-view updates
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-08-10)
 - **Date:** 2026-08-10
 - **Amended:** 2026-11-03 — the value carries a fifth effect, `COMPOSITED_LAYER_UPDATE` (bit `1 << 4`, no paint bit), applied after paint and refused when paint is requested; the application order has five steps; the non-Active cases of `RenderBehavior::on_update` are stated exactly; and the same value travels through `LocalRenderInvalidationHandle::request_update` ([ADR-0190](ADR-0190-owner-local-render-invalidation.md)). The decision is unchanged: setters return the impact and the owner applies it once.
 - **Issue:** [#534 — Make render-view updates return explicit invalidation impact](https://github.com/vanyastaff/flui/issues/534)

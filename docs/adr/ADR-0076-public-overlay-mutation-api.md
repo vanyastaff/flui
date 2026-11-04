@@ -1,6 +1,6 @@
 # ADR-0076: Public overlay API — lookup and mutation
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-09-22)
 - **Date:** 2026-09-23
 - **Absorbs:** ADR-0036
 

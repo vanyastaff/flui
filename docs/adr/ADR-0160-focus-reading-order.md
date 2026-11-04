@@ -1,6 +1,6 @@
 # ADR-0160: Focus traversal uses scoped reading direction
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-10-07)
 - **Date:** 2026-10-07
 - **Supersedes:** [ADR-0026](ADR-0026-focus-traversal-seam.md) §2's required
   traversal-policy signature only

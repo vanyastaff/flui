@@ -1,6 +1,6 @@
 # ADR-0229: Image placement is one painting contract
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-10-17)
 - **Date:** 2026-10-17
 - **Related:** ADR-0115 (image source regions), ADR-0098 (logical and device geometry)
 

@@ -1,6 +1,6 @@
 # ADR-0058: The platform paces production; a sleep never does
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-09-05)
 - **Date:** 2026-09-05
 - **Amended:** 2026-10-11 — removed the self-referential absorption label; platform pacing and fallback-deadline decisions are unchanged.
 - **Superseded-by:** [ADR-0257](ADR-0257-frame-timing-and-latency.md), decision 0 only: the swapchain's frame

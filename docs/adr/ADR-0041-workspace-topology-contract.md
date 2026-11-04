@@ -1,6 +1,6 @@
 # ADR-0041: Workspace topology contract
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-08-01)
 - **Date:** 2026-08-01
 - **Amended:** 2026-09-23 — the layer graph moved from `docs/workspace-layers.toml` into the
   manifests (`[package.metadata.flui] layer`), checked by `cargo xtask workspace`. Layer order

@@ -1,9 +1,6 @@
 # ADR-0093: Router is the primary navigation API
 
-- **Status:** Proposed. Steps one and two of the implementation series are implemented: in
-  `flui-widgets`, `Routable`, `RoutePath`, `Router` and `RouterHandle` over an addressed
-  Navigator, and `WidgetsApp::router`; in `flui-macros`, `#[derive(Routable)]`. The later steps
-  are not implemented.
+- **Status:** Proposed (2026-09-25)
 - **Date:** 2026-09-25
 - **Superseded-by:** [ADR-0254](ADR-0254-window-contract.md) decision 4, in part: the
   `Platform::on_open_urls` registration named here as a deep link's source is deleted; the

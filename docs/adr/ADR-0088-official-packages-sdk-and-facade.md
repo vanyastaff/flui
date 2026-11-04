@@ -1,18 +1,6 @@
 # ADR-0088: Official packages live in this workspace, build on `flui-sdk`, and the facade names none of them
 
-- **Status:** Proposed. First moves landed (2026-09-26): `flui-sdk` exists and
-  `flui-foundation` carries the train guard `links = "flui_train"`; `flui-material` builds on
-  `flui-sdk` alone from `packages/flui-material`, `flui-cupertino` builds on `flui-sdk` alone
-  from `packages/flui-cupertino`, and the FLUI derives resolve through the SDK first. On
-  2026-09-27 `flui-devtools` moved onto `flui-sdk` alone from `packages/flui-devtools`;
-  `flui-hot-reload` stays in `crates/` (move 4). On 2026-09-29 ADR-0094's hook landed and
-  `flui-app` stopped naming it; the facade's edges and the move wait on the blockers in move 4
-  ([migration plan](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/plans/2026-09-25-architecture-migration-plan.md)). Move 5's first half
-  landed the same day: the facade's `default` is `[]`; the `material`/`cupertino` features,
-  re-exports and the Material prelude half remain until `flui_material::prelude` and the example
-  move (move 5b). Also on 2026-09-29 `flui-view`'s `runtime-internals` feature became the hidden
-  module `flui_view::__runtime` (ADR-0081 §4), which `flui_sdk::view` shadows; that does not
-  unblock the hot-reload move (move 4).
+- **Status:** Proposed (2026-09-25)
 - **Date:** 2026-09-25
 - **Superseded-by:** [ADR-0154](ADR-0154-capability-crates.md) in part: official packages keep their rules; capability crates are a second kind of package with rules of their own.
 - **Amended by:** [ADR-0098](ADR-0098-owned-f64-geometry-values.md) (§8) — `flui-geometry` and

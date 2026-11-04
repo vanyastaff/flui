@@ -1,13 +1,6 @@
 # ADR-0306: Display-list commands hold local geometry under interned transforms
 
-- **Status:** Accepted (2026-11-03). Not implemented: every command still stores its own
-  `Matrix4` (`crates/flui-painting/src/display_list/command.rs:29-35`); `DRRect`, `ImageRegion`
-  and `ImageFiltered` hold their payloads inline and `Path` its hint and bounds
-  (`crates/flui-painting/src/paint/path.rs:75-87`); no size assertion exists; the canvas records
-  non-finite input as given (`crates/flui-painting/src/canvas/drawing.rs:42-46`); `clear` drops
-  the commands before it resets the cached extents
-  (`crates/flui-painting/src/display_list/mod.rs:183-188`); `Canvas::draw_picture` remains
-  (`drawing.rs:358-380`).
+- **Status:** Accepted (2026-11-03)
 - **Date:** 2026-11-03
 - **Supersedes:** [ADR-0066](ADR-0066-display-list-command-representation.md) "The command is
   `{ transform, op }`" and "The op has a budget" only (the absolute matrix stored in every command,

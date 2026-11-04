@@ -1,6 +1,6 @@
 # ADR-0069: Native text input has one editing route
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-09-17)
 - **Date:** 2026-09-17
 - **Amended:** 2026-10-11 — the original one-event wording is scoped to text-editing authority, not a universal count of keyboard/composition observations. Native command delivery obligations remain.
 

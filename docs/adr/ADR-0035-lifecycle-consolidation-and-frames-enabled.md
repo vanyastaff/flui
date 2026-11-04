@@ -1,6 +1,6 @@
 # ADR-0035: Lifecycle consolidation and the frames-enabled re-enable leg
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-07-17)
 - **Date:** 2026-07-18
 - **Related:** ADR-0027 (UI runtime ownership), ADR-0058 (pacing; the backgrounded pump)
 - **Superseded-by:**

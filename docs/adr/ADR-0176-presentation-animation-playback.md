@@ -1,6 +1,6 @@
 # ADR-0176: Animation playback belongs to a presentation clock
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-10-09)
 - **Date:** 2026-10-08
 - **Related:** [ADR-0175](ADR-0175-owner-local-scheduling-and-animation.md),
   [ADR-0095](ADR-0095-agent-protocol-schema-crate.md).

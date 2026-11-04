@@ -1,6 +1,6 @@
 # ADR-0201: Preserve modifier observations and interpret keyboard commands separately
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-10-12)
 - **Date:** 2026-10-12
 - **Supersedes:** ADR-0023 decision 2 and ADR-0156's modifier-comparison description,
   only for source composition and ordinary command interpretation. Character-only

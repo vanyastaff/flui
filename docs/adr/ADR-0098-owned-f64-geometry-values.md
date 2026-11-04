@@ -1,6 +1,6 @@
 # ADR-0098: Geometry values are FLUI-owned `f64` structs; flui-geometry and flui-types dissolve
 
-- **Status:** Accepted (2026-11-03). Not implemented: [`docs/gaps.md` entry 43, ADR-0098 §3 and §5–§8](../gaps.md#43-accepted-adr-sections-not-built-yet)
+- **Status:** Accepted (2026-11-03)
 - **Date:** 2026-09-28
 - **Revised:** 2026-11-03 — what is not built moves from the Status line and the "Implementation status" section to [`docs/gaps.md` entry 43](../gaps.md#43-accepted-adr-sections-not-built-yet).
 - **Revised:** 2026-11-03 — containment is half-open for every axis-aligned box (§3, "Containment"),

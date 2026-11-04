@@ -1,6 +1,6 @@
 # ADR-0071: Apple backends bind their UI kit through objc2
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-09-18)
 - **Date:** 2026-09-18
 - **Amended:** 2026-10-22 — following [ADR-0151](ADR-0151-platform-layer-boundary-and-names.md)
   §10: `FLUIContentView` is the owner's (`owner::apple::macos::content_view`) and registers

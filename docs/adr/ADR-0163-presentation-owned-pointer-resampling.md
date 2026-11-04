@@ -1,6 +1,6 @@
 # ADR-0163: Presentation-owned pointer resampling
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-10-07)
 - **Date:** 2026-10-07
 - **Amended:** 2026-10-11 — current clock ownership uses the UI runtime vocabulary of ADR-0171.
 - **Related:** [ADR-0027](ADR-0027-owner-affine-ui-realms.md),
