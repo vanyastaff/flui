@@ -1,29 +1,15 @@
-# State: setState, InheritedView, ValueNotifier
+# State: signals, InheritedView, ValueNotifier
 
-FLUI has four ways state enters the tree: the three familiar from Flutter, plus presentation-scoped signals:
-
-## `setState`
-
-A `ViewState` schedules its own rebuild by calling `Element::set_state`/`set_state_scheduled`
-(`crates/flui-view/src/element/unified.rs`). In application code you don't usually call it directly:
-`StateCell<T>`/`StateHandle<T>` (`crates/flui-view/src/state_cell.rs`, re-exported from
-`flui::prelude`) wrap that call behind a small handle you `bind(ctx)` once in `init_state`, then
-mutate with `.update(...)`/`.set(...)`:
-
-```rust,ignore
-count.update(|n| n + 1);
-```
-
-This replaces the older pattern of a raw
-`Rc<Cell<T>>` field plus a hand-threaded rebuild handle with one field.
+FLUI has three ways state enters the tree. Application and element-local state is a presentation-scoped
+signal; scope-wide data is an `InheritedView`; a controller that lives outside the tree is a `ValueNotifier`
+or another `Listenable`.
 
 ## Signals
 
-`examples/counter.rs` keeps its count in a presentation-scoped signal instead. `flui::prelude::Signal<T>`
-(ADR-0074, placed by ADR-0085) is a `Copy` handle to a value in the presentation's reactive graph:
-created in `init_state` (`self.count = ctx.signal(0)`), read in `build` (`count.get(ctx)`, which
-subscribes the element), and written from an event callback through the `cx` it receives
-(ADR-0086):
+`flui::prelude::Signal<T>` (ADR-0074, placed by ADR-0085) is a `Copy` handle to a value in the
+presentation's reactive graph. `examples/counter.rs` keeps its count in one: created in `init_state`
+(`self.count = ctx.signal(0)`), read in `build` (`count.get(ctx)`, which subscribes the element), and written
+from an event callback through the `cx` it receives (ADR-0086):
 
 ```rust,ignore
 RawButton::new(Text::new("Increment"))

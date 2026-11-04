@@ -23,7 +23,7 @@ use std::time::Duration;
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use flui_testing::widgets::{LaidOut, lay_out, loose};
-use flui_view::{FrameBuildReport, Reactive, RebuildReason, Signal, StateHandle, View};
+use flui_view::{FrameBuildReport, Reactive, RebuildHandle, RebuildReason, Signal, View};
 use flui_widgets::prelude::*;
 use flui_widgets::{Column, SizedBox};
 
@@ -52,16 +52,60 @@ impl StatelessView for CellA {
 
 // ---------------------------------------------------------------- variant A
 
-/// A: the owning `ViewState` holds a `Vec<u32>` behind a `StateHandle`; a
+/// A: the `setState` baseline. A value shared with the owning `ViewState`,
+/// whose change schedules **that** element through its [`RebuildHandle`]
+/// (`RebuildReason::StateChange`). It exists only to measure what a change
+/// with no granularity costs; application state is a `Signal`.
+struct OwnerState<T> {
+    value: Rc<RefCell<T>>,
+    rebuild: Rc<RefCell<Option<RebuildHandle>>>,
+}
+
+impl<T> Clone for OwnerState<T> {
+    fn clone(&self) -> Self {
+        Self {
+            value: Rc::clone(&self.value),
+            rebuild: Rc::clone(&self.rebuild),
+        }
+    }
+}
+
+impl<T> OwnerState<T> {
+    fn new(initial: T) -> Self {
+        Self {
+            value: Rc::new(RefCell::new(initial)),
+            rebuild: Rc::new(RefCell::new(None)),
+        }
+    }
+
+    /// Take the element's rebuild handle; call from `init_state`.
+    fn bind(&self, ctx: &dyn LifecycleContext) {
+        self.rebuild.replace(Some(ctx.rebuild_handle()));
+    }
+
+    fn with<R>(&self, f: impl FnOnce(&T) -> R) -> R {
+        f(&self.value.borrow())
+    }
+
+    fn update(&self, f: impl FnOnce(&mut T)) {
+        f(&mut self.value.borrow_mut());
+        let handle = self.rebuild.borrow().clone();
+        if let Some(handle) = handle {
+            handle.schedule(RebuildReason::StateChange);
+        }
+    }
+}
+
+/// A: the owning `ViewState` holds a `Vec<u32>` behind an `OwnerState`; a
 /// change is `handle.update(..)` which schedules **this** element, and its
 /// build re-emits every child.
 #[derive(Clone, StatefulView)]
 struct ListA {
-    values: StateHandle<Vec<u32>>,
+    values: OwnerState<Vec<u32>>,
 }
 
 struct ListAState {
-    values: StateHandle<Vec<u32>>,
+    values: OwnerState<Vec<u32>>,
 }
 
 impl StatefulView for ListA {
@@ -92,11 +136,11 @@ impl ViewState<ListA> for ListAState {
 /// whole form is one `ViewState`.
 #[derive(Clone, StatefulView)]
 struct FormA {
-    fields: StateHandle<Vec<u32>>,
+    fields: OwnerState<Vec<u32>>,
 }
 
 struct FormAState {
-    fields: StateHandle<Vec<u32>>,
+    fields: OwnerState<Vec<u32>>,
 }
 
 impl StatefulView for FormA {
@@ -126,11 +170,11 @@ impl ViewState<FormA> for FormAState {
 /// A: one setting read by every cell of three screens; the app root owns it.
 #[derive(Clone, StatefulView)]
 struct AppA {
-    unit: StateHandle<u32>,
+    unit: OwnerState<u32>,
 }
 
 struct AppAState {
-    unit: StateHandle<u32>,
+    unit: OwnerState<u32>,
 }
 
 impl StatefulView for AppA {
@@ -319,7 +363,7 @@ fn scenarios() -> Vec<Scenario> {
 
     // 1. List: one visible row changes value.
     {
-        let values = StateHandle::new((0..LIST_ROWS as u32).collect::<Vec<_>>());
+        let values = OwnerState::new((0..LIST_ROWS as u32).collect::<Vec<_>>());
         let laid = lay_out(
             ListA {
                 values: values.clone(),
@@ -356,7 +400,7 @@ fn scenarios() -> Vec<Scenario> {
 
     // 2. List: append one row (then remove it, so the tree stays bounded).
     {
-        let values = StateHandle::new((0..LIST_ROWS as u32).collect::<Vec<_>>());
+        let values = OwnerState::new((0..LIST_ROWS as u32).collect::<Vec<_>>());
         let laid = lay_out(
             ListA {
                 values: values.clone(),
@@ -410,7 +454,7 @@ fn scenarios() -> Vec<Scenario> {
         let initial: Vec<u32> = (0..FORM_FIELDS as u32)
             .map(|i| if i % 3 == 0 { 0 } else { 5 })
             .collect();
-        let fields = StateHandle::new(initial.clone());
+        let fields = OwnerState::new(initial.clone());
         let laid = lay_out(
             FormA {
                 fields: fields.clone(),
@@ -447,7 +491,7 @@ fn scenarios() -> Vec<Scenario> {
 
     // 5. Setting read by 600 cells across three screens.
     {
-        let unit = StateHandle::new(1u32);
+        let unit = OwnerState::new(1u32);
         let laid = lay_out(AppA { unit: unit.clone() }, loose(4096.0));
         out.push(Scenario {
             name: "setting read by 3x200 cells",
@@ -477,7 +521,7 @@ fn scenarios() -> Vec<Scenario> {
 
     // 6. Idle: no change at all.
     {
-        let values = StateHandle::new((0..LIST_ROWS as u32).collect::<Vec<_>>());
+        let values = OwnerState::new((0..LIST_ROWS as u32).collect::<Vec<_>>());
         let laid = lay_out(ListA { values }, loose(4096.0));
         out.push(Scenario {
             name: "idle frame (list 10k mounted)",

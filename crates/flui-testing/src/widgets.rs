@@ -19,9 +19,11 @@
 
 pub mod harness;
 mod host;
+mod shared_signal;
 mod signal_probe;
 mod state_creations;
 
+pub use shared_signal::SharedSignal;
 pub use signal_probe::{ProbeRoot, ProbeRootState, ProbeSignals, SignalProbe};
 pub use state_creations::{StateCreations, StateCreationsState};
 

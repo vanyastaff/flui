@@ -11,10 +11,6 @@ fn ui_tests() {
     t.pass("tests/ui_pass/state_and_depth.rs");
     t.compile_fail("tests/ui/apply_view_has_no_presentation_capabilities.rs");
     t.compile_fail("tests/ui/writer_source_minting_is_private.rs");
-    t.compile_fail("tests/ui/state_cell_is_not_send.rs");
-    t.compile_fail("tests/ui/state_cell_is_not_sync.rs");
-    t.compile_fail("tests/ui/state_handle_is_not_send.rs");
-    t.compile_fail("tests/ui/state_handle_is_not_sync.rs");
     t.compile_fail("tests/ui/element_depth_minting_is_private.rs");
     t.compile_fail("tests/ui/element_depth_rejects_raw_stamping.rs");
     t.compile_fail("tests/ui/column_17_compile_error.rs");

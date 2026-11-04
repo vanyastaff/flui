@@ -18,9 +18,10 @@ use flui_platform::TargetPlatform;
 use flui_platform::keyboard::NamedKey;
 use flui_testing::a11y::{Action, Role};
 use flui_testing::replay::{MouseScript, PointerScript, TouchScript};
+use flui_testing::widgets::SharedSignal;
 use flui_testing::{AlternativesSubject, GestureAlternativesCheck, assert_gesture_alternatives};
+use flui_view::BoxedView;
 use flui_view::prelude::*;
-use flui_view::{BoxedView, StateHandle};
 use flui_widgets::{
     Actions, Alternative, CallbackAction, ColoredBox, Column, CompanionGap, CompanionLink,
     CompanionRegistration, CompanionSpec, ControlPlacement, ControlSpec, Directionality,
@@ -63,13 +64,13 @@ enum Rows {
 #[derive(Clone, StatefulView)]
 struct Inbox {
     rows: Rows,
-    mailbox: StateHandle<Mailbox>,
-    menu: StateHandle<Option<MenuRequest>>,
+    mailbox: SharedSignal<Mailbox>,
+    menu: SharedSignal<Option<MenuRequest>>,
 }
 
 struct InboxState {
-    mailbox: StateHandle<Mailbox>,
-    menu: StateHandle<Option<MenuRequest>>,
+    mailbox: SharedSignal<Mailbox>,
+    menu: SharedSignal<Option<MenuRequest>>,
 }
 
 impl StatefulView for Inbox {
@@ -89,10 +90,10 @@ impl ViewState<Inbox> for InboxState {
         self.menu.bind(ctx);
     }
 
-    fn build(&self, view: &Inbox, _ctx: &dyn BuildContext) -> impl IntoView {
+    fn build(&self, view: &Inbox, ctx: &dyn BuildContext) -> impl IntoView {
         let mut children: Vec<BoxedView> = view
             .mailbox
-            .with(|mailbox| mailbox.inbox.clone())
+            .with(ctx, |mailbox| mailbox.inbox.clone())
             .into_iter()
             .map(|name| {
                 Dismissible::new(
@@ -104,7 +105,7 @@ impl ViewState<Inbox> for InboxState {
                 .boxed()
             })
             .collect();
-        if let Some(request) = view.menu.with(Clone::clone) {
+        if let Some(request) = view.menu.get(ctx) {
             children.extend(menu_buttons(&request, &view.menu));
         }
         mailbox_actions(&view.mailbox, Column::new(children).boxed())
@@ -128,7 +129,7 @@ impl std::fmt::Debug for InboxState {
 fn row_alternatives(
     rows: Rows,
     name: &'static str,
-    menu: &StateHandle<Option<MenuRequest>>,
+    menu: &SharedSignal<Option<MenuRequest>>,
 ) -> GestureAlternatives {
     let delete = GestureCommand::new(format!("Delete {name}"), Delete(name))
         .key(SingleActivator::named(NamedKey::F2));
@@ -140,8 +141,9 @@ fn row_alternatives(
         Rows::Menu => {
             let menu = menu.clone();
             Alternative::ContextMenu(
-                MenuSpec::new(delete, move |_cx, request| {
-                    menu.update(|open| *open = Some(request));
+                MenuSpec::new(delete, move |cx, request| {
+                    menu.set_in(cx, Some(request))
+                        .expect("the inbox menu slot is alive while its row is mounted");
                 })
                 .item(GestureCommand::new(
                     format!("Archive {name}"),
@@ -158,11 +160,11 @@ fn row_alternatives(
 /// A fresh inbox with Alice and Bob, the first row's alternatives and a
 /// reading of the mailbox.
 fn inbox(rows: Rows) -> AlternativesSubject<Mailbox> {
-    let mailbox = StateHandle::new(Mailbox {
+    let mailbox = SharedSignal::new(Mailbox {
         inbox: vec!["Alice", "Bob"],
         archived: Vec::new(),
     });
-    let menu = StateHandle::new(None);
+    let menu = SharedSignal::new(None);
     let alternatives = row_alternatives(rows, "Alice", &menu);
     let reading = mailbox.clone();
     AlternativesSubject::new(
@@ -172,7 +174,7 @@ fn inbox(rows: Rows) -> AlternativesSubject<Mailbox> {
             menu,
         },
         &alternatives,
-        move || reading.with(Clone::clone),
+        move || reading.value(),
     )
 }
 
@@ -210,8 +212,8 @@ pub(crate) fn dismissible_with_a_context_menu() {
 /// pointer press elsewhere in the row hides it, so a swipe that then starts
 /// where it was swipes the row away and opens no menu.
 pub(crate) fn a_press_off_the_revealed_control_frees_the_trailing_edge() {
-    let menu = StateHandle::new(None);
-    let mailbox = StateHandle::new(Mailbox {
+    let menu = SharedSignal::new(None);
+    let mailbox = SharedSignal::new(Mailbox {
         inbox: vec!["Alice", "Bob"],
         archived: Vec::new(),
     });
@@ -264,11 +266,11 @@ pub(crate) fn a_press_off_the_revealed_control_frees_the_trailing_edge() {
         laid.pump_for(Duration::from_millis(16));
     }
     assert_eq!(
-        mailbox.with(|mailbox| mailbox.inbox.clone()),
+        mailbox.peek(|mailbox| mailbox.inbox.clone()),
         ["Bob"],
         "the swipe from where the control was dismisses Alice"
     );
-    assert!(menu.with(Option::is_none), "and opens no menu");
+    assert!(menu.peek(Option::is_none), "and opens no menu");
 }
 
 /// Which single-pointer alternative the swipe rows offer.
@@ -284,13 +286,13 @@ enum SwipeRows {
 #[derive(Clone, StatefulView)]
 struct SwipeInbox {
     rows: SwipeRows,
-    mailbox: StateHandle<Mailbox>,
-    menu: StateHandle<Option<MenuRequest>>,
+    mailbox: SharedSignal<Mailbox>,
+    menu: SharedSignal<Option<MenuRequest>>,
 }
 
 struct SwipeInboxState {
-    mailbox: StateHandle<Mailbox>,
-    menu: StateHandle<Option<MenuRequest>>,
+    mailbox: SharedSignal<Mailbox>,
+    menu: SharedSignal<Option<MenuRequest>>,
 }
 
 impl StatefulView for SwipeInbox {
@@ -310,14 +312,14 @@ impl ViewState<SwipeInbox> for SwipeInboxState {
         self.menu.bind(ctx);
     }
 
-    fn build(&self, view: &SwipeInbox, _ctx: &dyn BuildContext) -> impl IntoView {
+    fn build(&self, view: &SwipeInbox, ctx: &dyn BuildContext) -> impl IntoView {
         let mut children: Vec<BoxedView> = view
             .mailbox
-            .with(|mailbox| mailbox.inbox.clone())
+            .with(ctx, |mailbox| mailbox.inbox.clone())
             .into_iter()
             .map(|name| swipe_row(view.rows, name, &view.menu).boxed())
             .collect();
-        if let Some(request) = view.menu.with(Clone::clone) {
+        if let Some(request) = view.menu.get(ctx) {
             children.extend(menu_buttons(&request, &view.menu));
         }
         mailbox_actions(&view.mailbox, Column::new(children).boxed())
@@ -339,7 +341,7 @@ impl std::fmt::Debug for SwipeInboxState {
 }
 
 /// The buttons a presented menu shows for `request`'s items.
-fn menu_buttons(request: &MenuRequest, menu: &StateHandle<Option<MenuRequest>>) -> Vec<BoxedView> {
+fn menu_buttons(request: &MenuRequest, menu: &SharedSignal<Option<MenuRequest>>) -> Vec<BoxedView> {
     request
         .items()
         .iter()
@@ -351,7 +353,8 @@ fn menu_buttons(request: &MenuRequest, menu: &StateHandle<Option<MenuRequest>>) 
                     .child(SizedBox::new(120.0, 30.0)),
             )
             .on_press(move |cx| {
-                menu.update(|open| *open = None);
+                menu.set_in(cx, None)
+                    .expect("the inbox menu slot is alive while its button is mounted");
                 let _ = item.perform(cx);
             })
             .boxed()
@@ -360,17 +363,21 @@ fn menu_buttons(request: &MenuRequest, menu: &StateHandle<Option<MenuRequest>>) 
 }
 
 /// `child` under the mailbox's Delete and Archive actions.
-fn mailbox_actions(mailbox: &StateHandle<Mailbox>, child: BoxedView) -> BoxedView {
+fn mailbox_actions(mailbox: &SharedSignal<Mailbox>, child: BoxedView) -> BoxedView {
     let (delete, archive) = (mailbox.clone(), mailbox.clone());
     Actions::new(child)
-        .action(CallbackAction::new(move |_cx, intent: &Delete| {
-            delete.update(|mailbox| mailbox.inbox.retain(|name| *name != intent.0));
+        .action(CallbackAction::new(move |cx, intent: &Delete| {
+            delete
+                .update_in(cx, |mailbox| mailbox.inbox.retain(|name| *name != intent.0))
+                .expect("the mailbox is alive while its actions are mounted");
         }))
-        .action(CallbackAction::new(move |_cx, intent: &Archive| {
-            archive.update(|mailbox| {
-                mailbox.inbox.retain(|name| *name != intent.0);
-                mailbox.archived.push(intent.0);
-            });
+        .action(CallbackAction::new(move |cx, intent: &Archive| {
+            archive
+                .update_in(cx, |mailbox| {
+                    mailbox.inbox.retain(|name| *name != intent.0);
+                    mailbox.archived.push(intent.0);
+                })
+                .expect("the mailbox is alive while its actions are mounted");
         }))
         .boxed()
 }
@@ -378,15 +385,16 @@ fn mailbox_actions(mailbox: &StateHandle<Mailbox>, child: BoxedView) -> BoxedVie
 fn swipe_row(
     rows: SwipeRows,
     name: &'static str,
-    menu: &StateHandle<Option<MenuRequest>>,
+    menu: &SharedSignal<Option<MenuRequest>>,
 ) -> SwipeActions {
     let alternative = match rows {
         SwipeRows::Controls => SwipeAlternative::VisibleControls(ControlPlacement::Trailing),
         SwipeRows::PlainMenu => SwipeAlternative::ContextMenu,
         SwipeRows::PresentedMenu => {
             let menu = menu.clone();
-            SwipeAlternative::PresentedMenu(std::rc::Rc::new(move |_cx, request| {
-                menu.update(|open| *open = Some(request));
+            SwipeAlternative::PresentedMenu(std::rc::Rc::new(move |cx, request| {
+                menu.set_in(cx, Some(request))
+                    .expect("the inbox menu slot is alive while its row is mounted");
             }))
         }
     };
@@ -416,11 +424,11 @@ fn swipe_row(
 /// a reading of the mailbox. The plain menu is a popup route, so its inbox is
 /// a navigator's page.
 fn swipe_inbox(rows: SwipeRows) -> AlternativesSubject<Mailbox> {
-    let mailbox = StateHandle::new(Mailbox {
+    let mailbox = SharedSignal::new(Mailbox {
         inbox: vec!["Alice", "Bob"],
         archived: Vec::new(),
     });
-    let menu = StateHandle::new(None);
+    let menu = SharedSignal::new(None);
     let alternatives = swipe_row(rows, "Alice", &menu).alternatives().clone();
     let reading = mailbox.clone();
     let inbox = SwipeInbox {
@@ -438,7 +446,7 @@ fn swipe_inbox(rows: SwipeRows) -> AlternativesSubject<Mailbox> {
         }
         SwipeRows::Controls | SwipeRows::PresentedMenu => inbox.boxed(),
     };
-    AlternativesSubject::new(view, &alternatives, move || reading.with(Clone::clone))
+    AlternativesSubject::new(view, &alternatives, move || reading.value())
 }
 
 /// Alice's row swiped all the way toward its reading start: its full swipe.
@@ -712,8 +720,8 @@ pub(crate) fn every_preset_opens_the_menu_by_its_pointer_trigger() {
         TargetPlatform::MacOS,
         TargetPlatform::Windows,
     ] {
-        let subject_menu = StateHandle::new(None);
-        let mailbox = StateHandle::new(Mailbox {
+        let subject_menu = SharedSignal::new(None);
+        let mailbox = SharedSignal::new(Mailbox {
             inbox: vec!["Alice"],
             archived: Vec::new(),
         });
@@ -747,7 +755,7 @@ pub(crate) fn every_preset_opens_the_menu_by_its_pointer_trigger() {
             laid.replay(&hold);
             laid.pump_for(Duration::from_millis(16));
             assert!(
-                subject_menu.with(Option::is_none),
+                subject_menu.peek(Option::is_none),
                 "{platform:?}: a mouse hold opens no menu"
             );
         }
@@ -771,7 +779,7 @@ pub(crate) fn every_preset_opens_the_menu_by_its_pointer_trigger() {
         .expect("the trigger ends its contact");
         laid.replay(&trigger);
         laid.pump_for(Duration::from_millis(16));
-        let opened = subject_menu.with(|menu| {
+        let opened = subject_menu.peek(|menu| {
             menu.as_ref().map(|request: &MenuRequest| {
                 request
                     .items()
@@ -797,8 +805,8 @@ pub(crate) fn the_menu_long_press_waits_for_the_system_setting() {
         (Duration::from_millis(1_400), false),
         (setting + Duration::from_millis(50), true),
     ] {
-        let menu = StateHandle::new(None);
-        let mailbox = StateHandle::new(Mailbox {
+        let menu = SharedSignal::new(None);
+        let mailbox = SharedSignal::new(Mailbox {
             inbox: vec!["Alice"],
             archived: Vec::new(),
         });
@@ -823,7 +831,7 @@ pub(crate) fn the_menu_long_press_waits_for_the_system_setting() {
         laid.replay(&press);
         laid.pump_for(Duration::from_millis(16));
         assert_eq!(
-            menu.with(Option::is_some),
+            menu.peek(Option::is_some),
             opens,
             "a {hold:?} hold under a {setting:?} setting"
         );
@@ -1044,7 +1052,7 @@ pub(crate) fn labels_name_one_action_each() {
 /// A command's Escape, Tab or typing key is not bound: Escape in the row
 /// still deletes nothing, while the command's other key still works.
 pub(crate) fn reserved_keys_are_not_bound() {
-    let mailbox = StateHandle::new(Mailbox {
+    let mailbox = SharedSignal::new(Mailbox {
         inbox: vec!["Alice"],
         archived: Vec::new(),
     });
@@ -1069,19 +1077,19 @@ pub(crate) fn reserved_keys_are_not_bound() {
         tight(400.0, 300.0),
         swipe_alice_away(),
         move || {
-            let mailbox = StateHandle::new(reading.with(Clone::clone));
+            let mailbox = SharedSignal::new(reading.value());
             let read = mailbox.clone();
             AlternativesSubject::new(
                 single_row(mailbox, alternatives.clone()),
                 &alternatives,
-                move || read.with(Clone::clone),
+                move || read.value(),
             )
         },
     ));
 }
 
 /// Alice's row alone, with `alternatives`, under the mailbox's actions.
-fn single_row(mailbox: StateHandle<Mailbox>, alternatives: GestureAlternatives) -> impl View {
+fn single_row(mailbox: SharedSignal<Mailbox>, alternatives: GestureAlternatives) -> impl View {
     let delete = mailbox.clone();
     MailboxRoot {
         mailbox,
@@ -1092,8 +1100,10 @@ fn single_row(mailbox: StateHandle<Mailbox>, alternatives: GestureAlternatives) 
             )
             .boxed(),
         )
-        .action(CallbackAction::new(move |_cx, intent: &Delete| {
-            delete.update(|mailbox| mailbox.inbox.retain(|name| *name != intent.0));
+        .action(CallbackAction::new(move |cx, intent: &Delete| {
+            delete
+                .update_in(cx, |mailbox| mailbox.inbox.retain(|name| *name != intent.0))
+                .expect("the mailbox is alive while its actions are mounted");
         }))
         .boxed(),
     }
@@ -1102,12 +1112,12 @@ fn single_row(mailbox: StateHandle<Mailbox>, alternatives: GestureAlternatives) 
 /// Rebuilds `child` when `mailbox` changes, so a deleted row goes away.
 #[derive(Clone, StatefulView)]
 struct MailboxRoot {
-    mailbox: StateHandle<Mailbox>,
+    mailbox: SharedSignal<Mailbox>,
     child: BoxedView,
 }
 
 struct MailboxRootState {
-    mailbox: StateHandle<Mailbox>,
+    mailbox: SharedSignal<Mailbox>,
 }
 
 impl StatefulView for MailboxRoot {
@@ -1125,8 +1135,8 @@ impl ViewState<MailboxRoot> for MailboxRootState {
         self.mailbox.bind(ctx);
     }
 
-    fn build(&self, view: &MailboxRoot, _ctx: &dyn BuildContext) -> impl IntoView {
-        if view.mailbox.with(|mailbox| mailbox.inbox.is_empty()) {
+    fn build(&self, view: &MailboxRoot, ctx: &dyn BuildContext) -> impl IntoView {
+        if view.mailbox.with(ctx, |mailbox| mailbox.inbox.is_empty()) {
             SizedBox::shrink().boxed()
         } else {
             view.child.clone()

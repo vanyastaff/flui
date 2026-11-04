@@ -8,6 +8,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::common::{LaidOut, lay_out, tight};
 use flui_painting::styling::Color;
+use flui_testing::widgets::SharedSignal;
 use flui_widgets::{ColoredBox, DragSlot, GestureDetector, TransformSlot};
 
 pub(crate) fn drag_motion_retains_root_units_under_scale_and_rotation() {
@@ -464,12 +465,12 @@ pub(crate) fn drag_and_transform_slots_carry_their_locks() {
 /// `PanClaim::None` region once `claimed` is set.
 #[derive(Clone, flui_view::prelude::StatefulView)]
 struct SwitchingScope {
-    claimed: flui_view::StateHandle<bool>,
+    claimed: SharedSignal<bool>,
     child: flui_view::BoxedView,
 }
 
 struct SwitchingScopeState {
-    claimed: flui_view::StateHandle<bool>,
+    claimed: SharedSignal<bool>,
     handles: Option<(
         flui_interaction::GestureArena,
         flui_interaction::GestureArena,
@@ -496,10 +497,10 @@ impl flui_view::ViewState<SwitchingScope> for SwitchingScopeState {
     fn build(
         &self,
         view: &SwitchingScope,
-        _: &dyn flui_view::BuildContext,
+        ctx: &dyn flui_view::BuildContext,
     ) -> impl flui_view::IntoView {
         let (plain, claimed) = self.handles.as_ref().expect("mounted handles");
-        let arena = if view.claimed.with(|claimed| *claimed) {
+        let arena = if view.claimed.get(ctx) {
             claimed
         } else {
             plain
@@ -526,14 +527,13 @@ impl std::fmt::Debug for SwitchingScopeState {
 /// `PanClaimRegion` is the same region, so the recognizers inside it stay.
 pub(crate) fn recognizers_follow_a_changed_arena_scope() {
     use flui_interaction::gesture::PanClaim;
-    use flui_view::StateHandle;
     use flui_view::prelude::IntoView;
     use flui_widgets::PanClaimRegion;
     use std::{cell::RefCell, rc::Rc};
 
     let calls = Rc::new(RefCell::new(Vec::new()));
     let (pan, pager) = (Rc::clone(&calls), Rc::clone(&calls));
-    let claimed = StateHandle::new(false);
+    let claimed = SharedSignal::new(false);
     let map = GestureDetector::new()
         .drag(DragSlot::pan().on_start(move |_, _| pan.borrow_mut().push("pan")))
         .child(ColoredBox::new(Color::rgb(10, 20, 30)));
@@ -564,7 +564,7 @@ pub(crate) fn recognizers_follow_a_changed_arena_scope() {
 
     let (created, rebuilt) = (
         Rc::new(std::cell::Cell::new(0_u32)),
-        StateHandle::new(0_u32),
+        SharedSignal::new(0_u32),
     );
     let factory = CountingPan(Rc::clone(&created));
     let mut laid = lay_out(
@@ -611,14 +611,13 @@ impl flui_widgets::GestureRecognizerFactory for CountingPan {
 /// reconfigures the recognizers it keeps: the kept tap reads the new
 /// factory's configuration.
 pub(crate) fn a_retired_recognizer_panicking_on_cancel_leaves_the_kept_ones_updated() {
-    use flui_view::StateHandle;
     use flui_view::prelude::IntoView;
     use std::cell::Cell;
     use std::rc::Rc;
 
     let configured = Rc::new(Cell::new(0_u32));
     let retiring = Rc::new(Cell::new(false));
-    let revision = StateHandle::new(0_u32);
+    let revision = SharedSignal::new(0_u32);
     let mut laid = lay_out(
         Rebuilding {
             revision: revision.clone(),
@@ -698,12 +697,12 @@ impl flui_widgets::GestureRecognizerFactory for TaggedTap {
 /// Builds a fresh `child` whenever `revision` changes.
 #[derive(Clone, flui_view::prelude::StatefulView)]
 struct Rebuilding {
-    revision: flui_view::StateHandle<u32>,
+    revision: SharedSignal<u32>,
     child: std::rc::Rc<dyn Fn() -> flui_view::BoxedView>,
 }
 
 struct RebuildingState {
-    revision: flui_view::StateHandle<u32>,
+    revision: SharedSignal<u32>,
 }
 
 impl flui_view::StatefulView for Rebuilding {
@@ -722,9 +721,9 @@ impl flui_view::ViewState<Rebuilding> for RebuildingState {
     fn build(
         &self,
         view: &Rebuilding,
-        _: &dyn flui_view::BuildContext,
+        ctx: &dyn flui_view::BuildContext,
     ) -> impl flui_view::IntoView {
-        let _ = view.revision.with(|revision| *revision);
+        let _ = view.revision.get(ctx);
         (view.child)()
     }
 }
