@@ -227,7 +227,10 @@ impl ViewState<ShelfList> for ShelfListState {
         };
         let items = Rc::new(self.items.get(ctx));
         let count = items.len();
-        let (keys, rows, labels) = (Rc::clone(&items), Rc::clone(&items), items);
+        let (rows, labels) = (Rc::clone(&items), items);
+        // The keys read the model as it is now, not as it was built: a command
+        // delivered before the next rebuild finds the row where the model has it.
+        let keys = self.items.clone();
         let model = self.items.clone();
         let (fed, with_feedback) = (Rc::clone(&shelf.log), shelf.log.with_feedback.get());
         let (moved, previewed, selecting) = (
@@ -237,7 +240,7 @@ impl ViewState<ShelfList> for ShelfListState {
         );
         let list = ReorderableList::builder(
             count,
-            move |index| keys[index].clone(),
+            move |index| keys.peek(|items| items[index].clone()),
             move |item| {
                 selecting.built.borrow_mut().push(item.index());
                 let name = rows[item.index()].clone();
