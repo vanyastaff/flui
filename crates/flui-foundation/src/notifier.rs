@@ -364,6 +364,14 @@ impl ChangeNotifier {
         !self.inner.is_empty()
     }
 
+    /// Subscribe with an owned
+    /// [`Subscription`](crate::notifier::Subscription): hold it, and the
+    /// listener fires on every [`notify_listeners`](Self::notify_listeners);
+    /// drop it, and the listener detaches from this notifier.
+    pub fn listen(&self, listener: impl Fn() + 'static) -> Subscription {
+        self.inner.listen(listener)
+    }
+
     /// Checks if there are no listeners registered
     #[must_use]
     #[inline]
@@ -706,6 +714,101 @@ impl<T> Listenable for ValueNotifier<T> {
 impl<T> ValueListenable<T> for ValueNotifier<T> {
     fn value(&self) -> &T {
         self.value()
+    }
+}
+
+impl<T> ValueNotifier<T> {
+    /// Subscribe with an owned
+    /// [`Subscription`](crate::notifier::Subscription): hold it, and the
+    /// listener fires on every [`set_value`](Self::set_value) that notifies;
+    /// drop it, and the listener detaches from this notifier.
+    pub fn listen(&self, listener: impl Fn() + 'static) -> Subscription
+    where
+        T: 'static,
+    {
+        self.notifier().listen(listener)
+    }
+}
+
+/// An owned registration on a [`Listenable`] source: hold it, and its
+/// listener fires; drop it, and it detaches.
+///
+/// The subscription remembers the channel it subscribed on, so its detach
+/// removes exactly the listener it registered: a [`ListenerId`]'s value alone
+/// can never name another channel's registration (ids are minted per channel,
+/// from one). A channel that was disposed, or is already gone, detaches
+/// quietly: its listener table is empty and its id names nothing.
+///
+/// A detach that lands inside its channel's own notify round withdraws the
+/// callback through that round's retirement: it destroys outside the channel's
+/// borrow, at the round's tail, with the round's containment (ADR-0287).
+///
+/// ```rust
+/// use std::{cell::Cell, rc::Rc};
+/// use flui_foundation::ChangeNotifier;
+///
+/// let notifier = ChangeNotifier::new();
+/// let hits = Rc::new(Cell::new(0));
+/// let subscription = notifier.listen({
+///     let hits = Rc::clone(&hits);
+///     move || hits.set(hits.get() + 1)
+/// });
+/// notifier.notify_listeners();
+/// assert_eq!(hits.get(), 1);
+///
+/// drop(subscription);
+/// notifier.notify_listeners();
+/// assert_eq!(hits.get(), 1, "dropping the subscription detached the listener");
+/// ```
+#[must_use = "hold the subscription: dropping it detaches its listener"]
+pub struct Subscription {
+    /// The channel the listener registered on, weak so a subscription never
+    /// pins a channel its outside has released.
+    channel: std::rc::Weak<dyn crate::notifier_generic::SubscribedChannel>,
+    /// Some while the listener is still registered; `None` once detached.
+    id: Option<ListenerId>,
+}
+
+impl Subscription {
+    /// A subscription bound to `channel`, cancelling on drop.
+    #[doc(hidden)]
+    pub(crate) fn for_channel(
+        channel: std::rc::Weak<dyn crate::notifier_generic::SubscribedChannel>,
+        id: ListenerId,
+    ) -> Self {
+        Self {
+            channel,
+            id: Some(id),
+        }
+    }
+
+    /// Detach now rather than at drop; idempotent with the drop that follows.
+    pub fn detach(mut self) {
+        self.take_listener();
+    }
+
+    fn take_listener(&mut self) {
+        let Some(id) = self.id.take() else {
+            return;
+        };
+        if let Some(channel) = self.channel.upgrade() {
+            channel.detach_listener(id);
+        }
+    }
+}
+
+impl Drop for Subscription {
+    fn drop(&mut self) {
+        self.take_listener();
+    }
+}
+
+impl fmt::Debug for Subscription {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match &self.id {
+            Some(id) => write!(f, "Subscription({id:?})"),
+            None => f.write_str("Subscription(detached)"),
+        }
     }
 }
 

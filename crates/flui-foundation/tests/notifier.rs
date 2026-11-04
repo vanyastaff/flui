@@ -1,9 +1,10 @@
 //! Notification ownership and recovery, exercised through the public API.
 
 use flui_foundation::{
-    ChangeNotifier, Listenable, ListenerId, Notifier, ValueListenable, ValueNotifier,
+    ChangeNotifier, Listenable, ListenerId, Notifier, Subscription, ValueListenable, ValueNotifier,
 };
 use std::io::Read;
+use std::rc::Rc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -812,4 +813,127 @@ fn notifier_ownership_and_recovery() {
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// The subscription's channel binding: an id's value alone cannot name
+/// another channel's registration, so a same-valued id across two channels
+/// survives every detach that is not its own.
+#[test]
+fn a_subscription_detaches_only_its_own_channel() {
+    let first = ChangeNotifier::new();
+    let second = ChangeNotifier::new();
+
+    let hits = Rc::new(AtomicUsize::new(0));
+    let other = second.listen({
+        let hits = Rc::clone(&hits);
+        move || {
+            hits.fetch_add(10, Ordering::SeqCst);
+        }
+    });
+    // Both ids are 1 (each channel mints from its own counter, from one):
+    // under an id-only detach the subscription's drop would remove the
+    // other channel's listener too.
+    let subscribed = first.listen(|| ());
+    assert!(first.has_listeners() && second.has_listeners());
+
+    drop(subscribed);
+    second.notify_listeners();
+    assert_eq!(
+        hits.load(Ordering::SeqCst),
+        10,
+        "the same-valued id on the other channel still fires"
+    );
+
+    first.notify_listeners();
+    assert_eq!(
+        hits.load(Ordering::SeqCst),
+        10,
+        "the detached listener no longer fires"
+    );
+
+    drop(other);
+    second.notify_listeners();
+    assert_eq!(
+        hits.load(Ordering::SeqCst),
+        10,
+        "the detached listener no longer fires"
+    );
+}
+
+/// The subscription detaches idempotently: an explicit `detach` and the drop
+/// that follows remove one registration, once.
+#[test]
+fn a_subscription_detaches_once_and_a_second_detach_is_a_noop() {
+    let notifier = ChangeNotifier::new();
+    let hits = Rc::new(AtomicUsize::new(0));
+    let subscription = notifier.listen({
+        let hits = Rc::clone(&hits);
+        move || {
+            hits.fetch_add(1, Ordering::SeqCst);
+        }
+    });
+    subscription.detach();
+    assert!(!notifier.has_listeners(), "the detach removed the listener");
+    notifier.notify_listeners();
+    assert_eq!(hits.load(Ordering::SeqCst), 0);
+}
+
+/// A channel that is disposed, or already gone, detaches quietly: the
+/// subscription's drop does nothing its channel could refuse.
+#[test]
+fn a_subscription_on_a_disposed_or_gone_channel_detaches_quietly() {
+    let disposed = ChangeNotifier::new();
+    let subscription = disposed.listen(|| ());
+    disposed.dispose();
+    drop(subscription);
+
+    // A channel nothing else holds: its drop retires the registered listener
+    // itself, and the subscription's later drop detaches nothing.
+    let gone = ChangeNotifier::new();
+    let subscription = gone.listen(|| ());
+    drop(gone);
+    drop(subscription);
+}
+
+/// A subscription detached INSIDE its channel's notify round retires through
+/// the round: the callback is skipped for the rest of the round and destroyed
+/// after the channel's borrow is released.
+#[test]
+fn a_subscription_detached_inside_a_round_is_skipped_and_retired_at_its_tail() {
+    let notifier = ChangeNotifier::new();
+
+    // The detacher registers first: its callback runs before the other
+    // listener's turn, drops the other listener's subscription mid-round, and
+    // the round skips the removed listener.
+    let subscription_held = Rc::new(std::cell::RefCell::new(None::<Subscription>));
+    let detacher = notifier.listen({
+        let subscription_held = Rc::clone(&subscription_held);
+        move || *subscription_held.borrow_mut() = None
+    });
+    let hits = Rc::new(AtomicUsize::new(0));
+    *subscription_held.borrow_mut() = Some(notifier.listen({
+        let hits = Rc::clone(&hits);
+        move || {
+            hits.fetch_add(1, Ordering::SeqCst);
+        }
+    }));
+
+    // The round's snapshot carries both listeners: the detached one is
+    // skipped when the round reaches it, and its callback retires at the
+    // round's tail, outside the channel's borrow.
+    notifier.notify_listeners();
+    assert_eq!(
+        hits.load(Ordering::SeqCst),
+        0,
+        "the detached listener fired in no round"
+    );
+    assert!(
+        subscription_held.borrow().is_none(),
+        "the subscription dropped inside its round"
+    );
+    // The detacher is still registered: only the dropped subscription's own
+    // listener is gone.
+    assert!(notifier.has_listeners());
+    drop(detacher);
+    assert!(!notifier.has_listeners());
 }

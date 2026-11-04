@@ -106,6 +106,32 @@ fn retire_callbacks<Arg>(mut callbacks: Vec<(ListenerId, OwnedCallback<Arg>)>) {
     drop(callbacks);
 }
 
+/// The channel a [`Subscription`](crate::notifier::Subscription) holds as a
+/// weak: the removal of its own listener. Sealed: the only implementations
+/// are this crate's shared listener storages, so a subscription can only
+/// detach through the channel it subscribed on — a [`ListenerId`]'s value
+/// never names another channel's registration.
+pub(crate) trait SubscribedChannel {
+    fn detach_listener(&self, id: ListenerId);
+}
+
+impl<Arg: 'static> SubscribedChannel for ListenerStorage<Arg> {
+    /// The removal that stays committed on every exit: the entry leaves the
+    /// map under its borrow, the callback destroys outside it — through the
+    /// delivery's retired list while a notify round is in progress, whose
+    /// containment the round's tail provides (ADR-0287).
+    fn detach_listener(&self, id: ListenerId) {
+        let callback = self.entries.borrow_mut().remove(&id);
+        if let Some(callback) = callback {
+            if self.delivery_depth.get() != 0 {
+                self.retired.borrow_mut().push((id, callback));
+            } else {
+                drop(callback);
+            }
+        }
+    }
+}
+
 /// A generic, typed, hardened notification channel. See module docs.
 ///
 /// Cloning shares the same underlying listener set, id counter, and disposed
@@ -207,6 +233,26 @@ impl<Arg> Notifier<Arg> {
             return self.mint_id();
         }
         self.add_unchecked(listener)
+    }
+
+    /// Subscribe with an owned [`Subscription`](crate::notifier::Subscription):
+    /// hold it, and the listener fires; drop it, and the listener detaches
+    /// from this channel.
+    ///
+    /// A removed-mid-notify listener is skipped for the rest of its round, as
+    /// [`remove`](Self::remove) says; a subscription is no different. On a
+    /// disposed channel the subscription detaches quietly: the map is empty
+    /// and the id it carries names nothing.
+    ///
+    /// The channel's value borrow does not follow the subscription: its
+    /// storage is held as a `'static` channel, so `Arg: 'static`.
+    pub fn listen(&self, listener: impl Fn() + 'static) -> crate::notifier::Subscription
+    where
+        Arg: 'static,
+    {
+        let id = self.add(Rc::new(move |_: &Arg| listener()));
+        let channel: Rc<dyn SubscribedChannel> = self.listeners.clone();
+        crate::notifier::Subscription::for_channel(Rc::downgrade(&channel), id)
     }
 
     /// [`Self::add`] without the disposed gate — for wrappers
