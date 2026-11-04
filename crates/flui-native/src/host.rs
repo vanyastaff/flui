@@ -65,7 +65,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use flui_foundation::geometry::Size;
-use flui_platform::data_transfer::{DataTransferSource, NullDataTransferSource};
+use flui_platform::data_transfer::{DragTransport, NullDragTransport};
 use flui_platform::haptics::{HapticCapabilities, HapticOutcome, HapticPattern, HapticRequest};
 use flui_platform::{
     AppDataDir, DeviceId, DisplaySnapshot, HapticFeedback, LaunchKey, PlatformHaptics,
@@ -396,7 +396,7 @@ pub trait PrimarySelection<O> {
 /// The drag-and-drop position.
 pub trait Drag<O> {
     /// [`Platform::data_transfer`].
-    fn data_transfer(owner: &O) -> Arc<dyn DataTransferSource>;
+    fn data_transfer(owner: &O) -> Arc<dyn DragTransport>;
 }
 
 /// The system preferences position.
@@ -613,8 +613,8 @@ impl<O> PrimarySelection<O> for Absent<position::PrimarySelection> {
 }
 
 impl<O> Drag<O> for Absent<position::Drag> {
-    fn data_transfer(_: &O) -> Arc<dyn DataTransferSource> {
-        Arc::new(NullDataTransferSource)
+    fn data_transfer(_: &O) -> Arc<dyn DragTransport> {
+        Arc::new(NullDragTransport)
     }
 }
 

@@ -1,7 +1,7 @@
 //! XDND on the native X11 host's windows, as targets and as sources (XDND
-//! version 5, ADR-0038, ADR-0211).
+//! version 5, ADR-0312, ADR-0211).
 //!
-//! [`X11Drag`] is the platform's one [`DataTransferSource`] and the loop's
+//! [`X11Drag`] is the platform's one [`DragTransport`] and the loop's
 //! `LoopDrag`: the loop hands it every event before the input hears it, and
 //! a window tells it as it opens and closes. A window that opens is marked
 //! `XdndAware`, so a source anywhere on the display (a file manager, a
@@ -60,9 +60,9 @@ use std::time::Duration;
 use flui_foundation::DataTransferId;
 use flui_foundation::geometry::Point;
 use flui_platform::data_transfer::{
-    DataTransferOffer, DataTransferSource, DropFeedback, RepresentationDescriptor,
-    RepresentationIndex, TransferActions, TransferCompleter, TransferError, TransferLimits,
-    TransferPayload, TransferRequest,
+    DataTransferOffer, DragTransport, DropFeedback, RepresentationDescriptor, RepresentationIndex,
+    TransferActions, TransferCompleter, TransferError, TransferLimits, TransferPayload,
+    TransferRequest,
 };
 use flui_platform::drag::PlatformDragSource;
 use flui_platform::{DragDropEvent, PlatformInput};
@@ -1572,12 +1572,7 @@ impl LoopDrag for X11Drag {
         self.finish(after);
     }
 }
-impl DataTransferSource for X11Drag {
-    /// The clipboard is the clipboard feature's.
-    fn clipboard_offer(&self) -> Option<DataTransferOffer> {
-        None
-    }
-
+impl DragTransport for X11Drag {
     fn request(
         &self,
         id: DataTransferId,

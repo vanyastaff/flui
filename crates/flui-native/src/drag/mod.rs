@@ -1,5 +1,5 @@
 //! Drag and drop: the OS transport behind the data-transfer contract
-//! (ADR-0038, ADR-0211, ADR-0151 §10).
+//! (ADR-0312, ADR-0211, ADR-0151 §10).
 //!
 //! The model is `offers`: the offer table every source mints its ids in, the
 //! producer half of a delivery, the URI list the hosts that read paths or
@@ -8,7 +8,7 @@
 //! share, with the representations the types of an X selection or a Wayland
 //! data offer give and what their bytes are read as (`offers::Kind`), which
 //! the X11 and Wayland files share. Beside it, one file per platform holds the
-//! host's one `DataTransferSource` (the drag position of its table) and what
+//! host's one `DragTransport` (the drag position of its table) and what
 //! a window needs to take and start drags:
 //!
 //! - `windows`: OLE;

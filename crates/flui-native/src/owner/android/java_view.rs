@@ -51,10 +51,10 @@ const VIEW_CLASS: &str = "dev.flui.platform.FluiView";
 /// The host's drag-and-drop transport as the view's drag callbacks reach it:
 /// `nativeDrag` and `nativeDrop` run on the Java main thread and must be
 /// answered at once, from what the owner published earlier (ADR-0211,
-/// ADR-0247). The transport is the host's one [`DataTransferSource`].
+/// ADR-0247). The transport is the host's one [`DragTransport`].
 ///
-/// [`DataTransferSource`]: flui_platform::data_transfer::DataTransferSource
-pub(crate) trait ViewTransfer: flui_platform::data_transfer::DataTransferSource {
+/// [`DragTransport`]: flui_platform::data_transfer::DragTransport
+pub(crate) trait ViewTransfer: flui_platform::data_transfer::DragTransport {
     /// One `DragEvent` other than the drop, of `action`, at `position` in
     /// logical pixels, offering `mime_types`; `local` is whether this activity
     /// started the drag and `result` the event's result. Returns what the view

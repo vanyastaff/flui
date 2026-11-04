@@ -1,7 +1,7 @@
 //! Drag and drop on the native Wayland host's windows, as targets and as
-//! sources (`wl_data_device` up to version 3, ADR-0038, ADR-0211).
+//! sources (`wl_data_device` up to version 3, ADR-0312, ADR-0211).
 //!
-//! [`SeatDrag`] is the platform's one [`DataTransferSource`] and the loop's
+//! [`SeatDrag`] is the platform's one [`DragTransport`] and the loop's
 //! `WaylandDrag`. A window tells it as it opens and closes; the drags over
 //! the windows reach it through the seats' data devices
 //! (`transfer::linux::wayland`), whose dispatch records them, and
@@ -51,9 +51,9 @@ use flui_foundation::DataTransferId;
 use flui_foundation::geometry::Point;
 use flui_foundation::panic::{FirstPanic, discard_payload};
 use flui_platform::data_transfer::{
-    DataTransferOffer, DataTransferSource, DropFeedback, RepresentationDescriptor,
-    RepresentationIndex, TransferActions, TransferCompleter, TransferError, TransferLimits,
-    TransferPayload, TransferRequest,
+    DataTransferOffer, DragTransport, DropFeedback, RepresentationDescriptor, RepresentationIndex,
+    TransferActions, TransferCompleter, TransferError, TransferLimits, TransferPayload,
+    TransferRequest,
 };
 use flui_platform::drag::PlatformDragSource;
 use flui_platform::{DragDropEvent, PlatformInput, WindowId};
@@ -843,12 +843,7 @@ impl WaylandDrag for SeatDrag {
     }
 }
 
-impl DataTransferSource for SeatDrag {
-    /// The clipboard is the clipboard feature's.
-    fn clipboard_offer(&self) -> Option<DataTransferOffer> {
-        None
-    }
-
+impl DragTransport for SeatDrag {
     fn request(
         &self,
         id: DataTransferId,

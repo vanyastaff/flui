@@ -27,7 +27,7 @@ use flui_interaction::{
     PenTool, PointerEvent, PointerId, PointerInfo,
 };
 use flui_platform::data_transfer::{
-    DataTransferOffer, DataTransferSource, DropFeedback, RepresentationIndex, TransferActions,
+    DataTransferOffer, DragTransport, DropFeedback, RepresentationIndex, TransferActions,
     TransferCompleter, TransferFormat, TransferLimits, TransferPayload, TransferRequest,
 };
 use flui_platform::drag::{OsDragEnd, OsDragRequest, OsDragStart, PlatformDragSource};
@@ -78,11 +78,7 @@ struct RecordingSource {
     requests: Mutex<Vec<(DataTransferId, RepresentationIndex, TransferCompleter)>>,
 }
 
-impl DataTransferSource for RecordingSource {
-    fn clipboard_offer(&self) -> Option<DataTransferOffer> {
-        None
-    }
-
+impl DragTransport for RecordingSource {
     fn request(
         &self,
         id: DataTransferId,

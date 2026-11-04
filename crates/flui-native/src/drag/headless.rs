@@ -2,7 +2,7 @@
 //! operating system's side of a drag, so a test can run a whole drag between
 //! windows, or a drag arriving from another application, without a display.
 //!
-//! The double is the platform's one [`DataTransferSource`]. A window it
+//! The double is the platform's one [`DragTransport`]. A window it
 //! serves ([`HeadlessPlatform::with_os_drag`](crate::HeadlessPlatform::with_os_drag))
 //! starts a session through its [`PlatformDragSource`]; the test then plays the
 //! pointer with [`HeadlessDragAndDrop::hover`], [`drop_here`](HeadlessDragAndDrop::drop_here)
@@ -21,9 +21,9 @@ use std::sync::{Arc, Weak};
 use flui_foundation::DataTransferId;
 use flui_foundation::geometry::Point;
 use flui_platform::data_transfer::{
-    DataTransferOffer, DataTransferSource, DropFeedback, RepresentationDescriptor,
-    RepresentationIndex, TransferActions, TransferError, TransferFormat, TransferLimits,
-    TransferPayload, TransferRequest,
+    DataTransferOffer, DragTransport, DropFeedback, RepresentationDescriptor, RepresentationIndex,
+    TransferActions, TransferError, TransferFormat, TransferLimits, TransferPayload,
+    TransferRequest,
 };
 use flui_platform::drag::{
     DragError, OsDragEnd, OsDragProvider, OsDragRequest, OsDragStart, PlatformDragSource,
@@ -65,7 +65,7 @@ impl std::fmt::Debug for DragDouble {
 }
 
 impl host::Drag<HeadlessLoop> for DragDouble {
-    fn data_transfer(owner: &HeadlessLoop) -> Arc<dyn DataTransferSource> {
+    fn data_transfer(owner: &HeadlessLoop) -> Arc<dyn DragTransport> {
         // The headless backend's one source: it serves the drags the test plays
         // through `HeadlessDragAndDrop`; it has no clipboard transport yet.
         // Every handle reads the one state, so an id one minted stays
@@ -73,16 +73,12 @@ impl host::Drag<HeadlessLoop> for DragDouble {
         owner.with_state(|state| {
             Arc::new(Self {
                 drags: Arc::clone(&state.drags),
-            }) as Arc<dyn DataTransferSource>
+            }) as Arc<dyn DragTransport>
         })
     }
 }
 
-impl DataTransferSource for DragDouble {
-    fn clipboard_offer(&self) -> Option<DataTransferOffer> {
-        None
-    }
-
+impl DragTransport for DragDouble {
     fn request(
         &self,
         id: DataTransferId,

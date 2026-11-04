@@ -64,8 +64,8 @@ impl WindowHandler for ConsoleLog {
                 ke.code
             )),
             PlatformInput::Ime(ime_event) => log(&format!("IME: {ime_event:?}")),
-            // The web backend has no data-transfer transport yet (ADR-0038
-            // §8), so this arm can only log.
+            // The demo only logs drags; the web host takes and starts HTML
+            // drags (ADR-0312 §5).
             PlatformInput::DragDrop(drag_drop_event) => {
                 log(&format!("DragDrop: {drag_drop_event:?}"));
             }

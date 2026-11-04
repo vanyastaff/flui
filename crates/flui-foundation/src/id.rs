@@ -744,14 +744,14 @@ ids! {
 
         /// Data-transfer ID - **generational** key identifying one live
         /// transfer offer: a clipboard snapshot or an in-progress system
-        /// drag session (ADR-0038).
+        /// drag session (ADR-0312).
         ///
         /// Generational ([`GenId`]): offers are short-lived and their slots
         /// are reused; a stale id held by a widget across a drag-cancel or a
         /// clipboard change must fail the generation check instead of
         /// silently addressing the next offer (ABA). Minted exclusively by
         /// the one offer table inside a platform's single
-        /// `DataTransferSource` instance, so every observable id is
+        /// `DragTransport` instance, so every observable id is
         /// redeemable at the place it was minted.
         pub type DataTransferId DataTransfer;
     }

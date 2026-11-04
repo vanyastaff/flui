@@ -40,7 +40,7 @@ use crate::{
     owner::signal::OwnerSignal, owner::window_delivery::WindowDelivery, platform::AppHandler,
     platform::Platform,
 };
-use flui_platform::data_transfer::DataTransferSource;
+use flui_platform::data_transfer::DragTransport;
 use flui_platform::drag::PlatformDragSource;
 use flui_platform::{DisplayId, DisplaySnapshot, SystemPreferences, WindowId, WindowIdMint};
 
@@ -87,7 +87,7 @@ pub(crate) trait WebHost: 'static {
 /// The page's drag-and-drop transport as the loop and its window reach it,
 /// which the table makes ([`WebHost::drag`]): the platform's one
 /// data-transfer source.
-pub(crate) trait HostDrag: DataTransferSource {
+pub(crate) trait HostDrag: DragTransport {
     /// Listen, in `registration`, for drags over `canvas` and for the drags
     /// its window starts, dispatching to the window's `callbacks`.
     ///
@@ -379,8 +379,8 @@ impl host::Clipboard<WebLoop> for WebLoop {
 /// The drag position: the transport the host's [`WebHost::drag`] made, which
 /// the loop holds.
 impl host::Drag<WebLoop> for WebLoop {
-    fn data_transfer(owner: &WebLoop) -> Arc<dyn DataTransferSource> {
-        Arc::clone(&owner.drag) as Arc<dyn DataTransferSource>
+    fn data_transfer(owner: &WebLoop) -> Arc<dyn DragTransport> {
+        Arc::clone(&owner.drag) as Arc<dyn DragTransport>
     }
 }
 

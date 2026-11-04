@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 use flui_foundation::geometry::Point;
 use flui_foundation::{DataTransferId, DragSessionId, UiRuntimeId};
 use flui_platform::data_transfer::{
-    DataTransferSource as _, DropFeedback, Mime, RepresentationDescriptor, RepresentationIndex,
+    DragTransport as _, DropFeedback, Mime, RepresentationDescriptor, RepresentationIndex,
     TransferActions, TransferError, TransferFormat, TransferLimits, TransferPayload,
     TransferRequest,
 };

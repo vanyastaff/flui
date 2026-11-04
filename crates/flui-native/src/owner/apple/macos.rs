@@ -302,7 +302,7 @@ impl MacOSLoop {
                     // The pump wakes on the owner thread, where the map is
                     // reached. The handles are cloned out before any of them
                     // is asked for a frame, so no borrow of the map is held
-                    // while a window runs (ADR-0038 §5).
+                    // while a window runs (ADR-0287).
                     let open: Vec<Rc<dyn HostWindow>> = windows.values();
                     for window in open {
                         // A frame for a window whose surface is already

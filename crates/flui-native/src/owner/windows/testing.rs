@@ -12,8 +12,8 @@ use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 
 use flui_foundation::DataTransferId;
 use flui_platform::data_transfer::{
-    DataTransferOffer, DataTransferSource, DropFeedback, NullDataTransferSource,
-    RepresentationIndex, TransferLimits, TransferRequest,
+    DragTransport, DropFeedback, NullDragTransport, RepresentationIndex, TransferLimits,
+    TransferRequest,
 };
 use flui_platform::drag::{DragError, OsDragRequest, OsDragStart, PlatformDragSource};
 use flui_platform::{DisplayId, DisplaySnapshot, SystemPreferences};
@@ -222,18 +222,14 @@ impl OwnerMessages for NoDrag {
     fn destroyed(&self) {}
 }
 
-impl DataTransferSource for NoDrag {
-    fn clipboard_offer(&self) -> Option<DataTransferOffer> {
-        None
-    }
-
+impl DragTransport for NoDrag {
     fn request(
         &self,
         id: DataTransferId,
         representation: RepresentationIndex,
         limits: TransferLimits,
     ) -> TransferRequest {
-        NullDataTransferSource.request(id, representation, limits)
+        NullDragTransport.request(id, representation, limits)
     }
 
     fn update_drop_feedback(&self, _id: DataTransferId, _feedback: DropFeedback) {}

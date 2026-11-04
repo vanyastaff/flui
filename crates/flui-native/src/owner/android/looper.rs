@@ -718,7 +718,7 @@ impl host::Loop for AndroidLoop {
             // iteration -- a deadline that fires, a new one getting armed,
             // or every deadline clearing must all be reflected immediately.
             // The handler re-enters `flui-app`, so it is asked through the
-            // call point with no lock held (ADR-0038 §5).
+            // call point with no lock held (ADR-0287).
             let wake_deadline = self.app_delivery.wake_deadline().or_resume(None);
             let now = web_time::Instant::now();
             let deadline_due = is_deadline_due(wake_deadline, now);
@@ -1071,7 +1071,7 @@ impl host::Loop for AndroidLoop {
         // and `android-activity` then finishes the activity without ever
         // delivering `Destroy` here. Before `invoke_quit`, so a quit hook
         // that panics still leaves the cycle broken. Outside the `window`
-        // lock, because it drops embedder closures (ADR-0038 §5); the
+        // lock, because it drops embedder closures (ADR-0287); the
         // `take()` is its own statement so its guard is gone before the
         // clear runs. At the top level of the window's FIFO, because no
         // `poll_events` callback is on the stack here, so no lease can
@@ -1207,11 +1207,9 @@ impl host::Clipboard<AndroidLoop> for AndroidLoop {
 /// The drag position: `FluiView`'s drag and drop (ADR-0211, ADR-0247), the
 /// transport the host's [`AndroidHost::transfer`] made for the view.
 impl host::Drag<AndroidLoop> for AndroidLoop {
-    fn data_transfer(
-        owner: &AndroidLoop,
-    ) -> Arc<dyn flui_platform::data_transfer::DataTransferSource> {
+    fn data_transfer(owner: &AndroidLoop) -> Arc<dyn flui_platform::data_transfer::DragTransport> {
         Arc::clone(owner.java_view.transfer())
-            as Arc<dyn flui_platform::data_transfer::DataTransferSource>
+            as Arc<dyn flui_platform::data_transfer::DragTransport>
     }
 }
 

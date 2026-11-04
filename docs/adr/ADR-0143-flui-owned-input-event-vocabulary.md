@@ -8,7 +8,7 @@
   [ADR-0082](ADR-0082-platform-api-contract-crate.md) (the contract crate that holds it),
   [ADR-0098](ADR-0098-owned-f64-geometry-values.md) (logical `f64` geometry),
   [ADR-0090](ADR-0090-ime-pull-text-store-contract.md) (text input travels through the text
-  store, not key events), [ADR-0038](ADR-0038-data-transfer-architecture.md) (drag and drop stays outside
+  store, not key events), [ADR-0312](ADR-0312-drag-and-drop-owns-the-transfer-transport-and-the-clipboard-stays-plain-text.md) §5 (drag and drop stays outside
   the pointer pipeline)
 
 ## Context

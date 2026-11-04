@@ -8,7 +8,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use flui_foundation::geometry::Size;
-use flui_platform::data_transfer::DataTransferSource;
+use flui_platform::data_transfer::DragTransport;
 use flui_platform::{
     AppDataDir, DisplaySnapshot, SessionEndAnswer, SessionEndPhase, SystemNotice,
     SystemPreferences, WindowCapabilities, WindowHandler, WindowId, WindowOptions,
@@ -298,16 +298,16 @@ pub trait Platform: sealed::Sealed + Send + Sync + 'static {
         None
     }
 
-    /// The data-transfer transport (ADR-0038). Contract: returns clones of
-    /// ONE source instance per platform instance — the source owns
-    /// connection-like state (the offer table), and per ADR-0038 §9 such
-    /// state must live behind an `Arc` the platform clones out, never be
-    /// reconstructed per call (two independently minted tables would split
-    /// the id space and let cross-table ids pass each other's generation
-    /// checks). Backends without a transport return
-    /// [`flui_platform::data_transfer::NullDataTransferSource`] (inert,
+    /// The drag-and-drop transport (ADR-0312 §4). Contract: returns clones
+    /// of ONE transport per platform instance — the transport owns
+    /// connection-like state (the offer table), which lives behind an `Arc`
+    /// the platform clones out, never reconstructed per call (two
+    /// independently minted tables would split the id space and let
+    /// cross-table ids pass each other's generation checks, ADR-0312 §2).
+    /// Backends without a drag transport return
+    /// [`flui_platform::data_transfer::NullDragTransport`] (inert,
     /// honest — not fake success).
-    fn data_transfer(&self) -> Arc<dyn DataTransferSource>;
+    fn data_transfer(&self) -> Arc<dyn DragTransport>;
 
     // ==================== App Activation (US3) ====================
 
@@ -633,7 +633,7 @@ impl<H: Host> Platform for HostPlatform<H> {
         H::PrimarySelection::primary_selection(&self.owner)
     }
 
-    fn data_transfer(&self) -> Arc<dyn DataTransferSource> {
+    fn data_transfer(&self) -> Arc<dyn DragTransport> {
         H::Drag::data_transfer(&self.owner)
     }
 

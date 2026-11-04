@@ -5,7 +5,7 @@
 //!
 //! - the capability traits [`PlatformTextInput`], [`PlatformHaptics`] and
 //!   the data-transfer transport
-//!   ([`data_transfer::DataTransferSource`], ADR-0038);
+//!   ([`data_transfer::DragTransport`], ADR-0312);
 //! - the display vocabulary: [`DisplaySnapshot`], [`DisplayInfo`], the opaque
 //!   [`DisplayId`] a [`DisplayRegistry`] issues, the validated
 //!   [`RefreshPeriod`] (ADR-0236), and each display's colour profile
@@ -161,7 +161,7 @@ pub use clipboard::{ClipboardError, ClipboardRead, ClipboardWrite, Concealment};
 /// The pointer-cursor shape [`PlatformWindow::set_cursor`] takes: the
 /// `cursor-icon` crate's, which ADR-0089 allows in stable signatures.
 pub use cursor_icon::CursorIcon;
-pub use data_transfer::{DataTransferOffer, DataTransferSource, NullDataTransferSource};
+pub use data_transfer::{DataTransferOffer, DragTransport, NullDragTransport};
 pub use display::{
     ColorGamut, ColorParts, DisplayColor, DisplayId, DisplayIdsExhausted, DisplayInfo, DisplayKey,
     DisplayParts, DisplayRegistry, DisplayRevision, DisplayRevisionExhausted, DisplaySnapshot,

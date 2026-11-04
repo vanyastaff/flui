@@ -15,9 +15,8 @@ use flui_native::{HeadlessDragAndDrop, HeadlessPlatform, HostWindow, Platform as
 use flui_platform::DragDropEvent;
 use flui_platform::WindowOptions;
 use flui_platform::data_transfer::{
-    DataTransferSource, DropFeedback, RepresentationDescriptor, RepresentationIndex,
-    TransferActions, TransferError, TransferFormat, TransferLimits, TransferPayload,
-    TransferRequest,
+    DragTransport, DropFeedback, RepresentationDescriptor, RepresentationIndex, TransferActions,
+    TransferError, TransferFormat, TransferLimits, TransferPayload, TransferRequest,
 };
 use flui_platform::drag::{
     DragError, DragSessionKey, OsDragProvider, OsDragRequest, OsDragStart, ProcessNonce,
@@ -32,7 +31,7 @@ const LINK: TransferActions = TransferActions::LINK;
 /// and what that window saw.
 struct Desktop {
     dnd: HeadlessDragAndDrop,
-    transfer: Arc<dyn DataTransferSource>,
+    transfer: Arc<dyn DragTransport>,
     window: Rc<dyn HostWindow>,
     seen: Rc<RefCell<Vec<DragDropEvent>>>,
     _owner: flui_native::OwnerPlatform,

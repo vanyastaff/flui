@@ -14,7 +14,7 @@ use flui_native::{
     AppHandler, HostWindow, NativeClipboard, OpenWindowError, PathPromptOptions, Platform,
     PlatformError, Task,
 };
-use flui_platform::data_transfer::DataTransferSource;
+use flui_platform::data_transfer::DragTransport;
 use flui_platform::{
     CursorError, CursorIcon, DisplaySnapshot, PlatformWindow,
     AppDataDir, LaunchKey, SystemPreferences,
@@ -58,7 +58,7 @@ impl Platform for OutsidePlatform {
         unreachable!("the impl never compiles")
     }
 
-    fn data_transfer(&self) -> Arc<dyn DataTransferSource> {
+    fn data_transfer(&self) -> Arc<dyn DragTransport> {
         unreachable!("the impl never compiles")
     }
 

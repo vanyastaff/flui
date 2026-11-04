@@ -252,7 +252,7 @@ pub use epoch::{
 // The frame-identity group bundled for the raster boundary.
 pub use frame_stamp::FrameStamp;
 pub use id::{
-    // Data-transfer offer identity (ADR-0038)
+    // Data-transfer offer identity (ADR-0312)
     DataTransferId,
     // Core tree IDs (5-tree architecture)
     ElementId,

@@ -6,8 +6,8 @@ and data-transfer vocabulary, with no OS backend behind them.
 ## What is in it
 
 - Capability traits: `PlatformTextInput` (IME), `PlatformHaptics`,
-  `Clipboard`, and the data-transfer transport
-  (`data_transfer::DataTransferSource`, ADR-0038).
+  the clipboard's plain-text vocabulary (`ClipboardRead`, `ClipboardWrite`),
+  and the drag-and-drop transport (`data_transfer::DragTransport`, ADR-0312).
 - Display vocabulary: `DisplaySnapshot`, `DisplayInfo`, the opaque `DisplayId`
   a `DisplayRegistry` issues, and the validated `RefreshPeriod` (ADR-0236).
 - Input vocabulary: `PlatformInput`, `DispatchEventResult`, `DragDropEvent`,
