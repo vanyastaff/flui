@@ -474,6 +474,7 @@ pub(crate) use {host::loop_wake_deadline, window_renderer::WindowRenderers};
 
 /// Install the native journal of `backend` before the loop starts its platform, in a build that
 /// records it (ADR-0288 §11): see `native_journal`.
+#[cfg(not(target_arch = "wasm32"))]
 fn begin_native_journal(backend: flui_native::journal::codec::Backend) {
     #[cfg(native_journal)]
     native_journal::begin(backend);
@@ -482,6 +483,7 @@ fn begin_native_journal(backend: flui_native::journal::codec::Backend) {
 }
 
 /// Whether this loop journals its backend, so the agent's hello lists the `native` layer.
+#[cfg(not(target_arch = "wasm32"))]
 fn journals_native() -> bool {
     #[cfg(native_journal)]
     {
@@ -494,6 +496,7 @@ fn journals_native() -> bool {
 }
 
 /// End the loop's native journal unless the driver agent is `served`.
+#[cfg(not(target_arch = "wasm32"))]
 fn keep_native_journal(served: bool) {
     #[cfg(native_journal)]
     native_journal::keep_if(served);
