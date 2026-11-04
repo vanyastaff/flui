@@ -17,6 +17,6 @@ exit = "ADR-0287"
 
 [[allow]]
 path = "crates/flui-view/src/tree/element_tree.rs"
-lines = 3002
+lines = 3001
 reason = "the ADR-0303 §6 expectations on its hand-written catches pushed it past the limit; each site that moves to a primitive removes its expectation"
 exit = "ADR-0287"

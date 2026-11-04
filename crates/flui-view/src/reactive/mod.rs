@@ -84,6 +84,7 @@ use std::fmt;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
+use flui_foundation::generation::GenSlots;
 use flui_foundation::panic::FirstPanic;
 pub use flui_foundation::read_scope::{
     ReadGraph, ReadScope, ReaderSink, ScopeRef, Signal, SignalError, SignalSender, SignalSlot,
@@ -123,7 +124,6 @@ fn next_graph_id(counter: &AtomicU32) -> u32 {
 }
 
 struct Node {
-    generation: u32,
     live: bool,
     /// The value; `None` while a freed slot, or while a read/write closure
     /// holds it on loan (see the module docs on re-entrancy).
@@ -201,6 +201,10 @@ struct Inner {
     phase_guard: Option<BuildPhaseGuard>,
     preserving_close: bool,
     nodes: Vec<Node>,
+    /// The slots' generations in circulation: minted and stepped through
+    /// `GenSlots`, so a slot's ids are never carried twice, and a slot
+    /// whose generation space is exhausted closes at its release.
+    generations: GenSlots,
     free: Vec<u32>,
     /// Slots each element read during its last build.
     element_reads: HashMap<ElementId, Membership<u32>>,
@@ -255,6 +259,18 @@ impl Inner {
         if let Some(shared) = &self.build_in_progress {
             shared.active.set(outer);
         }
+    }
+
+    /// Whether `slot` names a live node carrying the generation the handle
+    /// names: the one staleness compare every read, write and put-back runs.
+    fn generation_matches(&self, slot: &SignalSlot) -> bool {
+        self.nodes
+            .get(slot.index() as usize)
+            .is_some_and(|node| node.live)
+            && self
+                .generations
+                .generation(slot.index())
+                .is_some_and(|live| live.as_u32() == slot.generation())
     }
 }
 
@@ -353,17 +369,30 @@ impl Reactive {
             // that recreates itself keep the release running forever. The
             // refusal names a handle that is already released.
             let index = Self::claim_index(&mut inner, None);
-            let generation = inner.nodes[index as usize].generation;
+            let generation = inner
+                .generations
+                .generation(index)
+                .expect("BUG: a claimed slot carries the generation the claim stepped it to");
             Self::release_index(&mut inner, index);
             tracing::debug!(
                 target: "flui.signals",
                 ?owner,
                 "refused: a signal was created for an element that is releasing its signals"
             );
-            return Err((SignalError::Released { index, generation }, value));
+            return Err((
+                SignalError::Released {
+                    index,
+                    generation: generation.as_u32(),
+                },
+                value,
+            ));
         }
         let index = Self::claim_index(&mut inner, Some(Box::new(value)));
-        let slot = SignalSlot::new(self.id, index, inner.nodes[index as usize].generation);
+        let generation = inner
+            .generations
+            .generation(index)
+            .expect("BUG: a claimed slot carries the generation the claim stepped it to");
+        let slot = SignalSlot::new(self.id, index, generation.as_u32());
         if let Some(owner) = owner {
             inner.owned_by_element.entry(owner).or_default().push(slot);
         }
@@ -372,16 +401,13 @@ impl Reactive {
     }
 
     /// Takes a free slot under its next generation, or a new slot. A slot
-    /// whose generation is exhausted never returns to the free list (see
-    /// [`Self::release_index`]), so no handle of an earlier occupant can match
-    /// the new one.
+    /// whose generation is exhausted is closed at its release and never
+    /// returns to the free list (see [`Self::release_index`]), so no handle of
+    /// an earlier occupant can match the new one.
     fn claim_index(inner: &mut Inner, value: Option<Box<dyn Any>>) -> u32 {
         if let Some(index) = inner.free.pop() {
+            inner.generations.mint_recycled(index);
             let node = &mut inner.nodes[index as usize];
-            node.generation = node
-                .generation
-                .checked_add(1)
-                .expect("BUG: a slot whose generation is exhausted is never freed");
             node.live = true;
             node.value = value;
             node.element_readers.clear();
@@ -390,11 +416,11 @@ impl Reactive {
             let index = u32::try_from(inner.nodes.len())
                 .expect("BUG: a reactive graph holds at most u32::MAX signal slots");
             inner.nodes.push(Node {
-                generation: 0,
                 live: true,
                 value,
                 element_readers: Membership::default(),
             });
+            inner.generations.mint_fresh();
             index
         }
     }
@@ -451,12 +477,13 @@ impl Reactive {
                 this: self.id,
             });
         }
-        match inner.nodes.get(slot.index() as usize) {
-            Some(node) if node.live && node.generation == slot.generation() => Ok(()),
-            _ => Err(SignalError::Released {
+        if inner.generation_matches(&slot) {
+            Ok(())
+        } else {
+            Err(SignalError::Released {
                 index: slot.index(),
                 generation: slot.generation(),
-            }),
+            })
         }
     }
 
@@ -568,9 +595,9 @@ impl Reactive {
         let node = &mut inner.nodes[index as usize];
         node.live = false;
         let retired = node.value.take();
-        // A slot at its last generation retires: reusing it would wrap the
-        // generation back to one an old handle carries.
-        if node.generation != u32::MAX {
+        // A slot whose generation space is exhausted closes here: re-listing
+        // it would step into a generation one of its old handles carries.
+        if inner.generations.peek(index).is_some() {
             inner.free.push(index);
         }
         retired
@@ -726,12 +753,7 @@ impl Reactive {
                 for slot in owned {
                     // A closed graph still releases this element's live
                     // slots, so `check`'s closed refusal does not apply.
-                    if slot.graph() == self.id
-                        && inner
-                            .nodes
-                            .get(slot.index() as usize)
-                            .is_some_and(|node| node.live && node.generation == slot.generation())
-                    {
+                    if slot.graph() == self.id && inner.generation_matches(&slot) {
                         retired.push((slot, Self::release_index(&mut inner, slot.index())));
                     }
                 }
@@ -793,8 +815,12 @@ impl Reactive {
             .map(|(index, node)| {
                 let index =
                     u32::try_from(index).expect("BUG: signal slot indices fit u32 at claim");
+                let generation = inner
+                    .generations
+                    .generation(index)
+                    .expect("BUG: a live slot carries its generation");
                 SlotInfo {
-                    slot: SignalSlot::new(self.id, index, node.generation),
+                    slot: SignalSlot::new(self.id, index, generation.as_u32()),
                     readers: node.element_readers.to_vec(),
                     owner: owners.get(&index).copied(),
                 }
@@ -885,9 +911,8 @@ impl Reactive {
         let mut inner = self.inner.borrow_mut();
         if inner.closed
             && slot.graph() == self.id
+            && inner.generation_matches(&slot)
             && let Some(node) = inner.nodes.get_mut(slot.index() as usize)
-            && node.live
-            && node.generation == slot.generation()
             && node.value.is_none()
         {
             node.value = value.take();
@@ -1565,7 +1590,10 @@ mod tests {
         let first = r.signal(1u8);
         let index = first.slot().index();
         r.release(first.slot());
-        r.inner.borrow_mut().nodes[index as usize].generation = u32::MAX - 1;
+        r.inner
+            .borrow_mut()
+            .generations
+            .seed_generation(index, u32::MAX - 1);
         let last = r.signal(2u8);
         assert_eq!(last.slot().index(), index, "the freed slot is taken again");
         r.release(last.slot());
