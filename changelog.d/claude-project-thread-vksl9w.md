@@ -166,7 +166,9 @@
 - **`flui record <file>`** writes a running app's input recording (the rows `flui-testing`
   replays) to a file or, with `-`, to stdout, until Ctrl-C or until the window closes.
   `--window` names the window and `--keep-text` keeps the rows' text. It connects as an
-  observer, so it records beside a `flui mcp` that drives the app.
+  observer, so it records beside a `flui mcp` that drives the app. `--native <dir>` records
+  the backend too: each stream it journals to `<dir>/<n>.jsonl` as a native recording
+  `flui-native` replays, and `<dir>/index.json` naming them.
 - **A driver recording can hold the `native` layer** (protocol 0.10, additive): with `input`, a
   recording of an app whose backend journals is sent each backend stream's lines as
   `record_native` events (`flui_protocol::{RecordNativeEvent, RecordRow}`,

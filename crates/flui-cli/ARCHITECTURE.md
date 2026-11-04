@@ -263,7 +263,14 @@ each method's parameter type.
   over. Ctrl-C (the flag `flui run` listens with) or the app's own `end` row
   ends the loop, and `record.stop` then answers what the recording came to,
   the rows admitted before the stop and the `end` row arriving ahead of the
-  answer. A recording whose `end` row never came fails the command.
+  answer. A recording whose `end` row never came fails the command. With
+  `--native <dir>` it asks for the native layer too, and each stream's
+  `record_native` lines go to `agent::record::native`: the rows to a part file
+  as they arrive, flushed line by line, and at the end `<n>.jsonl`, its header
+  naming every device the rows read (a stream's header names none, its
+  devices being known only once its rows are), then `index.json`. The part
+  files are written whichever way the recording ended, so a cut-off one keeps
+  its native rows as well.
 - **Tests.** `agent::mcp::tests` pin the tool-to-method mapping;
   `an_agent_reads_and_taps_the_app_run_with_agent_through_mcp` runs
   `flui run --agent`, `flui mcp` and a fixture app end to end, and
@@ -279,7 +286,8 @@ each method's parameter type.
   app, its launch, a connection, a reload): Chromium and Firefox where one is
   installed, which CI's Linux image has. `cli_record` runs `flui record`
   against a stand-in agent: a recording the app ends, one Ctrl-C stops, one cut
-  off and one refused (Unix).
+  off, one refused, and one holding the native layer, whose streams are
+  written with the devices their rows read (Unix).
 
 ### Native iOS selection and launch
 

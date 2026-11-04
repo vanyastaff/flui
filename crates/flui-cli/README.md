@@ -89,7 +89,7 @@ it. Inside the FLUI checkout, generate against the local source instead:
 | `flui create [NAME]` | Scaffold a project from a template. Prompts when `NAME` is omitted and a terminal is attached. |
 | `flui run` | Build and run with hot reload; hot-keys while running. |
 | `flui mcp` | MCP server over stdio that lets an AI agent read and drive an app started with `flui run --agent`. See [Driving an app from an agent](#driving-an-app-from-an-agent). |
-| `flui record <file>` | Write the input of an app started with `flui run --agent` to a recording file until Ctrl-C. See [Driving an app from an agent](#driving-an-app-from-an-agent). |
+| `flui record <file>` | Write the input of an app started with `flui run --agent` to a recording file until Ctrl-C; `--native <dir>` writes its backend streams too. See [Driving an app from an agent](#driving-an-app-from-an-agent). |
 | `flui build <platform>` | Build for `desktop`, `macos`, `windows`, `linux`, `ios`, `android` or `web`; prints every artifact with its size. |
 | `flui test` | `cargo test` with `--unit`, `--integration`, `--release`, and harness args after `--`. |
 | `flui analyze` | `cargo clippy --workspace --all-targets -D warnings` (`--pedantic`, `--fix`). |
@@ -261,6 +261,15 @@ either way the file ends with its `end` row. A reader that falls behind loses
 rows, which a `gap` row counts and the command reports; a replay refuses a gap
 too. A recording cut off, because the app went, keeps its rows but fails the
 command: it has no `end` row, so a replay refuses it.
+
+`--native <dir>` records what the platform backend was handed too (the native
+layer, where the app journals its backend: a native debug build). Each stream
+the backend journals (its pointer registry, the loop's and a window's delivery,
+the system reads, a window's snapshots) goes to `<dir>/<n>.jsonl` as a native
+recording, the JSON Lines `flui-native` replays, its header naming every device
+its rows read; `<dir>/index.json` names each file's stream, backend, rows and
+lost rows. A stream that lost rows keeps a `gap` line where it lost them, and a
+replay refuses the file there.
 
 ## Building
 

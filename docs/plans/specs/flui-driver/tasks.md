@@ -430,9 +430,8 @@ graph LR
   - a recording made through the agent replays to the same decisions.
 - **Status:** the input layer has merged: held input (#2291), the journal (#2294), the recording
   wire types (#2295), the taps fan-out (#2298), `record.*` (#2301) and `flui record` (#2305).
-  The native layer is in the slices below: slices 1 (#2307) and 2 (#2311) merged; slice 3 is
-  validated by `a_loop_nobody_serves_ends_its_native_journal_so_no_line_reaches_it` and
-  `the_hello_lists_the_native_layer_only_when_the_loop_journals`.
+  The native layer is in the slices below: slices 1 (#2307), 2 (#2311) and 3 (#2313) merged;
+  slice 4 is validated by `a_native_recording_writes_each_stream_with_the_devices_its_rows_read`.
 - **Native layer, decided (2026-11-04):**
   - **Capture.** A native host's debug build installs one line capture (`flui-native`
     `journal::lines`) on the loop's thread before the platform is created, the backend named by

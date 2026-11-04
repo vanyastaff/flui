@@ -9,6 +9,12 @@
 //! answer comes once the `end` row went out), or when the app ends it, because the window it
 //! was started on closed or the runtime went. Either way `record.stop` then answers what it
 //! came to, since the app holds a recording that ended by itself until it is named.
+//!
+//! A recording that holds the native layer is also sent each backend stream's lines as
+//! `record_native` events; [`native::NativeFiles`] writes them, one native recording per
+//! stream.
+
+pub(crate) mod native;
 
 use std::io::{self, Write};
 use std::time::{Duration, Instant};
@@ -16,7 +22,11 @@ use std::time::{Duration, Instant};
 use flui_protocol::Event;
 use flui_protocol::input_recording::Row;
 use flui_protocol::method::{Method, RecordStart, RecordStop};
-use flui_protocol::{RecordEvent, RecordParams, RecordStopParams, RecordSummary, Recording};
+use flui_protocol::{
+    RecordEvent, RecordNativeEvent, RecordParams, RecordStopParams, RecordSummary, Recording,
+};
+
+use self::native::NativeFiles;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
@@ -58,22 +68,25 @@ pub(crate) enum RecordFailure {
     },
     /// A line could not be written.
     Write(io::Error),
+    /// A native stream's line could not be written; the error names the file.
+    Native(io::Error),
 }
 
-/// Records `params` over `connection` into `out` until `stop` answers true or the app ends the
-/// recording.
+/// Records `params` over `connection` into `out`, and its native streams into `native`, until
+/// `stop` answers true or the app ends the recording.
 pub(crate) fn record(
     connection: &mut Connection,
     params: &RecordParams,
     out: &mut impl Write,
+    native: Option<&mut NativeFiles>,
     stop: impl Fn() -> bool,
 ) -> Result<Recorded, RecordFailure> {
     // The connection is this recording's alone, so every row that arrives before the answer
     // is one of its own: the rows come after the header they follow.
     let mut early = Vec::new();
     let started: Recording = call::<RecordStart>(connection, params, |event| {
-        if let Event::Record(event) = event {
-            early.push(*event);
+        if matches!(event, Event::Record(_) | Event::RecordNative(_)) {
+            early.push(event);
         }
     })
     .map_err(RecordFailure::Start)?;
@@ -82,17 +95,18 @@ pub(crate) fn record(
 
     let mut file = Written {
         out,
+        native,
         ours,
         rows: 0,
         ended: false,
     };
     for event in early {
-        file.take(&event)?;
+        file.event(&event)?;
     }
     while !file.ended && !stop() {
         match connection.next_event(Instant::now() + POLL) {
-            Ok(Some(Event::Record(event))) => file.take(&event)?,
-            Ok(_) => {}
+            Ok(Some(event)) => file.event(&event)?,
+            Ok(None) => {}
             Err(why) => {
                 return Err(RecordFailure::Broken {
                     rows: file.rows,
@@ -110,8 +124,8 @@ pub(crate) fn record(
     // The rows admitted before the stop, and the `end` row, come before its answer.
     let mut written = Ok(());
     let stopped = call::<RecordStop>(connection, &RecordStopParams::new(ours), |event| {
-        if let (Ok(()), Event::Record(event)) = (&written, event) {
-            written = file.take(&event);
+        if written.is_ok() {
+            written = file.event(&event);
         }
     });
     written?;
@@ -131,6 +145,8 @@ pub(crate) fn record(
 /// The rows of one recording, as they are written.
 struct Written<'a, W: Write> {
     out: &'a mut W,
+    /// Where the native streams go, when the recording holds them.
+    native: Option<&'a mut NativeFiles>,
     ours: u64,
     /// The rows written, as [`RecordSummary::rows`] counts them: the header, the `gap` rows
     /// and the `end` row aside.
@@ -140,6 +156,26 @@ struct Written<'a, W: Write> {
 }
 
 impl<W: Write> Written<'_, W> {
+    /// Writes `event` when it is one of this recording's rows or native lines.
+    fn event(&mut self, event: &Event) -> Result<(), RecordFailure> {
+        match event {
+            Event::Record(event) => self.take(event),
+            Event::RecordNative(event) => self.take_native(event),
+            _ => Ok(()),
+        }
+    }
+
+    /// Writes `event`'s line to its stream when it is one of this recording's. A stream's
+    /// lines that come after the input's `end` row still are: they were admitted before it.
+    fn take_native(&mut self, event: &RecordNativeEvent) -> Result<(), RecordFailure> {
+        match &mut self.native {
+            Some(native) if event.recording == self.ours => native
+                .take(event.stream, &event.line)
+                .map_err(RecordFailure::Native),
+            _ => Ok(()),
+        }
+    }
+
     /// Writes `event`'s row when it is one of this recording's and its `end` row is not
     /// written yet.
     fn take(&mut self, event: &RecordEvent) -> Result<(), RecordFailure> {
