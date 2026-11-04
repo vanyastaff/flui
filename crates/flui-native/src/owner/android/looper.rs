@@ -90,7 +90,6 @@ use crate::{
     owner::signal::OwnerSignal,
     platform::AppHandler,
     platform::Platform,
-    platform::PlatformExecutor,
     version::gate::android::AndroidApi,
     version::gate::android::StylusHandwriting,
 };
@@ -245,7 +244,6 @@ pub struct AndroidLoop {
     /// Where the system's memory calls hand system notices.
     notices: Arc<dyn NoticeChannel>,
     pub(crate) window: Arc<Mutex<Option<Arc<dyn ActivityWindow>>>>,
-    background_executor: Arc<SimpleExecutor>,
     pub(crate) clipboard: Arc<dyn crate::host::SharedClipboard>,
     /// The input of the Activity's queue, as the table made it
     /// ([`AndroidHost::input`]).
@@ -327,7 +325,6 @@ impl AndroidLoop {
             activity: Arc::new(ActivityFlags::default()),
             activity_callbacks,
             window: Arc::new(Mutex::new(None)),
-            background_executor: Arc::new(SimpleExecutor),
             clipboard,
             input: H::input(),
             owner_signal,
@@ -1136,10 +1133,6 @@ impl host::Services for AndroidLoop {
         super::launch::string_extra(&self.app, key)
     }
 
-    fn background_executor(&self) -> Arc<dyn PlatformExecutor> {
-        self.background_executor.clone()
-    }
-
     fn app_path(&self) -> Result<PathBuf, PlatformError> {
         Ok(PathBuf::from("/data/local/tmp"))
     }
@@ -1249,17 +1242,5 @@ impl host::Storage<AndroidLoop> for AndroidLoop {
                 local: no_backup.join(app.as_str()),
             },
         ))
-    }
-}
-
-// ==================== Mock implementations (MVP) ====================
-
-/// Simple executor that runs tasks on the current thread
-#[derive(Debug)]
-struct SimpleExecutor;
-
-impl PlatformExecutor for SimpleExecutor {
-    fn spawn(&self, task: Box<dyn FnOnce() + Send>) {
-        task();
     }
 }

@@ -77,7 +77,6 @@ use crate::{
     error::PlatformError, executor::BackgroundExecutor, host, owner::OwnerHooks,
     owner::OwnerPlatform, owner::handlers::OpenWindows, owner::hwnd_affinity::UserDataRefusal,
     owner::window_delivery::WindowDelivery, platform::AppHandler, platform::Platform,
-    platform::PlatformExecutor,
 };
 use broadcast::Subscriber;
 use com_apartment::ComApartment;
@@ -1377,10 +1376,6 @@ impl host::Loop for WindowsLoop {
 impl host::Services for WindowsLoop {
     fn launch_value(&self, key: flui_platform::LaunchKey) -> Option<String> {
         host::environment_launch_value(key)
-    }
-
-    fn background_executor(&self) -> Arc<dyn PlatformExecutor> {
-        Arc::clone(&self.background_executor) as Arc<dyn PlatformExecutor>
     }
 
     fn app_path(&self) -> Result<std::path::PathBuf, PlatformError> {

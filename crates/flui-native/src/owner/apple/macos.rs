@@ -114,7 +114,6 @@ use crate::host_window::HostWindow;
 
 use crate::{
     error::PlatformError,
-    executor::BackgroundExecutor,
     owner::DirectOwnerHooks,
     owner::OwnerHooks,
     owner::OwnerPlatform,
@@ -127,7 +126,6 @@ use crate::{
     owner::watch::Watch,
     platform::AppHandler,
     platform::Platform,
-    platform::PlatformExecutor,
 };
 use flui_platform::{DisplayId, DisplaySnapshot, PlatformWindow, SystemPreferences};
 
@@ -202,9 +200,6 @@ pub struct MacOSLoop {
 
     /// The sources of the host's system notices, as the table built them.
     notice_sources: Box<dyn NoticeSources>,
-
-    /// Background executor (GCD-based)
-    background_executor: Arc<BackgroundExecutor>,
 
     /// The id registry and last snapshot of the displays, as the table made
     /// them; shared with every window so each names its screen by the same
@@ -296,9 +291,6 @@ impl MacOSLoop {
             // Initialize NSApplication (the process-wide singleton).
             let app = NSApplication::sharedApplication(mtm);
 
-            // Create executors
-            let background_executor = Arc::new(BackgroundExecutor::new());
-
             // Bind the fields the wake pump needs as locals first: the pump is
             // passed a wake closure over the window map, and both must exist
             // before the struct literal that owns them.
@@ -342,7 +334,6 @@ impl MacOSLoop {
                 windows,
                 app_delivery,
                 wake_pump,
-                background_executor,
                 displays,
                 _screen_observer: screen_observer,
                 notices,
@@ -420,10 +411,6 @@ impl host::Loop for MacOSLoop {
 impl host::Services for MacOSLoop {
     fn launch_value(&self, key: flui_platform::LaunchKey) -> Option<String> {
         host::environment_launch_value(key)
-    }
-
-    fn background_executor(&self) -> Arc<dyn PlatformExecutor> {
-        Arc::clone(&self.background_executor) as Arc<dyn PlatformExecutor>
     }
 
     fn app_path(&self) -> Result<PathBuf, PlatformError> {
