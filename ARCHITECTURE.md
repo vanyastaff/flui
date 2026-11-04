@@ -120,8 +120,9 @@ retained page elements.
 ### Products and registry support have different roles
 
 The facade and CLI are the two products; implementation crates required by their
-published manifests are registry support. Publication roles live in the existing
-workspace layer inventory, while private examples/tools retain `publish = false`.
+published manifests are registry support. Publication roles live in the workspace's
+`tier` and `tier-kind` declarations ([ADR-0081](docs/adr/ADR-0081-workspace-tiers-and-reach-facts.md)),
+while private examples/tools retain `publish = false`.
 No parallel release package list is maintained. Cargo's normalized dependency
 rules define the distribution closure: optional/build/target declarations and
 versioned dev-dependencies count; versionless dev-dependencies do not. This is a

@@ -390,7 +390,7 @@ pub(super) fn check_tiers(members: &Members, tiers: &[String]) -> Vec<Finding> {
             member.order.is_some(),
         ];
         for (key, present) in TIER_KEYS.into_iter().zip(present) {
-            if !present && (key == "tier-kind" || member.must_have_layer()) {
+            if !present {
                 findings.push(Finding::Missing {
                     name: name.clone(),
                     rel: rel.clone(),

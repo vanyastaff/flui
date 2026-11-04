@@ -85,6 +85,6 @@ that test into the issue — it is the reproduction, and it is what stops the bu
 ## See Also
 
 - [Getting Started](docs/getting-started.md) — toolchain setup and first build
-- [Architecture](docs/architecture.md) — frame pipeline + layered DAG
-- [Crates Map](docs/crates.md) — per-layer crate inventory and status
+- [Architecture](docs/architecture.md) — frame pipeline + tier DAG
+- [Crates Map](docs/crates.md) — per-tier crate inventory and status
 - [Testing](docs/testing.md) — quality gates and coverage targets

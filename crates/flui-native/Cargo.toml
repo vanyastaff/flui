@@ -38,7 +38,7 @@ flui-painting = { path = "../flui-painting", version = "=0.2.0-dev" }
 # The contracts the backends implement (capability traits, window/input and
 # data-transfer vocabulary), re-exported here at their old paths (ADR-0082).
 flui-platform = { workspace = true }
-# Layer-legal downward edge (foundation sits below platform in the DAG),
+# Downward edge in the tiers' order (foundation is the values tier),
 # carrying two seams: OwnerAffinity — the ADR-0039 owner-thread backstop,
 # hosted in foundation so its tests run in CI (flui-native's suite does
 # not) — and the generational DataTransferId for the ADR-0312 transport.
@@ -833,11 +833,11 @@ objc2-quartz-core = { version = "0.3.2", default-features = false, features = [
     "objc2-metal",
 ] }
 
-# Layer 3, not the substrate's 2: its `flui-semantics` edge (the
-# `PlatformAccessibility` trait, ADR-0082 §2) points at layer 3. Only
-# `flui-app` (layer 9) depends on it, so nothing below is affected.
+# Tier H, the hosts: it programs the OS cycles directly, so the tier forbids
+# only the render spine above it (`reach-forbid`). The `flui-semantics` edge
+# is ADR-0082 §2's capability seam. Only `flui-app` depends on it in
+# production, so nothing else is affected.
 [package.metadata.flui]
-layer = 3
 tier = "H"
 tier-kind = "internal"
 order = 1

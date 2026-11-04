@@ -32,7 +32,6 @@ default = []
 workspace = true
 
 [package.metadata.flui]
-layer = 1
 tier = "V"
 tier-kind = "internal"
 order = 3

@@ -144,7 +144,8 @@ reads comments, and no clippy lint counts lines outside `#[cfg(test)]`
 The tier gate meets the first condition because nothing else sees the package graph. Types and
 clippy work inside one crate. Cargo rejects only dependency cycles, not direction.
 `disallowed_types` and `disallowed_methods` cannot forbid a dependency. cargo-deny's bans are
-global or per dependent crate and cannot express a partial order (ADR-0041). A custom lint was
+global or per dependent crate and cannot express a partial order (ADR-0081's
+tier-and-order gate). A custom lint was
 rejected below for its nightly toolchain.
 
 The panic allowlist does not return: `clippy::unwrap_used` states that rule. The publish dry

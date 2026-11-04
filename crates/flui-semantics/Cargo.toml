@@ -80,7 +80,6 @@ name = "publish_cost"
 harness = false
 
 [package.metadata.flui]
-layer = 3
 tier = "S"
 tier-kind = "internal"
 order = 5

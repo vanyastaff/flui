@@ -57,7 +57,6 @@ path = "tests/render_object_harness.rs"
 workspace = true
 
 [package.metadata.flui]
-layer = 4
 tier = "R"
 tier-kind = "internal"
 order = 3

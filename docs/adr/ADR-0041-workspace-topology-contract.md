@@ -1,15 +1,19 @@
 # ADR-0041: Workspace topology contract
 
-- **Status:** Accepted (2026-08-01)
+- **Status:** Superseded (2026-11-03)
 - **Date:** 2026-08-01
 - **Amended:** 2026-09-23 — the layer graph moved from `docs/workspace-layers.toml` into the
   manifests (`[package.metadata.flui] layer`), checked by `cargo xtask workspace`. Layer order
   and Cargo's own cycle check replace the same-layer, forbidden and projected edge lists;
   `allowed-dependents` / `allowed-dev-dependents` carry the per-crate restrictions (`flui-log`,
   the design systems); review holds the planned-crate gate.
-- **Superseded in part by:** [ADR-0081](ADR-0081-workspace-tiers-and-reach-facts.md) — tiers
-  are checked beside layers; the layer table, "a crate is a layer" as the only reason, and
-  "Localization direction is locked" end when the `layer` key is removed.
+- **Superseded-by:** [ADR-0081](ADR-0081-workspace-tiers-and-reach-facts.md) — the tier rule
+  (tier, `tier-kind`, `order`, `edge-exceptions`, the reach facts) replaced the layer graph and
+  the `layer` key is gone from the manifests and the gate. What of this record lasts, restated
+  in ADR-0081: the manifest-as-source claim, the `allowed-dependents` / `allowed-dev-dependents`
+  mechanism, the dev-edge exemption and the rejected alternatives. "Localization direction is
+  locked" has governed nothing since [ADR-0081](ADR-0081-workspace-tiers-and-reach-facts.md)
+  deleted `flui-localizations`.
 - **Superseded in part by:** [ADR-0083](ADR-0083-one-frame-transaction-in-flui-runtime.md) — the
   paragraph "No `flui-runtime` without two consumers"; `flui-runtime` exists.
 - **Amended by:** [ADR-0082](ADR-0082-platform-api-contract-crate.md) (L1 gains

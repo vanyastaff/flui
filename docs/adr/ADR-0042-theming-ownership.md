@@ -3,7 +3,7 @@
 - **Status:** Accepted (2026-08-02)
 - **Date:** 2026-08-02
 - **Amended:** 2026-09-30 — "What is untouched" states this ADR's scope without the "ported 1:1" directive it quoted; FLUI is not a Flutter port ([`AGENTS.md`](../../AGENTS.md) Design stance). The decision is unchanged.
-- **Related:** [ADR-0028](ADR-0028-design-system-decoupling-contract.md) (design-system decoupling — Material and Cupertino are independent siblings above the widget catalog); [ADR-0027](ADR-0027-owner-affine-ui-realms.md) (one UI runtime per window — why appearance is per-presentation, and why package/ownership topology is a sanctioned leapfrog zone); [ADR-0037](ADR-0037-presentation-ownership-domains.md) (per-presentation owner state); [ADR-0041](ADR-0041-workspace-topology-contract.md) (layer policy — `flui-app` is L9, the design systems are L7)
+- **Related:** [ADR-0028](ADR-0028-design-system-decoupling-contract.md) (design-system decoupling — Material and Cupertino are independent siblings above the widget catalog); [ADR-0027](ADR-0027-owner-affine-ui-realms.md) (one UI runtime per window — why appearance is per-presentation, and why package/ownership topology is a sanctioned leapfrog zone); [ADR-0037](ADR-0037-presentation-ownership-domains.md) (per-presentation owner state); [ADR-0041](ADR-0041-workspace-topology-contract.md) (the superseded workspace topology contract — its design-system placement became [ADR-0088](ADR-0088-official-packages-sdk-and-facade.md)'s packages; [ADR-0081](ADR-0081-workspace-tiers-and-reach-facts.md) states today's tiers)
 - **Issue:** [#569](https://github.com/vanyastaff/flui/issues/569) — public package surface cleanup
 
 *OS appearance is a per-window signal carried by `MediaQueryData::platform_brightness`; theme *selection* (`ThemeMode`) belongs to the design system that defines the tokens, not to the application framework; the resolved theme is published through an in-tree inherited widget, separately in each window. There is no universal `ThemeData` abstraction over Material and Cupertino, and `WidgetsApp` works with neither. `flui-app` owns no design tokens — the parked `AppTheme`/`AppColorScheme` surface is removed rather than moved.*
@@ -15,7 +15,7 @@
 Zero consumers is a fact about cost, not about need. It proves the current API can be changed for free; it does not prove applications will never need theming. The moment a `MaterialApp`-shaped entry point lands, *something* has to answer "which theme, resolved how, published where" — and the parked surface answers it wrongly in five ways:
 
 1. **It bundles unrelated axes.** Colours, typography, spacing, radius, and motion are separate design concerns with separate override points. One struct with one builder means an application that wants a different corner radius restates a colour scheme.
-2. **It is Material-shaped but lives in a design-neutral crate.** `AppColorScheme`'s tokens (`primary`, `on_primary`, `surface`, `on_surface`, …) are Material 3 role names. `flui-app` is L9 application composition; the tokens belong to L7.
+2. **It is Material-shaped but lives in a design-neutral crate.** `AppColorScheme`'s tokens (`primary`, `on_primary`, `surface`, `on_surface`, …) are Material 3 role names. `flui-app` is the tier-H application-composition crate ([ADR-0081](ADR-0081-workspace-tiers-and-reach-facts.md)); the tokens belong to a design system.
 3. **It competes with the real thing.** `flui_material::ThemeData` and `flui_cupertino::CupertinoThemeData` already exist, are consumed by real widgets, and already resolve through the tree. A third, unwired theme type is a fork of the contract, not a layer above it.
 4. **Its scope is wrong.** `AppTheme` is application-scoped configuration. Appearance is not application-scoped: two windows of one application can legitimately show different brightness, and an OS appearance change reaches one window at a time.
 5. **`ThemeMode::System` was a lie.** `AppThemeBuilder::build` mapped `System` to `AppTheme::light()`. A "follow the system" mode that never reads a system signal is worse than no mode at all, because it silently satisfies the API and fails the behaviour.
@@ -56,12 +56,12 @@ An application with no Material and no Cupertino must still get navigation, loca
 
 **6. `flui-app` owns no design tokens.**
 
-`AppTheme` and `AppColorScheme` are deleted outright — no compatibility alias, no re-export, no move to another crate. They were an incorrect public contract; carrying a shim forward would preserve exactly the confusion the removal exists to end. This ADR records the rule so the surface cannot drift back: colours, typography, spacing, radius, motion, and any other design token are L7 concerns, and a token type appearing under `crates/flui-app/src/` is a review failure regardless of what it is named.
+`AppTheme` and `AppColorScheme` are deleted outright — no compatibility alias, no re-export, no move to another crate. They were an incorrect public contract; carrying a shim forward would preserve exactly the confusion the removal exists to end. This ADR records the rule so the surface cannot drift back: colours, typography, spacing, radius, motion, and any other design token are design-system concerns, and a token type appearing under `crates/flui-app/src/` is a review failure regardless of what it is named.
 
 ## Consequences
 
 - **Positive.** The removal happens while the cost is zero — no consumer, no migration, no deprecation window. Breaking changes are cheap today and ossify once consumers exist. The replacement architecture is recorded before the deletion, so the need it served has a named home rather than being quietly dropped.
-- **Positive.** `flui-app` loses its only design-system-shaped surface, which makes the L9/L7 split in ADR-0041 true in the source and not only in the manifest.
+- **Positive.** `flui-app` loses its only design-system-shaped surface, which makes the `flui-app`/design-system split in [ADR-0081](ADR-0081-workspace-tiers-and-reach-facts.md)'s tier table (`flui-app` in tier H, `flui-material` and `flui-cupertino` in tier pkg) true in the source and not only in the manifest.
 - **Negative / accepted cost.** FLUI has, for now, *no* application-level theming entry point at all: an author wires `Theme`/`CupertinoTheme` into their own tree. That is the honest state — it was equally true before, since `AppTheme` was never read; what changes is that the API no longer implies otherwise.
 - **Neutral.** No behaviour changes. Nothing consumed the removed types.
 

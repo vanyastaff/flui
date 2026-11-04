@@ -135,9 +135,9 @@ or below that may depend on `accesskit`.
 `flui_semantics::platform`, next to the AccessKit translation that produces what `publish`
 carries (`tree_to_update`, `semantics_action_for`). `flui-semantics` is tier S and already
 depends on `accesskit`. `flui-native` depends on `flui-semantics` and re-exports the three names
-at `flui_native::traits`, so no backend or host path changes; its layer becomes 3 so the edge
-points to the same layer, which amends [ADR-0041](ADR-0041-workspace-topology-contract.md)'s
-layer table. `HostWindow::accessibility` stays in `flui-native`: only the trait
+at `flui_native::traits`, so no backend or host path changes (`flui-native` sits
+in tier H over `flui-semantics`' tier S, the same edge [ADR-0081](ADR-0081-workspace-tiers-and-reach-facts.md)'s
+table states today). `HostWindow::accessibility` stays in `flui-native`: only the trait
 moved, not the discovery. A runtime-owned port was not chosen because it has one implementation
 and would move the translation in `PresentationState` into the host. The trait is still not in
 `flui-platform`: [ADR-0084](ADR-0084-open-capability-seam-and-plugins.md) (Proposed) asks
@@ -200,8 +200,7 @@ a reach fact:
   the full tree rather than a `cargo tree -i` probe, because `-i` errors on an absent package
   instead of printing nothing.
 
-The contract crate sits at `layer = 1` as the stand-in for tier C until the tier keys of
-ADR-0081 land.
+The contract crate sits in tier C (`flui-platform`, order 1).
 
 ### 4. Second change: registered callbacks lose `Send`, one backend at a time
 

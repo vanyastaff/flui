@@ -164,5 +164,5 @@ RUST_LOG=flui_native=trace,flui_engine=info cargo test -p flui-native
 ## See Also
 
 - [Architecture](architecture.md) — frame pipeline and crate DAG
-- [Crates Map](crates.md) — per-layer crate inventory and status
+- [Crates Map](crates.md) — per-tier crate inventory and status
 - [Testing](testing.md) — running the test suite and benchmarks

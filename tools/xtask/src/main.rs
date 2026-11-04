@@ -105,7 +105,7 @@ enum Command {
     Miri(tasks::MiriArgs),
     /// Remove the nested-cargo test caches under the target directory.
     CleanNested(tasks::CleanNestedArgs),
-    /// Check crate layers, manifests, test reachability and ADR numbers.
+    /// Check crate tiers, manifests, test reachability and ADR numbers.
     Workspace(workspace::WorkspaceArgs),
     /// Check that no crate reaches what its tier forbids (ADR-0081 §2).
     Reach(workspace::ReachArgs),

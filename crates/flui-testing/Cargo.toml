@@ -132,12 +132,11 @@ name = "flui_testing_it"
 path = "tests/main.rs"
 
 [package.metadata.flui]
-layer = 6
 tier = "K"
 tier-kind = "internal"
-# Above flui-widgets (3), flui-runtime (4) and flui-sdk (5): the test driver
-# wraps the catalog and the frame runtime (ADR-0083 §4). Every crate below
-# names it only on a dev edge.
+# Above `flui-widgets`, `flui-runtime` and `flui-sdk`: the test driver wraps
+# the catalog and the frame runtime (ADR-0083 §4). Every crate below names it
+# only on a dev edge.
 order = 6
 # Process-global state, checked by `cargo xtask globals` (ADR-0097).
 globals = [

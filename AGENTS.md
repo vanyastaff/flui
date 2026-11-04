@@ -51,13 +51,13 @@ and edits its row.
 | A list of listeners | `Notifier<Arg>`, `ChangeNotifier` | a hand-rolled `Vec` of callbacks guarded by a `notifying: bool` |
 | A new identity | `IdMint<I>` and `IdExhausted` (`flui_foundation::sequence`), or a generational key under the ID-offset rule | `wrapping_add`, a `pub` integer field, an ID derived from an OS handle or pointer |
 | A test that drives an application's frames | `flui_testing::HeadlessHost` over `UiRuntime::pump` and its manual clock | `HeadlessBinding::pump_frame`, which ADR-0083 removes |
-| Which crate may depend on which | `tier`, `order` and `reach` (ADR-0081) | reasoning from `layer = N`, which ADR-0081 removes |
+| Which crate may depend on which | `tier`, `order` and `reach` (ADR-0081) | reasoning from `layer = N`, which ADR-0081 removed |
 | A platform's status, a version floor, an open gap | `docs/platform-parity.md`, `platform-support.toml`, `docs/gaps.md` | a status line in an ADR, a spec or an `ARCHITECTURE.md` |
 
 ## Codebase map
 
 `docs/crates.md` maps the crates, `packages/` and the facade (`src/`); each manifest's
-`[package.metadata.flui]` gives tier and layer. Not visible from the layout:
+`[package.metadata.flui]` gives tier, kind and order. Not visible from the layout:
 
 - only `flui-app` depends on `flui-native`, and `windows::*`/`objc2::*` types stay in it
   (ADR-0082); `flui-runtime` has no host, platform or GPU edge (ADR-0083);

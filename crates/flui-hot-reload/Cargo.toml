@@ -68,7 +68,6 @@ name = "hot_reload_it"
 path = "tests/main.rs"
 
 [package.metadata.flui]
-layer = 6
 tier = "pkg"
 tier-kind = "official"
 order = 4

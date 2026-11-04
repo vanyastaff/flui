@@ -89,24 +89,6 @@ tiers = [
     "H",   # hosts: platform backends, app runners, the CLI, the facade
     "pkg", # official packages: material, cupertino, devtools, hot reload
 ]
-# Crate layers, bottom (0) to top, checked beside the tiers until the `layer`
-# key is removed. Each crate under crates/ and the facade set
-# `[package.metadata.flui] layer`; a normal or build dependency may point to the
-# same layer or lower, never higher, and never at an example or tool. Cargo
-# itself rejects cycles. Checked by `cargo xtask workspace` (ADR-0041).
-layers = [
-    "(empty, ADR-0098)",               # 0
-    "Framework primitives",            # 1
-    "Substrate",                       # 2
-    "Compositing / a11y / animation",  # 3
-    "Render machine + render catalog", # 4
-    "Framework spine",                 # 5
-    "Widget catalog + DX tooling",     # 6
-    "Design systems",                  # 7
-    "(empty, ADR-0081)",               # 8
-    "Application / tooling",           # 9
-    "Facade",                          # 10
-]
 
 # What no crate of a tier may reach in any root build, over normal and build
 # edges on every target (ADR-0081 §2), checked by `cargo xtask reach`. A tier's
@@ -743,7 +725,6 @@ keywords = ["gui", "ui", "wgpu", "flutter", "reactive"]
 categories = ["gui", "rendering::engine"]
 
 [package.metadata.flui]
-layer = 10
 tier = "H"
 tier-kind = "stable"
 order = 4
@@ -769,7 +750,7 @@ ignored-paths = [
 [lints]
 workspace = true
 
-# The facade surface (src/lib.rs): the layers an application author consumes.
+# The facade surface (src/lib.rs): what an application author consumes.
 # Custom painting, rendering, and gestures have curated authoring modules.
 # Engine/platform internals stay dev-deps for framework integration examples.
 #
@@ -777,8 +758,8 @@ workspace = true
 # dependencies, not dev-deps: `src/lib.rs` re-exports them as
 # `flui::material` / `flui::cupertino`, and a `[dev-dependencies]` crate
 # is unavailable to the lib target itself. Optional means an author who wants
-# neither catalog pays for neither — see `[features]` below. The facade's
-# layer (10) is above the design systems (7), so these edges point down
+# neither catalog pays for neither — see `[features]` below. The facade sits
+# above the packages and the spine, so these edges point down
 # (ADR-0028, `cargo xtask workspace`).
 [dependencies]
 flui-platform = { workspace = true }
@@ -805,14 +786,14 @@ toml.workspace = true
 # `tests/facade_consumer.rs` reads `cargo metadata`'s `target_directory` so its
 # nested consumer builds follow a relocated `CARGO_TARGET_DIR`.
 cargo_metadata.workspace = true
-# === Core Layer ===
+# === Core ===
 flui-layer = { path = "crates/flui-layer", version = "=0.2.0-dev" }
-# === Rendering Layer ("testing" for the layer readback test's render-tree inspection) ===
+# === Rendering ("testing" for the readback test's render-tree inspection) ===
 flui-rendering = { path = "crates/flui-rendering", version = "=0.2.0-dev", features = ["testing"] }
 flui-objects = { path = "crates/flui-objects", version = "=0.2.0-dev" }
 flui-interaction = { path = "crates/flui-interaction", version = "=0.2.0-dev" }
 
-# === Platform Layer (for examples) ===
+# === Platform (for examples) ===
 flui-native = { path = "crates/flui-native", version = "=0.2.0-dev" }
 
 # === Hot-Reload (for examples) ===
@@ -830,7 +811,7 @@ trybuild = { workspace = true }
 # NOTE: flui-material / flui-cupertino moved to [dependencies] above — the
 # facade's own src/lib.rs re-exports them as `flui::material`/`flui::cupertino`.
 
-# === Engine Layer (for GPU examples and the readback test) ===
+# === Engine (for GPU examples and the readback test) ===
 flui-engine = { path = "crates/flui-engine", version = "=0.2.0-dev", features = ["dx12"] }
 pollster = { workspace = true }
 # === Image encoding (scene_render example) ===

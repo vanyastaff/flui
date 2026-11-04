@@ -42,7 +42,6 @@ all-features = true
 # No workspace dependency: the vocabulary sits under flui-semantics and the
 # desktop agent server alike.
 [package.metadata.flui]
-layer = 1
 tier = "C"
 tier-kind = "stable"
 order = 2

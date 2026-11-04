@@ -267,4 +267,4 @@ For a full `flui-app` desktop runner, the same `HotReloadDriver` can wrap a plug
 - [`crates/flui-hot-reload`](../crates/flui-hot-reload/src/lib.rs) — API and module docs
 - [`examples/scene_render.rs`](../examples/scene_render.rs) — reference host integration
 - [`examples/desktop_scene`](../examples/desktop_scene/) — reference plugin crate
-- [Architecture](architecture.md) — workspace layers (hot-reload is layer 7)
+- [Architecture](architecture.md) — workspace tiers (hot-reload sits in pkg, an official package under crates/ per ADR-0088)

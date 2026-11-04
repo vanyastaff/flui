@@ -13,9 +13,8 @@ struct Fixture {
 }
 
 impl Fixture {
-    /// Layers "Base" and "Top" (and an unused third), tiers "Low", "High" and
-    /// "Top", crates `a` (layer 0, tier Low order 1) and `b` (layer 1, tier High
-    /// order 1, depends on `a`), an example `ex`, and one ADR.
+    /// Tiers "Low", "High" and "Top", crates `a` (tier Low order 1) and `b`
+    /// (tier High order 1, depends on `a`), an example `ex`, and one ADR.
     fn new() -> Self {
         static NEXT: AtomicUsize = AtomicUsize::new(0);
         let root = std::env::temp_dir().join(format!(
@@ -32,7 +31,6 @@ resolver = "3"
 members = ["crates/a", "crates/b", "examples/ex"]
 
 [workspace.metadata.flui]
-layers = ["Base", "Top", "Design systems"]
 tiers = ["Low", "High", "Top"]
 
 [workspace.package]
@@ -47,8 +45,8 @@ repository = "https://example.com"
 unsafe_code = "warn"
 "#,
         );
-        fixture.write_crate("a", 0, "Low", 1, "");
-        fixture.write_crate("b", 1, "High", 1, "a = { path = \"../a\" }\n");
+        fixture.write_crate("a", "Low", 1, "");
+        fixture.write_crate("b", "High", 1, "a = { path = \"../a\" }\n");
         fixture.write(
             "examples/ex/Cargo.toml",
             r#"[package]
@@ -74,7 +72,7 @@ tier-kind = "tool"
         fixture
     }
 
-    fn write_crate(&self, name: &str, layer: usize, tier: &str, order: u64, dependencies: &str) {
+    fn write_crate(&self, name: &str, tier: &str, order: u64, dependencies: &str) {
         self.write(
             &format!("crates/{name}/Cargo.toml"),
             &format!(
@@ -93,7 +91,6 @@ repository.workspace = true
 workspace = true
 
 [package.metadata.flui]
-layer = {layer}
 tier = "{tier}"
 tier-kind = "internal"
 order = {order}
@@ -156,27 +153,25 @@ fn a_well_formed_workspace_passes() {
 
 fn an_upward_dependency_is_refused() {
     let fixture = Fixture::new();
-    fixture.edit(
-        "crates/a/Cargo.toml",
-        "[dependencies]\n",
-        "[dependencies]\nb = { path = \"../b\" }\n",
-    );
-    fixture.edit("crates/b/Cargo.toml", "a = { path = \"../a\" }\n", "");
-    // the tier rule admits the edge, so the layer rule reports it alone
-    fixture.edit(
-        "crates/b/Cargo.toml",
-        "tier = \"High\"\ntier-kind = \"internal\"\norder = 1",
-        "tier = \"Low\"\ntier-kind = \"internal\"\norder = 0",
-    );
+    // `b` (High) already depends on `a` (Low); move `a` a tier above
+    place(&fixture, "a", ("Low", 1), ("Top", 1));
     assert_one(
         &fixture.findings(),
-        "a (layer 0 (Base)) depends on b (layer 1 (Top))",
+        "b (tier High, order 1) depends on a (tier Top, order 1)",
     );
 }
 
-fn a_same_layer_dependency_is_allowed() {
+fn a_same_tier_dependency_needs_a_smaller_order() {
     let fixture = Fixture::new();
-    fixture.edit("crates/b/Cargo.toml", "layer = 1", "layer = 0");
+    // `b` (High, order 1) depends on `a`; move `a` into the same tier, above
+    // `b`'s order
+    place(&fixture, "a", ("Low", 1), ("High", 2));
+    assert_one(
+        &fixture.findings(),
+        "b (tier High, order 1) depends on a (tier High, order 2)",
+    );
+    // and with the smaller order the same tier admits it
+    place(&fixture, "a", ("High", 2), ("High", 0));
     assert_eq!(fixture.findings(), Vec::<String>::new());
 }
 
@@ -194,8 +189,8 @@ fn allowed_dev_dependents_restrict_dev_dependencies() {
     let fixture = Fixture::new();
     fixture.edit(
         "crates/b/Cargo.toml",
-        "layer = 1",
-        "layer = 1\nallowed-dependents = [\"ex\"]\nallowed-dev-dependents = [\"ex\"]",
+        "tier = \"High\"",
+        "tier = \"High\"\nallowed-dependents = [\"ex\"]\nallowed-dev-dependents = [\"ex\"]",
     );
     fixture.edit(
         "crates/a/Cargo.toml",
@@ -212,8 +207,8 @@ fn allowed_dependents_leave_dev_dependencies_alone() {
     let fixture = Fixture::new();
     fixture.edit(
         "crates/b/Cargo.toml",
-        "layer = 1",
-        "layer = 1\nallowed-dependents = [\"ex\"]",
+        "tier = \"High\"",
+        "tier = \"High\"\nallowed-dependents = [\"ex\"]",
     );
     fixture.edit(
         "crates/a/Cargo.toml",
@@ -227,8 +222,8 @@ fn allowed_dependents_cover_build_dependencies() {
     let fixture = Fixture::new();
     fixture.edit(
         "crates/a/Cargo.toml",
-        "layer = 0",
-        "layer = 0\nallowed-dependents = [\"ex\"]",
+        "tier = \"Low\"",
+        "tier = \"Low\"\nallowed-dependents = [\"ex\"]",
     );
     fixture.edit(
         "crates/b/Cargo.toml",
@@ -243,27 +238,26 @@ fn examples_may_depend_on_a_restricted_crate() {
     let fixture = Fixture::new();
     fixture.edit(
         "crates/b/Cargo.toml",
-        "layer = 1",
-        "layer = 1\nallowed-dependents = []\nallowed-dev-dependents = []",
+        "tier = \"High\"",
+        "tier = \"High\"\nallowed-dependents = []\nallowed-dev-dependents = []",
     );
     assert_eq!(fixture.findings(), Vec::<String>::new());
 }
 
-fn a_crate_without_a_layer_is_reported() {
+fn a_declared_layer_is_an_unknown_flui_key() {
+    // the `layer` key is removed (ADR-0081's tier rule took it over)
     let fixture = Fixture::new();
-    fixture.edit("crates/a/Cargo.toml", "layer = 0\n", "");
-    assert_one(
-        &fixture.findings(),
-        "crates/a/Cargo.toml has no `[package.metadata.flui] layer`",
+    fixture.edit(
+        "crates/a/Cargo.toml",
+        "tier = \"Low\"",
+        "layer = 0\ntier = \"Low\"",
     );
-}
-
-fn a_layer_beyond_the_named_ones_is_reported() {
-    let fixture = Fixture::new();
-    fixture.edit("crates/b/Cargo.toml", "layer = 1", "layer = 5");
-    assert_one(
-        &fixture.findings(),
-        "declares layer 5, but the root manifest names only 3",
+    assert!(
+        fixture
+            .error()
+            .contains("unknown `[package.metadata.flui]` key `layer`"),
+        "{}",
+        fixture.error()
     );
 }
 
@@ -280,9 +274,8 @@ fn depending_on_an_example_is_refused() {
         "ex = { path = \"../../examples/ex\" }\n",
     );
     let findings = fixture.findings();
-    assert_eq!(findings.len(), 2, "{findings:#?}");
+    assert_eq!(findings.len(), 1, "{findings:#?}");
     assert!(findings[0].contains("b depends on ex, whose `tier-kind` is \"tool\""));
-    assert!(findings[1].contains("b depends on ex, an example or tool"));
 }
 
 fn manifests_inherit_the_workspace_keys_and_lints() {
@@ -347,7 +340,7 @@ fn an_internal_crate_with_its_own_version_is_still_reported() {
 /// Adds `crates/<name>` at tier Low with `links = "<links>"` and the build
 /// script Cargo requires beside it.
 fn write_linking_crate(fixture: &Fixture, name: &str, order: u64, links: &str) {
-    fixture.write_crate(name, 0, "Low", order, "");
+    fixture.write_crate(name, "Low", order, "");
     fixture.edit(
         &format!("crates/{name}/Cargo.toml"),
         "repository.workspace = true\n",
@@ -612,9 +605,8 @@ fn a_mistyped_or_unknown_flui_key_is_an_error() {
     let fixture = Fixture::new();
     fixture.edit(
         "crates/a/Cargo.toml",
-        "layer = 0",
-        "layer = 0
-wasm = \"false\"",
+        "order = 1",
+        "order = 1\nwasm = \"false\"",
     );
     assert!(
         fixture.error().contains("`wasm` must be `true` or `false`"),
@@ -666,11 +658,10 @@ fn place(
     );
 }
 
-/// Replaces `b -> a` with `a -> b`, both on layer 0, so only the tier rule
-/// can speak.
+/// Replaces `b -> a` with `a -> b`, an upward edge the tier rule refuses, so
+/// `edge-exceptions` entries have a real edge to cite or be stale about.
 fn reverse_the_edge(fixture: &Fixture) {
     fixture.edit("crates/b/Cargo.toml", "a = { path = \"../a\" }\n", "");
-    fixture.edit("crates/b/Cargo.toml", "layer = 1", "layer = 0");
     fixture.edit(
         "crates/a/Cargo.toml",
         "[dependencies]\n",
@@ -907,8 +898,8 @@ fn workspace_gate_contract() {
                 an_upward_dependency_is_refused as fn(),
             ),
             (
-                "a_same_layer_dependency_is_allowed",
-                a_same_layer_dependency_is_allowed as fn(),
+                "a_same_tier_dependency_needs_a_smaller_order",
+                a_same_tier_dependency_needs_a_smaller_order as fn(),
             ),
             (
                 "a_dev_dependency_may_point_up",
@@ -931,12 +922,8 @@ fn workspace_gate_contract() {
                 examples_may_depend_on_a_restricted_crate as fn(),
             ),
             (
-                "a_crate_without_a_layer_is_reported",
-                a_crate_without_a_layer_is_reported as fn(),
-            ),
-            (
-                "a_layer_beyond_the_named_ones_is_reported",
-                a_layer_beyond_the_named_ones_is_reported as fn(),
+                "a_declared_layer_is_an_unknown_flui_key",
+                a_declared_layer_is_an_unknown_flui_key as fn(),
             ),
             (
                 "depending_on_an_example_is_refused",

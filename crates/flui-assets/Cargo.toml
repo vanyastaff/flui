@@ -106,7 +106,6 @@ path = "tests/image_decode_scheduling.rs"
 required-features = ["images"]
 
 [package.metadata.flui]
-layer = 2
 tier = "S"
 tier-kind = "internal"
 order = 7
