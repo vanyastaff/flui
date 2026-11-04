@@ -1,4 +1,4 @@
-//! [`CollapsingHeader`] — a header above scrolling content that the
+﻿//! [`CollapsingHeader`] â€” a header above scrolling content that the
 //! content's own scroll collapses and expands, as a participant of the
 //! nested scroll channel (ADR-0209).
 //!
@@ -418,6 +418,9 @@ impl HeaderModel {
 }
 
 impl Listenable for HeaderModel {
+    fn listen(&self, listener: flui_foundation::ListenerCallback) -> flui_foundation::Subscription {
+        self.notifier.listen(listener)
+    }
     fn add_observer(&self, observer: flui_foundation::ListenerObserver) -> ListenerId {
         self.notifier.add_observer(observer)
     }

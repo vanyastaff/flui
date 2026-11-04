@@ -1,4 +1,4 @@
-//! [`TransformationController`] — the external handle for
+﻿//! [`TransformationController`] â€” the external handle for
 //! [`InteractiveViewer`](crate::InteractiveViewer)'s transform.
 
 use std::{cell::Cell, fmt, rc::Rc};
@@ -15,6 +15,9 @@ struct Inner {
 }
 
 impl Listenable for Inner {
+    fn listen(&self, listener: ListenerCallback) -> flui_foundation::Subscription {
+        self.notifier.listen(listener)
+    }
     fn add_observer(&self, observer: flui_foundation::ListenerObserver) -> ListenerId {
         self.notifier.add_observer(observer)
     }
@@ -39,7 +42,7 @@ impl Listenable for Inner {
 /// thread through `Rc`. [`listenable`](Self::listenable) returns that same channel,
 /// so subscribers can retain their subscription when given another clone.
 ///
-/// The value defaults to [`Matrix4::identity`] — no transformation.
+/// The value defaults to [`Matrix4::identity`] â€” no transformation.
 #[derive(Clone)]
 pub struct TransformationController {
     inner: Rc<Inner>,
@@ -134,7 +137,7 @@ impl TransformationController {
 
     /// The number of listeners currently registered.
     ///
-    /// Disposal-testing hook, mirroring `ChangeNotifier::len` — a caller
+    /// Disposal-testing hook, mirroring `ChangeNotifier::len` â€” a caller
     /// that mounts a widget against this controller and unmounts it can
     /// assert this returns to `0`, proving the widget's subscription was
     /// actually removed rather than left dangling into a torn-down subtree.

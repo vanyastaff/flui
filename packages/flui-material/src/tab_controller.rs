@@ -44,7 +44,8 @@ use flui_sdk::animation::{
 };
 use flui_sdk::foundation::panic::PanicRecovery;
 use flui_sdk::foundation::{
-    ChangeNotifier, Listenable, ListenerId, ListenerObserver, MutatedDuringBuild,
+    ChangeNotifier, Listenable, ListenerCallback, ListenerId, ListenerObserver, MutatedDuringBuild,
+    Subscription,
 };
 use flui_sdk::pipeline::ScrollDirection;
 use flui_sdk::view::environment::VsyncScope;
@@ -517,6 +518,9 @@ impl Drop for OwnerSlot<'_> {
 }
 
 impl Listenable for Shared {
+    fn listen(&self, listener: ListenerCallback) -> Subscription {
+        self.position_listeners.listen(listener)
+    }
     fn add_observer(&self, observer: ListenerObserver) -> ListenerId {
         self.position_listeners.add_observer(observer)
     }
@@ -970,6 +974,9 @@ impl TabPosition {
 }
 
 impl Listenable for TabPosition {
+    fn listen(&self, listener: ListenerCallback) -> Subscription {
+        self.shared.listen(listener)
+    }
     fn add_observer(&self, observer: ListenerObserver) -> ListenerId {
         self.shared.add_observer(observer)
     }

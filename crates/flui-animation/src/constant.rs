@@ -61,13 +61,6 @@ where
     pub fn with_status(value: T, status: AnimationStatus) -> Self {
         Self { value, status }
     }
-
-    /// Subscribe with an owned [`Subscription`](crate::Subscription): there is
-    /// nothing to hear — the value never changes — so the subscription is
-    /// inert and detaches nothing on drop.
-    pub fn listen(&self, _listener: impl Fn() + 'static) -> flui_foundation::Subscription {
-        flui_foundation::Subscription::inert()
-    }
 }
 
 impl<T> Animation<T> for ConstantAnimation<T>
@@ -98,6 +91,11 @@ impl<T> Listenable for ConstantAnimation<T>
 where
     T: Clone + 'static,
 {
+    fn listen(&self, _listener: ListenerCallback) -> flui_foundation::Subscription {
+        // Nothing to hear: the value never changes. The inert subscription
+        // names no channel and detaches nothing.
+        flui_foundation::Subscription::inert()
+    }
     fn add_listener(&self, _callback: ListenerCallback) -> ListenerId {
         // No registration is admitted. The returned id names nothing: no
         // registration is ever looked up against it, and this impl's own

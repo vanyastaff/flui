@@ -96,6 +96,11 @@ pub trait Listenable {
 
     /// Remove all listeners.
     fn remove_all_listeners(&self);
+
+    /// Subscribe with an owned [`Subscription`]: hold it, and the listener
+    /// fires on every notification; drop it, and the listener detaches from
+    /// its own channel.
+    fn listen(&self, listener: ListenerCallback) -> Subscription;
 }
 
 /// An interface for subclasses of [`Listenable`] that expose a value.
@@ -367,7 +372,7 @@ impl ChangeNotifier {
     /// Subscribe with an owned [`Subscription`]: hold it, and the
     /// listener fires on every [`notify_listeners`](Self::notify_listeners);
     /// drop it, and the listener detaches from this notifier.
-    pub fn listen(&self, listener: impl Fn() + 'static) -> Subscription {
+    pub fn listen(&self, listener: ListenerCallback) -> Subscription {
         self.inner.listen(listener)
     }
 
@@ -387,6 +392,9 @@ impl ChangeNotifier {
 }
 
 impl Listenable for ChangeNotifier {
+    fn listen(&self, listener: ListenerCallback) -> Subscription {
+        self.inner.listen(listener)
+    }
     fn add_observer(&self, observer: ListenerObserver) -> ListenerId {
         self.inner
             .add_with_recovery(Rc::new(move |&(), recovery| observer(recovery)))
@@ -694,6 +702,9 @@ impl<T> AsRef<T> for ValueNotifier<T> {
 }
 
 impl<T> Listenable for ValueNotifier<T> {
+    fn listen(&self, listener: ListenerCallback) -> Subscription {
+        self.notifier().listen(listener)
+    }
     fn add_observer(&self, observer: ListenerObserver) -> ListenerId {
         self.notifier().add_observer(observer)
     }
@@ -724,7 +735,7 @@ impl<T> ValueNotifier<T> {
     where
         T: 'static,
     {
-        self.notifier().listen(listener)
+        self.notifier().listen(Rc::new(move || listener()))
     }
 }
 

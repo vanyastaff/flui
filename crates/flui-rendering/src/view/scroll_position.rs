@@ -497,6 +497,9 @@ impl Inner {
 }
 
 impl Listenable for Inner {
+    fn listen(&self, listener: ListenerCallback) -> flui_foundation::Subscription {
+        self.notifier.listen(listener)
+    }
     fn add_observer(&self, observer: flui_foundation::ListenerObserver) -> ListenerId {
         self.notifier.add_observer(observer)
     }

@@ -1,11 +1,11 @@
-//! [`RefreshIndicator`] — pull to refresh, a participant of the nested scroll
+﻿//! [`RefreshIndicator`] â€” pull to refresh, a participant of the nested scroll
 //! channel (ADR-0209).
 //!
 //! The indicator is not a second scroll path. It joins the chain of the
 //! scrollables beneath it as a [`NestedScrollConnection`] and takes what a
-//! scroll leaf leaves at its leading edge — the top of a vertical list, the
+//! scroll leaf leaves at its leading edge â€” the top of a vertical list, the
 //! reading start of a horizontal one (its left, or its right under
-//! right-to-left text) — while a contact drags it:
+//! right-to-left text) â€” while a contact drags it:
 //!
 //! - **Pull.** `post_scroll` takes the leaf's remainder toward its start
 //!   when the step is [`ScrollCause::UserInput`]: a drag. A fling
@@ -14,7 +14,7 @@
 //!   assistive steps are user input too, and a list at its top passes a
 //!   wheel or trackpad packet up its chain, but none of them is a contact
 //!   ([`ScrollStep::contact`]): only a dragging hand reveals the indicator. Taking the first
-//!   delta latches the contact here (ADR-0209 §5): `pre_scroll` gives a
+//!   delta latches the contact here (ADR-0209 Â§5): `pre_scroll` gives a
 //!   reversing finger its pull back first, and the list moves again on the
 //!   next contact. A leaf with bouncing physics keeps its own overscroll and
 //!   leaves nothing to pull with.
@@ -34,8 +34,8 @@
 //!
 //! The pull is a path gesture, so the indicator takes its
 //! [`GestureAlternatives`] in its constructor (ADR-0216): the first command
-//! performs [`RefreshIntent`] — [`RefreshIntent::command`] builds it with
-//! the platform's refresh keys — and assistive technology's custom action,
+//! performs [`RefreshIntent`] â€” [`RefreshIntent::command`] builds it with
+//! the platform's refresh keys â€” and assistive technology's custom action,
 //! the keys and the visible control or menu perform it as the pull does,
 //! through the same action.
 //!
@@ -125,7 +125,7 @@ pub(crate) fn refresh_keys(platform: TargetPlatform) -> [SingleActivator; 2] {
 }
 
 // ---------------------------------------------------------------------------
-// RefreshController — what the indicator shows, for the caller to observe
+// RefreshController â€” what the indicator shows, for the caller to observe
 // ---------------------------------------------------------------------------
 
 struct RefreshControllerInner {
@@ -144,6 +144,9 @@ impl fmt::Debug for RefreshControllerInner {
 }
 
 impl Listenable for RefreshControllerInner {
+    fn listen(&self, listener: ListenerCallback) -> flui_foundation::Subscription {
+        self.notifier.listen(listener)
+    }
     fn add_observer(&self, observer: flui_foundation::ListenerObserver) -> ListenerId {
         self.notifier.add_observer(observer)
     }
@@ -231,7 +234,7 @@ impl RefreshController {
 }
 
 // ---------------------------------------------------------------------------
-// RefreshIndicatorStyle — the ambient indicator
+// RefreshIndicatorStyle â€” the ambient indicator
 // ---------------------------------------------------------------------------
 
 /// Where a pull-to-refresh gesture stands, for a [`RefreshIndicatorStyle`] builder.
@@ -417,7 +420,7 @@ impl RefreshIndicator {
 
     /// The axis it pulls along (default vertical): down from the top of a
     /// vertical scrollable, toward the reading end from the reading start
-    /// of a horizontal one — right from its left edge, or left from its
+    /// of a horizontal one â€” right from its left edge, or left from its
     /// right edge under the ambient right-to-left [`Directionality`].
     #[must_use]
     pub fn axis(mut self, axis: Axis) -> Self {
@@ -427,7 +430,7 @@ impl RefreshIndicator {
 }
 
 // ---------------------------------------------------------------------------
-// Refresher — the participant and the refresh it starts
+// Refresher â€” the participant and the refresh it starts
 // ---------------------------------------------------------------------------
 
 /// What the indicator keeps behind its connection: the pull of the contact

@@ -22,6 +22,7 @@ use std::{
 };
 
 use crate::id::ListenerId;
+use crate::notifier::ListenerCallback;
 use crate::panic::PanicRecovery;
 use crate::sequence::IdMint;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -246,7 +247,7 @@ impl<Arg> Notifier<Arg> {
     ///
     /// The channel's value borrow does not follow the subscription: its
     /// storage is held as a `'static` channel, so `Arg: 'static`.
-    pub fn listen(&self, listener: impl Fn() + 'static) -> crate::notifier::Subscription
+    pub fn listen(&self, listener: ListenerCallback) -> crate::notifier::Subscription
     where
         Arg: 'static,
     {
@@ -254,7 +255,6 @@ impl<Arg> Notifier<Arg> {
         let channel: Rc<dyn SubscribedChannel> = self.listeners.clone();
         crate::notifier::Subscription::for_channel(Rc::downgrade(&channel), id)
     }
-
     /// [`Self::add`] without the disposed gate — for wrappers
     /// (`ChangeNotifier`) that run their own differently-branded entry check
     /// first. A second gate here would turn a `dispose` racing in between the

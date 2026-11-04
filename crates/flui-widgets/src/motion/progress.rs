@@ -1,4 +1,4 @@
-//! [`Progress`] — what an `Animate`'s stages read: one parent animation and
+﻿//! [`Progress`] â€” what an `Animate`'s stages read: one parent animation and
 //! the side of a transition, either of which changes the pose.
 
 use std::cell::Cell;
@@ -87,6 +87,9 @@ impl fmt::Debug for Progress {
 }
 
 impl Listenable for Progress {
+    fn listen(&self, listener: flui_foundation::ListenerCallback) -> flui_foundation::Subscription {
+        self.changes.listen(listener)
+    }
     fn add_observer(&self, observer: ListenerObserver) -> ListenerId {
         self.changes.add_observer(observer)
     }

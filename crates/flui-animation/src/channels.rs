@@ -5,7 +5,9 @@ use std::rc::Rc;
 use flui_foundation::notifier::ListenerObserver;
 use flui_foundation::notifier_generic::NotificationCallback;
 use flui_foundation::panic::RecoveryScope;
-use flui_foundation::{ChangeNotifier, Listenable, ListenerCallback, ListenerId, Notifier};
+use flui_foundation::{
+    ChangeNotifier, Listenable, ListenerCallback, ListenerId, Notifier, Subscription,
+};
 
 use crate::animation::{Retirement, StatusObserver, Terminal};
 use crate::status::AnimationStatus;
@@ -60,6 +62,12 @@ impl Channels {
 
     pub(crate) fn add_listener(&self, listener: ListenerCallback) -> ListenerId {
         self.values.add_listener(listener)
+    }
+
+    /// Subscribe with an owned subscription on the value channel; the
+    /// subscription detaches through the channel itself on drop.
+    pub(crate) fn listen(&self, listener: ListenerCallback) -> Subscription {
+        self.values.listen(Rc::new(move || listener()))
     }
 
     /// Withdraw a value listener; its captures retire through `recovery`.

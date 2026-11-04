@@ -1,4 +1,4 @@
-//! Value and status listener registration.
+﻿//! Value and status listener registration.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -54,6 +54,9 @@ impl AnimationController {
 }
 
 impl Listenable for AnimationController {
+    fn listen(&self, listener: ListenerCallback) -> flui_foundation::Subscription {
+        self.notifier.listen(Rc::new(move || listener()))
+    }
     fn add_observer(&self, observer: flui_foundation::notifier::ListenerObserver) -> ListenerId {
         let mut observer = Opaque::new(observer);
         let inner = self.inner.borrow_mut();

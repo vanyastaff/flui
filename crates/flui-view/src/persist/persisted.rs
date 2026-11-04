@@ -582,6 +582,18 @@ impl<D: Document> Persisted<D> {
 }
 
 impl<D: Document> Listenable for Persisted<D> {
+    fn listen(&self, listener: flui_foundation::ListenerCallback) -> flui_foundation::Subscription {
+        let announcer = &self.document.announcer;
+        let subscription = announcer.notifier.listen(listener);
+        if announcer.closed.get() {
+            // The opening state is gone: the listener would never be told,
+            // and is not kept. The detached caller gets the inert form.
+            drop(subscription);
+            return flui_foundation::Subscription::inert();
+        }
+        self.document.refresh();
+        subscription
+    }
     /// The document follows the registry while it has listeners, so a
     /// commit by another document of this name is told too.
     fn add_observer(&self, observer: ListenerObserver) -> ListenerId {

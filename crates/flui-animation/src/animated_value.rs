@@ -745,6 +745,9 @@ impl<T: TwoWayConverter + 'static> Animation<T> for AnimatedValueView<T> {
 }
 
 impl<T: TwoWayConverter + 'static> Listenable for AnimatedValueView<T> {
+    fn listen(&self, listener: ListenerCallback) -> flui_foundation::Subscription {
+        self.controller.listen(listener)
+    }
     fn add_listener(&self, callback: ListenerCallback) -> ListenerId {
         self.controller.add_listener(callback)
     }

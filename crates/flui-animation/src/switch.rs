@@ -1,4 +1,4 @@
-//! `AnimationSwitch` - switches between animations when values cross.
+﻿//! `AnimationSwitch` - switches between animations when values cross.
 
 use crate::animation::{Animation, Retirement, Terminal};
 use crate::channels::{Channels, Withdrawn};
@@ -509,6 +509,9 @@ impl Animation<f64> for AnimationSwitch {
 }
 
 impl Listenable for AnimationSwitch {
+    fn listen(&self, listener: ListenerCallback) -> flui_foundation::Subscription {
+        self.owner.channels.listen(listener)
+    }
     fn add_observer(&self, observer: flui_foundation::notifier::ListenerObserver) -> ListenerId {
         self.owner.channels.add_observer(observer)
     }

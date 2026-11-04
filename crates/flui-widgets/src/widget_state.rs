@@ -404,6 +404,9 @@ impl fmt::Debug for WidgetStatesController {
 }
 
 impl Listenable for WidgetStatesController {
+    fn listen(&self, listener: flui_foundation::ListenerCallback) -> flui_foundation::Subscription {
+        self.notifier.listen(listener)
+    }
     fn add_observer(&self, observer: flui_foundation::ListenerObserver) -> ListenerId {
         self.notifier.add_observer(observer)
     }

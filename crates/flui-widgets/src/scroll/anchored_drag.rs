@@ -1,5 +1,5 @@
-//! [`AnchoredDrag`] — a one-dimensional drag that comes to rest on anchors
-//! (ADR-0209 §9).
+﻿//! [`AnchoredDrag`] â€” a one-dimensional drag that comes to rest on anchors
+//! (ADR-0209 Â§9).
 //!
 //! An anchored drag is a bounded scroll leaf of the nested scroll channel,
 //! not a second scroll path: it composes a [`Scrollable`] whose offset is the
@@ -113,7 +113,7 @@ pub enum AnchorsError {
 ///
 /// Built and validated once by [`DraggableAnchors::builder`]; cloning shares
 /// the set. The offsets go to an [`AnchorSnap`], which holds offsets, not
-/// keys (ADR-0209 §9); this set keeps the keys.
+/// keys (ADR-0209 Â§9); this set keeps the keys.
 ///
 /// ```
 /// use flui_widgets::{AnchorsError, DraggableAnchors};
@@ -541,7 +541,7 @@ impl<K: Copy + Eq + 'static> AnchoredDragController<K> {
     ///
     /// The move is a programmatic jump: through the drag's owner while one
     /// serves the controller, so the participants around it are offered the
-    /// step (ADR-0209 §3), and written by the controller when none does. It
+    /// step (ADR-0209 Â§3), and written by the controller when none does. It
     /// runs from the drag's lifecycle, which may run while the runtime
     /// builds, so it does not take the build check of
     /// [`ScrollController::jump_to`].
@@ -574,7 +574,7 @@ impl<K: Copy + Eq + 'static> AnchoredDragController<K> {
 /// selection haptic with the frame that shows it; programmatic moves play
 /// none.
 ///
-/// In the nested scroll channel (ADR-0209 §9) the drag is a bounded leaf: it
+/// In the nested scroll channel (ADR-0209 Â§9) the drag is a bounded leaf: it
 /// takes its axis first and passes the remainder to the scrollables around
 /// it, and an enclosing scrollable on the same axis loses the contact to it.
 /// For scrollables inside it the drag is a participant: a list at its edge
@@ -811,8 +811,8 @@ impl Ancestor {
 
 /// The drag as an ancestor is a connection, not a scrollable link of the
 /// chains inside it: it takes `UserInput` remainders only and settles itself
-/// from `released` (ADR-0209 §9), where the channel settles a scrollable
-/// link it moved (§6a).
+/// from `released` (ADR-0209 Â§9), where the channel settles a scrollable
+/// link it moved (Â§6a).
 impl NestedScrollConnection for Ancestor {
     fn post_scroll(&self, step: &ScrollStep, _consumed_by_child: Vec2) -> Vec2 {
         // Only the user's own motion drags it; a fling settles it instead.
@@ -932,6 +932,9 @@ impl fmt::Debug for DragOffset {
 }
 
 impl Listenable for DragOffset {
+    fn listen(&self, listener: flui_foundation::ListenerCallback) -> flui_foundation::Subscription {
+        self.scroll.listenable().listen(listener)
+    }
     fn add_observer(&self, observer: ListenerObserver) -> ListenerId {
         self.scroll.listenable().add_observer(observer)
     }

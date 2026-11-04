@@ -5,6 +5,7 @@ use std::rc::Rc;
 
 use flui_foundation::ListenerId;
 use flui_foundation::notifier::{Listenable, ListenerObserver};
+use flui_foundation::{ListenerCallback, Subscription};
 
 use super::path::{RouteParseError, RoutePath};
 use super::routable::Routable;
@@ -74,7 +75,7 @@ impl<R: Routable> RouterHandle<R> {
             .expect("BUG: a mounted Router's stack always holds a page")
     }
 
-    /// Pop the popups above the top page: they belong to it (ADR-0093 §2).
+    /// Pop the popups above the top page: they belong to it (ADR-0093 Â§2).
     fn dismiss_popups(&self) {
         let top = self.top_page();
         self.shared.navigator.pop_until(|id| id == top);
@@ -158,7 +159,7 @@ impl<R: Routable> RouterHandle<R> {
     /// # Errors
     ///
     /// [`RouterError::Parse`] when `location` does not parse or matches no
-    /// route — the stack is then unchanged — and [`RouterError::Disposed`]
+    /// route â€” the stack is then unchanged â€” and [`RouterError::Disposed`]
     /// once the router has unmounted.
     pub fn go(&self, location: &str) -> Result<(), RouterError> {
         self.mounted()?;
@@ -279,6 +280,17 @@ impl<R: Routable> Listenable for RouterHandle<R> {
     /// Once the router has unmounted the listener is dropped, not kept: it
     /// would never be told, and one holding this handle would keep the
     /// router's state alive.
+    fn listen(&self, listener: ListenerCallback) -> flui_foundation::Subscription {
+        let notifier = &self.shared.announcer.notifier;
+        let subscription = notifier.listen(listener);
+        if !self.shared.mounted.get() {
+            // Unmounted: the listener would never be told â€” drop it and hand
+            // the caller the inert form.
+            drop(subscription);
+            return flui_foundation::Subscription::inert();
+        }
+        subscription
+    }
     fn add_observer(&self, observer: ListenerObserver) -> ListenerId {
         let notifier = &self.shared.announcer.notifier;
         let id = notifier.add_observer(observer);
