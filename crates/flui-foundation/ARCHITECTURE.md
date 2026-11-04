@@ -33,6 +33,20 @@ exhausted mint refuses, typed (`IdExhausted`), forever
 no slab behind them (`ListenerId`, `TaskId`, `FrameCallbackId`) are minted by
 the family; the slab-backed ids stay the slot plus one.
 
+## Listener subscriptions (the owned listener)
+
+A listener paired by hand — `add_listener`'s id held apart from its source,
+removed later through `remove_listener` — is wrong-channel by construction:
+ids are per-channel counters that start at one, so the channel they name is
+not in the value. The owned form is the channel's `listen`
+(`ChangeNotifier::listen`, `ValueNotifier::listen`, `Notifier::listen`),
+which hands back a `Subscription`: cancel-on-drop, `detach` for an early
+exit, and a detach that knows its channel, so it removes exactly its own
+registration (`a_subscription_detaches_only_its_own_channel`,
+`a_subscription_detached_inside_a_round_is_skipped_and_retired_at_its_tail`).
+Taking the id protocol itself off the `Listenable` trait is the theme's next
+step; until then the id API stays next to this one.
+
 ## Slot generations (ADR-0313)
 
 A packed generational key (`ElementId`, `RenderId`, `UiRuntimeId`) names one

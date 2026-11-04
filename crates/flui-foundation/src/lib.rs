@@ -290,7 +290,8 @@ pub use id::{
 pub use key::{Key, KeyRef, Keyed, SaltedKey, UniqueKey, ValueKey, ViewKey, WithKey};
 // Change notification (Listenable pattern)
 pub use notifier::{
-    ChangeNotifier, Listenable, ListenerCallback, ListenerObserver, ValueListenable, ValueNotifier,
+    ChangeNotifier, Listenable, ListenerCallback, ListenerObserver, Subscription, ValueListenable,
+    ValueNotifier,
 };
 pub use rebuild_reason::{RebuildReason, RebuildReasons};
 pub use slot::IndexedSlot;
