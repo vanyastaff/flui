@@ -182,8 +182,8 @@ pub mod prelude {
         traits::{RenderBox, RenderObject, TextBaseline},
         view::{
             CacheExtentStyle, CompositeResult, FixedViewportOffset, RenderAbstractViewport,
-            RenderView, RevealedOffset, ScrollDirection, ScrollableViewportOffset,
-            SliverPaintOrder, ViewConfiguration, ViewportOffset,
+            RenderView, RevealedOffset, ScrollDirection, ScrollPosition, SliverPaintOrder,
+            ViewConfiguration, ViewportOffset,
         },
     };
     // Grid, custom-paint, flow, and custom-layout delegates — always available

@@ -66,9 +66,7 @@ use flui_animation::{SharedCurve, curves};
 use flui_foundation::geometry::Axis;
 use flui_foundation::{ChangeNotifier, Listenable, ListenerId};
 use flui_interaction::PointerKindSet;
-use flui_rendering::view::{
-    CacheExtentStyle, DimensionChangePolicy, ScrollPosition, ViewportOffset,
-};
+use flui_rendering::view::{CacheExtentStyle, DimensionChangePolicy, ScrollPosition};
 use flui_view::prelude::StatefulView;
 use flui_view::seq::ViewSeq;
 use flui_view::{
@@ -179,18 +177,21 @@ impl PageController {
     ///   hidden takes effect the moment the viewport regains a real dimension.
     /// - **Never established** — updates the pending startup page, same as
     ///   before any layout has run.
-    /// - **Real, established dimension** — jumps directly, unclamped, without
-    ///   checking whether the new value is in range.
+    /// - **Real, established dimension** — jumps through
+    ///   [`ScrollController::jump_to`]: a programmatic step of the pager's
+    ///   chain that stops the run driving it, clamped to the extents, and
+    ///   refused, like [`animate_to_page`](Self::animate_to_page), while the
+    ///   pager's runtime builds.
     pub fn jump_to_page(&self, page: usize) {
         let page_f = page as f64;
-        let mut position = self.scroll.position();
+        let position = self.scroll.position();
         if position.set_cached_page_while_collapsed(page_f) {
             return;
         }
         if position.has_applied_viewport_dimension() {
             let metrics = ScrollMetrics::from(&position);
             let pixels = metrics.pixels_from_page(self.viewport_fraction(), page_f);
-            position.jump_to(pixels);
+            let _ = self.scroll.jump_to(pixels);
         } else {
             position.set_dimension_policy(DimensionChangePolicy::KeepFractionalPage {
                 viewport_fraction: self.viewport_fraction(),

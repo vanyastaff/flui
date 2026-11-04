@@ -21,7 +21,7 @@ use std::time::Duration;
 
 use flui_painting::styling::Color;
 use flui_rendering::pipeline::PipelineOwner;
-use flui_rendering::view::ScrollPosition;
+use flui_rendering::view::{OffsetWriteCause, ScrollOffsetWriter, ScrollPosition};
 use flui_testing::widgets::SharedSignal;
 use flui_testing::{FrameReport, HeadlessBinding, MountOptions, MountOwners};
 use flui_widgets::prelude::*;
@@ -101,7 +101,7 @@ impl StatelessView for PerfApp {
 
 struct Mounted {
     binding: HeadlessBinding,
-    position: ScrollPosition,
+    writer: ScrollOffsetWriter,
 }
 impl Mounted {
     /// Pumps `frames` frames and sums their reports.
@@ -124,11 +124,8 @@ impl Mounted {
 /// Mounts [`PerfApp`] at 800×600 with semantics on.
 fn mount() -> Mounted {
     let label = SharedSignal::new(String::from("label"));
-    let position = ScrollPosition::new(0.0);
-    let app = PerfApp {
-        label,
-        position: position.clone(),
-    };
+    let (position, writer) = ScrollPosition::with_writer(0.0);
+    let app = PerfApp { label, position };
     let mut binding = HeadlessBinding::new();
     let root = GestureArenaScope::new(binding.arena().clone(), FocusRoot::new(app));
     let _ = binding.mount_root(
@@ -137,7 +134,7 @@ fn mount() -> Mounted {
         MountOptions::tight(WIDTH, HEIGHT),
     );
     binding.enable_semantics().expect("tree-bound");
-    Mounted { binding, position }
+    Mounted { binding, writer }
 }
 
 /// Writes `report` for `xtask perf` when `FLUI_PERF_OUT` is set. Called
@@ -195,7 +192,8 @@ fn perf_scrolling_a_10k_list_one_screen_lays_out_only_the_band() {
     let mut app = mount();
     let band = app.render_nodes();
 
-    app.position.set_pixels(HEIGHT);
+    app.writer
+        .set_pixels(HEIGHT, OffsetWriteCause::Programmatic);
     // Two frames: a lazy band that first appears is built after that frame's
     // paint and lands on the next (the ListView first-frame divergence).
     let report = app.pump_many(2);

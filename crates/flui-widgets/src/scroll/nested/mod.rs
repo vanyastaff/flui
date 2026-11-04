@@ -110,6 +110,20 @@ pub enum ScrollCause {
     Programmatic,
 }
 
+impl ScrollCause {
+    /// The cause an owner names when it writes the offset for a step of
+    /// this cause.
+    pub(crate) fn offset_write(self) -> flui_rendering::view::OffsetWriteCause {
+        use flui_rendering::view::OffsetWriteCause;
+        match self {
+            Self::UserInput => OffsetWriteCause::UserInput,
+            Self::Momentum => OffsetWriteCause::Momentum,
+            Self::SideEffect => OffsetWriteCause::Ballistic,
+            Self::Programmatic => OffsetWriteCause::Programmatic,
+        }
+    }
+}
+
 /// The device a sequence runs on (ADR-0209 §2).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]

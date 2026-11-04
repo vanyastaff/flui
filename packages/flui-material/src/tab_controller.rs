@@ -285,8 +285,7 @@ impl Shared {
         let _driving = DrivingPager::enter(&self.driving_pager);
         let (duration, curve) = match change {
             // A zero-duration run jumps through the scroll controller, which
-            // stops whatever run is driving the pager; `jump_to_page` only
-            // writes the offset, and a run in flight would carry on past it.
+            // stops whatever run is driving the pager.
             Change::Jump => (Duration::ZERO, SharedCurve::new(curves::LINEAR)),
             Change::Animate if self.reduce_pager.get() => {
                 (Duration::ZERO, SharedCurve::new(curves::LINEAR))

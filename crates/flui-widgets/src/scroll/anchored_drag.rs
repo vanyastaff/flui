@@ -538,6 +538,13 @@ impl<K: Copy + Eq + 'static> AnchoredDragController<K> {
 
     /// Put the child on the anchor nearest its offset, at once: the drag
     /// that was moving it is gone. A child resting on an anchor stays.
+    ///
+    /// The move is a programmatic jump: through the drag's owner while one
+    /// serves the controller, so the participants around it are offered the
+    /// step (ADR-0209 §3), and written by the controller when none does. It
+    /// runs from the drag's lifecycle, which may run while the runtime
+    /// builds, so it does not take the build check of
+    /// [`ScrollController::jump_to`].
     fn rest_on_nearest(&self) {
         let inner = &self.inner;
         let from = inner.scroll.pixels();
@@ -547,9 +554,9 @@ impl<K: Copy + Eq + 'static> AnchoredDragController<K> {
         if target == from && !self.is_moving() && key == inner.current.get() {
             return;
         }
-        inner.scroll.set_pixels(target);
+        inner.scroll.jump(target);
         inner.current.set(key);
-        inner.scroll.position().set_is_scrolling(false);
+        inner.scroll.writer().set_is_scrolling(false);
         inner.notifier.notify_listeners();
     }
 
@@ -795,7 +802,7 @@ impl Ancestor {
         if started {
             self.settling.set(Some(sequence));
         } else if owner.contact().is_none() {
-            owner.controller().position().set_is_scrolling(false);
+            owner.writer().set_is_scrolling(false);
         }
         started
     }
@@ -818,7 +825,7 @@ impl NestedScrollConnection for Ancestor {
             let taken = owner.take_remainder(step, recovery);
             if taken != Vec2::ZERO {
                 self.moved.set(Some((step.sequence, step.device)));
-                owner.controller().position().set_is_scrolling(true);
+                owner.writer().set_is_scrolling(true);
             }
             taken
         })
@@ -1024,7 +1031,7 @@ impl<K: Copy + Eq + 'static> AnchoredDragState<K> {
         };
         let ratio = presentation_device_pixel_ratio(pipeline.borrow().as_ref());
         if owner.move_to(target, ScrollCause::UserInput, ratio) == MoveOutcome::Moved {
-            owner.controller().position().set_is_scrolling(false);
+            owner.writer().set_is_scrolling(false);
         }
     }
 

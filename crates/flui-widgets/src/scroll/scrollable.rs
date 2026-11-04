@@ -192,7 +192,7 @@ pub type ViewportBuilder = Rc<dyn Fn(ScrollPosition) -> BoxedView>;
 /// on the given [`ScrollController`], including a ballistic fling simulation
 /// after the user lifts their finger.
 ///
-/// Scrolling rebuilds nothing. [`ScrollController::set_pixels`] notifies the
+/// Scrolling rebuilds nothing. A write of the controller's offset writer notifies the
 /// shared [`ScrollPosition`], and `RenderViewport` — which subscribes to it
 /// directly — marks itself needing layout; no element in the subtree is
 /// dirtied. See this module's docs.
@@ -729,7 +729,7 @@ impl ScrollableState {
                 if let Some(owner) = owner
                     && !owner.hold_ended(end, presentation_device_pixel_ratio(pipeline.as_ref()))
                 {
-                    owner.controller().position().set_is_scrolling(false);
+                    owner.writer().set_is_scrolling(false);
                 }
             })
             .build()
@@ -872,7 +872,7 @@ impl ScrollableState {
     /// fling would leave `is_scrolling` stuck true forever.
     fn install_fling_status_listener(&mut self) {
         drop(self.fling_status_subscription.take());
-        let position = self.scroll_controller.position();
+        let controller = self.scroll_controller.clone();
         let subscription = self
             .fling_controller
             .controller()
@@ -881,7 +881,7 @@ impl ScrollableState {
                     status,
                     AnimationStatus::ForwardSettled | AnimationStatus::ReverseSettled
                 ) {
-                    position.set_is_scrolling(false);
+                    controller.writer().set_is_scrolling(false);
                 }
             }));
         self.fling_status_subscription = Some(subscription);
@@ -986,7 +986,7 @@ impl ViewState<Scrollable> for ScrollableState {
         // (`crates/flui-objects/src/sliver/viewport.rs`). So this build runs when the
         // *configuration* changes, never per scroll pixel — the
         // `AnimatedBuilder` that used to wrap it rebuilt the viewport and
-        // every sliver view underneath on every `set_pixels`. What genuinely
+        // every sliver view underneath on every offset write. What genuinely
         // needed the notify — servicing an `animate_to`/`jump_to` command —
         // is a listener now (`install_command_listener`).
         let gestures = self.drag_gestures(view, &applied, self.viewport_content(view));
@@ -1073,7 +1073,7 @@ impl ViewState<Scrollable> for ScrollableState {
         self.retire_owner();
         self.wheel_motion.borrow_mut().take();
         let _ = self.fling_controller.controller().stop();
-        self.scroll_controller.position().set_is_scrolling(false);
+        self.scroll_controller.writer().set_is_scrolling(false);
         self.remove_command_listener();
         self.detach_hooks();
         self.scroll_controller = incoming;
@@ -1094,7 +1094,7 @@ impl ViewState<Scrollable> for ScrollableState {
         // while this state still knows which position it was driving (the
         // status listener below is about to be detached and could never
         // deliver the settle).
-        self.scroll_controller.position().set_is_scrolling(false);
+        self.scroll_controller.writer().set_is_scrolling(false);
         // Remove the value listener before disposing the controller so the
         // listener closure cannot fire after the state is gone.
         if let Some(id) = self.fling_listener_id.take() {
@@ -1141,9 +1141,10 @@ impl ScrollableState {
             // that same position to the built subtree, so content INSIDE
             // the scrolled slivers (a floating header's snap trigger, a
             // scrollbar) can subscribe to the position the gestures
-            // actually drive.
+            // actually drive, and a focusable list inside can ask this
+            // controller to jump.
             ScrollPositionScope::new(
-                scroll_controller.position(),
+                scroll_controller,
                 build_viewport(scroll_controller.position()),
             )
             .boxed()
@@ -1187,8 +1188,8 @@ impl ScrollableState {
         let owner_end = Rc::clone(&applied.owner);
         let owner_lost = Rc::clone(&applied.owner);
         let pipeline_fling = self.pipeline.clone();
-        let position_start = self.scroll_controller.position();
-        let position_end = self.scroll_controller.position();
+        let activity_start = self.scroll_controller.clone();
+        let activity_end = self.scroll_controller.clone();
 
         // Scrollable uses HitTestBehavior::Opaque so the
         // gesture area fires regardless of whether the child content is
@@ -1237,7 +1238,7 @@ impl ScrollableState {
                     // which marks the position idle — the grab that begins a
                     // new drag must win that ordering, or a fling-into-drag
                     // hand-off would flicker the activity signal off.
-                    position_start.set_is_scrolling(true);
+                    activity_start.writer().set_is_scrolling(true);
                 })
                 .on_update(move |_cx, details| {
                     let finger = match scroll_direction {
@@ -1271,7 +1272,7 @@ impl ScrollableState {
                         presentation_device_pixel_ratio(pipeline_fling.as_ref()),
                     ) {
                         // No run: the release IS the end of scrolling.
-                        position_end.set_is_scrolling(false);
+                        activity_end.writer().set_is_scrolling(false);
                     }
                     // After the drag's own settle: an anchored drag's host may
                     // replace it with a return.
@@ -1306,7 +1307,7 @@ impl ScrollableState {
                 HoldEnd::Lifted,
                 presentation_device_pixel_ratio(pipeline.as_ref()),
             ) {
-                owner.controller().position().set_is_scrolling(false);
+                owner.writer().set_is_scrolling(false);
             }
         }
     }
@@ -1469,15 +1470,17 @@ impl ScrollableState {
                     if is_current() {
                         if started {
                             motion.generation.set(Some(fling_wheel.run_generation()));
-                            position.set_is_scrolling(true);
+                            ctrl_wheel.writer().set_is_scrolling(true);
                             if !is_current() {
                                 return EventPropagation::Stop;
                             }
-                            position.set_user_scroll_direction(if delta > 0.0 {
-                                ScrollDirection::Reverse
-                            } else {
-                                ScrollDirection::Forward
-                            });
+                            ctrl_wheel
+                                .writer()
+                                .set_user_scroll_direction(if delta > 0.0 {
+                                    ScrollDirection::Reverse
+                                } else {
+                                    ScrollDirection::Forward
+                                });
                         } else {
                             wheel_motion.borrow_mut().take();
                         }
@@ -1486,15 +1489,17 @@ impl ScrollableState {
                 }
                 // The wheel pulse: direction is only recordable
                 // while an activity is live, so raise first.
-                position.set_is_scrolling(true);
+                ctrl_wheel.writer().set_is_scrolling(true);
                 if !is_current() {
                     return EventPropagation::Stop;
                 }
-                position.set_user_scroll_direction(if delta > 0.0 {
-                    ScrollDirection::Reverse
-                } else {
-                    ScrollDirection::Forward
-                });
+                ctrl_wheel
+                    .writer()
+                    .set_user_scroll_direction(if delta > 0.0 {
+                        ScrollDirection::Reverse
+                    } else {
+                        ScrollDirection::Forward
+                    });
                 if !is_current() {
                     return EventPropagation::Stop;
                 }
@@ -1505,19 +1510,19 @@ impl ScrollableState {
                 wheel_motion.borrow_mut().take();
                 match &post_frame_wheel {
                     Some(post_frame) => {
-                        let pulse_end = position.clone();
+                        let pulse_end = ctrl_wheel.clone();
                         let motion_end = fling_wheel.clone();
                         if post_frame
                             .schedule(move |_timing| {
                                 // A subsequent notch may have started after
                                 // this immediate tick but before the frame.
                                 if !motion_end.status().is_directional() {
-                                    pulse_end.set_is_scrolling(false);
+                                    pulse_end.writer().set_is_scrolling(false);
                                 }
                             })
                             .is_err()
                         {
-                            position.set_is_scrolling(false);
+                            ctrl_wheel.writer().set_is_scrolling(false);
                         }
                     }
                     // No post-frame capability (a bare harness without
@@ -1526,7 +1531,7 @@ impl ScrollableState {
                     // layout that consumes the pixels then sees an Idle
                     // direction — degraded, not wrong: it matches a
                     // plain programmatic jump.
-                    None => position.set_is_scrolling(false),
+                    None => ctrl_wheel.writer().set_is_scrolling(false),
                 }
                 EventPropagation::Stop
             })();
@@ -1588,7 +1593,7 @@ impl ScrollableState {
         let key_snap = view.snap.clone();
         let key_owner = Rc::clone(&applied.owner);
         let key_pipeline = self.pipeline.clone();
-        let key_position = self.scroll_controller.position();
+        let key_controller = self.scroll_controller.clone();
         let key_post_frame = self.post_frame.clone();
         move |_cx: &mut EventCx<'_>, event: &KeyEvent| {
             let pipeline = key_pipeline.as_ref();
@@ -1630,7 +1635,7 @@ impl ScrollableState {
             match outcome {
                 MoveOutcome::Unmoved => KeyEventResult::Ignored,
                 MoveOutcome::Moved => {
-                    end_scroll_pulse(&key_position, key_post_frame.as_ref());
+                    end_scroll_pulse(&key_controller, key_post_frame.as_ref());
                     KeyEventResult::Handled
                 }
                 MoveOutcome::Settling => KeyEventResult::Handled,
@@ -1657,7 +1662,7 @@ fn semantic_scroll_mover(
     post_frame: Option<PostFrameHandle>,
     pipeline: Option<WeakPipelineCell>,
 ) -> Rc<dyn Fn(f64, ScrollCause)> {
-    let position = controller.position();
+    let controller = controller.clone();
     Rc::new(move |target, cause| {
         let outcome = owner.move_to(
             target,
@@ -1669,7 +1674,7 @@ fn semantic_scroll_mover(
         }
         // Moved without a settle run: end the activity after the frame that
         // lays the new offset out.
-        end_scroll_pulse(&position, post_frame.as_ref());
+        end_scroll_pulse(&controller, post_frame.as_ref());
     })
 }
 
@@ -1760,17 +1765,17 @@ impl RevealTarget for ScrollReveal {
 
 /// End the scroll activity of a move that started no run, after the frame
 /// that lays its offset out.
-fn end_scroll_pulse(position: &ScrollPosition, post_frame: Option<&PostFrameHandle>) {
+fn end_scroll_pulse(controller: &ScrollController, post_frame: Option<&PostFrameHandle>) {
     let Some(post_frame) = post_frame else {
-        position.set_is_scrolling(false);
+        controller.writer().set_is_scrolling(false);
         return;
     };
-    let pulse_end = position.clone();
+    let pulse_end = controller.clone();
     if post_frame
-        .schedule(move |_| pulse_end.set_is_scrolling(false))
+        .schedule(move |_| pulse_end.writer().set_is_scrolling(false))
         .is_err()
     {
-        position.set_is_scrolling(false);
+        controller.writer().set_is_scrolling(false);
     }
 }
 

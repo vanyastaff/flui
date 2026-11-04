@@ -5,6 +5,8 @@ use flui_rendering::view::ScrollPosition;
 use flui_view::prelude::*;
 use flui_view::{BoxedView, InheritedView, impl_inherited_view};
 
+use super::ScrollController;
+
 /// Provides the enclosing [`Scrollable`](super::Scrollable)'s shared
 /// [`ScrollPosition`] to descendant widgets.
 ///
@@ -16,24 +18,30 @@ use flui_view::{BoxedView, InheritedView, impl_inherited_view};
 /// widget by hand.
 ///
 /// Carried as inherited data because `Scrollable`'s state is not otherwise
-/// reachable from a descendant.
+/// reachable from a descendant. The position reads and subscribes; a widget
+/// of this crate that must move it (a focusable list reaching an unbuilt
+/// row) asks the scope's controller, so the move runs through the
+/// scrollable's nested scroll chain (ADR-0209 §3).
 ///
-/// The handle itself is `Arc`-backed and stable for a given controller;
+/// The handle itself is `Rc`-backed and stable for a given controller;
 /// [`update_should_notify`](InheritedView::update_should_notify) fires only
 /// when a rebuild swaps in a genuinely different position (a controller
 /// swap), which is exactly when a dependent must re-subscribe its listeners.
 #[derive(Clone)]
 pub struct ScrollPositionScope {
+    controller: ScrollController,
     position: ScrollPosition,
     child: BoxedView,
 }
 
 impl ScrollPositionScope {
-    /// Wrap `child` in a scope providing `position` to its descendants.
+    /// Wrap `child` in a scope providing `controller`'s position to its
+    /// descendants.
     #[must_use]
-    pub fn new(position: ScrollPosition, child: impl IntoView) -> Self {
+    pub fn new(controller: &ScrollController, child: impl IntoView) -> Self {
         Self {
-            position,
+            controller: controller.clone(),
+            position: controller.position(),
             child: BoxedView::new(child.into_view()),
         }
     }
@@ -42,6 +50,12 @@ impl ScrollPositionScope {
     #[must_use]
     pub fn position(&self) -> &ScrollPosition {
         &self.position
+    }
+
+    /// The controller of the nearest enclosing scope, registering a
+    /// dependency on it.
+    pub(crate) fn controller_of(ctx: &dyn BuildContext) -> Option<ScrollController> {
+        ctx.depend_on::<Self, _>(|scope| scope.controller.clone())
     }
 }
 
