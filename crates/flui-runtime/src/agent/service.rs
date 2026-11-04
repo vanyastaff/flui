@@ -28,6 +28,8 @@ pub struct Limits {
     pub queue: usize,
     /// How many event subscriptions one conversation holds.
     pub subscriptions: usize,
+    /// How many recordings one conversation holds, ended ones it has not stopped included.
+    pub recordings: usize,
 }
 
 impl Default for Limits {
@@ -38,6 +40,7 @@ impl Default for Limits {
             max_connections: 4,
             queue: 32,
             subscriptions: 16,
+            recordings: 4,
         }
     }
 }

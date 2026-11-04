@@ -251,6 +251,12 @@ pub struct Capabilities {
     pub isolation: Option<Isolation>,
     /// The methods it answers, by wire name.
     pub methods: Vec<String>,
+    /// The layers `record.start` records; none when it does not record.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Vec::is_empty")
+    )]
+    pub record: Vec<crate::record::RecordLayer>,
 }
 
 /// `session.launch`: start an app with the agent attached.

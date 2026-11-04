@@ -27,16 +27,17 @@ use std::marker::PhantomData;
 use std::task::Waker;
 use std::time::Duration;
 
+use flui_protocol::input_recording::Row;
 use flui_protocol::method::{
-    Addressed, EventsSubscribe, EventsUnsubscribe, InputInject, InputRelease, Method, WindowMethod,
-    WindowsList,
+    Addressed, EventsSubscribe, EventsUnsubscribe, InputInject, InputRelease, Method, RecordStart,
+    RecordStop, WindowMethod, WindowsList,
 };
 use flui_protocol::{
     ClientRole, Effect, EffectKind, ErrorCode, ErrorObject, Event, EventFilter, HandleKind,
-    METHODS, MethodEffect, MethodInfo, RequestId, Retry, ServedBy, Subscription, WindowId,
-    WindowList,
+    METHODS, MethodEffect, MethodInfo, RecordEvent, RecordParams, RecordSummary, Recording,
+    RequestId, Retry, ServedBy, Subscription, WindowId, WindowList,
 };
-use flui_view::dev_agent::{AgentAnswer, AgentEvents, AgentWindow, InputLease};
+use flui_view::dev_agent::{AgentAnswer, AgentEvents, AgentRecording, AgentWindow, InputLease};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -49,6 +50,8 @@ use super::service::Shared;
 const APPS_OWN: &[&str] = &[
     EventsSubscribe::NAME,
     EventsUnsubscribe::NAME,
+    RecordStart::NAME,
+    RecordStop::NAME,
     WindowsList::NAME,
 ];
 
@@ -119,6 +122,10 @@ enum Work {
     Window(Box<dyn WindowAnswer>),
     /// A subscription, waiting for a stream of each window.
     Subscribe(Subscribing),
+    /// A recording, waiting for the window's owner to start it.
+    Record(Starting),
+    /// A recording asked to stop, waiting for its `end` row to be taken.
+    Stop(u64),
 }
 
 impl Running {
@@ -127,6 +134,7 @@ impl Running {
     pub(super) fn poll(
         &mut self,
         subscriptions: &mut Subscriptions,
+        recordings: &mut Recordings,
         now: Instant,
         waker: &Waker,
     ) -> Option<Result<Value, ErrorObject>> {
@@ -134,6 +142,8 @@ impl Running {
             Work::Done(outcome) => outcome.take(),
             Work::Window(answer) => answer.poll(waker),
             Work::Subscribe(subscribing) => subscribing.poll(subscriptions, waker),
+            Work::Record(starting) => starting.poll(recordings, waker),
+            Work::Stop(recording) => recordings.stopped(*recording),
         };
         if answered.is_some() {
             return answered;
@@ -167,6 +177,7 @@ fn timed_out(method: &MethodInfo) -> ErrorObject {
 pub(super) fn start(
     shared: &Shared,
     subscriptions: &mut Subscriptions,
+    recordings: &mut Recordings,
     leases: &mut Leases,
     admitted: Admitted,
     now: Instant,
@@ -184,6 +195,17 @@ pub(super) fn start(
                 subscribe(shared, subscriptions, params.events),
                 Duration::ZERO,
             ),
+            Err(error) => done(Err(error)),
+        },
+        RecordStart::NAME => match parse::<RecordStart>(params) {
+            Ok(params) => (record(shared, recordings, params), Duration::ZERO),
+            Err(error) => done(Err(error)),
+        },
+        RecordStop::NAME => match parse::<RecordStop>(params) {
+            Ok(params) => match recordings.stop(params.recording) {
+                Ok(()) => (Work::Stop(params.recording), Duration::ZERO),
+                Err(error) => done(Err(error)),
+            },
             Err(error) => done(Err(error)),
         },
         _ => window_route(shared, leases, method, params)
@@ -589,6 +611,204 @@ impl Subscribed {
             }
         }
         self.asked = waiting;
+    }
+}
+
+/// Start `record.start`: ask the window `params` name (the only one when they name none) for a
+/// recording of its runtime.
+fn record(shared: &Shared, recordings: &Recordings, params: RecordParams) -> Work {
+    if recordings.live.len() >= shared.limits.recordings {
+        return Work::Done(Some(Err(ErrorObject::new(
+            ErrorCode::Busy,
+            format!(
+                "a connection holds at most {} recordings; stop one first",
+                shared.limits.recordings
+            ),
+        ))));
+    }
+    let window = match params.window {
+        Some(id) => window(&shared.registry, id),
+        None => only_window(&shared.registry),
+    };
+    let window = match window {
+        Ok(window) => window,
+        Err(error) => return Work::Done(Some(Err(error))),
+    };
+    match window.record(params) {
+        Ok(answer) => Work::Record(Starting {
+            window: window.id(),
+            answer,
+        }),
+        Err(error) => Work::Done(Some(Err(error))),
+    }
+}
+
+/// A recording waiting for the window's owner to start it.
+struct Starting {
+    window: WindowId,
+    answer: AgentAnswer<AgentRecording>,
+}
+
+impl Starting {
+    /// The recording's number and first line, registered on `recordings`, once the owner
+    /// started it; the owner's refusal.
+    fn poll(
+        &mut self,
+        recordings: &mut Recordings,
+        waker: &Waker,
+    ) -> Option<Result<Value, ErrorObject>> {
+        // Registered before the answer is looked at, so one sent in between still wakes.
+        self.answer.register(waker);
+        let recording = match self.answer.try_take()? {
+            Ok(recording) => recording,
+            Err(error) => return Some(Err(error)),
+        };
+        let header = recording.header().clone();
+        let number = recordings.insert(self.window, recording);
+        Some(encode::<RecordStart>(Recording::new(number, header)))
+    }
+}
+
+/// One conversation's recordings, numbered from 1 in the order they started. Their rows go out
+/// as `record` events, to this conversation only; one that ended is held with what it came to
+/// until `record.stop` names it or the conversation ends.
+#[derive(Default)]
+pub(super) struct Recordings {
+    next: u64,
+    live: BTreeMap<u64, Recorded>,
+}
+
+/// One recording a conversation holds.
+struct Recorded {
+    /// The window it was started on.
+    window: WindowId,
+    /// `None` once its last row was taken.
+    recording: Option<AgentRecording>,
+    /// What it came to so far.
+    summary: RecordSummary,
+}
+
+impl Recorded {
+    /// Count `row` in the summary.
+    fn count(&mut self, row: &Row) {
+        match row {
+            Row::Gap { rows } => {
+                self.summary.lost_rows = self.summary.lost_rows.saturating_add(*rows);
+            }
+            // The `end` row counts every row the recording lost.
+            Row::End { lost_rows } => {
+                self.summary.lost_rows = *lost_rows;
+                self.summary.complete = true;
+            }
+            _ => self.summary.rows = self.summary.rows.saturating_add(1),
+        }
+    }
+}
+
+/// What one drain of a conversation's recordings found.
+pub(super) struct DrainedRows {
+    /// The rows taken, as `record` events, oldest first per recording.
+    pub(super) events: Vec<Event>,
+    /// The drain stopped at its room with rows still queued.
+    pub(super) held: bool,
+    /// A recording's last row was taken: a `record.stop` waiting on it can be answered.
+    pub(super) ended: bool,
+}
+
+impl Recordings {
+    fn insert(&mut self, window: WindowId, recording: AgentRecording) -> u64 {
+        self.next += 1;
+        self.live.insert(
+            self.next,
+            Recorded {
+                window,
+                recording: Some(recording),
+                summary: RecordSummary::default(),
+            },
+        );
+        self.next
+    }
+
+    /// Ask recording `number` to end; its `end` row follows the rows recorded before.
+    fn stop(&mut self, number: u64) -> Result<(), ErrorObject> {
+        let recorded = self.live.get_mut(&number).ok_or_else(|| {
+            ErrorObject::new(
+                ErrorCode::UnknownHandle,
+                format!("recording {number} is not this connection's"),
+            )
+            .with_handle(HandleKind::Recording, number.to_string())
+        })?;
+        if let Some(recording) = &mut recorded.recording {
+            recording.stop();
+        }
+        Ok(())
+    }
+
+    /// What recording `number` came to, once its last row was taken; it is let go then.
+    fn stopped(&mut self, number: u64) -> Option<Result<Value, ErrorObject>> {
+        let Entry::Occupied(recorded) = self.live.entry(number) else {
+            return Some(Err(ErrorObject::new(
+                ErrorCode::UnknownHandle,
+                format!("recording {number} is not this connection's"),
+            )
+            .with_handle(HandleKind::Recording, number.to_string())));
+        };
+        if recorded.get().recording.is_some() {
+            return None;
+        }
+        Some(encode::<RecordStop>(recorded.remove().summary))
+    }
+
+    /// Up to `room` rows the recordings hold now, taken in turn from each and oldest first per
+    /// recording, as `record` events. `waker` is registered with every recording still running.
+    pub(super) fn drain(&mut self, room: usize, waker: &Waker) -> DrainedRows {
+        let mut drained = DrainedRows {
+            events: Vec::new(),
+            held: false,
+            ended: false,
+        };
+        for recorded in self.live.values_mut() {
+            if let Some(recording) = &mut recorded.recording {
+                // Registered before the recording is read, so a row queued in between wakes.
+                recording.register(waker);
+            }
+        }
+        let mut taken = true;
+        while taken {
+            taken = false;
+            for (&number, recorded) in &mut self.live {
+                let Some(recording) = &mut recorded.recording else {
+                    continue;
+                };
+                if drained.events.len() >= room {
+                    drained.held = true;
+                    break;
+                }
+                if let Some(row) = recording.try_next() {
+                    recorded.count(&row);
+                    drained.events.push(Event::Record(Box::new(RecordEvent::new(
+                        number,
+                        recorded.window,
+                        row,
+                    ))));
+                    taken = true;
+                }
+            }
+            if drained.held {
+                break;
+            }
+        }
+        for recorded in self.live.values_mut() {
+            if recorded
+                .recording
+                .as_ref()
+                .is_some_and(AgentRecording::is_finished)
+            {
+                recorded.recording = None;
+                drained.ended = true;
+            }
+        }
+        drained
     }
 }
 

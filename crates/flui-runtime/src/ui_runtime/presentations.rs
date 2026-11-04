@@ -838,6 +838,12 @@ impl UiRuntime {
             failure,
             "removed presentation cleanup",
         );
+        // The agents' recordings started on it end with their `end` rows.
+        crate::lifecycle_state::preserve_first_lifecycle_panic(
+            &mut first_panic,
+            self.end_agent_recordings_of(id),
+            "agent recording end",
+        );
         #[expect(
             clippy::disallowed_methods,
             reason = "ADR-0287: window lifecycle sync runs contained so the first failure is kept"

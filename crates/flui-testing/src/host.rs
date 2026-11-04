@@ -1053,6 +1053,20 @@ impl HeadlessHost {
         self
     }
 
+    /// Hand `window`, which this host [opened](Self::open_window), to `agent`'s hook, as a
+    /// runner hands each window it installs; closing it ([`Self::request_close`]) closes the
+    /// hook's handle to it.
+    ///
+    /// Does nothing when the hook is not attached.
+    ///
+    /// # Panics
+    ///
+    /// If `window` was not opened by this host.
+    pub fn serve_window(&self, window: HeadlessWindowId, agent: &mut HeadlessDevAgent) {
+        let presentation = self.secondary_of(window).id;
+        agent.host.publish(&self.ui_runtime, presentation);
+    }
+
     /// Attach `view` as the UI runtime's root widget, the root view sized to the
     /// window. The UI runtime wraps it in its root scopes (`GestureArenaScope`,
     /// `VsyncScope`, `FocusRoot`, `MediaQuery`); the first

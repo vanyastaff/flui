@@ -15,10 +15,8 @@
 //! reader such as the driver reads a recording without the core. The format is versioned by
 //! [`FORMAT_VERSION`], apart from [`PROTOCOL_VERSION`](crate::PROTOCOL_VERSION).
 //!
-//! The module exists with the `serde` feature: its types are a serialization format and
-//! nothing else.
-
-use serde::{Deserialize, Serialize};
+//! With the `serde` feature its types read and write the recording; without it they are plain
+//! data, which the input recording's preference rows share.
 
 /// The native recording format's major version.
 pub const FORMAT_VERSION: u32 = 2;
@@ -28,40 +26,42 @@ pub const VERSION_KEY: &str = "flui_native_recording";
 
 vocabulary! {
     /// The backend a recording was taken on.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
     #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
     pub enum Backend {
         /// Win32 `WM_POINTER` and the legacy mouse route.
-        #[serde(rename = "win32")]
+        #[cfg_attr(feature = "serde", serde(rename = "win32"))]
         Win32 => "win32",
         /// AppKit `NSEvent`s.
-        #[serde(rename = "appkit")]
+        #[cfg_attr(feature = "serde", serde(rename = "appkit"))]
         AppKit => "appkit",
         /// UIKit `UITouch`es.
-        #[serde(rename = "uikit")]
+        #[cfg_attr(feature = "serde", serde(rename = "uikit"))]
         UiKit => "uikit",
         /// Android `MotionEvent`s.
-        #[serde(rename = "android")]
+        #[cfg_attr(feature = "serde", serde(rename = "android"))]
         Android => "android",
         /// The native X11 host's XInput 2 events.
-        #[serde(rename = "x11")]
+        #[cfg_attr(feature = "serde", serde(rename = "x11"))]
         X11 => "x11",
         /// DOM `PointerEvent`s.
-        #[serde(rename = "web")]
+        #[cfg_attr(feature = "serde", serde(rename = "web"))]
         Web => "web",
         /// A Wayland compositor's seats.
-        #[serde(rename = "wayland")]
+        #[cfg_attr(feature = "serde", serde(rename = "wayland"))]
         Wayland => "wayland",
         /// The headless backend.
-        #[serde(rename = "headless")]
+        #[cfg_attr(feature = "serde", serde(rename = "headless"))]
         Headless => "headless",
     }
 }
 
 vocabulary! {
     /// The kind of device a reading or a hot-plug names.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-    #[serde(rename_all = "snake_case")]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
     #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
     pub enum PointerKind {
         /// A mouse.
@@ -83,8 +83,9 @@ vocabulary! {
 
 vocabulary! {
     /// Why a contact ended without lifting.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-    #[serde(rename_all = "snake_case")]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
     #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
     pub enum CancelReason {
         /// The OS cancelled it.
@@ -102,8 +103,9 @@ vocabulary! {
 
 vocabulary! {
     /// A held modifier, as W3C `getModifierState` names it.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-    #[serde(rename_all = "snake_case")]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
     #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
     pub enum Modifier {
         /// Alt, or Option.
@@ -135,8 +137,9 @@ vocabulary! {
 
 vocabulary! {
     /// Which part of a trackpad gesture a gesture reading carries.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-    #[serde(rename_all = "snake_case")]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
     #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
     pub enum GestureComponent {
         /// The pinch.
@@ -150,8 +153,9 @@ vocabulary! {
 
 vocabulary! {
     /// Where a gesture is in its life.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-    #[serde(rename_all = "snake_case")]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
     #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
     pub enum GesturePhase {
         /// It began.
@@ -167,8 +171,9 @@ vocabulary! {
 
 vocabulary! {
     /// A touchpad viewport's status (Win32 DirectManipulation).
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-    #[serde(rename_all = "snake_case")]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
     #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
     pub enum ViewportStatus {
         /// Being built.
@@ -190,8 +195,9 @@ vocabulary! {
 
 vocabulary! {
     /// The axis a mouse wheel turned on.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-    #[serde(rename_all = "snake_case")]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
     #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
     pub enum WheelAxis {
         /// The vertical wheel.
@@ -203,8 +209,9 @@ vocabulary! {
 
 vocabulary! {
     /// Where a scroll is in its gesture and momentum.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-    #[serde(rename_all = "snake_case")]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
     #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
     pub enum ScrollPhase {
         /// The fingers began.
@@ -226,8 +233,9 @@ vocabulary! {
 
 vocabulary! {
     /// The unit a scroll's delta is in.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-    #[serde(rename_all = "snake_case")]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
     #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
     pub enum ScrollUnit {
         /// Lines of text.
@@ -242,7 +250,8 @@ vocabulary! {
 }
 
 /// The performance counter at the recording's epoch.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct Counter {
     /// The count.
@@ -252,7 +261,8 @@ pub struct Counter {
 }
 
 /// The OS click thresholds.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct ClickSettings {
     /// The longest gap between two clicks of one sequence, in nanoseconds.
@@ -264,7 +274,8 @@ pub struct ClickSettings {
 }
 
 /// A device the rows read, with every kind they read it as.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct Device {
     /// The backend's label for it.
@@ -277,8 +288,9 @@ vocabulary! {
     /// What a recording journals: one pointer registry, one loop's application delivery, one
     /// window's delivery, one platform's reads of the system, or one window's published
     /// snapshots.
-    #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
-    #[serde(rename_all = "snake_case")]
+    #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
     #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
     pub enum Stream {
         /// A pointer registry: readings, batches, devices, cancels, wheels and scrolls.
@@ -297,7 +309,8 @@ vocabulary! {
 
 /// The first line: the backend, what the recording journals, its clock anchors and the
 /// registry's setup.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct Header {
     /// The format's major version, [`FORMAT_VERSION`]; the field is [`VERSION_KEY`].
@@ -305,46 +318,74 @@ pub struct Header {
     /// The backend.
     pub backend: Backend,
     /// What the recording journals.
-    #[serde(default, skip_serializing_if = "crate::skip::is_default")]
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "crate::skip::is_default")
+    )]
     pub stream: Stream,
     /// The epoch instant on the event timeline, in nanoseconds; a registry's clock, so only a
     /// registry's recording has it.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
     pub epoch_ns: Option<u64>,
     /// System uptime at the epoch, in nanoseconds; with `epoch_ns`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
     pub uptime_ns: Option<u64>,
     /// The performance counter at the epoch, when the host has one.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
     pub counter: Option<Counter>,
     /// The contact given pointer identity one, when the backend reserves one.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
     pub reserved_contact: Option<u64>,
     /// The first pointer identity, when not one; never zero.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
     pub first_pointer: Option<u64>,
     /// The first device identity, when not the registry's default; never zero.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
     pub first_device: Option<u64>,
     /// The OS click thresholds the registry started with.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
     pub click_settings: Option<ClickSettings>,
     /// Where the readings came from, when not a capture: a hand-written recording says so
     /// here.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
     pub provenance: Option<String>,
     /// Every device the rows read, with the kinds they read it as.
-    #[serde(default)]
+    #[cfg_attr(feature = "serde", serde(default))]
     pub devices: Vec<Device>,
 }
 
 /// When a native event happened, in the clock its backend stamps.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub enum Time {
     /// A wrapping millisecond tick and the uptime it was placed against.
-    #[serde(rename = "tick_ms")]
+    #[cfg_attr(feature = "serde", serde(rename = "tick_ms"))]
     TickMillis {
         /// The tick.
         tick: u32,
@@ -352,16 +393,17 @@ pub enum Time {
         observed_ms: u64,
     },
     /// Seconds of system uptime.
-    #[serde(rename = "uptime_s")]
+    #[cfg_attr(feature = "serde", serde(rename = "uptime_s"))]
     UptimeSeconds(f64),
     /// Nanoseconds on the event timeline.
-    #[serde(rename = "epoch_ns")]
+    #[cfg_attr(feature = "serde", serde(rename = "epoch_ns"))]
     Epoch(u64),
 }
 
 /// How much a gesture reading changed its component.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub enum GestureDelta {
@@ -374,7 +416,8 @@ pub enum GestureDelta {
 }
 
 /// A trackpad gesture reading.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct Gesture {
     /// The component it carries.
@@ -386,8 +429,9 @@ pub struct Gesture {
 }
 
 /// What a reading did.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub enum Action {
@@ -408,8 +452,9 @@ pub enum Action {
 }
 
 /// A pen's angles, as its backend reports them.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub enum Angles {
@@ -423,73 +468,120 @@ pub enum Angles {
     /// Altitude and azimuth, in radians.
     Spherical {
         /// The altitude.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(
+            feature = "serde",
+            serde(default, skip_serializing_if = "Option::is_none")
+        )]
         altitude: Option<f64>,
         /// The azimuth.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(
+            feature = "serde",
+            serde(default, skip_serializing_if = "Option::is_none")
+        )]
         azimuth: Option<f64>,
     },
 }
 
 /// One reading, flat: the fields a backend copies out of its native event.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct Reading {
     /// The surface it happened on.
-    #[serde(default, skip_serializing_if = "is_zero")]
+    #[cfg_attr(feature = "serde", serde(default, skip_serializing_if = "is_zero"))]
     pub surface: u64,
     /// The device, when the backend names one.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
     pub device: Option<u64>,
     /// The backend's label for the contact.
     pub contact: u64,
     /// The device kind.
     pub kind: PointerKind,
     /// Whether this is the primary pointer of its kind, when the backend says.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
     pub primary: Option<bool>,
     /// What it did.
     pub action: Action,
     /// The buttons held, by number, when the backend reports them.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
     pub buttons: Option<Vec<u8>>,
     /// The modifiers held.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Vec::is_empty")
+    )]
     pub modifiers: Vec<Modifier>,
     /// The OS click count, when the backend counts.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
     pub click_count: Option<u8>,
     /// When.
     pub time: Time,
     /// The performance count, when the device reports one.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
     pub counter: Option<u64>,
     /// Where, in device pixels.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
     pub position: Option<[f64; 2]>,
     /// Device pixels per logical pixel.
-    #[serde(default = "one", skip_serializing_if = "is_one")]
+    #[cfg_attr(
+        feature = "serde",
+        serde(default = "one", skip_serializing_if = "is_one")
+    )]
     pub scale: f64,
     /// Pressure, 0 to 1.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
     pub pressure: Option<f64>,
     /// A pen's barrel pressure, -1 to 1.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
     pub tangential_pressure: Option<f64>,
     /// A pen's angles.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
     pub angles: Option<Angles>,
     /// A pen's rotation about its axis, in degrees.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
     pub twist_degrees: Option<f64>,
     /// The contact's width and height, in device pixels.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
     pub contact_size: Option<[f64; 2]>,
 }
 
 /// One viewport callback: a status, or the content's scale and offset.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub enum Viewport {
@@ -500,27 +592,38 @@ pub enum Viewport {
 }
 
 /// Where and when a viewport call happened, flat in its row.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct Frame {
     /// When.
     pub time: Time,
     /// The performance count, when the device reports one.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
     pub counter: Option<u64>,
     /// The cursor, in device pixels.
     pub position: [f64; 2],
     /// Device pixels per logical pixel.
-    #[serde(default = "one", skip_serializing_if = "is_one")]
+    #[cfg_attr(
+        feature = "serde",
+        serde(default = "one", skip_serializing_if = "is_one")
+    )]
     pub scale: f64,
     /// The modifiers held.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Vec::is_empty")
+    )]
     pub modifiers: Vec<Modifier>,
 }
 
 /// One wheel message: its signed distance in 1/120 detents as Win32 signs it, the cursor in
 /// device pixels and its time on the event timeline.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct Wheel {
     /// The axis.
@@ -530,51 +633,74 @@ pub struct Wheel {
     /// The cursor, in device pixels.
     pub position: [f64; 2],
     /// Device pixels per logical pixel.
-    #[serde(default = "one", skip_serializing_if = "is_one")]
+    #[cfg_attr(
+        feature = "serde",
+        serde(default = "one", skip_serializing_if = "is_one")
+    )]
     pub scale: f64,
     /// When, on the event timeline.
     pub time_ns: u64,
     /// The modifiers held.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Vec::is_empty")
+    )]
     pub modifiers: Vec<Modifier>,
 }
 
 /// One scroll step under an open contact, in the owned sign and unit, its phase resolved.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct Scroll {
     /// The surface.
-    #[serde(default, skip_serializing_if = "is_zero")]
+    #[cfg_attr(feature = "serde", serde(default, skip_serializing_if = "is_zero"))]
     pub surface: u64,
     /// The device, when the backend names one.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
     pub device: Option<u64>,
     /// The contact it scrolls from.
     pub contact: u64,
     /// The phase, when the device has one.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
     pub phase: Option<ScrollPhase>,
     /// The delta's unit.
     pub unit: ScrollUnit,
     /// The delta, x and y.
     pub delta: [f64; 2],
     /// Whether the device reports precise deltas.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "std::ops::Not::not")
+    )]
     pub precise: bool,
     /// Whole notches of a wheel the device reports as such (X11's, Wayland's `value120`).
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "std::ops::Not::not")
+    )]
     pub notched: bool,
     /// When, on the event timeline.
     pub time_ns: u64,
     /// The modifiers held.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Vec::is_empty")
+    )]
     pub modifiers: Vec<Modifier>,
 }
 
 vocabulary! {
     /// How much memory the system wants back.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-    #[serde(rename_all = "snake_case")]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
     #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
     pub enum MemoryPressureLevel {
         /// Free what is easy to restore.
@@ -586,8 +712,9 @@ vocabulary! {
 
 vocabulary! {
     /// A phase of the user's session ending.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-    #[serde(rename_all = "snake_case")]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
     #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
     pub enum SessionEndPhase {
         /// The session is about to end; the application is asked whether to wait.
@@ -600,8 +727,9 @@ vocabulary! {
 }
 
 /// A one-off system event the host reported to the application.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub enum Notice {
@@ -618,8 +746,9 @@ pub enum Notice {
 }
 
 /// An input method's event, as the window delivered it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub enum ImeEvent {
@@ -630,7 +759,10 @@ pub enum ImeEvent {
         /// The composition text.
         text: String,
         /// The cursor or selection, as byte offsets into `text`; none hides the caret.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(
+            feature = "serde",
+            serde(default, skip_serializing_if = "Option::is_none")
+        )]
         cursor: Option<[usize; 2]>,
     },
     /// Composition finished with this text.
@@ -641,8 +773,9 @@ pub enum ImeEvent {
 
 /// What a window's input method did. Input methods that edit the focused text store
 /// directly, with no event, will be recorded as a store edit beside `Event`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub enum Ime {
@@ -651,8 +784,9 @@ pub enum Ime {
 }
 
 /// The system's motion preference.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub enum Motion {
@@ -665,8 +799,9 @@ pub enum Motion {
 }
 
 /// The system's text-weight request.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub enum TextWeight {
@@ -679,8 +814,9 @@ pub enum TextWeight {
 }
 
 /// What one discrete vertical wheel notch scrolls.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub enum WheelStep {
@@ -691,7 +827,8 @@ pub enum WheelStep {
 }
 
 /// The native mouse geometry, in device pixels at `pixel_ratio`.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct MouseGeometry {
     /// The double-click rectangle, width and height.
@@ -703,7 +840,8 @@ pub struct MouseGeometry {
 }
 
 /// The native touch geometry, in device pixels at `pixel_ratio`.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct TouchGeometry {
     /// The distance a touch travels before it is a drag.
@@ -719,45 +857,77 @@ pub struct TouchGeometry {
 }
 
 /// The system's gesture timing and geometry; an absent field was not observed.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct Gestures {
     /// The mouse double-click interval, in nanoseconds.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
     pub double_click_interval_ns: Option<u64>,
     /// The touch double-tap interval, in nanoseconds.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
     pub double_tap_interval_ns: Option<u64>,
     /// The shortest long press, in nanoseconds.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
     pub long_press_timeout_ns: Option<u64>,
     /// The native mouse geometry.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
     pub native_mouse_geometry: Option<MouseGeometry>,
     /// The native touch geometry.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
     pub native_touch_geometry: Option<TouchGeometry>,
 }
 
 /// The user's regional formats, each as the value of its Unicode `u` extension key (UTS #35); an
 /// absent field was not observed.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct Regional {
     /// The first day of the week, as an `fw` value such as `mon`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
     pub first_weekday: Option<String>,
     /// The hour cycle, as an `hc` value such as `h23`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
     pub hour_cycle: Option<String>,
     /// The measurement system, as an `ms` value such as `metric`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
     pub measurement: Option<String>,
     /// The numbering system, as an `nu` value such as `arab`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
     pub numbering: Option<String>,
     /// The region override, as its region code such as `GB`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
     pub region: Option<String>,
 }
 
@@ -766,46 +936,75 @@ pub struct Regional {
 /// The same object is a native `platform` recording's `preferences` row and, beside its
 /// `revision`, a host input recording's preferences row, so the two never spell a preference
 /// differently.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct Preferences {
     /// The text-size multiplier, in `1/64..=64`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
     pub text_scale: Option<f64>,
     /// The motion preference.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
     pub motion: Option<Motion>,
     /// Whether high contrast is on.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
     pub high_contrast: Option<bool>,
     /// Whether system haptics are on.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
     pub haptics: Option<bool>,
     /// The text-weight request.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
     pub text_weight: Option<TextWeight>,
     /// The preferred UI locales as BCP 47 tags, in priority order.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
     pub locales: Option<Vec<String>>,
     /// The regional formats; absent when none was observed. Boxed, since a preferences read is
     /// carried by value and most hosts observe none.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
     pub regional: Option<Box<Regional>>,
     /// Gesture timing and geometry; always written, empty when nothing was observed.
-    #[serde(default)]
+    #[cfg_attr(feature = "serde", serde(default))]
     pub gestures: Gestures,
     /// What one vertical wheel notch scrolls.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
     pub wheel_vertical: Option<WheelStep>,
     /// The characters one horizontal wheel notch scrolls; zero disables the axis.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
     pub wheel_horizontal_characters: Option<u32>,
 }
 
 vocabulary! {
     /// Which error a failed read of the system returned, as the platform's error names it.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-    #[serde(rename_all = "snake_case")]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
     #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
     pub enum FailureKind {
         /// An observation was already running or waiting for its retry, so none was available.
@@ -824,19 +1023,24 @@ vocabulary! {
 }
 
 /// Why a read of the system failed: the error's kind, and its message when it has one.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct Failure {
     /// Which error.
     pub kind: FailureKind,
     /// What failed, in the host's words.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
     pub message: Option<String>,
 }
 
 /// What one read of the system preferences returned.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub enum PreferenceRead {
@@ -848,8 +1052,9 @@ pub enum PreferenceRead {
 
 vocabulary! {
     /// Why the platform reports no value for a capability.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-    #[serde(rename_all = "snake_case")]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
     #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
     pub enum Absence {
         /// The platform has no such capability.
@@ -863,8 +1068,9 @@ vocabulary! {
 
 vocabulary! {
     /// The primaries a display shows surfaces in.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-    #[serde(rename_all = "snake_case")]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
     #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
     pub enum Gamut {
         /// sRGB.
@@ -878,8 +1084,9 @@ vocabulary! {
 
 vocabulary! {
     /// The range a display shows surfaces in.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-    #[serde(rename_all = "snake_case")]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
     #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
     pub enum DynamicRange {
         /// Standard dynamic range.
@@ -890,8 +1097,9 @@ vocabulary! {
 }
 
 /// How far above SDR white a display can drive a surface, or why the platform does not say.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub enum Headroom {
@@ -902,7 +1110,8 @@ pub enum Headroom {
 }
 
 /// A display's colour: its colour space and headroom.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct Color {
     /// The primaries.
@@ -914,8 +1123,9 @@ pub struct Color {
 }
 
 /// A display's colour, or why the platform gives none.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub enum DisplayColor {
@@ -929,7 +1139,8 @@ pub enum DisplayColor {
 ///
 /// `label` is the display's id as its platform issued it: it names the display within this
 /// recording and nowhere else, so a replay issues its own id for each label.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct Display {
     /// The display within this recording.
@@ -943,21 +1154,31 @@ pub struct Display {
     /// Device pixels per logical pixel.
     pub scale_factor: f64,
     /// The period of its mode, in nanoseconds, when known.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
     pub refresh_period_ns: Option<u64>,
     /// Whether it is the primary display.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "std::ops::Not::not")
+    )]
     pub primary: bool,
     /// The string that names it again after a restart, when the platform has one.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
     pub persistent_key: Option<String>,
     /// Its colour.
     pub color: DisplayColor,
 }
 
 /// What one read of the displays returned.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub enum DisplayRead {
@@ -974,8 +1195,9 @@ pub enum DisplayRead {
 
 vocabulary! {
     /// How a window occupies its display.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-    #[serde(rename_all = "snake_case")]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
     #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
     pub enum WindowMode {
         /// Its own bounds.
@@ -991,8 +1213,9 @@ vocabulary! {
 
 vocabulary! {
     /// The user's theme as applied to a window.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-    #[serde(rename_all = "snake_case")]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
     #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
     pub enum Appearance {
         /// Light.
@@ -1008,8 +1231,9 @@ vocabulary! {
 
 vocabulary! {
     /// Whether the platform lets a window run its UI.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-    #[serde(rename_all = "snake_case")]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
     #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
     pub enum Execution {
         /// Running.
@@ -1023,8 +1247,9 @@ vocabulary! {
 
 vocabulary! {
     /// How a window honours a command or makes a report.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-    #[serde(rename_all = "snake_case")]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
     #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
     pub enum Availability {
         /// The window system does it.
@@ -1037,8 +1262,9 @@ vocabulary! {
 }
 
 /// How a window honours a command it is admitted against, or why it does not.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub enum Capability {
@@ -1066,7 +1292,8 @@ impl Capability {
 }
 
 /// Which commands a window honours, and how.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct Capabilities {
     /// Setting the title.
@@ -1103,16 +1330,22 @@ pub struct Capabilities {
     pub reports_presentation: Capability,
     /// Reporting where the soft keyboard covers it; a recording made before
     /// the field existed reads as the platform's absence.
-    #[serde(
-        default = "Capability::platform_absence",
-        skip_serializing_if = "Capability::is_platform_absence"
+    #[cfg_attr(
+        feature = "serde",
+        serde(
+            default = "Capability::platform_absence",
+            skip_serializing_if = "Capability::is_platform_absence"
+        )
     )]
     pub reports_keyboard_inset: Capability,
     /// Reporting the edges system gestures take; read as
     /// [`reports_keyboard_inset`](Self::reports_keyboard_inset) is.
-    #[serde(
-        default = "Capability::platform_absence",
-        skip_serializing_if = "Capability::is_platform_absence"
+    #[cfg_attr(
+        feature = "serde",
+        serde(
+            default = "Capability::platform_absence",
+            skip_serializing_if = "Capability::is_platform_absence"
+        )
     )]
     pub reports_system_gestures: Capability,
     /// Reporting its position.
@@ -1126,31 +1359,43 @@ pub struct Capabilities {
 }
 
 /// A window rectangle in logical pixels.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct WindowGeometry {
     /// The top-left corner in global coordinates, where the OS reports one.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
     pub position: Option<[f64; 2]>,
     /// Width and height.
     pub size: [f64; 2],
 }
 
 /// A window's inner-size limits in logical pixels.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct SizeConstraints {
     /// The smallest inner size, if limited.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
     pub min: Option<[f64; 2]>,
     /// The largest inner size, if limited.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
     pub max: Option<[f64; 2]>,
 }
 
 /// What frames a window.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub enum WindowFrame {
     /// The system's title bar and borders.
@@ -1165,8 +1410,9 @@ pub enum WindowFrame {
 }
 
 /// The controls a system draws over a title bar the application draws.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub enum SystemControls {
     /// Where the system puts them.
@@ -1178,7 +1424,8 @@ pub enum SystemControls {
 }
 
 /// A window's drawable area and scale.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct WindowMetrics {
     /// The drawable area in device pixels: width and height.
@@ -1190,7 +1437,8 @@ pub struct WindowMetrics {
 /// What the operating system reported about one window, at one revision.
 ///
 /// `display` is the display's label, as a `platform` recording of the same session writes it.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct WindowState {
     /// The revision the window published it at.
@@ -1202,7 +1450,10 @@ pub struct WindowState {
     /// How it occupies its display.
     pub mode: WindowMode,
     /// The rectangle it returns to from another mode, where known.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
     pub normal_geometry: Option<WindowGeometry>,
     /// Whether it is shown.
     pub visible: bool,
@@ -1211,20 +1462,29 @@ pub struct WindowState {
     /// Whether it has keyboard focus.
     pub focused: bool,
     /// Its title.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
     pub title: Option<String>,
     /// Its inner-size limits.
-    #[serde(default)]
+    #[cfg_attr(feature = "serde", serde(default))]
     pub constraints: SizeConstraints,
     /// Whether the user can resize it.
     pub resizable: bool,
     /// What frames it.
     pub frame: WindowFrame,
     /// The display it is on, by label.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
     pub display: Option<u64>,
     /// Its drawable area and scale, once reported.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
     pub metrics: Option<WindowMetrics>,
     /// The theme applied to it.
     pub appearance: Appearance,
@@ -1232,11 +1492,17 @@ pub struct WindowState {
     pub safe_area: [f64; 4],
     /// The soft keyboard's occlusion and its motion; absent while it is hidden
     /// and at rest.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
     pub keyboard: Option<KeyboardInset>,
     /// The edges system gestures take, in logical pixels: top, right, bottom,
     /// left; absent while zero.
-    #[serde(default, skip_serializing_if = "is_zero_insets")]
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "is_zero_insets")
+    )]
     pub system_gestures: [f64; 4],
     /// Whether the platform lets it run its UI.
     pub execution: Execution,
@@ -1249,24 +1515,30 @@ pub struct WindowState {
 }
 
 /// Whether all four insets are zero, which a writer leaves out.
+#[cfg(feature = "serde")]
 fn is_zero_insets(insets: &[f64; 4]) -> bool {
     insets.iter().all(|inset| *inset == 0.0)
 }
 
 /// Where the soft keyboard covers a window, and how it gets there.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct KeyboardInset {
     /// The occlusion once any motion ends, in logical pixels: top, right,
     /// bottom, left.
     pub target: [f64; 4],
     /// The motion toward `target`; absent at rest.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
     pub motion: Option<InsetMotion>,
 }
 
 /// A motion of the keyboard on the event timeline.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct InsetMotion {
     /// The occlusion it starts from: top, right, bottom, left.
@@ -1280,8 +1552,9 @@ pub struct InsetMotion {
 }
 
 /// A keyboard motion's timing curve.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "curve", rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(tag = "curve", rename_all = "snake_case"))]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub enum InsetCurve {
@@ -1303,8 +1576,9 @@ pub enum InsetCurve {
 }
 
 /// One registry call, after the header.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "row", rename_all = "snake_case")]
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(tag = "row", rename_all = "snake_case"))]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub enum Row {
@@ -1317,10 +1591,16 @@ pub enum Row {
     /// reading they attach to.
     Batch {
         /// Readings coalesced before `current`.
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        #[cfg_attr(
+            feature = "serde",
+            serde(default, skip_serializing_if = "Vec::is_empty")
+        )]
         coalesced: Vec<Reading>,
         /// Readings predicted after `current`.
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        #[cfg_attr(
+            feature = "serde",
+            serde(default, skip_serializing_if = "Vec::is_empty")
+        )]
         predicted: Vec<Reading>,
         /// The reading the batch decodes as.
         current: Reading,
@@ -1328,7 +1608,10 @@ pub enum Row {
     /// The OS click thresholds changed.
     ClickSettings {
         /// The new thresholds; none restores the registry's default.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(
+            feature = "serde",
+            serde(default, skip_serializing_if = "Option::is_none")
+        )]
         settings: Option<ClickSettings>,
     },
     /// A precision touchpad's viewport reported a status or a content transform.
@@ -1336,13 +1619,13 @@ pub enum Row {
         /// What it reported.
         viewport: Viewport,
         /// Where and when.
-        #[serde(flatten)]
+        #[cfg_attr(feature = "serde", serde(flatten))]
         frame: Frame,
     },
     /// The touchpad's open manipulation ended as cancelled.
     ViewportAbandoned {
         /// Where and when.
-        #[serde(flatten)]
+        #[cfg_attr(feature = "serde", serde(flatten))]
         frame: Frame,
     },
     /// A mouse wheel turned under the primary mouse.
@@ -1374,7 +1657,7 @@ pub enum Row {
     /// Every contact on a surface ended.
     CancelSurface {
         /// The surface.
-        #[serde(default, skip_serializing_if = "is_zero")]
+        #[cfg_attr(feature = "serde", serde(default, skip_serializing_if = "is_zero"))]
         surface: u64,
         /// When, on the event timeline.
         time_ns: u64,
@@ -1384,7 +1667,7 @@ pub enum Row {
     /// The contacts with one label ended (a capture loss).
     CancelContact {
         /// The surface.
-        #[serde(default, skip_serializing_if = "is_zero")]
+        #[cfg_attr(feature = "serde", serde(default, skip_serializing_if = "is_zero"))]
         surface: u64,
         /// The label.
         contact: u64,
@@ -1410,7 +1693,10 @@ pub enum Row {
         /// What it did.
         ime: Ime,
         /// Its text was replaced before writing (ADR-0215 §5): replay refuses the row.
-        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        #[cfg_attr(
+            feature = "serde",
+            serde(default, skip_serializing_if = "std::ops::Not::not")
+        )]
         redacted: bool,
     },
     /// The application read the system preferences (a `platform` recording).
@@ -1424,7 +1710,10 @@ pub enum Row {
         read: DisplayRead,
         /// Each display's name and persistent key were replaced before writing (ADR-0215 §5):
         /// a key by a pseudonym numbered within the recording, so equal keys stay equal.
-        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        #[cfg_attr(
+            feature = "serde",
+            serde(default, skip_serializing_if = "std::ops::Not::not")
+        )]
         redacted: bool,
     },
     /// A window published a new snapshot (a `window_state` recording).
@@ -1432,19 +1721,25 @@ pub enum Row {
         /// The snapshot.
         state: WindowState,
         /// Its title was replaced before writing (ADR-0215 §5): replay refuses the row.
-        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        #[cfg_attr(
+            feature = "serde",
+            serde(default, skip_serializing_if = "std::ops::Not::not")
+        )]
         redacted: bool,
     },
 }
 
+#[cfg(feature = "serde")]
 const fn is_zero(value: &u64) -> bool {
     *value == 0
 }
 
+#[cfg(feature = "serde")]
 const fn is_one(value: &f64) -> bool {
     *value == 1.0
 }
 
+#[cfg(feature = "serde")]
 const fn one() -> f64 {
     1.0
 }
