@@ -23,6 +23,3 @@ pub(crate) mod registry;
 pub use flui_foundation::{Key, KeyRef, Keyed, UniqueKey, ValueKey, ViewKey, WithKey};
 pub use global_key::GlobalKey;
 pub use object_key::ObjectKey;
-
-/// Unique identifier for a GlobalKey.
-pub type GlobalKeyId = u64;
