@@ -39,16 +39,19 @@ pub(super) fn trace(event: impl FnOnce()) {
 }
 
 /// Install an agent for `launch` on `config`, after the application's own
-/// hooks. The hello names the app by `config`'s title, and the system it runs on.
+/// hooks. The hello names the app by `config`'s title, and the system it runs on, and lists
+/// the `native` recording layer when `records_native`.
 pub(crate) fn install(
     config: &mut crate::AppConfig,
     launch: Launch,
     disconnect: &std::sync::Arc<super::Disconnect>,
+    records_native: bool,
 ) {
     let agent = DriverAgent::new(
         launch,
         app_info(&config.title),
         std::sync::Arc::clone(disconnect),
+        records_native,
     );
     config.dev_agent = Some(crate::app::dev_agent::DevAgent::with(
         config.dev_agent.take(),

@@ -254,12 +254,17 @@ kind `recording`.
 The `native` layer is the backend's own journal (ADR-0215 §4) beside the input, so it is recorded
 with `input` (`native` alone is `invalid_argument`):
 
-- **Capture.** A host that serves the agent in a debug build makes one `NativeLines` for its
-  backend, installs the backend's line capture (`flui-native`'s `journal::capture_lines`) with it
-  on its owner thread before it creates the platform, and attaches it to each runtime it hosts
-  (`UiRuntime::attach_native_journal`). An app that serves no agent installs nothing and pays
-  nothing. `ServiceConfig::records_native` says it did, and only then does the hello list
-  `native`; a runtime with no journal attached answers a recording of `native` `not_supported`.
+- **Capture.** A debug build of a native host (`flui-app`'s `cfg(native_journal)`) makes one
+  `NativeLines` for its backend and installs the backend's line capture (`flui-native`'s
+  `journal::capture_lines`) with it on its owner thread before it creates the platform, since a
+  registry reports only to the capture present when it was made; `current_host()` names the
+  backend before the platform starts. The launch that says whether the agent is served is read
+  from the platform, so the capture is ended right after it when none is: until then nobody
+  wants an ordinary row and only each stream's bounded setup is kept, and an app nobody drives
+  pays nothing after its start. A served app attaches the lines to each runtime it hands the
+  agent (`UiRuntime::attach_native_journal`) and sets `ServiceConfig::records_native`, and only
+  then does the hello list `native`; a runtime with no journal attached answers a recording of
+  `native` `not_supported`. A page records the input layer only.
 - **Streams.** Each source the backend journals is a stream, numbered in the order it opened, and
   a native recording of its own. Its lines go as `record_native` events `{recording, window,
   stream, line}`, where `line` is `native_recording::Line` (`#[non_exhaustive]`: `header`, `row`,
@@ -393,7 +398,10 @@ with `input` (`native` alone is `invalid_argument`):
   recording still wanted after it stopped, no share kept for the input, no `native` in the hello,
   and no refusal without a journal. `flui-native`'s
   `a_line_capture_sends_each_stream_s_header_then_its_rows_in_the_forms_asked` keeps the capture's
-  order and forms. `flui-protocol`'s `no_two_wire_types_share_a_schema_name` keeps the
+  order and forms. `flui-app`'s `a_loop_nobody_serves_ends_its_native_journal_so_no_line_reaches_it`
+  fails when an unserved app keeps its capture past the launch, and
+  `the_hello_lists_the_native_layer_only_when_the_loop_journals` when the hello lists `native`
+  without a journal. `flui-protocol`'s `no_two_wire_types_share_a_schema_name` keeps the
   recordings' types apart from the session's in the golden.
 
 ## Pros and cons of the options

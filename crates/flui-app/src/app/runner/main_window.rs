@@ -678,6 +678,8 @@ pub(super) fn shutdown_main_window() {
     // serves go, so its driver sees the connection end rather than each
     // window answer `gone`.
     super::terminal::contain_terminal("development agents' release", || drop(dev_agent));
+    #[cfg(native_journal)]
+    super::native_journal::end();
     if let Some(ingress) = ingress {
         ingress.close();
     }
@@ -731,7 +733,10 @@ where
     F: FnMut(&AppHandle) -> V + 'static,
 {
     run_with_platform_factory(application, || {
-        flui_native::current_platform().map_err(AppRunError::from_platform)
+        let host = flui_native::current_host().map_err(AppRunError::from_platform)?;
+        // Before the platform, whose registries report only to a capture already installed.
+        super::begin_native_journal(host.backend());
+        host.start().map_err(AppRunError::from_platform)
     })
 }
 
@@ -911,11 +916,13 @@ where
                     let _ = ingress.quit_now();
                 }
             });
-            crate::app::agent::install_from_launch(
+            let served = crate::app::agent::install_from_launch(
                 &mut config,
                 |key| launch.launch_value(key),
                 &ended,
+                super::journals_native(),
             );
+            super::keep_native_journal(served);
             // The loop takes the hooks and owns them until it ends
             // (`shutdown_main_window`).
             super::dev_agents::start(&config);

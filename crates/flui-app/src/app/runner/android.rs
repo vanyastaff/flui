@@ -96,6 +96,8 @@ where
     // The application's development reload hook may own frames with a scene
     // plugin (`flui run --scene`); inert unless one is installed.
     let hot_reload = ScenePlugin::from_config(&config, app.internal_data_path().as_deref());
+    // Before the platform, whose registries report only to a capture already installed.
+    super::begin_native_journal(flui_native::journal::codec::Backend::Android);
     let platform: Box<dyn Platform> =
         flui_native::android_platform(app).map_err(crate::app::LaunchError::from_platform)?;
 
@@ -105,11 +107,13 @@ where
     // the teardown ran.
     let disconnect = Arc::new(crate::app::agent::Disconnect::default());
     let mut config = config;
-    crate::app::agent::install_from_launch(
+    let served = crate::app::agent::install_from_launch(
         &mut config,
         |key| platform.launch_value(key),
         &disconnect,
+        super::journals_native(),
     );
+    super::keep_native_journal(served);
     // The loop takes the hooks and owns them until `run` returns. The window
     // is handed over once it is installed.
     super::dev_agents::start(&config);

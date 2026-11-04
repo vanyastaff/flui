@@ -41,6 +41,8 @@ where
         &mut config,
         |key| platform.launch_value(key),
         &disconnect,
+        // A page records the input layer only.
+        false,
     );
 
     /// The actual web bootstrap: canvas window, renderer, UI runtime, and

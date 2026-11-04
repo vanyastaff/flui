@@ -430,20 +430,77 @@ pub use owner::{
 /// }
 /// ```
 pub fn current_platform() -> Result<Box<dyn Platform>, PlatformError> {
-    // Check for headless mode via environment variable (CI/testing)
+    current_host()?.start()
+}
+
+/// A host [`current_platform`] can start on this target, chosen by [`current_host`] before it
+/// starts, so a caller can prepare for it first: a debug build's native journal names its
+/// backend in each stream's header, and must be installed before the platform exists.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum CurrentHost {
+    /// The headless host, which `FLUI_HEADLESS` selects.
+    Headless,
+    /// The native Win32 host.
+    #[cfg(windows)]
+    Windows,
+    /// The native AppKit host.
+    #[cfg(all(target_os = "macos", not(windows)))]
+    MacOs,
+    /// The native Wayland host.
+    #[cfg(all(target_os = "linux", not(any(windows, target_os = "macos"))))]
+    Wayland,
+    /// The native X11 host.
+    #[cfg(all(target_os = "linux", not(any(windows, target_os = "macos"))))]
+    X11,
+    /// The native UIKit host.
+    #[cfg(all(
+        target_os = "ios",
+        not(any(
+            windows,
+            target_os = "macos",
+            target_os = "linux",
+            target_os = "android"
+        ))
+    ))]
+    Ios,
+    /// The page host.
+    #[cfg(all(
+        target_arch = "wasm32",
+        not(any(
+            windows,
+            target_os = "macos",
+            target_os = "linux",
+            target_os = "android",
+            target_os = "ios"
+        ))
+    ))]
+    Web,
+}
+
+/// The host [`current_platform`] starts in this session, without starting it: the headless
+/// host under `FLUI_HEADLESS`, else the target's native host (on Linux, the one the session's
+/// environment names among those built).
+///
+/// # Errors
+///
+/// [`PlatformError::Init`] when this session has no host [`current_platform`] can start: a
+/// Linux session with no display server or none whose host is built, Android (whose host
+/// `android_platform` starts from `android_main`), or an unsupported target.
+pub fn current_host() -> Result<CurrentHost, PlatformError> {
     if std::env::var("FLUI_HEADLESS").is_ok() {
         tracing::info!("FLUI_HEADLESS detected, using headless platform");
-        return Ok(Box::new(HeadlessPlatform::new()));
+        return Ok(CurrentHost::Headless);
     }
 
     #[cfg(windows)]
     {
-        Ok(Box::new(WindowsPlatform::try_new()?))
+        Ok(CurrentHost::Windows)
     }
 
     #[cfg(all(target_os = "macos", not(windows)))]
     {
-        Ok(Box::new(MacOSPlatform::try_new()?))
+        Ok(CurrentHost::MacOs)
     }
 
     #[cfg(all(target_os = "linux", not(any(windows, target_os = "macos"))))]
@@ -452,14 +509,11 @@ pub fn current_platform() -> Result<Box<dyn Platform>, PlatformError> {
             wayland: cfg!(feature = "wayland"),
             x11: cfg!(feature = "x11"),
         };
-        let platform =
-            match choose_linux_host(&display::linux::protocol::Environment::current(), built) {
-                Ok(LinuxHost::Wayland) => start_wayland(),
-                Ok(LinuxHost::X11) => start_x11(),
-                Err(message) => Err(PlatformError::Init { message }),
-            }?;
-        tracing::info!(host = platform.name(), "the session's native host started");
-        Ok(platform)
+        match choose_linux_host(&display::linux::protocol::Environment::current(), built) {
+            Ok(LinuxHost::Wayland) => Ok(CurrentHost::Wayland),
+            Ok(LinuxHost::X11) => Ok(CurrentHost::X11),
+            Err(message) => Err(PlatformError::Init { message }),
+        }
     }
 
     #[cfg(all(
@@ -486,7 +540,7 @@ pub fn current_platform() -> Result<Box<dyn Platform>, PlatformError> {
         ))
     ))]
     {
-        Ok(Box::new(IOSPlatform::try_new()?))
+        Ok(CurrentHost::Ios)
     }
 
     #[cfg(all(
@@ -500,7 +554,7 @@ pub fn current_platform() -> Result<Box<dyn Platform>, PlatformError> {
         ))
     ))]
     {
-        Ok(Box::new(WebPlatform::try_new()?))
+        Ok(CurrentHost::Web)
     }
 
     #[cfg(not(any(
@@ -516,6 +570,94 @@ pub fn current_platform() -> Result<Box<dyn Platform>, PlatformError> {
             message: "Unsupported platform - no platform implementation available for this target"
                 .to_string(),
         })
+    }
+}
+
+impl CurrentHost {
+    /// Starts this host.
+    ///
+    /// # Errors
+    ///
+    /// [`PlatformError::Init`] when the host fails to start (e.g., COM failure on Windows, no
+    /// connection to the display server).
+    pub fn start(self) -> Result<Box<dyn Platform>, PlatformError> {
+        match self {
+            Self::Headless => Ok(Box::new(HeadlessPlatform::new())),
+            #[cfg(windows)]
+            Self::Windows => Ok(Box::new(WindowsPlatform::try_new()?)),
+            #[cfg(all(target_os = "macos", not(windows)))]
+            Self::MacOs => Ok(Box::new(MacOSPlatform::try_new()?)),
+            #[cfg(all(target_os = "linux", not(any(windows, target_os = "macos"))))]
+            Self::Wayland | Self::X11 => {
+                let platform = if self == Self::Wayland {
+                    start_wayland()
+                } else {
+                    start_x11()
+                }?;
+                tracing::info!(host = platform.name(), "the session's native host started");
+                Ok(platform)
+            }
+            #[cfg(all(
+                target_os = "ios",
+                not(any(
+                    windows,
+                    target_os = "macos",
+                    target_os = "linux",
+                    target_os = "android"
+                ))
+            ))]
+            Self::Ios => Ok(Box::new(IOSPlatform::try_new()?)),
+            #[cfg(all(
+                target_arch = "wasm32",
+                not(any(
+                    windows,
+                    target_os = "macos",
+                    target_os = "linux",
+                    target_os = "android",
+                    target_os = "ios"
+                ))
+            ))]
+            Self::Web => Ok(Box::new(WebPlatform::try_new()?)),
+        }
+    }
+
+    /// The backend this host journals as, in a native recording's header (ADR-0215 §4).
+    #[cfg(any(feature = "native-capture", feature = "testing"))]
+    #[must_use]
+    pub const fn backend(self) -> journal::codec::Backend {
+        use journal::codec::Backend;
+        match self {
+            Self::Headless => Backend::Headless,
+            #[cfg(windows)]
+            Self::Windows => Backend::Win32,
+            #[cfg(all(target_os = "macos", not(windows)))]
+            Self::MacOs => Backend::AppKit,
+            #[cfg(all(target_os = "linux", not(any(windows, target_os = "macos"))))]
+            Self::Wayland => Backend::Wayland,
+            #[cfg(all(target_os = "linux", not(any(windows, target_os = "macos"))))]
+            Self::X11 => Backend::X11,
+            #[cfg(all(
+                target_os = "ios",
+                not(any(
+                    windows,
+                    target_os = "macos",
+                    target_os = "linux",
+                    target_os = "android"
+                ))
+            ))]
+            Self::Ios => Backend::UiKit,
+            #[cfg(all(
+                target_arch = "wasm32",
+                not(any(
+                    windows,
+                    target_os = "macos",
+                    target_os = "linux",
+                    target_os = "android",
+                    target_os = "ios"
+                ))
+            ))]
+            Self::Web => Backend::Web,
+        }
     }
 }
 

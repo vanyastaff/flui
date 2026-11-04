@@ -75,11 +75,12 @@ pub(in super::super) fn listen(
     launch: &Launch,
     app: AppInfo,
     disconnect: Option<Arc<Disconnect>>,
+    records_native: bool,
 ) -> Result<Running, PlatformError> {
     let on_driver_gone = disconnect
         .map(|disconnect| -> Box<dyn Fn() + Send + Sync> { Box::new(move || disconnect.fire()) });
     let service = Service::new(ServiceConfig {
-        records_native: false,
+        records_native,
         token: launch.token.clone(),
         app,
         limits: launch.limits,

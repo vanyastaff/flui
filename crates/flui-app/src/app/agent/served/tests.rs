@@ -121,6 +121,14 @@ impl Address {
 
 /// An agent for `launch` that counts the quits a driver's disconnect asks.
 fn driver_agent(launch: Launch) -> (DriverAgent, Arc<Disconnect>, Arc<AtomicUsize>) {
+    driver_agent_journaling(launch, false)
+}
+
+/// An agent for `launch` that counts quits, listing the `native` layer when `records_native`.
+fn driver_agent_journaling(
+    launch: Launch,
+    records_native: bool,
+) -> (DriverAgent, Arc<Disconnect>, Arc<AtomicUsize>) {
     let quits = Arc::new(AtomicUsize::new(0));
     let disconnect = Arc::new(Disconnect::default());
     let counted = Arc::clone(&quits);
@@ -131,6 +139,7 @@ fn driver_agent(launch: Launch) -> (DriverAgent, Arc<Disconnect>, Arc<AtomicUsiz
         launch,
         AppInfo::new("counter", "headless").with_pid(7),
         Arc::clone(&disconnect),
+        records_native,
     );
     (agent, disconnect, quits)
 }
@@ -503,6 +512,27 @@ impl Owner {
 // ---------------------------------------------------------------------------
 // The scenario
 // ---------------------------------------------------------------------------
+
+/// The hello lists the `native` recording layer exactly when the loop journals its backend.
+#[test]
+fn the_hello_lists_the_native_layer_only_when_the_loop_journals() {
+    for (records_native, layers) in [
+        (false, json!(["input"])),
+        (true, json!(["input", "native"])),
+    ] {
+        let address = Address::new();
+        let (agent, _, _) = driver_agent_journaling(address.launch(), records_native);
+        let mut owner = Owner::new(agent);
+        let at = address.address;
+        owner.drive(move |_| {
+            let (_client, welcome) = Client::greeted(&at);
+            assert_eq!(
+                welcome["hello"]["capabilities"]["record"], layers,
+                "{welcome}"
+            );
+        });
+    }
+}
 
 #[test]
 fn reads_the_counter_and_taps_it_by_element_and_by_locator() {
