@@ -635,13 +635,16 @@ during detach: **Unasserted:** no test pins this.
 
 ### The development-reload hook lives here, not in the runtime
 
-`dev_reload::DevReloadHook` (ADR-0094 §1) is the only seam between a host and a reload tool.
+`dev_reload::DevReloadHook` ([ADR-0311](../../docs/adr/ADR-0311-development-reload-is-a-hook-the-application-installs.md))
+is the only seam between a host and a reload tool.
 It sits in this crate, below the runtime, so the host (`flui-app`) and the tool
 (`flui-hot-reload`) each name it without naming each other, and a package reaches it through
 `flui-sdk`'s `view` glob re-export with no new SDK item. The trait is the driver half — `attach`, `detach`,
 `poll` and `scene_frame`; the per-call seam a code patcher needs arrives with its first
-producer. Its bound is `Send + 'static` because the instance travels in the application's
-configuration; it is only ever called on the owner thread. `scene_frame` lends the scene to a
+producer (ADR-0311 §7). Its bound is still `Send + 'static` because the instance travels in the
+application's configuration; it is only ever called on the owner thread. ADR-0311 makes it
+`'static` alone, built on the owner thread from a factory, with `scene_frame` in a scene hook of
+its own; `docs/gaps.md` (entry 43) lists that as not built. `scene_frame` lends the scene to a
 callback so a scene built by a plugin image cannot outlive it. Pinned by
 `scene_frame_default_never_calls_render` and by the host's tests in `flui-app`
 (`app/hot_reload/tests.rs`).

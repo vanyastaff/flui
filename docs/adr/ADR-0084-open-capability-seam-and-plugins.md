@@ -272,7 +272,7 @@ AppRunError::CapabilityConflict(CapabilityConflict)
 through `flui-sdk` (ADR-0088). An application lists its plugins on the application builder —
 `Application::new(factory).plugin(flui_haptics::Plugin)`, a new method beside today's
 `with_config` and `on_ready` on `Application` (`crates/flui-app/src/app/application.rs:53,67`).
-The registrar registers capabilities only; other runtime hooks, such as ADR-0094's reload hook,
+The registrar registers capabilities only; other runtime hooks, such as ADR-0311's reload hook,
 have their own builder method. A plugin chooses its default provider per target with
 `[target.'cfg(..)'.dependencies]` in its own manifest.
 

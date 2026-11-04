@@ -2,7 +2,11 @@
 
 - **Status:** Accepted (2026-10-04)
 - **Date:** 2026-10-04
-- **Supersedes:** [ADR-0094](ADR-0094-hot-reload-through-subsecond.md) worker image lifetime only; its development-only boundary and future replacement remain unchanged.
+- **Related:** [ADR-0311](ADR-0311-development-reload-is-a-hook-the-application-installs.md) §7
+  (the dlopen path whose worker images this record keeps mapped, and its exit);
+  [ADR-0094](ADR-0094-hot-reload-through-subsecond.md) (the rejected record that first described
+  the worker's unload hazard)
+- **Revised:** 2026-11-04 — the pair with ADR-0094 became `Related`, since ADR-0094 is rejected.
 
 ## Context
 

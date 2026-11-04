@@ -2,7 +2,7 @@
 
 # Hot Reload
 
-FLUI targets **hot reload** (state preserved, `build()` re-run). The operational two-layer model below is the dev-time/build side; the runtime hook and the planned move to Subsecond are in [ADR-0094](adr/ADR-0094-hot-reload-through-subsecond.md), and the plugin boundary's invariants in [`crates/flui-hot-reload/ARCHITECTURE.md`](../crates/flui-hot-reload/ARCHITECTURE.md).
+FLUI targets **hot reload** (state preserved, `build()` re-run). The operational two-layer model below is the dev-time/build side; the runtime hook is [ADR-0311](adr/ADR-0311-development-reload-is-a-hook-the-application-installs.md), which also says when a code patcher such as Subsecond (rejected for now, [ADR-0094](adr/ADR-0094-hot-reload-through-subsecond.md)) replaces the dlopen path, and the plugin boundary's invariants in [`crates/flui-hot-reload/ARCHITECTURE.md`](../crates/flui-hot-reload/ARCHITECTURE.md).
 
 ## Target vs today
 
@@ -75,7 +75,7 @@ rebuilds both for the same reason (the host is unchanged and is not relinked).
 
 `flui-app` names no reload crate. The host installs the worker driver on its
 configuration, and the runner drives it through the `DevReloadHook` trait
-(`flui::view::dev_reload`, [ADR-0094](adr/ADR-0094-hot-reload-through-subsecond.md) §1):
+(`flui::view::dev_reload`, [ADR-0311](adr/ADR-0311-development-reload-is-a-hook-the-application-installs.md)):
 
 ```rust,ignore
 use flui::hot_reload::WorkerReloadHook;

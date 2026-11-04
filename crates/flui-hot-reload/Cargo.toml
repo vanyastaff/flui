@@ -23,7 +23,7 @@ exclude = ["/ARCHITECTURE.md"]
 default = []
 app-plugin = ["dep:flui-foundation", "dep:flui-view", "dep:flui-rendering", "dep:parking_lot"]
 # `WorkerReloadHook` and `ScenePluginHook`, the `DevReloadHook`s a `flui-app`
-# host installs (ADR-0094 §1). Off by default: the hook trait comes through
+# host installs (ADR-0311 §1, §3). Off by default: the hook traits come through
 # `flui-sdk`, which brings the widget catalog, and a scene plugin or worker
 # cdylib that only loads code must not build it.
 host-hook = ["dep:flui-sdk"]
@@ -73,24 +73,26 @@ tier = "pkg"
 tier-kind = "official"
 order = 4
 # ADR-0088 §2: an official package's normal dependencies are the SDK and the
-# contract crates. The dlopen reload path these serve is removed by ADR-0094.
+# contract crates. These edges go when the package builds on `flui-sdk` alone
+# from `packages/` (ADR-0311 §6); the reach exceptions and the globals below go
+# with the dlopen reload path (ADR-0311 §7).
 edge-exceptions = [
-    { to = "flui-foundation", exit = "ADR-0094", reason = "the dlopen reload path's internal-crate edges" },
-    { to = "flui-layer", exit = "ADR-0094", reason = "the dlopen reload path's internal-crate edges" },
-    { to = "flui-rendering", exit = "ADR-0094", reason = "the dlopen reload path's internal-crate edges" },
-    { to = "flui-view", exit = "ADR-0094", reason = "the dlopen reload path's internal-crate edges" },
+    { to = "flui-foundation", exit = "ADR-0311", reason = "the dlopen reload path's internal-crate edges" },
+    { to = "flui-layer", exit = "ADR-0311", reason = "the dlopen reload path's internal-crate edges" },
+    { to = "flui-rendering", exit = "ADR-0311", reason = "the dlopen reload path's internal-crate edges" },
+    { to = "flui-view", exit = "ADR-0311", reason = "the dlopen reload path's internal-crate edges" },
 ]
 reach-exceptions = [
-    { to = "windows", exit = "ADR-0094", reason = "the dlopen loader's Win32 LibraryLoader calls" },
-    { to = "android_log-sys", exit = "ADR-0094", reason = "the loader's Android logging" },
+    { to = "windows", exit = "ADR-0311", reason = "the dlopen loader's Win32 LibraryLoader calls" },
+    { to = "android_log-sys", exit = "ADR-0311", reason = "the loader's Android logging" },
 ]
 # Process-global state, checked by `cargo xtask globals` (ADR-0097).
 globals = [
     { item = "dispatch::NEXT_HOOK_GENERATION", grant = "ADR-0097", class = "counter", reason = "Rebuild hook generations, advanced by try_update with permanent exhaustion refusal" },
-    { item = "dispatch::REQUEST_REBUILD", exit = "ADR-0094", reason = "the rebuild hook slot of the dlopen reload path" },
-    { item = "plugin::app_plugin!::__FLUI_APP_NEXT_THREAD_TOKEN", exit = "ADR-0094", reason = "per-image lane token source that `app_plugin!` emits into the plugin crate" },
-    { item = "plugin::app_plugin!::__FLUI_APP_PINNED_THREAD", exit = "ADR-0094", reason = "the lane pinned by the first build call, emitted into the plugin crate" },
-    { item = "plugin::app_plugin!::__FLUI_APP_STATE", exit = "ADR-0094", reason = "the plugin image's pipeline slot, emitted into the plugin crate" },
-    { item = "worker::REGISTRATION_SESSION", exit = "ADR-0094", reason = "worker build registrations collected during `flui_worker_init`" },
-    { item = "worker::WORKER_BUILDS", exit = "ADR-0094", reason = "the registered worker build functions of the dlopen reload path" },
+    { item = "dispatch::REQUEST_REBUILD", exit = "ADR-0311", reason = "the rebuild hook slot of the dlopen reload path" },
+    { item = "plugin::app_plugin!::__FLUI_APP_NEXT_THREAD_TOKEN", exit = "ADR-0311", reason = "per-image lane token source that `app_plugin!` emits into the plugin crate" },
+    { item = "plugin::app_plugin!::__FLUI_APP_PINNED_THREAD", exit = "ADR-0311", reason = "the lane pinned by the first build call, emitted into the plugin crate" },
+    { item = "plugin::app_plugin!::__FLUI_APP_STATE", exit = "ADR-0311", reason = "the plugin image's pipeline slot, emitted into the plugin crate" },
+    { item = "worker::REGISTRATION_SESSION", exit = "ADR-0311", reason = "worker build registrations collected during `flui_worker_init`" },
+    { item = "worker::WORKER_BUILDS", exit = "ADR-0311", reason = "the registered worker build functions of the dlopen reload path" },
 ]

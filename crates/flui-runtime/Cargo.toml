@@ -28,7 +28,7 @@ workspace = true
 testing = ["flui-platform/testing"]
 # `reload::ReloadTier`, the development reload the UI runtime applies. Names no
 # hot-reload crate; `flui-app` always turns it on and translates an installed
-# `DevReloadHook`'s event into it (ADR-0094 §1).
+# `DevReloadHook`'s event into it (ADR-0311 §1).
 hot-reload = []
 
 [dependencies]
