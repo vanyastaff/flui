@@ -1,6 +1,6 @@
 # ADR-0168: Descendant reveal through scroll ancestors
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-10-07)
 - **Date:** 2026-10-07
 - **Superseded-by:** [ADR-0206](ADR-0206-typed-semantics-attributes.md), in part: the
   cross-thread handoff is the published AccessKit `TreeUpdate`; `SemanticsSnapshot` is removed.

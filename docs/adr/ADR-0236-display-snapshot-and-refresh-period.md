@@ -1,6 +1,6 @@
 # ADR-0236: The host owns an immutable display snapshot; the presentation owns its refresh period
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-10-17)
 - **Date:** 2026-10-17
 - **Superseded-by:** [ADR-0257](ADR-0257-frame-timing-and-latency.md), decision 8 only: the tick may be the
   frame's vsync instant, a sampled time; it is still not shifted to the presentation time.

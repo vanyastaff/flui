@@ -1,6 +1,6 @@
 # ADR-0155: Ballistic rest tolerance derives from the presentation's device pixel ratio
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-10-07)
 - **Date:** 2026-10-06
 - **Superseded-by:** [ADR-0200](ADR-0200-dynamics-derived-rest-velocity.md), decision 1's
   no-speed interpretation and its corresponding consequence only; DPR ownership and release-time acquisition remain in force.

@@ -1,6 +1,6 @@
 # ADR-0056: Keep-alive is an element-side lease, and a parked child stays in place
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-09-04)
 - **Date:** 2026-09-05
 - **Superseded-by:** [ADR-0265](ADR-0265-pinned-lazy-children-and-the-focusable-list.md) for "A parked child is not moved", for a pinned child only (a pinned child is laid out outside the band; releasing a pin schedules a relayout)
 - **Amends:** [ADR-0053](ADR-0053-one-lazy-child-lifecycle-for-multi-box-slivers.md) (its eviction contract: a held child is exempt from band eviction), and the evict-before-paint sentence in `crates/flui-rendering/ARCHITECTURE.md`

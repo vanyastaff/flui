@@ -1,6 +1,6 @@
 # ADR-0158: Hit paths distinguish cursor deferral and refuse non-finite offsets
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-10-07)
 - **Date:** 2026-10-07
 - **Superseded-by:** [ADR-0281](ADR-0281-a-destructor-that-panics-during-an-unwind-aborts-as-in-std.md),
   only where later opaque captures are retained after a caught failure: they are destroyed under

@@ -1,6 +1,6 @@
 # ADR-0079: Keyboard activation, intents at the primary focus, and focus for assistive technology
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-09-23)
 - **Date:** 2026-09-24
 - **Superseded-by:** [ADR-0203](ADR-0203-semantics-vocabulary.md), in part: the semantics focus
   action. `Focus` and `Blur` are published and routed through the widget's owner-local action

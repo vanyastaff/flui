@@ -134,9 +134,6 @@ self.nodes.get(id.get() - 1);
 ```rust
 // Sealed: `HostPlatform<H>` over a host's table is its one implementation.
 pub trait Platform: sealed::Sealed + Send + Sync + 'static {
-    // Core
-    fn background_executor(&self) -> Arc<dyn PlatformExecutor>;
-
     // Lifecycle
     // The handler hears and answers what the platform has for the application:
     // its bootstrap, the quit, a reopen, a session end, a notice, the exit

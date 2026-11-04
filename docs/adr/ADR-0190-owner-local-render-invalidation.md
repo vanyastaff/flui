@@ -1,6 +1,6 @@
 # ADR-0190: UI render invalidation is retained by its attachment owner
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-10-11)
 - **Date:** 2026-10-10
 - **Supersedes:** [ADR-0013](ADR-0013-render-object-attach-self-dirty-handle.md) in full: its attach handle type, bounded-channel delivery for UI subscriptions and single public invalidation capability are replaced by the Decision, and the lifecycle rules that remain true are restated under "Attachment lifecycle".
 - **Related:** [ADR-0175](ADR-0175-owner-local-scheduling-and-animation.md).

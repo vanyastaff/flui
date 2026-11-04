@@ -1,6 +1,6 @@
 # ADR-0114: Lines align inside the allocated paragraph box
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-10-04)
 - **Date:** 2026-10-04
 - **Supersedes:** ADR-0092 §10 step 4b's direction-only line alignment. Text context ownership, shaping and display-list contracts remain unchanged.
 

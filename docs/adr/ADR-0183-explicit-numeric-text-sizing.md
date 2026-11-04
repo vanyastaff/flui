@@ -1,6 +1,6 @@
 # ADR-0183: Explicit numeric text sizing
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-10-10)
 - **Date:** 2026-10-09
 - **Supersedes:** ADR-0092 §10, raw query and text-acquisition contract only.
 - **Related:** [ADR-0065](ADR-0065-painting-owns-shaping-text-crosses-the-display-list-shaped.md),

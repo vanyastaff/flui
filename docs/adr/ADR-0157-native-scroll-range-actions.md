@@ -1,6 +1,6 @@
 # ADR-0157: Native scroll adjustment shares viewport activity and physics
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-10-07)
 - **Date:** 2026-10-07
 - **Superseded-by:** [ADR-0206](ADR-0206-typed-semantics-attributes.md), in part: the axis no
   longer travels through `SemanticsSnapshot` or `SemanticsNodeData`, which are removed; it is

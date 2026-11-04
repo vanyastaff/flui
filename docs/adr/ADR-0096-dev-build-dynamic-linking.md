@@ -1,6 +1,6 @@
 # ADR-0096: Dynamic linking for development builds
 
-- **Status:** Proposed
+- **Status:** Proposed (2026-09-25)
 - **Date:** 2026-09-25
 - **Related:** [ADR-0041](ADR-0041-workspace-topology-contract.md) and
   [ADR-0081](ADR-0081-workspace-tiers-and-reach-facts.md) (where a `flui-dylib` crate sits),

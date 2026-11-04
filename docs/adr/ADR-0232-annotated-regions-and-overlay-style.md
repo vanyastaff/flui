@@ -1,6 +1,6 @@
 # ADR-0232: Annotated regions and the coalesced system overlay style
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-10-17)
 - **Date:** 2026-10-17
 - **Supersedes:** [ADR-0031](ADR-0031-platform-haptics-capability-and-system-chrome-deferral.md) §5, for the
   system-bar overlay style only; orientation, system UI modes and the change callback stay deferred

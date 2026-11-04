@@ -24,7 +24,6 @@
   [ADR-0078](ADR-0078-rules-live-in-types-and-lints.md),
   [ADR-0091](ADR-0091-one-owner-thread-isolated-realms-raster-thread.md),
   [ADR-0092](ADR-0092-per-realm-text-over-parley.md),
-  [ADR-0093](ADR-0093-router-is-the-primary-navigation-api.md),
   [ADR-0094](ADR-0094-hot-reload-through-subsecond.md)
 - **Refs:** principle P3 and its gate in the [decision index](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/design/decisions.md); the
   [architecture review](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/2026-09-25-architecture-review/report-architecture.ru.md)
@@ -48,7 +47,6 @@ re-checked:
 | `POLLING_PENDING_WINDOWS`, `PENDING_SECONDARY_WINDOW_OPENS`, `PENDING_SECONDARY_WINDOW_COMPLETIONS` | `crates/flui-app/src/app/runner/secondary_window.rs:453-471` | `thread_local!` queues beside the host cell |
 | `REQUEST_REBUILD` | `crates/flui-hot-reload/src/dispatch.rs:24` | `static LazyLock<Mutex<…>>` hook slot |
 | `REGISTRY_STACK`, `TEST_REGISTRY` | `crates/flui-view/src/key/registry.rs:198-212` | `thread_local!`, `ManuallyDrop` for a hot-reload cdylib |
-| `NAVIGATOR_COMMAND_TARGETS` | `crates/flui-widgets/src/navigator/navigator.rs:90-93` | `thread_local!` routing table |
 | `LOCAL_LANES`, `ACTIVE_LANES` | `crates/flui-interaction/src/pointer/interaction_lane.rs:739-741` | `thread_local!` lane registries |
 
 Beside them sit monotonic ID counters (`KEY_COUNTER`, `crates/flui-foundation/src/key.rs:59`;
@@ -132,7 +130,7 @@ findings like any other: `TIME_DILATION` is configuration, not an identifier.
   `flui-native`, or a second cell in the host or in one platform, claims it. The secondary-window queues
   beside `APP_RUNTIME` are not trampolines; they fold into it or into a UI runtime.
 - **Everything else** is an allowlist entry with a reason and either an `exit`, the ADR whose
-  change removes it (`FONT_SYSTEM` → ADR-0092; `NAVIGATOR_COMMAND_TARGETS` → ADR-0093;
+  change removes it (`FONT_SYSTEM` → ADR-0092;
   `REQUEST_REBUILD` and `REGISTRY_STACK`'s `ManuallyDrop` form → ADR-0094; `TIME_DILATION`
   → this ADR, as a property of each presentation's frame clock), or a permanent
   `grant = "ADR-0097"` with a `class` the gate checks:

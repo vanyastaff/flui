@@ -29,7 +29,7 @@ use crate::{
     error::PlatformError, host_window::HostWindow, owner::DirectOwnerHooks, owner::OpenWindowError,
     owner::OwnerHooks, owner::OwnerPlatform, owner::PendingWindow, owner::ProxyTransport,
     owner::WindowOpen, owner::handlers::OpenWindows, owner::window_delivery::WindowDelivery,
-    platform::AppHandler, platform::Platform, platform::PlatformExecutor,
+    platform::AppHandler, platform::Platform,
 };
 use flui_platform::{DisplayId, DisplaySnapshot, WindowHandler, WindowId, WindowOptions};
 
@@ -206,7 +206,6 @@ pub(crate) struct HeadlessState {
     pub(crate) app: Arc<AppDelivery>,
     /// Called when a test changes the keyboard layout.
     pub(crate) keyboard_layout_changed: Option<Box<dyn FnMut() + Send>>,
-    background_executor: Arc<TestExecutor>,
     pub(crate) clipboard: Arc<dyn crate::host::SharedClipboard>,
     is_running: bool,
     /// The windows the platform tracks: the window feature's.
@@ -337,7 +336,6 @@ impl HeadlessLoop {
             notices: H::notices(&app),
             app,
             keyboard_layout_changed: None,
-            background_executor: Arc::new(TestExecutor::new("background")),
             clipboard: Arc::new(MemoryClipboard::new()),
             is_running: false,
             windows,
@@ -572,10 +570,6 @@ impl host::Loop for HeadlessLoop {
 impl host::Services for HeadlessLoop {
     fn launch_value(&self, key: flui_platform::LaunchKey) -> Option<String> {
         host::environment_launch_value(key)
-    }
-
-    fn background_executor(&self) -> Arc<dyn PlatformExecutor> {
-        self.with_state(|state| state.background_executor.clone())
     }
 
     fn app_path(&self) -> Result<PathBuf, PlatformError> {
@@ -935,30 +929,6 @@ impl HeadlessDeferredWindowOpens {
             );
         }
         Some(window)
-    }
-}
-
-/// Test executor that runs tasks immediately
-struct TestExecutor {
-    name: String,
-}
-
-impl TestExecutor {
-    fn new(name: &str) -> Self {
-        Self {
-            name: name.to_string(),
-        }
-    }
-}
-
-impl PlatformExecutor for TestExecutor {
-    fn spawn(&self, task: Box<dyn FnOnce() + Send>) {
-        tracing::trace!(executor = %self.name, "Running task immediately");
-        task();
-    }
-
-    fn is_on_executor(&self) -> bool {
-        true // Always on executor in test mode
     }
 }
 

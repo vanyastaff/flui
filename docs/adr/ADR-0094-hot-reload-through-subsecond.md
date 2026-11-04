@@ -1,7 +1,6 @@
 # ADR-0094: Hot reload goes through Subsecond behind a runtime hook
 
-- **Status:** Proposed. The hook's driver half is implemented (see "§1 as implemented");
-  Subsecond is not integrated.
+- **Status:** Proposed (2026-09-25)
 - **Superseded-by:** [ADR-0111](ADR-0111-worker-image-lifetime.md) for admitted worker image lifetime only; its other proposed and implemented contracts remain unchanged.
 - **Date:** 2026-09-25
 - **Superseded-by:** [ADR-0108](ADR-0108-plugin-scene-render-callback-safety.md) for
@@ -99,7 +98,7 @@ merged.
   already uses.
 - **With the patched `dx`:**
   - A logic edit keeps state (a `born` field stays constant, a `ticks` counter keeps counting).
-    The signal and `StateCell` path was not exercised: its `count` stayed 0.
+    The signal path was not exercised: its `count` stayed 0.
   - A `State` size change (`extra: [u64; 8]`) is caught by a fingerprint of size, alignment, drop
     glue and type name, and the root is remounted with fresh state. That was a remount in the
     same UI runtime, primary presentation only, not a fresh UI runtime.

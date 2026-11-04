@@ -1,6 +1,6 @@
 # ADR-0200: Displacement rest tolerances derive their speed criterion from the motion
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-10-12)
 - **Date:** 2026-10-11
 - **Supersedes:** [ADR-0155](ADR-0155-ballistic-rest-tolerance-from-device-pixel-ratio.md),
   decision 1's absence of a speed criterion and its corresponding consequence only.

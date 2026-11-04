@@ -1,6 +1,6 @@
 # ADR-0055: Table rows carry identity
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-09-04)
 - **Date:** 2026-09-04
 - **Related:** [ADR-0050](ADR-0050-global-key-identity-and-frame-reservations.md) (key identity), [ADR-0052](ADR-0052-lazy-sliver-child-identity-and-recovery.md) (the salted-key precedent); issue #544
 

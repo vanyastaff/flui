@@ -155,11 +155,6 @@ mod sealed {
 pub trait Platform: sealed::Sealed + Send + Sync + 'static {
     // ==================== Core System ====================
 
-    /// Get the platform's background executor for async tasks
-    ///
-    /// Background tasks run on a thread pool and can block.
-    fn background_executor(&self) -> Arc<dyn PlatformExecutor>;
-
     // ==================== Lifecycle ====================
 
     /// Run the platform event loop, telling and asking `handler` what the
@@ -446,20 +441,6 @@ pub trait Platform: sealed::Sealed + Send + Sync + 'static {
     fn data_store(&self, app: &flui_platform::AppDataDir) -> Option<crate::storage::DataStore>;
 }
 
-/// Platform executor trait for async task execution
-///
-/// This is a minimal interface - platforms can return their own executor types
-/// that implement this trait.
-pub trait PlatformExecutor: Send + Sync {
-    /// Spawn a task on this executor
-    fn spawn(&self, task: Box<dyn FnOnce() + Send>);
-
-    /// Check if we're currently on this executor's thread(s)
-    fn is_on_executor(&self) -> bool {
-        false // Default implementation
-    }
-}
-
 /// Options for the file/directory picker dialog
 #[derive(Debug, Clone)]
 pub struct PathPromptOptions {
@@ -598,10 +579,6 @@ where
 impl<H: Host> sealed::Sealed for HostPlatform<H> {}
 
 impl<H: Host> Platform for HostPlatform<H> {
-    fn background_executor(&self) -> Arc<dyn PlatformExecutor> {
-        self.owner.background_executor()
-    }
-
     fn run(self: Box<Self>, handler: Rc<dyn AppHandler>) -> Result<(), PlatformError> {
         Arc::<Self>::from(self).run_shared(handler)
     }

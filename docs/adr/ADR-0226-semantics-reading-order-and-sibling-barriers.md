@@ -1,6 +1,6 @@
 # ADR-0226: Semantics reading order and sibling barriers
 
-Status: Accepted
+Status: Accepted (2026-10-17)
 
 ## Context
 

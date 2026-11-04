@@ -25,7 +25,7 @@ use flui_platform::drag::OsDragEnd;
 use flui_platform::keyboard::{Code, Key, KeyEvent, KeyState, NamedKey};
 use flui_platform::{CursorIcon, EventTime, HapticFeedback, TargetPlatform};
 use flui_testing::a11y::{Action, ActionData, ActionRequest, Role, TreeId};
-use flui_view::StateHandle;
+use flui_testing::widgets::SharedSignal;
 use flui_view::element::ElementKind;
 use flui_view::prelude::*;
 use flui_widgets::{
@@ -49,7 +49,7 @@ pub(crate) struct Board {
 
 /// What a desk's callbacks recorded, and how a test configures it.
 struct Shared {
-    board: StateHandle<Board>,
+    board: SharedSignal<Board>,
     log: RefCell<Vec<String>>,
     hover: RefCell<BTreeMap<&'static str, DropHover>>,
     drops: RefCell<Vec<DragPoint>>,
@@ -71,7 +71,7 @@ impl Shared {
     }
 
     fn board(&self) -> Board {
-        self.board.with(Clone::clone)
+        self.board.value()
     }
 }
 
@@ -142,7 +142,7 @@ impl View for DeskContent {
 }
 
 struct DeskContentState {
-    board: StateHandle<Board>,
+    board: SharedSignal<Board>,
 }
 
 impl StatefulView for DeskContent {
@@ -160,9 +160,9 @@ impl ViewState<DeskContent> for DeskContentState {
         self.board.bind(ctx);
     }
 
-    fn build(&self, view: &DeskContent, _ctx: &dyn BuildContext) -> impl IntoView {
+    fn build(&self, view: &DeskContent, ctx: &dyn BuildContext) -> impl IntoView {
         let shared = &view.shared;
-        let board = self.board.with(Clone::clone);
+        let board = self.board.get(ctx);
         let mut children: Vec<BoxedView> = board
             .todo
             .iter()
@@ -219,7 +219,7 @@ fn card(shared: &Rc<Shared>, name: &'static str) -> BoxedView {
     .feedback(|| Text::new("feedback").into_view().boxed())
     .child_when_dragging(move || Text::new(format!("{name} lifted")).into_view().boxed())
     .on_drag_started(move |_cx| started.note(format!("start {name}")))
-    .on_drag_end(move |_cx, outcome: DragOutcome| {
+    .on_drag_end(move |cx, outcome: DragOutcome| {
         ended.note(format!("end {name} {outcome:?}"));
         if outcome
             == (DragOutcome::Dropped {
@@ -228,7 +228,8 @@ fn card(shared: &Rc<Shared>, name: &'static str) -> BoxedView {
         {
             ended
                 .board
-                .update(|board| board.todo.retain(|card| *card != name));
+                .update_in(cx, |board| board.todo.retain(|card| *card != name))
+                .expect("the desk's board is alive while its cards are mounted");
         }
     })
     .into_view()
@@ -265,7 +266,7 @@ fn target_at(
     )
     .expect("the target's label names it")
     .target(name)
-    .on_drop(move |_cx, drag, at, action| {
+    .on_drop(move |cx, drag, at, action| {
         assert!(
             !dropped.panic_next_drop.replace(false),
             "intentional drop panic"
@@ -275,10 +276,13 @@ fn target_at(
             .expect("a card's drag carries its name");
         dropped.note(format!("drop {card} into {name} {}", action.bits()));
         dropped.drops.borrow_mut().push(at);
-        dropped.board.update(|board| match name {
-            "Done" => board.done.push(card),
-            _ => board.copies.push(card),
-        });
+        dropped
+            .board
+            .update_in(cx, |board| match name {
+                "Done" => board.done.push(card),
+                _ => board.copies.push(card),
+            })
+            .expect("the desk's board is alive while its targets are mounted");
     });
     if name == "Done"
         && let Some(policy) = shared.spring.get()
@@ -298,7 +302,7 @@ fn target_at(
 
 fn shared() -> Rc<Shared> {
     Rc::new(Shared {
-        board: StateHandle::new(initial_board()),
+        board: SharedSignal::new(initial_board()),
         log: RefCell::new(Vec::new()),
         hover: RefCell::new(BTreeMap::new()),
         drops: RefCell::new(Vec::new()),

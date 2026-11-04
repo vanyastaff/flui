@@ -263,8 +263,7 @@ pub use form::{
 };
 pub use navigator::{
     AnimationRunFuture, FlightDirection, GeneratedRoute, Hero, HeroController, HeroControllerScope,
-    HeroMode, KeyedSettings, NamedRouteError, Navigator, NavigatorCommand, NavigatorCommandError,
-    NavigatorCommandOutcome, NavigatorCommandTarget, NavigatorHandle, NavigatorObserver,
+    HeroMode, KeyedSettings, NamedRouteError, Navigator, NavigatorHandle, NavigatorObserver,
     NavigatorRoute, NavigatorState, PageRoute, PageTransitionBuilder, PageTransitions,
     ParallaxPageTransition, PopInvokedCallback, PopScope, PopupRoute, PushCompletion, Route,
     RouteAnimation, RouteArguments, RouteBindingSlot, RouteContentBuilder, RouteId, RouteKey,
@@ -422,11 +421,6 @@ pub mod prelude {
     // with `std`'s same-named macros) — import them explicitly from the crate
     // root: `use flui_widgets::{column, row};`.
     pub use flui_view::prelude::*;
-    // Ergonomic local-state cells (fold the `Rc<Cell<_>>`/`Option<RebuildHandle>`
-    // pattern into one bindable, cloneable value). Already covered by the glob
-    // above; named here too, next to `StatefulView`/`ViewState`/`RebuildHandle`,
-    // so they show up in a symbol search of this module.
-    pub use flui_view::{StateCell, StateHandle};
 
     // The widget catalog.
     pub use crate::{

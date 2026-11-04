@@ -1,6 +1,6 @@
 # ADR-0101: Transient render failure retains frame demand
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-10-01)
 - **Date:** 2026-10-01
 - **Related:** ADR-0045 (reliable raster completion), ADR-0068 (presentation
   disposition), ADR-0083 (host-free UI runtime), ADR-0100 (prepared GPU work).

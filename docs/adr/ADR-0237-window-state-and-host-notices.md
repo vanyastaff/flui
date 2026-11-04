@@ -1,6 +1,6 @@
 # ADR-0237: A window publishes a state snapshot and takes commands; the host delivers system notices
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-10-18)
 - **Date:** 2026-10-18
 - **Amended:** 2026-10-19 — decision 9's image cache is the renderer's image textures; decoded
   images belong to the application's asset registry, reclaimed once registered

@@ -1,6 +1,6 @@
 # ADR-0175: Scheduling and animation state belong to the UI owner
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-10-09)
 - **Date:** 2026-10-08
 - **Superseded-by:** [ADR-0182](ADR-0182-complete-owner-execution.md) for scheduler execution authority and complete-turn entry points; [ADR-0191](ADR-0191-single-parent-animation-registries.md) for shared descendant topology.
 - **Superseded-by:** [ADR-0281](ADR-0281-a-destructor-that-panics-during-an-unwind-aborts-as-in-std.md),

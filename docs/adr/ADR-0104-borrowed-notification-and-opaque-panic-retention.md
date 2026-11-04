@@ -1,6 +1,6 @@
 # ADR-0104: Borrowed notification arguments and opaque panic retention
 
-- **Status:** Accepted.
+- **Status:** Accepted (2026-10-03)
 - **Superseded-by:** [ADR-0109](ADR-0109-notification-channel-surface.md)
 - **Superseded-by:** [ADR-0119](ADR-0119-inert-panic-payload-retirement.md),
   only decision 4's unconditional retention of known inert text payloads.

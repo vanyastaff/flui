@@ -1,6 +1,6 @@
 # ADR-0197: Explicit animation completion preserves the admitted run
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-10-11)
 - **Date:** 2026-10-11
 - **Related:** [ADR-0064](ADR-0064-animation-completion-is-one-controller-resolved-future.md),
   [ADR-0179](ADR-0179-controller-registration-ownership.md),

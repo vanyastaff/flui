@@ -1,6 +1,6 @@
 # ADR-0255: How Android, iOS and the Web host FLUI
 
-- **Status:** Accepted (2026-10-20). Not implemented: [`docs/gaps.md` entry 43, ADR-0255](../gaps.md#43-accepted-adr-sections-not-built-yet)
+- **Status:** Accepted (2026-10-20)
 - **Date:** 2026-10-20
 - **Amended:** 2026-11-03 — decision 9 matches the platform: `InputLatency::Low` on Android does
   not need a Java touch path, since `ViewRootImpl` batches ahead of the native input queue and

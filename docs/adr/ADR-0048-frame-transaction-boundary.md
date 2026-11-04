@@ -1,6 +1,6 @@
 # ADR-0048: Presentation-local frame-transaction boundary
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-08-18)
 - **Date:** 2026-08-18
 - **Superseded-by:** [ADR-0123](ADR-0123-exceptional-presentation-close.md), in
   part: the remaining-element disposal policy, during a terminal presentation

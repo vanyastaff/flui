@@ -1,6 +1,6 @@
 # ADR-0156: Character shortcuts may ignore the Shift needed to produce them
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-10-07)
 - **Superseded-by:** ADR-0201 (source composition and command-modifier interpretation;
   character-only Shift opt-in remains)
 - **Date:** 2026-10-07

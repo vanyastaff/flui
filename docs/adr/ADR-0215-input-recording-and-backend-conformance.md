@@ -1,26 +1,6 @@
 # ADR-0215: Input is recorded as the `HostInput` stream, and backends are certified against one conformance table
 
-- **Status:** Accepted (2026-10-13); §8 amended (2026-10-18): Android injects through the shell's
-  `input` and `uinput` commands, not instrumentation; §1 amended (2026-10-19): pointer input held
-  for a commit is recorded where it is dispatched or discarded; §1 amended (2026-11-03): a
-  runtime's taps fan out, each registration with its own gap, lost-row count and `End` row, so an
-  application's recording and a driver's run side by side; §4 amended (2026-10-29): the native
-  recording's schema is `flui-protocol`'s `native_recording`, so a reader such as the driver reads
-  a recording without the core, and its codec is `flui-native`'s `journal`; §7 amended
-  (2026-11-03): a backend focuses a field for the IME rows (`focus_text_store`, no default, so a
-  backend names its input method path, a `docs/gaps.md` entry for one not driven yet, or its absence
-  by design), and decoding a composition step edits that field. §1–§6 are implemented;
-  §4's native codec is in `crates/flui-native/src/journal/`, its goldens in
-  `crates/flui-native/tests/native_recording/`, with the `native-capture` feature to record on a
-  native host. §7 is implemented for pointer assembly, clocks, the scroll grammar, undecodable
-  readings, availability, ownership, DnD, haptics and keys (`flui_testing::backend_conformance`),
-  and for the IME event order on the Linux, Windows, Apple, Android and Web input method paths;
-  winit reports the IME rows as `docs/gaps.md` entry 1. §5's `--keep-text`
-  is the API's `Privacy::KeepText`; the command-line flag arrives with a recording tool. §8 is
-  implemented on Windows: [`cargo xtask device windows-input`](https://github.com/vanyastaff/flui/blob/e8a42673ad23a2e88614940a266cd01224dcb25f/tools/xtask/src/device.rs) injects touch and pen
-  (`InjectSyntheticPointerInput`) and mouse and wheel (`SendInput`) into a real window, records
-  each session and holds it against its golden native recording; the precision touchpad is
-  journaled but certified only by a hardware recording, and the other OSes are pending.
+- **Status:** Accepted (2026-10-13)
 - **Date:** 2026-10-13
 - **Related:** [ADR-0207](ADR-0207-host-input-boundary-and-timeline.md) (the boundary and
   timeline recorded here), [ADR-0143](ADR-0143-flui-owned-input-event-vocabulary.md) (the

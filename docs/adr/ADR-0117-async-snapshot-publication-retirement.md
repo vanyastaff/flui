@@ -1,6 +1,6 @@
 # ADR-0117: Async snapshots publish before retiring generic values
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-10-04)
 - **Date:** 2026-10-04
 - **Superseded-by:** [ADR-0281](ADR-0281-a-destructor-that-panics-during-an-unwind-aborts-as-in-std.md),
   only the sentence retaining a competing wake payload without running its destructor: the

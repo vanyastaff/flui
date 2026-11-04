@@ -1,6 +1,6 @@
 # ADR-0090: IME talks to a pull text-store contract with edits and asynchronous locks
 
-- **Status:** Accepted (2026-09-26) for §1, §2 and §4; §3 and §5 are Proposed
+- **Status:** Accepted (2026-09-26)
 - **Date:** 2026-09-25
 - **Revised:** 2026-10-11 — current Win32 host/observer wiring is distinguished from pending acceptance and the controller-lock interim.
 - **Revised:** 2026-10-30 — the macOS row: edits take an `Async` read-write lock, queries keep `Sync`.
@@ -25,6 +25,8 @@
   panel record in
   [`report-decisions.ru.md`](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/2026-09-25-architecture-review/report-decisions.ru.md) §8;
   roadmap exit B1 (Windows with Narrator and a Japanese IME)
+
+> **Sections not yet accepted:** §3 and §5.
 
 ## Context
 

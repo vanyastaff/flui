@@ -361,14 +361,10 @@ fn route_binding_finalize_during_flush_is_deferred_not_reentrant() {
 /// failing row is named.
 #[test]
 fn history_reentrancy_and_completion_contracts() {
-    let rows: [(&str, fn()); 7] = [
+    let rows: [(&str, fn()); 6] = [
         (
             "route_identity_exhaustion_preserves_history_authority",
             super::route::route_identity_exhaustion_preserves_history_authority,
-        ),
-        (
-            "navigator_command_identity_exhaustion_preserves_target_authority",
-            super::navigator::identity_tests::navigator_command_identity_exhaustion_preserves_target_authority,
         ),
         (
             "terminal_binding_authority_is_closed_before_route_retirement",

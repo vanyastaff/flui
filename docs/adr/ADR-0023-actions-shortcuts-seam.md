@@ -1,6 +1,6 @@
 # ADR-0023: `Shortcuts` / `Actions`, and bubbling key dispatch
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-07-10)
 - **Superseded-by:** ADR-0156 (character-only Shift policy in decision 2);
   ADR-0201 (source composition and ordinary command interpretation in decision 2)
 - **Date:** 2026-07-10

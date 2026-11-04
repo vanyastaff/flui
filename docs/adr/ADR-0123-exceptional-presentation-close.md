@@ -1,6 +1,6 @@
 # ADR-0123: Exceptional presentation close withdraws authority before retaining ownership
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-10-05)
 - **Date:** 2026-10-05
 - **Supersedes:** [ADR-0048](ADR-0048-frame-transaction-boundary.md), in part:
   its remaining-element disposal policy, during a terminal presentation close

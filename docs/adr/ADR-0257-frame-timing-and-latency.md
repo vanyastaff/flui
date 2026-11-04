@@ -1,14 +1,6 @@
 # ADR-0257: A frame request carries the host's vsync and target present time, and frame latency is a typed setting
 
-- **Status:** Accepted (2026-10-26). Web reports the browser's animation-frame timestamp, rebased
-  by its age onto the event clock (not run in a browser on this host: the wasm test needs a
-  matching ChromeDriver). Win32 reports the compositor's last and next refresh from
-  `DwmGetCompositionTimingInfo` (type-checked for `x86_64-pc-windows-msvc`, not run). Every other
-  backend fills the vsync with its own reading of the event clock when the request is admitted,
-  and fills no `target_present`. A platform's row in `docs/platform-parity.md` moves only after a
-  run on that platform shows the rebased stamp is right (Confirmation). Amended (2026-10-28):
-  a frame request also carries the platform's report that earlier frames reached the screen, and
-  §3's idle bound falls back to the refresh grid a recent report places (see the amendment).
+- **Status:** Accepted (2026-10-26)
 - **Date:** 2026-10-26
 - **Supersedes:** [ADR-0236](ADR-0236-display-snapshot-and-refresh-period.md) decision 8 only: the
   frame tick may be the frame's vsync instant, a sampled time. It is still not shifted to the

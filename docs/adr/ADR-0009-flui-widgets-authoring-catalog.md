@@ -1,6 +1,6 @@
 # ADR-0009: flui-widgets is a catalog of configuration objects
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-06-28)
 - **Date:** 2026-06-25
 
 ## Context

@@ -19,9 +19,10 @@ use flui_platform::keyboard::{Code, Key, KeyEvent, KeyState, NamedKey};
 use flui_platform::pointer::PointerButton;
 use flui_testing::a11y::{A11yRect, A11yTree, Action, ActionRequest, Role, TreeId};
 use flui_testing::replay::{MouseScript, PointerScript, TouchScript};
+use flui_testing::widgets::SharedSignal;
 use flui_testing::{AlternativesSubject, GestureAlternativesCheck, assert_gesture_alternatives};
+use flui_view::BoxedView;
 use flui_view::prelude::*;
-use flui_view::{BoxedView, StateHandle};
 use flui_widgets::{
     Actions, Alternative, AlternativeKind, CallbackAction, ColoredBox, CommandAppearance,
     ContextMenuArea, Directionality, DragCommands, Draggable, GestureAlternatives, GestureCommand,
@@ -123,7 +124,7 @@ impl Scene {
 
     /// The scene's view, with the area shown while `shown` is true, and the
     /// log its commands write.
-    fn view(self, shown: &StateHandle<bool>) -> (BoxedView, Log) {
+    fn view(self, shown: &SharedSignal<bool>) -> (BoxedView, Log) {
         let log: Log = Rc::default();
         let navigator = NavigatorHandle::new();
         let (page_log, shown) = (Rc::clone(&log), shown.clone());
@@ -180,13 +181,13 @@ impl Scene {
         Mounted {
             laid,
             log,
-            shown: StateHandle::new(true),
+            shown: SharedSignal::new(true),
         }
     }
 
     /// The scene mounted in a 400 × 300 window, semantics on.
     fn mount(self) -> Mounted {
-        let shown = StateHandle::new(true);
+        let shown = SharedSignal::new(true);
         let (view, log) = self.view(&shown);
         let mut laid = lay_out(view, tight(400.0, 300.0));
         laid.enable_semantics();
@@ -199,7 +200,7 @@ impl Scene {
 struct Mounted {
     laid: LaidOut,
     log: Log,
-    shown: StateHandle<bool>,
+    shown: SharedSignal<bool>,
 }
 
 impl Mounted {
@@ -668,7 +669,7 @@ pub(crate) fn the_menu_labels_contrast_with_its_surface_under_any_text_colour() 
     use flui_painting::typography::TextStyle;
     use flui_widgets::DefaultTextStyle;
 
-    let shown = StateHandle::new(true);
+    let shown = SharedSignal::new(true);
     let (view, log) = Scene::new().view(&shown);
     let mut laid = lay_out(
         DefaultTextStyle::new(TextStyle::default().with_color(Color::WHITE), view),
@@ -909,7 +910,7 @@ pub(crate) fn assistive_technology_reads_a_menu_of_menu_items() {
 
 /// A fresh scene's area as an `assert_gesture_alternatives` subject.
 fn subject(scene: Scene) -> AlternativesSubject<Vec<&'static str>> {
-    let shown = StateHandle::new(true);
+    let shown = SharedSignal::new(true);
     let (view, log) = scene.view(&shown);
     AlternativesSubject::new(view, &Scene::alternatives(), move || log.borrow().clone())
 }
@@ -957,12 +958,12 @@ pub(crate) fn context_menu_area_right_to_left() {
 /// Shows `child` while `shown` is true.
 #[derive(Clone, StatefulView)]
 struct Shown {
-    shown: StateHandle<bool>,
+    shown: SharedSignal<bool>,
     child: BoxedView,
 }
 
 struct ShownState {
-    shown: StateHandle<bool>,
+    shown: SharedSignal<bool>,
 }
 
 impl StatefulView for Shown {
@@ -980,8 +981,8 @@ impl ViewState<Shown> for ShownState {
         self.shown.bind(ctx);
     }
 
-    fn build(&self, view: &Shown, _ctx: &dyn BuildContext) -> impl IntoView {
-        if view.shown.with(|shown| *shown) {
+    fn build(&self, view: &Shown, ctx: &dyn BuildContext) -> impl IntoView {
+        if view.shown.get(ctx) {
             view.child.clone()
         } else {
             SizedBox::shrink().boxed()

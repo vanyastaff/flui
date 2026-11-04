@@ -1,6 +1,6 @@
 # ADR-0124: Controlled numeric and disclosure actions preserve their meaning
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-10-05)
 - **Date:** 2026-10-05
 - **Superseded-by:** [ADR-0203](ADR-0203-semantics-vocabulary.md), in part: the action bit
   assignments (bits 27–29 and the reserved bits 23–25). The meaning of the actions stands.

@@ -1,6 +1,6 @@
 # ADR-0100: Prepared GPU work and retained frame commit
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-10-01)
 - **Date:** 2026-10-01
 - **Supersedes:** ADR-0087 §4 only where it permits rendering into and invalidating
   the previous retained image before a replacement frame is prepared and submitted.

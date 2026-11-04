@@ -1,6 +1,6 @@
 # ADR-0194: Color and group opacity retain normalized precision until rasterization
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-10-11)
 - **Date:** 2026-10-11
 - **Supersedes:** [ADR-0098](ADR-0098-owned-f64-geometry-values.md), the implementation-status deferral of normalized `Color` storage only.
 - **Related:** [ADR-0149](ADR-0149-interpolation-contracts.md), [ADR-0190](ADR-0190-owner-local-render-invalidation.md).

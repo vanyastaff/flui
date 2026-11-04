@@ -1,6 +1,6 @@
 # ADR-0171: UI runtime and host vocabulary
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-10-07)
 - **Date:** 2026-10-07
 - **Supersedes:** ADR-0027's `UiRealm`/`RealmId` terminology; its ownership,
   threading, presentation and shutdown decisions remain in force.

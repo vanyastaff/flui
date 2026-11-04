@@ -1,6 +1,6 @@
 # ADR-0230: Grouped backdrop filters share one capture per surface
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-10-17)
 - **Date:** 2026-10-17
 - **Related:** ADR-0115 (image source regions)
 

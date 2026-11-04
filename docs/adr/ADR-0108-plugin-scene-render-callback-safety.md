@@ -1,6 +1,6 @@
 # ADR-0108: Plugin scenes declare lifetime and font identity boundaries
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-10-03)
 - **Date:** 2026-10-03
 - **Supersedes:** ADR-0094's implemented scene callback safety claim; its driver
   topology and proposed Subsecond integration remain unchanged.

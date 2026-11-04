@@ -1,6 +1,6 @@
 # ADR-0078: Rules live in types and lints; `LifecycleContext` carries the capabilities
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-09-23)
 - **Date:** 2026-09-23
 - **Superseded-by:** [ADR-0152](ADR-0152-capability-seam-revised.md) for the last sentence of §1
   only: a platform capability is reached through the seam, not as a method on `LifecycleContext`.

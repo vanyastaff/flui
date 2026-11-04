@@ -1,6 +1,6 @@
 # ADR-0199: Presentation sampling preserves provenance and independent progress
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-10-12)
 - **Date:** 2026-10-11
 - **Supersedes:** [ADR-0048](ADR-0048-frame-transaction-boundary.md), in part:
   its exclusion of animation and gesture-deadline sampling before the segment;

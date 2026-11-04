@@ -1,7 +1,6 @@
 # ADR-0045: The raster lane — threaded raster ownership, shared GPU services, and what paces production once present stops blocking the produce loop
 
-- **Status:** Proposed — accepted when surface acquisition and present run on the raster thread and
-  a CI frame-pacing budget stays within budget.
+- **Status:** Superseded (2026-11-03)
 - **Date:** 2026-08-07
 - **Amended by:** ADR-0058 (decision 3), ADR-0063 (decision 1, §7)
 - **Superseded-by:** [ADR-0254](ADR-0254-window-contract.md), in part: decision 5's relay as a new

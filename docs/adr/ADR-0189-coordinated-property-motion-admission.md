@@ -1,6 +1,6 @@
 # ADR-0189: Property motion is admitted as a coordinated update
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-10-11)
 - **Date:** 2026-10-09
 - **Related:** [ADR-0176](ADR-0176-presentation-animation-playback.md),
   [ADR-0178](ADR-0178-notification-first-failure-custody.md),

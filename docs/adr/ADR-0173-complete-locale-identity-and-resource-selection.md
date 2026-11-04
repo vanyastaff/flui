@@ -1,6 +1,6 @@
 # ADR-0173: Complete locale identity and resource selection
 
-- **Status:** Accepted (2026-10-08). Not run: an OS-generated language change ([`docs/platform-parity.md`, System preferences](../platform-parity.md#system-preferences))
+- **Status:** Accepted (2026-10-08)
 - **Date:** 2026-10-08
 - **Related:** [ADR-0172](ADR-0172-host-owned-system-preferences.md).
 

@@ -1,6 +1,6 @@
 # ADR-0053: One element-owned lazy child lifecycle for every multi-box sliver
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-09-03)
 - **Date:** 2026-09-03
 - **Amended by:** [ADR-0056](ADR-0056-keep-alive-is-an-element-side-lease.md) (a keep-alive-held child is exempt from band eviction and parks in place)
 - **Related:** [ADR-0003](ADR-0003-virtualization-core-and-reentrant-build.md) (+ amendment), [ADR-0017](ADR-0017-build-during-layout-callback-seam.md) (+ amendment), [ADR-0051](ADR-0051-anchor-stationary-scroll-correction.md), [ADR-0052](ADR-0052-lazy-sliver-child-identity-and-recovery.md); issue #530

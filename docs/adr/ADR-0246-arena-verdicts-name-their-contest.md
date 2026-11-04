@@ -1,6 +1,6 @@
 # ADR-0246: Arena verdicts name their contest
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-10-19)
 - **Date:** 2026-10-17
 - **Related:** [ADR-0161](ADR-0161-immutable-owner-local-gesture-recognizers.md),
   [ADR-0208](ADR-0208-gesture-ownership-table-and-composition.md)

@@ -21,7 +21,7 @@ consumed by path (not published to crates.io).
 ## Surfaces
 
 ```text
-platform.rs      Platform, AppHandler, PlatformExecutor, and HostPlatform<H>, its one
+platform.rs      Platform, AppHandler, and HostPlatform<H>, its one
                  implementation
 host_window.rs   HostWindow: a PlatformWindow plus its accessibility bridge
 host.rs, hosts/  a host's table of positions, one table per host
@@ -37,7 +37,7 @@ haptics/, preferences/, lifecycle/
                  a feature each: its model beside one file per platform
                  (windows, apple, android, web, linux, headless)
 storage/         where an application keeps its data
-executor.rs      BackgroundExecutor (tokio pool)
+executor.rs      BackgroundExecutor (tokio pool for the hosts' own marshaling)
 error.rs         PlatformError, BootstrapError
 ```
 
@@ -54,7 +54,7 @@ Activity `android_main` is handed, through `android_platform(app)`.
   wrapped in `PlatformInput`. Named-key spellings and pointer fields map the
   applicable W3C vocabularies; native adapters keep their platform contracts
   (ADR-0143), with execution evidence distinct from type compatibility.
-- **Executor** — `BackgroundExecutor` runs thread-safe work on a multi-threaded
+- **Executor** — `BackgroundExecutor` runs the hosts' own thread-safe work on a multi-threaded
   tokio runtime. UI-owner commands stay private to each backend's bounded,
   wake-integrated control path.
 - **Displays** — monitor enumeration, DPI/scale factors, device↔logical pixel

@@ -1,6 +1,6 @@
 # ADR-0062: The paint queue is the cross-pass record; node flags are intra-pass
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-09-07)
 - **Date:** 2026-09-07
 
 *A frame that fails partway keeps its queue and loses its flags. So anything a

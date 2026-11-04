@@ -1,6 +1,6 @@
 # ADR-0018: Async builder seam — a `'static` rebuild handle, a frame-driven driver, keyed identity
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-07-09)
 - **Date:** 2026-07-09
 - **Amended:** 2026-10-11 — complete owner-turn execution follows ADR-0182; weak owner-local task ownership remains ADR-0136 §2.
 - **Superseded in part by:** ADR-0078 (capability acquisition)

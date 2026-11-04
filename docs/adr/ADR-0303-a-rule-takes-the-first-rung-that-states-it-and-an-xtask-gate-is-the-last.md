@@ -1,7 +1,6 @@
 # ADR-0303: A rule takes the first rung that states it, and an xtask gate is the last
 
-- **Status:** Accepted (2026-11-03). §§1–3 and §5 apply to each new command, rule and
-  exception; §4, §6, §7 and §8 are implemented, and the other gates move as Migration lists.
+- **Status:** Accepted (2026-11-03)
 - **Date:** 2026-11-03
 - **Supersedes in part:** [ADR-0078](ADR-0078-rules-live-in-types-and-lints.md) §4, the last
   clause of condition 3: a gate's self-test runs in `cargo test -p xtask`, not in

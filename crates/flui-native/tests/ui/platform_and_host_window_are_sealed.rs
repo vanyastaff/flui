@@ -12,8 +12,7 @@ use flui_foundation::geometry::Size;
 use flui_native::storage::DataStore;
 use flui_native::{
     AppHandler, HostWindow, NativeClipboard, OpenWindowError, PathPromptOptions, Platform,
-    PlatformError,
-    PlatformExecutor, Task,
+    PlatformError, Task,
 };
 use flui_platform::data_transfer::DataTransferSource;
 use flui_platform::{
@@ -27,10 +26,6 @@ use flui_semantics::platform::PlatformAccessibility;
 struct OutsidePlatform;
 
 impl Platform for OutsidePlatform {
-    fn background_executor(&self) -> Arc<dyn PlatformExecutor> {
-        unreachable!("the impl never compiles")
-    }
-
     fn run(self: Box<Self>, _: Rc<dyn AppHandler>) -> Result<(), PlatformError> {
         Ok(())
     }

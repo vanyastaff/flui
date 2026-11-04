@@ -1,8 +1,6 @@
 # ADR-0082: `flui-platform` is the contract crate; OS backends stay in `flui-native`
 
-- **Status:** Accepted (2026-09-26) for §1, §2, §3 and §5's retirement of `PlatformEmbedder`,
-  `BasicVelocityTracker`, `TimestampProvider` and `SystemTimestamp`; §4 and the rest of §5 are
-  Proposed
+- **Status:** Accepted (2026-09-26)
 - **Date:** 2026-09-25
 - **Superseded-by:** [ADR-0151](ADR-0151-platform-layer-boundary-and-names.md) for §1 (what the
   contract crate holds), §2 (the crates' names and what the core host keeps) and §5's Linux row
@@ -33,6 +31,8 @@
 - **Refs:** decision D1 of the
   [architecture review](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/2026-09-25-architecture-review/report-architecture.ru.md);
   index in [`design/decisions.md`](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/design/decisions.md)
+
+> **Sections not yet accepted:** §4 and the part of §5 other than the retirement of `PlatformEmbedder`, `BasicVelocityTracker`, `TimestampProvider` and `SystemTimestamp`.
 
 ## Context
 
@@ -207,8 +207,8 @@ ADR-0081 land.
 
 Every callback registered through `Platform` or `PlatformWindow` is delivered on the owner
 thread, so the contract states that and drops the bound: `Box<dyn FnMut(..)>` instead of
-`Box<dyn FnMut(..) + Send>`. `PlatformExecutor::spawn` (`platform.rs:419`) keeps `Send`: it
-really crosses threads. The traits themselves stayed `Send + Sync` here; ADR-0254 §5 later
+`Box<dyn FnMut(..) + Send>`. The traits themselves stayed `Send + Sync` here;
+ADR-0254 §5 later
 made the window owner-local, and what reaches the raster thread is the `Send + Sync` surface
 target it hands out (ADR-0063).
 

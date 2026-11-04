@@ -1,7 +1,6 @@
 # ADR-0083: One frame transaction lives in `flui-runtime` above `flui-widgets`
 
-- **Status:** Accepted (2026-11-03) for §1, §3, §4 and §5; §2 is Proposed. Not implemented:
-  [`docs/gaps.md` entry 43, ADR-0083 §3 and §4](../gaps.md#43-accepted-adr-sections-not-built-yet)
+- **Status:** Accepted (2026-11-03)
 - **Superseded-by:** [ADR-0182](ADR-0182-complete-owner-execution.md) for scheduler execution
   authority and the raw background sequence only. The runtime now submits preparation and
   pipeline through complete owner operations.
@@ -33,6 +32,8 @@
   [architecture review](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/2026-09-25-architecture-review/report-architecture.ru.md);
   index in [`design/decisions.md`](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/design/decisions.md)
 
+> **Sections not yet accepted:** §2.
+
 ## Context
 
 A frame is produced by two different implementations.
@@ -63,8 +64,7 @@ effects "never ran in the product", because `run_effects` was called only from
 
 The runtime cannot move below `flui-widgets`. The UI runtime's composition names widget types:
 `use flui_widgets::{FocusRoot, GestureArenaScope, VsyncScope};`
-(`crates/flui-app/src/app/ui_runtime/attach.rs:6`), `use flui_widgets::NavigatorCommand;`
-(`ui_runtime/commands.rs:8`), `use flui_widgets::{MediaQuery, MediaQueryData};`
+(`crates/flui-app/src/app/ui_runtime/attach.rs:6`), `use flui_widgets::{MediaQuery, MediaQueryData};`
 (`crates/flui-app/src/app/media_query_root.rs:9`); 22 files in `crates/flui-app/src` import
 `flui_widgets`.
 
@@ -281,10 +281,9 @@ the platform backend and the raster owner remain the three owners of ADR-0037 §
 
 ## Alternatives considered
 
-- **`flui-runtime` below `flui-widgets`.** The UI runtime's composition installs widget scopes and
-  routes `NavigatorCommand`; placing the runtime lower requires moving those first, or replacing
-  them with trait objects for no second implementation. `NavigatorCommand` later becomes a
-  design-neutral navigation intent (ADR-0093), which does not require the runtime to move.
+- **`flui-runtime` below `flui-widgets`.** The UI runtime's composition installs widget scopes;
+  placing the runtime lower requires moving those first, or replacing them with trait objects
+  for no second implementation.
 - **The runtime inside `flui-view`.** It would pull scheduling, presentations and the command
   vocabulary into the spine that every widget recompiles against, and still could not name
   widget scopes.

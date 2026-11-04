@@ -5,7 +5,7 @@
 //! module enforces by refusing a `+atomics` build.
 
 // This module is one of the workspace's sanctioned `unsafe` islands: the page
-// has one thread, so the loop and its executor claim `Send`/`Sync` by hand. The
+// has one thread, so the loop claims `Send`/`Sync` by hand. The
 // workspace lint `unsafe_code = "warn"` is opted out here, at the module
 // boundary, rather than for the whole crate (see `lib.rs`).
 #![expect(unsafe_code)]
@@ -20,7 +20,6 @@ compile_error!(
 );
 
 pub(crate) mod event;
-mod executor;
 mod launch;
 pub(crate) mod listener;
 
@@ -39,7 +38,7 @@ use crate::owner::app_delivery::AppDelivery;
 use crate::{
     error::PlatformError, owner::DirectOwnerHooks, owner::OwnerHooks, owner::OwnerPlatform,
     owner::signal::OwnerSignal, owner::window_delivery::WindowDelivery, platform::AppHandler,
-    platform::Platform, platform::PlatformExecutor,
+    platform::Platform,
 };
 use flui_platform::data_transfer::DataTransferSource;
 use flui_platform::drag::PlatformDragSource;
@@ -47,7 +46,6 @@ use flui_platform::{DisplayId, DisplaySnapshot, SystemPreferences, WindowId, Win
 
 use crate::owner::sources::SystemPreferenceSource;
 use crate::owner::watch::Watch;
-use executor::WebExecutor;
 
 /// What the web host's table names for its owner thread (ADR-0151 §10): the
 /// displays, the preference source, the page's lifecycle, the clipboard, the
@@ -486,7 +484,6 @@ pub struct WebLoop {
 }
 
 pub(crate) struct WebState {
-    background_executor: Arc<WebExecutor>,
     pub(crate) clipboard: Arc<dyn crate::host::SharedClipboard>,
     is_running: bool,
     /// The page's open window: its id and the callbacks the RAF loop
@@ -514,7 +511,7 @@ unsafe impl Send for WebLoop {}
 unsafe impl Sync for WebLoop {}
 
 impl std::fmt::Debug for WebLoop {
-    // Hand-written: the state holds JS-backed handles (executors, clipboard,
+    // Hand-written: the state holds JS-backed handles (clipboard,
     // callbacks) that carry no meaningful Debug representation.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("WebLoop").finish_non_exhaustive()
@@ -529,7 +526,6 @@ impl WebLoop {
         let launch = launch::take()?;
 
         let state = WebState {
-            background_executor: Arc::new(WebExecutor::new()),
             clipboard: H::clipboard(),
             is_running: false,
             window: None,
@@ -819,10 +815,6 @@ impl host::Loop for WebLoop {
 impl host::Services for WebLoop {
     fn launch_value(&self, key: flui_platform::LaunchKey) -> Option<String> {
         self.launch.value(key)
-    }
-
-    fn background_executor(&self) -> Arc<dyn PlatformExecutor> {
-        self.with_state(|s| s.background_executor.clone())
     }
 
     fn app_path(&self) -> Result<std::path::PathBuf, PlatformError> {

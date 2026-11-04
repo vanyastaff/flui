@@ -20,8 +20,8 @@ use flui_platform::EventTime;
 use flui_platform::keyboard::{Code, KeyEvent, KeyState, NamedKey};
 use flui_testing::a11y::{A11yTree, Action, ActionData, ActionRequest, NodeId, TreeId};
 use flui_testing::replay::{MouseScript, PointerScript};
+use flui_testing::widgets::SharedSignal;
 use flui_testing::{AlternativesSubject, GestureAlternativesCheck, assert_gesture_alternatives};
-use flui_view::StateHandle;
 use flui_view::element::ElementKind;
 use flui_view::prelude::*;
 use flui_widgets::{
@@ -52,10 +52,10 @@ fn tile_at(index: usize, stride: usize, dy: f64) -> (f64, f64) {
 /// and reading direction.
 #[derive(Clone)]
 struct Board {
-    items: StateHandle<Vec<String>>,
-    width: StateHandle<f64>,
-    horizontal: StateHandle<bool>,
-    rtl: StateHandle<bool>,
+    items: SharedSignal<Vec<String>>,
+    width: SharedSignal<f64>,
+    horizontal: SharedSignal<bool>,
+    rtl: SharedSignal<bool>,
     moves: Rc<RefCell<Vec<(usize, usize, ReorderCause)>>>,
 }
 
@@ -71,21 +71,21 @@ impl Board {
 
     fn new(names: &[impl AsRef<str>]) -> Self {
         Self {
-            items: StateHandle::new(
+            items: SharedSignal::new(
                 names
                     .iter()
                     .map(|name| name.as_ref().to_owned())
                     .collect::<Vec<String>>(),
             ),
-            width: StateHandle::new(400.0),
-            horizontal: StateHandle::new(false),
-            rtl: StateHandle::new(false),
+            width: SharedSignal::new(400.0),
+            horizontal: SharedSignal::new(false),
+            rtl: SharedSignal::new(false),
             moves: Rc::default(),
         }
     }
 
     fn items(&self) -> Vec<String> {
-        self.items.with(Clone::clone)
+        self.items.value()
     }
 
     fn moves(&self) -> Vec<(usize, usize, ReorderCause)> {
@@ -113,7 +113,7 @@ impl View for Desk {
 
 struct DeskState {
     navigator: NavigatorHandle,
-    rtl: StateHandle<bool>,
+    rtl: SharedSignal<bool>,
 }
 
 impl StatefulView for Desk {
@@ -137,8 +137,8 @@ impl ViewState<Desk> for DeskState {
         self.rtl.bind(ctx);
     }
 
-    fn build(&self, _view: &Desk, _ctx: &dyn BuildContext) -> impl IntoView {
-        let direction = if self.rtl.with(|rtl| *rtl) {
+    fn build(&self, _view: &Desk, ctx: &dyn BuildContext) -> impl IntoView {
+        let direction = if self.rtl.get(ctx) {
             TextDirection::Rtl
         } else {
             TextDirection::Ltr
@@ -158,9 +158,9 @@ impl View for BoardGrid {
 }
 
 struct BoardGridState {
-    items: StateHandle<Vec<String>>,
-    width: StateHandle<f64>,
-    horizontal: StateHandle<bool>,
+    items: SharedSignal<Vec<String>>,
+    width: SharedSignal<f64>,
+    horizontal: SharedSignal<bool>,
 }
 
 impl StatefulView for BoardGrid {
@@ -182,37 +182,36 @@ impl ViewState<BoardGrid> for BoardGridState {
         self.horizontal.bind(ctx);
     }
 
-    fn build(&self, view: &BoardGrid, _ctx: &dyn BuildContext) -> impl IntoView {
-        let count = self.items.with(Vec::len);
-        let (keys, tiles, labels, model) = (
-            self.items.clone(),
-            self.items.clone(),
-            self.items.clone(),
-            self.items.clone(),
-        );
+    fn build(&self, view: &BoardGrid, ctx: &dyn BuildContext) -> impl IntoView {
+        let items = Rc::new(self.items.get(ctx));
+        let count = items.len();
+        let (keys, tiles, labels) = (Rc::clone(&items), Rc::clone(&items), items);
+        let model = self.items.clone();
         let moved = Rc::clone(&view.0.moves);
         let grid = ReorderableGrid::builder(
             SliverGridDelegateWithMaxCrossAxisExtent::new(TILE),
             count,
-            move |index| keys.with(|items| items[index].clone()),
-            move |tile| Text::new(tiles.with(|items| items[tile.index()].clone())),
-            move |_cx, change| {
+            move |index| keys[index].clone(),
+            move |tile| Text::new(tiles[tile.index()].clone()),
+            move |cx, change| {
                 moved
                     .borrow_mut()
                     .push((change.from, change.to, change.cause));
-                model.update(|items| {
-                    let item = items.remove(change.from);
-                    items.insert(change.to, item);
-                });
+                model
+                    .update_in(cx, |items| {
+                        let item = items.remove(change.from);
+                        items.insert(change.to, item);
+                    })
+                    .expect("the board's signal is alive while its grid is mounted");
             },
         )
-        .item_label(move |index| labels.with(|items| items[index].clone()))
-        .scroll_direction(if self.horizontal.with(|horizontal| *horizontal) {
+        .item_label(move |index| labels[index].clone())
+        .scroll_direction(if self.horizontal.get(ctx) {
             Axis::Horizontal
         } else {
             Axis::Vertical
         });
-        let width = self.width.with(|width| *width);
+        let width = self.width.get(ctx);
         Align::new(Alignment::TOP_LEFT).child(SizedBox::new(width, 300.0).child(grid))
     }
 }
@@ -561,9 +560,7 @@ pub(crate) fn reorderable_grid() {
             // 0 1 2 3 / 4 5: every move is offered by some tile.
             let board = Board::new(&["a", "b", "c", "d", "e", "f"]);
             let items = board.items.clone();
-            AlternativesSubject::new(Desk(board), &tile_alternatives(), move || {
-                items.with(Clone::clone)
-            })
+            AlternativesSubject::new(Desk(board), &tile_alternatives(), move || items.value())
         },
     ));
 }

@@ -1,6 +1,6 @@
 # ADR-0185: Host delivery preserves runtime and presentation ownership
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-10-11)
 - **Date:** 2026-10-11
 - **Related:** [ADR-0027](ADR-0027-owner-affine-ui-realms.md), [ADR-0039](ADR-0039-event-loop-affinity-capability.md), [ADR-0175](ADR-0175-owner-local-scheduling-and-animation.md), [ADR-0182](ADR-0182-complete-owner-execution.md).
 

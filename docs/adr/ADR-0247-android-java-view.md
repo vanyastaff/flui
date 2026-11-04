@@ -1,8 +1,6 @@
 # ADR-0247: Android's Java side is a `flui-native` view loaded from the native library
 
-- **Status:** Accepted (2026-10-17). Implemented: the shim, its loader, the input method host,
-  the drop target, the drag source, the content receiver and the handwriting request; run on a
-  Galaxy S21 (Android 15) through [`cargo xtask device android-input`](https://github.com/vanyastaff/flui/blob/e8a42673ad23a2e88614940a266cd01224dcb25f/tools/xtask/src/device.rs).
+- **Status:** Implemented (2026-10-17)
 - **Date:** 2026-10-17
 - **Amended:** 2026-10-31: item 4 lays the view over the whole window as the decor view's first
   child, not over the content frame with `addContentView`, which sits below the status bar on a

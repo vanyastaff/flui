@@ -26,8 +26,8 @@ use parking_lot::Mutex;
 // Exercise the public prelude import path.
 use flui_widgets::prelude::*;
 use flui_widgets::{
-    NamedRouteError, NavigatorCommand, NavigatorCommandTarget, NavigatorObserver, NavigatorRoute,
-    Route, RouteContentBuilder, RouteId, RouteKey, RouteRequest, RouteSettings,
+    NamedRouteError, NavigatorObserver, NavigatorRoute, Route, RouteContentBuilder, RouteId,
+    RouteKey, RouteRequest, RouteSettings,
 };
 
 /// A prefix parser failure in the public default producer destroys the routes
@@ -726,17 +726,10 @@ impl NavigatorRoute for DeferredExitRoute {
 ///
 /// # Reaching it, given `pop_with`'s `Send` bound
 ///
-/// The payload cannot simply capture a `NavigatorHandle` — `pop_with<T: Send>`
-/// forbids it, since the handle is deliberately `!Send`. It can hold a
-/// [`NavigatorCommandTarget`], which **is** `Send + Sync` and is this crate's
-/// documented cross-thread route to a navigator; `apply_on_owner()` resolves the
-/// handle from owner-thread storage and takes the history lock.
-///
-/// **The detour is what makes this legitimate.** Had the reproduction needed a
-/// type the public API forbids, it would have been a contrivance and the defect
-/// arguably unreachable. Instead the deadlock is reachable through a *supported
-/// API on a drop path* — which is exactly the shape a real caller hits, and the
-/// reason the fix is not defensive.
+/// The payload cannot capture a `NavigatorHandle` — `pop_with<T: Send>` forbids
+/// it, since the handle is deliberately `!Send`. Its `Drop` reaches the navigator
+/// through an owner-thread `thread_local`, as a payload that finds the navigator
+/// through ambient owner state would.
 ///
 /// # Expected failure shape
 ///
@@ -752,17 +745,22 @@ impl NavigatorRoute for DeferredExitRoute {
 /// Red-check: emit the `tracing::error!` and drop the box inside
 /// `RouteRecord::did_complete` again, and this deadlocks the owner thread.
 pub(crate) fn a_mismatched_pop_result_is_reported_and_dropped_outside_the_history_lock() {
-    /// A payload whose `Drop` commands the navigator — a supported API, on the
-    /// drop path, from a `Send` value.
+    thread_local! {
+        static OWNER_NAVIGATOR: RefCell<Option<NavigatorHandle>> = const { RefCell::new(None) };
+    }
+
+    /// A payload whose `Drop` drives the navigator from the owner thread.
     struct CommandsNavigatorOnDrop {
-        target: NavigatorCommandTarget,
         drops: Arc<AtomicUsize>,
     }
 
     impl Drop for CommandsNavigatorOnDrop {
         fn drop(&mut self) {
             // Takes the history lock. Deadlocks if this drop happens under it.
-            let _ = NavigatorCommand::maybe_pop(self.target).apply_on_owner();
+            let navigator = OWNER_NAVIGATOR.with(|cell| cell.borrow().clone());
+            if let Some(navigator) = navigator {
+                let _ = navigator.maybe_pop();
+            }
             self.drops.fetch_add(1, Ordering::Relaxed);
         }
     }
@@ -771,6 +769,7 @@ pub(crate) fn a_mismatched_pop_result_is_reported_and_dropped_outside_the_histor
     let drops = Arc::new(AtomicUsize::new(0));
     let handle = NavigatorHandle::new();
     handle.seed_initial(page(&built, "/"));
+    OWNER_NAVIGATOR.with(|cell| *cell.borrow_mut() = Some(handle.clone()));
     let mut laid = lay_out(Navigator::new(handle.clone()), loose(400.0));
 
     // `page` is a `SimpleRoute<i32>`, so this payload is the wrong type for it and
@@ -780,7 +779,6 @@ pub(crate) fn a_mismatched_pop_result_is_reported_and_dropped_outside_the_histor
 
     let ((), log) = flui_testing::log_capture::capture(|| {
         assert!(handle.pop_with(CommandsNavigatorOnDrop {
-            target: handle.command_target(),
             drops: Arc::clone(&drops),
         }));
         // Reached only if the drop did not deadlock.

@@ -22,6 +22,7 @@ use std::time::Duration;
 use flui_painting::styling::Color;
 use flui_rendering::pipeline::PipelineOwner;
 use flui_rendering::view::ScrollPosition;
+use flui_testing::widgets::SharedSignal;
 use flui_testing::{FrameReport, HeadlessBinding, MountOptions, MountOwners};
 use flui_widgets::prelude::*;
 use flui_widgets::{
@@ -42,11 +43,11 @@ const LABEL_HEIGHT: f64 = 20.0;
 /// text below it.
 #[derive(Clone, StatefulView)]
 struct Label {
-    text: StateHandle<String>,
+    text: SharedSignal<String>,
 }
 
 struct LabelState {
-    text: StateHandle<String>,
+    text: SharedSignal<String>,
 }
 
 impl StatefulView for Label {
@@ -62,8 +63,8 @@ impl ViewState<Label> for LabelState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.text.bind(ctx);
     }
-    fn build(&self, _view: &Label, _ctx: &dyn BuildContext) -> impl IntoView {
-        Text::new(self.text.with(Clone::clone))
+    fn build(&self, _view: &Label, ctx: &dyn BuildContext) -> impl IntoView {
+        Text::new(self.text.get(ctx))
     }
 }
 
@@ -71,7 +72,7 @@ impl ViewState<Label> for LabelState {
 /// scrolled by a shared position.
 #[derive(Clone, StatelessView)]
 struct PerfApp {
-    label: StateHandle<String>,
+    label: SharedSignal<String>,
     position: ScrollPosition,
 }
 
@@ -122,7 +123,7 @@ impl Mounted {
 
 /// Mounts [`PerfApp`] at 800×600 with semantics on.
 fn mount() -> Mounted {
-    let label = StateHandle::new(String::from("label"));
+    let label = SharedSignal::new(String::from("label"));
     let position = ScrollPosition::new(0.0);
     let app = PerfApp {
         label,

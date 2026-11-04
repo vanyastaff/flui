@@ -1,6 +1,6 @@
 # ADR-0245: A view handed back unchanged is not built again
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-10-19)
 - **Date:** 2026-10-18
 - **Related:** [ADR-0041](ADR-0041-workspace-topology-contract.md),
   [ADR-0074](ADR-0074-realm-scoped-signals.md),

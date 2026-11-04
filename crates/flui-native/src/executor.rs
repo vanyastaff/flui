@@ -11,13 +11,13 @@ use std::{
 
 use tokio::runtime::Runtime;
 
-use crate::{platform::PlatformExecutor, task::Task};
+use crate::task::Task;
 
 /// Worker threads in the lazily-started runtime. Deliberately small: since
 /// the unified execution services (issue #557) the loop-scoped `AppRuntime`
 /// owns the process's real worker pools, and this executor remains only as
-/// the `Platform::background_executor` compatibility surface (slated for
-/// removal) for platform-internal marshaling and tests. It must never again
+/// the Linux and Windows hosts' platform-internal marshaling (D-Bus IO, dialogs)
+/// and tests. It must never again
 /// claim a full-core pool per platform instance.
 const WORKER_THREADS: usize = 2;
 
@@ -128,14 +128,6 @@ impl BackgroundExecutor {
 impl std::fmt::Debug for BackgroundExecutor {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("BackgroundExecutor").finish_non_exhaustive()
-    }
-}
-
-impl PlatformExecutor for BackgroundExecutor {
-    fn spawn(&self, task: Box<dyn FnOnce() + Send>) {
-        self.runtime().spawn(async move {
-            task();
-        });
     }
 }
 

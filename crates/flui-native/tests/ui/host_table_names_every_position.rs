@@ -7,7 +7,7 @@ use std::rc::Rc;
 
 use flui_native::host::{Absent, Host, Loop, Services, position};
 use flui_native::{
-    AppHandler, PathPromptOptions, Platform, PlatformError, PlatformExecutor, Task,
+    AppHandler, PathPromptOptions, Platform, PlatformError, Task,
 };
 use flui_platform::LaunchKey;
 
@@ -28,10 +28,6 @@ impl Loop for Idle {
 }
 
 impl Services for Idle {
-    fn background_executor(&self) -> Arc<dyn PlatformExecutor> {
-        unreachable!("the table never compiles")
-    }
-
     fn app_path(&self) -> Result<PathBuf, PlatformError> {
         Ok(PathBuf::new())
     }

@@ -1,6 +1,6 @@
 # ADR-0219: Observers are the required registration method
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-10-13)
 - **Date:** 2026-10-13
 - **Supersedes:** [ADR-0178](ADR-0178-notification-first-failure-custody.md), the default relay
   adapter only; [ADR-0193](ADR-0193-directional-phase-names.md), the `Animation` phase helpers

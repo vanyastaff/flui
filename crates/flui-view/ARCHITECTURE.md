@@ -51,30 +51,17 @@ Mounted widget cases `reparenting_an_unscoped_hero_adopts_its_first_route` and
 `reparenting_refreshes_a_build_time_miss_but_prunes_an_unread_one` verify first-scope
 adoption, preserved state, new child geometry and removal of an unread dependency.
 
-### Local-state and element-depth authority
+### Element-depth authority
 
-`StateCell` and `StateHandle` keep their state and rebuild trigger owner-local;
-neither implements `Send` or `Sync`. `ElementDepth` can be minted only by this
-crate, while element implementations receive the opaque depth when the tree
-stamps it. `trybuild_ui::ui_tests` pins E0277 for both local-state types' thread
-bounds, E0624 for depth minting and E0308 for raw-integer stamping, alongside
-valid local-state constructors and an opaque-depth forwarding caller.
+`ElementDepth` can be minted only by this crate, while element implementations
+receive the opaque depth when the tree stamps it. `trybuild_ui::ui_tests` pins
+E0624 for depth minting and E0308 for raw-integer stamping, alongside an
+opaque-depth forwarding caller.
 
-Binding local state acquires its rebuild handle and writer source together.
-Every bound mutation checks the presentation's write admission before changing
-the value or invoking an update closure. A refused build write reports the
-existing owner-context error and creates no rebuild debt. The binding is
-snapshotted before checking or scheduling, so neither a frame hook nor a
-diagnostic executes while its slot is borrowed. Unbound construction remains
-mutable. `bound_local_state_refuses_build_mutation_then_recovers` pins refusal,
-unchanged values and a later admitted rebuild through a mounted widget.
-
-An admitted StateHandle update can mutate its value before panicking. The
-borrow is released before scheduling that committed value, and the shared
-PanicRecovery preserves the update failure over a competing frame-hook failure.
-`a_panicking_local_update_rebuilds_its_committed_value` pins the next frame and
-the next healthy mutation. As with other containment seams, an opaque updater
-whose captures double-panic during its own unwind can abort before recovery.
+Element-local state is a `Signal<T>` created with `ctx.signal(value)` in
+`init_state`; "Writes open through a WriterSource" and "Signal mutation is
+commit-on-unwind, not transactional" state its write admission and panic
+containment.
 
 ### Clean widget frames report no builds
 

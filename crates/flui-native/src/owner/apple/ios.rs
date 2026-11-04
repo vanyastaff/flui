@@ -38,12 +38,10 @@
 //! while the scene is suspended or detached. Process owner signals remain
 //! independent; no OS background execution entitlement is implied.
 
-mod executor;
 mod scene;
 mod scene_error;
 
 pub(crate) use super::NativeOwner;
-pub use executor::IOSExecutor;
 pub use scene::{IOSSceneAttachmentId, IOSSceneSessionId};
 pub(crate) use scene::{SceneConsumer, SceneInstallation};
 
@@ -78,7 +76,7 @@ use crate::owner::panic_boundary::{AfterPanic, os_entry};
 use crate::owner::sources::SystemPreferenceSource;
 use crate::{
     owner::DirectOwnerHooks, owner::OwnerHooks, owner::OwnerPlatform, platform::AppHandler,
-    platform::Platform, platform::PlatformExecutor,
+    platform::Platform,
 };
 use flui_platform::{SessionEndAnswer, SessionEndPhase, SystemPreferences, WindowId};
 
@@ -451,7 +449,6 @@ pub struct IOSLoop {
     signal: Arc<OwnerSignal>,
     identity: Arc<()>,
     deadline: Mutex<Option<(Arc<()>, web_time::Instant)>>,
-    background_executor: Arc<IOSExecutor>,
     /// The screens, as the table made them; shared with every window.
     pub(crate) displays: Arc<dyn HostDisplays>,
     /// Marks `displays` stale and wakes the owner on screen and scene
@@ -540,7 +537,6 @@ impl IOSLoop {
             signal,
             identity,
             deadline: Mutex::new(None),
-            background_executor: Arc::new(IOSExecutor),
             displays,
             _screen_observer: NativeOwner::new(screen_observer, marker),
             notices: H::notices(&app),
@@ -801,10 +797,6 @@ impl host::Loop for IOSLoop {
 impl host::Services for IOSLoop {
     fn launch_value(&self, key: flui_platform::LaunchKey) -> Option<String> {
         host::environment_launch_value(key)
-    }
-
-    fn background_executor(&self) -> Arc<dyn PlatformExecutor> {
-        self.background_executor.clone()
     }
 
     fn app_path(&self) -> Result<PathBuf, PlatformError> {

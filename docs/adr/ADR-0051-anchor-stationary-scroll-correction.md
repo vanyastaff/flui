@@ -1,6 +1,6 @@
 # ADR-0051: Anchor-stationary scroll correction for lazy slivers
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-09-03)
 - **Date:** 2026-09-03
 - **Amends:** [ADR-0003](ADR-0003-virtualization-core-and-reentrant-build.md) (its consumer note on backward suppression is retired)
 - **Related:** [ADR-0017](ADR-0017-build-during-layout-callback-seam.md) (the in-frame fixpoint that services lazy requests); issue #530

@@ -1,6 +1,6 @@
 # ADR-0049: Task, worker, and service lifecycles
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-08-18)
 - **Date:** 2026-08-18
 - **Related:** [ADR-0047](ADR-0047-unified-execution-services.md) (the execution lanes these lifecycles run on); [ADR-0027](ADR-0027-owner-affine-ui-realms.md) (concurrency topology is a sanctioned leapfrog zone — Flutter is not the reference); [Runtime Architecture Execution Plan](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/2026-08-01-runtime-architecture-execution-plan.md) ("Define durable service lifecycle and graceful application shutdown")
 - **Issue:** [#558](https://github.com/vanyastaff/flui/issues/558) — follows unified execution services (#557)

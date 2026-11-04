@@ -1,6 +1,6 @@
 # ADR-0251: A touchpad pan is a scroll-fed contact in the gesture arena
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-10-20)
 - **Date:** 2026-10-21
 - **Amends:** [ADR-0208](ADR-0208-gesture-ownership-table-and-composition.md) (the table's
   rows also decide a scroll-fed contact), [ADR-0217](ADR-0217-interaction-module-layers-and-pointer-assembly.md)

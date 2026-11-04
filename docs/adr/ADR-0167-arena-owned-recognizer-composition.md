@@ -1,6 +1,6 @@
 # ADR-0167: Arena-owned recognizer composition
 
-- **Status:** Superseded
+- **Status:** Superseded (2026-10-13)
 - **Date:** 2026-10-07
 - **Superseded-by:** [ADR-0208](ADR-0208-gesture-ownership-table-and-composition.md)
 - **Related:** [ADR-0127](ADR-0127-exceptional-path-retention.md),

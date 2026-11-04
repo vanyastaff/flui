@@ -1,6 +1,6 @@
 # ADR-0195: Presentation clocks resolve host motion and application policy
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-10-11)
 - **Date:** 2026-10-09
 - **Superseded-by:** [ADR-0192](ADR-0192-accessible-loading-motion.md), loading indicator behavior only;
   [ADR-0218](ADR-0218-motion-override-name.md), the application setting's name only.

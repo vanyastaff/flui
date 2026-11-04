@@ -1,6 +1,6 @@
 # ADR-0233: External textures fed through a presentation registry
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-10-17)
 - **Date:** 2026-10-17
 - **Related:** ADR-0078 (lifecycle capabilities), ADR-0115 (image source regions)
 

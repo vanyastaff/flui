@@ -1,6 +1,6 @@
 # ADR-0193: Animation names distinguish phase, position and run outcome
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-10-11)
 - **Date:** 2026-10-10
 - **Supersedes:** [ADR-0177](ADR-0177-controller-ordered-delivery.md), settled-phase vocabulary only.
 - **Superseded-by:** [ADR-0219](ADR-0219-required-observer-registration.md), the `Animation`

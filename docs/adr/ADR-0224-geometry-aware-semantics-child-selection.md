@@ -1,6 +1,6 @@
 # ADR-0224: Semantics child selection receives committed geometry
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-10-17)
 - **Date:** 2026-10-16
 - **Amended:** 2026-10-19 (hit testing reads the paint record)
 - **Related:** [ADR-0223](ADR-0223-authored-semantics-regions.md),

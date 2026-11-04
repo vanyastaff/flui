@@ -59,14 +59,14 @@ use flui::testing::{HeadlessBinding, MountOptions, MountOwners};
 use flui::widgets::column;
 
 /// The tree `flui create`'s counter template builds: `Center` → `Column` →
-/// prompt `Text` / count `Text` / `ElevatedButton`, driven by a `StateCell`
-/// bound in `init_state` — see `crates/flui-view/src/state_cell.rs`. No
+/// prompt `Text` / count `Text` / `ElevatedButton`, driven by a `Signal`
+/// created in `init_state`, as the CLI template does. No
 /// additions: the semantics step 3 queries are the framework's own.
 #[derive(Clone, StatefulView)]
 struct AgentCounter;
 
 struct AgentCounterState {
-    count: StateCell<usize>,
+    count: Signal<usize>,
 }
 
 impl StatefulView for AgentCounter {
@@ -74,27 +74,27 @@ impl StatefulView for AgentCounter {
 
     fn create_state(&self) -> Self::State {
         AgentCounterState {
-            count: StateCell::new(0),
+            count: Signal::default(),
         }
     }
 }
 
 impl ViewState<AgentCounter> for AgentCounterState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        self.count.bind(ctx);
+        self.count = ctx.signal(0);
     }
 
-    fn build(&self, _view: &AgentCounter, _ctx: &dyn BuildContext) -> impl IntoView {
-        let count = self.count.clone();
+    fn build(&self, _view: &AgentCounter, ctx: &dyn BuildContext) -> impl IntoView {
+        let count = self.count;
 
         Center::new().child(
             Column::new(column![
                 Text::new("You have pushed the button this many times:"),
                 SizedBox::height(16.0),
-                Text::new(self.count.get().to_string()),
+                Text::new(count.get(ctx).to_string()),
                 SizedBox::height(16.0),
                 ElevatedButton::new(Text::new("Increment"))
-                    .on_pressed(move |_cx| count.update(|n| n + 1)),
+                    .on_pressed(move |cx| count.update(cx, |n| *n += 1)),
             ])
             .main_axis_alignment(MainAxisAlignment::Center),
         )

@@ -34,7 +34,7 @@ pull-request numbers, phases, cycles or task IDs: state the invariant, not the h
 ```markdown
 # ADR-NNNN: <the decision in one sentence, as a statement>
 
-- **Status:** Proposed | Accepted (YYYY-MM-DD) | Deprecated (YYYY-MM-DD)
+- **Status:** Proposed | Accepted | Implemented | Rejected | Superseded, then (YYYY-MM-DD)
 - **Date:** YYYY-MM-DD
 - **Supersedes:** [ADR-MMMM](ADR-MMMM-slug.md) §N only (what exactly, in one clause)
 - **Superseded-by:** [ADR-PPPP](ADR-PPPP-slug.md) for §N only (added to this file later)
@@ -99,13 +99,25 @@ decision should be revisited, say what would trigger it. -->
 - **One decision per ADR** where the decision stands alone. A boundary ADR may hold the numbered
   decisions that define both sides of the boundary; a later ADR supersedes one section, not the
   file.
-- **Status is one word and a date.** `Proposed` until the owner accepts it; `Accepted (date)`
-  once the decision is the rule; `Deprecated (date)` when it is withdrawn without a replacement.
-  A replaced decision gets `Superseded-by:` in its header and keeps its text: git keeps history,
-  the ADR keeps the reasoning. Code that disagrees with an accepted ADR is a defect in one of them
-  (`AGENTS.md`, "ADR Policy"). Whether the code is built yet is not status: it is a
-  `docs/gaps.md` entry that names `ADR-NNNN §k`, and a "Not implemented" clause in the record is
-  only a link to that entry, which the PR that builds the section removes.
+- **Status is one of five words and a date.** The line is `Word (YYYY-MM-DD)` and nothing else: no
+  clause, no link, no list of sections.
+  - `Proposed (date)`: written, not yet the rule. A `Proposed` record supersedes nothing.
+  - `Accepted (date)`: the owner accepted the decision; it is the rule from that date.
+  - `Implemented (date)`: an accepted decision whose every section is built; the date is when the
+    last one landed.
+  - `Rejected (date)`: the owner declined the decision. The record stays, with the reasoning.
+  - `Superseded (date)`: every section is replaced, and the header names each replacement in
+    `Superseded-by:`. A record with a section still in force keeps `Accepted` and gets a
+    `Superseded-by:` for the replaced sections only.
+
+  The status belongs to the whole record. There is no acceptance section by section: a section
+  that is not yet accepted is its own `Proposed` ADR, linked by `Related`, or it is rejected.
+  A replaced decision keeps its text: git keeps history, the ADR keeps the reasoning. Code that
+  disagrees with an accepted ADR is a defect in one of them (`AGENTS.md`, "ADR Policy"). An
+  `Accepted` record whose code is not all built has an entry in `docs/gaps.md` ("Accepted ADR
+  sections not built yet") that names `ADR-NNNN §k`; the record itself does not say so. The pull
+  request that builds the section removes the entry and, when none is left, writes `Implemented`.
+  A run owed on a device is a row of `docs/platform-parity.md`, not a status.
 - **The header keys are the template's.** `Status`, `Date`, `Supersedes`, `Superseded-by`,
   `Related`, `Revised`, `Sources`, nothing else. `Supersedes` and `Superseded-by` are written in
   pairs, one on each record.

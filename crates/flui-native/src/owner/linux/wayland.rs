@@ -395,7 +395,7 @@ mod event_loop {
     use crate::owner::watch::Watch;
     use crate::owner::window_delivery::WindowDelivery;
     use crate::owner::{DirectOwnerHooks, OpenWindowError, OwnerHooks, OwnerPlatform};
-    use crate::platform::{AppHandler, Platform, PlatformExecutor};
+    use crate::platform::{AppHandler, Platform};
     use crate::transfer::linux::wayland::DataDevices;
 
     /// The newest `wl_compositor` the loop understands: version 6 gives a
@@ -2222,10 +2222,6 @@ mod event_loop {
     impl host::Services for WaylandLoop {
         fn launch_value(&self, key: flui_platform::LaunchKey) -> Option<String> {
             host::environment_launch_value(key)
-        }
-
-        fn background_executor(&self) -> Arc<dyn PlatformExecutor> {
-            Arc::clone(&self.executor) as _
         }
 
         fn app_path(&self) -> Result<PathBuf, PlatformError> {

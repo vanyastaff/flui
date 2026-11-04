@@ -1,6 +1,6 @@
 # ADR-0222: The light/dark theme is observed per window, as the user's choice
 
-- **Status:** Accepted
+- **Status:** Accepted (2026-10-17)
 - **Date:** 2026-10-17
 - **Supersedes:** [ADR-0039](ADR-0039-event-loop-affinity-capability.md) §1, the
   `window_appearance` entry of `OwnerPlatform`'s operation list only.

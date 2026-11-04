@@ -6,7 +6,6 @@
 - Preserve controller status and run-delivery order during reentrant animation changes, finish healthy status listeners after a panic, and skip listeners removed or disposed during delivery.
 - Continue ticking remaining Vsync controllers and child registries after a contained failure; retain the first failure through wrapper relays and capture retirement.
 - Preserve animation progress when mounted implicit widgets and open navigator routes change their ambient frame registry; release their registration on unmount.
-- Refuse bound `StateCell` and `StateHandle` writes during build before changing values or invoking update closures; a later admitted write still schedules its rebuild.
 - Hold animation samples while a presentation is hidden or frames are disabled, then catch up on the first visible frame.
 - Refuse exhausted animation run identities permanently; exhausting sample identities cancels the active run without publishing a stale sample.
 

@@ -8,7 +8,7 @@ struct in `crates/`.
 | `StatelessWidget` | `StatelessView` (`#[derive(StatelessView)]`) | `crates/flui-view/src/view/stateless.rs` |
 | `StatefulWidget` + `State<T>` | `StatefulView` + `ViewState<V>` | `crates/flui-view/src/view/stateful.rs` |
 | `BuildContext` | `BuildContext` trait for `build`; the presentation capabilities (`rebuild_handle()`, `post_frame_handle()`, `text_input_handle()`, `focus_manager()`, ...) live on its `LifecycleContext` subtrait, which only `init_state`/`did_change_dependencies` receive (ADR-0078) | `crates/flui-view/src/context/build_context.rs` |
-| `setState(() => ...)` | `Element::set_state`/`set_state_scheduled`, usually reached through `StateCell<T>`/`StateHandle<T>` | `crates/flui-view/src/element/unified.rs`, `crates/flui-view/src/state_cell.rs` |
+| `setState(() => ...)` | A `Signal<T>` created with `ctx.signal(..)` in `init_state`, written through the `cx` of an event callback; the signal rebuilds the elements that read it | `crates/flui-view/src/reactive/`, `crates/flui-view/src/context/build_context.rs` |
 | `InheritedWidget` | `InheritedView` | `crates/flui-view/src/view/inherited.rs` |
 | `Navigator` | `Navigator` / `NavigatorHandle` / `NavigatorState` | `crates/flui-widgets/src/navigator/navigator.rs` |
 | `Router` | `Router<R: Routable>` + `RouterHandle<R>`, with `#[derive(Routable)]` on a route enum | `crates/flui-widgets/src/router/` |

@@ -1,11 +1,6 @@
 # ADR-0305: One GPU context serves every surface through a raster executor
 
-- **Status:** Accepted (2026-11-03). Not implemented: every window still builds its own
-  `Renderer`, with its own instance, device, pipelines and glyph atlas
-  (`crates/flui-app/src/app/runner/window_renderer.rs:107-116`), behind an
-  `Arc<Mutex<RasterLane>>` (`crates/flui-app/src/app/runner/desktop.rs:245-252`), inline on every
-  platform; the web renders through `DirectSink`. Migration gives the order. A platform's
-  placement becomes threaded only after a run on that platform (§10).
+- **Status:** Accepted (2026-11-03)
 - **Date:** 2026-11-03
 - **Supersedes:**
   - [ADR-0045](ADR-0045-raster-lane.md) decisions 1 to 7, as the table in More information maps
