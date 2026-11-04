@@ -61,6 +61,13 @@ where
     pub fn with_status(value: T, status: AnimationStatus) -> Self {
         Self { value, status }
     }
+
+    /// Subscribe with an owned [`Subscription`](crate::Subscription): there is
+    /// nothing to hear — the value never changes — so the subscription is
+    /// inert and detaches nothing on drop.
+    pub fn listen(&self, _listener: impl Fn() + 'static) -> flui_foundation::Subscription {
+        flui_foundation::Subscription::inert()
+    }
 }
 
 impl<T> Animation<T> for ConstantAnimation<T>

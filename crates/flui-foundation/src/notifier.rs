@@ -761,8 +761,9 @@ impl<T> ValueNotifier<T> {
 #[must_use = "hold the subscription: dropping it detaches its listener"]
 pub struct Subscription {
     /// The channel the listener registered on, weak so a subscription never
-    /// pins a channel its outside has released.
-    channel: std::rc::Weak<dyn crate::notifier_generic::SubscribedChannel>,
+    /// pins a channel its outside has released. `None` for an inert
+    /// subscription that never had one.
+    channel: Option<std::rc::Weak<dyn crate::notifier_generic::SubscribedChannel>>,
     /// Some while the listener is still registered; `None` once detached.
     id: Option<ListenerId>,
 }
@@ -775,10 +776,21 @@ impl Subscription {
         id: ListenerId,
     ) -> Self {
         Self {
-            channel,
+            channel: Some(channel),
             id: Some(id),
         }
     }
+
+    /// An inert subscription: nothing to detach, ever. For a source that
+    /// admits no registration (a constant animation) and hands this form out
+    /// instead of a listener id that names nothing.
+    pub fn inert() -> Self {
+        Self {
+            channel: None,
+            id: None,
+        }
+    }
+
 
     /// Detach now rather than at drop; idempotent with the drop that follows.
     pub fn detach(mut self) {
@@ -789,7 +801,7 @@ impl Subscription {
         let Some(id) = self.id.take() else {
             return;
         };
-        if let Some(channel) = self.channel.upgrade() {
+        if let Some(channel) = self.channel.take().and_then(|channel| channel.upgrade()) {
             channel.detach_listener(id);
         }
     }
