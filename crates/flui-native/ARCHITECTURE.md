@@ -1147,7 +1147,7 @@ trait depends on `flui-platform` instead.
   the loop and given to the first window its table holds (`WindowTable::register`),
   so a window that failed to open leaves it; the variable stays set, as unsetting it
   races every thread reading the environment, and `xdg_open` leaves it out
-  of the opener it starts. `current_platform` picks the native Wayland host
+  of the opener it starts. `current_host` picks the native Wayland host
   for a Wayland session (`choose_linux_host`).
 - **Linux host events reach the owner through an inbox, and a machine that
   waits for the application waits for delivery, not for receipt.** Two sources
@@ -3675,7 +3675,7 @@ display source of `display::linux` on a connection of its own, the Settings
 portal of `preferences::linux` and the logind and pressure sources of
 `lifecycle::linux`, through the hooks the Wayland loop holds them by too
 (`owner::linux::{LinuxPreferences, LinuxNotices}`); every window hands out the
-AT-SPI bridge of `accessibility::linux`. `current_platform` picks the host for
+AT-SPI bridge of `accessibility::linux`. `current_host` picks the host for
 an X11 session (`choose_linux_host`).
 Text input is `Absent` in the table until the host's later parts fill it; the
 clipboard is the clipboard feature's, on a connection and thread of its own.
@@ -4190,7 +4190,10 @@ as the sink asks, but a header and a setup row (a device added or removed, the
 click thresholds, the preferences, the displays, a window's state) always in
 both, so a sink can keep them for a reader that joins later. The header it
 sends names no device: the writer fills them in from the rows. It is the source
-of the driver agent's `native` recordings (ADR-0288 §11).
+of the driver agent's `native` recordings (ADR-0288 §11). A host installs it
+before its platform starts, since a registry reports only to the capture present
+when it was made, so it names the backend from `current_host()`, the one
+choice `current_platform` starts (`CurrentHost::backend`).
 
 A recording journals one stream, which its header names: a registry's (the
 default, the only one with a clock), a loop's application delivery (`app`:

@@ -39,7 +39,13 @@ pub(super) fn start(config: &AppConfig) {
 /// `presentation`'s agent window while a hook of this loop serves; `None`
 /// otherwise, and no semantics work is started.
 pub(super) fn vend(ui_runtime: &UiRuntime, presentation: PresentationId) -> Option<AgentWindow> {
-    lend(|host| host.vend(ui_runtime, presentation)).flatten()
+    let window = lend(|host| host.vend(ui_runtime, presentation)).flatten();
+    // A runtime the agent serves records the native layer, when the loop journals it.
+    #[cfg(native_journal)]
+    if window.is_some() {
+        super::native_journal::attach(ui_runtime);
+    }
+    window
 }
 
 /// Hand an installed window to this loop's hooks.
@@ -54,6 +60,8 @@ pub(super) fn end() {
     let host = APP_RUNTIME.with(|slot| slot.borrow_mut().loop_dev_agent.end());
     // Detached outside the borrow.
     drop(host);
+    #[cfg(native_journal)]
+    super::native_journal::end();
 }
 
 /// Whether a hook of the loop running on this thread serves.

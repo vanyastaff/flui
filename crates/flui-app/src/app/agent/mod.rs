@@ -153,18 +153,23 @@ impl fmt::Debug for Disconnect {
 /// Install the driver agent on `config` after the application's own hooks,
 /// when this build carries it and the launch values `value` reads name an endpoint
 /// (ADR-0288 §7); otherwise `config` is left alone and nothing is created.
-/// `disconnect` is what the driver's going does under `EXIT_ON_DISCONNECT`.
+/// `disconnect` is what the driver's going does under `EXIT_ON_DISCONNECT`, and
+/// `records_native` whether the loop journals its backend, so a recording can hold the
+/// `native` layer (§11). Whether the agent was installed.
 pub(crate) fn install_from_launch(
     config: &mut crate::AppConfig,
     value: impl Fn(flui_platform::LaunchKey) -> Option<String>,
     disconnect: &Arc<Disconnect>,
-) {
+    records_native: bool,
+) -> bool {
     #[cfg(driver_agent)]
     if let Some(launch) = served::Launch::read(value) {
-        served::install(config, launch, disconnect);
+        served::install(config, launch, disconnect, records_native);
+        return true;
     }
     #[cfg(not(driver_agent))]
-    let _ = (config, value, disconnect);
+    let _ = (config, value, disconnect, records_native);
+    false
 }
 
 #[cfg(all(test, driver_agent))]

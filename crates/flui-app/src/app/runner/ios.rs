@@ -186,6 +186,8 @@ where
     V: View + StatelessView + Clone + 'static,
 {
     use flui_native::{IOSPlatform, Platform};
+    // Before the platform, whose registries report only to a capture already installed.
+    super::begin_native_journal(flui_native::journal::codec::Backend::UiKit);
     let platform = IOSPlatform::try_new().map_err(|error| {
         tracing::error!(%error, "iOS initialization failed");
         LaunchError::from_platform(error)
@@ -249,11 +251,13 @@ where
         let mut config = config;
         let launch = with_owner_platform(flui_native::OwnerPlatform::shared)
             .expect("BUG: owner installed above");
-        crate::app::agent::install_from_launch(
+        let served = crate::app::agent::install_from_launch(
             &mut config,
             |key| launch.launch_value(key),
             &std::sync::Arc::default(),
+            super::journals_native(),
         );
+        super::keep_native_journal(served);
         let reload = WorkerReload::from_config(&config);
         let watcher = reload.spawn_watcher(runtime_wake_callback());
         // The loop takes the hooks and owns them until the process stops

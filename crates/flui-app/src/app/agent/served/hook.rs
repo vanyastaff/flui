@@ -19,19 +19,28 @@ pub(crate) struct DriverAgent {
     app: AppInfo,
     /// `Some` when the launch asked to exit when the driver goes.
     disconnect: Option<Arc<Disconnect>>,
+    /// Whether the loop journals its backend: the hello lists the `native` layer then.
+    records_native: bool,
     /// Between a successful bind at `attach` and `detach`.
     running: Option<Running>,
 }
 
 impl DriverAgent {
-    /// An agent for `launch`, introducing itself as `app`. `disconnect` is
+    /// An agent for `launch`, introducing itself as `app`, recording the `native` layer when
+    /// `records_native`. `disconnect` is
     /// what a driver's disconnect does when the launch asked to exit on one.
-    pub(crate) fn new(launch: Launch, app: AppInfo, disconnect: Arc<Disconnect>) -> Self {
+    pub(crate) fn new(
+        launch: Launch,
+        app: AppInfo,
+        disconnect: Arc<Disconnect>,
+        records_native: bool,
+    ) -> Self {
         let disconnect = launch.exit_on_disconnect().then_some(disconnect);
         Self {
             launch,
             app,
             disconnect,
+            records_native,
             running: None,
         }
     }
@@ -46,7 +55,12 @@ impl DriverAgent {
 impl DevAgentHook for DriverAgent {
     fn attach(&mut self) -> bool {
         self.stop();
-        match transport::listen(&self.launch, self.app.clone(), self.disconnect.clone()) {
+        match transport::listen(
+            &self.launch,
+            self.app.clone(),
+            self.disconnect.clone(),
+            self.records_native,
+        ) {
             Ok(running) => {
                 tracing::info!("driver agent listening");
                 self.running = Some(running);

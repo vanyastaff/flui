@@ -175,7 +175,11 @@
   as `native_lost_rows`. A host makes one `NativeLines` for its journal and attaches it with
   `UiRuntime::attach_native_journal` (`NativeForms` are the forms it asks for);
   `ServiceConfig::records_native` lists the layer in the hello; `HeadlessHost::attach_native_journal`
-  plays the backend in a test.
+  plays the backend in a test. A native debug app installs the capture before its platform starts
+  and ends it after the launch unless it serves an agent, so an app nobody drives keeps nothing
+  past its start; a page records `input` only.
+- **`flui_native::current_host()`** and `CurrentHost` name the host `current_platform()` would
+  start (`CurrentHost::start`), so a caller can act on the choice before the platform exists.
 
 ### Removed
 

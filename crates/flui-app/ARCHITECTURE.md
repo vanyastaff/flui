@@ -173,6 +173,17 @@ the dispatch layer moves there too.
   closed windows, events, a client that stops reading, a bind failure and the
   exit; `reads_the_counter_and_taps_it_by_element_and_by_locator` the
   conversation over a real socket or pipe.
+  A native host's debug build also journals its backend for the agent's
+  recordings (ADR-0288 §11, `cfg(native_journal)`): the runner installs
+  `flui-native`'s line capture on the loop's thread before it starts the
+  platform (`current_host()` names the backend first), since a registry reports
+  only to the capture present when it was made, and ends it right after the
+  launch is read when no agent is served
+  (`a_loop_nobody_serves_ends_its_native_journal_so_no_line_reaches_it`). A
+  served loop keeps it, attaches its `NativeLines` to each UI runtime it hands
+  the agent, and the hello lists `native`
+  (`the_hello_lists_the_native_layer_only_when_the_loop_journals`). A page
+  records the input layer only.
   In a page the transport is `flui-native`'s page export: the global the launch
   names takes `connect(onLine)`, each connection's conversation is a task of
   the page's executor that hands the script's lines to its session, keeps the

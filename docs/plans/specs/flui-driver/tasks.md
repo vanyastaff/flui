@@ -430,14 +430,16 @@ graph LR
   - a recording made through the agent replays to the same decisions.
 - **Status:** the input layer has merged: held input (#2291), the journal (#2294), the recording
   wire types (#2295), the taps fan-out (#2298), `record.*` (#2301) and `flui record` (#2305).
-  The native layer is in the slices below: slice 1 merged (#2307); slice 2 (protocol 0.10, the
-  runtime fan-out) is validated by the `agent_service` native tests.
+  The native layer is in the slices below: slices 1 (#2307) and 2 (#2311) merged; slice 3 is
+  validated by `a_loop_nobody_serves_ends_its_native_journal_so_no_line_reaches_it` and
+  `the_hello_lists_the_native_layer_only_when_the_loop_journals`.
 - **Native layer, decided (2026-11-04):**
-  - **Capture.** `flui-app` installs one native capture (`flui-native` `journal::capture`) on the
-    owner thread before the platform is created, and only when the app serves an agent; an app
-    that serves none installs nothing. `flui-app` builds `flui-native` with `native-capture`,
-    whose code is debug-only, so `capabilities.record` lists `native` only where that capture is
-    installed.
+  - **Capture.** A native host's debug build installs one line capture (`flui-native`
+    `journal::lines`) on the loop's thread before the platform is created, the backend named by
+    `flui_native::current_host()`, and ends it right after the launch is read when no agent is
+    served, so only each stream's bounded setup was kept. A served app attaches it to each
+    runtime it hands the agent, and `capabilities.record` lists `native` only then. A page
+    records `input` only.
   - **Join mid-run.** Live recording or not, the runtime's fan-out keeps each stream's header
     and setup rows (devices, click settings, preferences, displays, window states), at most 64
     rows per stream; a recording started later begins each stream with them, and with a `gap`
@@ -445,11 +447,11 @@ graph LR
   - **Seam.** `flui-runtime` holds the fan-out and takes the capture's lines from `flui-app`
     through a trait whose values are `flui_protocol::native_recording`'s, so no crate edge is
     added.
-  - **Wire.** `RecordLayer::Native`; `RecordEvent.row` becomes `RecordRow` (`#[non_exhaustive]`):
-    `Input(input_recording::Row)` or `Native { stream, line }`, a line being a stream's header,
-    one of its rows, or a `gap` naming the rows that stream lost. A recording of `native` records
-    `input` too, and ends with the input layer's `end` row; `RecordSummary` counts the native
-    losses apart.
+  - **Wire.** `RecordLayer::Native`; a native line goes as its own `record_native` event
+    `{recording, window, stream, line}`, a line being a stream's header, one of its rows, or a
+    `gap` naming the rows that stream lost, so `record` events stay as 0.9 sent them. A recording
+    of `native` records `input` too, and ends with the input layer's `end` row; `RecordSummary`
+    counts the native losses apart (`native_lost_rows`).
   - **Bounds.** One 1024-row queue per recording; native rows take at most 768 of it, so input
     is never starved, and are dropped first.
   - **CLI.** `flui record <file> --native <dir>` writes each stream to `<dir>/<n>.jsonl`, the
@@ -461,7 +463,8 @@ graph LR
   2. `flui-protocol` and `flui-runtime`: the wire above, the native fan-out beside the input
      taps with the capped setup prefix, the shared queue's reserve and per-stream gaps;
      ADR-0288 §11 rewritten.
-  3. `flui-app`: the capture installed when the agent is served, handed to the runtime, and the
+  3. `flui-app`: the capture installed before the platform and ended unless the agent is served,
+     `flui_native::current_host()` naming the backend, handed to the runtime, and the
      capability gated on it.
   4. `flui-cli`: `--native <dir>` and the index.
 

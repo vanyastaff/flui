@@ -96,7 +96,9 @@ flui-scheduler = { path = "../flui-scheduler", version = "=0.2.0-dev" }
 flui-painting = { path = "../flui-painting", version = "=0.2.0-dev" }
 flui-layer = { path = "../flui-layer", version = "=0.2.0-dev" }
 flui-engine = { path = "../flui-engine", version = "=0.2.0-dev" }
-flui-native = { path = "../flui-native", version = "=0.2.0-dev" }
+# `native-capture`: the native journal a debug build serving the driver agent records
+# (ADR-0288 §11). Its code is compiled in debug builds only; a release build links none.
+flui-native = { path = "../flui-native", version = "=0.2.0-dev", features = ["native-capture"] }
 # Widget catalog: provides `VsyncScope`, which `AppBinding::attach_root_widget*`
 # auto-wraps the root in so implicit-animation widgets work with zero boilerplate.
 # Zero new link-time deps: every crate flui-widgets pulls is already transitively

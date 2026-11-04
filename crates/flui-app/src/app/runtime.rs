@@ -384,6 +384,10 @@ pub(crate) struct AppRuntime {
     /// them, whatever configuration the application opened it with. Ended with
     /// the loop.
     pub(super) loop_dev_agent: super::dev_agent::LoopAgents,
+    /// The native journal of a debug build serving the driver agent (ADR-0288 §11), installed
+    /// before the loop's platform and ended when no agent is served.
+    #[cfg(native_journal)]
+    pub(super) native_journal: Option<super::runner::native_journal::NativeJournal>,
     #[cfg(all(
         not(target_os = "android"),
         not(target_os = "ios"),
@@ -573,6 +577,8 @@ impl AppRuntime {
             ))]
             main_ingress: None,
             loop_dev_agent: super::dev_agent::LoopAgents::None,
+            #[cfg(native_journal)]
+            native_journal: None,
             #[cfg(all(
                 not(target_os = "android"),
                 not(target_os = "ios"),
