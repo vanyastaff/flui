@@ -1,6 +1,6 @@
 # ADR-0262: Application state persists as versioned documents the application encodes, written through the host's flush registry over a byte-storage capability
 
-- **Status:** Accepted (2026-11-04)
+- **Status:** Implemented (2026-11-04)
 - **Date:** 2026-10-28
 - **Superseded-by:** [ADR-0281](ADR-0281-a-destructor-that-panics-during-an-unwind-aborts-as-in-std.md),
   §4's retention of the codec's panic payload only: the payload is dropped.
