@@ -1117,6 +1117,13 @@ impl TerminalParentState {
 }
 impl Listenable for TerminalParent {
     /// A source outside the framework: its relays run in their own scope.
+    fn listen(&self, listener: ListenerCallback) -> flui_foundation::Subscription {
+        // The test's own value list is not a `SubscribedChannel`: the
+        // subscription is inert here, and the caller's stored id does the
+        // withdrawal.
+        let _ = listener;
+        flui_foundation::Subscription::inert()
+    }
     fn add_observer(&self, observer: flui_foundation::ListenerObserver) -> ListenerId {
         self.add_listener(Rc::new(move || {
             flui_foundation::panic::RecoveryScope::boundary(|recovery| observer(recovery));

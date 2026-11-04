@@ -548,6 +548,12 @@ fn failure_propagates_after_healthy_tail() {
 fn adapted_listener_propagates_after_healthy_tail() {
     struct Forwarder(ChangeNotifier);
     impl Listenable for Forwarder {
+        fn listen(
+            &self,
+            listener: flui_foundation::ListenerCallback,
+        ) -> flui_foundation::Subscription {
+            self.0.listen(listener)
+        }
         fn add_observer(&self, observer: flui_foundation::ListenerObserver) -> ListenerId {
             self.0.add_observer(observer)
         }
@@ -824,16 +830,16 @@ fn a_subscription_detaches_only_its_own_channel() {
     let second = ChangeNotifier::new();
 
     let hits = Rc::new(AtomicUsize::new(0));
-    let other = second.listen({
+    let other = second.listen(Rc::new({
         let hits = Rc::clone(&hits);
         move || {
             hits.fetch_add(10, Ordering::SeqCst);
         }
-    });
+    }));
     // Both ids are 1 (each channel mints from its own counter, from one):
     // under an id-only detach the subscription's drop would remove the
     // other channel's listener too.
-    let subscribed = first.listen(|| ());
+    let subscribed = first.listen(Rc::new(|| ()));
     assert!(first.has_listeners() && second.has_listeners());
 
     drop(subscribed);
@@ -866,12 +872,12 @@ fn a_subscription_detaches_only_its_own_channel() {
 fn a_subscription_detaches_once_and_a_second_detach_is_a_noop() {
     let notifier = ChangeNotifier::new();
     let hits = Rc::new(AtomicUsize::new(0));
-    let subscription = notifier.listen({
+    let subscription = notifier.listen(Rc::new({
         let hits = Rc::clone(&hits);
         move || {
             hits.fetch_add(1, Ordering::SeqCst);
         }
-    });
+    }));
     subscription.detach();
     assert!(!notifier.has_listeners(), "the detach removed the listener");
     notifier.notify_listeners();
@@ -883,14 +889,14 @@ fn a_subscription_detaches_once_and_a_second_detach_is_a_noop() {
 #[test]
 fn a_subscription_on_a_disposed_or_gone_channel_detaches_quietly() {
     let disposed = ChangeNotifier::new();
-    let subscription = disposed.listen(|| ());
+    let subscription = disposed.listen(Rc::new(|| ()));
     disposed.dispose();
     drop(subscription);
 
     // A channel nothing else holds: its drop retires the registered listener
     // itself, and the subscription's later drop detaches nothing.
     let gone = ChangeNotifier::new();
-    let subscription = gone.listen(|| ());
+    let subscription = gone.listen(Rc::new(|| ()));
     drop(gone);
     drop(subscription);
 }
@@ -906,17 +912,17 @@ fn a_subscription_detached_inside_a_round_is_skipped_and_retired_at_its_tail() {
     // listener's turn, drops the other listener's subscription mid-round, and
     // the round skips the removed listener.
     let subscription_held = Rc::new(std::cell::RefCell::new(None::<Subscription>));
-    let detacher = notifier.listen({
+    let detacher = notifier.listen(Rc::new({
         let subscription_held = Rc::clone(&subscription_held);
         move || *subscription_held.borrow_mut() = None
-    });
+    }));
     let hits = Rc::new(AtomicUsize::new(0));
-    *subscription_held.borrow_mut() = Some(notifier.listen({
+    *subscription_held.borrow_mut() = Some(notifier.listen(Rc::new({
         let hits = Rc::clone(&hits);
         move || {
             hits.fetch_add(1, Ordering::SeqCst);
         }
-    }));
+    })));
 
     // The round's snapshot carries both listeners: the detached one is
     // skipped when the round reaches it, and its callback retires at the
@@ -945,12 +951,12 @@ fn a_subscription_detached_inside_a_round_is_skipped_and_retired_at_its_tail() {
 fn an_inert_subscription_detaches_nothing() {
     let notifier = ChangeNotifier::new();
     let hits = Rc::new(AtomicUsize::new(0));
-    let listener = notifier.listen({
+    let listener = notifier.listen(Rc::new({
         let hits = Rc::clone(&hits);
         move || {
             hits.fetch_add(1, Ordering::SeqCst);
         }
-    });
+    }));
     let inert = Subscription::inert();
     drop(inert);
 

@@ -287,7 +287,7 @@ impl<R: Routable> Listenable for RouterHandle<R> {
             // Unmounted: the listener would never be told â€” drop it and hand
             // the caller the inert form.
             drop(subscription);
-            return flui_foundation::Subscription::inert();
+            return Subscription::inert();
         }
         subscription
     }

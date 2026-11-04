@@ -20,7 +20,7 @@ use flui_widgets::{FadeTransition, SizedBox};
 
 pub(crate) fn fade_source_replacement_retries_after_status_failure() {
     use flui_animation::{StatusObserver, StatusSubscription};
-    use flui_foundation::{Listenable, ListenerId, ListenerObserver};
+    use flui_foundation::{Listenable, ListenerCallback, ListenerId, ListenerObserver};
     use std::{cell::Cell, rc::Rc};
 
     #[derive(Debug)]
@@ -29,6 +29,9 @@ pub(crate) fn fade_source_replacement_retries_after_status_failure() {
         armed: Cell<bool>,
     }
     impl Listenable for RefusedOnce {
+        fn listen(&self, listener: ListenerCallback) -> flui_foundation::Subscription {
+            self.controller.listen(listener)
+        }
         fn add_observer(&self, observer: ListenerObserver) -> ListenerId {
             self.controller.add_observer(observer)
         }

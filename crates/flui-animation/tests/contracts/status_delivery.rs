@@ -1500,6 +1500,9 @@ impl std::fmt::Debug for ObservedTrain {
 
 impl Listenable for ObservedTrain {
     /// Every registration, relays and adapted listeners alike, arrives here.
+    fn listen(&self, listener: ListenerCallback) -> flui_foundation::Subscription {
+        self.values.listen(listener)
+    }
     fn add_observer(&self, observer: flui_foundation::ListenerObserver) -> ListenerId {
         self.value_callbacks
             .borrow_mut()
@@ -1691,6 +1694,9 @@ impl std::fmt::Debug for SwitchReader {
 }
 
 impl Listenable for SwitchReader {
+    fn listen(&self, listener: ListenerCallback) -> flui_foundation::Subscription {
+        self.values.listen(listener)
+    }
     fn add_observer(&self, observer: flui_foundation::ListenerObserver) -> ListenerId {
         self.values.add_observer(observer)
     }

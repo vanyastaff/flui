@@ -731,11 +731,11 @@ impl<T> ValueNotifier<T> {
     /// Subscribe with an owned [`Subscription`]: hold it, and the
     /// listener fires on every [`set_value`](Self::set_value) that notifies;
     /// drop it, and the listener detaches from this notifier.
-    pub fn listen(&self, listener: impl Fn() + 'static) -> Subscription
+    pub fn listen(&self, listener: ListenerCallback) -> Subscription
     where
         T: 'static,
     {
-        self.notifier().listen(Rc::new(move || listener()))
+        self.notifier().listen(listener)
     }
 }
 
@@ -758,10 +758,10 @@ impl<T> ValueNotifier<T> {
 ///
 /// let notifier = ChangeNotifier::new();
 /// let hits = Rc::new(Cell::new(0));
-/// let subscription = notifier.listen({
+/// let subscription = notifier.listen(Rc::new({
 ///     let hits = Rc::clone(&hits);
 ///     move || hits.set(hits.get() + 1)
-/// });
+/// }));
 /// notifier.notify_listeners();
 /// assert_eq!(hits.get(), 1);
 ///

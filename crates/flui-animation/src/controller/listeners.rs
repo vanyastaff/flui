@@ -55,7 +55,7 @@ impl AnimationController {
 
 impl Listenable for AnimationController {
     fn listen(&self, listener: ListenerCallback) -> flui_foundation::Subscription {
-        self.notifier.listen(Rc::new(move || listener()))
+        self.notifier.listen(listener)
     }
     fn add_observer(&self, observer: flui_foundation::notifier::ListenerObserver) -> ListenerId {
         let mut observer = Opaque::new(observer);

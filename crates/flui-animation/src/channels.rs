@@ -67,7 +67,7 @@ impl Channels {
     /// Subscribe with an owned subscription on the value channel; the
     /// subscription detaches through the channel itself on drop.
     pub(crate) fn listen(&self, listener: ListenerCallback) -> Subscription {
-        self.values.listen(Rc::new(move || listener()))
+        self.values.listen(listener)
     }
 
     /// Withdraw a value listener; its captures retire through `recovery`.
