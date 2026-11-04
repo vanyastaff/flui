@@ -2,8 +2,12 @@
 
 - **Status:** Accepted (2026-10-03)
 - **Date:** 2026-10-03
-- **Supersedes:** ADR-0094's implemented scene callback safety claim; its driver
-  topology and proposed Subsecond integration remain unchanged.
+- **Related:** [ADR-0311](ADR-0311-development-reload-is-a-hook-the-application-installs.md) §3
+  (the scene hook whose callback this contract governs);
+  [ADR-0094](ADR-0094-hot-reload-through-subsecond.md) (the rejected record that first stated the
+  scene callback)
+- **Revised:** 2026-11-04 — the pair with ADR-0094 became `Related`, since ADR-0094 is rejected,
+  and the scene callback is the method of ADR-0311's scene hook.
 
 ## Context
 
@@ -23,7 +27,7 @@ artifact does not require scene construction.
 `HotReloadDriver::poll` updates the image and reports successful loading with a
 boolean. Scene construction remains the separate unsafe `build_scene` operation.
 
-`DevReloadHook::scene_frame` is unsafe. Its caller must ensure the render callback
+`scene_frame`, the scene hook's method (ADR-0311 §3), is unsafe. Its caller must ensure the render callback
 retains no image-dependent scene data beyond the call. The contract covers
 cloned layers and opaque payloads, including on unwind;
 the borrowed scene reference alone does not discharge it. `ScenePluginHook`

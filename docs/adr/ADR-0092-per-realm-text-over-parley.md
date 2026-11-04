@@ -57,7 +57,7 @@
 
 Two things this record leaves to others: the bidi base direction (Parley 0.11.1 takes it from
 the first strong character; flui-painting mapping decision 12), and how a hot-reload plugin's
-font bytes cross its FFI boundary ([ADR-0094](ADR-0094-hot-reload-through-subsecond.md)).
+font bytes cross its FFI boundary ([ADR-0311](ADR-0311-development-reload-is-a-hook-the-application-installs.md) §7).
 
 Text was one process-wide, locked object when this record was written (the file and line
 numbers below are of that tree; §10 step 6a removed `text_layout/layout.rs`).
@@ -610,7 +610,7 @@ that wires what it adds.
      on `TextContext`'s layout if one were passed. The plugin image is therefore a UI runtime of its
      own for text, and faces the host app registers do
      not reach it; carrying font bytes across the FFI into the plugin's collection is a
-     follow-up, or goes with ADR-0094's replacement of the `dlopen` path.
+     follow-up, or goes with the `dlopen` path when a code patcher replaces it (ADR-0311 §7).
    - *Acceptance (3a):* two UI runtimes over two collections measure through their own contexts, and
      a frame on one lends nothing of the other's; every presentation's pipeline holds the
      UI runtime's handle; a painter measures through the context it is given, and a registration on

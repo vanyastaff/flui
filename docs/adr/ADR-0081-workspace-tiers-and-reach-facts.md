@@ -126,9 +126,10 @@ and the gate reports any other H → `pkg` edge.
 The tier assignment had six refused edges, each seeded as an `edge-exceptions` entry.
 `flui-interaction -> flui-native` and `flui-widgets -> flui-native` (the widget harness,
 optional under `testing`) exited with ADR-0082: both now name `flui-platform` (tier C), and
-their entries are gone. `flui-app -> flui-hot-reload` exited with ADR-0094's hook (2026-09-29:
-`flui-app` reaches a reload tool only through an installed `DevReloadHook`). Three remain:
-`flui -> flui-hot-reload` exits with ADR-0094; `flui -> flui-material` and
+their entries are gone. `flui-app -> flui-hot-reload` exited with the development reload hook
+(2026-09-29: `flui-app` reaches a reload tool only through an installed `DevReloadHook`,
+[ADR-0311](ADR-0311-development-reload-is-a-hook-the-application-installs.md)). Three remain:
+`flui -> flui-hot-reload` exits with ADR-0311 §6; `flui -> flui-material` and
 `flui -> flui-cupertino` exit with ADR-0088. That paragraph describes the original
 migration's refused edges. Current `flui-widgets` reaches `flui-testing` only as a
 dev dependency; `flui-runtime` is K/internal order 4 and `flui-testing` is K/internal
@@ -152,8 +153,8 @@ The K set is the corrected list from owner decision 4. Generic FFI crates (`wind
 (`crates/flui-widgets/Cargo.toml:177`, `crates/flui-assets/Cargo.toml:69`) and say nothing
 about a windowing backend. A package that must reach a forbidden crate lists it under
 `reach-exceptions` with a reason (§2); `flui-hot-reload`'s direct `windows` dependency
-(`crates/flui-hot-reload/Cargo.toml:47`) is one entry, with
-[ADR-0094](ADR-0094-hot-reload-through-subsecond.md) as its exit. "Only `flui-engine` may reach
+(`crates/flui-hot-reload/Cargo.toml`) is one entry, with
+[ADR-0311](ADR-0311-development-reload-is-a-hook-the-application-installs.md) §7 as its exit. "Only `flui-engine` may reach
 `wgpu`" is the one standing permission: `flui-engine` holds a `grant` from this record for
 `wgpu`, which also covers the `windows` crate `wgpu-hal` brings for DX12. The grant is the only
 way in: R's set keeps `wgpu`, so any other R crate that reaches it is reported, with or without
@@ -227,8 +228,8 @@ finding, when E reaches no `to` in any root build, or when in no root build anyt
 (itself included) is forbidden to E or to a crate with a tier that reaches E. So the list only
 shrinks: once the change an `exit` names lands, its entry becomes stale and must go.
 
-`TREE_FACTS` moved into `reach` as ordinary facts over one root's build. Since ADR-0094's hook
-removed `flui-app`'s feature (2026-09-29) they read: `flui-hot-reload` is absent from `flui-app`
+`TREE_FACTS` moved into `reach` as ordinary facts over one root's build. Since the development
+reload hook (ADR-0311) removed `flui-app`'s feature (2026-09-29) they read: `flui-hot-reload` is absent from `flui-app`
 at its defaults and with `--all-features`, present under
 `flui --no-default-features --features hot-reload`, and `hot-reload-counter-host`'s build enables
 `flui-hot-reload/app-plugin`. A fact that names an unknown
@@ -241,10 +242,11 @@ entries it reports 13 (crate, forbidden name) pairs through three edges:
 `flui-hot-reload → windows` (10, with the `windows-*` crates behind it),
 `flui-hot-reload → android_log-sys` (1) and `flui-engine → wgpu` (2: `wgpu` itself, and
 `windows` through `wgpu-hal`). Three entries are seeded: the two `flui-hot-reload` edges exit
-with ADR-0094, and `flui-engine`'s `wgpu` is the grant of §1. With them the gate is green.
+with the dlopen path (ADR-0311 §7), and `flui-engine`'s `wgpu` is the grant of §1. With them the
+gate is green.
 
 Three points are decided with this section. `pkg`'s OS globs stand, so
-`flui-hot-reload → android_log-sys` is an entry of its own, whose exit is ADR-0094.
+`flui-hot-reload → android_log-sys` is an entry of its own, whose exit is ADR-0311 §7.
 `flui-engine`'s standing `grant` for `wgpu` stands. No `reach-exceptions` entry names
 `flui-native`: the three edges the gate reports without entries are the ones those entries and
 that grant excuse.
@@ -274,10 +276,10 @@ from the first day, with named, dated exceptions:
 - `flui-testing` dev -> `flui-devtools`: exited when the observation-seam test moved into
   `packages/flui-devtools` (ADR-0088 move 4);
 - `flui-app` optional -> `flui-hot-reload` (`crates/flui-app/Cargo.toml:65,108`): exited when
-  ADR-0094's `DevReloadHook` landed (2026-09-29);
-- the facade's optional edge and `hot-reload` feature (`Cargo.toml:553,664`) and the facade's
-  dev-dependency (`Cargo.toml:588`): exit in the change that moves `flui-hot-reload` into the
-  official packages (ADR-0094 §2);
+  the `DevReloadHook` landed (2026-09-29, ADR-0311);
+- the facade's optional edge and `hot-reload` feature and the facade's dev-dependency (the root
+  `Cargo.toml`): exit in the change that moves `flui-hot-reload` into the official packages
+  (ADR-0311 §6);
 - the facade's optional `material`/`cupertino` edges, features and default
   (`Cargo.toml:559-560,632,639-640`): exit with ADR-0088 §6, which sequences the facade change
   after the packages build on `flui-sdk`.
@@ -369,8 +371,8 @@ recorded:
   ADR-0088 using this record's kind rule and its dated exceptions. ADR-0028's decoupling rules
   are unchanged.
 - The reach gate is green only with its three seeded `reach-exceptions` entries, none of them
-  for `flui-native`: ADR-0082's trait move landed first. The two that exit with ADR-0094
-  become stale, and must be deleted, in the change that lands it.
+  for `flui-native`: ADR-0082's trait move landed first. The two that exit with the dlopen path
+  (ADR-0311 §7) become stale, and must be deleted, in the change that deletes it.
 - Applications that enabled `flui-view/runtime-internals` directly (none in this workspace
   besides the composition roots) lose the feature; the items are reachable at
   `flui_view::__runtime`, not through `flui::view` or `flui_sdk::view`.
