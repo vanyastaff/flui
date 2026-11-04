@@ -351,7 +351,7 @@ pub(crate) fn terminal_scroll_motion_uses_the_admitted_fling_profile() {
         tight(300.0, 300.0),
         vsync,
     );
-    controller.set_pixels(500.0);
+    controller.jump_to(500.0).expect("no build is running");
     for attempt in 0..4 {
         laid.dispatch_pointer_down(150.0, 250.0);
         let step = if attempt == 3 { 200.0 } else { 20.0 };
@@ -677,7 +677,7 @@ pub(crate) fn bouncing_physics_fling_springs_back_after_overscroll() {
 
     // Pre-position the scroll just below max_extent so a moderate in-bounds
     // upward drag pushes it past the boundary under bouncing physics.
-    controller.set_pixels(480.0);
+    controller.jump_to(480.0).expect("no build is running");
 
     // Upward drag past slop, then a further in-bounds move that applies
     // `apply_boundary_conditions` and lets pixels exceed max_extent (damped
@@ -3052,7 +3052,7 @@ pub(crate) fn bouncing_fling_into_the_edge_overscrolls_and_returns() {
         .physics(physics)
         .child(SizedBox::new(300.0, 800.0));
     let mut scoped = fling_scoped(widget, Vsync::new(), tight(300.0, 300.0));
-    controller.set_pixels(300.0);
+    controller.jump_to(300.0).expect("no build is running");
 
     scoped.dispatch_pointer_down(150.0, 250.0);
     scoped.dispatch_pointer_move(150.0, 180.0);
@@ -3089,7 +3089,7 @@ pub(crate) fn clamping_fling_into_the_edge_rests_on_it() {
         Vsync::new(),
         tight(300.0, 300.0),
     );
-    controller.set_pixels(300.0);
+    controller.jump_to(300.0).expect("no build is running");
     laid.dispatch_pointer_down(150.0, 250.0);
     laid.dispatch_pointer_move(150.0, 180.0);
     laid.dispatch_pointer_move(150.0, 150.0);
@@ -3300,7 +3300,7 @@ impl flui_widgets::ScrollPhysics for JumpingPhysics {
         velocity: f64,
     ) -> Option<f64> {
         if let Some((controller, to)) = JUMP.with_borrow_mut(Option::take) {
-            controller.set_pixels(to);
+            controller.jump_to(to).expect("no build is running");
         }
         ClampingScrollPhysics::new().boundary_velocity(metrics, velocity)
     }
@@ -3500,7 +3500,7 @@ pub(crate) fn a_fresh_physics_each_build_keeps_the_fling_and_its_bounce() {
         )
     };
     let mut laid = crate::common::lay_out_animated(tree(), tight(300.0, 300.0), vsync.clone());
-    controller.set_pixels(300.0);
+    controller.jump_to(300.0).expect("no build is running");
     laid.dispatch_pointer_down(150.0, 250.0);
     laid.dispatch_pointer_move(150.0, 180.0);
     laid.dispatch_pointer_move(150.0, 150.0);

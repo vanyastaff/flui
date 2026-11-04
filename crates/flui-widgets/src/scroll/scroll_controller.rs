@@ -2,9 +2,10 @@
 //! position.
 //!
 //! A `ScrollController` is cheaply cloneable: every clone shares the same
-//! owner-local state via an `Rc`. Gesture callbacks inside `Scrollable` hold
-//! a clone and mutate the position; `AnimatedView`'s listenable subscription
-//! on the same position observes changes.
+//! owner-local state via an `Rc`. The attached `Scrollable`'s gesture
+//! handling moves the position through the controller's writer;
+//! `AnimatedView`'s listenable subscription on the same position observes
+//! changes.
 //!
 //! # Handle and position
 //!
@@ -12,6 +13,14 @@
 //! handle, and [`flui_rendering::view::ScrollPosition`] as the shared,
 //! `RenderViewport`-consumable state it wraps — and a controller is restricted
 //! to exactly one position (multi-position attach/detach is deferred).
+//!
+//! The controller makes its position and keeps the position's one
+//! [`ScrollOffsetWriter`]: no other handle can move the offset. Application
+//! code asks for motion with [`ScrollController::jump_to`] and
+//! [`ScrollController::animate_to`], which the attached
+//! [`Scrollable`](super::Scrollable) runs through the nested scroll channel
+//! (ADR-0209 §3); every other write is the scrollable's own, made for the
+//! input it handles.
 //!
 //! # Deferred (v1)
 //!
@@ -66,7 +75,7 @@ use std::time::Duration;
 use flui_animation::{Animation, AnimationController, AnimationRunFuture, MotionSpec, SharedCurve};
 use flui_foundation::panic::PanicRecovery;
 use flui_foundation::{Listenable, MutatedDuringBuild};
-use flui_rendering::view::{ScrollPosition, ViewportOffset};
+use flui_rendering::view::{OffsetWriteCause, ScrollOffsetWriter, ScrollPosition, ViewportOffset};
 
 /// What the mounted `Scrollable` a controller serves lends it, installed and
 /// removed together; the installer is recognised by the `Rc` it installed.
@@ -147,10 +156,11 @@ struct CommandSlot {
 
 /// A shared, cheaply-cloneable handle to a scroll position.
 ///
-/// All clones point to the same underlying `ScrollPositionState`. Gesture
-/// callbacks inside [`Scrollable`](super::Scrollable) hold a clone and call
-/// [`set_pixels`](Self::set_pixels); the `AnimatedView` listenable subscription
-/// on the controller triggers a rebuild whenever the position changes.
+/// All clones point to the same underlying position and its one writer.
+/// The [`Scrollable`](super::Scrollable) a controller is attached to moves
+/// the position for the input it handles; application code requests motion
+/// with [`jump_to`](Self::jump_to) and [`animate_to`](Self::animate_to). A
+/// subscription to [`listenable`](Self::listenable) hears every change.
 ///
 /// # Creating a controller
 ///
@@ -170,6 +180,10 @@ struct CommandSlot {
 #[derive(Clone)]
 pub struct ScrollController {
     position: ScrollPosition,
+    /// The position's one writer, shared by this controller's clones and
+    /// reached only from the scroll module: the attached scrollable's owner
+    /// writes through it, and the controller itself when no owner can.
+    writer: Rc<ScrollOffsetWriter>,
     /// The latest unserviced command, shared only within the owning UI lane.
     /// Replacement moves outgoing ownership beyond the cell borrow.
     pending_command: Rc<RefCell<CommandSlot>>,
@@ -191,7 +205,7 @@ impl std::fmt::Debug for ScrollController {
             .field("position", &self.position)
             .field("has_pending_command", &has_pending_command)
             .field("attached", &attached)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -210,11 +224,15 @@ impl ScrollController {
     /// `RenderViewport`'s own layout feeds extents back automatically.
     #[must_use]
     pub fn new() -> Self {
-        Self {
-            position: ScrollPosition::zero(),
-            pending_command: Rc::new(RefCell::new(CommandSlot::default())),
-            hooks: Rc::new(RefCell::new(None)),
-        }
+        Self::with_initial_scroll_offset(0.0)
+    }
+
+    /// The position's one writer. Only the scroll module reaches it: the
+    /// owner of an attached scrollable writes through it for the input it
+    /// handles, and every other module asks through
+    /// [`jump_to`](Self::jump_to) or [`animate_to`](Self::animate_to).
+    pub(super) fn writer(&self) -> &ScrollOffsetWriter {
+        &self.writer
     }
 
     /// The installed hooks, cloned out of their cell: calling one may
@@ -235,17 +253,20 @@ impl ScrollController {
     /// Create a new controller pre-seeded at `initial_scroll_offset` pixels,
     /// before any layout has committed extents.
     ///
-    /// The value is **not** clamped here —
-    /// extents are unknown until the first layout — so it is clamped exactly
-    /// like a value set via [`set_pixels`](Self::set_pixels) before mount: the
-    /// first `apply_content_dimensions` call a `Scrollable`/`Viewport` in
+    /// The value seeds the position and is **not** clamped here — extents
+    /// are unknown until the first layout — so the first
+    /// `apply_content_dimensions` call a `Scrollable`/`Viewport` in
     /// [`position`](Self::position) mode commits during layout brings it into
     /// `[min_scroll_extent, max_scroll_extent]`.
     #[must_use]
     pub fn with_initial_scroll_offset(initial_scroll_offset: f64) -> Self {
-        let controller = Self::new();
-        controller.set_pixels(initial_scroll_offset);
-        controller
+        let (position, writer) = ScrollPosition::with_writer(initial_scroll_offset);
+        Self {
+            position,
+            writer: Rc::new(writer),
+            pending_command: Rc::new(RefCell::new(CommandSlot::default())),
+            hooks: Rc::new(RefCell::new(None)),
+        }
     }
 
     // -- Reads ---------------------------------------------------------------
@@ -282,25 +303,7 @@ impl ScrollController {
         self.max_scroll_extent() - self.min_scroll_extent()
     }
 
-    // -- Writes --------------------------------------------------------------
-
-    /// Set the scroll offset to `pixels` and notify listeners if it actually
-    /// changed (epsilon-guarded — a same-value write does not re-notify).
-    ///
-    /// No clamping is applied here; the caller is responsible for running the
-    /// value through `ScrollPhysics::apply_boundary_conditions` first when
-    /// interactive behaviour is desired. This keeps the controller
-    /// physics-agnostic (it is equally useful for programmatic jumps, physics
-    /// updates, and animation-driven ticks).
-    ///
-    /// It is a raw write below the nested scroll channel: no
-    /// [`NestedScrollConnection`](super::NestedScrollConnection) is offered
-    /// it, and it starts no sequence. A scroll the
-    /// chain should share goes through [`jump_to`](Self::jump_to) or
-    /// [`animate_to`](Self::animate_to).
-    pub fn set_pixels(&self, pixels: f64) {
-        self.position.set_pixels(pixels);
-    }
+    // -- Requests ------------------------------------------------------------
 
     /// Jump to `pixels`, clamped to `[min_scroll_extent, max_scroll_extent]`
     /// when the jump lands. Notifies listeners on a real change; does not
@@ -330,7 +333,11 @@ impl ScrollController {
         Ok(())
     }
 
-    fn jump(&self, pixels: f64) {
+    /// [`jump_to`](Self::jump_to) for a widget of the scroll module that
+    /// moves the position from its own lifecycle, which may run while the
+    /// scrollable's runtime builds: an anchored drag resting on an anchor as
+    /// it lets go of the controller.
+    pub(super) fn jump(&self, pixels: f64) {
         if !pixels.is_finite() {
             tracing::warn!(
                 pixels,
@@ -364,19 +371,21 @@ impl ScrollController {
         if current {
             // The stop may have replaced the hooks: the jump goes through
             // whatever is installed now.
+            // With no owner to step it through a chain, the controller
+            // writes the clamped target itself.
+            let writer = &self.writer;
             match self.hooks() {
                 Some(hooks) => {
-                    let position = self.position.clone();
                     recovery.scope().run(|| {
                         if !(hooks.jump)(clamped) {
-                            position.set_pixels(clamped);
+                            writer.set_pixels(clamped, OffsetWriteCause::Programmatic);
                         }
                     });
                     recovery.scope().retire(hooks);
                 }
-                None => self
-                    .position
-                    .set_pixels_with_recovery(clamped, &mut recovery.scope()),
+                None => recovery
+                    .scope()
+                    .run(|| writer.set_pixels(clamped, OffsetWriteCause::Programmatic)),
             }
         }
         // Pixel publication precedes pending-curve destruction, so a newer jump
@@ -446,7 +455,10 @@ impl ScrollController {
             curve,
         });
         recovery.scope().retire(retired);
-        self.position.notify_with_recovery(&mut recovery.scope());
+        // The attached scrollable services the slot when the position
+        // notifies.
+        let writer = &self.writer;
+        recovery.scope().run(|| writer.notify());
         recovery.finish();
         Ok(())
     }
@@ -464,10 +476,10 @@ impl ScrollController {
     /// This method's own `apply_viewport_dimension`/`apply_content_dimensions`
     /// calls can themselves mark the position dirty and queue a coalesced
     /// flush (if a flush handle happens to be installed — e.g. this
-    /// controller is also wired into a `Scrollable`). Notifying via
-    /// [`ScrollPosition::flush_now`] rather than a plain `notify` consumes
-    /// that queued flush's dirty state first, so it becomes a no-op instead
-    /// of firing a second, redundant notification once the frame completes.
+    /// controller is also wired into a `Scrollable`). The writer's
+    /// [`notify`](ScrollOffsetWriter::notify) consumes that queued flush's
+    /// dirty state first, so it becomes a no-op instead of firing a second,
+    /// redundant notification once the frame completes.
     ///
     /// # Arguments
     ///
@@ -515,22 +527,35 @@ impl ScrollController {
         }
         let mut position = self.position.clone();
         // Both write straight into the shared state (and clamp `pixels` to
-        // the new range, same as before); `flush_now` below is what makes
-        // this synchronous instead of the coalesced layout flush.
+        // the new range, same as before); the writer's `notify` below is
+        // what makes this synchronous instead of the coalesced layout flush.
         let _ = position.apply_viewport_dimension(viewport_dimension_pixels);
         let _ = position.apply_content_dimensions(min_scroll_extent, max_scroll_extent);
-        self.position.flush_now();
+        self.writer.notify();
         Ok(())
     }
 
     /// The shared [`ScrollPosition`] backing this controller.
     ///
     /// Inject this into a `Scrollable`/`Viewport`'s `.position(...)` builder
-    /// so gestures and `RenderViewport`'s committed content extents observe
-    /// (and write) the same state this controller reads.
+    /// so `RenderViewport` lays out at the offset this controller's writer
+    /// moves and reports its committed content extents into the same state
+    /// this controller reads. The position reads and subscribes; it cannot
+    /// scroll.
     #[must_use]
     pub fn position(&self) -> ScrollPosition {
         self.position.clone()
+    }
+
+    /// Put the offset at `pixels`, unclamped and outside the nested scroll
+    /// channel, in a test: for a starting state no input reaches and keeps,
+    /// such as a bouncing list resting past its edge. Every other offset
+    /// comes from input or from [`jump_to`](Self::jump_to) and
+    /// [`animate_to`](Self::animate_to).
+    #[cfg(any(test, feature = "testing"))]
+    pub fn place_for_test(&self, pixels: f64) {
+        self.writer
+            .set_pixels(pixels, OffsetWriteCause::Programmatic);
     }
 
     // -- animate_to servicing (ScrollableState only) --------------------------
@@ -600,10 +625,8 @@ impl ScrollController {
         let pending = self.take_pending_command();
         if let Some(PendingScrollCommand::JumpTo { target_pixels }) = &pending {
             let target = target_pixels.clamp(self.min_scroll_extent(), self.max_scroll_extent());
-            let mut recovery = PanicRecovery::new();
-            self.position
-                .set_pixels_with_recovery(target, &mut recovery.scope());
-            recovery.finish();
+            self.writer
+                .set_pixels(target, OffsetWriteCause::Programmatic);
         }
     }
 
@@ -648,7 +671,7 @@ impl ScrollController {
                     .retarget(target_pixels, &MotionSpec::Curve { duration, curve })
                     .ok()
                     .filter(|_| fling.status().is_directional())?;
-                self.position().set_is_scrolling(true);
+                self.writer.set_is_scrolling(true);
                 Some(run)
             }
             PendingScrollCommand::JumpTo { target_pixels } => {
@@ -657,7 +680,8 @@ impl ScrollController {
                 let _ = fling.stop();
                 let target =
                     target_pixels.clamp(self.min_scroll_extent(), self.max_scroll_extent());
-                self.set_pixels(target);
+                self.writer
+                    .set_pixels(target, OffsetWriteCause::Programmatic);
                 None
             }
             PendingScrollCommand::Cancel => {

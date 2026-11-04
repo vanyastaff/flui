@@ -106,7 +106,7 @@ fn decorated_box_snapshot() {
 pub fn scrolling_lazy_sliver_request_band_tracks_scroll_position_and_stays_bounded() {
     use flui_objects::RenderSliverList;
     use flui_rendering::constraints::AxisDirection;
-    use flui_rendering::{testing::sliver_node, view::ScrollableViewportOffset};
+    use flui_rendering::{testing::sliver_node, view::ScrollPosition};
 
     let n_items = 1_000usize;
     let item_height = 50.0_f64;
@@ -140,8 +140,8 @@ pub fn scrolling_lazy_sliver_request_band_tracks_scroll_position_and_stays_bound
     };
 
     let scroll_to = |run: &mut flui_rendering::testing::LayoutRun, pixels: f64| {
-        run.update::<flui_objects::RenderViewport<ScrollableViewportOffset>>(vp_id, |vp| {
-            vp.offset_mut().set_pixels(pixels);
+        run.update::<flui_objects::RenderViewport<ScrollPosition>>(vp_id, |vp| {
+            let _ = vp.set_offset(ScrollPosition::fixed(pixels));
         });
         run.relayout();
     };

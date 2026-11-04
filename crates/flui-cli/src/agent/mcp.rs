@@ -31,12 +31,13 @@ use std::time::Duration;
 use flui_protocol::method::{
     Method, MethodEffect, MotionSet, SemanticsAct, SemanticsRead, WindowsList,
 };
+use flui_protocol::session::ClientRole;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
+use super::Credentials;
 use super::client::{Connection, Failure};
-use super::{Credentials, ENDPOINT_ENV, TOKEN_ENV, find_session_file, target_dir_override};
 
 /// The MCP revisions this server speaks, newest first. A client that asks for
 /// another gets the newest; the tools are plain and the same in each.
@@ -328,29 +329,9 @@ impl Live {
         }
     }
 
-    /// The credentials to use now: the session file named on the command
-    /// line, else the environment, else the nearest `target/flui-agent.json`.
-    fn credentials(&self) -> Result<Credentials, String> {
-        if let Some(path) = &self.session {
-            return Credentials::read(path);
-        }
-        if let Some(credentials) = Credentials::from_env() {
-            return Ok(credentials);
-        }
-        let cwd = std::env::current_dir().map_err(|e| format!("no working directory: {e}"))?;
-        match find_session_file(&cwd, target_dir_override().as_deref()) {
-            Some(path) => Credentials::read(&path),
-            None => Err(format!(
-                "no running FLUI app found from {}. Start one with `flui run --agent`, \
-                 or pass --session <file>, or set {ENDPOINT_ENV} and {TOKEN_ENV}",
-                cwd.display()
-            )),
-        }
-    }
-
     fn connect(&self) -> Result<Connection, Failure> {
-        let credentials = self.credentials().map_err(Failure::Transport)?;
-        Connection::connect(&credentials, CONNECT_WAIT).map_err(|why| {
+        let credentials = Credentials::find(self.session.as_deref()).map_err(Failure::Transport)?;
+        Connection::connect(&credentials, ClientRole::Driver, CONNECT_WAIT).map_err(|why| {
             Failure::Transport(format!(
                 "{why}. Is the app running? Start it with `flui run --agent`."
             ))

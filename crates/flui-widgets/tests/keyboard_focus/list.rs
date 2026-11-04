@@ -246,6 +246,68 @@ pub(crate) fn focused_row_is_pinned_while_scrolled_away() {
     );
 }
 
+/// A list that scrolls to reach a row it has not built moves through its
+/// scrollable's nested scroll chain: the connection around it is offered the
+/// whole move, as programmatic steps of a sequence of its own (ADR-0209 §3).
+pub(crate) fn reaching_an_unbuilt_row_scrolls_through_the_nested_scroll_chain() {
+    use crate::nested_scroll::Probe;
+    use flui_widgets::{NestedScroll, ScrollCause};
+
+    let scroll = ScrollController::new();
+    let probe = Probe::new();
+    let list = Scrollable::new()
+        .controller(scroll.clone())
+        .viewport_builder(Rc::new(|position| {
+            ListView::builder(10_000, ROW, |index| {
+                (index < 10_000).then(|| button(format!("row{index}")))
+            })
+            .position(position)
+            .focusable(true)
+            .semantics_label("Notes")
+            .boxed()
+        }));
+    let mut app = lay_out(
+        Column::new(vec![
+            SizedBox::new(300.0, 200.0)
+                .child(NestedScroll::new(probe.connection(), list))
+                .boxed(),
+            Expanded::new(SizedBox::new(300.0, 0.0)).boxed(),
+        ]),
+        tight(300.0, 400.0),
+    );
+    app.enable_semantics();
+    settle(&mut app);
+    tab_once(&mut app);
+    assert_eq!(focused(&app).as_deref(), Some("row0"));
+    let _ = probe.take();
+
+    assert!(key(&mut app, NamedKey::End));
+    assert_eq!(
+        focused(&app).as_deref(),
+        Some("row9999"),
+        "End builds and focuses the last row"
+    );
+    let moved = scroll.pixels();
+    assert!(moved > 0.0, "the list scrolled to reach the row");
+    let steps = probe.steps();
+    assert!(
+        steps
+            .iter()
+            .all(|step| step.cause == ScrollCause::Programmatic),
+        "the move is programmatic: {steps:?}"
+    );
+    let offered: f64 = steps.iter().map(|step| step.available.y).sum();
+    assert_eq!(
+        offered, moved,
+        "the connection is offered the whole move, which a direct write of the offset skips"
+    );
+    assert!(
+        !probe.started().is_empty() && !probe.ended().is_empty(),
+        "the move is a sequence of its own: {:?}",
+        probe.seen()
+    );
+}
+
 /// The `before` and `after` buttons around an empty focusable list.
 fn empty_app() -> LaidOut {
     let scroll = ScrollController::new();

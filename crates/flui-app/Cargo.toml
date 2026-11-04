@@ -106,7 +106,7 @@ flui-native = { path = "../flui-native", version = "=0.2.0-dev" }
 flui-widgets = { path = "../flui-widgets", version = "=0.2.0-dev" }
 # The frame runtime (ADR-0083): the UI runtime core the runners drive, and the
 # per-presentation lanes it owns. `hot-reload` is its `reload::ReloadTier`, the
-# reload an installed development reload hook (ADR-0094 §1) applies to a
+# reload an installed development reload hook (ADR-0311 §1) applies to a
 # UI runtime; it names no reload tool.
 flui-runtime = { path = "../flui-runtime", version = "=0.2.0-dev", features = ["hot-reload"] }
 

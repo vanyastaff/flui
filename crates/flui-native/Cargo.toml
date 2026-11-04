@@ -841,6 +841,19 @@ layer = 3
 tier = "H"
 tier-kind = "internal"
 order = 1
+# ADR-0081 §2: the host builds and drives OS cycles and owns the OS types
+# (ADR-0151 §8); the frame engine, the rest of the render pipeline and the
+# composition root above them stay unreachable in every root build. These also
+# enforce the host/engine split this file's frame-ownership paragraphs cite.
+reach-forbid = [
+    "flui-engine",
+    "flui-rendering",
+    "flui-view",
+    "flui-widgets",
+    "flui-runtime",
+    "flui-sdk",
+    "wgpu",
+]
 # ADR-0082 §2: only composition roots link the OS backends. Crates that
 # program against a capability trait depend on `flui-platform` instead.
 # Examples and tools are applications and are exempt from this list.

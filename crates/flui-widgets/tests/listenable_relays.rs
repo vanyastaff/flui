@@ -7,7 +7,7 @@ use std::rc::Rc;
 
 use flui_foundation::Listenable;
 use flui_foundation::geometry::Matrix4;
-use flui_rendering::view::ScrollPosition;
+use flui_rendering::view::{OffsetWriteCause, ScrollPosition};
 use flui_widgets::interaction::TransformationController;
 use flui_widgets::text::TextEditingController;
 use flui_widgets::widget_state::{WidgetState, WidgetStates, WidgetStatesController};
@@ -56,7 +56,9 @@ pub fn transformation_controller_relays_keep_failure_custody() {
 }
 
 pub fn scroll_position_relays_keep_failure_custody() {
-    let position = ScrollPosition::new(0.0);
+    let (position, writer) = ScrollPosition::with_writer(0.0);
     let listenable = position.listenable();
-    relay_sees_the_enclosing_failure(&*listenable, || position.notify());
+    relay_sees_the_enclosing_failure(&*listenable, || {
+        writer.set_pixels(10.0, OffsetWriteCause::Programmatic);
+    });
 }

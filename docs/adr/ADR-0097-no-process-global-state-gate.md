@@ -24,7 +24,9 @@
   [ADR-0078](ADR-0078-rules-live-in-types-and-lints.md),
   [ADR-0091](ADR-0091-one-owner-thread-isolated-realms-raster-thread.md),
   [ADR-0092](ADR-0092-per-realm-text-over-parley.md),
-  [ADR-0094](ADR-0094-hot-reload-through-subsecond.md)
+  [ADR-0311](ADR-0311-development-reload-is-a-hook-the-application-installs.md) (the exit of the
+  dlopen path's entries),
+  [ADR-0094](ADR-0094-hot-reload-through-subsecond.md) (the rejected Subsecond record)
 - **Refs:** principle P3 and its gate in the [decision index](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/design/decisions.md); the
   [architecture review](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/2026-09-25-architecture-review/report-architecture.ru.md)
 
@@ -65,8 +67,9 @@ This state costs three things. It breaks isolation: two UI runtimes share one fo
 time dilation, and `TIME_DILATION` contradicts ADR-0027 §8 ("Tickers and animation controllers
 belong to their UI runtime's scheduler"). It breaks code patching: a copy of a static in a second
 image, or a reset thread-local, splits whatever lives there — the dlopen worker already needed
-a fix for its own `FONT_SYSTEM` (`docs/hot-reload.md:213`), and ADR-0094 makes globals reduction
-a precondition of its spike. It breaks determinism of tests that run in one process.
+a fix for its own `FONT_SYSTEM` (`docs/hot-reload.md:213`), and the Subsecond spike broke on
+app-crate statics and thread-locals (ADR-0094), so a code patcher that returns (ADR-0311 §7) needs
+globals reduced first. It breaks determinism of tests that run in one process.
 
 **Nothing guards against a new one.** `docs/runtime-contract.toml` and its checker were
 deleted deliberately in cf46dfe20 (#1283), whose message says those rules "are types and
@@ -131,7 +134,8 @@ findings like any other: `TIME_DILATION` is configuration, not an identifier.
   beside `APP_RUNTIME` are not trampolines; they fold into it or into a UI runtime.
 - **Everything else** is an allowlist entry with a reason and either an `exit`, the ADR whose
   change removes it (`FONT_SYSTEM` → ADR-0092;
-  `REQUEST_REBUILD` and `REGISTRY_STACK`'s `ManuallyDrop` form → ADR-0094; `TIME_DILATION`
+  `REQUEST_REBUILD` and `REGISTRY_STACK`'s `ManuallyDrop` form → ADR-0311, with the dlopen path;
+  `TIME_DILATION`
   → this ADR, as a property of each presentation's frame clock), or a permanent
   `grant = "ADR-0097"` with a `class` the gate checks:
   - `trampoline` — the one named exception above; it must be a `thread_local!` entry.
@@ -243,4 +247,4 @@ runs on the pinned stable toolchain, which dylint does not.
   file, or removing a seeded entry, makes it exit 1.
 - Each removal lands with a test that fails with the global back: two UI runtimes with different time
   dilation animate at different rates; two UI runtimes register different fonts and each shapes only
-  with its own; a navigation intent reaches the UI runtime that owns the router.
+  with its own.

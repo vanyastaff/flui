@@ -59,7 +59,7 @@ live plugin-backed values safe.
 
 ### The host drives reload through a hook it does not name
 
-`flui-app` has no edge to this crate (ADR-0094 §1). `hook.rs` implements
+`flui-app` has no edge to this crate (ADR-0311 §6). `hook.rs` implements
 `flui_sdk::view::dev_reload::DevReloadHook` twice, and the application installs
 one with `AppConfig::with_dev_reload`. Both sit behind the `host-hook` feature,
 the only one that brings in `flui-sdk` (and with it the widget catalog), so a
@@ -99,7 +99,7 @@ one were passed.
 
 The cost: a face the host app registers does not reach the plugin's text.
 Carrying the font bytes across the FFI into the plugin's collection is a
-follow-up, unless ADR-0094's replacement of the `dlopen` path removes the
+follow-up, unless a code patcher's replacement of the `dlopen` path (ADR-0311 §7) removes the
 boundary first.
 
 Pinned by `a_plugin_pipeline_measures_through_the_context_it_is_given`

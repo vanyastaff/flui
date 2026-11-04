@@ -593,6 +593,10 @@ fn keyboard_focus_contracts() {
                 crate::keyboard_focus::list::list_keyboard_navigation,
             ),
             (
+                "keyboard_focus::list::reaching_an_unbuilt_row_scrolls_through_the_nested_scroll_chain",
+                crate::keyboard_focus::list::reaching_an_unbuilt_row_scrolls_through_the_nested_scroll_chain,
+            ),
+            (
                 "keyboard_focus::list::sliver_keyboard_navigation",
                 crate::keyboard_focus::list::sliver_keyboard_navigation,
             ),

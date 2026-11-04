@@ -1862,7 +1862,7 @@ fn native_fling_profile_controls_real_scroll_inertia() {
             .expect("actual runtime frame");
     };
     frame();
-    controller.set_pixels(500.0);
+    controller.jump_to(500.0).expect("no build is running");
     for attempt in 0..3 {
         target
             .input(

@@ -621,7 +621,7 @@ fn page_resize_survives_text_failure(resize_cross_axis: bool) {
         view::{DimensionChangePolicy, ScrollPosition, ViewportOffset},
     };
 
-    let position = ScrollPosition::new(100.0);
+    let position = ScrollPosition::fixed(100.0);
     position.set_dimension_policy(DimensionChangePolicy::KeepFractionalPage {
         viewport_fraction: 1.0,
         initial_page: None,
@@ -858,10 +858,6 @@ fn rejected_text_layout_is_fallible_through_queries_and_frames() {
         (
             "fixed_offset_refuses_a_stale_proposal",
             fixed_offset_refuses_a_stale_proposal,
-        ),
-        (
-            "scrollable_offset_refuses_a_stale_proposal",
-            scrollable_offset_refuses_a_stale_proposal,
         ),
         (
             "scroll_position_refuses_a_stale_proposal",
@@ -1193,7 +1189,7 @@ struct CorrectionTextSliver {
     shrunk_extent: f64,
     reject: bool,
     text: TextContextHandle,
-    input_during_measurement: Option<flui_rendering::view::ScrollPosition>,
+    input_during_measurement: Option<std::rc::Rc<flui_rendering::view::ScrollOffsetWriter>>,
 }
 
 impl flui_foundation::inspect::Inspect for CorrectionTextSliver {
@@ -1213,8 +1209,8 @@ impl flui_rendering::traits::RenderSliver for CorrectionTextSliver {
         ctx: &mut flui_rendering::context::SliverLayoutContext<'_, Leaf, Self::ParentData>,
     ) -> flui_rendering::RenderResult<flui_rendering::constraints::SliverGeometry> {
         let constraints = *ctx.constraints();
-        if let Some(position) = self.input_during_measurement.take() {
-            position.set_pixels(200.0);
+        if let Some(writer) = self.input_during_measurement.take() {
+            writer.set_pixels(200.0, flui_rendering::view::OffsetWriteCause::UserInput);
         }
         let mut painter = flui_painting::TextPainter::new();
         painter.set_text(Some(
@@ -1248,7 +1244,7 @@ fn rejected_correction_preserves_scroll_metrics(shrink_wrap: bool, shrunk_extent
         view::{ScrollPosition, ViewportOffset},
     };
 
-    let position = ScrollPosition::new(100.0);
+    let position = ScrollPosition::fixed(100.0);
     let text = ui_runtime_text();
     let child = sliver_node(CorrectionTextSliver {
         shrink: false,
@@ -1342,7 +1338,8 @@ fn scroll_input_during_layout_is_retried(shrink_wrap: bool) {
     };
 
     let text = ui_runtime_text();
-    let position = ScrollPosition::new(100.0);
+    let (position, writer) = ScrollPosition::with_writer(100.0);
+    let writer = std::rc::Rc::new(writer);
     let child = sliver_node(CorrectionTextSliver {
         shrink: false,
         shrunk_extent: 150.0,
@@ -1374,7 +1371,7 @@ fn scroll_input_during_layout_is_retried(shrink_wrap: bool) {
     flui_rendering::testing::edit_render_object::<CorrectionTextSliver, _, _>(
         &mut owner,
         content,
-        |sliver| sliver.input_during_measurement = Some(position.clone()),
+        |sliver| sliver.input_during_measurement = Some(std::rc::Rc::clone(&writer)),
     );
     owner.mark_needs_layout(content);
     let (owner, result) = owner.run_frame();
@@ -1413,7 +1410,7 @@ fn text_failure_retains_independent_pending_layout() {
     use flui_rendering::{constraints::AxisDirection, testing::sliver_node, view::ScrollPosition};
 
     let text = ui_runtime_text();
-    let position = ScrollPosition::new(100.0);
+    let position = ScrollPosition::fixed(100.0);
     let viewport = |offset| {
         RenderViewport::with_offset(
             AxisDirection::TopToBottom,
@@ -1428,7 +1425,7 @@ fn text_failure_retains_independent_pending_layout() {
                 box_node(RenderConstrainedBox::new(BoxConstraints::tight(Size::new(
                     100.0, 100.0,
                 ))))
-                .child(box_node(viewport(ScrollPosition::new(0.0))).child(
+                .child(box_node(viewport(ScrollPosition::fixed(0.0))).child(
                     sliver_node(RenderSliverToBoxAdapter::new()).child(paragraph("first boundary")),
                 )),
             )
@@ -1525,18 +1522,12 @@ fn fixed_offset_refuses_a_stale_proposal() {
     stale_proposal_preserves_input(flui_rendering::view::FixedViewportOffset::zero());
 }
 
-fn scrollable_offset_refuses_a_stale_proposal() {
-    stale_proposal_preserves_input(flui_rendering::view::ScrollableViewportOffset::zero());
-}
-
 fn scroll_position_refuses_a_stale_proposal() {
-    stale_proposal_preserves_input(flui_rendering::view::ScrollPosition::new(0.0));
+    stale_proposal_preserves_input(flui_rendering::view::ScrollPosition::fixed(0.0));
 }
 
 fn unchanged_nonfinite_offset_is_not_new_input() {
-    use flui_rendering::view::{
-        FixedViewportOffset, ScrollPosition, ScrollableViewportOffset, ViewportOffset,
-    };
+    use flui_rendering::view::{FixedViewportOffset, ScrollPosition, ViewportOffset};
     fn unchanged<O: ViewportOffset>(mut offset: O) {
         let proposal = offset.begin_layout();
         offset
@@ -1544,8 +1535,7 @@ fn unchanged_nonfinite_offset_is_not_new_input() {
             .expect("unchanged admitted input is not a transient change");
     }
     unchanged(FixedViewportOffset::new(f64::NAN));
-    unchanged(ScrollableViewportOffset::new(f64::NAN));
-    unchanged(ScrollPosition::new(f64::NAN));
+    unchanged(ScrollPosition::fixed(f64::NAN));
 }
 
 fn shrink_wrapped_page_resize_measures_the_mapped_position() {
@@ -1558,7 +1548,7 @@ fn shrink_wrapped_page_resize_measures_the_mapped_position() {
         view::{DimensionChangePolicy, ScrollPosition, ViewportOffset},
     };
 
-    let position = ScrollPosition::new(100.0);
+    let position = ScrollPosition::fixed(100.0);
     position.set_dimension_policy(DimensionChangePolicy::KeepFractionalPage {
         viewport_fraction: 1.0,
         initial_page: None,

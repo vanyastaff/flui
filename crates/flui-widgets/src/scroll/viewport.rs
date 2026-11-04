@@ -8,7 +8,9 @@ use flui_objects::{RenderShrinkWrappingViewport, RenderViewport};
 use flui_painting::paint::Clip;
 use flui_rendering::constraints::AxisDirection;
 use flui_rendering::protocol::BoxProtocol;
-use flui_rendering::view::{CacheExtentStyle, ScrollPosition, SliverPaintOrder};
+use flui_rendering::view::{
+    CacheExtentStyle, ScrollPosition, SliverPaintOrder, ViewportOffset as _,
+};
 use flui_view::BoxedView;
 use flui_view::seq::ViewSeq;
 
@@ -20,11 +22,11 @@ use crate::__private::generic_render_view_element;
 /// different `RenderObject`s (`RenderViewport` vs
 /// `RenderShrinkWrappingViewport`) underneath.
 ///
-/// - `Fixed`: the widget owns a private `ScrollPosition` and pushes this
-///   value into it on every rebuild — today's programmatic-offset behavior,
-///   with no external subscriber.
+/// - `Fixed`: the widget owns a private [`ScrollPosition::fixed`] at this
+///   value, and a rebuild with another value installs a new one — today's
+///   programmatic-offset behavior, with no external subscriber.
 /// - `Position`: an external `ScrollPosition` (typically a
-///   `ScrollController`'s) is injected directly. Gestures write it, and the
+///   `ScrollController`'s) is injected directly. Its writer moves it, and the
 ///   render object's committed content extents (`RenderViewport` or
 ///   `RenderShrinkWrappingViewport::perform_layout`) flush back into it — the
 ///   content-dimension feedback loop.
@@ -170,7 +172,7 @@ impl<C> Viewport<C> {
     fn build_render_object(&self) -> RenderViewport<ScrollPosition> {
         let cross_axis_direction = default_cross_axis_direction(self.axis_direction);
         let position = match &self.offset_source {
-            OffsetSource::Fixed(pixels) => ScrollPosition::new(*pixels),
+            OffsetSource::Fixed(pixels) => ScrollPosition::fixed(*pixels),
             OffsetSource::Position(position) => position.clone(),
         };
         let mut render_object =
@@ -242,22 +244,20 @@ where
         impact |= render_object.set_clip_behavior(self.clip_behavior);
         match &self.offset_source {
             OffsetSource::Fixed(pixels) => {
-                // Compat with today's behavior: push the new value into the
-                // widget-owned position every rebuild — UNLESS the position
-                // currently installed is a foreign one left over from a
-                // PRIOR Position-mode build (a mode switch on the same
-                // render object; `update_render_object` only sees this
-                // rebuild's config, not the previous one's, so identity is
-                // the only signal available). Pushing into a foreign,
-                // externally shared `ScrollPosition` would stomp whatever
-                // the controller/gesture side holds. `is_uniquely_held`
+                // Compat with today's behavior: the rebuild's value is the
+                // offset. A fixed position has no writer, so a new value is
+                // a new private position. The installed one is kept only
+                // when it is this widget's own at that value — never a
+                // foreign one left over from a PRIOR Position-mode build (a
+                // mode switch on the same render object;
+                // `update_render_object` only sees this rebuild's config, so
+                // identity is the only signal available). `is_uniquely_held`
                 // distinguishes the two: a private, widget-owned position
                 // has no other clone alive; an injected one is always
                 // shared with at least the controller that owns it.
-                if render_object.offset().is_uniquely_held() {
-                    render_object.offset().set_pixels(*pixels);
-                } else {
-                    impact |= render_object.set_offset(ScrollPosition::new(*pixels));
+                let installed = render_object.offset();
+                if !(installed.is_uniquely_held() && installed.pixels() == *pixels) {
+                    impact |= render_object.set_offset(ScrollPosition::fixed(*pixels));
                 }
             }
             OffsetSource::Position(position) => {
@@ -367,7 +367,7 @@ impl<C> ShrinkWrappingViewport<C> {
     fn build_render_object(&self) -> RenderShrinkWrappingViewport<ScrollPosition> {
         let cross_axis_direction = default_cross_axis_direction(self.axis_direction);
         let position = match &self.offset_source {
-            OffsetSource::Fixed(pixels) => ScrollPosition::new(*pixels),
+            OffsetSource::Fixed(pixels) => ScrollPosition::fixed(*pixels),
             OffsetSource::Position(position) => position.clone(),
         };
         let mut render_object = RenderShrinkWrappingViewport::with_offset(
@@ -426,14 +426,11 @@ where
         match &self.offset_source {
             OffsetSource::Fixed(pixels) => {
                 // See `Viewport::update_render_object`'s matching arm for the
-                // full rationale: only push into the installed offset when it
-                // is still privately (uniquely) held, otherwise a mode switch
-                // away from a prior Position-mode build would stomp the
-                // foreign, externally shared `ScrollPosition`.
-                if render_object.offset().is_uniquely_held() {
-                    render_object.offset().set_pixels(*pixels);
-                } else {
-                    impact |= render_object.set_offset(ScrollPosition::new(*pixels));
+                // full rationale: keep the installed offset only when it is
+                // this widget's own fixed one at the requested value.
+                let installed = render_object.offset();
+                if !(installed.is_uniquely_held() && installed.pixels() == *pixels) {
+                    impact |= render_object.set_offset(ScrollPosition::fixed(*pixels));
                 }
             }
             OffsetSource::Position(position) => {

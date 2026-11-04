@@ -2,9 +2,12 @@
 
 - **Status:** Accepted (2026-07-09)
 - **Date:** 2026-07-09
-- **Related:** [ADR-0093](ADR-0093-router-is-the-primary-navigation-api.md) (a proposed typed
-  Router that would replace the Navigator-first shape; §1's pure-data history flush and §3's
-  `dyn Any` pop result would carry over)
+- **Superseded-by:** [ADR-0093](ADR-0093-router-is-the-primary-navigation-api.md) for §2 (a
+  navigation handle is a `RouterHandle` acquired in a lifecycle hook, not a `NavigatorHandle`
+  looked up from a build context, and the Navigator is the Router's internal page stack) and for
+  §3 only where the result crosses as `Box<dyn Any + Send>` and a mismatched type completes with
+  `None` (it crosses as `Box<dyn Any>` and a mismatch is `RouteResultError::TypeMismatch`); §1's
+  pure-data history flush stays
 
 ## Context
 

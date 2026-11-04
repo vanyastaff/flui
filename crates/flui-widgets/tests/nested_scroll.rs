@@ -1972,7 +1972,7 @@ pub(crate) fn a_step_that_is_not_finite_is_dropped_at_the_channel() {
     controller
         .update_dimensions(300.0, -f64::MAX, f64::MAX)
         .expect("ordered extents");
-    controller.set_pixels(-f64::MAX);
+    controller.jump_to(-f64::MAX).expect("no build is running");
     let jumped = catch_unwind(AssertUnwindSafe(|| controller.jump_to(f64::MAX)));
     assert!(
         jumped.is_ok(),
@@ -2557,16 +2557,16 @@ pub(crate) fn anchor_correction_bypasses_the_channel() {
         probe.take();
 
         // Controls: the comparison below tells a move through the channel
-        // from one outside it. A direct position write is a bypass: the offset
+        // from one outside it. A test's placement is outside it: the offset
         // moves and the probe hears nothing. A jump is a programmatic step:
         // the probe hears exactly what moved.
         let resting = controller.pixels();
-        controller.set_pixels(resting - 30.0);
+        controller.place_for_test(resting - 30.0);
         laid.tick();
         assert_eq!(
             probe.steps(),
             vec![],
-            "{device:?}: control: a direct write bypasses the channel"
+            "{device:?}: control: a placement outside the channel is not offered"
         );
         controller.jump_to(resting).expect("no build is running");
         let jump: Vec<_> = probe.steps();
@@ -2895,7 +2895,7 @@ pub(crate) fn a_remainder_moves_an_overscrolled_ancestor_only_toward_its_range()
         );
         inner.jump_to(800.0).expect("no build is running");
         laid.tick();
-        outer.set_pixels(-100.0);
+        outer.place_for_test(-100.0);
         laid.tick();
         let mut track = Vec::new();
         laid.replay_with(&slow(device, at(150.0, 280.0), at(150.0, 230.0)), |_, _| {
@@ -2922,7 +2922,7 @@ pub(crate) fn a_remainder_moves_an_overscrolled_ancestor_only_toward_its_range()
             vsync,
         );
         laid.tick();
-        outer.set_pixels(-100.0);
+        outer.place_for_test(-100.0);
         laid.tick();
         let mut track = Vec::new();
         laid.replay_with(&slow(device, at(150.0, 180.0), at(150.0, 230.0)), |_, _| {
@@ -3824,7 +3824,7 @@ pub(crate) fn drag_autoscroll_from_past_an_edge_moves_by_its_step() {
     )
     .boxed();
     let laid = mounted(tree, vsync);
-    controller.set_pixels(-100.0);
+    controller.place_for_test(-100.0);
 
     // Near the bottom edge: toward the content, by the frame's step.
     let drag = HoveringDrag::enter(&laid, 290.0);

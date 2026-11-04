@@ -1063,7 +1063,7 @@ Unbounded configuration is explicit; no literal infinite endpoint pair or
 fallible range construction is needed.
 
 `scroll_controller.rs`'s `service_pending_command` raises
-`ScrollPosition::set_is_scrolling(true)` only AFTER
+`ScrollOffsetWriter::set_is_scrolling(true)` only AFTER
 `fling.animate_to_curved(..)` returns `Ok` AND the resulting status is
 still running. A refused start (a non-finite target reaching this call)
 must not park the scrollable in "scrolling" forever, and a start that

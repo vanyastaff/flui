@@ -28,8 +28,7 @@ use flui_rendering::{
     pipeline::LocalRenderInvalidationHandle,
     traits::{RenderBox, SemanticsClip},
     view::{
-        CacheExtentStyle, ScrollableViewportOffset, SliverPaintOrder, ViewportLayout as _,
-        ViewportOffset,
+        CacheExtentStyle, ScrollPosition, SliverPaintOrder, ViewportLayout as _, ViewportOffset,
     },
 };
 
@@ -56,8 +55,8 @@ impl<O> std::fmt::Debug for OffsetListener<O> {
 /// Builds the render-side [`ViewportOffset`] listener that `attach` (and any
 /// later `set_offset` re-registration) installs: a self-mark that requests a
 /// re-layout of the node bound to `handle` whenever the offset's `pixels`
-/// changes out-of-band — a gesture's `set_pixels`, a
-/// `ScrollController::jump_to`, or the post-frame content-dimension flush.
+/// changes out-of-band — a write of its `ScrollOffsetWriter` (a gesture, a
+/// `ScrollController::jump_to`), or the post-frame content-dimension flush.
 /// `RenderViewport` and `RenderShrinkWrappingViewport` share this exact shape
 /// (a relayout mark wired to the offset in `attach`).
 ///
@@ -237,7 +236,7 @@ fn grow_along_axis(rect: Rect<f64>, axis: Axis, amount: f64) -> Rect<f64> {
 
 /// A Box-protocol viewport that lays out Sliver-protocol children.
 #[derive(Debug)]
-pub struct RenderViewport<O = ScrollableViewportOffset> {
+pub struct RenderViewport<O = ScrollPosition> {
     axis_direction: AxisDirection,
     cross_axis_direction: AxisDirection,
     offset: O,
@@ -327,15 +326,15 @@ struct CommittedChildClip {
     growth_direction: GrowthDirection,
 }
 
-impl RenderViewport<ScrollableViewportOffset> {
-    /// Creates a viewport with a zero scrollable offset.
+impl RenderViewport<ScrollPosition> {
+    /// Creates a viewport with a fixed offset at zero.
     #[inline]
     #[must_use]
     pub fn new(axis_direction: AxisDirection) -> Self {
         Self::with_offset(
             axis_direction,
             default_cross_axis_direction(axis_direction),
-            ScrollableViewportOffset::zero(),
+            ScrollPosition::fixed(0.0),
         )
     }
 }
@@ -1012,7 +1011,7 @@ impl<O> Drop for RenderViewport<O> {
     }
 }
 
-impl Default for RenderViewport<ScrollableViewportOffset> {
+impl Default for RenderViewport<ScrollPosition> {
     fn default() -> Self {
         Self::new(TopToBottom)
     }
@@ -1269,7 +1268,7 @@ impl<O: ViewportOffset + 'static> RenderBox for RenderViewport<O> {
 /// `max_paint_extent` values, constrained by its parent. It still expands in
 /// the cross axis.
 #[derive(Debug)]
-pub struct RenderShrinkWrappingViewport<O = ScrollableViewportOffset> {
+pub struct RenderShrinkWrappingViewport<O = ScrollPosition> {
     axis_direction: AxisDirection,
     cross_axis_direction: AxisDirection,
     offset: O,
@@ -1300,15 +1299,15 @@ struct ShrinkWrappingLayout {
     staged_positions: Vec<StagedPosition>,
 }
 
-impl RenderShrinkWrappingViewport<ScrollableViewportOffset> {
-    /// Creates a shrink-wrapping viewport with a zero scrollable offset.
+impl RenderShrinkWrappingViewport<ScrollPosition> {
+    /// Creates a shrink-wrapping viewport with a fixed offset at zero.
     #[inline]
     #[must_use]
     pub fn new(axis_direction: AxisDirection) -> Self {
         Self::with_offset(
             axis_direction,
             default_cross_axis_direction(axis_direction),
-            ScrollableViewportOffset::zero(),
+            ScrollPosition::fixed(0.0),
         )
     }
 }
@@ -1783,7 +1782,7 @@ impl<O> Drop for RenderShrinkWrappingViewport<O> {
     }
 }
 
-impl Default for RenderShrinkWrappingViewport<ScrollableViewportOffset> {
+impl Default for RenderShrinkWrappingViewport<ScrollPosition> {
     fn default() -> Self {
         Self::new(TopToBottom)
     }

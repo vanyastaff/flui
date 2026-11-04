@@ -35,6 +35,7 @@ use flui_view::owner::{KeepAliveHandle, KeepAliveLease};
 use flui_view::prelude::*;
 use flui_view::{BoxedView, impl_inherited_view};
 
+use super::{ScrollController, ScrollPositionScope};
 use crate::anchored_box::AnchoredSliver;
 use crate::interaction::focus::Focus;
 use crate::interaction::focus_reveal::{FocusRevealScope, SharedRevealTarget};
@@ -83,6 +84,10 @@ struct Inner {
     /// horizontal list under right-to-left text).
     reversed: Cell<bool>,
     reach: RefCell<Option<Reach>>,
+    /// The controller of the enclosing scrollable: the list asks it to jump,
+    /// so the move is a programmatic step of the scrollable's chain
+    /// (ADR-0209 §3). Used only while its position is the list's own.
+    requests: RefCell<Option<ScrollController>>,
     /// Reads the axis and direction a list over a sliver was laid out with;
     /// `None` for a list over a box viewport, which takes them from its
     /// config.
@@ -123,6 +128,7 @@ impl ListFocusController {
                 axis: Cell::new(Axis::Vertical),
                 reversed: Cell::new(false),
                 reach: RefCell::new(None),
+                requests: RefCell::new(None),
                 sliver_axis: RefCell::new(None),
                 reveal: RefCell::new(None),
                 grid: Cell::new(false),
@@ -248,11 +254,23 @@ impl ListFocusController {
         true
     }
 
+    /// The list's scroll position and the controller that moves it: the
+    /// enclosing scrollable's, when its position is the list's own.
+    fn reach(&self) -> Option<(Reach, ScrollController)> {
+        let reach = self.inner.reach.borrow().clone()?;
+        let controller = self.inner.requests.borrow().clone()?;
+        controller
+            .position()
+            .ptr_eq(&reach.position)
+            .then_some((reach, controller))
+    }
+
     /// Scroll so an unbuilt row gets built, and record it as pending: to the
-    /// row's estimated offset when the list owns a scroll position, otherwise
-    /// by revealing the row's estimated box through the enclosing scope.
+    /// row's estimated offset, by a jump of the enclosing scrollable, when
+    /// the list scrolls with it, otherwise by revealing the row's estimated
+    /// box through the enclosing scope.
     fn reach_row(&self, index: usize) -> bool {
-        if let Some(reach) = self.inner.reach.borrow().clone() {
+        if let Some((reach, controller)) = self.reach() {
             let estimate = if self.inner.grid.get() {
                 // Tiles share rows, so the offset comes from the built
                 // tiles: the estimated row brought to the leading edge.
@@ -275,7 +293,10 @@ impl ListFocusController {
             }
             let min = reach.position.min_scroll_extent();
             let max = reach.position.max_scroll_extent().max(min);
-            reach.position.set_pixels(estimate.clamp(min, max));
+            // Refused while the runtime builds: the row stays unreached.
+            if controller.jump_to(estimate.clamp(min, max)).is_err() {
+                return false;
+            }
             self.inner.pending.set(Some(index));
             return true;
         }
@@ -694,6 +715,7 @@ impl ViewState<FocusableList> for FocusableListState {
         let nested = ctx.get::<ListFocusScope, _>(|_| ()).is_some();
         inner.nested.set(nested);
         *inner.reveal.borrow_mut() = FocusRevealScope::of(ctx);
+        *inner.requests.borrow_mut() = ScrollPositionScope::controller_of(ctx);
         if self.sliver {
             let anchor = self.anchor.clone();
             let owner = ctx.pipeline_owner();
@@ -717,6 +739,7 @@ impl ViewState<FocusableList> for FocusableListState {
 
     fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
         *self.controller.inner.reveal.borrow_mut() = FocusRevealScope::of(ctx);
+        *self.controller.inner.requests.borrow_mut() = ScrollPositionScope::controller_of(ctx);
     }
 
     fn did_update_view(&mut self, _old: &FocusableList, view: &FocusableList) {

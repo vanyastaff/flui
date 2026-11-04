@@ -87,7 +87,7 @@ impl Document for NotesData {
 (trait в `flui-platform-api`, бэкенд в `flui-platform`), ADR-0047 (capability поверх IO-пула),
 ADR-0083 (у `flui-runtime` нет платформенного ребра), ADR-0097 (новых `static` нет; реестр
 сброса — значение хоста), ADR-0123/ADR-0127 (паники и закрытие — существующими путями).
-Дополняет шаг 8 ADR-0093 (Proposed): стек восстанавливается, web history остаётся. Ни один
+Восстановление стека Router решает ADR-0262 §6; web history остаётся в ADR-0093. Ни один
 принятый ADR не заменяется.
 
 **Ответы на открытые вопросы.**
@@ -289,7 +289,7 @@ wasm32 — тот же API поверх IndexedDB, асинхронный), `sto
 - **Notes: восстановление.** Корневой `FutureBuilder` грузит `data`, затем `session`: до
   готовности «Loading notes», ошибка данных — экран Retry, сеанс не читается и не пишется (R6).
   Затем `Router::from_stack(стек)`; пути хранятся как `to_path().to_string()` и разбираются
-  `from_path`, ошибка разбора — Home. `scroll.set_pixels(p)` и черновик задаются до первой
+  `from_path`, ошибка разбора — Home. `ScrollController::with_initial_scroll_offset(p)` и черновик задаются до первой
   раскладки (R5). Ссылка запуска, если приложение её получило, побеждает сеанс: стек берётся из
   неё, черновик остаётся, только если его заметка в этом стеке. Retry/Reload — `wrapping_add`
   (R26). Сеанс снимается из `RouterHandle::stack()`, `scroll.pixels()` и текста черновика в

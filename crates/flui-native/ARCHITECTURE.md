@@ -3879,8 +3879,8 @@ at once, the host's once a background scan added them, which wakes the loop.
 
 The engine does not draw it, though that was the first shape asked for:
 
-- the host cannot reach the engine: `flui-native` is layer 3 and
-  `flui-engine` layer 4, which `cargo xtask workspace` refuses, and the
+- the host cannot reach the engine: the host's manifest forbids the name in
+  every root build (`reach-forbid`, checked by `cargo xtask reach`), and the
   engine's device and raster thread are the composition root's
   (ADR-0091); a `wgpu::Instance` the host made apart from its surface is a
   defect of its own;

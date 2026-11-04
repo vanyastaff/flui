@@ -99,8 +99,9 @@ silences the rest of that round, including during an earlier parent failure.
 
 Pending scroll commands are owner-local. Replacement commits the incoming
 command and extracts outgoing ownership before invoking its curve's destructor.
-ScrollPosition's widget and viewport notifications borrow the enclosing
-command operation's RecoveryScope, so a retirement failure cannot erase
+A command's `ScrollOffsetWriter` write, with ScrollPosition's widget and
+viewport notifications, runs inside the enclosing command operation's
+RecoveryScope, so a retirement failure cannot erase
 accepted delivery or make observer retirement appear healthy. Each command
 admission owns a fresh pointer identity; the pending slot retains that identity
 after servicing, with no wrapping counter. A jump commits before calling its
