@@ -77,7 +77,7 @@ use crate::{
         RecurringFrameCallback, SchedulerPhase,
     },
     frame_clock::ClockSource,
-    id::{CallbackId, IdGenerator},
+    id::{AtomicIdMint, CallbackId},
     task::{Priority, TaskQueue},
 };
 
@@ -765,8 +765,9 @@ struct CallbackState {
     transient: RefCell<VecDeque<CancellableTransientCallback>>,
     /// Cancelled callback IDs, queried before callback delivery.
     cancelled: RefCell<HashSet<CallbackId>>,
-    /// Callback ID generator
-    id_gen: IdGenerator<flui_foundation::markers::FrameCallback>,
+    /// Callback identities: the minted `FrameCallbackId`s. Sticky refusal —
+    /// no id is ever issued twice.
+    id_mint: AtomicIdMint<CallbackId>,
     /// Persistent frame callbacks (every frame)
     persistent: RefCell<Vec<CancellablePersistentCallback>>,
     /// Post-frame callbacks (after frame completes)
@@ -775,6 +776,20 @@ struct CallbackState {
     microtasks: RefCell<VecDeque<Box<dyn FnOnce()>>>,
     /// Lifecycle state change listeners
     lifecycle_listeners: RefCell<Vec<LifecycleListener>>,
+}
+
+impl CallbackState {
+    /// Mint a callback id, in registration order with the caller's borrow.
+    ///
+    /// Exhaustion is sticky (the mint refuses, typed, forever), so the ids of
+    /// one schedule are never reused; a refusal here names a breached
+    /// invariant, not a caller error — a schedule minting every id
+    /// `usize` names is unreachable.
+    fn mint_id(&self) -> CallbackId {
+        self.id_mint
+            .next()
+            .expect("BUG: callback identity space exhausted")
+    }
 }
 
 /// Application lifecycle and frame timing reporting state.
@@ -1076,7 +1091,7 @@ impl UpdateScheduler {
             callbacks: CallbackState {
                 transient: RefCell::new(VecDeque::new()),
                 cancelled: RefCell::new(HashSet::new()),
-                id_gen: IdGenerator::new(),
+                id_mint: AtomicIdMint::new(),
                 persistent: RefCell::new(Vec::new()),
                 post_frame: RefCell::new(crate::post_frame::PostFrameStorage::new()),
                 microtasks: RefCell::new(VecDeque::new()),
@@ -1147,7 +1162,7 @@ impl UpdateScheduler {
         &self,
         callback: impl FnOnce(CallbackId) -> R,
     ) -> R {
-        callback(self.inner.callbacks.id_gen.next())
+        callback(self.inner.callbacks.mint_id())
     }
 
     pub(crate) fn inner_post_frame_storage(&self) -> &RefCell<crate::post_frame::PostFrameStorage> {
@@ -1238,8 +1253,8 @@ impl UpdateScheduler {
         //
         // Bounded by an id WATERMARK -- the id of the last (back) entry
         // queued at entry, read once before invoking anything -- not a
-        // remaining-iteration COUNT. `CallbackId`s are minted from this
-        // scheduler's own monotonic `id_gen` in registration order, so
+        // remaining-iteration COUNT. `CallbackId`s come from this
+        // scheduler's own mint, in registration order, so
         // `back().id` at entry is exactly the highest id already queued.
         // A callback that registers another transient callback of its own
         // from inside itself must have the new one deferred to the NEXT
@@ -1663,7 +1678,7 @@ impl UpdateScheduler {
     pub fn schedule_frame_callback(&self, callback: OneShotFrameCallback) -> CallbackId {
         let id = {
             let mut cbs = self.inner.callbacks.transient.borrow_mut();
-            let id = self.inner.callbacks.id_gen.next();
+            let id = self.inner.callbacks.mint_id();
             cbs.push_back(CancellableTransientCallback { id, callback });
             id
         };
@@ -1897,7 +1912,7 @@ impl UpdateScheduler {
     /// they are called for every frame for the lifetime of the application.
     /// Returns `()` — no removal handle.
     pub fn add_persistent_frame_callback(&self, callback: RecurringFrameCallback) {
-        let id = self.inner.callbacks.id_gen.next();
+        let id = self.inner.callbacks.mint_id();
         self.inner
             .callbacks
             .persistent
@@ -2250,7 +2265,7 @@ impl UpdateScheduler {
     /// scheduler.remove_lifecycle_state_listener(id);
     /// ```
     pub fn add_lifecycle_state_listener(&self, callback: LifecycleStateCallback) -> CallbackId {
-        let id = self.inner.callbacks.id_gen.next();
+        let id = self.inner.callbacks.mint_id();
         self.inner
             .callbacks
             .lifecycle_listeners

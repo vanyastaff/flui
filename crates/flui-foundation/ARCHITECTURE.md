@@ -16,6 +16,23 @@ supplies the identity contract required by
 [ADR-0209](../../docs/adr/ADR-0209-nested-scroll-connection.md), without making
 process-global state or serialization a second identity issuer.
 
+## The mint family and the ids they issue
+
+`flui_foundation::sequence` is the workspace's only issuer of identities.
+`IdMint` is the owner-local mint; `AtomicIdMint` is its cross-thread twin for
+an id domain more than one thread mints (the scheduler's task and callback
+identities). Both share the sealed `MintedId` contract, whose `MINT_CEILING`
+keeps every raw value convertible to the identity type's own representation,
+and the same refusal rule: an issued id is never issued again, and an
+exhausted mint refuses, typed (`IdExhausted`), forever
+(`the_atomic_mint_issues_the_same_sequence_the_owner_local_mint_does`,
+`an_exhausted_atomic_mint_refuses_permanently`,
+`an_atomic_mint_admits_exactly_one_of_concurrent_requests_for_the_last_identity`,
+`a_pointer_width_bounded_id_refuses_past_its_type_ceiling`,
+`scheduler_and_listener_ids_are_minted_by_the_family`). The counter ids with
+no slab behind them (`ListenerId`, `TaskId`, `FrameCallbackId`) are minted by
+the family; the slab-backed ids stay the slot plus one.
+
 ## The geometry values (`geometry`)
 
 `Matrix4::project_plane_point` checks the forward projection of the local

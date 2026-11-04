@@ -689,7 +689,9 @@ ids! {
 
         /// Listener ID - identifier for registered listeners.
         ///
-        /// Used by `ChangeNotifier` and `Listenable` to track registered callbacks.
+        /// Used by `ChangeNotifier` and `Listenable` to track registered
+        /// callbacks. Minted only by an [`IdMint`](crate::IdMint) owned by
+        /// the listener list; never reissued, never wrapped.
         pub type ListenerId Listener;
 
         /// Observer ID - identifier for registered observers.
@@ -700,16 +702,15 @@ ids! {
         /// Frame Callback ID - scheduler frame callback identifier.
         ///
         /// Identifies scheduled frame callbacks in the scheduler binding.
+        /// Minted only by an [`AtomicIdMint`](crate::AtomicIdMint), where
+        /// the scheduler's threads race to mint them.
         pub type FrameCallbackId FrameCallback;
-
-        /// Frame ID - scheduler frame identifier.
-        ///
-        /// Identifies individual frames in the scheduler frame lifecycle.
-        pub type FrameId Frame;
 
         /// Task ID - scheduler task identifier.
         ///
-        /// Identifies tasks in the priority-based task queue.
+        /// Identifies tasks in the priority-based task queue. Minted only by
+        /// an [`AtomicIdMint`](crate::AtomicIdMint), where the scheduler's
+        /// threads race to mint them.
         pub type TaskId Task;
 
     }

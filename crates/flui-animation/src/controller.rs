@@ -33,7 +33,7 @@ use crate::run_future::{RunCompleter, RunDelivery};
 use crate::simulation::{Simulation, SpringDescription, Tolerance};
 use crate::status::AnimationStatus;
 use flui_foundation::panic::{FailureClass, RecoveryScope};
-use flui_foundation::{ChangeNotifier, ListenerId};
+use flui_foundation::{ChangeNotifier, IdMint, ListenerId};
 use smallvec::SmallVec;
 use std::cell::RefCell;
 use std::collections::VecDeque;
@@ -316,8 +316,9 @@ struct AnimationControllerInner {
     /// Is disposed?
     disposed: bool,
 
-    /// Next status-listener ID.
-    next_listener_id: usize,
+    /// Next status-listener ID. The owner-local mint whose refusal is
+    /// sticky: a listener id is never issued twice.
+    listener_mint: IdMint<ListenerId>,
 
     /// Status most recently committed for delivery. The emission seam
     /// ([`enqueue_status_change`](AnimationControllerInner::enqueue_status_change))
@@ -504,7 +505,7 @@ impl AnimationController {
             run_start: RunStart::Fresh,
             sample_epoch: 0,
             disposed: false,
-            next_listener_id: 1,
+            listener_mint: IdMint::new(),
             last_committed_status: AnimationStatus::ReverseSettled,
             run: None,
             non_finite_warned: false,
@@ -1032,14 +1033,13 @@ impl AnimationController {
     /// A fresh listener identity. Exhaustion is refused permanently, with
     /// the borrow released before the panic unwinds through user code.
     fn mint_listener_id(
-        mut inner: std::cell::RefMut<'_, AnimationControllerInner>,
+        inner: std::cell::RefMut<'_, AnimationControllerInner>,
     ) -> (ListenerId, std::cell::RefMut<'_, AnimationControllerInner>) {
-        let Some(next_id) = inner.next_listener_id.checked_add(1) else {
+        let id = inner.listener_mint.next();
+        let Ok(id) = id else {
             drop(inner);
             panic!("BUG: listener identities exhausted");
         };
-        let id = ListenerId::new(inner.next_listener_id);
-        inner.next_listener_id = next_id;
         (id, inner)
     }
 
