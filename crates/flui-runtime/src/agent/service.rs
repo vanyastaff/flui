@@ -59,6 +59,9 @@ pub struct ServiceConfig {
     /// `None`: the driver's going frees the seat for the next. It runs on the transport's thread,
     /// with no lock of the service held, and a panic in it is contained.
     pub on_driver_gone: Option<Box<dyn Fn() + Send + Sync>>,
+    /// Whether the app's windows journal their backend, so a recording may hold the `native`
+    /// layer: the hello lists it in `capabilities.record` then (ADR-0288 §11).
+    pub records_native: bool,
 }
 
 impl fmt::Debug for ServiceConfig {
@@ -68,6 +71,7 @@ impl fmt::Debug for ServiceConfig {
             .field("app", &self.app)
             .field("limits", &self.limits)
             .field("on_driver_gone", &self.on_driver_gone.is_some())
+            .field("records_native", &self.records_native)
             .finish()
     }
 }
@@ -130,6 +134,7 @@ pub(super) struct Shared {
     pub(super) limits: Limits,
     pub(super) app: AppInfo,
     on_driver_gone: Option<Box<dyn Fn() + Send + Sync>>,
+    pub(super) records_native: bool,
     /// Taken by the conversation admitted as the driver, and given back when it ends. Locked
     /// only to read or swap the state, never across user code.
     driver: Mutex<Seat>,
@@ -203,6 +208,7 @@ impl Service {
             app,
             limits,
             on_driver_gone,
+            records_native,
         } = config;
         Self {
             shared: Arc::new(Shared {
@@ -211,6 +217,7 @@ impl Service {
                 limits,
                 app,
                 on_driver_gone,
+                records_native,
                 driver: Mutex::new(Seat::Free),
                 stopped: AtomicBool::new(false),
                 live: AtomicUsize::new(0),

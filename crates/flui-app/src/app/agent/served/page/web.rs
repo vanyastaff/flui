@@ -79,6 +79,7 @@ pub(in super::super) fn listen(
     let on_driver_gone = disconnect
         .map(|disconnect| -> Box<dyn Fn() + Send + Sync> { Box::new(move || disconnect.fire()) });
     let service = Service::new(ServiceConfig {
+        records_native: false,
         token: launch.token.clone(),
         app,
         limits: launch.limits,

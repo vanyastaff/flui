@@ -129,7 +129,8 @@ pub use perf::{
     PerfStartParams, PerfVerdict, PhaseTime, TargetBudget, TimeLimit,
 };
 pub use record::{
-    RecordEvent, RecordLayer, RecordParams, RecordStopParams, RecordSummary, Recording,
+    RecordEvent, RecordLayer, RecordNativeEvent, RecordParams, RecordRow, RecordStopParams,
+    RecordSummary, Recording,
 };
 pub use semantics::{SemanticsAction, SemanticsRole};
 pub use session::{

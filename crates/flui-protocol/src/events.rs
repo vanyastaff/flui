@@ -5,7 +5,7 @@
 //! it missed, never a silently shortened stream.
 
 use crate::input::JournalEntry;
-use crate::record::RecordEvent;
+use crate::record::{RecordEvent, RecordNativeEvent};
 use crate::tree::{TreeRevision, WindowId};
 
 vocabulary! {
@@ -30,7 +30,7 @@ vocabulary! {
         Announcement => "announcement",
         /// The subscriber's queue overflowed. Sent unasked.
         Gap => "gap",
-        /// One row of a recording. Sent unasked to the connection that started it
+        /// One line of a recording, of its input or native layer. Sent unasked to the connection that started it
         /// (`record.start`): a subscription that selects it selects nothing.
         Record => "record",
     }
@@ -223,6 +223,8 @@ pub enum Event {
     Gap(GapEvent),
     /// A recording's row, boxed: a row is larger than every other event.
     Record(Box<RecordEvent>),
+    /// A line of a recording's native stream, boxed as a row is.
+    RecordNative(Box<RecordNativeEvent>),
 }
 
 impl Event {
@@ -236,7 +238,7 @@ impl Event {
             Self::Window(_) => EventKind::Window,
             Self::Announcement(_) => EventKind::Announcement,
             Self::Gap(_) => EventKind::Gap,
-            Self::Record(_) => EventKind::Record,
+            Self::Record(_) | Self::RecordNative(_) => EventKind::Record,
         }
     }
 }

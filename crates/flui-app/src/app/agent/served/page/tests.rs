@@ -172,6 +172,7 @@ fn service(limits: Limits) -> (Service, Arc<AtomicUsize>) {
     let gone = Arc::new(AtomicUsize::new(0));
     let counted = Arc::clone(&gone);
     let service = Service::new(ServiceConfig {
+        records_native: false,
         token: TOKEN.to_owned(),
         app: AppInfo::new("page", "web"),
         limits,

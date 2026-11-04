@@ -2,8 +2,8 @@
 //! [`Request`]s, and every [`ServerLine`] an app sends back.
 //!
 //! ```text
-//! → {"hello":{"token":"…","protocol":"0.9","client":"flui-driver/0.1.0"}}   Greeting
-//! ← {"hello":{"protocol":"0.9","app":{…},"capabilities":{…}}}               ServerLine::Hello
+//! → {"hello":{"token":"…","protocol":"0.10","client":"flui-driver/0.1.0"}}   Greeting
+//! ← {"hello":{"protocol":"0.10","app":{…},"capabilities":{…}}}               ServerLine::Hello
 //! → {"id":7,"method":"semantics.locate","params":{…}}                       Request
 //! ← {"id":7,"result":{…}}                                                   ServerLine::Answered
 //! ← {"id":7,"error":{"code":…,"message":…,"retry":…}}                       ServerLine::Failed
