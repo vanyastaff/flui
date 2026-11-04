@@ -1,6 +1,6 @@
 # ADR-0262: Application state persists as versioned documents the application encodes, written through the host's flush registry over a byte-storage capability
 
-- **Status:** Proposed (2026-10-28)
+- **Status:** Accepted (2026-11-04)
 - **Date:** 2026-10-28
 - **Superseded-by:** [ADR-0281](ADR-0281-a-destructor-that-panics-during-an-unwind-aborts-as-in-std.md),
   §4's retention of the codec's panic payload only: the payload is dropped.
@@ -12,8 +12,11 @@
   `LifecycleContext::storage` is removed), [ADR-0127](ADR-0127-exceptional-path-retention.md) (an
   exceptional path's operation boundaries), [ADR-0089](ADR-0089-upstream-types-in-stable-signatures.md)
   §2 (no `serde` in a Stable signature), [ADR-0097](ADR-0097-no-process-global-state-gate.md) (no
-  `static`), [ADR-0093](ADR-0093-router-is-the-primary-navigation-api.md) step 8 (stack
-  restoration, decided here; web history stays there)
+  `static`), [ADR-0093](ADR-0093-router-is-the-primary-navigation-api.md) (the router whose
+  stack §6 restores; web history, query and fragment are its own)
+- **Revised:** 2026-11-04 — accepted as built: Confirmation names the tests that hold each
+  section, the native run owed is a row of `docs/platform-parity.md`, and §1 says which crate of
+  the facade's graph speaks JSON.
 - **Sources:** `rust-lang/rust@41089d07a0a2afc16adfe28a760d94d73d7298a4`
   `library/std/src/sys/fs/windows.rs` (`rename`: `MoveFileExW` with `MOVEFILE_REPLACE_EXISTING`,
   then `FileRenameInfoEx` with POSIX semantics);
@@ -23,9 +26,6 @@
   `packages/flutter/lib/src/services/restoration.dart` (restoration keyed by widget identity)
 
 ## Context and problem statement
-
-Once accepted, §6 here would replace ADR-0093 step 8's "stack restoration as a list of paths"
-only; web history, query and fragment stay in that step.
 
 An application that keeps a list of notes and the screen the user was on needs both back after a
 restart, a crash, a log-off, a full disk or a second running instance. Without framework support
@@ -105,8 +105,10 @@ the one switch, and the types above build with the facade's default features. An
 FLUI's crates, on `flui` alone, with the features its widgets need (`material` for the acceptance
 app, `testing` for its headless rows), and on its own codec (`serde_json` in the acceptance app). A
 second, build-time switch for the same thing gave "the method is there and the storage is not" and
-multiplied `cfg` across the runners, so it was removed. `serde_json` stays out of the facade's
-graph whether persistence is used or not.
+multiplied `cfg` across the runners, so it was removed. Persistence brings no serialization crate
+into the facade's graph, used or not: the one framework crate there that reaches `serde_json` is
+`flui-runtime`, for the driver agent's service
+([ADR-0288](ADR-0288-the-development-agent-is-one-sans-io-service.md)).
 
 ### §2. A write replaces the file atomically, and a version guards data against another instance
 
@@ -240,8 +242,8 @@ the last confirmed write is lost if the process is killed before the application
 stack, bottom to top, and `RouterHandle::stack(&self) -> Vec<R>` reads it as every committed edit
 left it; an empty stack is `RouterError::EmptyStack`. The application stores the stack as paths
 (`Routable::to_path`) in its own document and parses them back with `from_path`, falling back to
-its home route when a path no longer parses or names an item that is gone. This decides the stack
-restoration of ADR-0093 step 8; web history, query and fragment stay there.
+its home route when a path no longer parses or names an item that is gone. This is the whole of
+the router's stack restoration; web history, query and fragment belong to ADR-0093.
 
 ### Consequences
 
@@ -258,35 +260,71 @@ restoration of ADR-0093 step 8; web history, query and fragment stay there.
 
 ### Confirmation
 
-- `crates/flui-view/tests/persist.rs`: `a_loaded_document_round_trips_through_memory_storage`,
-  `saved_status_appears_only_after_commit`, `codec_panic_is_contained_first_failure_kept`,
-  `no_write_without_a_loaded_base`, `newer_version_is_never_written`,
-  `older_version_decodes_or_reports_without_writing`, `oversized_file_is_refused_unread`,
-  `busy_retry_follows_the_runtime_clock`, `a_later_edit_supersedes_an_unstarted_one`,
-  `user_close_waits_for_an_in_flight_save`, `a_saving_document_holds_user_close_only`,
-  `two_runtimes_keep_independent_documents`, `corrupt_bytes_are_kept_until_start_over`,
-  `start_over_never_writes_over_a_file_replaced_since_the_load`,
-  `listeners_hear_each_change_once_and_nothing_while_it_stands`,
+`Persisted<D>` is held by `crates/flui-view/tests/persist.rs`, a module of the crate's `view_it`
+suite, over `flui_testing::storage::MemoryStorage`:
+
+- §3, loading: `a_load_reports_each_stored_state` is the table of what a load finds (nothing
+  stored, a stored document, an older format that decodes, no header, another document's header,
+  a newer format that becomes read-only, an undecodable body, a decode that panics, an
+  inaccessible file, a file over `MAX_BYTES` refused unread), each writing nothing;
+  `a_loaded_document_round_trips_through_memory_storage`, `only_the_latest_of_several_loads_is_applied`,
+  `a_load_in_flight_is_not_applied_over_a_later_edit`, `a_failed_reload_after_a_save_reports_the_load`,
+  `unmount_during_load_releases_requests`, `unavailable_storage_runs_in_memory_with_status`,
+  `a_value_a_load_replaces_is_dropped_after_the_document_settles`.
+- §3, writing: `no_write_without_a_writable_base` is the table of refused sets (not loaded, a
+  failed load, a newer format, the last revision, no storage), each leaving the status and the
+  file as they were; `saved_status_appears_only_after_commit`, `drop_before_commit_loses_only_that_edit`,
+  `retry_after_failure_publishes_the_latest_value`, `a_later_edit_supersedes_an_unstarted_one`,
+  `an_edit_from_a_replaced_values_drop_wins`, `two_runtimes_keep_independent_documents`,
+  `a_provided_storage_receives_the_documents_writes`; the `Busy` back-off on the runtime's clock
+  in `busy_retry_follows_the_runtime_clock`, `a_later_edit_refused_as_busy_starts_its_own_back_off`,
+  `a_hide_while_clean_does_not_hurry_a_later_busy_retry` and
+  `a_hidden_application_or_a_close_retries_a_busy_write_at_once`; a fresh start in
+  `corrupt_bytes_are_kept_until_start_over`, `start_over_never_writes_over_a_file_replaced_since_the_load`,
+  `an_initial_value_that_panics_fails_the_fresh_start` and
+  `an_initial_value_failing_encode_and_drop_fails_the_fresh_start`.
+- §3, listeners and revisions: `listeners_hear_each_change_once_and_nothing_while_it_stands`,
+  `listeners_hear_a_change_that_came_back_before_the_delivery`,
   `a_listener_that_writes_and_retries_settles`, `a_listener_panic_leaves_later_changes_told`,
-  `revision_names_only_a_value_on_disk`, `a_listener_holding_a_weak_handle_lets_the_document_go`,
-  `a_revision_round_trips_as_its_number` (with `serde`),
   `a_frame_hook_panic_while_queueing_leaves_later_changes_told`,
   `a_commit_by_another_document_of_its_name_is_told`,
-  `a_revision_is_named_only_by_the_document_that_stored_it`,
+  `a_listener_holding_a_weak_handle_lets_the_document_go`,
+  `unmounting_the_opening_state_drops_the_listeners`, `revision_names_only_a_value_on_disk`,
+  `a_revision_is_named_only_by_the_document_that_stored_it`, and
+  `a_revision_round_trips_as_its_number` with the `serde` feature.
+- §4: `codec_panic_is_contained_first_failure_kept` (an encode panic fails one save, the next set
+  writes, the first failure is kept), the decode-panic case of `a_load_reports_each_stored_state`,
   `a_reload_whose_replaced_value_panics_in_drop_is_told`,
   `a_set_whose_replaced_value_and_frame_hook_both_panic_is_contained`,
-  `a_refused_value_whose_drop_panics_behind_a_frame_hook_is_contained`,
-  `unmounting_the_opening_state_drops_the_listeners`.
-- `FileStore`'s own tests: the atomic replacement, the lock and `Conflict`, a copy aside under the
-  first free name (`copy_aside_keeps_the_value_under_the_first_free_name`), the classification of
-  OS errors.
-- `crates/flui-widgets/tests/contracts.rs`: `from_stack_restores_back_order`,
-  `stack_reads_every_committed_edit`, `empty_stack_is_refused`.
-- The acceptance app's restart and storage-failure tables through the facade
-  (`acceptance_app_runs_through_the_facade`), with `serde_json` a dependency of the consumer only;
-  `cargo heli xtask facade-combos` keeps `serde_json` out of the framework's graph.
-- A dated native run through flui-driver's `os` lane: a kill in a write loop, a read-only file, a
-  long and redirected profile path, two instances, a session end during a save.
+  `a_refused_value_whose_drop_panics_behind_a_frame_hook_is_contained`.
+- §5: `a_saving_document_holds_user_close_only` (a write in flight refuses the user's and the
+  program's close, records it and carries it out once the write is stored; a session end goes
+  through; a failed write refuses even a session end).
+
+The rest is held where its code lives:
+
+- §1 and §2, `FileStore`: the `file_store_contract` table of `crates/flui-native/tests/file_store.rs`
+  (`first_write_creates_the_directory`, `a_stale_base_is_refused_with_conflict`,
+  `a_locked_directory_refuses_based_writes_as_busy`, `a_value_over_the_limit_is_too_large`,
+  `the_two_scopes_keep_equal_names_apart`, `long_non_ascii_path_round_trips`,
+  `copy_aside_keeps_the_value_under_the_first_free_name`,
+  `the_memory_store_compares_and_copies_as_the_file_store_does`, and the read-only and sharing
+  rows that run on Windows), and the module tests of `crates/flui-native/src/storage/`:
+  `file_store_interruption_matrix` (the atomic replacement), `two_threads_interleave_and_exactly_one_conflicts`
+  (the lock and `Conflict`), `os_error_classification_table`.
+- §6: `from_stack_restores_back_order`, `stack_reads_every_committed_edit` and
+  `empty_stack_is_refused` in `crates/flui-widgets/tests/router.rs`, rows of the
+  `router_and_widgets_app` table in `crates/flui-widgets/tests/contracts.rs`.
+- The whole decision through the facade: the acceptance app's restart, storage-failure and close
+  rows (`tests/fixtures/acceptance_app/persistence.rs`, among them `close_during_a_save_waits_for_it`
+  and `close_with_a_failed_write_requires_a_decision`) run as a consumer of `flui` alone in
+  `acceptance_app_runs_through_the_facade`, with `serde_json` the consumer's own dependency; and
+  `ordinary_facade_graph_excludes_test_support` (`tests/facade_consumer.rs`) refuses `serde_json`
+  in the facade's graph anywhere but `flui-runtime`.
+
+The native run of the same rows (a kill in a write loop, a read-only file, a long and redirected
+profile path, two instances, a session end during a save) is the "Persisted documents" row of
+[`platform-parity.md`](../platform-parity.md).
 
 ## Pros and cons of the options
 

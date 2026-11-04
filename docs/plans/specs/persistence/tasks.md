@@ -4,7 +4,9 @@
 - **Design:** [design.md](design.md) (раздел «Решения владельца 2026-10-28»); требования —
   [requirements.md](requirements.md); контракт закрытия — [teardown/tasks.md](../teardown/tasks.md)
 - **Итог:** сделаны P1–P6, P10, P11; P7, P8, P9 (Notes) устарели и заменены P10–P12.
-  Осталась одна задача: P12 (нативный прогон) ждёт flui-driver FD11.
+  Осталась одна задача: P12 (нативный прогон) ждёт flui-driver FD11; её долг уже записан
+  строкой «Persisted documents…» в [`docs/platform-parity.md`](../../../platform-parity.md) и
+  пунктом записи 4 в [`docs/gaps.md`](../../../gaps.md).
 - **Приложение приёмки** — задача P10 этой спеки. Его строки пишут три спеки: persistence (P11),
   teardown (T18), text-ime (T11).
 
