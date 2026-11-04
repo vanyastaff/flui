@@ -17,21 +17,30 @@
 //! path, and most unit tests) simply accumulates a dirty flag that is never
 //! read — those positions have no external subscriber to notify.
 //!
-//! All mutation that a caller expects to observe synchronously — the
-//! `ViewportOffset::jump_to`/`ScrollPosition::set_pixels` gesture path — still
-//! notifies immediately, epsilon-guarded against no-op writes.
+//! # One writer
+//!
+//! Outside layout a position moves only through its one
+//! [`ScrollOffsetWriter`], which [`ScrollPosition::with_writer`] returns
+//! beside it and which names the [`OffsetWriteCause`] of every write. A
+//! [`ScrollPosition::fixed`] position has no writer at all. A clone of the
+//! position reads and subscribes; it cannot scroll. The owner of the writer
+//! (in `flui-widgets`, the `ScrollController` that made the position) hands
+//! out requests and routes each through the nested scroll channel
+//! (ADR-0209 §3). A write notifies synchronously, epsilon-guarded against
+//! no-op writes, after its state is committed.
 
 use std::fmt;
 use std::rc::Rc;
 
+use flui_foundation::panic::commit;
 use flui_foundation::{ChangeNotifier, Listenable, ListenerCallback, ListenerId};
 use flui_scheduler::PostFrameHandle;
 use std::cell::RefCell;
 
 use super::viewport_offset::{OffsetListeners, ScrollDirection, ViewportOffset};
 
-/// The `ViewportOffset` fields today's `ScrollableViewportOffset` tracks —
-/// pixel position plus the viewport/content extents layout reports.
+/// The `ViewportOffset` fields a position tracks: the pixel offset plus the
+/// viewport and content extents layout reports.
 #[derive(Debug, Clone, Copy)]
 struct State {
     pixels: f64,
@@ -49,7 +58,7 @@ struct State {
     /// call must not run the `KeepFractionalPage` recompute: there is no
     /// prior dimension to divide by, so treating `viewport_dimension: 0.0`'s
     /// initial value as a real "old dimension" would reinterpret whatever
-    /// pixels were seeded before layout (e.g. `ScrollPosition::new`) as a
+    /// pixels were seeded before layout (e.g. `ScrollPosition::with_writer`) as a
     /// page count instead of a pixel offset.
     has_applied_viewport_dimension: bool,
     /// The fractional page cached by `KeepFractionalPage` whenever a resize
@@ -191,7 +200,7 @@ impl State {
                 // controller-driven startup page (a bare `ScrollPosition`
                 // opted into `KeepFractionalPage` directly). Behaves like
                 // `KeepPixels` for this one call — the seeded `pixels`
-                // value (e.g. from `ScrollPosition::new`) is left
+                // value (e.g. from `ScrollPosition::with_writer`) is left
                 // untouched rather than reinterpreted as a page count
                 // against a never-established prior dimension.
             }
@@ -326,7 +335,7 @@ pub struct ScrollPositionSnapshot {
 ///   `apply_viewport_dimension` call; `None` (a bare `ScrollPosition` opting
 ///   into this policy directly, with no controller) leaves `pixels`
 ///   untouched on that one call — the same as `KeepPixels` — so a value
-///   seeded via [`ScrollPosition::new`] is not reinterpreted as a page count
+///   seeded via [`ScrollPosition::with_writer`] is not reinterpreted as a page count
 ///   against a never-established prior dimension. Restoring the page from
 ///   saved state is not modeled.
 /// - **`viewport_fraction > 1.0`.** Centering each page within a
@@ -431,9 +440,9 @@ struct ActivityState {
 
 impl Inner {
     /// The single fusion point that fires both notification sinks. Every
-    /// mutation that must be observable — the gesture-driven `set_pixels`
-    /// path and the coalesced post-frame flush — routes through here so
-    /// there is exactly one place that decides who gets told.
+    /// mutation that must be observable — a [`ScrollOffsetWriter`] write and
+    /// the coalesced post-frame flush — routes through here so there is
+    /// exactly one place that decides who gets told.
     fn notify(&self) {
         let mut recovery = flui_foundation::panic::PanicRecovery::new();
         self.notify_with_recovery(&mut recovery.scope());
@@ -509,10 +518,10 @@ impl Listenable for Inner {
 /// implementation (consumed by `RenderViewport`) that is also
 /// [`Listenable`] (consumed by `ScrollController`/`AnimatedBuilder`).
 ///
-/// All clones point at the same underlying state via an `Rc`, so a gesture
-/// handler holding one clone and a `RenderViewport` holding another observe
-/// each other's writes immediately — no separate push step is needed once
-/// both sides share the same `ScrollPosition`.
+/// All clones point at the same underlying state via an `Rc`, so a
+/// `RenderViewport` holding one clone observes the writes of the position's
+/// [`ScrollOffsetWriter`] immediately — no separate push step is needed. A
+/// clone reads and subscribes; only the writer scrolls.
 ///
 /// See the module docs for the content-dimension feedback contract.
 #[derive(Clone)]
@@ -549,16 +558,14 @@ impl fmt::Debug for ScrollPosition {
 }
 
 impl Default for ScrollPosition {
+    /// A [fixed](Self::fixed) position at zero.
     fn default() -> Self {
-        Self::zero()
+        Self::fixed(0.0)
     }
 }
 
 impl ScrollPosition {
-    /// Creates a new scroll position at pixel offset `initial_pixels`, with
-    /// no known extents and no flush handle installed.
-    #[must_use]
-    pub fn new(initial_pixels: f64) -> Self {
+    fn seeded(initial_pixels: f64) -> Self {
         Self {
             inner: Rc::new(Inner {
                 state: RefCell::new(State {
@@ -574,10 +581,24 @@ impl ScrollPosition {
         }
     }
 
-    /// Creates a scroll position at zero.
+    /// A position at `pixels` that nothing writes: only layout moves it,
+    /// clamping it into the extents it reports and applying corrections.
+    /// The offset of a viewport that does not scroll, or of a test.
     #[must_use]
-    pub fn zero() -> Self {
-        Self::new(0.0)
+    pub fn fixed(pixels: f64) -> Self {
+        Self::seeded(pixels)
+    }
+
+    /// A position at `initial_pixels`, with no known extents and no flush
+    /// handle installed, and its one [`ScrollOffsetWriter`]. Whoever holds
+    /// the writer owns the position's motion.
+    #[must_use]
+    pub fn with_writer(initial_pixels: f64) -> (Self, ScrollOffsetWriter) {
+        let position = Self::seeded(initial_pixels);
+        let writer = ScrollOffsetWriter {
+            inner: Rc::clone(&position.inner),
+        };
+        (position, writer)
     }
 
     /// The smallest pixel value reachable without overscroll.
@@ -698,38 +719,6 @@ impl ScrollPosition {
         true
     }
 
-    /// Sets the scroll offset to `value`, unclamped, and notifies listeners
-    /// if the value actually changed (epsilon-guarded — a same-value write
-    /// does not re-notify). This is the gesture/programmatic write path;
-    /// `ScrollController::jump_to` clamps to the current extents before
-    /// calling this.
-    pub fn set_pixels(&self, value: f64) {
-        let mut recovery = flui_foundation::panic::PanicRecovery::new();
-        self.set_pixels_with_recovery(value, &mut recovery.scope());
-        recovery.finish();
-    }
-
-    /// Publish pixels within an enclosing framework operation's failure custody.
-    #[doc(hidden)]
-    pub fn set_pixels_with_recovery(
-        &self,
-        value: f64,
-        recovery: &mut flui_foundation::panic::RecoveryScope<'_>,
-    ) {
-        let changed = {
-            let mut state = self.inner.state.borrow_mut();
-            if (state.pixels - value).abs() > f64::EPSILON {
-                state.pixels = value;
-                true
-            } else {
-                false
-            }
-        };
-        if changed {
-            self.notify_with_recovery(recovery);
-        }
-    }
-
     /// Installs the post-frame capability that lets `apply_viewport_dimension`/
     /// `apply_content_dimensions` flush a coalesced notification after
     /// layout instead of firing synchronously mid-frame. Acquire `handle`
@@ -739,97 +728,19 @@ impl ScrollPosition {
         self.inner.flush.borrow_mut().flush_handle = Some(handle);
     }
 
-    /// Fires every registered listener (both the `Listenable` notifier and
-    /// the `ViewportOffset` ptr-eq list) exactly once.
-    ///
-    /// Does NOT consume any pending coalesced-flush state — a caller that
-    /// might have just triggered `apply_viewport_dimension`/
-    /// `apply_content_dimensions` (and so may have a flush already queued)
-    /// must use [`flush_now`](Self::flush_now) instead, or risk a second,
-    /// redundant notification once that flush runs. This method is for
-    /// callers that know no flush is in flight — e.g. the gesture/
-    /// `set_pixels` path, which never schedules one.
-    pub fn notify(&self) {
-        self.inner.notify();
-    }
-
-    /// Deliver both notification channels within shared framework failure custody.
-    #[doc(hidden)]
-    pub fn notify_with_recovery(&self, recovery: &mut flui_foundation::panic::RecoveryScope<'_>) {
-        self.inner.notify_with_recovery(recovery);
-    }
-
     // ========== Scroll activity ==========
 
     /// Whether a user drag or ballistic fling is currently underway.
     #[must_use]
     pub fn is_scrolling(&self) -> bool {
-        self.inner.activity.borrow_mut().is_scrolling
-    }
-
-    /// Records that scrolling started or stopped. Activity listeners fire on
-    /// the TRANSITION only — a same-value write is silent, so a caller may
-    /// set unconditionally at each gesture edge without spamming subscribers.
-    ///
-    /// Stopping also resets [`Self::user_scroll_direction`] to `Idle`,
-    /// since no drag or fling remains to have a direction.
-    pub fn set_is_scrolling(&self, is_scrolling: bool) {
-        let mut recovery = flui_foundation::panic::PanicRecovery::new();
-        self.set_is_scrolling_with_recovery(is_scrolling, &mut recovery.scope());
-        recovery.finish();
-    }
-
-    /// Publish activity within an enclosing framework delivery's failure custody.
-    #[doc(hidden)]
-    pub fn set_is_scrolling_with_recovery(
-        &self,
-        is_scrolling: bool,
-        recovery: &mut flui_foundation::panic::RecoveryScope<'_>,
-    ) {
-        let changed = {
-            let mut activity = self.inner.activity.borrow_mut();
-            let changed = activity.is_scrolling != is_scrolling;
-            activity.is_scrolling = is_scrolling;
-            if changed && !is_scrolling {
-                activity.user_scroll_direction = super::ScrollDirection::Idle;
-            }
-            changed
-        };
-        // Lock released before listeners run — a subscriber reading the
-        // activity back must not deadlock.
-        if changed {
-            self.inner
-                .activity_notifier
-                .notify_listeners_with_recovery(recovery);
-        }
+        self.inner.activity.borrow().is_scrolling
     }
 
     /// The direction of the user's current scroll, `Idle` when none is
     /// underway.
     #[must_use]
     pub fn user_scroll_direction(&self) -> super::ScrollDirection {
-        self.inner.activity.borrow_mut().user_scroll_direction
-    }
-
-    /// Records the user's scroll direction. Listeners fire on change only.
-    ///
-    /// A non-`Idle` direction is only recordable while
-    /// [`Self::is_scrolling`] — outside an active scroll the write is
-    /// ignored, keeping the documented invariant ("`Idle` when none is
-    /// underway") true by construction instead of by caller discipline.
-    pub fn set_user_scroll_direction(&self, direction: super::ScrollDirection) {
-        let changed = {
-            let mut activity = self.inner.activity.borrow_mut();
-            if !activity.is_scrolling && direction != super::ScrollDirection::Idle {
-                return;
-            }
-            let changed = activity.user_scroll_direction != direction;
-            activity.user_scroll_direction = direction;
-            changed
-        };
-        if changed {
-            self.inner.activity_notifier.notify_listeners();
-        }
+        self.inner.activity.borrow().user_scroll_direction
     }
 
     /// Subscribe to activity transitions (scrolling started/stopped, user
@@ -847,25 +758,6 @@ impl ScrollPosition {
     pub fn remove_activity_listener(&self, id: flui_foundation::ListenerId) {
         use flui_foundation::Listenable as _;
         self.inner.activity_notifier.remove_listener(id);
-    }
-
-    /// Notifies exactly once, synchronously — consuming any coalesced-flush
-    /// state first so a post-frame flush already queued by a preceding
-    /// `apply_viewport_dimension`/`apply_content_dimensions` call becomes a
-    /// no-op instead of firing a second, redundant notification for the
-    /// same mutation.
-    ///
-    /// `ScrollController::update_dimensions` calls this (not
-    /// [`notify`](Self::notify)) after applying dimensions outside a frame
-    /// phase, precisely because those two `apply_*` calls may have just
-    /// marked the position dirty and scheduled a flush.
-    pub fn flush_now(&self) {
-        {
-            let mut flush = self.inner.flush.borrow_mut();
-            flush.metrics_dirty = false;
-            flush.flush_pending = false;
-        }
-        self.notify();
     }
 
     /// Returns an `Rc<dyn Listenable>` sharing this position's notification channel.
@@ -916,18 +808,181 @@ impl ScrollPosition {
     }
 
     /// Whether `self` is the only live handle to its underlying position —
-    /// no clone of it is held anywhere else.
+    /// no clone of it and no [`ScrollOffsetWriter`] for it is held anywhere
+    /// else.
     ///
     /// A composer that owns a private position (creates it itself and never
     /// hands out a clone) can use this to detect that the position currently
     /// installed somewhere is instead a *foreign* one — e.g. `Viewport`
     /// switching from an injected, externally-shared position (Position
-    /// mode) back to its own private one (Fixed mode) uses this to decide
-    /// whether it's safe to keep writing into the installed position or
-    /// must swap in a fresh, privately-owned one first.
+    /// mode) back to its own private fixed one (Fixed mode) uses this to
+    /// decide whether the installed position is its own or must be replaced.
     #[must_use]
     pub fn is_uniquely_held(&self) -> bool {
         Rc::strong_count(&self.inner) == 1
+    }
+}
+
+/// Why a [`ScrollOffsetWriter`] moved its position.
+///
+/// The owner of the writer knows what drove each write, and says so: the
+/// cause travels with the write into its diagnostics. The offset an owner
+/// starts from is no write; it is the seed [`ScrollPosition::with_writer`]
+/// takes. A layout-time correction or clamp is no write either: layout
+/// applies it through [`ViewportOffset`] and notifies nobody.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum OffsetWriteCause {
+    /// A step of the user's own input: a drag, a wheel or trackpad packet,
+    /// a key, an assistive scroll action.
+    UserInput,
+    /// Inertia the platform delivers after the user let go (trackpad
+    /// momentum).
+    Momentum,
+    /// Motion the framework drives after a release or for the user: a
+    /// fling, a ballistic or snap settle, a spring back into range, a drop
+    /// autoscroll.
+    Ballistic,
+    /// An application request: a controller jump, a frame of its
+    /// animation, a reveal, a resting place an owner picks when the motion
+    /// that moved it is gone.
+    Programmatic,
+}
+
+/// The one writer of a [`ScrollPosition`] made by
+/// [`ScrollPosition::with_writer`].
+///
+/// It is not `Clone`, so a position has at most one, and not `Send`, as the
+/// position it writes is not. Every pixel write names its
+/// [`OffsetWriteCause`]. Each write commits the position's state before any
+/// listener runs, so a listener reads the new value back and may write
+/// again; a listener that panics does not stop the others, and the first
+/// panic resumes once all of them ran (ADR-0287).
+///
+/// The methods take `&self`: the owner that holds the writer shares it
+/// among its own handles, and a write that re-enters from a listener must
+/// find no borrow of the writer held.
+///
+/// ```compile_fail
+/// fn clone_it(writer: flui_rendering::view::ScrollOffsetWriter) {
+///     let _second: flui_rendering::view::ScrollOffsetWriter = Clone::clone(&writer);
+/// }
+/// ```
+///
+/// ```compile_fail
+/// fn send<T: Send>(_: T) {}
+/// let (_position, writer) = flui_rendering::view::ScrollPosition::with_writer(0.0);
+/// send(writer);
+/// ```
+///
+/// A clone of the position cannot scroll:
+///
+/// ```compile_fail
+/// let position = flui_rendering::view::ScrollPosition::fixed(0.0);
+/// position.set_pixels(10.0);
+/// ```
+pub struct ScrollOffsetWriter {
+    inner: Rc<Inner>,
+}
+
+impl fmt::Debug for ScrollOffsetWriter {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let pixels = self.inner.state.try_borrow().ok().map(|state| state.pixels);
+        f.debug_struct("ScrollOffsetWriter")
+            .field("pixels", &pixels)
+            .finish_non_exhaustive()
+    }
+}
+
+impl ScrollOffsetWriter {
+    /// Move the offset to `pixels`, unclamped, for `cause`, and notify both
+    /// listener channels when it changed (epsilon-guarded: a same-value
+    /// write, or a value that is not finite, changes and notifies nothing).
+    ///
+    /// # Panics
+    ///
+    /// Resumes the first panic of a listener, after every listener ran and
+    /// with the new offset committed.
+    pub fn set_pixels(&self, pixels: f64, cause: OffsetWriteCause) {
+        // Every scroll step writes here, and a step allocates nothing, so the
+        // write commits by hand rather than through an `Outbox`: the borrow
+        // closes, with the new offset in place, before any listener runs,
+        // and nothing in it can panic.
+        {
+            let mut state = self.inner.state.borrow_mut();
+            if !pixels.is_finite() || (state.pixels - pixels).abs() <= f64::EPSILON {
+                return;
+            }
+            state.pixels = pixels;
+        }
+        self.inner.notify();
+        // After the listeners: a subscriber is user code, and the state it
+        // reads back is committed.
+        tracing::trace!(pixels, ?cause, "scroll offset written");
+    }
+
+    /// Notify both listener channels once, now, whether or not anything
+    /// changed: the owner changed what its listeners act on without moving
+    /// the offset (new extents it applied itself, a request it queued). A
+    /// coalesced post-frame flush already queued for the same change is
+    /// consumed, so it does not notify a second time.
+    ///
+    /// # Panics
+    ///
+    /// Resumes the first panic of a listener, after every listener ran.
+    pub fn notify(&self) {
+        {
+            let mut flush = self.inner.flush.borrow_mut();
+            flush.metrics_dirty = false;
+            flush.flush_pending = false;
+        }
+        self.inner.notify();
+    }
+
+    /// Record that scrolling started or stopped. Activity listeners hear the
+    /// transition only: a same-value write is silent, so an owner may set
+    /// it at each gesture edge. Stopping resets the user's scroll direction
+    /// to `Idle`, since no drag or fling remains to have one.
+    ///
+    /// # Panics
+    ///
+    /// Resumes the first panic of an activity listener, after every one ran.
+    pub fn set_is_scrolling(&self, is_scrolling: bool) {
+        let inner = &self.inner;
+        commit(&inner.activity, |activity, outbox| {
+            if activity.is_scrolling == is_scrolling {
+                return;
+            }
+            activity.is_scrolling = is_scrolling;
+            if !is_scrolling {
+                activity.user_scroll_direction = super::ScrollDirection::Idle;
+            }
+            let inner = Rc::clone(inner);
+            outbox.call(move || inner.activity_notifier.notify_listeners());
+        });
+    }
+
+    /// Record the direction of the user's scroll. Activity listeners hear a
+    /// change only. A direction other than `Idle` is recorded only while
+    /// scrolling is underway, so "`Idle` when none is underway" holds by
+    /// construction.
+    ///
+    /// # Panics
+    ///
+    /// Resumes the first panic of an activity listener, after every one ran.
+    pub fn set_user_scroll_direction(&self, direction: super::ScrollDirection) {
+        let inner = &self.inner;
+        commit(&inner.activity, |activity, outbox| {
+            if !activity.is_scrolling && direction != super::ScrollDirection::Idle {
+                return;
+            }
+            if activity.user_scroll_direction == direction {
+                return;
+            }
+            activity.user_scroll_direction = direction;
+            let inner = Rc::clone(inner);
+            outbox.call(move || inner.activity_notifier.notify_listeners());
+        });
     }
 }
 
@@ -993,20 +1048,8 @@ impl ViewportOffset for ScrollPosition {
 
     fn correct_by(&mut self, correction: f64) {
         // No notification: a layout-time correction must not fire
-        // listeners (same contract as `ScrollableViewportOffset`).
+        // listeners (ADR-0051: anchor correction is not a scroll).
         self.inner.state.borrow_mut().pixels += correction;
-    }
-
-    fn jump_to(&mut self, pixels: f64) {
-        // Unclamped + epsilon-guarded — identical body to `set_pixels`, kept
-        // as one call so there is a single source of truth for the guard.
-        self.set_pixels(pixels);
-    }
-
-    fn animate_to(&mut self, to: f64, _duration_ms: u64) {
-        // No animation support yet (v1 restriction, `ScrollController` docs);
-        // synchronous jump is the documented fallback.
-        self.jump_to(to);
     }
 
     fn user_scroll_direction(&self) -> ScrollDirection {
@@ -1050,7 +1093,7 @@ mod tests {
         let scheduler = UpdateScheduler::new();
         let handle = PostFrameHandle::new(&scheduler);
 
-        let mut position = ScrollPosition::zero();
+        let mut position = ScrollPosition::fixed(0.0);
         position.set_flush_handle(handle);
 
         let notified = Rc::new(AtomicUsize::new(0));

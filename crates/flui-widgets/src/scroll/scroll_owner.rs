@@ -31,7 +31,7 @@ use flui_interaction::gesture::GestureSettingsProvider;
 use flui_interaction::{HoldEnd, InputSequenceId, RemainderHandoff};
 use flui_platform::keyboard::Code;
 use flui_platform::pointer::{DeviceId, PointerKind};
-use flui_rendering::view::ScrollDirection;
+use flui_rendering::view::{OffsetWriteCause, ScrollDirection, ScrollOffsetWriter};
 
 use super::nested::presentation_device_pixel_ratio;
 use super::nested::{
@@ -362,7 +362,9 @@ impl ScrollOwner {
     /// Move the offset to `pixels` for `cause`, and tell the motion hook.
     fn publish(&self, pixels: f64, cause: ScrollCause) {
         let from = self.controller.pixels();
-        self.controller.set_pixels(pixels);
+        self.controller
+            .writer()
+            .set_pixels(pixels, cause.offset_write());
         let to = self.controller.pixels();
         if from == to {
             return;
@@ -383,6 +385,11 @@ impl ScrollOwner {
 
     pub(crate) fn controller(&self) -> &ScrollController {
         &self.controller
+    }
+
+    /// The writer of the position this owner moves.
+    pub(crate) fn writer(&self) -> &ScrollOffsetWriter {
+        self.controller.writer()
     }
 
     pub(crate) fn is_alive(&self) -> bool {
@@ -843,7 +850,7 @@ impl ScrollOwner {
                 // The user's direction, for activity subscribers (a floating
                 // header's snap decision): a growing offset scrolls in
                 // reverse.
-                position.set_user_scroll_direction(if delta > 0.0 {
+                self.writer().set_user_scroll_direction(if delta > 0.0 {
                     ScrollDirection::Reverse
                 } else {
                     ScrollDirection::Forward
@@ -1282,11 +1289,11 @@ impl ScrollOwner {
         if !is_current() {
             return RunStart::TakenOver;
         }
-        scroll_position.set_is_scrolling(true);
+        self.writer().set_is_scrolling(true);
         if !is_current() {
             return RunStart::TakenOver;
         }
-        scroll_position.set_user_scroll_direction(if velocity > 0.0 {
+        self.writer().set_user_scroll_direction(if velocity > 0.0 {
             ScrollDirection::Reverse
         } else {
             ScrollDirection::Forward
@@ -1747,7 +1754,8 @@ impl ScrollOwner {
                 self.controller.max_scroll_extent(),
             );
             if !self.jump_within(target, recovery) {
-                self.controller.set_pixels(target);
+                self.writer()
+                    .set_pixels(target, OffsetWriteCause::Programmatic);
             }
             return;
         }
@@ -1853,8 +1861,8 @@ impl ScrollOwner {
         };
         sequence.finish_input();
         let _ = self.fling.stop();
-        position.set_is_scrolling(true);
-        position.set_user_scroll_direction(if target > old {
+        self.writer().set_is_scrolling(true);
+        self.writer().set_user_scroll_direction(if target > old {
             ScrollDirection::Reverse
         } else {
             ScrollDirection::Forward
@@ -1917,8 +1925,8 @@ impl ScrollOwner {
             }
         };
         let _ = self.fling.stop();
-        position.set_is_scrolling(true);
-        position.set_user_scroll_direction(if target > old {
+        self.writer().set_is_scrolling(true);
+        self.writer().set_user_scroll_direction(if target > old {
             ScrollDirection::Reverse
         } else {
             ScrollDirection::Forward

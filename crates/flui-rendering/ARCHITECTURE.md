@@ -186,8 +186,9 @@ The public widget row
 checks render notification after a value failure, live ancestor reveal and a
 fresh request after recovery.
 
-Framework command operations can lend their RecoveryScope to pixel publication
-and both notification channels. They do not start an independent healthy
+Framework command operations run pixel publication through the position's
+`ScrollOffsetWriter`, with both notification channels, inside their
+RecoveryScope. They do not start an independent healthy
 receipt after an earlier command-retirement failure. The mounted widget row
 `replacing_pending_scroll_motion_delivers_and_recovers_after_user_failure`
 checks inherited custody with a self-removing observer's actual destructor.
@@ -1565,7 +1566,7 @@ control, checking published extents and the cached items' committed geometry.
 | `RenderTree::owner` (`src/storage/tree.rs:65`) | `Option<Arc<RwLock<PipelineOwner>>>` | Shared infrastructure | Allowed: locks may guard shared infrastructure. Off the per-node hot path. |
 | `PipelineOwner` parent/back-references throughout [`src/pipeline/owner/mod.rs`](src/pipeline/owner/mod.rs) | `Arc<RwLock<PipelineOwner>>`, `Weak<RwLock<PipelineOwner>>` | Shared infrastructure | Soundness-rewrite precedent ([core-crates-hardening Task 7](https://github.com/vanyastaff/flui/blob/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/docs/plans/2026-03-31-core-crates-hardening.md)). |
 | `RenderTree::nodes` (`src/storage/tree.rs:59`) | `Slab<RenderNode>` | Auto-derived Send+Sync | No `unsafe impl` needed after U2. |
-| Viewport listener list (`ScrollableViewportOffset::listeners`, `src/view/viewport_offset.rs`) | `RwLock<Vec<…>>` | Listener registry | Off layout/paint hot path. `FixedViewportOffset`'s former listener list was deleted as speculative API (a fixed offset never notifies). |
+| Viewport listener list (`OffsetListeners`, `src/view/viewport_offset.rs`, held by `ScrollPosition`) | `Notifier` on the owner thread | Listener registry | Off layout/paint hot path. A fixed offset never notifies, so `FixedViewportOffset` has no list. |
 | `PipelineOwner::text` (`src/pipeline/text_context.rs`) | `Rc<RefCell<TextContext>>` | Owner-thread shared infrastructure | The UI runtime's text context, shared by its presentations' pipelines. Borrowed once per measurement, never across a child's layout; `!Send`, like the owner. See "Layout contexts lend the UI runtime's text context". |
 
 Two rows left this table because their sites left the crate: the mouse tracker

@@ -12,7 +12,7 @@ use flui_rendering::{
     pipeline::PipelineOwner,
     testing::inspect,
     traits::RenderSliver,
-    view::{ScrollableViewportOffset, ViewportOffset},
+    view::{OffsetWriteCause, ScrollPosition, ViewportOffset},
 };
 
 use crate::common::{BoxedSliverObject, laid_out_tight_100x100 as laid_out};
@@ -124,7 +124,7 @@ pub(crate) fn viewport_lays_out_forward_slivers_and_applies_content_dimensions()
     let viewport = RenderViewport::with_offset(
         AxisDirection::TopToBottom,
         AxisDirection::LeftToRight,
-        ScrollableViewportOffset::new(40.0),
+        ScrollPosition::fixed(40.0),
     );
 
     let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
@@ -157,7 +157,7 @@ pub(crate) fn viewport_lays_out_forward_slivers_and_applies_content_dimensions()
         .and_then(|entry| {
             entry
                 .render_object()
-                .downcast_ref::<RenderViewport<ScrollableViewportOffset>>()
+                .downcast_ref::<RenderViewport<ScrollPosition>>()
         })
         .expect("root is RenderViewport");
 
@@ -183,7 +183,7 @@ pub(crate) fn a_sliver_reports_its_painted_area_as_an_input_region() {
     let viewport = RenderViewport::with_offset(
         AxisDirection::TopToBottom,
         AxisDirection::LeftToRight,
-        ScrollableViewportOffset::new(40.0),
+        ScrollPosition::fixed(40.0),
     );
     let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
     let root_id = owner.insert(Box::new(viewport));
@@ -276,7 +276,7 @@ pub(crate) fn viewport_positions_first_sliver_for_axis_and_growth_matrix() {
         let mut viewport = RenderViewport::with_offset(
             axis_direction,
             test_cross_axis_direction(axis_direction),
-            ScrollableViewportOffset::zero(),
+            ScrollPosition::fixed(0.0),
         );
         if growth == GrowthDirection::Reverse {
             assert_eq!(
@@ -325,46 +325,52 @@ pub(crate) fn viewport_positions_first_sliver_for_axis_and_growth_matrix() {
 // state does not exist any more; there is nothing left for this test to
 // pin, so it is deleted rather than rewritten.
 
-/// A listener is user code. One that panics while a scrollable offset notifies leaves the rest of
-/// that round and every later change delivered.
+/// A listener is user code. One that panics while a scroll position notifies leaves the rest of
+/// that round and every later change delivered, and every listener reads the committed offset.
 ///
-/// Fails when the panic skips the listeners after it, or leaves the offset believing it is still
-/// notifying: the next `set_pixels` then only counts a pass nobody runs, and the viewport never
+/// Fails when the panic skips the listeners after it, or leaves the position believing it is
+/// still notifying: the next write then only counts a pass nobody runs, and the viewport never
 /// hears of another scroll.
 #[test]
-fn a_listener_that_panics_leaves_the_scrollable_offset_notifying() {
+fn a_listener_that_panics_leaves_the_scroll_position_notifying() {
     use std::{
-        cell::Cell,
+        cell::{Cell, RefCell},
         panic::{AssertUnwindSafe, catch_unwind},
         rc::Rc,
     };
 
-    let mut offset = ScrollableViewportOffset::zero();
+    let (position, writer) = ScrollPosition::with_writer(0.0);
     let armed = Rc::new(Cell::new(true));
     let failing: Rc<dyn Fn()> = Rc::new({
         let armed = Rc::clone(&armed);
         move || assert!(!armed.replace(false), "the first listener fails once")
     });
-    let heard = Rc::new(Cell::new(0_usize));
+    let heard = Rc::new(RefCell::new(Vec::new()));
     let counting: Rc<dyn Fn()> = Rc::new({
-        let heard = Rc::clone(&heard);
-        move || heard.set(heard.get() + 1)
+        let (heard, position) = (Rc::clone(&heard), position.clone());
+        move || heard.borrow_mut().push(position.pixels())
     });
-    offset.add_listener(Rc::clone(&failing));
-    offset.add_listener(Rc::clone(&counting));
+    position.add_listener(Rc::clone(&failing));
+    position.add_listener(Rc::clone(&counting));
 
-    let unwound = catch_unwind(AssertUnwindSafe(|| offset.set_pixels(10.0)));
+    let unwound = catch_unwind(AssertUnwindSafe(|| {
+        writer.set_pixels(10.0, OffsetWriteCause::UserInput);
+    }));
     assert!(unwound.is_err(), "the listener's panic continues");
     assert_eq!(
-        heard.get(),
-        1,
-        "the listener after the failing one still ran"
+        *heard.borrow(),
+        vec![10.0],
+        "the listener after the failing one still ran, and read the committed offset"
     );
 
-    offset.set_pixels(20.0);
-    assert_eq!(heard.get(), 2, "the next change reached the listeners");
+    writer.set_pixels(20.0, OffsetWriteCause::UserInput);
+    assert_eq!(
+        *heard.borrow(),
+        vec![10.0, 20.0],
+        "the next change reached the listeners"
+    );
 
-    offset.remove_listener(&counting);
-    offset.set_pixels(30.0);
-    assert_eq!(heard.get(), 2, "a removed listener is not told");
+    position.remove_listener(&counting);
+    writer.set_pixels(30.0, OffsetWriteCause::UserInput);
+    assert_eq!(heard.borrow().len(), 2, "a removed listener is not told");
 }

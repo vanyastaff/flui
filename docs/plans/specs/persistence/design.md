@@ -289,7 +289,7 @@ wasm32 — тот же API поверх IndexedDB, асинхронный), `sto
 - **Notes: восстановление.** Корневой `FutureBuilder` грузит `data`, затем `session`: до
   готовности «Loading notes», ошибка данных — экран Retry, сеанс не читается и не пишется (R6).
   Затем `Router::from_stack(стек)`; пути хранятся как `to_path().to_string()` и разбираются
-  `from_path`, ошибка разбора — Home. `scroll.set_pixels(p)` и черновик задаются до первой
+  `from_path`, ошибка разбора — Home. `ScrollController::with_initial_scroll_offset(p)` и черновик задаются до первой
   раскладки (R5). Ссылка запуска, если приложение её получило, побеждает сеанс: стек берётся из
   неё, черновик остаётся, только если его заметка в этом стеке. Retry/Reload — `wrapping_add`
   (R26). Сеанс снимается из `RouterHandle::stack()`, `scroll.pixels()` и текста черновика в

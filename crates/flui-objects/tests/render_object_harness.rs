@@ -172,7 +172,7 @@ use flui_rendering::{
         box_node, sliver_node,
     },
     traits::{RenderBox, TextBaseline},
-    view::{ScrollDirection, ScrollableViewportOffset},
+    view::{ScrollDirection, ScrollPosition},
 };
 
 /// Describes a test double that has no fields of its own to report.
@@ -1125,13 +1125,20 @@ fn grid_list(delegate: impl SliverGridDelegate + 'static, children: Vec<TreeNode
     node
 }
 
-fn viewport_with_scroll(offset: f64, sliver: TreeNode) -> TreeNode {
-    use flui_rendering::view::ScrollableViewportOffset;
+/// A position at `pixels` whose user scrolls in `direction`: a write of its
+/// own writer, which the harness drops once the activity is recorded.
+fn scrolled(pixels: f64, direction: ScrollDirection) -> ScrollPosition {
+    let (position, writer) = ScrollPosition::with_writer(pixels);
+    writer.set_is_scrolling(direction != ScrollDirection::Idle);
+    writer.set_user_scroll_direction(direction);
+    position
+}
 
+fn viewport_with_scroll(offset: f64, sliver: TreeNode) -> TreeNode {
     box_node(RenderViewport::with_offset(
         AxisDirection::TopToBottom,
         AxisDirection::LeftToRight,
-        ScrollableViewportOffset::new(offset),
+        ScrollPosition::fixed(offset),
     ))
     .label("viewport")
     .child(sliver)
@@ -9497,9 +9504,9 @@ fn harness_lazy_slivers_keep_a_pinned_child_out_of_band() {
                     .with_semantics_enabled()
                     .run_frame();
                 let viewport = run.id("viewport");
-                run.update::<RenderViewport<ScrollableViewportOffset>>(viewport, |viewport| {
+                run.update::<RenderViewport<ScrollPosition>>(viewport, |viewport| {
                     let _ = viewport.set_clip_behavior(clip);
-                    viewport.offset_mut().set_pixels(SCROLLED);
+                    let _ = viewport.set_offset(ScrollPosition::fixed(SCROLLED));
                 });
                 run.pump();
                 run
@@ -9619,8 +9626,8 @@ fn harness_sliver_list_anchor_correction_emits_in_both_scroll_directions() {
             flui_rendering::RenderUpdateImpact::LAYOUT
         );
     });
-    run.update::<RenderViewport<ScrollableViewportOffset>>(vp_id, |vp| {
-        vp.offset_mut().set_pixels(72.0);
+    run.update::<RenderViewport<ScrollPosition>>(vp_id, |vp| {
+        let _ = vp.set_offset(ScrollPosition::fixed(72.0));
     });
     run.relayout();
 
@@ -10080,7 +10087,7 @@ inspect_nothing!(PanicAfterNBoxLayouts);
 fn harness_viewport_degraded_pass_does_not_move_the_scroll_position() {
     use flui_rendering::view::{ScrollPosition, ViewportOffset};
 
-    let position = ScrollPosition::new(500.0);
+    let position = ScrollPosition::fixed(500.0);
     let layouts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let node = box_node(RenderViewport::with_offset(
         AxisDirection::TopToBottom,
@@ -10201,7 +10208,7 @@ fn harness_sliver_list_failed_child_keeps_its_extent_through_recovery() {
     use flui_rendering::view::{ScrollPosition, ViewportOffset};
     use std::sync::atomic::Ordering::SeqCst;
 
-    let position = ScrollPosition::new(250.0);
+    let position = ScrollPosition::fixed(250.0);
     let layouts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let fragile = PanicAfterNBoxLayouts {
         size: Size::new(300.0, 100.0),
@@ -10271,7 +10278,7 @@ fn harness_sliver_list_failed_child_keeps_its_extent_through_recovery() {
 fn harness_sliver_list_poisoned_child_that_never_laid_out_keeps_its_estimate() {
     use flui_rendering::view::{ScrollPosition, ViewportOffset};
 
-    let position = ScrollPosition::new(250.0);
+    let position = ScrollPosition::fixed(250.0);
     let layouts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let fragile = PanicAfterNBoxLayouts {
         size: Size::new(300.0, 100.0),
@@ -10370,7 +10377,7 @@ fn harness_sliver_list_measures_a_resident_laid_out_over_a_failed_descendant() {
 fn harness_viewport_does_not_serve_a_cache_built_by_a_degraded_pass() {
     use flui_rendering::view::ScrollPosition;
 
-    let position = ScrollPosition::new(0.0);
+    let position = ScrollPosition::fixed(0.0);
     let layouts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let node = box_node(RenderViewport::with_offset(
         AxisDirection::TopToBottom,
@@ -12343,12 +12350,6 @@ impl flui_rendering::view::ViewportOffset for ObservedViewportOffset {
     fn correct_by(&mut self, value: f64) {
         self.position.correct_by(value);
     }
-    fn jump_to(&mut self, value: f64) {
-        self.position.jump_to(value);
-    }
-    fn animate_to(&mut self, value: f64, duration: u64) {
-        self.position.animate_to(value, duration);
-    }
     fn user_scroll_direction(&self) -> ScrollDirection {
         self.position.user_scroll_direction()
     }
@@ -12492,7 +12493,7 @@ fn viewport_multi_with_scroll(
     let mut node = box_node(RenderViewport::with_offset(
         AxisDirection::TopToBottom,
         AxisDirection::LeftToRight,
-        ScrollableViewportOffset::new(offset),
+        ScrollPosition::fixed(offset),
     ))
     .label("viewport");
     for sliver in slivers {
@@ -12539,8 +12540,8 @@ fn harness_sliver_persistent_header_scrolling_shrinks_then_scrolls_off() {
         "fully expanded: child sits at the sliver's own origin",
     );
 
-    run.update::<RenderViewport<ScrollableViewportOffset>>(vp_id, |vp| {
-        vp.offset_mut().set_pixels(60.0);
+    run.update::<RenderViewport<ScrollPosition>>(vp_id, |vp| {
+        let _ = vp.set_offset(ScrollPosition::fixed(60.0));
     });
     run.relayout();
     assert_eq!(
@@ -12549,8 +12550,8 @@ fn harness_sliver_persistent_header_scrolling_shrinks_then_scrolls_off() {
         "mid-shrink: paint_extent = max_extent - scroll_offset",
     );
 
-    run.update::<RenderViewport<ScrollableViewportOffset>>(vp_id, |vp| {
-        vp.offset_mut().set_pixels(80.0);
+    run.update::<RenderViewport<ScrollPosition>>(vp_id, |vp| {
+        let _ = vp.set_offset(ScrollPosition::fixed(80.0));
     });
     run.relayout();
     assert_eq!(
@@ -12559,8 +12560,8 @@ fn harness_sliver_persistent_header_scrolling_shrinks_then_scrolls_off() {
         "at scroll_offset = max_extent - min_extent: shrunk to exactly min_extent",
     );
 
-    run.update::<RenderViewport<ScrollableViewportOffset>>(vp_id, |vp| {
-        vp.offset_mut().set_pixels(200.0);
+    run.update::<RenderViewport<ScrollPosition>>(vp_id, |vp| {
+        let _ = vp.set_offset(ScrollPosition::fixed(200.0));
     });
     run.relayout();
     assert_eq!(
@@ -12596,8 +12597,8 @@ fn harness_sliver_persistent_header_pinned_stays_at_zero_and_reports_max_scroll_
     assert_eq!(run.offset(run.id("child")).dy, 0.0);
 
     // Scroll well past full shrink — pinned headers never scroll off.
-    run.update::<RenderViewport<ScrollableViewportOffset>>(vp_id, |vp| {
-        vp.offset_mut().set_pixels(300.0);
+    run.update::<RenderViewport<ScrollPosition>>(vp_id, |vp| {
+        let _ = vp.set_offset(ScrollPosition::fixed(300.0));
     });
     run.relayout();
     assert_eq!(
@@ -12617,7 +12618,7 @@ fn harness_sliver_persistent_header_pinned_stays_at_zero_and_reports_max_scroll_
     // the mechanism `max_scroll_obstruction_extent` actually feeds (see the
     // module-level note above the correction to the source plan's citation).
     let mut obstruction_before_filler = None;
-    run.update::<RenderViewport<ScrollableViewportOffset>>(vp_id, |vp| {
+    run.update::<RenderViewport<ScrollPosition>>(vp_id, |vp| {
         obstruction_before_filler = vp.max_scroll_obstruction_extent_before(1);
     });
     assert_eq!(
@@ -12713,10 +12714,8 @@ fn harness_sliver_persistent_header_floating_reveals_on_reverse_scroll_and_point
     // Step 1: scroll forward past max_extent — header fully shrunk/hidden.
     // Shrinking (delta < 0) is unconditional regardless of user_scroll_direction,
     // so the exact direction here doesn't matter for this step.
-    run.update::<RenderViewport<ScrollableViewportOffset>>(vp_id, |vp| {
-        vp.offset_mut().set_pixels(300.0);
-        vp.offset_mut()
-            .set_user_scroll_direction(ScrollDirection::Reverse);
+    run.update::<RenderViewport<ScrollPosition>>(vp_id, |vp| {
+        let _ = vp.set_offset(scrolled(300.0, ScrollDirection::Reverse));
     });
     run.relayout();
     let mut effective = None;
@@ -12737,10 +12736,8 @@ fn harness_sliver_persistent_header_floating_reveals_on_reverse_scroll_and_point
     // and `allow_floating_expansion` is satisfied via its first disjunct,
     // clamping the stale effective_scroll_offset (300, past max_extent) down
     // to max_extent BEFORE applying the real 20px delta.
-    run.update::<RenderViewport<ScrollableViewportOffset>>(vp_id, |vp| {
-        vp.offset_mut().set_pixels(280.0);
-        vp.offset_mut()
-            .set_user_scroll_direction(ScrollDirection::Forward);
+    run.update::<RenderViewport<ScrollPosition>>(vp_id, |vp| {
+        let _ = vp.set_offset(scrolled(280.0, ScrollDirection::Forward));
     });
     run.relayout();
     run.update::<RenderSliverFloatingPersistentHeader>(header_id, |h| {
@@ -12765,10 +12762,8 @@ fn harness_sliver_persistent_header_floating_reveals_on_reverse_scroll_and_point
     run.update::<RenderSliverFloatingPersistentHeader>(header_id, |h| {
         h.update_scroll_start_direction(ScrollDirection::Forward);
     });
-    run.update::<RenderViewport<ScrollableViewportOffset>>(vp_id, |vp| {
-        vp.offset_mut().set_pixels(250.0);
-        vp.offset_mut()
-            .set_user_scroll_direction(ScrollDirection::Idle);
+    run.update::<RenderViewport<ScrollPosition>>(vp_id, |vp| {
+        let _ = vp.set_offset(scrolled(250.0, ScrollDirection::Idle));
     });
     run.relayout();
     run.update::<RenderSliverFloatingPersistentHeader>(header_id, |h| {
@@ -12812,10 +12807,8 @@ fn harness_sliver_persistent_header_floating_pinned_shares_reveal_sequence_but_c
     let header_id = run.id("header");
     let vp_id = run.id("viewport");
 
-    run.update::<RenderViewport<ScrollableViewportOffset>>(vp_id, |vp| {
-        vp.offset_mut().set_pixels(300.0);
-        vp.offset_mut()
-            .set_user_scroll_direction(ScrollDirection::Reverse);
+    run.update::<RenderViewport<ScrollPosition>>(vp_id, |vp| {
+        let _ = vp.set_offset(scrolled(300.0, ScrollDirection::Reverse));
     });
     run.relayout();
     assert_eq!(
@@ -12830,10 +12823,8 @@ fn harness_sliver_persistent_header_floating_pinned_shares_reveal_sequence_but_c
         "child_main_axis_position is always 0.0, even fully shrunk past max_extent",
     );
 
-    run.update::<RenderViewport<ScrollableViewportOffset>>(vp_id, |vp| {
-        vp.offset_mut().set_pixels(280.0);
-        vp.offset_mut()
-            .set_user_scroll_direction(ScrollDirection::Forward);
+    run.update::<RenderViewport<ScrollPosition>>(vp_id, |vp| {
+        let _ = vp.set_offset(scrolled(280.0, ScrollDirection::Forward));
     });
     run.relayout();
     assert_eq!(
@@ -13117,7 +13108,7 @@ fn harness_subtree_anchor_attach_publishes_the_real_render_id() {
 
 fn harness_sliver_cross_axis_group_allocates_tracks_in_both_physical_axes() {
     use flui_rendering::parent_data::{SliverCrossAxisAllocation, SliverCrossAxisParentData};
-    use flui_rendering::view::ScrollableViewportOffset;
+
     for (axis, cross_axis) in [
         (AxisDirection::TopToBottom, AxisDirection::LeftToRight),
         (AxisDirection::TopToBottom, AxisDirection::RightToLeft),
@@ -13159,7 +13150,7 @@ fn harness_sliver_cross_axis_group_allocates_tracks_in_both_physical_axes() {
             box_node(RenderViewport::with_offset(
                 axis,
                 cross_axis,
-                ScrollableViewportOffset::new(0.0),
+                ScrollPosition::fixed(0.0),
             ))
             .child(group),
         )
@@ -13295,7 +13286,7 @@ fn harness_sliver_cross_axis_group_places_tracks_at_their_own_origins() {
             box_node(RenderViewport::with_offset(
                 axis,
                 AxisDirection::LeftToRight,
-                flui_rendering::view::ScrollableViewportOffset::new(0.0),
+                ScrollPosition::fixed(0.0),
             ))
             .child(group),
         )
@@ -13347,7 +13338,7 @@ fn harness_sliver_cross_axis_group_composes_pinned_obstruction_and_scroll_correc
         assert_eq!(run.hit_first(5.0, 5.0), Some(run.id("header_content")));
     }
     use flui_rendering::view::{ScrollPosition, ViewportOffset};
-    let position = ScrollPosition::new(0.0);
+    let position = ScrollPosition::fixed(0.0);
     let layouts = Rc::new(Cell::new(0));
     let group = sliver_node(RenderSliverCrossAxisGroup::new())
         .child(
@@ -13392,7 +13383,7 @@ fn harness_sliver_cross_axis_group_refuses_unrepresentable_tracks_and_missing_co
             }))
             .child(box_node(RenderSizedBox::new(Some(10.0), Some(10.0)))),
     );
-    let mut position = ScrollPosition::new(17.0);
+    let mut position = ScrollPosition::fixed(17.0);
     position.apply_viewport_dimension(100.0);
     position.apply_content_dimensions(0.0, 42.0);
     let viewport = |child| {
@@ -15046,7 +15037,7 @@ fn an_unbounded_overflow_override_is_described_as_infinite() {
 /// Two viewports that differ only in their offset type are different kinds to a diff.
 #[test]
 fn viewports_over_different_offsets_report_different_kind_arguments() {
-    use flui_rendering::view::{ScrollPosition, ScrollableViewportOffset};
+    use flui_rendering::view::{FixedViewportOffset, ScrollPosition};
 
     fn arguments(object: &dyn Inspect) -> Vec<&'static str> {
         let mut found = Vec::new();
@@ -15057,14 +15048,14 @@ fn viewports_over_different_offsets_report_different_kind_arguments() {
     let position = RenderViewport::with_offset(
         AxisDirection::TopToBottom,
         AxisDirection::LeftToRight,
-        ScrollPosition::new(0.0),
+        ScrollPosition::fixed(0.0),
     );
-    let scrollable = RenderViewport::with_offset(
+    let fixed = RenderViewport::with_offset(
         AxisDirection::TopToBottom,
         AxisDirection::LeftToRight,
-        ScrollableViewportOffset::new(0.0),
+        FixedViewportOffset::new(0.0),
     );
-    assert_ne!(arguments(&position), arguments(&scrollable));
+    assert_ne!(arguments(&position), arguments(&fixed));
     assert_eq!(arguments(&position).len(), 1);
 }
 

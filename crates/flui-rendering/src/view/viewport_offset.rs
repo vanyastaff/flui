@@ -52,6 +52,11 @@ impl ScrollDirection {
 ///
 /// This trait is a `ChangeNotifier`-like that notifies its listeners when
 /// `pixels` changes.
+///
+/// It is the viewport's layout protocol, not a way to scroll: it reads the
+/// offset, reports extents and applies layout-time corrections. Moving a
+/// shared offset is the business of its one
+/// [`ScrollOffsetWriter`](super::ScrollOffsetWriter).
 pub trait ViewportOffset: Debug {
     /// Detached layout state; it contains no listeners or delivery obligations.
     type Layout: ViewportLayout;
@@ -96,23 +101,6 @@ pub trait ViewportOffset: Debug {
     /// This method should change the `pixels` value by `correction`, but
     /// without calling the notification callbacks.
     fn correct_by(&mut self, correction: f64);
-
-    /// Jumps `pixels` from its current value to the given value,
-    /// without animation.
-    fn jump_to(&mut self, pixels: f64);
-
-    /// Animates `pixels` from its current value to the given value.
-    ///
-    /// For synchronous implementations, this can just call `jump_to`.
-    fn animate_to(&mut self, to: f64, duration_ms: u64);
-
-    /// Calls `jump_to` if duration is zero, otherwise `animate_to`.
-    fn move_to(&mut self, to: f64, duration_ms: Option<u64>) {
-        match duration_ms {
-            Some(0) | None => self.jump_to(to),
-            Some(ms) => self.animate_to(to, ms),
-        }
-    }
 
     /// The direction in which the user is trying to change `pixels`.
     fn user_scroll_direction(&self) -> ScrollDirection;
@@ -188,17 +176,6 @@ impl FixedViewportOffset {
     }
 }
 
-// `FixedViewportOffset` previously carried
-// `listeners: RwLock<Vec<Arc<dyn Fn() + Send + Sync>>>` plus a private
-// `notify_listeners()` marked `#[allow(dead_code)] // Reserved for
-// future ViewportOffset listener API`. The notify path was never
-// called because a fixed viewport offset never changes its `pixels`
-// (`jump_to` / `animate_to` are no-ops by design). Storing listeners
-// that can never fire was speculative API, so both the field and the
-// method were deleted, and the `add_listener`/`remove_listener` trait
-// impl below was downgraded to no-ops (the trait still requires them,
-// but with no storage they cost nothing).
-
 impl Default for FixedViewportOffset {
     fn default() -> Self {
         Self::zero()
@@ -247,54 +224,18 @@ impl ViewportOffset for FixedViewportOffset {
         self.pixels += correction;
     }
 
-    fn jump_to(&mut self, _pixels: f64) {
-        // Fixed viewport offset doesn't change
-    }
-
-    fn animate_to(&mut self, _to: f64, _duration_ms: u64) {
-        // Fixed viewport offset doesn't animate
-    }
-
     fn user_scroll_direction(&self) -> ScrollDirection {
         ScrollDirection::Idle
     }
 
     fn add_listener(&self, _listener: Rc<dyn Fn()>) {
-        // No-op: FixedViewportOffset's `pixels` value never changes
-        // (`jump_to` / `animate_to` are no-ops by design), so no
-        // listener could ever fire. The trait requires the method,
-        // so we keep it but drop the storage that would back it.
+        // No-op: nothing moves a fixed offset outside layout, which never
+        // notifies, so no listener could ever fire.
     }
 
     fn remove_listener(&self, _listener: &Rc<dyn Fn()>) {
         // No-op for the same reason as `add_listener`.
     }
-}
-
-/// A mutable viewport offset that can be scrolled.
-///
-/// This is a more complete implementation that tracks scroll state.
-pub struct ScrollableViewportOffset {
-    /// Current scroll position in pixels.
-    pixels: f64,
-
-    /// Whether pixels has been set.
-    has_pixels: bool,
-
-    /// Minimum scroll extent.
-    min_scroll_extent: f64,
-
-    /// Maximum scroll extent.
-    max_scroll_extent: f64,
-
-    /// The viewport dimension.
-    viewport_dimension: f64,
-
-    /// Current scroll direction.
-    user_scroll_direction: ScrollDirection,
-
-    /// Listeners for change notifications.
-    listeners: OffsetListeners,
 }
 
 /// The listener set behind [`ViewportOffset::add_listener`]: a [`ChangeNotifier`] whose
@@ -312,14 +253,6 @@ impl OffsetListeners {
         let identity = Rc::downgrade(&listener);
         let id = self.notifier.add_listener(listener);
         self.identities.borrow_mut().push((id, identity));
-    }
-
-    /// Removes the first subscription of `listener`. Its callback is dropped after the delivery
-    /// in progress, or at once when none is.
-    pub(crate) fn remove(&self, listener: &Rc<dyn Fn()>) {
-        if let Some(id) = self.forget_identity(listener) {
-            self.notifier.remove_listener(id);
-        }
     }
 
     /// Withdraws the first subscription of `listener` without dropping its callback, for an
@@ -341,219 +274,5 @@ impl OffsetListeners {
 
     pub(crate) fn notifier(&self) -> &ChangeNotifier {
         &self.notifier
-    }
-}
-
-/// Detached layout proposal for a scrollable position without page mapping.
-#[derive(Debug)]
-pub struct ScrollableViewportLayout {
-    original: [u64; 4],
-    pixels: f64,
-    min: f64,
-    max: f64,
-    dimension: f64,
-}
-
-impl ViewportLayout for ScrollableViewportLayout {
-    fn pixels(&self) -> f64 {
-        self.pixels
-    }
-    fn apply_viewport_dimension(&mut self, dimension: f64) -> bool {
-        self.dimension = dimension;
-        true
-    }
-    fn apply_content_dimensions(&mut self, min: f64, max: f64) -> bool {
-        if (self.min - min).abs() < f64::EPSILON && (self.max - max).abs() < f64::EPSILON {
-            return true;
-        }
-        self.min = min;
-        self.max = max;
-        let clamped = self.pixels.clamp(min, max);
-        let accepted = (self.pixels - clamped).abs() <= f64::EPSILON;
-        self.pixels = clamped;
-        accepted
-    }
-    fn correct_by(&mut self, correction: f64) {
-        self.pixels += correction;
-    }
-}
-
-impl Debug for ScrollableViewportOffset {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ScrollableViewportOffset")
-            .field("pixels", &self.pixels)
-            .field("has_pixels", &self.has_pixels)
-            .field("min_scroll_extent", &self.min_scroll_extent)
-            .field("max_scroll_extent", &self.max_scroll_extent)
-            .field("viewport_dimension", &self.viewport_dimension)
-            .field("user_scroll_direction", &self.user_scroll_direction)
-            .field("listeners_count", &self.listeners.notifier().len())
-            .finish_non_exhaustive()
-    }
-}
-
-impl ScrollableViewportOffset {
-    fn publish_layout(&mut self, layout: ScrollableViewportLayout) {
-        self.pixels = layout.pixels;
-        self.min_scroll_extent = layout.min;
-        self.max_scroll_extent = layout.max;
-        self.viewport_dimension = layout.dimension;
-    }
-
-    /// Creates a new scrollable viewport offset.
-    pub fn new(initial_pixels: f64) -> Self {
-        Self {
-            pixels: initial_pixels,
-            has_pixels: true,
-            min_scroll_extent: 0.0,
-            max_scroll_extent: 0.0,
-            viewport_dimension: 0.0,
-            user_scroll_direction: ScrollDirection::Idle,
-            listeners: OffsetListeners::default(),
-        }
-    }
-
-    /// Creates a scrollable viewport offset at zero.
-    pub fn zero() -> Self {
-        Self::new(0.0)
-    }
-
-    /// Returns the minimum scroll extent.
-    pub fn min_scroll_extent(&self) -> f64 {
-        self.min_scroll_extent
-    }
-
-    /// Returns the maximum scroll extent.
-    pub fn max_scroll_extent(&self) -> f64 {
-        self.max_scroll_extent
-    }
-
-    /// Returns the viewport dimension.
-    pub fn viewport_dimension(&self) -> f64 {
-        self.viewport_dimension
-    }
-
-    /// Returns whether there's content above the current scroll position.
-    pub fn extends_before(&self) -> bool {
-        self.pixels > self.min_scroll_extent
-    }
-
-    /// Returns whether there's content below the current scroll position.
-    pub fn extends_after(&self) -> bool {
-        self.pixels < self.max_scroll_extent
-    }
-
-    /// Returns whether there's content to scroll in either direction.
-    pub fn out_of_range(&self) -> bool {
-        self.pixels < self.min_scroll_extent || self.pixels > self.max_scroll_extent
-    }
-
-    /// Returns the current scroll position as a ratio (0.0 to 1.0).
-    pub fn scroll_ratio(&self) -> f64 {
-        let range = self.max_scroll_extent - self.min_scroll_extent;
-        if range <= 0.0 {
-            0.0
-        } else {
-            ((self.pixels - self.min_scroll_extent) / range).clamp(0.0, 1.0)
-        }
-    }
-
-    /// Sets the pixels value and notifies listeners.
-    pub fn set_pixels(&mut self, value: f64) {
-        if (self.pixels - value).abs() > f64::EPSILON {
-            self.pixels = value;
-            self.notify_listeners();
-        }
-    }
-
-    /// Sets the scroll direction.
-    pub fn set_user_scroll_direction(&mut self, direction: ScrollDirection) {
-        self.user_scroll_direction = direction;
-    }
-
-    /// Tells every listener of a pixels change. A listener that panics does not stop the rest;
-    /// the first panic resumes once all of them have run.
-    fn notify_listeners(&self) {
-        self.listeners.notifier().notify_listeners();
-    }
-}
-
-impl Default for ScrollableViewportOffset {
-    fn default() -> Self {
-        Self::zero()
-    }
-}
-
-impl ViewportOffset for ScrollableViewportOffset {
-    type Layout = ScrollableViewportLayout;
-
-    fn begin_layout(&self) -> Self::Layout {
-        ScrollableViewportLayout {
-            original: [
-                self.pixels.to_bits(),
-                self.min_scroll_extent.to_bits(),
-                self.max_scroll_extent.to_bits(),
-                self.viewport_dimension.to_bits(),
-            ],
-            pixels: self.pixels,
-            min: self.min_scroll_extent,
-            max: self.max_scroll_extent,
-            dimension: self.viewport_dimension,
-        }
-    }
-
-    fn accept_layout(&mut self, layout: Self::Layout) -> crate::RenderResult<()> {
-        if self.begin_layout().original != layout.original {
-            return Err(crate::RenderError::ViewportOffsetChanged);
-        }
-        self.publish_layout(layout);
-        Ok(())
-    }
-
-    fn pixels(&self) -> f64 {
-        self.pixels
-    }
-
-    fn has_pixels(&self) -> bool {
-        self.has_pixels
-    }
-
-    fn apply_viewport_dimension(&mut self, viewport_dimension: f64) -> bool {
-        let mut layout = self.begin_layout();
-        let accepted = layout.apply_viewport_dimension(viewport_dimension);
-        self.publish_layout(layout);
-        accepted
-    }
-
-    fn apply_content_dimensions(&mut self, min_scroll_extent: f64, max_scroll_extent: f64) -> bool {
-        let mut layout = self.begin_layout();
-        let accepted = layout.apply_content_dimensions(min_scroll_extent, max_scroll_extent);
-        self.publish_layout(layout);
-        accepted
-    }
-
-    fn correct_by(&mut self, correction: f64) {
-        self.pixels += correction;
-    }
-
-    fn jump_to(&mut self, pixels: f64) {
-        self.set_pixels(pixels);
-    }
-
-    fn animate_to(&mut self, to: f64, _duration_ms: u64) {
-        // For now, just jump (no animation support yet)
-        self.jump_to(to);
-    }
-
-    fn user_scroll_direction(&self) -> ScrollDirection {
-        self.user_scroll_direction
-    }
-
-    fn add_listener(&self, listener: Rc<dyn Fn()>) {
-        self.listeners.add(listener);
-    }
-
-    fn remove_listener(&self, listener: &Rc<dyn Fn()>) {
-        self.listeners.remove(listener);
     }
 }

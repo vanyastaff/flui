@@ -129,7 +129,16 @@ need their own channel ([followups](https://github.com/vanyastaff/flui/blob/083b
    participant that only a dragging hand may move (pull-to-refresh) needs the difference.
 3. **One offset primitive.** Every scroll (drag, wheel, keyboard, assistive actions per ADR-0157,
    `reveal(rect)` per ADR-0168, controller jumps and animations, DnD autoscroll) goes through the
-   dispatcher with its cause. `reveal(rect)` keeps ADR-0169's rebasing of the published target
+   dispatcher with its cause. The one write of an offset is
+   `ScrollOffsetWriter::set_pixels(pixels, OffsetWriteCause)` in `flui-rendering`: a
+   `ScrollPosition` is created with its single writer by `ScrollPosition::with_writer`, the writer
+   is neither `Clone` nor `Send`, and the scrollable's `ScrollController` holds it for the owner,
+   which writes the offset each step publishes with the step's cause. `ScrollPosition`, its clones
+   and `ViewportOffset` only read; a fixed offset is `ScrollPosition::fixed`. Code that moves a
+   scrollable it does not own (list focus reaching an unbuilt row, `AnchoredDrag` resting on its
+   nearest anchor, user code) asks the controller (`jump_to`, `animate_to`), and the request goes
+   through the owner and the chain as below. Row:
+   `reaching_an_unbuilt_row_scrolls_through_the_nested_scroll_chain`. `reveal(rect)` keeps ADR-0169's rebasing of the published target
    by the signed current-minus-published pixels and moves every scroll ancestor nearest first,
    each by its own geometry (the target, or the visible part of the viewport the previous one
    moved, shifted by that move) as a `Programmatic` sequence of its own through that
