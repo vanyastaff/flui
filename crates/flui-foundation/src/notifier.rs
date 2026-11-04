@@ -791,7 +791,6 @@ impl Subscription {
         }
     }
 
-
     /// Detach now rather than at drop; idempotent with the drop that follows.
     pub fn detach(mut self) {
         self.take_listener();

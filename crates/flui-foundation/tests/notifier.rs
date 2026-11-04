@@ -937,3 +937,35 @@ fn a_subscription_detached_inside_a_round_is_skipped_and_retired_at_its_tail() {
     drop(detacher);
     assert!(!notifier.has_listeners());
 }
+
+/// An inert subscription detaches nothing: the channel it was made without
+/// never held a listener of its, and a separately registered one keeps
+/// firing.
+#[test]
+fn an_inert_subscription_detaches_nothing() {
+    let notifier = ChangeNotifier::new();
+    let hits = Rc::new(AtomicUsize::new(0));
+    let listener = notifier.listen({
+        let hits = Rc::clone(&hits);
+        move || {
+            hits.fetch_add(1, Ordering::SeqCst);
+        }
+    });
+    let inert = Subscription::inert();
+    drop(inert);
+
+    notifier.notify_listeners();
+    assert_eq!(
+        hits.load(Ordering::SeqCst),
+        1,
+        "a separately registered listener still fires"
+    );
+
+    drop(listener);
+    notifier.notify_listeners();
+    assert_eq!(
+        hits.load(Ordering::SeqCst),
+        1,
+        "its own detach is the real one"
+    );
+}
