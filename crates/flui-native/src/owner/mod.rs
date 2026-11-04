@@ -137,7 +137,7 @@ use crate::error::PlatformError;
 use crate::host_window::{HostWindow, OwnerThreadToken};
 use crate::platform::{PathPromptOptions, Platform};
 use crate::task::Task;
-use flui_platform::data_transfer::DataTransferSource;
+use flui_platform::data_transfer::DragTransport;
 use flui_platform::{WindowHandler, WindowId, WindowOptions};
 use signal::{OwnerSignal, SignalTransport};
 
@@ -406,9 +406,9 @@ impl SharedPlatform {
         self.platform.data_store(app)
     }
 
-    /// The data-transfer transport (ADR-0038).
+    /// The drag-and-drop transport (ADR-0312 §4).
     #[must_use]
-    pub fn data_transfer(&self) -> Arc<dyn DataTransferSource> {
+    pub fn data_transfer(&self) -> Arc<dyn DragTransport> {
         self.platform.data_transfer()
     }
 

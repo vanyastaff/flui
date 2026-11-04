@@ -70,7 +70,7 @@ pub enum Autoscroll {
 /// `drag_left` or `dropped`.
 pub trait DropReceiver {
     /// The drag entered the receiver. The answer is "what would you do if the
-    /// user dropped now" (ADR-0038 §1).
+    /// user dropped now" (ADR-0312 §1).
     fn drag_entered(&self, drag: &DragView<'_>, at: DragPoint) -> DropFeedback;
 
     /// The drag moved over the receiver, which answers again.

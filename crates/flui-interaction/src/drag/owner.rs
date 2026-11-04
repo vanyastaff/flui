@@ -12,8 +12,8 @@ use std::sync::Arc;
 use flui_foundation::geometry::Offset;
 use flui_foundation::{DataTransferId, DragSessionId, PresentationId, UiRuntimeId};
 use flui_platform::data_transfer::{
-    DataTransferOffer, DataTransferSource, DropFeedback, Mime, RepresentationIndex,
-    TransferActions, TransferError, TransferPayload,
+    DataTransferOffer, DragTransport, DropFeedback, Mime, RepresentationIndex, TransferActions,
+    TransferError, TransferPayload,
 };
 use flui_platform::drag::{
     AllowedActions, DragError, DragMoment, DragReach, DragSessionKey, OsDragEnd, OsDragRequest,
@@ -195,7 +195,7 @@ impl std::fmt::Debug for DragStart {
 /// The drag machinery of one UI runtime.
 pub struct DragOwner {
     shared: Shared,
-    source: Arc<dyn DataTransferSource>,
+    source: Arc<dyn DragTransport>,
     wake: OwnerWake,
 }
 
@@ -216,7 +216,7 @@ impl DragOwner {
     pub fn new(
         nonce: ProcessNonce,
         runtime: UiRuntimeId,
-        source: Arc<dyn DataTransferSource>,
+        source: Arc<dyn DragTransport>,
         wake: OwnerWake,
     ) -> Self {
         Self {
@@ -892,7 +892,7 @@ impl ViewParts {
 
     fn with_view<R>(
         &self,
-        source: &Arc<dyn DataTransferSource>,
+        source: &Arc<dyn DragTransport>,
         run: impl FnOnce(&DragView<'_>) -> R,
     ) -> R {
         let view = DragView {
@@ -1382,8 +1382,8 @@ fn locate(shared: &Shared, running: &Running, global: Offset<f64>) -> Over {
 }
 
 /// A no-op view source: a window-scope view never asks the platform.
-fn no_source() -> Arc<dyn DataTransferSource> {
-    Arc::new(flui_platform::NullDataTransferSource)
+fn no_source() -> Arc<dyn DragTransport> {
+    Arc::new(flui_platform::NullDragTransport)
 }
 
 fn move_session(

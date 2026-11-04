@@ -1,6 +1,6 @@
 //! Android drag and drop through `FluiView` (ADR-0211, ADR-0247).
 //!
-//! [`AndroidTransfer`] is the platform's one [`DataTransferSource`]. A drag
+//! [`AndroidTransfer`] is the platform's one [`DragTransport`]. A drag
 //! over the view mints an offer from its `ClipDescription` when it enters,
 //! answers the view at once on the Java main thread, and queues the
 //! `DragDropEvent`s for the owner. The drop is decided from the feedback the
@@ -571,8 +571,8 @@ use flui_foundation::DataTransferId;
 use flui_platform::{
     Unsupported, UnsupportedReason,
     data_transfer::{
-        DataTransferOffer, DataTransferSource, DropFeedback, RepresentationIndex, TransferActions,
-        TransferError, TransferLimits, TransferPayload, TransferRequest,
+        DragTransport, DropFeedback, RepresentationIndex, TransferActions, TransferError,
+        TransferLimits, TransferPayload, TransferRequest,
     },
     drag::{DragError, OsDragEndHook, OsDragRequest, OsDragStart, PlatformDragSource},
 };
@@ -692,11 +692,7 @@ impl AndroidTransfer {
 }
 
 #[cfg(target_os = "android")]
-impl DataTransferSource for AndroidTransfer {
-    fn clipboard_offer(&self) -> Option<DataTransferOffer> {
-        None
-    }
-
+impl DragTransport for AndroidTransfer {
     fn request(
         &self,
         id: DataTransferId,

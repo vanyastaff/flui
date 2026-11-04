@@ -29,7 +29,7 @@ use std::time::{Duration, Instant};
 use flui_foundation::geometry::{Point, Size};
 use flui_foundation::{DragSessionId, UiRuntimeId};
 use flui_platform::data_transfer::{
-    DataTransferOffer, DataTransferSource, DropFeedback, Mime, RepresentationDescriptor,
+    DataTransferOffer, DragTransport, DropFeedback, Mime, RepresentationDescriptor,
     RepresentationIndex, TransferActions, TransferError, TransferFormat, TransferLimits,
     TransferPayload, TransferRequest,
 };
@@ -351,7 +351,7 @@ fn open(
 
 /// Answer every hover with `accept`.
 fn answering(
-    transfer: &Arc<dyn DataTransferSource>,
+    transfer: &Arc<dyn DragTransport>,
     accept: Option<TransferActions>,
 ) -> impl FnMut(&DragDropEvent) + 'static {
     let transfer = Arc::clone(transfer);
@@ -461,7 +461,7 @@ fn resolve(request: TransferRequest) -> Result<TransferPayload, TransferError> {
 }
 
 fn fetch(
-    transfer: &Arc<dyn DataTransferSource>,
+    transfer: &Arc<dyn DragTransport>,
     offer: &DataTransferOffer,
     format: &TransferFormat,
 ) -> Result<TransferPayload, TransferError> {

@@ -1,7 +1,9 @@
 # ADR-0038: Data transfer — clipboard reachability, representations and system drag-and-drop
 
-- **Status:** Accepted (2026-07-28)
+- **Status:** Superseded (2026-11-04)
 - **Date:** 2026-07-28
+- **Superseded-by:** [ADR-0312](ADR-0312-drag-and-drop-owns-the-transfer-transport-and-the-clipboard-stays-plain-text.md)
+  as a whole
 - **Absorbs:** ADR-0034
 - **Amended by:** [ADR-0082](ADR-0082-platform-api-contract-crate.md) (§4: the transport and its
   vocabulary live in `flui-platform`, re-exported at `flui_native::data_transfer`; §9: the

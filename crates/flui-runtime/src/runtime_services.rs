@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use flui_foundation::{PresentationId, UiRuntimeId};
 use flui_painting::{FontCollection, TextContext};
-use flui_platform::data_transfer::{DataTransferSource, NullDataTransferSource};
+use flui_platform::data_transfer::{DragTransport, NullDragTransport};
 use flui_platform::drag::ProcessNonce;
 use flui_rendering::TextContextHandle;
 use flui_scheduler::{ClockSource, OwnerFrame, UpdateScheduler};
@@ -29,7 +29,7 @@ pub struct RuntimeHostServices<'a> {
     pub(crate) fonts: &'a FontCollection,
     pub(crate) clock: ClockSource,
     pub(crate) preferences: Option<crate::owner::SystemPreferencesSnapshot>,
-    pub(crate) data_transfer: Arc<dyn DataTransferSource>,
+    pub(crate) data_transfer: Arc<dyn DragTransport>,
     pub(crate) process_nonce: ProcessNonce,
     pub(crate) flush_registry: Option<FlushRegistry>,
     pub(crate) close_vetoes: Vec<CloseReason>,
@@ -72,7 +72,7 @@ impl<'a> RuntimeHostServices<'a> {
             fonts,
             clock,
             preferences: None,
-            data_transfer: Arc::new(NullDataTransferSource),
+            data_transfer: Arc::new(NullDragTransport),
             process_nonce: ProcessNonce::mint(),
             flush_registry: None,
             close_vetoes: Vec::new(),
@@ -92,7 +92,7 @@ impl<'a> RuntimeHostServices<'a> {
     /// sessions answer the OS through (ADR-0211). Without it the runtime sees
     /// no OS drag.
     #[must_use]
-    pub fn with_data_transfer(mut self, source: Arc<dyn DataTransferSource>) -> Self {
+    pub fn with_data_transfer(mut self, source: Arc<dyn DragTransport>) -> Self {
         self.data_transfer = source;
         self
     }
@@ -167,7 +167,7 @@ pub(crate) struct RuntimeServices {
     /// context to its layout (ADR-0092 §10 step 3).
     pub(crate) text: TextContextHandle,
     /// The platform's data-transfer source, for drag sessions.
-    pub(crate) data_transfer: Arc<dyn DataTransferSource>,
+    pub(crate) data_transfer: Arc<dyn DragTransport>,
     /// The platform instance's nonce, naming this runtime's drags.
     pub(crate) process_nonce: ProcessNonce,
     /// What every presentation closes and persists through.

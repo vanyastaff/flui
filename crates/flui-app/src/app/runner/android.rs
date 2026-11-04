@@ -148,7 +148,7 @@ where
                 .expect("BUG: bootstrap_android runs only after install_owner_platform")
         }
 
-        // 0. The platform clipboard (ADR-0038 §9) was installed with the
+        // 0. The platform clipboard (ADR-0312 §6) was installed with the
         // owner platform; the ui_runtime below takes it through `build_ui_runtime`.
         //
         // 0b. This window's device-recovery backoff, constructed here (not

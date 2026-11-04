@@ -1,6 +1,6 @@
-//! HTML drag and drop, as target and as source (ADR-0038, ADR-0211 §11).
+//! HTML drag and drop, as target and as source (ADR-0312, ADR-0211 §11).
 //!
-//! [`WebTransfer`] is the platform's one [`DataTransferSource`]. A drag over
+//! [`WebTransfer`] is the platform's one [`DragTransport`]. A drag over
 //! a window's canvas, from the page, another page or the OS, mints an offer
 //! from the drag's `DataTransfer.types` and files. The browser keeps the data
 //! out of reach until the drop, so a hover reads only the types (FLUI's
@@ -33,7 +33,7 @@
 // Its pure part forbids it.
 #![cfg_attr(target_arch = "wasm32", expect(unsafe_code))]
 
-/// The decidable half of the backend (ADR-0038, ADR-0211 §11): how
+/// The decidable half of the backend (ADR-0312, ADR-0211 §11): how
 /// `DataTransfer` types and effect names map to transfer formats and actions,
 /// and what string a payload is stored as. Plain functions, so every host
 /// checks them; the DOM side around them moves the values in and out of the
@@ -283,7 +283,7 @@ use flui_foundation::{DataTransferId, geometry::Point};
 use flui_platform::{
     DragDropEvent, PlatformInput, Unsupported, UnsupportedReason,
     data_transfer::{
-        DataTransferOffer, DataTransferSource, DropFeedback, Mime, RepresentationDescriptor,
+        DataTransferOffer, DragTransport, DropFeedback, Mime, RepresentationDescriptor,
         RepresentationIndex, TransferActions, TransferError, TransferFormat, TransferLimits,
         TransferPayload, TransferRequest,
     },
@@ -457,14 +457,9 @@ impl HostDrag for WebTransfer {
     }
 }
 
-// HTML drag and drop; `clipboard_offer` stays `None`, since the clipboard
-// reads only its own writes.
+// HTML drag and drop.
 #[cfg(target_arch = "wasm32")]
-impl DataTransferSource for WebTransfer {
-    fn clipboard_offer(&self) -> Option<DataTransferOffer> {
-        None
-    }
-
+impl DragTransport for WebTransfer {
     fn request(
         &self,
         id: DataTransferId,

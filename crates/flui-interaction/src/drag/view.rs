@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::task::{Context, Poll};
 
 use flui_platform::data_transfer::{
-    DataTransferOffer, DataTransferSource, TransferActions, TransferError, TransferFormat,
+    DataTransferOffer, DragTransport, TransferActions, TransferError, TransferFormat,
     TransferLimits, TransferPayload, TransferRequest,
 };
 use flui_platform::drag::DragSessionKey;
@@ -54,7 +54,7 @@ pub struct DragView<'a> {
     pub(super) key: Option<DragSessionKey>,
     pub(super) scope: DragScope,
     pub(super) allowed: TransferActions,
-    pub(super) source: Option<&'a Arc<dyn DataTransferSource>>,
+    pub(super) source: Option<&'a Arc<dyn DragTransport>>,
     pub(super) in_flight: Option<&'a Arc<InFlight>>,
     pub(super) pointer: PointerKind,
 }

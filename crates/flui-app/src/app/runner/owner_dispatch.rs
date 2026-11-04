@@ -1365,7 +1365,7 @@ pub(super) fn teardown_platform_ui_runtime_logged(log: &mut dyn FnMut(TeardownSt
     preserve_first_lifecycle_panic(&mut first_panic, failure, "execution shutdown");
     log(TeardownStep::Execution);
 
-    // ADR-0038 §9's install/teardown symmetry: the event loop has exited (this
+    // ADR-0312 §6's install/teardown symmetry: the event loop has exited (this
     // runs from both `run_desktop` and `run_android`, after their respective
     // `platform.run(...)` returns), so drop the platform clipboard now rather
     // than let a live platform resource (arboard on X11 owns a live X11

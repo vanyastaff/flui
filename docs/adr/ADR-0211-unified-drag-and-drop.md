@@ -14,10 +14,10 @@
   12's type only: `TransferActions` is the contract's own flag set, not a `bitflags` type,
   because a Stable signature names no upstream type outside ADR-0089 §2; `COPY`, `MOVE`, `LINK`
   and the set algebra stay.
-- **Amends:** [ADR-0038](ADR-0038-data-transfer-architecture.md) §2 (several concurrent offers
-  and sessions where the platform delivers them), §5 (DnD gains a source side and in-window
-  sessions) and §8 (the Web gets an HTML DnD target and source)
-- **Related:** [ADR-0027](ADR-0027-owner-affine-ui-realms.md),
+- **Related:** [ADR-0312](ADR-0312-drag-and-drop-owns-the-transfer-transport-and-the-clipboard-stays-plain-text.md)
+  (the transport these sessions run on, which states this record's concurrent offers, OS-only
+  `DragDropEvent` and Web target in its §2 and §5),
+  [ADR-0027](ADR-0027-owner-affine-ui-realms.md),
   [ADR-0082](ADR-0082-platform-api-contract-crate.md),
   [ADR-0207](ADR-0207-host-input-boundary-and-timeline.md),
   [ADR-0208](ADR-0208-gesture-ownership-table-and-composition.md),
@@ -40,7 +40,7 @@ at the drop, and winit 0.31 has no outgoing DnD on X11
 1. **Source side.** The `Draggable` widget starts a session with `DragItem`s and `AllowedActions`;
    the `DropTarget` widget (today's `DragTarget`, renamed by the naming pass with
    `#[doc(alias = "DragTarget")]`) receives enter, move, leave and drop and answers with
-   `DropFeedback` as in ADR-0038 §1. A `DragItem` holds `InProcess(Rc<dyn Any>)` and ordered
+   `DropFeedback` as in ADR-0312 §1. A `DragItem` holds `InProcess(Rc<dyn Any>)` and ordered
    `Serialized(TransferFormat, Lazy)` representations (`with_value::<T>`,
    `value::<T>() -> Option<&T>`); the lazy provider is a `!Send`
    `Box<dyn FnOnce() -> Result<.., TransferError>>`. `DragTrigger::{Immediate, LongPress}` starts
@@ -57,7 +57,7 @@ at the drop, and winit 0.31 has no outgoing DnD on X11
    non-empty `within_app` actions; a session whose `within_app` and `outside_app` are both
    empty is refused at start with `DragError::NoAllowedActions`, so no OS session ever
    advertises an empty mask (row `a_drag_with_no_allowed_actions_is_refused_at_start`). Otherwise leaving the
-   window is a move with no target. Exceptions: item 11 (Web, iOS). This narrows ADR-0038 §5:
+   window is a move with no target. Exceptions: item 11 (Web, iOS). As ADR-0312 §5 states it,
    `DragDropEvent` is for OS sessions only.
 
    **Other windows of the runtime.** Where the backend places its windows on one desktop
@@ -88,10 +88,10 @@ at the drop, and winit 0.31 has no outgoing DnD on X11
    drop loop ([threading](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/2026-10-13-interaction-threading-model.md) Q4).
 5. **Actions and sessions.** `AllowedActions { within_app, outside_app }`, each a `TransferActions`
    set. Several sessions can be live at once (one per contact, as `UIDragSession` allows); each is
-   keyed by its own id. This amends ADR-0038 §2: where a platform delivers several incoming OS
+   keyed by its own id. As ADR-0312 §2 states it, where a platform delivers several incoming OS
    offers to one window at once (iPadOS), each is a separate offer keyed by its `DataTransferId`,
    and a new offer no longer retires a live one; a platform that delivers one offer at a time keeps
-   §2's behaviour. The same offer announced again over the same window is the same hover, which
+   that behaviour. The same offer announced again over the same window is the same hover, which
    takes the newly permitted actions. A receiver is one registration: the lane ticket its node
    carries, holding that receiver. A ticket that was unregistered, or that now holds another
    receiver, no longer names it: it gets its one leave at the next move or tick, never

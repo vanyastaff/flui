@@ -191,7 +191,7 @@ parallel execution), so `MacOSClipboard` dispatches every operation to the
 AppKit main thread through the main dispatch queue. The lane enforces the
 ordering; an assertion would only panic legitimate cross-thread callers. Rich
 pasteboard items and promised data are the data-transfer design's to place
-(ADR-0038).
+(ADR-0312 §7).
 
 ### 6. Composition with the runtime
 

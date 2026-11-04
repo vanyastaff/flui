@@ -809,11 +809,11 @@ graph LR
   не может объект пропустить; так же LY31 называет цикл позицией дисплеев: Windows называет цикл
   для дисплеев и drag, Web и winit — ещё и для буфера обмена (у headless дисплеи — цикл,
   буфер и drag — типы фич над состоянием, которое цикл держит сам). Win32 — `WindowsHost::drag() -> Arc<dyn HostDrag>`, `HostDrag:
-  OwnerMessages + DataTransferSource` с `drag_source(WindowRef)` и `register_target(WindowRef)`
+  OwnerMessages + DragTransport` с `drag_source(WindowRef)` и `register_target(WindowRef)`
   для окна; хуки окна владельца — этот транспорт. Web — `WebHost::{clipboard, drag}`,
   `HostDrag::register(canvas, callbacks, registration) -> Box<dyn CanvasDrag>` (`source`,
   `arm`, `retire`). winit — `WinitHost::{clipboard, drag}` с `FileDrops` (шесть методов
-  транспорта, `DataTransferSource` — супертрейт, позиция отдаёт upcast). Android —
+  транспорта, `DragTransport` — супертрейт, позиция отдаёт upcast). Android —
   `AndroidHost::{clipboard, transfer}` (в трейте рядом с `input_method` LY30, `displays` LY31 и `preferences`, `notices`, `activity` LY33), `transfer(view)`
   делает транспорт `ViewTransfer` (`drag`, `drop_clip`, `set_own`, `take_local_drop`) для
   `FluiView`. Циклы берут хост: `WebLoop::new::<Web>()`, `WinitLoop::new::<Winit>()`,

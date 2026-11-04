@@ -26,7 +26,9 @@
   what carries over is restated in §1.
   [ADR-0078](ADR-0078-rules-live-in-types-and-lints.md) §1's last sentence ("A new capability is a
   method on `LifecycleContext`"), for platform capabilities only.
-- **Related:** [ADR-0151](ADR-0151-platform-layer-boundary-and-names.md),
+- **Related:** [ADR-0312](ADR-0312-drag-and-drop-owns-the-transfer-transport-and-the-clipboard-stays-plain-text.md)
+  (the clipboard stays plain text, and the reserved shape of a richer read),
+  [ADR-0151](ADR-0151-platform-layer-boundary-and-names.md),
   [ADR-0153](ADR-0153-release-train-and-capability-crates.md),
   [ADR-0154](ADR-0154-capability-crates.md),
   [ADR-0254](ADR-0254-window-contract.md) (the window contract shares `Unsupported`),
@@ -65,8 +67,9 @@ their subscriptions.
 
 The one existing platform handle, `flui_interaction::ClipboardHandle`, is owner-local
 (`PhantomData<Rc<()>>`) and reads through a callback so it can become asynchronous (ADR-0038
-§6); web and Wayland clipboards only read asynchronously. The seam must hand out that handle, not
-a `Send + Sync` provider trait object. The synchronous `Clipboard` trait cannot be implemented
+§6, superseded by ADR-0312, whose §6 keeps this handle as the clipboard's one surface); web and
+Wayland clipboards only read asynchronously. The seam must hand out that handle, not a
+`Send + Sync` provider trait object. The synchronous `Clipboard` trait cannot be implemented
 honestly on those two platforms, and keeping it beside an asynchronous twin (as GPUI does) is two
 shapes for one fact.
 

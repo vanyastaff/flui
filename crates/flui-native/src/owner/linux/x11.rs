@@ -58,7 +58,7 @@ use flui_platform::input_capabilities::InputCapabilities;
 use std::sync::{Arc, Weak};
 
 use flui_foundation::panic::FirstPanic;
-use flui_platform::data_transfer::DataTransferSource;
+use flui_platform::data_transfer::DragTransport;
 use flui_platform::{
     DisplayRevision, DisplaySnapshot, SessionEndAnswer, SessionEndPhase, SystemNotice,
     SystemPreferences, WindowAppearance, WindowId,
@@ -260,9 +260,9 @@ pub(crate) trait X11Host: 'static {
 /// §10): the platform's one data-transfer source, which the loop hands
 /// every event before the input, and which a window tells as it opens and
 /// closes. A fetch it waits on has a deadline the loop wakes for. Every
-/// method but the [`DataTransferSource`]'s runs on the owner thread, and
+/// method but the [`DragTransport`]'s runs on the owner thread, and
 /// none runs user code with a lock of its own held.
-pub(crate) trait LoopDrag: DataTransferSource {
+pub(crate) trait LoopDrag: DragTransport {
     /// The drag source of `window`, whose sessions run on this transfer.
     fn drag_source(
         self: Arc<Self>,
@@ -495,8 +495,8 @@ impl host::Clipboard<X11Loop> for X11Loop {
 /// The drag position is the loop's: the drag the table made, the platform's
 /// one data-transfer source.
 impl host::Drag<X11Loop> for X11Loop {
-    fn data_transfer(owner: &X11Loop) -> Arc<dyn DataTransferSource> {
-        Arc::clone(&owner.drag) as Arc<dyn DataTransferSource>
+    fn data_transfer(owner: &X11Loop) -> Arc<dyn DragTransport> {
+        Arc::clone(&owner.drag) as Arc<dyn DragTransport>
     }
 }
 

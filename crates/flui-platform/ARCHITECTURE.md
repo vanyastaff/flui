@@ -250,7 +250,7 @@ per-context projection, zero axes and overflowing division.
 ### Platform services are capability traits in a contract crate
 
 Text input, haptics, clipboard and system chrome are typed capability traits
-(ADR-0030, ADR-0031, ADR-0038), not messages to one embedder, and the traits
+(ADR-0030, ADR-0031, ADR-0312), not messages to one embedder, and the traits
 live apart from their implementations, so a crate that names a capability links no OS code and a
 plugin can implement one without the backends. The contract of each
 capability is that of its own ADR.

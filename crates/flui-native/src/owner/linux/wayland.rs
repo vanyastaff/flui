@@ -346,7 +346,7 @@ mod event_loop {
     use std::time::Duration;
 
     use cursor_icon::CursorIcon;
-    use flui_platform::data_transfer::DataTransferSource;
+    use flui_platform::data_transfer::DragTransport;
     use flui_platform::drag::PlatformDragSource;
     use flui_platform::{
         CursorError, DisplayId, DisplaySnapshot, SessionEndAnswer, SessionEndPhase, SystemNotice,
@@ -775,12 +775,12 @@ mod event_loop {
 
     /// What the loop and its windows ask of drag and drop: the drag
     /// feature's (`drag::wayland`), which the table registers, and the
-    /// platform's one [`DataTransferSource`].
+    /// platform's one [`DragTransport`].
     ///
     /// Its windows' drags reach it through the seats' data devices, which
     /// record them; [`Self::deliver`] tells the windows, with no lock of the
     /// loop held.
-    pub(crate) trait WaylandDrag: DataTransferSource + Send + Sync {
+    pub(crate) trait WaylandDrag: DragTransport + Send + Sync {
         /// A window opened: drags over it are offered to it from now on.
         fn attach(&self, window: DragWindow);
 
@@ -2291,8 +2291,8 @@ mod event_loop {
     /// the drag the table registered, the platform's one data-transfer
     /// source.
     impl host::Drag<WaylandLoop> for WaylandLoop {
-        fn data_transfer(owner: &WaylandLoop) -> Arc<dyn DataTransferSource> {
-            Arc::clone(&owner.drag) as Arc<dyn DataTransferSource>
+        fn data_transfer(owner: &WaylandLoop) -> Arc<dyn DragTransport> {
+            Arc::clone(&owner.drag) as Arc<dyn DragTransport>
         }
     }
 

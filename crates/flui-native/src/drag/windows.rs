@@ -1,6 +1,6 @@
-//! OLE drag and drop, as source and as target (ADR-0038, ADR-0211).
+//! OLE drag and drop, as source and as target (ADR-0312, ADR-0211).
 //!
-//! [`OleTransfer`] is the platform's one [`DataTransferSource`]. Every window
+//! [`OleTransfer`] is the platform's one [`DragTransport`]. Every window
 //! registers a [`WindowDropTarget`] with
 //! `RegisterDragDrop`; a drag over it, from this process or another, mints an
 //! offer in the transfer's table, keeps the drag's `IDataObject` for lazy
@@ -42,7 +42,7 @@ mod com;
 #[cfg(all(windows, test))]
 mod tests;
 
-/// The decidable half of the backend (ADR-0038, ADR-0211): which clipboard
+/// The decidable half of the backend (ADR-0312, ADR-0211): which clipboard
 /// format carries each transfer format, how a payload is laid out in its
 /// `HGLOBAL`, how `DROPEFFECT` bits map to [`TransferActions`], and when the
 /// drop source ends the modal loop. Plain functions over bytes and integers,
@@ -523,7 +523,7 @@ use flui_foundation::DataTransferId;
 use flui_platform::{
     Unsupported, UnsupportedReason,
     data_transfer::{
-        DataTransferOffer, DataTransferSource, DropFeedback, RepresentationDescriptor,
+        DataTransferOffer, DragTransport, DropFeedback, RepresentationDescriptor,
         RepresentationIndex, TransferError, TransferLimits, TransferRequest,
     },
     drag::{DragError, OsDragEnd, OsDragRequest, OsDragStart, PlatformDragSource},
@@ -1048,11 +1048,7 @@ impl DropTarget for RegisteredTarget {
 }
 
 #[cfg(windows)]
-impl DataTransferSource for OleTransfer {
-    fn clipboard_offer(&self) -> Option<DataTransferOffer> {
-        None
-    }
-
+impl DragTransport for OleTransfer {
     fn request(
         &self,
         id: DataTransferId,

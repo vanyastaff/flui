@@ -41,7 +41,7 @@ use std::{
 };
 
 use flui_platform::CursorError;
-use flui_platform::data_transfer::DataTransferSource;
+use flui_platform::data_transfer::DragTransport;
 use flui_platform::drag::PlatformDragSource;
 use flui_platform::text_store::TextStoreHost;
 use windows::{
@@ -347,7 +347,7 @@ pub(crate) fn is_flui_window(hwnd: HWND) -> bool {
 /// windows it opens reach it, which the table makes ([`WindowsHost::drag`]):
 /// the platform's one data-transfer source, and its part of the owner window's
 /// procedure.
-pub(crate) trait HostDrag: control::OwnerMessages + DataTransferSource {
+pub(crate) trait HostDrag: control::OwnerMessages + DragTransport {
     /// The drag source `window`, created on this thread, hands out.
     fn drag_source(self: Arc<Self>, window: WindowRef) -> Arc<dyn PlatformDragSource>;
 
@@ -378,8 +378,8 @@ pub(crate) trait DropTarget {
 /// The drag position: the transport the host's [`WindowsHost::drag`] made,
 /// which the loop holds.
 impl host::Drag<WindowsLoop> for WindowsLoop {
-    fn data_transfer(owner: &WindowsLoop) -> Arc<dyn DataTransferSource> {
-        Arc::clone(&owner.drag) as Arc<dyn DataTransferSource>
+    fn data_transfer(owner: &WindowsLoop) -> Arc<dyn DragTransport> {
+        Arc::clone(&owner.drag) as Arc<dyn DragTransport>
     }
 }
 

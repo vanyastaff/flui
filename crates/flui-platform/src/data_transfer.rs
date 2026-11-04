@@ -1,8 +1,11 @@
-//! Data-transfer transport vocabulary (ADR-0038).
+//! Data-transfer vocabulary and the drag-and-drop transport (ADR-0312).
 //!
-//! Clipboard reads and system drag-and-drop share one seven-stage transport:
-//! offer → negotiation → request → async delivery → decoding → drop action →
-//! completion/cancellation. This module defines the stage artifacts:
+//! System drag-and-drop runs one seven-stage transport: offer → negotiation →
+//! request → async delivery → decoding → drop action →
+//! completion/cancellation. The clipboard is not on it: it reads plain text
+//! through `ClipboardHandle`, and a richer read, when a widget needs one,
+//! names its formats in this module's payload vocabulary rather than polling
+//! an offer (ADR-0312 §6, §7). This module defines the stage artifacts:
 //!
 //! - [`DataTransferOffer`] — stage 1, metadata only, never bytes;
 //! - [`RepresentationDescriptor`] / [`TransferFormat`] / [`Mime`] — stage 2
@@ -12,12 +15,12 @@
 //!   pair over the foundation claim slot, polled on the frame-driven
 //!   `AsyncDriver` (no second async mechanism, no runtime dependency);
 //! - [`TransferPayload`] / [`TransferError`] — stage 5 outcomes;
-//! - [`DataTransferSource`] — the platform-side trait tying the stages
-//!   together, with [`NullDataTransferSource`] as the honest inert
-//!   implementation for backends that have no transport yet.
+//! - [`DragTransport`] — the platform-side trait tying the stages
+//!   together, with [`NullDragTransport`] as the honest inert
+//!   implementation for backends that have no drag transport yet.
 //!
 //! Each platform instance mints [`DataTransferId`]s in one table inside its
-//! one [`DataTransferSource`], so every id the app can observe is redeemable
+//! one [`DragTransport`], so every id the app can observe is redeemable
 //! at `Platform::data_transfer()` and a stale id fails the generation check
 //! instead of aliasing a later offer. The table is the host's.
 
@@ -150,7 +153,7 @@ crate::flag_set::flag_set! {
 
 /// Stage-2 reply half (DnD): the target's current answer to "what would you
 /// do if the user dropped now". Sent via
-/// [`DataTransferSource::update_drop_feedback`]; the backend caches the
+/// [`DragTransport::update_drop_feedback`]; the backend caches the
 /// latest value per session and answers the OS's synchronous hover queries
 /// from that cache. `accept: None` (the default) means reject.
 ///
@@ -383,7 +386,7 @@ pub struct TransferRequest {
 impl TransferRequest {
     /// A pending delivery and the completer that resolves it: the backend
     /// keeps the completer and returns the request from
-    /// [`DataTransferSource::request`]. The two are made together, so no
+    /// [`DragTransport::request`]. The two are made together, so no
     /// other party can claim the delivery first:
     ///
     /// ```compile_fail
@@ -477,20 +480,25 @@ impl TransferCompleter {
 }
 
 // ============================================================================
-// DataTransferSource
+// DragTransport
 // ============================================================================
 
-/// The platform-side transport: stages 1, 2 (reply half), 3, 6 in one
-/// object-safe trait. Exactly one instance per platform instance (ADR-0038
-/// §2, §6). No method blocks; no method is `async fn` — the sync-pipeline
-/// rule is honored by returning a pollable value instead.
-pub trait DataTransferSource: Send + Sync {
-    /// Stage 1, clipboard flavor: advertise the current clipboard offer.
-    /// Stable id per observed clipboard state (ADR-0038 §2 lifecycle). DnD
-    /// offers arrive by event (`DragDropEvent::Entered`) instead — pushed by
-    /// the OS, not polled.
-    fn clipboard_offer(&self) -> Option<DataTransferOffer>;
-
+/// The platform-side drag-and-drop transport: stages 2 (reply half), 3 and 6
+/// in one object-safe trait. Stage 1 is pushed by the OS
+/// (`DragDropEvent::Entered`), never polled. Exactly one instance per
+/// platform instance (ADR-0312 §2, §4). No method blocks; no method is
+/// `async fn` — the sync-pipeline rule is honored by returning a pollable
+/// value instead.
+///
+/// The clipboard is not on this trait: a widget reads and writes it through
+/// `ClipboardHandle`, with no offer to poll (ADR-0312 §6).
+///
+/// ```compile_fail,E0599
+/// fn poll(transport: &dyn flui_platform::data_transfer::DragTransport) {
+///     let _ = transport.clipboard_offer();
+/// }
+/// ```
+pub trait DragTransport: Send + Sync {
     /// Stage 3: request one representation of a live offer. Returns
     /// immediately; delivery completes through the returned future. A
     /// backend whose data is already in memory returns
@@ -502,30 +510,25 @@ pub trait DataTransferSource: Send + Sync {
         limits: TransferLimits,
     ) -> TransferRequest;
 
-    /// Stage 2, reply half (DnD only): the target's current hover answer.
-    /// The backend caches the latest value per session and answers the OS's
-    /// synchronous hover queries from the cache. Stale ids are a no-op.
+    /// Stage 2, reply half: the target's current hover answer. The backend
+    /// caches the latest value per session and answers the OS's synchronous
+    /// hover queries from the cache. Stale ids are a no-op.
     fn update_drop_feedback(&self, id: DataTransferId, feedback: DropFeedback);
 
-    /// Stage 6 (DnD only): the target has fetched what it needs; release
-    /// protocol resources (Wayland `wl_data_offer.finish`, Win32 IDataObject
-    /// release) and retire the offer. Idempotent; stale ids are a no-op.
+    /// Stage 6: the target has fetched what it needs; release protocol
+    /// resources (Wayland `wl_data_offer.finish`, Win32 IDataObject release)
+    /// and retire the offer. Idempotent; stale ids are a no-op.
     fn conclude_drop(&self, id: DataTransferId);
 }
 
-/// The inert source: [`clipboard_offer`](DataTransferSource::clipboard_offer)
-/// → `None`; [`request`](DataTransferSource::request) →
+/// The inert transport: [`request`](DragTransport::request) →
 /// `TransferRequest::ready(Err(TransferError::StaleOffer(id)))`; feedback and
-/// conclusion are no-ops. For backends with no transport yet — honest
+/// conclusion are no-ops. For backends with no drag transport yet — honest
 /// absence, not fake success.
 #[derive(Debug, Default, Clone, Copy)]
-pub struct NullDataTransferSource;
+pub struct NullDragTransport;
 
-impl DataTransferSource for NullDataTransferSource {
-    fn clipboard_offer(&self) -> Option<DataTransferOffer> {
-        None
-    }
-
+impl DragTransport for NullDragTransport {
     fn request(
         &self,
         id: DataTransferId,

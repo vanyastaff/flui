@@ -1,4 +1,4 @@
-//! The data-transfer transport (ADR-0038): a source with a native backend's
+//! The data-transfer transport (ADR-0312): a source with a native backend's
 //! shape driven through every stage, its delivery polled by a real
 //! `AsyncDriver`.
 
@@ -11,11 +11,11 @@ use std::task::{Context, Poll, Waker};
 
 use flui_foundation::DataTransferId;
 use flui_platform::{
-    data_transfer::DataTransferOffer, data_transfer::DataTransferSource,
-    data_transfer::DropFeedback, data_transfer::RepresentationDescriptor,
-    data_transfer::RepresentationIndex, data_transfer::TransferActions,
-    data_transfer::TransferCompleter, data_transfer::TransferError, data_transfer::TransferFormat,
-    data_transfer::TransferLimits, data_transfer::TransferPayload, data_transfer::TransferRequest,
+    data_transfer::DataTransferOffer, data_transfer::DragTransport, data_transfer::DropFeedback,
+    data_transfer::RepresentationDescriptor, data_transfer::RepresentationIndex,
+    data_transfer::TransferActions, data_transfer::TransferCompleter, data_transfer::TransferError,
+    data_transfer::TransferFormat, data_transfer::TransferLimits, data_transfer::TransferPayload,
+    data_transfer::TransferRequest,
 };
 use flui_scheduler::{OwnerFrame, UpdateScheduler};
 use parking_lot::Mutex;
@@ -43,7 +43,7 @@ fn poll_once(
 // Mock source: the seven stages over a real AsyncDriver
 // ============================================================================
 
-/// A `DataTransferSource` with the same shape a native backend has: ids
+/// A `DragTransport` with the same shape a native backend has: ids
 /// minted once and retired for good, lazy delivery through parked
 /// completers, and a feedback cache — enough to drive every transport stage
 /// from a test.
@@ -142,11 +142,7 @@ impl MockSource {
     }
 }
 
-impl DataTransferSource for MockSource {
-    fn clipboard_offer(&self) -> Option<DataTransferOffer> {
-        None
-    }
-
+impl DragTransport for MockSource {
     fn request(
         &self,
         id: DataTransferId,

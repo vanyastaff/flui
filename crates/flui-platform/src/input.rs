@@ -171,7 +171,7 @@ pub enum PlatformInput {
     /// window-side capability this pairs with.
     Ime(crate::ImeEvent),
 
-    /// System drag-and-drop (ADR-0038). Deliberately NOT a pointer event:
+    /// System drag-and-drop (ADR-0312). Deliberately NOT a pointer event:
     /// during an external drag the OS owns the cursor, and the gesture-arena
     /// semantics of the pointer pipeline (capture, velocity) do not apply.
     DragDrop(DragDropEvent),
@@ -237,14 +237,14 @@ impl PlatformInput {
     }
 }
 
-/// The push half of the data-transfer transport (ADR-0038): stage-1 arrival
+/// The push half of the data-transfer transport (ADR-0312): stage-1 arrival
 /// and stage-2/6 progress for a drag session over one window. The target's
 /// reply half flows the other way, through
-/// [`crate::data_transfer::DataTransferSource::update_drop_feedback`].
+/// [`crate::data_transfer::DragTransport::update_drop_feedback`].
 #[derive(Debug, Clone)]
 #[allow(
     clippy::exhaustive_enums,
-    reason = "the stages of the transport protocol (ADR-0038), each of which a target answers"
+    reason = "the stages of the transport protocol (ADR-0312), each of which a target answers"
 )]
 pub enum DragDropEvent {
     /// A drag entered the window. Carries the full offer (stage 1) and the

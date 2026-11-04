@@ -557,7 +557,7 @@ fn android_run_lets_go_of_the_window_handler_between_its_loop_and_the_quit_hook(
         !clear_line.contains(".lock()"),
         "the exit-path clear must not run under the platform's `window` lock: found \
          `{clear_line}`. It drops embedder closures, which may re-enter platform code that \
-         takes the same lock (ADR-0038 §5)"
+         takes the same lock (ADR-0287)"
     );
     let own_statement = format!("{binding}.delivery().clear();");
     assert_eq!(

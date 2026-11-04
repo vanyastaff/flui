@@ -3647,7 +3647,7 @@ impl HoveringDrag {
         let owner = DragOwner::new(
             ProcessNonce::from_raw(std::num::NonZeroU64::new(7).expect("nonzero")),
             UiRuntimeId::new(7),
-            Arc::new(flui_platform::NullDataTransferSource),
+            Arc::new(flui_platform::NullDragTransport),
             Arc::new(|| {}),
         );
         let representations: Arc<[RepresentationDescriptor]> =

@@ -5,10 +5,10 @@ this crate. Partial: this file exists for the `## Mapping
 decisions` entries below; a full crate architecture writeup is deferred.
 
 The contracts this crate's backends implement — `PlatformWindow`,
-`PlatformTextInput`, `PlatformHaptics`, `Clipboard`, the display snapshot
-vocabulary (`DisplaySnapshot`, `DisplayId`, `RefreshPeriod`), the
-`data_transfer` transport and the window and input vocabulary — live in
-`flui-platform` (ADR-0082), and this crate does not re-export them: each item
+`PlatformTextInput`, `PlatformHaptics`, the clipboard's text vocabulary, the
+display snapshot vocabulary (`DisplaySnapshot`, `DisplayId`, `RefreshPeriod`),
+the `data_transfer` vocabulary with its `DragTransport` (ADR-0312) and the
+window and input vocabulary — live in `flui-platform` (ADR-0082), and this crate does not re-export them: each item
 has one path (ADR-0151 §9), so a host and `flui-app` import them from
 `flui_platform`. What stays here is what names an OS stack, AccessKit or tokio:
 `Platform`, the owner-thread capability, `HostWindow` and every host.
@@ -1657,7 +1657,7 @@ zoomed detent in the decoder).
 
 ### Web drag and drop is HTML drag and drop, answered in its events
 
-`drag::web` holds the platform's one `DataTransferSource`,
+`drag::web` holds the platform's one `DragTransport`,
 `WebTransfer`, and each canvas's `WebDragSource` (ADR-0211 §11). A drag over
 a canvas mints an offer from `DataTransfer.types` and its file items: the
 browser hides the data until the drop, so a hover reads only types, and
@@ -3762,7 +3762,7 @@ modules' tables
 
 The drag position is the loop's too (`type Drag = X11Loop`): the table makes
 the drag feature's `drag::x11::X11Drag` (`X11Host::drag`), the platform's one
-`DataTransferSource`, and the loop holds it by the hook
+`DragTransport`, and the loop holds it by the hook
 `owner::linux::x11::LoopDrag`, hands it every event before the input, and
 wakes for the deadline of the fetch it waits on. A window opening tells it
 with the same `InputTarget` and is marked `XdndAware` (version 5); closing
@@ -4537,7 +4537,7 @@ precision touchpad; none of these has run):
 
 ### Win32 drag and drop runs `DoDragDrop` on the owner window's next turn and paces frames from a thread
 
-The platform owns one `OleTransfer`, its only `DataTransferSource`. Every window
+The platform owns one `OleTransfer`, its only `DragTransport`. Every window
 registers an `IDropTarget` with `RegisterDragDrop` as it is created (after its
 text services, so OLE needs the apartment `OleInitialize` entered, not a bare
 `CoInitializeEx`) and revokes it in `WM_DESTROY`, leaving a drag still over it
@@ -4646,7 +4646,7 @@ snapshot the view holds, and the host replays it under an async lock, dropping o
 older snapshot than it published last (`replay_current`). A key the native queue delivers while
 the view reports a composition is marked composing (`key_composition`): Android pre-dispatches
 every key to the input method, so such a key is one it passed on. `drag::android::AndroidTransfer` is the
-platform's one `DataTransferSource`: drags over the view mint offers from their
+platform's one `DragTransport`: drags over the view mint offers from their
 `ClipDescription` (`drag::android::clip::offered`) and drops are answered from the cached
 feedback; `drag::android::AndroidDragSource` serves the whole clip at the start (`clip_parts`) and maps
 `ACTION_DRAG_ENDED` to `OsDragEnd` (`source_end`). Without the view, or below API 24, the

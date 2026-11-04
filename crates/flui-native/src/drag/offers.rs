@@ -33,10 +33,10 @@ struct OfferSlot {
 
 /// Slab of live offers, each the representations it announced, with
 /// generation-checked lookup. One per platform instance, private inside its
-/// one `DataTransferSource`, behind the source's own state lock.
+/// one `DragTransport`, behind the source's own state lock.
 ///
 /// This is the **single minting authority** for [`DataTransferId`]s
-/// (ADR-0038 §2): a generational check is only a defense within one table,
+/// (ADR-0312 §2): a generational check is only a defense within one table,
 /// so a platform instance must never operate two of these.
 #[derive(Debug, Default)]
 pub(crate) struct OfferTable {
