@@ -89,6 +89,7 @@ it. Inside the FLUI checkout, generate against the local source instead:
 | `flui create [NAME]` | Scaffold a project from a template. Prompts when `NAME` is omitted and a terminal is attached. |
 | `flui run` | Build and run with hot reload; hot-keys while running. |
 | `flui mcp` | MCP server over stdio that lets an AI agent read and drive an app started with `flui run --agent`. See [Driving an app from an agent](#driving-an-app-from-an-agent). |
+| `flui record <file>` | Write the input of an app started with `flui run --agent` to a recording file until Ctrl-C. See [Driving an app from an agent](#driving-an-app-from-an-agent). |
 | `flui build <platform>` | Build for `desktop`, `macos`, `windows`, `linux`, `ios`, `android` or `web`; prints every artifact with its size. |
 | `flui test` | `cargo test` with `--unit`, `--integration`, `--release`, and harness args after `--`. |
 | `flui analyze` | `cargo clippy --workspace --all-targets -D warnings` (`--pedantic`, `--fix`). |
@@ -246,6 +247,20 @@ runs. Tools:
 `window` may be left out when the app has one. Failures carry the wire's
 error object (`code`, `message`, `retry`, `effect`). The token keeps out other
 users and remote callers, not other processes of the same user.
+
+`flui record <file>` writes what a running app's UI runtime applies (its
+input, the gesture decisions it reached and the preference revisions it took)
+to `<file>` as an input recording, the JSON Lines that `flui-testing` reads
+(`RecordingReader`) and replays (`ReplayableRecording`); `-` writes it to
+stdout. It finds the session as `flui mcp` does and connects as an observer,
+so it records beside a `flui mcp` that drives the app. `--window w3` names the
+window whose runtime is recorded (left out when the app has one). Text the
+rows carry is redacted unless `--keep-text` keeps it, and a replay refuses a
+redacted row. Ctrl-C stops the recording, and closing the window ends it;
+either way the file ends with its `end` row. A reader that falls behind loses
+rows, which a `gap` row counts and the command reports; a replay refuses a gap
+too. A recording cut off, because the app went, keeps its rows but fails the
+command: it has no `end` row, so a replay refuses it.
 
 ## Building
 

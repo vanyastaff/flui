@@ -34,6 +34,8 @@ mod cli_doctor;
 mod cli_errors;
 #[path = "cli_platform.rs"]
 mod cli_platform;
+#[path = "cli_record.rs"]
+mod cli_record;
 #[path = "cli_run.rs"]
 mod cli_run;
 

@@ -253,6 +253,31 @@ enum Commands {
         session: Option<std::path::PathBuf>,
     },
 
+    /// Record a running app's input to a file
+    ///
+    /// Writes what the app's UI runtime applies (its input, gesture
+    /// decisions and preference revisions) as an input recording, the JSON
+    /// Lines that `flui-testing` replays. Start the app with
+    /// `flui run --agent`. Ctrl-C stops the recording; closing the window
+    /// ends it too. It records beside a `flui mcp` that drives the app.
+    Record {
+        /// Where the recording goes; `-` writes it to stdout
+        #[arg(value_name = "FILE")]
+        output: std::path::PathBuf,
+        /// The window whose runtime is recorded, as flui_windows names it
+        /// (`w3`); may be left out when the app has one window
+        #[arg(long, value_name = "WINDOW")]
+        window: Option<String>,
+        /// Keep the text rows carry (typed text, input-method strings,
+        /// window titles); it is redacted otherwise
+        #[arg(long)]
+        keep_text: bool,
+        /// Session file written by `flui run --agent` (default: the nearest
+        /// `target/flui-agent.json`, or FLUI_AGENT_ENDPOINT and FLUI_AGENT_TOKEN)
+        #[arg(long, value_name = "FILE")]
+        session: Option<std::path::PathBuf>,
+    },
+
     /// Build the FLUI application
     Build {
         /// Target platform
@@ -770,6 +795,18 @@ fn main() {
         }
 
         Commands::Mcp { session } => commands::mcp::execute(session),
+
+        Commands::Record {
+            output,
+            window,
+            keep_text,
+            session,
+        } => commands::record::execute(commands::record::RecordArgs {
+            output,
+            window,
+            keep_text,
+            session,
+        }),
 
         Commands::Build {
             platform,

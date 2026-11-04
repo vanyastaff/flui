@@ -17,6 +17,7 @@ pub(crate) mod emulators;
 pub(crate) mod format;
 pub(crate) mod mcp;
 pub(crate) mod platform;
+pub(crate) mod record;
 pub(crate) mod run;
 pub(crate) mod test;
 pub(crate) mod upgrade;

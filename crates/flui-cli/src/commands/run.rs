@@ -790,9 +790,9 @@ fn print_key_legend(strategy: &dyn ReloadStrategy) -> CliResult<()> {
 static INTERRUPTED: AtomicBool = AtomicBool::new(false);
 
 /// Ctrl-C sets [`INTERRUPTED`] instead of killing the CLI outright: the app
-/// must be stopped and reported first. The listener is installed once per
-/// process; later loops (there is only ever one) reuse it.
-fn install_interrupt_flag() -> &'static AtomicBool {
+/// must be stopped and reported first, or a recording ended. The listener is
+/// installed once per process; a later caller reuses it.
+pub(crate) fn install_interrupt_flag() -> &'static AtomicBool {
     static INSTALL: Once = Once::new();
     INSTALL.call_once(|| {
         // A tiny current-thread runtime on its own thread hosts the async

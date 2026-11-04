@@ -3,12 +3,14 @@
 //! The conversation is `flui-protocol`'s (`flui_protocol::envelope`): newline-delimited JSON, a
 //! [`Greeting`] first, answered by the app's hello (or a `version` refusal when the app does not
 //! serve this client's protocol), then [`Request`]s, each answered by a [`ServerLine`] carrying
-//! its id. One request is in flight at a time, and this client subscribes to no events.
+//! its id. One request is in flight at a time. The events the app sends unasked (a recording's
+//! rows) are handed to the caller that waits for them ([`Connection::next_event`]) or that waits
+//! for an answer meanwhile ([`Connection::request_seeing`]).
 //!
 //! A thread of the connection's own reads every line the app sends and another writes, so a
 //! peer that stops answering, or stops reading, costs a bounded wait ([`REPLY_TIMEOUT`])
-//! instead of a stuck `flui mcp`. A request takes the first line that answers its id: an
-//! event, or a late answer to an earlier request that timed out, is passed over.
+//! instead of a stuck `flui mcp`. A request takes the first line that answers its id: a late
+//! answer to an earlier request that timed out is passed over.
 
 use std::io::{self, Read, Write};
 use std::net::TcpStream;
@@ -17,9 +19,9 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use flui_protocol::framing::LineReader;
-use flui_protocol::session::Hello;
+use flui_protocol::session::{ClientRole, Hello};
 use flui_protocol::version::PROTOCOL_VERSION;
-use flui_protocol::{ErrorCode, Greeting, Request, RequestId, ServerLine};
+use flui_protocol::{ErrorCode, Event, Greeting, Request, RequestId, ServerLine};
 use interprocess::local_socket::traits::Stream as _;
 use interprocess::local_socket::{Name, Stream};
 use serde_json::Value;
@@ -60,12 +62,16 @@ pub(crate) struct Connection {
 }
 
 impl Connection {
-    /// Connects and authenticates, retrying until `wait` has passed: the app
+    /// Connects and authenticates in `role`, retrying until `wait` has passed: the app
     /// may still be building, or restarting after a change.
-    pub(crate) fn connect(credentials: &Credentials, wait: Duration) -> Result<Self, String> {
+    pub(crate) fn connect(
+        credentials: &Credentials,
+        role: ClientRole,
+        wait: Duration,
+    ) -> Result<Self, String> {
         let deadline = Instant::now() + wait;
         loop {
-            match Self::connect_once(credentials) {
+            match Self::connect_once(credentials, role) {
                 Ok(connection) => return Ok(connection),
                 Err(error) if Instant::now() >= deadline => return Err(error),
                 Err(_) => thread::sleep(Duration::from_millis(200)),
@@ -73,7 +79,7 @@ impl Connection {
         }
     }
 
-    fn connect_once(credentials: &Credentials) -> Result<Self, String> {
+    fn connect_once(credentials: &Credentials, role: ClientRole) -> Result<Self, String> {
         let (receiving, sending) = open(&credentials.endpoint)
             .map_err(|e| format!("could not connect to {}: {e}", credentials.endpoint))?;
 
@@ -94,7 +100,9 @@ impl Connection {
             incoming,
             next_id: 1,
         };
-        let hello = Hello::new(credentials.token.clone(), PROTOCOL_VERSION).with_client(CLIENT);
+        let hello = Hello::new(credentials.token.clone(), PROTOCOL_VERSION)
+            .with_client(CLIENT)
+            .with_role(role);
         let refused = |why: String| {
             // The server closes unread on a wrong token.
             format!(
@@ -128,8 +136,20 @@ impl Connection {
         }
     }
 
-    /// Calls `method` with `params` and returns its result.
+    /// Calls `method` with `params` and returns its result. The events that arrive meanwhile
+    /// are passed over.
     pub(crate) fn request(&mut self, method: &str, params: Value) -> Result<Value, Failure> {
+        self.request_seeing(method, params, |_| {})
+    }
+
+    /// Calls `method` with `params` and returns its result, handing `event` each event that
+    /// arrives before it, in the order the app sent them.
+    pub(crate) fn request_seeing(
+        &mut self,
+        method: &str,
+        params: Value,
+        mut event: impl FnMut(Event),
+    ) -> Result<Value, Failure> {
         let id = RequestId::Number(self.next_id);
         self.next_id += 1;
         let line = serde_json::to_string(&Request::new(id.clone(), method, params))
@@ -138,6 +158,7 @@ impl Connection {
         let deadline = Instant::now() + REPLY_TIMEOUT;
         loop {
             match self.next(deadline)? {
+                ServerLine::Event(arrived) => event(arrived),
                 ServerLine::Answered {
                     id: answered,
                     result,
@@ -153,9 +174,25 @@ impl Connection {
                 ServerLine::Hello { .. } => {
                     return Err(Failure::Transport("the app said hello again".into()));
                 }
-                // An event, the late answer to an earlier request that timed out, or a line
-                // of a newer app's that this client does not know.
+                // The late answer to an earlier request that timed out, or a line of a newer
+                // app's that this client does not know.
                 _ => {}
+            }
+        }
+    }
+
+    /// The next event the app sends, waiting until `deadline` for it: `None` when none came by
+    /// then. A late answer to an earlier request is passed over.
+    pub(crate) fn next_event(&self, deadline: Instant) -> Result<Option<Event>, Failure> {
+        loop {
+            match self.line(deadline)? {
+                None => return Ok(None),
+                Some(ServerLine::Event(event)) => return Ok(Some(event)),
+                Some(ServerLine::Hello { .. }) => {
+                    return Err(Failure::Transport("the app said hello again".into()));
+                }
+                // A late answer to an earlier request, or a line this client does not know.
+                Some(_) => {}
             }
         }
     }
@@ -166,17 +203,23 @@ impl Connection {
             .map_err(|_| Failure::Unsent("the connection closed".into()))
     }
 
-    /// The next line the app sent, waiting until `deadline` for it.
+    /// The next line the app sent, waiting until `deadline` for it; a reply that has not come
+    /// by then is a failure.
     fn next(&self, deadline: Instant) -> Result<ServerLine<Value>, Failure> {
+        self.line(deadline)?.ok_or_else(|| {
+            Failure::Transport(format!("no reply within {} s", REPLY_TIMEOUT.as_secs()))
+        })
+    }
+
+    /// The next line the app sent, waiting until `deadline` for it: `None` when none came.
+    fn line(&self, deadline: Instant) -> Result<Option<ServerLine<Value>>, Failure> {
         let left = deadline.saturating_duration_since(Instant::now());
         match self.incoming.recv_timeout(left) {
             Ok(Ok(line)) => serde_json::from_str::<ServerLine<Value>>(&line)
+                .map(Some)
                 .map_err(|e| Failure::Transport(format!("the app sent a malformed line: {e}"))),
             Ok(Err(failure)) => Err(failure),
-            Err(RecvTimeoutError::Timeout) => Err(Failure::Transport(format!(
-                "no reply within {} s",
-                REPLY_TIMEOUT.as_secs()
-            ))),
+            Err(RecvTimeoutError::Timeout) => Ok(None),
             Err(RecvTimeoutError::Disconnected) => {
                 Err(Failure::Transport("the connection closed".into()))
             }
