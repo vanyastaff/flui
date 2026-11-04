@@ -56,7 +56,7 @@ use flui_foundation::{ElementId, Identifier, LayerId, RenderId, TreeId, ViewId};
 
 // The plain `Id<T: Marker>` family wraps a `NonZeroUsize` and implements
 // `Identifier`. The tree ids that address slab storage (ViewId, LayerId,
-// SemanticsId) are the slot plus one; the rest (ListenerId, ObserverId,
+// SemanticsId) are the slot plus one; the rest (ListenerId,
 // FrameCallbackId, TaskId) are opaque counters with no
 // slot behind them, minted only by the `IdMint` family. `zip` takes the
 // public (non-zero) value; the slab offset is the caller's.
@@ -95,7 +95,7 @@ any_tree_id(render_id);
 | Kind | Types |
 |------|-------|
 | **Plain `Id<T>`**, slab slot + 1 | `ViewId`, `LayerId`, `SemanticsId` |
-| **Plain `Id<T>`**, opaque counter (no slot) | `ListenerId`, `ObserverId`, `FrameCallbackId`, `TaskId` |
+| **Plain `Id<T>`**, opaque counter (no slot) | `ListenerId`, `FrameCallbackId`, `TaskId` |
 | **Generational** (slab index + generation) | `ElementId`, `RenderId`, `UiRuntimeId`, `DataTransferId`, `PresentationId` |
 | **Composite** | `PresentationAddress` (a `UiRuntimeId` plus a `PresentationId`) |
 

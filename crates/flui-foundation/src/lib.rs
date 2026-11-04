@@ -267,10 +267,9 @@ pub use id::{
     Id,
     Identifier,
     LayerId,
-    // Listener/Observer IDs
+    // Listener ID
     ListenerId,
     Marker,
-    ObserverId,
     // The full (UiRuntimeId, PresentationId) routable address of one presentation
     PresentationAddress,
     // Presentation identity — one presentation-runtime incarnation
@@ -334,8 +333,6 @@ pub mod prelude {
         Listenable,
         ListenerCallback,
         ListenerId,
-        // Observer IDs
-        ObserverId,
         PresentationAddress,
         PresentationId,
         RELEASE_MODE,

@@ -694,11 +694,6 @@ ids! {
         /// the listener list; never reissued, never wrapped.
         pub type ListenerId Listener;
 
-        /// Observer ID - identifier for registered observers.
-        ///
-        /// Used by `ObserverList` to track registered observers.
-        pub type ObserverId Observer;
-
         /// Frame Callback ID - scheduler frame callback identifier.
         ///
         /// Identifies scheduled frame callbacks in the scheduler binding.
