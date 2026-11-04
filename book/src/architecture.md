@@ -1,6 +1,6 @@
 # Architecture
 
-FLUI has two maps: the tree pipeline explains how UI becomes a frame, and the workspace layers
+FLUI has two maps: the tree pipeline explains how UI becomes a frame, and the workspace tiers
 explain which crates may depend on which. Start with the [concept overview](concepts/overview.md)
 for the trees, then use this page to find the design records behind a particular subsystem.
 

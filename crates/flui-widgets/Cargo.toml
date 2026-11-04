@@ -232,7 +232,6 @@ harness = false
 ignored-paths = ["tests/routable_ui/**/*.rs", "tests/nested_scroll_ui/**/*.rs"]
 
 [package.metadata.flui]
-layer = 6
 tier = "K"
 tier-kind = "internal"
 order = 3

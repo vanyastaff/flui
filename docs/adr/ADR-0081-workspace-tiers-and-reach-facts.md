@@ -10,8 +10,8 @@
   above it, so the tier table and the `mint` findings below name crates that no longer exist.
 - **Supersedes:** [ADR-0041](ADR-0041-workspace-topology-contract.md), through §1 of this
   record, for the numbered layer table, "a crate is a layer" as the only reason for a crate,
-  and the "Localization direction is locked" paragraph only (they end when the `layer` key is
-  removed; until then tiers are checked beside layers). The manifest-as-source rule, the
+  and the "Localization direction is locked" paragraph, with the `layer` key deleted from
+  the manifests and the gate. The manifest-as-source rule, the
   `allowed-dependents`/`allowed-dev-dependents` mechanism, the dev-edge exemption and the
   rejected alternatives stand. ADR-0041's "No `flui-runtime` without two consumers" paragraph
   is superseded separately by [ADR-0083](ADR-0083-one-frame-transaction-in-flui-runtime.md).
@@ -115,8 +115,9 @@ An edge the rule refuses is legal only while the **dependent** lists it in its
 removes the edge, and its file must exist under `docs/adr`. An entry for an edge that does not
 exist, or that no rule of this record refuses, is itself a finding, so the list only shrinks. The
 key exempts the rules of this record only: the tier rule, and the kind rule of §3 once it is
-checked, whose refused edges (dev and optional ones included) then count as well. The layer rule
-of ADR-0041 is checked beside it, unchanged, until the `layer` key is removed in a later change.
+checked, whose refused edges (dev and optional ones included) then count as well. The gate
+refuses an unknown `[package.metadata.flui]` key, so a manifest that still declares
+`layer` fails it: §1 of this record supersedes the layer rule of ADR-0041 in full.
 
 `pkg` is ordered after H, so an edge from a host to an official package points up. Such an edge
 is legal only when it is one of the dated exceptions listed under "Core never names official"
@@ -172,11 +173,11 @@ navigation and write trio became inherent methods on the three trees that used i
 `LayerTree::{ancestors, lowest_common_ancestor, descendants}`, `SemanticsTree::remove` (and a
 private ancestor check behind `add_child`), and `RenderTree::insert`.
 
-`flui-localizations` (a crate alone in its own layer) was removed on 2026-09-26. It held no
+`flui-localizations` (on its own in ADR-0041's layer table) was removed on 2026-09-26. It held no
 translated strings: every string forwarded to `DefaultWidgetsLocalizations`, so nothing went to
 the packages. Its RTL table and `GlobalWidgetsLocalizationsDelegate` moved to
 `flui_widgets::localization`, the design systems' exemption set became `flui-app` and the
-facade ([ADR-0028](ADR-0028-design-system-decoupling-contract.md)), layer 8 is empty, and the
+facade ([ADR-0028](ADR-0028-design-system-decoupling-contract.md)), and the
 facade's `localizations` feature stays empty until nothing names it. ADR-0041's "Localization
 direction is locked" paragraph has nothing left to govern.
 
@@ -363,9 +364,9 @@ recorded:
 
 ## Consequences
 
-- Every manifest changes: `layer` becomes `tier`, `tier-kind` and `order`. The root
-  `layers` array becomes `tiers` with the forbidden sets. `flui-native` moves from the
-  bottom of the graph to H, which is the point: nothing below the hosts may name it.
+- Every manifest declares `tier`, `tier-kind` and `order`; the root names the `tiers`
+  with the forbidden sets beside them. `flui-native` sits in H, which is the point:
+  nothing below the hosts may name it.
 - ADR-0028's hard-coded exemption set (`flui-app`, `flui`; `flui-localizations` until its
   deletion) is replaced by
   ADR-0088 using this record's kind rule and its dated exceptions. ADR-0028's decoupling rules
@@ -378,9 +379,10 @@ recorded:
   `flui_view::__runtime`, not through `flui::view` or `flui_sdk::view`.
 - AGENTS.md's "Crate layering" rows and the "Crate" row of `docs/extending.md` and `docs/crates.md`
   changed with the tier gate; [`docs/ROADMAP.md:11`](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/ROADMAP.md#L11) changes with §5. ADR-0041 carries the
-  `Superseded in part by: ADR-0081` back-link.
+  `Superseded-by: ADR-0081` back-link.
 - Migration: one change added the three keys and `edge-exceptions` next to `layer` and taught
-  the gate both; a second removes `layer`. `reach` landed with its `reach-exceptions` seeded
+  the gate both; the second, a later change, removed `layer` and the root `layers` array
+  with it. `reach` landed with its `reach-exceptions` seeded
   from its own first run.
 
 ## Verification
@@ -396,13 +398,14 @@ For the accepted part:
   cross-tier edge, an in-tier edge against `order`, an H → `pkg` edge without an exception, a
   stale exception, a missing `tier-kind`, a duplicate `order` and an edge onto a `tool`; it
   fails unless exactly those are reported. `cargo xtask checks` runs it before `workspace`.
-- `cargo nextest run -p xtask workspace`: the table test `workspace_gate_contract` runs the layer,
+- `cargo nextest run -p xtask workspace`: the table test `workspace_gate_contract` runs the
   manifest and ADR-citation rules over throwaway workspaces, among them
   `a_dev_cycle_inside_a_tier_is_allowed`, `a_crate_without_tier_order_or_kind_is_reported`,
   `an_unknown_tier_or_kind_is_reported`, `an_example_declares_only_the_tool_kind`,
   `a_stale_edge_exception_is_reported` and `an_edge_exception_citing_a_missing_adr_is_reported`;
   the tier rule's own rejection cases (upward edge, in-tier order, duplicate order, an edge onto
-  a `tool`) are the self-test's planted findings above.
+  a `tool`) are the self-test's planted findings above, and `a_declared_layer_is_an_unknown_flui_key`
+  holds §1's supersession of the layer rule: a manifest that still declares `layer` fails the gate.
 - `cargo xtask reach` is green with the three seeded `reach-exceptions` entries of §2; removing
   `flui-engine`'s grant makes it fail with
   ``flui-engine (tier R) reaches wgpu under `flui --no-default-features`: flui-engine -> wgpu``

@@ -15,7 +15,7 @@ Use `flui::testing::widgets::{lay_out, loose}` for widget layout and input,
 Accessibility and gesture replay live in `flui::testing::{a11y, replay}`.
 
 The `testing` feature is off by default. Independent consumer tests check that
-ordinary dependency graphs do not include the headless test driver. The layer
+ordinary dependency graphs do not include the headless test driver. The tier
 map below describes implementation ownership for framework contributors.
 
 ## Map of the testing layer
@@ -127,7 +127,7 @@ cargo xtask ci
 It runs, in order (`tools/xtask/src/tasks.rs` is the authority):
 
 ```bash
-cargo xtask checks                        # fmt, typos, taplo, markdown links (docs-links: lychee, offline), the paths, packages and llms.txt links the docs name (docs-paths), workspace (tiers, layers, manifests, test reachability, ADR numbers), reach (what each crate's resolved graph may contain, and the hot-reload facts), module-dag (import direction between a crate's modules), toolchain, wgsl, globals (process-global state, ADR-0097), panic-boundary (every OS entry into `flui-native` goes through `owner::panic_boundary::os_entry`, ADR-0151 §16), send-impls (every `unsafe impl Send`/`Sync` is listed and the list only shrinks, ADR-0136), try-new (every `new` returning `Result` or `Option` is listed and the list only shrinks: such a constructor is `try_new`), panic-messages (every production `expect` and `panic!` names its invariant with `BUG: ` or its `try_` twin; the per-file counts of the ones that do not only go down), the docs-only allowlist, font assets, file-length, markers and changelog fragments; builds only xtask (each gate's self-test runs in `cargo test -p xtask`, ADR-0303 §4)
+cargo xtask checks                        # fmt, typos, taplo, markdown links (docs-links: lychee, offline), the paths, packages and llms.txt links the docs name (docs-paths), workspace (tiers, manifests, test reachability, ADR numbers), reach (what each crate's resolved graph may contain, and the hot-reload facts), module-dag (import direction between a crate's modules), toolchain, wgsl, globals (process-global state, ADR-0097), panic-boundary (every OS entry into `flui-native` goes through `owner::panic_boundary::os_entry`, ADR-0151 §16), send-impls (every `unsafe impl Send`/`Sync` is listed and the list only shrinks, ADR-0136), try-new (every `new` returning `Result` or `Option` is listed and the list only shrinks: such a constructor is `try_new`), panic-messages (every production `expect` and `panic!` names its invariant with `BUG: ` or its `try_` twin; the per-file counts of the ones that do not only go down), the docs-only allowlist, font assets, file-length, markers and changelog fragments; builds only xtask (each gate's self-test runs in `cargo test -p xtask`, ADR-0303 §4)
 cargo xtask lint                          # clippy -D warnings, as the CI clippy job runs it: the workspace, then flui-engine's `testing` code
 cargo xtask doc-strict                    # cargo doc --workspace --no-deps --locked --document-private-items with every workspace `testing` feature on
 cargo xtask test                          # nextest over the local scope, flui-native headless, then the nested-cargo group (see "What `cargo xtask test` runs")
@@ -844,8 +844,7 @@ dev-dependency, since it sits above `flui-testing`.
 Two crates deliberately do not, because they have nothing to poison — their
 capture tests share no callsite with anything else in their binary, each
 emitting at its own source line inside its own helper. `flui-log` additionally
-has no in-workspace dependencies at all, which its layer entry states as a
-contract; `flui-foundation` is emission-only and may not construct a subscriber,
+has no in-workspace dependencies at all; `flui-foundation` is emission-only and may not construct a subscriber,
 which is also why the primitive lives in
 `flui-testing` rather than at the bottom of the DAG where every crate could
 reach it without an edge.
@@ -963,7 +962,7 @@ check; all cargo commands run `--locked`; actions are SHA-pinned and the
 workflow files themselves are linted:
 
 ```bash
-cargo xtask checks --strict                                   # fmt, taplo, typos, markdown links, workspace layers, module-dag, toolchain, wgsl, globals, panic-boundary, send-impls, try-new, panic-messages, changelog fragments, ...; a missing tool fails
+cargo xtask checks --strict                                   # fmt, taplo, typos, markdown links, workspace, module-dag, toolchain, wgsl, globals, panic-boundary, send-impls, try-new, panic-messages, changelog fragments, ...; a missing tool fails
 cargo test -p xtask --locked                                  # xtask's own tests, lane classification included
 actionlint                                                    # workflow semantics
 zizmor .                                                      # workflow security audit

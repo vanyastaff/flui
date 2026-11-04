@@ -51,7 +51,6 @@ name = "material_it"
 path = "tests/main.rs"
 
 [package.metadata.flui]
-layer = 7
 tier = "pkg"
 tier-kind = "official"
 order = 1

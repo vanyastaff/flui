@@ -265,7 +265,7 @@ typed protocol tree rather than this diagnostics representation (ADR-0095).
 
 ## Thread safety
 
-`flui-foundation` is a Layer 0 crate (no FLUI dependencies); concurrency primitives are minimal and live at well-defined seams.
+`flui-foundation` sits in tier V with no FLUI dependencies; concurrency primitives are minimal and live at well-defined seams.
 
 | Site | Primitive | Where | Why |
 |------|-----------|-------|-----|

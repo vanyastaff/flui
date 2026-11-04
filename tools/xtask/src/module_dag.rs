@@ -34,8 +34,8 @@
 //! at the root, so every module can name every other. clippy's
 //! `disallowed_types`/`disallowed_methods` are configured per crate and cannot
 //! vary by the importing module. Splitting the crate so cargo enforces the
-//! direction was ruled out (ADR-0041, flui-widgets stays one
-//! crate). The other conditions hold: it reads a syn AST and the manifest
+//! direction was ruled out (ADR-0081: a new crate needs a tier, a kind and an
+//! ADR that names a reason, and flui-widgets stays one crate). The other conditions hold: it reads a syn AST and the manifest
 //! TOML, `--self-test` runs it on built-in crates with planted violations, and
 //! its allowlist is manifest data that names an ADR and only shrinks.
 //!

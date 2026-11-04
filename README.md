@@ -6,7 +6,7 @@
 
 > A modular declarative UI framework for Rust with GPU-accelerated rendering.
 
-FLUI brings Flutter's tree architecture to Rust as five trees — `View` (immutable configuration) → `Element` (lifecycle, reconciliation) → `RenderObject` (layout, paint, hit-test) → `Layer` (compositing, rebuilt each frame), with `Semantics` alongside for accessibility — adapted to native ownership, type-safe arity, and a strict layered crate DAG. The widget catalog (`flui-widgets`) is live, the full build → layout → paint → composite pipeline runs end to end, and gestures and animation are integrated.
+FLUI brings Flutter's tree architecture to Rust as five trees — `View` (immutable configuration) → `Element` (lifecycle, reconciliation) → `RenderObject` (layout, paint, hit-test) → `Layer` (compositing, rebuilt each frame), with `Semantics` alongside for accessibility — adapted to native ownership, type-safe arity, and a strict tier DAG for the crates. The widget catalog (`flui-widgets`) is live, the full build → layout → paint → composite pipeline runs end to end, and gestures and animation are integrated.
 
 **Project stage: 0.x, beta candidate.** The `flui` CLI is on crates.io (`cargo install flui-cli --locked`; `flui create` scaffolds a project that pins the framework's `v0.1.0` git tag). The framework crates themselves are not yet published: they build and run from a clone (instructions below) or from that tag, and APIs may still change between minor versions. See [`CHANGELOG.md`](CHANGELOG.md) for notable changes.
 
@@ -25,7 +25,7 @@ are defined in the [release requirements](docs/plans/specs/release/requirements.
 - ✅ Official packages (`tier-kind = "official"`): `flui-material`, `flui-cupertino`, `flui-devtools` (partial) under `packages/`, built on `flui-sdk` alone; and `flui-hot-reload`, still under `crates/` until it builds on `flui-sdk` alone (ADR-0311 §6)
 - ✅ DX/tooling: `flui-cli` (with the per-target build pipeline in `crates/flui-cli/src/build/`)
 
-See [`docs/crates.md`](docs/crates.md) for the full layered map and per-crate status.
+See [`docs/crates.md`](docs/crates.md) for the full tier map and per-crate status.
 
 ## Quick Start
 
@@ -99,7 +99,7 @@ driver.
 - **Cross-platform, unevenly verified.** Native Win32 and AppKit backends, headless mode for CI, an Android NDK target, WASM/WebGPU, and a `winit` fallback all build, but how far each has actually been run and checked differs sharply by platform — macOS has live, operator-equivalent input evidence; Windows, Linux, Android, Web/WASM and the iOS Simulator are experimental, each with narrower recorded runs. See the [per-platform status](docs/platform-parity.md) before relying on a platform this project has not verified for you.
 - **Saving on close, except on the Web.** On desktop and mobile hosts, closing the last window or ending the session writes owed values within a fixed budget before the process exits; a close the app cannot veto (a session end, an Android stop) gets a shorter budget, and a write the system cuts off there is lost while the file on disk stays whole. A Web page gets no close it can hold: teardown is not guaranteed when the tab closes, `pagehide` writes are best effort, and what survives is what persistence checkpointed while the page ran. The Web close path is compile-checked only.
 - **Hot-reload scenes.** `dlopen`-based plugin host (`flui-hot-reload`) for desktop iteration without process restarts.
-- **Strict architecture.** Layered crate DAG with no upward edges. `unsafe` is *not* confined to a fixed crate list — it concentrates wherever a crate touches an FFI or ABI boundary. `flui-native` (Win32/AppKit/Android FFI) holds most of it by a wide margin; `flui-hot-reload` (the `dlopen` ABI boundary) and `flui-rendering` (a miri-audited arena, `subtree_arena.rs`) follow, and a few other crates carry a handful of sites. `flui-engine` denies `unsafe` in its hand-written production code; its generated shader bindings allow it. [`docs/architecture.md`](docs/architecture.md#confinement-of-unsafe) lists the production sites. Reviewed at the workspace level — see `docs/PANIC-POLICY.md` and each crate's `ARCHITECTURE.md`.
+- **Strict architecture.** Tier DAG with no upward edges. `unsafe` is *not* confined to a fixed crate list — it concentrates wherever a crate touches an FFI or ABI boundary. `flui-native` (Win32/AppKit/Android FFI) holds most of it by a wide margin; `flui-hot-reload` (the `dlopen` ABI boundary) and `flui-rendering` (a miri-audited arena, `subtree_arena.rs`) follow, and a few other crates carry a handful of sites. `flui-engine` denies `unsafe` in its hand-written production code; its generated shader bindings allow it. [`docs/architecture.md`](docs/architecture.md#confinement-of-unsafe) lists the production sites. Reviewed at the workspace level — see `docs/PANIC-POLICY.md` and each crate's `ARCHITECTURE.md`.
 
 ## Why FLUI
 
@@ -199,8 +199,8 @@ together (the procedure lives in `rust-toolchain.toml`'s header).
 | Guide | Description |
 |-------|-------------|
 | [Getting Started](docs/getting-started.md) | Prerequisites, build, run examples, platform-specific setup |
-| [Architecture](docs/architecture.md) | Frame pipeline + layered crate DAG overview (current state) |
-| [Crates Map](docs/crates.md) | Per-layer crate inventory with status and purpose |
+| [Architecture](docs/architecture.md) | Frame pipeline + tier crate DAG overview (current state) |
+| [Crates Map](docs/crates.md) | Per-tier crate inventory with status and purpose |
 | [Testing](docs/testing.md) | Build / test / clippy / fmt commands, coverage targets, benchmarks |
 
 For the architectural rules (dependency DAG, pipeline contracts) see the ADRs in [`docs/adr/`](docs/adr/).

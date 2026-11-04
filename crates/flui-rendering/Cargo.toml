@@ -53,9 +53,9 @@ flui-semantics = { path = "../flui-semantics", version = "=0.2.0-dev" }
 accesskit = { workspace = true }
 # `ScrollPosition`'s coalesced post-frame flush (view/scroll_position.rs) names
 # `PostFrameHandle` — promoted from dev-dependency (integration tests only) to a
-# real production edge. flui-scheduler sits below flui-rendering in the layer
-# graph already (flui-view/-widgets/-app all depend on both), so this is not a
-# new direction, just a new consumer.
+# real production edge. flui-scheduler sits below flui-rendering in the
+# tiers' order already (flui-view/-widgets/-app all depend on both), so this
+# is not a new direction, just a new consumer.
 flui-scheduler = { path = "../flui-scheduler", version = "=0.2.0-dev" }
 # `InputRegionKind` and `InputRegion`: the contract `PlatformWindow::set_input_regions`
 # takes the collected regions in (ADR-0217 §5).
@@ -103,7 +103,7 @@ harness = false
 
 # run_semantics end to end as a function of render-tree size: one marked
 # leaf (mark-scoped graft) vs a marked root (the full-rebuild ceiling).
-# Companion to flui-semantics' publish_cost bench, one layer up.
+# Companion to flui-semantics' publish_cost bench, one tier up.
 [[bench]]
 name = "semantics_assembly"
 harness = false
@@ -125,7 +125,7 @@ static_assertions.workspace = true
 # The workspace-pinned proptest, as flui-painting uses.
 proptest = { workspace = true }
 # Animation -> render-pipeline integration scenarios (tests only; no
-# production dependency between the layers). flui-scheduler moved to
+# production dependency here). flui-scheduler moved to
 # `[dependencies]` above — `ScrollPosition` names it in production now.
 flui-animation = { path = "../flui-animation", version = "=0.2.0-dev" }
 # Self dev-dependency that turns the off-by-default `testing` feature on
@@ -141,7 +141,8 @@ flui-rendering = { path = ".", features = ["testing"] }
 # previously imported objects from `flui_rendering::objects`; after the
 # flui-objects extraction they import from `flui_objects` instead.
 # This is a dev-only dependency — flui-rendering does not depend on
-# flui-objects in production (that would invert the layer order).
+# flui-objects in production (the render machine produces the objects,
+# the catalog object classes live above rendering's contract).
 # Checkout-only test edge: versionless, so Cargo drops it from the published manifest.
 flui-objects = { path = "../flui-objects", features = ["testing"] }
 # The text-context tests count the loans of a UI runtime's context
@@ -184,7 +185,6 @@ workspace = true
 ignored-paths = ["tests/compile_fail/*.rs"]
 
 [package.metadata.flui]
-layer = 4
 tier = "R"
 tier-kind = "internal"
 order = 2

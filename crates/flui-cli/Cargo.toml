@@ -164,7 +164,6 @@ path = "tests/main.rs"
 workspace = true
 
 [package.metadata.flui]
-layer = 9
 tier = "H"
 tier-kind = "tool"
 order = 3

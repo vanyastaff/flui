@@ -20,45 +20,47 @@ This page describes the architecture as it is. The decisions that set the target
 
 The crates under `crates/` and `packages/` and the `flui` facade form a strict directed acyclic graph (DAG). Dependencies flow downward only; circular dependencies are forbidden. Each crate exposes its public API exclusively through `lib.rs` (and an optional `prelude` module). Internal modules default to `pub(crate)`.
 
-Each crate's manifest declares a layer and a tier (`[package.metadata.flui] layer`, `tier`, `order`); the root `[workspace.metadata.flui] layers` and `tiers` name them. The diagram below is read from those manifests, with each crate's tier in brackets (V values, C contracts, S substrate, R render machine, K spine and runtime, H hosts, pkg official packages):
+Each crate's manifest declares a tier, its kind and its order (`[package.metadata.flui] tier`, `tier-kind`, `order`); the root `[workspace.metadata.flui] tiers` names the tiers bottom to top. The diagram below is read from those manifests, grouped by tier, with each crate's `order` in brackets:
 
 ```
-Layer 10 ── flui [H]                                    (facade)
-                │
-Layer 9  ── flui-app [H], flui-cli [H], flui-devtools [pkg]
-                │
-Layer 8  ── (empty: flui-localizations deleted, ADR-0081)
-                │
-Layer 7  ── flui-material [pkg], flui-cupertino [pkg]
-                │
-Layer 6  ── flui-widgets [K], flui-runtime [K], flui-sdk [K],
-                │  flui-testing [K], flui-hot-reload [pkg]
-                │
-Layer 5  ── flui-view [K]
-                │
-Layer 4  ── flui-rendering [R], flui-objects [R], flui-engine [R]
-                │   (objects → rendering, never the reverse)
-Layer 3  ── flui-layer [R], flui-semantics [S], flui-animation [S],
-                │  flui-native [H]
-                │  (flui-native = the core host; only flui-app depends on it)
-Layer 2  ── flui-log [S], flui-scheduler [S], flui-painting [S],
-                │  flui-interaction [S], flui-assets [S]
-                │  (flui-log = the subscriber backend; flui-app depends on
-                │   it, and its allowed-dependents also admit flui-cli and
-                │   the facade)
-Layer 1  ── flui-foundation [V], flui-macros [V],
-                │  flui-platform [C], flui-protocol [C]
-                │   (flui-foundation = framework primitives:
-                │    ChangeNotifier, Id system, Key, diagnostics, and the
-                │    plain-f64 geometry values in flui_foundation::geometry;
-                │    flui-platform = platform contracts, no OS code;
-                │    interaction → platform-api, platform → platform-api;
-                │    flui-protocol = semantics and agent-protocol vocabulary,
-                │    semantics → protocol)
-Layer 0  ── (empty: each value type lives with its owner, ADR-0098)
+tier pkg ── flui-material [1], flui-cupertino [2], flui-devtools [3],
+        │    flui-hot-reload [4], flui-system [5]
+        │    (official packages on the SDK: material, cupertino,
+        │     devtools; flui-system is the capability crate)
+        │
+tier H  ── flui-native [1], flui-app [2], flui-cli [3], flui [4]
+        │    (flui-native = the core host; only flui-app depends on it;
+        │     flui = the facade, the root package)
+        │
+tier K  ── flui-view [1], flui-widgets [3], flui-runtime [4],
+        │    flui-sdk [5], flui-testing [6]
+        │    (flui-view = View/Element, BuildContext, reconciliation,
+        │     signals; flui-testing = the test driver, dev edges only)
+        │
+tier R  ── flui-layer [1], flui-rendering [2], flui-objects [3],
+        │    flui-engine [4]
+        │    (objects → rendering, never the reverse;
+        │     flui-engine = the one wgpu grant)
+        │
+tier S  ── flui-log [1], flui-scheduler [2], flui-painting [3],
+        │    flui-interaction [4], flui-semantics [5],
+        │    flui-animation [6], flui-assets [7]
+        │    (flui-log = the subscriber backend; flui-app depends on
+        │     it, and its allowed-dependents also admit flui-cli and
+        │     the facade)
+        │
+tier C  ── flui-platform [1], flui-protocol [2]
+        │    (flui-platform = platform contracts, no OS code;
+        │     interaction → platform, platform → platform-api;
+        │     flui-protocol = semantics and agent-protocol vocabulary,
+        │     semantics → protocol)
+        │
+tier V  ── flui-macros [3], flui-foundation [4]
+             (the foundation's `geometry` holds the plain-f64
+              value types; no value-types crate, ADR-0098)
 ```
 
-**This is not enforced by convention.** Each crate declares its layer in its manifest (`[package.metadata.flui] layer`, named in the root `[workspace.metadata.flui] layers`), and `cargo xtask workspace` (part of `cargo xtask checks` and the CI `checks` job) validates every **normal** and build Cargo edge against it: same layer or lower, and a lower tier or a smaller `order` in the same tier, never an example or tool, and every crate layered. Cargo rejects cycles itself. See [ADR-0041](adr/ADR-0041-workspace-topology-contract.md). Dev-dependencies may cross layers — a test fixture is not an architectural claim — except where the kind rule reads them ([ADR-0081](adr/ADR-0081-workspace-tiers-and-reach-facts.md) §3, [ADR-0088](adr/ADR-0088-official-packages-sdk-and-facade.md) §2): only applications name an official package (`tier-kind = "official"`: `flui-material`, `flui-cupertino`, `flui-devtools`, `flui-hot-reload`), in any dependency kind; any other crate that does lists the edge in its `edge-exceptions` (today only the facade), and one official package names another only through such an entry, so the two design systems name each other in no kind ([ADR-0028](adr/ADR-0028-design-system-decoupling-contract.md)).
+**This is not enforced by convention.** Each crate declares its tier, kind and order in its manifest, and `cargo xtask workspace` (part of `cargo xtask checks` and the CI `checks` job) validates every **normal** and build Cargo edge against them: a dependency points to a lower tier, or to a smaller `order` in the same tier, unless the dependent lists the edge in `edge-exceptions` with the ADR that removes it, and nothing with a tier depends on a `tier-kind = "tool"` package. Cargo rejects cycles itself. See [ADR-0081](adr/ADR-0081-workspace-tiers-and-reach-facts.md). Dev-dependencies may point anywhere — a test fixture is not an architectural claim — except where the kind rule reads them ([ADR-0081](adr/ADR-0081-workspace-tiers-and-reach-facts.md) §3, [ADR-0088](adr/ADR-0088-official-packages-sdk-and-facade.md) §2): only applications name an official package (`tier-kind = "official"`: `flui-material`, `flui-cupertino`, `flui-devtools`, `flui-hot-reload`), in any dependency kind; any other crate that does lists the edge in its `edge-exceptions` (today only the facade), and one official package names another only through such an entry, so the two design systems name each other in no kind ([ADR-0028](adr/ADR-0028-design-system-decoupling-contract.md)).
 
 Note on value types: there is no value-types crate. Geometry (`Point`, `Offset`, `Size`, `Rect`, `Matrix4`, the device-grid types, `DevicePixelRatio`) lives in `flui_foundation::geometry`, a leaf crate with no internal-crate runtime deps; paint, styling and typography values in `flui-painting`; constraints in `flui-rendering`; gesture details in `flui-interaction`; and platform values in `flui-platform`. Logical lengths are plain `f64`, with no unit wrapper ([ADR-0098](adr/ADR-0098-owned-f64-geometry-values.md)).
 
@@ -66,7 +68,7 @@ See [`crates.md`](crates.md) for the full inventory and current status of each c
 
 ### Why this structure?
 
-- **Tooling enforces the layout, not review.** Cargo rejects a dependency *cycle* at build time, but an upward edge that does not close a cycle (`flui-rendering → flui-devtools`, say) builds fine — which is how three placements in this diagram drifted from the code unnoticed. `cargo xtask workspace` closes that gap by comparing each manifest's declared layer against Cargo's normal and build edges.
+- **Tooling enforces the layout, not review.** Cargo rejects a dependency *cycle* at build time, but an upward edge that does not close a cycle (`flui-rendering → flui-devtools`, say) builds fine — which is how three placements in this diagram drifted from the code unnoticed. `cargo xtask workspace` closes that gap by comparing each manifest's declared tier and order against Cargo's normal and build edges.
 - **Public API discipline scales.** A consumer cannot reach into another crate's internals because they are `pub(crate)`. Reviewers reject changes that expose internals "just to make it compile" — that is the signal an abstraction is wrong.
 - **Backends slot in via traits.** `Platform`, `RasterBackend`, `RenderBox`, and similar are extension points. Implementations live in dedicated crates, not in widget code.
 
@@ -200,5 +202,5 @@ See [Hot Reload](hot-reload.md) for workflows, `ReloadStrategy`, and integration
 - [Hot Reload](hot-reload.md) — two-layer dev model, plugin workflows
 - [ADRs](adr/) — the cross-crate decisions the code follows
 - [`AGENTS.md`](../AGENTS.md) — the current cross-tool rules
-- [Crates Map](crates.md) — per-layer crate inventory
+- [Crates Map](crates.md) — per-tier crate inventory
 - [Contributing](../CONTRIBUTING.md) — workflow and conventions

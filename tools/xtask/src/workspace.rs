@@ -22,13 +22,6 @@
 //!   `reach-exceptions` are read here, and each exception's `exit` or `grant`
 //!   must cite an ADR with a file under `docs/adr`; what they mean over the
 //!   resolved graph is `cargo xtask reach` ([`mod@reach`]).
-//! - **Layers** (ADR-0041), checked beside the tiers until the `layer` key is
-//!   removed. Each crate under `crates/` or `packages/` and the facade declare
-//!   `[package.metadata.flui] layer`; the names live in the root manifest's
-//!   `[workspace.metadata.flui] layers`. A normal or build dependency on another
-//!   workspace package points to the same layer or lower, never higher, and never
-//!   at an example or tool. Cargo rejects cycles itself; this adds direction.
-//!   Dev-dependencies may point up (tests use `flui-testing`).
 //! - **Allowed dependents.** A crate may list `allowed-dependents`, the complete
 //!   set of crates allowed a normal or build dependency on it, and
 //!   `allowed-dev-dependents`, the same for dev-dependencies. Three crates list
@@ -36,8 +29,8 @@
 //!   `flui-native` (ADR-0082) and `flui-runtime` (ADR-0047), which only the
 //!   host links; their dev-dependents are not restricted. No manifest lists
 //!   `allowed-dev-dependents` since the design systems moved to the kind rule
-//!   (ADR-0088); the key stays as the dev-edge restriction ADR-0041 and
-//!   ADR-0081 keep, and the self-test exercises it. Examples and tools are
+//!   (ADR-0088); the key stays for ADR-0081 §1's dev-edge rule, carried over
+//!   from ADR-0041, and the self-test exercises it. Examples and tools are
 //!   applications and may depend on anything.
 //! - **wasm32.** `wasm = false` marks a package that cannot build for wasm32;
 //!   wasm-check and the scoped wasm32 check leave it out. `globals` is ADR-0097's
@@ -86,8 +79,8 @@ pub(crate) struct WorkspaceArgs {
     self_test: bool,
 }
 
-/// `cargo xtask workspace`: check tiers, layers, manifests, test reachability
-/// and ADR numbers. Exit code 1 lists every finding.
+/// `cargo xtask workspace`: check tiers, manifests, test reachability and ADR
+/// numbers. Exit code 1 lists every finding.
 pub(crate) fn workspace(args: &WorkspaceArgs) -> anyhow::Result<ExitCode> {
     if args.self_test {
         return Ok(tiers::self_test());
@@ -118,13 +111,13 @@ fn check(root: &Path, metadata: &Metadata) -> anyhow::Result<(Vec<String>, Strin
             .map(ToString::to_string),
     );
     tiers::check_adr_citations(root, &members, &mut findings);
-    let (layers, edges) = check_layers(&members, &metadata.workspace_metadata, &mut findings)?;
+    let edges = check_allowed_dependents(&members, &mut findings);
     check_manifests(root, &members, metadata, &mut findings)?;
     check_unique_adr_numbers(root, &mut findings)?;
     Ok((
         findings,
         format!(
-            "{} crates in {} tiers and {layers} layers, {edges} dependency edges checked",
+            "{} crates in {} tiers, {edges} dependency edges checked",
             members
                 .iter()
                 .filter(|member| member.tier.is_some())
@@ -135,14 +128,13 @@ fn check(root: &Path, metadata: &Metadata) -> anyhow::Result<(Vec<String>, Strin
 }
 
 /// The keys a member's `[package.metadata.flui]` may set.
-const FLUI_KEYS: [&str; 15] = [
+const FLUI_KEYS: [&str; 14] = [
     "tier",
     "tier-kind",
     "order",
     "edge-exceptions",
     "reach-forbid",
     "reach-exceptions",
-    "layer",
     "allowed-dependents",
     "allowed-dev-dependents",
     "wasm",
@@ -243,8 +235,6 @@ struct Member {
     reach_forbid: Vec<String>,
     /// `[package.metadata.flui] reach-exceptions`.
     reach_exceptions: Vec<ReachException>,
-    /// `[package.metadata.flui] layer`, when declared.
-    layer: Option<usize>,
     /// `[package.metadata.flui] allowed-dependents`: the crates allowed a
     /// normal or build dependency on this one, when declared.
     allowed_dependents: Option<BTreeSet<String>>,
@@ -256,14 +246,6 @@ struct Member {
 impl Member {
     fn name(&self) -> &str {
         &self.name
-    }
-
-    /// Crates under `crates/` or `packages/` and the root facade carry a
-    /// layer, a tier and an order.
-    fn must_have_layer(&self) -> bool {
-        self.rel == "Cargo.toml"
-            || self.rel.starts_with("crates/")
-            || self.rel.starts_with("packages/")
     }
 
     fn is_example_or_tool(&self) -> bool {
@@ -336,17 +318,6 @@ impl Members {
             if !(flui["api-closure"].is_null() || flui["api-closure"].is_object()) {
                 bail!("{rel}: `api-closure` must be a table");
             }
-            let layer = match &flui["layer"] {
-                Json::Null => None,
-                value => Some(
-                    value
-                        .as_u64()
-                        .and_then(|layer| usize::try_from(layer).ok())
-                        .with_context(|| {
-                            format!("{rel}: `layer` must be a non-negative integer")
-                        })?,
-                ),
-            };
             let order =
                 match &flui["order"] {
                     Json::Null => None,
@@ -364,7 +335,6 @@ impl Members {
                 reach_forbid: package_names(&flui, "reach-forbid", &rel)?
                     .map_or_default(|names| names.into_iter().collect()),
                 reach_exceptions: reach_exceptions(&flui, &rel)?,
-                layer,
                 allowed_dependents,
                 allowed_dev_dependents,
                 name,
@@ -492,42 +462,11 @@ fn reach_exceptions(flui: &Json, rel: &str) -> anyhow::Result<Vec<ReachException
     Ok(out)
 }
 
-/// Layer direction and allowed dependents. Returns the number of named layers
-/// and of in-workspace edges examined.
-fn check_layers(
-    members: &Members,
-    workspace_metadata: &Json,
-    findings: &mut Vec<String>,
-) -> anyhow::Result<(usize, usize)> {
-    let names: Vec<&str> = workspace_metadata["flui"]["layers"]
-        .as_array()
-        .context("Cargo.toml needs `[workspace.metadata.flui] layers = [...]`")?
-        .iter()
-        .map(|name| name.as_str().context("layer names must be strings"))
-        .collect::<anyhow::Result<_>>()?;
-    let describe = |layer: usize| {
-        names.get(layer).map_or_else(
-            || format!("layer {layer}"),
-            |name| format!("layer {layer} ({name})"),
-        )
-    };
-
-    for member in members.iter() {
-        match member.layer {
-            None if member.must_have_layer() => findings.push(format!(
-                "{} has no `[package.metadata.flui] layer`; every crate under crates/ or \
-                 packages/ declares one",
-                member.rel
-            )),
-            Some(layer) if layer >= names.len() => findings.push(format!(
-                "{} declares layer {layer}, but the root manifest names only {} layers",
-                member.rel,
-                names.len()
-            )),
-            _ => {}
-        }
-    }
-
+/// The `allowed-dependents` and `allowed-dev-dependents` restrictions: a
+/// crate may name the complete set of crates allowed a normal or build
+/// dependency on it, and the same for dev-dependencies. Returns the number of
+/// in-workspace edges examined.
+fn check_allowed_dependents(members: &Members, findings: &mut Vec<String>) -> usize {
     let by_name = members.by_name();
     let mut edges = 0;
     for member in members.iter() {
@@ -562,29 +501,9 @@ fn check_layers(
                     allowed.iter().cloned().collect::<Vec<_>>().join(", ")
                 ));
             }
-            if dev {
-                continue;
-            }
-
-            let Some(from) = member.layer else { continue };
-            match target.layer {
-                Some(to) if to > from => findings.push(format!(
-                    "{} ({}) depends on {} ({}): dependencies point to the same layer or lower",
-                    member.name(),
-                    describe(from),
-                    target.name(),
-                    describe(to)
-                )),
-                None if target.is_example_or_tool() => findings.push(format!(
-                    "{} depends on {}, an example or tool; nothing layered depends on those",
-                    member.name(),
-                    target.name()
-                )),
-                _ => {}
-            }
         }
     }
-    Ok((names.len(), edges))
+    edges
 }
 
 /// The `[workspace.package]` keys every crate inherits; examples and tools

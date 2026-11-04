@@ -502,7 +502,6 @@ request.
 > **Environments:** all · **Who it hurts:** Anyone who reads an accepted ADR as the code's current shape · **Parity:** [Quality bar](platform-parity.md#quality-bar)
 
 - An accepted ADR is the rule; whether the code follows it yet is not its status ([`adr/README.md`](adr/README.md)). Where a section is not built, a bullet here names it as `ADR-NNNN §k` and the record's Status stays `Accepted (date)`; the pull request that builds the section removes its bullet, and the record becomes `Implemented (date)` when none is left.
-- **ADR-0081 §1.** The `layer` key and ADR-0041's layer rule are still checked beside the tiers: the root manifest's `layers` table, each crate's `layer` and `tools/xtask/src/workspace.rs`. ADR-0041's superseded paragraphs end with them.
 - **ADR-0083 §3.** Beside `APP_RUNTIME`, `flui-app` keeps three secondary-window thread-locals (`crates/flui-app/src/app/runner/secondary_window.rs`), each a `globals` entry whose exit is ADR-0083.
 - **ADR-0083 §4.** `HeadlessBinding::pump_frame`, `run_pipeline`, `pump_presentation` and `pump_all` still exist in `crates/flui-testing/src/lib.rs`.
 - **ADR-0085 §5.** Four empty `signals` features remain (`flui-view`, `flui-widgets`, `flui-app`, `flui-testing`), though no CI step names them; and a graph no element reads still pays the map lookups, since `begin_element_build` (`crates/flui-view/src/reactive/mod.rs`) looks the element up on every build.

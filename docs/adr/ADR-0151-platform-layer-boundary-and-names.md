@@ -231,10 +231,10 @@ dependents that need not wait for platform crates (GPUI:
   facade ([rust-windowing/winit@1893565716 winit/src](https://github.com/rust-windowing/winit/tree/1893565716/winit/src)), 19 lines naming `cfg` in `gpui_platform`
   ([zed-industries/zed@fae8a35482 crates/gpui_platform/src/gpui_platform.rs](https://github.com/zed-industries/zed/blob/fae8a35482/crates/gpui_platform/src/gpui_platform.rs)); and to feature
   forwarding.
-- Each crate adds a tier, a layer, `globals`, reach and name-keyed tooling entries (145 lines in 30
+- Each crate adds a tier, a `tier-kind`, `globals`, reach and name-keyed tooling entries (145 lines in 30
   files of `tools/`, `.github/`, `Cargo.toml`, `deny.toml` and `.config/` name `flui-platform`
-  today) and a unit in the first publication; ADR-0041 admits a new crate for a new layer or a
-  proven second consumer, and these have neither.
+  today) and a unit in the first publication; ADR-0081 admits a new crate only with a tier, a
+  kind, and an ADR that names a reason, and these splits have none.
 - winit's own split came after more than a year of turning its API into traits: the trait
   refactors listed in #3433 preceded the first crate move, `winit-core`
   ([rust-windowing/winit#4208](https://github.com/rust-windowing/winit/pull/4208), merged
@@ -852,9 +852,9 @@ directories). They add no area to it.
   name `crate::shared::` or `crate::traits::`).
 - Bad, because the `cfg` moves to a facade and to feature forwarding instead of disappearing (70
   lines starting `#[cfg` in winit's facade, 19 lines naming `cfg` in `gpui_platform`).
-- Bad, because each crate adds a tier, a layer, `globals`, reach and name-keyed tooling entries
-  and a unit in the first publication, and ADR-0041 admits a new crate only for a new layer or a
-  proven second consumer.
+- Bad, because each crate adds a tier, a `tier-kind`, `globals`, reach and name-keyed tooling entries
+  and a unit in the first publication, and ADR-0081 admits a new crate only with a tier, a kind,
+  and an ADR that names a reason.
 - Bad, because winit's own split came after more than a year of turning its API into traits,
   while FLUI's seam is closed on purpose.
 
@@ -865,7 +865,8 @@ directories). They add no area to it.
 
 ### 7. A pure `rules` crate plus FFI crates
 
-- Bad, because it is one crate with no layer of its own (ADR-0041), and every rule function is
+- Bad, because it is one crate with no reason of its own under [ADR-0081](ADR-0081-workspace-tiers-and-reach-facts.md)'s
+  rule for a new crate, and every rule function is
   `pub` again.
 - Bad, because one crate of every OS's rules is `shared/` renamed.
 

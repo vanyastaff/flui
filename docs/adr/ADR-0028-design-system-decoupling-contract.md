@@ -18,13 +18,14 @@
   adds an `edge-exceptions` entry naming its exit ADR. The change narrows the exemption:
   `flui-app` loses its blanket exemption, which no edge used. The rule's substance below is
   unchanged.
-- **Related:** ADR-0041 (the whole-workspace layer policy this rule is one part of)
+- **Related:** [ADR-0041](ADR-0041-workspace-topology-contract.md) (the superseded workspace topology contract, whose manifest-as-source rule stands via [ADR-0081](ADR-0081-workspace-tiers-and-reach-facts.md))
 
 ## Context
 
 Flutter spent years unwinding `material`/`cupertino` assumptions out of its framework core, and
 froze its in-SDK design-system packages at 3.44 to continue them in `flutter/packages`. FLUI's
-layer table already puts the design systems (L7) above the widget catalog (L6). Without an
+tier table ([ADR-0081](ADR-0081-workspace-tiers-and-reach-facts.md)) already puts the design
+systems (tier pkg) above the widget catalog (tier K). Without an
 enforced rule the failure mode is gradual: a widget author reaches for a Material constant
 "just this once", a core crate pulls `flui-material` in as a test fixture, and a few changes
 later `flui-cupertino` cannot exist without dragging Material along.

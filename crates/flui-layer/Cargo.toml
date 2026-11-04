@@ -55,7 +55,6 @@ harness = false
 workspace = true
 
 [package.metadata.flui]
-layer = 3
 tier = "R"
 tier-kind = "internal"
 order = 1

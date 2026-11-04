@@ -10,8 +10,7 @@
   placement this record would replace; see Context),
   [ADR-0040](ADR-0040-tree-observation-seam.md) (the devtools observation seam, whose §8 this
   record would replace; see Context),
-  [ADR-0041](ADR-0041-workspace-topology-contract.md) (the manifest-as-source rule, which stands;
-  its layer table is superseded in part by ADR-0081), [ADR-0042](ADR-0042-theming-ownership.md) (`MaterialApp` stays in the design
+  [ADR-0041](ADR-0041-workspace-topology-contract.md) (the manifest-as-source rule, which stands; ADR-0081 supersedes its numbered layer table in full and deleted the `layer` key), [ADR-0042](ADR-0042-theming-ownership.md) (`MaterialApp` stays in the design
   system), [ADR-0043](ADR-0043-presentation-bundled-trees-and-realm-globalkey-scope.md),
   [ADR-0081](ADR-0081-workspace-tiers-and-reach-facts.md) (tiers, `tier-kind`, reach facts),
   [ADR-0089](ADR-0089-upstream-types-in-stable-signatures.md) (what a Stable signature may name),
@@ -287,8 +286,8 @@ which exists.
 
 - ADR-0028's placement and exemption set are replaced; `flui-material` and `flui-cupertino`
   manifests drop `allowed-dependents` in favour of `tier-kind`. This record owns that partial
-  supersession of ADR-0028; ADR-0081 supplies the kind rule it uses and owns the partial
-  supersession of ADR-0041's layer table.
+  supersession of ADR-0028; ADR-0081 supplies the kind rule it uses and supersedes ADR-0041's
+  layer table in full.
 - **Breaks for applications.** `flui::material::…` becomes `flui_material::…`;
   `features = ["material"]` / `["cupertino"]` / `["hot-reload"]` on `flui` disappear; an
   application adds `flui-material` (and development tools) as its own dependencies. The CHANGELOG

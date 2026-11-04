@@ -127,7 +127,6 @@ serde = ["dep:serde", "flui-painting/serde", "flui-platform/serde"]
 workspace = true
 
 [package.metadata.flui]
-layer = 2
 tier = "S"
 tier-kind = "internal"
 order = 4

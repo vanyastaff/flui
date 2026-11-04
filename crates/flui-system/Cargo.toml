@@ -61,7 +61,6 @@ required-features = ["testing"]
 all-features = true
 
 [package.metadata.flui]
-layer = 6
 tier = "pkg"
 tier-kind = "capability"
 order = 5

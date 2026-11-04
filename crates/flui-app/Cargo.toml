@@ -210,7 +210,6 @@ name = "app_it"
 path = "tests/main.rs"
 
 [package.metadata.flui]
-layer = 9
 tier = "H"
 tier-kind = "internal"
 order = 2
