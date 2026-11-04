@@ -11,9 +11,10 @@ use std::rc::Rc;
 
 use crate::common::{lay_out, loose};
 use flui_view::element::ElementKind;
+use flui_view::environment::{MediaQuery, MediaQueryData};
 use flui_view::prelude::*;
 use flui_view::{BoxedView, ProxyView, View};
-use flui_widgets::{Column, MediaQuery, MediaQueryData, SizedBox};
+use flui_widgets::{Column, SizedBox};
 
 type Count = Rc<Cell<u32>>;
 

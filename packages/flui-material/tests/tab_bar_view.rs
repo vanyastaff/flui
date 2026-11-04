@@ -13,9 +13,10 @@ use common::{LaidOut, lay_out, lay_out_animated, tight};
 use flui_material::{TabBar, TabBarView, TabController, Theme, ThemeData};
 use flui_sdk::animation::{MotionOverride, MotionPolicy, MotionSpec, SharedCurve, Vsync};
 use flui_sdk::view::BoxedView;
+use flui_sdk::view::environment::{MediaQuery, MediaQueryData};
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::animated::VsyncScope;
-use flui_sdk::widgets::{Column, Expanded, MediaQuery, MediaQueryData, PageView, SizedBox};
+use flui_sdk::widgets::{Column, Expanded, PageView, SizedBox};
 
 /// A leaf whose `create_state` is counted — proves whether a tab's content
 /// element survived a visibility toggle (`Offstage`) versus being torn down
@@ -310,7 +311,7 @@ pub fn unmounting_the_view_mid_drag_keeps_the_index() {
 /// A second view refused by an attached controller leaves the holder's
 /// motion policy alone.
 pub fn a_refused_view_does_not_change_the_holders_motion_policy() {
-    use flui_sdk::widgets::MediaQueryData;
+    use flui_sdk::view::environment::MediaQueryData;
 
     let vsync = Vsync::new();
     let controller = TabController::new(4, 0);

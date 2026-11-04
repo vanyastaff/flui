@@ -129,7 +129,7 @@ pub fn retained_theme_roles_paint_distinct_numeric_sizing_answers() {
     use flui_painting::glyphs::FontRegistry;
     use flui_painting::{DrawOp, TextSizing};
     use flui_sdk::foundation::{TextScaleProfile, TextSize, TextSizeRequest};
-    use flui_sdk::widgets::{MediaQuery, MediaQueryData};
+    use flui_sdk::view::environment::{MediaQuery, MediaQueryData};
 
     let view = |text_sizing| {
         MediaQuery::new(

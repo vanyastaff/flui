@@ -25,8 +25,9 @@ use common::{lay_out, loose};
 use flui_cupertino::{CupertinoColor, CupertinoTheme, CupertinoThemeData};
 use flui_sdk::painting::Color;
 use flui_sdk::platform::Brightness;
+use flui_sdk::view::environment::{MediaQuery, MediaQueryData};
 use flui_sdk::view::prelude::*;
-use flui_sdk::widgets::{MediaQuery, MediaQueryData, SizedBox};
+use flui_sdk::widgets::SizedBox;
 
 #[derive(Clone, Debug, StatelessView)]
 struct PaintedCupertinoRoles;

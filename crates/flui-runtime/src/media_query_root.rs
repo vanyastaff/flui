@@ -4,9 +4,9 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
+use flui_view::environment::{MediaQuery, MediaQueryData};
 use flui_view::prelude::*;
 use flui_view::{BoxedView, RebuildHandle};
-use flui_widgets::{MediaQuery, MediaQueryData};
 
 /// Owner-local shared cell for the root media-query data.
 ///

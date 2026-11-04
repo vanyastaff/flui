@@ -60,9 +60,10 @@ use std::cell::RefCell;
 
 use flui_sdk::animation::MotionPolicy;
 use flui_sdk::foundation::ChangeNotifier;
+use flui_sdk::view::environment::MediaQuery;
 use flui_sdk::view::prelude::*;
 use flui_sdk::view::{BoxedView, EventCx};
-use flui_sdk::widgets::{Action, ActionOutcome, Actions, MediaQuery, PageController, PageView};
+use flui_sdk::widgets::{Action, ActionOutcome, Actions, PageController, PageView};
 
 use crate::tab_controller::{
     DefaultTabController, PagerAttachment, PagerSuspender, TabController, TabStep,

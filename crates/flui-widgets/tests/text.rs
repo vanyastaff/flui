@@ -7,7 +7,8 @@ use std::rc::Rc;
 
 use crate::common::{lay_out, loose};
 use flui_painting::typography::TextStyle;
-use flui_widgets::{DefaultTextStyle, MediaQuery, MediaQueryData, Text};
+use flui_view::environment::{MediaQuery, MediaQueryData};
+use flui_widgets::{DefaultTextStyle, Text};
 
 /// An icon's authored sizing policy applies to its box and painted glyph once.
 pub(crate) fn icon_text_sizing_keeps_box_and_glyph_together() {

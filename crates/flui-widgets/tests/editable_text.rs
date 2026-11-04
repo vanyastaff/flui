@@ -945,7 +945,7 @@ fn with_render_editable<T>(
 pub(crate) fn inherited_text_sizing_updates_editable_glyphs_and_caret() {
     use flui_painting::typography::TextStyle;
     use flui_view::ViewExt;
-    use flui_widgets::{MediaQuery, MediaQueryData};
+    use flui_view::environment::{MediaQuery, MediaQueryData};
 
     let controller = TextEditingController::with_text("mmmm");
     let focus = FocusNode::with_debug_label("text sizing");

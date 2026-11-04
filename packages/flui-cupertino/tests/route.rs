@@ -45,7 +45,8 @@ fn seeded_navigator() -> NavigatorHandle {
 
 pub fn cupertino_route_does_not_slide_under_reduced_motion() {
     use flui_sdk::animation::MotionPolicy;
-    use flui_sdk::widgets::{GestureDetector, MediaQuery, MediaQueryData};
+    use flui_sdk::view::environment::{MediaQuery, MediaQueryData};
+    use flui_sdk::widgets::GestureDetector;
     use std::{cell::Cell, rc::Rc};
     let vsync = Vsync::new();
     let navigator = seeded_navigator();

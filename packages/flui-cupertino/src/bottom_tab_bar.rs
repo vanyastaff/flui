@@ -52,11 +52,12 @@ use std::rc::Rc;
 use flui_sdk::geometry::Size;
 use flui_sdk::painting::{Border, BorderSide, BorderStyle, BoxDecoration, Color};
 use flui_sdk::view::BoxedView;
+use flui_sdk::view::environment::MediaQuery;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{
     Column, CrossAxisAlignment, DecoratedBox, DefaultTextStyle, Expanded, GestureDetector,
-    HitTestBehavior, IconTheme, IconThemeData, MainAxisAlignment, MediaQuery, Padding,
-    PreferredSizeView, Row, Semantics, SizedBox, Text,
+    HitTestBehavior, IconTheme, IconThemeData, MainAxisAlignment, Padding, PreferredSizeView, Row,
+    Semantics, SizedBox, Text,
 };
 
 use crate::colors::{CupertinoColor, CupertinoColors, CupertinoDynamicColor};

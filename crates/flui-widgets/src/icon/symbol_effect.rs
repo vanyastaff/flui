@@ -24,9 +24,10 @@ use flui_view::{BoxedView, ViewExt};
 use super::{AnimatedIconData, IconData};
 use crate::animated::VsyncScope;
 use crate::{
-    AnimatedBuilder, ExcludeSemantics, FadeTransition, MediaQuery, OverflowBox, Positioned,
-    RotationTransition, ScaleTransition, Stack, TickerMode,
+    AnimatedBuilder, ExcludeSemantics, FadeTransition, OverflowBox, Positioned, RotationTransition,
+    ScaleTransition, Stack, TickerMode,
 };
+use flui_view::environment::MediaQuery;
 
 /// The longest run a slow [`Speed`] stretches an effect to.
 const LONGEST_RUN: Duration = Duration::from_hours(24);

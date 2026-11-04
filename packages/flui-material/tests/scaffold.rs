@@ -19,7 +19,8 @@ use flui_painting::glyphs::FontRegistry;
 use flui_sdk::geometry::EdgeInsets;
 use flui_sdk::painting::Color;
 use flui_sdk::view::ViewExt;
-use flui_sdk::widgets::{Column, MediaQuery, MediaQueryData, SizedBox, Text};
+use flui_sdk::view::environment::{MediaQuery, MediaQueryData};
+use flui_sdk::widgets::{Column, SizedBox, Text};
 
 /// The render-tree node for the scaffold's `CustomMultiChildLayout`.
 ///

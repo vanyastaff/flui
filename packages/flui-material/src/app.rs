@@ -63,10 +63,11 @@ use flui_sdk::painting::Color;
 use flui_sdk::painting::{FontWeight, TextStyle};
 use flui_sdk::platform::{Brightness, Locale};
 use flui_sdk::view::BoxedView;
+use flui_sdk::view::environment::MediaQuery;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{
-    AppBuilder, BoxedLocalizationsDelegate, MediaQuery, NavigatorHandle, NavigatorObserver,
-    PageTransitions, RefreshIndicatorPhase, RefreshIndicatorStyle, SizedBox, WidgetsApp,
+    AppBuilder, BoxedLocalizationsDelegate, NavigatorHandle, NavigatorObserver, PageTransitions,
+    RefreshIndicatorPhase, RefreshIndicatorStyle, SizedBox, WidgetsApp,
 };
 
 use crate::page_transitions::dialog_transition;

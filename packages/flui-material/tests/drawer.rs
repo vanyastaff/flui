@@ -18,8 +18,9 @@ use std::time::Duration;
 use common::{lay_out_animated, tight};
 use flui_material::{Drawer, DrawerHandle, Scaffold, ScaffoldScope, Theme, ThemeData};
 use flui_sdk::animation::Vsync;
+use flui_sdk::view::environment::{MediaQuery, MediaQueryData};
 use flui_sdk::view::prelude::*;
-use flui_sdk::widgets::{GestureDetector, MediaQuery, MediaQueryData, SizedBox, VsyncScope};
+use flui_sdk::widgets::{GestureDetector, SizedBox, VsyncScope};
 
 #[derive(Clone, StatelessView)]
 struct DrawerFlingProfile {

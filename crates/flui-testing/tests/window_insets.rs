@@ -10,7 +10,8 @@ use std::time::Duration;
 use flui_foundation::geometry::EdgeInsets;
 use flui_platform::{EventTime, InsetCurve, KeyboardInset, WindowInsets};
 use flui_testing::{HeadlessHost, HeadlessWindow};
-use flui_widgets::{MediaQuery, MediaQueryData, SizedBox};
+use flui_view::environment::{MediaQuery, MediaQueryData};
+use flui_widgets::SizedBox;
 
 const FRAME: Duration = Duration::from_millis(16);
 

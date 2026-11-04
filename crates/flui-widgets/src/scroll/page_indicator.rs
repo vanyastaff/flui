@@ -17,9 +17,8 @@ use crate::localization::{
     BoxedWidgetsLocalizations, DefaultWidgetsLocalizations, WidgetsLocalizations,
 };
 use crate::scroll::PageController;
-use crate::{
-    CustomPaint, Directionality, GestureDetector, MediaQuery, RepaintBoundary, Semantics, SizedBox,
-};
+use crate::{CustomPaint, Directionality, GestureDetector, RepaintBoundary, Semantics, SizedBox};
+use flui_view::environment::MediaQuery;
 
 /// How long a tap or an assistive-technology step takes to turn the page, the
 /// same as a [`PageView`](super::PageView)'s own page keys.

@@ -6,7 +6,8 @@ use crate::common;
 use common::{lay_out, tight};
 use flui_cupertino::{CupertinoTabBar, CupertinoTabBarItem};
 use flui_sdk::painting::DrawOp;
-use flui_sdk::widgets::{Icon, IconData, MediaQuery, MediaQueryData};
+use flui_sdk::view::environment::{MediaQuery, MediaQueryData};
+use flui_sdk::widgets::{Icon, IconData};
 
 fn two_items() -> Vec<CupertinoTabBarItem> {
     vec![

@@ -48,7 +48,8 @@ use flui_view::{BoxedView, BuildContext, ViewExt};
 use super::navigator::NavigatorHandle;
 use super::overlay_route::RouteAnimation;
 use super::page_transitions::PageTransitionBuilder;
-use crate::{DecoratedBoxTransition, Directionality, MediaQuery, SlideTransition};
+use crate::{DecoratedBoxTransition, Directionality, SlideTransition};
+use flui_view::environment::MediaQuery;
 
 /// The slide's duration.
 const DURATION: Duration = Duration::from_millis(500);

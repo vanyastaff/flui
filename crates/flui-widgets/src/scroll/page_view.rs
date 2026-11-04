@@ -84,7 +84,8 @@ use crate::scroll::{
     ViewportFraction,
 };
 use crate::support::{ValueCallback, value_callback};
-use crate::{Action, ActionOutcome, Actions, GestureAlternatives, Intent, MediaQuery};
+use crate::{Action, ActionOutcome, Actions, GestureAlternatives, Intent};
+use flui_view::environment::MediaQuery;
 
 // ============================================================================
 // PageController

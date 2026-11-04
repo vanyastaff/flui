@@ -24,11 +24,12 @@ use flui_rendering::prelude::{BoxLayoutContext, BoxParentData, Leaf, PaintCx, Re
 use flui_scheduler::SchedulerPhase;
 use flui_testing::widgets::{ProbeSignals, SignalProbe, lay_out, loose, tight};
 use flui_testing::{A11yTree, Action, ActionRequest, TreeId};
+use flui_view::environment::{MediaQuery, MediaQueryData};
 use flui_view::prelude::*;
 use flui_view::{RenderView, View};
 use flui_widgets::{
-    ColoredBox, EditableText, GestureDetector, MediaQuery, MediaQueryData, MouseRegion, Padding,
-    Semantics, SizedBox, Text, TextEditingController,
+    ColoredBox, EditableText, GestureDetector, MouseRegion, Padding, Semantics, SizedBox, Text,
+    TextEditingController,
 };
 
 // ---------------------------------------------------------------------------

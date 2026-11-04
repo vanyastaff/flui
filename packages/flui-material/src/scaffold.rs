@@ -148,10 +148,11 @@ use flui_sdk::foundation::ElementId;
 use flui_sdk::geometry::{EdgeInsets, Offset, Size};
 use flui_sdk::painting::Color;
 use flui_sdk::rendering::BoxConstraints;
+use flui_sdk::view::environment::MediaQuery;
 use flui_sdk::view::prelude::*;
 use flui_sdk::view::{GlobalKey, RebuildHandle, impl_inherited_view};
 use flui_sdk::widgets::{
-    ConstrainedBox, CustomMultiChildLayout, LayoutId, MediaQuery, MultiChildLayoutContext,
+    ConstrainedBox, CustomMultiChildLayout, LayoutId, MultiChildLayoutContext,
     MultiChildLayoutDelegate, PreferredSizeView,
 };
 

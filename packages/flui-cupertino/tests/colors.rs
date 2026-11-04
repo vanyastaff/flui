@@ -11,9 +11,10 @@ use common::{lay_out, loose};
 use flui_cupertino::{CupertinoColor, CupertinoDynamicColor, CupertinoTheme, CupertinoThemeData};
 use flui_sdk::painting::Color;
 use flui_sdk::platform::Brightness;
+use flui_sdk::view::environment::{MediaQuery, MediaQueryData};
 use flui_sdk::view::prelude::*;
 use flui_sdk::view::{BoxedView, ProxyView};
-use flui_sdk::widgets::{MediaQuery, MediaQueryData, SizedBox};
+use flui_sdk::widgets::SizedBox;
 
 /// Captures `CupertinoColor::Static(sentinel).resolve(ctx)` during `build()`
 /// — proving `resolve` actually runs against a real mounted `BuildContext`

@@ -7,9 +7,10 @@ use flui_rendering::protocol::BoxProtocol;
 use flui_view::prelude::StatelessView;
 use flui_view::{BuildContext, CreationSite, IntoView, RenderView, ViewExt, impl_render_view};
 
+use crate::Semantics;
 use crate::icon::symbol_effect::{ContentKey, SymbolEffectHost};
 use crate::icon::{IconData, IconTheme, IconThemeData, SymbolEffect};
-use crate::{MediaQuery, Semantics};
+use flui_view::environment::MediaQuery;
 
 /// A graphical icon drawn from a glyph in an icon font, described by an
 /// [`IconData`].

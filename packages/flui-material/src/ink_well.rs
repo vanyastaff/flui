@@ -93,12 +93,13 @@ use flui_sdk::geometry::Point;
 use flui_sdk::interaction::FocusNode;
 use flui_sdk::painting::Color;
 use flui_sdk::view::RebuildHandle;
+use flui_sdk::view::environment::MediaQuery;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::animated::VsyncScope;
 use flui_sdk::widgets::{
     Actions, ActivateIntent, ButtonActivateIntent, ButtonChange, CallbackAction, CustomPaint,
-    Focus, FocusRing, GestureDetector, Listener, MediaQuery, MouseRegion, PointerDispatch,
-    PointerEvent, WidgetState, WidgetStateProperty, WidgetStatesController,
+    Focus, FocusRing, GestureDetector, Listener, MouseRegion, PointerDispatch, PointerEvent,
+    WidgetState, WidgetStateProperty, WidgetStatesController,
 };
 
 use crate::ripple::{Indication, IndicationPainter, IndicationStyle, RippleScope};

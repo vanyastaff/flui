@@ -56,11 +56,11 @@ values.
 
 `animation::AnimationBehavior` is used by essential timer and loading-indicator
 controllers. `animation::MotionPolicy` is read by Cupertino route composition
-through `widgets::MediaQuery::motion_of` (ADR-0195). These consumer imports are
+through `view::environment::MediaQuery::motion_of` (ADR-0195). These consumer imports are
 pinned in `tests/surface.rs`.
 
 `painting::TextSizing` is the existing Painting policy carried by
-`widgets::MediaQueryData::text_sizing`. Package authors can choose fixed or
+`view::environment::MediaQueryData::text_sizing`. Package authors can choose fixed or
 linear subtree sizing through the SDK; native capture construction stays with
 the host. Numeric growth profiles and authored sizing intent are exposed through
 the whole `foundation` re-export. The surface and identity tests pin the policy

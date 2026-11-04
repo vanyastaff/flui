@@ -24,9 +24,10 @@ use flui_cupertino::{
 };
 use flui_sdk::painting::Color;
 use flui_sdk::platform::Brightness;
+use flui_sdk::view::environment::{MediaQuery, MediaQueryData};
 use flui_sdk::view::prelude::*;
 use flui_sdk::view::{BoxedView, RebuildHandle};
-use flui_sdk::widgets::{MediaQuery, MediaQueryData, SizedBox};
+use flui_sdk::widgets::SizedBox;
 
 /// What a descendant of the shell observes: the effective brightness, the
 /// published theme's (already materialized) primary color, and a dynamic
