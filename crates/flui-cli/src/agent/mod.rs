@@ -1,7 +1,7 @@
 //! The driver agent from the CLI's side (ADR-0239).
 //!
 //! Every debug FLUI app, and a release build with the `driver` feature,
-//! serves its windows over a local endpoint when its launch names one. Two
+//! serves its windows over a local endpoint when its launch names one. The
 //! commands meet at that endpoint and share nothing but the protocol and the
 //! credentials in this module:
 //!
@@ -13,6 +13,8 @@
 //!   carries a loopback port to.
 //! - `flui mcp` ([`mcp`]) serves MCP over stdio and forwards each tool call
 //!   to that endpoint through a [`client::Connection`].
+//! - `flui record` ([`record`]) connects as an observer and writes a recording
+//!   of the app's input to a file.
 //!
 //! The launch contract (the variable and extra names, the shortest token) and
 //! the wire types are `flui-protocol`'s, the contract crate the app's server
@@ -22,6 +24,7 @@ pub(crate) mod browser;
 pub(crate) mod client;
 pub(crate) mod forward;
 pub(crate) mod mcp;
+pub(crate) mod record;
 
 use std::fmt;
 use std::fs;
@@ -103,6 +106,26 @@ impl Credentials {
             token,
             pid: 0,
         })
+    }
+
+    /// The credentials a client uses now: the session file named on its command line, else
+    /// the environment, else the nearest `target/flui-agent.json`.
+    pub(crate) fn find(session: Option<&Path>) -> Result<Self, String> {
+        if let Some(path) = session {
+            return Self::read(path);
+        }
+        if let Some(credentials) = Self::from_env() {
+            return Ok(credentials);
+        }
+        let cwd = std::env::current_dir().map_err(|e| format!("no working directory: {e}"))?;
+        match find_session_file(&cwd, target_dir_override().as_deref()) {
+            Some(path) => Self::read(&path),
+            None => Err(format!(
+                "no running FLUI app found from {}. Start one with `flui run --agent`, \
+                 or pass --session <file>, or set {ENDPOINT_ENV} and {TOKEN_ENV}",
+                cwd.display()
+            )),
+        }
     }
 
     /// Reads a session file.

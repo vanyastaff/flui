@@ -195,9 +195,9 @@ minimal local dependency identities. They verify admission and execution without
 opening a window; they do not substitute for the generated application's own
 interaction regression or live platform verification.
 
-### `flui run --agent` and `flui mcp` share a session file and a contract crate
+### `flui run --agent`, `flui mcp` and `flui record` share a session file and a contract crate
 
-The two commands meet at the app's driver agent (ADR-0239) through a small
+The commands meet at the app's driver agent (ADR-0239) through a small
 credentials file, `target/flui-agent.json` (`CARGO_TARGET_DIR` honoured), and
 the contract crate `flui-protocol`, the CLI's one FLUI dependency: the launch
 variables and the shortest token (`launch`), the hello, the method names and
@@ -253,6 +253,17 @@ each method's parameter type.
   connection's own thread for a bounded time, so a peer that is not an agent
   cannot hang the MCP client. Element handles are scoped to a window, so a
   call without `window` is resolved only when the app has exactly one.
+- **Record.** `flui record` (`agent::record`) connects in the `observer` role
+  (ADR-0288 §8), so it records beside the driver `flui mcp` is, and asks
+  `record.start` for the input layer (§11). The answer's header and every row
+  of the `record` events then go to the file as the input recording's JSON
+  Lines, each line flushed as it is written, so a recording cut off keeps
+  what arrived. The connection hands events to whoever waits on it
+  (`Connection::next_event`, `request_seeing`); a request alone passes them
+  over. Ctrl-C (the flag `flui run` listens with) or the app's own `end` row
+  ends the loop, and `record.stop` then answers what the recording came to,
+  the rows admitted before the stop and the `end` row arriving ahead of the
+  answer. A recording whose `end` row never came fails the command.
 - **Tests.** `agent::mcp::tests` pin the tool-to-method mapping;
   `an_agent_reads_and_taps_the_app_run_with_agent_through_mcp` runs
   `flui run --agent`, `flui mcp` and a fixture app end to end, and
@@ -266,7 +277,9 @@ each method's parameter type.
   `agent::browser::tests` run the relay against a tab of the test's own, and
   both dialects end to end against a real browser (a page standing in for the
   app, its launch, a connection, a reload): Chromium and Firefox where one is
-  installed, which CI's Linux image has.
+  installed, which CI's Linux image has. `cli_record` runs `flui record`
+  against a stand-in agent: a recording the app ends, one Ctrl-C stops, one cut
+  off and one refused (Unix).
 
 ### Native iOS selection and launch
 

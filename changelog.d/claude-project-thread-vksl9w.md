@@ -163,6 +163,10 @@
   row. `flui_protocol::{RecordParams, Recording, RecordStopParams, RecordSummary, RecordEvent,
   RecordLayer}`, `HandleKind::Recording`, `RecordingStart::to_wire` (`flui-runtime`) and
   `HeadlessHost::serve_window`, which hands a window it opened to a development agent.
+- **`flui record <file>`** writes a running app's input recording (the rows `flui-testing`
+  replays) to a file or, with `-`, to stdout, until Ctrl-C or until the window closes.
+  `--window` names the window and `--keep-text` keeps the rows' text. It connects as an
+  observer, so it records beside a `flui mcp` that drives the app.
 
 ### Removed
 
