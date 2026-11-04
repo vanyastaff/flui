@@ -246,7 +246,7 @@ pub struct NativeForms {
 /// each runtime it hosts with [`UiRuntime::attach_native_journal`].
 ///
 /// It hands each line to every recording of the layer, and keeps each stream's header and its
-/// last [`PREFIX_ROWS`] setup lines, so a recording started later begins each stream with them,
+/// last 64 setup lines, so a recording started later begins each stream with them,
 /// after a `gap` when the bound let some go. The journal calls it on its own thread, so it is
 /// shared behind a lock held only to queue or keep a line, never across a waker.
 #[derive(Clone, Default)]
