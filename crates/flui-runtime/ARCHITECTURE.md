@@ -956,6 +956,19 @@ drops, each under the close's containment. A tap removed before its `end` row en
 without one, so a reader never waits on a recording nothing fills. At most 8 per runtime
 (`TooManyRecordings`, `busy`). Pinned by `tests/contracts/agent_service.rs`.
 
+A recording of the `native` layer also joins the `NativeLines` the host attached
+(`UiRuntime::attach_native_journal`), the fan-out its backend journal sends its lines to (a
+runtime nobody attached refuses the layer `not_supported`). The fan-out is shared with the
+journal's thread, so it is behind a mutex that is held only to queue or keep a line, never across
+a waker: the queues it filled are woken after it lets go. It keeps each stream's header and last 64 setup
+lines in both forms, so a recording that joins later begins each stream with them, after a
+`gap` for what the bound let go, and `wants()` tells the journal which forms of an ordinary row
+the live recordings want, so a form nobody wants is not made. Native lines share the
+recording's queue but take at most 768 of its places: past that a line is counted against its
+stream, and that stream's next line, or the recording's end, is preceded by a `gap` line, so a
+flooding backend never costs the input a row. The rows reach the connection as `record_native`
+events, counted apart as `native_lost_rows`.
+
 **Waits.** `wait.until` parks a condition on the presentation
 (`agent_waits`) instead of polling it. The owner evaluates it when it arrives, so one that holds
 already answers at the drain; after each frame `drive_frame` ran, which also counts that frame

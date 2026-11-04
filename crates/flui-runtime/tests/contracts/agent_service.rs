@@ -11,12 +11,14 @@ use std::time::Duration;
 use flui_interaction::events::Code;
 use flui_interaction::testing::input::KeyEventBuilder;
 use flui_platform::PlatformInput;
+use flui_protocol::native_recording::Line as NativeLine;
 use flui_protocol::version::PROTOCOL_VERSION;
 use flui_protocol::{
     ActParams, ActionName, ActionSequence, AppInfo, InputParams, InputSource, Locator,
     LogicalPoint, PointerAction, PointerButton, PointerDevice, Target, WindowId,
 };
 use flui_runtime::agent::{Limits, Refused, Service, ServiceConfig, Session, Status};
+use flui_runtime::ui_runtime::{NativeForms, NativeLines};
 use flui_testing::{HeadlessDevAgent, HeadlessHost, HeadlessWindow};
 use flui_view::dev_agent::{AgentWindow, DevAgentHook};
 use flui_view::prelude::*;
@@ -98,6 +100,7 @@ impl Wake for Wakes {
 
 fn service(limits: Limits, on_driver_gone: Option<Box<dyn Fn() + Send + Sync>>) -> Service {
     Service::new(ServiceConfig {
+        records_native: false,
         token: TOKEN.to_owned(),
         app: AppInfo::new("counter", "headless"),
         limits,
@@ -942,4 +945,389 @@ fn a_connection_holds_its_recordings_up_to_its_limit_and_stops_only_its_own() {
         host.input_taps().is_recording(),
         "another connection's stop left the recording running"
     );
+}
+
+/// A service whose app journals its backend, so its hello lists the `native` layer.
+fn native_service() -> Service {
+    Service::new(ServiceConfig {
+        records_native: true,
+        token: TOKEN.to_owned(),
+        app: AppInfo::new("counter", "headless"),
+        limits: Limits::default(),
+        on_driver_gone: None,
+    })
+}
+
+/// A native line from its JSON.
+fn native(line: Value) -> NativeLine {
+    serde_json::from_value::<NativeLine>(line).expect("a native line")
+}
+
+/// A native header whose `provenance` says which form it is.
+fn native_header(form: &str) -> NativeLine {
+    native(json!({ "header": {
+        "flui_native_recording": 1, "backend": "win32", "provenance": form,
+    } }))
+}
+
+/// A native row; `notice` tells one apart from another.
+fn native_row(notice: &str) -> NativeLine {
+    native(json!({ "row": { "row": "notice", "notice": notice } }))
+}
+
+/// Send `kept` and `redacted` as the next line of `stream`, as a backend's journal does: an
+/// ordinary line only in the forms the recordings want.
+fn journal(
+    lines: &NativeLines,
+    stream: u32,
+    setup: bool,
+    kept: &NativeLine,
+    redacted: &NativeLine,
+) {
+    let wants = lines.wants();
+    lines.line(
+        stream,
+        setup,
+        (setup || wants.kept).then_some(kept),
+        (setup || wants.redacted).then_some(redacted),
+    );
+}
+
+/// Start a recording of the input and native layers on `session`, as request `id`.
+fn record_native(
+    session: &mut Session,
+    host: &mut HeadlessHost,
+    id: u64,
+    keep_text: bool,
+    now: Instant,
+    waker: &Waker,
+) -> Vec<Value> {
+    let params = json!({ "layers": ["input", "native"], "keep_text": keep_text });
+    session.receive(
+        &line(&json!({ "id": id, "method": "record.start", "params": params })),
+        now,
+    );
+    exchange(session, host, now, waker)
+}
+
+/// The `(stream, line)` of each `record_native` event among `lines`, in order.
+fn native_of(lines: &[Value]) -> Vec<(u64, &Value)> {
+    lines
+        .iter()
+        .filter(|line| line["event"] == "record_native")
+        .map(|line| {
+            (
+                line["params"]["stream"].as_u64().expect("a stream number"),
+                &line["params"]["line"],
+            )
+        })
+        .collect()
+}
+
+/// A recording of the `native` layer is sent each stream's lines as `record_native` events in
+/// the form its privacy asks for. One that starts after a stream opened begins it with the
+/// stream's header and setup lines kept for it; a row the backend could not journal is a `gap`
+/// line of its stream before the next one, counted by `record.stop`; nobody's form is made once
+/// no recording wants it.
+#[test]
+fn a_native_recording_begins_each_stream_with_its_setup_and_streams_its_lines() {
+    let service = native_service();
+    let (mut host, _agent, _presses) = shown(&service);
+    let waker = Waker::from(Arc::new(Wakes::default()));
+    let now = Instant::now();
+    let journaled = host.attach_native_journal();
+    assert_eq!(
+        journaled.wants(),
+        NativeForms::default(),
+        "no recording wants a row"
+    );
+    journal(
+        &journaled,
+        0,
+        true,
+        &native_header("kept"),
+        &native_header("redacted"),
+    );
+    journal(
+        &journaled,
+        0,
+        true,
+        &native_row("session_locked"),
+        &native_row("session_unlocked"),
+    );
+    journal(
+        &journaled,
+        0,
+        false,
+        &native_row("sleep"),
+        &native_row("wake"),
+    );
+    // A stream keeps its last 64 setup lines: one more lets the first go.
+    journal(
+        &journaled,
+        1,
+        true,
+        &native_header("kept"),
+        &native_header("redacted"),
+    );
+    for _ in 0..=64 {
+        journal(
+            &journaled,
+            1,
+            true,
+            &native_row("session_locked"),
+            &native_row("session_unlocked"),
+        );
+    }
+
+    let (mut redacting, welcome) = greeted_as(&service, now, &waker, Some("observer"));
+    assert_eq!(
+        welcome["hello"]["capabilities"]["record"],
+        json!(["input", "native"]),
+        "{welcome}"
+    );
+    let mut keeping = greeted_as(&service, now, &waker, Some("observer")).0;
+    let mut started = record_native(&mut redacting, &mut host, 1, false, now, &waker);
+    // The rest of the prefix goes out as the transport writes what was there.
+    redacting.poll(now, &waker);
+    started.extend(transmitted(&mut redacting));
+    assert_eq!(started[0]["result"]["recording"], 1, "{started:?}");
+    assert_eq!(
+        native_of(&started)
+            .into_iter()
+            .filter(|(stream, _)| *stream == 0)
+            .collect::<Vec<_>>(),
+        [
+            (
+                0,
+                &json!({ "header": serde_json::to_value(native_header("redacted")).expect("json")["header"] })
+            ),
+            (
+                0,
+                &json!({ "row": { "row": "notice", "notice": "session_unlocked" } })
+            ),
+        ],
+        "a stream begins with its header and setup, in the recording's form: {started:?}"
+    );
+    let second: Vec<&Value> = native_of(&started)
+        .into_iter()
+        .filter(|(stream, _)| *stream == 1)
+        .map(|(_, line)| line)
+        .collect();
+    assert_eq!(
+        (second.len(), second.get(1)),
+        (2 + 64, Some(&&json!({ "gap": { "rows": 1 } }))),
+        "a stream whose setup outgrew what it keeps begins with a gap after its header: {second:?}"
+    );
+    let kept = record_native(&mut keeping, &mut host, 1, true, now, &waker);
+    assert_eq!(
+        native_of(&kept)
+            .iter()
+            .filter(|(stream, _)| *stream == 0)
+            .map(|(_, line)| line.to_string())
+            .collect::<Vec<_>>(),
+        [
+            serde_json::to_value(native_header("kept"))
+                .expect("json")
+                .to_string(),
+            json!({ "row": { "row": "notice", "notice": "session_locked" } }).to_string(),
+        ],
+        "{kept:?}"
+    );
+    let wants = journaled.wants();
+    assert!(
+        wants.kept && wants.redacted,
+        "both forms are wanted: {wants:?}"
+    );
+    journal(
+        &journaled,
+        0,
+        false,
+        &native_row("sleep"),
+        &native_row("wake"),
+    );
+    journaled.lost(0);
+    journal(
+        &journaled,
+        0,
+        false,
+        &native_row("sleep"),
+        &native_row("wake"),
+    );
+    redacting.poll(now, &waker);
+    let lines = transmitted(&mut redacting);
+    assert_eq!(
+        native_of(&lines),
+        [
+            (0, &json!({ "row": { "row": "notice", "notice": "wake" } })),
+            (0, &json!({ "gap": { "rows": 1 } })),
+            (0, &json!({ "row": { "row": "notice", "notice": "wake" } })),
+        ],
+        "{lines:?}"
+    );
+
+    redacting.receive(
+        &line(&json!({ "id": 2, "method": "record.stop", "params": { "recording": 1 } })),
+        now,
+    );
+    let stopped = exchange(&mut redacting, &mut host, now, &waker);
+    assert_eq!(
+        stopped.last().map(|line| {
+            let result = &line["result"];
+            (
+                &result["lost_rows"],
+                &result["native_lost_rows"],
+                &result["complete"],
+            )
+        }),
+        // The setup line stream 1 let go before the recording began, and the row lost.
+        Some((&json!(0), &json!(2), &json!(true))),
+        "{stopped:?}"
+    );
+    keeping.receive(
+        &line(&json!({ "id": 2, "method": "record.stop", "params": { "recording": 1 } })),
+        now,
+    );
+    let _ = exchange(&mut keeping, &mut host, now, &waker);
+    assert_eq!(
+        journaled.wants(),
+        NativeForms::default(),
+        "a stopped recording wants nothing"
+    );
+}
+
+/// The native layer has a share of a recording's queue and the input the rest: a backend that
+/// journals more than its reader takes loses native rows, counted per stream, never input.
+#[test]
+fn a_native_stream_that_floods_a_recording_loses_its_own_rows_not_the_input() {
+    const FLOOD: usize = 1500;
+    const KEYS: usize = 200;
+    let service = native_service();
+    let (mut host, _agent, _presses) = shown(&service);
+    let waker = Waker::from(Arc::new(Wakes::default()));
+    let now = Instant::now();
+    let journaled = host.attach_native_journal();
+    let mut recorder = greeted_as(&service, now, &waker, Some("observer")).0;
+    let mut lines = record_native(&mut recorder, &mut host, 1, false, now, &waker);
+
+    // Nothing is read while the backend and the keys go in.
+    for stream in [0, 1] {
+        journal(
+            &journaled,
+            stream,
+            true,
+            &native_header("kept"),
+            &native_header("redacted"),
+        );
+    }
+    for _ in 0..FLOOD {
+        journal(
+            &journaled,
+            1,
+            false,
+            &native_row("sleep"),
+            &native_row("wake"),
+        );
+    }
+    for _ in 0..KEYS {
+        host.dispatch(key(Code::KeyA));
+    }
+    recorder.receive(
+        &line(&json!({ "id": 2, "method": "record.stop", "params": { "recording": 1 } })),
+        now,
+    );
+    recorder.poll(now, &waker);
+    let _ = host.pump(Duration::ZERO);
+    lines.extend(until_answered(&mut recorder, 2, now, &waker));
+    let (answer, lines) = lines.split_last().expect("record.stop answers");
+    assert_eq!(keys(&rows_of(lines)), KEYS, "every key is kept: {answer}");
+    assert_eq!(answer["result"]["lost_rows"], 0, "{answer}");
+    let native = native_of(lines);
+    let lost = answer["result"]["native_lost_rows"]
+        .as_u64()
+        .expect("the answer counts the native rows lost");
+    let rows = native
+        .iter()
+        .filter(|(stream, line)| *stream == 1 && line.get("row").is_some())
+        .count();
+    assert!(
+        lost > 0,
+        "the native share had no room for the flood: {answer}"
+    );
+    assert_eq!(
+        rows as u64 + lost,
+        FLOOD as u64,
+        "each native row is sent or counted lost: {answer}"
+    );
+    assert_eq!(
+        native
+            .iter()
+            .filter(|(_, line)| line.get("gap").is_some())
+            .map(|(stream, line)| (*stream, line["gap"]["rows"].as_u64()))
+            .collect::<Vec<_>>(),
+        [(1, Some(lost))],
+        "only the flooding stream has a gap, before the end: {lines:?}"
+    );
+}
+
+/// A recording of `native` records the input too, and is refused `not_supported` by an app
+/// whose backend journals nothing, which its hello does not list.
+#[test]
+fn a_native_recording_is_refused_without_the_input_or_a_journal() {
+    struct Case {
+        name: &'static str,
+        records_native: bool,
+        attached: bool,
+        layers: Value,
+        code: &'static str,
+    }
+    let cases = [
+        Case {
+            name: "native alone",
+            records_native: true,
+            attached: true,
+            layers: json!(["native"]),
+            code: "invalid_argument",
+        },
+        Case {
+            name: "no journal attached",
+            records_native: true,
+            attached: false,
+            layers: json!(["input", "native"]),
+            code: "not_supported",
+        },
+        Case {
+            name: "an app that journals nothing",
+            records_native: false,
+            attached: false,
+            layers: json!(["input", "native"]),
+            code: "not_supported",
+        },
+    ];
+    for case in cases {
+        let service = if case.records_native {
+            native_service()
+        } else {
+            service(Limits::default(), None)
+        };
+        let (mut host, _agent, _presses) = shown(&service);
+        let _journal = case.attached.then(|| host.attach_native_journal());
+        let waker = Waker::from(Arc::new(Wakes::default()));
+        let now = Instant::now();
+        let mut recorder = greeted_as(&service, now, &waker, Some("observer")).0;
+        recorder.receive(
+            &line(&json!({
+                "id": 1, "method": "record.start", "params": { "layers": case.layers },
+            })),
+            now,
+        );
+        let answered = exchange(&mut recorder, &mut host, now, &waker);
+        assert_eq!(
+            answered.last().map(|line| &line["error"]["code"]),
+            Some(&json!(case.code)),
+            "{}: {answered:?}",
+            case.name
+        );
+        assert!(!host.input_taps().is_recording(), "{}", case.name);
+    }
 }

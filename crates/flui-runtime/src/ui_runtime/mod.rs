@@ -132,6 +132,7 @@ pub(crate) use agent::{DevAgentSlot, PendingActRead};
 pub(crate) use agent_events::EventHub;
 pub(crate) use agent_input::{Abandoned as AbandonedInput, AgentInput};
 pub(crate) use agent_inspect::{PendingLayerRead, StagedLayerRead, deliver_each, first_panic_of};
+pub use agent_record::{NativeForms, NativeLines};
 pub use agent_serve::window_answers;
 pub(crate) use agent_stability::AgentStability;
 pub(crate) use agent_wait::PendingWait;
@@ -255,6 +256,9 @@ pub struct UiRuntime {
     /// The recordings agents asked of this runtime (`record.start`), each a tap beside the
     /// application's.
     agent_recordings: agent_record::AgentRecordings,
+    /// The fan-out of the host's native journal, once the host attached one: the recordings of
+    /// the `native` layer join it.
+    native_lines: RefCell<Option<agent_record::NativeLines>>,
     /// The providers this UI runtime's presentations acquire platform
     /// capabilities from: the registry the host gave it, handed to the initial
     /// presentation at construction and to every later one through

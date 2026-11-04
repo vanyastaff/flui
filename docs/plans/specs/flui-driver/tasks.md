@@ -430,7 +430,8 @@ graph LR
   - a recording made through the agent replays to the same decisions.
 - **Status:** the input layer has merged: held input (#2291), the journal (#2294), the recording
   wire types (#2295), the taps fan-out (#2298), `record.*` (#2301) and `flui record` (#2305).
-  The native layer is next, in the slices below.
+  The native layer is in the slices below: slice 1 merged (#2307); slice 2 (protocol 0.10, the
+  runtime fan-out) is validated by the `agent_service` native tests.
 - **Native layer, decided (2026-11-04):**
   - **Capture.** `flui-app` installs one native capture (`flui-native` `journal::capture`) on the
     owner thread before the platform is created, and only when the app serves an agent; an app

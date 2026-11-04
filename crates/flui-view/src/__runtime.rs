@@ -31,7 +31,8 @@ use std::sync::{Arc, Weak};
 use std::task::Waker;
 use std::time::Duration;
 
-use flui_protocol::input_recording::{Header, Row};
+use flui_protocol::RecordRow;
+use flui_protocol::input_recording::Header;
 use flui_protocol::method::WindowMethod;
 use flui_protocol::{ErrorObject, Event, EventFilter, RecordParams, WindowId};
 use flui_scheduler::AppLifecycleState;
@@ -359,10 +360,10 @@ pub fn agent_events(source: impl EventSource + 'static) -> AgentEvents {
 /// The queue behind an [`AgentRecording`], which the runtime fills.
 pub trait RecordSource: Send {
     /// The next row, if one is queued.
-    fn try_next(&mut self) -> Option<Row>;
+    fn try_next(&mut self) -> Option<RecordRow>;
 
     /// The next row, waiting up to `timeout`; `None` if none came, and once the recording ended.
-    fn recv_timeout(&mut self, timeout: Duration) -> Option<Row>;
+    fn recv_timeout(&mut self, timeout: Duration) -> Option<RecordRow>;
 
     /// Whether the recording ended and every row it queued was taken.
     fn is_finished(&self) -> bool;

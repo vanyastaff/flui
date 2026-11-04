@@ -37,6 +37,7 @@ use flui_protocol::{
     METHODS, MethodEffect, MethodInfo, RecordEvent, RecordParams, RecordSummary, Recording,
     RequestId, Retry, ServedBy, Subscription, WindowId, WindowList,
 };
+use flui_protocol::{RecordNativeEvent, RecordRow, native_recording};
 use flui_view::dev_agent::{AgentAnswer, AgentEvents, AgentRecording, AgentWindow, InputLease};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -690,17 +691,24 @@ struct Recorded {
 
 impl Recorded {
     /// Count `row` in the summary.
-    fn count(&mut self, row: &Row) {
+    fn count(&mut self, row: &RecordRow) {
         match row {
-            Row::Gap { rows } => {
+            RecordRow::Input(Row::Gap { rows }) => {
                 self.summary.lost_rows = self.summary.lost_rows.saturating_add(*rows);
             }
-            // The `end` row counts every row the recording lost.
-            Row::End { lost_rows } => {
+            // The `end` row counts every input row the recording lost.
+            RecordRow::Input(Row::End { lost_rows }) => {
                 self.summary.lost_rows = *lost_rows;
                 self.summary.complete = true;
             }
-            _ => self.summary.rows = self.summary.rows.saturating_add(1),
+            RecordRow::Input(_) => self.summary.rows = self.summary.rows.saturating_add(1),
+            RecordRow::Native {
+                line: native_recording::Line::Gap { rows },
+                ..
+            } => {
+                self.summary.native_lost_rows = self.summary.native_lost_rows.saturating_add(*rows);
+            }
+            RecordRow::Native { .. } => {}
         }
     }
 }
@@ -786,11 +794,14 @@ impl Recordings {
                 }
                 if let Some(row) = recording.try_next() {
                     recorded.count(&row);
-                    drained.events.push(Event::Record(Box::new(RecordEvent::new(
-                        number,
-                        recorded.window,
-                        row,
-                    ))));
+                    drained.events.push(match row {
+                        RecordRow::Native { stream, line } => Event::RecordNative(Box::new(
+                            RecordNativeEvent::new(number, recorded.window, stream, line),
+                        )),
+                        RecordRow::Input(row) => {
+                            Event::Record(Box::new(RecordEvent::new(number, recorded.window, row)))
+                        }
+                    });
                     taken = true;
                 }
             }

@@ -63,7 +63,8 @@ use std::sync::{Arc, Weak};
 use std::task::Waker;
 use std::time::Duration;
 
-use flui_protocol::input_recording::{Header, Row};
+use flui_protocol::RecordRow;
+use flui_protocol::input_recording::Header;
 use flui_protocol::method::{Addressed, WindowMethod};
 use flui_protocol::{
     ErrorCode, ErrorObject, Event, EventFilter, HandleKind, RecordParams, Retry, WindowId,
@@ -298,13 +299,13 @@ impl AgentRecording {
     }
 
     /// The next row, if one is queued.
-    pub fn try_next(&mut self) -> Option<Row> {
+    pub fn try_next(&mut self) -> Option<RecordRow> {
         self.source.try_next()
     }
 
     /// The next row, waiting up to `timeout` for one; `None` if none came by then, and once the
     /// recording has ended. Never call this on the owner thread.
-    pub fn recv_timeout(&mut self, timeout: Duration) -> Option<Row> {
+    pub fn recv_timeout(&mut self, timeout: Duration) -> Option<RecordRow> {
         self.source.recv_timeout(timeout)
     }
 

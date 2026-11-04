@@ -229,6 +229,7 @@ impl UiRuntime {
             input_taps: crate::InputTaps::new(Arc::clone(&wake)),
             decision_recorder: super::recording::DecisionRecorder::default(),
             agent_recordings: super::agent_record::AgentRecordings::default(),
+            native_lines: RefCell::new(None),
             wake,
             capabilities,
             owner_jobs,

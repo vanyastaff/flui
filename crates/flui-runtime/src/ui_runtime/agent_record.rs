@@ -14,15 +14,15 @@
 //! recording nothing fills.
 
 use std::cell::RefCell;
-use std::collections::VecDeque;
-use std::sync::Arc;
+use std::collections::{BTreeMap, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Weak};
 use std::time::{Duration, Instant};
 
 use flui_foundation::PresentationId;
 use flui_foundation::panic::FirstPanic;
 use flui_protocol::input_recording::{self as rec, Row};
-use flui_protocol::{RecordLayer, RecordParams};
+use flui_protocol::{RecordLayer, RecordParams, RecordRow, native_recording};
 use flui_scheduler::ClockSource;
 use flui_view::__runtime::{RecordSource, Reply, WakeSlot};
 use flui_view::dev_agent::AgentRecording;
@@ -41,24 +41,64 @@ pub(crate) const MAX_RECORDINGS: usize = 8;
 /// The most rows one recording's queue holds before it counts the rest as lost.
 const QUEUE_ROWS: usize = 1024;
 
+/// The most native rows one recording's queue holds: the rest of it is the input's, so a
+/// backend's readings never crowd out the rows a replay needs first.
+const NATIVE_ROWS: usize = 768;
+
 #[derive(Default)]
 struct QueueState {
-    rows: VecDeque<Row>,
-    /// Rows lost since the last `gap` row was queued.
+    rows: VecDeque<RecordRow>,
+    /// Input rows lost since the last input `gap` row was queued.
     missed: u64,
-    /// Rows the queue lost in all.
+    /// Input rows the queue lost in all.
     lost: u64,
+    /// Native lines queued now.
+    native: usize,
+    /// Per native stream, the rows lost since its last `gap` line was queued.
+    native_missed: BTreeMap<u32, u64>,
     /// Nothing is queued after what is there: the `end` row went in, or the tap went without it.
     ended: bool,
 }
 
 impl QueueState {
-    /// Queue the `gap` row still owed, past the bound.
+    /// Queue the input `gap` row still owed, past the bound.
     fn owe_gap(&mut self) {
         if self.missed > 0 {
             let lost_rows = std::mem::take(&mut self.missed);
-            self.rows.push_back(Row::Gap { rows: lost_rows });
+            self.rows
+                .push_back(RecordRow::Input(Row::Gap { rows: lost_rows }));
         }
+    }
+
+    /// Queue every native stream's `gap` line still owed, past the bound: the recording ends.
+    fn owe_native_gaps(&mut self) {
+        for (stream, rows) in std::mem::take(&mut self.native_missed) {
+            self.queue_native(stream, native_recording::Line::Gap { rows });
+        }
+    }
+
+    fn queue_native(&mut self, stream: u32, line: native_recording::Line) {
+        self.rows.push_back(RecordRow::Native { stream, line });
+        self.native += 1;
+    }
+
+    fn native_full(&self) -> bool {
+        self.native >= NATIVE_ROWS || self.rows.len() >= QUEUE_ROWS
+    }
+
+    /// Count a native row of `stream` lost.
+    fn miss_native(&mut self, stream: u32) {
+        let missed = self.native_missed.entry(stream).or_default();
+        *missed = missed.saturating_add(1);
+    }
+
+    /// The oldest row queued.
+    fn pop(&mut self) -> Option<RecordRow> {
+        let row = self.rows.pop_front()?;
+        if matches!(row, RecordRow::Native { .. }) {
+            self.native -= 1;
+        }
+        Some(row)
     }
 }
 
@@ -76,7 +116,8 @@ struct RecordQueue {
 }
 
 impl RecordQueue {
-    /// Queue `row`, or count it lost when there is no room; whether the reader is to be woken.
+    /// Queue input `row`, or count it lost when there is no room; whether the reader is to be
+    /// woken.
     #[must_use]
     fn push(&self, row: Row) -> bool {
         let mut state = self.state.lock();
@@ -99,7 +140,35 @@ impl RecordQueue {
                 return true;
             }
         }
-        state.rows.push_back(row);
+        state.rows.push_back(RecordRow::Input(row));
+        drop(state);
+        self.arrived.notify_one();
+        true
+    }
+
+    /// Queue `line` of native `stream`, or count it lost when the native layer's share of the
+    /// queue is full; whether the reader is to be woken.
+    #[must_use]
+    fn push_native(&self, stream: u32, line: native_recording::Line) -> bool {
+        let mut state = self.state.lock();
+        if state.ended {
+            return false;
+        }
+        if state.native_full() {
+            state.miss_native(stream);
+            return false;
+        }
+        if let Some(rows) = state.native_missed.remove(&stream) {
+            state.queue_native(stream, native_recording::Line::Gap { rows });
+            if state.native_full() {
+                // The gap took the last place: this line is lost too.
+                state.miss_native(stream);
+                drop(state);
+                self.arrived.notify_one();
+                return true;
+            }
+        }
+        state.queue_native(stream, line);
         drop(state);
         self.arrived.notify_one();
         true
@@ -114,16 +183,27 @@ impl RecordQueue {
         }
     }
 
+    /// Count a row of native `stream` the backend could not put in the format as lost.
+    fn lose_native(&self, stream: u32) {
+        let mut state = self.state.lock();
+        if !state.ended {
+            state.miss_native(stream);
+        }
+    }
+
     /// The tap's `end` row, which counts the `lost_rows` the tap lost: queued past the bound
-    /// after the gap still owed, counting the queue's losses too.
+    /// after the gaps still owed, counting the queue's losses too.
     fn end(&self, lost_rows: u64) {
         let mut state = self.state.lock();
         if state.ended {
             return;
         }
+        state.owe_native_gaps();
         state.owe_gap();
         let lost_rows = lost_rows.saturating_add(state.lost);
-        state.rows.push_back(Row::End { lost_rows });
+        state
+            .rows
+            .push_back(RecordRow::Input(Row::End { lost_rows }));
         state.ended = true;
         drop(state);
         self.arrived.notify_all();
@@ -136,6 +216,7 @@ impl RecordQueue {
         if state.ended {
             return;
         }
+        state.owe_native_gaps();
         state.owe_gap();
         state.ended = true;
         drop(state);
@@ -144,6 +225,203 @@ impl RecordQueue {
 
     fn is_ended(&self) -> bool {
         self.state.lock().ended
+    }
+}
+
+/// The most setup lines kept per native stream for a recording that starts later.
+const PREFIX_ROWS: usize = 64;
+
+/// The forms of a native line a host makes for its recordings (ADR-0215 §5).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct NativeForms {
+    /// With its text kept: a recording asked for `keep_text`.
+    pub kept: bool,
+    /// With its text redacted.
+    pub redacted: bool,
+}
+
+/// Where a host's native journal sends its lines for the recordings of the `native` layer
+/// (ADR-0288 §11): a host makes one for its backend (`NativeLines::default()`) and attaches it to
+/// each runtime it hosts with [`UiRuntime::attach_native_journal`].
+///
+/// It hands each line to every recording of the layer, and keeps each stream's header and its
+/// last 64 setup lines, so a recording started later begins each stream with them,
+/// after a `gap` when the bound let some go. The journal calls it on its own thread, so it is
+/// shared behind a lock held only to queue or keep a line, never across a waker.
+#[derive(Clone, Default)]
+pub struct NativeLines(Arc<Mutex<NativeFanOut>>);
+
+impl std::fmt::Debug for NativeLines {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let fan_out = self.0.lock();
+        f.debug_struct("NativeLines")
+            .field("streams", &fan_out.streams.len())
+            .field("readers", &fan_out.readers.len())
+            .finish()
+    }
+}
+
+#[derive(Default)]
+struct NativeFanOut {
+    streams: BTreeMap<u32, Prefix>,
+    readers: Vec<NativeReader>,
+}
+
+/// One recording of the `native` layer, as the fan-out sees it.
+struct NativeReader {
+    queue: Weak<RecordQueue>,
+    privacy: Privacy,
+}
+
+/// What a recording that starts later is given of one stream: its header, the setup lines kept,
+/// in both forms, and how many the bound let go.
+#[derive(Default)]
+struct Prefix {
+    header: Option<Box<Forms>>,
+    setup: VecDeque<Forms>,
+    dropped: u64,
+}
+
+/// A line in both its forms.
+struct Forms {
+    kept: native_recording::Line,
+    redacted: native_recording::Line,
+}
+
+impl Forms {
+    fn of(&self, privacy: Privacy) -> &native_recording::Line {
+        match privacy {
+            Privacy::KeepText => &self.kept,
+            Privacy::Redact => &self.redacted,
+        }
+    }
+}
+
+impl NativeLines {
+    /// The forms of the next row that is not a setup row the recordings want now; a host makes
+    /// no other.
+    #[must_use]
+    pub fn wants(&self) -> NativeForms {
+        let mut fan_out = self.0.lock();
+        fan_out.prune();
+        let mut forms = NativeForms::default();
+        for reader in &fan_out.readers {
+            match reader.privacy {
+                Privacy::KeepText => forms.kept = true,
+                Privacy::Redact => forms.redacted = true,
+            }
+        }
+        forms
+    }
+
+    /// The next line of native `stream`, in the forms made. A header or a `setup` line comes in
+    /// both forms, and is kept for a recording that starts later.
+    pub fn line(
+        &self,
+        stream: u32,
+        setup: bool,
+        kept: Option<&native_recording::Line>,
+        redacted: Option<&native_recording::Line>,
+    ) {
+        let woken = {
+            let mut fan_out = self.0.lock();
+            fan_out.prune();
+            if setup && let (Some(kept), Some(redacted)) = (kept, redacted) {
+                fan_out.keep(stream, kept, redacted);
+            }
+            let mut woken = Vec::new();
+            for reader in &fan_out.readers {
+                let line = match reader.privacy {
+                    Privacy::KeepText => kept,
+                    Privacy::Redact => redacted,
+                };
+                if let (Some(queue), Some(line)) = (reader.queue.upgrade(), line)
+                    && queue.push_native(stream, line.clone())
+                {
+                    woken.push(queue);
+                }
+            }
+            woken
+        };
+        // Woken with the fan-out let go: a waker is the reader's code.
+        for queue in woken {
+            queue.wake.wake();
+        }
+    }
+
+    /// A row of native `stream` the backend could not put in the format was lost: each
+    /// recording of the layer has a gap there.
+    pub fn lost(&self, stream: u32) {
+        let mut fan_out = self.0.lock();
+        fan_out.prune();
+        for reader in &fan_out.readers {
+            if let Some(queue) = reader.queue.upgrade() {
+                queue.lose_native(stream);
+            }
+        }
+    }
+
+    /// Adds `queue` to the readers, after queuing it every stream's prefix.
+    fn join(&self, queue: &Arc<RecordQueue>, privacy: Privacy) {
+        let mut fan_out = self.0.lock();
+        fan_out.prune();
+        for (&stream, prefix) in &fan_out.streams {
+            let Some(header) = &prefix.header else {
+                continue;
+            };
+            let _ = queue.push_native(stream, header.of(privacy).clone());
+            if prefix.dropped > 0 {
+                let _ = queue.push_native(
+                    stream,
+                    native_recording::Line::Gap {
+                        rows: prefix.dropped,
+                    },
+                );
+            }
+            for line in &prefix.setup {
+                let _ = queue.push_native(stream, line.of(privacy).clone());
+            }
+        }
+        fan_out.readers.push(NativeReader {
+            queue: Arc::downgrade(queue),
+            privacy,
+        });
+    }
+}
+
+impl NativeFanOut {
+    /// Lets go of the readers whose recording ended.
+    fn prune(&mut self) {
+        self.readers.retain(|reader| {
+            reader
+                .queue
+                .upgrade()
+                .is_some_and(|queue| !queue.is_ended())
+        });
+    }
+
+    /// Keeps a header or setup line of `stream` for a recording that starts later.
+    fn keep(
+        &mut self,
+        stream: u32,
+        kept: &native_recording::Line,
+        redacted: &native_recording::Line,
+    ) {
+        let prefix = self.streams.entry(stream).or_default();
+        let forms = Forms {
+            kept: kept.clone(),
+            redacted: redacted.clone(),
+        };
+        if matches!(kept, native_recording::Line::Header(_)) {
+            prefix.header = Some(Box::new(forms));
+            return;
+        }
+        prefix.setup.push_back(forms);
+        if prefix.setup.len() > PREFIX_ROWS {
+            prefix.setup.pop_front();
+            prefix.dropped = prefix.dropped.saturating_add(1);
+        }
     }
 }
 
@@ -190,15 +468,15 @@ struct RecordStream {
 }
 
 impl RecordSource for RecordStream {
-    fn try_next(&mut self) -> Option<Row> {
-        self.queue.state.lock().rows.pop_front()
+    fn try_next(&mut self) -> Option<RecordRow> {
+        self.queue.state.lock().pop()
     }
 
-    fn recv_timeout(&mut self, timeout: Duration) -> Option<Row> {
+    fn recv_timeout(&mut self, timeout: Duration) -> Option<RecordRow> {
         let deadline = Instant::now().checked_add(timeout);
         let mut state = self.queue.state.lock();
         loop {
-            if let Some(row) = state.rows.pop_front() {
+            if let Some(row) = state.pop() {
                 return Some(row);
             }
             if state.ended {
@@ -212,7 +490,7 @@ impl RecordSource for RecordStream {
                         .wait_until(&mut state, deadline)
                         .timed_out()
                     {
-                        return state.rows.pop_front();
+                        return state.pop();
                     }
                 }
                 None => self.queue.arrived.wait(&mut state),
@@ -329,14 +607,32 @@ impl UiRuntime {
                 reason: "a recording names at least one layer",
             });
         }
+        let native = params.layers.contains(&RecordLayer::Native);
+        if native && !params.layers.contains(&RecordLayer::Input) {
+            return Err(AgentError::InvalidArgument {
+                reason: "a recording of `native` records `input` too",
+            });
+        }
+        // The fan-out the recording joins once its tap is in, when it holds the native layer.
+        let native_lines = if native {
+            let Some(lines) = self.native_lines.borrow().clone() else {
+                return Err(AgentError::NotSupported {
+                    capability: "record",
+                    reason: "this app journals no native layer: a debug build serving an agent does",
+                });
+            };
+            Some(lines)
+        } else {
+            None
+        };
         if params
             .layers
             .iter()
-            .any(|layer| *layer != RecordLayer::Input)
+            .any(|layer| !matches!(layer, RecordLayer::Input | RecordLayer::Native))
         {
             return Err(AgentError::NotSupported {
                 capability: "record",
-                reason: "this build records the `input` layer only",
+                reason: "this build records the `input` and `native` layers only",
             });
         }
         // A recording whose reader went no longer counts: the drain's sweep removes it.
@@ -376,6 +672,9 @@ impl UiRuntime {
             .map_err(|_| AgentError::RecordingRefused {
                 reason: "the runtime has registered every input tap it can",
             })?;
+        if let Some(lines) = &native_lines {
+            lines.join(&queue, privacy);
+        }
         self.agent_recordings.0.borrow_mut().push(Held {
             presentation,
             queue: Arc::clone(&queue),
@@ -423,5 +722,16 @@ impl UiRuntime {
             first.contain(|| held.end());
         }
         first.into_payload()
+    }
+}
+
+impl UiRuntime {
+    /// Hands this runtime's recordings of the `native` layer (ADR-0288 §11) the lines of the
+    /// host's native journal, which `lines` fans out. A host makes one [`NativeLines`] for its
+    /// backend, installs the journal with it before it creates the platform, and attaches it to
+    /// each runtime it hosts; a runtime nobody attached refuses a recording of `native`
+    /// `not_supported`. Attaching again replaces the fan-out for later recordings.
+    pub fn attach_native_journal(&self, lines: &NativeLines) {
+        self.native_lines.replace(Some(lines.clone()));
     }
 }

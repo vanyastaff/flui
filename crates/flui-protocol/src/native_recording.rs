@@ -62,7 +62,7 @@ vocabulary! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
     #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
     #[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
-    #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+    #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema), schemars(rename = "NativePointerKind"))]
     pub enum PointerKind {
         /// A mouse.
         Mouse => "mouse",
@@ -86,7 +86,7 @@ vocabulary! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
     #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
     #[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
-    #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+    #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema), schemars(rename = "NativeCancelReason"))]
     pub enum CancelReason {
         /// The OS cancelled it.
         Platform => "platform",
@@ -212,7 +212,7 @@ vocabulary! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
     #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
     #[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
-    #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+    #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema), schemars(rename = "NativeScrollPhase"))]
     pub enum ScrollPhase {
         /// The fingers began.
         Began => "began",
@@ -236,7 +236,7 @@ vocabulary! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
     #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
     #[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
-    #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+    #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema), schemars(rename = "NativeScrollUnit"))]
     pub enum ScrollUnit {
         /// Lines of text.
         Lines => "lines",
@@ -276,7 +276,11 @@ pub struct ClickSettings {
 /// A device the rows read, with every kind they read it as.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[cfg_attr(
+    feature = "schemars",
+    derive(schemars::JsonSchema),
+    schemars(rename = "NativeDevice")
+)]
 pub struct Device {
     /// The backend's label for it.
     pub device: u64,
@@ -311,7 +315,11 @@ vocabulary! {
 /// registry's setup.
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[cfg_attr(
+    feature = "schemars",
+    derive(schemars::JsonSchema),
+    schemars(rename = "NativeHeader")
+)]
 pub struct Header {
     /// The format's major version, [`FORMAT_VERSION`]; the field is [`VERSION_KEY`].
     pub flui_native_recording: u32,
@@ -651,7 +659,11 @@ pub struct Wheel {
 /// One scroll step under an open contact, in the owned sign and unit, its phase resolved.
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[cfg_attr(
+    feature = "schemars",
+    derive(schemars::JsonSchema),
+    schemars(rename = "NativeScroll")
+)]
 pub struct Scroll {
     /// The surface.
     #[cfg_attr(feature = "serde", serde(default, skip_serializing_if = "is_zero"))]
@@ -749,7 +761,11 @@ pub enum Notice {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
-#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[cfg_attr(
+    feature = "schemars",
+    derive(schemars::JsonSchema),
+    schemars(rename = "NativeImeEvent")
+)]
 #[non_exhaustive]
 pub enum ImeEvent {
     /// Composition became available for the focused input.
@@ -938,7 +954,11 @@ pub struct Regional {
 /// differently.
 #[derive(Debug, Clone, Default, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[cfg_attr(
+    feature = "schemars",
+    derive(schemars::JsonSchema),
+    schemars(rename = "NativePreferences")
+)]
 pub struct Preferences {
     /// The text-size multiplier, in `1/64..=64`.
     #[cfg_attr(
@@ -1234,7 +1254,7 @@ vocabulary! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
     #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
     #[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
-    #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+    #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema), schemars(rename = "NativeExecution"))]
     pub enum Execution {
         /// Running.
         Running => "running",
@@ -1250,7 +1270,7 @@ vocabulary! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
     #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
     #[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
-    #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+    #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema), schemars(rename = "NativeAvailability"))]
     pub enum Availability {
         /// The window system does it.
         Native => "native",
@@ -1294,7 +1314,11 @@ impl Capability {
 /// Which commands a window honours, and how.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[cfg_attr(
+    feature = "schemars",
+    derive(schemars::JsonSchema),
+    schemars(rename = "NativeCapabilities")
+)]
 pub struct Capabilities {
     /// Setting the title.
     pub sets_title: Capability,
@@ -1601,7 +1625,11 @@ pub enum Line {
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(tag = "row", rename_all = "snake_case"))]
-#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[cfg_attr(
+    feature = "schemars",
+    derive(schemars::JsonSchema),
+    schemars(rename = "NativeRow")
+)]
 #[non_exhaustive]
 pub enum Row {
     /// One reading, decoded.

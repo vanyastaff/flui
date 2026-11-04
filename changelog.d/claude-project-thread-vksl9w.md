@@ -7,14 +7,14 @@
   once, once per wait.
 - **Every debug FLUI app hosts the driver agent** (`flui-app`, ADR-0239): launched with
   `FLUI_AGENT_ENDPOINT` and `FLUI_AGENT_TOKEN`, a debug build (or one with the new `driver`
-  feature) serves its windows in protocol 0.9 over a current-user named pipe or a `0700` Unix
+  feature) serves its windows in protocol 0.10 over a current-user named pipe or a `0700` Unix
   socket, with no application code. `FLUI_AGENT_EXIT_ON_DISCONNECT=1` makes the app exit with
   `flui_protocol::launch::EXIT_DISCONNECTED` when its driver's connection closes.
 - **`AppConfig::with_dev_agent` appends** a hook instead of replacing the installed one; each
   hook is contained on its own.
 - **`flui run --agent`** needs no feature of the application in a debug build, accepts
   `--release` (building with the `driver` feature of `flui` or `flui-app`, under the key the
-  application names it by), and `flui mcp` speaks protocol 0.9.
+  application names it by), and `flui mcp` speaks protocol 0.10.
 - **An agent's `wait.until` without `timeout_ms`** waits `WaitParams::DEFAULT_TIMEOUT_MS`
   (5 s) and none waits past `WaitParams::MAX_TIMEOUT_MS` (24 h); the window answers it
   unsatisfied rather than the connection timing out, and a wait whose asker has gone gives
@@ -167,6 +167,15 @@
   replays) to a file or, with `-`, to stdout, until Ctrl-C or until the window closes.
   `--window` names the window and `--keep-text` keeps the rows' text. It connects as an
   observer, so it records beside a `flui mcp` that drives the app.
+- **A driver recording can hold the `native` layer** (protocol 0.10, additive): with `input`, a
+  recording of an app whose backend journals is sent each backend stream's lines as
+  `record_native` events (`flui_protocol::{RecordNativeEvent, RecordRow}`,
+  `native_recording::Line`). A recording that starts later begins each stream with its header
+  and setup lines. Native lines never crowd out the input, and `record.stop` counts the ones lost
+  as `native_lost_rows`. A host makes one `NativeLines` for its journal and attaches it with
+  `UiRuntime::attach_native_journal` (`NativeForms` are the forms it asks for);
+  `ServiceConfig::records_native` lists the layer in the hello; `HeadlessHost::attach_native_journal`
+  plays the backend in a test.
 
 ### Removed
 

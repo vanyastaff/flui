@@ -1759,6 +1759,16 @@ impl HeadlessHost {
         self.ui_runtime.input_taps()
     }
 
+    /// Where a native journal sends its lines for this host's recordings of the `native` layer
+    /// (ADR-0288 §11). A headless host has no backend to journal, so a test plays the backend
+    /// and sends the lines itself; until it calls this, `native` is refused.
+    #[must_use]
+    pub fn attach_native_journal(&self) -> flui_runtime::ui_runtime::NativeLines {
+        let lines = flui_runtime::ui_runtime::NativeLines::default();
+        self.ui_runtime.attach_native_journal(&lines);
+        lines
+    }
+
     /// The header of a recording of this host: its virtual clock, every
     /// window with its scale factor and the per-kind gesture values its
     /// contacts are admitted with, the system-preference revision in effect,

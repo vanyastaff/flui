@@ -368,6 +368,9 @@ impl Session {
             .any(|method| method == RecordStart::NAME)
         {
             capabilities.record = vec![flui_protocol::RecordLayer::Input];
+            if self.shared.records_native {
+                capabilities.record.push(flui_protocol::RecordLayer::Native);
+            }
         }
         let welcome = HelloReply::new(PROTOCOL_VERSION)
             .with_app(self.shared.app.clone())
