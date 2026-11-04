@@ -4182,6 +4182,16 @@ derives them again. The codec reads every number back to the bits it was
 written from (serde_json's `float_roundtrip`): a cumulative pinch scale read
 one ulp off replays a different transform than the device delivered.
 
+A capture that is sent on rather than kept is `journal::lines::capture_lines`:
+its `LineSink` gets each stream as the wire's `native_recording::Line`s, a
+header once the stream's setup is done (its first row, so the header holds the
+setup made before it) and then one line per row, each kept and redacted only
+as the sink asks, but a header and a setup row (a device added or removed, the
+click thresholds, the preferences, the displays, a window's state) always in
+both, so a sink can keep them for a reader that joins later. The header it
+sends names no device: the writer fills them in from the rows. It is the source
+of the driver agent's `native` recordings (ADR-0288 §11).
+
 A recording journals one stream, which its header names: a registry's (the
 default, the only one with a clock), a loop's application delivery (`app`:
 system notices, session-end phases and reopens, reported by `AppDelivery`

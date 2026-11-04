@@ -428,6 +428,41 @@ graph LR
   - the journal matches the injection;
   - a dropped connection mid-drag cancels the contact (a recognizer sees cancel);
   - a recording made through the agent replays to the same decisions.
+- **Status:** the input layer has merged: held input (#2291), the journal (#2294), the recording
+  wire types (#2295), the taps fan-out (#2298), `record.*` (#2301) and `flui record` (#2305).
+  The native layer is next, in the slices below.
+- **Native layer, decided (2026-11-04):**
+  - **Capture.** `flui-app` installs one native capture (`flui-native` `journal::capture`) on the
+    owner thread before the platform is created, and only when the app serves an agent; an app
+    that serves none installs nothing. `flui-app` builds `flui-native` with `native-capture`,
+    whose code is debug-only, so `capabilities.record` lists `native` only where that capture is
+    installed.
+  - **Join mid-run.** Live recording or not, the runtime's fan-out keeps each stream's header
+    and setup rows (devices, click settings, preferences, displays, window states), at most 64
+    rows per stream; a recording started later begins each stream with them, and with a `gap`
+    when the cap dropped some.
+  - **Seam.** `flui-runtime` holds the fan-out and takes the capture's lines from `flui-app`
+    through a trait whose values are `flui_protocol::native_recording`'s, so no crate edge is
+    added.
+  - **Wire.** `RecordLayer::Native`; `RecordEvent.row` becomes `RecordRow` (`#[non_exhaustive]`):
+    `Input(input_recording::Row)` or `Native { stream, line }`, a line being a stream's header,
+    one of its rows, or a `gap` naming the rows that stream lost. A recording of `native` records
+    `input` too, and ends with the input layer's `end` row; `RecordSummary` counts the native
+    losses apart.
+  - **Bounds.** One 1024-row queue per recording; native rows take at most 768 of it, so input
+    is never starved, and are dropped first.
+  - **CLI.** `flui record <file> --native <dir>` writes each stream to `<dir>/<n>.jsonl`, the
+    header's device list taken from the rows at the end, and `<dir>/index.json` naming each
+    file's stream, backend and whether it lost rows.
+- **Native slices:**
+  1. `flui-native`: the capture as a stream of wire lines (`journal::lines`: a header once a
+     stream's setup is done, then rows, setup rows flagged), each form made only when asked.
+  2. `flui-protocol` and `flui-runtime`: the wire above, the native fan-out beside the input
+     taps with the capped setup prefix, the shared queue's reserve and per-stream gaps;
+     ADR-0288 §11 rewritten.
+  3. `flui-app`: the capture installed when the agent is served, handed to the runtime, and the
+     capability gated on it.
+  4. `flui-cli`: `--native <dir>` and the index.
 
 ### FD7. Agent server in `flui-app`
 

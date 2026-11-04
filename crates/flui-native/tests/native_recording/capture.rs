@@ -18,7 +18,9 @@ use parking_lot::Mutex;
 
 use super::codec::{Backend, NativeRecording, Row, Stream};
 use super::{RECORDINGS, recording};
+use flui_native::journal::lines::{Forms, LineSink, StreamLine, capture_lines};
 use flui_native::journal::recorder::Recorder;
+use flui_protocol::native_recording as wire;
 
 /// Run `session` with a capture installed on this thread, and return its
 /// result with the recording of every registry created during it, in
@@ -425,7 +427,89 @@ pub fn a_sink_may_release_or_replace_its_capture_from_inside_a_call() {
 }
 
 /// The capture rows of `native_recording_contracts`.
-pub const CASES: [(&str, fn()); 4] = [
+/// What a line sink was handed: each line with its stream, whether it was a setup line, and its
+/// two forms.
+#[derive(Default)]
+struct Seen {
+    wants: Forms,
+    lines: Vec<(u32, bool, Option<wire::Line>, Option<wire::Line>)>,
+    lost: Vec<u32>,
+}
+
+#[derive(Clone)]
+struct Shared(Arc<Mutex<Seen>>);
+
+impl LineSink for Shared {
+    fn wants(&self) -> Forms {
+        self.0.lock().wants
+    }
+
+    fn line(&mut self, line: StreamLine<'_>) {
+        self.0.lock().lines.push((
+            line.stream,
+            line.setup,
+            line.kept.cloned(),
+            line.redacted.cloned(),
+        ));
+    }
+
+    fn lost(&mut self, stream: u32) {
+        self.0.lock().lost.push(stream);
+    }
+}
+
+/// A line capture hands each stream's header once its setup is done, then each row as the
+/// wire holds it: what the recorder writes, in the forms the sink asks for. A header and a
+/// setup row come in both forms whatever it asks, and a row nobody asks for is not sent.
+pub fn a_line_capture_sends_each_stream_s_header_then_its_rows_in_the_forms_asked() {
+    for (name, text) in RECORDINGS {
+        let original = recording(text);
+        for wants in [
+            Forms {
+                kept: true,
+                redacted: false,
+            },
+            Forms::default(),
+        ] {
+            let shared = Shared(Arc::new(Mutex::new(Seen {
+                wants,
+                ..Seen::default()
+            })));
+            let capture = capture_lines(original.header.backend, shared.clone());
+            original.replay().expect("a registry's recording replays");
+            drop(capture);
+            let seen = std::mem::take(&mut *shared.0.lock());
+            assert!(seen.lost.is_empty(), "{name}: {:?}", seen.lost);
+
+            let mut header = original.header.clone();
+            header.provenance = None;
+            let header = wire::Line::Header(Box::new(header.to_wire().expect("mirrored")));
+            let mut expected = vec![(0, true, Some(header.clone()), Some(header))];
+            for row in &original.rows {
+                let setup = matches!(
+                    row,
+                    Row::AddDevice { .. } | Row::RemoveDevice { .. } | Row::ClickSettings(_)
+                );
+                let line = wire::Line::Row(Box::new(row.to_wire().expect("mirrored")));
+                if setup {
+                    expected.push((0, true, Some(line.clone()), Some(line)));
+                } else if wants.kept {
+                    expected.push((0, false, Some(line), None));
+                }
+            }
+            if original.rows.is_empty() {
+                expected.clear();
+            }
+            assert_eq!(seen.lines, expected, "{name}, wanting {wants:?}");
+        }
+    }
+}
+
+pub const CASES: [(&str, fn()); 5] = [
+    (
+        "a_line_capture_sends_each_stream_s_header_then_its_rows_in_the_forms_asked",
+        a_line_capture_sends_each_stream_s_header_then_its_rows_in_the_forms_asked,
+    ),
     (
         "a_captured_registry_journals_the_recording_it_replays",
         a_captured_registry_journals_the_recording_it_replays,

@@ -98,16 +98,7 @@ fn journal(
     call: Captured<'_>,
 ) {
     let index = source.0 as usize;
-    let header = match call {
-        Captured::Started {
-            epoch,
-            uptime,
-            counter,
-        } => Some(Header::new(backend, epoch, uptime, counter)),
-        Captured::Opened(stream) => Some(Header::for_stream(backend, stream)),
-        _ => None,
-    };
-    if let Some(header) = header {
+    if let Some(header) = opened(backend, call) {
         assert_eq!(
             index,
             recordings.len(),
@@ -122,23 +113,55 @@ fn journal(
     }
     let recording = &mut recordings[index];
     let setup = recording.rows.is_empty();
-    let header = &mut recording.header;
+    if let Some(row) = fold(
+        &mut recording.header,
+        setup,
+        &mut pseudonyms[index],
+        privacy,
+        call,
+    ) {
+        recording.rows.push(row);
+    }
+}
+
+/// The header a call that opens its source starts it with.
+pub(super) fn opened(backend: Backend, call: Captured<'_>) -> Option<Header> {
+    match call {
+        Captured::Started {
+            epoch,
+            uptime,
+            counter,
+        } => Some(Header::new(backend, epoch, uptime, counter)),
+        Captured::Opened(stream) => Some(Header::for_stream(backend, stream)),
+        _ => None,
+    }
+}
+
+/// Fold a call of an opened source into its `header`, while `setup` (no row yet), or into the
+/// row it adds, its text treated as `privacy` says.
+pub(super) fn fold(
+    header: &mut Header,
+    setup: bool,
+    pseudonyms: &mut Pseudonyms,
+    privacy: Privacy,
+    call: Captured<'_>,
+) -> Option<Row> {
     let row = match call {
         Captured::ReservedContact(contact) => {
             header.reserved_contact = Some(contact);
-            return;
+            return None;
         }
         Captured::FirstPointer(first) => {
             header.first_pointer = Some(first);
-            return;
+            return None;
         }
         Captured::FirstDevice(first) => {
             header.first_device = Some(first);
-            return;
+            return None;
         }
         Captured::ClickSettings(settings) if setup => {
             header.click_settings = settings;
-            return;
+            return None;
         }
         Captured::ClickSettings(settings) => Row::ClickSettings(settings),
         Captured::Reading(reading) => Row::Reading(*reading),
@@ -208,19 +231,16 @@ fn journal(
                 Err(error) => DisplayRead::Failed(ReadFailure::of(error)),
             };
             match (privacy, read) {
-                (Privacy::Redact, DisplayRead::Observed { revision, displays }) => {
-                    let pseudonyms = &mut pseudonyms[index];
-                    Row::Displays {
-                        read: DisplayRead::Observed {
-                            revision,
-                            displays: displays
-                                .into_iter()
-                                .map(|display| pseudonyms.anonymized(display))
-                                .collect(),
-                        },
-                        redacted: true,
-                    }
-                }
+                (Privacy::Redact, DisplayRead::Observed { revision, displays }) => Row::Displays {
+                    read: DisplayRead::Observed {
+                        revision,
+                        displays: displays
+                            .into_iter()
+                            .map(|display| pseudonyms.anonymized(display))
+                            .collect(),
+                    },
+                    redacted: true,
+                },
                 (_, read) => Row::Displays {
                     read,
                     redacted: false,
@@ -244,10 +264,10 @@ fn journal(
             }
         }
         Captured::Started { .. } | Captured::Opened(_) => {
-            unreachable!("BUG: a source opens once, handled above")
+            unreachable!("BUG: a source opens once, before its other calls")
         }
     };
-    recording.rows.push(row);
+    Some(row)
 }
 
 /// `event` with its text replaced, and whether it had any to replace.
@@ -269,7 +289,7 @@ fn redacted(event: &ImeEvent) -> (ImeEvent, bool) {
 /// counter in order of first sight, never derived from the key, so a redacted
 /// recording keeps which reads saw the same display without naming it.
 #[derive(Debug, Default)]
-struct Pseudonyms(HashMap<String, String>);
+pub(super) struct Pseudonyms(HashMap<String, String>);
 
 impl Pseudonyms {
     /// `display` with its name replaced and its persistent key pseudonymized.
