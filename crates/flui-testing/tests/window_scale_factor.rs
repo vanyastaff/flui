@@ -110,7 +110,7 @@ pub(crate) fn rescaling_the_primary_window_updates_only_its_semantics_bounds() {
 /// Records the `MediaQuery` each of its builds reads.
 #[derive(Clone, flui_view::prelude::StatelessView)]
 struct MediaQueryReader {
-    seen: std::rc::Rc<std::cell::RefCell<Vec<flui_widgets::MediaQueryData>>>,
+    seen: std::rc::Rc<std::cell::RefCell<Vec<flui_view::environment::MediaQueryData>>>,
 }
 
 impl flui_view::prelude::StatelessView for MediaQueryReader {
@@ -120,7 +120,7 @@ impl flui_view::prelude::StatelessView for MediaQueryReader {
     ) -> impl flui_view::prelude::IntoView {
         self.seen
             .borrow_mut()
-            .push(flui_widgets::MediaQuery::of(ctx));
+            .push(flui_view::environment::MediaQuery::of(ctx));
         SizedBox::new(10.0, 10.0)
     }
 }

@@ -1215,7 +1215,7 @@ fn first_build_text_sizing(runtime: &mut crate::app::ui_runtime::UiRuntime) -> T
 
     impl StatelessView for InitialPreferences {
         fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
-            let sizing = flui_widgets::MediaQuery::text_sizing_of(ctx)
+            let sizing = flui_view::environment::MediaQuery::text_sizing_of(ctx)
                 .expect("runtime inherited preferences");
             self.0.borrow_mut().push(sizing);
             flui_widgets::Text::new("Preference")
@@ -1344,7 +1344,8 @@ fn preferences_wake_each_isolated_window() {
     struct Reader(Rc<RefCell<Vec<TextSizing>>>);
     impl StatelessView for Reader {
         fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
-            let sizing = flui_widgets::MediaQuery::text_sizing_of(ctx).expect("preferences");
+            let sizing =
+                flui_view::environment::MediaQuery::text_sizing_of(ctx).expect("preferences");
             self.0.borrow_mut().push(sizing);
             flui_widgets::Text::new("Preference")
         }
@@ -1462,7 +1463,8 @@ fn present_sizing_reader(
     struct Reader(SizingLog);
     impl StatelessView for Reader {
         fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
-            let sizing = flui_widgets::MediaQuery::text_sizing_of(ctx).expect("preferences");
+            let sizing =
+                flui_view::environment::MediaQuery::text_sizing_of(ctx).expect("preferences");
             self.0.borrow_mut().push(sizing);
             flui_widgets::Text::new("Preference")
         }
@@ -1945,7 +1947,9 @@ fn platform_brightness_follows_the_window_appearance() {
         fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
             self.0
                 .borrow_mut()
-                .push(flui_widgets::MediaQuery::platform_brightness_of(ctx));
+                .push(flui_view::environment::MediaQuery::platform_brightness_of(
+                    ctx,
+                ));
             flui_widgets::Text::new("Brightness")
         }
     }

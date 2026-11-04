@@ -12,7 +12,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use common::{lay_out, tight};
 use flui_material::{ListTile, Radio, Theme, ThemeData};
 use flui_sdk::view::IntoView;
-use flui_sdk::widgets::{MediaQuery, MediaQueryData, MergeSemantics, Text};
+use flui_sdk::view::environment::{MediaQuery, MediaQueryData};
+use flui_sdk::widgets::{MergeSemantics, Text};
 use flui_testing::a11y::Role;
 
 /// `ListTile::build` reads `SafeArea`, which panics without an ambient

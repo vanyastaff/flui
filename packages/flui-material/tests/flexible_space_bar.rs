@@ -15,10 +15,9 @@ use common::{lay_out, tight};
 use flui_material::{FlexibleSpaceBar, SliverAppBar, Theme, ThemeData};
 use flui_sdk::view::BoxedView;
 use flui_sdk::view::IntoView;
+use flui_sdk::view::environment::{MediaQuery, MediaQueryData};
 use flui_sdk::view::view::ViewExt;
-use flui_sdk::widgets::{
-    ColoredBox, CustomScrollView, MediaQuery, MediaQueryData, SizedBox, SliverToBoxAdapter, Text,
-};
+use flui_sdk::widgets::{ColoredBox, CustomScrollView, SizedBox, SliverToBoxAdapter, Text};
 
 fn trailing_content() -> BoxedView {
     SliverToBoxAdapter::new()

@@ -8,8 +8,9 @@ use crate::common;
 use common::{LaidOut, lay_out, tight};
 use flui_cupertino::{CupertinoNavigationBar, CupertinoPageScaffold};
 use flui_sdk::foundation::RenderId;
+use flui_sdk::view::environment::{MediaQuery, MediaQueryData};
+use flui_sdk::widgets::SizedBox;
 use flui_sdk::widgets::prelude::EdgeInsets;
-use flui_sdk::widgets::{MediaQuery, MediaQueryData, SizedBox};
 
 /// The unique `RenderConstrainedBox` sized exactly `width x height` — used
 /// to locate the content marker unambiguously alongside the navigation

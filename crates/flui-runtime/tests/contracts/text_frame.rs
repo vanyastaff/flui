@@ -283,8 +283,8 @@ impl ViewState<TextFrameCompletion> for TextFrameCompletionState {
     }
 
     fn build(&self, view: &TextFrameCompletion, _: &dyn BuildContext) -> impl IntoView {
-        flui_widgets::MediaQuery::new(
-            flui_widgets::MediaQueryData {
+        flui_view::environment::MediaQuery::new(
+            flui_view::environment::MediaQueryData {
                 text_sizing: view.sizing.borrow().clone(),
                 ..Default::default()
             },
@@ -622,8 +622,8 @@ impl ViewState<PartialTextFrame> for PartialTextFrameState {
             );
             *view.lock_outcome.borrow_mut() = Some(outcome);
         }
-        flui_widgets::MediaQuery::new(
-            flui_widgets::MediaQueryData {
+        flui_view::environment::MediaQuery::new(
+            flui_view::environment::MediaQueryData {
                 text_sizing: if view.pending.get() {
                     view.pending_sizing.clone()
                 } else {
@@ -1087,8 +1087,8 @@ fn animated_preparation_retains_its_tick(failing_deadline: bool) {
     let child = flui_widgets::AnimatedBuilder::new(Rc::new(animation.clone()), move || {
         let value = sampled.value();
         recorded.borrow_mut().push(value);
-        flui_widgets::MediaQuery::new(
-            flui_widgets::MediaQueryData {
+        flui_view::environment::MediaQuery::new(
+            flui_view::environment::MediaQueryData {
                 text_sizing: source_policy.clone(),
                 ..Default::default()
             },

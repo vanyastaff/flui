@@ -5,9 +5,9 @@
 //! near the root of the widget tree and provide ambient data every descendant
 //! can read without explicit parameter threading.
 //!
-//! Inherited presentation data is provided by [`crate::MediaQuery`] in the
-//! lower widget layer, so text and interaction consumers can read it without
-//! depending on application composition.
+//! Inherited presentation data ([`MediaQuery`](flui_view::environment::MediaQuery)) now
+//! lives in `flui-view`'s `environment` module, so text and interaction
+//! consumers can read it without depending on application composition.
 //!
 //! The Material `Theme`/`ThemeData` inherited widget itself now lives in
 //! `flui-material` (`flui_material::Theme`/`ThemeData`), which depends on

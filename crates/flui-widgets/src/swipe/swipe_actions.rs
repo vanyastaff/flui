@@ -23,9 +23,8 @@ use crate::interaction::{
 };
 use crate::localization::Directionality;
 use crate::scroll::{AnchoredDrag, AnchoredDragController, DraggableAnchors};
-use crate::{
-    Center, ExcludeSemantics, Listener, MediaQuery, RawButton, Row, Semantics, SizedBox, Stack,
-};
+use crate::{Center, ExcludeSemantics, Listener, RawButton, Row, Semantics, SizedBox, Stack};
+use flui_view::environment::MediaQuery;
 
 /// How far each revealed action reaches into the row, in logical pixels:
 /// past the touch minimum target, so each is hit reliably at rest.

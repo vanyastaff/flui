@@ -50,8 +50,9 @@
 use flui_sdk::geometry::EdgeInsets;
 use flui_sdk::painting::BoxDecoration;
 use flui_sdk::view::BoxedView;
+use flui_sdk::view::environment::MediaQuery;
 use flui_sdk::view::prelude::*;
-use flui_sdk::widgets::{DecoratedBox, MediaQuery, Padding, Positioned, PreferredSizeView, Stack};
+use flui_sdk::widgets::{DecoratedBox, Padding, Positioned, PreferredSizeView, Stack};
 
 use crate::colors::CupertinoColor;
 use crate::theme::CupertinoTheme;

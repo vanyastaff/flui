@@ -141,6 +141,10 @@ path = "crates/flui-view/src/element/behavior.rs"
 count = 3
 
 [[allow]]
+path = "crates/flui-view/src/environment.rs"
+count = 1
+
+[[allow]]
 path = "crates/flui-view/src/key/global_key.rs"
 count = 1
 
@@ -166,10 +170,6 @@ count = 1
 
 [[allow]]
 path = "crates/flui-widgets/src/interaction/focus.rs"
-count = 1
-
-[[allow]]
-path = "crates/flui-widgets/src/media_query.rs"
 count = 1
 
 [[allow]]

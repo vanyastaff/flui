@@ -16,9 +16,10 @@
 
 use flui_sdk::painting::Color;
 use flui_sdk::platform::Brightness;
+use flui_sdk::view::environment::MediaQuery;
 use flui_sdk::view::prelude::*;
 use flui_sdk::view::{BoxedView, InheritedView, impl_inherited_view};
-use flui_sdk::widgets::{InheritedTheme, MediaQuery};
+use flui_sdk::widgets::InheritedTheme;
 
 use crate::colors::{ColorResolver, CupertinoColor, CupertinoColors, CupertinoDynamicColor};
 use crate::text_theme::CupertinoTextThemeData;
@@ -77,7 +78,7 @@ impl CupertinoThemeData {
     }
 
     /// Overrides [`Self::brightness`] instead of falling back to the ambient
-    /// [`MediaQueryData::platform_brightness`](flui_sdk::widgets::MediaQueryData::platform_brightness).
+    /// [`MediaQueryData::platform_brightness`](flui_sdk::view::environment::MediaQueryData::platform_brightness).
     #[must_use]
     pub fn with_brightness(mut self, brightness: Brightness) -> Self {
         self.brightness = Some(brightness);
@@ -240,7 +241,7 @@ impl CupertinoTheme {
     /// The brightness that descendant Cupertino widgets should use: the
     /// nearest ancestor [`CupertinoTheme`]'s explicit
     /// [`CupertinoThemeData::brightness`], falling back to
-    /// [`MediaQueryData::platform_brightness`](flui_sdk::widgets::MediaQueryData::platform_brightness). Returns `None` if neither is
+    /// [`MediaQueryData::platform_brightness`](flui_sdk::view::environment::MediaQueryData::platform_brightness). Returns `None` if neither is
     /// available.
     #[must_use]
     pub fn maybe_brightness_of(ctx: &dyn BuildContext) -> Option<Brightness> {

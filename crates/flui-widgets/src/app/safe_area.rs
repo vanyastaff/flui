@@ -6,8 +6,8 @@ use flui_foundation::geometry::{EdgeInsets, Edges};
 use flui_view::prelude::StatelessView;
 use flui_view::{BoxedView, BuildContext, IntoView, ViewExt};
 
-use crate::MediaQuery;
 use crate::layout::Padding;
+use flui_view::environment::MediaQuery;
 
 /// Insets its child with sufficient padding to avoid operating-system
 /// intrusions (notch, status bar, home indicator) reported by the nearest

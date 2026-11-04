@@ -23,12 +23,11 @@
 //!   treatment of it is its own widget.
 
 use flui_sdk::painting::Color;
+use flui_sdk::view::environment::MediaQuery;
 use flui_sdk::view::prelude::StatelessView;
 use flui_sdk::view::{BoxedView, BuildContext, IntoView, ViewExt};
 use flui_sdk::widgets::layout::PreferredSizeView;
-use flui_sdk::widgets::{
-    MediaQuery, SizedBox, SliverPersistentHeader, SliverPersistentHeaderDelegate,
-};
+use flui_sdk::widgets::{SizedBox, SliverPersistentHeader, SliverPersistentHeaderDelegate};
 
 use crate::AppBar;
 

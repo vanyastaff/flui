@@ -30,8 +30,9 @@ use flui_material::{
 use flui_sdk::animation::Vsync;
 use flui_sdk::foundation::RenderId;
 use flui_sdk::painting::Color;
+use flui_sdk::view::environment::{MediaQuery, MediaQueryData};
 use flui_sdk::view::prelude::*;
-use flui_sdk::widgets::{ColoredBox, MediaQuery, MediaQueryData, SizedBox, Text, VsyncScope};
+use flui_sdk::widgets::{ColoredBox, SizedBox, Text, VsyncScope};
 
 /// Wraps `child` in the `Theme`/`MediaQuery` ancestors `Scaffold`/`Material`
 /// require, plus a `VsyncScope` over `vsync` — required for

@@ -14,8 +14,8 @@ use flui_view::{
 
 use super::linked_paragraph::{LinkRouting, LinkedParagraph};
 use super::selection_area::{SelectableParagraph, SelectionScope};
-use crate::MediaQuery;
 use crate::support::{RefCallback, ref_callback};
+use flui_view::environment::MediaQuery;
 
 /// Displays a tree of styled [`InlineSpan`]s (most commonly a
 /// [`TextSpan`](flui_painting::typography::TextSpan)) in a single paragraph.

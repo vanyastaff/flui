@@ -19,8 +19,9 @@ use common::{LaidOut, lay_out, loose};
 use flui_material::{ColorSchemeOverrides, MaterialApp, Theme, ThemeData, ThemeMode};
 use flui_sdk::painting::Color;
 use flui_sdk::platform::Brightness;
+use flui_sdk::view::environment::{MediaQuery, MediaQueryData};
 use flui_sdk::view::prelude::*;
-use flui_sdk::widgets::{MediaQuery, MediaQueryData, SizedBox};
+use flui_sdk::widgets::SizedBox;
 
 /// A light theme with a sentinel primary color no preset uses, so an
 /// assertion can tell "my theme arrived" from "some default arrived".

@@ -100,6 +100,7 @@ pub mod context;
 pub mod dev_agent;
 pub mod dev_reload;
 pub mod element;
+pub mod environment;
 mod inspect;
 pub mod key;
 pub mod macros;
@@ -315,6 +316,7 @@ pub mod prelude {
             ElementSlot, IndexedSlot, LayoutChangedNotification, Lifecycle, NotifiableElement,
             Notification, RootElement,
         },
+        environment::{MediaQuery, MediaQueryData},
         key::{GlobalKey, GlobalKeyId, ObjectKey, ValueKey},
         owner::{BuildOwner, ElementOwner, RebuildHandle, RebuildReason, RebuildReasons},
         tree::{ElementNode, ElementTree},

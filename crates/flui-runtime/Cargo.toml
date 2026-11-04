@@ -60,7 +60,7 @@ flui-painting = { path = "../flui-painting", version = "=0.2.0-dev" }
 # UI runtime drives it through), its render pipeline, the UI runtime-owned scheduler,
 # the vsync the root's animations tick on, and the root wrappers the UI runtime
 # installs above every root widget (`FocusRoot`, `GestureArenaScope`,
-# `VsyncScope`, `MediaQuery`).
+# `VsyncScope`).
 flui-view = { path = "../flui-view", version = "=0.2.0-dev" }
 flui-rendering = { path = "../flui-rendering", version = "=0.2.0-dev" }
 flui-scheduler = { path = "../flui-scheduler", version = "=0.2.0-dev" }

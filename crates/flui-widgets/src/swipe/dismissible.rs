@@ -51,7 +51,8 @@ use crate::interaction::{CommandHandle, ContactAdmission, GestureAlternatives};
 use crate::scroll::{
     AnchoredDrag, AnchoredDragController, DraggableAnchors, ScrollMetrics, SnapPolicy,
 };
-use crate::{ClipRect, Listener, MediaQuery, Positioned, SizedBox, Stack};
+use crate::{ClipRect, Listener, Positioned, SizedBox, Stack};
+use flui_view::environment::MediaQuery;
 
 /// The release speed, logical px/s, from which a release is a fling: below
 /// it the threshold decides.

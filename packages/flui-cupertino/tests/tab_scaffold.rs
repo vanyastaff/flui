@@ -12,8 +12,9 @@ use common::{lay_out, tight};
 use flui_cupertino::{
     CupertinoTabBar, CupertinoTabBarItem, CupertinoTabController, CupertinoTabScaffold,
 };
+use flui_sdk::view::environment::{MediaQuery, MediaQueryData};
 use flui_sdk::view::prelude::*;
-use flui_sdk::widgets::{Icon, IconData, MediaQuery, MediaQueryData, SizedBox};
+use flui_sdk::widgets::{Icon, IconData, SizedBox};
 
 fn two_tab_bar() -> CupertinoTabBar {
     CupertinoTabBar::new(vec![

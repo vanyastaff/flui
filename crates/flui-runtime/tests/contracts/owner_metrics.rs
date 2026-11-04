@@ -124,9 +124,9 @@ struct MotionReader(Rc<RefCell<Vec<flui_animation::MotionPolicy>>>);
 
 impl StatelessView for MotionReader {
     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
-        self.0
-            .borrow_mut()
-            .push(flui_widgets::MediaQuery::motion_of(ctx).expect("runtime motion policy"));
+        self.0.borrow_mut().push(
+            flui_view::environment::MediaQuery::motion_of(ctx).expect("runtime motion policy"),
+        );
         flui_widgets::SizedBox::square(20.0)
     }
 }
@@ -313,8 +313,8 @@ struct PreferenceReader(Rc<RefCell<Vec<TextSizing>>>);
 
 impl StatelessView for PreferenceReader {
     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
-        let sizing =
-            flui_widgets::MediaQuery::text_sizing_of(ctx).expect("runtime root preference");
+        let sizing = flui_view::environment::MediaQuery::text_sizing_of(ctx)
+            .expect("runtime root preference");
         self.0.borrow_mut().push(sizing);
         flui_widgets::Text::new("Preference")
     }
@@ -325,9 +325,10 @@ struct ContrastReader(Rc<RefCell<Vec<bool>>>);
 
 impl StatelessView for ContrastReader {
     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
-        self.0
-            .borrow_mut()
-            .push(flui_widgets::MediaQuery::high_contrast_of(ctx).expect("runtime root contrast"));
+        self.0.borrow_mut().push(
+            flui_view::environment::MediaQuery::high_contrast_of(ctx)
+                .expect("runtime root contrast"),
+        );
         flui_widgets::SizedBox::square(10.0)
     }
 }
@@ -365,7 +366,7 @@ impl StatelessView for MetricsReader {
             status.phase,
             flui_scheduler::SchedulerPhase::PersistentCallbacks
         );
-        let media = flui_widgets::MediaQuery::of(ctx);
+        let media = flui_view::environment::MediaQuery::of(ctx);
         self.contrast.borrow_mut().push(media.high_contrast);
         self.text_scale.borrow_mut().push(media.text_sizing.clone());
         self.brightness.borrow_mut().push(media.platform_brightness);
@@ -601,7 +602,7 @@ fn initial_inherited_scale_matches_the_renderer() {
     impl StatelessView for Reader {
         fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
             self.0
-                .set(flui_widgets::MediaQuery::of(ctx).device_pixel_ratio);
+                .set(flui_view::environment::MediaQuery::of(ctx).device_pixel_ratio);
             flui_widgets::SizedBox::new(20.0, 20.0)
         }
     }
@@ -1119,10 +1120,10 @@ fn bold_text_changes_the_painted_glyphs() {
         };
         let root = text_root("AA");
         let root = if let Some(adjustment) = override_weight {
-            flui_widgets::MediaQuery::new(
-                flui_widgets::MediaQueryData {
+            flui_view::environment::MediaQuery::new(
+                flui_view::environment::MediaQueryData {
                     font_weight_adjustment: adjustment,
-                    ..flui_widgets::MediaQueryData::default()
+                    ..flui_view::environment::MediaQueryData::default()
                 },
                 root,
             )
@@ -1410,7 +1411,7 @@ fn regional_formats_reach_media_query() {
 
     impl StatelessView for RegionalReader {
         fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
-            let formats = flui_widgets::MediaQuery::regional_formats_of(ctx)
+            let formats = flui_view::environment::MediaQuery::regional_formats_of(ctx)
                 .expect("runtime root preference");
             self.0.borrow_mut().push(formats);
             flui_widgets::Text::new("Formats")

@@ -110,7 +110,6 @@ pub mod interaction;
 pub mod layout;
 pub mod localization;
 mod magnifier;
-mod media_query;
 mod popup_menu;
 // Effects, reversible transitions and `Animate`; flat re-exports below.
 pub mod motion;
@@ -159,7 +158,6 @@ pub use app::{
 pub use magnifier::{
     InvalidMagnifierScale, MagnifierDecoration, MagnifierScale, MagnifierShape, RawMagnifier,
 };
-pub use media_query::{MediaQuery, MediaQueryData};
 // `Brightness` is the value type `MediaQueryData` (and any theme's
 // brightness field) uses; re-exported here so callers need only
 // `use flui_widgets::Brightness`.
@@ -441,23 +439,23 @@ pub mod prelude {
         IgnorePointer, Image, ImagePlacement, ImageProvider, ImageRepeat, IndexedSemantics,
         IndexedStack, InheritedTheme, Intent, IntrinsicHeight, IntrinsicWidth, LayoutBuilder,
         LayoutId, LimitedBox, ListBody, ListView, Listener, Localizations, LocalizationsDelegate,
-        MediaQuery, MediaQueryData, MergeSemantics, MouseRegion, Navigator, NavigatorHandle,
-        NextFocusAction, NextFocusIntent, Offstage, Opacity, OverflowBox, OverflowBoxFit, Overlay,
-        OverlayEntry, OverlayEntryId, OverlayHandle, Padding, PageController, PageRoute, PageView,
-        PanClaimRegion, PasteTextIntent, PhysicalModel, PhysicalShape, PopScope, PopupRoute,
-        Positioned, PreferredSize, PreferredSizeView, PreviousFocusAction, PreviousFocusIntent,
-        RawButton, RawTextField, RawTextFieldState, RawTextFormField, RepaintBoundary, RichText,
-        RotatedBox, Routable, RoutePath, Router, RouterHandle, Row, SafeArea, ScrollController,
-        Scrollable, Scrollbar, SelectAllTextIntent, SelectionArea, SelectionContainer,
-        SelectionController, SelectionHandles, SelectionStyle, Semantics, Shortcuts,
-        ShrinkWrappingViewport, SimpleRoute, SingleActivator, SingleChildScrollView, SizedBox,
-        SizedOverflowBox, Slider, SliderState, SliverChildBuilderDelegate, SliverFadeTransition,
-        SliverFillRemaining, SliverFillRemainingAndOverscroll, SliverFillRemainingWithScrollable,
-        SliverFillViewport, SliverFixedExtentList, SliverGrid, SliverIgnorePointer, SliverList,
-        SliverOffstage, SliverOpacity, SliverPadding, SliverToBoxAdapter, Spacer, Stack,
-        StreamBuilder, SubmitCallback, Table, TableCell, TableRow, Text, TextEditingController,
-        TickerMode, Transform, UnconstrainedBox, ValueListenableBuilder, Viewport, Visibility,
-        VisibilityGate, WidgetState, WidgetStateConstraint, WidgetStateProperty, WidgetStates,
+        MergeSemantics, MouseRegion, Navigator, NavigatorHandle, NextFocusAction, NextFocusIntent,
+        Offstage, Opacity, OverflowBox, OverflowBoxFit, Overlay, OverlayEntry, OverlayEntryId,
+        OverlayHandle, Padding, PageController, PageRoute, PageView, PanClaimRegion,
+        PasteTextIntent, PhysicalModel, PhysicalShape, PopScope, PopupRoute, Positioned,
+        PreferredSize, PreferredSizeView, PreviousFocusAction, PreviousFocusIntent, RawButton,
+        RawTextField, RawTextFieldState, RawTextFormField, RepaintBoundary, RichText, RotatedBox,
+        Routable, RoutePath, Router, RouterHandle, Row, SafeArea, ScrollController, Scrollable,
+        Scrollbar, SelectAllTextIntent, SelectionArea, SelectionContainer, SelectionController,
+        SelectionHandles, SelectionStyle, Semantics, Shortcuts, ShrinkWrappingViewport,
+        SimpleRoute, SingleActivator, SingleChildScrollView, SizedBox, SizedOverflowBox, Slider,
+        SliderState, SliverChildBuilderDelegate, SliverFadeTransition, SliverFillRemaining,
+        SliverFillRemainingAndOverscroll, SliverFillRemainingWithScrollable, SliverFillViewport,
+        SliverFixedExtentList, SliverGrid, SliverIgnorePointer, SliverList, SliverOffstage,
+        SliverOpacity, SliverPadding, SliverToBoxAdapter, Spacer, Stack, StreamBuilder,
+        SubmitCallback, Table, TableCell, TableRow, Text, TextEditingController, TickerMode,
+        Transform, UnconstrainedBox, ValueListenableBuilder, Viewport, Visibility, VisibilityGate,
+        WidgetState, WidgetStateConstraint, WidgetStateProperty, WidgetStates,
         WidgetStatesController, WidgetsApp, WidgetsLocalizations, Wrap,
     };
 

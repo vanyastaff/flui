@@ -35,6 +35,7 @@ use flui_rendering::layer::LayerLink;
 use flui_rendering::pipeline::PipelineCell;
 use flui_rendering::protocol::BoxProtocol;
 use flui_rendering::semantics::TextSelection;
+use flui_view::environment::MediaQuery;
 use flui_view::prelude::*;
 use flui_view::{BoxedView, CreationSite, RenderView, impl_render_view};
 
@@ -2218,8 +2219,8 @@ impl ViewState<EditableText> for EditableTextState {
         };
         let enabled = view.enabled;
         let appearance = FieldAppearance {
-            text_sizing: crate::MediaQuery::text_sizing_of(ctx),
-            font_weight_adjustment: crate::MediaQuery::font_weight_adjustment_of(ctx).unwrap_or(0),
+            text_sizing: MediaQuery::text_sizing_of(ctx),
+            font_weight_adjustment: MediaQuery::font_weight_adjustment_of(ctx).unwrap_or(0),
             caret_height: view.caret_height,
             caret_color: view.caret_color,
             selection_style: view

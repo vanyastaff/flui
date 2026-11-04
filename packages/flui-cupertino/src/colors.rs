@@ -3,8 +3,8 @@
 
 use flui_sdk::painting::Color;
 use flui_sdk::platform::Brightness;
+use flui_sdk::view::environment::MediaQuery;
 use flui_sdk::view::prelude::BuildContext;
-use flui_sdk::widgets::MediaQuery;
 
 // =============================================================================
 // CupertinoColor — a literal color or a dynamic one

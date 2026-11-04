@@ -121,7 +121,7 @@ impl tracing::Subscriber for Diagnostics {
 struct Reader(Rc<RefCell<Vec<(TextSizing, bool)>>>);
 impl StatelessView for Reader {
     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
-        let media = flui_widgets::MediaQuery::of(ctx);
+        let media = flui_view::environment::MediaQuery::of(ctx);
         self.0
             .borrow_mut()
             .push((media.text_sizing.clone(), media.high_contrast));

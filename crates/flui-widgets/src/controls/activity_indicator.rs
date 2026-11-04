@@ -16,7 +16,8 @@ use flui_rendering::{delegates::CustomPainter, semantics::SemanticsRole};
 use flui_view::prelude::*;
 
 use crate::animated::VsyncScope;
-use crate::{CustomPaint, MediaQuery, RepaintBoundary, Semantics, TickerMode};
+use crate::{CustomPaint, RepaintBoundary, Semantics, TickerMode};
+use flui_view::environment::MediaQuery;
 
 /// One cycle of the indicator's motion.
 const CYCLE: Duration = Duration::from_secs(6);

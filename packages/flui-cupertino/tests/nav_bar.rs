@@ -13,7 +13,8 @@ use crate::common;
 
 use common::{lay_out, tight};
 use flui_cupertino::CupertinoNavigationBar;
-use flui_sdk::widgets::{MediaQuery, MediaQueryData, SizedBox, Text};
+use flui_sdk::view::environment::{MediaQuery, MediaQueryData};
+use flui_sdk::widgets::{SizedBox, Text};
 use flui_testing::a11y::Role;
 
 /// `leading`/`middle`/`trailing` all reach the mounted render tree, not just

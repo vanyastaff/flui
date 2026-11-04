@@ -255,7 +255,6 @@ layers = [
     [
         "support",
         "localization",
-        "media_query",
         "widget_state",
         "anchored_box",
     ],

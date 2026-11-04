@@ -17,7 +17,8 @@ use flui_view::WriterSource;
 use flui_view::prelude::*;
 
 use super::GesturePolicy;
-use crate::{GestureArenaScope, Listener, MediaQuery};
+use crate::{GestureArenaScope, Listener};
+use flui_view::environment::MediaQuery;
 
 /// Builds one kind of recognizer for a [`RawGestureDetector`] and carries its
 /// configuration.

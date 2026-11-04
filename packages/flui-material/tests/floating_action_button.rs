@@ -13,7 +13,8 @@ use common::{lay_out, rgba, tight};
 use flui_material::{
     FabThemeData, FloatingActionButton, Scaffold, Theme, ThemeData, ThemeDataOverrides,
 };
-use flui_sdk::widgets::{MediaQuery, MediaQueryData, SizedBox};
+use flui_sdk::view::environment::{MediaQuery, MediaQueryData};
+use flui_sdk::widgets::SizedBox;
 
 /// The middle cascade tier, proven end to end: a
 /// `ThemeData.floating_action_button_theme` with a custom

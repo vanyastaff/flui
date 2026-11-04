@@ -142,7 +142,7 @@ impl ViewState<CupertinoActivityIndicator> for CupertinoActivityIndicatorState {
 
     fn build(&self, _view: &CupertinoActivityIndicator, ctx: &dyn BuildContext) -> impl IntoView {
         let enabled = flui_sdk::widgets::TickerMode::is_enabled(ctx);
-        let reduced = flui_sdk::widgets::MediaQuery::motion_of(ctx)
+        let reduced = flui_sdk::view::environment::MediaQuery::motion_of(ctx)
             == Some(flui_sdk::animation::MotionPolicy::Reduce);
         let painter = TickPainter {
             controller: (self.controller.is_bound() && enabled && !reduced)

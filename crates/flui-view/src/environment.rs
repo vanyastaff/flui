@@ -15,12 +15,15 @@
 //! These require platform event plumbing (accessibility bridge, IME state)
 //! that lives above this layer.
 
-use flui_foundation::geometry::Size;
-use flui_foundation::geometry::{EdgeInsets, Edges};
-use flui_platform::{Brightness, Locale, RegionalFormats};
-use flui_view::prelude::*;
-use flui_view::{BoxedView, FieldMask, InheritedData, InheritedView, impl_inherited_view};
 use std::sync::Arc;
+
+use flui_animation::MotionPolicy;
+use flui_foundation::geometry::{EdgeInsets, Edges, Size};
+use flui_painting::TextSizing;
+use flui_platform::{Brightness, Locale, RegionalFormats};
+
+use crate::prelude::*;
+use crate::{FieldMask, impl_inherited_view};
 
 /// Ambient logical-screen data provided to descendants by a [`MediaQuery`]
 /// ancestor.
@@ -29,7 +32,7 @@ use std::sync::Arc;
 /// directly, or start from [`Default`] and override:
 ///
 /// ```rust,ignore
-/// use flui_widgets::MediaQueryData;
+/// use flui_view::environment::MediaQueryData;
 ///
 /// let data = MediaQueryData {
 ///     device_pixel_ratio: 2.0,
@@ -67,7 +70,7 @@ pub struct MediaQueryData {
     /// Numeric sizing authority applied after authored span inheritance.
     /// The nearest provider replaces the outer policy, including when fixed.
     /// Copy the parent data to preserve its policy while overriding another field.
-    pub text_sizing: flui_painting::TextSizing,
+    pub text_sizing: TextSizing,
 
     /// Signed adjustment applied after authored text-style inheritance. Zero
     /// preserves authored weights. Text shaping bounds adjusted weights to
@@ -104,12 +107,12 @@ pub struct MediaQueryData {
 
     /// Resolved application motion policy. Controllers obey the presentation
     /// clock; this inherited value lets widgets choose a static composition.
-    pub motion: flui_animation::MotionPolicy,
+    pub motion: MotionPolicy,
 
     /// Ordered preferred UI languages observed by the host. `None` means
     /// unavailable; an empty list is an observed empty preference list.
-    /// Application locale overrides and resource fallback belong to
-    /// [`WidgetsApp`](crate::WidgetsApp). Like the other fields, a nested
+    /// Application locale overrides and resource fallback belong to the
+    /// application's `WidgetsApp`. Like the other fields, a nested
     /// `MediaQuery` replaces this value; copy parent data to preserve it when
     /// overriding another field.
     pub preferred_locales: Option<Arc<[Locale]>>,
@@ -118,8 +121,8 @@ pub struct MediaQueryData {
     /// hour cycle, measurement, numbering system and region override
     /// (ADR-0278). Empty when the host reported none. A date, time or number
     /// formatter takes the resolved locale through
-    /// [`RegionalFormats::apply_to`]; the locale [`Localizations`](crate::Localizations)
-    /// resolves stays without these keys, so delegates match it as declared.
+    /// [`RegionalFormats::apply_to`]; the locale `Localizations` resolver
+    /// stays without these keys, so delegates match it as declared.
     pub regional_formats: RegionalFormats,
 }
 
@@ -128,14 +131,14 @@ impl Default for MediaQueryData {
         Self {
             size: Size::new(800.0, 600.0),
             device_pixel_ratio: 1.0,
-            text_sizing: flui_painting::TextSizing::fixed(),
+            text_sizing: TextSizing::fixed(),
             font_weight_adjustment: 0,
             view_padding: EdgeInsets::ZERO,
             view_insets: EdgeInsets::ZERO,
             system_gesture_insets: EdgeInsets::ZERO,
             platform_brightness: Brightness::Light,
             high_contrast: false,
-            motion: flui_animation::MotionPolicy::Full,
+            motion: MotionPolicy::Full,
             preferred_locales: None,
             regional_formats: RegionalFormats::default(),
         }
@@ -146,8 +149,8 @@ impl MediaQueryData {
     /// The part of [`view_padding`](Self::view_padding) that
     /// [`view_insets`](Self::view_insets) do not already cover, per edge: with
     /// the keyboard up over the home-indicator area the bottom value is zero.
-    /// App content avoids these areas and [`SafeArea`](crate::SafeArea)
-    /// consumes them. Computed, so it cannot disagree with its sources.
+    /// App content avoids these areas and a `SafeArea` consumes them.
+    /// Computed, so it cannot disagree with its sources.
     #[must_use]
     pub fn padding(&self) -> EdgeInsets {
         (self.view_padding - self.view_insets).clamp_non_negative()
@@ -214,11 +217,11 @@ impl MediaQueryData {
 /// ## Example
 ///
 /// ```rust,ignore
-/// use flui_widgets::{MediaQuery, MediaQueryData, SizedBox};
+/// use flui_view::environment::{MediaQuery, MediaQueryData};
 ///
 /// MediaQuery::new(
 ///     MediaQueryData::default(),
-///     SizedBox::shrink(),
+///     child.into_view(),
 /// )
 /// ```
 #[derive(Clone)]
@@ -231,7 +234,7 @@ pub struct MediaQuery {
 
 impl MediaQuery {
     /// Depend on the resolved presentation motion policy.
-    pub fn motion_of(ctx: &dyn BuildContext) -> Option<flui_animation::MotionPolicy> {
+    pub fn motion_of(ctx: &dyn BuildContext) -> Option<MotionPolicy> {
         Self::depend_on_fields(ctx, MediaQueryData::FIELD_MOTION, |data| data.motion)
     }
     /// Wrap `child` in a `MediaQuery` that provides `data` to all descendants.
@@ -294,7 +297,7 @@ impl MediaQuery {
     /// The nearest numeric sizing policy, depending on `text_sizing` only.
     /// No provider means that the render pipeline's policy is inherited.
     #[must_use]
-    pub fn text_sizing_of(ctx: &dyn BuildContext) -> Option<flui_painting::TextSizing> {
+    pub fn text_sizing_of(ctx: &dyn BuildContext) -> Option<TextSizing> {
         Self::depend_on_fields(ctx, MediaQueryData::FIELD_TEXT_SIZING, |d| {
             d.text_sizing.clone()
         })

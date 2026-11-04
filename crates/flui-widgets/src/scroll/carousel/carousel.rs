@@ -38,8 +38,9 @@ use crate::scroll::scroll_owner::SharedSnapPolicy;
 use crate::scroll::{ScrollController, Scrollable, Viewport};
 use crate::{
     Align, Column, CustomPaint, CustomPainter, Directionality, Expanded, Focus, Listener,
-    MediaQuery, MouseRegion, RawButton, Semantics, SizedBox, TickerMode,
+    MouseRegion, RawButton, Semantics, SizedBox, TickerMode,
 };
+use flui_view::environment::MediaQuery;
 
 /// What an item's content reads of the item while it scrolls: its index, the part of it the
 /// carousel shows, and how far it has travelled between keylines.
