@@ -445,7 +445,8 @@ pub(crate) fn viewer_native_focal_inertia_uses_the_admitted_profile() {
 
 fn viewer_focal_inertia_uses_profile(native: bool) {
     use flui_animation::Vsync;
-    use flui_widgets::{InteractiveViewer, TransformationController, VsyncScope};
+    use flui_view::environment::VsyncScope;
+    use flui_widgets::{InteractiveViewer, TransformationController};
     use std::time::Duration;
     let profile = |min, max| {
         flui_interaction::GestureSettings::default()
@@ -587,7 +588,8 @@ fn viewer_focal_inertia_uses_profile(native: bool) {
 /// The real presentation ticks the release velocity and new input retires it.
 pub(crate) fn viewer_focal_fling_advances_then_stops_on_new_input() {
     use flui_animation::Vsync;
-    use flui_widgets::{InteractiveViewer, TransformationController, VsyncScope};
+    use flui_view::environment::VsyncScope;
+    use flui_widgets::{InteractiveViewer, TransformationController};
     use std::time::Duration;
     let controller = TransformationController::new();
     let released = Rc::new(RefCell::new(Vec::new()));
@@ -672,7 +674,8 @@ pub(crate) fn viewer_focal_fling_advances_then_stops_on_new_input() {
 
 fn viewer_focal_fling_without_clock_preserves_the_scene() {
     use flui_animation::Vsync;
-    use flui_widgets::{InteractiveViewer, TransformationController, VsyncScope};
+    use flui_view::environment::VsyncScope;
+    use flui_widgets::{InteractiveViewer, TransformationController};
     use std::time::Duration;
 
     for initially_bound in [false, true] {
@@ -782,7 +785,8 @@ fn viewer_focal_fling_without_clock_preserves_the_scene() {
 /// A fling keeps immutable limits until real layout or authored bounds change.
 pub(crate) fn viewer_focal_fling_rebuild_preserves_or_retires_geometry() {
     use flui_animation::Vsync;
-    use flui_widgets::{InteractiveViewer, TransformationController, VsyncScope};
+    use flui_view::environment::VsyncScope;
+    use flui_widgets::{InteractiveViewer, TransformationController};
     use std::time::Duration;
     for change_viewport in [false, true] {
         let controller = TransformationController::new();
@@ -1126,8 +1130,8 @@ struct ZoomWheelPreferences {
 
 impl flui_view::StatelessView for ZoomWheelPreferences {
     fn build(&self, ctx: &dyn flui_view::BuildContext) -> impl flui_view::IntoView {
-        flui_widgets::GestureArenaScope::new(
-            flui_widgets::GestureArenaScope::of(ctx),
+        flui_view::environment::GestureArenaScope::new(
+            flui_view::environment::GestureArenaScope::of(ctx),
             self.child.clone(),
         )
         .wheel_preferences(

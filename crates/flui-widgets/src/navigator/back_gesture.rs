@@ -40,13 +40,13 @@ use flui_interaction::{
 };
 use flui_painting::typography::TextDirection;
 use flui_rendering::hit_testing::HitTestBehavior;
+use flui_view::environment::GesturePolicy;
 use flui_view::prelude::*;
 use flui_view::{AnimatedView, impl_animated_view};
 
 use super::binding::PopPacing;
 use super::navigator::NavigatorHandle;
 use super::route::RouteId;
-use crate::interaction::GesturePolicy;
 use crate::interaction::recognizer_attachment::RecognizerAttachment;
 use crate::{Directionality, Listener, Positioned, SizedBox, Stack, StackFit};
 

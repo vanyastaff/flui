@@ -22,8 +22,8 @@ use flui_sdk::foundation::Listenable as _;
 use flui_sdk::painting::{DrawOp, TextDirection};
 use flui_sdk::rendering::BoxConstraints;
 use flui_sdk::view::BoxedView;
+use flui_sdk::view::environment::VsyncScope;
 use flui_sdk::view::prelude::{IntoView as _, ViewExt as _};
-use flui_sdk::widgets::animated::VsyncScope;
 use flui_sdk::widgets::{Column, Directionality, SizedBox};
 
 fn two_tabs() -> Vec<Tab> {

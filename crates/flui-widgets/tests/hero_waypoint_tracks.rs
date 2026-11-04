@@ -7,7 +7,7 @@ use crate::common::{LaidOut, lay_out_animated, tight};
 use flui_animation::Vsync;
 use flui_foundation::geometry::Rect;
 use flui_painting::styling::Color;
-use flui_widgets::VsyncScope;
+use flui_view::environment::VsyncScope;
 use flui_widgets::prelude::*;
 
 struct SampledHeroTrack {

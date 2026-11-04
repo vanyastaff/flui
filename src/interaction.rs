@@ -2,7 +2,7 @@
 //!
 //! Ordinary handlers remain on [`crate::widgets::GestureDetector`]. Use these
 //! contracts when naming callback payloads or integrating a recognizer with
-//! the presentation's [`crate::widgets::GestureArenaScope`]. Lifecycle hooks can
+//! the presentation's [`crate::view::environment::GestureArenaScope`]. Lifecycle hooks can
 //! also retain the focus, hit-test, and text-input handles provided by
 //! [`crate::view::LifecycleContext`], using the callback and result types below.
 //! Owners and backend adapter construction remain internal to the runtime.

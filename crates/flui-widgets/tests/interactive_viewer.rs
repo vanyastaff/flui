@@ -18,12 +18,13 @@ use flui_platform::pointer::{
 use flui_platform::{EventTime, keyboard::Modifiers};
 use flui_testing::a11y::{Action, ActionData, ActionRequest, TreeId};
 use flui_testing::{MouseScript, PointerScript, TouchScript, TrackpadScript};
+use flui_view::environment::VsyncScope;
 use flui_view::prelude::*;
 use flui_view::{BoxedView, Signal, SignalWriteExt, View, ViewExt};
 use flui_widgets::{
     ColoredBox, Directionality, InteractiveViewer, NestedScroll, PageController, PageView,
     ScrollCause, ScrollController, ScrollEndReason, Scrollable, SizedBox, Transform,
-    TransformationController, VsyncScope, WheelScaleGate,
+    TransformationController, WheelScaleGate,
 };
 
 use crate::common::{LaidOut, lay_out, tight, viewer_alternatives};

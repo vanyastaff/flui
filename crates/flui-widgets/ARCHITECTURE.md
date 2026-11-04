@@ -397,8 +397,10 @@ also pins the focus and lifecycle hit-test paths through an actual editable.
 and its tests import the types from there, and package authors reach them as
 the SDK's `flui_sdk::view::environment`. `flui_widgets` owns no presentation-data
 module: the `app` module provides the shell and `SafeArea`, not the source of
-inherited presentation data. Field-specific dependency behavior is
-pinned by `a_size_only_change_rebuilds_size_and_whole_readers_only`.
+inherited presentation data. The gesture arena and the shared frame registry
+(`GestureArenaScope`, `VsyncScope`) live there too, for the same reason: they
+are views the presentation installs, not catalog widgets. Field-specific
+dependency behavior is pinned by `a_size_only_change_rebuilds_size_and_whole_readers_only`.
 
 `MediaQuery::motion_of` observes the presentation's resolved policy, while
 controllers obey the clock rather than an inherited subtree override. Physical
@@ -653,7 +655,7 @@ into one module.
 
 `motion` sits in a layer of its own directly above `animated`: `Animate`
 composes the explicit transitions (`transitions`) and binds its progress to the
-ambient `VsyncScope` (`animated`); nothing below names an effect, and the
+ambient `VsyncScope` (`flui_view::environment`); nothing below names an effect, and the
 widgets that will play a `Transition` per child (a switcher, a list) sit above
 it. `Shimmer` and `Skeleton` live in `motion` too: the shimmer effect and the
 placeholders share one band, and the shimmer binds its phase the same way.

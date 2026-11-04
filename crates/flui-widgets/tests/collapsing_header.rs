@@ -12,11 +12,12 @@ use flui_interaction::focus::FocusNode;
 use flui_interaction::{GestureProfiles, GestureSettings, GestureSettingsSource, GestureValues};
 use flui_testing::MouseScript;
 use flui_testing::a11y::{Action, ActionRequest, Role, TreeId};
+use flui_view::environment::VsyncScope;
 use flui_view::{BoxedView, ViewExt};
 use flui_widgets::{
     CollapsingHeader, Column, Focus, HeaderExtents, HeaderExtentsError, HeaderOrder, NestedScroll,
     PageSnap, ScrollCause, ScrollController, ScrollEndReason, Scrollable, Semantics, SemanticsRole,
-    SizedBox, ViewportFraction, VsyncScope,
+    SizedBox, ViewportFraction,
 };
 
 use crate::common::LaidOut;

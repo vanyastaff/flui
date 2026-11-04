@@ -103,7 +103,7 @@ packet. The custom recognizer example demonstrates both routed contact delivery
 and a stationary long-press deadline using public input constructors.
 
 Mounted widgets acquire the presentation's shared, binding-driven arena through
-`flui_widgets::GestureArenaScope::of(ctx)` in their lifecycle setup, retain
+`flui_view::environment::GestureArenaScope::of(ctx)` in their lifecycle setup, retain
 recognizers in state, and attach them with `Listener::recognizer`.
 `GestureBinding` owns routing, closure, sweeping and draining there; the
 presentation frame loop drives its idle deadlines and pending motion.

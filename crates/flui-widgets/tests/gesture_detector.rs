@@ -490,7 +490,7 @@ impl flui_view::StatefulView for SwitchingScope {
 impl flui_view::ViewState<SwitchingScope> for SwitchingScopeState {
     fn init_state(&mut self, ctx: &dyn flui_view::LifecycleContext) {
         self.claimed.bind(ctx);
-        let plain = flui_widgets::GestureArenaScope::of(ctx);
+        let plain = flui_view::environment::GestureArenaScope::of(ctx);
         let claimed = plain.with_pan_claim(flui_interaction::gesture::PanClaim::None);
         self.handles = Some((plain, claimed));
     }
@@ -505,7 +505,7 @@ impl flui_view::ViewState<SwitchingScope> for SwitchingScopeState {
         } else {
             plain
         };
-        flui_widgets::GestureArenaScope::new(arena.clone(), view.child.clone())
+        flui_view::environment::GestureArenaScope::new(arena.clone(), view.child.clone())
     }
 }
 
@@ -834,7 +834,7 @@ impl flui_view::StatefulView for ComposedDetector {
 
 impl flui_view::ViewState<ComposedDetector> for ComposedDetectorState {
     fn init_state(&mut self, ctx: &dyn flui_view::LifecycleContext) {
-        let arena = flui_widgets::GestureArenaScope::of(ctx);
+        let arena = flui_view::environment::GestureArenaScope::of(ctx);
         let (first, _) = arena
             .compose(flui_interaction::gesture::GestureComposition::Exclusive)
             .expect("presentation root")
@@ -846,7 +846,7 @@ impl flui_view::ViewState<ComposedDetector> for ComposedDetectorState {
         view: &ComposedDetector,
         _: &dyn flui_view::BuildContext,
     ) -> impl flui_view::IntoView {
-        flui_widgets::GestureArenaScope::new(
+        flui_view::environment::GestureArenaScope::new(
             self.branch.as_ref().expect("mounted branch").clone(),
             view.detector.clone(),
         )
@@ -906,7 +906,7 @@ impl flui_view::StatefulView for ConfiguredGesture {
 
 impl flui_view::ViewState<ConfiguredGesture> for ConfiguredGestureState {
     fn init_state(&mut self, ctx: &dyn flui_view::LifecycleContext) {
-        self.arena = Some(flui_widgets::GestureArenaScope::of(ctx));
+        self.arena = Some(flui_view::environment::GestureArenaScope::of(ctx));
     }
 
     fn build(
@@ -914,7 +914,7 @@ impl flui_view::ViewState<ConfiguredGesture> for ConfiguredGestureState {
         view: &ConfiguredGesture,
         _: &dyn flui_view::BuildContext,
     ) -> impl flui_view::IntoView {
-        flui_widgets::GestureArenaScope::new(
+        flui_view::environment::GestureArenaScope::new(
             self.arena
                 .as_ref()
                 .expect("mounted presentation arena")

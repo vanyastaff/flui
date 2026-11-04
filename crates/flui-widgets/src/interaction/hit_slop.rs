@@ -4,10 +4,9 @@
 use flui_foundation::geometry::EdgeInsets;
 use flui_objects::{HitShape, MinTarget, RenderContentShape, RenderHitSlop};
 use flui_rendering::protocol::BoxProtocol;
+use flui_view::environment::GestureArenaScope;
 use flui_view::prelude::*;
 use flui_view::{Child, IntoView, RenderView, impl_render_view};
-
-use super::gesture_arena_scope::GestureArenaScope;
 
 /// Makes its child hittable within an area larger than the child, as React
 /// Native's `hitSlop` does: the child's box grown by [`slop`](Self::slop) on

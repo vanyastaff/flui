@@ -569,7 +569,7 @@ struct MultiTapSlot {
 /// # Arena and settings
 ///
 /// The recognizers join the arena of the enclosing
-/// [`GestureArenaScope`](crate::GestureArenaScope) and read its gesture
+/// `flui_view::environment::GestureArenaScope` and read its gesture
 /// settings per pointer kind at admission, including the position smoothing
 /// a scope selects. A scope whose settings change replaces every recognizer.
 /// Mounting outside a scope is an invariant violation.

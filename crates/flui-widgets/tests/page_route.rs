@@ -94,7 +94,8 @@ pub(crate) fn page_route_paints_its_separate_entrance_and_exit_durations() {
     use flui_animation::Vsync;
     use flui_painting::{display_list::DrawOp, styling::Color};
     use flui_rendering::layer::Layer;
-    use flui_widgets::{ColoredBox, FadeTransition, VsyncScope};
+    use flui_view::environment::VsyncScope;
+    use flui_widgets::{ColoredBox, FadeTransition};
 
     fn painted_alpha(app: &crate::common::LaidOut) -> Option<f64> {
         let scene = app.layer_tree().expect("submitted page scene");

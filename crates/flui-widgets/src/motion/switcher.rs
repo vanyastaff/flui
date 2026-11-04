@@ -40,10 +40,10 @@ use flui_view::{
 
 use super::animate::{Animate, Trigger};
 use super::transition::Transition;
-use crate::animated::VsyncScope;
 use crate::stack::Stack;
 use crate::support::retirement::Terminal;
 use crate::transitions::FadeTransition;
+use flui_view::environment::VsyncScope;
 
 /// A custom transition for [`AnimatedSwitcher`]: wraps an incoming/outgoing
 /// `child` with a widget driven by `animation` (`0.0` = fully switched out,

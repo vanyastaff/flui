@@ -5,8 +5,8 @@ use std::time::Duration;
 use flui_cupertino::CupertinoPageControl;
 use flui_sdk::animation::Vsync;
 use flui_sdk::painting::{Color, DrawOp};
+use flui_sdk::view::environment::VsyncScope;
 use flui_sdk::view::{BoxedView, ViewExt};
-use flui_sdk::widgets::animated::VsyncScope;
 use flui_sdk::widgets::{
     Alternative, Center, ColoredBox, Column, Expanded, GestureAlternatives, GestureCommand,
     MenuSpec, PageController, PageIntent, PageView,

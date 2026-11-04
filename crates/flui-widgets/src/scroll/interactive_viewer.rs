@@ -127,9 +127,10 @@ use crate::anchored_box::AnchoredBox;
 use crate::support::command_modifiers;
 use crate::{
     Action, ActionOutcome, Actions, AnimatedBuilder, ClipRect, CommandHandle, Focus,
-    GestureAlternatives, GestureArenaScope, GestureDetector, Intent, Listener, Semantics,
-    Shortcuts, SingleActivator, Transform, TransformSlot, TransformationController, VsyncScope,
+    GestureAlternatives, GestureDetector, Intent, Listener, Semantics, Shortcuts, SingleActivator,
+    Transform, TransformSlot, TransformationController,
 };
+use flui_view::environment::{GestureArenaScope, VsyncScope};
 
 /// One zoom step of a key, a double tap, a control or an assistive action:
 /// a factor of two.

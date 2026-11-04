@@ -2088,8 +2088,8 @@ impl StatefulView for PreparedSibling {
 
 impl ViewState<PreparedSibling> for PreparedSiblingState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        let vsync =
-            flui_widgets::VsyncScope::maybe_of(ctx).expect("sibling's actual inherited registry");
+        let vsync = flui_view::environment::VsyncScope::maybe_of(ctx)
+            .expect("sibling's actual inherited registry");
         let driven =
             flui_animation::AnimationController::builder(std::time::Duration::from_millis(100))
                 .build_on(Some(&vsync));
@@ -2295,7 +2295,7 @@ impl StatefulView for AuthorityAnimatedText {
 
 impl ViewState<AuthorityAnimatedText> for AuthorityAnimatedTextState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        let registry = flui_widgets::VsyncScope::maybe_of(ctx)
+        let registry = flui_view::environment::VsyncScope::maybe_of(ctx)
             .expect("actual authority presentation animation registry");
         let owner =
             flui_animation::AnimationController::builder(std::time::Duration::from_millis(100))

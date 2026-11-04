@@ -51,12 +51,12 @@ use flui_view::{
 
 use super::rich_text::ResolvedParagraph;
 use crate::anchored_box::AnchoredBox;
-use crate::interaction::GesturePolicy;
 use crate::support::RefCallback;
 use crate::{
     Action, ActionOutcome, Actions, ActivateIntent, ActivateLinkIntent, ActivationPressIntent,
     DefaultFocusRingStyle, Focus, Positioned, Shortcuts, SingleActivator, SizedBox, Stack,
 };
+use flui_view::environment::GesturePolicy;
 
 /// What a link's tap, key and assistive activation read when they fire: the
 /// latest handler, whether the paragraph is still mounted, and which links

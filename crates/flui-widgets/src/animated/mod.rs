@@ -5,9 +5,10 @@
 //! explicit `Animation` to manage. Owning motion retains values and velocities
 //! across reconfiguration; inner builders observe its published samples.
 //!
-//! Drive them deterministically by wrapping the subtree in a [`VsyncScope`] over
-//! a binding's [`Vsync`](flui_animation::Vsync); without a scope, newly admitted
-//! motion settles synchronously.
+//! Drive them deterministically by wrapping the subtree in a
+//! `flui_view::environment::VsyncScope` over a binding's
+//! [`Vsync`](flui_animation::Vsync); without a scope, newly admitted motion
+//! settles synchronously.
 
 mod animated;
 mod animated_align;
@@ -23,7 +24,6 @@ mod animated_slide;
 pub(crate) mod implicitly_animated;
 mod property_motion;
 mod ticker_mode;
-mod vsync_scope;
 
 pub use animated::{Animated, AnimatedState};
 pub use animated_align::{AnimatedAlign, AnimatedAlignState};
@@ -38,4 +38,3 @@ pub use animated_size::{AnimatedSize, AnimatedSizeState};
 pub use animated_slide::{AnimatedSlide, AnimatedSlideState};
 pub use implicitly_animated::MotionBuilder;
 pub use ticker_mode::{TickerMode, TickerModeState};
-pub use vsync_scope::VsyncScope;

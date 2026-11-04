@@ -47,9 +47,9 @@ use flui_sdk::foundation::{
     ChangeNotifier, Listenable, ListenerId, ListenerObserver, MutatedDuringBuild,
 };
 use flui_sdk::pipeline::ScrollDirection;
+use flui_sdk::view::environment::VsyncScope;
 use flui_sdk::view::prelude::*;
 use flui_sdk::view::{BoxedView, InheritedView, impl_inherited_view};
-use flui_sdk::widgets::animated::VsyncScope;
 use flui_sdk::widgets::{
     Alternative, CompanionLink, CompanionRegistration, CompanionSpec, GestureAlternatives,
     GestureCommand, Intent, MotionBuilder, PageController, SemanticsAnchor, SingleActivator,

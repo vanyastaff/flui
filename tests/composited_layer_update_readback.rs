@@ -502,9 +502,8 @@ fn a_slide_tick_moves_pixels_without_rebuilding() {
     use flui_objects::TranslationFraction;
     use flui_painting::{Alignment, styling::Color};
     use flui_testing::{HeadlessBinding, MountOptions, MountOwners};
-    use flui_widgets::{
-        Align, ColoredBox, FocusRoot, GestureArenaScope, SizedBox, SlideTransition,
-    };
+    use flui_view::environment::GestureArenaScope;
+    use flui_widgets::{Align, ColoredBox, FocusRoot, SizedBox, SlideTransition};
 
     let mut binding = HeadlessBinding::new();
     let owner =
@@ -592,7 +591,8 @@ fn a_color_tween_preserves_sub_byte_alpha_until_rasterization() {
     use flui_foundation::{Listenable, geometry::Rect};
     use flui_painting::styling::Color;
     use flui_testing::{HeadlessBinding, MountOptions, MountOwners};
-    use flui_widgets::{CustomPaint, FocusRoot, GestureArenaScope};
+    use flui_view::environment::GestureArenaScope;
+    use flui_widgets::{CustomPaint, FocusRoot};
 
     #[derive(Debug)]
     struct FadePainter(Rc<dyn Animation<Color>>, Rc<std::cell::Cell<Option<Color>>>);

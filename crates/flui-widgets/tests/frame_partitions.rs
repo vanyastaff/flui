@@ -6,7 +6,8 @@ use crate::common::{LaidOut, lay_out_animated, loose};
 use flui_animation::{Linear, SpringDescription, Vsync};
 use flui_painting::{display_list::DrawOp, styling::Color};
 use flui_rendering::layer::Layer;
-use flui_widgets::{AnimatedContainer, AnimatedOpacity, MotionBuilder, SizedBox, VsyncScope};
+use flui_view::environment::VsyncScope;
+use flui_widgets::{AnimatedContainer, AnimatedOpacity, MotionBuilder, SizedBox};
 
 fn tree(registry: &Vsync, opacity: f64, side: f64, spring: bool) -> VsyncScope {
     let mut geometry = AnimatedContainer::new(SizedBox::shrink())

@@ -1916,7 +1916,8 @@ pub(crate) fn animated_slide_publishes_bounds_at_its_current_sample() {
     use flui_painting::Alignment;
     use flui_painting::typography::TextDirection;
     use flui_view::ViewExt;
-    use flui_widgets::{Align, SlideTransition, Transform, VsyncScope};
+    use flui_view::environment::VsyncScope;
+    use flui_widgets::{Align, SlideTransition, Transform};
     use std::rc::Rc;
     use std::time::Duration;
 
@@ -2013,9 +2014,8 @@ pub(crate) fn animated_scale_and_rotation_publish_clipped_bounds() {
     use flui_animation::{Animation, AnimationController, Tween, Vsync};
     use flui_painting::Alignment;
     use flui_view::ViewExt;
-    use flui_widgets::{
-        Align, ClipRect, RotationTransition, ScaleTransition, Transform, VsyncScope,
-    };
+    use flui_view::environment::VsyncScope;
+    use flui_widgets::{Align, ClipRect, RotationTransition, ScaleTransition, Transform};
     use std::rc::Rc;
     use std::time::Duration;
 

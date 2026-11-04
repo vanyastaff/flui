@@ -32,6 +32,7 @@ use flui_interaction::{
     PointerEventExt, PointerId, PointerKindSet, TapGestureRecognizer, TapUpDetails,
 };
 use flui_platform::TargetPlatform;
+use flui_view::environment::{GestureArenaScope, GesturePolicy};
 use flui_view::prelude::*;
 use flui_view::{InheritedView, RebuildHandle, RebuildReason, WriterSource, impl_inherited_view};
 use smallvec::SmallVec;
@@ -43,7 +44,6 @@ use super::actions::{
 use super::companion::{CompanionGap, CompanionLink, LinkedCompanions};
 use super::focus::Focus;
 use super::focus_ring::FocusRing;
-use super::gesture_arena_scope::{GestureArenaScope, GesturePolicy};
 use super::listener::Listener;
 use super::raw_button::RawButton;
 use super::raw_gesture_detector::{

@@ -13,8 +13,9 @@ use flui_painting::{display_list::DrawOp, styling::Color};
 use flui_rendering::{layer::Layer, pipeline::PipelineOwner};
 use flui_testing::widgets::{LaidOut, SharedSignal, lay_out_animated, tight};
 use flui_view::ViewExt;
+use flui_view::environment::VsyncScope;
 use flui_widgets::prelude::*;
-use flui_widgets::{AnimatedContainer, AnimatedOpacity, ScrollController, Scrollable, VsyncScope};
+use flui_widgets::{AnimatedContainer, AnimatedOpacity, ScrollController, Scrollable};
 
 pub(super) const FRAME: Duration = Duration::from_millis(17);
 pub(super) const RUN: Duration = Duration::from_secs(2);

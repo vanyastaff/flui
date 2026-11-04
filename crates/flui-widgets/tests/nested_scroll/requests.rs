@@ -9,10 +9,10 @@ use flui_animation::Vsync;
 use flui_foundation::geometry::Vec2;
 use flui_interaction::InputSequenceId;
 use flui_interaction::events::{Code, Key, NamedKey};
+use flui_view::environment::VsyncScope;
 use flui_view::{BoxedView, ViewExt};
 use flui_widgets::{
     NestedScroll, ScrollCause, ScrollController, ScrollDevice, ScrollEndReason, SizedBox,
-    VsyncScope,
 };
 
 use crate::common::LaidOut;

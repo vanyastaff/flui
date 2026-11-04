@@ -189,9 +189,9 @@ use flui_sdk::animation::{
 };
 use flui_sdk::foundation::ElementId;
 use flui_sdk::view::PostFrameHandle;
+use flui_sdk::view::environment::VsyncScope;
 use flui_sdk::view::prelude::*;
 use flui_sdk::view::{RebuildHandle, impl_inherited_view};
-use flui_sdk::widgets::animated::VsyncScope;
 
 use crate::snack_bar::SnackBar;
 

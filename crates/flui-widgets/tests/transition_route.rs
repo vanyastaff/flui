@@ -25,11 +25,11 @@ use flui_animation::{Animation, AnimationStatus, Vsync};
 use flui_view::prelude::*;
 use parking_lot::Mutex;
 
+use flui_view::environment::VsyncScope;
 use flui_widgets::__test_access::{
     NavigatorProbe as _, RouteLifecycle, TransitionHandle, TransitionRoute,
 };
 use flui_widgets::SizedBox;
-use flui_widgets::animated::VsyncScope;
 use flui_widgets::navigator::{Navigator, NavigatorHandle, SimpleRoute};
 
 use crate::common::harness::{Harness, mount};

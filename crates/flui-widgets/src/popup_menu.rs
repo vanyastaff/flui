@@ -31,8 +31,8 @@ use flui_view::prelude::*;
 
 use crate::interaction::{
     Action, ActionOutcome, Actions, ActivateIntent, ActivationPressIntent, ButtonActivateIntent,
-    Focus, FocusRing, GestureArenaScope, GestureDetector, Intent, MenuItem, MenuPresenter,
-    MenuRequest, Shortcuts, SingleActivator,
+    Focus, FocusRing, GestureDetector, Intent, MenuItem, MenuPresenter, MenuRequest, Shortcuts,
+    SingleActivator,
 };
 use crate::localization::{BoxedWidgetsLocalizations, Directionality};
 use crate::navigator::{NavigatorHandle, PopupRoute, RouteId};
@@ -41,6 +41,7 @@ use crate::{
     IntrinsicWidth, Padding, PopupOrigin, SelectionMenu, SelectionPopup, Semantics, SemanticsRole,
     Text, ToolbarItems,
 };
+use flui_view::environment::GestureArenaScope;
 
 // ============================================================================
 // Opening and closing

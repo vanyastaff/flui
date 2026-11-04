@@ -66,9 +66,9 @@ use flui_sdk::painting::{BorderRadius, BorderRadiusExt, Color};
 use flui_sdk::pipeline::TranslationFraction;
 use flui_sdk::rendering::{BoxConstraints, HitTestBehavior};
 use flui_sdk::view::environment::MediaQuery;
+use flui_sdk::view::environment::VsyncScope;
 use flui_sdk::view::prelude::*;
 use flui_sdk::view::{GlobalKey, impl_inherited_view};
-use flui_sdk::widgets::animated::VsyncScope;
 use flui_sdk::widgets::{
     Align, ColoredBox, ConstrainedBox, DragSlot, FadeTransition, GestureDetector, LayoutBuilder,
     SizedBox, SlideTransition, Stack,

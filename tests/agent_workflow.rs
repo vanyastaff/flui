@@ -56,6 +56,7 @@ use flui::prelude::*;
 use flui::testing::rendering::render_snapshot;
 use flui::testing::replay::PointerScript;
 use flui::testing::{HeadlessBinding, MountOptions, MountOwners};
+use flui::view::environment::GestureArenaScope;
 use flui::widgets::column;
 
 /// The tree `flui create`'s counter template builds: `Center` → `Column` →

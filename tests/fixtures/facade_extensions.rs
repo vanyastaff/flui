@@ -115,7 +115,8 @@ impl CustomPainter for MotionPainter {
 fn nested_custom_motion_repaints_and_retargets_through_the_facade() {
     use flui::animation::{AnimatedValue, Linear, MotionSpec, SharedCurve, Vsync};
     use flui::testing::widgets::{LaidOut, lay_out_animated};
-    use flui::widgets::{CustomPaint, VsyncScope};
+    use flui::view::environment::VsyncScope;
+    use flui::widgets::CustomPaint;
 
     fn sample(laid: &LaidOut) -> (Rect, Color) {
         let rectangles: Vec<_> = laid.draw_ops().into_iter().filter_map(|command| {

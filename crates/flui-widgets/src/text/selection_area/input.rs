@@ -34,11 +34,11 @@ use super::{
 use crate::interaction::actions::ErasedAction;
 use crate::interaction::recognizer_attachment::RecognizerAttachment;
 use crate::interaction::{
-    Action, ActionOutcome, CopySelectionTextIntent, DismissIntent, GesturePolicy, Listener,
-    SelectAllTextIntent,
+    Action, ActionOutcome, CopySelectionTextIntent, DismissIntent, Listener, SelectAllTextIntent,
 };
 use crate::support::command_modifiers;
 use crate::text::editable_text::is_word_jump_modifier;
+use flui_view::environment::GesturePolicy;
 
 /// How far a press selects, and how far a drag from it moves at a time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

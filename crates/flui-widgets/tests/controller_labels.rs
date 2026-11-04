@@ -8,12 +8,13 @@ use flui_animation::Vsync;
 use flui_foundation::geometry::{Angle, EdgeInsets};
 use flui_painting::Alignment;
 use flui_painting::styling::Color;
+use flui_view::environment::VsyncScope;
 use flui_view::{BoxedView, View, ViewExt};
 use flui_widgets::{
     ActivityIndicator, Alternative, AnimatedAlign, AnimatedContainer, AnimatedOpacity,
     AnimatedPadding, AnimatedRotation, AnimatedSize, Center, ColoredBox, ControlSpec,
     DismissDirection, Dismissible, GestureAlternatives, InteractiveViewer, MotionBuilder,
-    RefreshIndicator, RefreshIntent, SizedBox, VsyncScope,
+    RefreshIndicator, RefreshIntent, SizedBox,
 };
 use tracing::Subscriber;
 use tracing_subscriber::Layer;

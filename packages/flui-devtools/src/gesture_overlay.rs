@@ -32,11 +32,12 @@ use flui_sdk::foundation::{ChangeNotifier, Listenable, ListenerId, RebuildReason
 use flui_sdk::interaction::{EventTime, GestureArena, PointerEventExt, PointerId};
 use flui_sdk::painting::{Color, TextStyle};
 use flui_sdk::rendering::HitTestBehavior;
+use flui_sdk::view::environment::GestureArenaScope;
 use flui_sdk::view::prelude::*;
 use flui_sdk::view::{PostFrameHandle, RebuildHandle};
 use flui_sdk::widgets::{
-    ColoredBox, Column, CrossAxisAlignment, GestureArenaScope, IgnorePointer, Listener,
-    MainAxisSize, Padding, Positioned, SizedBox, Stack, StackFit, Text,
+    ColoredBox, Column, CrossAxisAlignment, IgnorePointer, Listener, MainAxisSize, Padding,
+    Positioned, SizedBox, Stack, StackFit, Text,
 };
 
 use crate::gesture_inspector::{

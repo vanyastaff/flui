@@ -19,13 +19,12 @@ use flui_painting::display_list::DrawOp;
 use flui_painting::paint::Shader;
 use flui_painting::styling::Color;
 use flui_testing::a11y::Role;
+use flui_view::environment::VsyncScope;
 use flui_view::{BoxedView, ViewExt};
 use flui_widgets::motion::{
     Animate, AnimateExt, Effect, Effects, Shimmer, ShimmerBand, Skeleton, Transition, Trigger,
 };
-use flui_widgets::{
-    AnimatedSwitcher, ColoredBox, Column, Row, SizedBox, Text, TickerMode, VsyncScope,
-};
+use flui_widgets::{AnimatedSwitcher, ColoredBox, Column, Row, SizedBox, Text, TickerMode};
 
 /// The animated child's side.
 const SIDE: f64 = 40.0;

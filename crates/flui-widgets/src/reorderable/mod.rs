@@ -55,7 +55,6 @@ use flui_rendering::delegates::{SliverGridDelegate, SliverGridLayout};
 use flui_rendering::pipeline::WeakPipelineCell;
 
 use crate::__private::AnchoredBox;
-use crate::animated::VsyncScope;
 use crate::interaction::FeedbackFrame;
 use crate::{
     AnimatedBuilder, DecoratedBox, DefaultFocusRingStyle, Opacity, PhysicalModel, Transform,
@@ -66,14 +65,15 @@ use flui_platform::keyboard::NamedKey;
 use flui_rendering::hit_testing::HitTestBehavior;
 use flui_rendering::semantics::{Announcer, Urgency};
 use flui_view::element::ElementKind;
+use flui_view::environment::GestureArenaScope;
+use flui_view::environment::VsyncScope;
 use flui_view::prelude::*;
 use flui_view::{EventCx, EventOutcome, RebuildHandle, WriterSource};
 
 use crate::interaction::actions::{ambient_action_chain, resolve};
 use crate::interaction::{
     Action, ActionOutcome, Actions, Alternative, ControlPlacement, ControlSpec,
-    GestureAlternatives, GestureArenaScope, GestureCommand, Intent, Shortcuts,
-    ShowContextMenuIntent, SingleActivator,
+    GestureAlternatives, GestureCommand, Intent, Shortcuts, ShowContextMenuIntent, SingleActivator,
 };
 use crate::localization::{
     BoxedWidgetsLocalizations, DefaultWidgetsLocalizations, Directionality, WidgetsLocalizations,

@@ -11,12 +11,13 @@ use flui_interaction::events::{Code, Key, NamedKey};
 use flui_painting::styling::Color;
 use flui_painting::typography::TextDirection;
 use flui_platform::HapticFeedback;
+use flui_view::environment::VsyncScope;
 use flui_view::{BoxedView, IntoView, ViewExt};
 use flui_widgets::{
     Alternative, AnchorIntent, AnchoredDrag, AnchoredDragController, AnchorsError, ColoredBox,
     ControlPlacement, ControlSpec, Directionality, DraggableAnchors, GestureAlternatives,
     GestureCommand, NestedScroll, ScrollCause, ScrollController, ScrollDevice, Scrollable,
-    SizedBox, VsyncScope,
+    SizedBox,
 };
 
 use crate::common::{LaidOut, lay_out_animated, tight};

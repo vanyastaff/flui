@@ -9,7 +9,7 @@ error[E0308]: mismatched types
   = note: expected reference `&dyn LifecycleContext`
              found reference `&dyn BuildContext`
 note: associated function defined here
- --> crates/flui-widgets/src/animated/vsync_scope.rs
+ --> crates/flui-view/src/environment.rs
   |
   |     pub fn maybe_of(ctx: &dyn LifecycleContext) -> Option<Vsync> {
   |            ^^^^^^^^

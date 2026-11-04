@@ -16,8 +16,8 @@ use flui_view::element::{
 use flui_view::prelude::{StatefulView, StatelessView, ViewState};
 use flui_view::{BuildContext, IntoView, LifecycleContext, RebuildHandle, ViewExt};
 
-use crate::VsyncScope;
 use crate::scroll::scroll_position_scope::ScrollPositionScope;
+use flui_view::environment::VsyncScope;
 
 /// A sliver that keeps a header of delegate-controlled extent at the leading
 /// edge, rebuilding its content as the header collapses from

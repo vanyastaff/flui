@@ -18,9 +18,10 @@ use std::time::Duration;
 use crate::common::{lay_out_animated, loose};
 use flui_animation::{MotionSpec, SharedCurve, SpringDescription, Vsync, curves};
 use flui_painting::Alignment;
+use flui_view::environment::VsyncScope;
 use flui_view::prelude::{BuildContext, StatefulView};
 use flui_view::{EventCx, IntoView, ViewState};
-use flui_widgets::{AnimatedSize, MotionBuilder, SizedBox, VsyncScope};
+use flui_widgets::{AnimatedSize, MotionBuilder, SizedBox};
 use parking_lot::Mutex;
 
 /// A 100 ms run pumped in 20 ms frames spans the run in five steps.

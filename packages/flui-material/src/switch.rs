@@ -91,8 +91,8 @@ use flui_sdk::painting::Canvas;
 use flui_sdk::painting::Color;
 use flui_sdk::painting::Paint;
 use flui_sdk::painting::TextDirection;
+use flui_sdk::view::environment::VsyncScope;
 use flui_sdk::view::prelude::*;
-use flui_sdk::widgets::animated::VsyncScope;
 use flui_sdk::widgets::{
     CustomPaint, CustomPainter, Directionality, MotionBuilder, Semantics, WidgetState,
     WidgetStateProperty, WidgetStates, WidgetStatesController,

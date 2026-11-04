@@ -10,8 +10,8 @@ use flui_view::{BoxedView, IntoView, ViewExt, ViewState};
 
 use crate::animated::implicitly_animated::MotionBuilder;
 use crate::animated::property_motion::PropertyMotion;
-use crate::animated::vsync_scope::VsyncScope;
 use crate::{AnimatedBuilder, Positioned};
+use flui_view::environment::VsyncScope;
 
 /// The six placement properties, in the order they are staged.
 const LABELS: [&str; 6] = [

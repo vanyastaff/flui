@@ -60,8 +60,8 @@ flui-view = { path = "../flui-view", version = "=0.2.0-dev" }
 # widget harness (`widgets`) reads.
 flui-rendering = { path = "../flui-rendering", version = "=0.2.0-dev", features = ["testing"] }
 # The widget harness (`widgets`): the catalog widgets it wraps a root in
-# (`Align`, `ConstrainedBox`, `UnconstrainedBox`, `FocusRoot`,
-# `GestureArenaScope`), and the concrete render objects its probes downcast.
+# (`Align`, `ConstrainedBox`, `UnconstrainedBox`, `FocusRoot`), and the
+# concrete render objects its probes downcast.
 flui-widgets = { path = "../flui-widgets", version = "=0.2.0-dev" }
 flui-objects = { workspace = true }
 # `HeadlessHost` hosts a `UiRuntime` and drives its frame transaction

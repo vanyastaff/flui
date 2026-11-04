@@ -3432,8 +3432,8 @@ struct NestedWheelScroll {
 
 impl StatelessView for NestedWheelScroll {
     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
-        let scope = flui_widgets::GestureArenaScope::new(
-            flui_widgets::GestureArenaScope::of(ctx),
+        let scope = flui_view::environment::GestureArenaScope::new(
+            flui_view::environment::GestureArenaScope::of(ctx),
             self.child.clone(),
         );
         if self.authored_gestures {
@@ -3464,11 +3464,11 @@ impl flui_view::StatefulView for AuthoredGestureTiming {
 
 impl flui_view::ViewState<AuthoredGestureTiming> for AuthoredGestureTimingState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        self.arena = Some(flui_widgets::GestureArenaScope::of(ctx));
+        self.arena = Some(flui_view::environment::GestureArenaScope::of(ctx));
     }
 
     fn build(&self, view: &AuthoredGestureTiming, _: &dyn BuildContext) -> impl IntoView {
-        flui_widgets::GestureArenaScope::new(
+        flui_view::environment::GestureArenaScope::new(
             self.arena.as_ref().expect("mounted arena").clone(),
             view.child.clone(),
         )

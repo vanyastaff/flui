@@ -121,7 +121,8 @@ pub(crate) fn cancelling_a_back_swipe_past_halfway_keeps_the_route() {
     use crate::common::{lay_out_animated, tight};
     use flui_animation::Vsync;
     use flui_painting::styling::Color;
-    use flui_widgets::{ColoredBox, VsyncScope};
+    use flui_view::environment::VsyncScope;
+    use flui_widgets::ColoredBox;
     let navigator = NavigatorHandle::new();
     navigator.seed_initial(SimpleRoute::<i32>::new(|_| {
         ColoredBox::new(Color::BLACK).boxed()
@@ -183,7 +184,8 @@ pub(crate) fn mounted_back_swipe_reads_retained_admission_settings() {
     };
     use flui_interaction::{GestureSettings, GestureSettingsSource, PointerId};
     use flui_painting::styling::Color;
-    use flui_widgets::{ColoredBox, GestureDetector, VsyncScope};
+    use flui_view::environment::VsyncScope;
+    use flui_widgets::{ColoredBox, GestureDetector};
 
     let profile = |slop| {
         GestureSettings::default()
@@ -274,7 +276,8 @@ pub(crate) fn replacing_authored_back_swipe_policy_cancels_the_outgoing_contact(
     };
     use flui_interaction::{GestureSettings, PointerId};
     use flui_painting::styling::Color;
-    use flui_widgets::{ColoredBox, GestureDetector, VsyncScope};
+    use flui_view::environment::VsyncScope;
+    use flui_widgets::{ColoredBox, GestureDetector};
 
     let navigator = NavigatorHandle::new();
     navigator.seed_initial(SimpleRoute::<i32>::new(|_| {
@@ -413,7 +416,8 @@ pub(crate) fn mounted_back_swipe_settle_uses_the_admitted_fling_bound() {
             PointerMove, PointerPosition, PointerPress, PointerRelease, PointerSample,
         },
     };
-    use flui_widgets::{ColoredBox, VsyncScope};
+    use flui_view::environment::VsyncScope;
+    use flui_widgets::ColoredBox;
 
     let profile = |max| {
         GestureSettings::default()

@@ -8,8 +8,8 @@ use flui_material::{InkWell, RippleConfiguration, RippleScope, StateLayerAlpha, 
 use flui_sdk::animation::MotionOverride;
 use flui_sdk::geometry::{Point, Rect};
 use flui_sdk::painting::{Alignment, Color, DrawOp};
+use flui_sdk::view::environment::VsyncScope;
 use flui_sdk::view::prelude::*;
-use flui_sdk::widgets::animated::VsyncScope;
 use flui_sdk::widgets::{
     GestureDetector, OverflowBox, Row, SizedBox, WidgetState, WidgetStatesController,
 };

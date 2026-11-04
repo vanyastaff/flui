@@ -105,7 +105,7 @@ impl StatefulView for SamplingView {
 
 impl ViewState<SamplingView> for SamplingState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        let registry = flui_widgets::VsyncScope::maybe_of(ctx)
+        let registry = flui_view::environment::VsyncScope::maybe_of(ctx)
             .expect("mounted animation receives its presentation registry");
         let driven = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&registry));
         let peer = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&registry));
@@ -116,7 +116,7 @@ impl ViewState<SamplingView> for SamplingState {
             controller: driven.controller().clone(),
             peer: peer.controller().clone(),
             completion,
-            arena: flui_widgets::GestureArenaScope::of(ctx),
+            arena: flui_view::environment::GestureArenaScope::of(ctx),
         });
         self.driven = Some([driven, peer]);
     }

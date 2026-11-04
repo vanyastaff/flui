@@ -29,11 +29,12 @@ use flui_painting::typography::TextDirection;
 use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
 use flui_testing::{FrameReport, HeadlessBinding, MountOptions, MountOwners};
 use flui_view::RebuildReason;
+use flui_view::environment::GestureArenaScope;
 use flui_view::{BoxedView, View, ViewExt};
 use flui_widgets::{
-    Align, AlignTransition, ColoredBox, Column, DecoratedBoxTransition, FocusRoot,
-    GestureArenaScope, GestureDetector, PositionedTransition, RotationTransition, ScaleTransition,
-    SizeTransition, SizedBox, SlideTransition, Stack, row,
+    Align, AlignTransition, ColoredBox, Column, DecoratedBoxTransition, FocusRoot, GestureDetector,
+    PositionedTransition, RotationTransition, ScaleTransition, SizeTransition, SizedBox,
+    SlideTransition, Stack, row,
 };
 
 /// The child's side: every transition here wraps a 40×40 box.

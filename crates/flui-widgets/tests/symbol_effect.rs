@@ -10,9 +10,10 @@ use flui_animation::{ConstantAnimation, MotionOverride, Vsync};
 use flui_foundation::geometry::Matrix4;
 use flui_painting::display_list::DrawOp;
 use flui_view::View;
+use flui_view::environment::VsyncScope;
 use flui_widgets::{
     AnimatedIcon, AnimatedIconData, Icon, IconCommand, IconData, IconPath, PathEffect, Speed,
-    SymbolEffect, TickerMode, VsyncScope,
+    SymbolEffect, TickerMode,
 };
 
 use crate::common::{LaidOut, lay_out_animated, loose};

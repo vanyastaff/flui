@@ -20,8 +20,8 @@ use flui_sdk::animation::{
 use flui_sdk::foundation::Listenable;
 use flui_sdk::geometry::{Rect, Size};
 use flui_sdk::painting::{Canvas, Color, Paint, TextDirection};
+use flui_sdk::view::environment::VsyncScope;
 use flui_sdk::view::prelude::*;
-use flui_sdk::widgets::animated::VsyncScope;
 use flui_sdk::widgets::{CustomPaint, CustomPainter, Directionality};
 
 use super::{Fraction, STROKE, moves, paint_linear_track, progress_semantics};

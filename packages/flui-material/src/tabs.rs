@@ -99,9 +99,9 @@ use flui_sdk::foundation::panic::PanicRecovery;
 use flui_sdk::foundation::{Listenable, ListenerId};
 use flui_sdk::geometry::{EdgeInsets, Rect, Size};
 use flui_sdk::painting::{Canvas, Color, Paint, TextDirection, TextStyle};
+use flui_sdk::view::environment::VsyncScope;
 use flui_sdk::view::prelude::*;
 use flui_sdk::view::{BoxedView, RebuildHandle};
-use flui_sdk::widgets::animated::VsyncScope;
 use flui_sdk::widgets::{
     Center, Column, CompanionRegistration, Container, CrossAxisAlignment, CustomPaint,
     CustomPainter, DefaultTextStyle, Directionality, Expanded, IgnorePointer, MergeSemantics,

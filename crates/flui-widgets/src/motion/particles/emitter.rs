@@ -16,9 +16,9 @@ use flui_view::prelude::*;
 use super::atlas::Atlas;
 use super::config::ParticleConfig;
 use super::system::ParticleSystem;
-use crate::animated::VsyncScope;
 use crate::{CustomPaint, CustomPainter, TickerMode};
 use flui_view::environment::MediaQuery;
+use flui_view::environment::VsyncScope;
 
 /// A widget that emits, moves and draws particles: confetti, sparkles, snow, or a
 /// [`ParticleConfig`] of the app's own.

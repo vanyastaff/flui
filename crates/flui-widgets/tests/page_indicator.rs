@@ -11,11 +11,12 @@ use flui_painting::typography::TextDirection;
 use flui_painting::{DrawOp, PaintStyle};
 use flui_rendering::layer::Layer;
 use flui_testing::{Action, ActionRequest, NodeId, TreeId};
+use flui_view::environment::VsyncScope;
 use flui_view::prelude::*;
 use flui_view::{BoxedView, ViewExt};
 use flui_widgets::{
     ColoredBox, Column, Directionality, Expanded, PageController, PageIndicator,
-    PageIndicatorStyle, PageIndicatorStyleError, PageView, SizedBox, VsyncScope,
+    PageIndicatorStyle, PageIndicatorStyleError, PageView, SizedBox,
 };
 
 use crate::common::{LaidOut, lay_out_animated, pager_alternatives, tight};

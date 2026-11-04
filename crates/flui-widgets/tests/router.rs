@@ -18,10 +18,11 @@ use crate::common::{LaidOut, child_process, lay_out_animated, tight};
 use flui_animation::Vsync;
 use flui_foundation::notifier::Listenable;
 use flui_painting::styling::Color;
+use flui_view::environment::VsyncScope;
 use flui_widgets::prelude::*;
 use flui_widgets::{
     ColoredBox, GestureDetector, NavigatorHandle, NavigatorObserver, PopupRoute, RouteAnimation,
-    RouteId, RouteParseError, RouterError, Text, VsyncScope,
+    RouteId, RouteParseError, RouterError, Text,
 };
 
 const FRAME: Duration = Duration::from_millis(50);

@@ -11,11 +11,12 @@ use std::time::Duration;
 use flui_animation::Vsync;
 use flui_painting::styling::Color;
 use flui_painting::typography::TextDirection;
+use flui_view::environment::VsyncScope;
 use flui_view::{BoxedView, IntoView, ViewExt};
 use flui_widgets::{
     Actions, CallbackAction, ColoredBox, Column, Directionality, GestureCommand, Intent,
     ScrollController, Scrollable, SizedBox, SwipeAction, SwipeActions, SwipeActionsError,
-    SwipeAlternative, SwipeEdge, Text, VsyncScope,
+    SwipeAlternative, SwipeEdge, Text,
 };
 
 use crate::anchored_drag::painted_at;

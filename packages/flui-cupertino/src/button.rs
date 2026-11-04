@@ -55,9 +55,9 @@ use flui_sdk::painting::TextStyle;
 use flui_sdk::painting::{BorderRadius, BorderRadiusExt, BoxDecoration, Color};
 use flui_sdk::platform::Brightness;
 use flui_sdk::view::RebuildHandle;
+use flui_sdk::view::environment::VsyncScope;
 use flui_sdk::view::prelude::*;
 use flui_sdk::view::{BoxedView, StatefulView, ViewState};
-use flui_sdk::widgets::animated::VsyncScope;
 use flui_sdk::widgets::prelude::BoxConstraints;
 use flui_sdk::widgets::{
     Align, ConstrainedBox, DecoratedBox, DefaultTextStyle, FadeTransition, GestureDetector,

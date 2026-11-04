@@ -35,6 +35,7 @@ use flui_platform::haptics::{HapticRequest, HapticTiming};
 use flui_platform::pointer::PointerInfo;
 use flui_platform::{CursorIcon, HapticFeedback};
 use flui_view::element::ElementKind;
+use flui_view::environment::GesturePolicy;
 use flui_view::owner::{KeepAliveHandle, KeepAliveLease};
 use flui_view::prelude::*;
 use flui_view::{EventCx, EventOutcome, RebuildHandle, WriterSource};
@@ -44,7 +45,6 @@ use super::gesture_alternatives::{
     AlternativeKind, CommandAppearance, GestureAlternatives, GestureAlternativesError,
     MenuHoldScope,
 };
-use super::gesture_arena_scope::GesturePolicy;
 use super::recognizer_attachment::RecognizerAttachment;
 use crate::overlay::{InsertPosition, Overlay, OverlayEntry, OverlayHandle};
 use crate::support::{EventCallback, ValueCallback, event_callback, value_callback};
