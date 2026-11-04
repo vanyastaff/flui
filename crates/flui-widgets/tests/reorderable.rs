@@ -21,8 +21,8 @@ use flui_platform::EventTime;
 use flui_platform::keyboard::{Code, KeyEvent, KeyState, NamedKey};
 use flui_testing::a11y::{A11yTree, Action, ActionData, ActionRequest, NodeId, TreeId};
 use flui_testing::replay::{MouseScript, PointerScript};
+use flui_testing::widgets::SharedSignal;
 use flui_testing::{AlternativesSubject, GestureAlternativesCheck, assert_gesture_alternatives};
-use flui_view::StateHandle;
 use flui_view::element::ElementKind;
 use flui_view::prelude::*;
 use flui_widgets::{
@@ -77,27 +77,27 @@ struct Log {
 /// The shelf: its model, what it recorded and whether the list is shown.
 #[derive(Clone)]
 struct Shelf {
-    items: StateHandle<Vec<String>>,
-    shown: StateHandle<bool>,
+    items: SharedSignal<Vec<String>>,
+    shown: SharedSignal<bool>,
     /// Whether the list scrolls horizontally.
-    horizontal: StateHandle<bool>,
+    horizontal: SharedSignal<bool>,
     /// Whether the focus ring above the overlay has its second color.
-    ring: StateHandle<bool>,
+    ring: SharedSignal<bool>,
     log: Rc<Log>,
 }
 
 impl Shelf {
     fn new(items: &[&str]) -> Self {
         Self {
-            items: StateHandle::new(
+            items: SharedSignal::new(
                 items
                     .iter()
                     .map(|item| (*item).to_owned())
                     .collect::<Vec<String>>(),
             ),
-            shown: StateHandle::new(true),
-            horizontal: StateHandle::new(false),
-            ring: StateHandle::new(false),
+            shown: SharedSignal::new(true),
+            horizontal: SharedSignal::new(false),
+            ring: SharedSignal::new(false),
             log: Rc::default(),
         }
     }
@@ -106,16 +106,16 @@ impl Shelf {
     fn numbered(count: usize) -> Self {
         let names: Vec<String> = (0..count).map(|index| index.to_string()).collect();
         Self {
-            items: StateHandle::new(names),
-            shown: StateHandle::new(true),
-            horizontal: StateHandle::new(false),
-            ring: StateHandle::new(false),
+            items: SharedSignal::new(names),
+            shown: SharedSignal::new(true),
+            horizontal: SharedSignal::new(false),
+            ring: SharedSignal::new(false),
             log: Rc::default(),
         }
     }
 
     fn items(&self) -> Vec<String> {
-        self.items.with(Clone::clone)
+        self.items.value()
     }
 
     fn moves(&self) -> Vec<(usize, usize, ReorderCause)> {
@@ -142,7 +142,7 @@ impl View for Desk {
 
 struct DeskState {
     navigator: NavigatorHandle,
-    ring: StateHandle<bool>,
+    ring: SharedSignal<bool>,
 }
 
 impl StatefulView for Desk {
@@ -168,9 +168,9 @@ impl ViewState<Desk> for DeskState {
 
     /// The focus ring's style sits above the overlay, so a change of it
     /// rebuilds what the overlay shows.
-    fn build(&self, _view: &Desk, _ctx: &dyn BuildContext) -> impl IntoView {
+    fn build(&self, _view: &Desk, ctx: &dyn BuildContext) -> impl IntoView {
         let mut style = FocusRingStyle::BUILT_IN;
-        if self.ring.with(|ring| *ring) {
+        if self.ring.get(ctx) {
             style.outer = Color::rgb(0x00, 0x60, 0xC0);
         }
         DefaultFocusRingStyle::new(style, Navigator::new(self.navigator.clone()))
@@ -188,10 +188,10 @@ impl View for ShelfList {
 }
 
 struct ShelfListState {
-    items: StateHandle<Vec<String>>,
-    shown: StateHandle<bool>,
+    items: SharedSignal<Vec<String>>,
+    shown: SharedSignal<bool>,
     /// Whether the list scrolls horizontally.
-    horizontal: StateHandle<bool>,
+    horizontal: SharedSignal<bool>,
 }
 
 impl StatefulView for ShelfList {
@@ -213,25 +213,22 @@ impl ViewState<ShelfList> for ShelfListState {
         self.horizontal.bind(ctx);
     }
 
-    fn build(&self, view: &ShelfList, _ctx: &dyn BuildContext) -> impl IntoView {
-        if !self.shown.with(|shown| *shown) {
+    fn build(&self, view: &ShelfList, ctx: &dyn BuildContext) -> impl IntoView {
+        if !self.shown.get(ctx) {
             return SizedBox::shrink().into_view().boxed();
         }
         let shelf = &view.0;
-        let horizontal = self.horizontal.with(|horizontal| *horizontal);
+        let horizontal = self.horizontal.get(ctx);
         // A row is `ROW` along the list, the rest of the cross axis beside its handle.
         let (width, height) = if horizontal {
             (ROW, 152.0)
         } else {
             (352.0, ROW)
         };
-        let count = self.items.with(Vec::len);
-        let (keys, rows, labels, model) = (
-            self.items.clone(),
-            self.items.clone(),
-            self.items.clone(),
-            self.items.clone(),
-        );
+        let items = Rc::new(self.items.get(ctx));
+        let count = items.len();
+        let (keys, rows, labels) = (Rc::clone(&items), Rc::clone(&items), items);
+        let model = self.items.clone();
         let (fed, with_feedback) = (Rc::clone(&shelf.log), shelf.log.with_feedback.get());
         let (moved, previewed, selecting) = (
             Rc::clone(&shelf.log),
@@ -240,10 +237,10 @@ impl ViewState<ShelfList> for ShelfListState {
         );
         let list = ReorderableList::builder(
             count,
-            move |index| keys.with(|items| items[index].clone()),
+            move |index| keys[index].clone(),
             move |item| {
                 selecting.built.borrow_mut().push(item.index());
-                let name = rows.with(|items| items[item.index()].clone());
+                let name = rows[item.index()].clone();
                 let text = Text::new(name);
                 if !selecting.selectable.get() {
                     return SizedBox::new(width, height).child(text).into_view().boxed();
@@ -259,15 +256,17 @@ impl ViewState<ShelfList> for ShelfListState {
                 });
                 SizedBox::new(width, height).child(area).into_view().boxed()
             },
-            move |_cx, change| {
+            move |cx, change| {
                 moved
                     .moves
                     .borrow_mut()
                     .push((change.from, change.to, change.cause));
-                model.update(|items| {
-                    let item = items.remove(change.from);
-                    items.insert(change.to, item);
-                });
+                model
+                    .update_in(cx, |items| {
+                        let item = items.remove(change.from);
+                        items.insert(change.to, item);
+                    })
+                    .expect("the shelf's signal is alive while its list is mounted");
             },
         )
         .on_reorder_preview(move |_cx, preview| previewed.previews.borrow_mut().push(preview))
@@ -297,7 +296,7 @@ impl ViewState<ShelfList> for ShelfListState {
         let list = if shelf.log.unlabelled.get() {
             list
         } else {
-            list.item_label(move |index| labels.with(|items| items[index].clone()))
+            list.item_label(move |index| labels[index].clone())
         };
         list.into_view().boxed()
     }
@@ -871,7 +870,7 @@ pub(crate) fn reorderable_list() {
             let shelf = Shelf::new(&["a", "b", "c"]);
             let items = shelf.items.clone();
             AlternativesSubject::new(Desk(shelf), &middle_row_alternatives(), move || {
-                items.with(Clone::clone)
+                items.value()
             })
         },
     ));

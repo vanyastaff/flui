@@ -862,11 +862,10 @@ that reason: those crates' own tests can see implementation details this one
 must not use.
 
 The tree under test is a Material counter (`Center` → `Column` → prompt
-`Text` / count `Text` / `ElevatedButton`, a `StateCell` bound in
+`Text` / count `Text` / `ElevatedButton`, a `Signal` created in
 `init_state`), the shape the CLI `counter` template
 (`crates/flui-cli/src/templates/counter.rs`) has with Material in place of
-its `RawButton` and `Signal` — see `crates/flui-view/src/state_cell.rs` for
-the state primitive. Five steps, each backed by a documented, facade-reachable API:
+its `RawButton`. Five steps, each backed by a documented, facade-reachable API:
 
 | Step | What it does | API |
 |------|--------------|-----|

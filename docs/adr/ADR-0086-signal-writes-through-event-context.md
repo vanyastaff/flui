@@ -4,7 +4,6 @@
 - **Date:** 2026-09-25
 - **Amended:** 2026-10-30 — §5: listener, animation-status and post-frame callbacks lost `Send`
   without gaining `cx`; they write through a captured `WriterSource`.
-- **Amended:** 2026-10-11 — implemented local-state write refusal and current method names are distinguished from outstanding proposal items.
 - **Superseded-by:** [ADR-0161](ADR-0161-immutable-owner-local-gesture-recognizers.md),
   only §4's gesture extension signature compatibility promise; the signal write
   boundary and widget-side `WriterSource` wrapping remain in force
@@ -103,9 +102,8 @@ At the original census, one catalog callback was invoked from `build`: `Animated
 The owner-local migration now delivers it after the frame. A callback called
 from `build` cannot be handed a typed write capability, because `build` has none.
 
-`StateCell` is bound from `init_state` through `StateCell::bind(&self, ctx: &dyn
-LifecycleContext)` (`crates/flui-view/src/state_cell.rs:189`) and is unguarded while unbound by
-design (`state_cell.rs:48-60`).
+Element-local state is a `Signal<T>`, created in `init_state` through `ctx.signal(value)`
+(`crates/flui-view/src/context/build_context.rs`); no other local-state handle exists.
 
 ### What the panel measured
 
@@ -310,8 +308,7 @@ originating-context contract is settled with that dispatch path; the `TabControl
 `CupertinoTabController` listeners notify from a method the application calls, so their `cx`
 arrives with the listener family (§5) as a caller-supplied context, as the form handles do;
 `UiCommand::SignalWrite` still opens its write on `&Reactive` (§3, ADR-0074 §5.8); the
-`&Reactive` target and both `reactive()` accessors go in §8 step 3; bound local-state mutations
-are already refused during `build` per §7. These boundaries follow §5 rather than weakening types or
+`&Reactive` target and both `reactive()` accessors go in §8 step 3. These boundaries follow §5 rather than weakening types or
 adding an ambient graph. The inventory of what still requires `Send` on the callback path —
 the families ADR-0091 §1 flips, the edges that stay `Send` by design, and the `Send + Sync`
 values that are data rather than callbacks — is kept with the `!Send` flip's row of
@@ -341,13 +338,10 @@ records failure scenarios, rejected alternatives and remaining ownership and
 overload boundaries. The post-frame bridge does not settle the shared animation
 listener topology or promise bounded event latency.
 
-### 7. `StateCell` and `RebuildHandle` stay run-time capabilities
+### 7. `RebuildHandle` stays a run-time capability
 
-Neither takes `&mut Writer`. `StateCell` is already a capability bound in `init_state`
-(`state_cell.rs:189`) and works unbound; `RebuildHandle` stays as ADR-0018 defines it. The guard
-already refuses bound `StateCell::set`/`update` and `StateHandle` mutation during `build`,
-before changing storage or scheduling a rebuild. Unbound state remains ordinary local storage. The
-compile-time claim of this record is limited to writes into `Signal<T>`.
+It does not take `&mut Writer`; it stays as ADR-0018 defines it. The compile-time claim of this
+record is limited to writes into `Signal<T>`.
 
 ### 8. Order and rollback
 
@@ -364,7 +358,7 @@ The changes land one at a time, each with the pre-PR checks (AGENTS.md, "Checkin
    `WriterSource`), and the application code that uses it: the `counter` and `todo` examples
    (`examples/counter.rs`, [`examples/todo.rs`](https://github.com/vanyastaff/flui/blob/e8a42673ad23a2e88614940a266cd01224dcb25f/examples/todo.rs)) and the `flui create` counter template
    (`crates/flui-cli/src/templates/counter.rs`). Those examples previously used only Material
-   setters and `StateCell`/`StateHandle` (untyped by §7), so they move to the widgets catalog
+   setters and local state outside the typed write path, so they move to the widgets catalog
    and to `Signal<T>` state. `flui-cupertino`'s three setters move to the crate-by-crate
    migration with `GestureDetector`'s thirteen: converting either inside the pilot would touch
    Material and Cupertino call sites and make the pilot costly to revert. Steps 3 and 4 land
@@ -430,8 +424,8 @@ examples crates/flui-cli/src/templates` finds nothing (no annotation), and `git 
   out), and `EventOutcome` added to an existing `use`. `.report()` logs a refused write, as
   `RawButton` does with a press's `Result`. It disappears when the setter
   itself takes `cx`.
-- *Moving state to `Signal`*: `#[derive(Default)]` on the state and `Signal::default()` in place
-  of `StateCell::new(0)`/`StateHandle::new(..)`; net one line shorter in the counter.
+- *Moving state to `Signal`*: `#[derive(Default)]` on the state, `Signal::default()` in
+  `create_state` and `ctx.signal(0)` in `init_state`.
 - *Collateral outside the pilot*: none in code. One layout defect surfaced and was fixed in the
   pilot file itself: the todo `ListView` sat in a bare `Column`, got unbounded height, and its
   rows were never reachable (not in the semantics tree, not hit); it is now `Expanded`.
@@ -481,9 +475,6 @@ ready for the owner to accept.
   the reactive graph, which lives in `flui-view` above it.
 - **Accept both `Fn()` and `Fn(&mut EventCx)` during a transition.** Rejected: new-style closures
   then need explicit type annotations (probe d1), which is worse than one shape.
-- **Give `StateCell` a `&mut Writer` parameter.** Rejected: `StateCell` is a capability already,
-  it deliberately works unbound, and typing it would break every stateful widget for no new
-  guarantee.
 
 ## Consequences
 
@@ -520,7 +511,6 @@ Marked **(exists)** where the item is in the repository.
   `flui-view/tests/writer_source.rs::a_callback_run_inside_its_widgets_build_is_refused_by_the_guard`**)**.
 - A test that `AnimatedSize` no longer calls `on_end` from `build` **(exists**:
   `crates/flui-widgets/tests/animated_size.rs::animated_size_completion_writes_a_signal_after_build`**)**.
-- `bound_local_state_refuses_build_mutation_then_recovers` covers bound local-state mutation refusal through the public writer-source family.
 - §5 as amended: `owner_local_write_paths` in `crates/flui-testing/tests/` writes through a
   captured `WriterSource` from a listener, an animation-status listener and a post-frame
   callback (`listener_writes_through_a_captured_writer_source` and its two siblings), and

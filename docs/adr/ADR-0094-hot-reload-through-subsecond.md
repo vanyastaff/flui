@@ -99,7 +99,7 @@ merged.
   already uses.
 - **With the patched `dx`:**
   - A logic edit keeps state (a `born` field stays constant, a `ticks` counter keeps counting).
-    The signal and `StateCell` path was not exercised: its `count` stayed 0.
+    The signal path was not exercised: its `count` stayed 0.
   - A `State` size change (`extra: [u64; 8]`) is caught by a fingerprint of size, alignment, drop
     glue and type name, and the root is remounted with fresh state. That was a remount in the
     same UI runtime, primary presentation only, not a fresh UI runtime.

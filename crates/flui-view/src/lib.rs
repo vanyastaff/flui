@@ -107,7 +107,6 @@ pub mod owner;
 pub mod persist;
 pub mod reactive;
 pub mod seq;
-pub mod state_cell;
 pub mod tree;
 pub mod view;
 
@@ -242,13 +241,11 @@ pub use owner::{
     GlobalKeyScope, LifecycleHook, PresentationCapabilities, RebuildHandle, RebuildReason,
     RebuildReasons, RecoveredAt, RecoveredPanic, UnmountHook,
 };
-// Ergonomic local-state cells built on `RebuildHandle` (see `state_cell.rs`).
 pub use reactive::{
     BuildInProgress, EventContextError, EventCx, EventError, EventOutcome, Reactive, ReadGraph,
     ReadScope, ReaderSink, ScopeRef, Signal, SignalError, SignalSender, SignalSlot, SignalWriteExt,
     SlotInfo, WriteTarget, Writer, WriterSource, callback, callback_ref, callback_with,
 };
-pub use state_cell::{StateCell, StateHandle};
 pub use tree::{ElementNode, ElementTree};
 pub use view::{
     AnimatedElement, AnimatedView, BoxedElement, BoxedView, ElementBase, ElementDepth, ElementExt,
@@ -320,7 +317,6 @@ pub mod prelude {
         },
         key::{GlobalKey, GlobalKeyId, ObjectKey, ValueKey},
         owner::{BuildOwner, ElementOwner, RebuildHandle, RebuildReason, RebuildReasons},
-        state_cell::{StateCell, StateHandle},
         tree::{ElementNode, ElementTree},
         view::{
             AnimatedView, BoxedView, InheritedView, IntoView, Memo, ParentDataConfig,

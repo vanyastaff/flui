@@ -11,8 +11,8 @@ use flui_animation::{Linear, SharedCurve, Vsync, curves};
 use flui_foundation::geometry::{Matrix4, Rect};
 use flui_painting::{display_list::DrawOp, styling::Color};
 use flui_rendering::{layer::Layer, pipeline::PipelineOwner};
-use flui_testing::widgets::{LaidOut, lay_out_animated, tight};
-use flui_view::{StateHandle, ViewExt};
+use flui_testing::widgets::{LaidOut, SharedSignal, lay_out_animated, tight};
+use flui_view::ViewExt;
 use flui_widgets::prelude::*;
 use flui_widgets::{AnimatedContainer, AnimatedOpacity, ScrollController, Scrollable, VsyncScope};
 
@@ -52,11 +52,11 @@ impl Workload {
 struct Population {
     count: usize,
     workload: Workload,
-    target: StateHandle<bool>,
+    target: SharedSignal<bool>,
 }
 
 struct PopulationState {
-    target: StateHandle<bool>,
+    target: SharedSignal<bool>,
 }
 
 impl StatefulView for Population {
@@ -88,8 +88,8 @@ impl ViewState<Population> for PopulationState {
         self.target.bind(ctx);
     }
 
-    fn build(&self, view: &Population, _ctx: &dyn BuildContext) -> impl IntoView {
-        let target = self.target.with(|target| *target);
+    fn build(&self, view: &Population, ctx: &dyn BuildContext) -> impl IntoView {
+        let target = self.target.get(ctx);
         let children = (0..view.count)
             .map(|index| {
                 let cell = if view.workload.changes_color() {
@@ -162,7 +162,7 @@ pub(super) struct FrameSnapshot {
 
 pub(super) struct MountedMotion {
     pub(super) laid: LaidOut,
-    target: StateHandle<bool>,
+    target: SharedSignal<bool>,
     builds: Arc<BuildCounter>,
 }
 
@@ -178,7 +178,7 @@ impl flui_foundation::observe::TreeObserver for BuildCounter {
 impl MountedMotion {
     pub(super) fn new(count: usize, workload: Workload) -> Self {
         assert!((1..=1000).contains(&count));
-        let target = StateHandle::new(false);
+        let target = SharedSignal::new(false);
         let vsync = Vsync::new();
         let mut laid = lay_out_animated(
             VsyncScope::new(
