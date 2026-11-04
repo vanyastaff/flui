@@ -276,3 +276,105 @@ fn a_recording_the_app_refuses_says_why_and_writes_nothing() {
     let written = std::fs::read_to_string(tmp.path().join("out.jsonl")).unwrap_or_default();
     assert!(written.is_empty(), "{written}");
 }
+
+/// The `record_native` event carrying `line` of native `stream` of recording `recording`.
+fn native(recording: u64, stream: u32, line: &Value) -> String {
+    json!({ "event": "record_native", "params": {
+        "recording": recording, "window": "w1", "stream": stream, "line": line,
+    } })
+    .to_string()
+}
+
+/// A registry reading of `device` read as `kind`.
+fn reading(device: u64, kind: &str, contact: u64) -> Value {
+    json!({ "row": "reading", "reading": {
+        "surface": 1, "device": device, "contact": contact, "kind": kind, "action": "move",
+        "time": { "tick_ms": { "tick": 10, "observed_ms": 10 } }, "position": [5.0, 4.0],
+    } })
+}
+
+#[test]
+fn a_native_recording_writes_each_stream_with_the_devices_its_rows_read() {
+    use flui_protocol::native_recording::Row as NativeRow;
+
+    let tmp = TempDir::new().unwrap();
+    let listener = UnixListener::bind(tmp.path().join("agent.sock")).unwrap();
+    let child = flui_record(tmp.path(), &["out.jsonl", "--native", "native"]);
+
+    let mut peer = Peer::accept(&listener);
+    assert_eq!(started(&mut peer), json!({ "layers": ["input", "native"] }));
+    let registry = json!({ "flui_native_recording": 2, "backend": "x11" });
+    let add = json!({ "row": "add_device", "device": 1, "kind": "mouse", "time_ns": 51 });
+    let gap = json!({ "gap": { "rows": 3 } });
+    peer.send(&native(7, 0, &json!({ "header": registry })));
+    peer.send(&native(
+        7,
+        1,
+        &json!({ "header": {
+        "flui_native_recording": 2, "backend": "x11", "stream": "app",
+    } }),
+    ));
+    peer.send(&native(7, 0, &json!({ "row": add })));
+    peer.send(&native(7, 0, &json!({ "row": reading(1, "mouse", 9) })));
+    // A line of another recording is not this one's.
+    peer.send(&native(8, 0, &json!({ "row": reading(4, "touch", 9) })));
+    peer.send(&native(7, 0, &gap));
+    // A stream whose header never came has no file to place its rows in.
+    peer.send(&native(7, 2, &json!({ "row": reading(3, "mouse", 9) })));
+    peer.send(&row(7, &json!({ "end": { "lost_rows": 0 } })));
+    // Admitted before the end, sent after it.
+    peer.send(&native(7, 0, &json!({ "row": reading(2, "pen", 11) })));
+    stopped(
+        &mut peer,
+        &[],
+        &json!({ "rows": 0, "lost_rows": 0, "native_lost_rows": 4, "complete": true }),
+    );
+
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success(), "{}", stderr(&output));
+    let dir = tmp.path().join("native");
+    let text = std::fs::read_to_string(dir.join("0.jsonl")).expect("stream 0");
+    let lines: Vec<Value> = text
+        .lines()
+        .map(|line| serde_json::from_str(line).expect("json"))
+        .collect();
+    assert_eq!(lines.len(), 5, "{text}");
+    assert_eq!(
+        lines[0],
+        json!({ "flui_native_recording": 2, "backend": "x11", "devices": [
+            { "device": 1, "kinds": ["mouse"] },
+            { "device": 2, "kinds": ["pen"] },
+        ] })
+    );
+    let native_row = |value: &Value| serde_json::from_value::<NativeRow>(value.clone()).unwrap();
+    assert_eq!(native_row(&lines[1]), native_row(&add));
+    assert_eq!(native_row(&lines[2]), native_row(&reading(1, "mouse", 9)));
+    assert_eq!(lines[3], gap, "the gap stays where the stream lost rows");
+    assert_eq!(native_row(&lines[4]), native_row(&reading(2, "pen", 11)));
+    let app = std::fs::read_to_string(dir.join("1.jsonl")).expect("stream 1");
+    assert_eq!(app.lines().count(), 1, "{app}");
+
+    let mut files: Vec<String> = std::fs::read_dir(&dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    files.sort();
+    assert_eq!(files, ["0.jsonl", "1.jsonl", "index.json"]);
+    let index: Value =
+        serde_json::from_str(&std::fs::read_to_string(dir.join("index.json")).unwrap()).unwrap();
+    assert_eq!(
+        index,
+        json!({ "streams": [
+            { "stream": 0, "file": "0.jsonl", "backend": "x11", "journals": "registry",
+              "rows": 3, "lost_rows": 3 },
+            { "stream": 1, "file": "1.jsonl", "backend": "x11", "journals": "app",
+              "rows": 0, "lost_rows": 0 },
+            { "stream": 2, "file": null, "backend": null, "journals": null,
+              "rows": 0, "lost_rows": 1 },
+        ] })
+    );
+    let said = stderr(&output);
+    assert!(said.contains("Wrote 2 native streams"), "{said}");
+    assert!(said.contains("native stream 0 lost 3 rows"), "{said}");
+    assert!(said.contains("native stream 2 sent no header"), "{said}");
+}

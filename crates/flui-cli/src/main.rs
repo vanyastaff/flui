@@ -272,6 +272,11 @@ enum Commands {
         /// window titles); it is redacted otherwise
         #[arg(long)]
         keep_text: bool,
+        /// Record what the platform backend was handed too: each stream it
+        /// journals goes to DIR/<n>.jsonl as a native recording, and
+        /// DIR/index.json names them
+        #[arg(long, value_name = "DIR")]
+        native: Option<std::path::PathBuf>,
         /// Session file written by `flui run --agent` (default: the nearest
         /// `target/flui-agent.json`, or FLUI_AGENT_ENDPOINT and FLUI_AGENT_TOKEN)
         #[arg(long, value_name = "FILE")]
@@ -800,11 +805,13 @@ fn main() {
             output,
             window,
             keep_text,
+            native,
             session,
         } => commands::record::execute(commands::record::RecordArgs {
             output,
             window,
             keep_text,
+            native,
             session,
         }),
 

@@ -2,7 +2,9 @@
 //!
 //! See [`crate::agent::record`]. The command connects as an observer, so it records beside a
 //! `flui mcp` that drives the app. The recording goes to the named file, or to stdout for `-`;
-//! what the command says goes to stderr either way.
+//! what the command says goes to stderr either way. With `--native <dir>` the recording holds
+//! the native layer too, and each backend stream goes to `<dir>/<n>.jsonl` beside
+//! `<dir>/index.json` ([`crate::agent::record::native`]).
 
 use std::fs::File;
 use std::io::{self, BufWriter, Write};
@@ -11,10 +13,11 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use flui_protocol::session::ClientRole;
-use flui_protocol::{RecordParams, WindowId};
+use flui_protocol::{RecordLayer, RecordParams, WindowId};
 
 use crate::agent::Credentials;
 use crate::agent::client::{Connection, Failure};
+use crate::agent::record::native::{NativeFiles, WrittenStream};
 use crate::agent::record::{Ending, RecordFailure, Recorded, record};
 use crate::error::{CliError, CliResult};
 use crate::ui;
@@ -31,6 +34,8 @@ pub(crate) struct RecordArgs {
     pub(crate) window: Option<String>,
     /// Keep the text the rows carry.
     pub(crate) keep_text: bool,
+    /// Where the native streams go, when the recording holds the native layer.
+    pub(crate) native: Option<PathBuf>,
     /// The session file to connect with.
     pub(crate) session: Option<PathBuf>,
 }
@@ -48,7 +53,10 @@ pub(crate) fn execute(args: RecordArgs) -> CliResult<()> {
             })
         })
         .transpose()?;
-    let params = RecordParams::input(window).with_keep_text(args.keep_text);
+    let mut params = RecordParams::input(window).with_keep_text(args.keep_text);
+    if args.native.is_some() {
+        params.layers.push(RecordLayer::Native);
+    }
     let credentials = Credentials::find(args.session.as_deref()).map_err(CliError::Missing)?;
     let mut connection = Connection::connect(&credentials, ClientRole::Observer, CONNECT_WAIT)
         .map_err(|why| {
@@ -72,13 +80,28 @@ pub(crate) fn execute(args: RecordArgs) -> CliResult<()> {
         args.output.display().to_string()
     };
 
+    let mut native = args
+        .native
+        .as_deref()
+        .map(NativeFiles::create)
+        .transpose()
+        .map_err(|e| CliError::context(e, "could not create the native directory"))?;
+
     let interrupted = super::run::install_interrupt_flag();
     interrupted.store(false, Ordering::SeqCst);
     ui::step(format!("Recording to {shown}; Ctrl-C stops"))?;
-    let outcome = record(&mut connection, &params, &mut out, || {
+    let outcome = record(&mut connection, &params, &mut out, native.as_mut(), || {
         interrupted.load(Ordering::SeqCst)
     });
     drop(out);
+    // What arrived of the native streams is written whichever way the recording ended.
+    if let Some(native) = native {
+        let dir = native.dir().display().to_string();
+        let streams = native
+            .finish()
+            .map_err(|e| CliError::context(e, "could not write the native streams"))?;
+        report_native(&dir, &streams)?;
+    }
     match outcome {
         Ok(Recorded { summary, ending }) => {
             ui::emit(
@@ -115,7 +138,37 @@ pub(crate) fn execute(args: RecordArgs) -> CliResult<()> {
             error,
             format!("could not write the recording to {shown}"),
         )),
+        Err(RecordFailure::Native(error)) => {
+            Err(CliError::context(error, "could not write a native stream"))
+        }
     }
+}
+
+/// Says what went to the native directory `dir`.
+fn report_native(dir: &str, streams: &[WrittenStream]) -> CliResult<()> {
+    ui::emit(
+        "record.native",
+        &serde_json::json!({ "dir": dir, "streams": streams }),
+    );
+    let files = streams
+        .iter()
+        .filter(|stream| stream.file.is_some())
+        .count();
+    ui::success(format!("Wrote {files} native streams to {dir}"))?;
+    for stream in streams {
+        if stream.file.is_none() {
+            ui::warning(format!(
+                "native stream {} sent no header, so its {} rows have no file",
+                stream.stream, stream.lost_rows
+            ))?;
+        } else if stream.lost_rows > 0 {
+            ui::warning(format!(
+                "native stream {} lost {} rows, so a replay refuses it at its gap",
+                stream.stream, stream.lost_rows
+            ))?;
+        }
+    }
+    Ok(())
 }
 
 /// `failure` as a sentence part.
