@@ -98,8 +98,8 @@ keep:
 and tests program against, and nothing that names an OS, winit, AccessKit or tokio:
 
 - the per-window contract `PlatformWindow`, without `as_winit` and without `accessibility()`;
-- the capability traits `PlatformTextInput`, `PlatformHaptics`, `Clipboard`,
-  `DataTransferSource` and their vocabulary (`DataTransferOffer`, `ClipboardItem`); display
+- the capability traits `PlatformTextInput`, `PlatformHaptics` and `DragTransport` with its
+  vocabulary (`DataTransferOffer`), and the plain-text clipboard read (ADR-0312 §6); display
   vocabulary is `DisplaySnapshot` and its types, which replaced `PlatformDisplay` (ADR-0236);
 - the input and window vocabulary: `PlatformInput`, `DispatchEventResult`, `DragDropEvent`,
   `WindowEvent`, `WindowId`, `WindowOptions`, `WindowMode`, `WindowAppearance`, `WindowBounds`,
