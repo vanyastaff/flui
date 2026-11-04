@@ -24,8 +24,8 @@ trait depends on `flui-platform` instead.
   (ADR-0151 §10).** `src/` holds, at its top, the crate root (`lib.rs`, which
   picks a host), the table (`host.rs`), `Platform` and its one implementation
   (`platform.rs`), `HostWindow` (`host_window.rs`), the error vocabulary
-  (`error.rs`), the table-test runner (`table_test.rs`) and, until `Platform`
-  loses its executor, `executor.rs` and `task.rs`. Its directories are the
+  (`error.rs`), the table-test runner (`table_test.rs`), `executor.rs` (the
+  runtime the Linux and Windows hosts marshal their own I/O on, not part of `Platform`) and `task.rs`. Its directories are the
   tables (`hosts/`), the owner thread and each platform's loop (`owner/`), the
   OS versions (`version/`), the storage position's vocabulary (`storage/`), the
   OS objects two kinds of transfer share (`transfer/`: the Wayland seats' data
@@ -107,7 +107,7 @@ trait depends on `flui-platform` instead.
   names (`WindowsPlatform`, `HeadlessPlatform`, …) are `HostPlatform` over each
   table, and what a host offers beyond `Platform` (headless test controls, a
   scene registration) is an inherent method on `HostPlatform<H>` for the `H`
-  whose loop it is. The executor, the application path, the launch values (an
+  whose loop it is. The application path, the launch values (an
   Android intent's extras, the environment elsewhere; ADR-0288 §7), URL and path opening,
   the file prompts and the compositor name are no position: the loop carries
   them (`host::Services`) until the system capability crate takes them.

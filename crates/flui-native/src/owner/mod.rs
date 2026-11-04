@@ -135,7 +135,7 @@ use static_assertions::{assert_impl_all, assert_not_impl_any};
 
 use crate::error::PlatformError;
 use crate::host_window::{HostWindow, OwnerThreadToken};
-use crate::platform::{PathPromptOptions, Platform, PlatformExecutor};
+use crate::platform::{PathPromptOptions, Platform};
 use crate::task::Task;
 use flui_platform::data_transfer::DataTransferSource;
 use flui_platform::{WindowHandler, WindowId, WindowOptions};
@@ -293,7 +293,7 @@ impl OwnerPlatform {
         self.platform.quit();
     }
 
-    /// Escapes to the residual thread-safe surface: `background_executor`,
+    /// Escapes to the residual thread-safe surface:
     /// callback registration, and the rest of §2's "stays on
     /// `Platform`" list, wrapped in a `Clone + Send + Sync` handle a
     /// `std::thread::scope` worker can freely hold — see
@@ -370,12 +370,6 @@ impl fmt::Debug for SharedPlatform {
 impl SharedPlatform {
     pub(crate) fn new(platform: Arc<dyn Platform>) -> Self {
         Self { platform }
-    }
-
-    /// The platform's background executor for async tasks.
-    #[must_use]
-    pub fn background_executor(&self) -> Arc<dyn PlatformExecutor> {
-        self.platform.background_executor()
     }
 
     /// The platform's name for debugging/logging.

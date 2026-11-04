@@ -472,7 +472,7 @@ containment, the owner hearing committed text) stand. `InMemoryTextStore` moves 
 
 ### 9. `Platform` slims; one `AppHandler` replaces the application-level registrations
 
-Removed from `Platform`: `background_executor` with `BackgroundExecutor` and `Task`,
+Removed from `Platform`: `background_executor` (`BackgroundExecutor` and `Task` stay as the hosts' own marshaling),
 `active_window`, `write_to_clipboard`, `read_from_clipboard`, `on_window_event`,
 `compositor_name`, and `on_open_urls`, which has no producer. Moved to `flui-system`: `open_url`,
 `reveal_path`, `open_path`, `prompt_for_paths`, `prompt_for_new_path`, `app_path`.

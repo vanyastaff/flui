@@ -17,8 +17,7 @@
 ## Context
 
 `Platform` is `Send + Sync + 'static` with about thirty `&self` methods, and
-nothing distinguished an operation any thread may perform (`background_executor`,
-`name`) from one that is owner-thread-only on real operating systems
+nothing distinguished an operation any thread may perform (`name`) from one that is owner-thread-only on real operating systems
 (`open_window`, `activate`, `displays`, `window_appearance`, `quit`). There was
 no runtime check either. On macOS, `MacOSPlatform` was `unsafe impl Send/Sync`
 "by AppKit convention" while `quit()` messaged `NSApp` from whatever thread
@@ -93,7 +92,7 @@ backend's state lock or mutate the window map mid-frame. Errors are typed and
 
 ### 2. What stays on `Platform`
 
-`run`, `background_executor`, `capabilities`/`name`/`compositor_name`,
+`run`, `capabilities`/`name`/`compositor_name`,
 `app_path`, the `on_*` registrations (registration writes a `Send` callback;
 delivery is owner-thread by construction), `clipboard()` and `data_transfer()`
 (resolution is thread-safe; §5), and the shell dispatches

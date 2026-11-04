@@ -79,7 +79,7 @@ use flui_semantics::platform::{
 use crate::error::PlatformError;
 use crate::host_window::HostWindow;
 use crate::owner::OpenWindowError;
-use crate::platform::{AppHandler, PathPromptOptions, Platform, PlatformExecutor};
+use crate::platform::{AppHandler, PathPromptOptions, Platform};
 use crate::storage::DataStore;
 use crate::task::Task;
 use crate::text::TextInput;
@@ -160,14 +160,11 @@ pub trait Loop: Send + Sync + Sized + 'static {
 }
 
 /// What the host does for the application outside the closed list: the
-/// background executor, the application's path, opening URLs and paths, file
+/// application's path, opening URLs and paths, file
 /// prompts and the compositor's name. They leave [`Platform`] for the system
 /// capability crate (ADR-0151 §9); until then the loop carries them, and each
 /// host writes its answer, inert ones included.
 pub trait Services {
-    /// [`Platform::background_executor`].
-    fn background_executor(&self) -> Arc<dyn PlatformExecutor>;
-
     /// [`Platform::app_path`].
     ///
     /// # Errors

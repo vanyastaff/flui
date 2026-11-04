@@ -309,7 +309,7 @@ pub use task::{Task, TaskLabel};
 // `flui_platform`, the accessibility capability from `flui_semantics::platform`.
 // Each has this one path (ADR-0151 §9).
 pub use host_window::HostWindow;
-pub use platform::{AppHandler, ExitAnswer, PathPromptOptions, Platform, PlatformExecutor};
+pub use platform::{AppHandler, ExitAnswer, PathPromptOptions, Platform};
 #[cfg(any(target_os = "linux", target_os = "android"))]
 pub use process::current_user_id;
 #[cfg(windows)]

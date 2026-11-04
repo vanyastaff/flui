@@ -207,8 +207,8 @@ ADR-0081 land.
 
 Every callback registered through `Platform` or `PlatformWindow` is delivered on the owner
 thread, so the contract states that and drops the bound: `Box<dyn FnMut(..)>` instead of
-`Box<dyn FnMut(..) + Send>`. `PlatformExecutor::spawn` (`platform.rs:419`) keeps `Send`: it
-really crosses threads. The traits themselves stayed `Send + Sync` here; ADR-0254 §5 later
+`Box<dyn FnMut(..) + Send>`. The traits themselves stayed `Send + Sync` here;
+ADR-0254 §5 later
 made the window owner-local, and what reaches the raster thread is the `Send + Sync` surface
 target it hands out (ADR-0063).
 
