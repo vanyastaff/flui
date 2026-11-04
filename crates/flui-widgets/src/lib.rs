@@ -263,8 +263,7 @@ pub use form::{
 };
 pub use navigator::{
     AnimationRunFuture, FlightDirection, GeneratedRoute, Hero, HeroController, HeroControllerScope,
-    HeroMode, KeyedSettings, NamedRouteError, Navigator, NavigatorCommand, NavigatorCommandError,
-    NavigatorCommandOutcome, NavigatorCommandTarget, NavigatorHandle, NavigatorObserver,
+    HeroMode, KeyedSettings, NamedRouteError, Navigator, NavigatorHandle, NavigatorObserver,
     NavigatorRoute, NavigatorState, PageRoute, PageTransitionBuilder, PageTransitions,
     ParallaxPageTransition, PopInvokedCallback, PopScope, PopupRoute, PushCompletion, Route,
     RouteAnimation, RouteArguments, RouteBindingSlot, RouteContentBuilder, RouteId, RouteKey,

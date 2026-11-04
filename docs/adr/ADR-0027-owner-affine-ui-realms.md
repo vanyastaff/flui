@@ -260,7 +260,7 @@ These are deliberate divergences from Flutter's process-global shape.
   position left in the public API to a list that only shrinks.
 - **Closed command vocabulary**: the cross-thread surface is domain-specific — coalesced redraw
   requests (`RebuildHandle`, `FrameWaker`), signal writes (`SignalSender`), owner-queued hot
-  reload, stamped worker results (`IoFuture`, `ComputeJob`), navigation commands, application
+  reload, stamped worker results (`IoFuture`, `ComputeJob`), application
   commands (`AppHandle`), and the raster handle verbs. The run-a-closure primitive is crate-private; a public arbitrary-closure
   executor is rejected as a standing constraint. Raw channels never appear in public
   signatures.
