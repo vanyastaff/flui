@@ -36,7 +36,7 @@ the same bug found by a whole-demo snapshot names a demo.
 | **Widget** | A mounted widget tree with geometry probes and synthetic input, every frame the UI runtime's own `UiRuntime::pump` on a manual clock | `flui_testing::widgets::{lay_out, LaidOut}`, `flui_testing::HeadlessHost` | dev-dependency |
 | Accessibility | The assembled semantics tree, queried by role | `flui_testing::a11y::{A11yTree, A11yQuery}` | dev-dependency |
 | Gesture replay | A scripted gesture replayed with its timing | `flui_testing::replay::PointerScript` | dev-dependency |
-| Log capture | The `tracing` events a frame emitted | `flui_testing::log_capture::capture` | dev-dependency |
+| Log capture | The `tracing` events a frame emitted | `flui_log::testing::capture` (`flui_testing::log_capture` re-exports it for the crates whose edges go through the testing kit) | dev-dependency |
 | GPU readback | Real pixels off a local device (adapter required) | `flui-engine`'s readback suite | `flui-engine/testing` |
 
 Two structural rules hold across the stack:
@@ -807,7 +807,7 @@ through it.
 Some contracts are only observable as a diagnostic — a misconfiguration
 reported once rather than every frame, the text of a caught panic that
 `RenderError` does not carry. Capture those with
-`flui_testing::log_capture::capture`:
+`flui_log::testing::capture`:
 
 ```rust,ignore
 let (laid, log) = capture(|| harness::pump_widget(root, harness::screen()));
@@ -834,7 +834,7 @@ one closure. So it never takes the process-global default slot: a binary keeps
 its own logging subscriber, events outside a capture still reach it, and
 concurrent captures on different threads neither block nor see each other.
 A crate whose capture helper is too specialised to replace keeps it, and calls
-`log_capture::disarm_interest_cache` first — that is public for exactly this.
+`flui_log::testing::disarm_interest_cache` first — that is public for exactly this.
 `flui-view`, `flui-interaction` and `flui-app` do, through a
 **dev-dependency cycle**: `flui-testing` depends on them normally, and cargo
 permits the reverse edge for dev-dependencies precisely so a lower crate can
@@ -845,9 +845,9 @@ Two crates deliberately do not, because they have nothing to poison — their
 capture tests share no callsite with anything else in their binary, each
 emitting at its own source line inside its own helper. `flui-log` additionally
 has no in-workspace dependencies at all; `flui-foundation` is emission-only and may not construct a subscriber,
-which is also why the primitive lives in
-`flui-testing` rather than at the bottom of the DAG where every crate could
-reach it without an edge.
+which is why the capture primitive's home is the subscriber's crate:
+`flui_log::testing` builds a capture subscriber, so it lives in the crate
+whose composition decision a subscriber is, not at the DAG's bottom.
 
 ## Agent workflow
 

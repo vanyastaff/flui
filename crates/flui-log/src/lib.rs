@@ -150,6 +150,9 @@ pub mod config;
 pub mod filter;
 pub mod identity;
 pub mod ownership;
+// The crate's test support: deterministic `tracing` capture behind its own
+// subscriber home (ADR-0243: test support is named `testing`).
+pub mod testing;
 
 #[cfg(test)]
 mod test_support;

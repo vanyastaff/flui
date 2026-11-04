@@ -82,9 +82,9 @@
 //!
 //! - Span *fields* are not recorded — only events. Assertions here are about
 //!   what was logged, not about span structure.
-//! - A crate at or below `flui-interaction` in the layer DAG cannot depend on
-//!   this crate, so its in-`src` capture tests keep their own technique and
-//!   their own caveat.
+//! - A crate that does not build on `flui-log` (the frame-path floor) keeps
+//!   its own capture technique and its own caveat: this home is the one
+//!   everything above the log plane can reach without a testing-kit edge.
 
 use std::cell::RefCell;
 use std::fmt::Write as _;
