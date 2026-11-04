@@ -28,9 +28,9 @@ use flui_view::{
     InheritedView, RenderObjectContext, RenderView, impl_inherited_view, impl_render_view,
 };
 
-use crate::animated::VsyncScope;
 use crate::{Column, CrossAxisAlignment, MainAxisSize, Semantics, SizedBox, TickerMode};
 use flui_view::environment::MediaQuery;
+use flui_view::environment::VsyncScope;
 
 /// A skeleton's colour when none is given: a light neutral grey.
 const DEFAULT_BASE: Color = Color::rgb(224, 224, 224);

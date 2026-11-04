@@ -11,7 +11,7 @@ use flui_animation::{
 use flui_foundation::geometry::Matrix4;
 use flui_view::prelude::LifecycleContext;
 
-use crate::animated::vsync_scope::VsyncScope;
+use flui_view::environment::VsyncScope;
 
 /// How an implicit widget moves toward each new target.
 ///

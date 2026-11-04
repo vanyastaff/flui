@@ -155,8 +155,9 @@ pub fn a_toggle_cross_fades_to_its_selected_icon() {
 
     use common::lay_out_animated;
     use flui_sdk::animation::Vsync;
+    use flui_sdk::view::environment::VsyncScope;
+    use flui_sdk::widgets::Icon;
     use flui_sdk::widgets::icon::IconData;
-    use flui_sdk::widgets::{Icon, VsyncScope};
 
     let button = |vsync: &Vsync, selected| {
         VsyncScope::new(

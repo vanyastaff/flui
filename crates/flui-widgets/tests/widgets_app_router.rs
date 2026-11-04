@@ -19,11 +19,12 @@ use flui_interaction::focus::FocusScopeNode;
 use flui_painting::styling::Color;
 use flui_painting::typography::TextDirection;
 use flui_platform::Locale;
+use flui_view::environment::VsyncScope;
 use flui_widgets::interaction::Focus;
 use flui_widgets::prelude::*;
 use flui_widgets::{
     AppForm, ColoredBox, Directionality, FocusScope, Localizations, NavigatorHandle,
-    NavigatorObserver, RouterError, Row, SizedBox, Text, VsyncScope, WidgetsApp,
+    NavigatorObserver, RouterError, Row, SizedBox, Text, WidgetsApp,
 };
 
 use crate::common::{LaidOut, lay_out_animated, tight};

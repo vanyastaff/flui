@@ -802,11 +802,12 @@ pub(crate) fn closing_mid_transition_releases_the_route_overlay_and_hero() {
     use flui_animation::{Animation as _, Vsync};
     use flui_foundation::ValueKey;
     use flui_view::CloseReason;
+    use flui_view::environment::VsyncScope;
     use flui_widgets::__test_access::{
         HeroControllerProbe as _, OverlayEntryProbe as _, RouteProbe as _,
     };
+    use flui_widgets::Center;
     use flui_widgets::navigator::{Hero, HeroController, NavigatorObserver, PageRoute};
-    use flui_widgets::{Center, VsyncScope};
 
     use crate::common::{lay_out_animated, tight};
 

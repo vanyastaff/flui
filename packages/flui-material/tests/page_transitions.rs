@@ -23,10 +23,11 @@ use flui_sdk::geometry::Point;
 use flui_sdk::painting::{Color, DrawOp};
 use flui_sdk::platform::TargetPlatform;
 use flui_sdk::view::BuildContext;
+use flui_sdk::view::environment::VsyncScope;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{
     ColoredBox, FadeTransition, NavigatorHandle, PageRoute, PageTransitionBuilder, RouteAnimation,
-    SizedBox, VsyncScope,
+    SizedBox,
 };
 
 /// The pushed page's colour; nothing else in these apps paints it.

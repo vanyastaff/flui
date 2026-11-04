@@ -33,13 +33,13 @@ use flui_interaction::{
 };
 use flui_painting::styling::Color;
 use flui_rendering::hit_testing::HitTestBehavior;
+use flui_view::environment::GestureArenaScope;
 use flui_view::prelude::*;
 use flui_view::{BoxedView, LifecycleContext, ViewState};
 use flui_widgets::{
-    Alternative, ColoredBox, Column, GestureAlternatives, GestureArenaScope, GestureCommand,
-    GestureDetector, InteractiveViewer, Listener, MenuSpec, PageController, PageIntent, PageView,
-    ScrollController, Scrollable, SizedBox, SwipeAction, SwipeActions, SwipeAlternative,
-    ZoomIntent,
+    Alternative, ColoredBox, Column, GestureAlternatives, GestureCommand, GestureDetector,
+    InteractiveViewer, Listener, MenuSpec, PageController, PageIntent, PageView, ScrollController,
+    Scrollable, SizedBox, SwipeAction, SwipeActions, SwipeAlternative, ZoomIntent,
 };
 
 use crate::{

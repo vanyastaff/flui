@@ -12,8 +12,9 @@ use common::{lay_out_animated, tight};
 use flui_cupertino::cupertino_page_route;
 use flui_sdk::animation::{Curve, Vsync, curves};
 use flui_sdk::painting::{Color, DrawOp};
+use flui_sdk::view::environment::VsyncScope;
 use flui_sdk::view::prelude::*;
-use flui_sdk::widgets::{ColoredBox, Navigator, NavigatorHandle, SimpleRoute, VsyncScope};
+use flui_sdk::widgets::{ColoredBox, Navigator, NavigatorHandle, SimpleRoute};
 
 /// `CupertinoRouteTransitionMixin.kTransitionDuration` (`route.dart`, oracle
 /// tag `3.44.0`).

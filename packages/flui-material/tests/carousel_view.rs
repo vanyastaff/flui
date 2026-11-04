@@ -11,7 +11,7 @@ use flui_sdk::foundation::inspect::Rgba;
 use flui_sdk::geometry::Offset;
 use flui_sdk::painting::{Alignment, Color};
 use flui_sdk::view::ViewExt;
-use flui_sdk::widgets::animated::VsyncScope;
+use flui_sdk::view::environment::VsyncScope;
 use flui_sdk::widgets::{CarouselItemScope, CarouselLayout, ColoredBox, KeylineSnap};
 use flui_testing::TouchScript;
 use flui_testing::a11y::Role;

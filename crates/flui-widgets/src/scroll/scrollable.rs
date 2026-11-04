@@ -79,7 +79,6 @@ use flui_view::{
     BoxedView, BuildContext, Child, EventCx, IntoView, LifecycleContext, ViewExt, ViewState,
 };
 
-use crate::animated::VsyncScope;
 use crate::interaction::focus_reveal::{
     FocusRevealScope, RevealTarget, SharedRevealTarget, reveal_distance,
 };
@@ -99,9 +98,7 @@ use crate::scroll::{
     ClampingScrollPhysics, ScrollController, ScrollMetrics, SharedScrollPhysics, SnapPolicy,
 };
 use crate::support::command_modifiers;
-use crate::{
-    DragSlot, Focus, GestureArenaScope, GestureDetector, Listener, Semantics, SingleChildScrollView,
-};
+use crate::{DragSlot, Focus, GestureDetector, Listener, Semantics, SingleChildScrollView};
 use flui_interaction::focus::{FocusNode, FocusNodeRegistration, KeyEventResult};
 use flui_interaction::pointer::EventPropagation;
 use flui_interaction::{
@@ -116,6 +113,8 @@ use flui_platform::{
 };
 use flui_rendering::semantics::{Reveal, ScrollUnit as SemanticsScrollUnit};
 use flui_scheduler::PostFrameHandle;
+use flui_view::environment::GestureArenaScope;
+use flui_view::environment::VsyncScope;
 
 use super::anchored_drag::AnchoredLeaf;
 use super::scroll_controller::ScrollableHooks;
@@ -197,8 +196,8 @@ pub type ViewportBuilder = Rc<dyn Fn(ScrollPosition) -> BoxedView>;
 /// directly — marks itself needing layout; no element in the subtree is
 /// dirtied. See this module's docs.
 ///
-/// A [`VsyncScope`] must be above the `Scrollable` in the tree (or provided
-/// by the application's binding) for fling, `animate_to` and notched-wheel
+/// A `flui_view::environment::VsyncScope` must be above the `Scrollable` in the
+/// tree (or provided by the application's binding) for fling, `animate_to` and notched-wheel
 /// animations to advance. There is no wall-clock fallback: the animation
 /// controller is built with `AnimationController::unbounded_without_ticker`
 /// and registered with that scope. Drag updates and precise or unknown wheel
@@ -208,7 +207,8 @@ pub type ViewportBuilder = Rc<dyn Fn(ScrollPosition) -> BoxedView>;
 ///
 /// ```rust
 /// use flui_animation::Vsync;
-/// use flui_widgets::{ScrollController, Scrollable, SizedBox, VsyncScope};
+/// use flui_view::environment::VsyncScope;
+/// use flui_widgets::{ScrollController, Scrollable, SizedBox};
 ///
 /// let controller = ScrollController::new();
 ///

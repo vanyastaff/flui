@@ -139,8 +139,8 @@ use flui_sdk::painting::Alignment;
 use flui_sdk::painting::Color;
 use flui_sdk::painting::TextStyle;
 use flui_sdk::painting::{Canvas, Paint};
+use flui_sdk::view::environment::VsyncScope;
 use flui_sdk::view::prelude::*;
-use flui_sdk::widgets::animated::VsyncScope;
 use flui_sdk::widgets::{
     Column, CustomPaint, CustomPainter, Expanded, IconTheme, IconThemeData, IndexedStack,
     MainAxisAlignment, MergeSemantics, MotionBuilder, Padding, Row, SafeArea, Semantics,

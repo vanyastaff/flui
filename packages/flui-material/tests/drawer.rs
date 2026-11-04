@@ -18,9 +18,10 @@ use std::time::Duration;
 use common::{lay_out_animated, tight};
 use flui_material::{Drawer, DrawerHandle, Scaffold, ScaffoldScope, Theme, ThemeData};
 use flui_sdk::animation::Vsync;
+use flui_sdk::view::environment::VsyncScope;
 use flui_sdk::view::environment::{MediaQuery, MediaQueryData};
 use flui_sdk::view::prelude::*;
-use flui_sdk::widgets::{GestureDetector, SizedBox, VsyncScope};
+use flui_sdk::widgets::{GestureDetector, SizedBox};
 
 #[derive(Clone, StatelessView)]
 struct DrawerFlingProfile {
@@ -30,8 +31,8 @@ struct DrawerFlingProfile {
 
 impl StatelessView for DrawerFlingProfile {
     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
-        flui_sdk::widgets::GestureArenaScope::new(
-            flui_sdk::widgets::GestureArenaScope::of(ctx),
+        flui_sdk::view::environment::GestureArenaScope::new(
+            flui_sdk::view::environment::GestureArenaScope::of(ctx),
             self.child.clone(),
         )
         .settings(self.provider.clone())
@@ -360,7 +361,8 @@ fn drawer_scene_sample(
 pub fn drawer_slides_without_rebuilding_per_frame() {
     use flui_sdk::geometry::Offset;
     use flui_sdk::painting::Color;
-    use flui_sdk::widgets::{ColoredBox, FocusRoot, GestureArenaScope};
+    use flui_sdk::view::environment::GestureArenaScope;
+    use flui_sdk::widgets::{ColoredBox, FocusRoot};
     use flui_testing::{HeadlessBinding, MountOptions, MountOwners, PointerScript};
 
     for (end, settling_frames, panel_tap, both) in [

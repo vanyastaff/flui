@@ -164,6 +164,7 @@ mod measured {
     };
     use flui_sdk::view::dev_reload::{DevReloadHook as _, ReloadEvent as _, ReloadWake as _};
     use flui_sdk::view::element::ElementKind as _;
+    use flui_sdk::view::environment::{GestureArenaScope as _, VsyncScope as _};
     use flui_sdk::view::environment::{MediaQuery as _, MediaQueryData as _};
     use flui_sdk::view::prelude::{BuildContext as _, InheritedData as _, StatelessView as _};
     use flui_sdk::view::{
@@ -180,7 +181,6 @@ mod measured {
         AnchoredBox as _, FlightSeat as _, SeatClaim as _, SeatHold as _, TextFormFieldConfig as _,
         TextFormFieldCore as _,
     };
-    use flui_sdk::widgets::animated::VsyncScope as _;
     use flui_sdk::widgets::icon::IconData as _;
     use flui_sdk::widgets::layout::PreferredSizeView as _;
     use flui_sdk::widgets::prelude::{BoxConstraints as _, BoxFit as _};
@@ -197,7 +197,7 @@ mod measured {
         DraggableAnchors as _, DraggableAnchorsBuilder as _, EditableText as _, Expanded as _,
         ExpansionState as _, FadeTransition as _, Flexible as _,
         FloatingHeaderSnapConfiguration as _, Focus as _, FocusRing as _, FocusRingStyle as _,
-        ForcePressSlot as _, FormFieldHandle as _, GestureArenaScope as _, GestureDetector as _,
+        ForcePressSlot as _, FormFieldHandle as _, GestureDetector as _,
         GestureRecognizerFactory as _, HeadingLevel as _, HeroMode as _, HitShape as _,
         HitSlop as _, HitTestBehavior as _, Icon as _, IconData as _, IconTheme as _,
         IconThemeData as _, InheritedTheme as _, IntrinsicWidth as _, InvalidViewportFraction as _,

@@ -12,8 +12,8 @@ use flui_view::{BoxedView, IntoView, ViewExt, ViewState};
 
 use crate::animated::implicitly_animated::MotionBuilder;
 use crate::animated::property_motion::{PropertyMotion, observed_property};
-use crate::animated::vsync_scope::VsyncScope;
 use crate::{Align, AnimatedBuilder};
+use flui_view::environment::VsyncScope;
 
 /// Animates the [`Alignment`] of its child within itself whenever a new
 /// alignment is given.

@@ -485,7 +485,10 @@ pub(crate) fn cancelling_a_hero_mapping_does_not_refreeze_the_previous_page() {
         let navigator = NavigatorHandle::new();
         navigator.seed_initial(hero_page("shared", 30.0, 20.0));
         let mut laid = crate::common::lay_out_animated(
-            flui_widgets::VsyncScope::new(vsync.clone(), Navigator::new(navigator.clone())),
+            flui_view::environment::VsyncScope::new(
+                vsync.clone(),
+                Navigator::new(navigator.clone()),
+            ),
             crate::common::tight(400.0, 400.0),
             vsync,
         );

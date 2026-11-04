@@ -14,7 +14,8 @@ use flui_view::prelude::{BuildContext, LifecycleContext, StatefulView, Stateless
 use flui_view::{BoxedView, IntoView, ViewExt, ViewState};
 // Only the `#[cfg(debug_assertions)]` invalid-configuration tests drive a tree
 // by hand and assert on the ErrorView substitution, which is debug-only.
-use flui_widgets::{SizedBox, Visibility, VsyncScope};
+use flui_view::environment::VsyncScope;
+use flui_widgets::{SizedBox, Visibility};
 use parking_lot::Mutex;
 
 const FRAME: Duration = Duration::from_millis(20);

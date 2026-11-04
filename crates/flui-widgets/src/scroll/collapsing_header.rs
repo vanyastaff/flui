@@ -47,8 +47,9 @@ use super::{ClampingScrollPhysics, ScrollMetrics, ScrollPhysics};
 use crate::interaction::focus_reveal::{FocusRevealScope, RevealTarget, SharedRevealTarget};
 use crate::{
     AnimatedBuilder, ClipRect, Column, Expanded, Focus, OverflowBox, Semantics, SemanticsRole,
-    SizedBox, VsyncScope,
+    SizedBox,
 };
+use flui_view::environment::VsyncScope;
 
 /// Why [`HeaderExtents::try_new`] refused a pair of extents.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]

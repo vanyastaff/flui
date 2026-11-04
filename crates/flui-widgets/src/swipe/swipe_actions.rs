@@ -154,7 +154,7 @@ enum Host {
 /// horizontal swipe moves the row and a vertical one scrolls the list. A
 /// touch that goes down in the window's system-gesture strip at either side
 /// belongs to the operating system's edge swipe and a navigator's swipe
-/// back, never to the row. A [`VsyncScope`](crate::VsyncScope) above it runs
+/// back, never to the row. An ambient `flui_view::environment::VsyncScope` runs it
 /// the settle.
 #[derive(Clone, StatefulView)]
 pub struct SwipeActions {

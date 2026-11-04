@@ -41,7 +41,7 @@ lane without waiting for a Move; flush pending motion on frames. Public event
 constructors and a manual clock drive both terminal and idle delivery without
 the `testing` feature.
 
-Mounted recognizers acquire `flui_widgets::GestureArenaScope::of(ctx)` during
+Mounted recognizers acquire `flui_view::environment::GestureArenaScope::of(ctx)` during
 lifecycle setup, retain their owners in state and attach through
 `Listener::recognizer`. The presentation's `GestureBinding` supplies the shared
 binding-driven arena and owns its routing and time progression. A private

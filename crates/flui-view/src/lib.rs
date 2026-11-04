@@ -316,7 +316,7 @@ pub mod prelude {
             ElementSlot, IndexedSlot, LayoutChangedNotification, Lifecycle, NotifiableElement,
             Notification, RootElement,
         },
-        environment::{MediaQuery, MediaQueryData},
+        environment::{GestureArenaScope, GesturePolicy, MediaQuery, MediaQueryData, VsyncScope},
         key::{GlobalKey, GlobalKeyId, ObjectKey, ValueKey},
         owner::{BuildOwner, ElementOwner, RebuildHandle, RebuildReason, RebuildReasons},
         tree::{ElementNode, ElementTree},

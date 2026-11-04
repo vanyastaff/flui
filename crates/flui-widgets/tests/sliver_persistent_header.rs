@@ -188,7 +188,8 @@ fn exercise_floating_snap(pinned: bool, migrate_and_unmount: bool) {
     use std::time::Duration;
 
     use flui_animation::Vsync;
-    use flui_widgets::{ScrollController, Scrollable, Viewport, VsyncScope};
+    use flui_view::environment::VsyncScope;
+    use flui_widgets::{ScrollController, Scrollable, Viewport};
 
     let builds = Rc::new(RefCell::new(Vec::new()));
     let builds_for_delegate = Rc::clone(&builds);

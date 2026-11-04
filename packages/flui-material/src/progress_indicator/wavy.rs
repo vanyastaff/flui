@@ -20,8 +20,8 @@ use flui_sdk::foundation::Listenable;
 use flui_sdk::geometry::{Point, Rect, Size};
 use flui_sdk::painting::{Canvas, Color, Paint, Path, StrokeCap, TextDirection};
 use flui_sdk::view::environment::MediaQuery;
+use flui_sdk::view::environment::VsyncScope;
 use flui_sdk::view::prelude::*;
-use flui_sdk::widgets::animated::VsyncScope;
 use flui_sdk::widgets::{ActivityArc, CustomPaint, CustomPainter, Directionality};
 
 use super::circular::determinate_arcs;

@@ -595,15 +595,16 @@ impl<K: Copy + Eq + 'static> AnchoredDragController<K> {
 /// [`semantics`](Self::semantics), the slider reads its label and the
 /// current anchor's description.
 ///
-/// A [`VsyncScope`](crate::VsyncScope) above it runs the settle.
+/// An ambient `flui_view::environment::VsyncScope` runs the settle.
 ///
 /// ```
 /// use flui_animation::Vsync;
 /// use flui_foundation::geometry::Axis;
 /// use flui_widgets::{
 ///     Alternative, AnchorIntent, AnchoredDrag, AnchoredDragController, ControlSpec,
-///     DraggableAnchors, GestureAlternatives, GestureCommand, SizedBox, Text, VsyncScope,
+///     DraggableAnchors, GestureAlternatives, GestureCommand, SizedBox, Text,
 /// };
+/// use flui_view::environment::VsyncScope;
 ///
 /// #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 /// enum Row {

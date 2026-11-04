@@ -18,10 +18,10 @@ use super::effect::{Pose, Stages};
 use super::effects::Effects;
 use super::progress::Progress;
 use super::transition::{Phase, Transition};
-use crate::animated::VsyncScope;
 use crate::transitions::{
     FadeTransition, RotationTransition, ScaleTransition, ShimmerMaskTransition, SlideTransition,
 };
+use flui_view::environment::VsyncScope;
 
 /// What moves an [`Animate`]'s progress.
 ///

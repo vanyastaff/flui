@@ -24,7 +24,7 @@ use std::{cell::Cell, rc::Rc, sync::Arc};
 use crate::common::{LaidOut, lay_out_animated, tight};
 use flui_animation::Vsync;
 use flui_rendering::pipeline::PipelineCell;
-use flui_widgets::VsyncScope;
+use flui_view::environment::VsyncScope;
 use flui_widgets::prelude::*;
 
 const TRANSITION: Duration = Duration::from_millis(100);

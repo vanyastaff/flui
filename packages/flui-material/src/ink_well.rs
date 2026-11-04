@@ -62,7 +62,7 @@
 //! applies the oracle's `_activationDuration` mechanism uniformly: on
 //! `on_tap`, `Pressed` is set immediately, then cleared after 100ms via a
 //! one-shot [`flui_sdk::animation::AnimationController`] registered on the
-//! ambient [`flui_sdk::widgets::animated::VsyncScope`] — "the simplest owner-side
+//! ambient [`flui_sdk::view::environment::VsyncScope`] - "the simplest owner-side
 //! timer available" that is already exercised elsewhere in this workspace
 //! (`flui-widgets::animated`'s `ImplicitController`), rather than inventing
 //! a new timer primitive. Standalone (no `VsyncScope` above this `InkWell`):
@@ -94,8 +94,8 @@ use flui_sdk::interaction::FocusNode;
 use flui_sdk::painting::Color;
 use flui_sdk::view::RebuildHandle;
 use flui_sdk::view::environment::MediaQuery;
+use flui_sdk::view::environment::VsyncScope;
 use flui_sdk::view::prelude::*;
-use flui_sdk::widgets::animated::VsyncScope;
 use flui_sdk::widgets::{
     Actions, ActivateIntent, ButtonActivateIntent, ButtonChange, CallbackAction, CustomPaint,
     Focus, FocusRing, GestureDetector, Listener, MouseRegion, PointerDispatch, PointerEvent,

@@ -9,7 +9,7 @@ use flui_painting::paint::PathCommand;
 use flui_sdk::animation::{ConstantAnimation, Vsync};
 use flui_sdk::geometry::Point;
 use flui_sdk::painting::{DrawOp, TextDirection};
-use flui_sdk::widgets::animated::VsyncScope;
+use flui_sdk::view::environment::VsyncScope;
 use flui_sdk::widgets::{AnimatedIcon, AnimatedIconData, Directionality};
 
 use crate::common::{lay_out_animated, loose};

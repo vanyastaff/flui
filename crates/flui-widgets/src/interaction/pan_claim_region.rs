@@ -3,9 +3,8 @@
 use flui_interaction::GestureArena;
 use flui_interaction::gesture::PanClaim;
 use flui_view::BoxedView;
+use flui_view::environment::GestureArenaScope;
 use flui_view::prelude::*;
-
-use super::GestureArenaScope;
 
 /// Declares which axes axial gestures outside this subtree may claim from the
 /// free gestures (pans) inside it.

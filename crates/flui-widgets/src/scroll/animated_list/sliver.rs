@@ -18,10 +18,10 @@ use flui_view::prelude::{BuildContext, LifecycleContext, StatefulView};
 use flui_view::{BoxedView, IntoView, RebuildHandle, StatelessView, View, ViewExt, ViewState};
 
 use super::roster::{Entry, ItemBuilder, Items, Shown, Source, merge};
-use crate::animated::VsyncScope;
 use crate::motion::{Animate, Effects, Transition, Trigger};
 use crate::scroll::sliver_list::wrap_in_repaint_boundary;
 use crate::scroll::{SliverGrid, SliverList};
+use flui_view::environment::VsyncScope;
 
 /// The per-item extent a list estimates before it measures its items.
 const DEFAULT_ITEM_EXTENT_ESTIMATE: f64 = 48.0;

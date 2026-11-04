@@ -12,8 +12,8 @@ use flui_view::{BoxedView, IntoView, ViewExt, ViewState};
 
 use crate::animated::implicitly_animated::{MotionBuilder, TransformTween};
 use crate::animated::property_motion::PropertyMotion;
-use crate::animated::vsync_scope::VsyncScope;
 use crate::{AnimatedBuilder, Container};
+use flui_view::environment::VsyncScope;
 
 /// Animates [`Container`]'s alignment, padding, color, width, height, margin and
 /// transform whenever any of them changes.

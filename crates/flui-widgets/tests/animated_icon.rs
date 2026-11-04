@@ -12,9 +12,10 @@ use flui_painting::paint::PathCommand;
 use flui_painting::styling::Color;
 use flui_painting::typography::TextDirection;
 use flui_testing::a11y::Role;
+use flui_view::environment::VsyncScope;
 use flui_widgets::{
     AnimatedIcon, AnimatedIconData, Directionality, IconCommand, IconCommandBuf, IconDataError,
-    IconPath, IconPathBuf, IconTheme, IconThemeData, VsyncScope,
+    IconPath, IconPathBuf, IconTheme, IconThemeData,
 };
 
 /// A bar that slides down: its corner moves from (4, 4) to (4, 14) over two frames, the second

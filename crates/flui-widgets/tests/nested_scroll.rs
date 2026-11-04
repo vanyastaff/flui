@@ -15,12 +15,13 @@ use flui_interaction::{
 };
 use flui_platform::{EventTime, TargetPlatform};
 use flui_testing::{MouseScript, PointerScript, ScriptStep, TouchScript, TrackpadScript};
+use flui_view::environment::VsyncScope;
 use flui_view::{BoxedView, ViewExt};
 use flui_widgets::{
     AnchorSnap, AnchorSnapError, Column, FlingHandoff, FlingStep, ListView, NestedScroll,
     NestedScrollConnection, OverscrollBehavior, PageSnap, Row, ScrollCause, ScrollController,
     ScrollDevice, ScrollEndReason, ScrollMetrics, ScrollStep, Scrollable, SizedBox, SnapPolicy,
-    Transform, ViewportFraction, VsyncScope,
+    Transform, ViewportFraction,
 };
 
 use crate::common::{LaidOut, lay_out_animated, tight};

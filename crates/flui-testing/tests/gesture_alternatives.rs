@@ -15,12 +15,13 @@ use flui_painting::styling::Color;
 use flui_testing::replay::PointerScript;
 use flui_testing::widgets::tight;
 use flui_testing::{AlternativesSubject, GestureAlternativesCheck, assert_gesture_alternatives};
+use flui_view::environment::VsyncScope;
 use flui_view::prelude::*;
 use flui_view::{BoxedView, ViewExt};
 use flui_widgets::{
     Actions, Alternative, CallbackAction, ColoredBox, Column, CompanionLink, CompanionRegistration,
     CompanionSpec, ControlSpec, Dismissible, GestureAlternatives, GestureCommand, Intent, Listener,
-    MenuSpec, RawButton, Semantics, SemanticsAnchor, SizedBox, VsyncScope,
+    MenuSpec, RawButton, Semantics, SemanticsAnchor, SizedBox,
 };
 
 /// Count one removal.

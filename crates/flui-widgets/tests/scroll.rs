@@ -16,10 +16,11 @@ use crate::common::{LaidOut, lay_out, tight};
 use flui_animation::{SharedCurve, Vsync, curves};
 use flui_rendering::constraints::BoxConstraints;
 use flui_rendering::view::ScrollDirection;
+use flui_view::environment::VsyncScope;
 use flui_view::{IntoView, SignalWriteExt, ViewExt};
 use flui_widgets::{
     BouncingScrollPhysics, ClampingScrollPhysics, ScrollController, Scrollable, Scrollbar,
-    SemanticsRole, SharedScrollPhysics, SizedBox, VsyncScope,
+    SemanticsRole, SharedScrollPhysics, SizedBox,
 };
 
 #[derive(Clone, flui_view::prelude::StatelessView)]
@@ -30,8 +31,8 @@ pub(crate) struct FlingProfile {
 
 impl flui_view::StatelessView for FlingProfile {
     fn build(&self, ctx: &dyn flui_view::BuildContext) -> impl IntoView {
-        flui_widgets::GestureArenaScope::new(
-            flui_widgets::GestureArenaScope::of(ctx),
+        flui_view::environment::GestureArenaScope::new(
+            flui_view::environment::GestureArenaScope::of(ctx),
             self.child.clone(),
         )
         .settings(self.provider.clone())
@@ -1978,15 +1979,16 @@ struct AuthoredWheelContent {
 
 impl flui_view::StatelessView for AuthoredWheelContent {
     fn build(&self, ctx: &dyn flui_view::BuildContext) -> impl IntoView {
-        let arena = flui_widgets::GestureArenaScope::of(ctx);
+        let arena = flui_view::environment::GestureArenaScope::of(ctx);
         let scroll = Scrollable::new()
             .scroll_direction(self.axis)
             .controller(self.controller.clone())
             .wheel_distances(self.distances)
             .child(SizedBox::new(self.extent, self.extent));
-        let inner = flui_widgets::GestureArenaScope::new(arena.clone(), scroll)
+        let inner = flui_view::environment::GestureArenaScope::new(arena.clone(), scroll)
             .settings(flui_interaction::GestureSettings::default());
-        flui_widgets::GestureArenaScope::new(arena, inner).wheel_preferences(self.provider.clone())
+        flui_view::environment::GestureArenaScope::new(arena, inner)
+            .wheel_preferences(self.provider.clone())
     }
 }
 

@@ -130,7 +130,7 @@ mod registry_reentry {
     }
 
     fn fly(operation: &str) {
-        use flui_widgets::VsyncScope;
+        use flui_view::environment::VsyncScope;
         use flui_widgets::navigator::{
             HeroController, Navigator, NavigatorHandle, NavigatorObserver, PageRoute,
         };

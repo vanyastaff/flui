@@ -29,7 +29,8 @@ use flui_painting::DrawOp;
 use flui_sdk::animation::{MotionOverride, Vsync};
 use flui_sdk::painting::{Color, TextDirection};
 use flui_sdk::view::View;
-use flui_sdk::widgets::{Directionality, VsyncScope};
+use flui_sdk::view::environment::VsyncScope;
+use flui_sdk::widgets::Directionality;
 use flui_testing::a11y::{Role, Toggled};
 
 /// The switch's full tap target (track + M3 default horizontal padding).

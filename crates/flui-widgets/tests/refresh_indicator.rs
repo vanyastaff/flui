@@ -20,11 +20,12 @@ use flui_testing::{
     AlternativesSubject, GestureAlternativesCheck, MouseScript, PointerScript, TouchScript,
     TrackpadScript, assert_gesture_alternatives,
 };
+use flui_view::environment::VsyncScope;
 use flui_view::prelude::*;
 use flui_widgets::{
     Alternative, ControlSpec, GestureAlternatives, RefreshController, RefreshIndicator,
     RefreshIndicatorPhase, RefreshIndicatorStyle, RefreshIntent, Row, ScrollController, Scrollable,
-    SingleActivator, SizedBox, VsyncScope,
+    SingleActivator, SizedBox,
 };
 
 use crate::common::{LaidOut, tight};

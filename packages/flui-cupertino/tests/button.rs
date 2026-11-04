@@ -39,7 +39,8 @@ fn exercise_button_fade_migration(releasing: bool) {
 
     use flui_sdk::animation::Vsync;
     use flui_sdk::painting::{Color, DrawOp};
-    use flui_sdk::widgets::{ColoredBox, VsyncScope};
+    use flui_sdk::view::environment::VsyncScope;
+    use flui_sdk::widgets::ColoredBox;
 
     let paint_alpha = |laid: &common::LaidOut, render| {
         laid.pipeline_owner().with(|owner| {

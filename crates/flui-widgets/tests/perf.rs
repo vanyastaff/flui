@@ -24,10 +24,9 @@ use flui_rendering::pipeline::PipelineOwner;
 use flui_rendering::view::{OffsetWriteCause, ScrollOffsetWriter, ScrollPosition};
 use flui_testing::widgets::SharedSignal;
 use flui_testing::{FrameReport, HeadlessBinding, MountOptions, MountOwners};
+use flui_view::environment::GestureArenaScope;
 use flui_widgets::prelude::*;
-use flui_widgets::{
-    ColoredBox, Column, Expanded, FocusRoot, GestureArenaScope, ListView, SizedBox, Text,
-};
+use flui_widgets::{ColoredBox, Column, Expanded, FocusRoot, ListView, SizedBox, Text};
 
 /// One 60 Hz frame of virtual time.
 const FRAME: Duration = Duration::from_nanos(16_666_667);

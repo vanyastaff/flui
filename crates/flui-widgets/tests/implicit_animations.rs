@@ -17,13 +17,14 @@ use flui_animation::{MotionOverride, MotionSpec, SharedCurve, Vsync, curves};
 use flui_foundation::geometry::{Angle, EdgeInsets, Matrix4, Offset};
 use flui_painting::Alignment;
 use flui_painting::styling::Color;
+use flui_view::environment::VsyncScope;
 use flui_view::prelude::{BuildContext, StatefulView};
 use flui_view::{IntoView, ViewExt, ViewState};
 use flui_widgets::{
     Animated, AnimatedAlign, AnimatedContainer, AnimatedCrossFade, AnimatedDefaultTextStyle,
     AnimatedLerp, AnimatedOpacity, AnimatedPadding, AnimatedPositioned, AnimatedRotation,
     AnimatedScale, AnimatedSlide, Center, ColoredBox, CrossFadeState, MotionBuilder, Opacity,
-    RotationPath, Semantics, SizedBox, Stack, Text, TranslationFraction, VsyncScope,
+    RotationPath, Semantics, SizedBox, Stack, Text, TranslationFraction,
 };
 use parking_lot::Mutex;
 

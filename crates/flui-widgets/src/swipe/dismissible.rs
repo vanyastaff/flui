@@ -46,13 +46,13 @@ use flui_view::{
 use super::row::{
     ContactOrigin, OutWatch, RowGeometry, Stop, UncoverWatch, Uncovered, nothing_behind,
 };
-use crate::animated::VsyncScope;
 use crate::interaction::{CommandHandle, ContactAdmission, GestureAlternatives};
 use crate::scroll::{
     AnchoredDrag, AnchoredDragController, DraggableAnchors, ScrollMetrics, SnapPolicy,
 };
 use crate::{ClipRect, Listener, Positioned, SizedBox, Stack};
 use flui_view::environment::MediaQuery;
+use flui_view::environment::VsyncScope;
 
 /// The release speed, logical px/s, from which a release is a fling: below
 /// it the threshold decides.

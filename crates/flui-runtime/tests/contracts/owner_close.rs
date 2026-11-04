@@ -48,7 +48,8 @@ impl flui_view::StatefulView for MotionProbe {
 
 impl flui_view::ViewState<MotionProbe> for MotionProbeState {
     fn init_state(&mut self, ctx: &dyn flui_view::LifecycleContext) {
-        let registry = flui_widgets::VsyncScope::maybe_of(ctx).expect("runtime motion scope");
+        let registry =
+            flui_view::environment::VsyncScope::maybe_of(ctx).expect("runtime motion scope");
         self.owner.rebind(Some(&registry)).expect("live registry");
         let run = self.owner.controller().forward().expect("bound owner runs");
         let outcomes = Rc::new(RefCell::new(Vec::new()));

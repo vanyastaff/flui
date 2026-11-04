@@ -60,7 +60,7 @@ reason = "the decision's context names the layout the decision changed, and file
 [[allow]]
 path = "docs/adr/ADR-0083-one-frame-transaction-in-flui-runtime.md"
 kind = "path"
-count = 3
+count = 1
 reason = "the decision's context names the layout the decision changed"
 
 [[allow]]

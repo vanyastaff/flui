@@ -13,9 +13,9 @@ use common::{LaidOut, lay_out, lay_out_animated, tight};
 use flui_material::{TabBar, TabBarView, TabController, Theme, ThemeData};
 use flui_sdk::animation::{MotionOverride, MotionPolicy, MotionSpec, SharedCurve, Vsync};
 use flui_sdk::view::BoxedView;
+use flui_sdk::view::environment::VsyncScope;
 use flui_sdk::view::environment::{MediaQuery, MediaQueryData};
 use flui_sdk::view::prelude::*;
-use flui_sdk::widgets::animated::VsyncScope;
 use flui_sdk::widgets::{Column, Expanded, PageView, SizedBox};
 
 /// A leaf whose `create_state` is counted — proves whether a tab's content

@@ -21,11 +21,12 @@ use flui_material::{
 use flui_sdk::animation::{Curve, MotionOverride, Vsync, curves};
 use flui_sdk::geometry::{EdgeInsets, Point, Radius};
 use flui_sdk::painting::{Alignment, BorderRadius, Color, DrawOp};
+use flui_sdk::view::environment::VsyncScope;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{
     ColoredBox, Column, CrossAxisAlignment, MainAxisSize, NavigatorHandle, Padding, PageRoute,
     Routable, RouteParseError, RoutePath, Router, ScrollController, Semantics,
-    SingleChildScrollView, SizedBox, Transform, VsyncScope, WidgetsApp,
+    SingleChildScrollView, SizedBox, Transform, WidgetsApp,
 };
 use flui_testing::{Action, ActionRequest, TreeId};
 

@@ -14,10 +14,10 @@ use common::{lay_out_animated, tight};
 use flui_material::{AlertDialog, Theme, ThemeData, show_dialog};
 use flui_sdk::animation::Vsync;
 use flui_sdk::painting::Color;
+use flui_sdk::view::environment::VsyncScope;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{
     Center, ColoredBox, GestureDetector, Navigator, NavigatorHandle, Semantics, SimpleRoute, Text,
-    VsyncScope,
 };
 use flui_testing::a11y::Role;
 

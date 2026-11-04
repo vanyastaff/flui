@@ -14,8 +14,8 @@ use flui_painting::paint::PathCommand;
 use flui_sdk::animation::{MotionOverride, Vsync};
 use flui_sdk::geometry::Point;
 use flui_sdk::painting::{Color, DrawOp, TextDirection};
+use flui_sdk::view::environment::VsyncScope;
 use flui_sdk::view::prelude::*;
-use flui_sdk::widgets::animated::VsyncScope;
 use flui_sdk::widgets::{
     Alternative, ControlSpec, Directionality, GestureAlternatives, RefreshController,
     RefreshIndicator, RefreshIntent, ScrollController, Scrollable, SizedBox,

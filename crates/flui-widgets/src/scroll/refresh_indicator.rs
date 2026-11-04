@@ -72,11 +72,11 @@ use flui_view::{
 use super::nested::{
     FlingStep, NestedScroll, NestedScrollConnection, ScrollCause, ScrollEndReason, ScrollStep,
 };
-use crate::animated::VsyncScope;
 use crate::{
     Action, ActionOutcome, Actions, ActivityIndicator, Center, CommandHandle, Directionality,
     GestureAlternatives, GestureCommand, Intent, Positioned, SingleActivator, SizedBox, Stack,
 };
+use flui_view::environment::VsyncScope;
 
 /// Default pull, in logical pixels past the leading edge, that refreshes.
 const DEFAULT_THRESHOLD_PX: f64 = 80.0;

@@ -13,7 +13,6 @@ pub(crate) mod focus_reveal;
 mod focus_ring;
 mod focus_traversal_group;
 mod gesture_alternatives;
-mod gesture_arena_scope;
 mod gesture_detector;
 mod hit_slop;
 mod listener;
@@ -59,8 +58,6 @@ pub use gesture_alternatives::{
     GestureAlternativesState, GestureCommand, MenuCause, MenuItem, MenuPresenter, MenuRequest,
     MenuSpec,
 };
-pub use gesture_arena_scope::GestureArenaScope;
-pub(crate) use gesture_arena_scope::GesturePolicy;
 pub use gesture_detector::{
     DragSlot, ForcePressSlot, GestureDetector, GestureDetectorState, MultiTapCount,
     MultiTapCountError, TransformSlot,

@@ -1292,12 +1292,12 @@ impl EditableTextState {
     fn follow_handle_scope(&mut self, ctx: &dyn LifecycleContext) {
         self.touch_handles.set_scope(
             crate::Overlay::maybe_of(ctx),
-            crate::animated::VsyncScope::maybe_of(ctx),
+            flui_view::environment::VsyncScope::maybe_of(ctx),
             ctx.haptics(),
         );
         let drag = Rc::downgrade(&self.selection_drag);
         self.long_press.build(
-            crate::interaction::GesturePolicy::of(ctx),
+            flui_view::environment::GesturePolicy::of(ctx),
             &self.touch_handles,
             // A long press takes its contact from the field's own drag.
             Rc::new(move || {

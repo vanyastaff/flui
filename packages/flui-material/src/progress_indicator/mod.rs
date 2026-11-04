@@ -13,7 +13,7 @@
 //!   linear track ends in a 4 dp stop dot that marks where the work is complete.
 //! - **Motion is never the only signal.** Assistive technology sees a progress bar: with its
 //!   percentage and a 0–100 range when determinate, without a value (unknown-total, busy work)
-//!   when indeterminate. Without a ticking [`VsyncScope`](flui_sdk::widgets::animated::VsyncScope),
+//!   when indeterminate. Without a ticking [`VsyncScope`](flui_sdk::view::environment::VsyncScope),
 //!   under a disabled `TickerMode`, or with reduced motion, an indeterminate indicator draws a
 //!   still frame that reads as activity, never as a percentage, and a wave lies flat.
 

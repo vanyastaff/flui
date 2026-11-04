@@ -37,7 +37,7 @@ use flui_view::element::ElementKind;
 use flui_view::prelude::*;
 use flui_view::{InheritedView, impl_inherited_view};
 
-use super::VsyncScope;
+use flui_view::environment::VsyncScope;
 
 /// Pauses (or resumes) every animation in its subtree.
 ///

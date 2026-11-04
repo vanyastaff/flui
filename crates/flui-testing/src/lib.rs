@@ -782,10 +782,10 @@ impl HeadlessBinding {
     /// arena's entries are `Arc`-backed, so the clone shares them).
     ///
     /// To hand this arena to a whole widget subtree, wrap it in a
-    /// `GestureArenaScope` (in `flui-widgets`): every `GestureDetector` below
-    /// reads the scope's arena ambiently and competes in / is polled against it.
-    /// `flui-testing` cannot host that scope itself — it has no `flui-view`
-    /// dependency — so the wiring lives one layer up.
+    /// `GestureArenaScope` (in `flui_view::environment`): every
+    /// `GestureDetector` below reads the scope's arena ambiently and competes
+    /// in / is polled against it. That scoping lives one layer up —
+    /// `flui-runtime`'s root attach wraps every mounted root in it.
     #[must_use]
     pub fn arena(&self) -> &GestureArena {
         self.gestures.arena()

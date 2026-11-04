@@ -14,11 +14,11 @@ use flui_painting::styling::Color;
 use flui_testing::a11y::Role;
 use flui_testing::{Action, ActionRequest, NodeId, PointerScript, TouchScript, TreeId};
 use flui_view::ViewExt;
+use flui_view::environment::VsyncScope;
 use flui_view::prelude::*;
 use flui_widgets::{
     Carousel, CarouselAutoplay, CarouselAutoplayError, CarouselController, CarouselItemScope,
     CarouselLayout, CarouselLayoutError, ColoredBox, GestureDetector, KeylineSnap, Semantics,
-    VsyncScope,
 };
 
 use crate::common::{LaidOut, lay_out_animated, tight};

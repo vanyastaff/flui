@@ -11,11 +11,11 @@ use flui_animation::Vsync;
 use flui_painting::display_list::DrawOp;
 use flui_rendering::layer::Layer;
 use flui_testing::a11y::Role;
+use flui_view::environment::VsyncScope;
 use flui_view::{SignalWriteExt, ViewExt};
 use flui_widgets::{
     ActivityIndicator, Alternative, Center, ControlSpec, GestureAlternatives, RefreshController,
     RefreshIndicator, RefreshIntent, Row, ScrollController, Scrollable, SizedBox, TickerMode,
-    VsyncScope,
 };
 
 use crate::common::{LaidOut, lay_out, lay_out_animated, loose, tight};

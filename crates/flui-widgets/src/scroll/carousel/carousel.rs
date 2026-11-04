@@ -29,7 +29,6 @@ use flui_view::{
 use super::autoplay::CarouselAutoplay;
 use super::controller::{Attachment, CarouselController};
 use super::snap::{CarouselSnap, KeylineSnap};
-use crate::animated::VsyncScope;
 use crate::localization::{
     BoxedWidgetsLocalizations, DefaultWidgetsLocalizations, WidgetsLocalizations,
     axis_direction_from_axis_reverse_and_directionality,
@@ -41,6 +40,7 @@ use crate::{
     MouseRegion, RawButton, Semantics, SizedBox, TickerMode,
 };
 use flui_view::environment::MediaQuery;
+use flui_view::environment::VsyncScope;
 
 /// What an item's content reads of the item while it scrolls: its index, the part of it the
 /// carousel shows, and how far it has travelled between keylines.

@@ -63,10 +63,9 @@ effects "never ran in the product", because `run_effects` was called only from
 `HeadlessBinding::pump_frame` (ADR-0075, "What the prototype got wrong", item 1).
 
 The runtime cannot move below `flui-widgets`. The UI runtime's composition names widget types:
-`use flui_widgets::{FocusRoot, GestureArenaScope, VsyncScope};`
-(`crates/flui-app/src/app/ui_runtime/attach.rs:6`), `use flui_widgets::{MediaQuery, MediaQueryData};`
-(`crates/flui-app/src/app/media_query_root.rs:9`); 22 files in `crates/flui-app/src` import
-`flui_widgets`.
+`use flui_view::environment::{GestureArenaScope, VsyncScope}; use flui_widgets::FocusRoot;`
+(`crates/flui-runtime/src/ui_runtime/attach.rs`), and `flui-app`'s agent pages and tests import
+the catalog's widgets.
 
 The harness also sits in the wrong place for such a move. `flui-widgets` depends on
 `flui-testing` optionally for its `testing` feature (`crates/flui-widgets/Cargo.toml:89`), and

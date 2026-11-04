@@ -33,11 +33,11 @@ impl StatefulView for SettingsScope {
 
 impl ViewState<SettingsScope> for SettingsScopeState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        self.arena = Some(flui_widgets::GestureArenaScope::of(ctx));
+        self.arena = Some(flui_view::environment::GestureArenaScope::of(ctx));
     }
 
     fn build(&self, view: &SettingsScope, _: &dyn BuildContext) -> impl IntoView {
-        flui_widgets::GestureArenaScope::new(
+        flui_view::environment::GestureArenaScope::new(
             self.arena
                 .as_ref()
                 .expect("mounted presentation arena")

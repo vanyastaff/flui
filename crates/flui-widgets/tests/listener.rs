@@ -589,8 +589,8 @@ pub(crate) fn custom_recognizer_competes_through_a_listener() {
         GestureRecognizer, GestureSettings, PrimaryContact, TapGestureRecognizer,
     };
     use flui_rendering::hit_testing::PointerEvent;
+    use flui_view::environment::GestureArenaScope;
     use flui_view::prelude::*;
-    use flui_widgets::GestureArenaScope;
     use std::cell::RefCell;
 
     struct ExternalRecognizer {

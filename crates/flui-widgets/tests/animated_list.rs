@@ -13,10 +13,11 @@ use crate::common::{LaidOut, lay_out_animated, tight};
 use flui_animation::{MotionOverride, MotionSpec, Stagger, StaggerOrigin, Vsync, curves};
 use flui_foundation::RenderId;
 use flui_rendering::delegates::SliverGridDelegateWithFixedCrossAxisCount;
+use flui_view::environment::VsyncScope;
 use flui_view::prelude::{BuildContext, LifecycleContext, StatefulView};
 use flui_view::{IntoView, ViewState};
 use flui_widgets::motion::{Effects, Transition};
-use flui_widgets::{AnimatedGrid, AnimatedList, SizedBox, Text, VsyncScope};
+use flui_widgets::{AnimatedGrid, AnimatedList, SizedBox, Text};
 
 /// Every row's height, and a grid tile's side.
 const ROW: f64 = 40.0;

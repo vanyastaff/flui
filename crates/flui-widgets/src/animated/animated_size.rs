@@ -29,7 +29,7 @@ use std::rc::Rc;
 type EndCallback = Rc<dyn Fn(&mut EventCx<'_>)>;
 
 use crate::animated::implicitly_animated::MotionBuilder;
-use crate::animated::vsync_scope::VsyncScope;
+use flui_view::environment::VsyncScope;
 
 /// Animates its size toward its child's natural size whenever that size
 /// changes, clipping overflow while the resize animation is in flight.

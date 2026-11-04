@@ -72,8 +72,8 @@ use super::route::{
     AnyResult, Route, RouteId, RoutePopDisposition, RouteSettings, UndeliveredResult,
 };
 use super::subtree::RouteSubtree;
-use crate::animated::VsyncScope;
 use crate::{Overlay, OverlayEntry, OverlayEntryId, OverlayHandle};
+use flui_view::environment::VsyncScope;
 
 // A child module, so the admission rules and the `Router`'s doors can reach
 // `NavigatorShared` without widening it (`navigator/navigator/addressing.rs`).

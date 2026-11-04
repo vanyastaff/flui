@@ -25,6 +25,7 @@ use flui_platform::TargetPlatform;
 use flui_rendering::hit_testing::HitTestBehavior;
 use flui_rendering::layer::LayerLink;
 use flui_rendering::pipeline::{LeaderWatch, PipelineCell};
+use flui_view::environment::GesturePolicy;
 use flui_view::prelude::*;
 use flui_view::{BoxedView, View, ViewExt};
 
@@ -33,7 +34,6 @@ use super::{
 };
 #[cfg(doc)]
 use crate::DefaultSelectionControls;
-use crate::interaction::GesturePolicy;
 use crate::interaction::actions::ActionChain;
 use crate::interaction::recognizer_attachment::RecognizerAttachment;
 use crate::interaction::{DragSlot, GestureDetector, Listener};

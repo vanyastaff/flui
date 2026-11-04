@@ -11,11 +11,10 @@ use flui_interaction::events::{Code, Key, KeyState, Modifiers, NamedKey};
 use flui_painting::styling::Color;
 use flui_painting::typography::TextDirection;
 use flui_testing::{MouseScript, PointerScript, TouchScript};
+use flui_view::environment::VsyncScope;
 use flui_view::prelude::*;
 use flui_view::{BoxedView, ViewExt};
-use flui_widgets::{
-    ColoredBox, Directionality, PageController, PageView, ViewportFraction, VsyncScope,
-};
+use flui_widgets::{ColoredBox, Directionality, PageController, PageView, ViewportFraction};
 
 use crate::common::{LaidOut, lay_out_animated, pager_alternatives, tight};
 

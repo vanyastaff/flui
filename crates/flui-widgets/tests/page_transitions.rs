@@ -13,14 +13,13 @@ use std::time::Duration;
 use flui_animation::{MotionOverride, Vsync};
 use flui_painting::{display_list::DrawOp, styling::Color};
 use flui_rendering::layer::Layer;
+use flui_view::environment::VsyncScope;
 use flui_view::prelude::*;
 use flui_view::{BoxedView, BuildContext};
 use flui_widgets::navigator::{
     Navigator, NavigatorHandle, PageRoute, PopupRoute, RouteAnimation, SimpleRoute,
 };
-use flui_widgets::{
-    ColoredBox, FadeTransition, PageTransitionBuilder, PageTransitions, SizedBox, VsyncScope,
-};
+use flui_widgets::{ColoredBox, FadeTransition, PageTransitionBuilder, PageTransitions, SizedBox};
 
 use crate::common::{LaidOut, lay_out_animated, tight};
 

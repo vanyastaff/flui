@@ -4,9 +4,9 @@ use crate::common::{lay_out_animated, tight};
 use flui_animation::Vsync;
 use flui_foundation::geometry::Offset;
 use flui_painting::styling::Color;
+use flui_view::environment::VsyncScope;
 use flui_widgets::{
     ColoredBox, DismissDirection, DismissSide, DismissThreshold, Dismissible, GestureDetector,
-    VsyncScope,
 };
 use std::cell::Cell;
 use std::rc::Rc;
@@ -289,7 +289,8 @@ pub(crate) fn dismissal_updates_follow_owner_lifetime() {
 
 pub(crate) fn dismissible_slides_without_rebuilding_per_frame() {
     use flui_testing::{HeadlessBinding, MountOptions, MountOwners, PointerScript};
-    use flui_widgets::{FocusRoot, GestureArenaScope, SizedBox};
+    use flui_view::environment::GestureArenaScope;
+    use flui_widgets::{FocusRoot, SizedBox};
     for (vertical, sign) in [(false, 1.0), (false, -1.0), (true, 1.0), (true, -1.0)] {
         let mut binding = HeadlessBinding::new();
         let progress = Rc::new(std::cell::RefCell::new(Vec::new()));
