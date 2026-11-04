@@ -247,4 +247,4 @@ runs on the pinned stable toolchain, which dylint does not.
   file, or removing a seeded entry, makes it exit 1.
 - Each removal lands with a test that fails with the global back: two UI runtimes with different time
   dilation animate at different rates; two UI runtimes register different fonts and each shapes only
-  with its own; a navigation intent reaches the UI runtime that owns the router.
+  with its own.

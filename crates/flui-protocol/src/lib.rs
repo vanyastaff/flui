@@ -38,13 +38,15 @@
 //!   [`ServerLine`] an app answers with;
 //! - [`framing`]: how a byte transport frames lines ([`LineReader`]) and binary payloads;
 //! - [`error`]: the fixed [`ErrorCode`]s, [`Retry`] and the [`ErrorObject`] that carries them;
-//! - `input_recording` (with `serde`): the schema of an input recording, the `HostInput` stream
+//! - [`input_recording`]: the schema of an input recording, the `HostInput` stream
 //!   a UI runtime applied with its gesture decisions and preferences (ADR-0215 §2), which
 //!   `flui-runtime` converts to and from the event vocabulary and a reader such as the driver
 //!   reads without it;
-//! - `native_recording` (with `serde`): the schema of a native recording, the journal of a
+//! - [`native_recording`]: the schema of a native recording, the journal of a
 //!   backend's pointer registry before translation (ADR-0215 §4), which the core writes and
 //!   a reader such as the driver reads without it;
+//! - [`record`]: `record.start` and `record.stop`, a driver's recording of a window's UI runtime
+//!   in the input recording's format, sent to it row by row as `record` events;
 //! - [`version`]: the [`PROTOCOL_VERSION`] the schema is published under,
 //!   versioned apart from this crate, and the rule for changing it.
 //!
@@ -73,16 +75,15 @@ pub mod events;
 pub mod framing;
 pub mod geometry;
 pub mod input;
-#[cfg(feature = "serde")]
 pub mod input_recording;
 pub mod inspect;
 pub mod launch;
 pub mod locator;
 pub mod method;
 pub mod motion;
-#[cfg(feature = "serde")]
 pub mod native_recording;
 pub mod perf;
+pub mod record;
 pub mod semantics;
 pub mod session;
 pub mod snapshot;
@@ -126,6 +127,9 @@ pub use motion::{MotionParams, MotionRequest, MotionState};
 pub use perf::{
     Distribution, FramePhase, FrameSample, Latency, PerfBudget, PerfExpectParams, PerfReport,
     PerfStartParams, PerfVerdict, PhaseTime, TargetBudget, TimeLimit,
+};
+pub use record::{
+    RecordEvent, RecordLayer, RecordParams, RecordStopParams, RecordSummary, Recording,
 };
 pub use semantics::{SemanticsAction, SemanticsRole};
 pub use session::{

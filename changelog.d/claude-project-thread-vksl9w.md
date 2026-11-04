@@ -152,6 +152,17 @@
   `JournalParams::new` and `InputEvent::new`** (`flui-protocol`), and
   `DeviceClass::Other`, the class of a pointer with no physical contact or of a kind the
   platform did not name.
+- **The driver agent records** (`record.start`, `record.stop`, the `record` event, ADR-0288
+  §11): a connection records what a window's UI runtime applies in the input recording's format,
+  its header in the answer and each row sent to it alone as a `record` event; a reader that
+  falls behind gets a `gap` row, and the recording ends with its `end` row at `record.stop`,
+  when its window closes or when the runtime goes. The hello lists the layers it records in
+  `capabilities.record`; `Limits::recordings` bounds a connection's.
+- **`AgentWindow::record` and `AgentRecording`** (`flui-view`'s development-agent seam): the
+  recording's header, its rows, a waker, and `stop`; dropping it ends the recording with no
+  row. `flui_protocol::{RecordParams, Recording, RecordStopParams, RecordSummary, RecordEvent,
+  RecordLayer}`, `HandleKind::Recording`, `RecordingStart::to_wire` (`flui-runtime`) and
+  `HeadlessHost::serve_window`, which hands a window it opened to a development agent.
 
 ### Removed
 

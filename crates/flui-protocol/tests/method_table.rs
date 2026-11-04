@@ -157,7 +157,13 @@ fn every_method_the_agent_serves_is_a_window_method_but_the_apps_own() {
         };
     }
     let window_methods: &[&str] = &flui_protocol::for_each_window_method!(names);
-    let apps_own = ["events.subscribe", "events.unsubscribe", "windows.list"];
+    let apps_own = [
+        "events.subscribe",
+        "events.unsubscribe",
+        "record.start",
+        "record.stop",
+        "windows.list",
+    ];
     let expected: Vec<&str> = METHODS
         .iter()
         .filter(|row| row.served_by == ServedBy::Agent && !apps_own.contains(&row.name))

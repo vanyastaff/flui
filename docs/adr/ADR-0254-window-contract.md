@@ -69,9 +69,6 @@
   - [ADR-0044](ADR-0044-driver-loop-hybrid.md) §7, in part: the registered
     `Platform::set_wake_deadline_hook`, which is `AppHandler::wake_deadline` (decision 4); the
     wall-clock wake the loop computes from its answer stays.
-  - [ADR-0093](ADR-0093-router-is-the-primary-navigation-api.md), in part: the
-    `Platform::on_open_urls` registration it names as a deep link's source, deleted by decision
-    4; the opened URLs and files reach the handler with the activation feature.
   - [ADR-0222](ADR-0222-window-appearance-is-a-presentation-observation.md), the delivery shape
     only: the appearance is a field of the window state snapshot and its change arrives through
     the handler's state-changed obligation, not through `appearance()` and

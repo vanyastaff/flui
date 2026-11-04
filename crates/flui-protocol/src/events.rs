@@ -5,6 +5,7 @@
 //! it missed, never a silently shortened stream.
 
 use crate::input::JournalEntry;
+use crate::record::RecordEvent;
 use crate::tree::{TreeRevision, WindowId};
 
 vocabulary! {
@@ -29,6 +30,9 @@ vocabulary! {
         Announcement => "announcement",
         /// The subscriber's queue overflowed. Sent unasked.
         Gap => "gap",
+        /// One row of a recording. Sent unasked to the connection that started it
+        /// (`record.start`): a subscription that selects it selects nothing.
+        Record => "record",
     }
 }
 
@@ -217,6 +221,8 @@ pub enum Event {
     Announcement(AnnouncementEvent),
     /// The queue overflowed.
     Gap(GapEvent),
+    /// A recording's row, boxed: a row is larger than every other event.
+    Record(Box<RecordEvent>),
 }
 
 impl Event {
@@ -230,6 +236,7 @@ impl Event {
             Self::Window(_) => EventKind::Window,
             Self::Announcement(_) => EventKind::Announcement,
             Self::Gap(_) => EventKind::Gap,
+            Self::Record(_) => EventKind::Record,
         }
     }
 }

@@ -63,10 +63,13 @@ use std::sync::{Arc, Weak};
 use std::task::Waker;
 use std::time::Duration;
 
+use flui_protocol::input_recording::{Header, Row};
 use flui_protocol::method::{Addressed, WindowMethod};
-use flui_protocol::{ErrorCode, ErrorObject, Event, EventFilter, HandleKind, Retry, WindowId};
+use flui_protocol::{
+    ErrorCode, ErrorObject, Event, EventFilter, HandleKind, RecordParams, Retry, WindowId,
+};
 
-use crate::__runtime::{AgentPort, EventSource, LeaseId, WakeSlot, WindowCall};
+use crate::__runtime::{AgentPort, EventSource, LeaseId, RecordSource, WakeSlot, WindowCall};
 
 /// A development tool that serves the application's windows to an agent,
 /// installed by the application and called by the host on the owner thread.
@@ -263,6 +266,76 @@ impl fmt::Debug for AgentEvents {
     }
 }
 
+/// A recording of the UI runtime that hosts a window, from [`AgentWindow::record`]: its
+/// [`header`](Self::header), then its rows in the order the runtime applied them, in the input
+/// recording's format (ADR-0215, ADR-0288 §11).
+///
+/// It covers every window that runtime hosts, and ends with an `end` row once [`Self::stop`]
+/// was asked, the window it was started on closed, or the runtime went. A row the reader has
+/// no room for is counted, and the next row that fits is preceded by a `gap` row naming how many
+/// were lost; the `end` row counts every row lost. A recording whose `end` row could not be
+/// queued ends without it, and [`Self::is_finished`] still says so.
+///
+/// Dropping it ends the recording at the owner's next drain, with no `end` row.
+///
+/// Never wait on it on the owner thread, or inside a [`DevAgentHook`] method: the owner fills
+/// it as it applies input.
+#[must_use = "dropping the recording ends it"]
+pub struct AgentRecording {
+    header: Header,
+    source: Box<dyn RecordSource>,
+}
+
+impl AgentRecording {
+    pub(crate) fn new(header: Header, source: Box<dyn RecordSource>) -> Self {
+        Self { header, source }
+    }
+
+    /// What the recording starts from: its first line.
+    #[must_use]
+    pub fn header(&self) -> &Header {
+        &self.header
+    }
+
+    /// The next row, if one is queued.
+    pub fn try_next(&mut self) -> Option<Row> {
+        self.source.try_next()
+    }
+
+    /// The next row, waiting up to `timeout` for one; `None` if none came by then, and once the
+    /// recording has ended. Never call this on the owner thread.
+    pub fn recv_timeout(&mut self, timeout: Duration) -> Option<Row> {
+        self.source.recv_timeout(timeout)
+    }
+
+    /// Whether the recording has ended and every row it queued was taken.
+    #[must_use]
+    pub fn is_finished(&self) -> bool {
+        self.source.is_finished()
+    }
+
+    /// Wake `waker` once a row is queued or the recording ends. Only the waker registered last
+    /// is woken, once; register again for another wake, and read after registering.
+    pub fn register(&mut self, waker: &Waker) {
+        self.source.register(waker);
+    }
+
+    /// End the recording: the owner delivers what it recorded so far and the `end` row at its
+    /// next drain. Asked again, or once the recording has ended, it does nothing.
+    pub fn stop(&mut self) {
+        self.source.stop();
+    }
+}
+
+impl fmt::Debug for AgentRecording {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("AgentRecording")
+            .field("windows", &self.header.windows.len())
+            .field("finished", &self.is_finished())
+            .finish_non_exhaustive()
+    }
+}
+
 /// One window an agent can read and act on, from any thread.
 ///
 /// Handed to [`DevAgentHook::window_opened`] by the host. `Clone + Send +
@@ -411,6 +484,32 @@ impl AgentWindow {
             .ok_or_else(|| window_gone(self.id))?
             .subscribe(filters)
     }
+
+    /// Record the UI runtime that hosts this window, as [`AgentRecording`] describes: the answer
+    /// is the recording once the owner has started it; what the runtime applies after that is
+    /// in it.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::call`]; the answer carries the rest: `invalid_argument` when `params` name no
+    /// layer, `not_supported` naming a layer this build does not record, and `busy` when the
+    /// runtime already holds as many recordings as it admits.
+    pub fn record(&self, params: RecordParams) -> Result<AgentAnswer<AgentRecording>, ErrorObject> {
+        if let Some(named) = params.window
+            && named != self.id
+        {
+            return Err(ErrorObject::new(
+                ErrorCode::InvalidArgument,
+                format!(
+                    "record.start's parameters name window {named}; this is window {}",
+                    self.id
+                ),
+            ));
+        }
+        self.open_port()
+            .ok_or_else(|| window_gone(self.id))?
+            .record(params)
+    }
 }
 
 /// A lease on one window's synthetic input, from
@@ -540,6 +639,10 @@ mod tests {
         }
 
         fn release(&self, _: LeaseId) {}
+
+        fn record(&self, _: RecordParams) -> Result<AgentAnswer<AgentRecording>, ErrorObject> {
+            Err(window_gone(WindowId::from_u64(1).expect("non-zero")))
+        }
     }
 
     #[test]
@@ -570,6 +673,10 @@ mod tests {
 
         let elsewhere = window
             .call::<SemanticsRead>(ReadParams::new(other))
+            .expect_err("the parameters name another window");
+        assert_eq!(elsewhere.code, ErrorCode::InvalidArgument);
+        let elsewhere = window
+            .record(RecordParams::input(Some(other)))
             .expect_err("the parameters name another window");
         assert_eq!(elsewhere.code, ErrorCode::InvalidArgument);
 
@@ -628,6 +735,10 @@ mod tests {
 
         fn release(&self, lease: LeaseId) {
             self.released.lock().push(lease);
+        }
+
+        fn record(&self, _: RecordParams) -> Result<AgentAnswer<AgentRecording>, ErrorObject> {
+            Err(window_gone(WindowId::from_u64(1).expect("non-zero")))
         }
     }
 

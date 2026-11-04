@@ -72,6 +72,132 @@
       ],
       "type": "object"
     },
+    "ActionData": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "custom_action": {
+              "format": "int32",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "custom_action"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "value": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "numeric_value": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          "required": [
+            "numeric_value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "scroll_unit": {
+              "$ref": "#/$defs/AxScrollUnit"
+            }
+          },
+          "required": [
+            "scroll_unit"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "scroll_hint": {
+              "$ref": "#/$defs/ScrollHint"
+            }
+          },
+          "required": [
+            "scroll_hint"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "scroll_to_point": {
+              "items": {
+                "format": "double",
+                "type": "number"
+              },
+              "maxItems": 2,
+              "minItems": 2,
+              "type": "array"
+            }
+          },
+          "required": [
+            "scroll_to_point"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "set_scroll_offset": {
+              "items": {
+                "format": "double",
+                "type": "number"
+              },
+              "maxItems": 2,
+              "minItems": 2,
+              "type": "array"
+            }
+          },
+          "required": [
+            "set_scroll_offset"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "set_text_selection": {
+              "properties": {
+                "anchor": {
+                  "$ref": "#/$defs/TextPosition"
+                },
+                "focus": {
+                  "$ref": "#/$defs/TextPosition"
+                }
+              },
+              "required": [
+                "anchor",
+                "focus"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "set_text_selection"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "ActionName": {
       "oneOf": [
         {
@@ -107,6 +233,37 @@
           "type": "string"
         }
       ]
+    },
+    "ActionRequest": {
+      "properties": {
+        "action": {
+          "type": "string"
+        },
+        "data": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ActionData"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "node": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "tree": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "action",
+        "tree",
+        "node"
+      ],
+      "type": "object"
     },
     "ActionSequence": {
       "properties": {
@@ -453,6 +610,34 @@
         }
       ]
     },
+    "Availability": {
+      "oneOf": [
+        {
+          "const": "native",
+          "type": "string"
+        },
+        {
+          "const": "emulated",
+          "type": "string"
+        },
+        {
+          "const": "unavailable",
+          "type": "string"
+        }
+      ]
+    },
+    "AxScrollUnit": {
+      "oneOf": [
+        {
+          "const": "item",
+          "type": "string"
+        },
+        {
+          "const": "page",
+          "type": "string"
+        }
+      ]
+    },
     "BlobRef": {
       "properties": {
         "bytes": {
@@ -475,6 +660,97 @@
         "media"
       ],
       "type": "object"
+    },
+    "Brightness": {
+      "oneOf": [
+        {
+          "const": "light",
+          "type": "string"
+        },
+        {
+          "const": "dark",
+          "type": "string"
+        }
+      ]
+    },
+    "ButtonEvent": {
+      "properties": {
+        "button": {
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "buttons": {
+          "items": {
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": "array"
+        },
+        "click_count": {
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "modifiers": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "pointer": {
+          "$ref": "#/$defs/PointerInfo"
+        },
+        "sample": {
+          "$ref": "#/$defs/Sample"
+        }
+      },
+      "required": [
+        "pointer",
+        "button",
+        "buttons",
+        "sample"
+      ],
+      "type": "object"
+    },
+    "CancelReason": {
+      "oneOf": [
+        {
+          "const": "platform",
+          "type": "string"
+        },
+        {
+          "const": "capture_lost",
+          "type": "string"
+        },
+        {
+          "const": "focus_lost",
+          "type": "string"
+        },
+        {
+          "const": "device_removed",
+          "type": "string"
+        },
+        {
+          "const": "invalid_input",
+          "type": "string"
+        },
+        {
+          "const": "claimed",
+          "type": "string"
+        },
+        {
+          "const": "superseded",
+          "type": "string"
+        }
+      ]
     },
     "Capabilities": {
       "properties": {
@@ -509,6 +785,12 @@
         "pointers": {
           "items": {
             "$ref": "#/$defs/PointerDevice"
+          },
+          "type": "array"
+        },
+        "record": {
+          "items": {
+            "$ref": "#/$defs/RecordLayer"
           },
           "type": "array"
         }
@@ -658,6 +940,18 @@
         }
       ]
     },
+    "Clock": {
+      "oneOf": [
+        {
+          "const": "virtual",
+          "type": "string"
+        },
+        {
+          "const": "monotonic",
+          "type": "string"
+        }
+      ]
+    },
     "CloseParams": {
       "properties": {
         "keep_app": {
@@ -790,6 +1084,142 @@
         }
       ]
     },
+    "Deadline": {
+      "properties": {
+        "member": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "member_type": {
+          "type": "string"
+        },
+        "pointer": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "sequence": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "t": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "window": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "window",
+        "t",
+        "member"
+      ],
+      "type": "object"
+    },
+    "Decision": {
+      "properties": {
+        "disposition": {
+          "$ref": "#/$defs/Disposition"
+        },
+        "member": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "member_type": {
+          "type": "string"
+        },
+        "pointer": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "sequence": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "t": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "window": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "window",
+        "pointer",
+        "t",
+        "disposition",
+        "member"
+      ],
+      "type": "object"
+    },
+    "Device": {
+      "properties": {
+        "device": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "kind": {
+          "$ref": "#/$defs/PointerKind"
+        },
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "device",
+        "kind"
+      ],
+      "type": "object"
+    },
+    "DeviceChange": {
+      "properties": {
+        "device": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "kind": {
+          "$ref": "#/$defs/PointerKind"
+        },
+        "t": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "device",
+        "kind",
+        "t"
+      ],
+      "type": "object"
+    },
     "DeviceClass": {
       "oneOf": [
         {
@@ -842,6 +1272,18 @@
         }
       ]
     },
+    "Disposition": {
+      "oneOf": [
+        {
+          "const": "accepted",
+          "type": "string"
+        },
+        {
+          "const": "rejected",
+          "type": "string"
+        }
+      ]
+    },
     "Distribution": {
       "properties": {
         "max": {
@@ -873,6 +1315,152 @@
         "max"
       ],
       "type": "object"
+    },
+    "DragDrop": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "entered": {
+              "properties": {
+                "allowed": {
+                  "format": "uint8",
+                  "maximum": 255,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "id": {
+                  "$ref": "#/$defs/TransferId"
+                },
+                "position": {
+                  "items": {
+                    "format": "double",
+                    "type": "number"
+                  },
+                  "maxItems": 2,
+                  "minItems": 2,
+                  "type": [
+                    "array",
+                    "null"
+                  ]
+                },
+                "representations": {
+                  "items": {
+                    "$ref": "#/$defs/Representation"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "id",
+                "representations",
+                "allowed"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "entered"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "moved": {
+              "properties": {
+                "allowed": {
+                  "format": "uint8",
+                  "maximum": 255,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "id": {
+                  "$ref": "#/$defs/TransferId"
+                },
+                "position": {
+                  "items": {
+                    "format": "double",
+                    "type": "number"
+                  },
+                  "maxItems": 2,
+                  "minItems": 2,
+                  "type": "array"
+                }
+              },
+              "required": [
+                "id",
+                "allowed",
+                "position"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "moved"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "dropped": {
+              "properties": {
+                "action": {
+                  "format": "uint8",
+                  "maximum": 255,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "id": {
+                  "$ref": "#/$defs/TransferId"
+                },
+                "position": {
+                  "items": {
+                    "format": "double",
+                    "type": "number"
+                  },
+                  "maxItems": 2,
+                  "minItems": 2,
+                  "type": [
+                    "array",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "id",
+                "action"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "dropped"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "exited": {
+              "properties": {
+                "id": {
+                  "$ref": "#/$defs/TransferId"
+                }
+              },
+              "required": [
+                "id"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "exited"
+          ],
+          "type": "object"
+        }
+      ]
     },
     "DragParams": {
       "properties": {
@@ -1288,6 +1876,22 @@
             "params"
           ],
           "type": "object"
+        },
+        {
+          "properties": {
+            "event": {
+              "const": "record",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/$defs/RecordEvent"
+            }
+          },
+          "required": [
+            "event",
+            "params"
+          ],
+          "type": "object"
         }
       ]
     },
@@ -1336,6 +1940,26 @@
         },
         {
           "const": "gap",
+          "type": "string"
+        },
+        {
+          "const": "record",
+          "type": "string"
+        }
+      ]
+    },
+    "Execution": {
+      "oneOf": [
+        {
+          "const": "running",
+          "type": "string"
+        },
+        {
+          "const": "suspended",
+          "type": "string"
+        },
+        {
+          "const": "detached",
           "type": "string"
         }
       ]
@@ -1459,6 +2083,27 @@
         }
       ]
     },
+    "FramePresented": {
+      "properties": {
+        "at": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "refresh": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "at"
+      ],
+      "type": "object"
+    },
     "FrameSample": {
       "properties": {
         "frame": {
@@ -1527,6 +2172,172 @@
       ],
       "type": "object"
     },
+    "GestureValues": {
+      "properties": {
+        "contactless_latch_idle_ns": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "double_tap_slop": {
+          "format": "double",
+          "type": "number"
+        },
+        "double_tap_timeout_ns": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "haptic_frame_deadline_factor": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "long_press_timeout_ns": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_fling_velocity": {
+          "format": "double",
+          "type": "number"
+        },
+        "max_resolution_delay_ns": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "min_fling_velocity": {
+          "format": "double",
+          "type": "number"
+        },
+        "min_target": {
+          "format": "double",
+          "type": "number"
+        },
+        "pan_slop": {
+          "format": "double",
+          "type": "number"
+        },
+        "pan_slop_horizontal": {
+          "format": "double",
+          "type": "number"
+        },
+        "pan_slop_vertical": {
+          "format": "double",
+          "type": "number"
+        },
+        "phased_latch_idle_ns": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "position_smoothing": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Smoothing"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "remainder_handoff": {
+          "$ref": "#/$defs/RemainderHandoff"
+        },
+        "scale_slop": {
+          "format": "double",
+          "type": "number"
+        },
+        "spring_loading_delay_ns": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "swipe_edge_width": {
+          "format": "double",
+          "type": "number"
+        },
+        "touch_slop": {
+          "format": "double",
+          "type": "number"
+        },
+        "velocity_estimator": {
+          "$ref": "#/$defs/VelocityEstimator"
+        }
+      },
+      "required": [
+        "touch_slop",
+        "pan_slop",
+        "pan_slop_vertical",
+        "pan_slop_horizontal",
+        "scale_slop",
+        "double_tap_slop",
+        "double_tap_timeout_ns",
+        "long_press_timeout_ns",
+        "min_fling_velocity",
+        "max_fling_velocity",
+        "velocity_estimator",
+        "min_target",
+        "spring_loading_delay_ns",
+        "swipe_edge_width",
+        "remainder_handoff",
+        "contactless_latch_idle_ns",
+        "phased_latch_idle_ns",
+        "max_resolution_delay_ns",
+        "haptic_frame_deadline_factor"
+      ],
+      "type": "object"
+    },
+    "Gestures": {
+      "properties": {
+        "double_click_interval_ns": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "double_tap_interval_ns": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "long_press_timeout_ns": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "native_mouse_geometry": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MouseGeometry"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "native_touch_geometry": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TouchGeometry"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
     "Greeting": {
       "properties": {
         "hello": {
@@ -1555,8 +2366,57 @@
         {
           "const": "subscription",
           "type": "string"
+        },
+        {
+          "const": "recording",
+          "type": "string"
         }
       ]
+    },
+    "Header": {
+      "properties": {
+        "clock": {
+          "$ref": "#/$defs/Clock"
+        },
+        "devices": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/Device"
+          },
+          "type": "array"
+        },
+        "flui_recording": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "keep_text": {
+          "default": false,
+          "type": "boolean"
+        },
+        "preferences": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Preferences"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "windows": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/Window"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "flui_recording",
+        "clock"
+      ],
+      "type": "object"
     },
     "Hello": {
       "properties": {
@@ -1613,6 +2473,103 @@
       ],
       "type": "object"
     },
+    "HostInput": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "platform": {
+              "$ref": "#/$defs/PlatformInput"
+            }
+          },
+          "required": [
+            "platform"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "window": {
+              "$ref": "#/$defs/WindowObservation"
+            }
+          },
+          "required": [
+            "window"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "frame": {
+              "properties": {
+                "presented": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/FramePresented"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "target_present": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "vsync": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "vsync"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "frame"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "accessibility": {
+              "$ref": "#/$defs/ActionRequest"
+            }
+          },
+          "required": [
+            "accessibility"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "assistive_focus": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "assistive_focus"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "ImeAction": {
       "oneOf": [
         {
@@ -1666,6 +2623,70 @@
             "type"
           ],
           "type": "object"
+        }
+      ]
+    },
+    "ImeEvent": {
+      "oneOf": [
+        {
+          "const": "enabled",
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "preedit": {
+              "properties": {
+                "cursor": {
+                  "maxItems": 2,
+                  "minItems": 2,
+                  "prefixItems": [
+                    {
+                      "format": "uint",
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    {
+                      "format": "uint",
+                      "minimum": 0,
+                      "type": "integer"
+                    }
+                  ],
+                  "type": [
+                    "array",
+                    "null"
+                  ]
+                },
+                "text": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "text"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "preedit"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "commit": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "commit"
+          ],
+          "type": "object"
+        },
+        {
+          "const": "disabled",
+          "type": "string"
         }
       ]
     },
@@ -1781,6 +2802,124 @@
           "type": "boolean"
         }
       },
+      "type": "object"
+    },
+    "InputRecordingCapabilities": {
+      "properties": {
+        "caption_buttons": {
+          "$ref": "#/$defs/Availability"
+        },
+        "outgoing_drag": {
+          "$ref": "#/$defs/Availability"
+        },
+        "pen": {
+          "$ref": "#/$defs/Availability"
+        },
+        "precise_scroll": {
+          "$ref": "#/$defs/Availability"
+        },
+        "present": {
+          "items": {
+            "$ref": "#/$defs/PointerKind"
+          },
+          "type": "array"
+        },
+        "system_gesture_exclusion": {
+          "$ref": "#/$defs/Availability"
+        },
+        "trackpad_gestures": {
+          "$ref": "#/$defs/Availability"
+        },
+        "window_move": {
+          "$ref": "#/$defs/Availability"
+        },
+        "window_resize": {
+          "$ref": "#/$defs/Availability"
+        }
+      },
+      "required": [
+        "pen",
+        "precise_scroll",
+        "trackpad_gestures",
+        "system_gesture_exclusion",
+        "window_move",
+        "window_resize",
+        "caption_buttons",
+        "outgoing_drag",
+        "present"
+      ],
+      "type": "object"
+    },
+    "InputRecordingScrollUnit": {
+      "oneOf": [
+        {
+          "const": "lines",
+          "type": "string"
+        },
+        {
+          "const": "pixels",
+          "type": "string"
+        },
+        {
+          "const": "pages",
+          "type": "string"
+        },
+        {
+          "const": "detents",
+          "type": "string"
+        }
+      ]
+    },
+    "InputRow": {
+      "properties": {
+        "arrival": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "embedded_surface": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "input": {
+          "$ref": "#/$defs/HostInput"
+        },
+        "outcome": {
+          "$ref": "#/$defs/Outcome"
+        },
+        "redacted": {
+          "type": "boolean"
+        },
+        "sequence": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "t": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "window": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "window",
+        "t",
+        "arrival",
+        "input",
+        "outcome"
+      ],
       "type": "object"
     },
     "InputSource": {
@@ -1916,6 +3055,99 @@
           "type": "object"
         }
       ]
+    },
+    "InsetCurve": {
+      "oneOf": [
+        {
+          "properties": {
+            "curve": {
+              "const": "linear",
+              "type": "string"
+            }
+          },
+          "required": [
+            "curve"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "curve": {
+              "const": "cubic_bezier",
+              "type": "string"
+            },
+            "x1": {
+              "format": "double",
+              "type": "number"
+            },
+            "x2": {
+              "format": "double",
+              "type": "number"
+            },
+            "y1": {
+              "format": "double",
+              "type": "number"
+            },
+            "y2": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          "required": [
+            "curve",
+            "x1",
+            "y1",
+            "x2",
+            "y2"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "curve": {
+              "const": "system_keyboard",
+              "type": "string"
+            }
+          },
+          "required": [
+            "curve"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "InsetMotion": {
+      "properties": {
+        "curve": {
+          "$ref": "#/$defs/InsetCurve"
+        },
+        "duration_ns": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "from": {
+          "items": {
+            "format": "double",
+            "type": "number"
+          },
+          "maxItems": 4,
+          "minItems": 4,
+          "type": "array"
+        },
+        "start_ns": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "from",
+        "start_ns",
+        "duration_ns",
+        "curve"
+      ],
+      "type": "object"
     },
     "InspectField": {
       "properties": {
@@ -2680,6 +3912,34 @@
       ],
       "type": "object"
     },
+    "Key": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "character": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "character"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "named": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "named"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "KeyAction": {
       "oneOf": [
         {
@@ -2732,6 +3992,89 @@
           "type": "object"
         }
       ]
+    },
+    "KeyEvent": {
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "composing": {
+          "type": "boolean"
+        },
+        "key": {
+          "$ref": "#/$defs/Key"
+        },
+        "location": {
+          "$ref": "#/$defs/Location"
+        },
+        "modifiers": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "repeat": {
+          "type": "boolean"
+        },
+        "state": {
+          "$ref": "#/$defs/KeyState"
+        },
+        "t": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "unreleased": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "state",
+        "key",
+        "code",
+        "location",
+        "t"
+      ],
+      "type": "object"
+    },
+    "KeyState": {
+      "oneOf": [
+        {
+          "const": "down",
+          "type": "string"
+        },
+        {
+          "const": "up",
+          "type": "string"
+        }
+      ]
+    },
+    "KeyboardInset": {
+      "properties": {
+        "motion": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InsetMotion"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "target": {
+          "items": {
+            "format": "double",
+            "type": "number"
+          },
+          "maxItems": 4,
+          "minItems": 4,
+          "type": "array"
+        }
+      },
+      "required": [
+        "target"
+      ],
+      "type": "object"
     },
     "Latency": {
       "properties": {
@@ -2810,6 +4153,26 @@
         "locator"
       ],
       "type": "object"
+    },
+    "Location": {
+      "oneOf": [
+        {
+          "const": "standard",
+          "type": "string"
+        },
+        {
+          "const": "left",
+          "type": "string"
+        },
+        {
+          "const": "right",
+          "type": "string"
+        },
+        {
+          "const": "numpad",
+          "type": "string"
+        }
+      ]
     },
     "Locator": {
       "properties": {
@@ -3040,6 +4403,31 @@
       ],
       "type": "object"
     },
+    "Motion": {
+      "oneOf": [
+        {
+          "const": "no_preference",
+          "type": "string"
+        },
+        {
+          "const": "reduce",
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "scaled": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          "required": [
+            "scaled"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "MotionParams": {
       "properties": {
         "request": {
@@ -3089,6 +4477,38 @@
       "required": [
         "rate",
         "time_ms"
+      ],
+      "type": "object"
+    },
+    "MouseGeometry": {
+      "properties": {
+        "double_click_area": {
+          "items": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": "array"
+        },
+        "drag_tolerance": {
+          "items": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": "array"
+        },
+        "pixel_ratio": {
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "required": [
+        "double_click_area",
+        "drag_tolerance",
+        "pixel_ratio"
       ],
       "type": "object"
     },
@@ -3305,6 +4725,101 @@
         "count"
       ],
       "type": "object"
+    },
+    "Outcome": {
+      "oneOf": [
+        {
+          "const": "handled",
+          "type": "string"
+        },
+        {
+          "const": "unhandled",
+          "type": "string"
+        },
+        {
+          "const": "queued",
+          "type": "string"
+        }
+      ]
+    },
+    "PanZoom": {
+      "properties": {
+        "modifiers": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "phase": {
+          "$ref": "#/$defs/PanZoomPhase"
+        },
+        "pointer": {
+          "$ref": "#/$defs/PointerInfo"
+        },
+        "t": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "x": {
+          "format": "double",
+          "type": "number"
+        },
+        "y": {
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "required": [
+        "pointer",
+        "t",
+        "x",
+        "y",
+        "phase"
+      ],
+      "type": "object"
+    },
+    "PanZoomPhase": {
+      "oneOf": [
+        {
+          "const": "start",
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "update": {
+              "properties": {
+                "rotation": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "scale": {
+                  "format": "double",
+                  "type": "number"
+                }
+              },
+              "required": [
+                "scale",
+                "rotation"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "update"
+          ],
+          "type": "object"
+        },
+        {
+          "const": "end",
+          "type": "string"
+        },
+        {
+          "const": "cancelled",
+          "type": "string"
+        }
+      ]
     },
     "PerfBudget": {
       "properties": {
@@ -3597,6 +5112,85 @@
       ],
       "type": "object"
     },
+    "PlatformInput": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "pointer": {
+              "$ref": "#/$defs/PointerEvent"
+            }
+          },
+          "required": [
+            "pointer"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "pointer_frame": {
+              "items": {
+                "$ref": "#/$defs/PointerEvent"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "pointer_frame"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "keyboard": {
+              "$ref": "#/$defs/KeyEvent"
+            }
+          },
+          "required": [
+            "keyboard"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "ime": {
+              "$ref": "#/$defs/ImeEvent"
+            }
+          },
+          "required": [
+            "ime"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "drag_drop": {
+              "$ref": "#/$defs/DragDrop"
+            }
+          },
+          "required": [
+            "drag_drop"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "capabilities": {
+              "$ref": "#/$defs/InputRecordingCapabilities"
+            }
+          },
+          "required": [
+            "capabilities"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "PointerAction": {
       "oneOf": [
         {
@@ -3735,6 +5329,453 @@
         }
       ]
     },
+    "PointerEvent": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "down": {
+              "$ref": "#/$defs/ButtonEvent"
+            }
+          },
+          "required": [
+            "down"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "button_pressed": {
+              "$ref": "#/$defs/ButtonEvent"
+            }
+          },
+          "required": [
+            "button_pressed"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "button_released": {
+              "$ref": "#/$defs/ButtonEvent"
+            }
+          },
+          "required": [
+            "button_released"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "up": {
+              "$ref": "#/$defs/ButtonEvent"
+            }
+          },
+          "required": [
+            "up"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "move": {
+              "properties": {
+                "buttons": {
+                  "items": {
+                    "format": "uint8",
+                    "maximum": 255,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "type": "array"
+                },
+                "coalesced": {
+                  "items": {
+                    "$ref": "#/$defs/Sample"
+                  },
+                  "type": "array"
+                },
+                "current": {
+                  "$ref": "#/$defs/Sample"
+                },
+                "modifiers": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "pointer": {
+                  "$ref": "#/$defs/PointerInfo"
+                },
+                "predicted": {
+                  "items": {
+                    "$ref": "#/$defs/Sample"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "pointer",
+                "buttons",
+                "current"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "move"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "cancel": {
+              "properties": {
+                "pointer": {
+                  "$ref": "#/$defs/PointerInfo"
+                },
+                "reason": {
+                  "$ref": "#/$defs/CancelReason"
+                },
+                "t": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "pointer",
+                "t",
+                "reason"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "cancel"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "enter": {
+              "$ref": "#/$defs/Signal"
+            }
+          },
+          "required": [
+            "enter"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "leave": {
+              "$ref": "#/$defs/Signal"
+            }
+          },
+          "required": [
+            "leave"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "scroll": {
+              "$ref": "#/$defs/Scroll"
+            }
+          },
+          "required": [
+            "scroll"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "scroll_inertia_cancel": {
+              "$ref": "#/$defs/Signal"
+            }
+          },
+          "required": [
+            "scroll_inertia_cancel"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "pan_zoom": {
+              "$ref": "#/$defs/PanZoom"
+            }
+          },
+          "required": [
+            "pan_zoom"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "smart_zoom": {
+              "$ref": "#/$defs/SmartZoom"
+            }
+          },
+          "required": [
+            "smart_zoom"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "revise": {
+              "properties": {
+                "pointer": {
+                  "$ref": "#/$defs/PointerInfo"
+                },
+                "sample": {
+                  "$ref": "#/$defs/Sample"
+                }
+              },
+              "required": [
+                "pointer",
+                "sample"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "revise"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "pen_squeeze": {
+              "properties": {
+                "hover": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/Sample"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "phase": {
+                  "$ref": "#/$defs/SqueezePhase"
+                },
+                "pointer": {
+                  "$ref": "#/$defs/PointerInfo"
+                },
+                "t": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "pointer",
+                "t",
+                "phase"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "pen_squeeze"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "device_added": {
+              "$ref": "#/$defs/DeviceChange"
+            }
+          },
+          "required": [
+            "device_added"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "device_removed": {
+              "$ref": "#/$defs/DeviceChange"
+            }
+          },
+          "required": [
+            "device_removed"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "PointerInfo": {
+      "properties": {
+        "device": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "id": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "kind": {
+          "$ref": "#/$defs/PointerKind"
+        },
+        "primary": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "kind"
+      ],
+      "type": "object"
+    },
+    "PointerKind": {
+      "oneOf": [
+        {
+          "const": "mouse",
+          "type": "string"
+        },
+        {
+          "const": "touch",
+          "type": "string"
+        },
+        {
+          "const": "pen",
+          "type": "string"
+        },
+        {
+          "const": "eraser",
+          "type": "string"
+        },
+        {
+          "const": "trackpad",
+          "type": "string"
+        },
+        {
+          "const": "virtual",
+          "type": "string"
+        },
+        {
+          "const": "unknown",
+          "type": "string"
+        }
+      ]
+    },
+    "Preferences": {
+      "properties": {
+        "gestures": {
+          "$ref": "#/$defs/Gestures",
+          "default": {}
+        },
+        "haptics": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "high_contrast": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "locales": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "motion": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Motion"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "regional": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Regional"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "revision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "text_scale": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "text_weight": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TextWeight"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "wheel_horizontal_characters": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "wheel_vertical": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WheelStep"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "revision"
+      ],
+      "type": "object"
+    },
     "PressKeysParams": {
       "properties": {
         "force": {
@@ -3793,6 +5834,21 @@
       ],
       "type": "object"
     },
+    "Profile": {
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/PointerKind"
+        },
+        "values": {
+          "$ref": "#/$defs/GestureValues"
+        }
+      },
+      "required": [
+        "kind",
+        "values"
+      ],
+      "type": "object"
+    },
     "ProtocolVersion": {
       "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$",
       "type": "string"
@@ -3843,6 +5899,115 @@
       },
       "type": "object"
     },
+    "RecordEvent": {
+      "properties": {
+        "recording": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "row": {
+          "$ref": "#/$defs/Row"
+        },
+        "window": {
+          "$ref": "#/$defs/WindowId"
+        }
+      },
+      "required": [
+        "recording",
+        "window",
+        "row"
+      ],
+      "type": "object"
+    },
+    "RecordLayer": {
+      "oneOf": [
+        {
+          "const": "input",
+          "type": "string"
+        }
+      ]
+    },
+    "RecordParams": {
+      "properties": {
+        "keep_text": {
+          "type": "boolean"
+        },
+        "layers": {
+          "items": {
+            "$ref": "#/$defs/RecordLayer"
+          },
+          "type": "array"
+        },
+        "window": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WindowId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "layers"
+      ],
+      "type": "object"
+    },
+    "RecordStopParams": {
+      "properties": {
+        "recording": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "recording"
+      ],
+      "type": "object"
+    },
+    "RecordSummary": {
+      "properties": {
+        "complete": {
+          "type": "boolean"
+        },
+        "lost_rows": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "rows": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "rows",
+        "lost_rows",
+        "complete"
+      ],
+      "type": "object"
+    },
+    "Recording": {
+      "properties": {
+        "header": {
+          "$ref": "#/$defs/Header"
+        },
+        "recording": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "recording",
+        "header"
+      ],
+      "type": "object"
+    },
     "Rect": {
       "properties": {
         "height": {
@@ -3872,6 +6037,41 @@
       ],
       "type": "object"
     },
+    "Regional": {
+      "properties": {
+        "first_weekday": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "hour_cycle": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "measurement": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "numbering": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "region": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
     "Released": {
       "properties": {
         "keys": {
@@ -3888,6 +6088,37 @@
       "required": [
         "pointers",
         "keys"
+      ],
+      "type": "object"
+    },
+    "RemainderHandoff": {
+      "oneOf": [
+        {
+          "const": "next_sequence",
+          "type": "string"
+        },
+        {
+          "const": "at_edge_within_sequence",
+          "type": "string"
+        }
+      ]
+    },
+    "Representation": {
+      "properties": {
+        "declared_len": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "format": {
+          "$ref": "#/$defs/TransferFormat"
+        }
+      },
+      "required": [
+        "format"
       ],
       "type": "object"
     },
@@ -4109,6 +6340,268 @@
         }
       ]
     },
+    "Row": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "input": {
+              "$ref": "#/$defs/InputRow"
+            }
+          },
+          "required": [
+            "input"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "decision": {
+              "$ref": "#/$defs/Decision"
+            }
+          },
+          "required": [
+            "decision"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "deadline": {
+              "$ref": "#/$defs/Deadline"
+            }
+          },
+          "required": [
+            "deadline"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "preferences": {
+              "$ref": "#/$defs/Preferences"
+            }
+          },
+          "required": [
+            "preferences"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "gap": {
+              "properties": {
+                "rows": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "rows"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "gap"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "end": {
+              "properties": {
+                "lost_rows": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "lost_rows"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "end"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Sample": {
+      "properties": {
+        "altitude": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "azimuth": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "contact_size": {
+          "items": {
+            "format": "double",
+            "type": "number"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "hover_distance": {
+          "format": "float",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "pressure": {
+          "format": "float",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "t": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "tangential_pressure": {
+          "format": "float",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "twist": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "x": {
+          "format": "double",
+          "type": "number"
+        },
+        "y": {
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "required": [
+        "t",
+        "x",
+        "y"
+      ],
+      "type": "object"
+    },
+    "Scroll": {
+      "properties": {
+        "dx": {
+          "format": "double",
+          "type": "number"
+        },
+        "dy": {
+          "format": "double",
+          "type": "number"
+        },
+        "modifiers": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "phase": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ScrollPhase"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "pointer": {
+          "$ref": "#/$defs/PointerInfo"
+        },
+        "precision": {
+          "$ref": "#/$defs/ScrollPrecision"
+        },
+        "t": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "unit": {
+          "$ref": "#/$defs/InputRecordingScrollUnit"
+        },
+        "x": {
+          "format": "double",
+          "type": "number"
+        },
+        "y": {
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "required": [
+        "pointer",
+        "t",
+        "x",
+        "y",
+        "unit",
+        "dx",
+        "dy",
+        "precision"
+      ],
+      "type": "object"
+    },
+    "ScrollHint": {
+      "oneOf": [
+        {
+          "const": "top_left",
+          "type": "string"
+        },
+        {
+          "const": "bottom_right",
+          "type": "string"
+        },
+        {
+          "const": "top_edge",
+          "type": "string"
+        },
+        {
+          "const": "bottom_edge",
+          "type": "string"
+        },
+        {
+          "const": "left_edge",
+          "type": "string"
+        },
+        {
+          "const": "right_edge",
+          "type": "string"
+        }
+      ]
+    },
     "ScrollIntoViewParams": {
       "properties": {
         "force": {
@@ -4143,6 +6636,54 @@
         "target"
       ],
       "type": "object"
+    },
+    "ScrollPhase": {
+      "oneOf": [
+        {
+          "const": "began",
+          "type": "string"
+        },
+        {
+          "const": "changed",
+          "type": "string"
+        },
+        {
+          "const": "ended",
+          "type": "string"
+        },
+        {
+          "const": "cancelled",
+          "type": "string"
+        },
+        {
+          "const": "momentum_began",
+          "type": "string"
+        },
+        {
+          "const": "momentum_changed",
+          "type": "string"
+        },
+        {
+          "const": "momentum_ended",
+          "type": "string"
+        }
+      ]
+    },
+    "ScrollPrecision": {
+      "oneOf": [
+        {
+          "const": "unknown",
+          "type": "string"
+        },
+        {
+          "const": "notched",
+          "type": "string"
+        },
+        {
+          "const": "precise",
+          "type": "string"
+        }
+      ]
     },
     "ScrollUnit": {
       "oneOf": [
@@ -4268,6 +6809,90 @@
       ],
       "type": "object"
     },
+    "Signal": {
+      "properties": {
+        "pointer": {
+          "$ref": "#/$defs/PointerInfo"
+        },
+        "position": {
+          "items": {
+            "format": "double",
+            "type": "number"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "t": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "pointer",
+        "t"
+      ],
+      "type": "object"
+    },
+    "SmartZoom": {
+      "properties": {
+        "modifiers": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "pointer": {
+          "$ref": "#/$defs/PointerInfo"
+        },
+        "t": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "x": {
+          "format": "double",
+          "type": "number"
+        },
+        "y": {
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "required": [
+        "pointer",
+        "t",
+        "x",
+        "y"
+      ],
+      "type": "object"
+    },
+    "Smoothing": {
+      "properties": {
+        "beta": {
+          "format": "double",
+          "type": "number"
+        },
+        "d_cutoff": {
+          "format": "double",
+          "type": "number"
+        },
+        "min_cutoff": {
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "required": [
+        "min_cutoff",
+        "beta",
+        "d_cutoff"
+      ],
+      "type": "object"
+    },
     "Snapshot": {
       "oneOf": [
         {
@@ -4345,6 +6970,26 @@
             "full"
           ],
           "type": "object"
+        }
+      ]
+    },
+    "SqueezePhase": {
+      "oneOf": [
+        {
+          "const": "began",
+          "type": "string"
+        },
+        {
+          "const": "changed",
+          "type": "string"
+        },
+        {
+          "const": "ended",
+          "type": "string"
+        },
+        {
+          "const": "cancelled",
+          "type": "string"
         }
       ]
     },
@@ -4633,6 +7278,50 @@
         }
       ]
     },
+    "TextPosition": {
+      "properties": {
+        "character_index": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "node": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "node",
+        "character_index"
+      ],
+      "type": "object"
+    },
+    "TextWeight": {
+      "oneOf": [
+        {
+          "const": "no_preference",
+          "type": "string"
+        },
+        {
+          "const": "bold",
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "adjustment": {
+              "format": "int32",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "adjustment"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "TimeLimit": {
       "oneOf": [
         {
@@ -4662,6 +7351,38 @@
           "type": "object"
         }
       ]
+    },
+    "TouchGeometry": {
+      "properties": {
+        "double_tap_slop": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "max_fling": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "min_fling": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "pixel_ratio": {
+          "format": "double",
+          "type": "number"
+        },
+        "touch_slop": {
+          "format": "int32",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "touch_slop",
+        "double_tap_slop",
+        "min_fling",
+        "max_fling",
+        "pixel_ratio"
+      ],
+      "type": "object"
     },
     "TrackpadAction": {
       "oneOf": [
@@ -4767,6 +7488,81 @@
           "type": "object"
         }
       ]
+    },
+    "TransferFormat": {
+      "oneOf": [
+        {
+          "const": "text",
+          "type": "string"
+        },
+        {
+          "const": "html",
+          "type": "string"
+        },
+        {
+          "const": "uri_list",
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "image": {
+              "properties": {
+                "mime": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "mime"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "image"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "custom": {
+              "properties": {
+                "mime": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "mime"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "custom"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "TransferId": {
+      "properties": {
+        "generation": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "index": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "index",
+        "generation"
+      ],
+      "type": "object"
     },
     "Tree": {
       "properties": {
@@ -4960,6 +7756,26 @@
         }
       ]
     },
+    "VelocityEstimator": {
+      "oneOf": [
+        {
+          "const": "least_squares",
+          "type": "string"
+        },
+        {
+          "const": "impulse",
+          "type": "string"
+        },
+        {
+          "const": "ios",
+          "type": "string"
+        },
+        {
+          "const": "macos",
+          "type": "string"
+        }
+      ]
+    },
     "Verdict": {
       "oneOf": [
         {
@@ -5082,6 +7898,61 @@
         }
       ]
     },
+    "WheelStep": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "lines": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "lines"
+          ],
+          "type": "object"
+        },
+        {
+          "const": "page",
+          "type": "string"
+        }
+      ]
+    },
+    "Window": {
+      "properties": {
+        "gestures": {
+          "items": {
+            "$ref": "#/$defs/Profile"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "scale_factor": {
+          "format": "double",
+          "type": "number"
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "window": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "window",
+        "scale_factor"
+      ],
+      "type": "object"
+    },
     "WindowEvent": {
       "properties": {
         "opened": {
@@ -5114,6 +7985,184 @@
         "windows"
       ],
       "type": "object"
+    },
+    "WindowObservation": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "metrics": {
+              "properties": {
+                "height": {
+                  "format": "int32",
+                  "type": "integer"
+                },
+                "scale_factor": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "width": {
+                  "format": "int32",
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "width",
+                "height",
+                "scale_factor"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "metrics"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "focus": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "focus"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "visibility": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "visibility"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "execution": {
+              "$ref": "#/$defs/Execution"
+            }
+          },
+          "required": [
+            "execution"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "snapshot": {
+              "properties": {
+                "execution": {
+                  "$ref": "#/$defs/Execution"
+                },
+                "focused": {
+                  "type": "boolean"
+                },
+                "visible": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "execution",
+                "focused",
+                "visible"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "snapshot"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "hover": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "hover"
+          ],
+          "type": "object"
+        },
+        {
+          "const": "moved",
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "insets": {
+              "properties": {
+                "keyboard": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/KeyboardInset"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "safe_area": {
+                  "items": {
+                    "format": "double",
+                    "type": "number"
+                  },
+                  "maxItems": 4,
+                  "minItems": 4,
+                  "type": "array"
+                },
+                "system_gestures": {
+                  "default": [
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0
+                  ],
+                  "items": {
+                    "format": "double",
+                    "type": "number"
+                  },
+                  "maxItems": 4,
+                  "minItems": 4,
+                  "type": "array"
+                }
+              },
+              "required": [
+                "safe_area"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "insets"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "brightness": {
+              "$ref": "#/$defs/Brightness"
+            }
+          },
+          "required": [
+            "brightness"
+          ],
+          "type": "object"
+        }
+      ]
     },
     "WindowParams": {
       "properties": {
@@ -6614,6 +9663,28 @@
       },
       "served_by": "agent",
       "tier": "perf"
+    },
+    "record.start": {
+      "effect": "read_only",
+      "output": {
+        "$ref": "#/$defs/Recording"
+      },
+      "params": {
+        "$ref": "#/$defs/RecordParams"
+      },
+      "served_by": "agent",
+      "tier": "record"
+    },
+    "record.stop": {
+      "effect": "read_only",
+      "output": {
+        "$ref": "#/$defs/RecordSummary"
+      },
+      "params": {
+        "$ref": "#/$defs/RecordStopParams"
+      },
+      "served_by": "agent",
+      "tier": "record"
     },
     "semantics.act": {
       "effect": "acts",

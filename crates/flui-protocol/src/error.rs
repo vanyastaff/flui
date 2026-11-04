@@ -119,6 +119,8 @@ vocabulary! {
         Process => "process",
         /// An event subscription.
         Subscription => "subscription",
+        /// A recording (`record.start`).
+        Recording => "recording",
     }
 }
 

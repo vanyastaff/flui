@@ -87,7 +87,7 @@ impl Document for NotesData {
 (trait в `flui-platform-api`, бэкенд в `flui-platform`), ADR-0047 (capability поверх IO-пула),
 ADR-0083 (у `flui-runtime` нет платформенного ребра), ADR-0097 (новых `static` нет; реестр
 сброса — значение хоста), ADR-0123/ADR-0127 (паники и закрытие — существующими путями).
-Дополняет шаг 8 ADR-0093 (Proposed): стек восстанавливается, web history остаётся. Ни один
+Восстановление стека Router решает ADR-0262 §6; web history остаётся в ADR-0093. Ни один
 принятый ADR не заменяется.
 
 **Ответы на открытые вопросы.**
@@ -399,8 +399,8 @@ In-src `storage::tests::file_store_interruption_matrix`: обрыв после t
 ## ADR
 
 Нужен: новые контракты `flui-platform-api`, `flui-view`, `flui-app`, `flui-widgets` и facade.
-**ADR-0262 (`Proposed`; было «Persistence: byte storage capability, flush registry and
-versioned documents»).** Решение:
+**ADR-0262 (было «Persistence: byte storage capability, flush registry and versioned
+documents»).** Решение:
 
 1. `flui-platform-api::Storage` — асинхронное чтение и синхронно принимаемая публикация байтов;
    через границу IO идут только байты и версии. Данные пишутся с CAS под короткой

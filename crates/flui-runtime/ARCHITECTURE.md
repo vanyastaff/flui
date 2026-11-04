@@ -941,6 +941,21 @@ change, drag-and-drop, capabilities, an input method turning on or off) is route
 entry. An injection's answer carries `observed`, the span of the window's entries its ticks made,
 measured around each batch it sent. Pinned by `tests/contracts/agent_input.rs`.
 
+**Recordings.** `AgentWindow::record` sends `UiCommand::AgentRecord`; the drain starts the
+recording as a tap of the runtime's (`agent_record.rs`), beside the application's own, so it
+covers every presentation of the runtime, and answers with the header `recording_start` gives,
+in the recording format (`RecordingStart::to_wire`). The tap converts each row and queues it on
+a queue the reader shares, bounded at 1024 rows: a row with no room is counted, the next that
+fits is preceded by a `gap` row, and the tap's `end` row goes in past the bound, counting the
+queue's losses with the tap's. The reader's stop and its drop are flags on that queue, recorded
+before the owner is woken, like a released lease; the drain sweeps them after the leases'
+release, finishing a stopped recording (`InputTapHandle::finish`, so the rows admitted before it
+go out first) and removing an abandoned one with no row. A recording also ends with its `end`
+row when its presentation is removed (`close_presentation_after_failure`) and when the runtime
+drops, each under the close's containment. A tap removed before its `end` row ends the queue
+without one, so a reader never waits on a recording nothing fills. At most 8 per runtime
+(`TooManyRecordings`, `busy`). Pinned by `tests/contracts/agent_service.rs`.
+
 **Waits.** `wait.until` parks a condition on the presentation
 (`agent_waits`) instead of polling it. The owner evaluates it when it arrives, so one that holds
 already answers at the drain; after each frame `drive_frame` ran, which also counts that frame

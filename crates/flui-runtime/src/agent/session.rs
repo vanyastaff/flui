@@ -8,6 +8,7 @@ use std::task::Waker;
 use std::time::Duration;
 
 use flui_protocol::framing::{LineReader, MAX_LINE};
+use flui_protocol::method::{Method as _, RecordStart};
 use flui_protocol::version::PROTOCOL_VERSION;
 use flui_protocol::{
     Capabilities, ClientRole, ErrorCode, ErrorObject, Greeting, Hello, HelloReply, InputPath,
@@ -18,7 +19,7 @@ use serde::Serialize;
 use serde_json::Value;
 use web_time::Instant;
 
-use super::dispatch::{self, Admitted, Leases, Running, Subscriptions};
+use super::dispatch::{self, Admitted, Leases, Recordings, Running, Subscriptions};
 use super::service::{Shared, Taken};
 
 /// What the service writes: a result is the method's output as a JSON value.
@@ -100,6 +101,8 @@ pub struct Session {
     waiting: VecDeque<Admitted>,
     running: Option<Running>,
     subscriptions: Subscriptions,
+    /// Its recordings: their rows go out as `record` events, to this conversation only.
+    recordings: Recordings,
     /// Its input leases: what it injected stays held until it releases it or goes.
     leases: Leases,
     outgoing: VecDeque<Outgoing>,
@@ -125,6 +128,7 @@ impl Session {
             waiting: VecDeque::new(),
             running: None,
             subscriptions: Subscriptions::default(),
+            recordings: Recordings::default(),
             leases: Leases::default(),
             outgoing: VecDeque::new(),
             unsent_answers: 0,
@@ -217,7 +221,19 @@ impl Session {
                 tracing::warn!(window = %window, code = %code, "a subscription cannot reach a window");
             });
         }
-        if drained.held {
+        let room = EVENT_ROOM.saturating_sub(self.outgoing.len());
+        let rows = self.recordings.drain(room, waker);
+        for event in rows.events {
+            if let Some(bytes) = encode(&Line::Event(event)) {
+                self.push(bytes, false);
+            }
+        }
+        if rows.ended {
+            // A `record.stop` waits for its recording's `end` row, written above: it is
+            // answered after it.
+            self.run_requests(now, waker);
+        }
+        if drained.held || rows.held {
             // More events are queued than there was room for: poll again once the transport
             // has transmitted what is here.
             waker.wake_by_ref();
@@ -237,6 +253,7 @@ impl Session {
                 self.running = Some(dispatch::start(
                     &self.shared,
                     &mut self.subscriptions,
+                    &mut self.recordings,
                     &mut self.leases,
                     admitted,
                     now,
@@ -246,7 +263,9 @@ impl Session {
                 .running
                 .as_mut()
                 .expect("BUG: a request runs once one was started");
-            let Some(outcome) = running.poll(&mut self.subscriptions, now, waker) else {
+            let Some(outcome) =
+                running.poll(&mut self.subscriptions, &mut self.recordings, now, waker)
+            else {
                 return;
             };
             let running = self
@@ -343,6 +362,13 @@ impl Session {
         let mut capabilities = Capabilities::default();
         capabilities.paths = vec![InputPath::Semantic];
         capabilities.methods = dispatch::served(hello.role);
+        if capabilities
+            .methods
+            .iter()
+            .any(|method| method == RecordStart::NAME)
+        {
+            capabilities.record = vec![flui_protocol::RecordLayer::Input];
+        }
         let welcome = HelloReply::new(PROTOCOL_VERSION)
             .with_app(self.shared.app.clone())
             .with_capabilities(capabilities);
@@ -491,6 +517,7 @@ impl Session {
         self.waiting.clear();
         self.running = None;
         self.subscriptions = Subscriptions::default();
+        self.recordings = Recordings::default();
         self.leases = Leases::default();
         self.retry_at = None;
     }

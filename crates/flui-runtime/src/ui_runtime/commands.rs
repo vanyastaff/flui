@@ -102,6 +102,16 @@ pub enum UiCommand {
         /// Where the stream goes.
         reply: flui_view::__runtime::Reply<flui_view::dev_agent::AgentEvents>,
     },
+    /// Start a recording of the UI runtime that hosts the addressed presentation and answer
+    /// with it (`agent_record`).
+    AgentRecord {
+        /// The presentation the agent's window addresses.
+        presentation_id: PresentationId,
+        /// What to record.
+        params: flui_protocol::RecordParams,
+        /// Where the recording goes.
+        reply: flui_view::__runtime::Reply<flui_view::dev_agent::AgentRecording>,
+    },
     /// Run a write against the reactive graph that minted `target` (ADR-0074
     /// §5.8, routed per ADR-0085 §1) on the owner thread: the cross-thread
     /// way to write a signal. Readers it marks land in the owning
@@ -158,6 +168,15 @@ impl std::fmt::Debug for UiCommand {
                 .debug_struct("UiCommand::AgentSubscribe")
                 .field("presentation_id", presentation_id)
                 .field("filters", filters)
+                .finish_non_exhaustive(),
+            UiCommand::AgentRecord {
+                presentation_id,
+                params,
+                ..
+            } => f
+                .debug_struct("UiCommand::AgentRecord")
+                .field("presentation_id", presentation_id)
+                .field("layers", &params.layers)
                 .finish_non_exhaustive(),
             UiCommand::SignalWrite { target, .. } => f
                 .debug_struct("UiCommand::SignalWrite")
@@ -685,6 +704,14 @@ impl UiRuntime {
                     self.subscribe_agent_events(state, filters, &reply);
                     report.invoked += 1;
                 }
+                UiCommand::AgentRecord {
+                    presentation_id,
+                    params,
+                    reply,
+                } => {
+                    self.start_agent_recording(presentation_id, &params, &reply);
+                    report.invoked += 1;
+                }
                 UiCommand::SignalWrite { target, mut apply } => {
                     let Some((presentation, source)) = self.signal_writer_for(target) else {
                         #[expect(
@@ -796,8 +823,12 @@ impl UiRuntime {
                 }
             }
         }
-        // The input of the leases let go is released, every window's, before a panic continues.
-        if let Some(payload) = self.release_counted_leases(released) {
+        // The input of the leases let go is released, every window's, and then the recordings
+        // their readers stopped or let go end, before a panic continues: a recording stopped
+        // here holds the release.
+        let mut first = self.release_counted_leases(released);
+        flui_foundation::panic::FirstPanic::fold(&mut first, self.sweep_agent_recordings());
+        if let Some(payload) = first {
             self.rearm_after_command_panic(payload);
         }
         // Then what providers posted back: settled completions run their

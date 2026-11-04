@@ -111,6 +111,7 @@ mod agent_events;
 mod agent_input;
 mod agent_inspect;
 mod agent_journal;
+mod agent_record;
 mod agent_serve;
 mod agent_stability;
 mod agent_wait;
@@ -251,6 +252,9 @@ pub struct UiRuntime {
     input_taps: crate::InputTaps,
     /// The arena observers a recording keeps, and what they reported.
     decision_recorder: recording::DecisionRecorder,
+    /// The recordings agents asked of this runtime (`record.start`), each a tap beside the
+    /// application's.
+    agent_recordings: agent_record::AgentRecordings,
     /// The providers this UI runtime's presentations acquire platform
     /// capabilities from: the registry the host gave it, handed to the initial
     /// presentation at construction and to every later one through
@@ -487,6 +491,14 @@ impl Drop for UiRuntime {
                 "ui_runtime presentation retirement",
             );
         }
+        // The agents' recordings end with their `end` rows: the runtime they
+        // record goes. Delivering the rows still queued reaches the
+        // application's taps too, each call contained by the registry.
+        crate::lifecycle_state::preserve_first_lifecycle_panic(
+            &mut first,
+            self.agent_recordings.end_all(),
+            "ui_runtime agent recording end",
+        );
         // The ui_runtime is the only strong owner of its owner-local post-frame
         // callbacks and async tasks: retire them here, on the owner thread,
         // after the presentations (whose widgets may still cancel tasks) and
