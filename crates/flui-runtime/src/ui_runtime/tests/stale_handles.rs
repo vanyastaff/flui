@@ -1,7 +1,6 @@
 //! R19: a handle a UI runtime handed out refuses once the runtime is
 //! dropped, typed and without a panic, and holding it does not keep the
 //! runtime's tree alive. One row per handle type.
-
 use super::*;
 
 /// The handles a mounted state acquires, kept past the runtime that made them.
@@ -102,10 +101,8 @@ pub(crate) fn command_sender() {
     let (ui_runtime, _acquired, released) = mounted();
     let sender = ui_runtime.command_sender();
     drop_holding(ui_runtime, &released, &sender);
-    let navigator = NavigatorHandle::new();
-    navigator.seed_initial(test_route("/"));
     assert!(matches!(
-        sender.send_navigation(NavigatorCommand::maybe_pop(navigator.command_target())),
+        sender.send_assistive_focus(None),
         Err(CommandSendError::OwnerGone { .. })
     ));
     sender.request_redraw();

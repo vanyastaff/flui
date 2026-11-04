@@ -10,7 +10,7 @@
   Context), [ADR-0262](ADR-0262-persisted-documents-over-a-byte-storage-capability.md) §6 (a
   proposed replacement for step 8's stack restoration), [ADR-0020](ADR-0020-transition-modal-route-seam.md),
   [ADR-0021](ADR-0021-hero-flight-seam.md), [ADR-0025](ADR-0025-local-history-seam.md),
-  [ADR-0027](ADR-0027-owner-affine-ui-realms.md) §9 (navigation commands in the closed command
+  [ADR-0027](ADR-0027-owner-affine-ui-realms.md) §9 (the closed command
   vocabulary), [ADR-0042](ADR-0042-theming-ownership.md) (`WidgetsApp` owns the navigator),
   [ADR-0064](ADR-0064-animation-completion-is-one-controller-resolved-future.md),
   [ADR-0076](ADR-0076-public-overlay-mutation-api.md),
@@ -49,14 +49,6 @@ Navigator those two records describe:
   (`navigator.rs:1592`) and `maybe_of_root` (`navigator.rs:1605`) resolve the navigator from a
   build context. The handle is owned and takes no second lock (ADR-0019 §2), which is right,
   but a build-time lookup is the pattern ADR-0078 moved every other capability away from.
-- **A thread-local routing table for commands.** Cross-thread navigation goes through
-  `UiCommand::Navigation(NavigatorCommand)` (`crates/flui-runtime/src/ui_runtime/commands.rs:91`,
-  applied in `UiRuntime::drain_commands` in the same file). `NavigatorCommand::apply_on_owner` resolves its target through
-  `thread_local! NAVIGATOR_COMMAND_TARGETS` (`navigator.rs:90-93`, read at `navigator.rs:819`),
-  a per-thread map from a process-wide counter (`NEXT_NAVIGATOR_COMMAND_TARGET_ID`,
-  `navigator.rs:88`) to `Weak<NavigatorShared>`. The sender is `pub(crate)` and not wired
-  (`send_navigation` at `commands.rs:249` carries `expect(dead_code, reason = "typed navigation command sender is
-  wired before public runtime vending")`, `commands.rs:242-247`), and the vocabulary names a widget-catalog type.
 
 Flutter went through this twice: named routes are no longer recommended because they cannot
 customise deep-link handling or support the browser's forward button, and page-backed routes
@@ -194,15 +186,16 @@ From acceptance, `Navigator` and `NavigatorHandle` get no new public items.
   `push_for_result::<T>(route)` returns ADR-0019's `RouteResult<T>`, and the result still
   crosses the stack as `Box<dyn Any + Send>` (ADR-0019 §3).
 
-### 5. The command vocabulary names navigation, not Navigator
+### 5. Navigation is an owner-thread intent, not a cross-thread command
 
-`UiCommand::Navigation(NavigatorCommand)` becomes a design-neutral navigation intent (a route
-path to push or replace, or a pop) addressed to a presentation — a UI runtime can host several
-(ADR-0043) — and applied to that presentation's URL-owning Router (§2), not to a
-`NavigatorCommandTarget`. An intent for a presentation with no Router is reported, not applied
-elsewhere. `NAVIGATOR_COMMAND_TARGETS` and its counter are deleted; the intent is applied by the
-UI runtime that owns the presentation, so it can never land on the wrong window's navigator. This keeps ADR-0027 §9's closed vocabulary closed and stops the runtime and the
-agent protocol from naming a widget-catalog type.
+There is no cross-thread navigation command: the dead `UiCommand::Navigation` and the
+`NavigatorCommand*` types behind it are deleted without replacement. A design-neutral navigation
+intent (a route path to push or replace, or a pop) is a value on the owner thread, addressed to a
+presentation — a UI runtime can host several (ADR-0043) — and applied to that presentation's
+URL-owning Router (§2). An intent for a presentation with no Router is reported, not applied
+elsewhere, so it can never land on the wrong window's navigator. A thread that needs to navigate
+writes a signal the owner thread reacts to. This keeps ADR-0027 §9's closed vocabulary closed and
+keeps the runtime and the agent protocol from naming a widget-catalog type.
 
 ### Flutter divergences
 
@@ -241,8 +234,7 @@ agent protocol from naming a widget-catalog type.
    `PopScope`, and system back goes to the URL-owning Router.
 6. **Presentation-addressed intents.** `NavigationIntent { presentation, op }` in `flui-runtime`,
    applied by the UI runtime to that presentation's URL-owning Router (§5); `Platform::on_open_urls`
-   delivers intents, and the Router gains an `on_unknown` hook. `NAVIGATOR_COMMAND_TARGETS`, the
-   `NavigatorCommand*` types and their `globals` entry are deleted.
+   delivers intents, and the Router gains an `on_unknown` hook.
 7. **Freeze and removal.** The Material and Cupertino router constructors; the named-route doors, `on_generate_route` and the `WidgetsApp` routes table
    are removed (`flui migrate` rewrites callers); dialogs move to overlay entries and popups stop
    being admitted.
@@ -257,8 +249,8 @@ agent protocol from naming a widget-catalog type.
 - **Keep named routes in the prelude beside the Router.** Rejected: it is Flutter's
   Navigator 1/2 split, two navigation APIs with different deep-link and restoration semantics.
 - **`Router::of(w)` resolved from the `Writer` in a callback.** Rejected: a callback has no
-  tree position, so it could only mean "the primary presentation's router" — the routing
-  `NAVIGATOR_COMMAND_TARGETS` exists to paper over, and wrong in a multi-window app.
+  tree position, so it could only mean "the primary presentation's router" — a routing
+  that is wrong in a multi-window app.
 - **Make dialogs and popups routes too.** Rejected: a URL that opens a confirmation dialog is
   rarely wanted, and it would pull transient overlays into restoration. The line is drawn once
   and tested.
@@ -274,10 +266,8 @@ agent protocol from naming a widget-catalog type.
   static. Typed `push`/`pop` callers keep compiling.
 - `NavigatorHandle::maybe_of` stays for code under no Router; new code acquires a
   `RouterHandle` in `init_state`, which moves navigation out of `build`.
-- `flui-app` loses its only reference to a `flui-widgets` navigation type in the command
-  vocabulary (`commands.rs:8`), which the runtime extraction (ADR-0083) needs anyway.
-- The deletion of `NAVIGATOR_COMMAND_TARGETS` is one entry leaving the globals allowlist
-  (ADR-0097).
+- The runtime's command vocabulary names no `flui-widgets` navigation type, which the runtime
+  extraction (ADR-0083) needs anyway.
 - A saveable-state contract shared by the back stack, lazy-list eviction and hot reload (the
   Compose `rememberSaveable` lesson) is not decided here; page state is kept alive while the
   page is on the stack, as today. See [open questions](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/design/open-questions.md).

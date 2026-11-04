@@ -524,9 +524,9 @@ returns nothing and a mutation does nothing. Modal, transition and hero handles
 that outlive the navigator keep only their own state; a transition handle does
 not keep a modal page alive.
 
-Route and navigator command identities never wrap: the integer maximum
+Route identities never wrap: the integer maximum
 permanently refuses allocation, so a caught capacity failure cannot reissue an
-identity held by history or a command target. A rejected route and its
+identity held by history. A rejected route and its
 replacement result are destroyed by the refusal's unwind (ADR-0281).
 
 An admission reserves every identity it spends, route and overlay entry alike,

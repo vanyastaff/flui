@@ -1,69 +1,7 @@
 //! Identity-exhaustion cases that need the navigator's private admission seams.
 
 use super::*;
-
-pub(in crate::navigator) fn navigator_command_identity_exhaustion_preserves_target_authority() {
-    use crate::navigator::overlay_route::SimpleRoute;
-    let counter = AtomicU64::new(u64::MAX - 2);
-    let original = NavigatorHandle::new();
-    original.push(SimpleRoute::<()>::new(|_| {
-        crate::Text::new("original").boxed()
-    }));
-    let original_route = original.current().expect("original route");
-    let original_target = register_command_target_with_id(
-        &original.shared,
-        NavigatorCommandTargetId::next_from(&counter),
-    );
-    let replacement = NavigatorHandle::new();
-    replacement.push(SimpleRoute::<()>::new(|_| {
-        crate::Text::new("replacement").boxed()
-    }));
-    let replacement_route = replacement.current().expect("replacement route");
-    let replacement_target = register_command_target_with_id(
-        &replacement.shared,
-        NavigatorCommandTargetId::next_from(&counter),
-    );
-    assert_ne!(original_target.id, replacement_target.id);
-    for _ in 0..3 {
-        let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            register_command_target_with_id(
-                &replacement.shared,
-                NavigatorCommandTargetId::next_from(&counter),
-            )
-        }))
-        .expect_err("exhausted command identity cannot replace authority");
-        assert_eq!(
-            flui_foundation::panic::payload_text(failure.as_ref()),
-            Some("BUG: navigator command target identity capacity exhausted")
-        );
-    }
-    assert_eq!(
-        NavigatorCommand::remove_route(original_target, original_route).apply_on_owner(),
-        Ok(NavigatorCommandOutcome::Removed(true))
-    );
-    assert_eq!(original.current(), None);
-    assert_eq!(replacement.current(), Some(replacement_route));
-    drop(original);
-    assert_eq!(
-        NavigatorCommand::pop(original_target).apply_on_owner(),
-        Err(NavigatorCommandError::OwnerGone)
-    );
-    assert_eq!(
-        NavigatorCommand::remove_route(replacement_target, replacement_route).apply_on_owner(),
-        Ok(NavigatorCommandOutcome::Removed(true))
-    );
-    assert_eq!(replacement.current(), None);
-    let independent = NavigatorHandle::new();
-    independent.push(SimpleRoute::<()>::new(|_| {
-        crate::Text::new("independent").boxed()
-    }));
-    let route = independent.current().expect("independent route");
-    assert_eq!(
-        NavigatorCommand::remove_route(independent.command_target(), route).apply_on_owner(),
-        Ok(NavigatorCommandOutcome::Removed(true))
-    );
-    assert_eq!(independent.current(), None);
-}
+use std::sync::atomic::AtomicU64;
 
 use crate::support::child_process::child_test;
 

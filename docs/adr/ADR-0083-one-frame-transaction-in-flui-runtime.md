@@ -64,8 +64,7 @@ effects "never ran in the product", because `run_effects` was called only from
 
 The runtime cannot move below `flui-widgets`. The UI runtime's composition names widget types:
 `use flui_widgets::{FocusRoot, GestureArenaScope, VsyncScope};`
-(`crates/flui-app/src/app/ui_runtime/attach.rs:6`), `use flui_widgets::NavigatorCommand;`
-(`ui_runtime/commands.rs:8`), `use flui_widgets::{MediaQuery, MediaQueryData};`
+(`crates/flui-app/src/app/ui_runtime/attach.rs:6`), `use flui_widgets::{MediaQuery, MediaQueryData};`
 (`crates/flui-app/src/app/media_query_root.rs:9`); 22 files in `crates/flui-app/src` import
 `flui_widgets`.
 
@@ -282,10 +281,9 @@ the platform backend and the raster owner remain the three owners of ADR-0037 §
 
 ## Alternatives considered
 
-- **`flui-runtime` below `flui-widgets`.** The UI runtime's composition installs widget scopes and
-  routes `NavigatorCommand`; placing the runtime lower requires moving those first, or replacing
-  them with trait objects for no second implementation. `NavigatorCommand` later becomes a
-  design-neutral navigation intent (ADR-0093), which does not require the runtime to move.
+- **`flui-runtime` below `flui-widgets`.** The UI runtime's composition installs widget scopes;
+  placing the runtime lower requires moving those first, or replacing them with trait objects
+  for no second implementation.
 - **The runtime inside `flui-view`.** It would pull scheduling, presentations and the command
   vocabulary into the spine that every widget recompiles against, and still could not name
   widget scopes.

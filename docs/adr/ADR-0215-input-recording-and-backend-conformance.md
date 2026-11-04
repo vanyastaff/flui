@@ -90,18 +90,23 @@ and put `serde` on the Stable contract crate.
    other owner-thread deliveries: a pass delivers only the records present when it started;
    records a tap callback admits reentrantly (by dispatching input) go to the next pass, which
    the runtime schedules as an owner-thread wake, so a tap that dispatches on every row cannot
-   keep the owner loop from returning (row `a_tap_may_dispatch_reentrantly` admits recursively);
-   a
-   tap replaced or removed from
-   inside a callback takes effect from the next row. An outgoing tap (replaced, removed, or the
-   one that panicked after installing a replacement) is retired after the callback catch under
-   the same containment custody: a panic while destroying its captures is contained separately,
-   never replaces the first failure and never double-panics; the incoming tap still receives
-   the next row. Registration returns a `#[must_use]` RAII
-   handle bound to its own registration (id and generation); its `Drop` unregisters only that
-   registration, so a stale handle dropped after a replacement never removes the new tap.
-   Registration generations are never reused; at the terminal value registration returns
-   `Err(IdExhausted)` permanently instead of wrapping.
+   keep the owner loop from returning (row `a_tap_may_dispatch_reentrantly` admits recursively).
+   Several taps may be registered at once, so an application's recording and a driver's
+   (ADR-0288) run side by side. Each registration is offered the rows admitted after it was
+   installed, in the order they were admitted, and keeps its own pending `Gap` count, lost-row
+   total and `End` row: one tap's failures never reach another's recording (rows
+   `each_tap_keeps_its_own_gaps_and_end_row`,
+   `a_tap_installed_mid_call_records_from_the_next_row_beside_the_first`). A tap installed
+   inside a callback is offered the rows admitted after it, not the rest of the running pass; a
+   registration finished before the running row reached it counts that row as lost to it (row
+   `a_tap_finished_by_another_before_the_running_row_reached_it_counts_that_row_lost`). A
+   removed tap is retired after the callback catch under the same containment custody: a panic
+   while destroying its captures is contained separately, never replaces the first failure and
+   never double-panics, and the other taps still receive the next row. Registration returns a
+   `#[must_use]` RAII handle bound to its own registration (its generation); its `Drop`
+   unregisters only that registration, never another tap's. Registration generations are never
+   reused; at the terminal value registration returns `Err(IdExhausted)` permanently instead of
+   wrapping.
 2. **DTO, not vocabulary.** The event vocabulary carries no `serde`. `flui_protocol::input_recording`
    holds the mirror types (`Header`, `Row` and what they nest) with pinned `#[serde(rename)]`
    spellings, plain public data a reader such as the driver reads without the runtime; unknown
@@ -190,8 +195,10 @@ vocabulary evolves without a wire freeze, at the cost of a DTO layer kept in ste
 - `recordings_redact_text_titles_and_device_names_by_default`, and
   `an_assistive_set_value_on_a_password_field_records_no_plaintext`.
 - `InputTap` delivery rows: `a_tap_may_dispatch_reentrantly`,
-  `a_tap_replaced_mid_call_takes_effect_from_the_next_row` (including dropping the replaced tap's stale handle, which leaves the new tap registered),
-  `a_panicking_tap_is_contained_and_the_first_failure_kept` (the next row is still recorded after a `Gap` marker), `tap_registration_refuses_at_generation_exhaustion`, `a_tap_that_installs_a_replacement_then_panics_retires_contained_and_the_new_tap_records_the_next_row`, and
+  `a_tap_installed_mid_call_records_from_the_next_row_beside_the_first` (including dropping the
+  first tap's handle, which leaves the second registered), `each_tap_keeps_its_own_gaps_and_end_row`,
+  `a_tap_finished_by_another_before_the_running_row_reached_it_counts_that_row_lost`,
+  `a_panicking_tap_is_contained_and_the_first_failure_kept` (the next row is still recorded after a `Gap` marker), `tap_registration_refuses_at_generation_exhaustion`, `a_failing_tap_keeps_its_losses_and_retires_contained_beside_a_tap_it_installed`, and
   `releasing_the_owner_during_a_tap_call_finishes_cleanly`.
 - `a_script_with_an_unpaired_down_fails_to_build`; rows "double click within one frame",
   "N events in one frame" and "an event between vsyncs".

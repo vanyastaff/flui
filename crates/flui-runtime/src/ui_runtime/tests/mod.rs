@@ -1,7 +1,7 @@
 use std::sync::atomic::{AtomicBool, AtomicUsize};
 
 use flui_view::prelude::*;
-use flui_widgets::{NavigatorCommand, NavigatorHandle, SimpleRoute, SizedBox};
+use flui_widgets::SizedBox;
 
 use super::*;
 use crate::testing::ScriptedSink;
@@ -78,12 +78,9 @@ pub(crate) fn full_inbox_retries_outstanding_wake_debt_before_rejecting() {
     });
     let runtime = new_runtime_with_capacity(1, wake).expect("runtime with one command slot");
     let sender = runtime.command_sender();
-    let navigator = NavigatorHandle::new();
-    navigator.seed_initial(test_route("/"));
-    let filler = || NavigatorCommand::maybe_pop(navigator.command_target());
 
     let first = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        sender.send_navigation(filler())
+        sender.send_assistive_focus(None)
     }));
     assert!(
         first.is_err(),
@@ -91,7 +88,7 @@ pub(crate) fn full_inbox_retries_outstanding_wake_debt_before_rejecting() {
     );
 
     let overflow = sender
-        .send_navigation(filler())
+        .send_assistive_focus(None)
         .expect_err("the accepted command still fills the inbox");
     assert!(matches!(
         overflow,
@@ -109,10 +106,6 @@ pub(crate) fn full_inbox_retries_outstanding_wake_debt_before_rejecting() {
         2,
         "successful debt delivery is acknowledged exactly once"
     );
-}
-
-fn test_route(name: &'static str) -> SimpleRoute<i32> {
-    SimpleRoute::new(move |_ctx| SizedBox::new(1.0, 1.0).into_view().boxed()).named(name)
 }
 
 // ========================================================================
@@ -242,11 +235,9 @@ pub(crate) fn dropping_ui_runtime_a_cannot_wake_ui_runtime_b() {
 
     drop(ui_runtime_a);
 
-    let navigator = NavigatorHandle::new();
-    navigator.seed_initial(test_route("/"));
     assert!(
         matches!(
-            sender_a.send_navigation(NavigatorCommand::maybe_pop(navigator.command_target())),
+            sender_a.send_assistive_focus(None),
             Err(CommandSendError::OwnerGone { .. })
         ),
         "a sender into the dropped ui_runtime A must turn OwnerGone"
@@ -265,10 +256,8 @@ pub(crate) fn dropping_ui_runtime_a_cannot_wake_ui_runtime_b() {
     // ui_runtime B's own inbox still drains normally — dropping a SIBLING
     // ui_runtime leaves it fully live, not merely non-crashed.
     let sender_b = ui_runtime_b.command_sender();
-    let navigator_b = NavigatorHandle::new();
-    navigator_b.seed_initial(test_route("/"));
     sender_b
-        .send_navigation(NavigatorCommand::maybe_pop(navigator_b.command_target()))
+        .send_assistive_focus(None)
         .expect("ui_runtime B's inbox has room");
     let report = ui_runtime_b.drain_commands();
     assert_eq!(report.invoked, 1);
