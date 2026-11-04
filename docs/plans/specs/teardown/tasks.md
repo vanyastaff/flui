@@ -187,8 +187,8 @@ graph LR
   терминальный выход), ADR-0259 (close guard, причины, реестр сброса), ADR-0260 (завершение
   сеанса) и ADR-0261 (drop владельца завершает наблюдение) — `Accepted (2026-10-28)`, не
   реализованы; ADR-0262 (persistence: документы поверх байтового хранилища, codec-паника
-  `Panicked { during: CodecStep, message }`, набор фич R34, стек Router) — `Proposed`, с
-  `Supersedes (on acceptance)` ADR-0093 шаг 8 и парной отметкой в ADR-0093; `Superseded-by` в
+  `Panicked { during: CodecStep, message }`, набор фич R34, стек Router), связанный с ADR-0093
+  через `Related`; `Superseded-by` в
   ADR-0035 и ADR-0040; раздел «Callback panics and exit codes» и абзац о codec-панике в
   PANIC-POLICY; `crates/flui-runtime/ARCHITECTURE.md` о панике, покидающей dispatch, сверен с
   ADR-0258. Пять открытых решений приняты исследованием 2026-10-28 (шапка): §4 — 4b с тотальным
