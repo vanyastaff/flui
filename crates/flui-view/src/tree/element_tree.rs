@@ -6,11 +6,13 @@
 use std::any::TypeId;
 use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
-use std::num::NonZeroU32;
 use std::panic::AssertUnwindSafe;
 use std::rc::Rc;
 use std::sync::Arc;
 
+#[cfg(test)]
+use flui_foundation::generation::Generation;
+use flui_foundation::generation::{GenSlots, Release};
 use flui_foundation::{ElementId, RenderId, ViewKey};
 use flui_rendering::{parent_data::SliverMultiBoxAdaptorParentData, pipeline::PipelineCell};
 use slab::Slab;
@@ -416,17 +418,11 @@ impl std::fmt::Debug for ElementNode {
 pub struct ElementTree {
     /// Slab storage for element nodes.
     nodes: Slab<ElementNode>,
-    /// Per-slot generation counters, parallel to `nodes` by slab index.
-    ///
-    /// `generations[i]` is the generation currently *live* in slab slot `i`.
-    /// An [`ElementId`] minted against slot `i` carries this value; when the
-    /// slot is freed (eager remove / finalize) the counter is bumped, so any
-    /// straggler id that still carries the old generation fails the staleness
-    /// compare in [`ElementTree::resolve_index`] and resolves to `None`
-    /// instead of the unrelated element that later reuses the slot. This is
-    /// the use-after-free-by-id guard the old nested `Box` graph never needed
-    /// but the slab arena does (ABA safety).
-    generations: Vec<NonZeroU32>,
+    /// Per-slot generations (`GenSlots`), parallel to `nodes`: an id minted
+    /// against a slot carries its live generation, so a straggler id refuses
+    /// instead of naming the slot's next occupant; an exhausted generation
+    /// closes the slot, and its release refuses before any mutation.
+    generations: GenSlots,
     /// Root element ID.
     root: Option<ElementId>,
     /// Set whenever a render-bearing element is inserted, so the post-build
@@ -570,7 +566,7 @@ impl ElementTree {
     pub fn new() -> Self {
         Self {
             nodes: Slab::new(),
-            generations: Vec::new(),
+            generations: GenSlots::new(),
             root: None,
             needs_render_reorder: false,
             reconcile_state: Rc::new(ReconcileState::default()),
@@ -581,7 +577,7 @@ impl ElementTree {
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
             nodes: Slab::with_capacity(capacity),
-            generations: Vec::with_capacity(capacity),
+            generations: GenSlots::new(),
             root: None,
             needs_render_reorder: false,
             reconcile_state: Rc::new(ReconcileState::default()),
@@ -603,36 +599,31 @@ impl ElementTree {
         self.reconcile_state.active_parent.get() == Some(parent_id)
     }
 
-    /// Mint an [`ElementId`] for a freshly-inserted slab slot, threading the
-    /// parallel generation counter.
-    ///
-    /// * Fresh slot (slab grew by one) → append a generation of `1`.
-    /// * Reused slot (Slab handed back a previously-freed index) → the slot's
-    ///   counter was already bumped at remove time, so reuse the current value.
-    ///   The minted id therefore differs from any id that addressed the slot's
-    ///   previous occupant.
+    /// Mint an [`ElementId`] for a freshly-inserted slab slot: a fresh slot
+    /// mints its first generation, a reused slot carries the generation the
+    /// prior remove's commit left, so the minted id differs from any id the
+    /// slot's previous occupant had.
     ///
     /// # Panics
     ///
-    /// Panics if `slab_index` exceeds `u32::MAX` — the element tree cannot hold
-    /// more than `u32::MAX` live slots because [`ElementId`] packs the index
-    /// into 32 bits. This is the index-cap bound.
+    /// Panics if `slab_index` exceeds `u32::MAX` — the element tree cannot
+    /// hold more than `u32::MAX` live slots because [`ElementId`] packs the
+    /// index into 32 bits. This is the index-cap bound.
     fn alloc_id(&mut self, slab_index: usize) -> ElementId {
         let index = slab_index_to_u32(slab_index);
-        let generation = if let Some(&g) = self.generations.get(slab_index) {
-            // Reused slot: generation already bumped by the prior remove.
-            g
+        let generation = if let Some(live) = self.generations.generation(index) {
+            // Reused slot: generation already stepped by the prior remove.
+            live
         } else {
-            // Fresh slot: the slab grew by exactly one. Seed generation = 1.
+            // Fresh slot: the slab grew by exactly one. Seed its first.
             debug_assert_eq!(
                 slab_index,
-                self.generations.len(),
+                self.generations.slot_count(),
                 "slab must grow by exactly one slot per insert"
             );
-            self.generations.push(NonZeroU32::MIN);
-            NonZeroU32::MIN
+            self.generations.mint_fresh()
         };
-        ElementId::new_gen(index, generation)
+        ElementId::new_gen(index, generation.as_nonzero())
     }
 
     /// Resolve an [`ElementId`] to its live slab index, applying the
@@ -646,25 +637,28 @@ impl ElementTree {
     #[inline]
     fn resolve_index(&self, id: ElementId) -> Option<usize> {
         let index = id.index() as usize;
-        if self.generations.get(index).copied() == Some(id.generation())
-            && self.nodes.contains(index)
-        {
-            Some(index)
-        } else {
-            None
+        match self.generations.generation(id.index()) {
+            Some(live) if live.as_nonzero() == id.generation() && self.nodes.contains(index) => {
+                Some(index)
+            }
+            _ => None,
         }
     }
 
-    /// Preflight a slot's next generation before teardown can mutate it.
-    /// Exhaustion refuses removal while the current occupant stays live;
-    /// freeing first would allow a caught panic to reuse the same identity.
-    fn next_generation(&self, index: usize) -> NonZeroU32 {
-        self.generations[index].checked_add(1).unwrap_or_else(|| {
-            panic!(
-                "ElementTree: slab slot {index} exhausted u32::MAX generations \
-                 (ABA-safety overflow — removal refused)"
-            )
-        })
+    /// Preflight a removal: the peek runs before any hook or unmount, so a
+    /// caught panic between it and the commit steps nothing, and the released
+    /// identity cannot be minted from under a partially torn-down occupant. A
+    /// slot whose generation space is exhausted has no step: the removal
+    /// refuses while the current occupant stays live.
+    fn next_generation(&self, index: usize) -> Release {
+        self.generations
+            .peek(slab_index_to_u32(index))
+            .unwrap_or_else(|| {
+                panic!(
+                    "ElementTree: slab slot {index} exhausted u32::MAX generations \
+                     (ABA-safety overflow — removal refused)"
+                )
+            })
     }
 
     /// Get the root element ID.
@@ -1964,7 +1958,7 @@ impl ElementTree {
 
         let node = self.nodes.remove(index);
         // The nonfallible commit follows the preflight above.
-        self.generations[index] = next_generation;
+        self.generations.commit(next_generation);
 
         if self.root == Some(id) {
             self.root = None;
@@ -2193,7 +2187,7 @@ impl ElementTree {
 
         let node = self.nodes.remove(index);
         // The nonfallible commit follows the preflight above.
-        self.generations[index] = next_generation;
+        self.generations.commit(next_generation);
 
         if self.root == Some(id) {
             self.root = None;
@@ -2331,19 +2325,26 @@ impl ElementTree {
     /// would carry generation 1 and fail the staleness compare on any reused
     /// slot).
     pub fn iter(&self) -> impl Iterator<Item = ElementId> + '_ {
-        let generations = &self.generations;
         self.nodes
             .iter()
-            .map(move |(index, _)| ElementId::new_gen(slab_index_to_u32(index), generations[index]))
+            .map(move |(index, _)| self.id_of_index(index))
     }
 
     /// Iterate over all live element nodes.
     pub fn iter_nodes(&self) -> impl Iterator<Item = (ElementId, &ElementNode)> + '_ {
-        let generations = &self.generations;
-        self.nodes.iter().map(move |(index, node)| {
-            let id = ElementId::new_gen(slab_index_to_u32(index), generations[index]);
-            (id, node)
-        })
+        self.nodes
+            .iter()
+            .map(|(index, node)| (self.id_of_index(index), node))
+    }
+
+    /// The id the live slab slot `index` answers, with its live generation.
+    fn id_of_index(&self, index: usize) -> ElementId {
+        let slot = slab_index_to_u32(index);
+        let generation = self
+            .generations
+            .generation(slot)
+            .expect("BUG: the generation ledger runs parallel to the slab");
+        ElementId::new_gen(slot, generation.as_nonzero())
     }
 }
 
@@ -3008,6 +3009,9 @@ mod tests {
     #[path = "activation_recovery_tests.rs"]
     mod activation_recovery_tests;
 
+    #[path = "exhaustion_refusal_tests.rs"]
+    mod exhaustion_refusal_tests;
+
     use crate::{BuildContext, BuildOwner, GlobalKey, RenderView, StatelessView, View};
 
     #[derive(Clone)]
@@ -3416,304 +3420,6 @@ mod tests {
         assert!(tree.contains(id_b), "stale remove must not touch B");
     }
 
-    fn exhausted_generation_refuses_removal(mode: u8) {
-        let mut tree = ElementTree::new();
-        let mut owner = BuildOwner::new();
-        let view = TestView {
-            name: "live".into(),
-        };
-        let root = tree.mount_root(&view, &mut owner.element_owner_mut());
-        let candidate = tree.insert(&view, root, 0, &mut owner.element_owner_mut());
-        // Counter exhaustion is unreachable in a bounded consumer run. Only
-        // this injection is private; refusal and reuse go through the public tree.
-        let index = candidate.index() as usize;
-        let generation = NonZeroU32::new(u32::MAX).expect("nonzero maximum");
-        tree.generations[index] = generation;
-        let candidate = ElementId::new_gen(candidate.index(), generation);
-        tree.get_mut(candidate)
-            .expect("live candidate")
-            .element_mut()
-            .set_self_id(candidate);
-        tree.get_mut(root)
-            .expect("root")
-            .set_child_ids(vec![candidate]);
-        for _ in 0..2 {
-            let failure = std::panic::catch_unwind(AssertUnwindSafe(|| match mode {
-                0 => tree.remove(candidate, &mut owner.element_owner_mut()),
-                1 => tree.remove_finalized(candidate, &mut owner.element_owner_mut()),
-                _ => tree.discard_unannounced(candidate, &mut owner.element_owner_mut()),
-            }))
-            .expect_err("exhausted removal must refuse");
-            assert!(
-                flui_foundation::panic::payload_text(&*failure)
-                    .expect("generation failure text")
-                    .contains("exhausted u32::MAX generations")
-            );
-            let node = tree.get(candidate).expect("refused occupant stays live");
-            assert_eq!(
-                node.element().lifecycle(),
-                crate::element::Lifecycle::Active
-            );
-            assert_eq!(node.parent(), Some(root));
-        }
-        let sibling = tree.insert(&view, root, 1, &mut owner.element_owner_mut());
-        assert_ne!(
-            sibling.index(),
-            candidate.index(),
-            "refusal cannot expose an exhausted slot"
-        );
-        assert!(
-            tree.remove(sibling, &mut owner.element_owner_mut())
-                .is_some()
-        );
-        let replacement = tree.insert(&view, root, 1, &mut owner.element_owner_mut());
-        assert!(!tree.contains(sibling), "ordinary stale IDs remain refused");
-        assert!(tree.contains(candidate) && tree.contains(replacement));
-    }
-    struct UnmountCounter(std::sync::atomic::AtomicUsize);
-    impl flui_foundation::observe::TreeObserver for UnmountCounter {
-        fn element_unmounted(&self, _: &flui_foundation::observe::ElementUnmounted) {
-            self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        }
-    }
-
-    fn terminal_generation(tree: &mut ElementTree, id: ElementId) -> ElementId {
-        let generation = NonZeroU32::new(u32::MAX).expect("nonzero maximum");
-        tree.generations[id.index() as usize] = generation;
-        let id = ElementId::new_gen(id.index(), generation);
-        tree.get_mut(id)
-            .expect("terminal occupant")
-            .element_mut()
-            .set_self_id(id);
-        id
-    }
-
-    fn exhausted_subtree_refuses_before_teardown(target: usize, mode: SubtreeRemoval) {
-        let mut tree = ElementTree::new();
-        let mut owner = BuildOwner::new();
-        let observer = std::sync::Arc::new(UnmountCounter(std::sync::atomic::AtomicUsize::new(0)));
-        owner.set_tree_observer(observer.clone());
-        let view = TestView {
-            name: "subtree".into(),
-        };
-        let parent = tree.mount_root(&view, &mut owner.element_owner_mut());
-        let root = tree.insert(&view, parent, 0, &mut owner.element_owner_mut());
-        let middle = tree.insert(&view, root, 0, &mut owner.element_owner_mut());
-        let leaf = tree.insert(&view, middle, 0, &mut owner.element_owner_mut());
-        let sibling = tree.insert(&view, root, 1, &mut owner.element_owner_mut());
-        let mut ids = [root, middle, leaf, sibling];
-        ids[target] = terminal_generation(&mut tree, ids[target]);
-        let [root, middle, leaf, sibling] = ids;
-        tree.get_mut(parent)
-            .expect("parent")
-            .set_child_ids(vec![root]);
-        tree.get_mut(root)
-            .expect("root")
-            .set_child_ids(vec![middle, sibling]);
-        tree.get_mut(middle)
-            .expect("middle")
-            .set_child_ids(vec![leaf]);
-        for (child, parent) in [
-            (root, parent),
-            (middle, root),
-            (leaf, middle),
-            (sibling, root),
-        ] {
-            tree.get_mut(child).expect("child").parent = Some(parent);
-        }
-        for _ in 0..2 {
-            let failure = std::panic::catch_unwind(AssertUnwindSafe(|| {
-                tree.remove_subtree(root, &mut owner.element_owner_mut(), mode);
-            }))
-            .expect_err("whole subtree retirement must refuse");
-            assert!(
-                flui_foundation::panic::payload_text(&*failure)
-                    .expect("generation refusal")
-                    .contains("exhausted u32::MAX generations")
-            );
-            assert_eq!(
-                observer.0.load(std::sync::atomic::Ordering::Relaxed),
-                0,
-                "no teardown observation may precede admission"
-            );
-            assert_refused_subtree_intact(&tree, parent, ids);
-        }
-        let healthy = tree.insert(&view, parent, 1, &mut owner.element_owner_mut());
-        tree.remove_subtree(
-            healthy,
-            &mut owner.element_owner_mut(),
-            SubtreeRemoval::Finalize,
-        );
-        assert!(!tree.contains(healthy));
-        assert_eq!(observer.0.load(std::sync::atomic::Ordering::Relaxed), 1);
-        let replacement = tree.insert(&view, parent, 1, &mut owner.element_owner_mut());
-        assert_ne!(healthy, replacement);
-        assert!(!tree.contains(healthy));
-        assert!(ids.iter().all(|id| tree.contains(*id)) && tree.contains(replacement));
-    }
-
-    fn assert_refused_subtree_intact(tree: &ElementTree, parent: ElementId, ids: [ElementId; 4]) {
-        let [root, middle, leaf, sibling] = ids;
-        for (id, parent) in [
-            (root, parent),
-            (middle, root),
-            (leaf, middle),
-            (sibling, root),
-        ] {
-            let node = tree.get(id).expect("entire refused subtree stays live");
-            assert_eq!(node.parent(), Some(parent));
-            assert_eq!(
-                node.element().lifecycle(),
-                crate::element::Lifecycle::Active
-            );
-        }
-        assert_eq!(tree.get(parent).expect("parent").child_ids(), &[root]);
-        assert_eq!(
-            tree.get(root).expect("root").child_ids(),
-            &[middle, sibling]
-        );
-        assert_eq!(tree.get(middle).expect("middle").child_ids(), &[leaf]);
-    }
-
-    fn exhausted_subtree_root_preserves_finalize_integrity() {
-        exhausted_subtree_refuses_before_teardown(0, SubtreeRemoval::Finalize);
-    }
-    fn exhausted_subtree_middle_preserves_finalize_integrity() {
-        exhausted_subtree_refuses_before_teardown(1, SubtreeRemoval::Finalize);
-    }
-    fn exhausted_subtree_leaf_preserves_finalize_integrity() {
-        exhausted_subtree_refuses_before_teardown(2, SubtreeRemoval::Finalize);
-    }
-    fn exhausted_subtree_root_preserves_deactivate_integrity() {
-        exhausted_subtree_refuses_before_teardown(0, SubtreeRemoval::DeactivateKeyed);
-    }
-    fn exhausted_subtree_middle_preserves_deactivate_integrity() {
-        exhausted_subtree_refuses_before_teardown(1, SubtreeRemoval::DeactivateKeyed);
-    }
-    fn exhausted_subtree_leaf_preserves_deactivate_integrity() {
-        exhausted_subtree_refuses_before_teardown(2, SubtreeRemoval::DeactivateKeyed);
-    }
-
-    fn exhausted_wrapper_refuses_before_keyed_descendant_deactivation() {
-        let mut tree = ElementTree::new();
-        let mut owner = BuildOwner::new();
-        let view = TestView {
-            name: "wrapper".into(),
-        };
-        let parent = tree.mount_root(&view, &mut owner.element_owner_mut());
-        let wrapper = tree.insert(&view, parent, 0, &mut owner.element_owner_mut());
-        let wrapper = terminal_generation(&mut tree, wrapper);
-        let key = GlobalKey::new();
-        let keyed = tree.insert(
-            &KeyedTestView { key: key.clone() },
-            wrapper,
-            0,
-            &mut owner.element_owner_mut(),
-        );
-        let leaf = tree.insert(&view, keyed, 0, &mut owner.element_owner_mut());
-        tree.get_mut(parent)
-            .expect("parent")
-            .set_child_ids(vec![wrapper]);
-        tree.get_mut(wrapper)
-            .expect("wrapper")
-            .set_child_ids(vec![keyed]);
-        tree.get_mut(keyed)
-            .expect("keyed")
-            .set_child_ids(vec![leaf]);
-        for _ in 0..2 {
-            std::panic::catch_unwind(AssertUnwindSafe(|| {
-                tree.remove_subtree(
-                    wrapper,
-                    &mut owner.element_owner_mut(),
-                    SubtreeRemoval::DeactivateKeyed,
-                );
-            }))
-            .expect_err("wrapper refuses before any keyed detach");
-            assert_eq!(tree.get(parent).expect("parent").child_ids(), &[wrapper]);
-            assert_eq!(tree.get(wrapper).expect("wrapper").child_ids(), &[keyed]);
-            assert_eq!(tree.get(keyed).expect("keyed").parent(), Some(wrapper));
-            assert_eq!(tree.get(keyed).expect("keyed").child_ids(), &[leaf]);
-            assert_eq!(owner.element_for_global_key(&key), Some(keyed));
-            for id in [wrapper, keyed, leaf] {
-                assert_eq!(
-                    tree.get(id)
-                        .expect("refused occupant")
-                        .element()
-                        .lifecycle(),
-                    crate::element::Lifecycle::Active
-                );
-            }
-        }
-        let healthy = tree.insert(&view, parent, 1, &mut owner.element_owner_mut());
-        tree.remove_subtree(
-            healthy,
-            &mut owner.element_owner_mut(),
-            SubtreeRemoval::Finalize,
-        );
-        assert!(!tree.contains(healthy));
-        assert!(tree.contains(wrapper) && tree.contains(keyed) && tree.contains(leaf));
-    }
-
-    fn terminal_keyed_subtree_soft_removal_needs_no_generation_advance() {
-        let mut tree = ElementTree::new();
-        let mut owner = BuildOwner::new();
-        let view = TestView {
-            name: "wrapper".into(),
-        };
-        let parent = tree.mount_root(&view, &mut owner.element_owner_mut());
-        let wrapper = tree.insert(&view, parent, 0, &mut owner.element_owner_mut());
-        let key = GlobalKey::new();
-        let keyed = tree.insert(
-            &KeyedTestView { key: key.clone() },
-            wrapper,
-            0,
-            &mut owner.element_owner_mut(),
-        );
-        let keyed = terminal_generation(&mut tree, keyed);
-        owner.element_owner_mut().unregister_global_key(&key);
-        owner.element_owner_mut().register_global_key(&key, keyed);
-        let leaf = tree.insert(&view, keyed, 0, &mut owner.element_owner_mut());
-        let leaf = terminal_generation(&mut tree, leaf);
-        tree.get_mut(parent)
-            .expect("parent")
-            .set_child_ids(vec![wrapper]);
-        tree.get_mut(wrapper)
-            .expect("wrapper")
-            .set_child_ids(vec![keyed]);
-        tree.get_mut(keyed)
-            .expect("keyed")
-            .set_child_ids(vec![leaf]);
-        tree.remove_subtree(
-            wrapper,
-            &mut owner.element_owner_mut(),
-            SubtreeRemoval::DeactivateKeyed,
-        );
-        assert!(!tree.contains(wrapper));
-        assert_eq!(owner.element_for_global_key(&key), Some(keyed));
-        assert_eq!(
-            tree.get(keyed).expect("keyed survives").child_ids(),
-            &[leaf]
-        );
-        assert_eq!(
-            tree.get(keyed)
-                .expect("keyed survives")
-                .element()
-                .lifecycle(),
-            crate::element::Lifecycle::Inactive
-        );
-        assert!(tree.contains(leaf));
-    }
-
-    fn exhausted_eager_removal_keeps_its_occupant_live() {
-        exhausted_generation_refuses_removal(0);
-    }
-    fn exhausted_finalization_keeps_its_occupant_live() {
-        exhausted_generation_refuses_removal(1);
-    }
-    fn exhausted_unannounced_retirement_keeps_its_occupant_live() {
-        exhausted_generation_refuses_removal(2);
-    }
-
     // ========================================================================
     // Inherited scope (PR-2): the per-node `inherited` map gives O(1)
     // `depend_on` resolution. These exercise the map directly (it is
@@ -3816,50 +3522,6 @@ mod tests {
                 (
                     "stale_id_after_slot_reuse_resolves_none",
                     stale_id_after_slot_reuse_resolves_none as fn(),
-                ),
-                (
-                    "exhausted_subtree_root_preserves_finalize_integrity",
-                    exhausted_subtree_root_preserves_finalize_integrity as fn(),
-                ),
-                (
-                    "exhausted_subtree_middle_preserves_finalize_integrity",
-                    exhausted_subtree_middle_preserves_finalize_integrity as fn(),
-                ),
-                (
-                    "exhausted_subtree_leaf_preserves_finalize_integrity",
-                    exhausted_subtree_leaf_preserves_finalize_integrity as fn(),
-                ),
-                (
-                    "exhausted_subtree_root_preserves_deactivate_integrity",
-                    exhausted_subtree_root_preserves_deactivate_integrity as fn(),
-                ),
-                (
-                    "exhausted_subtree_middle_preserves_deactivate_integrity",
-                    exhausted_subtree_middle_preserves_deactivate_integrity as fn(),
-                ),
-                (
-                    "exhausted_subtree_leaf_preserves_deactivate_integrity",
-                    exhausted_subtree_leaf_preserves_deactivate_integrity as fn(),
-                ),
-                (
-                    "exhausted_wrapper_refuses_before_keyed_descendant_deactivation",
-                    exhausted_wrapper_refuses_before_keyed_descendant_deactivation as fn(),
-                ),
-                (
-                    "terminal_keyed_subtree_soft_removal_needs_no_generation_advance",
-                    terminal_keyed_subtree_soft_removal_needs_no_generation_advance as fn(),
-                ),
-                (
-                    "exhausted_eager_removal_keeps_its_occupant_live",
-                    exhausted_eager_removal_keeps_its_occupant_live as fn(),
-                ),
-                (
-                    "exhausted_finalization_keeps_its_occupant_live",
-                    exhausted_finalization_keeps_its_occupant_live as fn(),
-                ),
-                (
-                    "exhausted_unannounced_retirement_keeps_its_occupant_live",
-                    exhausted_unannounced_retirement_keeps_its_occupant_live as fn(),
                 ),
                 (
                     "nested_same_type_provider_shadows_nearest",

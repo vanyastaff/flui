@@ -10,6 +10,9 @@ mod notifier;
 #[path = "claim_slot.rs"]
 mod claim_slot;
 
+#[path = "generation.rs"]
+mod generation;
+
 #[path = "sequence.rs"]
 mod sequence;
 

@@ -33,6 +33,18 @@ exhausted mint refuses, typed (`IdExhausted`), forever
 no slab behind them (`ListenerId`, `TaskId`, `FrameCallbackId`) are minted by
 the family; the slab-backed ids stay the slot plus one.
 
+## Slot generations (ADR-0313)
+
+A packed generational key (`ElementId`, `RenderId`, `UiRuntimeId`) names one
+slot with a `generation::Generation`: 1-based, checked, never wrapped, minted
+only by the slot arena's `generation::GenSlots` ledger. A release preflights
+its step with `GenSlots::peek` before user code runs and commits it with
+`GenSlots::commit` after; a caught panic between the two steps nothing. A
+slot whose generation space is exhausted closes at its release and never
+mints again; the signal graph re-lists nothing there, the element tree
+refuses the removal with the occupant kept. The render slab keeps its
+hand-rolled ledger until #2241 (gaps entry 43).
+
 ## The geometry values (`geometry`)
 
 `Matrix4::project_plane_point` checks the forward projection of the local

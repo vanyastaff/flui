@@ -172,6 +172,11 @@ pub mod epoch;
 // the raster boundary — see the module doc for why it exists as its own
 // builder-constructed type instead of positional constructor arguments.
 pub mod frame_stamp;
+// A slot's typed generation, and the one generation bookkeeping (`GenSlots`)
+// under every packed generational key: fresh and recycled mints, the
+// release's peek (before user code) and commit (after the release's own
+// mutation), and a slot closed, forever, once its generation space ends.
+pub mod generation;
 // Geometry values: points, offsets, sizes, rectangles, insets, radii, matrices (ADR-0098).
 pub mod geometry;
 pub mod text_sizing;
