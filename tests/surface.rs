@@ -1,15 +1,17 @@
-//! The escape hatch's surface (ADR-0254 §8): each `flui::native` item through
-//! its facade path, and a window of each host narrowed through it.
+//! Feature-gated facade surfaces: the native escape hatch (ADR-0254 §8) and
+//! capability crates under `flui::services` (ADR-0154 §8).
 //!
 //! The windows come from the core host, which a test may name: a headless
 //! window has no view of any operating system's, and on Windows a Win32
 //! window opened with its own options narrows to the view that reads them
 //! back. The macOS cases build wherever the macOS target is type-checked.
-//! Which paths exist without the feature or off their system is pinned by the
-//! compile-fail fixtures under `tests/ui/native/` (`thread_boundary_ui`).
+//! Which paths exist without their feature or off their system is pinned by
+//! the compile-fail fixtures under `tests/ui/native/` and `tests/ui/services/`
+//! (`thread_boundary_ui`).
 
 /// Every item through its facade path: removing or moving one fails to build
 /// this test.
+#[cfg(feature = "native")]
 #[expect(
     unused_imports,
     reason = "each import only has to resolve; nothing here is used"
@@ -32,8 +34,19 @@ mod items {
     };
 }
 
+/// The system capability's plugin is nameable through the facade and keeps the
+/// contract an application registers.
+#[cfg(feature = "system")]
+#[test]
+fn system_plugin_is_available_through_the_facade() {
+    fn assert_plugin<P: flui::platform::capability::Plugin + Default>() {}
+
+    assert_plugin::<flui::services::system::SystemPlugin>();
+}
+
 /// Nothing is presented at an address no runtime issued, so `with_window`
 /// answers `None` and does not run the closure.
+#[cfg(feature = "native")]
 #[test]
 fn with_window_answers_none_where_nothing_is_presented() {
     let address = flui_foundation::PresentationAddress {
@@ -43,7 +56,7 @@ fn with_window_answers_none_where_nothing_is_presented() {
     assert_eq!(flui::native::with_window(address, |_| ()), None);
 }
 
-#[cfg(any(windows, target_os = "macos"))]
+#[cfg(all(feature = "native", any(windows, target_os = "macos")))]
 mod narrowing {
     use flui::native::HostWindow;
     use flui::platform::WindowOptions;

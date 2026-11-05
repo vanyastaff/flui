@@ -4826,6 +4826,24 @@ graph LR
   `a_feature_joins_the_facade_dependency_in_any_shape`,
   `the_declared_plugin_is_the_crates_default_plugin`. Устройство: Android-прогон APK с сетью и
   вибрацией, iOS-загрузка в App Store Connect с privacy manifest.
+- [x] **LY101** — ветка `platform/capability-facade-gate`. Фасад публикует
+  `flui::services::system` за выключенной по умолчанию фичей `system`, а `flui add system`
+  включает её и показывает регистрацию `SystemPlugin`. `workspace` сохраняет optionality каждой
+  зависимости и таблицу фичей из cargo metadata: capability-крейт — только optional normal
+  dependency фасада, а фича его имени без `flui-` включает ровно `dep:<crate>`. Самотест сажает
+  обязательную зависимость, отсутствующую и неправильную фичу: 25 ожидаемых находок, без лишних;
+  `flui-system` → `system` — отдельный допустимый случай. `facade-combos` получил system-only
+  конфигурацию (всего 11). `surface` проверяет `SystemPlugin` через фасад, trybuild
+  `system_needs_system` — присутствие с фичей и E0433 без неё; обычный consumer graph не содержит
+  `flui-system`. Проверки на Windows: `workspace` и `workspace --self-test`, `facade-combos`,
+  `feature-matrix` (170), clippy `-p flui -p xtask --all-targets -D warnings`, `doc-strict`,
+  nextest `-p flui -p xtask` — 76 из 78 в общем прогоне и два downstream-теста отдельно после
+  их одновременного 20-минутного ожидания общего Cargo target; проверка consumer graph —
+  отдельно. `xtask checks`: все gate'ы зелёны, кроме запуска `cargo fmt --all`,
+  который во вложенном worktree ищет workspace `third_party/accesskit_android` в родительском
+  `D:\flui`; `cargo fmt -p flui -p xtask -p flui-native -- --check` — зелёный. Заодно убрана
+  недействительная rustdoc-ссылка на cfg-зависимый `TextInputV3`, не дававшая `doc-strict`
+  завершиться на Windows.
 
 ## Отступление от порядка, решённое владельцем
 

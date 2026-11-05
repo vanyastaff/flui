@@ -17,7 +17,9 @@
 //!   an official package's normal and build dependencies are `flui-sdk` and
 //!   the contract crates; a member under `packages/` is official and lists no
 //!   `edge-exceptions`. A refused edge needs the dependent's `edge-exceptions`
-//!   entry, as for the tiers.
+//!   entry, as for the tiers. A capability crate is the facade's optional
+//!   normal dependency; its facade feature (the crate name without `flui-`)
+//!   enables exactly that dependency (ADR-0154 §8).
 //! - **Reach declarations** (ADR-0081 §2). `reach-forbid` and
 //!   `reach-exceptions` are read here, and each exception's `exit` or `grant`
 //!   must cite an ADR with a file under `docs/adr`; what they mean over the
@@ -157,12 +159,15 @@ struct Node {
     /// `[package] links`, when declared.
     links: Option<String>,
     deps: Vec<Dep>,
+    /// `[features]`: each feature and the features or dependencies it enables.
+    features: BTreeMap<String, Vec<String>>,
 }
 
 /// One dependency of a [`Node`].
 struct Dep {
     name: String,
     kind: DependencyKind,
+    optional: bool,
     /// A `path` dependency: only in-repository edges are architecture; a
     /// registry crate that happens to share a member's name is not a member.
     in_repo: bool,
@@ -222,6 +227,8 @@ struct Member {
     /// `[package] links`, when declared: only the train guard sets it.
     links: Option<String>,
     deps: Vec<Dep>,
+    /// `[features]`: each feature and the features or dependencies it enables.
+    features: BTreeMap<String, Vec<String>>,
     /// `[package.metadata.flui] tier`, when declared.
     tier: Option<String>,
     /// `[package.metadata.flui] tier-kind`, when declared.
@@ -277,9 +284,11 @@ impl Members {
                         .map(|dependency| Dep {
                             name: dependency.name.clone(),
                             kind: dependency.kind,
+                            optional: dependency.optional,
                             in_repo: dependency.path.is_some(),
                         })
                         .collect(),
+                    features: package.features.clone(),
                 })
             })
             .collect::<anyhow::Result<_>>()?;
@@ -296,6 +305,7 @@ impl Members {
             flui,
             links,
             deps,
+            features,
         } in nodes
         {
             if let Some(key) = flui
@@ -341,6 +351,7 @@ impl Members {
                 rel,
                 links,
                 deps,
+                features,
             });
         }
         members.sort_by(|a, b| a.rel.cmp(&b.rel));

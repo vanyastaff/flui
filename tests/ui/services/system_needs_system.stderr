@@ -1,0 +1,13 @@
+error[E0433]: cannot find `services` in `flui`
+ --> tests/ui/services/system_needs_system.rs:2:19
+  |
+2 |     let _ = flui::services::system::SystemPlugin::new();
+  |                   ^^^^^^^^ could not find `services` in `flui`
+  |
+note: found an item that was configured out
+ --> src/lib.rs
+  |
+  | #[cfg(feature = "system")]
+  |       ------------------ the item is gated behind the `system` feature
+  | pub mod services {
+  |         ^^^^^^^^

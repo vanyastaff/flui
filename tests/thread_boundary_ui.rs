@@ -46,4 +46,12 @@ fn thread_boundary_ui() {
     } else {
         cases.compile_fail(HOST_WINDOW);
     }
+    // A capability crate is reachable through `flui::services` exactly with
+    // its facade feature (ADR-0154 §8).
+    const SYSTEM: &str = "tests/ui/services/system_needs_system.rs";
+    if cfg!(feature = "system") {
+        cases.pass(SYSTEM);
+    } else {
+        cases.compile_fail(SYSTEM);
+    }
 }
