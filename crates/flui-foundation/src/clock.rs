@@ -15,9 +15,7 @@
 //! sideways across the crate graph.
 
 use std::fmt;
-use std::sync::{Arc, LazyLock};
-
-use parking_lot::Mutex;
+use std::sync::{Arc, LazyLock, Mutex, MutexGuard, PoisonError};
 // `std::time::{Duration, Instant}` on native targets; on wasm32 an
 // `Instant` backed by `performance.now()` — the std one panics there,
 // and this clock is what the gesture arena reads on every pointer event.
@@ -92,15 +90,22 @@ impl ManualClock {
         }
     }
 
+    fn elapsed_guard(&self) -> MutexGuard<'_, Duration> {
+        // A `Duration` is always valid, including when an earlier addition
+        // panicked before assigning a new one. Recovering it cannot publish
+        // damaged clock state and preserves the old lock's behavior.
+        self.elapsed.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
     /// Move the virtual timeline forward by `dt`.
     pub fn advance(&self, dt: Duration) {
-        *self.elapsed.lock() += dt;
+        *self.elapsed_guard() += dt;
     }
 
     /// The elapsed virtual time since construction.
     #[must_use]
     pub fn elapsed(&self) -> Duration {
-        *self.elapsed.lock()
+        *self.elapsed_guard()
     }
 }
 
@@ -113,7 +118,7 @@ impl Default for ManualClock {
 impl MonotonicClock for ManualClock {
     #[inline]
     fn now(&self) -> Instant {
-        self.base + *self.elapsed.lock()
+        self.base + *self.elapsed_guard()
     }
 
     fn epoch(&self) -> Instant {

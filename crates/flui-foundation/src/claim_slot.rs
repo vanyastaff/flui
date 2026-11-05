@@ -66,11 +66,9 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use crate::panic::FirstPanic;
 use std::pin::Pin;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::task::{Context, Poll, Waker};
-
-use parking_lot::{Condvar, Mutex};
 
 /// Fired exactly once, the moment a request transitions into `Abandoned` —
 /// always from [`ClaimHandle`]'s `Drop`, the only place that transition
@@ -112,6 +110,18 @@ struct Inner<T> {
 }
 
 impl<T> Inner<T> {
+    fn state(&self) -> MutexGuard<'_, SlotState<T>> {
+        self.state
+            .lock()
+            .expect("BUG: ClaimSlot's state lock runs no user code and cannot unwind")
+    }
+
+    fn waker(&self) -> MutexGuard<'_, Option<Waker>> {
+        self.waker
+            .lock()
+            .expect("BUG: ClaimSlot's waker lock runs no user code and cannot unwind")
+    }
+
     /// Fires the wake callback outside the state lock (never call this
     /// while `state` is held — the callback is arbitrary owner code and
     /// must not be able to deadlock by re-entering the slot) and only on
@@ -146,7 +156,7 @@ impl<T> Inner<T> {
         // code that may re-enter this slot. Extracting into a named binding
         // first ends the guard's scope at that statement's `;`, before
         // `wake()` ever runs.
-        let woken = self.waker.lock().take();
+        let woken = self.waker().take();
         let mut first = FirstPanic::new();
         if let Some(waker) = woken {
             first.contain(|| waker.wake_by_ref());
@@ -162,7 +172,7 @@ impl<T> Inner<T> {
     /// must observe the lock already released.
     #[cfg(test)]
     fn is_unlocked(&self) -> bool {
-        self.waker.try_lock().is_some()
+        self.waker.try_lock().is_ok()
     }
 }
 
@@ -186,7 +196,7 @@ pub struct ClaimSlot<T> {
 
 impl<T> fmt::Debug for ClaimSlot<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let state = match &*self.inner.state.lock() {
+        let state = match &*self.inner.state() {
             SlotState::Pending => "Pending",
             SlotState::Delivered(_) => "Delivered",
             SlotState::Claimed => "Claimed",
@@ -209,7 +219,7 @@ impl<T> ClaimSlot<T> {
     /// the `ClaimSlot` value is already gone.
     #[must_use]
     pub fn is_abandoned(&self) -> bool {
-        matches!(*self.inner.state.lock(), SlotState::Abandoned(_))
+        matches!(*self.inner.state(), SlotState::Abandoned(_))
     }
 
     /// True once the request is fully resolved — `Claimed`, or `Abandoned`
@@ -219,7 +229,7 @@ impl<T> ClaimSlot<T> {
     #[must_use]
     pub fn is_settled(&self) -> bool {
         matches!(
-            *self.inner.state.lock(),
+            *self.inner.state(),
             SlotState::Claimed | SlotState::Abandoned(None)
         )
     }
@@ -247,7 +257,7 @@ impl<T> ClaimSlot<T> {
     /// same `ClaimSlot` value's own `Drop`, so no further method call on it
     /// can observe it.
     pub fn deliver(&self, value: T) -> Result<(), T> {
-        let mut state = self.inner.state.lock();
+        let mut state = self.inner.state();
         match &*state {
             SlotState::Pending => {
                 *state = SlotState::Delivered(value);
@@ -285,7 +295,7 @@ impl<T> ClaimSlot<T> {
     /// or was already reclaimed. Idempotent past the first successful call.
     #[must_use]
     pub fn take_abandoned(&self) -> Option<T> {
-        let mut state = self.inner.state.lock();
+        let mut state = self.inner.state();
         match &mut *state {
             SlotState::Abandoned(payload) => payload.take(),
             SlotState::Pending
@@ -310,7 +320,7 @@ impl<T> Drop for ClaimSlot<T> {
     fn drop(&mut self) {
         let unwinding = std::thread::panicking();
         let became_owner_gone = {
-            let mut state = self.inner.state.lock();
+            let mut state = self.inner.state();
             if matches!(*state, SlotState::Pending) {
                 *state = SlotState::OwnerGone;
                 true
@@ -377,8 +387,7 @@ impl<T> ClaimHandle<T> {
     fn register_waker(&self, waker: &Waker) {
         let already_registered = self
             .inner
-            .waker
-            .lock()
+            .waker()
             .as_ref()
             .is_some_and(|existing| existing.will_wake(waker));
         if already_registered {
@@ -388,7 +397,7 @@ impl<T> ClaimHandle<T> {
         // so both cloning and displaced-envelope retirement run without locks.
         let candidate = waker.clone();
         let displaced = {
-            let mut slot = self.inner.waker.lock();
+            let mut slot = self.inner.waker();
             if slot
                 .as_ref()
                 .is_some_and(|existing| existing.will_wake(waker))
@@ -408,7 +417,7 @@ impl<T> ClaimHandle<T> {
         if let Some(waker) = waker {
             self.register_waker(waker);
         }
-        let mut state = self.inner.state.lock();
+        let mut state = self.inner.state();
         match std::mem::replace(&mut *state, SlotState::Claimed) {
             SlotState::Delivered(value) => Poll::Ready(ClaimOutcome::Delivered(value)),
             SlotState::Pending => {
@@ -478,6 +487,10 @@ impl<T> ClaimHandle<T> {
     /// `wait` and taking the non-blocking `try_take` path (or the `Future`
     /// impl, which is always non-blocking) instead.
     ///
+    /// # Panics
+    /// A poisoned state lock means a panic interrupted a transition elsewhere
+    /// in this module; waiting cannot safely continue from that partial state.
+    ///
     /// # Owner obligation
     /// The owner must still guarantee it always eventually calls `deliver`,
     /// typically via a panic-safe guard that calls it unconditionally on
@@ -490,7 +503,7 @@ impl<T> ClaimHandle<T> {
     /// backstop makes optional.
     #[must_use = "discarding a Delivered outcome strands whatever the owner delivered"]
     pub fn wait(self) -> ClaimOutcome<T> {
-        let mut state = self.inner.state.lock();
+        let mut state = self.inner.state();
         loop {
             match &*state {
                 SlotState::Delivered(_) => {
@@ -502,7 +515,9 @@ impl<T> ClaimHandle<T> {
                     return ClaimOutcome::Delivered(value);
                 }
                 SlotState::Pending => {
-                    self.inner.delivered.wait(&mut state);
+                    state = self.inner.delivered.wait(state).expect(
+                        "BUG: ClaimHandle::wait's critical section runs no user code and cannot unwind",
+                    );
                 }
                 // Already resolved by an earlier `try_take` on this same
                 // handle -- a caller-sequencing fact, not a bug: nothing
@@ -542,7 +557,7 @@ impl<T> Drop for ClaimHandle<T> {
     fn drop(&mut self) {
         let unwinding = std::thread::panicking();
         let became_abandoned = {
-            let mut state = self.inner.state.lock();
+            let mut state = self.inner.state();
             match std::mem::replace(&mut *state, SlotState::Claimed) {
                 SlotState::Pending => {
                     *state = SlotState::Abandoned(None);
@@ -717,11 +732,9 @@ mod tests {
 
     fn panic_during_owner_work_before_delivery_leaves_the_slot_claimable_or_abandoned() {
         // Simulates the owner panicking while producing `T`, *before* ever
-        // calling `deliver` — the hazard this test rules out is a wedged
-        // `Mutex` from a poisoned lock (`parking_lot::Mutex` does not
-        // poison) AND, since `ClaimSlot`'s own `Drop` now covers owner
-        // disconnection (ADR-0039 §3), a handle left
-        // waiting forever for a `deliver` call that will now never come.
+        // calling `deliver` — since `ClaimSlot`'s own `Drop` covers owner
+        // disconnection (ADR-0039 §3), the handle must not wait forever for
+        // a `deliver` call that will now never come.
         //
         // The panicking thread's `slot` unwinds through `ClaimSlot::drop`
         // right there, on the owner thread — it observes `Pending` and

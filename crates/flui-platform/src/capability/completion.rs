@@ -7,12 +7,11 @@ use std::{
     future::Future,
     pin::Pin,
     rc::Rc,
-    sync::Arc,
+    sync::{Arc, Mutex},
     task::{Context, Poll, Waker},
 };
 
 use flui_foundation::panic::{FirstPanic, commit};
-use parking_lot::Mutex;
 
 use super::owner::{OwnerJob, OwnerPoster, OwnerRetired, PendingCompletions, PendingSlot};
 
@@ -70,7 +69,12 @@ pub(super) trait Settle {
 impl<T: 'static> Settle for Local<T> {
     fn settle(&self) {
         commit(&self.state, |state, out| {
-            let Some(outcome) = state.settled.take().or_else(|| self.shared.lock().take()) else {
+            let Some(outcome) = state.settled.take().or_else(|| {
+                self.shared
+                    .lock()
+                    .expect("BUG: a completion's shared slot runs no user code and cannot unwind")
+                    .take()
+            }) else {
                 return;
             };
             if let Some(mut on_complete) = state.on_complete.take() {
@@ -424,7 +428,14 @@ pub struct Resolver<T> {
 impl<T> Resolver<T> {
     fn deliver(&mut self, outcome: Outcome<T>) -> Result<(), OwnerRetired> {
         self.done = true;
-        *self.shared.lock() = Some(outcome);
+        let previous = self
+            .shared
+            .lock()
+            .expect("BUG: a completion's shared slot runs no user code and cannot unwind")
+            .replace(outcome);
+        // `done` makes this `None`; even an unexpected earlier value is user
+        // data and therefore destroyed after the lock is released.
+        drop(previous);
         match self.id {
             Some(id) => self.poster.post_job(settle_job(id)),
             None => Err(OwnerRetired),

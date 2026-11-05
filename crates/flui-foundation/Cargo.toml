@@ -27,7 +27,6 @@ exclude = ["/ARCHITECTURE.md", "/docs/"]
 workspace = true
 
 [dependencies]
-parking_lot = { workspace = true }
 # `MonotonicClock`'s Instant: std::time on native, performance.now() on
 # wasm32 — std::time::Instant::now() panics on wasm32-unknown-unknown,
 # and this clock is the default the gesture arena runs on (see clock.rs).

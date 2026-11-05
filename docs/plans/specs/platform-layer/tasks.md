@@ -4844,6 +4844,21 @@ graph LR
   `D:\flui`; `cargo fmt -p flui -p xtask -p flui-native -- --check` — зелёный. Заодно убрана
   недействительная rustdoc-ссылка на cfg-зависимый `TextInputV3`, не дававшая `doc-strict`
   завершиться на Windows.
+- [ ] **LY55**, часть `parking_lot` — ветка `platform/contract-std-mutex`. Контракт и его
+  зависимость `flui-foundation` больше не используют `parking_lot`: `DisplayRegistry`,
+  `Completion`, `FakeHaptics`, `ScriptedHttp`, `ManualClock` и `ClaimSlot` переведены на
+  `std::sync`. `reach-forbid` контракта запрещает возврат crate; `reach` подтверждает, что путей
+  к нему нет. Poison — по `docs/PANIC-POLICY.md`: состояние `ManualClock` (`Duration`) остаётся
+  целым и восстанавливается, а реестр дисплеев и claim slot не продолжают после возможной
+  частичной записи. `Completion` уничтожает заменённый outcome после unlock; waker'ы по-прежнему
+  не вызываются под lock. Тест `a_poisoned_registry_reports_its_invariant` до исправления падал
+  («a poisoned registry must not mint an id»), после — проходит. Проверки на Windows: nextest
+  `-p flui-foundation -p flui-platform` — 149; platform lib/integration со всеми фичами — 58;
+  doctests — 224; clippy обоих крейтов `--all-targets --all-features -D warnings`; `workspace`,
+  `reach`, `api-closure -p flui-platform`, `shear` обоих крейтов. `xtask checks` зелёный, кроме
+  известного запуска `cargo fmt --all` во вложенном worktree; форматирование изменённых пакетов
+  проверено отдельно. Остаются части LY55: `tracing` в text store и удаление `active_window`,
+  `compositor_name`, публичного пути keyboard layout; они не входят в этот PR.
 
 ## Отступление от порядка, решённое владельцем
 
