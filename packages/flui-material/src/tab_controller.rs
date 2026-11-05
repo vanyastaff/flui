@@ -190,6 +190,11 @@ struct Shared {
     /// A drive requested while the owner was out; the outer drive applies it.
     pending_drive: Cell<Option<(f64, Change)>>,
     /// The owner's value relay's subscription; lives as long as the owner.
+    /// Held for its drop; nothing reads it.
+    #[expect(
+        dead_code,
+        reason = "the relay's subscription detaches at the controller's drop"
+    )]
     position_forwarding: Cell<Option<Subscription>>,
     motion: RefCell<MotionSpec>,
     pager: RefCell<Option<PagerLink>>,

@@ -280,7 +280,9 @@ struct Wave {
     pointer: Option<NonZeroU64>,
     /// Unit progress over [`WAVE_RADIUS`] since the press.
     enter: DrivenController,
-    /// The repaint listener's subscription; detaches with the wave.
+    /// The repaint listener's subscription; detaches with the wave. Held for
+    /// its drop; nothing reads it.
+    #[expect(dead_code, reason = "the subscription detaches with the wave's drop")]
     listening: Subscription,
     /// The fade-out, once released or cancelled.
     exit: Option<WaveExit>,
@@ -294,7 +296,9 @@ struct WaveExit {
     /// The wait before the fade-out begins: the rest of the fade-in.
     delay_ms: f64,
     total_ms: f64,
-    /// The repaint listener's subscription; detaches with the exit.
+    /// The repaint listener's subscription; detaches with the exit. Held for
+    /// its drop; nothing reads it.
+    #[expect(dead_code, reason = "the subscription detaches with the exit's drop")]
     listening: Subscription,
 }
 
@@ -413,6 +417,11 @@ pub(crate) struct Indication {
     layer_color: Cell<Option<Color>>,
     waves: RefCell<Vec<Wave>>,
     /// The layer controller's repaint listener, held for its whole life.
+    /// Held for its drop; nothing reads it.
+    #[expect(
+        dead_code,
+        reason = "the subscription detaches at the indication's drop"
+    )]
     layer_listening: RefCell<Option<Subscription>>,
     /// Contacts held on the well: pressed for the state layer while no
     /// wave carries the press.

@@ -521,7 +521,7 @@ impl JumpingOnEveryChange {
         laid.tick();
         let remaining = Rc::new(Cell::new(budget));
         let (left, reentrant) = (Rc::clone(&remaining), controller.clone());
-        let _listening = controller.listenable().listen(Rc::new(move || {
+        let listening = controller.listenable().listen(Rc::new(move || {
             if left.get() > 0 {
                 left.set(left.get() - 1);
                 reentrant
@@ -535,7 +535,7 @@ impl JumpingOnEveryChange {
             probe,
             remaining,
             vsync,
-            listening: _listening,
+            listening,
         }
     }
 }
