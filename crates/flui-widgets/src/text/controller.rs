@@ -13,8 +13,7 @@ use flui_painting::text_boundaries::{
     previous_word_start,
 };
 
-use flui_foundation::ListenerId;
-use flui_foundation::notifier::{ChangeNotifier, Listenable, ListenerCallback};
+use flui_foundation::notifier::{ChangeNotifier, Listenable};
 use flui_interaction::text_input::{EditGeneration, committed_text};
 
 // ============================================================================
@@ -191,10 +190,11 @@ pub(super) struct ComposingState {
 ///
 /// # Listening
 ///
-/// Implement a reactive rebuild by registering via [`Listenable::add_listener`]
-/// (returns a [`ListenerId`] for later removal in [`Listenable::remove_listener`])
-/// or by passing [`TextEditingController::listenable`] to
-/// [`AnimatedBuilder`](crate::AnimatedBuilder).
+/// Implement a reactive rebuild by registering via
+/// [`Listenable::listen_with_recovery`] or [`Listenable::listen`] (an owned
+/// [`Subscription`]; hold it, and the listener fires on every change; drop it,
+/// and the listener detaches) or by passing [`TextEditingController::listenable`]
+/// to [`AnimatedBuilder`](crate::AnimatedBuilder).
 ///
 /// # IME composition
 ///
@@ -1068,21 +1068,6 @@ impl Listenable for TextEditingController {
         relay: flui_foundation::ListenerObserver,
     ) -> flui_foundation::Subscription {
         self.notifier.listen_with_recovery(relay)
-    }
-    fn add_observer(&self, observer: flui_foundation::ListenerObserver) -> ListenerId {
-        self.notifier.add_observer(observer)
-    }
-
-    fn add_listener(&self, listener: ListenerCallback) -> ListenerId {
-        self.notifier.add_listener(listener)
-    }
-
-    fn remove_listener(&self, id: ListenerId) {
-        self.notifier.remove_listener(id);
-    }
-
-    fn remove_all_listeners(&self) {
-        self.notifier.remove_all_listeners();
     }
 }
 

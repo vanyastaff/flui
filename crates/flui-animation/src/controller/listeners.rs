@@ -55,7 +55,25 @@ impl AnimationController {
 
 impl Listenable for AnimationController {
     fn listen(&self, listener: ListenerCallback) -> flui_foundation::Subscription {
-        self.notifier.listen(listener)
+        let mut callback = Opaque::new(listener);
+        let inner = self.inner.borrow_mut();
+        if inner.disposed {
+            // A disposed controller refuses admission: the callback retires
+            // under this controller's own custody, and the caller holds the
+            // inert subscription (ADR-0180's refusal contract).
+            let (_id, inner) = Self::mint_listener_id(inner);
+            let callback = callback.take();
+            let mut retired = RetiredSources::new();
+            retired.value_callbacks.push(Opaque::new(
+                flui_foundation::notifier_generic::NotificationCallback::user(Rc::new(
+                    move |(): &()| callback(),
+                )),
+            ));
+            Self::retire_after(inner, retired);
+            return flui_foundation::Subscription::inert();
+        }
+        drop(inner);
+        self.notifier.listen(callback.take())
     }
     fn listen_with_recovery(
         &self,
@@ -78,50 +96,5 @@ impl Listenable for AnimationController {
         }
         drop(inner);
         self.notifier.listen_with_recovery(relay.take())
-    }
-    fn add_observer(&self, observer: flui_foundation::notifier::ListenerObserver) -> ListenerId {
-        let mut observer = Opaque::new(observer);
-        let inner = self.inner.borrow_mut();
-        if inner.disposed {
-            let (id, inner) = Self::mint_listener_id(inner);
-            let observer = observer.take();
-            let mut retired = RetiredSources::new();
-            retired.value_callbacks.push(Opaque::new(
-                flui_foundation::notifier_generic::NotificationCallback::relay(Rc::new(
-                    move |(): &(), recovery| observer(recovery),
-                )),
-            ));
-            Self::retire_after(inner, retired);
-            return id;
-        }
-        drop(inner);
-        self.notifier.add_observer(observer.take())
-    }
-    fn add_listener(&self, callback: ListenerCallback) -> ListenerId {
-        let mut callback = Opaque::new(callback);
-        let inner = self.inner.borrow_mut();
-        if inner.disposed {
-            let (id, inner) = Self::mint_listener_id(inner);
-            let callback = callback.take();
-            let mut retired = RetiredSources::new();
-            retired.value_callbacks.push(Opaque::new(
-                flui_foundation::notifier_generic::NotificationCallback::user(Rc::new(
-                    move |(): &()| callback(),
-                )),
-            ));
-            Self::retire_after(inner, retired);
-            return id;
-        }
-        drop(inner);
-        self.notifier.add_listener(callback.take())
-    }
-
-    fn remove_listener(&self, id: ListenerId) {
-        let callback = self.notifier.take_listener(id);
-        self.retire_value_callbacks(callback);
-    }
-
-    fn remove_all_listeners(&self) {
-        self.retire_value_callbacks(self.notifier.take_listeners());
     }
 }

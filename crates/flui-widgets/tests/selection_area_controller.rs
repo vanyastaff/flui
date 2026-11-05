@@ -356,9 +356,9 @@ pub(crate) fn a_panicking_listener_still_lets_the_controller_notify() {
     let controller = SelectionController::new();
     let notified = Rc::new(Cell::new(0));
     let counter = Rc::clone(&notified);
-    controller
+    let _listening = controller
         .listenable()
-        .add_listener(Rc::new(move || counter.set(counter.get() + 1)));
+        .listen(Rc::new(move || counter.set(counter.get() + 1)));
     let area = SelectionArea::new(two_texts())
         .controller(controller.clone())
         .on_selection_changed(|_cx, _change| -> () { panic!("the listener fails") });

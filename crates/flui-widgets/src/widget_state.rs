@@ -67,7 +67,7 @@ use std::cell::Cell;
 use std::fmt;
 use std::rc::Rc;
 
-use flui_foundation::{ChangeNotifier, Listenable, ListenerCallback, ListenerId};
+use flui_foundation::{ChangeNotifier, Listenable};
 
 // ============================================================================
 // WidgetState / WidgetStates
@@ -412,20 +412,5 @@ impl Listenable for WidgetStatesController {
         relay: flui_foundation::ListenerObserver,
     ) -> flui_foundation::Subscription {
         self.notifier.listen_with_recovery(relay)
-    }
-    fn add_observer(&self, observer: flui_foundation::ListenerObserver) -> ListenerId {
-        self.notifier.add_observer(observer)
-    }
-
-    fn add_listener(&self, listener: ListenerCallback) -> ListenerId {
-        self.notifier.add_listener(listener)
-    }
-
-    fn remove_listener(&self, id: ListenerId) {
-        self.notifier.remove_listener(id);
-    }
-
-    fn remove_all_listeners(&self) {
-        self.notifier.remove_all_listeners();
     }
 }

@@ -57,7 +57,7 @@ use std::time::Duration;
 use flui_animation::{Animation, AnimationController, DrivenController, Vsync};
 use flui_foundation::geometry::{Axis, Vec2};
 use flui_foundation::panic::PanicRecovery;
-use flui_foundation::{ChangeNotifier, Listenable, ListenerCallback, ListenerId};
+use flui_foundation::{ChangeNotifier, Listenable, ListenerCallback};
 use flui_interaction::InputSequenceId;
 use flui_painting::typography::TextDirection;
 use flui_platform::TargetPlatform;
@@ -152,21 +152,6 @@ impl Listenable for RefreshControllerInner {
         relay: flui_foundation::ListenerObserver,
     ) -> flui_foundation::Subscription {
         self.notifier.listen_with_recovery(relay)
-    }
-    fn add_observer(&self, observer: flui_foundation::ListenerObserver) -> ListenerId {
-        self.notifier.add_observer(observer)
-    }
-
-    fn add_listener(&self, callback: ListenerCallback) -> ListenerId {
-        self.notifier.add_listener(callback)
-    }
-
-    fn remove_listener(&self, id: ListenerId) {
-        self.notifier.remove_listener(id);
-    }
-
-    fn remove_all_listeners(&self) {
-        self.notifier.remove_all_listeners();
     }
 }
 

@@ -37,7 +37,7 @@
 use flui_rendering::parent_data::SliverSlot;
 use std::{fmt, rc::Rc};
 
-use flui_foundation::{Listenable, ListenerId};
+use flui_foundation::Listenable;
 
 use super::{
     arity::{ElementArity, Leaf, Optional, Single, Variable},
@@ -216,7 +216,7 @@ where
 // ============================================================================
 
 /// Captured handle to a `Listenable` that a `StatefulElement` subscribes
-/// to, plus the listener-id used to detach on unmount.
+/// to, plus the owned `Subscription` whose drop detaches on unmount.
 ///
 /// Phase 1 ships the **struct shape only** — the
 /// listener is not yet attached to any `StatefulElement` (that wiring
@@ -239,26 +239,26 @@ where
 pub struct AnimationListener {
     /// Captured listenable provider.
     ///
-    /// Returns a fresh `Arc<dyn Listenable>` clone on each call. The
+    /// Returns a fresh `Rc<dyn Listenable>` clone on each call. The
     /// concrete listenable type is captured at construction time
     /// (when the typed `V::listenable()` call site is in scope) — the
-    /// closure body merely `Arc::clone`s the captured handle.
+    /// closure body merely `Rc::clone`s the captured handle.
     pub listenable_provider: Rc<dyn Fn() -> std::rc::Rc<dyn Listenable>>,
-    /// Identifier returned by the `Listenable::add_listener` call;
-    /// passed to `remove_listener` on detach.
-    pub listener_id: ListenerId,
+    /// The owned `Subscription` the registration returned; its drop
+    /// detaches the listener on unmount.
+    pub listening: flui_foundation::Subscription,
 }
 
 impl AnimationListener {
     /// Construct a listener handle from a captured listenable provider
-    /// and the listener-id returned by the matching `add_listener` call.
+    /// and the owned `Subscription` the matching registration returned.
     pub fn new(
         listenable_provider: Rc<dyn Fn() -> std::rc::Rc<dyn Listenable>>,
-        listener_id: ListenerId,
+        listening: flui_foundation::Subscription,
     ) -> Self {
         Self {
             listenable_provider,
-            listener_id,
+            listening,
         }
     }
 
@@ -274,10 +274,9 @@ impl AnimationListener {
 impl fmt::Debug for AnimationListener {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("AnimationListener")
-            // The closure has no useful debug representation; surface
-            // only the listener-id, which is the field a developer
-            // actually needs to correlate against `Listenable::remove`.
-            .field("listener_id", &self.listener_id)
+            // The closure has no useful debug representation; surface only
+            // the subscription state.
+            .field("listening", &self.listening)
             .finish_non_exhaustive()
     }
 }

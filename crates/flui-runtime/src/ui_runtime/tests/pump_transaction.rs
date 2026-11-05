@@ -213,7 +213,9 @@ pub(crate) fn step_during_a_tick_applies_next_frame() {
         let _ = runtime.pump(&mut clock, &mut sink);
         let armed = Rc::new(Cell::new(true));
         let reply = Rc::new(RefCell::new(None));
-        primary_owner.controller().add_listener(Rc::new({
+        // The registration stays for the round's own pumps, as the id form's
+        // abandoned registration did.
+        let _listening = primary_owner.controller().listen(Rc::new({
             let armed = Rc::clone(&armed);
             let reply = Rc::clone(&reply);
             move || {

@@ -9,7 +9,6 @@ use std::sync::Arc;
 use std::task::{Poll, Waker};
 use std::time::Duration;
 
-use flui_foundation::ListenerId;
 use flui_foundation::notifier::{ChangeNotifier, Listenable, ListenerObserver};
 use flui_foundation::panic::{FirstPanic, commit, payload_text};
 use flui_platform::{
@@ -616,26 +615,6 @@ impl<D: Document> Listenable for Persisted<D> {
         }
         self.document.refresh();
         subscription
-    }
-    fn add_observer(&self, observer: ListenerObserver) -> ListenerId {
-        let announcer = &self.document.announcer;
-        let id = announcer.notifier.add_observer(observer);
-        if announcer.closed.get() {
-            // The opening state is gone: the listener would never be told,
-            // and is not kept.
-            announcer.notifier.remove_listener(id);
-            return id;
-        }
-        self.document.refresh();
-        id
-    }
-
-    fn remove_listener(&self, id: ListenerId) {
-        self.document.announcer.notifier.remove_listener(id);
-    }
-
-    fn remove_all_listeners(&self) {
-        self.document.announcer.notifier.remove_all_listeners();
     }
 }
 

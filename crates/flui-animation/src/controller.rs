@@ -996,22 +996,6 @@ impl AnimationController {
         self.inner.borrow().disposed
     }
 
-    fn retire_value_callbacks(
-        &self,
-        callbacks: impl IntoIterator<
-            Item = Rc<flui_foundation::notifier_generic::NotificationCallback<()>>,
-        >,
-    ) {
-        let mut retired = RetiredSources::new();
-        retired
-            .value_callbacks
-            .extend(callbacks.into_iter().map(Opaque::new));
-        if retired.value_callbacks.is_empty() {
-            return;
-        }
-        Self::retire_after(self.inner.borrow_mut(), retired);
-    }
-
     /// Retire `retired` outside the state borrow: after the delivery in
     /// progress, which retires its queue in order, or now, contained.
     fn retire_after(

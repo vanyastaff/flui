@@ -6,9 +6,7 @@ use std::{
     rc::{Rc, Weak},
 };
 
-use flui_foundation::{
-    ChangeNotifier, Listenable, ListenerId, notifier_generic::NotificationCallback,
-};
+use flui_foundation::{ChangeNotifier, Subscription};
 
 /// The direction of a scroll, relative to the positive scroll offset axis.
 ///
@@ -244,26 +242,21 @@ impl ViewportOffset for FixedViewportOffset {
 /// rules, so one failed listener neither silences the offset nor skips the rest.
 #[derive(Default)]
 pub(crate) struct OffsetListeners {
-    identities: RefCell<Vec<(ListenerId, Weak<dyn Fn()>)>>,
+    identities: RefCell<Vec<(Subscription, Weak<dyn Fn()>)>>,
     notifier: ChangeNotifier,
 }
 
 impl OffsetListeners {
     pub(crate) fn add(&self, listener: Rc<dyn Fn()>) {
         let identity = Rc::downgrade(&listener);
-        let id = self.notifier.add_listener(listener);
-        self.identities.borrow_mut().push((id, identity));
+        let listening = self.notifier.listen(listener);
+        self.identities.borrow_mut().push((listening, identity));
     }
 
-    /// Withdraws the first subscription of `listener` without dropping its callback, for an
+    /// Withdraws the first subscription of `listener` without detaching it, for an
     /// owner that retires it under the failure of another delivery in progress.
     #[must_use]
-    pub(crate) fn take(&self, listener: &Rc<dyn Fn()>) -> Option<Rc<NotificationCallback<()>>> {
-        self.forget_identity(listener)
-            .and_then(|id| self.notifier.take_listener(id))
-    }
-
-    fn forget_identity(&self, listener: &Rc<dyn Fn()>) -> Option<ListenerId> {
+    pub(crate) fn take(&self, listener: &Rc<dyn Fn()>) -> Option<Subscription> {
         let mut identities = self.identities.borrow_mut();
         let probe = Rc::downgrade(listener);
         let index = identities

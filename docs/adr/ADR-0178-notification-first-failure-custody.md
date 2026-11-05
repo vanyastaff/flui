@@ -57,13 +57,15 @@ capability. Each link borrows its channel's atomic signal and the enclosing
 stack-local link. Nesting does not grow a heap collection; the borrow checker
 prevents a scope or signal reference from escaping its synchronous delivery.
 
-Framework relays borrow this same context through `Listenable::add_observer`
-and `Animation::subscribe_status_observer`. User listeners retain their ordinary
-callback signature. Both kinds share the channel's membership, ordering and
-retirement storage. `add_observer` is the required registration method and
-`add_listener` a provided adapter over it, so every listenable, including one
-outside the framework, must decide where its relays run; there is no default
-that silently opens a fresh recovery. Framework listenables forward relays to
+Framework relays borrow this same context through `Listenable::listen_with_recovery`
+and an animation's relays through `Animation::observe_status`. User listeners
+retain their ordinary callback signature and hold the owned `Subscription` the
+required registration returns ([ADR-0109](ADR-0109-notification-channel-surface.md)
+decision 5 states the trait's method surface; [ADR-0219](
+ADR-0219-required-observer-registration.md) remains this relay custody's
+record). Both kinds share the channel's membership, ordering and retirement
+storage. Every listenable, including one outside the framework, must decide
+where its relays run; there is no default that silently opens a fresh recovery. Framework listenables forward relays to
 the channel that notifies, so a chain of wrappers never starts a fresh recovery
 after an earlier parent failure. A source that does not notify through a
 foundation channel opens its own scope at its boundary with
@@ -126,13 +128,15 @@ Disposed controllers refuse later mutations and listener admission.
 
 Framework cleanup rounds also lend this custody to subscription cancellation.
 `StatusSubscription::cancel_with_recovery` withdraws its removal authority before
-calling the source. `ProxyAnimation::remove_listener_with_recovery` withdraws a
-value listener and retires its outgoing capture within the same borrowed scope;
-ordinary `Listenable::remove_listener` uses this path with its own outer recovery.
-Hero teardown uses these seams alongside `ChangeNotifier::take_listener` so one
-failed cancellation cannot skip overlay withdrawal, placeholder restoration or
-the remaining flights. Outgoing owners retire through that same context;
-cancellation and restoration complete before it resumes its first failure.
+calling the source. A value listener's owned `Subscription` withdraws through
+its own channel: inside a round the withdrawn callback joins that round's
+retirement, so its outgoing capture retires with the round's containment, and
+outside a round it retires at once ([ADR-0109](
+ADR-0109-notification-channel-surface.md) decision 5 states this owned form).
+Hero teardown uses the cancellation seam so one failed cancellation cannot skip
+overlay withdrawal, placeholder restoration or the remaining flights. Outgoing
+owners retire through that same context; cancellation and restoration complete
+before it resumes its first failure.
 
 Ticker start and stop also join that FIFO. The run and its completer are committed
 before a platform wake hook runs, and no controller borrow is held across the

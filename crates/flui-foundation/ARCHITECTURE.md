@@ -35,8 +35,8 @@ the family; the slab-backed ids stay the slot plus one.
 
 ## Listener subscriptions (the owned listener)
 
-A listener paired by hand — `add_listener`'s id held apart from its source,
-removed later through `remove_listener` — is wrong-channel by construction:
+A listener paired by hand — an id held apart from its source, removed later
+through a remove call — is wrong-channel by construction:
 ids are per-channel counters that start at one, so the channel they name is
 not in the value. The owned form is the channel's `listen`
 (`ChangeNotifier::listen`, `ValueNotifier::listen`, `Notifier::listen`),
@@ -44,8 +44,11 @@ which hands back a `Subscription`: cancel-on-drop, `detach` for an early
 exit, and a detach that knows its channel, so it removes exactly its own
 registration (`a_subscription_detaches_only_its_own_channel`,
 `a_subscription_detached_inside_a_round_is_skipped_and_retired_at_its_tail`).
-Taking the id protocol itself off the `Listenable` trait is the theme's next
-step; until then the id API stays next to this one.
+No id-based registration or withdrawal is a `Listenable` method
+([ADR-0109](../../docs/adr/ADR-0109-notification-channel-surface.md) decision
+5): the id machinery is the channel level's own
+(`take_listener`, `take_listeners`, `add_listener`, `add_with_recovery`),
+reached through concrete types, not through the trait.
 
 ## Slot generations (ADR-0313)
 

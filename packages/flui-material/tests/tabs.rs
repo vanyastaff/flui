@@ -44,7 +44,7 @@ pub fn a_panicking_position_observer_does_not_hide_the_index_change() {
     let heard = Rc::new(Cell::new(0));
     let counter = Rc::clone(&heard);
     let _index = controller.listen(move || counter.set(counter.get() + 1));
-    let _observer = controller.position().add_listener(Rc::new(panics_once()));
+    let _observer = controller.position().listen(Rc::new(panics_once()));
 
     let outcome = catch_unwind(AssertUnwindSafe(|| controller.animate_to(1)));
 
@@ -73,8 +73,8 @@ pub fn a_nested_change_beside_a_panicking_observer_does_not_outlive_it() {
             }
         }
     };
-    let _nested = controller.position().add_listener(Rc::new(nested));
-    let _failing = controller.position().add_listener(Rc::new(panics_once()));
+    let _nested = controller.position().listen(Rc::new(nested));
+    let _failing = controller.position().listen(Rc::new(panics_once()));
 
     let outcome = catch_unwind(AssertUnwindSafe(|| controller.animate_to(1)));
     assert!(outcome.is_err(), "the observer's panic reaches the caller");
@@ -248,7 +248,7 @@ pub fn a_refused_motion_still_lands_on_the_committed_index() {
 /// notifies panics.
 pub fn on_tap_runs_beside_a_panicking_position_observer() {
     let controller = TabController::new(2, 0);
-    let _observer = controller.position().add_listener(Rc::new(panics_once()));
+    let _observer = controller.position().listen(Rc::new(panics_once()));
     let tapped = Rc::new(Cell::new(None));
     let record = Rc::clone(&tapped);
     let laid = lay_out(

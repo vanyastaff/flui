@@ -519,20 +519,6 @@ impl flui_foundation::Listenable for RemovalPanics {
     ) -> flui_foundation::Subscription {
         self.inner.listen_with_recovery(relay)
     }
-    fn add_observer(
-        &self,
-        observer: flui_foundation::ListenerObserver,
-    ) -> flui_foundation::ListenerId {
-        self.inner.add_observer(observer)
-    }
-
-    fn remove_listener(&self, id: flui_foundation::ListenerId) {
-        self.inner.remove_listener(id);
-    }
-
-    fn remove_all_listeners(&self) {
-        self.inner.remove_all_listeners();
-    }
 }
 
 impl Animation<f64> for RemovalPanics {
@@ -1107,20 +1093,6 @@ impl flui_foundation::Listenable for StatusByHand {
         relay: flui_foundation::ListenerObserver,
     ) -> flui_foundation::Subscription {
         self.value.listen_with_recovery(relay)
-    }
-    fn add_observer(
-        &self,
-        observer: flui_foundation::ListenerObserver,
-    ) -> flui_foundation::ListenerId {
-        self.value.add_observer(observer)
-    }
-
-    fn remove_listener(&self, id: flui_foundation::ListenerId) {
-        self.value.remove_listener(id);
-    }
-
-    fn remove_all_listeners(&self) {
-        self.value.remove_all_listeners();
     }
 }
 

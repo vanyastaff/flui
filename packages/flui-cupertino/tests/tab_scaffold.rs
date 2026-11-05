@@ -202,7 +202,7 @@ pub fn controller_mutation_during_build_is_refused() {
     let outcome = Rc::new(std::cell::RefCell::new(Vec::new()));
     let notified = Rc::new(Cell::new(0_u32));
     let heard = Rc::clone(&notified);
-    let _listener = flui_sdk::foundation::Listenable::add_listener(
+    let _listening = flui_sdk::foundation::Listenable::listen(
         &controller,
         Rc::new(move || heard.set(heard.get() + 1)),
     );

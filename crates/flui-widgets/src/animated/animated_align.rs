@@ -85,6 +85,10 @@ impl std::fmt::Debug for AnimatedAlign {
 #[derive(Debug)]
 pub struct AnimatedAlignState {
     alignment: AnimatedValue<Alignment>,
+    /// The alignment relay's subscription; lives beside its owner. Held for
+    /// its drop; nothing reads it.
+    #[expect(dead_code, reason = "the relay's subscription detaches with the state")]
+    alignment_relay: Option<flui_foundation::Subscription>,
     width_factor: PropertyMotion<f64>,
     height_factor: PropertyMotion<f64>,
     notifications: Rc<ChangeNotifier>,
@@ -102,15 +106,17 @@ impl StatefulView for AnimatedAlign {
         } else {
             Alignment::CENTER
         };
+        let (alignment, alignment_relay) = observed_property(
+            "AnimatedAlign.alignment",
+            alignment,
+            self.motion.clone(),
+            &notifications,
+            None,
+        )
+        .expect("BUG: initial alignment was made finite");
         AnimatedAlignState {
-            alignment: observed_property(
-                "AnimatedAlign.alignment",
-                alignment,
-                self.motion.clone(),
-                &notifications,
-                None,
-            )
-            .expect("BUG: initial alignment was made finite"),
+            alignment,
+            alignment_relay: Some(alignment_relay),
             width_factor: PropertyMotion::try_new(
                 "AnimatedAlign.width_factor",
                 self.width_factor.filter(|v| v.is_finite()),

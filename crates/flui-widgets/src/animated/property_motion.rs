@@ -16,15 +16,17 @@ pub(super) fn observed_property<T: TwoWayConverter + 'static>(
     motion: MotionSpec,
     notifications: &Rc<ChangeNotifier>,
     vsync: Option<&Vsync>,
-) -> Result<AnimatedValue<T>, AnimationError> {
+) -> Result<(AnimatedValue<T>, flui_foundation::Subscription), AnimationError> {
     let owner = AnimatedValue::with_debug_label(label, initial, motion, vsync)?;
     let weak = Rc::downgrade(notifications);
-    owner.animation().add_observer(Rc::new(move |recovery| {
-        if let Some(notifications) = weak.upgrade() {
-            notifications.notify_listeners_with_recovery(recovery);
-        }
-    }));
-    Ok(owner)
+    let relay = owner
+        .animation()
+        .listen_with_recovery(Rc::new(move |recovery| {
+            if let Some(notifications) = weak.upgrade() {
+                notifications.notify_listeners_with_recovery(recovery);
+            }
+        }));
+    Ok((owner, relay))
 }
 
 #[derive(Debug)]
@@ -32,6 +34,8 @@ pub(super) struct PropertyMotion<T: TwoWayConverter + 'static> {
     /// The diagnostics label of every owner this property creates.
     label: &'static str,
     owner: Option<AnimatedValue<T>>,
+    /// The owner's-relay subscription, living beside the owner.
+    relay: Option<flui_foundation::Subscription>,
 }
 
 impl<T: TwoWayConverter + 'static> PropertyMotion<T> {
@@ -42,10 +46,15 @@ impl<T: TwoWayConverter + 'static> PropertyMotion<T> {
         notifications: &Rc<ChangeNotifier>,
         vsync: Option<&Vsync>,
     ) -> Result<Self, AnimationError> {
-        let owner = initial
+        let (owner, relay) = initial
             .map(|initial| observed_property(label, initial, motion, notifications, vsync))
-            .transpose()?;
-        Ok(Self { label, owner })
+            .transpose()?
+            .map_or_else(|| (None, None), |(owner, relay)| (Some(owner), Some(relay)));
+        Ok(Self {
+            label,
+            owner,
+            relay,
+        })
     }
 
     pub(super) fn stage_binding<'owners>(
@@ -73,11 +82,13 @@ impl<T: TwoWayConverter + 'static> PropertyMotion<T> {
             }
             (owner @ None, Some(target)) => {
                 // Appearing properties have no previous value to interpolate.
-                let next = Self::try_new(label, Some(target), motion, notifications, vsync)?;
+                let mut next = Self::try_new(label, Some(target), motion, notifications, vsync)?;
+                self.relay = next.relay.take();
                 update.replace(owner, next.owner);
             }
             (owner, None) => {
                 if owner.is_some() {
+                    drop(self.relay.take());
                     update.replace(owner, None);
                 }
             }

@@ -150,7 +150,7 @@ fn a_real_animation_reaches_the_profiler_with_its_work() {
             let controller = owner.controller();
             let pipeline = binding.pipeline_owner().expect("mounted pipeline").clone();
             let delivered = Rc::clone(&notifications);
-            controller.add_listener(Rc::new(move || {
+            let _listening = controller.listen(Rc::new(move || {
                 delivered.set(delivered.get() + 1);
                 pipeline.with_mut(|pipeline| pipeline.mark_needs_paint(mounted.render_root));
             }));
@@ -639,7 +639,7 @@ fn a_closed_sampling_span_cannot_charge_listener_work_in_the_same_frame() {
         let elapsed = Arc::clone(&boundary.elapsed);
         let calls = Rc::new(Cell::new(0));
         let delivered = Rc::clone(&calls);
-        controller.add_listener(Rc::new(move || {
+        let _listening = controller.listen(Rc::new(move || {
             let span = visit.borrow().clone();
             if let Some(span) = span {
                 let envelope = *elapsed.lock().expect("completed producer extent");

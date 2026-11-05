@@ -8,7 +8,7 @@ use std::any::Any;
 use std::cell::Cell;
 use std::rc::Rc;
 
-use flui::foundation::{ChangeNotifier, Listenable as _};
+use flui::foundation::ChangeNotifier;
 use flui::prelude::*;
 
 /// Counts its notifier's changes and its post-frame callbacks in one shared

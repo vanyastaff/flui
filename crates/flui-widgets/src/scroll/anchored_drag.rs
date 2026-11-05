@@ -31,7 +31,7 @@ use flui_animation::{
 };
 use flui_foundation::geometry::{Axis, Offset, Vec2};
 use flui_foundation::panic::PanicRecovery;
-use flui_foundation::{ChangeNotifier, Listenable, ListenerId, ListenerObserver, Subscription};
+use flui_foundation::{ChangeNotifier, Listenable, ListenerObserver, Subscription};
 use flui_interaction::{HapticsHandle, InputSequenceId};
 use flui_painting::typography::TextDirection;
 use flui_platform::HapticFeedback;
@@ -935,17 +935,6 @@ impl Listenable for DragOffset {
     }
     fn listen_with_recovery(&self, relay: ListenerObserver) -> flui_foundation::Subscription {
         self.scroll.listenable().listen_with_recovery(relay)
-    }
-    fn add_observer(&self, observer: ListenerObserver) -> ListenerId {
-        self.scroll.listenable().add_observer(observer)
-    }
-
-    fn remove_listener(&self, id: ListenerId) {
-        self.scroll.listenable().remove_listener(id);
-    }
-
-    fn remove_all_listeners(&self) {
-        self.scroll.listenable().remove_all_listeners();
     }
 }
 

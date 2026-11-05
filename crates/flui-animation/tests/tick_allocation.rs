@@ -143,10 +143,17 @@ fn a_steady_state_frame_allocates_nothing() {
     let vsync = Vsync::new();
     let owner = AnimationController::builder(NEVER_ENDING).build_on(Some(&vsync));
     let controller = owner.controller();
+    // Four listeners held for the whole measured frame, as the id form's
+    // abandoned registrations did.
+    #[expect(
+        clippy::collection_is_never_read,
+        reason = "the vector only holds the listeners to the scope's end, where the id form abandoned them"
+    )]
+    let mut held = Vec::new();
     for _ in 0..4 {
-        controller.add_listener(std::rc::Rc::new(|| {
+        held.push(controller.listen(std::rc::Rc::new(|| {
             black_box(());
-        }));
+        })));
     }
     controller
         .subscribe_status(std::rc::Rc::new(|status| {
@@ -165,9 +172,9 @@ fn a_steady_state_frame_allocates_nothing() {
     .expect("finite vector with a live registry");
     let stream = vector.animation();
     for _ in 0..4 {
-        stream.add_listener(std::rc::Rc::new(|| {
+        held.push(stream.listen(std::rc::Rc::new(|| {
             black_box(());
-        }));
+        })));
     }
     let _vector_run = vector
         .animate_to(EdgeInsets::new(10.0, 20.0, 30.0, 40.0))
@@ -194,9 +201,9 @@ fn a_steady_state_frame_allocates_nothing() {
     let nested_deliveries = std::rc::Rc::new(Cell::new(0usize));
     for _ in 0..4 {
         let delivered = nested_deliveries.clone();
-        nested_stream.add_listener(std::rc::Rc::new(move || {
+        held.push(nested_stream.listen(std::rc::Rc::new(move || {
             delivered.set(delivered.get() + 1);
-        }));
+        })));
     }
     let _nested_run = nested
         .animate_to(CardMotion(
@@ -350,7 +357,7 @@ fn a_steady_state_frame_allocates_nothing() {
         }
         let delivered = std::rc::Rc::new(Cell::new(0usize));
         let observed = delivered.clone();
-        leaf.add_listener(std::rc::Rc::new(move || observed.set(observed.get() + 1)));
+        let _listening = leaf.listen(std::rc::Rc::new(move || observed.set(observed.get() + 1)));
         let _run = controller.forward().expect("forward on a live controller");
         let mut clock = flui_animation::MotionClock::new();
         let mut now = 0.0;
@@ -389,7 +396,7 @@ fn a_steady_state_frame_allocates_nothing() {
     let controller = owner.controller();
     let delivered = std::rc::Rc::new(Cell::new(0usize));
     let observed = delivered.clone();
-    controller.add_listener(std::rc::Rc::new(move || observed.set(observed.get() + 1)));
+    let _listening = controller.listen(std::rc::Rc::new(move || observed.set(observed.get() + 1)));
     let _run = controller.forward().expect("live nested run");
     let mut clock = MotionClock::new();
     let mut now = 0.0;

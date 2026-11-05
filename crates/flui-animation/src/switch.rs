@@ -528,21 +528,6 @@ impl Listenable for AnimationSwitch {
     ) -> flui_foundation::Subscription {
         self.owner.channels.listen_with_recovery(relay)
     }
-    fn add_observer(&self, observer: flui_foundation::notifier::ListenerObserver) -> ListenerId {
-        self.owner.channels.add_observer(observer)
-    }
-
-    fn add_listener(&self, callback: ListenerCallback) -> ListenerId {
-        self.owner.channels.add_listener(callback)
-    }
-
-    fn remove_listener(&self, id: ListenerId) {
-        self.owner.channels.remove_listener(id);
-    }
-
-    fn remove_all_listeners(&self) {
-        self.owner.channels.remove_all_listeners();
-    }
 }
 
 impl fmt::Debug for AnimationSwitch {

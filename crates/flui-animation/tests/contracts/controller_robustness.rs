@@ -305,7 +305,7 @@ fn curved_run_never_publishes_a_non_finite_value() {
     let published = Arc::new(Mutex::new(Vec::new()));
     let sink = Arc::clone(&published);
     let reader = controller.clone();
-    controller.add_listener(std::rc::Rc::new(move || {
+    let _listening = controller.listen(std::rc::Rc::new(move || {
         sink.lock().expect("published values").push(reader.value());
     }));
     let _run = controller
@@ -403,7 +403,7 @@ fn disposed_controller_ignores_set_value() {
     controller.set_value(0.3).expect("no build is running");
     let notified = Arc::new(Mutex::new(0_usize));
     let sink = Arc::clone(&notified);
-    controller.add_listener(std::rc::Rc::new(move || {
+    let _listening = controller.listen(std::rc::Rc::new(move || {
         *sink.lock().expect("notification count") += 1;
     }));
     owner.dispose();
@@ -447,7 +447,7 @@ fn disposed_controller_drops_a_late_value_listener() {
     owner.dispose();
     let probe = Arc::new(());
     let capture = Arc::clone(&probe);
-    let _id = controller.add_listener(std::rc::Rc::new(move || {
+    let _listening = controller.listen(std::rc::Rc::new(move || {
         let _ = &capture;
     }));
     assert_eq!(
@@ -576,7 +576,7 @@ fn explicit_finish_completes_the_original_finite_run() {
             let value_events = Rc::clone(&events);
             let observed = controller.clone();
             let original = run.clone();
-            let listener = controller.add_listener(Rc::new(move || {
+            let listener = controller.listen(Rc::new(move || {
                 assert_eq!(observed.value(), target);
                 assert!(!observed.is_animating());
                 assert!(
@@ -585,6 +585,7 @@ fn explicit_finish_completes_the_original_finite_run() {
                 );
                 value_events.borrow_mut().push("value");
             }));
+            let status_listener = listener;
             let status_events = Rc::clone(&events);
             let observed = controller.clone();
             let phase = if reverse {
@@ -618,7 +619,7 @@ fn explicit_finish_completes_the_original_finite_run() {
             controller.finish().expect("idle finish is silent");
             registry.tick_all(&clock.frame(Duration::from_secs(2)));
             assert_eq!(*events.borrow(), ["value", "status", "outcome"]);
-            controller.remove_listener(listener);
+            drop(status_listener);
             drop(subscription);
         }
     }
@@ -788,8 +789,8 @@ fn explicit_finish_preserves_a_reentrant_replacement() {
                 );
             })
         };
-        let value_listener =
-            (channel == "value").then(|| controller.add_listener(Rc::clone(&action)));
+        let value_listener: Option<flui_foundation::Subscription> =
+            (channel == "value").then(|| controller.listen(Rc::clone(&action)));
         let status_subscription = (channel == "status").then(|| {
             let action = Rc::clone(&action);
             controller.subscribe_status(Rc::new(move |status| {
@@ -823,7 +824,7 @@ fn explicit_finish_preserves_a_reentrant_replacement() {
         assert_eq!(controller.value(), 0.25);
         assert!(next.is_complete());
         if let Some(listener) = value_listener {
-            controller.remove_listener(listener);
+            drop(listener);
         }
         drop(status_subscription);
     }
@@ -883,12 +884,13 @@ fn explicit_finish_retires_sources_with_failure_custody() {
             )
             .unwrap();
         controller.tick_at(Duration::from_millis(400));
-        let value_listener = mode.contains("value").then(|| {
-            let armed = Cell::new(true);
-            controller.add_listener(Rc::new(move || {
-                assert!(!armed.replace(false), "value delivery failure");
-            }))
-        });
+        let value_listener: Option<flui_foundation::Subscription> =
+            mode.contains("value").then(|| {
+                let armed = Cell::new(true);
+                controller.listen(Rc::new(move || {
+                    assert!(!armed.replace(false), "value delivery failure");
+                }))
+            });
         let status_subscription = mode.contains("status").then(|| {
             let armed = Cell::new(true);
             controller.subscribe_status(Rc::new(move |status| {
@@ -930,7 +932,7 @@ fn explicit_finish_retires_sources_with_failure_custody() {
             "{mode}: the source is dropped under the first failure"
         );
         if let Some(listener) = value_listener {
-            controller.remove_listener(listener);
+            drop(listener);
         }
         drop(status_subscription);
         let next = if let Some(next) = replacement.borrow_mut().take() {
@@ -1053,8 +1055,14 @@ fn explicit_finish_allows_owner_release_during_delivery() {
                 releases.set(releases.get() + 1);
             })
         };
+        #[expect(
+            clippy::collection_is_never_read,
+            reason = "the vector only holds the value registration to the scope's end, where the id form abandoned it"
+        )]
+        let mut held = Vec::new();
         if channel == "value" {
-            controller.add_listener(Rc::clone(&release));
+            // A registration abandoned in place, as the id form did.
+            held.push(controller.listen(Rc::clone(&release)));
         } else if channel == "status" {
             let release = Rc::clone(&release);
             controller

@@ -9,7 +9,7 @@ use std::rc::{Rc, Weak};
 
 use flui_foundation::ElementId;
 use flui_foundation::panic::FirstPanic;
-use flui_foundation::{ChangeNotifier, Listenable, ListenerCallback, ListenerId, ListenerObserver};
+use flui_foundation::{ChangeNotifier, Listenable, ListenerCallback, ListenerObserver};
 use flui_painting::text_boundaries;
 use flui_rendering::semantics::{DocumentPosition, DocumentSelection, SemanticsAnchor};
 use flui_view::EventContextError;
@@ -30,21 +30,6 @@ impl Listenable for Inner {
     }
     fn listen_with_recovery(&self, relay: ListenerObserver) -> flui_foundation::Subscription {
         self.notifier.listen_with_recovery(relay)
-    }
-    fn add_observer(&self, observer: ListenerObserver) -> ListenerId {
-        self.notifier.add_observer(observer)
-    }
-
-    fn add_listener(&self, listener: ListenerCallback) -> ListenerId {
-        self.notifier.add_listener(listener)
-    }
-
-    fn remove_listener(&self, id: ListenerId) {
-        self.notifier.remove_listener(id);
-    }
-
-    fn remove_all_listeners(&self) {
-        self.notifier.remove_all_listeners();
     }
 }
 

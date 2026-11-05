@@ -526,17 +526,6 @@ impl Listenable for Shared {
     fn listen_with_recovery(&self, relay: ListenerObserver) -> Subscription {
         self.position_listeners.listen_with_recovery(relay)
     }
-    fn add_observer(&self, observer: ListenerObserver) -> ListenerId {
-        self.position_listeners.add_observer(observer)
-    }
-
-    fn remove_listener(&self, id: ListenerId) {
-        self.position_listeners.remove_listener(id);
-    }
-
-    fn remove_all_listeners(&self) {
-        self.position_listeners.remove_all_listeners();
-    }
 }
 
 /// Coordinates tab selection and position for [`TabBar`](crate::TabBar) and
@@ -986,17 +975,6 @@ impl Listenable for TabPosition {
     }
     fn listen_with_recovery(&self, relay: ListenerObserver) -> Subscription {
         Listenable::listen_with_recovery(&*self.shared, relay)
-    }
-    fn add_observer(&self, observer: ListenerObserver) -> ListenerId {
-        self.shared.add_observer(observer)
-    }
-
-    fn remove_listener(&self, id: ListenerId) {
-        self.shared.remove_listener(id);
-    }
-
-    fn remove_all_listeners(&self) {
-        self.shared.remove_all_listeners();
     }
 }
 

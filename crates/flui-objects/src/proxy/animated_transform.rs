@@ -642,7 +642,7 @@ impl RenderBox for RenderAnimatedTransform {
 mod tests {
     use super::*;
     use flui_animation::AnimationController;
-    use flui_foundation::{Listenable, ListenerId};
+    use flui_foundation::Listenable;
     use flui_rendering::pipeline::PipelineOwner;
     use flui_rendering::protocol::BoxProtocol;
     use std::sync::Arc;
@@ -812,18 +812,6 @@ mod tests {
             relay: flui_foundation::ListenerObserver,
         ) -> flui_foundation::Subscription {
             self.1.listen_with_recovery(relay)
-        }
-        fn add_observer(&self, observer: flui_foundation::ListenerObserver) -> ListenerId {
-            self.1.add_observer(observer)
-        }
-        fn add_listener(&self, callback: flui_foundation::ListenerCallback) -> ListenerId {
-            self.1.add_listener(callback)
-        }
-        fn remove_listener(&self, id: ListenerId) {
-            self.1.remove_listener(id);
-        }
-        fn remove_all_listeners(&self) {
-            self.1.remove_all_listeners();
         }
     }
 

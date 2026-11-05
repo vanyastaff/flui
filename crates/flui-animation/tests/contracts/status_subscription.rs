@@ -24,7 +24,7 @@ fn dropping_one_subscription_preserves_independent_sources_and_channels() {
         let calls = Rc::clone(&b_calls);
         Rc::new(move |_| calls.set(calls.get() + 1))
     });
-    a.controller().add_listener({
+    let _listening = a.controller().listen({
         let calls = Rc::clone(&values);
         Rc::new(move || calls.set(calls.get() + 1))
     });
@@ -154,15 +154,6 @@ impl Listenable for ChannelSource {
         relay: flui_foundation::ListenerObserver,
     ) -> flui_foundation::Subscription {
         self.values.listen_with_recovery(relay)
-    }
-    fn add_observer(&self, observer: flui_foundation::ListenerObserver) -> ListenerId {
-        self.values.add_observer(observer)
-    }
-    fn remove_listener(&self, id: ListenerId) {
-        self.values.remove_listener(id);
-    }
-    fn remove_all_listeners(&self) {
-        self.values.remove_all_listeners();
     }
 }
 

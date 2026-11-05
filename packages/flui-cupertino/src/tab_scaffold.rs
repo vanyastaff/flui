@@ -49,9 +49,7 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use flui_sdk::foundation::{
-    BuildPhase, ChangeNotifier, Listenable, ListenerCallback, ListenerId, MutatedDuringBuild,
-};
+use flui_sdk::foundation::{BuildPhase, ChangeNotifier, Listenable, MutatedDuringBuild};
 use flui_sdk::geometry::EdgeInsets;
 use flui_sdk::painting::BoxDecoration;
 use flui_sdk::view::BoxedView;
@@ -154,21 +152,6 @@ impl Listenable for CupertinoTabController {
         relay: flui_sdk::foundation::ListenerObserver,
     ) -> flui_sdk::foundation::Subscription {
         self.notifier.listen_with_recovery(relay)
-    }
-    fn add_observer(&self, observer: flui_sdk::foundation::ListenerObserver) -> ListenerId {
-        self.notifier.add_observer(observer)
-    }
-
-    fn add_listener(&self, listener: ListenerCallback) -> ListenerId {
-        self.notifier.add_listener(listener)
-    }
-
-    fn remove_listener(&self, id: ListenerId) {
-        self.notifier.remove_listener(id);
-    }
-
-    fn remove_all_listeners(&self) {
-        self.notifier.remove_all_listeners();
     }
 }
 

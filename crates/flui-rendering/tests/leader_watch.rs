@@ -89,11 +89,11 @@ impl Scene {
     }
 }
 
-fn counted(watch: &LeaderWatch) -> Rc<Cell<usize>> {
+fn counted(watch: &LeaderWatch) -> (Rc<Cell<usize>>, flui_foundation::Subscription) {
     let count = Rc::new(Cell::new(0));
     let counter = Rc::clone(&count);
-    watch.add_listener(Rc::new(move || counter.set(counter.get() + 1)));
-    count
+    let listening = watch.listen(Rc::new(move || counter.set(counter.get() + 1)));
+    (count, listening)
 }
 
 fn height(watch: &LeaderWatch) -> Option<f64> {
@@ -109,7 +109,7 @@ fn height(watch: &LeaderWatch) -> Option<f64> {
 fn a_watch_hears_only_changes() {
     let scene = Scene::new(20.0);
     let watch = scene.watch(scene.link);
-    let heard = counted(&watch);
+    let (heard, _listening) = counted(&watch);
 
     scene.paint();
     assert_eq!(heard.get(), 0, "listeners wait for the post-frame lane");
@@ -139,7 +139,7 @@ fn a_watch_hears_only_changes() {
 fn a_watch_without_a_leader_reads_none() {
     let scene = Scene::new(20.0);
     let watch = scene.watch(LayerLink::new());
-    let heard = counted(&watch);
+    let (heard, _listening) = counted(&watch);
     for _ in 0..2 {
         scene.paint();
         scene.complete();
@@ -155,7 +155,7 @@ fn a_watch_without_a_leader_reads_none() {
 fn changes_before_the_lane_runs_deliver_once() {
     let scene = Scene::new(20.0);
     let watch = scene.watch(scene.link);
-    let heard = counted(&watch);
+    let (heard, _listening) = counted(&watch);
     scene.paint();
     scene.resize(40.0);
     scene.paint();
@@ -172,7 +172,7 @@ fn a_dropped_watch_releases_its_listeners() {
     let watch = scene.watch(scene.link);
     let capture = Rc::new(());
     let held = Rc::clone(&capture);
-    watch.add_listener(Rc::new(move || {
+    let _listening = watch.listen(Rc::new(move || {
         let _ = &held;
     }));
     let copy = watch.clone();
@@ -194,8 +194,8 @@ fn a_dropped_watch_releases_its_listeners() {
 fn a_panicking_listener_keeps_the_next_delivery() {
     let scene = Scene::new(20.0);
     let watch = scene.watch(scene.link);
-    watch.add_listener(Rc::new(|| panic!("a listener fails")));
-    let heard = counted(&watch);
+    let _listening = watch.listen(Rc::new(|| panic!("a listener fails")));
+    let (heard, _listening) = counted(&watch);
 
     scene.paint();
     let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| scene.complete()));
@@ -219,7 +219,7 @@ fn a_late_watch_starts_from_the_committed_leader() {
     scene.paint();
     scene.complete();
     let watch = scene.watch(scene.link);
-    let heard = counted(&watch);
+    let (heard, _listening) = counted(&watch);
     scene.paint();
     scene.complete();
     assert_eq!((heard.get(), height(&watch)), (0, Some(20.0)));
@@ -234,7 +234,7 @@ fn a_late_watch_starts_from_the_committed_leader() {
 fn a_moved_leader_is_heard() {
     let scene = Scene::new(20.0);
     let watch = scene.watch(scene.link);
-    let heard = counted(&watch);
+    let (heard, _listening) = counted(&watch);
     scene.paint();
     scene.complete();
     let origin = |watch: &LeaderWatch| watch.geometry().and_then(|geometry| geometry.origin);

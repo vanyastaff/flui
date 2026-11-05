@@ -45,7 +45,7 @@ mod tests {
         AnimationController, AnimationStatus, StatusObserver, StatusSubscription,
     };
     use flui_foundation::notifier::ListenerObserver;
-    use flui_foundation::{Listenable, ListenerCallback, ListenerId, Subscription};
+    use flui_foundation::{Listenable, ListenerCallback, Subscription};
 
     use super::*;
 
@@ -63,17 +63,6 @@ mod tests {
         }
         fn listen_with_recovery(&self, relay: ListenerObserver) -> Subscription {
             self.inner.listen_with_recovery(relay)
-        }
-        fn add_observer(&self, observer: ListenerObserver) -> ListenerId {
-            self.inner.add_observer(observer)
-        }
-
-        fn remove_listener(&self, id: ListenerId) {
-            self.inner.remove_listener(id);
-        }
-
-        fn remove_all_listeners(&self) {
-            self.inner.remove_all_listeners();
         }
     }
 

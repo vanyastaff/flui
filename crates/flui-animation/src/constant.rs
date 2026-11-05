@@ -2,7 +2,7 @@
 
 use crate::animation::Animation;
 use crate::status::AnimationStatus;
-use flui_foundation::{Listenable, ListenerCallback, ListenerId};
+use flui_foundation::{Listenable, ListenerCallback};
 use std::fmt;
 
 /// An animation that always returns the same value.
@@ -104,30 +104,6 @@ where
         // Nothing to hear: the value never changes. Dropping the inert
         // subscription retires the relay right away.
         flui_foundation::Subscription::inert()
-    }
-    fn add_listener(&self, _callback: ListenerCallback) -> ListenerId {
-        // No registration is admitted. The returned id names nothing: no
-        // registration is ever looked up against it, and this impl's own
-        // `remove_listener` is the no-op that keeps the promise. A listener
-        // id the ledger could one day mint equals this value only after one
-        // channel issued every id from one to `usize::MAX`, a bound the
-        // sentinel exceeds by being unreachable there; the owned form — an
-        // inert `Subscription` — replaces both this id and its caveat with
-        // the subscriptions theme's id-API removal.
-        ListenerId::new(usize::MAX)
-    }
-
-    fn add_observer(&self, _observer: flui_foundation::notifier::ListenerObserver) -> ListenerId {
-        // Retire the inert relay directly, without the default wrapper allocation.
-        ListenerId::new(usize::MAX)
-    }
-
-    fn remove_listener(&self, _id: ListenerId) {
-        // No-op since we don't store listeners.
-    }
-
-    fn remove_all_listeners(&self) {
-        // No-op since we don't store listeners.
     }
 }
 

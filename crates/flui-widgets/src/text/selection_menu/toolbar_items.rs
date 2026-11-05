@@ -7,7 +7,7 @@ use std::fmt;
 use std::ops::Range;
 use std::rc::Rc;
 
-use flui_foundation::{ChangeNotifier, Listenable, ListenerCallback, ListenerId};
+use flui_foundation::{ChangeNotifier, Listenable, ListenerCallback};
 use flui_objects::{RenderToolbarItems, ToolbarItemsSplit};
 use flui_painting::typography::TextDirection;
 use flui_rendering::hit_testing::HitTestBehavior;
@@ -103,21 +103,6 @@ impl Listenable for ToolbarItemsController {
         relay: flui_foundation::ListenerObserver,
     ) -> flui_foundation::Subscription {
         self.inner.notifier.listen_with_recovery(relay)
-    }
-    fn add_observer(&self, observer: flui_foundation::ListenerObserver) -> ListenerId {
-        self.inner.notifier.add_observer(observer)
-    }
-
-    fn add_listener(&self, listener: ListenerCallback) -> ListenerId {
-        self.inner.notifier.add_listener(listener)
-    }
-
-    fn remove_listener(&self, id: ListenerId) {
-        self.inner.notifier.remove_listener(id);
-    }
-
-    fn remove_all_listeners(&self) {
-        self.inner.notifier.remove_all_listeners();
     }
 }
 
@@ -234,7 +219,7 @@ impl StatefulView for ToolbarItems {
 pub struct ToolbarItemsState {
     own: ToolbarItemsController,
     given: Option<ToolbarItemsController>,
-    listening: Option<(ToolbarItemsController, ListenerId)>,
+    listening: Option<flui_foundation::Subscription>,
     handle: Option<RebuildHandle>,
 }
 
@@ -257,16 +242,14 @@ impl ToolbarItemsState {
     fn listen(&mut self, handle: RebuildHandle) {
         let controller = self.in_use().clone();
         self.unlisten();
-        let id = controller.add_listener(Rc::new(move || {
+        let listening = controller.listen(Rc::new(move || {
             handle.schedule(RebuildReason::StateChange);
         }));
-        self.listening = Some((controller, id));
+        self.listening = Some(listening);
     }
 
     fn unlisten(&mut self) {
-        if let Some((controller, id)) = self.listening.take() {
-            controller.remove_listener(id);
-        }
+        drop(self.listening.take());
     }
 }
 

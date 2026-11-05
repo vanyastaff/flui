@@ -14,7 +14,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use flui_foundation::panic::RecoveryScope;
-use flui_foundation::{Listenable, ListenerCallback, ListenerId};
+use flui_foundation::{Listenable, ListenerCallback};
 use smallvec::SmallVec;
 
 use crate::animation::{Retirement, StatusObserver, Terminal};
@@ -748,23 +748,11 @@ impl<T: TwoWayConverter + 'static> Listenable for AnimatedValueView<T> {
     fn listen(&self, listener: ListenerCallback) -> flui_foundation::Subscription {
         self.controller.listen(listener)
     }
-    fn add_listener(&self, callback: ListenerCallback) -> ListenerId {
-        self.controller.add_listener(callback)
-    }
     fn listen_with_recovery(
         &self,
         relay: flui_foundation::notifier::ListenerObserver,
     ) -> flui_foundation::Subscription {
         self.controller.listen_with_recovery(relay)
-    }
-    fn add_observer(&self, observer: flui_foundation::notifier::ListenerObserver) -> ListenerId {
-        self.controller.add_observer(observer)
-    }
-    fn remove_listener(&self, id: ListenerId) {
-        self.controller.remove_listener(id);
-    }
-    fn remove_all_listeners(&self) {
-        self.controller.remove_all_listeners();
     }
 }
 

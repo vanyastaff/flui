@@ -16,7 +16,6 @@ use std::fmt;
 use std::rc::{Rc, Weak};
 
 use flui_foundation::ListenerCallback;
-use flui_foundation::ListenerId;
 use flui_foundation::geometry::{Point, Size};
 use flui_foundation::notifier::{ChangeNotifier, Listenable, ListenerObserver};
 use flui_layer::{LayerLink, LayerTree, leader_origin};
@@ -92,17 +91,6 @@ impl Listenable for LeaderWatch {
     }
     fn listen_with_recovery(&self, relay: ListenerObserver) -> flui_foundation::Subscription {
         self.0.notifier.listen_with_recovery(relay)
-    }
-    fn add_observer(&self, observer: ListenerObserver) -> ListenerId {
-        self.0.notifier.add_observer(observer)
-    }
-
-    fn remove_listener(&self, id: ListenerId) {
-        self.0.notifier.remove_listener(id);
-    }
-
-    fn remove_all_listeners(&self) {
-        self.0.notifier.remove_all_listeners();
     }
 }
 

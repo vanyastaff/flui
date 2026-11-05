@@ -9,7 +9,7 @@ use flui_animation::{
     Animation, AnimationStatus, ProxyAnimation, StatusObserver, StatusSubscription,
 };
 use flui_foundation::panic::RecoveryScope;
-use flui_foundation::{ChangeNotifier, Listenable, ListenerId, ListenerObserver};
+use flui_foundation::{ChangeNotifier, Listenable, ListenerObserver};
 
 use super::transition::Phase;
 
@@ -89,17 +89,6 @@ impl Listenable for Progress {
     }
     fn listen_with_recovery(&self, relay: ListenerObserver) -> flui_foundation::Subscription {
         Listenable::listen_with_recovery(&self.changes, relay)
-    }
-    fn add_observer(&self, observer: ListenerObserver) -> ListenerId {
-        self.changes.add_observer(observer)
-    }
-
-    fn remove_listener(&self, id: ListenerId) {
-        self.changes.remove_listener(id);
-    }
-
-    fn remove_all_listeners(&self) {
-        self.changes.remove_all_listeners();
     }
 }
 

@@ -53,7 +53,8 @@ handle from a previous attachment are inert.
 **D4 — One mechanism for owned and external notifiers.** An owned animation
 (`RenderAnimatedSize`: subscribe to its controller, mark layout) and an external notifier
 (`RenderFlow`/`RenderCustomPaint`: subscribe to the delegate's `Listenable`, mark paint) are the
-same shape — `add_listener` in `attach`, self-mark on notify, `remove_listener` in `detach`.
+same shape — `listen` in `attach`, the owned `Subscription` held for `detach`, self-mark on
+notify, the subscription's drop withdrawing the registration at `detach`.
 They differ only in who owns the `Listenable` and which mark they send.
 
 `RenderInvalidationHandle` is the only public invalidation capability; the raw sender and the

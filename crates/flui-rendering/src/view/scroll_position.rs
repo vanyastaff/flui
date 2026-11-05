@@ -33,7 +33,7 @@ use std::fmt;
 use std::rc::Rc;
 
 use flui_foundation::panic::commit;
-use flui_foundation::{ChangeNotifier, Listenable, ListenerCallback, ListenerId};
+use flui_foundation::{ChangeNotifier, Listenable, ListenerCallback};
 use flui_scheduler::PostFrameHandle;
 use std::cell::RefCell;
 
@@ -505,21 +505,6 @@ impl Listenable for Inner {
         relay: flui_foundation::ListenerObserver,
     ) -> flui_foundation::Subscription {
         self.notifier.listen_with_recovery(relay)
-    }
-    fn add_observer(&self, observer: flui_foundation::ListenerObserver) -> ListenerId {
-        self.notifier.add_observer(observer)
-    }
-
-    fn add_listener(&self, listener: ListenerCallback) -> ListenerId {
-        self.notifier.add_listener(listener)
-    }
-
-    fn remove_listener(&self, id: ListenerId) {
-        self.notifier.remove_listener(id);
-    }
-
-    fn remove_all_listeners(&self) {
-        self.notifier.remove_all_listeners();
     }
 }
 
@@ -1070,14 +1055,14 @@ impl ViewportOffset for ScrollPosition {
     }
 
     fn remove_listener(&self, listener: &Rc<dyn Fn()>) {
-        if let Some(callback) = self.inner.offset_listeners.take(listener) {
+        if let Some(subscription) = self.inner.offset_listeners.take(listener) {
             let mut recovery = flui_foundation::panic::PanicRecovery::new();
             self.inner.notifier.inherit_failure(&mut recovery.scope());
             self.inner
                 .offset_listeners
                 .notifier()
                 .inherit_failure(&mut recovery.scope());
-            recovery.retire(callback);
+            recovery.retire(subscription);
             recovery.finish();
         }
     }

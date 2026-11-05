@@ -568,7 +568,7 @@ fn a_trivial_curved_run_completes_before_its_curve_retires() {
             *trivial.borrow_mut() = Some(run);
         })
     };
-    controller.add_listener(listener);
+    let _listening = controller.listen(listener);
     controller.set_value(0.5).expect("no build is running");
     let run = trivial.borrow_mut().take().expect("the listener ran");
     assert!(
@@ -1115,6 +1115,29 @@ impl TerminalParentState {
         assert!(!self.fail_removal, "{}", kind);
     }
 }
+impl TerminalParent {
+    /// The test's own ledger: a registration runs through `register`'s hooks.
+    fn admit(&self, callback: ListenerCallback) -> flui_foundation::ListenerId {
+        self.register();
+        let mut values = self.values.lock().expect("parent values");
+        let id = flui_foundation::ListenerId::new(values.len() + 1);
+        values.push((id, callback));
+        id
+    }
+
+    /// The test's own withdrawal, with its removal hooks.
+    fn withdraw(&self, id: flui_foundation::ListenerId) {
+        let removed = {
+            let mut values = self.values.lock().expect("parent values");
+            values
+                .iter()
+                .position(|(candidate, _)| *candidate == id)
+                .map(|i| values.remove(i))
+        };
+        drop(removed);
+        self.removed("value removal");
+    }
+}
 impl Listenable for TerminalParent {
     /// A source outside the framework: its relays run in their own scope.
     fn listen(&self, listener: ListenerCallback) -> flui_foundation::Subscription {
@@ -1126,47 +1149,20 @@ impl Listenable for TerminalParent {
     }
     fn listen_with_recovery(
         &self,
-        observer: flui_foundation::ListenerObserver,
+        relay: flui_foundation::ListenerObserver,
     ) -> flui_foundation::Subscription {
-        let id = self.add_observer(observer);
+        let id = self.admit(Rc::new(move || {
+            flui_foundation::panic::RecoveryScope::boundary(|recovery| relay(recovery));
+        }));
         // The test's own ledger withdraws this one; the owned subscription
         // carries the removal the way ADR-0180's status guard does.
         let state = Rc::clone(&self.state);
         flui_foundation::Subscription::for_removal(move || {
-            Listenable::remove_listener(
-                &TerminalParent {
-                    state: Rc::clone(&state),
-                },
-                id,
-            );
+            TerminalParent {
+                state: Rc::clone(&state),
+            }
+            .withdraw(id);
         })
-    }
-    fn add_observer(&self, observer: flui_foundation::ListenerObserver) -> ListenerId {
-        self.add_listener(Rc::new(move || {
-            flui_foundation::panic::RecoveryScope::boundary(|recovery| observer(recovery));
-        }))
-    }
-    fn add_listener(&self, callback: ListenerCallback) -> ListenerId {
-        self.register();
-        let mut values = self.values.lock().expect("parent values");
-        let id = ListenerId::new(values.len() + 1);
-        values.push((id, callback));
-        id
-    }
-    fn remove_listener(&self, id: ListenerId) {
-        let removed = {
-            let mut values = self.values.lock().expect("parent values");
-            values
-                .iter()
-                .position(|(candidate, _)| *candidate == id)
-                .map(|i| values.remove(i))
-        };
-        drop(removed);
-        self.removed("value removal");
-    }
-    fn remove_all_listeners(&self) {
-        let removed = std::mem::take(&mut *self.values.lock().expect("parent values"));
-        drop(removed);
     }
 }
 impl Animation<f64> for TerminalParent {

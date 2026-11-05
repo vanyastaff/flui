@@ -86,7 +86,7 @@ fn small_from_jumps_notify_their_exact_value() {
         let values = Rc::new(RefCell::new(Vec::new()));
         let observed = Rc::clone(&values);
         let source = c.clone();
-        let listener = c.add_listener(Rc::new(move || observed.borrow_mut().push(source.value())));
+        let listener = c.listen(Rc::new(move || observed.borrow_mut().push(source.value())));
         let from = if reverse { 1.0 - 0.5e-6 } else { 0.5e-6 };
         let run = if reverse {
             c.reverse_from(Some(from))
@@ -100,7 +100,7 @@ fn small_from_jumps_notify_their_exact_value() {
             "every changed position is observable"
         );
         assert!(run.is_pending());
-        c.remove_listener(listener);
+        listener.detach();
     }
 }
 
@@ -109,7 +109,7 @@ fn small_zero_duration_settlement_notifies_the_endpoint() {
     let values = Rc::new(RefCell::new(Vec::new()));
     let observed = Rc::clone(&values);
     let source = c.clone();
-    let listener = c.add_listener(Rc::new(move || observed.borrow_mut().push(source.value())));
+    let listener = c.listen(Rc::new(move || observed.borrow_mut().push(source.value())));
     let run = c.animate_to(0.5e-6, Some(Duration::ZERO)).unwrap();
     assert!(run.is_complete());
     assert_eq!(
@@ -117,7 +117,7 @@ fn small_zero_duration_settlement_notifies_the_endpoint() {
         [0.5e-6],
         "the endpoint change is delivered once"
     );
-    c.remove_listener(listener);
+    listener.detach();
 }
 
 fn nearby_interior_positions_keep_their_directional_phase() {
@@ -589,7 +589,7 @@ fn controller_mutation_during_build_is_refused() {
     let c = owner.controller().clone();
     let notified = Rc::new(AtomicUsize::new(0));
     let heard = Rc::clone(&notified);
-    let _listener = c.add_listener(Rc::new(move || {
+    let _listening = c.listen(Rc::new(move || {
         heard.fetch_add(1, Ordering::Relaxed);
     }));
     c.set_value(0.5).expect("no build is running");

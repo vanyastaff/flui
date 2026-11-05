@@ -20,17 +20,17 @@ use flui_animation::{
     Animation, AnimationController, AnimationStatus, AnimationSwitch, ConstantAnimation,
     DrivenController, ProxyAnimation, StatusCallback, StatusSubscription, Vsync, curve::Curve,
 };
-use flui_foundation::{ChangeNotifier, Listenable, ListenerCallback, ListenerId};
-
+use flui_foundation::{ChangeNotifier, Listenable, ListenerCallback};
 enum Subscription {
-    Value(ListenerId),
+    Value(flui_foundation::Subscription),
     Status(StatusSubscription),
 }
 
 impl Subscription {
     fn remove(self, source: &dyn Animation<f64>) {
+        let _ = source;
         match self {
-            Self::Value(id) => source.remove_listener(id),
+            Self::Value(subscription) => drop(subscription),
             Self::Status(subscription) => drop(subscription),
         }
     }
@@ -167,21 +167,24 @@ fn competing_status_listener_panics_re_raise_the_first() {
     );
 }
 
-/// A value listener that records how often it ran.
-fn value_counter(controller: &AnimationController) -> Arc<Mutex<usize>> {
+/// A value listener that records how often it ran. The caller holds the
+/// subscription for the listener's lifetime.
+fn value_counter(
+    controller: &AnimationController,
+) -> (Arc<Mutex<usize>>, flui_foundation::Subscription) {
     let count = Arc::new(Mutex::new(0));
     let sink = Arc::clone(&count);
-    controller.add_listener(std::rc::Rc::new(move || {
+    let listening = controller.listen(std::rc::Rc::new(move || {
         *sink.lock().expect("value count") += 1;
     }));
-    count
+    (count, listening)
 }
 
 fn panicking_value_listener_is_re_raised_after_the_round() {
     let controller = controller();
     let _run = controller.forward().expect("run starts");
-    controller.add_listener(std::rc::Rc::new(|| panic_any("value listener")));
-    let later = value_counter(&controller);
+    let _failing = controller.listen(std::rc::Rc::new(|| panic_any("value listener")));
+    let (later, _listening) = value_counter(&controller);
 
     let ticked = catch_unwind(AssertUnwindSafe(|| {
         controller.tick_at(std::time::Duration::from_secs_f64(0.5));
@@ -204,9 +207,9 @@ fn panicking_value_listener_is_re_raised_after_the_round() {
 fn competing_value_listener_panics_re_raise_the_first() {
     let controller = controller();
     let _run = controller.forward().expect("run starts");
-    controller.add_listener(std::rc::Rc::new(|| panic_any("first")));
-    controller.add_listener(std::rc::Rc::new(|| panic_any("second")));
-    let later = value_counter(&controller);
+    let _first = controller.listen(std::rc::Rc::new(|| panic_any("first")));
+    let _second = controller.listen(std::rc::Rc::new(|| panic_any("second")));
+    let (later, _listening) = value_counter(&controller);
 
     let ticked = catch_unwind(AssertUnwindSafe(|| {
         controller.tick_at(std::time::Duration::from_secs_f64(0.5));
@@ -802,22 +805,26 @@ fn dropping_wrapper_silences_its_tail(kind: &str) {
             let mut lifecycle =
                 AnimationController::builder(Duration::from_secs(1)).build_on(Some(&Vsync::new()));
             let parent = lifecycle.controller().clone();
-            let failure_id = failed.then(|| {
-                if status {
-                    Subscription::Status(
-                        parent.subscribe_status(std::rc::Rc::new(|_| {
+            let failure_id =
+                failed.then(|| {
+                    if status {
+                        Subscription::Status(parent.subscribe_status(std::rc::Rc::new(|_| {
                             panic_any("first parent failure")
-                        })),
-                    )
-                } else {
-                    Subscription::Value(
-                        parent.add_listener(std::rc::Rc::new(|| panic_any("first parent failure"))),
-                    )
-                }
-            });
+                        })))
+                    } else {
+                        Subscription::Value(
+                            parent.listen(std::rc::Rc::new(|| panic_any("first parent failure"))),
+                        )
+                    }
+                });
             let wrapper = make_wrapper(std::rc::Rc::new(parent.clone()), kind);
             let owner = std::rc::Rc::new(std::cell::RefCell::new(None));
             let retire = owner.clone();
+            #[expect(
+                clippy::collection_is_never_read,
+                reason = "the vector only holds the registration while the wrapper retires its own tail; the scope's end withdraws it"
+            )]
+            let mut held = Vec::new();
             if status {
                 wrapper
                     .subscribe_status(std::rc::Rc::new(move |_| {
@@ -825,7 +832,9 @@ fn dropping_wrapper_silences_its_tail(kind: &str) {
                     }))
                     .detach();
             } else {
-                wrapper.add_listener(std::rc::Rc::new(move || drop(retire.borrow_mut().take())));
+                held.push(wrapper.listen(std::rc::Rc::new(move || {
+                    drop(retire.borrow_mut().take());
+                })));
             }
             let drops = Arc::new(AtomicUsize::new(0));
             let captures = failed.then(|| Captures {
@@ -842,10 +851,10 @@ fn dropping_wrapper_silences_its_tail(kind: &str) {
                     }))
                     .detach();
             } else {
-                wrapper.add_listener(std::rc::Rc::new(move || {
+                held.push(wrapper.listen(std::rc::Rc::new(move || {
                     let _ = &captures;
                     observed.set(observed.get() + 1);
-                }));
+                })));
             }
             *owner.borrow_mut() = Some(wrapper);
             let result = catch_unwind(AssertUnwindSafe(|| {
@@ -895,9 +904,7 @@ fn wrapper_keeps_parent_failure_custody(status: bool, kind: &str) {
             parent.subscribe_status(std::rc::Rc::new(|_| panic_any("first parent failure"))),
         )
     } else {
-        Subscription::Value(
-            parent.add_listener(std::rc::Rc::new(|| panic_any("first parent failure"))),
-        )
+        Subscription::Value(parent.listen(std::rc::Rc::new(|| panic_any("first parent failure"))))
     };
     let source: std::rc::Rc<dyn Animation<f64>> = std::rc::Rc::new(parent.clone());
     let wrapper = make_wrapper(source, kind);
@@ -916,25 +923,31 @@ fn wrapper_keeps_parent_failure_custody(status: bool, kind: &str) {
             }));
             drop(id);
         } else {
-            let id = wrapper.add_listener(std::rc::Rc::new(move || {
+            drop(wrapper.listen(std::rc::Rc::new(move || {
                 let _ = &capture;
-            }));
-            wrapper.remove_listener(id);
+            })));
         }
     };
     let removal_id = if status {
         Subscription::Status(wrapper.subscribe_status(std::rc::Rc::new(move |_| retire())))
     } else {
-        Subscription::Value(wrapper.add_listener(std::rc::Rc::new(retire)))
+        Subscription::Value(wrapper.listen(std::rc::Rc::new(retire)))
     };
     let calls = std::rc::Rc::new(std::cell::Cell::new(0));
     let observed = calls.clone();
+    #[expect(
+        clippy::collection_is_never_read,
+        reason = "the vector only holds the registration to the scope's end, where the id form abandoned it"
+    )]
+    let mut held = Vec::new();
     if status {
         wrapper
             .subscribe_status(std::rc::Rc::new(move |_| observed.set(observed.get() + 1)))
             .detach();
     } else {
-        wrapper.add_listener(std::rc::Rc::new(move || observed.set(observed.get() + 1)));
+        held.push(wrapper.listen(std::rc::Rc::new(move || {
+            observed.set(observed.get() + 1);
+        })));
     }
     let failure = catch_unwind(AssertUnwindSafe(|| {
         if status {
@@ -1001,12 +1014,20 @@ fn relay_retirement_case(inside_child: bool, kind: &str, status: bool, competing
             panic_any("first child relay failure");
         }
     });
+    // Registrations abandoned in place, as the id form did: the subscriptions
+    // live to the end of the round; only the status twins `.detach()` their
+    // guard.
+    #[expect(
+        clippy::collection_is_never_read,
+        reason = "the vector only holds the registrations to the scope's end, where the id form abandoned them"
+    )]
+    let mut held = Vec::new();
     if status {
         child
             .subscribe_status(std::rc::Rc::new(move |_| fail()))
             .detach();
     } else {
-        child.add_listener(fail);
+        held.push(child.listen(fail));
     }
     let weak = std::rc::Rc::downgrade(&parent);
     let drops = Arc::new(AtomicUsize::new(0));
@@ -1019,17 +1040,18 @@ fn relay_retirement_case(inside_child: bool, kind: &str, status: bool, competing
     let retire = std::rc::Rc::new(move || {
         let parent = weak.upgrade().expect("live parent");
         let capture = CountDrop(captures.clone());
-        let id = parent.add_listener(std::rc::Rc::new(move || {
+        // Register and withdraw at once; the registration retires under this
+        // retirement's recovery through the owned detach's drop.
+        drop(parent.listen(std::rc::Rc::new(move || {
             let _ = &capture;
-        }));
-        parent.remove_listener(id);
+        })));
     });
     if status {
         removal_source
             .subscribe_status(std::rc::Rc::new(move |_| retire()))
             .detach();
     } else {
-        removal_source.add_listener(retire);
+        held.push(removal_source.listen(retire));
     }
     if competing {
         let fail = armed.clone();
@@ -1043,7 +1065,7 @@ fn relay_retirement_case(inside_child: bool, kind: &str, status: bool, competing
                 .subscribe_status(std::rc::Rc::new(move |_| second_failure()))
                 .detach();
         } else {
-            parent.add_listener(second_failure);
+            held.push(parent.listen(second_failure));
         }
     }
     let calls = std::rc::Rc::new(std::cell::Cell::new(0));
@@ -1054,7 +1076,7 @@ fn relay_retirement_case(inside_child: bool, kind: &str, status: bool, competing
             .subscribe_status(std::rc::Rc::new(move |_| tail()))
             .detach();
     } else {
-        parent.add_listener(tail);
+        held.push(parent.listen(tail));
     }
 
     let values = if status {
@@ -1101,7 +1123,7 @@ fn removed_value_capture_custody(mode: &str) {
     let mut driven = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&vsync));
     let controller = driven.controller().clone();
     let initial_peer_tick = std::cell::Cell::new(true);
-    let peer_failure = peer.add_listener(std::rc::Rc::new(move || {
+    let peer_failing = peer.listen(std::rc::Rc::new(move || {
         if !initial_peer_tick.replace(false) {
             panic_any("first peer failure");
         }
@@ -1127,29 +1149,37 @@ fn removed_value_capture_custody(mode: &str) {
             _first: DropCount(captures.clone()),
             _second: DropCount(captures.clone()),
         };
-        let id = controller.add_listener(std::rc::Rc::new(move || {
+        drop(controller.listen(std::rc::Rc::new(move || {
             let _ = &capture;
-        }));
-        controller.remove_listener(id);
+        })));
     };
-    let failure_id = if mode == "status" {
+    // The failing listener's withdrawal rides out in `failure_id`, as the id
+    // form's `Subscription::Value(id)` did; the retire listener stays
+    // registered for good (the id form's abandoned registration).
+    let (failure_id, _retire_held) = if mode == "status" {
         let id =
             controller.subscribe_status(std::rc::Rc::new(|_| panic_any("first status failure")));
         controller
             .subscribe_status(std::rc::Rc::new(move |_| retire()))
             .detach();
-        Subscription::Status(id)
+        (Subscription::Status(id), None)
     } else {
-        let id = controller.add_listener(std::rc::Rc::new(|| panic_any("first value failure")));
-        if mode == "peer" {
-            controller.remove_listener(id);
-        }
-        controller.add_listener(std::rc::Rc::new(retire));
-        Subscription::Value(id)
+        let failure_subscription =
+            controller.listen(std::rc::Rc::new(|| panic_any("first value failure")));
+        // `peer` withdraws the failing listener now; other modes hold its
+        // withdrawal in the enum, released after the failed round.
+        let failure_held = if mode == "peer" {
+            failure_subscription.detach();
+            flui_foundation::Subscription::inert()
+        } else {
+            failure_subscription
+        };
+        let retire_subscription = controller.listen(std::rc::Rc::new(retire));
+        (Subscription::Value(failure_held), Some(retire_subscription))
     };
     let calls = std::rc::Rc::new(std::cell::Cell::new(0));
     let observed = calls.clone();
-    controller.add_listener(std::rc::Rc::new(move || observed.set(observed.get() + 1)));
+    let _listening = controller.listen(std::rc::Rc::new(move || observed.set(observed.get() + 1)));
     let failure = if mode == "status" {
         catch_unwind(AssertUnwindSafe(|| {
             controller.forward().expect("run admitted");
@@ -1188,7 +1218,7 @@ fn removed_value_capture_custody(mode: &str) {
         "outgoing value captures are dropped under the first failure"
     );
     failure_id.remove(&controller);
-    peer.remove_listener(peer_failure);
+    drop(peer_failing);
     controller.tick_at(std::time::Duration::from_secs_f64(1.0));
     assert_eq!(controller.status(), ForwardSettled);
     assert_eq!(
@@ -1503,12 +1533,6 @@ impl Listenable for ObservedTrain {
     fn listen(&self, listener: ListenerCallback) -> flui_foundation::Subscription {
         self.values.listen(listener)
     }
-    fn add_observer(&self, observer: flui_foundation::ListenerObserver) -> ListenerId {
-        self.value_callbacks
-            .borrow_mut()
-            .push(Rc::downgrade(&observer));
-        self.values.add_observer(observer)
-    }
     fn listen_with_recovery(
         &self,
         relay: flui_foundation::ListenerObserver,
@@ -1517,14 +1541,6 @@ impl Listenable for ObservedTrain {
             .borrow_mut()
             .push(Rc::downgrade(&relay));
         self.values.listen_with_recovery(relay)
-    }
-
-    fn remove_listener(&self, id: ListenerId) {
-        self.values.remove_listener(id);
-    }
-
-    fn remove_all_listeners(&self) {
-        self.values.remove_all_listeners();
     }
 }
 
@@ -1547,7 +1563,7 @@ impl Animation<f64> for ObservedTrain {
             .push(Rc::downgrade(&observer));
         let id = self
             .statuses
-            .add_observer(Rc::new(move |recovery| observer(Forward, recovery)));
+            .add_with_recovery(Rc::new(move |recovery| observer(Forward, recovery)));
         StatusSubscription::new(&self.statuses, id, |source, id, recovery| {
             source.inherit_failure(recovery);
             source.take_listener(id)
@@ -1559,9 +1575,16 @@ fn dispose_before_a_hop_detaches_from_both_trains() {
     let current = ObservedTrain::new(0.8);
     let next = ObservedTrain::new(0.3);
     let changes = Rc::new(Cell::new(0));
+    #[expect(
+        clippy::collection_is_never_read,
+        reason = "the vector only holds the listeners to the scope's end, where the id form abandoned them"
+    )]
+    let mut held = Vec::new();
     for source in [&current, &next] {
         let changes = Rc::clone(&changes);
-        source.add_listener(Rc::new(move || changes.set(changes.get() + 1)));
+        // Both listeners stay registered past the loop, as the id form's
+        // abandoned registrations did.
+        held.push(source.listen(Rc::new(move || changes.set(changes.get() + 1))));
     }
     let current_parent: Rc<dyn Animation<f64>> = current.clone();
     let switch = AnimationSwitch::new(current_parent.clone(), Some(next.clone()));
@@ -1712,18 +1735,6 @@ impl Listenable for SwitchReader {
     ) -> flui_foundation::Subscription {
         self.values.listen_with_recovery(relay)
     }
-    fn add_observer(&self, observer: flui_foundation::ListenerObserver) -> ListenerId {
-        self.values.add_observer(observer)
-    }
-    fn add_listener(&self, callback: ListenerCallback) -> ListenerId {
-        self.values.add_listener(callback)
-    }
-    fn remove_listener(&self, id: ListenerId) {
-        self.values.remove_listener(id);
-    }
-    fn remove_all_listeners(&self) {
-        self.values.remove_all_listeners();
-    }
 }
 
 impl Animation<f64> for SwitchReader {
@@ -1837,13 +1848,15 @@ fn parents() -> Parents {
     Parents { a, b, c }
 }
 
-fn counter(proxy: &ProxyAnimation<f64>) -> Arc<Mutex<usize>> {
+/// A notification listener that records how often the proxy notified. The
+/// caller holds the subscription for the listener's lifetime.
+fn counter(proxy: &ProxyAnimation<f64>) -> (Arc<Mutex<usize>>, flui_foundation::Subscription) {
     let count = Arc::new(Mutex::new(0));
     let sink = Arc::clone(&count);
-    proxy.add_listener(std::rc::Rc::new(move || {
+    let listening = proxy.listen(std::rc::Rc::new(move || {
         *sink.lock().expect("notification count") += 1;
     }));
-    count
+    (count, listening)
 }
 
 fn count(counter: &Arc<Mutex<usize>>) -> usize {
@@ -1853,7 +1866,7 @@ fn count(counter: &Arc<Mutex<usize>>) -> usize {
 fn set_parent_moves_every_notification_to_the_new_parent_once() {
     let Parents { a, b, .. } = parents();
     let proxy = ProxyAnimation::new(std::rc::Rc::new(a.clone()));
-    let values = counter(&proxy);
+    let (values, _listening) = counter(&proxy);
     let (log, listener) = recorder();
     proxy.subscribe_status(listener).detach();
 
@@ -1892,17 +1905,16 @@ fn reentrant_set_parent_last_commit_wins() {
     let proxy = ProxyAnimation::new(std::rc::Rc::new(a));
     let slot: std::rc::Rc<Mutex<Option<PendingSwap>>> = std::rc::Rc::default();
     let pending = std::rc::Rc::clone(&slot);
-    proxy.add_listener(std::rc::Rc::new(move || {
+    let _listening = proxy.listen(std::rc::Rc::new(move || {
         let swap = pending.lock().expect("swap slot").take();
         if let Some((proxy, parent)) = swap {
             proxy.set_parent(std::rc::Rc::new(parent));
         }
     }));
-    let values = counter(&proxy);
+    let (values, _counting) = counter(&proxy);
     let (log, listener) = recorder();
     proxy.subscribe_status(listener).detach();
     *slot.lock().expect("swap slot") = Some((proxy.clone(), c.clone()));
-
     proxy.set_parent(std::rc::Rc::new(b.clone()));
 
     assert_eq!(
