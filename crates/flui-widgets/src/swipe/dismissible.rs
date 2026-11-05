@@ -925,13 +925,12 @@ impl ViewState<Dismissible> for DismissibleState {
             slide_lease: RefCell::new(None),
         });
         let moved = Rc::downgrade(&events);
-        self.offset_listener = Some(self.controller.offset_listenable().listen(Rc::new(
-            move || {
+        self.offset_listener =
+            Some(self.controller.offset_listenable().listen(Rc::new(move || {
                 if let Some(events) = moved.upgrade() {
                     events.moved();
                 }
-            },
-        )));
+            })));
         self.events = Some(events);
         let rebuild = ctx.rebuild_handle();
         self.uncover = Some(UncoverWatch::new(&self.controller, rebuild.clone()));
