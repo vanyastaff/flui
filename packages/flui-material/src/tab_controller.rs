@@ -42,9 +42,9 @@ use flui_sdk::animation::{
     AnimatedValue, AnimatedValueView, Animation as _, Curve as _, MotionSpec, SharedCurve, Vsync,
     curves,
 };
-use flui_sdk::foundation::panic::PanicRecovery;
+use flui_sdk::foundation::panic::{PanicRecovery, RecoveryScope};
 use flui_sdk::foundation::{
-    ChangeNotifier, Listenable, ListenerCallback, ListenerId, ListenerObserver, MutatedDuringBuild,
+    ChangeNotifier, Listenable, ListenerCallback, ListenerObserver, MutatedDuringBuild,
     Subscription,
 };
 use flui_sdk::pipeline::ScrollDirection;
@@ -96,55 +96,28 @@ struct IndexPair {
 /// capture the controller itself.
 type TabChangeListener = Rc<dyn Fn()>;
 
-/// [`TabController`]'s index listener registry.
+/// [`TabController`]'s index listeners: the notification channel, so delivery
+/// takes a snapshot, contains a panicking listener and retires its captures
+/// by the [`ChangeNotifier`]'s one set of rules.
 #[derive(Default)]
 struct TabListenerRegistry {
-    listeners: RefCell<Vec<(ListenerId, TabChangeListener)>>,
-    /// The last id handed out; `ListenerId` is 1-based.
-    last_id: Cell<usize>,
+    listeners: ChangeNotifier,
 }
 
 impl TabListenerRegistry {
-    fn add_listener(&self, listener: TabChangeListener) -> ListenerId {
-        let next = self
-            .last_id
-            .get()
-            .checked_add(1)
-            .expect("BUG: tab listener ids are exhausted");
-        self.last_id.set(next);
-        let id = ListenerId::new(next);
-        self.listeners.borrow_mut().push((id, listener));
-        id
-    }
-
-    fn remove_listener(&self, id: ListenerId) {
-        self.listeners
-            .borrow_mut()
-            .retain(|(entry, _)| *entry != id);
+    fn listen(&self, listener: TabChangeListener) -> Subscription {
+        self.listeners.listen(listener)
     }
 
     fn len(&self) -> usize {
-        self.listeners.borrow().len()
+        self.listeners.len()
     }
 
-    /// Fires every registered listener from a snapshot, so a listener that
-    /// adds or removes a listener does not collide with the borrow.
-    fn notify(&self) {
-        let snapshot: Vec<TabChangeListener> = self
-            .listeners
-            .borrow()
-            .iter()
-            .map(|(_, listener)| Rc::clone(listener))
-            .collect();
-        // Every listener hears the change; the first panic is resumed after.
-        // A snapshot entry may be the last owner of its captures, so it is
-        // released under the same recovery as the call.
-        let mut recovery = PanicRecovery::new();
-        for listener in snapshot {
-            recovery.run(|| listener());
-            recovery.retire(listener);
-        }
-        recovery.finish();
+    /// Fires every registered listener inside `recovery`, so the caller's
+    /// first failure stays first and a panicking listener's captures retire
+    /// under it.
+    fn notify(&self, recovery: &mut RecoveryScope<'_>) {
+        self.listeners.notify_listeners_with_recovery(recovery);
     }
 }
 /// How a selection change moves the position.
@@ -235,8 +208,8 @@ fn default_motion() -> MotionSpec {
 
 impl Shared {
     /// Tell the index listeners and the step actions the selection changed.
-    fn notify_index_changed(&self) {
-        self.index_listeners.notify();
+    fn notify_index_changed(&self, recovery: &mut RecoveryScope<'_>) {
+        self.index_listeners.notify(recovery);
         self.step_changes.notify_listeners();
     }
 
@@ -418,7 +391,7 @@ impl Shared {
             recovery.run(|| self.follow(settled, Change::Animate));
         }
         if committed {
-            recovery.run(|| self.notify_index_changed());
+            self.notify_index_changed(&mut recovery.scope());
         }
         recovery.finish();
     }
@@ -744,7 +717,7 @@ impl TabController {
         // failure is resumed once they have.
         let mut recovery = PanicRecovery::new();
         recovery.run(|| self.shared.follow(index, change));
-        recovery.run(|| self.shared.notify_index_changed());
+        self.shared.notify_index_changed(&mut recovery.scope());
         recovery.finish();
         Ok(())
     }
@@ -753,13 +726,7 @@ impl TabController {
     /// changes. It may capture this same `TabController` to read the
     /// just-updated `(index, previous_index)` pair.
     pub fn listen(&self, listener: impl Fn() + 'static) -> Subscription {
-        let id = self.shared.index_listeners.add_listener(Rc::new(listener));
-        let shared = Rc::downgrade(&self.shared);
-        Subscription::for_removal(move || {
-            if let Some(shared) = shared.upgrade() {
-                shared.index_listeners.remove_listener(id);
-            }
-        })
+        self.shared.index_listeners.listen(Rc::new(listener))
     }
 
     /// The number of currently-registered index listeners, so a consumer's
