@@ -460,9 +460,9 @@ pub fn a_page_change_in_a_collapsed_viewport_reaches_position_observers() {
 
     let heard = Rc::new(Cell::new(0));
     let counter = Rc::clone(&heard);
-    let _observer = controller
+    let _listening = controller
         .position()
-        .add_listener(Rc::new(move || counter.set(counter.get() + 1)));
+        .listen(Rc::new(move || counter.set(counter.get() + 1)));
     controller.set_index(2).expect("no build is running");
 
     assert_eq!(controller.position().value(), 2.0);

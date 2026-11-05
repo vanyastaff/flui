@@ -8,7 +8,7 @@
 
 use crate::common;
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::rc::Rc;
 use std::time::Duration;
@@ -18,7 +18,7 @@ use flui_material::{
     DefaultTabController, Tab, TabBar, TabController, TabIndicatorAnimation, Theme, ThemeData,
 };
 use flui_sdk::animation::{MotionOverride, MotionSpec, SharedCurve, Vsync, curves};
-use flui_sdk::foundation::Listenable as _;
+use flui_sdk::foundation::{Listenable as _, Subscription};
 use flui_sdk::painting::{DrawOp, TextDirection};
 use flui_sdk::rendering::BoxConstraints;
 use flui_sdk::view::BoxedView;
@@ -43,7 +43,7 @@ pub fn a_panicking_position_observer_does_not_hide_the_index_change() {
     let controller = TabController::new(3, 0);
     let heard = Rc::new(Cell::new(0));
     let counter = Rc::clone(&heard);
-    let _index = controller.add_listener(move || counter.set(counter.get() + 1));
+    let _index = controller.listen(move || counter.set(counter.get() + 1));
     let _observer = controller.position().add_listener(Rc::new(panics_once()));
 
     let outcome = catch_unwind(AssertUnwindSafe(|| controller.animate_to(1)));
@@ -179,23 +179,22 @@ impl Drop for PanicsOnDrop {
 /// listeners after it.
 pub fn a_listener_that_removes_itself_and_panics_does_not_skip_the_rest() {
     let controller = TabController::new(3, 0);
-    let own_id = Rc::new(Cell::new(None));
+    let own = Rc::new(RefCell::new(None::<flui_sdk::foundation::Subscription>));
     let capture = PanicsOnDrop;
-    let id = controller.add_listener({
-        let controller = controller.clone();
-        let own_id = Rc::clone(&own_id);
+    let listening = controller.listen({
+        let own = Rc::clone(&own);
         move || {
             let _ = &capture;
-            if let Some(id) = own_id.get() {
-                controller.remove_listener(id);
-            }
+            // The withdrawal goes through the subscription's own drop; the
+            // panic after it still reaches the caller.
+            drop(own.borrow_mut().take());
             panic!("listener failure");
         }
     });
-    own_id.set(Some(id));
+    *own.borrow_mut() = Some(listening);
     let heard = Rc::new(Cell::new(0));
     let counter = Rc::clone(&heard);
-    let _later = controller.add_listener(move || counter.set(counter.get() + 1));
+    let _later = controller.listen(move || counter.set(counter.get() + 1));
 
     let outcome = catch_unwind(AssertUnwindSafe(|| controller.set_index(1)));
 
@@ -697,7 +696,7 @@ pub(crate) fn controller_mutation_during_build_is_refused() {
     let outcome = Rc::new(std::cell::RefCell::new(Vec::new()));
     let notified = Rc::new(Cell::new(0));
     let heard = Rc::clone(&notified);
-    let _listener = controller.add_listener(move || heard.set(heard.get() + 1));
+    let _listener = controller.listen(move || heard.set(heard.get() + 1));
     let tree = |drive: bool| {
         VsyncScope::new(
             vsync.clone(),
@@ -747,7 +746,7 @@ struct SelectionReader {
 struct SelectionReaderState {
     selected: Option<flui_sdk::view::Signal<usize>>,
     controller: TabController,
-    listener: Option<flui_sdk::foundation::ListenerId>,
+    listener: Option<Subscription>,
 }
 
 impl flui_sdk::view::StatefulView for SelectionReader {
@@ -768,7 +767,7 @@ impl flui_sdk::view::ViewState<SelectionReader> for SelectionReaderState {
         let selected = ctx.signal(self.controller.index());
         let writer = ctx.writer_source();
         let heard = self.controller.clone();
-        self.listener = Some(self.controller.add_listener(move || {
+        self.listener = Some(self.controller.listen(move || {
             let index = heard.index();
             // An indicator reads the position too.
             let _ = heard.position().value();
@@ -780,9 +779,7 @@ impl flui_sdk::view::ViewState<SelectionReader> for SelectionReaderState {
     }
 
     fn dispose(&mut self) {
-        if let Some(id) = self.listener.take() {
-            self.controller.remove_listener(id);
-        }
+        drop(self.listener.take());
     }
 
     fn build(

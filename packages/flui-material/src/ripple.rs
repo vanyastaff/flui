@@ -46,7 +46,7 @@ use std::time::Duration;
 
 use flui_sdk::animation::prelude::*;
 use flui_sdk::animation::{Vsync, curves};
-use flui_sdk::foundation::{ChangeNotifier, Listenable};
+use flui_sdk::foundation::{ChangeNotifier, Listenable, Subscription};
 use flui_sdk::geometry::{Point, Rect, Size};
 use flui_sdk::painting::{Canvas, Clip, ClipOp, Color, Paint};
 use flui_sdk::view::prelude::*;
@@ -280,6 +280,8 @@ struct Wave {
     pointer: Option<NonZeroU64>,
     /// Unit progress over [`WAVE_RADIUS`] since the press.
     enter: DrivenController,
+    /// The repaint listener's subscription; detaches with the wave.
+    listening: Subscription,
     /// The fade-out, once released or cancelled.
     exit: Option<WaveExit>,
     /// The fade-in a cancel froze.
@@ -292,6 +294,8 @@ struct WaveExit {
     /// The wait before the fade-out begins: the rest of the fade-in.
     delay_ms: f64,
     total_ms: f64,
+    /// The repaint listener's subscription; detaches with the exit.
+    listening: Subscription,
 }
 
 impl Wave {
@@ -356,22 +360,23 @@ fn duration_ms(duration: Duration) -> f64 {
 }
 
 /// A unit run over `duration` on `vsync`, repainting through `repaint`.
-/// When it settles forward, `settled` re-syncs the state layer.
+/// When it settles forward, `settled` re-syncs the state layer. Returns the
+/// run and the repaint listener's subscription beside it: hold both, drop
+/// both.
 fn start_run(
     label: &'static str,
     duration: Duration,
     vsync: Option<&Vsync>,
     repaint: &Rc<ChangeNotifier>,
     settled: Option<Weak<Indication>>,
-) -> DrivenController {
+) -> (DrivenController, Subscription) {
     let owner = AnimationController::builder(duration)
         .debug_label(label)
         .build_on(vsync);
     let notifier = Rc::clone(repaint);
-    // The listener lives as long as the controller, which this run owns.
-    let _listener = owner
+    let listening = owner
         .controller()
-        .add_listener(Rc::new(move || notifier.notify_listeners()));
+        .listen(Rc::new(move || notifier.notify_listeners()));
     if let Some(indication) = settled {
         // Weak: the run must not keep its owner alive.
         owner
@@ -388,7 +393,7 @@ fn start_run(
     if let Err(error) = owner.controller().forward_from(Some(0.0)) {
         tracing::debug!(?error, label, "InkWell ripple run failed to start");
     }
-    owner
+    (owner, listening)
 }
 
 /// An [`InkWell`](crate::InkWell)'s state layer and ripple, shared by its
@@ -407,6 +412,8 @@ pub(crate) struct Indication {
     /// replaced by the animated one, so a fade-out keeps its hue.
     layer_color: Cell<Option<Color>>,
     waves: RefCell<Vec<Wave>>,
+    /// The layer controller's repaint listener, held for its whole life.
+    layer_listening: RefCell<Option<Subscription>>,
     /// Contacts held on the well: pressed for the state layer while no
     /// wave carries the press.
     contacts: RefCell<Vec<NonZeroU64>>,
@@ -444,8 +451,9 @@ impl Indication {
             let notifier = Rc::clone(&repaint);
             let indication = Weak::clone(this);
             // The listener lives as long as the layer's controller; it holds
-            // the indication weakly.
-            let _listener = layer_view.add_listener(Rc::new(move || {
+            // the indication weakly. The subscription is stored on the
+            // indicated object below.
+            let listening = layer_view.listen(Rc::new(move || {
                 notifier.notify_listeners();
                 if let Some(indication) = indication.upgrade() {
                     indication.detach_when_idle();
@@ -459,6 +467,7 @@ impl Indication {
                 layer_target: Cell::new(0.0),
                 layer_color: Cell::new(None),
                 waves: RefCell::new(Vec::new()),
+                layer_listening: RefCell::new(Some(listening)),
                 contacts: RefCell::new(Vec::new()),
                 vsync: RefCell::new(None),
                 repaint,
@@ -596,16 +605,18 @@ impl Indication {
         }
         if ripples {
             let vsync = self.vsync.borrow().clone();
+            let (enter, listening) = start_run(
+                "InkWell.ripple",
+                WAVE_RADIUS,
+                vsync.as_ref(),
+                &self.repaint,
+                None,
+            );
             let wave = Wave {
                 origin,
                 pointer,
-                enter: start_run(
-                    "InkWell.ripple",
-                    WAVE_RADIUS,
-                    vsync.as_ref(),
-                    &self.repaint,
-                    None,
-                ),
+                enter,
+                listening,
                 exit: None,
                 fade_in_cap: 1.0,
             };
@@ -660,7 +671,7 @@ impl Indication {
         }
         for (index, delay_ms, fade_in) in ending {
             let total_ms = delay_ms + WAVE_FADE_OUT_MS;
-            let run = start_run(
+            let (run, listening) = start_run(
                 "InkWell.ripple_exit",
                 Duration::from_secs_f64(total_ms / 1000.0),
                 vsync.as_ref(),
@@ -676,6 +687,7 @@ impl Indication {
                     run,
                     delay_ms,
                     total_ms,
+                    listening,
                 });
             }
         }

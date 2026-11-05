@@ -230,7 +230,7 @@ impl std::fmt::Debug for InkWell {
 /// Persistent state behind [`InkWell`] — see [`StatefulView`]/[`ViewState`].
 pub struct InkWellState {
     states: WidgetStatesController,
-    states_listener: Option<flui_sdk::foundation::ListenerId>,
+    states_listener: Option<flui_sdk::foundation::Subscription>,
     /// Refreshed every `build()` so the tap closure (built once, reused
     /// across rebuilds via `GestureDetector`'s own slot-refresh — see
     /// `build`) always calls the *current* handler, matching
@@ -272,7 +272,7 @@ impl InkWellState {
     /// layer, on every change.
     fn listen_to_states(&mut self, rebuild: RebuildHandle) {
         let indication = Rc::downgrade(&self.indication);
-        self.states_listener = Some(self.states.add_listener(Rc::new(move || {
+        self.states_listener = Some(self.states.listen(Rc::new(move || {
             if let Some(indication) = indication.upgrade() {
                 indication.sync();
             }
@@ -396,9 +396,7 @@ impl ViewState<InkWell> for InkWellState {
         };
 
         if controller_changed {
-            if let Some(id) = self.states_listener.take() {
-                self.states.remove_listener(id);
-            }
+            drop(self.states_listener.take());
 
             self.states = new_view.states_controller.clone().unwrap_or_default();
             self.indication.set_states(self.states.clone());
@@ -607,9 +605,7 @@ impl ViewState<InkWell> for InkWellState {
     }
 
     fn dispose(&mut self) {
-        if let Some(id) = self.states_listener.take() {
-            self.states.remove_listener(id);
-        }
+        drop(self.states_listener.take());
         Self::cancel_pending_deactivation(&self.pending_deactivation);
         self.indication.dispose();
     }

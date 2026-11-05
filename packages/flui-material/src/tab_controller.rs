@@ -147,7 +147,6 @@ impl TabListenerRegistry {
         recovery.finish();
     }
 }
-
 /// How a selection change moves the position.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Change {
@@ -190,6 +189,8 @@ struct Shared {
     owned: AnimatedValueView<f64>,
     /// A drive requested while the owner was out; the outer drive applies it.
     pending_drive: Cell<Option<(f64, Change)>>,
+    /// The owner's value relay's subscription; lives as long as the owner.
+    position_forwarding: Cell<Option<Subscription>>,
     motion: RefCell<MotionSpec>,
     pager: RefCell<Option<PagerLink>>,
     /// Set while this controller moves the pager. Moving it can stop the
@@ -621,8 +622,8 @@ impl TabController {
         let position_listeners = ChangeNotifier::new();
         let forward = position_listeners.clone();
         // The owner's notifications live as long as the owner, which this
-        // controller holds; the subscription needs no explicit removal.
-        let _forwarding = owned.add_observer(Rc::new(move |recovery| {
+        // controller holds; the subscription is stored on the shared state.
+        let forwarding = owned.listen_with_recovery(Rc::new(move |recovery| {
             forward.notify_listeners_with_recovery(recovery);
         }));
         Self {
@@ -637,6 +638,7 @@ impl TabController {
                 owner: RefCell::new(Some(owner)),
                 owned,
                 pending_drive: Cell::new(None),
+                position_forwarding: Cell::new(Some(forwarding)),
                 motion: RefCell::new(motion),
                 pager: RefCell::new(None),
                 driving_pager: Cell::new(false),
@@ -756,13 +758,14 @@ impl TabController {
     /// Registers a listener, called whenever the selected index actually
     /// changes. It may capture this same `TabController` to read the
     /// just-updated `(index, previous_index)` pair.
-    pub fn add_listener(&self, listener: impl Fn() + 'static) -> ListenerId {
-        self.shared.index_listeners.add_listener(Rc::new(listener))
-    }
-
-    /// Unregisters a previously-registered listener.
-    pub fn remove_listener(&self, id: ListenerId) {
-        self.shared.index_listeners.remove_listener(id);
+    pub fn listen(&self, listener: impl Fn() + 'static) -> Subscription {
+        let id = self.shared.index_listeners.add_listener(Rc::new(listener));
+        let shared = Rc::downgrade(&self.shared);
+        Subscription::for_removal(move || {
+            if let Some(shared) = shared.upgrade() {
+                shared.index_listeners.remove_listener(id);
+            }
+        })
     }
 
     /// The number of currently-registered index listeners, so a consumer's

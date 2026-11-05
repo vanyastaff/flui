@@ -96,7 +96,7 @@ use std::rc::Rc;
 
 use flui_sdk::animation::Vsync;
 use flui_sdk::foundation::panic::PanicRecovery;
-use flui_sdk::foundation::{Listenable, ListenerId};
+use flui_sdk::foundation::{Listenable, Subscription};
 use flui_sdk::geometry::{EdgeInsets, Rect, Size};
 use flui_sdk::painting::{Canvas, Color, Paint, TextDirection, TextStyle};
 use flui_sdk::view::environment::VsyncScope;
@@ -469,7 +469,7 @@ fn label_padding(tab: &Tab, bar_has_mixed_tabs: bool) -> EdgeInsets {
 /// TabBarState`) for exactly when the subscription is re-homed.
 pub struct TabBarState {
     controller: RefCell<Option<TabController>>,
-    listener_id: RefCell<Option<ListenerId>>,
+    listener_id: RefCell<Option<Subscription>>,
     rebuild: Option<RebuildHandle>,
     /// The ambient clock the controller's position runs on.
     vsync: Option<Vsync>,
@@ -545,20 +545,17 @@ impl TabBarState {
 
         if changed {
             let previous_controller = self.controller.borrow_mut().take();
-            let previous_listener = self.listener_id.borrow_mut().take();
-            if let (Some(previous_controller), Some(id)) = (previous_controller, previous_listener)
-            {
-                previous_controller.remove_listener(id);
-            }
+            drop(self.listener_id.borrow_mut().take());
+            let _ = previous_controller;
 
             let rebuild = self
                 .rebuild
                 .clone()
                 .expect("init_state runs before the first build");
-            let id = resolved.add_listener(move || {
+            let listening = resolved.listen(move || {
                 rebuild.schedule(flui_sdk::view::RebuildReason::AnimationTick);
             });
-            *self.listener_id.borrow_mut() = Some(id);
+            *self.listener_id.borrow_mut() = Some(listening);
             let lease = resolved.lease_clock(self.vsync.clone());
             let _previous_lease = self.clock.borrow_mut().replace(lease);
             let _prev = self.controller.borrow_mut().replace(resolved.clone());
@@ -612,11 +609,8 @@ impl ViewState<TabBar> for TabBarState {
     fn dispose(&mut self) {
         drop(self.companion.get_mut().take());
         drop(self.clock.get_mut().take());
-        let controller = self.controller.get_mut().take();
-        let listener_id = self.listener_id.get_mut().take();
-        if let (Some(controller), Some(id)) = (controller, listener_id) {
-            controller.remove_listener(id);
-        }
+        drop(self.listener_id.get_mut().take());
+        let _ = self.controller.get_mut().take();
     }
 
     fn build(&self, view: &TabBar, ctx: &dyn BuildContext) -> impl IntoView {

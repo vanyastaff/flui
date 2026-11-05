@@ -28,7 +28,7 @@ use std::rc::{Rc, Weak};
 use std::time::Duration;
 
 use flui_sdk::foundation::geometry::Offset;
-use flui_sdk::foundation::{ChangeNotifier, Listenable, ListenerId, RebuildReason};
+use flui_sdk::foundation::{ChangeNotifier, RebuildReason};
 use flui_sdk::interaction::{EventTime, GestureArena, PointerEventExt, PointerId};
 use flui_sdk::painting::{Color, TextStyle};
 use flui_sdk::rendering::HitTestBehavior;
@@ -230,7 +230,7 @@ struct OverlayLayerState {
     /// it into `live`.
     controller: GestureOverlayController,
     live: Option<Rc<Live>>,
-    listener: Option<ListenerId>,
+    listener: Option<flui_sdk::foundation::Subscription>,
 }
 
 /// What the observer, the controller's listener and the fade loop share.
@@ -384,19 +384,17 @@ impl OverlayLayerState {
             return;
         };
         let weak: Weak<Live> = Rc::downgrade(live);
-        let id = controller.inner.changed.add_listener(Rc::new(move || {
+        let listener = controller.inner.changed.listen(Rc::new(move || {
             if let Some(live) = weak.upgrade() {
                 let shown = live.controller.borrow().is_shown();
                 live.sync(shown);
             }
         }));
-        self.listener = Some(id);
+        self.listener = Some(listener);
     }
 
     fn unlisten(&mut self) {
-        if let (Some(id), Some(live)) = (self.listener.take(), &self.live) {
-            live.controller.borrow().inner.changed.remove_listener(id);
-        }
+        drop(self.listener.take());
     }
 }
 
