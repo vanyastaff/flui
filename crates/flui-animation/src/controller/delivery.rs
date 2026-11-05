@@ -146,28 +146,27 @@ impl AnimationController {
                     });
                 }
                 ControllerDelivery::Status(status, listeners) => {
-                    let profile = if listeners.is_empty() {
+                    // A dispose between the commit and the turn silences the
+                    // turn: the channel holds no listeners and delivers no
+                    // more, so the per-turn check is what keeps a queued
+                    // status from reaching the unusable channel.
+                    let (disposed, channel) = {
+                        let inner = self.inner.borrow();
+                        (inner.disposed, inner.status_channel.clone())
+                    };
+                    let profile = if disposed || listeners.is_empty() {
                         None
                     } else {
                         Some(crate::observability::ProfileSpan::listeners())
                     };
-                    for (id, callback) in &listeners {
-                        let live = {
-                            let inner = self.inner.borrow();
-                            !inner.disposed
-                                && inner
-                                    .status_listeners
-                                    .iter()
-                                    .any(|(candidate, _)| candidate == id)
-                        };
-                        if live {
-                            retirement.run_classified(FailureClass::Delivery, |recovery| {
-                                (callback.get())(status, recovery);
-                            });
-                        }
-                    }
-                    for (_, callback) in listeners {
-                        retirement.retire_classified(FailureClass::Delivery, callback);
+                    // The channel is cloned out of the state borrow, so a
+                    // listener that reenters a set or a mutation can borrow it
+                    // again: membership resolves by ticket inside the call,
+                    // and the round's retirement keeps the first failure.
+                    if !disposed {
+                        retirement.run_classified(FailureClass::Delivery, |recovery| {
+                            channel.notify_selected_with_recovery(&status, &listeners, recovery);
+                        });
                     }
                     if let Some(profile) = profile {
                         profile.close(retirement);

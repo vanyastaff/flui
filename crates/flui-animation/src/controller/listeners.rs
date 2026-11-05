@@ -1,4 +1,4 @@
-﻿//! Value and status listener registration.
+//! Value and status listener registration.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -6,50 +6,60 @@ use std::rc::Rc;
 use flui_foundation::panic::RecoveryScope;
 use flui_foundation::{Listenable, ListenerCallback, ListenerId};
 
+use crate::StatusObserver;
+use crate::channels::Withdrawn;
+use crate::status::AnimationStatus;
+
 use super::{
     AnimationController, AnimationControllerInner, ControllerDelivery, Opaque, RetiredSources,
 };
-use crate::StatusObserver;
 
 impl AnimationController {
-    pub(super) fn register_status_listener(&self, callback: StatusObserver) -> Option<ListenerId> {
-        let mut callback = Opaque::new(callback);
+    pub(super) fn register_status_listener(&self, listener: StatusObserver) -> Option<ListenerId> {
+        let mut listener = Opaque::new(listener);
         let inner = self.inner.borrow_mut();
         if inner.disposed {
             let mut retired = RetiredSources::new();
-            retired.callbacks.push(callback);
+            retired.refused_status.push(listener);
             Self::retire_after(inner, retired);
             return None;
         }
-        let (id, mut inner) = Self::mint_listener_id(inner);
-        inner.status_listeners.push((id, callback.take()));
+        // Admission runs with the state borrow released: the channel's
+        // exhausted-mint panic reaches reentering hooks while the public
+        // source stays borrowable (ADR-0180). A dispose that lands between
+        // the check and the admission is answered by the channel's own
+        // disposed gate, which admits nothing and names no ticket.
+        drop(inner);
+        let observer = listener.take();
+        let id = self
+            .inner
+            .borrow()
+            .status_channel
+            .add_with_recovery(Rc::new(move |status, recovery| observer(*status, recovery)));
         Some(id)
     }
 
     pub(super) fn withdraw_status_listener(
         source: &RefCell<AnimationControllerInner>,
         id: ListenerId,
-        _recovery: &mut RecoveryScope<'_>,
-    ) -> Option<Opaque<StatusObserver>> {
-        let mut retired;
+        recovery: &mut RecoveryScope<'_>,
+    ) -> Option<Withdrawn<AnimationStatus>> {
+        let mut inner = source.borrow_mut();
+        let taken = inner.status_channel.take_callback(id);
+        if inner.delivering
+            && let Some(callback) = taken
         {
-            let mut inner = source.borrow_mut();
-            retired = inner
-                .status_listeners
-                .iter()
-                .position(|(candidate, _)| *candidate == id)
-                .map(|index| Opaque::new(inner.status_listeners.remove(index).1));
-            if inner.delivering
-                && let Some(callback) = retired.take()
-            {
-                let mut sources = RetiredSources::new();
-                sources.callbacks.push(callback);
-                inner
-                    .pending_delivery
-                    .push_back(ControllerDelivery::Retire(sources));
-            }
+            // A delivery round is draining: its tail retires the capture.
+            let mut sources = RetiredSources::new();
+            sources.status_callbacks.push(callback);
+            inner
+                .pending_delivery
+                .push_back(ControllerDelivery::Retire(sources));
+            return None;
         }
-        retired
+        drop(inner);
+        source.borrow().status_channel.inherit_failure(recovery);
+        taken
     }
 }
 
@@ -61,7 +71,6 @@ impl Listenable for AnimationController {
             // A disposed controller refuses admission: the callback retires
             // under this controller's own custody, and the caller holds the
             // inert subscription (ADR-0180's refusal contract).
-            let (_id, inner) = Self::mint_listener_id(inner);
             let callback = callback.take();
             let mut retired = RetiredSources::new();
             retired.value_callbacks.push(Opaque::new(
@@ -82,7 +91,6 @@ impl Listenable for AnimationController {
         let mut relay = Opaque::new(relay);
         let inner = self.inner.borrow_mut();
         if inner.disposed {
-            let (_id, inner) = Self::mint_listener_id(inner);
             let relay = relay.take();
             let mut retired = RetiredSources::new();
             retired.value_callbacks.push(Opaque::new(

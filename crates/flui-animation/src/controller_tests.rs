@@ -1,10 +1,9 @@
-//! Terminal identity matrices need private counter injection. Outcomes,
-//! refusal atomicity, reentry and recovery use the real controller commands.
+//! Outcomes, refusal atomicity, reentry and recovery use the real controller
+//! commands; run and sample identity matrices take private counter injection.
 
 use super::*;
 use crate::AnimationRunFuture;
 use crate::repeat::RepeatMode;
-use flui_foundation::IdMint;
 use flui_foundation::Listenable;
 
 #[path = "../tests/support/child_process.rs"]
@@ -59,11 +58,10 @@ fn exhausted_run_identities_refuse_without_displacing_the_last_run() {
     }
 }
 
-fn disposed_status_admission_is_inert_even_after_identity_exhaustion() {
+fn disposed_status_admission_is_inert() {
     let mut owner = AnimationController::builder(Duration::from_millis(100)).build_on(None);
     owner.dispose();
     let c = owner.controller();
-    c.inner.borrow_mut().listener_mint = IdMint::starting_after(usize::MAX as u64);
     let drops = Rc::new(std::cell::Cell::new(0));
     struct Capture(Rc<std::cell::Cell<usize>>, AnimationController);
     impl Drop for Capture {
@@ -84,56 +82,8 @@ fn disposed_status_admission_is_inert_even_after_identity_exhaustion() {
 }
 
 #[test]
-fn exhausted_status_identities_refuse_outside_the_state_borrow() {
+fn disposed_value_registrations_retire_their_captures() {
     fn row() {
-        // A child process isolates the process-wide panic hook.
-        thread_local! {
-            #[cfg_attr(target_os = "android", allow(clippy::missing_const_for_thread_local, reason = "Const initializer; Android std macro false positive: https://github.com/rust-lang/rust-clippy/issues/13422"))]
-            static SOURCE: RefCell<Option<AnimationController>> = const { RefCell::new(None) };
-            #[cfg_attr(target_os = "android", allow(clippy::missing_const_for_thread_local, reason = "Const initializer; Android std macro false positive: https://github.com/rust-lang/rust-clippy/issues/13422"))]
-            static HOOK_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-        }
-        let c = controller(100);
-        c.inner.borrow_mut().listener_mint = IdMint::starting_after(usize::MAX as u64 - 1);
-        let calls = Rc::new(std::cell::Cell::new(0));
-        let _last = c.subscribe_status({
-            let calls = Rc::clone(&calls);
-            Rc::new(move |_| calls.set(calls.get() + 1))
-        });
-        SOURCE.with(|source| *source.borrow_mut() = Some(c.clone()));
-        let previous_hook = std::panic::take_hook();
-        std::panic::set_hook(Box::new(|_| {
-            SOURCE.with(|source| {
-                let source = source.borrow();
-                assert!(source.as_ref().expect("hook source").value().is_finite());
-            });
-            HOOK_CALLS.with(|calls| calls.set(calls.get() + 1));
-        }));
-        for _ in 0..2 {
-            let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                c.subscribe_status(Rc::new(|_| panic!("refused callback invoked")))
-            }));
-            assert!(failure.is_err(), "identity refusal remains permanent");
-        }
-        std::panic::set_hook(previous_hook);
-        SOURCE.with(|source| source.borrow_mut().take());
-        HOOK_CALLS.with(|calls| assert_eq!(calls.get(), 2));
-        let _run = c.forward().expect("existing source still makes progress");
-        assert_eq!(calls.get(), 1, "the last accepted registration survives");
-    }
-    child_process::run_single(
-        "controller::tests::exhausted_status_identities_refuse_outside_the_state_borrow",
-        row,
-    );
-}
-
-#[test]
-fn exhausted_disposed_value_identities_refuse_outside_the_state_borrow() {
-    fn row() {
-        thread_local! {
-            #[cfg_attr(target_os = "android", allow(clippy::missing_const_for_thread_local, reason = "Const initializer; Android std macro false positive: https://github.com/rust-lang/rust-clippy/issues/13422"))]
-            static SOURCE: RefCell<Option<AnimationController>> = const { RefCell::new(None) };
-        }
         struct Capture(AnimationController, Rc<std::cell::Cell<usize>>);
         impl Drop for Capture {
             fn drop(&mut self) {
@@ -145,23 +95,8 @@ fn exhausted_disposed_value_identities_refuse_outside_the_state_borrow() {
             let mut owner = AnimationController::builder(Duration::from_millis(100)).build_on(None);
             owner.dispose();
             let c = owner.controller();
-            c.inner.borrow_mut().listener_mint = IdMint::starting_after(usize::MAX as u64 - 1);
-            SOURCE.with(|source| *source.borrow_mut() = Some(c.clone()));
-            let previous_hook = std::panic::take_hook();
-            std::panic::set_hook(Box::new(|_| {
-                SOURCE.with(|source| {
-                    assert!(
-                        source
-                            .borrow()
-                            .as_ref()
-                            .expect("hook source")
-                            .value()
-                            .is_finite()
-                    );
-                });
-            }));
             let drops = Rc::new(std::cell::Cell::new(0));
-            for exhausted in [false, true, true] {
+            for _ in 0..2 {
                 let capture = Capture(c.clone(), Rc::clone(&drops));
                 let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     if observer {
@@ -176,15 +111,9 @@ fn exhausted_disposed_value_identities_refuse_outside_the_state_borrow() {
                         .detach();
                     }
                 }));
-                assert_eq!(
-                    failure.is_err(),
-                    exhausted,
-                    "terminal identity refuses permanently"
-                );
+                assert!(failure.is_ok(), "a disposed refusal stays inert");
             }
-            std::panic::set_hook(previous_hook);
-            SOURCE.with(|source| source.borrow_mut().take());
-            assert_eq!(drops.get(), 3, "every refusal drops its capture");
+            assert_eq!(drops.get(), 2, "every refusal drops its capture");
             assert!(!c.is_animating());
             assert_eq!(c.set_value(0.5), Err(AnimationError::Disposed));
             assert_eq!(
@@ -195,7 +124,7 @@ fn exhausted_disposed_value_identities_refuse_outside_the_state_borrow() {
         }
     }
     child_process::run_single(
-        "controller::tests::exhausted_disposed_value_identities_refuse_outside_the_state_borrow",
+        "controller::tests::disposed_value_registrations_retire_their_captures",
         row,
     );
 }
@@ -248,8 +177,8 @@ impl Simulation for InstantSimulation {
 fn failure_modes_are_contained() {
     crate::test_cases::run_cases(&[
         (
-            "disposed status admission after identity exhaustion",
-            disposed_status_admission_is_inert_even_after_identity_exhaustion,
+            "disposed status admission",
+            disposed_status_admission_is_inert,
         ),
         (
             "exhausted run identities refuse without displacing the last run",

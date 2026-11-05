@@ -32,8 +32,9 @@ use crate::origin::ControllerOrigin;
 use crate::run_future::{RunCompleter, RunDelivery};
 use crate::simulation::{Simulation, SpringDescription, Tolerance};
 use crate::status::AnimationStatus;
+use flui_foundation::notifier_generic::NotificationCallback;
 use flui_foundation::panic::{FailureClass, RecoveryScope};
-use flui_foundation::{ChangeNotifier, IdMint, ListenerId};
+use flui_foundation::{ChangeNotifier, ListenerId, Notifier};
 use smallvec::SmallVec;
 use std::cell::RefCell;
 use std::collections::VecDeque;
@@ -94,7 +95,10 @@ impl<T> Opaque<T> {
 struct RetiredSources {
     simulation: Option<Opaque<SimulationRun>>,
     curve: Option<Opaque<Rc<dyn Curve>>>,
-    callbacks: SmallVec<[Opaque<StatusObserver>; 4]>,
+    /// Status observers a refusal held back: never admitted, so they retire
+    /// through the controller's containment rather than the channel's.
+    refused_status: SmallVec<[Opaque<StatusObserver>; 2]>,
+    status_callbacks: SmallVec<[Rc<NotificationCallback<AnimationStatus>>; 4]>,
     value_callbacks:
         SmallVec<[Opaque<Rc<flui_foundation::notifier_generic::NotificationCallback<()>>>; 4]>,
 }
@@ -106,17 +110,15 @@ impl RetiredSources {
 }
 
 /// Accepted transitions and run outcomes share one controller delivery order.
-/// Snapshot ownership keeps removed callbacks alive until they can retire outside
-/// the state guard, with the round's first failure still authoritative.
+/// The status snapshot carries membership tickets: the channel resolves them
+/// at the turn, silencing withdrawn registrations, and its delivery shares the
+/// round's containment with the round's first failure still authoritative.
 enum ControllerDelivery {
     #[cfg(feature = "diagnostics")]
     Diagnostic(diagnostics::Transition),
     RequestFrame,
     SettleRun(u64),
-    Status(
-        AnimationStatus,
-        SmallVec<[(ListenerId, Terminal<StatusObserver>); 4]>,
-    ),
+    Status(AnimationStatus, SmallVec<[ListenerId; 4]>),
     Run(Terminal<RunDelivery>),
     Retire(RetiredSources),
     RetireRegistry(Terminal<crate::Vsync>),
@@ -271,8 +273,11 @@ struct AnimationControllerInner {
     /// Upper bound (default 1.0).
     upper_bound: f64,
 
-    /// Status listeners, in registration order.
-    status_listeners: Vec<(ListenerId, StatusObserver)>,
+    /// Status listeners, in registration order, on the notification channel:
+    /// the ledger and membership are the channel's, its snapshot tickets name
+    /// the controller's delivery turns, and withdrawal retires through
+    /// `take_callback`.
+    status_channel: Notifier<AnimationStatus>,
 
     pending_delivery: VecDeque<ControllerDelivery>,
     delivering: bool,
@@ -316,10 +321,6 @@ struct AnimationControllerInner {
     /// Is disposed?
     disposed: bool,
 
-    /// Next status-listener ID. The owner-local mint whose refusal is
-    /// sticky: a listener id is never issued twice.
-    listener_mint: IdMint<ListenerId>,
-
     /// Status most recently committed for delivery. The emission seam
     /// ([`enqueue_status_change`](AnimationControllerInner::enqueue_status_change))
     /// compares against this before firing, so a call that leaves `status`
@@ -356,10 +357,7 @@ impl Drop for AnimationControllerInner {
         let run = self.run.take().map(|run| run.retire(&mut sources));
         let simulation = Terminal::new(sources.simulation.take());
         let curve = Terminal::new(sources.curve.take());
-        let callbacks: Vec<_> = std::mem::take(&mut self.status_listeners)
-            .into_iter()
-            .map(|(_, callback)| Terminal::new(callback))
-            .collect();
+        let status_callbacks = self.status_channel.dispose_and_take_callbacks();
         // All physical custody is withdrawn before cancellation or user Drop.
         let mut retirement = Retirement::new();
         let delivery = run.map(RunCompleter::cancel);
@@ -368,7 +366,7 @@ impl Drop for AnimationControllerInner {
         }
         retirement.retire(simulation);
         retirement.retire(curve);
-        for callback in callbacks {
+        for callback in status_callbacks {
             retirement.retire(callback);
         }
         retirement.finish();
@@ -483,7 +481,7 @@ impl AnimationController {
             reverse_duration: None,
             lower_bound,
             upper_bound,
-            status_listeners: Vec::new(),
+            status_channel: Notifier::new(),
             pending_delivery: VecDeque::new(),
             frame_routes: Vec::new(),
             delivering: false,
@@ -505,7 +503,6 @@ impl AnimationController {
             run_start: RunStart::Fresh,
             sample_epoch: 0,
             disposed: false,
-            listener_mint: IdMint::new(),
             last_committed_status: AnimationStatus::ReverseSettled,
             run: None,
             non_finite_warned: false,
@@ -974,12 +971,9 @@ impl AnimationController {
             return None;
         }
         let delivery = inner.take_run(&mut retired).map(RunCompleter::cancel);
-        retired.callbacks.extend(
-            inner
-                .status_listeners
-                .drain(..)
-                .map(|(_, callback)| Opaque::new(callback)),
-        );
+        retired
+            .status_callbacks
+            .extend(inner.status_channel.dispose_and_take_callbacks());
         inner.disposed = true;
         retired.value_callbacks.extend(
             self.notifier
@@ -1012,19 +1006,6 @@ impl AnimationController {
         let mut retirement = Retirement::new();
         retirement.retire(retired);
         retirement.finish();
-    }
-
-    /// A fresh listener identity. Exhaustion is refused permanently, with
-    /// the borrow released before the panic unwinds through user code.
-    fn mint_listener_id(
-        inner: std::cell::RefMut<'_, AnimationControllerInner>,
-    ) -> (ListenerId, std::cell::RefMut<'_, AnimationControllerInner>) {
-        let id = inner.listener_mint.next();
-        let Ok(id) = id else {
-            drop(inner);
-            panic!("BUG: listener identities exhausted");
-        };
-        (id, inner)
     }
 
     /// Report a simulation run that has not settled after `elapsed` run-local
@@ -1215,21 +1196,18 @@ impl AnimationControllerInner {
             && self.sample_epoch == identity.epoch
     }
 
-    /// Admit each distinct committed status with its subscription snapshot.
-    /// Equal adjacent commits are silent; returning to an earlier status after
-    /// an intervening transition still admits that transition.
+    /// Admit each distinct committed status with a membership snapshot of its
+    /// tickets. Equal adjacent commits are silent; returning to an earlier
+    /// status after an intervening transition still admits that transition.
     fn enqueue_status_change(&mut self, status: AnimationStatus) {
         if self.disposed || status == self.last_committed_status {
             return;
         }
         self.last_committed_status = status;
-        let listeners = self
-            .status_listeners
-            .iter()
-            .map(|(id, callback)| (*id, Terminal::new(callback.clone())))
-            .collect();
-        self.pending_delivery
-            .push_back(ControllerDelivery::Status(status, listeners));
+        self.pending_delivery.push_back(ControllerDelivery::Status(
+            status,
+            self.status_channel.listener_ids().into(),
+        ));
     }
 
     /// Effective duration for the current run: a timed run's own duration, a
