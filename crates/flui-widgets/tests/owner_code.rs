@@ -2101,7 +2101,7 @@ fn editable_on_changed_failure_ahead_of_a_nested_one() {
     let field = field(&harness);
     NESTING_FIELD.with(|slot| *slot.borrow_mut() = Some(Rc::clone(&field)));
     let once = Arc::new(AtomicBool::new(false));
-    let listener = controller.add_listener(std::rc::Rc::new(move || {
+    let listener = controller.listen(std::rc::Rc::new(move || {
         if once.swap(true, Ordering::SeqCst) {
             return;
         }
@@ -2111,7 +2111,7 @@ fn editable_on_changed_failure_ahead_of_a_nested_one() {
         }
     }));
     assert_eq!(edit(&*field, "a"), Ok(LockOutcome::Granted));
-    controller.remove_listener(listener);
+    listener.detach();
     NESTING_FIELD.with(|slot| slot.borrow_mut().take());
     assert_eq!(controller.text(), "ab", "both sessions stand");
     assert_eq!(
@@ -2124,8 +2124,6 @@ fn editable_on_changed_failure_ahead_of_a_nested_one() {
 
 fn editable_key_edit_whose_listener_retirement_fails() {
     use flui_foundation::Listenable as _;
-    use std::sync::Mutex;
-
     let controller = TextEditingController::new();
     let node = FocusNode::with_debug_label("key edit");
     let heard = Rc::new(RefCell::new(Vec::new()));
@@ -2135,21 +2133,21 @@ fn editable_key_edit_whose_listener_retirement_fails() {
             .on_changed(move |_cx, text| sink.borrow_mut().push(text.to_owned())),
         &node,
     );
-    // A listener that removes itself; the notification's snapshot is then
-    // its last owner, and its capture panics when destroyed.
-    let own_id = Arc::new(Mutex::new(None));
-    let (remover, own) = (controller.clone(), Arc::clone(&own_id));
-    let capture = Arc::new(Mutex::new(Some(PanicsOnDropSend(
-        "listener capture destroyed",
-    ))));
-    let id = controller.add_listener(std::rc::Rc::new(move || {
-        let _keep_alive = &capture;
-        let id = own.lock().expect("unpoisoned").take();
-        if let Some(id) = id {
-            remover.remove_listener(id);
-        }
-    }));
-    *own_id.lock().expect("unpoisoned") = Some(id);
+    // A listener that drops its own subscription mid-round; the notifier's
+    // retired list is then the callback's last owner, and its capture panics
+    // when the round's tail retires it.
+    let own = Rc::new(RefCell::new(None::<flui_foundation::Subscription>));
+    let capture = PanicsOnDrop("listener capture destroyed");
+    let subscription = controller.listen({
+        let own = Rc::clone(&own);
+        Rc::new(move || {
+            let _keep_alive = &capture;
+            if let Some(own_subscription) = own.borrow_mut().take() {
+                drop(own_subscription);
+            }
+        })
+    });
+    *own.borrow_mut() = Some(subscription);
     let key = flui_interaction::testing::input::KeyEventBuilder::new(
         flui_interaction::events::Code::KeyA,
     )
@@ -2696,7 +2694,7 @@ fn field_rebuilt_by_its_listener(
     node: &Rc<FocusNode>,
     log: &Rc<RefCell<Vec<String>>>,
     rebuilt: EditableText,
-) -> Rc<RefCell<Harness>> {
+) -> (Rc<RefCell<Harness>>, flui_foundation::Subscription) {
     use flui_foundation::Listenable as _;
 
     let harness = Rc::new(RefCell::new(focused(
@@ -2712,13 +2710,13 @@ fn field_rebuilt_by_its_listener(
             }
         }));
     });
-    let _listening = controller.add_listener(std::rc::Rc::new(|| {
+    let listening = controller.listen(std::rc::Rc::new(|| {
         let rebuild = ON_NEXT_CHANGE.with(|slot| slot.borrow_mut().take());
         if let Some(rebuild) = rebuild {
             rebuild();
         }
     }));
-    harness
+    (harness, listening)
 }
 
 /// Types "a" into a field whose controller listener rebuilds it as
@@ -2736,7 +2734,9 @@ fn key_edit_whose_listener_rebuilds_the_field(
     let node = FocusNode::with_debug_label(label);
     let log = Rc::new(RefCell::new(Vec::new()));
     let rebuilt = rebuilt(&controller, &node, &log);
-    let harness = field_rebuilt_by_its_listener(&controller, &node, &log, rebuilt);
+    // The rebuild listener's subscription is held across the whole exercise:
+    // dropping it detaches the listener, and with it the swap that never runs.
+    let (harness, _listening) = field_rebuilt_by_its_listener(&controller, &node, &log, rebuilt);
     let key = flui_interaction::testing::input::KeyEventBuilder::new(
         flui_interaction::events::Code::KeyA,
     )
@@ -3469,7 +3469,7 @@ fn editable_store_outliving_its_field() {
     // The store ends up holding the controller's last handle; a listener
     // capture of it panics when destroyed.
     let listener_capture = std::sync::Mutex::new(PanicsOnDropSend("listener capture destroyed"));
-    let _listener = controller.add_listener(std::rc::Rc::new(move || {
+    let _listener = controller.listen(std::rc::Rc::new(move || {
         let _keep_alive = &listener_capture;
     }));
     let node = FocusNode::with_debug_label("outlived field");
