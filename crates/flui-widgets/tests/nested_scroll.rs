@@ -2405,7 +2405,7 @@ pub(crate) fn a_release_taken_over_by_reentrant_code_still_ends_its_sequence() {
         probe.take();
         laid.replay(&press(device, at(150.0, 150.0)));
         settle(&mut laid);
-        position.remove_activity_listener(listener);
+        listener.detach();
         assert!(!armed.get(), "{device:?}: the settle raised the activity");
         assert_eq!(controller.pixels(), 900.0, "{device:?}: the jump took over");
         let started = probe.started();

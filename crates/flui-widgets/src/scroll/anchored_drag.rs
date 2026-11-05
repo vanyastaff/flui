@@ -31,7 +31,7 @@ use flui_animation::{
 };
 use flui_foundation::geometry::{Axis, Offset, Vec2};
 use flui_foundation::panic::PanicRecovery;
-use flui_foundation::{ChangeNotifier, Listenable, ListenerId, ListenerObserver};
+use flui_foundation::{ChangeNotifier, Listenable, ListenerId, ListenerObserver, Subscription};
 use flui_interaction::{HapticsHandle, InputSequenceId};
 use flui_painting::typography::TextDirection;
 use flui_platform::HapticFeedback;
@@ -327,14 +327,12 @@ struct Inner<K> {
     scroll: ScrollController,
     slot: Rc<LeafSlot>,
     notifier: Rc<ChangeNotifier>,
-    activity: Cell<Option<ListenerId>>,
+    activity: Cell<Option<Subscription>>,
 }
 
 impl<K> Drop for Inner<K> {
     fn drop(&mut self) {
-        if let Some(id) = self.activity.take() {
-            self.scroll.position().remove_activity_listener(id);
-        }
+        drop(self.activity.take());
     }
 }
 

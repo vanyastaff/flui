@@ -158,22 +158,18 @@ enum Change {
 }
 
 /// The attached `TabBarView`'s pager and this controller's subscriptions to
-/// it.
+/// it. Both subscriptions detach when the link is dropped.
 struct PagerLink {
     pager: PageController,
     pixels: Rc<dyn Listenable>,
-    pixel_listener: ListenerId,
-    activity_listener: ListenerId,
+    /// Both held only to detach at the link's drop; no read.
+    #[expect(dead_code, reason = "the subscriptions detach at the link's drop")]
+    pixel_listener: Subscription,
+    #[expect(dead_code, reason = "the subscriptions detach at the link's drop")]
+    activity_listener: Subscription,
 }
 
 impl PagerLink {
-    fn unsubscribe(&self) {
-        self.pixels.remove_listener(self.pixel_listener);
-        self.pager
-            .position()
-            .remove_activity_listener(self.activity_listener);
-    }
-
     fn is(&self, pager: &PageController) -> bool {
         Rc::ptr_eq(&self.pixels, &pager.listenable())
     }
@@ -852,7 +848,7 @@ impl TabController {
         let pager = PageController::with_params(self.index(), ViewportFraction::FULL);
         let pixels = pager.listenable();
         let forward = self.shared.position_listeners.clone();
-        let pixel_listener = pixels.add_observer(Rc::new(move |recovery| {
+        let pixel_listener = pixels.listen_with_recovery(Rc::new(move |recovery| {
             forward.notify_listeners_with_recovery(recovery);
         }));
         let weak = Rc::downgrade(&self.shared);
@@ -926,7 +922,7 @@ impl Drop for PagerAttachment {
             }
         };
         if let Some(link) = link {
-            link.unsubscribe();
+            drop(link);
             shared.drive_owner(shared.index() as f64, Change::Jump);
         }
     }

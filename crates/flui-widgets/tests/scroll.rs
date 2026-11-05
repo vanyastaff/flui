@@ -1032,7 +1032,7 @@ pub(crate) fn stopping_scroll_motion_preserves_commands_admitted_by_activity_obs
             if newer_jumps { 325.0 } else { 275.0 },
             "newer mounted command survives the older cancellation tail"
         );
-        controller.position().remove_activity_listener(listener);
+        listener.detach();
     }
 }
 
@@ -1805,7 +1805,7 @@ pub(crate) fn replacing_vsync_releases_old_seats_and_drives_fresh_contacts() {
                 "{family}: replacement Vsync cannot drive fresh inertia"
             ));
         }
-        position.remove_activity_listener(activity_listener);
+        activity_listener.detach();
     }
     assert!(failures.is_empty(), "{}", failures.join("; "));
 }
@@ -1939,7 +1939,7 @@ pub(crate) fn replacing_a_scroll_position_cancels_its_contact_and_recovers() {
         );
         laid.dispatch_pointer_cancel();
         assert!(!incoming.is_scrolling());
-        incoming.remove_activity_listener(subscription);
+        drop(subscription);
     }
     assert!(failures.is_empty(), "{}", failures.join("; "));
 }

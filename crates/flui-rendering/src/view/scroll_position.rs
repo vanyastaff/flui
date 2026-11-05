@@ -755,18 +755,13 @@ impl ScrollPosition {
     /// Subscribe to activity transitions (scrolling started/stopped, user
     /// direction changed). The pixel [`Listenable`] is deliberately a
     /// different sink — see the `activity` field's own doc.
+    ///
+    /// The subscription detaches on drop; `detach` for an early exit.
     pub fn add_activity_listener(
         &self,
         listener: flui_foundation::ListenerCallback,
-    ) -> flui_foundation::ListenerId {
-        use flui_foundation::Listenable as _;
-        self.inner.activity_notifier.add_listener(listener)
-    }
-
-    /// Remove an activity subscription.
-    pub fn remove_activity_listener(&self, id: flui_foundation::ListenerId) {
-        use flui_foundation::Listenable as _;
-        self.inner.activity_notifier.remove_listener(id);
+    ) -> flui_foundation::Subscription {
+        self.inner.activity_notifier.listen(listener)
     }
 
     /// Returns an `Rc<dyn Listenable>` sharing this position's notification channel.
