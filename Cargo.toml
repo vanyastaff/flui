@@ -945,12 +945,10 @@ name = "agent_workflow"
 path = "tests/agent_workflow.rs"
 required-features = ["testing", "material"]
 
-# The escape hatch's surface: each `flui::native` item through its facade path,
-# and a window of each host narrowed through it.
+# Feature-gated facade surfaces: the native escape hatch and capability crates.
 [[test]]
 name = "surface"
 path = "tests/surface.rs"
-required-features = ["native"]
 
 # UI-runtime-bound handles refuse `std::thread::spawn` (compile-fail fixtures under
 # `tests/ui/thread_boundary/`), and the facade hides the unstable input vocabulary

@@ -490,9 +490,11 @@ first capability crate that needs them.
 
 ## More information
 
-- **Not implemented.** The workspace rule, the `flui-cli` support and the first crate,
-  `flui-system`, land together (decision 12); the declarations, the verify mode and `flui add`
-  land with the first capability crate that needs them.
+- **Implemented.** `flui-system` is the first crate; `flui add system` enables the facade feature
+  and shows the registration. `cargo xtask workspace` requires every capability crate to be the
+  facade's optional normal dependency, with `<service> = ["dep:<crate>"]` as its only feature
+  entry; its self-test plants a mandatory dependency, a missing feature and a wrong feature.
+  `cargo xtask facade-combos` builds each capability feature on its own.
 - **Open until the first crate that needs it.** The schema in decision 7 is illustrative, and its
   keys are fixed with the first crate that needs a declaration; Win32 has nothing in the host
   bridge until a capability has a consumer for a message hook (decision 9, item 4); each later

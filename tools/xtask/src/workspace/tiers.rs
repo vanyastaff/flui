@@ -7,7 +7,9 @@
 //! dependencies are [`SDK_SURFACE`]; a member under `packages/` is an
 //! official package with no `edge-exceptions`. A refused edge is admitted by
 //! the dependent's `edge-exceptions`, as for the tier rule, and an entry that
-//! admits nothing either rule refuses is stale.
+//! admits nothing either rule refuses is stale. A capability crate is the
+//! facade's optional normal dependency, enabled alone by its service feature
+//! (ADR-0154 §8).
 //!
 //! The rule itself is pure over [`Members`], so `--self-test` runs it on a
 //! built-in graph without cargo or a disk; only the exit citations of
@@ -152,6 +154,16 @@ pub(super) enum Finding {
     /// or build dependency, or another capability crate names it in any
     /// kind: a capability crate is a leaf below the facade (ADR-0154 §1).
     CapabilityNotLeaf { from: String, to: String },
+    /// The facade links a capability crate without `optional = true`, so an
+    /// application that did not enable the capability still builds it.
+    CapabilityNotOptional { from: String, to: String },
+    /// A capability crate has no facade feature of its service name, or that
+    /// feature does not enable exactly the capability's optional dependency.
+    CapabilityFeature {
+        name: String,
+        feature: String,
+        enables: String,
+    },
     /// An `edge-exceptions` entry for an edge the rule admits or that does
     /// not exist.
     Stale { from: String, to: String },
@@ -221,6 +233,12 @@ impl Finding {
             }
             Self::CapabilityNotLeaf { from, to } => {
                 (from.clone(), to.clone(), "capability not leaf")
+            }
+            Self::CapabilityNotOptional { from, to } => {
+                (from.clone(), to.clone(), "capability not optional")
+            }
+            Self::CapabilityFeature { name, feature, .. } => {
+                (name.clone(), feature.clone(), "capability feature")
             }
             Self::Stale { from, to } => (from.clone(), to.clone(), "stale exception"),
             Self::BadExit { from, to, .. } => (from.clone(), to.clone(), "bad exit"),
@@ -323,6 +341,20 @@ impl fmt::Display for Finding {
                 "{from} depends on {to}, a capability crate: only the facade names one in a \
                  normal or build dependency, and no capability crate names another in any kind \
                  (ADR-0154 §1); list it in `edge-exceptions` with the ADR that removes the edge"
+            ),
+            Self::CapabilityNotOptional { from, to } => write!(
+                f,
+                "{from} depends on {to} without `optional = true`: a capability crate is linked \
+                 only when an application enables its facade feature (ADR-0154 §8)"
+            ),
+            Self::CapabilityFeature {
+                name,
+                feature,
+                enables,
+            } => write!(
+                f,
+                "capability crate {name} needs `{feature} = [\"{enables}\"]` in the facade's \
+                 `[features]`, enabling its optional normal dependency (ADR-0154 §8)"
             ),
             Self::Stale { from, to } => write!(
                 f,
@@ -526,6 +558,8 @@ pub(super) fn check_tiers(members: &Members, tiers: &[String]) -> Vec<Finding> {
         }
     }
 
+    findings.extend(capability_facade_findings(members));
+
     for member in members.iter() {
         let mut seen = BTreeSet::new();
         for entry in &member.edge_exceptions {
@@ -543,6 +577,55 @@ pub(super) fn check_tiers(members: &Members, tiers: &[String]) -> Vec<Finding> {
                     exit: entry.exit.clone(),
                 });
             }
+        }
+    }
+    findings
+}
+
+/// Every capability crate is an optional normal dependency of the facade,
+/// enabled by the feature of its service name (`flui-system` → `system`). The
+/// feature enables that dependency alone, so it cannot turn on unrelated
+/// framework code (ADR-0154 §8).
+fn capability_facade_findings(members: &Members) -> Vec<Finding> {
+    let by_name = members.by_name();
+    let Some(facade) = by_name.get(FACADE).copied() else {
+        return Vec::new();
+    };
+    let mut findings = Vec::new();
+    for capability in members
+        .iter()
+        .filter(|member| member.tier_kind.as_deref() == Some(CAPABILITY))
+    {
+        let feature = capability
+            .name()
+            .strip_prefix("flui-")
+            .unwrap_or(capability.name())
+            .to_owned();
+        let enables = format!("dep:{}", capability.name);
+        let mut linked = false;
+        let mut mandatory = false;
+        for dep in facade
+            .repo_deps()
+            .filter(|dep| dep.kind != DependencyKind::Development && dep.name == capability.name)
+        {
+            linked |= dep.kind == DependencyKind::Normal;
+            mandatory |= !dep.optional;
+        }
+        if mandatory {
+            findings.push(Finding::CapabilityNotOptional {
+                from: facade.name.clone(),
+                to: capability.name.clone(),
+            });
+        }
+        let correct_feature = facade.features.get(&feature).is_some_and(|enabled| {
+            enabled.len() == 1 && enabled.first().is_some_and(|actual| actual == &enables)
+        });
+        if !linked || !correct_feature {
+            findings.push(Finding::CapabilityFeature {
+                name: capability.name.clone(),
+                feature,
+                enables,
+            });
         }
     }
     findings
@@ -687,9 +770,11 @@ fn node(rel: &str, flui: &Json, deps: &[(&str, DependencyKind)]) -> Node {
             .map(|&(name, kind)| Dep {
                 name: name.to_owned(),
                 kind,
+                optional: false,
                 in_repo: true,
             })
             .collect(),
+        features: BTreeMap::new(),
     }
 }
 
@@ -755,6 +840,45 @@ fn self_test_members() -> Members {
     let (cap1_rel, cap1) = krate("cap1", "pkg", 10, CAPABILITY);
     let (cap2_rel, cap2) = krate("cap2", "pkg", 11, CAPABILITY);
     let (cap_tier_rel, cap_tier) = krate("cap-tier", "K", 9, CAPABILITY);
+    let (cap_mandatory_rel, cap_mandatory) = krate("cap-mandatory", "pkg", 12, CAPABILITY);
+    let (cap_no_feature_rel, cap_no_feature) = krate("cap-no-feature", "pkg", 13, CAPABILITY);
+    let (cap_wrong_feature_rel, cap_wrong_feature) =
+        krate("cap-wrong-feature", "pkg", 14, CAPABILITY);
+    let (cap_service_rel, cap_service) = krate("flui-system", "pkg", 15, CAPABILITY);
+    let expose = |facade: &mut Node, capability: &str, optional: bool, enables: Option<&str>| {
+        facade.deps.push(Dep {
+            name: capability.to_owned(),
+            kind: Normal,
+            optional,
+            in_repo: true,
+        });
+        if let Some(enables) = enables {
+            facade
+                .features
+                .insert(capability.to_owned(), vec![enables.to_owned()]);
+        }
+    };
+    let mut facade_node = node(&facade_rel, &facade, &[]);
+    expose(&mut facade_node, "cap1", true, Some("dep:cap1"));
+    expose(&mut facade_node, "cap2", true, Some("dep:cap2"));
+    expose(&mut facade_node, "cap-tier", true, Some("dep:cap-tier"));
+    expose(
+        &mut facade_node,
+        "cap-mandatory",
+        false,
+        Some("dep:cap-mandatory"),
+    );
+    expose(&mut facade_node, "cap-no-feature", true, None);
+    expose(
+        &mut facade_node,
+        "cap-wrong-feature",
+        true,
+        Some("dep:cap1"),
+    );
+    expose(&mut facade_node, "flui-system", true, None);
+    facade_node
+        .features
+        .insert("system".to_owned(), vec!["dep:flui-system".to_owned()]);
     let guard = |mut node: Node| {
         node.links = Some(TRAIN_LINKS.to_owned());
         node
@@ -815,8 +939,9 @@ fn self_test_members() -> Members {
             &[("h1", Normal), ("pkg1", Normal)],
         ),
         node("tools/t1/Cargo.toml", &tool, &[]),
-        // silent: the facade names a capability crate, upward but admitted
-        node(&facade_rel, &facade, &[("cap1", Normal)]),
+        // silent: the facade names capability crates, upward but admitted;
+        // planted: one mandatory edge, one missing feature, one wrong feature
+        facade_node,
         // silent: a capability crate on the SDK and a dev edge off it;
         // planted: its normal edge off the contract
         node(
@@ -828,6 +953,11 @@ fn self_test_members() -> Members {
         node(&cap2_rel, &cap2, &[("cap1", Dev)]),
         // planted: a capability crate outside tier pkg
         node(&cap_tier_rel, &cap_tier, &[]),
+        node(&cap_mandatory_rel, &cap_mandatory, &[]),
+        node(&cap_no_feature_rel, &cap_no_feature, &[]),
+        node(&cap_wrong_feature_rel, &cap_wrong_feature, &[]),
+        // silent: the crate's `flui-` prefix is not part of its feature
+        node(&cap_service_rel, &cap_service, &[]),
         // planted: a core crate names a capability crate (upward, and not
         // the facade)
         crate_node("k-cap", "K", 7, &[("cap1", Normal)]),
@@ -838,7 +968,14 @@ fn self_test_members() -> Members {
 }
 
 /// The finding each planted violation must produce, and no other.
-const EXPECTED: [(&str, &str, &str); 22] = [
+const EXPECTED: [(&str, &str, &str); 25] = [
+    (FACADE, "cap-mandatory", "capability not optional"),
+    ("cap-no-feature", "cap-no-feature", "capability feature"),
+    (
+        "cap-wrong-feature",
+        "cap-wrong-feature",
+        "capability feature",
+    ),
     ("cap1", "v1", "capability off contract"),
     ("cap2", "cap1", "capability not leaf"),
     ("k-cap", "cap1", "capability not leaf"),

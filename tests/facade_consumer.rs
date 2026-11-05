@@ -179,6 +179,10 @@ fn ordinary_facade_graph_excludes_test_support() {
             "test driver in default={defaults} normal graph:\n{graph}"
         );
         assert!(
+            !graph.lines().any(|line| line.starts_with("flui-system ")),
+            "system capability in default={defaults} normal graph:\n{graph}"
+        );
+        assert!(
             !graph
                 .lines()
                 .any(|line| line.starts_with("flui-hot-reload ")),

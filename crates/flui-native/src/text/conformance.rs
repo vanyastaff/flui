@@ -4,7 +4,7 @@
 //! backend makes of them in the focused field's store. The platform's side
 //! of the conversation (what the client sends back) is a silent stand-in.
 //!
-//! - [`TextInputV3`]: `zwp_text_input_v3`'s events on Wayland, which the X11
+//! - `TextInputV3`: `zwp_text_input_v3`'s events on Wayland, which the X11
 //!   host's IBus, Fcitx5 and XIM contexts are translated into as well;
 //! - [`AppKitClient`]: `NSTextInputClient`'s verbs on macOS, and UIKit's on iOS;
 //! - [`TsfDocument`]: what a TSF text service does under one read-write lock
