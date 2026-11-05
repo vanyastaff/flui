@@ -521,6 +521,9 @@ impl Listenable for Shared {
     fn listen(&self, listener: ListenerCallback) -> Subscription {
         self.position_listeners.listen(listener)
     }
+    fn listen_with_recovery(&self, relay: ListenerObserver) -> Subscription {
+        self.position_listeners.listen_with_recovery(relay)
+    }
     fn add_observer(&self, observer: ListenerObserver) -> ListenerId {
         self.position_listeners.add_observer(observer)
     }
@@ -976,6 +979,9 @@ impl TabPosition {
 impl Listenable for TabPosition {
     fn listen(&self, listener: ListenerCallback) -> Subscription {
         self.shared.listen(listener)
+    }
+    fn listen_with_recovery(&self, relay: ListenerObserver) -> Subscription {
+        Listenable::listen_with_recovery(&*self.shared, relay)
     }
     fn add_observer(&self, observer: ListenerObserver) -> ListenerId {
         self.shared.add_observer(observer)

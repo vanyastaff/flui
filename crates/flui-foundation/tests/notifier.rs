@@ -554,6 +554,12 @@ fn adapted_listener_propagates_after_healthy_tail() {
         ) -> flui_foundation::Subscription {
             self.0.listen(listener)
         }
+        fn listen_with_recovery(
+            &self,
+            relay: flui_foundation::ListenerObserver,
+        ) -> flui_foundation::Subscription {
+            self.0.listen_with_recovery(relay)
+        }
         fn add_observer(&self, observer: flui_foundation::ListenerObserver) -> ListenerId {
             self.0.add_observer(observer)
         }

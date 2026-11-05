@@ -96,6 +96,15 @@ where
         // names no channel and detaches nothing.
         flui_foundation::Subscription::inert()
     }
+
+    fn listen_with_recovery(
+        &self,
+        _relay: flui_foundation::notifier::ListenerObserver,
+    ) -> flui_foundation::Subscription {
+        // Nothing to hear: the value never changes. Dropping the inert
+        // subscription retires the relay right away.
+        flui_foundation::Subscription::inert()
+    }
     fn add_listener(&self, _callback: ListenerCallback) -> ListenerId {
         // No registration is admitted. The returned id names nothing: no
         // registration is ever looked up against it, and this impl's own

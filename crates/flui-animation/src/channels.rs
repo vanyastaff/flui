@@ -70,6 +70,12 @@ impl Channels {
         self.values.listen(listener)
     }
 
+    /// Subscribe an owned relay on the value channel, inside the value
+    /// delivery's recovery scope; the subscription detaches on drop.
+    pub(crate) fn listen_with_recovery(&self, relay: ListenerObserver) -> Subscription {
+        self.values.listen_with_recovery(relay)
+    }
+
     /// Withdraw a value listener; its captures retire through `recovery`.
     pub(crate) fn remove_listener_with_recovery(
         &self,

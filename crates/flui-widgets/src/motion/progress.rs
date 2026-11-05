@@ -90,6 +90,9 @@ impl Listenable for Progress {
     fn listen(&self, listener: flui_foundation::ListenerCallback) -> flui_foundation::Subscription {
         self.changes.listen(listener)
     }
+    fn listen_with_recovery(&self, relay: ListenerObserver) -> flui_foundation::Subscription {
+        Listenable::listen_with_recovery(&self.changes, relay)
+    }
     fn add_observer(&self, observer: ListenerObserver) -> ListenerId {
         self.changes.add_observer(observer)
     }

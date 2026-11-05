@@ -98,6 +98,12 @@ impl Listenable for ToolbarItemsController {
     fn listen(&self, listener: ListenerCallback) -> flui_foundation::Subscription {
         self.inner.notifier.listen(listener)
     }
+    fn listen_with_recovery(
+        &self,
+        relay: flui_foundation::ListenerObserver,
+    ) -> flui_foundation::Subscription {
+        self.inner.notifier.listen_with_recovery(relay)
+    }
     fn add_observer(&self, observer: flui_foundation::ListenerObserver) -> ListenerId {
         self.inner.notifier.add_observer(observer)
     }

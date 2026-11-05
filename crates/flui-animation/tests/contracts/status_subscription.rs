@@ -149,6 +149,12 @@ impl Listenable for ChannelSource {
     fn listen(&self, listener: ListenerCallback) -> flui_foundation::Subscription {
         self.values.listen(listener)
     }
+    fn listen_with_recovery(
+        &self,
+        relay: flui_foundation::ListenerObserver,
+    ) -> flui_foundation::Subscription {
+        self.values.listen_with_recovery(relay)
+    }
     fn add_observer(&self, observer: flui_foundation::ListenerObserver) -> ListenerId {
         self.values.add_observer(observer)
     }

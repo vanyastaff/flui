@@ -1063,6 +1063,12 @@ impl Listenable for TextEditingController {
     fn listen(&self, listener: flui_foundation::ListenerCallback) -> flui_foundation::Subscription {
         self.notifier.listen(listener)
     }
+    fn listen_with_recovery(
+        &self,
+        relay: flui_foundation::ListenerObserver,
+    ) -> flui_foundation::Subscription {
+        self.notifier.listen_with_recovery(relay)
+    }
     fn add_observer(&self, observer: flui_foundation::ListenerObserver) -> ListenerId {
         self.notifier.add_observer(observer)
     }

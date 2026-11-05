@@ -1509,6 +1509,13 @@ impl Listenable for ObservedTrain {
             .push(Rc::downgrade(&observer));
         self.values.add_observer(observer)
     }
+    fn listen_with_recovery(
+        &self,
+        relay: flui_foundation::ListenerObserver,
+    ) -> flui_foundation::Subscription {
+        self.value_callbacks.borrow_mut().push(Rc::downgrade(&relay));
+        self.values.listen_with_recovery(relay)
+    }
 
     fn remove_listener(&self, id: ListenerId) {
         self.values.remove_listener(id);
@@ -1696,6 +1703,12 @@ impl std::fmt::Debug for SwitchReader {
 impl Listenable for SwitchReader {
     fn listen(&self, listener: ListenerCallback) -> flui_foundation::Subscription {
         self.values.listen(listener)
+    }
+    fn listen_with_recovery(
+        &self,
+        relay: flui_foundation::ListenerObserver,
+    ) -> flui_foundation::Subscription {
+        self.values.listen_with_recovery(relay)
     }
     fn add_observer(&self, observer: flui_foundation::ListenerObserver) -> ListenerId {
         self.values.add_observer(observer)

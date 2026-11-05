@@ -255,6 +255,23 @@ impl<Arg> Notifier<Arg> {
         let channel: Rc<dyn SubscribedChannel> = self.listeners.clone();
         crate::notifier::Subscription::for_channel(Rc::downgrade(&channel), id)
     }
+    /// Subscribe a [`RecoveryCallback`] under an owned
+    /// [`Subscription`](crate::notifier::Subscription): hold it, and the
+    /// relay fires on every [`notify`](Self::notify), borrowing each
+    /// delivery's recovery scope; drop it, and the relay detaches from this
+    /// channel. The relay's custody matches [`add_with_recovery`](Self::add_with_recovery)'s.
+    pub fn listen_with_recovery(
+        &self,
+        relay: RecoveryCallback<Arg>,
+    ) -> crate::notifier::Subscription
+    where
+        Arg: 'static,
+    {
+        let id = self.add_with_recovery(relay);
+        let channel: Rc<dyn SubscribedChannel> = self.listeners.clone();
+        crate::notifier::Subscription::for_channel(Rc::downgrade(&channel), id)
+    }
+
     /// [`Self::add`] without the disposed gate — for wrappers
     /// (`ChangeNotifier`) that run their own differently-branded entry check
     /// first. A second gate here would turn a `dispose` racing in between the

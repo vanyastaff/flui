@@ -512,6 +512,12 @@ impl Listenable for AnimationSwitch {
     fn listen(&self, listener: ListenerCallback) -> flui_foundation::Subscription {
         self.owner.channels.listen(listener)
     }
+    fn listen_with_recovery(
+        &self,
+        relay: flui_foundation::notifier::ListenerObserver,
+    ) -> flui_foundation::Subscription {
+        self.owner.channels.listen_with_recovery(relay)
+    }
     fn add_observer(&self, observer: flui_foundation::notifier::ListenerObserver) -> ListenerId {
         self.owner.channels.add_observer(observer)
     }

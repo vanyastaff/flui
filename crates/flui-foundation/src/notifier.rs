@@ -79,6 +79,15 @@ pub trait Listenable {
     /// observer borrows that delivery's failure custody rather than a fresh one.
     fn add_observer(&self, observer: ListenerObserver) -> ListenerId;
 
+    /// Register a relay that runs inside the notifying delivery's
+    /// [`RecoveryScope`] under an owned [`Subscription`]: the owned twin of
+    /// [`add_observer`](Self::add_observer) (ADR-0219's required observer). A
+    /// source forwards it to the channel that notifies, so the relay borrows
+    /// that delivery's failure custody rather than a fresh one. Hold the
+    /// returned [`Subscription`], and the relay fires on every notification;
+    /// drop it, and the relay detaches from its own channel.
+    fn listen_with_recovery(&self, relay: ListenerObserver) -> Subscription;
+
     /// Register a listener callback.
     ///
     /// An observer that ignores the scope; a panic in it is still contained
@@ -376,6 +385,14 @@ impl ChangeNotifier {
         self.inner.listen(listener)
     }
 
+    /// Subscribe an owned relay that runs inside the notifying delivery's
+    /// [`RecoveryScope`]: the owned twin of
+    /// [`add_observer`](Self::add_observer).
+    pub fn listen_with_recovery(&self, relay: ListenerObserver) -> Subscription {
+        self.inner
+            .listen_with_recovery(Rc::new(move |&(), recovery| relay(recovery)))
+    }
+
     /// Checks if there are no listeners registered
     #[must_use]
     #[inline]
@@ -394,6 +411,10 @@ impl ChangeNotifier {
 impl Listenable for ChangeNotifier {
     fn listen(&self, listener: ListenerCallback) -> Subscription {
         self.inner.listen(listener)
+    }
+    fn listen_with_recovery(&self, relay: ListenerObserver) -> Subscription {
+        self.inner
+            .listen_with_recovery(Rc::new(move |&(), recovery| relay(recovery)))
     }
     fn add_observer(&self, observer: ListenerObserver) -> ListenerId {
         self.inner
@@ -704,6 +725,9 @@ impl<T> AsRef<T> for ValueNotifier<T> {
 impl<T> Listenable for ValueNotifier<T> {
     fn listen(&self, listener: ListenerCallback) -> Subscription {
         self.notifier().listen(listener)
+    }
+    fn listen_with_recovery(&self, relay: ListenerObserver) -> Subscription {
+        self.notifier().listen_with_recovery(relay)
     }
     fn add_observer(&self, observer: ListenerObserver) -> ListenerId {
         self.notifier().add_observer(observer)

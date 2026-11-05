@@ -807,6 +807,12 @@ mod tests {
         ) -> flui_foundation::Subscription {
             self.1.listen(listener)
         }
+        fn listen_with_recovery(
+            &self,
+            relay: flui_foundation::ListenerObserver,
+        ) -> flui_foundation::Subscription {
+            self.1.listen_with_recovery(relay)
+        }
         fn add_observer(&self, observer: flui_foundation::ListenerObserver) -> ListenerId {
             self.1.add_observer(observer)
         }

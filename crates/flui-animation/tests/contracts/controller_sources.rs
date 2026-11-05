@@ -1124,6 +1124,15 @@ impl Listenable for TerminalParent {
         let _ = listener;
         flui_foundation::Subscription::inert()
     }
+    fn listen_with_recovery(
+        &self,
+        observer: flui_foundation::ListenerObserver,
+    ) -> flui_foundation::Subscription {
+        self.add_observer(observer);
+        // The test's own ledger withdraws by its own identity; the owned
+        // subscription names no foundation channel, as `listen` says.
+        flui_foundation::Subscription::inert()
+    }
     fn add_observer(&self, observer: flui_foundation::ListenerObserver) -> ListenerId {
         self.add_listener(Rc::new(move || {
             flui_foundation::panic::RecoveryScope::boundary(|recovery| observer(recovery));

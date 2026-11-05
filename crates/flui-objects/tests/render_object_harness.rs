@@ -437,6 +437,12 @@ impl flui_foundation::Listenable for RemovalNotifier {
     fn listen(&self, listener: flui_foundation::ListenerCallback) -> flui_foundation::Subscription {
         self.source.listen(listener)
     }
+    fn listen_with_recovery(
+        &self,
+        relay: flui_foundation::notifier::ListenerObserver,
+    ) -> flui_foundation::Subscription {
+        flui_foundation::Listenable::listen_with_recovery(&self.source, relay)
+    }
     fn add_observer(
         &self,
         observer: flui_foundation::notifier::ListenerObserver,
@@ -4337,6 +4343,12 @@ impl flui_foundation::Listenable for ScriptedAnimation {
     fn listen(&self, listener: flui_foundation::ListenerCallback) -> flui_foundation::Subscription {
         self.controller.listen(listener)
     }
+    fn listen_with_recovery(
+        &self,
+        relay: flui_foundation::ListenerObserver,
+    ) -> flui_foundation::Subscription {
+        self.controller.listen_with_recovery(relay)
+    }
     fn add_observer(
         &self,
         observer: flui_foundation::ListenerObserver,
@@ -4455,6 +4467,12 @@ struct CountingAnimation {
 impl flui_foundation::Listenable for CountingAnimation {
     fn listen(&self, listener: flui_foundation::ListenerCallback) -> flui_foundation::Subscription {
         self.controller.listen(listener)
+    }
+    fn listen_with_recovery(
+        &self,
+        relay: flui_foundation::ListenerObserver,
+    ) -> flui_foundation::Subscription {
+        self.controller.listen_with_recovery(relay)
     }
     fn add_observer(
         &self,

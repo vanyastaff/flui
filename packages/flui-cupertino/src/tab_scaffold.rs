@@ -149,6 +149,12 @@ impl Listenable for CupertinoTabController {
     ) -> flui_sdk::foundation::Subscription {
         self.notifier.listen(listener)
     }
+    fn listen_with_recovery(
+        &self,
+        relay: flui_sdk::foundation::ListenerObserver,
+    ) -> flui_sdk::foundation::Subscription {
+        self.notifier.listen_with_recovery(relay)
+    }
     fn add_observer(&self, observer: flui_sdk::foundation::ListenerObserver) -> ListenerId {
         self.notifier.add_observer(observer)
     }
