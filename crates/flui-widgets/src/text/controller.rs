@@ -192,9 +192,10 @@ pub(super) struct ComposingState {
 ///
 /// Implement a reactive rebuild by registering via
 /// [`Listenable::listen_with_recovery`] or [`Listenable::listen`] (an owned
-/// [`Subscription`]; hold it, and the listener fires on every change; drop it,
-/// and the listener detaches) or by passing [`TextEditingController::listenable`]
-/// to [`AnimatedBuilder`](crate::AnimatedBuilder).
+/// [`Subscription`](flui_foundation::Subscription); hold it, and the listener
+/// fires on every change; drop it, and the listener detaches) or by passing
+/// [`TextEditingController::listenable`] to
+/// [`AnimatedBuilder`](crate::AnimatedBuilder).
 ///
 /// # IME composition
 ///

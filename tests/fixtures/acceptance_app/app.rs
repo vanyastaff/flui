@@ -28,7 +28,7 @@ use std::str::FromStr;
 use std::task::Poll;
 
 use flui::foundation::{
-    ChangeNotifier, ConnectionState, Listenable, ListenerId, ValueKey, ViewKey,
+    ChangeNotifier, ConnectionState, Listenable, Subscription, ValueKey, ViewKey,
 };
 use flui::geometry::{EdgeInsets, Size};
 use flui::interaction::FocusNode;
@@ -490,7 +490,8 @@ struct Place {
     draft: TextEditingController,
     editing: Rc<Cell<Option<NoteId>>>,
     scroll: ScrollController,
-    router: RefCell<Option<(RouterHandle<Route>, ListenerId)>>,
+    /// The router this place follows, with its own listener's subscription.
+    router: RefCell<Option<(RouterHandle<Route>, Subscription)>>,
     /// What it listens to while the loaded screens are up.
     listening: RefCell<Option<Listening>>,
     /// The session as last read or written, so a write that changes
@@ -500,12 +501,10 @@ struct Place {
 
 /// The listeners a [`Place`] keeps.
 struct Listening {
-    data: ListenerId,
-    draft: ListenerId,
-    /// The scroll position's notifier and the listener on it.
-    scroll: Rc<dyn Listenable>,
-    offset: ListenerId,
-    session: ListenerId,
+    data: Subscription,
+    draft: Subscription,
+    scroll: Subscription,
+    session: Subscription,
 }
 
 impl Place {
@@ -523,40 +522,38 @@ impl Place {
     /// itself: a write refused while a fresh start was running is made once
     /// the session settles.
     fn listen(self: &Rc<Self>) {
-        let scroll = self.scroll.listenable();
-        let ids = Listening {
-            data: self.data.add_listener(self.listener()),
-            draft: self.draft.add_listener(self.listener()),
-            offset: scroll.add_listener(self.listener()),
-            session: self.session.add_listener(self.listener()),
-            scroll,
+        let listening = Listening {
+            data: self.data.listen(self.listener()),
+            draft: self.draft.listen(self.listener()),
+            scroll: self.scroll.listenable().listen(self.listener()),
+            session: self.session.listen(self.listener()),
         };
-        *self.listening.borrow_mut() = Some(ids);
+        *self.listening.borrow_mut() = Some(listening);
     }
 
     /// Stop listening to anything.
     fn stop(&self) {
         if let Some(listening) = self.listening.take() {
-            self.data.remove_listener(listening.data);
-            self.draft.remove_listener(listening.draft);
-            listening.scroll.remove_listener(listening.offset);
-            self.session.remove_listener(listening.session);
+            drop(listening.data);
+            drop(listening.draft);
+            drop(listening.scroll);
+            drop(listening.session);
         }
         self.detach();
     }
 
     /// Follow the stack of the router Home's page sits under.
     fn attach(self: &Rc<Self>, router: RouterHandle<Route>) {
-        let id = router.add_listener(self.listener());
-        if let Some((old, id)) = self.router.replace(Some((router, id))) {
-            old.remove_listener(id);
+        let listening = router.listen(self.listener());
+        if let Some((_old_router, old_listening)) = self.router.replace(Some((router, listening))) {
+            drop(old_listening);
         }
     }
 
     /// Stop following the router: Home's page is gone.
     fn detach(&self) {
-        if let Some((router, id)) = self.router.take() {
-            router.remove_listener(id);
+        if let Some((_router, listening)) = self.router.take() {
+            drop(listening);
         }
     }
 
@@ -567,7 +564,7 @@ impl Place {
             .router
             .borrow()
             .as_ref()
-            .map(|(router, _id)| router.stack())
+            .map(|(router, _listening)| router.stack())
         else {
             return;
         };
@@ -933,9 +930,18 @@ impl ViewState<Loaded> for LoadedState {
             draft.set_text(title.clone());
         }
         if let Some(kept) = plant(self.planter.as_ref(), Kept::Listener) {
-            draft.add_listener(Rc::new(move || {
+            // The sentinel lives in the listener: the registration stays for
+            // the draft's own lifetime, as the id form's abandoned
+            // registration did. The subscription is forgotten on purpose (a
+            // deliberate leak; it only holds a weak to the channel, whose
+            // own teardown at close retires the sentinel).
+            #[expect(
+                clippy::mem_forget,
+                reason = "a deliberate leak: the planted listener outlives this construction the way the id form's abandoned registration did; the draft channel's teardown retires it"
+            )]
+            std::mem::forget(draft.listen(Rc::new(move || {
                 let _kept = &kept;
-            }));
+            })));
         }
         let editing = Rc::new(Cell::new(restored.draft.map(|draft| draft.note)));
         let scroll = ScrollController::with_initial_scroll_offset(restored.offset);
@@ -1412,22 +1418,16 @@ fn place_banner(session: &Persisted<Session>) -> BoxedView {
 /// Wait until the fresh start of `data` is stored: its value is loaded and
 /// takes edits from then on. A failed step ends the wait with its error.
 async fn started_over(data: &Persisted<Saved>) -> Result<(), String> {
-    /// Removes the waiting listener when the wait ends or is dropped.
+    /// The waiting listener, cancelled when the wait ends or is dropped: the
+    /// owned subscription's own drop detaches it.
     struct Watch {
         data: Persisted<Saved>,
-        id: Option<ListenerId>,
-    }
-    impl Drop for Watch {
-        fn drop(&mut self) {
-            if let Some(id) = self.id.take() {
-                self.data.remove_listener(id);
-            }
-        }
+        listening: Option<Subscription>,
     }
     let waker = Rc::new(RefCell::new(None::<std::task::Waker>));
     let mut watch = Watch {
         data: data.clone(),
-        id: None,
+        listening: None,
     };
     poll_fn(move |cx| {
         if let SaveStatus::Failed(error) = watch.data.status() {
@@ -1437,10 +1437,10 @@ async fn started_over(data: &Persisted<Saved>) -> Result<(), String> {
             return Poll::Ready(Ok(()));
         }
         *waker.borrow_mut() = Some(cx.waker().clone());
-        if watch.id.is_none() {
+        if watch.listening.is_none() {
             let waker = Rc::clone(&waker);
-            watch.id = Some(watch.data.add_listener(Rc::new(move || {
-                // Taken before waking: the waker's wake may poll again.
+            // Taken before waking: the waker's wake may poll again.
+            watch.listening = Some(watch.data.listen(Rc::new(move || {
                 let waker = waker.borrow_mut().take();
                 if let Some(waker) = waker {
                     waker.wake();

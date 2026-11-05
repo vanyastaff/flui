@@ -363,8 +363,9 @@ impl ChangeNotifier {
     }
 
     /// Subscribe an owned relay that runs inside the notifying delivery's
-    /// [`RecoveryScope`]: the owned twin of
-    /// [`add_observer`](Self::add_observer).
+    /// [`RecoveryScope`], the relay custody ADR-0219's registration owes.
+    /// The id-form twin is [`add_with_recovery`](Self::add_with_recovery),
+    /// for owners that retire through their own recovery scope.
     pub fn listen_with_recovery(&self, relay: ListenerObserver) -> Subscription {
         self.inner
             .listen_with_recovery(Rc::new(move |&(), recovery| relay(recovery)))
