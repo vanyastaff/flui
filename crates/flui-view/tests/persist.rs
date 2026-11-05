@@ -1301,7 +1301,9 @@ fn an_initial_value_that_panics_fails_the_fresh_start() {
 
 /// Count each time `notes` tells its listeners, and what the status was
 /// then. The subscription detaches at the caller's scope end, beside the log.
-fn listen(notes: &Persisted<Note>) -> (Rc<RefCell<Vec<SaveStatus>>>, flui_foundation::Subscription) {
+fn listen(
+    notes: &Persisted<Note>,
+) -> (Rc<RefCell<Vec<SaveStatus>>>, flui_foundation::Subscription) {
     let heard = Rc::new(RefCell::new(Vec::new()));
     let log = Rc::clone(&heard);
     let reader = notes.downgrade();

@@ -598,10 +598,7 @@ impl<D: Document> Listenable for Persisted<D> {
     }
     /// The document follows the registry while it has listeners, so a
     /// commit by another document of this name is told too.
-    fn listen_with_recovery(
-        &self,
-        relay: ListenerObserver,
-    ) -> flui_foundation::Subscription {
+    fn listen_with_recovery(&self, relay: ListenerObserver) -> flui_foundation::Subscription {
         let announcer = &self.document.announcer;
         let subscription = announcer.notifier.listen_with_recovery(relay);
         if announcer.closed.get() {

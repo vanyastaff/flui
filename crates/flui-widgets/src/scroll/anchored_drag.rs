@@ -1,4 +1,4 @@
-﻿//! [`AnchoredDrag`] â€” a one-dimensional drag that comes to rest on anchors
+//! [`AnchoredDrag`] â€” a one-dimensional drag that comes to rest on anchors
 //! (ADR-0209 Â§9).
 //!
 //! An anchored drag is a bounded scroll leaf of the nested scroll channel,
@@ -933,10 +933,7 @@ impl Listenable for DragOffset {
     fn listen(&self, listener: flui_foundation::ListenerCallback) -> flui_foundation::Subscription {
         self.scroll.listenable().listen(listener)
     }
-    fn listen_with_recovery(
-        &self,
-        relay: ListenerObserver,
-    ) -> flui_foundation::Subscription {
+    fn listen_with_recovery(&self, relay: ListenerObserver) -> flui_foundation::Subscription {
         self.scroll.listenable().listen_with_recovery(relay)
     }
     fn add_observer(&self, observer: ListenerObserver) -> ListenerId {

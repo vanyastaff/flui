@@ -801,6 +801,10 @@ pub struct Subscription {
     channel: Option<std::rc::Weak<dyn crate::notifier_generic::SubscribedChannel>>,
     /// Some while the listener is still registered; `None` once detached.
     id: Option<ListenerId>,
+    /// A removal the source itself supplies instead of a channel: the owned
+    /// twin of ADR-0180's status-guard removal function, for a custom source
+    /// whose storage is no foundation listener set.
+    remove: Option<Box<dyn Fn()>>,
 }
 
 impl Subscription {
@@ -813,6 +817,24 @@ impl Subscription {
         Self {
             channel: Some(channel),
             id: Some(id),
+            remove: None,
+        }
+    }
+
+    /// Detach now rather than at drop; idempotent with the drop that follows.
+    /// A custom source's withdrawal runs its `remove` once.
+    pub fn detach(mut self) {
+        self.take_listener();
+    }
+
+    /// A subscription to a custom source: `remove` runs once, on the first
+    /// detach or the drop that follows. The closure must commit the
+    /// withdrawal it promises, as ADR-0180's status guard's removal does.
+    pub fn for_removal(remove: impl Fn() + 'static) -> Self {
+        Self {
+            channel: None,
+            id: None,
+            remove: Some(Box::new(remove)),
         }
     }
 
@@ -823,16 +845,15 @@ impl Subscription {
         Self {
             channel: None,
             id: None,
+            remove: None,
         }
-    }
-
-    /// Detach now rather than at drop; idempotent with the drop that follows.
-    pub fn detach(mut self) {
-        self.take_listener();
     }
 
     fn take_listener(&mut self) {
         let Some(id) = self.id.take() else {
+            if let Some(remove) = self.remove.take() {
+                remove();
+            }
             return;
         };
         if let Some(channel) = self.channel.take().and_then(|channel| channel.upgrade()) {

@@ -1,4 +1,4 @@
-﻿//! [`TransformationController`] â€” the external handle for
+//! [`TransformationController`] â€” the external handle for
 //! [`InteractiveViewer`](crate::InteractiveViewer)'s transform.
 
 use std::{cell::Cell, fmt, rc::Rc};
@@ -18,7 +18,10 @@ impl Listenable for Inner {
     fn listen(&self, listener: ListenerCallback) -> flui_foundation::Subscription {
         self.notifier.listen(listener)
     }
-    fn listen_with_recovery(&self, relay: flui_foundation::ListenerObserver) -> flui_foundation::Subscription {
+    fn listen_with_recovery(
+        &self,
+        relay: flui_foundation::ListenerObserver,
+    ) -> flui_foundation::Subscription {
         Listenable::listen_with_recovery(&self.notifier, relay)
     }
     fn add_observer(&self, observer: flui_foundation::ListenerObserver) -> ListenerId {

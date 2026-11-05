@@ -1513,7 +1513,9 @@ impl Listenable for ObservedTrain {
         &self,
         relay: flui_foundation::ListenerObserver,
     ) -> flui_foundation::Subscription {
-        self.value_callbacks.borrow_mut().push(Rc::downgrade(&relay));
+        self.value_callbacks
+            .borrow_mut()
+            .push(Rc::downgrade(&relay));
         self.values.listen_with_recovery(relay)
     }
 

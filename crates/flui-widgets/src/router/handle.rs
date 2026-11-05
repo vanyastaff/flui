@@ -291,10 +291,7 @@ impl<R: Routable> Listenable for RouterHandle<R> {
         }
         subscription
     }
-    fn listen_with_recovery(
-        &self,
-        relay: ListenerObserver,
-    ) -> flui_foundation::Subscription {
+    fn listen_with_recovery(&self, relay: ListenerObserver) -> flui_foundation::Subscription {
         let notifier = &self.shared.announcer.notifier;
         let subscription = notifier.listen_with_recovery(relay);
         if !self.shared.mounted.get() {

@@ -61,10 +61,7 @@ mod tests {
         fn listen(&self, listener: ListenerCallback) -> Subscription {
             self.inner.listen(listener)
         }
-        fn listen_with_recovery(
-            &self,
-            relay: ListenerObserver,
-        ) -> Subscription {
+        fn listen_with_recovery(&self, relay: ListenerObserver) -> Subscription {
             self.inner.listen_with_recovery(relay)
         }
         fn add_observer(&self, observer: ListenerObserver) -> ListenerId {

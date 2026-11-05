@@ -1128,10 +1128,18 @@ impl Listenable for TerminalParent {
         &self,
         observer: flui_foundation::ListenerObserver,
     ) -> flui_foundation::Subscription {
-        self.add_observer(observer);
-        // The test's own ledger withdraws by its own identity; the owned
-        // subscription names no foundation channel, as `listen` says.
-        flui_foundation::Subscription::inert()
+        let id = self.add_observer(observer);
+        // The test's own ledger withdraws this one; the owned subscription
+        // carries the removal the way ADR-0180's status guard does.
+        let state = Rc::clone(&self.state);
+        flui_foundation::Subscription::for_removal(move || {
+            Listenable::remove_listener(
+                &TerminalParent {
+                    state: Rc::clone(&state),
+                },
+                id,
+            );
+        })
     }
     fn add_observer(&self, observer: flui_foundation::ListenerObserver) -> ListenerId {
         self.add_listener(Rc::new(move || {

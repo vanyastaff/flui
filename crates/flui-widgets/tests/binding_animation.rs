@@ -32,10 +32,7 @@ pub(crate) fn fade_source_replacement_retries_after_status_failure() {
         fn listen(&self, listener: ListenerCallback) -> flui_foundation::Subscription {
             self.controller.listen(listener)
         }
-        fn listen_with_recovery(
-            &self,
-            relay: ListenerObserver,
-        ) -> flui_foundation::Subscription {
+        fn listen_with_recovery(&self, relay: ListenerObserver) -> flui_foundation::Subscription {
             self.controller.listen_with_recovery(relay)
         }
         fn add_observer(&self, observer: ListenerObserver) -> ListenerId {
