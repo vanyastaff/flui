@@ -537,7 +537,7 @@ pub(crate) fn a_panic_on_the_last_drag_move_still_ends_the_drag() {
     let armed = Rc::new(std::cell::Cell::new(true));
     let fired = Rc::new(std::cell::Cell::new(false));
     let watched = scene.controller.clone();
-    let listener = scene.controller.add_listener(Rc::new({
+    let listener = scene.controller.listen(Rc::new({
         let armed = Rc::clone(&armed);
         let fired = Rc::clone(&fired);
         move || {
@@ -592,7 +592,7 @@ pub(crate) fn a_panic_on_the_last_drag_move_still_ends_the_drag() {
     drop(released);
     assert!(fired.get(), "the release made the last change");
     armed.set(false);
-    scene.controller.remove_listener(listener);
+    listener.detach();
     assert_eq!(scene.controller.caret_byte_offset(), 11);
     // The timer's run starts on the frame after it was started.
     scene.settle();
@@ -613,7 +613,7 @@ pub(crate) fn a_panic_on_a_long_press_release_still_ends_the_press() {
     let armed = Rc::new(std::cell::Cell::new(true));
     let fired = Rc::new(std::cell::Cell::new(false));
     let watched = scene.controller.clone();
-    let listener = scene.controller.add_listener(Rc::new({
+    let listener = scene.controller.listen(Rc::new({
         let armed = Rc::clone(&armed);
         let fired = Rc::clone(&fired);
         move || {
@@ -663,7 +663,7 @@ pub(crate) fn a_panic_on_a_long_press_release_still_ends_the_press() {
     drop(released);
     assert!(fired.get(), "the release made the last change");
     armed.set(false);
-    scene.controller.remove_listener(listener);
+    listener.detach();
     scene.settle();
     assert_eq!(scene.handles(), 2, "the ended press shows its handles");
 }
@@ -682,7 +682,7 @@ pub(crate) fn a_panic_on_the_long_press_selection_still_claims_the_contact() {
     let armed = Rc::new(std::cell::Cell::new(true));
     let fired = Rc::new(std::cell::Cell::new(false));
     let watched = scene.controller.clone();
-    let listener = scene.controller.add_listener(Rc::new({
+    let listener = scene.controller.listen(Rc::new({
         let armed = Rc::clone(&armed);
         let fired = Rc::clone(&fired);
         move || {
@@ -720,7 +720,7 @@ pub(crate) fn a_panic_on_the_long_press_selection_still_claims_the_contact() {
     // failed on the pressed word.
     drop(pressed);
     assert!(fired.get(), "the press selected beta");
-    scene.controller.remove_listener(listener);
+    listener.detach();
     let gamma = scene.along(start_of("alpha beta ga"));
     for (millis, at) in [(1016, gamma), (1032, gamma)] {
         scene
@@ -757,7 +757,7 @@ pub(crate) fn an_edit_in_reply_to_a_long_press_ends_it() {
     let mut scene = Scene::over(CaretHandle::NEVER);
     let armed = Rc::new(std::cell::Cell::new(true));
     let watched = scene.controller.clone();
-    let listener = scene.controller.add_listener(Rc::new({
+    let listener = scene.controller.listen(Rc::new({
         let armed = Rc::clone(&armed);
         move || {
             if armed.get() && watched.selection() == (6..10) {
@@ -784,7 +784,7 @@ pub(crate) fn an_edit_in_reply_to_a_long_press_ends_it() {
         }
     });
     scene.settle();
-    scene.controller.remove_listener(listener);
+    listener.detach();
     assert!(!armed.get(), "the press selected beta");
     assert_eq!(scene.controller.text(), "one two three");
     assert_eq!(Some(scene.selection()), *after_edit.borrow());
