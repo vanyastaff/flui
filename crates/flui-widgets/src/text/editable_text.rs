@@ -817,7 +817,7 @@ pub struct EditableTextState {
     /// ID for the listener we added to `controller` so we can remove it on
     /// dispose — avoids a `remove_all_listeners` that would disrupt other
     /// subscribers.
-    controller_listener_id: Option<ListenerId>,
+    controller_listener_id: Option<flui_foundation::Subscription>,
     /// The single notifier that drives the inner `AnimatedBuilder`.  Fires on
     /// text changes (forwarded from the controller listener) **and** on focus
     /// changes (forwarded from the FocusManager listener).
@@ -1797,7 +1797,7 @@ impl ViewState<EditableText> for EditableTextState {
         //    inner AnimatedBuilder rebuilds on every keystroke, and claim the
         //    selection they leave.
         let listener = self.controller_listener();
-        self.controller_listener_id = Some(self.controller.borrow().add_listener(listener));
+        self.controller_listener_id = Some(self.controller.borrow().listen(listener));
         // A selection the controller already held is claimed now: no change
         // will report it.
         claim_primary(
@@ -2043,9 +2043,9 @@ impl ViewState<EditableText> for EditableTextState {
             .is_same_controller(&new_view.controller)
         {
             self.selection_drag.set(None);
-            if let Some(id) = self.controller_listener_id.take() {
-                self.controller.borrow().remove_listener(id);
-            }
+            // The subscription withdraws through its own channel — the old
+            // controller's registrations cannot be detached by the new one's.
+            drop(self.controller_listener_id.take());
             // The replaced controller retires inside the update's scope: it
             // may hold the last handle to listeners the application added.
             let replaced = std::mem::replace(
@@ -2054,7 +2054,7 @@ impl ViewState<EditableText> for EditableTextState {
             );
             calls.retire(replaced);
             let listener = self.controller_listener();
-            self.controller_listener_id = Some(self.controller.borrow().add_listener(listener));
+            self.controller_listener_id = Some(self.controller.borrow().listen(listener));
             // The visible text is the replacement's now, and nothing else
             // will say so: the old controller's notifications are gone and the
             // new one has not changed since it was handed over. Its selection
@@ -2316,9 +2316,8 @@ impl ViewState<EditableText> for EditableTextState {
         calls.run(|| self.touch_handles.menu().close());
         // This field's own rebuild listener goes first: the commit below
         // must not schedule a build of a subtree that is being unmounted.
-        if let Some(id) = self.controller_listener_id.take() {
-            let controller = self.controller.borrow().clone();
-            calls.run(|| controller.remove_listener(id));
+        if let Some(subscription) = self.controller_listener_id.take() {
+            calls.run(|| drop(subscription));
         }
         // A field unmounted while it holds the input (a route the program
         // changed) keeps the composition it shows as committed text: the

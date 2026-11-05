@@ -1,4 +1,4 @@
-﻿//! [`RefreshIndicator`] â€” pull to refresh, a participant of the nested scroll
+//! [`RefreshIndicator`] â€” pull to refresh, a participant of the nested scroll
 //! channel (ADR-0209).
 //!
 //! The indicator is not a second scroll path. It joins the chain of the
@@ -758,7 +758,7 @@ pub struct RefreshIndicatorState {
     refresher: Rc<Refresher>,
     connection: Rc<dyn NestedScrollConnection>,
     settle: DrivenController,
-    settle_listener: Option<ListenerId>,
+    settle_listener: Option<flui_foundation::Subscription>,
     vsync: Option<Vsync>,
 }
 
@@ -825,7 +825,7 @@ impl ViewState<RefreshIndicator> for RefreshIndicatorState {
         self.refresher.mounted.set(true);
         let settle = self.settle.controller().clone();
         let weak = Rc::downgrade(&self.refresher);
-        self.settle_listener = Some(self.settle.controller().add_listener(Rc::new(move || {
+        self.settle_listener = Some(self.settle.controller().listen(Rc::new(move || {
             if let Some(refresher) = weak.upgrade() {
                 refresher.settled_to(settle.value());
             }
@@ -872,9 +872,7 @@ impl ViewState<RefreshIndicator> for RefreshIndicatorState {
 
     fn dispose(&mut self) {
         self.refresher.retire();
-        if let Some(id) = self.settle_listener.take() {
-            self.settle.controller().remove_listener(id);
-        }
+        drop(self.settle_listener.take());
         self.settle.dispose();
     }
 }
@@ -967,7 +965,10 @@ impl fmt::Debug for RefreshOverlay {
 
 struct RefreshOverlayState {
     rebuild: Option<RebuildHandle>,
-    subscription: Option<(RefreshController, ListenerId)>,
+    subscription: Option<flui_foundation::Subscription>,
+    /// The controller the live subscription listens on: a rebuild handing a
+    /// different one re-subscribes.
+    subscribed_controller: Option<RefreshController>,
     initial: Option<RefreshController>,
 }
 
@@ -978,6 +979,7 @@ impl StatefulView for RefreshOverlay {
         RefreshOverlayState {
             rebuild: None,
             subscription: None,
+            subscribed_controller: None,
             initial: Some(self.controller.clone()),
         }
     }
@@ -991,19 +993,18 @@ impl RefreshOverlayState {
         };
         let watched = controller.clone();
         let shown = Cell::new((watched.is_refreshing(), watched.pull_distance_px()));
-        let id = controller.inner.add_listener(Rc::new(move || {
+        let subscription = controller.inner.listen(Rc::new(move || {
             let current = (watched.is_refreshing(), watched.pull_distance_px());
             if shown.replace(current) != current {
                 rebuild.schedule(RebuildReason::StateChange);
             }
         }));
-        self.subscription = Some((controller.clone(), id));
+        self.subscription = Some(subscription);
+        self.subscribed_controller = Some(controller.clone());
     }
 
     fn unsubscribe(&mut self) {
-        if let Some((controller, id)) = self.subscription.take() {
-            controller.inner.remove_listener(id);
-        }
+        drop(self.subscription.take());
     }
 }
 
@@ -1069,9 +1070,11 @@ impl ViewState<RefreshOverlay> for RefreshOverlayState {
 
     fn did_update_view(&mut self, _old_view: &RefreshOverlay, new_view: &RefreshOverlay) {
         if !self
-            .subscription
+            .subscribed_controller
             .as_ref()
-            .is_some_and(|(controller, _)| controller.shares_state_with(&new_view.controller))
+            .is_some_and(|controller| {
+                self.subscription.is_some() && controller.shares_state_with(&new_view.controller)
+            })
         {
             self.subscribe(&new_view.controller);
         }

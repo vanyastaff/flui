@@ -7,8 +7,8 @@ use std::fmt;
 use std::rc::{Rc, Weak};
 
 use flui_animation::{Animation, AnimationController, DrivenController, MotionPolicy, Simulation};
+use flui_foundation::Listenable;
 use flui_foundation::geometry::{Point, Size};
-use flui_foundation::{Listenable, ListenerId};
 use flui_painting::Canvas;
 use flui_painting::paint::BlendMode;
 use flui_view::prelude::*;
@@ -271,7 +271,7 @@ impl Simulation for Elapsed {
 pub struct ParticleEmitterState {
     core: Rc<Core>,
     clock: DrivenController,
-    listener: Option<ListenerId>,
+    listener: Option<flui_foundation::Subscription>,
     controller: Option<ParticleController>,
     ticking: bool,
 }
@@ -307,7 +307,7 @@ impl StatefulView for ParticleEmitter {
             resumed: Cell::new(false),
         });
         let weak = Rc::downgrade(&core);
-        let listener = clock.controller().add_listener(Rc::new(move || {
+        let listener = clock.controller().listen(Rc::new(move || {
             if let Some(core) = weak.upgrade() {
                 core.tick();
             }
@@ -394,9 +394,8 @@ impl ViewState<ParticleEmitter> for ParticleEmitterState {
         if let Some(controller) = self.controller.take() {
             controller.detach(&self.core);
         }
-        if let Some(listener) = self.listener.take() {
-            self.core.clock.remove_listener(listener);
-        }
+        // The subscription detaches through its own drop.
+        drop(self.listener.take());
         self.core.stop();
         let _ = self.clock.rebind(None);
         self.clock.dispose();

@@ -68,8 +68,8 @@ use std::time::Duration;
 use flui_animation::{
     Animation, AnimationController, AnimationStatus, DrivenController, StatusSubscription, Vsync,
 };
+use flui_foundation::Listenable;
 use flui_foundation::geometry::{Axis, Point, Rect, Vec2};
-use flui_foundation::{Listenable, ListenerId};
 use flui_rendering::constraints::AxisDirection;
 use flui_rendering::hit_testing::HitTestBehavior;
 use flui_rendering::pipeline::WeakPipelineCell;
@@ -526,7 +526,7 @@ pub struct ScrollableState {
     /// (called from `init_state`, and re-run on every `did_update_view` so a
     /// controller swap moves it onto the new controller), removed in
     /// `dispose`.
-    fling_listener_id: Option<ListenerId>,
+    fling_listener_id: Option<flui_foundation::Subscription>,
     /// Owning status subscription on `fling_controller` that marks the shared
     /// `ScrollPosition` idle when the ballistic run settles or is stopped.
     /// Withdrawn before controller teardown or attachment replacement.
@@ -546,7 +546,7 @@ pub struct ScrollableState {
     /// `did_update_view` reassigns `scroll_controller` before the installers
     /// run, so a removal that read the field would detach from the incoming
     /// controller and leave the outgoing one holding the listener forever.
-    command_listener: Option<(std::rc::Rc<dyn Listenable>, ListenerId)>,
+    command_listener: Option<flui_foundation::Subscription>,
     /// Post-frame capability for the wheel-scroll activity pulse — acquired
     /// in `init_state`/`did_change_dependencies` (never from `build`), per
     /// the frame-capability scope rule. A wheel tick raises the scroll
@@ -808,14 +808,12 @@ impl ScrollableState {
     /// drove `fling_controller`'s value but the new controller's own
     /// `pixels()` never moved.
     fn install_fling_listener(&mut self) {
-        if let Some(id) = self.fling_listener_id.take() {
-            self.fling_controller.controller().remove_listener(id);
-        }
+        drop(self.fling_listener_id.take());
         let owner = Rc::clone(&self.owner);
         let listener_id = self
             .fling_controller
             .controller()
-            .add_listener(std::rc::Rc::new(move || {
+            .listen(std::rc::Rc::new(move || {
                 // Each tick is a step of the sequence the run belongs to.
                 let owner = owner.borrow().clone();
                 if let Some(owner) = owner {
@@ -842,10 +840,10 @@ impl ScrollableState {
         let scroll_ref = self.scroll_controller.clone();
         let owner = Rc::clone(&self.owner);
         let listenable = self.scroll_controller.listenable();
-        let listener_id = listenable.add_listener(std::rc::Rc::new(move || {
+        let listener_id = listenable.listen(std::rc::Rc::new(move || {
             service_pending_command(&owner, &scroll_ref);
         }));
-        self.command_listener = Some((listenable, listener_id));
+        self.command_listener = Some(listener_id);
         // Drain once on install. A command queued before this listener existed
         // — `animate_to` on a controller that is not attached to a mounted
         // `Scrollable` yet, or one handed over by a rebuild — already fired
@@ -860,9 +858,7 @@ impl ScrollableState {
     /// Detach the command listener from whichever listenable it was installed
     /// on. Idempotent.
     fn remove_command_listener(&mut self) {
-        if let Some((listenable, id)) = self.command_listener.take() {
-            listenable.remove_listener(id);
-        }
+        drop(self.command_listener.take());
     }
 
     /// Installs the status listener that ends the position's scroll
@@ -1097,9 +1093,7 @@ impl ViewState<Scrollable> for ScrollableState {
         self.scroll_controller.writer().set_is_scrolling(false);
         // Remove the value listener before disposing the controller so the
         // listener closure cannot fire after the state is gone.
-        if let Some(id) = self.fling_listener_id.take() {
-            self.fling_controller.controller().remove_listener(id);
-        }
+        drop(self.fling_listener_id.take());
         drop(self.fling_status_subscription.take());
         self.remove_command_listener();
         // Release the vsync registration so the binding does not hold a

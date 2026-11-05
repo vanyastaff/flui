@@ -282,7 +282,7 @@ pub(super) struct FieldHandles {
     long_press: RefCell<Weak<LongPressGestureRecognizer>>,
     /// Rebuild shown handles when the ends they follow change after a
     /// layout, so a handle sized from its line follows a new line height.
-    watches: RefCell<Vec<LeaderWatch>>,
+    watches: RefCell<Vec<(LeaderWatch, flui_foundation::Subscription)>>,
     warned: Cell<bool>,
     /// What a handle drag shows over the dragged end, resolved at the
     /// field's last build.
@@ -430,7 +430,7 @@ impl FieldHandles {
         let pipeline = parts.pipeline.clone();
         *self.parts.borrow_mut() = Some(parts);
         if let (Some(pipeline), Some(post_frame)) = (&pipeline, &post_frame) {
-            let watches: Vec<LeaderWatch> = self
+            let watches: Vec<(LeaderWatch, flui_foundation::Subscription)> = self
                 .links
                 .iter()
                 .enumerate()
@@ -441,7 +441,7 @@ impl FieldHandles {
                     // depends on the leader's size, and the toolbar's
                     // placement against the overlay on where it stands too.
                     let size = Cell::new(watch.geometry().map(|geometry| geometry.size));
-                    watch.add_listener(Rc::new(move || {
+                    let listening = watch.listen(Rc::new(move || {
                         let Some(handles) = handles.upgrade() else {
                             return;
                         };
@@ -449,7 +449,7 @@ impl FieldHandles {
                             .watches
                             .borrow()
                             .get(index)
-                            .and_then(LeaderWatch::geometry);
+                            .and_then(|(watch, _)| watch.geometry());
                         let resized = size.replace(geometry.map(|geometry| geometry.size))
                             != geometry.map(|geometry| geometry.size);
                         let placed = resized || handles.menu.toolbar_shown();
@@ -459,7 +459,7 @@ impl FieldHandles {
                             failure.resume();
                         }
                     }));
-                    watch
+                    (watch, listening)
                 })
                 .collect();
             *self.watches.borrow_mut() = watches;
