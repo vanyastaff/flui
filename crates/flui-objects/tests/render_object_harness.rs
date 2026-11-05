@@ -413,27 +413,80 @@ impl RenderBox for RenderTestBox {
 }
 
 #[derive(Debug)]
-struct RemovalNotifier {
+struct RemovalNotifierState {
     source: flui_foundation::ChangeNotifier,
-    fail: Cell<bool>,
-    before: Cell<bool>,
-    fail_add: Cell<bool>,
+    fail: Rc<Cell<bool>>,
+    before: Rc<Cell<bool>>,
+    fail_add: Rc<Cell<bool>>,
     name: &'static str,
+}
+
+struct RemovalNotifier {
+    state: Rc<RemovalNotifierState>,
+}
+impl std::ops::Deref for RemovalNotifier {
+    type Target = RemovalNotifierState;
+    fn deref(&self) -> &Self::Target {
+        &self.state
+    }
+}
+
+impl std::fmt::Debug for RemovalNotifier {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RemovalNotifier")
+            .field("name", &self.state.name)
+            .finish_non_exhaustive()
+    }
 }
 
 impl RemovalNotifier {
     fn new(name: &'static str, fail: bool) -> Rc<Self> {
         Rc::new(Self {
-            source: flui_foundation::ChangeNotifier::new(),
-            fail: Cell::new(fail),
-            before: Cell::new(false),
-            fail_add: Cell::new(false),
-            name,
+            state: Rc::new(RemovalNotifierState {
+                source: flui_foundation::ChangeNotifier::new(),
+                fail: Rc::new(Cell::new(fail)),
+                before: Rc::new(Cell::new(false)),
+                fail_add: Rc::new(Cell::new(false)),
+                name,
+            }),
         })
+    }
+
+    fn withdraw(&self, id: flui_foundation::ListenerId) {
+        assert!(!self.before.replace(false), "{} removal", self.name);
+        flui_foundation::Listenable::remove_listener(&self.source, id);
+        assert!(!self.fail.replace(false), "{} removal", self.name);
     }
 }
 
 impl flui_foundation::Listenable for RemovalNotifier {
+    fn listen(&self, listener: flui_foundation::ListenerCallback) -> flui_foundation::Subscription {
+        let id = flui_foundation::Listenable::add_listener(self, listener);
+        // The removals run the source's own machinery; the subscription
+        // carries it the way ADR-0180's status guard does.
+        let state = Rc::clone(&self.state);
+        flui_foundation::Subscription::for_removal(move || {
+            RemovalNotifier {
+                state: Rc::clone(&state),
+            }
+            .withdraw(id);
+        })
+    }
+    fn listen_with_recovery(
+        &self,
+        relay: flui_foundation::ListenerObserver,
+    ) -> flui_foundation::Subscription {
+        let id = flui_foundation::Listenable::add_observer(self, relay);
+        // The removals run the source's own machinery; the subscription
+        // carries it the way ADR-0180's status guard does.
+        let state = Rc::clone(&self.state);
+        flui_foundation::Subscription::for_removal(move || {
+            RemovalNotifier {
+                state: Rc::clone(&state),
+            }
+            .withdraw(id);
+        })
+    }
     fn add_observer(
         &self,
         observer: flui_foundation::notifier::ListenerObserver,
@@ -444,9 +497,7 @@ impl flui_foundation::Listenable for RemovalNotifier {
     }
 
     fn remove_listener(&self, id: flui_foundation::ListenerId) {
-        assert!(!self.before.replace(false), "{} removal", self.name);
-        flui_foundation::Listenable::remove_listener(&self.source, id);
-        assert!(!self.fail.replace(false), "{} removal", self.name);
+        self.withdraw(id);
     }
 
     fn remove_all_listeners(&self) {
@@ -4331,6 +4382,15 @@ impl ScriptedAnimation {
 }
 
 impl flui_foundation::Listenable for ScriptedAnimation {
+    fn listen(&self, listener: flui_foundation::ListenerCallback) -> flui_foundation::Subscription {
+        self.controller.listen(listener)
+    }
+    fn listen_with_recovery(
+        &self,
+        relay: flui_foundation::ListenerObserver,
+    ) -> flui_foundation::Subscription {
+        self.controller.listen_with_recovery(relay)
+    }
     fn add_observer(
         &self,
         observer: flui_foundation::ListenerObserver,
@@ -4447,6 +4507,15 @@ struct CountingAnimation {
 }
 
 impl flui_foundation::Listenable for CountingAnimation {
+    fn listen(&self, listener: flui_foundation::ListenerCallback) -> flui_foundation::Subscription {
+        self.controller.listen(listener)
+    }
+    fn listen_with_recovery(
+        &self,
+        relay: flui_foundation::ListenerObserver,
+    ) -> flui_foundation::Subscription {
+        self.controller.listen_with_recovery(relay)
+    }
     fn add_observer(
         &self,
         observer: flui_foundation::ListenerObserver,

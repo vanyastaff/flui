@@ -1117,6 +1117,30 @@ impl TerminalParentState {
 }
 impl Listenable for TerminalParent {
     /// A source outside the framework: its relays run in their own scope.
+    fn listen(&self, listener: ListenerCallback) -> flui_foundation::Subscription {
+        // The test's own value list is not a `SubscribedChannel`: the
+        // subscription is inert here, and the caller's stored id does the
+        // withdrawal.
+        let _ = listener;
+        flui_foundation::Subscription::inert()
+    }
+    fn listen_with_recovery(
+        &self,
+        observer: flui_foundation::ListenerObserver,
+    ) -> flui_foundation::Subscription {
+        let id = self.add_observer(observer);
+        // The test's own ledger withdraws this one; the owned subscription
+        // carries the removal the way ADR-0180's status guard does.
+        let state = Rc::clone(&self.state);
+        flui_foundation::Subscription::for_removal(move || {
+            Listenable::remove_listener(
+                &TerminalParent {
+                    state: Rc::clone(&state),
+                },
+                id,
+            );
+        })
+    }
     fn add_observer(&self, observer: flui_foundation::ListenerObserver) -> ListenerId {
         self.add_listener(Rc::new(move || {
             flui_foundation::panic::RecoveryScope::boundary(|recovery| observer(recovery));

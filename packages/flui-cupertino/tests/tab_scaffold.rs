@@ -176,11 +176,11 @@ pub fn standalone_bar_rejects_an_out_of_range_selection() {
 pub fn tab_controller_relays_keep_failure_custody() {
     use flui_sdk::foundation::Listenable;
     let controller = CupertinoTabController::new(0);
-    let first = controller.add_listener(Rc::new(|| panic!("first listener")));
+    let first = controller.listen(Rc::new(|| panic!("first listener")));
     let seen = Rc::new(Cell::new(None));
     let relay = {
         let seen = Rc::clone(&seen);
-        controller.add_observer(Rc::new(move |recovery| {
+        controller.listen_with_recovery(Rc::new(move |recovery| {
             seen.set(Some(recovery.has_failure()));
         }))
     };
@@ -188,8 +188,8 @@ pub fn tab_controller_relays_keep_failure_custody() {
         controller.set_index(1).expect("no build is running");
     }))
     .is_err();
-    controller.remove_listener(first);
-    controller.remove_listener(relay);
+    first.detach();
+    relay.detach();
     assert!(unwound, "the first listener's panic propagates");
     assert_eq!(seen.get(), Some(true));
 }

@@ -45,7 +45,7 @@ mod tests {
         AnimationController, AnimationStatus, StatusObserver, StatusSubscription,
     };
     use flui_foundation::notifier::ListenerObserver;
-    use flui_foundation::{Listenable, ListenerId};
+    use flui_foundation::{Listenable, ListenerCallback, ListenerId, Subscription};
 
     use super::*;
 
@@ -58,6 +58,12 @@ mod tests {
     }
 
     impl Listenable for StatusPanicsOnce {
+        fn listen(&self, listener: ListenerCallback) -> Subscription {
+            self.inner.listen(listener)
+        }
+        fn listen_with_recovery(&self, relay: ListenerObserver) -> Subscription {
+            self.inner.listen_with_recovery(relay)
+        }
         fn add_observer(&self, observer: ListenerObserver) -> ListenerId {
             self.inner.add_observer(observer)
         }

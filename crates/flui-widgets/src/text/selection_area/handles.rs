@@ -145,7 +145,7 @@ pub(super) struct HandleState {
     look: RefCell<Option<Look>>,
     /// Watches on the two ends' leaders: a leader's size is its end's line,
     /// so a change rebuilds shown handles, a relayout without a build too.
-    watches: RefCell<Vec<LeaderWatch>>,
+    watches: RefCell<Vec<(LeaderWatch, flui_foundation::Subscription)>>,
     /// Where a handle drag holds the end, relative to the contact.
     pub(super) grip: Cell<Option<(HandleSide, Offset<f64>)>>,
     /// What a handle drag shows over the dragged end, resolved at the
@@ -353,7 +353,7 @@ impl SelectionModel {
             // The handles follow a move by themselves; only a new line
             // height changes how they look.
             let size = Cell::new(watch.geometry().map(|geometry| geometry.size));
-            watch.add_listener(Rc::new(move || {
+            let listening = watch.listen(Rc::new(move || {
                 let Some(model) = Weak::upgrade(&model) else {
                     return;
                 };
@@ -362,7 +362,7 @@ impl SelectionModel {
                     .watches
                     .borrow()
                     .get(index)
-                    .and_then(LeaderWatch::geometry)
+                    .and_then(|(watch, _)| watch.geometry())
                     .map(|geometry| geometry.size);
                 // The toolbar is placed against the overlay, so a move
                 // places it again.
@@ -373,7 +373,7 @@ impl SelectionModel {
                     failure.resume();
                 }
             }));
-            watches.push(watch);
+            watches.push((watch, listening));
         }
     }
 }

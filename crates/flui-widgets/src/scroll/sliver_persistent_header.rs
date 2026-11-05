@@ -5,7 +5,7 @@ use std::cell::Cell;
 use std::rc::Rc;
 
 use flui_animation::{AnimationController, DrivenController};
-use flui_foundation::ListenerId;
+use flui_foundation::Subscription;
 use flui_objects::{SnapAction, SnapCommand};
 use flui_rendering::view::{ScrollDirection, ScrollPosition};
 use flui_view::BuildContextExt as _;
@@ -175,7 +175,7 @@ struct SnapTriggerSlot {
 struct FloatingHeaderHostState {
     snap_controller: Option<DrivenController>,
     position: Option<ScrollPosition>,
-    activity_listener: Option<ListenerId>,
+    activity_listener: Option<Subscription>,
     slot: Rc<Cell<SnapTriggerSlot>>,
 }
 
@@ -205,18 +205,14 @@ impl FloatingHeaderHostState {
     /// (Re)subscribe the activity listener to `position`, detaching from any
     /// previous one first — the swap path a controller replacement takes.
     fn subscribe_to(&mut self, position: Option<ScrollPosition>, ctx: &dyn LifecycleContext) {
-        if let (Some(old_position), Some(id)) =
-            (self.position.take(), self.activity_listener.take())
-        {
-            old_position.remove_activity_listener(id);
-        }
+        drop(self.activity_listener.take());
         let Some(position) = position else {
             return;
         };
         let rebuild: RebuildHandle = ctx.rebuild_handle();
         let slot = Rc::clone(&self.slot);
         let observed_position = position.clone();
-        let id = position.add_activity_listener(Rc::new(move || {
+        let subscription = position.add_activity_listener(Rc::new(move || {
             let mut trigger = slot.get();
             let changed = trigger.on_activity(
                 observed_position.is_scrolling(),
@@ -228,7 +224,7 @@ impl FloatingHeaderHostState {
             }
         }));
         self.position = Some(position);
-        self.activity_listener = Some(id);
+        self.activity_listener = Some(subscription);
     }
 }
 
@@ -294,9 +290,8 @@ impl ViewState<FloatingHeaderHost> for FloatingHeaderHostState {
     }
 
     fn dispose(&mut self) {
-        if let (Some(position), Some(id)) = (self.position.take(), self.activity_listener.take()) {
-            position.remove_activity_listener(id);
-        }
+        drop(self.activity_listener.take());
+        self.position.take();
         self.snap_controller.take();
     }
 }

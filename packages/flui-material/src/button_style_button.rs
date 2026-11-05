@@ -79,7 +79,7 @@
 //! which fires independently of this type's rebuild — see `ink_well.rs`)
 //! keep resolving it fresh.
 
-use flui_sdk::foundation::{Listenable, ListenerId};
+use flui_sdk::foundation::{Listenable, Subscription};
 use flui_sdk::painting::Color;
 use flui_sdk::painting::TextStyle;
 use flui_sdk::rendering::BoxConstraints;
@@ -243,7 +243,7 @@ impl std::fmt::Debug for ButtonStyleButtonCore {
 /// ordering this mirrors exactly (see the module docs).
 pub(crate) struct ButtonStyleButtonCoreState {
     states: WidgetStatesController,
-    states_listener: Option<ListenerId>,
+    states_listener: Option<Subscription>,
     /// Seeded from the initial view in `create_state`; consumed once by
     /// `init_state` (which has no `view` parameter — see `InkWellState`'s
     /// identical `tap_slot` shape for why `create_state` is where a
@@ -281,7 +281,7 @@ impl ViewState<ButtonStyleButtonCore> for ButtonStyleButtonCoreState {
             .update(WidgetState::Selected, self.initially_selected);
 
         let rebuild_for_listener = rebuild.clone();
-        self.states_listener = Some(self.states.add_listener(std::rc::Rc::new(move || {
+        self.states_listener = Some(self.states.listen(std::rc::Rc::new(move || {
             rebuild_for_listener.schedule(flui_sdk::view::RebuildReason::StateChange);
         })));
 
@@ -410,9 +410,7 @@ impl ViewState<ButtonStyleButtonCore> for ButtonStyleButtonCoreState {
     }
 
     fn dispose(&mut self) {
-        if let Some(id) = self.states_listener.take() {
-            self.states.remove_listener(id);
-        }
+        drop(self.states_listener.take());
     }
 }
 

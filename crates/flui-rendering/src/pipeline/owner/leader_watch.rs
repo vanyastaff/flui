@@ -15,6 +15,7 @@ use std::cell::{Cell, RefCell};
 use std::fmt;
 use std::rc::{Rc, Weak};
 
+use flui_foundation::ListenerCallback;
 use flui_foundation::ListenerId;
 use flui_foundation::geometry::{Point, Size};
 use flui_foundation::notifier::{ChangeNotifier, Listenable, ListenerObserver};
@@ -86,6 +87,12 @@ impl fmt::Debug for LeaderWatch {
 }
 
 impl Listenable for LeaderWatch {
+    fn listen(&self, listener: ListenerCallback) -> flui_foundation::Subscription {
+        self.0.notifier.listen(listener)
+    }
+    fn listen_with_recovery(&self, relay: ListenerObserver) -> flui_foundation::Subscription {
+        self.0.notifier.listen_with_recovery(relay)
+    }
     fn add_observer(&self, observer: ListenerObserver) -> ListenerId {
         self.0.notifier.add_observer(observer)
     }

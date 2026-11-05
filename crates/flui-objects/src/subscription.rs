@@ -2,19 +2,21 @@
 
 use std::{cell::Cell, fmt, rc::Rc};
 
-use flui_foundation::{Listenable, ListenerCallback, ListenerId, panic::PanicRecovery};
+use flui_foundation::{Listenable, ListenerCallback, panic::PanicRecovery};
 use flui_rendering::{RenderUpdateImpact, pipeline::LocalRenderInvalidationHandle};
 
 pub(crate) struct RenderSubscription {
     source: Option<Rc<dyn Listenable>>,
-    id: ListenerId,
+    subscription: Option<flui_foundation::Subscription>,
+    /// Set false when this subscription revokes; a delivery of a
+    /// registration the source could not withdraw stays silent.
     active: Rc<Cell<bool>>,
 }
 
 impl fmt::Debug for RenderSubscription {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("RenderSubscription")
-            .field("id", &self.id)
+            .field("revoked", &!self.active.get())
             .finish_non_exhaustive()
     }
 }
@@ -44,29 +46,35 @@ impl RenderSubscription {
         let mut source = None;
         recovery.run(|| source = resolve());
         let source = source?;
+        // The admission gate: once the enclosing owner revokes this
+        // subscription, the relay stays silent even if the source's own
+        // removal panicked before it could take the entry.
         let active = Rc::new(Cell::new(true));
-        let admission = active.clone();
-        let mut id = None;
+        let admitted = Rc::clone(&active);
+        let mut subscription = None;
         recovery.run(|| {
-            id = Some(source.add_listener(Rc::new(move || {
-                if admission.get() {
-                    callback();
-                }
-            })));
+            subscription = Some(source.listen({
+                let callback = Rc::clone(&callback);
+                Rc::new(move || {
+                    if admitted.get() {
+                        callback();
+                    }
+                })
+            }));
         });
-        if let Some(id) = id {
-            Some(Self {
-                source: Some(source),
-                id,
-                active,
-            })
-        } else {
-            // A source that panics before returning an ID has not provided a
-            // cancellation capability. Retain its opaque ownership on failure.
+        let Some(subscription) = subscription else {
+            // A source that panics before handing out a subscription has not
+            // provided a cancellation capability. Retain its opaque ownership
+            // on failure.
             active.set(false);
             recovery.retire(source);
-            None
-        }
+            return None;
+        };
+        Some(Self {
+            source: Some(source),
+            subscription: Some(subscription),
+            active,
+        })
     }
 
     pub(crate) fn close(mut self, recovery: &mut PanicRecovery) {
@@ -75,11 +83,14 @@ impl RenderSubscription {
 
     fn close_source(&mut self, recovery: &mut PanicRecovery) {
         self.active.set(false);
+        if let Some(subscription) = self.subscription.take() {
+            recovery.run(|| subscription.detach());
+        }
         if let Some(source) = self.source.take() {
-            recovery.run(|| source.remove_listener(self.id));
-            // Retain the cancellation capability too if the source's panic
-            // leaves completion unproven. The revoked relay is already inert.
-            recovery.retire((source, self.id));
+            // The source is held only so its later destruction stays under
+            // containment: its captures may run user destructors on the way
+            // out. The revoked relay never fires again.
+            recovery.retire(source);
         }
     }
 }

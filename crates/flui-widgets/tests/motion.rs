@@ -510,6 +510,15 @@ struct RemovalPanics {
 }
 
 impl flui_foundation::Listenable for RemovalPanics {
+    fn listen(&self, listener: flui_foundation::ListenerCallback) -> flui_foundation::Subscription {
+        self.inner.listen(listener)
+    }
+    fn listen_with_recovery(
+        &self,
+        relay: flui_foundation::ListenerObserver,
+    ) -> flui_foundation::Subscription {
+        self.inner.listen_with_recovery(relay)
+    }
     fn add_observer(
         &self,
         observer: flui_foundation::ListenerObserver,
@@ -1090,6 +1099,15 @@ impl StatusByHand {
 }
 
 impl flui_foundation::Listenable for StatusByHand {
+    fn listen(&self, listener: flui_foundation::ListenerCallback) -> flui_foundation::Subscription {
+        self.value.listen(listener)
+    }
+    fn listen_with_recovery(
+        &self,
+        relay: flui_foundation::ListenerObserver,
+    ) -> flui_foundation::Subscription {
+        self.value.listen_with_recovery(relay)
+    }
     fn add_observer(
         &self,
         observer: flui_foundation::ListenerObserver,

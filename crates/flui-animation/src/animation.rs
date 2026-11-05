@@ -108,13 +108,13 @@ where
 /// the subscription is reference-counted here and torn down exactly once, on the
 /// final drop — never while a sibling clone is still alive.
 pub(crate) struct ParentSubscription {
-    teardown: std::cell::RefCell<Option<Box<dyn FnMut()>>>,
+    subscription: std::cell::RefCell<Option<flui_foundation::Subscription>>,
 }
 
 impl ParentSubscription {
-    pub(crate) fn new(teardown: impl FnMut() + 'static) -> Rc<Self> {
+    pub(crate) fn new(subscription: flui_foundation::Subscription) -> Rc<Self> {
         Rc::new(Self {
-            teardown: std::cell::RefCell::new(Some(Box::new(teardown))),
+            subscription: std::cell::RefCell::new(Some(subscription)),
         })
     }
 }
@@ -135,11 +135,9 @@ impl Drop for ParentSubscription {
 
 impl ParentSubscription {
     pub(crate) fn detach(&self, retirement: &mut RecoveryScope<'_>) {
-        let teardown = self.teardown.borrow_mut().take();
-        if let Some(teardown) = teardown {
-            let mut teardown = Terminal::new(teardown);
-            retirement.run(|| (teardown.get_mut())());
-            retirement.retire(teardown);
+        let subscription = self.subscription.borrow_mut().take();
+        if let Some(subscription) = subscription {
+            retirement.run(|| subscription.detach());
         }
     }
 }
@@ -271,7 +269,7 @@ impl Drop for ParentLinks {
 }
 
 /// Subscribe `notifier` to re-emit whenever `parent`'s value changes, returning
-/// a shared [`ParentSubscription`] that removes the subscription on the last
+/// a shared [`ParentSubscription`] that detaches the subscription on the last
 /// combinator clone's drop.
 ///
 /// The parent's callback holds only a `Weak` reference to `notifier`, so the
@@ -284,13 +282,12 @@ where
     T: Clone + 'static,
 {
     let weak = Rc::downgrade(notifier);
-    let id = parent.add_observer(Rc::new(move |recovery| {
+    let subscription = parent.listen_with_recovery(Rc::new(move |recovery| {
         if let Some(notifier) = weak.upgrade() {
             notifier.notify_listeners_with_recovery(recovery);
         }
     }));
-    let parent = Rc::clone(parent);
-    ParentSubscription::new(move || parent.remove_listener(id))
+    ParentSubscription::new(subscription)
 }
 
 /// Status listeners belong to the wrapper; its parent holds only a weak relay.

@@ -1,4 +1,4 @@
-//! [`SelectionController`]: reads and moves a [`SelectionArea`]'s selection
+﻿//! [`SelectionController`]: reads and moves a [`SelectionArea`]'s selection
 //! from outside the area, as an app or a driver does.
 //!
 //! [`SelectionArea`]: super::SelectionArea
@@ -25,6 +25,12 @@ struct Inner {
 }
 
 impl Listenable for Inner {
+    fn listen(&self, listener: ListenerCallback) -> flui_foundation::Subscription {
+        self.notifier.listen(listener)
+    }
+    fn listen_with_recovery(&self, relay: ListenerObserver) -> flui_foundation::Subscription {
+        self.notifier.listen_with_recovery(relay)
+    }
     fn add_observer(&self, observer: ListenerObserver) -> ListenerId {
         self.notifier.add_observer(observer)
     }

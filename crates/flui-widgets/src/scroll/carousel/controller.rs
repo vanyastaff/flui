@@ -6,7 +6,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use flui_animation::{SharedCurve, curves};
-use flui_foundation::{ChangeNotifier, Listenable, ListenerId, MutatedDuringBuild};
+use flui_foundation::{ChangeNotifier, MutatedDuringBuild};
 use flui_objects::{CarouselGeometry, CarouselItemFrames, CarouselLayout};
 use flui_view::{EventCx, EventOutcome};
 
@@ -248,12 +248,9 @@ impl CarouselController {
         holds && self.inner.index.replace(Some(index)) != Some(index)
     }
 
-    pub(super) fn add_pause_listener(&self, listener: Rc<dyn Fn()>) -> ListenerId {
-        self.inner.pause_listeners.add_listener(listener)
-    }
-
-    pub(super) fn remove_pause_listener(&self, id: ListenerId) {
-        self.inner.pause_listeners.remove_listener(id);
+    /// Subscribe with an owned subscription on the pause channel.
+    pub(super) fn listen_pause(&self, listener: Rc<dyn Fn()>) -> flui_foundation::Subscription {
+        self.inner.pause_listeners.listen(listener)
     }
 
     pub(super) fn ptr_eq(&self, other: &Self) -> bool {

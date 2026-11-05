@@ -1,4 +1,4 @@
-//! [`Progress`] — what an `Animate`'s stages read: one parent animation and
+﻿//! [`Progress`] â€” what an `Animate`'s stages read: one parent animation and
 //! the side of a transition, either of which changes the pose.
 
 use std::cell::Cell;
@@ -20,7 +20,7 @@ pub(super) struct Progress {
     proxy: ProxyAnimation<f64>,
     phase: Cell<Phase>,
     changes: ChangeNotifier,
-    relay: Cell<Option<ListenerId>>,
+    relay: Cell<Option<flui_foundation::Subscription>>,
 }
 
 impl Progress {
@@ -32,14 +32,13 @@ impl Progress {
             relay: Cell::new(None),
         });
         let weak: Weak<Self> = Rc::downgrade(&progress);
-        let relay =
-            progress
-                .proxy
-                .add_observer(Rc::new(move |recovery: &mut RecoveryScope<'_>| {
-                    if let Some(progress) = weak.upgrade() {
-                        progress.changes.notify_listeners_with_recovery(recovery);
-                    }
-                }));
+        let relay = progress.proxy.listen_with_recovery(Rc::new(
+            move |recovery: &mut RecoveryScope<'_>| {
+                if let Some(progress) = weak.upgrade() {
+                    progress.changes.notify_listeners_with_recovery(recovery);
+                }
+            },
+        ));
         progress.relay.set(Some(relay));
         progress
     }
@@ -71,9 +70,7 @@ impl Progress {
 
 impl Drop for Progress {
     fn drop(&mut self) {
-        if let Some(relay) = self.relay.take() {
-            self.proxy.remove_listener(relay);
-        }
+        drop(self.relay.take());
     }
 }
 
@@ -87,6 +84,12 @@ impl fmt::Debug for Progress {
 }
 
 impl Listenable for Progress {
+    fn listen(&self, listener: flui_foundation::ListenerCallback) -> flui_foundation::Subscription {
+        self.changes.listen(listener)
+    }
+    fn listen_with_recovery(&self, relay: ListenerObserver) -> flui_foundation::Subscription {
+        Listenable::listen_with_recovery(&self.changes, relay)
+    }
     fn add_observer(&self, observer: ListenerObserver) -> ListenerId {
         self.changes.add_observer(observer)
     }

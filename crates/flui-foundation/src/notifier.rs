@@ -79,6 +79,15 @@ pub trait Listenable {
     /// observer borrows that delivery's failure custody rather than a fresh one.
     fn add_observer(&self, observer: ListenerObserver) -> ListenerId;
 
+    /// Register a relay that runs inside the notifying delivery's
+    /// [`RecoveryScope`] under an owned [`Subscription`]: the owned twin of
+    /// [`add_observer`](Self::add_observer) (ADR-0219's required observer). A
+    /// source forwards it to the channel that notifies, so the relay borrows
+    /// that delivery's failure custody rather than a fresh one. Hold the
+    /// returned [`Subscription`], and the relay fires on every notification;
+    /// drop it, and the relay detaches from its own channel.
+    fn listen_with_recovery(&self, relay: ListenerObserver) -> Subscription;
+
     /// Register a listener callback.
     ///
     /// An observer that ignores the scope; a panic in it is still contained
@@ -96,6 +105,11 @@ pub trait Listenable {
 
     /// Remove all listeners.
     fn remove_all_listeners(&self);
+
+    /// Subscribe with an owned [`Subscription`]: hold it, and the listener
+    /// fires on every notification; drop it, and the listener detaches from
+    /// its own channel.
+    fn listen(&self, listener: ListenerCallback) -> Subscription;
 }
 
 /// An interface for subclasses of [`Listenable`] that expose a value.
@@ -367,8 +381,16 @@ impl ChangeNotifier {
     /// Subscribe with an owned [`Subscription`]: hold it, and the
     /// listener fires on every [`notify_listeners`](Self::notify_listeners);
     /// drop it, and the listener detaches from this notifier.
-    pub fn listen(&self, listener: impl Fn() + 'static) -> Subscription {
+    pub fn listen(&self, listener: ListenerCallback) -> Subscription {
         self.inner.listen(listener)
+    }
+
+    /// Subscribe an owned relay that runs inside the notifying delivery's
+    /// [`RecoveryScope`]: the owned twin of
+    /// [`add_observer`](Self::add_observer).
+    pub fn listen_with_recovery(&self, relay: ListenerObserver) -> Subscription {
+        self.inner
+            .listen_with_recovery(Rc::new(move |&(), recovery| relay(recovery)))
     }
 
     /// Checks if there are no listeners registered
@@ -387,6 +409,13 @@ impl ChangeNotifier {
 }
 
 impl Listenable for ChangeNotifier {
+    fn listen(&self, listener: ListenerCallback) -> Subscription {
+        self.inner.listen(listener)
+    }
+    fn listen_with_recovery(&self, relay: ListenerObserver) -> Subscription {
+        self.inner
+            .listen_with_recovery(Rc::new(move |&(), recovery| relay(recovery)))
+    }
     fn add_observer(&self, observer: ListenerObserver) -> ListenerId {
         self.inner
             .add_with_recovery(Rc::new(move |&(), recovery| observer(recovery)))
@@ -694,6 +723,12 @@ impl<T> AsRef<T> for ValueNotifier<T> {
 }
 
 impl<T> Listenable for ValueNotifier<T> {
+    fn listen(&self, listener: ListenerCallback) -> Subscription {
+        self.notifier().listen(listener)
+    }
+    fn listen_with_recovery(&self, relay: ListenerObserver) -> Subscription {
+        self.notifier().listen_with_recovery(relay)
+    }
     fn add_observer(&self, observer: ListenerObserver) -> ListenerId {
         self.notifier().add_observer(observer)
     }
@@ -720,7 +755,7 @@ impl<T> ValueNotifier<T> {
     /// Subscribe with an owned [`Subscription`]: hold it, and the
     /// listener fires on every [`set_value`](Self::set_value) that notifies;
     /// drop it, and the listener detaches from this notifier.
-    pub fn listen(&self, listener: impl Fn() + 'static) -> Subscription
+    pub fn listen(&self, listener: ListenerCallback) -> Subscription
     where
         T: 'static,
     {
@@ -747,10 +782,10 @@ impl<T> ValueNotifier<T> {
 ///
 /// let notifier = ChangeNotifier::new();
 /// let hits = Rc::new(Cell::new(0));
-/// let subscription = notifier.listen({
+/// let subscription = notifier.listen(Rc::new({
 ///     let hits = Rc::clone(&hits);
 ///     move || hits.set(hits.get() + 1)
-/// });
+/// }));
 /// notifier.notify_listeners();
 /// assert_eq!(hits.get(), 1);
 ///
@@ -761,10 +796,15 @@ impl<T> ValueNotifier<T> {
 #[must_use = "hold the subscription: dropping it detaches its listener"]
 pub struct Subscription {
     /// The channel the listener registered on, weak so a subscription never
-    /// pins a channel its outside has released.
-    channel: std::rc::Weak<dyn crate::notifier_generic::SubscribedChannel>,
+    /// pins a channel its outside has released. `None` for an inert
+    /// subscription that never had one.
+    channel: Option<std::rc::Weak<dyn crate::notifier_generic::SubscribedChannel>>,
     /// Some while the listener is still registered; `None` once detached.
     id: Option<ListenerId>,
+    /// A removal the source itself supplies instead of a channel: the owned
+    /// twin of ADR-0180's status-guard removal function, for a custom source
+    /// whose storage is no foundation listener set.
+    remove: Option<Box<dyn Fn()>>,
 }
 
 impl Subscription {
@@ -775,21 +815,48 @@ impl Subscription {
         id: ListenerId,
     ) -> Self {
         Self {
-            channel,
+            channel: Some(channel),
             id: Some(id),
+            remove: None,
         }
     }
 
     /// Detach now rather than at drop; idempotent with the drop that follows.
+    /// A custom source's withdrawal runs its `remove` once.
     pub fn detach(mut self) {
         self.take_listener();
     }
 
+    /// A subscription to a custom source: `remove` runs once, on the first
+    /// detach or the drop that follows. The closure must commit the
+    /// withdrawal it promises, as ADR-0180's status guard's removal does.
+    pub fn for_removal(remove: impl Fn() + 'static) -> Self {
+        Self {
+            channel: None,
+            id: None,
+            remove: Some(Box::new(remove)),
+        }
+    }
+
+    /// An inert subscription: nothing to detach, ever. For a source that
+    /// admits no registration (a constant animation) and hands this form out
+    /// instead of a listener id that names nothing.
+    pub fn inert() -> Self {
+        Self {
+            channel: None,
+            id: None,
+            remove: None,
+        }
+    }
+
     fn take_listener(&mut self) {
         let Some(id) = self.id.take() else {
+            if let Some(remove) = self.remove.take() {
+                remove();
+            }
             return;
         };
-        if let Some(channel) = self.channel.upgrade() {
+        if let Some(channel) = self.channel.take().and_then(|channel| channel.upgrade()) {
             channel.detach_listener(id);
         }
     }

@@ -71,7 +71,7 @@ use std::time::Duration;
 use std::sync::OnceLock;
 
 use flui_animation::{Animation, ProxyAnimation};
-use flui_foundation::{ChangeNotifier, Listenable, ListenerId};
+use flui_foundation::{ChangeNotifier, Listenable};
 use flui_painting::styling::Color;
 use flui_view::prelude::*;
 use flui_view::{AnimatedView, BoxedView, ViewExt, impl_animated_view};
@@ -153,7 +153,7 @@ struct ModalInner {
     relay: super::lifecycle::Terminal<Rc<ChangeNotifier>>,
     /// The relay's subscriptions to the two animations, opened in `install` and
     /// closed in `dispose`. `Listenable` has no `Drop`-based unsubscribe.
-    relay_subscriptions: Mutex<Vec<(RouteAnimation, ListenerId)>>,
+    relay_subscriptions: Mutex<Vec<flui_foundation::Subscription>>,
 
     /// The primary animation proxy.
     ///
@@ -375,16 +375,19 @@ impl ModalInner {
         let mut subscriptions = self.relay_subscriptions.lock();
         for animation in animations {
             let relay = Rc::clone(&self.relay);
-            let id = animation.add_listener(std::rc::Rc::new(move || relay.notify_listeners()));
-            subscriptions.push((animation, id));
+            let subscription = animation.listen(std::rc::Rc::new(move || relay.notify_listeners()));
+            subscriptions.push(subscription);
         }
     }
 
     /// Drop them again. Called from `dispose()`, **before** the controller is.
     fn close_relay(&self) {
-        for (animation, id) in self.relay_subscriptions.lock().drain(..) {
-            animation.remove_listener(id);
-        }
+        drop(
+            self.relay_subscriptions
+                .lock()
+                .drain(..)
+                .collect::<Vec<_>>(),
+        );
     }
 }
 

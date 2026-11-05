@@ -1,4 +1,4 @@
-//! [`ToolbarItems`]: a toolbar's commands in one row, the trailing ones that
+﻿//! [`ToolbarItems`]: a toolbar's commands in one row, the trailing ones that
 //! don't fit behind an overflow button, and [`ToolbarItemsController`], which
 //! holds whether the button shows them and which they are.
 
@@ -95,6 +95,15 @@ impl fmt::Debug for ToolbarItemsController {
 }
 
 impl Listenable for ToolbarItemsController {
+    fn listen(&self, listener: ListenerCallback) -> flui_foundation::Subscription {
+        self.inner.notifier.listen(listener)
+    }
+    fn listen_with_recovery(
+        &self,
+        relay: flui_foundation::ListenerObserver,
+    ) -> flui_foundation::Subscription {
+        self.inner.notifier.listen_with_recovery(relay)
+    }
     fn add_observer(&self, observer: flui_foundation::ListenerObserver) -> ListenerId {
         self.inner.notifier.add_observer(observer)
     }
@@ -309,7 +318,7 @@ impl ViewState<ToolbarItems> for ToolbarItemsState {
     }
 }
 
-/// The plain overflow button: "⋯" in the row and "‹" over the column,
+/// The plain overflow button: "â‹¯" in the row and "â€¹" over the column,
 /// labelled for assistive technology, flipping the toolbar when chosen. It
 /// never takes the focus.
 fn plain_button(controller: &ToolbarItemsController, ctx: &dyn BuildContext) -> BoxedView {

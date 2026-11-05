@@ -577,7 +577,7 @@ fn indicator_callback_requests_removal(source: usize) {
         .iter()
         .enumerate()
         .map(|(index, (_, animation))| {
-            animation.add_listener(Rc::new({
+            animation.listen(Rc::new({
                 let deliveries = deliveries.clone();
                 move || deliveries[index].set(deliveries[index].get() + 1)
             }))
@@ -585,7 +585,7 @@ fn indicator_callback_requests_removal(source: usize) {
         .collect::<Vec<_>>();
     let requested = Rc::new(Cell::new(false));
     let writer = laid.with_build_owner_mut(|owner| owner.writer_source());
-    let callback = animations[source].1.add_listener(Rc::new({
+    let callback = animations[source].1.listen(Rc::new({
         let requested = requested.clone();
         move || {
             if !requested.replace(true) {
@@ -658,10 +658,8 @@ fn indicator_callback_requests_removal(source: usize) {
         arcs(&laid).is_empty(),
         "disposed indicators paint no further arcs"
     );
-    animations[source].1.remove_listener(callback);
-    for ((_, animation), monitor) in animations.iter().zip(monitors) {
-        animation.remove_listener(monitor);
-    }
+    drop(callback);
+    drop(monitors);
 }
 
 fn indicator_rebind_after_unmount() {

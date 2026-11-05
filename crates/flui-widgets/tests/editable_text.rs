@@ -1928,7 +1928,7 @@ pub(crate) mod text_store {
         );
         let heard = Rc::new(RefCell::new(Vec::new()));
         let (listened, log) = (controller.clone(), Rc::clone(&heard));
-        let _listener = controller.add_listener(Rc::new(move || {
+        let _listener = controller.listen(Rc::new(move || {
             log.borrow_mut().push(listened.text());
         }));
         let _ = focus_node.request_focus();
@@ -2094,7 +2094,7 @@ pub(crate) mod text_store {
             assert!(controller.is_composing(), "precondition: composing");
             let notified = Arc::new(AtomicUsize::new(0));
             let count = Arc::clone(&notified);
-            let listener = controller.add_listener(Rc::new(move || {
+            let listener = controller.listen(Rc::new(move || {
                 count.fetch_add(1, Ordering::SeqCst);
             }));
 
@@ -2124,7 +2124,7 @@ pub(crate) mod text_store {
             harness.tick();
             harness.swap_root(flui_widgets::SizedBox::square(10.0));
             harness.tick();
-            controller.remove_listener(listener);
+            drop(listener);
             assert_eq!(controller.text(), "ab東京", "a second unmount adds nothing");
             assert_eq!(
                 notified.load(Ordering::SeqCst),
@@ -2180,7 +2180,7 @@ pub(crate) mod text_store {
         LISTENED_FIELD.with(|slot| *slot.borrow_mut() = Some(Rc::clone(&field)));
         let answered = Arc::new(AtomicBool::new(false));
         let once = Arc::clone(&answered);
-        let listener = controller.add_listener(std::rc::Rc::new(move || {
+        let listener = controller.listen(std::rc::Rc::new(move || {
             if once.swap(true, Ordering::SeqCst) {
                 return;
             }
@@ -2198,7 +2198,7 @@ pub(crate) mod text_store {
         edit(&field, |session| {
             session.insert_at_selection("a").expect("in range");
         });
-        controller.remove_listener(listener);
+        drop(listener);
         LISTENED_FIELD.with(|slot| slot.borrow_mut().take());
         assert!(
             answered.load(Ordering::SeqCst),

@@ -40,6 +40,21 @@ move or borrow its value.
    retirement panics, retain the remaining envelopes and propagate the first
    retirement failure. `panic::retain_opaque_payload` deliberately retains a
    discarded opaque payload; a propagated original failure uses `resume_unwind`.
+5. `Listenable`'s registration is an owned subscription. The trait carries two
+   required methods, `listen` and `listen_with_recovery`
+   ([ADR-0219](ADR-0219-required-observer-registration.md) names the relay's
+   recovery custody); each returns a `Subscription`, `#[must_use]` and
+   `!Send`, whose drop detaches through its own channel — or, for a custom
+   source whose storage is no foundation listener set, through the removal the
+   subscription was built with (`Subscription::for_removal`, the twin of
+   ADR-0180's status guard's removal function). An inert source answers
+   `Subscription::inert()`. A listener id never leaves the `Listenable` trait:
+   the id is the channel's own identity, its removal machinery the concrete
+   channel's (`ChangeNotifier::take_listener`, `take_listeners`,
+   `Notifier::add`/`add_with_recovery`), and the concrete owner clears its
+   channel with `dispose`. Sources that refuse a registration hand back the
+   inert form; an unmounted or closed source's listen checks its gate before
+   the channel's disposed state can answer.
 
 ADR-0119 refines discarded-payload retention: exact static-string and owned-string
 payloads are released; all opaque payloads and exceptional callback snapshots

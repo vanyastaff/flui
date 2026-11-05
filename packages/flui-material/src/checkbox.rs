@@ -74,7 +74,7 @@
 
 use std::rc::Rc;
 
-use flui_sdk::foundation::Listenable;
+use flui_sdk::foundation::{Listenable, Subscription};
 use flui_sdk::painting::Canvas;
 use flui_sdk::painting::{BorderSide, BorderStyle};
 use flui_sdk::painting::{Paint, Path};
@@ -303,7 +303,7 @@ impl Checkbox {
 /// `Hovered`/`Focused`/`Pressed`/`Disabled` are `InkWell`'s to manage.
 pub struct CheckboxState {
     states: WidgetStatesController,
-    states_listener: Option<flui_sdk::foundation::ListenerId>,
+    states_listener: Option<Subscription>,
 }
 
 impl std::fmt::Debug for CheckboxState {
@@ -341,7 +341,7 @@ impl ViewState<Checkbox> for CheckboxState {
         // handle is consumed directly by the listener closure; nothing else
         // needs to re-read it later, so it is not stored on `self`.
         let rebuild = ctx.rebuild_handle();
-        self.states_listener = Some(self.states.add_listener(std::rc::Rc::new(move || {
+        self.states_listener = Some(self.states.listen(std::rc::Rc::new(move || {
             rebuild.schedule(flui_sdk::view::RebuildReason::StateChange);
         })));
     }
@@ -448,9 +448,7 @@ impl ViewState<Checkbox> for CheckboxState {
     }
 
     fn dispose(&mut self) {
-        if let Some(id) = self.states_listener.take() {
-            self.states.remove_listener(id);
-        }
+        drop(self.states_listener.take());
     }
 }
 

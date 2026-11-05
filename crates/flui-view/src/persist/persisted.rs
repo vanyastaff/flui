@@ -210,7 +210,9 @@ impl Announcer {
         self.closed.set(true);
         let delivery = self.delivery.borrow_mut().take();
         drop(delivery);
-        Listenable::remove_all_listeners(&self.notifier);
+        // The concrete owner's clear: nothing serves this announcer again,
+        // and a registration after close is refused at the closed gate.
+        self.notifier.dispose();
     }
 }
 
@@ -582,8 +584,39 @@ impl<D: Document> Persisted<D> {
 }
 
 impl<D: Document> Listenable for Persisted<D> {
+    fn listen(&self, listener: flui_foundation::ListenerCallback) -> flui_foundation::Subscription {
+        let announcer = &self.document.announcer;
+        // Refused at the closed gate: the closed run's notifier is disposed.
+        if announcer.closed.get() {
+            return flui_foundation::Subscription::inert();
+        }
+        let subscription = announcer.notifier.listen(listener);
+        if announcer.closed.get() {
+            // The opening state went away amid the registration.
+            drop(subscription);
+            return flui_foundation::Subscription::inert();
+        }
+        self.document.refresh();
+        subscription
+    }
     /// The document follows the registry while it has listeners, so a
     /// commit by another document of this name is told too.
+    fn listen_with_recovery(&self, relay: ListenerObserver) -> flui_foundation::Subscription {
+        let announcer = &self.document.announcer;
+        // Refused at the closed gate: the closed run's notifier is disposed.
+        if announcer.closed.get() {
+            return flui_foundation::Subscription::inert();
+        }
+        let subscription = announcer.notifier.listen_with_recovery(relay);
+        if announcer.closed.get() {
+            // The opening state is gone: the relay would never be told,
+            // and is not kept. The detached caller gets the inert form.
+            drop(subscription);
+            return flui_foundation::Subscription::inert();
+        }
+        self.document.refresh();
+        subscription
+    }
     fn add_observer(&self, observer: ListenerObserver) -> ListenerId {
         let announcer = &self.document.announcer;
         let id = announcer.notifier.add_observer(observer);

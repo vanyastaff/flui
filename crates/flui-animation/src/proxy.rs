@@ -1,4 +1,4 @@
-//! `ProxyAnimation` - wraps another animation, allowing hot-swapping.
+﻿//! `ProxyAnimation` - wraps another animation, allowing hot-swapping.
 
 use crate::animation::{Animation, ParentSubscription, Retirement, Terminal, link_parent};
 use crate::channels::{Channels, Withdrawn};
@@ -277,6 +277,15 @@ impl<T> Listenable for ProxyAnimation<T>
 where
     T: Clone + 'static,
 {
+    fn listen(&self, listener: ListenerCallback) -> flui_foundation::Subscription {
+        self.inner.channels.listen(listener)
+    }
+    fn listen_with_recovery(
+        &self,
+        relay: flui_foundation::notifier::ListenerObserver,
+    ) -> flui_foundation::Subscription {
+        self.inner.channels.listen_with_recovery(relay)
+    }
     fn add_observer(&self, observer: flui_foundation::notifier::ListenerObserver) -> ListenerId {
         self.inner.channels.add_observer(observer)
     }

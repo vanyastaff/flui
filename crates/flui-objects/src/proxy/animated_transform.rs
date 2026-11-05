@@ -801,6 +801,18 @@ mod tests {
     struct Probe(Arc<AtomicBool>, flui_foundation::ChangeNotifier);
 
     impl Listenable for Probe {
+        fn listen(
+            &self,
+            listener: flui_foundation::ListenerCallback,
+        ) -> flui_foundation::Subscription {
+            self.1.listen(listener)
+        }
+        fn listen_with_recovery(
+            &self,
+            relay: flui_foundation::ListenerObserver,
+        ) -> flui_foundation::Subscription {
+            self.1.listen_with_recovery(relay)
+        }
         fn add_observer(&self, observer: flui_foundation::ListenerObserver) -> ListenerId {
             self.1.add_observer(observer)
         }

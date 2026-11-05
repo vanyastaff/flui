@@ -50,7 +50,7 @@ use flui_animation::{
     Tween,
 };
 use flui_foundation::geometry::Rect;
-use flui_foundation::{ChangeNotifier, Listenable, ListenerId, RenderId};
+use flui_foundation::{ChangeNotifier, Listenable, RenderId};
 use flui_scheduler::PostFrameHandle;
 use flui_view::prelude::*;
 use flui_view::{AnimatedView, BoxedView, ViewExt, impl_animated_view};
@@ -147,7 +147,7 @@ struct FlightInner {
     wake: Terminal<Rc<ChangeNotifier>>,
     /// The forwarding subscription feeding [`wake`](Self::wake) from
     /// [`proxy`](Self::proxy)'s own value changes.
-    proxy_wake_subscription: Cell<Option<ListenerId>>,
+    proxy_wake_subscription: Cell<Option<flui_foundation::Subscription>>,
     /// The forwarding subscription feeding [`wake`](Self::wake) from
     /// [`gesture_signal`](Self::gesture_signal)'s notifier — the same
     /// listener that replays a terminal status parked mid-gesture. Registered
@@ -165,7 +165,7 @@ struct FlightInner {
     /// (owned by this same struct), which simply drops the registry along
     /// with itself; only a registration on someone else's longer-lived
     /// notifier can leak a closure this way.
-    gesture_wake_subscription: Cell<Option<ListenerId>>,
+    gesture_wake_subscription: Cell<Option<flui_foundation::Subscription>>,
     /// Terminal status reported by the data-plane animation listener.
     ///
     /// The listener captures this cell rather than the flight or manager;
@@ -366,12 +366,11 @@ impl Drop for FlightInner {
             subscription.cancel_with_recovery(&mut recovery.scope());
         }
         recovery.retire(status_subscription);
-        if let Some(id) = proxy_subscription {
-            proxy.remove_listener_with_recovery(id, &mut recovery.scope());
+        if let Some(subscription) = proxy_subscription {
+            recovery.run(|| subscription.detach());
         }
-        if let Some(id) = gesture_subscription {
-            let callback = Terminal::new(gesture.notifier().take_listener(id));
-            recovery.retire(callback);
+        if let Some(subscription) = gesture_subscription {
+            recovery.run(|| subscription.detach());
         }
         recovery.retire(tag);
         recovery.retire(state);
@@ -512,12 +511,11 @@ impl HeroFlight {
             subscription.cancel_with_recovery(recovery);
         }
         recovery.retire(status_subscription);
-        if let Some(id) = proxy_subscription {
-            self.inner.proxy.remove_listener_with_recovery(id, recovery);
+        if let Some(subscription) = proxy_subscription {
+            recovery.run(|| subscription.detach());
         }
-        if let Some(id) = gesture_subscription {
-            let callback = Terminal::new(self.inner.gesture_signal.notifier().take_listener(id));
-            recovery.retire(callback);
+        if let Some(subscription) = gesture_subscription {
+            recovery.run(|| subscription.detach());
         }
 
         if let Some(entry) = entry.as_ref()
@@ -1201,10 +1199,12 @@ impl FlightManager {
             // The shuttle listens to `wake`, not `proxy` directly — forward every proxy
             // tick into it so that stays true.
             let proxy_to_wake = Rc::clone(&inner.wake);
-            let proxy_wake_id = inner
+            let proxy_wake_subscription = inner
                 .proxy
-                .add_listener(std::rc::Rc::new(move || proxy_to_wake.notify_listeners()));
-            inner.proxy_wake_subscription.set(Some(proxy_wake_id));
+                .listen(std::rc::Rc::new(move || proxy_to_wake.notify_listeners()));
+            inner
+                .proxy_wake_subscription
+                .set(Some(proxy_wake_subscription));
 
             // The status listener must remain a data-plane callback. It records only a
             // tiny terminal-status flag; the owner-local shuttle drains the flag and
@@ -1245,26 +1245,26 @@ impl FlightManager {
             let proxy_for_replay = Rc::clone(&inner.proxy);
             let gesture_to_wake = Rc::clone(&inner.wake);
             let replay_gesture_signal = gesture_signal.clone();
-            let gesture_wake_id =
-                gesture_signal
-                    .notifier()
-                    .add_listener(std::rc::Rc::new(move || {
-                        if !replay_gesture_signal.in_progress() {
-                            // Read the status fresh, not whatever status was skipped when it
-                            // was parked.
-                            match proxy_for_replay.status() {
-                                AnimationStatus::ReverseSettled => {
-                                    settled_status.set(Some(AnimationStatus::ReverseSettled));
-                                }
-                                AnimationStatus::ForwardSettled => {
-                                    settled_status.set(Some(AnimationStatus::ForwardSettled));
-                                }
-                                _ => {} // Still animating; nothing to replay.
+            let gesture_wake_subscription =
+                gesture_signal.notifier().listen(std::rc::Rc::new(move || {
+                    if !replay_gesture_signal.in_progress() {
+                        // Read the status fresh, not whatever status was skipped when it
+                        // was parked.
+                        match proxy_for_replay.status() {
+                            AnimationStatus::ReverseSettled => {
+                                settled_status.set(Some(AnimationStatus::ReverseSettled));
                             }
+                            AnimationStatus::ForwardSettled => {
+                                settled_status.set(Some(AnimationStatus::ForwardSettled));
+                            }
+                            _ => {} // Still animating; nothing to replay.
                         }
-                        gesture_to_wake.notify_listeners();
-                    }));
-            inner.gesture_wake_subscription.set(Some(gesture_wake_id));
+                    }
+                    gesture_to_wake.notify_listeners();
+                }));
+            inner
+                .gesture_wake_subscription
+                .set(Some(gesture_wake_subscription));
             initialized = true;
         });
         if !initialized && !inner.ended.get() {
@@ -1759,14 +1759,14 @@ mod terminal_tests {
             drop(previous);
             let mut competing_drops = None;
             if case == "placeholder_reentry_competing" {
-                if let Some(id) = old.inner.proxy_wake_subscription.take() {
-                    old.inner.proxy.remove_listener(id);
-                }
+                drop(old.inner.proxy_wake_subscription.take());
                 let (capture, drops) = bomb("second placeholder cancellation failure", true);
-                let id = old.inner.proxy.add_listener(Rc::new(move || {
+                let proxy_wake_subscription = old.inner.proxy.listen(Rc::new(move || {
                     let _capture = &capture;
                 }));
-                old.inner.proxy_wake_subscription.set(Some(id));
+                old.inner
+                    .proxy_wake_subscription
+                    .set(Some(proxy_wake_subscription));
                 competing_drops = Some(drops);
             }
             let outcome = catch_unwind(AssertUnwindSafe(|| {
@@ -1874,17 +1874,18 @@ mod terminal_tests {
                 .borrow_mut()
                 .replace(subscription);
             drop(previous);
-            if let Some(id) = flight.inner.proxy_wake_subscription.take() {
-                flight.inner.proxy.remove_listener(id);
-            }
+            drop(flight.inner.proxy_wake_subscription.take());
             let (capture, capture_drops) = bomb(
                 "second Hero cancellation failure",
                 case == "abort_competing",
             );
-            let id = flight.inner.proxy.add_listener(Rc::new(move || {
+            let proxy_wake_subscription = flight.inner.proxy.listen(Rc::new(move || {
                 let _capture = &capture;
             }));
-            flight.inner.proxy_wake_subscription.set(Some(id));
+            flight
+                .inner
+                .proxy_wake_subscription
+                .set(Some(proxy_wake_subscription));
             let failure = catch_unwind(AssertUnwindSafe(|| manager.finish_all()))
                 .expect_err("cancellation reports its first failure after restoration");
             assert_failure(failure, "first Hero cancellation failure");

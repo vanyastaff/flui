@@ -7,9 +7,7 @@
 use std::cell::{Cell, RefCell};
 use std::rc::{Rc, Weak};
 
-use flui_foundation::ListenerId;
 use flui_foundation::geometry::Offset;
-use flui_foundation::notifier::{ChangeNotifier, Listenable};
 use flui_foundation::panic::FirstPanic;
 use flui_painting::typography::TextDirection;
 use flui_scheduler::{FrameTiming, PostFrameHandle};
@@ -78,7 +76,7 @@ pub(crate) struct MenuHost {
     /// Set while the toolbar shows.
     toolbar: Cell<bool>,
     /// The toolbar's subscriptions to its items' enablement.
-    toolbar_watches: RefCell<Vec<(ChangeNotifier, ListenerId)>>,
+    toolbar_watches: RefCell<Vec<flui_foundation::Subscription>>,
 }
 
 impl MenuHost {
@@ -281,26 +279,22 @@ impl MenuHost {
         if self.look().is_none() || self.toolbar.replace(true) {
             return false;
         }
-        let watches: Vec<(ChangeNotifier, ListenerId)> = self
+        let watches = self
             .items()
             .iter()
             .filter_map(MenuItem::enablement_changes)
             .map(|changes| {
                 let changed = Rc::clone(changed);
-                let id = changes.add_listener(Rc::new(move || changed()));
-                (changes, id)
+                changes.listen(Rc::new(move || changed()))
             })
-            .collect::<Vec<(ChangeNotifier, ListenerId)>>();
+            .collect::<Vec<flui_foundation::Subscription>>();
         *self.toolbar_watches.borrow_mut() = watches;
         true
     }
 
     /// Marks the toolbar gone. Returns whether it showed.
     pub(crate) fn stop_toolbar(&self) -> bool {
-        let watches = std::mem::take(&mut *self.toolbar_watches.borrow_mut());
-        for (changes, id) in watches {
-            changes.remove_listener(id);
-        }
+        drop(std::mem::take(&mut *self.toolbar_watches.borrow_mut()));
         self.toolbar.replace(false)
     }
 }

@@ -44,7 +44,8 @@ use flui_sdk::animation::{
 };
 use flui_sdk::foundation::panic::PanicRecovery;
 use flui_sdk::foundation::{
-    ChangeNotifier, Listenable, ListenerId, ListenerObserver, MutatedDuringBuild,
+    ChangeNotifier, Listenable, ListenerCallback, ListenerId, ListenerObserver, MutatedDuringBuild,
+    Subscription,
 };
 use flui_sdk::pipeline::ScrollDirection;
 use flui_sdk::view::environment::VsyncScope;
@@ -146,7 +147,6 @@ impl TabListenerRegistry {
         recovery.finish();
     }
 }
-
 /// How a selection change moves the position.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Change {
@@ -157,22 +157,18 @@ enum Change {
 }
 
 /// The attached `TabBarView`'s pager and this controller's subscriptions to
-/// it.
+/// it. Both subscriptions detach when the link is dropped.
 struct PagerLink {
     pager: PageController,
     pixels: Rc<dyn Listenable>,
-    pixel_listener: ListenerId,
-    activity_listener: ListenerId,
+    /// Both held only to detach at the link's drop; no read.
+    #[expect(dead_code, reason = "the subscriptions detach at the link's drop")]
+    pixel_listener: Subscription,
+    #[expect(dead_code, reason = "the subscriptions detach at the link's drop")]
+    activity_listener: Subscription,
 }
 
 impl PagerLink {
-    fn unsubscribe(&self) {
-        self.pixels.remove_listener(self.pixel_listener);
-        self.pager
-            .position()
-            .remove_activity_listener(self.activity_listener);
-    }
-
     fn is(&self, pager: &PageController) -> bool {
         Rc::ptr_eq(&self.pixels, &pager.listenable())
     }
@@ -193,6 +189,13 @@ struct Shared {
     owned: AnimatedValueView<f64>,
     /// A drive requested while the owner was out; the outer drive applies it.
     pending_drive: Cell<Option<(f64, Change)>>,
+    /// The owner's value relay's subscription; lives as long as the owner.
+    /// Held for its drop; nothing reads it.
+    #[expect(
+        dead_code,
+        reason = "the relay's subscription detaches at the controller's drop"
+    )]
+    position_forwarding: Cell<Option<Subscription>>,
     motion: RefCell<MotionSpec>,
     pager: RefCell<Option<PagerLink>>,
     /// Set while this controller moves the pager. Moving it can stop the
@@ -517,6 +520,12 @@ impl Drop for OwnerSlot<'_> {
 }
 
 impl Listenable for Shared {
+    fn listen(&self, listener: ListenerCallback) -> Subscription {
+        self.position_listeners.listen(listener)
+    }
+    fn listen_with_recovery(&self, relay: ListenerObserver) -> Subscription {
+        self.position_listeners.listen_with_recovery(relay)
+    }
     fn add_observer(&self, observer: ListenerObserver) -> ListenerId {
         self.position_listeners.add_observer(observer)
     }
@@ -618,8 +627,8 @@ impl TabController {
         let position_listeners = ChangeNotifier::new();
         let forward = position_listeners.clone();
         // The owner's notifications live as long as the owner, which this
-        // controller holds; the subscription needs no explicit removal.
-        let _forwarding = owned.add_observer(Rc::new(move |recovery| {
+        // controller holds; the subscription is stored on the shared state.
+        let forwarding = owned.listen_with_recovery(Rc::new(move |recovery| {
             forward.notify_listeners_with_recovery(recovery);
         }));
         Self {
@@ -634,6 +643,7 @@ impl TabController {
                 owner: RefCell::new(Some(owner)),
                 owned,
                 pending_drive: Cell::new(None),
+                position_forwarding: Cell::new(Some(forwarding)),
                 motion: RefCell::new(motion),
                 pager: RefCell::new(None),
                 driving_pager: Cell::new(false),
@@ -753,13 +763,14 @@ impl TabController {
     /// Registers a listener, called whenever the selected index actually
     /// changes. It may capture this same `TabController` to read the
     /// just-updated `(index, previous_index)` pair.
-    pub fn add_listener(&self, listener: impl Fn() + 'static) -> ListenerId {
-        self.shared.index_listeners.add_listener(Rc::new(listener))
-    }
-
-    /// Unregisters a previously-registered listener.
-    pub fn remove_listener(&self, id: ListenerId) {
-        self.shared.index_listeners.remove_listener(id);
+    pub fn listen(&self, listener: impl Fn() + 'static) -> Subscription {
+        let id = self.shared.index_listeners.add_listener(Rc::new(listener));
+        let shared = Rc::downgrade(&self.shared);
+        Subscription::for_removal(move || {
+            if let Some(shared) = shared.upgrade() {
+                shared.index_listeners.remove_listener(id);
+            }
+        })
     }
 
     /// The number of currently-registered index listeners, so a consumer's
@@ -845,7 +856,7 @@ impl TabController {
         let pager = PageController::with_params(self.index(), ViewportFraction::FULL);
         let pixels = pager.listenable();
         let forward = self.shared.position_listeners.clone();
-        let pixel_listener = pixels.add_observer(Rc::new(move |recovery| {
+        let pixel_listener = pixels.listen_with_recovery(Rc::new(move |recovery| {
             forward.notify_listeners_with_recovery(recovery);
         }));
         let weak = Rc::downgrade(&self.shared);
@@ -919,7 +930,7 @@ impl Drop for PagerAttachment {
             }
         };
         if let Some(link) = link {
-            link.unsubscribe();
+            drop(link);
             shared.drive_owner(shared.index() as f64, Change::Jump);
         }
     }
@@ -970,6 +981,12 @@ impl TabPosition {
 }
 
 impl Listenable for TabPosition {
+    fn listen(&self, listener: ListenerCallback) -> Subscription {
+        self.shared.listen(listener)
+    }
+    fn listen_with_recovery(&self, relay: ListenerObserver) -> Subscription {
+        Listenable::listen_with_recovery(&*self.shared, relay)
+    }
     fn add_observer(&self, observer: ListenerObserver) -> ListenerId {
         self.shared.add_observer(observer)
     }

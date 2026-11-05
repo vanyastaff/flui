@@ -6,8 +6,8 @@ use std::num::NonZeroUsize;
 use std::rc::Rc;
 
 use flui_animation::{Animation, MotionPolicy, SharedCurve, curves};
+use flui_foundation::Listenable;
 use flui_foundation::geometry::{Point, Rect, Size};
-use flui_foundation::{Listenable, ListenerId};
 use flui_painting::{Canvas, Paint, styling::Color, typography::TextDirection};
 use flui_rendering::{delegates::CustomPainter, semantics::SemanticsRole};
 use flui_view::prelude::*;
@@ -280,7 +280,10 @@ impl Live {
 /// Persistent state for [`PageIndicator`]: the subscription to its position.
 pub struct PageIndicatorState {
     live: Rc<Live>,
-    listener: Option<(Rc<dyn Listenable>, ListenerId)>,
+    listener: Option<flui_foundation::Subscription>,
+    /// The channel the listener subscribed on, for the painter's repaint
+    /// trigger: a fresh subscription means a fresh source.
+    repaint_source: Option<Rc<dyn Listenable>>,
     rebuild: Option<RebuildHandle>,
 }
 
@@ -310,6 +313,7 @@ impl StatefulView for PageIndicator {
         PageIndicatorState {
             live,
             listener: None,
+            repaint_source: None,
             rebuild: None,
         }
     }
@@ -324,20 +328,20 @@ impl PageIndicatorState {
             .expect("BUG: init_state mints the rebuild handle before subscribing");
         let live = Rc::downgrade(&self.live);
         let listenable = self.live.source.borrow().listenable();
-        let id = listenable.add_listener(Rc::new(move || {
+        let subscription = listenable.listen(Rc::new(move || {
             let Some(live) = live.upgrade() else { return };
             let page = nearest(live.position());
             if live.announced.replace(page) != page {
                 rebuild.schedule(RebuildReason::StateChange);
             }
         }));
-        self.listener = Some((listenable, id));
+        self.listener = Some(subscription);
+        self.repaint_source = Some(listenable);
     }
 
     fn unsubscribe(&mut self) {
-        if let Some((listenable, id)) = self.listener.take() {
-            listenable.remove_listener(id);
-        }
+        self.listener.take();
+        self.repaint_source.take();
     }
 }
 
@@ -368,11 +372,9 @@ impl ViewState<PageIndicator> for PageIndicatorState {
         let paint = CustomPaint::new().size(size).painter(DotsPainter {
             live: Rc::clone(&self.live),
             source: Rc::clone(
-                &self
-                    .listener
+                self.repaint_source
                     .as_ref()
-                    .expect("BUG: init_state subscribes before the first build")
-                    .0,
+                    .expect("BUG: init_state subscribes before the first build"),
             ),
             count,
             style,

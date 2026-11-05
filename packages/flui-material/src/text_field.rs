@@ -113,8 +113,7 @@
 
 use std::rc::Rc;
 
-use flui_sdk::foundation::ListenerId;
-use flui_sdk::foundation::notifier::Listenable;
+use flui_sdk::foundation::{Listenable, Subscription};
 use flui_sdk::interaction::{FocusNode, FocusSubscription};
 use flui_sdk::platform::TextInputPurpose;
 use flui_sdk::view::RebuildHandle;
@@ -337,7 +336,7 @@ pub struct MaterialTextFieldState {
     controller: TextEditingController,
     focus_node: Rc<FocusNode>,
     rebuild: Option<RebuildHandle>,
-    controller_listener_id: Option<ListenerId>,
+    controller_listener_id: Option<Subscription>,
     focus_subscription: Option<FocusSubscription>,
 }
 
@@ -390,10 +389,9 @@ impl ViewState<TextField> for MaterialTextFieldState {
         // Rebuild on every edit — `is_empty` (fed to `InputDecorator`) is
         // recomputed fresh in `build`, so a text change must trigger one.
         let rebuild_on_edit = rebuild;
-        self.controller_listener_id =
-            Some(self.controller.add_listener(std::rc::Rc::new(move || {
-                rebuild_on_edit.schedule(flui_sdk::view::RebuildReason::StateChange);
-            })));
+        self.controller_listener_id = Some(self.controller.listen(std::rc::Rc::new(move || {
+            rebuild_on_edit.schedule(flui_sdk::view::RebuildReason::StateChange);
+        })));
 
         // The effective node is the single source of focus truth for the
         // decorated field and its EditableText child.
@@ -407,14 +405,13 @@ impl ViewState<TextField> for MaterialTextFieldState {
         // label, so retargeting is the listener plus the pinned clone —
         // the interior does the rest, and does it through a shared cell.
         if !self.controller.is_same_controller(&new_view.controller) {
-            if let Some(id) = self.controller_listener_id.take() {
-                self.controller.remove_listener(id);
-            }
+            // The subscription withdraws through its own channel.
+            drop(self.controller_listener_id.take());
             self.controller = new_view.controller.clone();
             if let Some(rebuild) = self.rebuild.clone() {
                 let rebuild_on_edit = rebuild.clone();
                 self.controller_listener_id =
-                    Some(self.controller.add_listener(std::rc::Rc::new(move || {
+                    Some(self.controller.listen(std::rc::Rc::new(move || {
                         rebuild_on_edit.schedule(flui_sdk::view::RebuildReason::StateChange);
                     })));
                 // `is_empty` feeds the decoration's floating label and is
@@ -449,14 +446,9 @@ impl ViewState<TextField> for MaterialTextFieldState {
     }
 
     fn dispose(&mut self) {
-        let controller_listener_id = self.controller_listener_id.take();
-        let focus_subscription = self.focus_subscription.take();
-        let rebuild = self.rebuild.take();
-        if let Some(id) = controller_listener_id {
-            self.controller.remove_listener(id);
-        }
-        drop(focus_subscription);
-        drop(rebuild);
+        drop(self.controller_listener_id.take());
+        drop(self.focus_subscription.take());
+        drop(self.rebuild.take());
     }
 
     fn build(&self, view: &TextField, ctx: &dyn BuildContext) -> impl IntoView {

@@ -16,7 +16,7 @@ use flui_widgets::widget_state::{WidgetState, WidgetStates, WidgetStatesControll
 /// failure its enclosing delivery already holds, so outgoing captures it
 /// retires stay retained rather than running user destructors after a panic.
 fn relay_sees_the_enclosing_failure(listenable: &dyn Listenable, notify: impl FnOnce()) {
-    let first = listenable.add_listener(Rc::new(|| panic!("first listener")));
+    let first = listenable.listen(Rc::new(|| panic!("first listener")));
     let seen = Rc::new(Cell::new(None));
     let relay = {
         let seen = Rc::clone(&seen);
@@ -25,7 +25,7 @@ fn relay_sees_the_enclosing_failure(listenable: &dyn Listenable, notify: impl Fn
         }))
     };
     let unwound = catch_unwind(AssertUnwindSafe(notify)).is_err();
-    listenable.remove_listener(first);
+    first.detach();
     listenable.remove_listener(relay);
     assert!(unwound, "the first listener's panic propagates");
     assert_eq!(

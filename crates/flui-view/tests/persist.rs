@@ -1300,17 +1300,19 @@ fn an_initial_value_that_panics_fails_the_fresh_start() {
 }
 
 /// Count each time `notes` tells its listeners, and what the status was
-/// then.
-fn listen(notes: &Persisted<Note>) -> Rc<RefCell<Vec<SaveStatus>>> {
+/// then. The subscription detaches at the caller's scope end, beside the log.
+fn listen(
+    notes: &Persisted<Note>,
+) -> (Rc<RefCell<Vec<SaveStatus>>>, flui_foundation::Subscription) {
     let heard = Rc::new(RefCell::new(Vec::new()));
     let log = Rc::clone(&heard);
     let reader = notes.downgrade();
-    notes.add_listener(Rc::new(move || {
+    let listening = notes.listen(Rc::new(move || {
         if let Some(notes) = reader.upgrade() {
             log.borrow_mut().push(notes.status());
         }
     }));
-    heard
+    (heard, listening)
 }
 
 /// A listener holding a weak handle keeps neither itself nor the document
@@ -1323,7 +1325,7 @@ fn a_listener_holding_a_weak_handle_lets_the_document_go() {
     let alive = Rc::new(());
     let kept = Rc::downgrade(&alive);
     let reader = weak.clone();
-    notes.add_listener(Rc::new(move || {
+    let _listening = notes.listen(Rc::new(move || {
         let _held = (&alive, reader.upgrade());
     }));
     assert!(weak.upgrade().is_some(), "the document is alive while held");
@@ -1341,7 +1343,7 @@ fn listeners_hear_each_change_once_and_nothing_while_it_stands() {
     let storage = MemoryStorage::new();
     storage.put(&Note::NAME, stored(1, "first"));
     let (mut laid, notes) = mount(&storage);
-    let heard = listen(&notes);
+    let (heard, _listening) = listen(&notes);
     let loaded = drive(&mut laid, notes.load());
     assert!(loaded.is_ok(), "the stored document loads: {loaded:?}");
     laid.pump();
@@ -1397,7 +1399,7 @@ fn a_listener_that_writes_and_retries_settles() {
     let calls = Rc::new(Cell::new(0_usize));
     let count = Rc::clone(&calls);
     let writer = notes.clone();
-    notes.add_listener(Rc::new(move || {
+    let _listening = notes.listen(Rc::new(move || {
         count.set(count.get() + 1);
         writer.retry();
         // Bounded only so a delivery that recursed fails here instead of
@@ -1437,10 +1439,10 @@ fn a_listener_panic_leaves_later_changes_told() {
 
     let panicked = Rc::new(Cell::new(false));
     let once = Rc::clone(&panicked);
-    notes.add_listener(Rc::new(move || {
+    let _listening = notes.listen(Rc::new(move || {
         assert!(once.replace(true), "a listener panics once");
     }));
-    let heard = listen(&notes);
+    let (heard, _listening) = listen(&notes);
     let barrier = storage.hold_commits();
     assert!(notes.set(Note("edited".into())).is_ok());
     let delivery = catch_unwind(AssertUnwindSafe(|| laid.pump()));
@@ -1488,7 +1490,7 @@ fn a_frame_hook_panic_while_queueing_leaves_later_changes_told() {
         "nothing stored loads the initial value: {loaded:?}"
     );
     laid.pump();
-    let heard = listen(&notes);
+    let (heard, _listening) = listen(&notes);
     failing(&driver, &|| {
         let _ = notes.set(Note("edited".into()));
     });
@@ -1529,7 +1531,7 @@ fn a_frame_hook_panic_while_queueing_leaves_later_changes_told() {
     let driver = opened.driver.expect("a hosted presentation has a driver");
     assert!(drive(&mut laid, notes.load()).is_ok());
     laid.pump();
-    let heard = listen(&notes);
+    let (heard, _listening) = listen(&notes);
     let barrier = storage.hold_commits();
     assert!(notes.set(Note("first".into())).is_ok());
     laid.pump();
@@ -1575,7 +1577,7 @@ fn a_frame_hook_panic_while_queueing_leaves_later_changes_told() {
     let delivery = catch_unwind(AssertUnwindSafe(|| laid.pump()));
     driver.set_request_frame(|| {});
     drop(delivery);
-    let heard = listen(&notes);
+    let (heard, _listening) = listen(&notes);
     assert!(notes.set(Note("watched".into())).is_ok());
     barrier.commit();
     laid.pump();
@@ -1595,7 +1597,7 @@ fn a_frame_hook_panic_while_queueing_leaves_later_changes_told() {
 fn a_commit_by_another_document_of_its_name_is_told() {
     let storage = MemoryStorage::new();
     let (mut laid, outer, inner) = mount_two(&storage);
-    let heard = listen(&outer);
+    let (heard, _listening) = listen(&outer);
 
     assert!(inner.set(Note("from inner".into())).is_ok());
     laid.pump();
@@ -1670,7 +1672,7 @@ fn a_set_whose_replaced_value_and_frame_hook_both_panic_is_contained() {
     let notes = opened.document;
     let driver = opened.driver.expect("a hosted presentation has a driver");
     assert!(drive(&mut laid, notes.load()).is_ok());
-    let heard = listen(&notes);
+    let (heard, _listening) = listen(&notes);
     laid.pump();
     laid.pump();
     heard.borrow_mut().clear();
@@ -1838,7 +1840,7 @@ fn a_reload_whose_replaced_value_panics_in_drop_is_told() {
     let (mut laid, notes) = mount(&storage);
     assert!(drive(&mut laid, notes.load()).is_ok());
     laid.pump();
-    let heard = listen(&notes);
+    let (heard, _listening) = listen(&notes);
     laid.pump();
     laid.pump();
     heard.borrow_mut().clear();
@@ -1895,7 +1897,7 @@ fn unmounting_the_opening_state_drops_the_listeners() {
     let alive = Rc::new(());
     let kept = Rc::downgrade(&alive);
     let reader = notes.clone();
-    notes.add_listener(Rc::new(move || {
+    let _listening = notes.listen(Rc::new(move || {
         let _held = (&alive, reader.status());
     }));
     let weak = notes.downgrade();
@@ -1904,7 +1906,7 @@ fn unmounting_the_opening_state_drops_the_listeners() {
     assert!(kept.upgrade().is_none(), "the listener goes at unmount");
     let later = Rc::new(());
     let added = Rc::downgrade(&later);
-    notes.add_listener(Rc::new(move || {
+    let _added_listening = notes.listen(Rc::new(move || {
         let _held = Rc::clone(&later);
     }));
     assert!(
@@ -1929,7 +1931,7 @@ fn listeners_hear_a_change_that_came_back_before_the_delivery() {
     let failed = SaveStatus::Failed(PersistError::Storage(StorageError::Full));
     assert_eq!(notes.status(), failed);
 
-    let heard = listen(&notes);
+    let (heard, _listening) = listen(&notes);
     storage.fail_next(StorageError::Full);
     notes.retry();
     assert_eq!(

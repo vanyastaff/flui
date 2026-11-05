@@ -1,4 +1,4 @@
-//! `CurvedAnimation` - applies easing curves to animations.
+﻿//! `CurvedAnimation` - applies easing curves to animations.
 
 use crate::animation::{Animation, ParentLinks, Retirement, Terminal};
 use crate::curve::Curve;
@@ -10,7 +10,7 @@ use std::rc::Rc;
 
 /// Captures the run's entering direction while animating (keeping an already
 /// captured one) and clears it at rest. Reads only the reported
-/// `AnimationStatus` — no separate "is a ticker literally running" check.
+/// `AnimationStatus` â€” no separate "is a ticker literally running" check.
 /// Shared by the constructor's seed call and the status-listener callback so
 /// both apply the identical rule.
 fn update_curve_direction(direction: &Cell<Option<AnimationStatus>>, status: AnimationStatus) {
@@ -148,6 +148,15 @@ impl<C: Curve + 'static> Animation<f64> for CurvedAnimation<C> {
 }
 
 impl<C: Curve> Listenable for CurvedAnimation<C> {
+    fn listen(&self, listener: ListenerCallback) -> flui_foundation::Subscription {
+        self.links.channels.listen(listener)
+    }
+    fn listen_with_recovery(
+        &self,
+        relay: flui_foundation::notifier::ListenerObserver,
+    ) -> flui_foundation::Subscription {
+        self.links.channels.listen_with_recovery(relay)
+    }
     fn add_observer(&self, observer: flui_foundation::notifier::ListenerObserver) -> ListenerId {
         self.links.channels.add_observer(observer)
     }

@@ -57,7 +57,7 @@
 //! desktop, where users often click into a field) must show the focused
 //! treatment, not the hovered one.
 
-use flui_sdk::foundation::ListenerId;
+use flui_sdk::foundation::Subscription;
 use flui_sdk::foundation::notifier::Listenable;
 use flui_sdk::geometry::EdgeInsets;
 use flui_sdk::geometry::Radius;
@@ -423,7 +423,7 @@ impl InputDecorator {
 /// tracking (see the struct doc's "State inputs" section).
 pub struct InputDecoratorState {
     hover: WidgetStatesController,
-    hover_listener: Option<ListenerId>,
+    hover_listener: Option<Subscription>,
 }
 
 impl std::fmt::Debug for InputDecoratorState {
@@ -450,15 +450,13 @@ impl ViewState<InputDecorator> for InputDecoratorState {
         // ADR-0018: `rebuild_handle()` is acquired here, fired later from the
         // hover-controller listener below — never called from `build`.
         let rebuild = ctx.rebuild_handle();
-        self.hover_listener = Some(self.hover.add_listener(std::rc::Rc::new(move || {
+        self.hover_listener = Some(self.hover.listen(std::rc::Rc::new(move || {
             rebuild.schedule(flui_sdk::view::RebuildReason::StateChange);
         })));
     }
 
     fn dispose(&mut self) {
-        if let Some(id) = self.hover_listener.take() {
-            self.hover.remove_listener(id);
-        }
+        drop(self.hover_listener.take());
     }
 
     fn build(&self, view: &InputDecorator, ctx: &dyn BuildContext) -> impl IntoView {

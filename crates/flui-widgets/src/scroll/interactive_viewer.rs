@@ -87,9 +87,9 @@ use std::time::Duration;
 use flui_animation::{
     Animation, AnimationController, DrivenController, FrictionSimulation, Tolerance, Vsync,
 };
+use flui_foundation::Listenable;
 use flui_foundation::geometry::{Axis, EdgeInsets, Matrix4, Offset, Point, Rect, Vec2};
 use flui_foundation::panic::PanicRecovery;
-use flui_foundation::{Listenable, ListenerId};
 use flui_interaction::focus::{FocusNode, FocusNodeRegistration, KeyEventResult};
 use flui_interaction::gesture::{
     GestureSettingsProvider, ScaleEndDetails, ScaleStartDetails, ScaleStartMode, ScaleUpdateDetails,
@@ -1664,7 +1664,7 @@ impl FocalFling {
         let weak = Rc::downgrade(core);
         let (step_sequence, step_live, step_blocked) =
             (sequence.clone(), Rc::clone(&live), Rc::clone(&blocked));
-        let listener = self.controller.add_listener(Rc::new(move || {
+        let listener = self.controller.listen(Rc::new(move || {
             if !step_live.get() {
                 return;
             }
@@ -1721,7 +1721,7 @@ impl FocalFling {
             }
         }));
         let run = Rc::new(FocalRun {
-            listener,
+            listener: std::cell::Cell::new(Some(listener)),
             viewport,
             boundary,
             core: Rc::downgrade(core),
@@ -1777,7 +1777,7 @@ impl FocalFling {
         let animation = self.controller.clone();
         let weak = Rc::downgrade(core);
         let step_live = Rc::clone(&live);
-        let listener = self.controller.add_listener(Rc::new(move || {
+        let listener = self.controller.listen(Rc::new(move || {
             if !step_live.get() {
                 return;
             }
@@ -1803,7 +1803,7 @@ impl FocalFling {
             core.publish(core.base());
         }));
         let run = Rc::new(FocalRun {
-            listener,
+            listener: std::cell::Cell::new(Some(listener)),
             viewport,
             boundary,
             core: Rc::downgrade(core),
@@ -1829,7 +1829,9 @@ impl FocalFling {
 /// Completed layout validates the immutable limits before the next motion tick.
 /// Publication remains on the Vsync listener, before build and paint.
 struct FocalRun {
-    listener: ListenerId,
+    /// Detached with the run; `None` after. A cell because the run detaches
+    /// through a shared reference.
+    listener: std::cell::Cell<Option<flui_foundation::Subscription>>,
     viewport: Rect<f64>,
     boundary: Rect<f64>,
     core: Weak<ViewerCore>,
@@ -1857,7 +1859,7 @@ impl FocalRun {
         if !self.live.replace(false) {
             return false;
         }
-        self.animation.remove_listener(self.listener);
+        drop(self.listener.take());
         let _ = self.animation.stop();
         true
     }

@@ -1,4 +1,4 @@
-//! [`CollapsingHeader`] — a header above scrolling content that the
+﻿//! [`CollapsingHeader`] â€” a header above scrolling content that the
 //! content's own scroll collapses and expands, as a participant of the
 //! nested scroll channel (ADR-0209).
 //!
@@ -418,6 +418,15 @@ impl HeaderModel {
 }
 
 impl Listenable for HeaderModel {
+    fn listen(&self, listener: flui_foundation::ListenerCallback) -> flui_foundation::Subscription {
+        self.notifier.listen(listener)
+    }
+    fn listen_with_recovery(
+        &self,
+        relay: flui_foundation::ListenerObserver,
+    ) -> flui_foundation::Subscription {
+        self.notifier.listen_with_recovery(relay)
+    }
     fn add_observer(&self, observer: flui_foundation::ListenerObserver) -> ListenerId {
         self.notifier.add_observer(observer)
     }
@@ -513,7 +522,7 @@ impl RevealTarget for HeaderReveal {
 pub struct CollapsingHeaderState {
     model: Rc<HeaderModel>,
     settle: DrivenController,
-    settle_listener: Option<ListenerId>,
+    settle_listener: Option<flui_foundation::Subscription>,
     reveal: Rc<HeaderReveal>,
 }
 
@@ -570,7 +579,7 @@ impl ViewState<CollapsingHeader> for CollapsingHeaderState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         let model = Rc::downgrade(&self.model);
         let settle = self.settle.controller().clone();
-        self.settle_listener = Some(settle.add_listener(Rc::new(move || {
+        self.settle_listener = Some(settle.listen(Rc::new(move || {
             if let Some(model) = model.upgrade() {
                 model.set_offset(model.settle.value());
             }
@@ -622,9 +631,7 @@ impl ViewState<CollapsingHeader> for CollapsingHeaderState {
     }
 
     fn dispose(&mut self) {
-        if let Some(id) = self.settle_listener.take() {
-            self.settle.controller().remove_listener(id);
-        }
+        drop(self.settle_listener.take());
         let _ = self.settle.controller().stop();
         self.reveal.parent.borrow_mut().take();
     }

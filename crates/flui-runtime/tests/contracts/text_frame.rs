@@ -2205,7 +2205,7 @@ fn a_sibling_animation_admission_replaces_ready_text_before_geometry_publication
         .clone();
     let changed = Rc::new(Cell::new(false));
     let accepted = Rc::clone(&changed);
-    let listener = animation.add_listener(Rc::new(move || {
+    let listener = animation.listen(Rc::new(move || {
         if !accepted.replace(true) {
             size.set(22.75);
             handle.schedule(flui_foundation::RebuildReason::StateChange);
@@ -2242,7 +2242,7 @@ fn a_sibling_animation_admission_replaces_ready_text_before_geometry_publication
             .iter()
             .all(|request| request.size.value() == 22.75)
     );
-    animation.remove_listener(listener);
+    listener.detach();
     animation
         .stop()
         .expect("stop sibling after the observed admission");
@@ -2579,7 +2579,7 @@ fn authority_report_case(late: bool, replace: bool, retained: bool) {
     let scope = AuthorityReportScope::install(&runtime, &source, &replacement);
     let armed = Rc::new(Cell::new(true));
     let failure = Rc::clone(&armed);
-    let listener = primary.add_listener(Rc::new(move || {
+    let listener = primary.listen(Rc::new(move || {
         if failure.replace(false) {
             std::panic::panic_any("authority sampling delivery");
         }
@@ -2675,7 +2675,7 @@ fn authority_report_case(late: bool, replace: bool, retained: bool) {
         );
     }
     drop(reports);
-    primary.remove_listener(listener);
+    listener.detach();
     drop(scope);
 }
 
@@ -2825,7 +2825,7 @@ fn sampling_report_replacement_case(late_preparation: bool) {
     })));
     let armed = Rc::new(Cell::new(true));
     let failing = Rc::clone(&armed);
-    let listener = animation.add_listener(Rc::new(move || {
+    let listener = animation.listen(Rc::new(move || {
         if failing.replace(false) {
             std::panic::panic_any("sibling delivery before ready text");
         }
@@ -2888,7 +2888,7 @@ fn sampling_report_replacement_case(late_preparation: bool) {
             .iter()
             .all(|request| request.size.value() == 22.75)
     );
-    animation.remove_listener(listener);
+    listener.detach();
     animation.stop().expect("stop observed sibling");
     assert!(
         runtime.close_presentation_entered(sibling_id),

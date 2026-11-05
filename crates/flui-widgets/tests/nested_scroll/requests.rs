@@ -181,19 +181,18 @@ pub(crate) fn a_jump_from_a_position_listener_never_nests_inside_a_step() {
         let listenable = controller.listenable();
         let armed = Rc::new(Cell::new(true));
         let (trigger, reentrant) = (Rc::clone(&armed), controller.clone());
-        let jumper = listenable.add_listener(Rc::new(move || {
+        let jumper = listenable.listen(Rc::new(move || {
             if reentrant.pixels() >= 700.0 && trigger.replace(false) {
                 reentrant.jump_to(100.0).expect("no build is running");
             }
         }));
         let heard = Rc::new(RefCell::new(Vec::new()));
         let (log, reader) = (Rc::clone(&heard), controller.clone());
-        let after =
-            listenable.add_listener(Rc::new(move || log.borrow_mut().push(reader.pixels())));
+        let after = listenable.listen(Rc::new(move || log.borrow_mut().push(reader.pixels())));
         laid.replay(&slow(device, at(150.0, 250.0), at(150.0, 100.0)));
         settle(&mut laid);
-        listenable.remove_listener(jumper);
-        listenable.remove_listener(after);
+        jumper.detach();
+        after.detach();
         assert!(!armed.get(), "{device:?}: the list reached its end");
         let heard = heard.borrow();
         let end = heard
@@ -507,6 +506,12 @@ struct JumpingOnEveryChange {
     probe: Rc<Probe>,
     remaining: Rc<Cell<u32>>,
     vsync: Vsync,
+    /// Held for its detach; nothing reads it.
+    #[expect(
+        dead_code,
+        reason = "the listener's subscription detaches at the struct's drop"
+    )]
+    listening: flui_foundation::Subscription,
 }
 
 impl JumpingOnEveryChange {
@@ -516,7 +521,7 @@ impl JumpingOnEveryChange {
         laid.tick();
         let remaining = Rc::new(Cell::new(budget));
         let (left, reentrant) = (Rc::clone(&remaining), controller.clone());
-        controller.listenable().add_listener(Rc::new(move || {
+        let listening = controller.listenable().listen(Rc::new(move || {
             if left.get() > 0 {
                 left.set(left.get() - 1);
                 reentrant
@@ -530,6 +535,7 @@ impl JumpingOnEveryChange {
             probe,
             remaining,
             vsync,
+            listening,
         }
     }
 }

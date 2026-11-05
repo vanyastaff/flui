@@ -379,8 +379,8 @@ pub struct CarouselState {
     frames: CarouselItemFrames,
     shared: Rc<Shared>,
     snap: Option<SharedSnapPolicy>,
-    scroll_listener: Option<(Rc<dyn Listenable>, ListenerId)>,
-    pause_listener: Option<(CarouselController, ListenerId)>,
+    scroll_listener: Option<flui_foundation::Subscription>,
+    pause_listener: Option<flui_foundation::Subscription>,
     focus: Rc<FocusNode>,
     focus_manager: Option<(Rc<FocusManager>, ListenerId)>,
     lifecycle: Option<LifecycleSubscription>,
@@ -490,16 +490,14 @@ impl CarouselState {
             self.shared.controller.borrow().detach(token);
         }
         self.shared.attachment.borrow_mut().take();
-        if let Some((controller, id)) = self.pause_listener.take() {
-            controller.remove_pause_listener(id);
-        }
+        self.pause_listener.take();
     }
 
     fn listen_for_pauses(&mut self, controller: &CarouselController) {
         let rebuild = self.rebuild.clone();
         let shared = Rc::downgrade(&self.shared);
         let timer = self.timer.controller().clone();
-        let id = controller.add_pause_listener(Rc::new(move || {
+        let subscription = controller.listen_pause(Rc::new(move || {
             if let Some(rebuild) = &rebuild {
                 rebuild.schedule(RebuildReason::StateChange);
             }
@@ -512,7 +510,7 @@ impl CarouselState {
                 let _ = timer.forward_from(Some(0.0));
             }
         }));
-        self.pause_listener = Some((controller.clone(), id));
+        self.pause_listener = Some(subscription);
     }
 
     /// Re-attaches after the view changed what the controller drives.
@@ -564,12 +562,12 @@ impl ViewState<Carousel> for CarouselState {
 
         let listenable = self.scroll.listenable();
         let shared = Rc::downgrade(&self.shared);
-        let id = listenable.add_listener(Rc::new(move || {
+        let subscription = listenable.listen(Rc::new(move || {
             if let Some(shared) = shared.upgrade() {
                 shared.scrolled();
             }
         }));
-        self.scroll_listener = Some((listenable, id));
+        self.scroll_listener = Some(subscription);
 
         // The first layout commits the first active item.
         if let Some(post_frame) = ctx.post_frame_handle() {
@@ -791,9 +789,7 @@ impl ViewState<Carousel> for CarouselState {
 
     fn dispose(&mut self) {
         self.shared.alive.set(false);
-        if let Some((listenable, id)) = self.scroll_listener.take() {
-            listenable.remove_listener(id);
-        }
+        self.scroll_listener.take();
         if let Some((manager, id)) = self.focus_manager.take() {
             manager.remove_listener(id);
         }

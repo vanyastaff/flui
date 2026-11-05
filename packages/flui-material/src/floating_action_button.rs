@@ -71,7 +71,7 @@
 //!   constructor-level `Color?` fields; this V1 always resolves the M3
 //!   defaults.
 
-use flui_sdk::foundation::{Listenable, ListenerId};
+use flui_sdk::foundation::{Listenable, Subscription};
 use flui_sdk::geometry::Radius;
 use flui_sdk::geometry::Size;
 use flui_sdk::painting::BorderRadius;
@@ -249,7 +249,7 @@ fn resolve_colors(theme: &ThemeData) -> ResolvedFabStyle {
 /// always sees the real, lifecycle-synced `Disabled` bit on the first build.
 pub struct FloatingActionButtonState {
     states: WidgetStatesController,
-    states_listener: Option<ListenerId>,
+    states_listener: Option<Subscription>,
     initially_enabled: bool,
     rebuild: Option<RebuildHandle>,
 }
@@ -284,7 +284,7 @@ impl ViewState<FloatingActionButton> for FloatingActionButtonState {
             .update(WidgetState::Disabled, !self.initially_enabled);
 
         let rebuild_for_listener = rebuild.clone();
-        self.states_listener = Some(self.states.add_listener(std::rc::Rc::new(move || {
+        self.states_listener = Some(self.states.listen(std::rc::Rc::new(move || {
             rebuild_for_listener.schedule(flui_sdk::view::RebuildReason::StateChange);
         })));
 
@@ -366,8 +366,6 @@ impl ViewState<FloatingActionButton> for FloatingActionButtonState {
     }
 
     fn dispose(&mut self) {
-        if let Some(id) = self.states_listener.take() {
-            self.states.remove_listener(id);
-        }
+        drop(self.states_listener.take());
     }
 }

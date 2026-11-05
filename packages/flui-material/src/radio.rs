@@ -94,7 +94,7 @@
 
 use std::rc::Rc;
 
-use flui_sdk::foundation::Listenable;
+use flui_sdk::foundation::{Listenable, Subscription};
 use flui_sdk::geometry::{Point, Size};
 use flui_sdk::painting::Canvas;
 use flui_sdk::painting::Color;
@@ -241,7 +241,7 @@ impl<T: PartialEq + Clone + 'static> Radio<T> {
 /// `InkWell`'s to manage.
 pub struct RadioState {
     states: WidgetStatesController,
-    states_listener: Option<flui_sdk::foundation::ListenerId>,
+    states_listener: Option<Subscription>,
 }
 
 impl std::fmt::Debug for RadioState {
@@ -273,7 +273,7 @@ impl<T: PartialEq + Clone + 'static> ViewState<Radio<T>> for RadioState {
         // The handle is consumed directly by the listener closure; nothing
         // else needs to re-read it later, so it is not stored on `self`.
         let rebuild = ctx.rebuild_handle();
-        self.states_listener = Some(self.states.add_listener(std::rc::Rc::new(move || {
+        self.states_listener = Some(self.states.listen(std::rc::Rc::new(move || {
             rebuild.schedule(flui_sdk::view::RebuildReason::StateChange);
         })));
     }
@@ -342,9 +342,7 @@ impl<T: PartialEq + Clone + 'static> ViewState<Radio<T>> for RadioState {
     }
 
     fn dispose(&mut self) {
-        if let Some(id) = self.states_listener.take() {
-            self.states.remove_listener(id);
-        }
+        drop(self.states_listener.take());
     }
 }
 

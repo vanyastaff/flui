@@ -7,7 +7,7 @@ use flui_animation::{
     ProxyAnimation, ReverseAnimation, StatusCallback, StatusSubscription, Tween, TweenAnimation,
     Vsync, curves,
 };
-use flui_foundation::{Listenable, ListenerId, Notifier};
+use flui_foundation::{Listenable, ListenerCallback, ListenerId, Notifier};
 
 fn dropping_one_subscription_preserves_independent_sources_and_channels() {
     let registry = Vsync::new();
@@ -146,6 +146,15 @@ struct ChannelSource {
 }
 
 impl Listenable for ChannelSource {
+    fn listen(&self, listener: ListenerCallback) -> flui_foundation::Subscription {
+        self.values.listen(listener)
+    }
+    fn listen_with_recovery(
+        &self,
+        relay: flui_foundation::ListenerObserver,
+    ) -> flui_foundation::Subscription {
+        self.values.listen_with_recovery(relay)
+    }
     fn add_observer(&self, observer: flui_foundation::ListenerObserver) -> ListenerId {
         self.values.add_observer(observer)
     }

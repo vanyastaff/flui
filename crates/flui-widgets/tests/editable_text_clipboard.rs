@@ -371,7 +371,7 @@ pub(crate) fn a_panicking_listener_keeps_the_middle_press_paste() {
     harness.dispatch_pointer_down_with_button(1.0, 5.0, PointerButton::AUXILIARY);
 
     let armed = Rc::new(Cell::new(true));
-    let _listener = controller.listenable().add_listener(Rc::new({
+    let _listener = controller.listenable().listen(Rc::new({
         let armed = Rc::clone(&armed);
         move || {
             assert!(!armed.replace(false), "listener failed");

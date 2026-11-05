@@ -10,7 +10,6 @@ use std::time::Duration;
 
 use flui_animation::{MotionPolicy, SharedCurve};
 use flui_foundation::geometry::{Axis, Size};
-use flui_foundation::{Listenable, ListenerId};
 use flui_objects::SubtreeAnchor;
 use flui_painting::typography::TextDirection;
 use flui_rendering::pipeline::PipelineCell;
@@ -174,31 +173,26 @@ pub(crate) fn nothing_behind() -> BoxedView {
 /// the content's motion patches a transform layer, so a drag or a settle
 /// rebuilds nothing in between.
 pub(crate) struct UncoverWatch {
-    offsets: Rc<dyn Listenable>,
-    listener: Cell<Option<ListenerId>>,
+    listener: Cell<Option<flui_foundation::Subscription>>,
 }
 
 impl UncoverWatch {
     pub(crate) fn new(controller: &AnchoredDragController<Stop>, rebuild: RebuildHandle) -> Self {
-        let offsets = controller.offset_listenable();
         let watched = controller.clone();
         let shown = Cell::new(Uncovered::at(controller.offset()));
-        let listener = offsets.add_listener(Rc::new(move || {
+        let subscription = controller.offset_listenable().listen(Rc::new(move || {
             let edge = Uncovered::at(watched.offset());
             if shown.replace(edge) != edge {
                 rebuild.schedule(RebuildReason::AnimationTick);
             }
         }));
         Self {
-            offsets,
-            listener: Cell::new(Some(listener)),
+            listener: Cell::new(Some(subscription)),
         }
     }
 
     pub(crate) fn retire(&self) {
-        if let Some(id) = self.listener.take() {
-            self.offsets.remove_listener(id);
-        }
+        self.listener.take();
     }
 }
 
@@ -228,8 +222,7 @@ pub(crate) fn return_to(
 /// The rest is checked again when the frame is over, so a cancellation or a
 /// new drag in between undoes it, and a row that is gone acts on nothing.
 pub(crate) struct OutWatch {
-    controller: AnchoredDragController<Stop>,
-    listener: Cell<Option<ListenerId>>,
+    listener: Cell<Option<flui_foundation::Subscription>>,
     mounted: Rc<Cell<bool>>,
 }
 
@@ -245,7 +238,7 @@ impl OutWatch {
         let pending = Rc::new(Cell::new(false));
         let watched = controller.clone();
         let alive = Rc::clone(&mounted);
-        let listener = controller.listenable().add_listener(Rc::new(move || {
+        let listener = controller.listenable().listen(Rc::new(move || {
             let stop = watched.current();
             if watched.is_moving() || !stop.is_out() || pending.replace(true) {
                 return;
@@ -274,7 +267,6 @@ impl OutWatch {
             }
         }));
         Self {
-            controller: controller.clone(),
             listener: Cell::new(Some(listener)),
             mounted,
         }
@@ -283,9 +275,7 @@ impl OutWatch {
     /// Stop watching: a rest not yet acted on is dropped.
     pub(crate) fn retire(&self) {
         self.mounted.set(false);
-        if let Some(id) = self.listener.take() {
-            self.controller.listenable().remove_listener(id);
-        }
+        self.listener.take();
     }
 }
 

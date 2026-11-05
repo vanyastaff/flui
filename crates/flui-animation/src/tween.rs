@@ -1,4 +1,4 @@
-//! `TweenAnimation` - maps f64 animations to any type T.
+﻿//! `TweenAnimation` - maps f64 animations to any type T.
 
 use crate::animation::{Animation, ParentLinks, Retirement, Terminal};
 use crate::status::AnimationStatus;
@@ -69,7 +69,7 @@ where
     ///
     /// # Arguments
     ///
-    /// * `tween` - The tween that maps f64 → T
+    /// * `tween` - The tween that maps f64 â†’ T
     /// * `parent` - The parent animation (typically 0.0 to 1.0)
     #[must_use]
     pub fn new(tween: A, parent: Rc<dyn Animation<f64>>) -> Self {
@@ -124,6 +124,15 @@ where
     A: Animatable + 'static,
     A::Value: Clone + 'static,
 {
+    fn listen(&self, listener: ListenerCallback) -> flui_foundation::Subscription {
+        self.links.channels.listen(listener)
+    }
+    fn listen_with_recovery(
+        &self,
+        relay: flui_foundation::notifier::ListenerObserver,
+    ) -> flui_foundation::Subscription {
+        self.links.channels.listen_with_recovery(relay)
+    }
     fn add_observer(&self, observer: flui_foundation::notifier::ListenerObserver) -> ListenerId {
         self.links.channels.add_observer(observer)
     }

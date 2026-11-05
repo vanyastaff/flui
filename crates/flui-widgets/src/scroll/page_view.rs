@@ -64,7 +64,7 @@ use std::time::Duration;
 
 use flui_animation::{SharedCurve, curves};
 use flui_foundation::geometry::Axis;
-use flui_foundation::{ChangeNotifier, Listenable, ListenerId};
+use flui_foundation::{ChangeNotifier, Listenable};
 use flui_interaction::PointerKindSet;
 use flui_rendering::view::{CacheExtentStyle, DimensionChangePolicy, ScrollPosition};
 use flui_view::prelude::StatefulView;
@@ -580,17 +580,12 @@ pub struct PageViewState {
     /// writer alive past teardown.
     delivery: Option<Rc<PageChangeDelivery>>,
     last_reported_page: Rc<Cell<i64>>,
-    /// The listenable the listener is registered on, alongside its id.
-    /// Stored together (not looked up fresh from `self.controller` at
-    /// removal time) because a controller SWAP changes which listenable
-    /// `self.controller.listenable()` resolves to — each notifier keeps
-    /// its own `ListenerId` counter, so removing by id from a DIFFERENT
-    /// notifier than the one that issued it can collide with an unrelated
-    /// listener there (silently removing the wrong one and leaking the
-    /// real one). Same shape `AnimatedBehavior::on_view_updated`
-    /// (`crates/flui-view/src/element/behavior.rs`) uses for a `Listenable`
-    /// swap.
-    page_listener: Option<(std::rc::Rc<dyn Listenable>, ListenerId)>,
+    /// The listener's own subscription: its withdrawal carries its own
+    /// channel, so a controller swap cannot detach somebody else's
+    /// registration (the shape `AnimatedBehavior::on_view_updated`
+    /// (`crates/flui-view/src/element/behavior.rs`) uses for a
+    /// `Listenable` swap).
+    page_listener: Option<flui_foundation::Subscription>,
     /// What the page action tells the semantics layer when a turn becomes
     /// possible or stops being: its enablement follows the controller's
     /// position, which changes with no rebuild.
@@ -702,7 +697,7 @@ impl PageViewState {
             .expect("BUG: init_state mints the rebuild handle before registering the listener");
 
         let listenable = self.controller.listenable();
-        let listener_id = listenable.add_listener(std::rc::Rc::new(move || {
+        let listener_id = listenable.listen(std::rc::Rc::new(move || {
             if !position.has_applied_viewport_dimension() {
                 return;
             }
@@ -727,7 +722,7 @@ impl PageViewState {
                 rebuild.schedule(RebuildReason::StateChange);
             }
         }));
-        self.page_listener = Some((listenable, listener_id));
+        self.page_listener = Some(listener_id);
     }
 }
 
@@ -874,21 +869,14 @@ impl ViewState<PageView> for PageViewState {
 
         if controller_swapped {
             self.snap = page_snap(&self.controller);
-            // Remove from the OLD listenable specifically — never from
-            // whatever `self.controller` resolves to AFTER this assignment
-            // (a different notifier, whose own `ListenerId` counter could
-            // collide with this one and remove an unrelated listener while
-            // leaking this one).
-            if let Some((listenable, id)) = self.page_listener.take() {
-                listenable.remove_listener(id);
-            }
+            // The subscription withdraws through its own channel: another
+            // controller's registrations cannot detach somebody else's.
+            drop(self.page_listener.take());
             self.register_page_listener();
         }
     }
 
     fn dispose(&mut self) {
-        if let Some((listenable, id)) = self.page_listener.take() {
-            listenable.remove_listener(id);
-        }
+        drop(self.page_listener.take());
     }
 }

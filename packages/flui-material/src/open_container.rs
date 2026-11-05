@@ -77,7 +77,7 @@ use std::task::{Poll, Waker};
 use std::time::Duration;
 
 use flui_sdk::animation::{AnimationStatus, Curve, SharedCurve, curves};
-use flui_sdk::foundation::ListenerId;
+use flui_sdk::foundation::Subscription;
 use flui_sdk::geometry::Rect;
 use flui_sdk::painting::{Alignment, BorderRadius, BorderRadiusExt, Clip, Color};
 use flui_sdk::view::element::ElementKind;
@@ -818,7 +818,7 @@ struct MorphState {
     primary: RouteAnimation,
     /// The morph's own frame: where the navigator's page area sits.
     frame: Rc<FlightSeat>,
-    listener: Option<ListenerId>,
+    listener: Option<Subscription>,
 }
 
 impl fmt::Debug for MorphState {
@@ -833,16 +833,11 @@ impl MorphState {
         self.unlisten();
         let flight = Rc::clone(&self.flight);
         let frame = Rc::clone(&self.frame);
-        self.listener = Some(
-            self.primary
-                .add_listener(Rc::new(move || flight.measure(&frame))),
-        );
+        self.listener = Some(self.primary.listen(Rc::new(move || flight.measure(&frame))));
     }
 
     fn unlisten(&mut self) {
-        if let Some(id) = self.listener.take() {
-            self.primary.remove_listener(id);
-        }
+        drop(self.listener.take());
     }
 
     /// Measure the frame once the frame it was mounted in has laid it out,

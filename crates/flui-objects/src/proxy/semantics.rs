@@ -5,7 +5,7 @@
 //! semantics hooks differ.
 
 use flui_foundation::geometry::{Axis, AxisDirection};
-use flui_foundation::{ChangeNotifier, Listenable, ListenerId, Single};
+use flui_foundation::{ChangeNotifier, Single};
 use flui_rendering::semantics::{CustomActionId, NumericRange, SemanticsAction};
 use flui_rendering::{
     pipeline::LocalRenderInvalidationHandle,
@@ -80,22 +80,7 @@ impl std::fmt::Debug for GatedCustomAction {
     }
 }
 
-/// A listener on a [`ChangeNotifier`] that marks one node's semantics dirty,
-/// removed when dropped.
-#[derive(Debug)]
-struct RefreshSubscription {
-    notifier: ChangeNotifier,
-    id: ListenerId,
-}
-
-impl Drop for RefreshSubscription {
-    fn drop(&mut self) {
-        self.notifier.remove_listener(self.id);
-    }
-}
-
 /// Where a semantics node's owner-local action handlers live.
-///
 /// A widget whose action handlers are owner-local closures keeps them in the
 /// owner's interaction lane under `target`, and advertises each action in the
 /// configuration through one shared `handler` that resolves `target`
@@ -174,7 +159,9 @@ pub struct RenderSemanticsAnnotations {
     custom_actions: Vec<GatedCustomAction>,
     custom_base: usize,
     refresh_sources: Vec<ChangeNotifier>,
-    refresh_subscriptions: Vec<Rc<RefreshSubscription>>,
+    /// One per source: shared with the object's clones, detaching when the
+    /// last of them drops.
+    refresh_subscriptions: Vec<Rc<flui_foundation::Subscription>>,
 }
 
 impl RenderSemanticsAnnotations {
@@ -243,13 +230,9 @@ impl RenderSemanticsAnnotations {
             .iter()
             .map(|notifier| {
                 let handle = handle.clone();
-                let id = notifier.add_listener(Rc::new(move || {
+                Rc::new(notifier.listen(Rc::new(move || {
                     let _ = handle.mark_needs_semantics();
-                }));
-                Rc::new(RefreshSubscription {
-                    notifier: notifier.clone(),
-                    id,
-                })
+                })))
             })
             .collect();
     }
