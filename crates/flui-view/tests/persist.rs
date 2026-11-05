@@ -1597,7 +1597,7 @@ fn a_frame_hook_panic_while_queueing_leaves_later_changes_told() {
 fn a_commit_by_another_document_of_its_name_is_told() {
     let storage = MemoryStorage::new();
     let (mut laid, outer, inner) = mount_two(&storage);
-    let heard = listen(&outer);
+    let (heard, _listening) = listen(&outer);
 
     assert!(inner.set(Note("from inner".into())).is_ok());
     laid.pump();
