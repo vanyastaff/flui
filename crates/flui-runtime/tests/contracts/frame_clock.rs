@@ -808,7 +808,7 @@ fn delivery_case(delivery: Delivery) {
     let primary_before = primary_builds.borrow().len();
     let sibling_before = sibling_builds.borrow().len();
     let fail_once = Rc::clone(&armed);
-    let listener = primary.controller.add_listener(Rc::new(move || {
+    let listener = primary.controller.listen(Rc::new(move || {
         if delivery == Delivery::Animation && fail_once.replace(false) {
             std::panic::panic_any("primary value delivery");
         }
@@ -831,7 +831,7 @@ fn delivery_case(delivery: Delivery) {
     let later_samples = Rc::new(RefCell::new(Vec::new()));
     let recorded = Rc::clone(&later_samples);
     let read = primary.controller.clone();
-    let later_listener = primary.controller.add_listener(Rc::new(move || {
+    let later_listener = primary.controller.listen(Rc::new(move || {
         recorded.borrow_mut().push(read.value());
     }));
     let primary_completed = Rc::new(Cell::new(0));
@@ -959,8 +959,8 @@ fn delivery_case(delivery: Delivery) {
         1,
         "sibling completion is not replayed"
     );
-    primary.controller.remove_listener(listener);
-    primary.controller.remove_listener(later_listener);
+    listener.detach();
+    later_listener.detach();
     drop(status_listener);
 }
 
@@ -1156,7 +1156,7 @@ fn source_failure_case(failure: SourceFailure) {
     );
     let armed = Rc::new(Cell::new(true));
     let fail_once = Rc::clone(&armed);
-    let listener = healthy.add_listener(Rc::new(move || {
+    let listener = healthy.listen(Rc::new(move || {
         if mixed && fail_once.replace(false) {
             std::panic::panic_any("value delivery");
         }
@@ -1164,7 +1164,7 @@ fn source_failure_case(failure: SourceFailure) {
     let delivered = Rc::new(RefCell::new(Vec::new()));
     let recorded = Rc::clone(&delivered);
     let read = healthy.clone();
-    let later_listener = healthy.add_listener(Rc::new(move || {
+    let later_listener = healthy.listen(Rc::new(move || {
         recorded.borrow_mut().push(read.value());
     }));
     let primary_completed = Rc::new(Cell::new(0));
@@ -1275,8 +1275,8 @@ fn source_failure_case(failure: SourceFailure) {
             "the intervening terminal clean frame reset only this presentation's streak"
         );
     }
-    healthy.remove_listener(listener);
-    healthy.remove_listener(later_listener);
+    listener.detach();
+    later_listener.detach();
 }
 
 impl FrameSink for Sink {
@@ -1321,7 +1321,7 @@ fn one_pump_shares_its_selected_time_across_parent_and_child() {
     let armed = Rc::new(Cell::new(true));
     let observed = Rc::clone(&armed);
     let callback_clock = host.clone();
-    let listener = child_owner.controller().add_listener(Rc::new(move || {
+    let listener = child_owner.controller().listen(Rc::new(move || {
         if observed.replace(false) {
             callback_clock.advance(Duration::from_secs(3));
         }
@@ -1354,7 +1354,7 @@ fn one_pump_shares_its_selected_time_across_parent_and_child() {
     );
     assert!((parent_owner.controller().value() - 0.5).abs() < 1e-9);
     assert!((child_owner.controller().value() - 0.5).abs() < 1e-9);
-    child_owner.controller().remove_listener(listener);
+    listener.detach();
 }
 
 fn manual_frame_runtime(host: &ManualClock) -> UiRuntime {
