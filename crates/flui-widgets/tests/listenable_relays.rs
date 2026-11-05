@@ -20,13 +20,13 @@ fn relay_sees_the_enclosing_failure(listenable: &dyn Listenable, notify: impl Fn
     let seen = Rc::new(Cell::new(None));
     let relay = {
         let seen = Rc::clone(&seen);
-        listenable.add_observer(Rc::new(move |recovery| {
+        listenable.listen_with_recovery(Rc::new(move |recovery| {
             seen.set(Some(recovery.has_failure()));
         }))
     };
     let unwound = catch_unwind(AssertUnwindSafe(notify)).is_err();
     first.detach();
-    listenable.remove_listener(relay);
+    relay.detach();
     assert!(unwound, "the first listener's panic propagates");
     assert_eq!(
         seen.get(),

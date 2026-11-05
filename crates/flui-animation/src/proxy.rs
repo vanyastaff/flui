@@ -220,17 +220,6 @@ where
     }
 }
 
-impl<T: Clone + 'static> ProxyAnimation<T> {
-    /// Withdraw a value listener within an enclosing framework cleanup round.
-    /// Its outgoing captures retire through that round's first-failure context.
-    #[doc(hidden)]
-    pub fn remove_listener_with_recovery(&self, id: ListenerId, recovery: &mut RecoveryScope<'_>) {
-        self.inner
-            .channels
-            .remove_listener_with_recovery(id, recovery);
-    }
-}
-
 impl<T> Animation<T> for ProxyAnimation<T>
 where
     T: Clone + 'static,
@@ -285,21 +274,6 @@ where
         relay: flui_foundation::notifier::ListenerObserver,
     ) -> flui_foundation::Subscription {
         self.inner.channels.listen_with_recovery(relay)
-    }
-    fn add_observer(&self, observer: flui_foundation::notifier::ListenerObserver) -> ListenerId {
-        self.inner.channels.add_observer(observer)
-    }
-
-    fn add_listener(&self, callback: ListenerCallback) -> ListenerId {
-        self.inner.channels.add_listener(callback)
-    }
-
-    fn remove_listener(&self, id: ListenerId) {
-        self.inner.channels.remove_listener(id);
-    }
-
-    fn remove_all_listeners(&self) {
-        self.inner.channels.remove_all_listeners();
     }
 }
 

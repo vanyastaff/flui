@@ -123,9 +123,8 @@ impl flui_view::ViewState<WriteReader> for WriteReaderState {
         };
         match &self.view.trigger {
             Trigger::Listener(notifier) => {
-                use flui_foundation::Listenable as _;
-                let id = notifier.add_listener(std::rc::Rc::new(move || write(1)));
-                self.keep.push(Box::new(id));
+                let listening = notifier.listen(std::rc::Rc::new(move || write(1)));
+                self.keep.push(Box::new(listening));
             }
             Trigger::Status(controller) => {
                 use flui_animation::Animation as _;

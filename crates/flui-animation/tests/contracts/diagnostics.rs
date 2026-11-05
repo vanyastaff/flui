@@ -27,6 +27,9 @@ thread_local! {
     #[cfg(feature = "diagnostics")]
     #[cfg_attr(target_os = "android", allow(clippy::missing_const_for_thread_local, reason = "Const initializer; Android std macro false positive: https://github.com/rust-lang/rust-clippy/issues/13422"))]
     static ADMITTED: RefCell<Vec<(flui_animation::DrivenController, flui_animation::AnimationRunFuture)>> = const { RefCell::new(Vec::new()) };
+    static OBSERVED_LISTENING: RefCell<Vec<flui_foundation::Subscription>> = const {
+        RefCell::new(Vec::new())
+    };
 }
 
 #[derive(Default)]
@@ -344,7 +347,7 @@ fn subscriber_failures_preserve_delivery_and_recovery() {
                     OBSERVED.with(|observed| *observed.borrow_mut() = Some(controller.clone()));
                     let mut clock = flui_animation::MotionClock::new();
                     let throws = Rc::new(std::cell::Cell::new(callback_fails));
-                    controller.add_listener(Rc::new(move || {
+                    let _listening = controller.listen(Rc::new(move || {
                         let value = OBSERVED.with(|observed| {
                             observed
                                 .borrow()
@@ -359,7 +362,7 @@ fn subscriber_failures_preserve_delivery_and_recovery() {
                     }));
                     let healthy = Rc::new(std::cell::Cell::new(0));
                     let tail = Rc::clone(&healthy);
-                    controller.add_listener(Rc::new(move || tail.set(tail.get() + 1)));
+                    let _listening = controller.listen(Rc::new(move || tail.set(tail.get() + 1)));
                     let original = controller.forward().expect("original run");
                     if fault.span != "animation_controller" {
                         armed.store(true, Ordering::Relaxed);
@@ -571,7 +574,7 @@ fn subscriber_retirement_after_failed_close() {
     drop(dispatcher);
     let guard = Rc::new(RefCell::new(Some(guard)));
     let controller = AnimationController::builder(Duration::from_millis(100)).build();
-    controller.add_listener(Rc::new(move || {
+    let _listening = controller.listen(Rc::new(move || {
         drop(guard.borrow_mut().take());
         panic!("real listener failure");
     }));
@@ -767,7 +770,8 @@ impl AdmitFromSpan {
                 let controller = OBSERVED
                     .with(|slot| slot.borrow().clone())
                     .expect("observed controller");
-                controller.add_listener(listener);
+                let listening = controller.listen(listener);
+                OBSERVED_LISTENING.with(|slot| slot.borrow_mut().push(listening));
             }
             Admission::Controller | Admission::Child => {
                 let registry = OBSERVED_VSYNC
@@ -782,7 +786,8 @@ impl AdmitFromSpan {
                 };
                 let owner = AnimationController::builder(Duration::from_millis(100))
                     .build_on(Some(&destination));
-                owner.controller().add_listener(listener);
+                let listening = owner.controller().listen(listener);
+                OBSERVED_LISTENING.with(|slot| slot.borrow_mut().push(listening));
                 let run = owner
                     .controller()
                     .forward()
@@ -1024,7 +1029,8 @@ fn subscriber_disposal_silences_value_delivery() {
                     OBSERVED_OWNER.with(|slot| *slot.borrow_mut() = Some(owner));
                     let notifications = Rc::new(std::cell::Cell::new(0));
                     let delivered = Rc::clone(&notifications);
-                    controller.add_listener(Rc::new(move || delivered.set(delivered.get() + 1)));
+                    let _listening =
+                        controller.listen(Rc::new(move || delivered.set(delivered.get() + 1)));
                     let original = controller.forward().expect("owned run");
                     let peer = AnimationController::builder(Duration::from_millis(100))
                         .build_on(Some(&registry));

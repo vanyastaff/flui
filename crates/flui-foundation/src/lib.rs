@@ -92,14 +92,14 @@
 //! use flui_foundation::{ChangeNotifier, Listenable, ValueNotifier};
 //!
 //! // Basic change notification
-//! let mut notifier = ChangeNotifier::new();
-//! let listener = notifier.add_listener(Rc::new(|| {
+//! let notifier = ChangeNotifier::new();
+//! let _listening = notifier.listen(Rc::new(|| {
 //!     // react to the change
 //! }));
 //!
 //! // Value-holding notifier
 //! let mut value_notifier = ValueNotifier::new(42);
-//! let value_listener = value_notifier.add_listener(Rc::new(|| {
+//! let _value_listening = value_notifier.listen(Rc::new(|| {
 //!     // react to the value change
 //! }));
 //! value_notifier.set_value(100);

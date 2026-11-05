@@ -28,7 +28,7 @@ use std::time::Duration;
 
 use flui_animation::{Animation, AnimationController, DrivenController};
 use flui_foundation::geometry::{Rect, Vec2};
-use flui_foundation::{ChangeNotifier, Listenable, ListenerId};
+use flui_foundation::{ChangeNotifier, Listenable};
 use flui_interaction::InputSequenceId;
 use flui_interaction::focus::FocusNode;
 use flui_painting::Alignment;
@@ -426,21 +426,6 @@ impl Listenable for HeaderModel {
         relay: flui_foundation::ListenerObserver,
     ) -> flui_foundation::Subscription {
         self.notifier.listen_with_recovery(relay)
-    }
-    fn add_observer(&self, observer: flui_foundation::ListenerObserver) -> ListenerId {
-        self.notifier.add_observer(observer)
-    }
-
-    fn add_listener(&self, callback: flui_foundation::ListenerCallback) -> ListenerId {
-        self.notifier.add_listener(callback)
-    }
-
-    fn remove_listener(&self, id: ListenerId) {
-        self.notifier.remove_listener(id);
-    }
-
-    fn remove_all_listeners(&self) {
-        self.notifier.remove_all_listeners();
     }
 }
 

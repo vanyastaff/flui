@@ -410,7 +410,6 @@ fn listener_panic_reaches_the_realm_report() {
             false
         }
     }
-    use flui_foundation::Listenable as _;
 
     let owner = OwnerHost::new();
     let reports = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));

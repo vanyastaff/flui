@@ -165,13 +165,15 @@ fn exhausted_disposed_value_identities_refuse_outside_the_state_borrow() {
                 let capture = Capture(c.clone(), Rc::clone(&drops));
                 let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     if observer {
-                        c.add_observer(Rc::new(move |_| {
+                        c.listen_with_recovery(Rc::new(move |_| {
                             let _keep = &capture;
-                        }));
+                        }))
+                        .detach();
                     } else {
-                        c.add_listener(Rc::new(move || {
+                        c.listen(Rc::new(move || {
                             let _keep = &capture;
-                        }));
+                        }))
+                        .detach();
                     }
                 }));
                 assert_eq!(

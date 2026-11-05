@@ -159,7 +159,7 @@ fn child_snapshot_custody_survives_reentry_and_retires_outside_borrows() {
         let callback_parent = parent.clone();
         let callback_events = events.clone();
         let entered = Cell::new(false);
-        owner.controller().add_listener(Rc::new(move || {
+        let _listening = owner.controller().listen(Rc::new(move || {
             if entered.replace(true) {
                 return;
             }
@@ -217,9 +217,9 @@ fn duplicate_child_is_refused() {
     let owner = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&child));
     let samples = Rc::new(Cell::new(0));
     let observed = Rc::clone(&samples);
-    owner
+    let _listening = owner
         .controller()
-        .add_listener(Rc::new(move || observed.set(observed.get() + 1)));
+        .listen(Rc::new(move || observed.set(observed.get() + 1)));
     let run = owner.controller().forward().expect("finite run");
     let mut clock = MotionClock::new();
     parent.tick_all(&clock.frame(Duration::ZERO));
@@ -726,16 +726,27 @@ fn rebinding_preserves_delivery_failure_before_outgoing_retirement() {
 
         let replacement = Vsync::new();
         let healthy = Rc::new(Cell::new(0));
+        // The delivery failure lives in these listeners; their subscriptions
+        // are held until the recovery path withdraws them.
+        #[expect(
+            clippy::collection_is_never_read,
+            reason = "the vector only holds the failing registrations; the recovery path or the scope's end withdraws them"
+        )]
+        let mut held = Vec::new();
         if binding == "replacement" {
             replacement.set_frame_requester(Some(Rc::new(|| panic!("clock delivery"))));
         } else {
-            owner
-                .controller()
-                .add_listener(Rc::new(|| panic!("clock delivery")));
+            held.push(
+                owner
+                    .controller()
+                    .listen(Rc::new(|| panic!("clock delivery"))),
+            );
             let observed = healthy.clone();
-            owner
-                .controller()
-                .add_listener(Rc::new(move || observed.set(observed.get() + 1)));
+            held.push(
+                owner
+                    .controller()
+                    .listen(Rc::new(move || observed.set(observed.get() + 1))),
+            );
         }
         let failure = catch_unwind(AssertUnwindSafe(|| {
             owner
@@ -754,7 +765,7 @@ fn rebinding_preserves_delivery_failure_before_outgoing_retirement() {
             assert_eq!(owner.controller().value(), 1.0);
             assert!(run.is_complete());
             assert_eq!(healthy.get(), 1, "healthy settlement delivery finishes");
-            owner.controller().remove_all_listeners();
+            held.clear();
             owner.rebind(Some(&replacement)).expect("restore clock");
         } else {
             assert_eq!(replacement.len(), 1);
@@ -792,7 +803,13 @@ fn dropping_the_last_owner_from_its_own_listener_mid_frame() {
         });
         let peer_calls = Rc::new(Cell::new(0));
         let observed = peer_calls.clone();
-        peer_controller.add_listener(Rc::new(move || observed.set(observed.get() + 1)));
+        let _peer_listening =
+            peer_controller.listen(Rc::new(move || observed.set(observed.get() + 1)));
+        #[expect(
+            clippy::collection_is_never_read,
+            reason = "the vector only holds the retiring registration to the scope's end, where the id form abandoned it"
+        )]
+        let mut held = Vec::new();
         if channel == "status" {
             let retire = retire.clone();
             first_controller
@@ -805,11 +822,11 @@ fn dropping_the_last_owner_from_its_own_listener_mid_frame() {
         } else if channel == "value" {
             let retire = retire.clone();
             let controller = first_controller.clone();
-            first_controller.add_listener(Rc::new(move || {
+            held.push(first_controller.listen(Rc::new(move || {
                 if controller.value() > 0.0 {
                     retire();
                 }
-            }));
+            })));
         }
         let run = first_controller.forward().expect("first run");
         if channel == "continuation" {
@@ -1097,10 +1114,10 @@ fn reentrant_owner_retirement_joins_registry_custody() {
         let controller = owner.controller().clone();
         let run = controller.forward().unwrap();
         let storage = Rc::new(RefCell::new(Some(owner)));
-        controller.add_listener(Rc::new(move || {
+        let _idle_listening = controller.listen(Rc::new(move || {
             assert!(!earlier_failure, "earlier driven listener failure");
         }));
-        controller.add_listener({
+        let _self_removing = controller.listen({
             let storage = Rc::downgrade(&storage);
             Rc::new(move || {
                 let storage = storage.upgrade().unwrap();
@@ -1636,7 +1653,7 @@ fn dispose_releases_value_listeners() {
     let controller = lifecycle.controller().clone();
     let probe = Arc::new(());
     let capture = Arc::clone(&probe);
-    let _id = controller.add_listener(std::rc::Rc::new(move || {
+    let _listening = controller.listen(std::rc::Rc::new(move || {
         let _ = &capture;
     }));
 
@@ -1658,13 +1675,15 @@ fn constant_listener_tokens_never_withdraw_live_callbacks() {
 
     let notifier = ChangeNotifier::new();
     let calls = Rc::new(Cell::new(0));
-    notifier.add_listener({
+    let _listening = notifier.listen({
         let calls = Rc::clone(&calls);
         Rc::new(move || calls.set(calls.get() + 1))
     });
     let constant = ConstantAnimation::new(0.5);
     let capture = Rc::new(());
-    let token = constant.add_listener({
+    // A constant refuses the registration with the inert subscription: the
+    // callback retires at admission, and its subscription detaches nothing.
+    let _inert = constant.listen({
         let capture = Rc::clone(&capture);
         Rc::new(move || {
             let _ = &capture;
@@ -1676,14 +1695,12 @@ fn constant_listener_tokens_never_withdraw_live_callbacks() {
         1,
         "an inert callback retires at admission"
     );
-    notifier.remove_listener(token);
     notifier.notify_listeners();
     assert_eq!(
         calls.get(),
         1,
-        "an unregistered constant token cannot remove live work"
+        "the refused registration cannot withdraw the notifier's listener"
     );
-    constant.remove_listener(token);
     notifier.notify_listeners();
     assert_eq!(calls.get(), 2);
 }
@@ -1728,7 +1745,7 @@ fn wrapper_over_a_disposed_source(wrap: fn(AnimationHandle) -> AnimationHandle) 
     let (drops, value_probe) = drop_probe();
     let status_probe = DropProbe(drops.clone());
     let wrapper = wrap(std::rc::Rc::new(parent.clone()));
-    wrapper.add_listener(std::rc::Rc::new(move || {
+    let _listening = wrapper.listen(std::rc::Rc::new(move || {
         let _ = &value_probe;
         panic!("a disposed source cannot notify a new wrapper");
     }));
@@ -1929,7 +1946,7 @@ fn fixed_parent_wrappers_retire_value_listeners_before_status_observers() {
         let parent = controller();
         let wrapper = wrap(Rc::new(parent.clone()));
         let value = ValueBomb;
-        wrapper.add_listener(Rc::new(move || {
+        let _listening = wrapper.listen(Rc::new(move || {
             let _keep = &value;
         }));
         let status = StatusBomb;
@@ -1972,21 +1989,25 @@ fn listener_removal_during_a_failing_delivery_drops_the_capture() {
         let panicking = || -> flui_foundation::ListenerCallback {
             Rc::new(|| panic!("first listener failure"))
         };
+        #[expect(
+            clippy::collection_is_never_read,
+            reason = "the vector only holds the failing registrations through the round, where the id form abandoned them"
+        )]
+        let mut failing = Vec::new();
         if panic_first {
-            wrapper.add_listener(panicking());
+            failing.push(wrapper.listen(panicking()));
         }
         let weak = Rc::downgrade(&wrapper);
-        wrapper.add_listener(Rc::new(move || {
+        let _listening = wrapper.listen(Rc::new(move || {
             let (Some(wrapper), Some(capture)) = (weak.upgrade(), capture.take()) else {
                 return;
             };
-            let id = wrapper.add_listener(Rc::new(move || {
+            drop(wrapper.listen(Rc::new(move || {
                 let _keep = &capture;
-            }));
-            wrapper.remove_listener(id);
+            })));
         }));
         if !panic_first {
-            wrapper.add_listener(panicking());
+            failing.push(wrapper.listen(panicking()));
         }
         let failure = catch_unwind(AssertUnwindSafe(|| parent.set_value(0.25)))
             .expect_err("the first listener's failure propagates");
@@ -2037,23 +2058,26 @@ fn value_listener_removed_during_a_status_round_waits_for_the_round() {
         let parent = controller();
         let wrapper = wrap(Rc::new(parent.clone()));
         let (drops, capture) = drop_probe();
-        let id = wrapper.add_listener(Rc::new(move || {
+        let listening = wrapper.listen(Rc::new(move || {
             let _keep = &capture;
         }));
-        wrapper.remove_listener(id);
+        drop(listening);
         assert_eq!(drops.load(Ordering::SeqCst), 1, "{name}: no round, at once");
 
         for fails in [true, false] {
             let parent = controller();
             let wrapper = wrap(Rc::new(parent.clone()));
             let (drops, capture) = drop_probe();
-            let id = wrapper.add_listener(Rc::new(move || {
+            let held = Rc::new(std::cell::RefCell::new(
+                None::<flui_foundation::Subscription>,
+            ));
+            *held.borrow_mut() = Some(wrapper.listen(Rc::new(move || {
                 let _keep = &capture;
-            }));
+            })));
             let weak = Rc::downgrade(&wrapper);
             let _remove = wrapper.subscribe_status(Rc::new(move |_| {
-                if let Some(wrapper) = weak.upgrade() {
-                    wrapper.remove_listener(id);
+                if let Some(_wrapper) = weak.upgrade() {
+                    drop(std::cell::RefCell::borrow_mut(&held).take());
                 }
             }));
             let _fail = wrapper.subscribe_status(Rc::new(move |_| {
@@ -2086,8 +2110,17 @@ fn proxy_listener_removal_joins_its_enclosing_cleanup() {
         fn drop(&mut self) {
             self.drops.set(self.drops.get() + 1);
             let calls = Rc::clone(&self.reentrant_calls);
-            self.proxy
-                .add_listener(Rc::new(move || calls.set(calls.get() + 1)));
+            // The reentrant registration stays registered for good, as the id
+            // form's abandoned registration did: the subscription is forgotten
+            // on purpose (a deliberate leak; it only holds a weak to the
+            // channel, whose own teardown retires the callback).
+            #[expect(
+                clippy::mem_forget,
+                reason = "a deliberate leak: the reentrant registration outlives the destructor the way the id form's abandoned registration did"
+            )]
+            std::mem::forget(self.proxy.listen(Rc::new(move || {
+                calls.set(calls.get() + 1);
+            })));
             assert!(!self.panics, "outgoing proxy capture failure");
         }
     }
@@ -2105,7 +2138,7 @@ fn proxy_listener_removal_joins_its_enclosing_cleanup() {
             panics: case == "competing",
         };
         let observed = Rc::clone(&calls);
-        let id = proxy.add_listener(Rc::new(move || {
+        let listening = proxy.listen(Rc::new(move || {
             let _capture = &capture;
             observed.set(observed.get() + 1);
         }));
@@ -2116,7 +2149,10 @@ fn proxy_listener_removal_joins_its_enclosing_cleanup() {
             if case != "healthy" {
                 recovery.run(|| panic!("first cleanup failure"));
             }
-            proxy.remove_listener_with_recovery(id, &mut recovery.scope());
+            // The withdrawal joins the enclosing cleanup: its capture
+            // retirement runs under this recovery, so a destructor panic
+            // there cannot override the first failure.
+            recovery.run(|| drop(listening));
             recovery.finish();
         }));
         if case == "healthy" {
@@ -2138,12 +2174,10 @@ fn proxy_listener_removal_joins_its_enclosing_cleanup() {
         assert_eq!(reentrant_calls.get(), 1);
 
         let (fresh_drops, fresh_capture) = drop_probe();
-        let fresh_id = proxy.add_listener(Rc::new(move || {
+        let fresh_listening = proxy.listen(Rc::new(move || {
             let _capture = &fresh_capture;
         }));
-        let mut recovery = flui_foundation::panic::PanicRecovery::new();
-        proxy.remove_listener_with_recovery(fresh_id, &mut recovery.scope());
-        recovery.finish();
+        drop(fresh_listening);
         assert_eq!(
             fresh_drops.load(Ordering::SeqCst),
             1,

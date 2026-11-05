@@ -2417,7 +2417,7 @@ impl ViewState<EditableText> for EditableTextState {
         // (this method) runs before that child unmounts.
         //
         // `ChangeNotifier::remove_listener` is a safe no-op after dispose
-        // (see `Listenable::remove_listener`'s doc), so
+        // (see its doc), so
         // calling `dispose()` here first would no longer panic against the
         // child's later `remove_listener` call. It is still left undone: an
         // explicit `dispose()` would mark the shared notifier disposed while

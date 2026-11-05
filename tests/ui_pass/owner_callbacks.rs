@@ -17,7 +17,7 @@ fn main() {
 
     let notifier = ChangeNotifier::new();
     let observed = calls.clone();
-    notifier.add_listener(Rc::new(move || observed.set(observed.get() + 1)));
+    let _listening = notifier.listen(Rc::new(move || observed.set(observed.get() + 1)));
     notifier.notify_listeners();
 
     let vsync = Vsync::new();

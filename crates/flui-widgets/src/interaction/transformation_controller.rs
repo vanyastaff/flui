@@ -5,7 +5,7 @@ use std::{cell::Cell, fmt, rc::Rc};
 
 use flui_foundation::geometry::Matrix4;
 use flui_foundation::geometry::Offset;
-use flui_foundation::{ChangeNotifier, Listenable, ListenerCallback, ListenerId};
+use flui_foundation::{ChangeNotifier, Listenable, ListenerCallback};
 
 /// The heap-allocated state shared by every clone of a
 /// [`TransformationController`].
@@ -23,21 +23,6 @@ impl Listenable for Inner {
         relay: flui_foundation::ListenerObserver,
     ) -> flui_foundation::Subscription {
         Listenable::listen_with_recovery(&self.notifier, relay)
-    }
-    fn add_observer(&self, observer: flui_foundation::ListenerObserver) -> ListenerId {
-        self.notifier.add_observer(observer)
-    }
-
-    fn add_listener(&self, listener: ListenerCallback) -> ListenerId {
-        self.notifier.add_listener(listener)
-    }
-
-    fn remove_listener(&self, id: ListenerId) {
-        self.notifier.remove_listener(id);
-    }
-
-    fn remove_all_listeners(&self) {
-        self.notifier.remove_all_listeners();
     }
 }
 

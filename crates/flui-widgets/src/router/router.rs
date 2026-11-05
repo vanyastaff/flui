@@ -8,7 +8,7 @@ use std::rc::{Rc, Weak};
 use std::sync::Arc;
 use std::time::Duration;
 
-use flui_foundation::notifier::{ChangeNotifier, Listenable};
+use flui_foundation::notifier::ChangeNotifier;
 use flui_view::element::ElementKind;
 use flui_view::prelude::*;
 use flui_view::{AsyncDriver, BoxedView, BuildContextExt, TaskToken};
@@ -345,7 +345,9 @@ impl<R: Routable> ViewState<Router<R>> for RouterState<R> {
             };
             let delivery = shared.announcer.delivery.borrow_mut().take();
             drop(delivery);
-            Listenable::remove_all_listeners(&shared.announcer.notifier);
+            // The concrete owner's clear: the router's listeners go at the
+            // unmount, and the channel stays open for a later remount.
+            shared.announcer.notifier.remove_all_listeners();
         }))
         .forget();
     }

@@ -148,16 +148,23 @@ fn spring_step(c: &mut Criterion) {
 }
 
 /// Register `value_listeners` no-op value listeners and `status_listeners`
-/// no-op status listeners on `controller`.
+/// no-op status listeners on `controller`. The registrations stay for good, as
+/// the id form's abandoned registrations did: the subscriptions are forgotten
+/// on purpose (a deliberate leak; the bench's controller is per-group state
+/// whose own teardown retires them).
 fn add_listeners(
     controller: &AnimationController,
     value_listeners: usize,
     status_listeners: usize,
 ) {
     for _ in 0..value_listeners {
-        controller.add_listener(std::rc::Rc::new(|| {
+        #[expect(
+            clippy::mem_forget,
+            reason = "a deliberate leak: the bench's listeners outlive the helper the way the id form's abandoned registrations did; the controller's own teardown retires them"
+        )]
+        std::mem::forget(controller.listen(std::rc::Rc::new(|| {
             black_box(());
-        }));
+        })));
     }
     for _ in 0..status_listeners {
         controller

@@ -111,7 +111,7 @@ fn dispose_from_a_value_listener_mid_walk() {
     let _sibling_run = sibling.forward().expect("run starts");
     let reader = disposed.clone();
     let owner = std::rc::Rc::new(std::cell::RefCell::new(Some(disposed_owner)));
-    disposed.add_listener(std::rc::Rc::new(move || {
+    let _listening = disposed.listen(std::rc::Rc::new(move || {
         if reader.value() >= 0.5 {
             let released = owner.borrow_mut().take();
             drop(released);
@@ -154,7 +154,7 @@ fn last_owner_released_from_its_own_listener_mid_walk() {
     let _first_run = first.forward().expect("run starts");
     let _second_run = second.forward().expect("run starts");
     let (second_ticks, count) = counter();
-    second.add_listener(std::rc::Rc::new(count));
+    let _listening = second.listen(std::rc::Rc::new(count));
 
     let owners = std::rc::Rc::new(Mutex::new(Some(vec![first_owner, second_owner])));
     first

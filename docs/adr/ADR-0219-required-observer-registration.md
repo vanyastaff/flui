@@ -5,6 +5,10 @@
 - **Supersedes:** [ADR-0178](ADR-0178-notification-first-failure-custody.md), the default relay
   adapter only; [ADR-0193](ADR-0193-directional-phase-names.md), the `Animation` phase helpers
   only.
+- **Superseded-by:** [ADR-0109](ADR-0109-notification-channel-surface.md) decision 5, the
+  `Listenable` method surface only: the trait's required methods are the owned `listen` and
+  `listen_with_recovery`, each returning a `Subscription`, and no id-based registration or
+  withdrawal is a trait method. The relay's custody rules below stand.
 - **Related:** [ADR-0180](ADR-0180-source-bound-animation-status-subscriptions.md)
 
 ## Context

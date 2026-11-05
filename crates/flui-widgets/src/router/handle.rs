@@ -3,7 +3,6 @@
 use std::fmt;
 use std::rc::Rc;
 
-use flui_foundation::ListenerId;
 use flui_foundation::notifier::{Listenable, ListenerObserver};
 use flui_foundation::{ListenerCallback, Subscription};
 
@@ -301,22 +300,6 @@ impl<R: Routable> Listenable for RouterHandle<R> {
             return Subscription::inert();
         }
         subscription
-    }
-    fn add_observer(&self, observer: ListenerObserver) -> ListenerId {
-        let notifier = &self.shared.announcer.notifier;
-        let id = notifier.add_observer(observer);
-        if !self.shared.mounted.get() {
-            notifier.remove_listener(id);
-        }
-        id
-    }
-
-    fn remove_listener(&self, id: ListenerId) {
-        self.shared.announcer.notifier.remove_listener(id);
-    }
-
-    fn remove_all_listeners(&self) {
-        self.shared.announcer.notifier.remove_all_listeners();
     }
 }
 

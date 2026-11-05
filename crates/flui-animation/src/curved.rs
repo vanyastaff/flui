@@ -3,7 +3,7 @@
 use crate::animation::{Animation, ParentLinks, Retirement, Terminal};
 use crate::curve::Curve;
 use crate::status::AnimationStatus;
-use flui_foundation::{Listenable, ListenerCallback, ListenerId};
+use flui_foundation::{Listenable, ListenerCallback};
 use std::cell::Cell;
 use std::fmt;
 use std::rc::Rc;
@@ -156,20 +156,6 @@ impl<C: Curve> Listenable for CurvedAnimation<C> {
         relay: flui_foundation::notifier::ListenerObserver,
     ) -> flui_foundation::Subscription {
         self.links.channels.listen_with_recovery(relay)
-    }
-    fn add_observer(&self, observer: flui_foundation::notifier::ListenerObserver) -> ListenerId {
-        self.links.channels.add_observer(observer)
-    }
-    fn add_listener(&self, callback: ListenerCallback) -> ListenerId {
-        self.links.channels.add_listener(callback)
-    }
-
-    fn remove_listener(&self, id: ListenerId) {
-        self.links.channels.remove_listener(id);
-    }
-
-    fn remove_all_listeners(&self) {
-        self.links.channels.remove_all_listeners();
     }
 }
 

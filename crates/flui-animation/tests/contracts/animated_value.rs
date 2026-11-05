@@ -307,7 +307,7 @@ fn admitting_motion_preserves_the_exact_displayed_origin() {
             AnimatedValue::try_new(initial, curve(curves::LINEAR), Some(&registry)).unwrap();
         let view = owner.animation();
         let heard = Rc::new(Cell::new(None));
-        let subscription = view.add_listener({
+        let subscription = view.listen({
             let view = view.clone();
             let heard = Rc::clone(&heard);
             Rc::new(move || heard.set(Some(view.value())))
@@ -369,7 +369,7 @@ fn admitting_motion_preserves_the_exact_displayed_origin() {
         );
         registry.tick_all(&clock.frame(Duration::from_secs(3)));
         assert_eq!(view.value(), Color::WHITE);
-        view.remove_listener(subscription);
+        drop(subscription);
     }
 }
 
@@ -383,7 +383,7 @@ fn an_equivalent_motion_target_still_publishes_its_exact_value() {
     let mut value = AnimatedValue::try_new(red, curve(curves::LINEAR), Some(&registry)).unwrap();
     let view = value.animation();
     let notified = Rc::new(Cell::new(None));
-    let _listener = view.add_listener({
+    let _listening = view.listen({
         let view = view.clone();
         let notified = Rc::clone(&notified);
         Rc::new(move || notified.set(Some(view.value())))
@@ -523,7 +523,7 @@ fn displaced_exact_endpoints_share_failure_custody() {
             "frames retain exact endpoints"
         );
         let view = owner.animation();
-        let listener = view.add_listener(Rc::new(move || {
+        let listener = view.listen(Rc::new(move || {
             assert!(!delivery_fails, "admission delivery");
         }));
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -534,7 +534,7 @@ fn displaced_exact_endpoints_share_failure_custody() {
                 })
                 .unwrap()
         }));
-        view.remove_listener(listener);
+        drop(listener);
         let expected_failure = if delivery_fails {
             Some("admission delivery")
         } else if origin_fails {
@@ -1092,12 +1092,14 @@ fn owner_retirement_joins_every_delivery_channel() {
             let view = value.animation();
             assert!(OWNER.with(|owner| owner.replace(Some(value))).is_none());
             let first: fn() = if earlier_failure { fail } else { healthy };
-            let mut subscriptions = Vec::new();
+            // Both holder vectors live to the same tail drop.
+            let mut subscriptions = Vec::<flui_animation::StatusSubscription>::new();
+            let mut value_listeners = Vec::<flui_foundation::Subscription>::new();
             let mut waiters = Vec::new();
             match channel {
                 "value" => {
-                    view.add_listener(Rc::new(first));
-                    view.add_listener(Rc::new(release_owner));
+                    value_listeners.push(view.listen(Rc::new(first)));
+                    value_listeners.push(view.listen(Rc::new(release_owner)));
                 }
                 "status" => {
                     subscriptions.push(view.subscribe_status(Rc::new(move |_| first())));
@@ -1156,6 +1158,7 @@ fn owner_retirement_joins_every_delivery_channel() {
                 );
             }
             drop(subscriptions);
+            drop(value_listeners);
 
             let fresh_drops = Rc::new(Cell::new(0));
             let mut fresh = AnimatedValue::try_new(
@@ -1285,7 +1288,7 @@ fn retired_owner_cleanup_passes_a_stale_settlement_fence() {
     let next_run = Rc::new(RefCell::new(None));
     let drops = Rc::new(Cell::new(0));
     let capture = Capture(Rc::clone(&drops));
-    view.add_listener(Rc::new(move || {
+    let _listening = view.listen(Rc::new(move || {
         let _keep = &capture;
     }));
     let first = view.subscribe_status({
@@ -1471,8 +1474,8 @@ fn grouped_motion_publishes_all_owners_before_delivery() {
     for view in [left.animation().status(), right.animation().status()] {
         assert_eq!(view, AnimationStatus::Forward);
     }
-    let left_listener = left.animation().add_listener(Rc::new(check.clone()));
-    let right_listener = right.animation().add_listener(Rc::new(check.clone()));
+    let left_listening = left.animation().listen(Rc::new(check.clone()));
+    let right_listening = right.animation().listen(Rc::new(check.clone()));
     left_old.when_complete_or_cancel({
         let check = check.clone();
         move |result| {
@@ -1490,8 +1493,8 @@ fn grouped_motion_publishes_all_owners_before_delivery() {
     })
     .unwrap();
     assert_eq!(delivered.get(), 4);
-    left.animation().remove_listener(left_listener);
-    right.animation().remove_listener(right_listener);
+    drop(left_listening);
+    drop(right_listening);
     registry.tick_all(&clock.frame(Duration::from_millis(1250)));
     assert_eq!(left.value(), -1.0);
     assert_eq!(right.value(), Offset::new(-3.0, 7.0));

@@ -1559,13 +1559,13 @@ fn panic_in_listener_keeps_the_clock_monotone() {
     registry.tick_all(&clock.frame(Duration::ZERO));
     let first_listener = first
         .controller()
-        .add_listener(Rc::new(|| panic!("first clock listener")));
+        .listen(Rc::new(|| panic!("first clock listener")));
     let competing_listener = competing
         .controller()
-        .add_listener(Rc::new(|| panic!("second clock listener")));
+        .listen(Rc::new(|| panic!("second clock listener")));
     let deliveries = Rc::new(Cell::new(0));
     let recorded = Rc::clone(&deliveries);
-    let _healthy_listener = healthy.controller().add_listener(Rc::new(move || {
+    let _healthy_listener = healthy.controller().listen(Rc::new(move || {
         recorded.set(recorded.get() + 1);
     }));
     let failure = catch_unwind(AssertUnwindSafe(|| {
@@ -1589,8 +1589,8 @@ fn panic_in_listener_keeps_the_clock_monotone() {
     );
     assert_eq!(deliveries.get(), 1);
     // Remove the failing observers before verifying the next operation.
-    first.controller().remove_listener(first_listener);
-    competing.controller().remove_listener(competing_listener);
+    first_listener.detach();
+    competing_listener.detach();
     registry.tick_all(&clock.frame(ms(100)));
     assert_eq!(healthy.controller().value(), 0.25);
     let held_deliveries = deliveries.get();

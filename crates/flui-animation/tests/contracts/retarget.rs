@@ -2021,7 +2021,7 @@ fn a_retarget_from_a_listener_is_ordered_and_lock_free() {
     let next = Rc::new(RefCell::new(None));
     let sink = next.clone();
     let observer = controller.clone();
-    controller.add_listener(Rc::new(move || {
+    let _listening = controller.listen(Rc::new(move || {
         if sink.borrow().is_some() {
             return;
         }
@@ -2288,7 +2288,7 @@ fn retarget_on_the_completing_frame_starts_at_rest() {
     let next = Rc::new(RefCell::new(None));
     let sink = next.clone();
     let observer = controller.clone();
-    controller.add_listener(Rc::new(move || {
+    let _listening = controller.listen(Rc::new(move || {
         if observer.value() == 1.0 && sink.borrow().is_none() {
             assert_eq!(observer.velocity(), 0.0, "completed source is at rest");
             let run = observer
@@ -2413,7 +2413,7 @@ fn retargeting_another_controller_preserves_its_frame_origin() {
         let seam = Rc::new(Cell::new(None));
         let sink = seam.clone();
         let observer = target.controller().clone();
-        trigger.controller().add_listener(Rc::new(move || {
+        let _listening = trigger.controller().listen(Rc::new(move || {
             if sink.get().is_some() {
                 return;
             }

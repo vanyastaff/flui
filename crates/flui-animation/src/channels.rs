@@ -5,11 +5,9 @@ use std::rc::Rc;
 use flui_foundation::notifier::ListenerObserver;
 use flui_foundation::notifier_generic::NotificationCallback;
 use flui_foundation::panic::RecoveryScope;
-use flui_foundation::{
-    ChangeNotifier, Listenable, ListenerCallback, ListenerId, Notifier, Subscription,
-};
+use flui_foundation::{ChangeNotifier, ListenerCallback, ListenerId, Notifier, Subscription};
 
-use crate::animation::{Retirement, StatusObserver, Terminal};
+use crate::animation::{StatusObserver, Terminal};
 use crate::status::AnimationStatus;
 
 /// A withdrawn callback envelope, retired by its owner (ADR-0178).
@@ -56,16 +54,6 @@ impl Channels {
         self.statuses.inherit_failure(recovery);
     }
 
-    pub(crate) fn add_observer(&self, observer: ListenerObserver) -> ListenerId {
-        self.values.add_observer(observer)
-    }
-
-    pub(crate) fn add_listener(&self, listener: ListenerCallback) -> ListenerId {
-        self.values.add_listener(listener)
-    }
-
-    /// Subscribe with an owned subscription on the value channel; the
-    /// subscription detaches through the channel itself on drop.
     pub(crate) fn listen(&self, listener: ListenerCallback) -> Subscription {
         self.values.listen(listener)
     }
@@ -74,49 +62,6 @@ impl Channels {
     /// delivery's recovery scope; the subscription detaches on drop.
     pub(crate) fn listen_with_recovery(&self, relay: ListenerObserver) -> Subscription {
         self.values.listen_with_recovery(relay)
-    }
-
-    /// Withdraw a value listener; its captures retire through `recovery`.
-    pub(crate) fn remove_listener_with_recovery(
-        &self,
-        id: ListenerId,
-        recovery: &mut RecoveryScope<'_>,
-    ) {
-        let callback = Terminal::new(self.values.take_listener(id));
-        self.inherit_failure(recovery);
-        recovery.retire(callback);
-    }
-
-    /// Remove a value listener. A failure either channel's delivery already
-    /// holds drops the capture now under that failure; otherwise a round either
-    /// channel is delivering keeps it until that round ends, even when the round
-    /// fails. Outside any round it retires at once.
-    pub(crate) fn remove_listener(&self, id: ListenerId) {
-        self.retire_values(self.values.take_listener(id));
-    }
-
-    /// Remove every value listener, with the custody of
-    /// [`remove_listener`](Self::remove_listener).
-    pub(crate) fn remove_all_listeners(&self) {
-        self.retire_values(self.values.take_listeners());
-    }
-
-    fn retire_values(&self, callbacks: impl IntoIterator<Item = Withdrawn<()>>) {
-        let mut recovery = Retirement::new();
-        self.inherit_failure(&mut recovery.scope());
-        for callback in callbacks {
-            let held = if recovery.has_failure() {
-                Some(callback)
-            } else {
-                self.values
-                    .retire_after_delivery(callback)
-                    .and_then(|callback| self.statuses.retire_after_delivery(callback))
-            };
-            if let Some(callback) = held {
-                recovery.retire(Terminal::new(callback));
-            }
-        }
-        recovery.finish();
     }
 
     pub(crate) fn add_status(&self, observer: StatusObserver) -> ListenerId {

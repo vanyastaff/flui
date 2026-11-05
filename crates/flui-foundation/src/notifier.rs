@@ -16,7 +16,7 @@
 //! let notifier = ChangeNotifier::new();
 //! let count = Rc::new(Cell::new(0));
 //! let count2 = Rc::clone(&count);
-//! let _id = notifier.add_listener(Rc::new(move || {
+//! let _listening = notifier.listen(Rc::new(move || {
 //!     count2.set(count2.get() + 1);
 //! }));
 //! notifier.notify_listeners();
@@ -64,51 +64,29 @@ pub type ListenerObserver = Rc<dyn Fn(&mut RecoveryScope<'_>)>;
 /// let notifier = ChangeNotifier::new();
 /// let count = Rc::new(Cell::new(0));
 /// let count2 = Rc::clone(&count);
-/// let id = notifier.add_listener(Rc::new(move || {
+/// let listening = notifier.listen(Rc::new(move || {
 ///     count2.set(count2.get() + 1);
 /// }));
 /// notifier.notify_listeners();
 /// assert_eq!(count.get(), 1);
-/// notifier.remove_listener(id);
+/// listening.detach();
 /// ```
 pub trait Listenable {
-    /// Register an observer that runs inside the notifying delivery's
-    /// [`RecoveryScope`].
-    ///
-    /// Implementations forward it to the channel that notifies, so the
-    /// observer borrows that delivery's failure custody rather than a fresh one.
-    fn add_observer(&self, observer: ListenerObserver) -> ListenerId;
-
     /// Register a relay that runs inside the notifying delivery's
-    /// [`RecoveryScope`] under an owned [`Subscription`]: the owned twin of
-    /// [`add_observer`](Self::add_observer) (ADR-0219's required observer). A
-    /// source forwards it to the channel that notifies, so the relay borrows
-    /// that delivery's failure custody rather than a fresh one. Hold the
-    /// returned [`Subscription`], and the relay fires on every notification;
-    /// drop it, and the relay detaches from its own channel.
+    /// [`RecoveryScope`] (ADR-0219): a source forwards it to the channel that
+    /// notifies, so the relay borrows that delivery's failure custody rather
+    /// than a fresh one.
+    ///
+    /// Hold the returned [`Subscription`], and the relay fires on every
+    /// notification; drop it, and the relay detaches from its own channel.
     fn listen_with_recovery(&self, relay: ListenerObserver) -> Subscription;
 
     /// Register a listener callback.
     ///
     /// An observer that ignores the scope; a panic in it is still contained
-    /// by the notifying delivery.
-    fn add_listener(&self, listener: ListenerCallback) -> ListenerId {
-        self.add_observer(Rc::new(move |_| listener()))
-    }
-
-    /// Remove a previously registered listener.
-    ///
-    /// A no-op if `id` is not registered — including after the listenable
-    /// has been disposed (`ChangeNotifier::remove_listener` tolerates a
-    /// disposed receiver so teardown code can always detach).
-    fn remove_listener(&self, id: ListenerId);
-
-    /// Remove all listeners.
-    fn remove_all_listeners(&self);
-
-    /// Subscribe with an owned [`Subscription`]: hold it, and the listener
-    /// fires on every notification; drop it, and the listener detaches from
-    /// its own channel.
+    /// by the notifying delivery. Hold the returned [`Subscription`], and the
+    /// listener fires on every notification; drop it, and the listener
+    /// detaches from its own channel.
     fn listen(&self, listener: ListenerCallback) -> Subscription;
 }
 
@@ -134,8 +112,8 @@ pub trait Listenable {
 pub trait ValueListenable<T>: Listenable {
     /// The current value of the object.
     ///
-    /// When the value changes, the callbacks registered with
-    /// [`Listenable::add_listener`] will be invoked.
+    /// When the value changes, the listeners registered with
+    /// [`Listenable::listen`] will be invoked.
     fn value(&self) -> &T;
 }
 
@@ -157,9 +135,9 @@ pub trait ValueListenable<T>: Listenable {
 /// listener-callback holding its own clone sees disposal performed elsewhere.
 ///
 /// [`dispose`]: ChangeNotifier::dispose
-/// [`add_listener`]: Listenable::add_listener
+/// [`add_listener`]: ChangeNotifier::add_listener
 /// [`notify_listeners`]: ChangeNotifier::notify_listeners
-/// [`remove_listener`]: Listenable::remove_listener
+/// [`remove_listener`]: ChangeNotifier::remove_listener
 #[derive(Clone)]
 pub struct ChangeNotifier {
     /// The shared notification core — `ChangeNotifier` IS `Notifier<()>`
@@ -214,8 +192,7 @@ impl ChangeNotifier {
     /// subsequent calls to [`add_listener`] or [`notify_listeners`] panic in
     /// debug builds via `debug_assert!` and degrade to a `tracing::warn!` +
     /// no-op in release builds. [`remove_listener`] is the deliberate
-    /// exception — it stays a silent no-op after dispose (see
-    /// [`Listenable::remove_listener`]'s impl on this type).
+    /// exception — it stays a silent no-op after dispose.
     ///
     /// Disposal does NOT notify listeners; consumers must decide whether to notify before
     /// calling `dispose`.
@@ -226,9 +203,9 @@ impl ChangeNotifier {
     /// to call `dispose` on its own clone (the snapshot-then-fire path in
     /// [`notify_listeners`] makes this reentrancy-safe).
     ///
-    /// [`add_listener`]: Listenable::add_listener
+    /// [`add_listener`]: ChangeNotifier::add_listener
     /// [`notify_listeners`]: Self::notify_listeners
-    /// [`remove_listener`]: Listenable::remove_listener
+    /// [`remove_listener`]: ChangeNotifier::remove_listener
     pub fn dispose(&self) {
         self.inner.dispose();
     }
@@ -386,8 +363,9 @@ impl ChangeNotifier {
     }
 
     /// Subscribe an owned relay that runs inside the notifying delivery's
-    /// [`RecoveryScope`]: the owned twin of
-    /// [`add_observer`](Self::add_observer).
+    /// [`RecoveryScope`], the relay custody ADR-0219's registration owes.
+    /// The id-form twin is [`add_with_recovery`](Self::add_with_recovery),
+    /// for owners that retire through their own recovery scope.
     pub fn listen_with_recovery(&self, relay: ListenerObserver) -> Subscription {
         self.inner
             .listen_with_recovery(Rc::new(move |&(), recovery| relay(recovery)))
@@ -416,36 +394,41 @@ impl Listenable for ChangeNotifier {
         self.inner
             .listen_with_recovery(Rc::new(move |&(), recovery| relay(recovery)))
     }
-    fn add_observer(&self, observer: ListenerObserver) -> ListenerId {
-        self.inner
-            .add_with_recovery(Rc::new(move |&(), recovery| observer(recovery)))
-    }
-    fn add_listener(&self, listener: ListenerCallback) -> ListenerId {
+}
+
+impl ChangeNotifier {
+    /// The channel's own registration of a plain callback, for owners that
+    /// withdraw through [`take_listener`](Self::take_listener)'s id — the
+    /// channel-level machinery the trait's `listen`-pair wraps.
+    pub fn add_listener(&self, listener: ListenerCallback) -> ListenerId {
         if self.check_disposed() {
-            // Release-mode no-op: return a fresh id that is not registered.
             return self.inner.mint_id();
         }
-        // Unchecked for the same reason as `notify_listeners`: the branded
-        // check above is the one entry check; a racing `dispose` must not
-        // produce the inner channel's generically-worded failure.
         self.inner.add_unchecked(Rc::new(move |&()| listener()))
     }
 
-    fn remove_listener(&self, id: ListenerId) {
-        // Deliberately NO disposed check here, unlike `add_listener`/`dispose`/
-        // `notify_listeners`: it is common that the owner of this instance is
-        // disposed a frame earlier than its listeners, and allowing removal
-        // after dispose makes it easier for listeners to clean up.
-        // `dispose()` already cleared the listener map, so the lookup below is
-        // naturally a no-op; the id simply isn't found.
+    /// The channel's own registration of a relay, whose id the channel's
+    /// `take_callback` machinery withdraws (ADR-0219's channel level).
+    pub fn add_with_recovery(&self, relay: ListenerObserver) -> ListenerId {
+        if self.check_disposed() {
+            return self.inner.mint_id();
+        }
+        self.inner
+            .add_with_recovery(Rc::new(move |&(), recovery| relay(recovery)))
+    }
+
+    /// The channel's own tolerant withdrawal: a no-op on a disposed channel
+    /// (its table is empty), so an owner's teardown or a
+    /// [`Subscription`]'s replacement can always detach. Owned callers hold a
+    /// [`Subscription`] instead; this is the channel-level machinery an owner
+    /// of the whole channel retires its own registrations through.
+    pub fn remove_listener(&self, id: ListenerId) {
         self.inner.remove_even_if_disposed(id);
     }
 
-    fn remove_all_listeners(&self) {
-        if self.check_disposed() {
-            return;
-        }
-        // Unchecked: same single-entry-check rationale as `add_listener`.
+    /// Withdraw every listener with the tolerance of
+    /// [`remove_listener`](Self::remove_listener).
+    pub fn remove_all_listeners(&self) {
         self.inner.remove_all_unchecked();
     }
 }
@@ -729,20 +712,6 @@ impl<T> Listenable for ValueNotifier<T> {
     fn listen_with_recovery(&self, relay: ListenerObserver) -> Subscription {
         self.notifier().listen_with_recovery(relay)
     }
-    fn add_observer(&self, observer: ListenerObserver) -> ListenerId {
-        self.notifier().add_observer(observer)
-    }
-    fn add_listener(&self, listener: ListenerCallback) -> ListenerId {
-        self.notifier().add_listener(listener)
-    }
-
-    fn remove_listener(&self, id: ListenerId) {
-        self.notifier().remove_listener(id);
-    }
-
-    fn remove_all_listeners(&self) {
-        self.notifier().remove_all_listeners();
-    }
 }
 
 impl<T> ValueListenable<T> for ValueNotifier<T> {
@@ -888,7 +857,7 @@ mod tests {
         let counter = Rc::new(AtomicUsize::new(0));
 
         let counter_clone = Rc::clone(&counter);
-        let _id = notifier.add_listener(Rc::new(move || {
+        let _listening = notifier.listen(Rc::new(move || {
             counter_clone.fetch_add(1, Ordering::SeqCst);
         }));
 
@@ -914,11 +883,11 @@ mod tests {
         let fired_3 = Rc::new(AtomicBool::new(false));
         let (fired_2c, fired_3c) = (Rc::clone(&fired_2), Rc::clone(&fired_3));
 
-        let _ = notifier.add_listener(Rc::new(|| panic!("intentional test panic")));
-        let _ = notifier.add_listener(Rc::new(move || {
+        let _listening = notifier.listen(Rc::new(|| panic!("intentional test panic")));
+        let _listening = notifier.listen(Rc::new(move || {
             fired_2c.store(true, Ordering::SeqCst);
         }));
-        let _ = notifier.add_listener(Rc::new(move || {
+        let _listening = notifier.listen(Rc::new(move || {
             fired_3c.store(true, Ordering::SeqCst);
         }));
 
@@ -957,12 +926,12 @@ mod tests {
         let other_ran_clone = Rc::clone(&other_ran);
 
         // Listener #1: disposes the notifier mid-iteration.
-        let _ = notifier.add_listener(Rc::new(move || {
+        let _listening = notifier.listen(Rc::new(move || {
             notifier_for_callback.dispose();
         }));
         // Listener #2: increments counter — proves iteration completes after
         // mid-flight dispose (snapshot was already taken).
-        let _ = notifier.add_listener(Rc::new(move || {
+        let _listening = notifier.listen(Rc::new(move || {
             other_ran_clone.fetch_add(1, Ordering::SeqCst);
         }));
 

@@ -62,11 +62,20 @@ fn admit(vsync: &Vsync, fault: Fault, armed: Rc<Cell<bool>>) -> DrivenController
     let controller = owner.controller();
     match fault {
         Fault::Delivery => {
-            controller.add_listener(Rc::new(move || {
+            // The fault listener stays registered for the returned owner's
+            // lifetime, as the id form's abandoned registration did: the
+            // subscription is forgotten on purpose (a deliberate leak; it
+            // only holds a weak to the channel, whose own teardown retires
+            // the callback).
+            #[expect(
+                clippy::mem_forget,
+                reason = "a deliberate leak: the fault listener outlives the helper the way the id form's abandoned registration did"
+            )]
+            std::mem::forget(controller.listen(Rc::new(move || {
                 if armed.replace(false) {
                     std::panic::panic_any("first delivery");
                 }
-            }));
+            })));
             controller.forward().expect("delivery run");
         }
         Fault::Curve => {
@@ -343,26 +352,28 @@ fn withdrawn_value_listener_retirement_preserves_the_commit() {
     let owner = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&vsync));
     let controller = owner.controller();
     let run = controller.forward().expect("listener retirement run");
-    let identity = Rc::new(Cell::new(None));
-    let callback_identity = Rc::clone(&identity);
-    let callback_controller = controller.clone();
     let armed = Rc::new(Cell::new(false));
     let callback_armed = Rc::clone(&armed);
     let drops = Rc::new(Cell::new(0));
+    let own = Rc::new(std::cell::RefCell::new(
+        None::<flui_foundation::Subscription>,
+    ));
+    let own_for_listener = Rc::downgrade(&own);
     let capture = RetiredListenerCapture(Rc::clone(&drops));
-    identity.set(Some(controller.add_listener(Rc::new(move || {
+    *own.borrow_mut() = Some(controller.listen(Rc::new(move || {
         let _capture = &capture;
         if callback_armed.get() {
-            callback_controller.remove_listener(
-                callback_identity
-                    .take()
-                    .expect("the live listener removes its own identity"),
-            );
+            // The listener removes its own registration: its subscription
+            // is stored under this same identity slot.
+            let own_subscription = own_for_listener
+                .upgrade()
+                .and_then(|own| own.borrow_mut().take());
+            drop(own_subscription);
         }
-    }))));
+    })));
     let tail = Rc::new(Cell::new(0));
     let delivered = Rc::clone(&tail);
-    controller.add_listener(Rc::new(move || delivered.set(delivered.get() + 1)));
+    let _listening = controller.listen(Rc::new(move || delivered.set(delivered.get() + 1)));
     let mut clock = MotionClock::new();
     vsync.tick_all(&clock.frame(Duration::ZERO));
     armed.set(true);

@@ -3,6 +3,7 @@
 use flui_foundation::{
     ChangeNotifier, Listenable, ListenerId, Notifier, Subscription, ValueListenable, ValueNotifier,
 };
+use std::cell::RefCell;
 use std::io::Read;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -74,7 +75,7 @@ fn non_clone_owned_value() {
     let mut notifier = ValueNotifier::new(OwnedValue("initial".into()));
     let calls = Arc::new(AtomicUsize::new(0));
     let listener_calls = Arc::clone(&calls);
-    notifier.add_listener(std::rc::Rc::new(move || {
+    let _listening = notifier.listen(std::rc::Rc::new(move || {
         listener_calls.fetch_add(1, Ordering::SeqCst);
     }));
     assert_eq!(read(&notifier), "initial");
@@ -97,7 +98,7 @@ fn cloneable_values_keep_independent_values_and_shared_listeners() {
     let mut cloned = original.clone();
     let calls = Arc::new(AtomicUsize::new(0));
     let listener_calls = Arc::clone(&calls);
-    original.add_listener(std::rc::Rc::new(move || {
+    let _listening = original.listen(std::rc::Rc::new(move || {
         listener_calls.fetch_add(1, Ordering::SeqCst);
     }));
     cloned.set_value(2);
@@ -193,11 +194,11 @@ fn terminal_retirement_competition() {
         drops: Arc::clone(&drops),
         message: "first terminal retirement",
     };
-    notifier.add_listener(std::rc::Rc::new(move || {
+    let _listening = notifier.listen(std::rc::Rc::new(move || {
         let _capture = &capture;
     }));
     let capture = Counted(Arc::clone(&drops));
-    notifier.add_listener(std::rc::Rc::new(move || {
+    let _listening = notifier.listen(std::rc::Rc::new(move || {
         let _capture = &capture;
     }));
     let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(notifier)))
@@ -347,7 +348,7 @@ fn value_terminal_retirement_preserves_the_first_failure() {
             drops: Arc::clone(&listener_drops),
             fails: extract.then_some("listener retirement failure"),
         };
-        notifier.add_listener(std::rc::Rc::new(move || {
+        let _listening = notifier.listen(std::rc::Rc::new(move || {
             let _capture = &capture;
         }));
         let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
@@ -397,7 +398,7 @@ fn value_retirement_failure_releases_the_shared_channel() {
     let listener_drops = Arc::new(AtomicUsize::new(0));
     let capture = Counted(Arc::clone(&listener_drops));
     let observed = Arc::clone(&calls);
-    notifier.add_listener(std::rc::Rc::new(move || {
+    let _listening = notifier.listen(std::rc::Rc::new(move || {
         let _capture = &capture;
         observed.fetch_add(1, Ordering::SeqCst);
     }));
@@ -432,7 +433,7 @@ fn value_terminal_retirement_during_unwind_destroys_both() {
     let listener_drops = Arc::new(AtomicUsize::new(0));
     let notifier = ValueNotifier::new(Counted(Arc::clone(&value_drops)));
     let capture = Counted(Arc::clone(&listener_drops));
-    notifier.add_listener(std::rc::Rc::new(move || {
+    let _listening = notifier.listen(std::rc::Rc::new(move || {
         let _capture = &capture;
     }));
     let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
@@ -461,7 +462,7 @@ fn healthy_value_extraction_preserves_reentry_and_shared_channel_disposal() {
     }
     struct ReentrantCapture {
         observer: ValueNotifier<Value>,
-        id: Arc<Mutex<Option<ListenerId>>>,
+        listening: Rc<RefCell<Option<Subscription>>>,
         calls: Arc<AtomicUsize>,
     }
     impl Drop for ReentrantCapture {
@@ -470,12 +471,7 @@ fn healthy_value_extraction_preserves_reentry_and_shared_channel_disposal() {
                 self.observer.is_empty(),
                 "channel emptied before captures retire"
             );
-            self.observer.remove_listener(
-                self.id
-                    .lock()
-                    .expect("listener id")
-                    .expect("registered listener"),
-            );
+            drop(self.listening.borrow_mut().take());
             self.calls.fetch_add(1, Ordering::SeqCst);
         }
     }
@@ -485,16 +481,16 @@ fn healthy_value_extraction_preserves_reentry_and_shared_channel_disposal() {
         drops: Arc::clone(&value_drops),
     });
     let alias = notifier.clone();
-    let id = Arc::new(Mutex::new(None));
+    let listening = Rc::new(RefCell::new(None));
     let capture = ReentrantCapture {
         observer: alias.clone(),
-        id: Arc::clone(&id),
+        listening: Rc::clone(&listening),
         calls: Arc::clone(&reentries),
     };
-    let installed = notifier.add_listener(std::rc::Rc::new(move || {
+    let installed = notifier.listen(std::rc::Rc::new(move || {
         let _capture = &capture;
     }));
-    *id.lock().expect("listener id") = Some(installed);
+    *listening.borrow_mut() = Some(installed);
     let extracted = notifier.into_value();
     assert_eq!(reentries.load(Ordering::SeqCst), 1);
     assert_eq!(
@@ -542,9 +538,9 @@ fn failure_propagates_after_healthy_tail() {
     assert_eq!(calls.get(), 2, "the next round makes progress");
 }
 
-/// A `Listenable` that implements only the required observer method still
-/// gives `add_listener` callers the channel's containment: the first failure
-/// propagates after the healthy tail, and the next round makes progress.
+/// A `Listenable` that forwards the owned pair to its channel still gives its
+/// listeners the channel's containment: the first failure propagates after the
+/// healthy tail, and the next round makes progress.
 fn adapted_listener_propagates_after_healthy_tail() {
     struct Forwarder(ChangeNotifier);
     impl Listenable for Forwarder {
@@ -560,21 +556,12 @@ fn adapted_listener_propagates_after_healthy_tail() {
         ) -> flui_foundation::Subscription {
             self.0.listen_with_recovery(relay)
         }
-        fn add_observer(&self, observer: flui_foundation::ListenerObserver) -> ListenerId {
-            self.0.add_observer(observer)
-        }
-        fn remove_listener(&self, id: ListenerId) {
-            self.0.remove_listener(id);
-        }
-        fn remove_all_listeners(&self) {
-            self.0.remove_all_listeners();
-        }
     }
     let forwarder = Forwarder(ChangeNotifier::new());
     let calls = std::rc::Rc::new(std::cell::Cell::new(0));
-    let first = forwarder.add_listener(std::rc::Rc::new(|| panic!("first listener failure")));
+    let first = forwarder.listen(std::rc::Rc::new(|| panic!("first listener failure")));
     let observed = calls.clone();
-    forwarder.add_listener(std::rc::Rc::new(move || observed.set(observed.get() + 1)));
+    let _listening = forwarder.listen(std::rc::Rc::new(move || observed.set(observed.get() + 1)));
     let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         forwarder.0.notify_listeners();
     }))
@@ -584,7 +571,7 @@ fn adapted_listener_propagates_after_healthy_tail() {
         Some("first listener failure")
     );
     assert_eq!(calls.get(), 1);
-    forwarder.remove_listener(first);
+    first.detach();
     forwarder.0.notify_listeners();
     assert_eq!(calls.get(), 2, "the next round makes progress");
 }
@@ -592,10 +579,10 @@ fn adapted_listener_propagates_after_healthy_tail() {
 fn disposal_silences_the_snapshot_tail() {
     let notifier = ChangeNotifier::new();
     let alias = notifier.clone();
-    notifier.add_listener(std::rc::Rc::new(move || alias.dispose()));
+    let _listening = notifier.listen(std::rc::Rc::new(move || alias.dispose()));
     let calls = std::rc::Rc::new(std::cell::Cell::new(0));
     let observed = calls.clone();
-    notifier.add_listener(std::rc::Rc::new(move || observed.set(observed.get() + 1)));
+    let _listening = notifier.listen(std::rc::Rc::new(move || observed.set(observed.get() + 1)));
     notifier.notify_listeners();
     assert_eq!(
         calls.get(),
@@ -650,30 +637,29 @@ fn recursive_relay_retirement_preserves_failure() {
     let child = ChangeNotifier::new();
     let armed = Rc::new(Cell::new(false));
     let fail = Rc::clone(&armed);
-    child.add_listener(Rc::new(move || {
+    let _listening = child.listen(Rc::new(move || {
         assert!(!fail.get(), "first recursive relay failure");
     }));
-    parent.add_observer(Rc::new(move |recovery| {
+    let _relaying = parent.listen_with_recovery(Rc::new(move |recovery| {
         child.notify_listeners_with_recovery(recovery);
     }));
     let nested = Cell::new(false);
     let owner = Rc::downgrade(&parent);
     let drops = Arc::new(AtomicUsize::new(0));
     let captures = Arc::clone(&drops);
-    parent.add_listener(Rc::new(move || {
+    let _listening = parent.listen(Rc::new(move || {
         let owner = owner.upgrade().expect("parent remains alive");
         if !nested.replace(true) {
             owner.notify_listeners();
             nested.set(false);
         }
         let capture = Counted(Arc::clone(&captures));
-        let id = owner.add_listener(Rc::new(move || {
+        let listening = owner.listen(Rc::new(move || {
             let _capture = &capture;
         }));
-        let callback = owner.take_listener(id).expect("fresh callback");
         let mut recovery = PanicRecovery::new();
         owner.inherit_failure(&mut recovery.scope());
-        recovery.retire(callback);
+        recovery.run(|| listening.detach());
         recovery.finish();
     }));
     parent.notify_listeners();

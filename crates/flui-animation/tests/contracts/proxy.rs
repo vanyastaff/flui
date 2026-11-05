@@ -10,7 +10,7 @@ use crate::child_process;
 use flui_animation::{
     Animation, AnimationController, AnimationStatus, ConstantAnimation, ProxyAnimation,
 };
-use flui_foundation::{ChangeNotifier, Listenable, ListenerCallback, ListenerId};
+use flui_foundation::{ChangeNotifier, Listenable, ListenerCallback};
 
 #[derive(Debug, Clone, Copy)]
 enum Reentry {
@@ -23,6 +23,7 @@ struct ReentrantParentState {
     proxy: Mutex<Option<Weak<ProxyAnimation<f64>>>>,
     reentry: Reentry,
     values: ChangeNotifier,
+    value_listening: RefCell<Option<flui_foundation::Subscription>>,
     statuses: Rc<ChangeNotifier>,
 }
 
@@ -51,13 +52,14 @@ impl ReentrantParent {
                 proxy: Mutex::new(None),
                 reentry,
                 values: ChangeNotifier::new(),
+                value_listening: RefCell::new(None),
                 statuses: Rc::new(ChangeNotifier::new()),
             }),
         }
     }
 
-    fn withdraw(&self, id: flui_foundation::ListenerId) {
-        self.values.remove_listener(id);
+    fn withdraw(&self) {
+        drop(self.value_listening.borrow_mut().take());
         if matches!(self.reentry, Reentry::Removal) {
             self.reenter();
         }
@@ -84,30 +86,19 @@ impl Listenable for ReentrantParent {
         &self,
         relay: flui_foundation::ListenerObserver,
     ) -> flui_foundation::Subscription {
-        let id = Listenable::add_observer(self, relay);
-        // The source's withdrawals run its own machinery; the subscription
-        // carries the removal the way ADR-0180's status guard does.
+        let listening = self.values.listen_with_recovery(relay);
+        *self.value_listening.borrow_mut() = Some(listening);
+        // The source's withdrawal runs its own machinery (its reenter hook);
+        // the subscription carries it the way ADR-0180's status guard does.
         flui_foundation::Subscription::for_removal({
             let state = Rc::clone(&self.state);
             move || {
                 ReentrantParent {
                     state: Rc::clone(&state),
                 }
-                .withdraw(id);
+                .withdraw();
             }
         })
-    }
-    fn add_observer(&self, observer: flui_foundation::ListenerObserver) -> ListenerId {
-        self.values.add_observer(observer)
-    }
-    fn add_listener(&self, callback: ListenerCallback) -> ListenerId {
-        self.values.add_listener(callback)
-    }
-    fn remove_listener(&self, id: ListenerId) {
-        self.withdraw(id);
-    }
-    fn remove_all_listeners(&self) {
-        self.values.remove_all_listeners();
     }
 }
 
@@ -142,16 +133,23 @@ impl Animation<f64> for ReentrantParent {
         })
     }
 }
-
 fn fixture(reentry: Reentry) -> (Rc<ProxyAnimation<f64>>, Rc<AtomicUsize>) {
     let parent = std::rc::Rc::new(ReentrantParent::new(reentry));
     let proxy = Rc::new(ProxyAnimation::new(parent.clone()));
     *parent.proxy.lock().expect("set parent hook") = Some(Rc::downgrade(&proxy));
     let changes = Rc::new(AtomicUsize::new(0));
     let observed = Rc::clone(&changes);
-    proxy.add_listener(std::rc::Rc::new(move || {
+    // The counted listener stays registered for the returned proxy's whole
+    // lifetime, as the id form's abandoned registration did: the subscription
+    // is forgotten on purpose (a deliberate leak; it only holds a weak to the
+    // channel, whose own teardown retires the callback).
+    #[expect(
+        clippy::mem_forget,
+        reason = "a deliberate leak: the counted listener outlives the helper the way the id form's abandoned registration did"
+    )]
+    std::mem::forget(proxy.listen(std::rc::Rc::new(move || {
         observed.fetch_add(1, Ordering::Relaxed);
-    }));
+    })));
     (proxy, changes)
 }
 

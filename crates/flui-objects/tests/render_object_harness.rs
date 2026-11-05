@@ -454,14 +454,18 @@ impl RemovalNotifier {
 
     fn withdraw(&self, id: flui_foundation::ListenerId) {
         assert!(!self.before.replace(false), "{} removal", self.name);
-        flui_foundation::Listenable::remove_listener(&self.source, id);
+        self.source.remove_listener(id);
         assert!(!self.fail.replace(false), "{} removal", self.name);
     }
 }
 
 impl flui_foundation::Listenable for RemovalNotifier {
     fn listen(&self, listener: flui_foundation::ListenerCallback) -> flui_foundation::Subscription {
-        let id = flui_foundation::Listenable::add_listener(self, listener);
+        // A registration that fails once does so before the channel admits
+        // anything; the caller holds the closure and never gets a
+        // subscription.
+        assert!(!self.fail_add.replace(false), "{} registration", self.name);
+        let id = self.source.add_listener(listener);
         // The removals run the source's own machinery; the subscription
         // carries it the way ADR-0180's status guard does.
         let state = Rc::clone(&self.state);
@@ -476,7 +480,7 @@ impl flui_foundation::Listenable for RemovalNotifier {
         &self,
         relay: flui_foundation::ListenerObserver,
     ) -> flui_foundation::Subscription {
-        let id = flui_foundation::Listenable::add_observer(self, relay);
+        let id = self.source.add_with_recovery(relay);
         // The removals run the source's own machinery; the subscription
         // carries it the way ADR-0180's status guard does.
         let state = Rc::clone(&self.state);
@@ -486,22 +490,6 @@ impl flui_foundation::Listenable for RemovalNotifier {
             }
             .withdraw(id);
         })
-    }
-    fn add_observer(
-        &self,
-        observer: flui_foundation::notifier::ListenerObserver,
-    ) -> flui_foundation::ListenerId {
-        let id = flui_foundation::Listenable::add_observer(&self.source, observer);
-        assert!(!self.fail_add.replace(false), "{} registration", self.name);
-        id
-    }
-
-    fn remove_listener(&self, id: flui_foundation::ListenerId) {
-        self.withdraw(id);
-    }
-
-    fn remove_all_listeners(&self) {
-        flui_foundation::Listenable::remove_all_listeners(&self.source);
     }
 }
 
@@ -648,7 +636,7 @@ fn harness_custom_paint_failed_replacement_commits_new_painter_and_revokes_old_r
                 run.pump().painted,
                 "the replacement continues making progress"
             );
-            flui_foundation::Listenable::remove_all_listeners(&old.source);
+            old.source.dispose();
             assert_eq!(run.owner_mut().remove_render_object(root), 1);
             assert_eq!(new.source.len(), 0);
         }
@@ -897,7 +885,7 @@ fn harness_custom_paint_failed_subscription_is_inert_and_can_be_replaced() {
             );
             new.source.notify_listeners();
             assert!(run.pump().painted, "retry installs a working registration");
-            flui_foundation::Listenable::remove_all_listeners(&new.source);
+            new.source.dispose();
             assert_eq!(run.owner_mut().remove_render_object(root), 1);
         }
     }
@@ -4391,24 +4379,6 @@ impl flui_foundation::Listenable for ScriptedAnimation {
     ) -> flui_foundation::Subscription {
         self.controller.listen_with_recovery(relay)
     }
-    fn add_observer(
-        &self,
-        observer: flui_foundation::ListenerObserver,
-    ) -> flui_foundation::ListenerId {
-        self.controller.add_observer(observer)
-    }
-    fn add_listener(
-        &self,
-        callback: flui_foundation::ListenerCallback,
-    ) -> flui_foundation::ListenerId {
-        self.controller.add_listener(callback)
-    }
-    fn remove_listener(&self, id: flui_foundation::ListenerId) {
-        self.controller.remove_listener(id);
-    }
-    fn remove_all_listeners(&self) {
-        self.controller.remove_all_listeners();
-    }
 }
 
 impl Animation<f64> for ScriptedAnimation {
@@ -4515,24 +4485,6 @@ impl flui_foundation::Listenable for CountingAnimation {
         relay: flui_foundation::ListenerObserver,
     ) -> flui_foundation::Subscription {
         self.controller.listen_with_recovery(relay)
-    }
-    fn add_observer(
-        &self,
-        observer: flui_foundation::ListenerObserver,
-    ) -> flui_foundation::ListenerId {
-        self.controller.add_observer(observer)
-    }
-    fn add_listener(
-        &self,
-        callback: flui_foundation::ListenerCallback,
-    ) -> flui_foundation::ListenerId {
-        self.controller.add_listener(callback)
-    }
-    fn remove_listener(&self, id: flui_foundation::ListenerId) {
-        self.controller.remove_listener(id);
-    }
-    fn remove_all_listeners(&self) {
-        self.controller.remove_all_listeners();
     }
 }
 
