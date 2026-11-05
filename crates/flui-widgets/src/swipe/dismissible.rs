@@ -32,7 +32,6 @@ use flui_animation::{
     Animation, AnimationController, DrivenController, MotionPolicy, Vsync, VsyncUpdate, curves,
 };
 use flui_foundation::Listenable;
-use flui_foundation::ListenerId;
 use flui_foundation::geometry::{Axis, Size};
 use flui_objects::StackFit;
 use flui_painting::paint::Clip;
@@ -682,7 +681,7 @@ struct Collapse {
     dismissed: Cell<Option<DismissSide>>,
     size_prior: Cell<Option<Size>>,
     controller: RefCell<Option<DrivenController>>,
-    listener: Cell<Option<ListenerId>>,
+    listener: Cell<Option<flui_foundation::Subscription>>,
     completion: Cell<ResizeCompletion>,
 }
 
@@ -707,7 +706,7 @@ impl Collapse {
         let weak = Rc::downgrade(collapse);
         let events = Rc::downgrade(events);
         let rebuild = rebuild.clone();
-        let listener = controller.controller().add_listener(Rc::new(move || {
+        let listener = controller.controller().listen(Rc::new(move || {
             let Some(collapse) = weak.upgrade() else {
                 return;
             };
@@ -743,9 +742,7 @@ impl Collapse {
     fn retire(&self) {
         let controller = self.controller.borrow_mut().take();
         if let Some(mut controller) = controller {
-            if let Some(id) = self.listener.take() {
-                controller.controller().remove_listener(id);
-            }
+            self.listener.take();
             controller.dispose();
         }
     }
@@ -765,7 +762,7 @@ pub struct DismissibleState {
     /// The configuration the controller's stops were built from.
     config: Rc<RefCell<DismissConfig>>,
     events: Option<Rc<DismissEvents>>,
-    offset_listener: Option<ListenerId>,
+    offset_listener: Option<flui_foundation::Subscription>,
     watch: Option<OutWatch>,
     uncover: Option<UncoverWatch>,
     collapse: Rc<Collapse>,
@@ -928,7 +925,7 @@ impl ViewState<Dismissible> for DismissibleState {
             slide_lease: RefCell::new(None),
         });
         let moved = Rc::downgrade(&events);
-        self.offset_listener = Some(self.controller.offset_listenable().add_listener(Rc::new(
+        self.offset_listener = Some(self.controller.offset_listenable().listen(Rc::new(
             move || {
                 if let Some(events) = moved.upgrade() {
                     events.moved();
@@ -1012,9 +1009,7 @@ impl ViewState<Dismissible> for DismissibleState {
             let released = events.slide_lease.take();
             drop(released);
         }
-        if let Some(id) = self.offset_listener.take() {
-            self.controller.offset_listenable().remove_listener(id);
-        }
+        self.offset_listener.take();
         self.collapse.retire();
         self.geometry.release();
     }
