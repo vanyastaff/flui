@@ -34,7 +34,7 @@
 use std::rc::Rc;
 use std::sync::Arc;
 
-use flui_foundation::{ListenerId, ValueListenable};
+use flui_foundation::ValueListenable;
 use flui_view::context::{BuildContext, LifecycleContext};
 use flui_view::element::ElementKind;
 use flui_view::{BoxedView, IntoView, RebuildHandle, StatefulView, View, ViewExt, ViewState};
@@ -134,7 +134,7 @@ impl<T: 'static> StatefulView for ValueListenableBuilder<T> {
         ValueListenableBuilderState {
             value_listenable: Arc::clone(&self.value_listenable),
             handle: None,
-            listener_id: None,
+            subscription: None,
         }
     }
 }
@@ -160,14 +160,15 @@ pub struct ValueListenableBuilderState<T> {
     value_listenable: Arc<dyn ValueListenable<T>>, // erases the concrete notifier type, same shape as the already-sanctioned `Listenable`
     /// Captured in `init_state`, the only lifecycle hook handed a `BuildContext`.
     handle: Option<RebuildHandle>,
-    /// The id of the listener registered against `value_listenable`, if any.
-    listener_id: Option<ListenerId>,
+    /// The listener registered against `value_listenable`, if any: detaching
+    /// is cancel-on-drop.
+    subscription: Option<flui_foundation::Subscription>,
 }
 
 impl<T> std::fmt::Debug for ValueListenableBuilderState<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ValueListenableBuilderState")
-            .field("subscribed", &self.listener_id.is_some())
+            .field("subscribed", &self.subscription.is_some())
             .finish_non_exhaustive()
     }
 }
@@ -187,12 +188,10 @@ impl<T: 'static> ValueListenableBuilderState<T> {
             .handle
             .clone()
             .expect("BUG: subscribe() called before init_state populated handle");
-        let listener_id = self
-            .value_listenable
-            .add_listener(std::rc::Rc::new(move || {
-                handle.schedule(flui_view::RebuildReason::StateChange);
-            }));
-        self.listener_id = Some(listener_id);
+        let subscription = self.value_listenable.listen(std::rc::Rc::new(move || {
+            handle.schedule(flui_view::RebuildReason::StateChange);
+        }));
+        self.subscription = Some(subscription);
     }
 }
 
@@ -223,17 +222,13 @@ impl<T: 'static> ViewState<ValueListenableBuilder<T>> for ValueListenableBuilder
             return;
         }
 
-        if let Some(listener_id) = self.listener_id.take() {
-            self.value_listenable.remove_listener(listener_id);
-        }
+        self.subscription.take();
         self.value_listenable = Arc::clone(&new_view.value_listenable);
         self.subscribe();
     }
 
     /// `_ValueListenableBuilderState.dispose`: unsubscribe from the listenable.
     fn dispose(&mut self) {
-        if let Some(listener_id) = self.listener_id.take() {
-            self.value_listenable.remove_listener(listener_id);
-        }
+        self.subscription.take();
     }
 }
