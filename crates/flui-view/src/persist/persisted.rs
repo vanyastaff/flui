@@ -210,7 +210,9 @@ impl Announcer {
         self.closed.set(true);
         let delivery = self.delivery.borrow_mut().take();
         drop(delivery);
-        Listenable::remove_all_listeners(&self.notifier);
+        // The concrete owner's clear: nothing serves this announcer again,
+        // and a registration after close is refused at the closed gate.
+        self.notifier.dispose();
     }
 }
 

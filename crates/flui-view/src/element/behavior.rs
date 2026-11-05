@@ -13,7 +13,7 @@ use std::{
     rc::Rc,
 };
 
-use flui_foundation::{ElementId, Listenable, ListenerId, RenderId};
+use flui_foundation::{ElementId, Listenable, RenderId};
 use flui_rendering::{
     pipeline::PipelineOwner, protocol::Protocol, traits::RenderObject as RenderObjectTrait,
 };
@@ -1672,14 +1672,14 @@ where
     /// Composed StatefulBehavior for state management
     stateful: StatefulBehavior<V>,
     /// The listenable this element is currently subscribed to, cached
-    /// together with the `ListenerId` `add_listener` returned — set at
+    /// together with the owned `Subscription` the listen handed back — set at
     /// subscribe time (`on_mount`, and again on a swap in
     /// `on_view_updated`).
     ///
     /// # Why cache instead of re-reading `listenable()`
     ///
-    /// `on_unmount` removes the subscription through this cached `Arc` and
-    /// never calls `core.view().listenable()` again. `listenable()` is the
+    /// `on_unmount` detaches the subscription without calling
+    /// `core.view().listenable()` again. `listenable()` is the
     /// user's only handle to the thing being cleaned up, so a
     /// `catch_unwind` around a *second* call to it at unmount cannot make
     /// removal safe: if that call panicked, there is nothing left to
@@ -1688,7 +1688,7 @@ where
     /// it: the hook is no longer on the removal path at all, so a
     /// `listenable()` that panics on every call after mount cannot make
     /// unmount panic too.
-    subscribed: Option<(std::rc::Rc<dyn Listenable>, ListenerId)>,
+    subscribed: Option<(std::rc::Rc<dyn Listenable>, flui_foundation::Subscription)>,
 }
 
 impl<V> AnimatedBehavior<V>
@@ -1756,12 +1756,12 @@ where
         self.stateful.on_mount(core, owner);
 
         // Then subscribe to the listenable, caching the `Arc` alongside the
-        // `ListenerId` — `on_unmount` removes through this cache and never
-        // calls `listenable()` again (see the field doc on `subscribed`).
+        // owned subscription — `on_unmount` detaches through this cache and
+        // never calls `listenable()` again (see the field doc on `subscribed`).
         let listenable = core.view().listenable();
         let mark_dirty = core.create_mark_dirty_callback(crate::RebuildReason::AnimationTick);
-        let listener_id = listenable.add_listener(mark_dirty);
-        self.subscribed = Some((listenable, listener_id));
+        let subscription = listenable.listen(mark_dirty);
+        self.subscribed = Some((listenable, subscription));
 
         tracing::debug!("AnimatedBehavior::on_mount subscribed to listenable");
     }
@@ -1772,8 +1772,8 @@ where
         // cannot make safe (see `subscribed`'s field doc); closing it by
         // caching means a `listenable()` that panics on every call after
         // mount cannot reach this method at all.
-        if let Some((listenable, listener_id)) = self.subscribed.take() {
-            listenable.remove_listener(listener_id);
+        if let Some(subscription) = self.subscribed.take().map(|(_, subscription)| subscription) {
+            drop(subscription);
             tracing::debug!("AnimatedBehavior::on_unmount unsubscribed from listenable");
         }
 
@@ -1825,18 +1825,16 @@ where
             .is_some_and(|(cached, _)| Rc::ptr_eq(cached, &new_listenable));
 
         if !unchanged {
-            // Safe to unsubscribe unconditionally, even if the old
-            // listenable's backing `ChangeNotifier` were already disposed:
-            // `Listenable::remove_listener` is a silent no-op on a disposed
-            // notifier, precisely so teardown code can detach from an
+            // Safe to detach unconditionally, even if the old listenable's
+            // backing `ChangeNotifier` were already disposed: an empty
+            // channel detaches silently (the subscription's entry is simply
+            // absent), precisely so teardown code can detach from an
             // already-disposed listenable.
-            if let Some((old_listenable, listener_id)) = self.subscribed.take() {
-                old_listenable.remove_listener(listener_id);
-            }
+            drop(self.subscribed.take().map(|(_, subscription)| subscription));
 
             let mark_dirty = core.create_mark_dirty_callback(crate::RebuildReason::AnimationTick);
-            let listener_id = new_listenable.add_listener(mark_dirty);
-            self.subscribed = Some((new_listenable, listener_id));
+            let subscription = new_listenable.listen(mark_dirty);
+            self.subscribed = Some((new_listenable, subscription));
 
             tracing::debug!(
                 "AnimatedBehavior::on_view_updated resubscribed: listenable instance changed"
