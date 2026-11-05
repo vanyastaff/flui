@@ -387,7 +387,7 @@ pub(crate) fn anchored_drag_follows_anchors_replaced_mid_drag() {
                 }
             })
         };
-        let _id = anchors.listenable().add_listener(listener);
+        let _listening = anchors.listenable().listen(listener);
         let mut laid = mount(drag_view(&anchors, Axis::Horizontal), &vsync);
         laid.replay(&slow(device, at(10.0, 150.0), at(290.0, 150.0)));
         settle(&mut laid);
@@ -404,10 +404,10 @@ pub(crate) fn anchored_drag_follows_anchors_replaced_mid_drag() {
 
         // A settle whose target the listener removes lands on the new set.
         let settling = Rc::new(Cell::new(false));
-        let _id = {
+        let _listening = {
             let anchors = anchors.clone();
             let settling = Rc::clone(&settling);
-            anchors.clone().listenable().add_listener(Rc::new(move || {
+            anchors.clone().listenable().listen(Rc::new(move || {
                 if anchors.current() == Stop::Open && !settling.replace(true) {
                     anchors.set_anchors(stops(&[(Stop::Closed, 0.0), (Stop::Far, 200.0)]));
                 }
@@ -943,11 +943,11 @@ pub(crate) fn anchored_drag_offset_listenable_follows_every_move() {
     let vsync = Vsync::new();
     let anchors = controller(three());
     let heard = Rc::new(Cell::new(0_u32));
-    let _id = {
+    let _listening = {
         let heard = Rc::clone(&heard);
         anchors
             .offset_listenable()
-            .add_listener(Rc::new(move || heard.set(heard.get() + 1)))
+            .listen(Rc::new(move || heard.set(heard.get() + 1)))
     };
     let mut laid = mount(drag_view(&anchors, Axis::Horizontal), &vsync);
     laid.dispatch_pointer_down(100.0, 150.0);

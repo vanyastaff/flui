@@ -7,7 +7,7 @@
 //! 5. `ScrollController::animate_to` (ADR-0037) — curve-driven animation,
 //!    grab-to-cancel, and jump_to-cancels-in-flight.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
@@ -885,20 +885,21 @@ pub(crate) fn replacing_pending_scroll_motion_delivers_and_recovers_after_user_f
             let attempts = Rc::new(Cell::new(0));
             let calls = Rc::clone(&attempts);
             let listenable = controller.listenable();
-            let listener = listenable.add_listener(Rc::new(move || {
+            let listener = listenable.listen(Rc::new(move || {
                 calls.set(calls.get() + 1);
                 assert!(!notification_fails, "pending scroll notification failure");
             }));
             let observer_drops = Arc::new(AtomicUsize::new(0));
             let observer = RetiringObserver(Arc::clone(&observer_drops));
-            let identity = Rc::new(Cell::new(None));
+            let identity = Rc::new(RefCell::new(None::<flui_foundation::Subscription>));
             let owned_identity = Rc::clone(&identity);
-            let removal = Rc::clone(&listenable);
-            let self_removing = listenable.add_listener(Rc::new(move || {
+            let self_removing = listenable.listen(Rc::new(move || {
                 observer.observe();
-                removal.remove_listener(owned_identity.take().expect("registered observer"));
+                // The withdrawal detaches through the subscription's own
+                // channel, so the retired callback destroys at the tail.
+                drop(owned_identity.borrow_mut().take());
             }));
-            identity.set(Some(self_removing));
+            *identity.borrow_mut() = Some(self_removing);
             let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 if jumps {
                     controller.jump_to(200.0).expect("no build is running");
@@ -935,7 +936,7 @@ pub(crate) fn replacing_pending_scroll_motion_delivers_and_recovers_after_user_f
             } else {
                 assert!(outcome.is_ok(), "healthy replacement completes");
             }
-            listenable.remove_listener(listener);
+            listener.detach();
             let mut laid = fling_scoped(
                 Scrollable::new()
                     .controller(controller.clone())
@@ -3956,7 +3957,7 @@ pub(crate) fn nested_fling_failure_keeps_first_panic_and_a_new_gesture_makes_pro
         let listenable = outer.listenable();
         let first = Arc::new(AtomicBool::new(true));
         let fail = Arc::clone(&first);
-        let first_id = listenable.add_listener(std::rc::Rc::new(move || {
+        let first_id = listenable.listen(std::rc::Rc::new(move || {
             assert!(
                 !fail.swap(false, Ordering::SeqCst),
                 "first parent handoff notification"
@@ -3964,7 +3965,7 @@ pub(crate) fn nested_fling_failure_keeps_first_panic_and_a_new_gesture_makes_pro
         }));
         let second = Arc::new(AtomicBool::new(competing));
         let fail = Arc::clone(&second);
-        let second_id = listenable.add_listener(std::rc::Rc::new(move || {
+        let second_id = listenable.listen(std::rc::Rc::new(move || {
             assert!(
                 !fail.swap(false, Ordering::SeqCst),
                 "second parent handoff notification"
@@ -3995,8 +3996,8 @@ pub(crate) fn nested_fling_failure_keeps_first_panic_and_a_new_gesture_makes_pro
             outer.pixels() > 600.0,
             "contained notification failures do not stall accepted motion"
         );
-        listenable.remove_listener(first_id);
-        listenable.remove_listener(second_id);
+        first_id.detach();
+        second_id.detach();
         outer.jump_to(600.0).expect("no build is running");
         inner.jump_to(650.0).expect("no build is running");
         laid.tick();
@@ -4084,7 +4085,7 @@ pub(crate) fn nested_fling_equal_edge_jump_cancels_old_handoff_and_next_gesture_
     let jump = Arc::clone(&pending_jump);
     let controller = inner.clone();
     let listenable = inner.listenable();
-    let listener = listenable.add_listener(std::rc::Rc::new(move || {
+    let listener = listenable.listen(std::rc::Rc::new(move || {
         if controller.pixels() == 800.0 && jump.swap(false, Ordering::SeqCst) {
             // Explicit programmatic cancellation must win even when it leaves
             // the already-committed edge pixels unchanged.
@@ -4110,7 +4111,7 @@ pub(crate) fn nested_fling_equal_edge_jump_cancels_old_handoff_and_next_gesture_
         600.0,
         "the explicit equal-edge jump cancels the older residual impulse"
     );
-    listenable.remove_listener(listener);
+    listener.detach();
     inner.jump_to(650.0).expect("no build is running");
     outer.jump_to(600.0).expect("no build is running");
     laid.tick();
@@ -4183,7 +4184,7 @@ pub(crate) fn nested_fling_skips_saturated_parent_and_reentrant_jump_retires_tra
     let entered = Arc::clone(&once);
     let reentrant = outer.clone();
     let listenable = outer.listenable();
-    let listener = listenable.add_listener(std::rc::Rc::new(move || {
+    let listener = listenable.listen(std::rc::Rc::new(move || {
         if entered.swap(false, std::sync::atomic::Ordering::SeqCst) {
             reentrant.jump_to(123.0).expect("no build is running");
         }
@@ -4207,7 +4208,7 @@ pub(crate) fn nested_fling_skips_saturated_parent_and_reentrant_jump_retires_tra
         123.0,
         "no older handoff overwrites the new position"
     );
-    listenable.remove_listener(listener);
+    listener.detach();
     outer.jump_to(600.0).expect("no build is running");
     inner.jump_to(650.0).expect("no build is running");
     laid.tick();
@@ -4544,7 +4545,7 @@ pub(crate) fn show_on_screen_failure_continues_live_ancestors_and_fresh_requests
         let first = Arc::new(AtomicBool::new(true));
         let failed = Arc::clone(&first);
         let inner_listenable = inner.listenable();
-        let first_id = inner_listenable.add_listener(std::rc::Rc::new(move || {
+        let first_id = inner_listenable.listen(std::rc::Rc::new(move || {
             assert!(
                 !failed.swap(false, Ordering::SeqCst),
                 "first inner reveal notification"
@@ -4553,7 +4554,7 @@ pub(crate) fn show_on_screen_failure_continues_live_ancestors_and_fresh_requests
         let second = Arc::new(AtomicBool::new(competing));
         let failed = Arc::clone(&second);
         let outer_listenable = outer.listenable();
-        let second_id = outer_listenable.add_listener(std::rc::Rc::new(move || {
+        let second_id = outer_listenable.listen(std::rc::Rc::new(move || {
             assert!(
                 !failed.swap(false, Ordering::SeqCst),
                 "second outer reveal notification"
@@ -4591,8 +4592,8 @@ pub(crate) fn show_on_screen_failure_continues_live_ancestors_and_fresh_requests
             600.0,
             "inner failure cannot starve the enclosing viewport"
         );
-        inner_listenable.remove_listener(first_id);
-        outer_listenable.remove_listener(second_id);
+        first_id.detach();
+        second_id.detach();
         inner.jump_to(0.0).expect("no build is running");
         outer.jump_to(0.0).expect("no build is running");
         laid.tick();
@@ -4641,7 +4642,7 @@ pub(crate) fn show_on_screen_same_pipeline_reentry_keeps_one_reveal_and_recovers
         .expect("actual automatic ancestor reveal");
     let _scope = RestoreScope(PENDING_REVEAL.with(|slot| slot.replace(Some(invocation))));
     let listenable = inner.listenable();
-    let listener = listenable.add_listener(std::rc::Rc::new(|| {
+    let listener = listenable.listen(std::rc::Rc::new(|| {
         // The notification runs on the same owner thread. Resolve its local
         // pending request without making that request cross-thread ownership.
         let invocation = PENDING_REVEAL.with(|slot| slot.borrow_mut().take());
@@ -4662,7 +4663,7 @@ pub(crate) fn show_on_screen_same_pipeline_reentry_keeps_one_reveal_and_recovers
     );
     assert_eq!(outer.pixels(), 600.0);
     assert_reveal_target_visible(&laid);
-    listenable.remove_listener(listener);
+    listener.detach();
     inner.jump_to(0.0).expect("no build is running");
     outer.jump_to(0.0).expect("no build is running");
     laid.tick();
@@ -4757,7 +4758,7 @@ pub(crate) fn show_on_screen_sibling_reentry_delivers_last_target_without_stale_
         let notifications = Arc::new(AtomicUsize::new(0));
         let seen = Arc::clone(&notifications);
         let listenable = controller.listenable();
-        let listener = listenable.add_listener(std::rc::Rc::new(move || {
+        let listener = listenable.listen(std::rc::Rc::new(move || {
             seen.fetch_add(1, Ordering::SeqCst);
             let invocation = PENDING_SIBLING.with(|slot| slot.borrow_mut().take());
             if let Some(invocation) = invocation {
@@ -4795,7 +4796,7 @@ pub(crate) fn show_on_screen_sibling_reentry_delivers_last_target_without_stale_
             bounds.y0 >= -1e-9 && bounds.y1 <= 200.0 + 1e-9,
             "last accepted target is visible: {bounds:?}"
         );
-        listenable.remove_listener(listener);
+        listener.detach();
         controller.jump_to(0.0).expect("no build is running");
         laid.tick();
         let current = laid.a11y_tree().expect("fresh geometry");

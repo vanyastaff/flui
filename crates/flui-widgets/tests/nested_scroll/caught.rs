@@ -639,7 +639,7 @@ pub(crate) fn a_panic_above_a_caught_ancestor_keeps_its_settle(device: Device) {
     laid.tick();
     let (armed, moved) = (Rc::new(Cell::new(true)), pager.clone());
     let trigger = Rc::clone(&armed);
-    pager.listenable().add_listener(Rc::new(move || {
+    let _listening = pager.listenable().listen(Rc::new(move || {
         let fails = moved.pixels() > 0.0 && trigger.replace(false);
         assert!(!fails, "first participant failure");
     }));

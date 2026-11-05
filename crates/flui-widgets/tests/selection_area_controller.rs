@@ -33,6 +33,12 @@ struct Scene {
     controller: SelectionController,
     /// How often the controller's listenable notified.
     notified: Rc<Cell<usize>>,
+    /// Held for its detach; nothing reads it.
+    #[expect(
+        dead_code,
+        reason = "the listener's subscription detaches at the struct's drop"
+    )]
+    listening: flui_foundation::Subscription,
 }
 
 impl Scene {
@@ -42,9 +48,9 @@ impl Scene {
         let controller = SelectionController::new();
         let notified = Rc::new(Cell::new(0));
         let counter = Rc::clone(&notified);
-        controller
+        let listening = controller
             .listenable()
-            .add_listener(Rc::new(move || counter.set(counter.get() + 1)));
+            .listen(Rc::new(move || counter.set(counter.get() + 1)));
         let app = Self::app(two_texts(), &heard, &controller);
         let mut laid = lay_out(app, tight(400.0, 300.0));
         laid.pump();
@@ -53,6 +59,7 @@ impl Scene {
             heard,
             controller,
             notified,
+            listening,
         }
     }
 

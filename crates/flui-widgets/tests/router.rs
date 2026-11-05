@@ -410,7 +410,7 @@ pub(crate) fn router_go_recomputes_its_prefix_after_popup_observer_navigation() 
 fn observer_panic_recovery(edit: fn(&RouterHandle<AppRoute>), expected: AppRoute) {
     let (mut laid, home) = two_screen_app();
     let router = home.handle();
-    let heard = listen(&router);
+    let (heard, _listening) = listen(&router);
     let navigator = home.navigator();
     let home_id = navigator.current().expect("initial page");
     let during = router.clone();
@@ -1987,7 +1987,9 @@ pub(crate) fn an_unmounted_router_lets_go_of_its_listeners() {
         fn drop(&mut self) {
             let reader = self.0.clone();
             let alive = Rc::clone(&self.1);
-            self.0.add_listener(Rc::new(move || {
+            // The router is unmounting: the listen hands back the inert
+            // form and the refused closure dies inside the call.
+            let _ = self.0.listen(Rc::new(move || {
                 let _held = (&alive, reader.stack());
             }));
         }
@@ -1999,11 +2001,11 @@ pub(crate) fn an_unmounted_router_lets_go_of_its_listeners() {
     let kept = Rc::downgrade(&alive);
     let reader = router.clone();
     let held = Rc::clone(&alive);
-    router.add_listener(Rc::new(move || {
+    let _listening = router.listen(Rc::new(move || {
         let _held = (&held, reader.stack());
     }));
     let adds = AddsOnDrop(router.clone(), Rc::clone(&alive));
-    router.add_listener(Rc::new(move || {
+    let _listening_too = router.listen(Rc::new(move || {
         let _held = &adds;
     }));
     drop(alive);
@@ -2019,7 +2021,7 @@ pub(crate) fn an_unmounted_router_lets_go_of_its_listeners() {
 pub(crate) fn a_frame_hook_panic_while_queueing_leaves_later_changes_told() {
     let (mut laid, home) = two_screen_app();
     let router = home.handle();
-    let heard = listen(&router);
+    let (heard, _listening) = listen(&router);
     let driver = home.driver();
     driver.set_request_frame(|| panic!("frame hook failure"));
     let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -2047,13 +2049,19 @@ pub(crate) fn a_frame_hook_panic_while_queueing_leaves_later_changes_told() {
     );
 }
 
-/// Record the stack each time `router` tells its listeners.
-fn listen(router: &RouterHandle<AppRoute>) -> Rc<RefCell<Vec<Vec<AppRoute>>>> {
+/// Record the stack each time `router` tells its listeners. The subscription
+/// detaches at the caller's scope end, beside the log.
+fn listen(
+    router: &RouterHandle<AppRoute>,
+) -> (
+    Rc<RefCell<Vec<Vec<AppRoute>>>>,
+    flui_foundation::Subscription,
+) {
     let heard = Rc::new(RefCell::new(Vec::new()));
     let log = Rc::clone(&heard);
     let reader = router.clone();
-    router.add_listener(Rc::new(move || log.borrow_mut().push(reader.stack())));
-    heard
+    let listening = router.listen(Rc::new(move || log.borrow_mut().push(reader.stack())));
+    (heard, listening)
 }
 
 /// A router's listeners hear each committed stack change once, on the next
@@ -2062,7 +2070,7 @@ fn listen(router: &RouterHandle<AppRoute>) -> Rc<RefCell<Vec<Vec<AppRoute>>>> {
 pub(crate) fn stack_listeners_hear_each_committed_change_once() {
     let (mut laid, home) = two_screen_app();
     let router = home.handle();
-    let heard = listen(&router);
+    let (heard, _listening) = listen(&router);
     settle(&mut laid);
     assert!(
         heard.borrow().is_empty(),
@@ -2145,9 +2153,9 @@ pub(crate) fn stack_listeners_hear_each_committed_change_once() {
 pub(crate) fn a_stack_listener_may_navigate() {
     let (mut laid, home) = two_screen_app();
     let router = home.handle();
-    let heard = listen(&router);
+    let (heard, _listening) = listen(&router);
     let driver = router.clone();
-    router.add_listener(Rc::new(move || {
+    let _listening = router.listen(Rc::new(move || {
         if driver.current() == (AppRoute::Note { id: 1 }) {
             driver
                 .push(AppRoute::NoteEdit { id: 1 })
