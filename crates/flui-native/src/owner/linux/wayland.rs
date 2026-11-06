@@ -2266,10 +2266,6 @@ mod event_loop {
             let _ = (directory, suggested_name);
             crate::Task::ready(Err(no_file_prompt()))
         }
-
-        fn compositor_name(&self) -> &'static str {
-            ""
-        }
     }
 
     /// The displays position is the loop's: the source the table registered.

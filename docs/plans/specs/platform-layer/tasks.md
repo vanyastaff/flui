@@ -4859,6 +4859,18 @@ graph LR
   известного запуска `cargo fmt --all` во вложенном worktree; форматирование изменённых пакетов
   проверено отдельно. Остаются части LY55: `tracing` в text store и удаление `active_window`,
   `compositor_name`, публичного пути keyboard layout; они не входят в этот PR.
+- [ ] **LY55**, часть `compositor_name` — ветка `platform/compositor-name`. Метод удалён из
+  `Platform`, `SharedPlatform`, `host::Services` и всех восьми loop-реализаций; `Platform::name`
+  остаётся. Продакшен-читателей метода не было. ADR-0039 обновлён, trybuild-снимки изменились
+  только в номерах строк после удаления fixture-метода. Проверки на Windows: nextest
+  `-p flui-native -p flui-app -p flui-testing` — 756 зелёных; три остальных теста
+  (`the_text_services_answer_a_completion_for_its_store`,
+  `the_driver_agent_contains_every_failure`, `each_conformance_row_fails_against_a_broken_backend`)
+  падают и на неизменённой базе, поэтому не относятся к этому PR. Clippy тех же крейтов с
+  `-D warnings`, `wasm-check`, `workspace`, `reach` и остальные `xtask checks` зелёные, кроме
+  известного `cargo fmt --all` во вложенном worktree; `cross-typecheck` локально требует
+  отсутствующий `zig` и остаётся на CI. Остаются `tracing` в text store, `active_window` и
+  публичный путь keyboard layout.
 
 ## Отступление от порядка, решённое владельцем
 

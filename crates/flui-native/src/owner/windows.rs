@@ -1590,11 +1590,6 @@ impl host::Services for WindowsLoop {
             Ok(result)
         })
     }
-
-    fn compositor_name(&self) -> &'static str {
-        // Nothing reads it; the name leaves `Platform` with the other services.
-        ""
-    }
 }
 
 /// The displays position is the loop's: it answers from the displays the table

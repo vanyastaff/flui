@@ -109,10 +109,6 @@ impl Platform for OutsidePlatform {
         "outside"
     }
 
-    fn compositor_name(&self) -> &'static str {
-        ""
-    }
-
     fn app_path(&self) -> Result<PathBuf, PlatformError> {
         Ok(PathBuf::new())
     }

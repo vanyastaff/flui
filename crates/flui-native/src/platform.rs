@@ -408,10 +408,6 @@ pub trait Platform: sealed::Sealed + Send + Sync + 'static {
     /// Get the platform's name for debugging/logging
     fn name(&self) -> &'static str;
 
-    /// Get the compositor name (e.g., "DWM" on Windows), empty where the host
-    /// names none
-    fn compositor_name(&self) -> &'static str;
-
     /// Get the application's executable path
     ///
     /// # Errors
@@ -694,10 +690,6 @@ impl<H: Host> Platform for HostPlatform<H> {
 
     fn name(&self) -> &'static str {
         H::NAME
-    }
-
-    fn compositor_name(&self) -> &'static str {
-        self.owner.compositor_name()
     }
 
     fn app_path(&self) -> Result<PathBuf, PlatformError> {

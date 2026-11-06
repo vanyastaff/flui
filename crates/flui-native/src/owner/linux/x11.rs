@@ -1211,10 +1211,6 @@ impl host::Services for X11Loop {
         let _ = (directory, suggested_name);
         Task::ready(Err(no_file_prompt()))
     }
-
-    fn compositor_name(&self) -> &'static str {
-        ""
-    }
 }
 
 /// What a feature reaches one X11 window by: the window's X id, the server's

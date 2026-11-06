@@ -195,9 +195,6 @@ pub trait Services {
         directory: &Path,
         suggested_name: Option<&str>,
     ) -> Task<Result<Option<PathBuf>, PlatformError>>;
-
-    /// [`Platform::compositor_name`].
-    fn compositor_name(&self) -> &'static str;
 }
 
 /// The window position: opening windows, and what is known of them before

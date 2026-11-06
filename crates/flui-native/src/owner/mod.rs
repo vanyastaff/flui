@@ -378,12 +378,6 @@ impl SharedPlatform {
         self.platform.name()
     }
 
-    /// The compositor name (e.g., "DWM" on Windows).
-    #[must_use]
-    pub fn compositor_name(&self) -> &'static str {
-        self.platform.compositor_name()
-    }
-
     /// The application's executable path.
     ///
     /// # Errors

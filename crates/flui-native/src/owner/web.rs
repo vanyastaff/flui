@@ -834,10 +834,6 @@ impl host::Services for WebLoop {
         }
     }
 
-    fn compositor_name(&self) -> &'static str {
-        "Browser"
-    }
-
     // A page reveals or opens no path and shows no file prompt here: those
     // services move to the system capability crate.
     fn reveal_path(&self, path: &std::path::Path) {

@@ -452,10 +452,6 @@ impl host::Services for MacOSLoop {
         let _ = (directory, suggested_name);
         crate::Task::ready(Ok(None))
     }
-
-    fn compositor_name(&self) -> &'static str {
-        ""
-    }
 }
 
 /// The displays position is the loop's: it answers from the screens the table
