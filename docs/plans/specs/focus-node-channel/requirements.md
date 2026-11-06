@@ -1,10 +1,15 @@
 # The focus node layer's listener lists are the notification channels
 
+**Status:** Ratified (2026-11-05, PR #2329) with the custody amendment below —
+the live-round and close-round failure custody is the foundation receipt
+(`PanicRecovery` + `Retirement`), because a `RecoveryFailure` deliberately
+releases no payload box (ADR-0287): the close's tombstone keeps its semantics
+through a flag bridge (`CloseTombstone::preserve` from `round.has_failure`),
+and `FocusClosePanic` remains only for rejection closes.
+
 A live spec for moving the focus layer's two listener ledgers onto the
 notification channels, revising ADR-0026's listener primitives and keeping
-the focus round's failure authority where it is. The design below requires the
-owner's ratification before any code moves; the ADR revision happens in the
-slice that lands it, not before.
+the focus round's failure authority where it is.
 
 ## Ratification points
 
@@ -23,8 +28,11 @@ slice that lands it, not before.
    today — and a rejection inside a round that already owes a failure is
    discarded by the round's own first-failure rule, as the close discarded
    it. `FocusClosePanic` keeps the surfaces that are owners of their own
-   custody: closed-owner admission refusals and the close-time teardown
-   delivery (`close`/`close_with_mode`), whose shape is unchanged. The
+   custody: closed-owner **admission refusals** (a self-contained
+   `for_rejection` close per refusal, as the rejection sites already build)
+   and the **close-time teardown** of the manager's `close`/`close_with_mode`
+   — which itself moves to foundation receipt custody in the same change,
+   with the tombstone flag-bridged from the round's `has_failure`. The
    `notification_failure` latch latches from the round's `has_failure` at the
    same guard boundaries.
 3. The public surface changes: `FocusNode::subscribe` returns the channel's
