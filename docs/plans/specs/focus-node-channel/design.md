@@ -46,14 +46,23 @@ Split the ledger from the authority:
    snapshot membership, skip-withdrawn-earlier semantics, containment per
    listener (`run_classified`-grade under the round's recovery), and deferred
    tail retirement of what the round withdraws mid-dispatch.
-2. **The round authority stays owner-side.** The manager's transition round
-   keeps building one `FocusClosePanic` per commit and drives the fan-out in
-   today's order; each channel's notify joins a `PanicRecovery`-bridged
-   recovery (the channels' `inherit_failure`/first-failure latch matches
-   `adopt`/`preserving`), and the round's first failure hands to the close
-   through `keep_caught` (or `keep_earlier`, where a close already owes one).
-   The close finishes and resumes exactly as today; the
-   `notification_failure` latch keeps latching from `failure.preserving()`.
+2. **The round authority is the foundation receipt, not the close.** A live
+   transition round owns one `PanicRecovery`; every channel notify joins the
+   round's recovery scope (`notify_listeners_with_recovery` on the node,
+   `notify_with_recovery` on the manager — their first-failure latch matches
+   `adopt`/`preserving`), and `round.finish()` at the round's tail resumes
+   the first failure at the sites where `FocusClosePanic::finish` resumes
+   today. A rejection unwinding inside a round that already owes a failure is
+   caught by the round and discarded — what the close's
+   `keep_caught`-discard did. `FocusClosePanic` leaves the live rounds: it
+   remains the authority of closed-owner **admission refusals** (a
+   self-contained `for_rejection` close per refusal, as the rejection sites
+   already build) and the **close-time teardown** (`close`/`close_with_mode`,
+   shape unchanged). The foundation owns a caught failure's payload as a
+   receipt (ADR-0287) — a hand-over of the payload box into the close is
+   exactly what the receipt design forbids, hence no bridging. The
+   `notification_failure` latch latches from `round.has_failure()` at the
+   same guard boundaries.
 3. **Closed-owner refusal stays an owner entry check.** A closed node or
    manager refuses admission before the channel sees it (the check + `retire`
    + `finish` move verbatim into the new `listen`), so the tombstone rejection
