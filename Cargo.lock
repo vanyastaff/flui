@@ -1844,7 +1844,7 @@ dependencies = [
  "interprocess",
  "notify-debouncer-mini",
  "predicates",
- "roxmltree",
+ "roxmltree 0.21.2",
  "rustix 1.1.5",
  "serde",
  "serde_json",
@@ -2125,7 +2125,7 @@ dependencies = [
  "objc2-ui-kit 0.3.2",
  "parking_lot",
  "raw-window-handle",
- "roxmltree",
+ "roxmltree 0.21.2",
  "rustix 1.1.5",
  "rustls",
  "serde",
@@ -2517,7 +2517,7 @@ version = "0.5.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bbc773e24e02d4ddd8395fd30dc147524273a83e54e0f312d986ea30de5f5646"
 dependencies = [
- "roxmltree",
+ "roxmltree 0.20.0",
 ]
 
 [[package]]
@@ -5252,6 +5252,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6c20b6793b5c2fa6553b250154b78d6d0db37e72700ae35fad9387a46f487c97"
 
 [[package]]
+name = "roxmltree"
+version = "0.21.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9da7f59328b09405b181fee1018925fad50f157afb43c0c0f5c522c256dd5907"
+dependencies = [
+ "memchr",
+]
+
+[[package]]
 name = "rustc-hash"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7581,7 +7590,7 @@ dependencies = [
  "proc-macro2",
  "pulldown-cmark",
  "regex",
- "roxmltree",
+ "roxmltree 0.21.2",
  "serde",
  "serde_json",
  "sha2",
