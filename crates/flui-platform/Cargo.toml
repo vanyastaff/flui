@@ -26,8 +26,6 @@ cursor-icon = { workspace = true }
 # `DataTransferId`, the generational id of the ADR-0312 transport.
 flui-foundation = { path = "../flui-foundation", version = "=0.2.0-dev" }
 language-tags = { workspace = true }
-# The one-shot slot inside `TransferRequest`.
-parking_lot = { workspace = true }
 # `PlatformWindow`'s GPU handles, through `HasWindowHandle`/`HasDisplayHandle`
 # only (ADR-0089). `alloc` carries those traits through `Arc`, so the
 # `Arc<dyn PlatformWindow>` a renderer holds is itself a handle source; without
@@ -84,4 +82,4 @@ all-features = true
 tier = "C"
 tier-kind = "stable"
 order = 1
-reach-forbid = ["accesskit", "dpi", "keyboard-types", "tokio", "ui-events"]
+reach-forbid = ["accesskit", "dpi", "keyboard-types", "parking_lot", "tokio", "ui-events"]

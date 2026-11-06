@@ -48,12 +48,11 @@
 
 use std::collections::HashMap;
 use std::num::NonZeroU64;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use flui_foundation::UniqueKey;
 use flui_foundation::geometry::Bounds;
-use parking_lot::Mutex;
 
 use crate::unsupported::{CapabilityAbsence, Unsupported};
 
@@ -180,8 +179,14 @@ impl DisplayRegistry {
     /// [`DisplayIdsExhausted`] when a fresh id is needed and the id space is
     /// used up, now and for every later call. A key that was already issued an
     /// id keeps resolving to it.
+    ///
+    /// # Panics
+    /// A poisoned registry lock means its internal critical section panicked;
+    /// continuing could publish a half-updated counter and cache.
     pub fn mint(&self, key: &DisplayKey) -> Result<DisplayId, DisplayIdsExhausted> {
-        let mut state = self.inner.lock();
+        let mut state = self.inner.lock().expect(
+            "BUG: DisplayRegistry::mint's critical section runs no user code and cannot unwind",
+        );
         if !matches!(key, DisplayKey::Unkeyed)
             && let Some(id) = state.known.get(key)
         {
@@ -753,6 +758,34 @@ mod tests {
             Ok(last),
             "a key issued before exhaustion keeps resolving to its id"
         );
+    }
+
+    /// Poison is a FLUI defect, not a successful mint with a possibly
+    /// half-updated counter and cache. The private lock is poisoned only to
+    /// set up the public `mint` case.
+    #[test]
+    fn a_poisoned_registry_reports_its_invariant() {
+        let registry = Arc::new(DisplayRegistry::new());
+        let worker = Arc::clone(&registry);
+        let poisoned = std::thread::spawn(move || {
+            let _guard = worker.inner.lock().expect("test lock");
+            panic!("poison the registry for this test");
+        });
+        assert!(poisoned.join().is_err());
+
+        let mut failure = flui_foundation::panic::FirstPanic::new();
+        let minted = failure.contain(|| registry.mint(&DisplayKey::Injected(1)));
+        assert!(minted.is_none(), "a poisoned registry must not mint an id");
+        let payload = failure
+            .into_payload()
+            .expect("a poisoned registry reports its invariant");
+        let message = flui_foundation::panic::payload_text(payload.as_ref())
+            .expect("the invariant panic carries text");
+        assert!(
+            message.starts_with("BUG: DisplayRegistry::mint"),
+            "{message}"
+        );
+        flui_foundation::panic::discard_payload(payload);
     }
 
     #[test]

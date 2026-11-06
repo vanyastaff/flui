@@ -1,7 +1,7 @@
 //! A recording [`PlatformHaptics`] for scenarios: the double of the haptics
 //! contract (ADR-0210, ADR-0243 D4).
 
-use parking_lot::Mutex;
+use std::sync::{Mutex, MutexGuard};
 
 use crate::haptics::{
     HapticCapabilities, HapticOutcome, HapticPattern, HapticRequest, PatternPlayback,
@@ -86,25 +86,30 @@ impl FakeHaptics {
         }
     }
 
+    fn state(&self) -> MutexGuard<'_, State> {
+        self.state
+            .lock()
+            .expect("BUG: FakeHaptics runs no user code while holding its state lock")
+    }
+
     /// This fake knowing `device` as an actuator of its own.
     #[must_use]
     pub fn with_device(self, device: DeviceId) -> Self {
-        self.state.lock().devices.push(device);
+        self.state().devices.push(device);
         self
     }
 
     /// Every request, in arrival order.
     #[must_use]
     pub fn calls(&self) -> Vec<HapticCall> {
-        self.state.lock().calls.clone()
+        self.state().calls.clone()
     }
 
     /// The semantic kinds that played, in order: each tier-1 request, and the
     /// fallback of each pattern that fell back.
     #[must_use]
     pub fn feedback(&self) -> Vec<HapticFeedback> {
-        self.state
-            .lock()
+        self.state()
             .calls
             .iter()
             .filter(|call| call.outcome.played())
@@ -119,11 +124,11 @@ impl FakeHaptics {
 
     /// Forget every recorded request.
     pub fn clear(&self) {
-        self.state.lock().calls.clear();
+        self.state().calls.clear();
     }
 
     fn record(&self, play: HapticPlay, request: &HapticRequest) -> HapticOutcome {
-        let mut state = self.state.lock();
+        let mut state = self.state();
         let actuator = request
             .source
             .filter(|source| state.devices.contains(source));
@@ -174,7 +179,7 @@ impl PlatformHaptics for FakeHaptics {
     }
 
     fn capabilities(&self, _source: Option<DeviceId>) -> HapticCapabilities {
-        self.state.lock().capabilities
+        self.state().capabilities
     }
 
     fn as_any(&self) -> &dyn std::any::Any {

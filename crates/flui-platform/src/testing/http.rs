@@ -10,10 +10,8 @@
 
 use std::collections::HashMap;
 use std::fmt;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::task::{Poll, Waker};
-
-use parking_lot::Mutex;
 
 use crate::capability::{CapabilityRegistrar, ProviderContext};
 use crate::http::{
@@ -66,6 +64,12 @@ struct State {
     abandoned: usize,
 }
 
+fn lock_state(state: &Mutex<State>) -> MutexGuard<'_, State> {
+    state
+        .lock()
+        .expect("BUG: ScriptedHttp runs no user code while holding its state lock")
+}
+
 impl ScriptedHttp {
     /// A client with no script: every request fails until the test scripts
     /// its URL.
@@ -79,14 +83,14 @@ impl ScriptedHttp {
     pub fn respond(&self, url: impl Into<String>, response: ScriptedResponse) {
         // Converted before the lock: the conversion is the caller's code.
         let url: String = url.into();
-        self.state.lock().scripts.insert(url, response);
+        lock_state(&self.state).scripts.insert(url, response);
     }
 
     /// Keep the requests for `url` unanswered until
     /// [`release`](Self::release).
     pub fn hold(&self, url: impl Into<String>) {
         let url: String = url.into();
-        self.state.lock().holding.push(url);
+        lock_state(&self.state).holding.push(url);
     }
 
     /// Answer the held requests for `url` and every later one.
@@ -95,7 +99,7 @@ impl ScriptedHttp {
     /// panic is resumed once all of them are.
     pub fn release(&self, url: &str) {
         let wakers: Vec<Waker> = {
-            let mut state = self.state.lock();
+            let mut state = lock_state(&self.state);
             state.holding.retain(|held| held != url);
             state
                 .held
@@ -116,14 +120,13 @@ impl ScriptedHttp {
     /// Every request sent so far, in order.
     #[must_use]
     pub fn requests(&self) -> Vec<HttpRequest> {
-        self.state.lock().requests.clone()
+        lock_state(&self.state).requests.clone()
     }
 
     /// How many requests sent so far were for `url`.
     #[must_use]
     pub fn requests_to(&self, url: &str) -> usize {
-        self.state
-            .lock()
+        lock_state(&self.state)
             .requests
             .iter()
             .filter(|request| request.url() == url)
@@ -133,7 +136,7 @@ impl ScriptedHttp {
     /// How many requests were dropped before they were answered.
     #[must_use]
     pub fn abandoned(&self) -> usize {
-        self.state.lock().abandoned
+        lock_state(&self.state).abandoned
     }
 
     /// The handle a widget acquires.
@@ -158,7 +161,7 @@ impl HttpClient for ScriptedHttp {
         let url = request.url().to_owned();
         let limit = request.body_limit();
         let id = {
-            let mut state = self.state.lock();
+            let mut state = lock_state(&self.state);
             state.requests.push(request);
             state.next_request += 1;
             state.next_request
@@ -173,7 +176,7 @@ impl HttpClient for ScriptedHttp {
             // lock: a waker's clone and drop run its owner's code, which may
             // call back here.
             let waker = cx.waker().clone();
-            let mut state = pending.state.lock();
+            let mut state = lock_state(&pending.state);
             if state.holding.contains(&url) {
                 let replaced = state.held.insert(pending.id, (url.clone(), waker));
                 drop(state);
@@ -226,7 +229,7 @@ impl Drop for Pending {
             return;
         }
         let registered = {
-            let mut state = self.state.lock();
+            let mut state = lock_state(&self.state);
             state.abandoned += 1;
             state.held.remove(&self.id)
         };
@@ -239,7 +242,7 @@ impl fmt::Debug for ScriptedHttp {
         // Counted under the lock and written after it: the formatter's writer
         // is the caller's code, which may call back here.
         let (scripts, requests) = {
-            let state = self.state.lock();
+            let state = lock_state(&self.state);
             (state.scripts.len(), state.requests.len())
         };
         f.debug_struct("ScriptedHttp")
