@@ -1,4 +1,4 @@
-//! Keyboard focus over a lazy list: one Tab stop, roving focus over its rows.
+﻿//! Keyboard focus over a lazy list: one Tab stop, roving focus over its rows.
 //!
 //! [`FocusableList`] wraps whatever hosts the rows (a `ListView`'s or
 //! `GridView`'s viewport, or one sliver under `FocusableSliver`) in the **list
@@ -23,9 +23,9 @@ use std::collections::BTreeMap;
 use std::rc::{Rc, Weak};
 
 use flui_foundation::geometry::{Axis, Rect, Vec2};
-use flui_foundation::{SaltedKey, ViewKey};
+use flui_foundation::{SaltedKey, Subscription, ViewKey};
 use flui_interaction::focus::{
-    EntryTarget, FocusCause, FocusNode, FocusNodeRegistration, FocusSubscription, KeyEventResult,
+    EntryTarget, FocusCause, FocusNode, FocusNodeRegistration, KeyEventResult,
 };
 use flui_platform::keyboard::{Key, KeyEvent, KeyState, Modifiers, NamedKey};
 use flui_rendering::constraints::AxisDirection;
@@ -86,7 +86,7 @@ struct Inner {
     reach: RefCell<Option<Reach>>,
     /// The controller of the enclosing scrollable: the list asks it to jump,
     /// so the move is a programmatic step of the scrollable's chain
-    /// (ADR-0209 §3). Used only while its position is the list's own.
+    /// (ADR-0209 Â§3). Used only while its position is the list's own.
     requests: RefCell<Option<ScrollController>>,
     /// Reads the axis and direction a list over a sliver was laid out with;
     /// `None` for a list over a box viewport, which takes them from its
@@ -871,7 +871,7 @@ pub(crate) struct ListItemFocusState {
     pin: Rc<RefCell<Option<KeepAliveLease>>>,
     /// The pin refresh the controller calls; the controller holds it weakly.
     refresh: Rc<dyn Fn()>,
-    subscription: Option<FocusSubscription>,
+    subscription: Option<Subscription>,
     post_frame: Option<flui_view::PostFrameHandle>,
 }
 
@@ -930,11 +930,11 @@ impl ListItemFocusState {
     fn register(&mut self) {
         self.refresh = self.make_refresh();
         let refresh = Rc::downgrade(&self.refresh);
-        self.subscription = Some(self.node.subscribe(Rc::new(move || {
+        self.subscription = Some(self.node.subscribe(move || {
             if let Some(refresh) = refresh.upgrade() {
                 refresh();
             }
-        })));
+        }));
         if let Some(controller) = &self.controller {
             controller.inner.rows.borrow_mut().insert(
                 self.index,

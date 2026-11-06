@@ -1,20 +1,20 @@
-//! [`Focus`] and [`FocusScope`] — the widgets that put `flui-interaction`'s
+//! [`Focus`] and [`FocusScope`] â€” the widgets that put `flui-interaction`'s
 //! focus tree into the element tree.
 //!
 //! ADR-0026. The node/manager layer (`FocusManager`, `FocusNode`,
-//! `FocusScopeNode` — tracker H4) predates these widgets; what they add is the
+//! `FocusScopeNode` â€” tracker H4) predates these widgets; what they add is the
 //! lifecycle wiring: a widget-owned node attached under the nearest enclosing
 //! scope on mount, moved with [`FocusScopeNode::adopt_node`] when that scope
 //! changes, and detached on dispose.
 //!
 //! # Design notes (ADR-0026)
 //!
-//! * **Nodes parent to the nearest focus *node*** — scope or plain `Focus` —
+//! * **Nodes parent to the nearest focus *node*** â€” scope or plain `Focus` â€”
 //!   through one provider. (An earlier design flattened to the nearest scope;
 //!   key bubbling made the node tree's shape observable and superseded that
-//!   decision — ADR-0026, ADR-0023.)
+//!   decision â€” ADR-0026, ADR-0023.)
 //! * **Reparenting happens in `did_change_dependencies`**, not on every build
-//!   — the provider notifying is the only way the enclosing scope changes
+//!   â€” the provider notifying is the only way the enclosing scope changes
 //!   without a remount. Observable only through the parent node, which is not
 //!   exposed.
 //! * **Focus changes apply synchronously.** FLUI's `FocusManager` is
@@ -36,11 +36,11 @@ use crate::anchored_box::{AnchoredBox, AnchoredSliver};
 use crate::localization::Directionality;
 use crate::semantics::{Semantics, SliverSemantics};
 use crate::support::value_callback;
+use flui_foundation::Subscription;
 use flui_foundation::geometry::{Axis, Rect};
 use flui_interaction::focus::{
     FocusAttachment, FocusCause, FocusManager, FocusNode, FocusNodeRegistration, FocusScopeNode,
-    FocusSubscription, FocusTraversalOverrides, KeyEventHandler, KeyEventResult, RectProvider,
-    TraversalEdgeBehavior,
+    FocusTraversalOverrides, KeyEventHandler, KeyEventResult, RectProvider, TraversalEdgeBehavior,
 };
 use flui_objects::SubtreeAnchor;
 use flui_platform::keyboard::KeyEvent;
@@ -84,13 +84,13 @@ fn key_handler(handler: &FocusKeyHandler, writer: &WriterSlot) -> KeyEventHandle
 // The ambient scope
 // ============================================================================
 
-/// Provides the nearest enclosing focus **node** — scope or plain `Focus` —
+/// Provides the nearest enclosing focus **node** â€” scope or plain `Focus` â€”
 /// to descendants, which every `Focus`
 /// widget provides. Private: [`Focus`] and
 /// [`FocusScope`] are the public surface.
 ///
 /// The parent being a *node*, not always a scope, is what makes the
-/// leaf→root key-dispatch walk (ADR-0023) match the widget tree: a
+/// leafâ†’root key-dispatch walk (ADR-0023) match the widget tree: a
 /// `Shortcuts`-style non-scope `Focus` above a field is a node **ancestor**
 /// of the field, so keys the field ignores bubble through it.
 #[derive(Clone)]
@@ -245,8 +245,8 @@ impl ViewState<FocusRoot> for FocusRootState {
 
 /// Which side is authoritative for the configuration stored on a focus node.
 ///
-/// An external node is always *hosted* by [`Focus`] — attached, reparented,
-/// and detached with the widget — but it can follow either configuration
+/// An external node is always *hosted* by [`Focus`] â€” attached, reparented,
+/// and detached with the widget â€” but it can follow either configuration
 /// policy. The regular [`Focus::focus_node`] path lets the widget manage
 /// explicitly supplied attributes. [`Focus::with_external_node`] leaves every
 /// node attribute under the caller's control.
@@ -346,7 +346,7 @@ impl Focus {
     }
 
     /// Whether the subtree tells assistive technology it is focusable and
-    /// when it holds the focus — `true` by default.
+    /// when it holds the focus â€” `true` by default.
     /// Without it a screen reader cannot follow keyboard focus: Narrator
     /// read nothing when Tab moved to the counter's button on a live window.
     #[must_use]
@@ -450,8 +450,8 @@ impl Focus {
         self
     }
 
-    /// Key handler invoked during the leaf→root dispatch walk while this
-    /// node — or a descendant — holds the primary focus. Return
+    /// Key handler invoked during the leafâ†’root dispatch walk while this
+    /// node â€” or a descendant â€” holds the primary focus. Return
     /// [`Handled`](flui_interaction::KeyEventResult::Handled) to consume the
     /// event, [`Ignored`](flui_interaction::KeyEventResult::Ignored) to let it
     /// bubble to the enclosing `Focus`, or
@@ -462,7 +462,7 @@ impl Focus {
     /// `&mut EventCx<'_>` and may write signals; it keeps its decision as the
     /// return value, so a write's `Result` is not reported for it: call
     /// [`report`](EventOutcome::report) on a write whose refusal should be
-    /// logged (ADR-0086 §6).
+    /// logged (ADR-0086 Â§6).
     #[must_use]
     pub fn on_key_event<F>(mut self, handler: F) -> Self
     where
@@ -493,7 +493,7 @@ impl Focus {
         Self::maybe_of(ctx).expect(
             "Focus::of() was called with a context that does not contain a Focus widget. \
              No Focus widget ancestor could be found starting from the context passed to \
-             Focus::of() — wrap the subtree in a Focus, or use Focus::maybe_of with a \
+             Focus::of() â€” wrap the subtree in a Focus, or use Focus::maybe_of with a \
              caller-chosen fallback.",
         )
     }
@@ -600,7 +600,7 @@ impl StatefulView for Focus {
     type State = FocusState;
 
     fn create_state(&self) -> Self::State {
-        // The node is configured here — `init_state` has no view reference,
+        // The node is configured here â€” `init_state` has no view reference,
         // and `did_update_view` re-syncs later configurations.
         let node = self.make_node();
         let writer = WriterSlot::default();
@@ -666,7 +666,7 @@ impl RevealSlot {
 
 /// The state behind [`Focus`]. `pub` because `StatefulView::State`
 /// requires it, and re-exported like every other widget's state in this crate
-/// (`GestureDetectorState`, `AnimatedAlignState`, …) so a caller can name it.
+/// (`GestureDetectorState`, `AnimatedAlignState`, â€¦) so a caller can name it.
 pub struct FocusState {
     traversal_registration: Option<FocusNodeRegistration>,
     /// Set first in `init_state`; the focus-edge listener and the key handler
@@ -703,7 +703,7 @@ pub struct FocusState {
     /// moves it when the provider changes.
     parent: Option<Rc<FocusNode>>,
     /// Publishes the child's `RenderId` while mounted, so the node's
-    /// [`RectProvider`] can measure it —
+    /// [`RectProvider`] can measure it â€”
     /// reading-order traversal sorts by this geometry (ADR-0026).
     anchor: SubtreeAnchor,
     /// The live geometry source, retained so a replacement node receives the
@@ -725,7 +725,7 @@ pub struct FocusState {
     rebuild_handle: Option<RebuildHandle>,
     /// Listener installed on the current node. It drives both inherited
     /// dependents and the optional focus-edge callback.
-    focus_subscription: Option<FocusSubscription>,
+    focus_subscription: Option<Subscription>,
     /// Captured at `create_state`: `init_state` has no view reference.
     autofocus: bool,
     /// One-shot latch: whether this widget has already attempted its
@@ -736,7 +736,7 @@ pub struct FocusState {
     did_autofocus: bool,
     /// The current `on_focus_change` handler, behind a shared cell so the installed
     /// listener reads the *latest* one. `did_update_view` writes here rather than
-    /// reinstalling the listener — a captured-by-value closure would keep firing the
+    /// reinstalling the listener â€” a captured-by-value closure would keep firing the
     /// handler from the build that mounted it.
     on_focus_change: Rc<RefCell<Option<FocusChangeHandler>>>,
     /// The current `on_visible_focus_change` handler, shared the same way.
@@ -762,7 +762,7 @@ impl FocusState {
 
     /// The rebuild-on-focus-change listener: descendants that read the node's state during
     /// build stay current, and `on_focus_change` fires on the edges.
-    fn add_focus_listener(&self, node: &Rc<FocusNode>) -> FocusSubscription {
+    fn add_focus_listener(&self, node: &Rc<FocusNode>) -> Subscription {
         let rebuild = self
             .rebuild_handle
             .as_ref()
@@ -779,7 +779,7 @@ impl FocusState {
             .get()
             .expect("BUG: Focus listener installed before init_state acquired its writer source")
             .clone();
-        node.subscribe(Rc::new(move || {
+        node.subscribe(move || {
             let next_revision = node_revision
                 .get()
                 .checked_add(1)
@@ -816,7 +816,7 @@ impl FocusState {
             if now_shown && !was_shown {
                 reveal.reveal();
             }
-        }))
+        })
     }
 
     fn record_action_chain(&mut self, ctx: &dyn BuildContext) {
@@ -843,17 +843,17 @@ impl FocusState {
 
     /// A one-shot autofocus
     /// attempt, made the first time `autofocus` is (or becomes) `true` and
-    /// never repeated —
+    /// never repeated â€”
     /// [`FocusState::did_autofocus`] latches regardless of whether the
     /// attempt actually won the focus (an already-focused sibling can still
     /// make it lose). Only when the enclosing scope has nothing focused yet
     /// does the request land; either way the attempt is marked made.
-    /// Synchronous — FLUI has no end-of-frame focus batch (module docs).
+    /// Synchronous â€” FLUI has no end-of-frame focus batch (module docs).
     ///
     /// Derives the nearest scope from [`FocusState::parent`] (kept current by
     /// `init_state`/`did_change_dependencies`) rather than an ambient
     /// `BuildContext` lookup, so it can run from
-    /// [`ViewState::did_update_view`] too — that hook gets no `BuildContext`.
+    /// [`ViewState::did_update_view`] too â€” that hook gets no `BuildContext`.
     fn try_autofocus(&mut self) {
         if self.did_autofocus || !self.autofocus {
             return;
@@ -912,7 +912,7 @@ fn record_action_chain(
 }
 
 impl ViewState<Focus> for FocusState {
-    /// Listen, attach, autofocus — in that order, so a focus request queued on
+    /// Listen, attach, autofocus â€” in that order, so a focus request queued on
     /// an external node before mount is observed when attach fulfills it
     /// (`did_change_dependencies` repeats the lookup).
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
@@ -946,7 +946,7 @@ impl ViewState<Focus> for FocusState {
     }
 
     fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
-        // The provider changed: move the node — with focus — under the new
+        // The provider changed: move the node â€” with focus â€” under the new
         // parent, via ADR-0026's adopt.
         let parent = enclosing_focus_parent(ctx);
         if self
@@ -1019,7 +1019,7 @@ impl ViewState<Focus> for FocusState {
             let replacement_attachment = match attachment.replace_node(&replacement) {
                 Ok(replacement_attachment) => replacement_attachment,
                 Err(error) => {
-                    // Refused before anything changed — a focus listener is
+                    // Refused before anything changed â€” a focus listener is
                     // running. Keep hosting the current node; the next update
                     // compares against it and tries the replacement again.
                     // Dropping the replacement's registrations clears only
@@ -1131,8 +1131,8 @@ impl ViewState<Focus> for FocusState {
         // (a popup route makes everything under it unfocusable), and a
         // subtree whose wrapper appears and disappears is torn down and
         // mounted again, which cancels a gesture in flight under it. Only a
-        // node that can take focus annotates it. A node that cannot — the one
-        // a `Shortcuts` hosts its key handler on — leaves the configuration
+        // node that can take focus annotates it. A node that cannot â€” the one
+        // a `Shortcuts` hosts its key handler on â€” leaves the configuration
         // empty, which adds nothing to the semantics tree; setting even a
         // false flag would gather the subtree into one node.
         if self.sliver {
@@ -1187,7 +1187,7 @@ impl ViewState<Focus> for FocusState {
 }
 
 /// Wire `node`'s rect to `anchor`'s render node: measured lazily at traversal
-/// time against committed layout — `box_size` + `transform_to` the render
+/// time against committed layout â€” `box_size` + `transform_to` the render
 /// root, the `HeroHandle::bounding_box_in` shape. `None` (fall back to the
 /// stored rect) while unmounted, checked out, or awaiting complete layout.
 pub fn install_rect_provider(
@@ -1269,7 +1269,7 @@ impl FocusScope {
         }
     }
 
-    /// Use `scope` instead of a widget-owned node — the caller keeps the
+    /// Use `scope` instead of a widget-owned node â€” the caller keeps the
     /// handle (`FocusScope.withExternalFocusNode`, `:826-834`).
     pub fn with_external_node(scope: Rc<FocusScopeNode>, child: impl IntoView) -> Self {
         Self {
@@ -1290,7 +1290,7 @@ impl FocusScope {
     /// [`FocusScope`], walked up to its scope: the unfiltered
     /// `nearest_focus_node` (not [`Focus::maybe_of`]'s scope-filtering
     /// wrapper), then its nearest scope
-    /// (itself if it already is a scope, else the nearest scope ancestor —
+    /// (itself if it already is a scope, else the nearest scope ancestor â€”
     /// [`FocusNode::as_scope`]/[`FocusNode::enclosing_scope`], the exact pair
     /// `FocusState::try_autofocus` already uses to find "the enclosing
     /// scope" for autofocus purposes).
@@ -1376,7 +1376,7 @@ pub struct FocusScopeState {
     /// Inherited-provider revision advanced by backing-node notifications.
     node_revision: Rc<Cell<u64>>,
     rebuild_handle: Option<RebuildHandle>,
-    focus_subscription: Option<FocusSubscription>,
+    focus_subscription: Option<Subscription>,
     /// The `Actions` chain visible at this scope, recorded on its backing
     /// node: the node itself can hold the primary focus (ADR-0079).
     action_chain: Option<ActionChain>,
@@ -1393,21 +1393,21 @@ impl std::fmt::Debug for FocusScopeState {
 }
 
 impl FocusScopeState {
-    fn add_focus_listener(&self, node: &Rc<FocusNode>) -> FocusSubscription {
+    fn add_focus_listener(&self, node: &Rc<FocusNode>) -> Subscription {
         let revision = Rc::clone(&self.node_revision);
         let rebuild = self
             .rebuild_handle
             .as_ref()
             .expect("BUG: FocusScope listener installed before init_state")
             .clone();
-        node.subscribe(Rc::new(move || {
+        node.subscribe(move || {
             let next = revision
                 .get()
                 .checked_add(1)
                 .expect("BUG: FocusScope inherited revision exhausted");
             revision.set(next);
             rebuild.schedule(flui_view::RebuildReason::StateChange);
-        }))
+        })
     }
 }
 
@@ -1436,8 +1436,8 @@ impl ViewState<FocusScope> for FocusScopeState {
     fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
         self.scope
             .set_text_direction(Directionality::maybe_of(ctx).unwrap_or_default());
-        // An enclosing provider changed: move this scope — subtree, focus and
-        // all — under the new parent (ADR-0026).
+        // An enclosing provider changed: move this scope â€” subtree, focus and
+        // all â€” under the new parent (ADR-0026).
         let parent = enclosing_focus_parent(ctx);
         if self
             .parent
@@ -1497,7 +1497,7 @@ impl ViewState<FocusScope> for FocusScopeState {
         match attachment.replace_node(replacement.as_focus_node()) {
             Ok(replacement_attachment) => self.attachment = Some(replacement_attachment),
             Err(error) => {
-                // Refused before anything changed — a focus listener is
+                // Refused before anything changed â€” a focus listener is
                 // running. Keep the current scope; the next update tries the
                 // replacement again.
                 tracing::warn!(

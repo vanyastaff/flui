@@ -513,12 +513,12 @@ pub(crate) fn slider_focus_manager_close_during_pointer_focus_rejects_proposal()
     let closing = Rc::downgrade(&manager);
     let closed = Rc::new(Cell::new(false));
     let observed = Rc::clone(&closed);
-    manager.add_listener(Rc::new(move |_previous, current| {
+    let _listening = manager.listen(move |_previous, current| {
         if current.is_some() {
             observed.set(true);
             closing.upgrade().expect("live focus manager").close();
         }
-    }));
+    });
     tap(&laid, 71.0, 16.0);
     assert!(closed.get(), "actual focus listener closed its manager");
     assert!(manager.is_closed());

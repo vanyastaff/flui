@@ -83,15 +83,15 @@ mod measured {
         ArenaMembership as _, BeginContactError as _, CancelOutcome as _, CompositionBranch as _,
         CompositionError as _, CompositionKind as _, ContactEnd as _, ContactId as _,
         ContactSnapshot as _, ContestCancel as _, DragDownDetails as _, EventTime as _,
-        FocusNode as _, FocusSubscription as _, GestureArena as _, GestureArenaEntry as _,
-        GestureArenaMember as _, GestureBranches as _, GestureComposition as _,
-        GestureContest as _, GestureDisposition as _, GestureEndReason as _,
-        GestureObservation as _, GestureObserver as _, GestureProfiles as _,
-        GestureRecognizer as _, GestureSettings as _, GestureSettingsProvider as _,
-        MotionRole as _, ObservedComposition as _, ObservedMember as _, ObserverHandle as _,
-        PanClaim as _, PointerDispatch as _, PointerEvent as _, PointerEventExt as _,
-        PointerId as _, PointerKind as _, PointerKindSet as _, PrimaryContact as _,
-        RejectionReason as _, SequencedBranch as _, cancel_all as _,
+        FocusNode as _, GestureArena as _, GestureArenaEntry as _, GestureArenaMember as _,
+        GestureBranches as _, GestureComposition as _, GestureContest as _,
+        GestureDisposition as _, GestureEndReason as _, GestureObservation as _,
+        GestureObserver as _, GestureProfiles as _, GestureRecognizer as _, GestureSettings as _,
+        GestureSettingsProvider as _, MotionRole as _, ObservedComposition as _,
+        ObservedMember as _, ObserverHandle as _, PanClaim as _, PointerDispatch as _,
+        PointerEvent as _, PointerEventExt as _, PointerId as _, PointerKind as _,
+        PointerKindSet as _, PrimaryContact as _, RejectionReason as _, SequencedBranch as _,
+        cancel_all as _,
     };
     // What a text widget's store is built from (ADR-0151 §6).
     use flui_sdk::interaction::text_input::{
@@ -343,8 +343,9 @@ fn the_re_exports_are_the_facades_types() {
         |x| x;
     let _: fn(flui::interaction::DragDownDetails) -> flui_sdk::interaction::DragDownDetails = |x| x;
     let _: fn(flui::interaction::FocusNode) -> flui_sdk::interaction::FocusNode = |x| x;
-    let _: fn(flui::interaction::FocusSubscription) -> flui_sdk::interaction::FocusSubscription =
-        |x| x;
+    let _: fn(
+        flui::interaction::FocusNodeChangeCallback,
+    ) -> flui_sdk::interaction::FocusNodeChangeCallback = |x| x;
     let _: fn(flui::interaction::GestureProfiles) -> flui_sdk::interaction::GestureProfiles = |x| x;
     let _: fn(flui::interaction::GestureSettings) -> flui_sdk::interaction::GestureSettings = |x| x;
     let _: fn(flui::interaction::GestureArena) -> flui_sdk::interaction::GestureArena = |x| x;
@@ -568,7 +569,7 @@ fn the_public_surface_is_the_measured_list() {
         "pub use flui_interaction::drag::MoveOutcome;",
         "pub use flui_interaction::drag::SpringLoading;",
         "pub use flui_interaction::focus::FocusNode;",
-        "pub use flui_interaction::focus::FocusSubscription;",
+        "pub use flui_interaction::focus::FocusNodeChangeCallback;",
         "pub use flui_interaction::gesture::CompositionBranch;",
         "pub use flui_interaction::gesture::CompositionError;",
         "pub use flui_interaction::gesture::CompositionKind;",

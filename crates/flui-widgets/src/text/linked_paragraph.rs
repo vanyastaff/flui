@@ -1,4 +1,4 @@
-//! A paragraph whose links a handler activates.
+﻿//! A paragraph whose links a handler activates.
 //!
 //! Each link gets a tap recognizer of its own, built against the enclosing
 //! arena scope, so two contacts on two links recognize independently and a
@@ -26,8 +26,8 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use flui_foundation::geometry::Rect;
-use flui_foundation::{ValueKey, ViewKey};
-use flui_interaction::focus::{FocusCause, FocusNode, FocusSubscription};
+use flui_foundation::{Subscription, ValueKey, ViewKey};
+use flui_interaction::focus::{FocusCause, FocusNode};
 use flui_interaction::{
     GestureRecognizer, InteractionDispatchError, LocalPayloadTarget, PointerDispatch,
     PointerTarget, RecognizerSet, RectProvider, TapGestureRecognizer, cancel_all,
@@ -184,7 +184,7 @@ struct LinkSlot {
     route: Rc<RefCell<Option<TextLinkRoute>>>,
     /// Rebuilds the paragraph when the node's focus or its visibility
     /// changes, so the ring and the link node follow.
-    _subscription: FocusSubscription,
+    _subscription: Subscription,
 }
 
 /// The links' recognizers and focus nodes, one slot per link in
@@ -271,9 +271,9 @@ fn new_slot(
 ) -> LinkSlot {
     let node = FocusNode::with_debug_label("text link");
     let rebuild = mount.rebuild.clone();
-    let subscription = node.subscribe(Rc::new(move || {
+    let subscription = node.subscribe(move || {
         rebuild.schedule(RebuildReason::StateChange);
-    }));
+    });
     let position = Rc::new(Cell::new(0));
     LinkSlot {
         tap: tap(live, mount, identity.link.clone()),

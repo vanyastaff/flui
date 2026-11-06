@@ -10,8 +10,8 @@ use std::{
     rc::{Rc, Weak},
 };
 
-use flui_foundation::IdMint;
-use flui_foundation::ListenerId;
+use flui_foundation::panic::{PanicRecovery, RecoveryScope};
+use flui_foundation::{Notifier, Subscription};
 use flui_platform::EventTime;
 use flui_platform::keyboard::{Code, Key, KeyEvent, KeyState, NamedKey};
 
@@ -26,6 +26,10 @@ use crate::focus::key_ledger::{
 
 /// Callback invoked after primary focus or its focus-tree ancestry changes.
 pub type FocusChangeCallback = Rc<dyn Fn(Option<Rc<FocusNode>>, Option<Rc<FocusNode>>)>;
+
+/// What one committed focus transition publishes: `(previous, new)`, delivered
+/// by reference through the manager's listener channel.
+pub type FocusChange = (Option<Rc<FocusNode>>, Option<Rc<FocusNode>>);
 
 /// A global key handler could not be registered with this presentation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
@@ -72,22 +76,22 @@ use crate::close::{CloseMode, CloseTombstone};
 /// `request_focus`/[`Self::unfocus`] apply and publish a focus transition
 /// synchronously: commit the new primary, notify every focus-tree node
 /// whose focused ancestry changed, then publish `(previous, new)` to every
-/// [`FocusChangeCallback`] registered via [`Self::add_listener`]. A
+/// [`FocusChangeCallback`] registered via [`Self::listen`]. A
 /// listener that itself calls `request_focus`/`unfocus` from inside that
-/// publication — a reentrant request — is never applied inline: it is
+/// publication â€” a reentrant request â€” is never applied inline: it is
 /// queued, then re-validated (attached, focusable, still owned by this
-/// manager — see the private `is_eligible` predicate) immediately before
+/// manager â€” see the private `is_eligible` predicate) immediately before
 /// its turn, and applied only once every currently in-flight notification
 /// has finished publishing, in the order it was requested (FIFO). A
-/// target that lost eligibility while it waited — a later listener in the
+/// target that lost eligibility while it waited â€” a later listener in the
 /// same chain detached it, revoked its focusability, or reparented it
-/// elsewhere — is skipped rather than committed stale. By the time the
+/// elsewhere â€” is skipped rather than committed stale. By the time the
 /// outermost `request_focus`/`unfocus` call returns,
 /// [`Self::primary_focus`] and the last edge any listener observed always
-/// agree — no listener can observe a stale destination (issue #1040). The
+/// agree â€” no listener can observe a stale destination (issue #1040). The
 /// crate-internal node-replacement completion publishes its own outer
 /// edge under this same guard; [`Self::close`] does not participate in it
-/// at all — see its own doc for the distinct contract it keeps instead. A
+/// at all â€” see its own doc for the distinct contract it keeps instead. A
 /// reentrant chain that never settles (two listeners that keep
 /// re-requesting each other) is bounded: past a fixed per-call budget of
 /// applications, the remaining queue is dropped with a single
@@ -102,10 +106,9 @@ use crate::close::{CloseMode, CloseTombstone};
 pub struct FocusManager {
     root_scope: Rc<FocusScopeNode>,
     primary_focus: RefCell<Option<Rc<FocusNode>>>,
-    listeners: RefCell<Vec<(ListenerId, FocusChangeCallback)>>,
-    /// The owner-local mint whose refusal is sticky: a listener id is
-    /// never issued twice.
-    listener_mint: IdMint<ListenerId>,
+    /// The focus-change listeners on the notification channel: membership,
+    /// snapshot delivery and withdrawal are the channel's.
+    listeners: Notifier<FocusChange>,
     /// Each handler under the registration number it was added with, so a
     /// dispatch snapshot names registrations rather than allocations.
     global_key_handlers: RefCell<Vec<(u64, KeyEventHandler)>>,
@@ -146,7 +149,7 @@ pub struct FocusManager {
 /// RAII scope for one nested level of [`FocusManager::notification_depth`].
 ///
 /// `enter` increments on construction; `Drop` decrements unconditionally,
-/// including when the drop runs while unwinding — a listener that panics
+/// including when the drop runs while unwinding â€” a listener that panics
 /// mid-notification must not leave `notification_depth` stuck above zero,
 /// or every later `request_focus`/`unfocus` on that manager would queue
 /// forever instead of applying. Accepted requests remain delivery debt even
@@ -200,8 +203,8 @@ impl FocusManager {
     /// two listeners that keep redirecting focus to each other would
     /// otherwise spin the caller forever. Past the budget,
     /// [`Self::drain_pending_focus_transitions`] drops whatever is left
-    /// and warns once. The budget counts *applications* — queued
-    /// transitions that actually commit a change — not queue pops: a
+    /// and warns once. The budget counts *applications* â€” queued
+    /// transitions that actually commit a change â€” not queue pops: a
     /// queued entry that turns out to already name the current primary,
     /// or whose target lost eligibility while it waited (see
     /// [`Self::is_eligible`]), is skipped for free and never touches the
@@ -214,8 +217,7 @@ impl FocusManager {
         Rc::new_cyclic(|manager| Self {
             root_scope: FocusScopeNode::new_root(manager.clone()),
             primary_focus: RefCell::new(None),
-            listeners: RefCell::new(Vec::new()),
-            listener_mint: IdMint::new(),
+            listeners: Notifier::new(),
             global_key_handlers: RefCell::new(Vec::new()),
             next_global_key_handler: Cell::new(0),
             unfocused_key_claims: RefCell::new(Vec::new()),
@@ -254,14 +256,38 @@ impl FocusManager {
 
     pub(super) fn notification_failure_scope(
         &self,
-        failure: &FocusClosePanic,
+        preserving: bool,
     ) -> NotificationFailureGuard<'_> {
         let guard = NotificationFailureGuard {
             mode: &self.notification_failure,
             previous: self.notification_failure.get(),
         };
-        guard.preserve(failure.preserving());
+        guard.preserve(preserving);
         guard
+    }
+
+    /// A notification guard latched from the round's own failure state: set
+    /// before and after each channel notify, so a rejection made while the
+    /// round owes a failure reads preserving.
+    fn notification_round_guard(&self, round: &PanicRecovery) -> NotificationFailureGuard<'_> {
+        self.notification_failure_scope(round.has_failure())
+    }
+
+    /// A fresh transition round: the foundation receipt whose first failure
+    /// resumes at the round's tail. A preserving ambient mode (the tombstone
+    /// of a preserving close, or the notification latch) seeds the round, so
+    /// everything it catches is discarded at `finish` exactly as a
+    /// `PreservingFailure` close discards.
+    fn focus_round(&self) -> PanicRecovery {
+        Self::focus_round_seeded(self.notification_failure_mode())
+    }
+
+    fn focus_round_seeded(mode: CloseMode) -> PanicRecovery {
+        let mut round = PanicRecovery::new();
+        if mode == CloseMode::PreservingFailure {
+            round.inherit_failure();
+        }
+        round
     }
 
     /// Whether this manager currently has primary focus.
@@ -270,7 +296,7 @@ impl FocusManager {
         self.primary_focus.borrow().is_some()
     }
 
-    /// Accepted — applied immediately, or, when requested from inside a
+    /// Accepted â€” applied immediately, or, when requested from inside a
     /// focus-change listener, queued and applied after the in-flight
     /// notification completes (see the type-level ordering contract).
     /// Returns `true` whenever the request is accepted, regardless of
@@ -330,16 +356,16 @@ impl FocusManager {
         let Some(primary) = self.primary_focus() else {
             return;
         };
-        let mut failure = FocusClosePanic::for_rejection(self.notification_failure_mode());
+        let mut round = self.focus_round();
         {
             let _guard = NotificationDepthGuard::enter(&self.notification_depth);
-            primary.notify_listeners_in_round(&mut failure);
+            primary.notify_listeners_in_round(&mut round.scope());
         }
         if self.notification_depth.get() == 0 {
-            self.drain_pending_focus_transitions(&mut failure);
+            self.drain_pending_focus_transitions(&mut round);
         }
-        failure.retire(primary);
-        failure.finish();
+        round.retire(primary);
+        round.finish();
     }
 
     /// Record that a removal took the primary focus out of the tree. The
@@ -434,10 +460,10 @@ impl FocusManager {
     ///
     /// The single source of truth for that question: [`Self::request_focus`]
     /// calls it directly (after its own `owns` check, evaluated first only
-    /// so a foreign-manager rejection gets its own distinct warning — see
+    /// so a foreign-manager rejection gets its own distinct warning â€” see
     /// that method), and [`Self::drain_pending_focus_transitions`] calls it
     /// again immediately before a queued transition is applied, since the
-    /// world can change while a request waits in the queue — a reentrant
+    /// world can change while a request waits in the queue â€” a reentrant
     /// listener earlier in the same chain can detach `node`, flip its
     /// [`FocusNode::can_request_focus`], or reparent it under a different
     /// manager before its turn comes, and a stale queued target must be
@@ -450,7 +476,7 @@ impl FocusManager {
     /// committed primary focus.
     ///
     /// Queues the request instead of applying it when a notification is
-    /// already in flight — see the type-level ordering contract.
+    /// already in flight â€” see the type-level ordering contract.
     fn set_primary_focus(&self, node: Option<Rc<FocusNode>>, cause: FocusCause) {
         if self.notification_depth.get() > 0 {
             self.pending_focus_transitions
@@ -458,10 +484,10 @@ impl FocusManager {
                 .push_back((node, cause));
             return;
         }
-        let mut failure = FocusClosePanic::for_rejection(self.notification_failure_mode());
-        self.apply_focus_transition(node, cause, &mut failure);
-        self.drain_pending_focus_transitions(&mut failure);
-        failure.finish();
+        let mut round = self.focus_round();
+        self.apply_focus_transition(node, cause, &mut round);
+        self.drain_pending_focus_transitions(&mut round);
+        round.finish();
     }
 
     /// Commit one focus transition and publish it.
@@ -477,13 +503,13 @@ impl FocusManager {
         &self,
         node: Option<Rc<FocusNode>>,
         cause: FocusCause,
-        failure: &mut FocusClosePanic,
+        round: &mut PanicRecovery,
     ) {
         let shows_focus = matches!(cause, FocusCause::Traversal | FocusCause::Assistive);
         let unchanged =
             Self::focus_identity_eq(self.primary_focus.borrow().as_ref(), node.as_ref());
         if unchanged {
-            failure.retire(node);
+            round.retire(node);
             // Tab wrapping back onto the only candidate still shows it.
             if shows_focus {
                 self.set_modality(InputModality::Keyboard);
@@ -511,17 +537,17 @@ impl FocusManager {
         }
 
         let _guard = NotificationDepthGuard::enter(&self.notification_depth);
-        let failure_guard = self.notification_failure_scope(failure);
-        let _ = failure.invoke(|| {
+        let failure_guard = self.notification_failure_scope(round.has_failure());
+        round.run(|| {
             tracing::trace!(
                 previous = ?previous.as_ref().map(|node| node.id().get()),
                 new = ?node.as_ref().map(|node| node.id().get()),
                 "focus changed"
             );
         });
-        failure_guard.preserve(failure.preserving());
-        Self::notify_focus_nodes(previous.as_ref(), node.as_ref(), failure);
-        self.notify_listeners(previous, node, failure);
+        failure_guard.preserve(round.has_failure());
+        Self::notify_focus_nodes(previous.as_ref(), node.as_ref(), round);
+        self.notify_listeners(previous, node, round);
     }
 
     /// Whether `a` and `b` name the identical focus node (or both `None`).
@@ -538,20 +564,22 @@ impl FocusManager {
     /// closes, or [`Self::REENTRANT_FOCUS_DRAIN_BUDGET`] is exhausted.
     ///
     /// Each dequeued `Some(node)` is re-validated with [`Self::is_eligible`]
-    /// before it is applied — the world can change between when a
-    /// reentrant listener queued it and when its turn comes — and skipped
+    /// before it is applied â€” the world can change between when a
+    /// reentrant listener queued it and when its turn comes â€” and skipped
     /// with a `tracing::trace!` if the target is no longer eligible. A
     /// dequeued `None` ([`Self::unfocus`]) is always eligible. Neither an
     /// eligibility skip nor a same-identity no-op counts against the drain
     /// budget: it bounds applications, not queue pops.
-    fn drain_pending_focus_transitions(&self, failure: &mut FocusClosePanic) {
+    fn drain_pending_focus_transitions(&self, round: &mut PanicRecovery) {
         let mut applied = 0usize;
         loop {
-            let failure_guard = self.notification_failure_scope(failure);
+            // The latch re-derives each iteration, so an admission made in
+            // this iteration reads the round's failure state as of its start.
+            let _failure_guard = self.notification_round_guard(round);
             if self.closed.get() {
                 let pending = std::mem::take(&mut *self.pending_focus_transitions.borrow_mut());
                 for (node, _) in pending {
-                    failure.retire(node);
+                    round.retire(node);
                 }
                 return;
             }
@@ -562,32 +590,31 @@ impl FocusManager {
             if let Some(target) = &node
                 && !self.is_eligible(target)
             {
-                let _ = failure.invoke(|| {
+                round.run(|| {
                     tracing::trace!(
                         node = target.id().get(),
                         "skipping a queued focus transition whose target is no longer eligible"
                     );
                 });
-                failure_guard.preserve(failure.preserving());
-                failure.retire(node);
+                round.retire(node);
                 continue;
             }
             if Self::focus_identity_eq(self.primary_focus.borrow().as_ref(), node.as_ref()) {
                 // Already the committed primary: applying it is the no-op
                 // `apply_focus_transition` detects (it may still show focus),
                 // so it never counts as an application.
-                self.apply_focus_transition(node, cause, failure);
+                self.apply_focus_transition(node, cause, round);
                 continue;
             }
             applied += 1;
             if applied > Self::REENTRANT_FOCUS_DRAIN_BUDGET {
                 // `node` (the one that tripped the budget) plus whatever is
-                // still queued behind it are both dropped below — count
+                // still queued behind it are both dropped below â€” count
                 // both, so the warning is the one piece of evidence a
                 // ping-pong author will ever see for this drop.
                 let pending = std::mem::take(&mut *self.pending_focus_transitions.borrow_mut());
                 let dropped = 1 + pending.len();
-                let _ = failure.invoke(|| {
+                round.run(|| {
                     tracing::warn!(
                         budget = Self::REENTRANT_FOCUS_DRAIN_BUDGET,
                         last_requested = ?node.as_ref().map(|node| node.id().get()),
@@ -596,14 +623,13 @@ impl FocusManager {
                          dropping the rest of the queue"
                     );
                 });
-                failure_guard.preserve(failure.preserving());
-                failure.retire(node);
+                round.retire(node);
                 for (node, _) in pending {
-                    failure.retire(node);
+                    round.retire(node);
                 }
                 return;
             }
-            self.apply_focus_transition(node, cause, failure);
+            self.apply_focus_transition(node, cause, round);
         }
     }
 
@@ -625,14 +651,14 @@ impl FocusManager {
     ///
     /// Publishes `(previous_primary, current)` to manager listeners only
     /// when primary-focus identity actually changed across the
-    /// replacement — a replacement that leaves primary on the same node
+    /// replacement â€” a replacement that leaves primary on the same node
     /// (only its ancestry changed) is not a transition and publishes
     /// nothing; the affected ancestors' node-level listeners still fire
     /// via [`Self::notify_focus_path_change`]. Runs that node notification
     /// with `notification_depth` held above zero (via
     /// [`NotificationDepthGuard`]), so a reentrant `request_focus`/`unfocus`
     /// from one of those listeners is queued and applied after this
-    /// publication — see the type-level ordering contract.
+    /// publication â€” see the type-level ordering contract.
     ///
     /// Its only caller, `FocusAttachment::replace_node`, refuses with
     /// `FocusTreeError::NotificationInFlight` before mutating anything while
@@ -661,18 +687,18 @@ impl FocusManager {
                 .collect()
         });
 
-        let mut failure = FocusClosePanic::for_rejection(self.close_mode.mode());
+        let mut round = Self::focus_round_seeded(self.close_mode.mode());
         {
             let _guard = NotificationDepthGuard::enter(&self.notification_depth);
-            Self::notify_focus_path_change(previous_focus_path, current_focus_path, &mut failure);
+            Self::notify_focus_path_change(previous_focus_path, current_focus_path, &mut round);
             if !Self::focus_identity_eq(current.as_ref(), Some(&previous_primary)) {
-                self.notify_listeners(Some(previous_primary), current, &mut failure);
+                self.notify_listeners(Some(previous_primary), current, &mut round);
             }
         }
         if self.notification_depth.get() == 0 {
-            self.drain_pending_focus_transitions(&mut failure);
+            self.drain_pending_focus_transitions(&mut round);
         }
-        failure.finish();
+        round.finish();
     }
 
     /// Release primary focus.
@@ -689,91 +715,64 @@ impl FocusManager {
     /// Register a focus or focused-ancestry change listener.
     ///
     /// The callback receives `(previous, new)` in the order transitions
-    /// are committed. A reentrant `request_focus`/`unfocus` made from
+    /// are committed; the manager's listener channel delivers it by
+    /// reference and clones the pair per listener, exactly as the id form
+    /// delivered by value. A reentrant `request_focus`/`unfocus` made from
     /// inside a callback is applied only after every currently in-flight
     /// notification finishes publishing, so `new` from one call this
-    /// listener observes is always `previous` on the next — no listener
+    /// listener observes is always `previous` on the next â€” no listener
     /// ever sees a destination that a later, already-applied transition
-    /// has superseded.
-    pub fn add_listener(&self, callback: FocusChangeCallback) -> ListenerId {
-        let id = self
-            .listener_mint
-            .next()
-            .expect("BUG: focus-manager listener ID space exhausted");
+    /// has superseded. Dropping the subscription withdraws the listener.
+    pub fn listen(
+        &self,
+        listener: impl Fn(Option<Rc<FocusNode>>, Option<Rc<FocusNode>>) + 'static,
+    ) -> Subscription {
         if self.closed.get() {
             let mut failure = FocusClosePanic::for_rejection(self.close_mode.mode());
-            failure.retire(callback);
-            failure.finish();
-        } else {
-            self.listeners.borrow_mut().push((id, callback));
-        }
-        id
-    }
-
-    /// Remove one focus-change listener.
-    pub fn remove_listener(&self, id: ListenerId) {
-        let removed = {
-            let mut listeners = self.listeners.borrow_mut();
-            listeners
-                .iter()
-                .position(|(held, _)| *held == id)
-                .map(|index| listeners.remove(index))
-        };
-        let mut failure = FocusClosePanic::for_rejection(self.notification_failure_mode());
-        if let Some((_, callback)) = removed {
-            failure.retire(callback);
-        }
-        failure.finish();
-    }
-
-    /// Remove all focus-change listeners.
-    pub fn clear_listeners(&self) {
-        let listeners = std::mem::take(&mut *self.listeners.borrow_mut());
-        let mut failure = FocusClosePanic::for_rejection(self.notification_failure_mode());
-        for (_, listener) in listeners {
             failure.retire(listener);
+            failure.finish();
+            return Subscription::inert();
         }
-        failure.finish();
+        self.listeners.listen_with_recovery(Rc::new(
+            move |change: &FocusChange, _recovery: &mut RecoveryScope<'_>| {
+                listener(change.0.clone(), change.1.clone());
+            },
+        ))
     }
 
     /// Number of registered listeners.
     #[cfg(any(test, feature = "testing"))]
     #[must_use]
     pub fn listener_count(&self) -> usize {
-        self.listeners.borrow().len()
+        self.listeners.len()
     }
 
     fn notify_listeners(
         &self,
         previous: Option<Rc<FocusNode>>,
         new: Option<Rc<FocusNode>>,
-        failure: &mut FocusClosePanic,
+        round: &mut PanicRecovery,
     ) {
-        let ids: Vec<_> = self.listeners.borrow().iter().map(|(id, _)| *id).collect();
-        for id in ids {
-            // A listener already dispatched in this loop may have removed
-            // a later one (itself included) — skip it: once removed, a
-            // listener is never called again, even mid-dispatch.
-            let listener = self
-                .listeners
-                .borrow()
-                .iter()
-                .find(|(registered, _)| *registered == id)
-                .map(|(_, listener)| Rc::clone(listener));
-            if let Some(listener) = listener {
-                let failure_guard = self.notification_failure_scope(failure);
-                failure.adopt(self.close_mode.mode());
-                let _ = failure.invoke(|| listener(previous.clone(), new.clone()));
-                failure_guard.preserve(failure.preserving());
-                failure.retire(listener);
-            }
+        let failure_guard = self.notification_failure_scope(round.has_failure());
+        if self.listeners.is_disposed() {
+            // A close that landed mid-round (a listener closed the manager
+            // inside its own notification) leaves the channel disposed —
+            // callers after that point hear nothing, exactly as the emptied
+            // id ledger silenced them.
+            return;
         }
+        // The manager's listener channel snapshots its membership, so a
+        // listener removed by an earlier one in this same dispatch (itself
+        // included) is never called.
+        self.listeners
+            .notify_with_recovery(&(previous, new), &mut round.scope());
+        failure_guard.preserve(round.has_failure());
     }
 
     fn notify_focus_nodes(
         previous: Option<&Rc<FocusNode>>,
         new: Option<&Rc<FocusNode>>,
-        failure: &mut FocusClosePanic,
+        round: &mut PanicRecovery,
     ) {
         let previous_path: Vec<_> = previous
             .into_iter()
@@ -801,14 +800,14 @@ impl FocusManager {
             }
         }
         for node in changed {
-            node.notify_listeners_in_round(failure);
+            node.notify_listeners_in_round(&mut round.scope());
         }
     }
 
     fn notify_focus_path_change(
         previous_path: Vec<Rc<FocusNode>>,
         current_path: Vec<Rc<FocusNode>>,
-        failure: &mut FocusClosePanic,
+        round: &mut PanicRecovery,
     ) {
         let previous_ids: HashSet<_> = previous_path.iter().map(|node| node.id()).collect();
         let current_ids: HashSet<_> = current_path.iter().map(|node| node.id()).collect();
@@ -825,7 +824,7 @@ impl FocusManager {
             .collect::<Vec<_>>();
 
         for node in changed {
-            node.notify_tree_change_in_round(failure);
+            node.notify_tree_change_in_round(&mut round.scope());
         }
     }
 
@@ -1065,7 +1064,7 @@ impl FocusManager {
                 continue;
             };
             let mut failure = FocusClosePanic::for_rejection(self.notification_failure_mode());
-            let failure_guard = self.notification_failure_scope(&failure);
+            let failure_guard = self.notification_failure_scope(failure.preserving());
             let result = failure
                 .invoke(|| handler(event))
                 .unwrap_or(KeyEventResult::Ignored);
@@ -1239,7 +1238,7 @@ impl FocusManager {
     /// Ask for keys to start their walk at `node` while nothing is focused.
     ///
     /// The walk normally starts at the primary focus. A window opened with
-    /// nothing focused has none, so without a target every key is dropped —
+    /// nothing focused has none, so without a target every key is dropped â€”
     /// including the first Tab that would bring the focus in. FLUI's
     /// default bindings claim their own node here, so the walk
     /// reaches them and nothing about `primary_focus` changes.
@@ -1294,7 +1293,7 @@ impl FocusManager {
     /// aborts, as in std (ADR-0281).
     ///
     /// Primary focus is always cleared to `None`, even when `close` runs
-    /// reentrantly from inside a focus-change listener — unlike
+    /// reentrantly from inside a focus-change listener â€” unlike
     /// `request_focus`/[`Self::unfocus`], `close` never takes the private
     /// notification-depth guard itself, so its healthy node-level notifications
     /// run immediately, nested inside whatever notification is already in
@@ -1303,8 +1302,8 @@ impl FocusManager {
     /// *manager*-level publication is conditional: it fires `(previous,
     /// None)` to [`FocusChangeCallback`] listeners only when
     /// `notification_depth` reads zero (no outer notification is currently
-    /// publishing), and is skipped — rather than interleaved out of order
-    /// — otherwise. The net effect matches `request_focus`/`unfocus`'s
+    /// publishing), and is skipped â€” rather than interleaved out of order
+    /// â€” otherwise. The net effect matches `request_focus`/`unfocus`'s
     /// ordering goal, reached here by omission instead of participation.
     /// Any request a reentrant listener queues afterward is dropped, never
     /// applied, once closed.
@@ -1322,8 +1321,29 @@ impl FocusManager {
         } else {
             mode
         };
-        let mut failure = FocusClosePanic::for_close(mode, self.close_mode.clone());
+        // The close's custody is the foundation receipt: the tombstone keeps
+        // its rejection policies through the flag bridge at this round's
+        // tail, and `FocusClosePanic` stays out of the close round entirely.
+        // A close that owes a failure — a preserving mode, itself inside an
+        // unwind, or a tombstone a previous close left preserved — omits its
+        // optional notifications and discards everything its retirement
+        // catches behind the failure already owed.
+        let tombstone = self.close_mode.clone();
+        let preserving = mode == CloseMode::PreservingFailure
+            || std::thread::panicking()
+            || tombstone.preserved();
+        if preserving {
+            tombstone.preserve();
+        }
+        tombstone.enter_close();
+        let mut round = Self::focus_round_seeded(if preserving {
+            CloseMode::PreservingFailure
+        } else {
+            CloseMode::Ordinary
+        });
         if self.retired.replace(true) {
+            tombstone.exit_close();
+            round.finish();
             return;
         }
         self.closed.set(true);
@@ -1349,39 +1369,56 @@ impl FocusManager {
             FocusNode::close_owned_tree(self.root_scope.as_focus_node(), self.close_mode.clone());
         let global_handlers = std::mem::take(&mut *self.global_key_handlers.borrow_mut());
 
-        for node in notified {
-            node.notify_close_listeners(&mut failure);
-        }
-        if previous.is_some() && self.notification_depth.get() == 0 {
-            let ids: Vec<_> = self.listeners.borrow().iter().map(|(id, _)| *id).collect();
-            for id in ids {
-                let listener = self
-                    .listeners
-                    .borrow()
-                    .iter()
-                    .find(|(registered, _)| *registered == id)
-                    .map(|(_, listener)| Rc::clone(listener));
-                if let Some(listener) = listener {
-                    failure.run(|| listener(previous.clone(), None));
-                    failure.retire(listener);
+        if !preserving {
+            for node in notified {
+                node.notify_close_listeners(&mut round.scope());
+                if round.has_failure() {
+                    // The first caught notification failure turns the rest of
+                    // the close preserving, exactly as the round it replaced
+                    // did: later nodes and the manager's own listeners hear
+                    // nothing more.
+                    tombstone.preserve();
+                    break;
                 }
             }
+            if previous.is_some() && self.notification_depth.get() == 0 {
+                let _failure_guard = self.notification_round_guard(&round);
+                // The manager's listeners hear `(previous, None)` — the final
+                // commit of the presentation's teardown, delivered by the
+                // channel's own snapshot-and-contain machinery.
+                self.listeners
+                    .notify_with_recovery(&(previous.clone(), None), &mut round.scope());
+            }
         }
-        let listeners = std::mem::take(&mut *self.listeners.borrow_mut());
-        for (_, listener) in listeners {
-            failure.retire(listener);
+        let listeners = self.listeners.dispose_and_take_callbacks();
+        for listener in listeners {
+            round.retire(listener);
+        }
+        // The first caught destructor failure preserves the tombstone at
+        // once, so later outgoing captures' reentrant rejections read
+        // preserving — the custody rule the close's own round decided.
+        if round.has_failure() {
+            tombstone.preserve();
         }
         for (_, handler) in global_handlers {
-            failure.retire(handler);
+            round.retire(handler);
         }
         for node in retired {
-            node.retire(&mut failure);
+            node.retire(&mut round.scope());
         }
         for (node, _) in pending {
-            failure.retire(node);
+            round.retire(node);
         }
-        failure.retire(previous);
-        failure.finish();
+        round.retire(previous);
+        // The tombstone flags ahead of the resume, so a rejection after the
+        // close reads preserving exactly as it did under the round; the
+        // closing counter drops first, so nothing outside the close observes
+        // a close in progress.
+        tombstone.exit_close();
+        if round.has_failure() {
+            tombstone.preserve();
+        }
+        round.finish();
     }
 
     /// Refuse every later request without running user code; a later
@@ -1402,7 +1439,7 @@ impl std::fmt::Debug for FocusManager {
         f.debug_struct("FocusManager")
             .field("primary_focus", &self.primary_focus().map(|node| node.id()))
             .field("root_scope_id", &self.root_scope.id())
-            .field("listener_count", &self.listeners.borrow().len())
+            .field("listener_count", &self.listeners.len())
             .field("closed", &self.closed.get())
             .finish_non_exhaustive()
     }
@@ -1611,18 +1648,18 @@ mod tests {
         );
     }
 
-    // ── Reentrant focus-notification ordering (issue #1040) ─────────────
+    // â”€â”€ Reentrant focus-notification ordering (issue #1040) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     //
     // `set_primary_focus` commits and publishes synchronously. A listener
     // that requests another focus change from inside that publication must
     // not see its request applied out of turn, and no manager listener may
     // ever observe a transition that a later, already-applied one has
     // superseded. These tests pin the ordering contract documented on
-    // `FocusManager` and on `request_focus`/`unfocus`/`add_listener`.
+    // `FocusManager` and on `request_focus`/`unfocus`/`listen`.
     //
     // `tracing` capture for these tests goes through
     // `flui_testing::log_capture::capture`, race-free in a thread-parallel
-    // test binary for the reason documented there — this crate sits below
+    // test binary for the reason documented there â€” this crate sits below
     // `flui-testing` in the layer DAG for everything else, but keeps it as
     // a dev-dependency for exactly this.
 
@@ -1757,18 +1794,18 @@ mod tests {
                 node: Rc::downgrade(&nodes[1]),
             };
             let owner = capture("node listener");
-            let node_listener = nodes[0].add_listener(Rc::new(move || {
+            let node_listener = nodes[0].listen(move || {
                 let _ = &owner;
                 assert!(callback_failure != Some("node callback"), "node callback");
-            }));
+            });
             let owner = capture("manager listener");
-            let manager_listener = manager.add_listener(Rc::new(move |_, _| {
+            let manager_listener = manager.listen(move |_, _| {
                 let _ = &owner;
                 assert!(
                     callback_failure != Some("manager callback"),
                     "manager callback"
                 );
-            }));
+            });
             let owner = capture("global handler");
             manager.add_global_key_handler(Rc::new(move |_| {
                 let _ = &owner;
@@ -1805,9 +1842,9 @@ mod tests {
 
             // Safe negative control: if old close stopped early, release its
             // leftover captures separately before asserting the defect.
-            let _ = catch_unwind(AssertUnwindSafe(|| nodes[0].remove_listener(node_listener)));
+            let _ = catch_unwind(AssertUnwindSafe(|| drop(node_listener)));
             let _ = catch_unwind(AssertUnwindSafe(|| {
-                manager.remove_listener(manager_listener);
+                drop(manager_listener);
             }));
             let _ = catch_unwind(AssertUnwindSafe(|| manager.clear_global_key_handlers()));
             let _ = catch_unwind(AssertUnwindSafe(|| nodes[1].clear_on_key_event()));
@@ -1835,7 +1872,7 @@ mod tests {
                 "every capture sees the complete closed tree after {expected}"
             );
             // Every capture is destroyed once, after a callback failure and
-            // past a failing destructor alike (ADR-0281 §3).
+            // past a failing destructor alike (ADR-0281 Â§3).
             let mut destroyed = drops.borrow().clone();
             destroyed.sort_unstable();
             let mut all = [
@@ -1868,7 +1905,7 @@ mod tests {
         let owner = Rc::downgrade(&manager);
         let notified = Rc::new(Cell::new(false));
         let observed = Rc::clone(&notified);
-        nodes[0].add_listener(Rc::new(move || {
+        let _node_listening = nodes[0].listen(move || {
             let manager = owner.upgrade().expect("the caller retains the manager");
             assert!(manager.primary_focus().is_none());
             assert!(!other.is_attached());
@@ -1878,12 +1915,12 @@ mod tests {
             ));
             other.set_on_key_event(Rc::new(|_| panic!("closed node accepted a key handler")));
             other.register_context(Rc::new(())).relinquish();
-            manager.add_listener(Rc::new(|_, _| panic!("closed owner accepted a listener")));
+            let _ = manager.listen(|_, _| panic!("closed owner accepted a listener"));
             manager
                 .add_global_key_handler(Rc::new(|_| panic!("closed owner accepted a key handler")));
             manager.close();
             observed.set(true);
-        }));
+        });
         manager.close();
         assert!(notified.get());
         assert!(nodes[1].context().is_none());
@@ -1907,7 +1944,7 @@ mod tests {
         );
         let notified = Rc::new(Cell::new(false));
         let observed = Rc::clone(&notified);
-        root.add_listener(Rc::new(move || observed.set(true)));
+        let _root_listening = root.listen(move || observed.set(true));
         manager.close();
         assert!(!notified.get(), "a parentless root is never notified");
     }
@@ -1976,16 +2013,16 @@ mod tests {
                 panic!("closed manager accepted global handler");
             })),
             1 => {
-                manager.add_listener(Rc::new(move |_, _| {
+                let _listening = manager.listen(move |_, _| {
                     let _ = &capture;
                     panic!("closed manager accepted listener");
-                }));
+                });
             }
             2 => {
-                node.add_listener(Rc::new(move || {
+                let _listening = node.listen(move || {
                     let _ = &capture;
                     panic!("closed node accepted listener");
-                }));
+                });
             }
             3 => node.set_rect_provider(Rc::new(move || {
                 let _ = &capture;
@@ -2117,21 +2154,21 @@ mod tests {
 
         let edges = Rc::new(RefCell::new(Vec::new()));
         let edges_for_listener = Rc::clone(&edges);
-        manager.add_listener(Rc::new(move |previous, current| {
+        let _edges_listening = manager.listen(move |previous, current| {
             edges_for_listener.borrow_mut().push((
                 previous.map(|node| node.id()),
                 current.map(|node| node.id()),
             ));
-        }));
+        });
 
         let c_for_listener = Rc::clone(&c);
         let b_weak = Rc::downgrade(&b);
-        b.add_listener(Rc::new(move || {
+        let _b_listening = b.listen(move || {
             if b_weak.upgrade().unwrap().has_primary_focus() {
                 let _ = c_for_listener.request_focus();
                 let _ = c_attachment.detach();
             }
-        }));
+        });
 
         let _ = b.request_focus();
 
@@ -2157,9 +2194,7 @@ mod tests {
         let (manager, nodes) = manager_with_nodes(2);
         let _ = nodes[0].request_focus();
 
-        let panicking_listener =
-            nodes[0].add_listener(Rc::new(|| panic!("boom: listener under test panics")));
-
+        let panicking_listener = nodes[0].listen(|| panic!("boom: listener under test panics"));
         let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let _ = nodes[1].request_focus();
         }));
@@ -2169,16 +2204,16 @@ mod tests {
         // teardown at the end of this test — this test is about
         // `notification_depth` recovering from ONE panic, not about a
         // permanently misbehaving listener.
-        nodes[0].remove_listener(panicking_listener);
+        panicking_listener.detach();
 
         let edges = Rc::new(RefCell::new(Vec::new()));
         let edges_for_listener = Rc::clone(&edges);
-        manager.add_listener(Rc::new(move |previous, current| {
+        let _edges_listening = manager.listen(move |previous, current| {
             edges_for_listener.borrow_mut().push((
                 previous.map(|node| node.id()),
                 current.map(|node| node.id()),
             ));
-        }));
+        });
 
         let _ = nodes[0].request_focus();
 
@@ -2203,12 +2238,12 @@ mod tests {
 
         let edges = Rc::new(RefCell::new(Vec::new()));
         let edges_for_listener = Rc::clone(&edges);
-        manager.add_listener(Rc::new(move |previous, current| {
+        let _edges_listening = manager.listen(move |previous, current| {
             edges_for_listener.borrow_mut().push((
                 previous.map(|node| node.id()),
                 current.map(|node| node.id()),
             ));
-        }));
+        });
 
         // Each listener re-requests the other node only while it is itself
         // the current primary, so every application enqueues exactly one
@@ -2216,18 +2251,18 @@ mod tests {
         // also waste applications re-requesting the already-current node.
         let target_of_0 = Rc::clone(&nodes[1]);
         let self_of_0 = Rc::downgrade(&nodes[0]);
-        let listener_0 = nodes[0].add_listener(Rc::new(move || {
+        let listener_0 = nodes[0].listen(move || {
             if self_of_0.upgrade().unwrap().has_primary_focus() {
                 let _ = target_of_0.request_focus();
             }
-        }));
+        });
         let target_of_1 = Rc::clone(&nodes[0]);
         let self_of_1 = Rc::downgrade(&nodes[1]);
-        let listener_1 = nodes[1].add_listener(Rc::new(move || {
+        let listener_1 = nodes[1].listen(move || {
             if self_of_1.upgrade().unwrap().has_primary_focus() {
                 let _ = target_of_1.request_focus();
             }
-        }));
+        });
 
         let ((), log) = flui_testing::log_capture::capture(|| {
             let _ = nodes[0].request_focus();
@@ -2247,7 +2282,7 @@ mod tests {
 
         // The concrete node left focused after the drop must match the
         // last transition the drain actually committed, not a hardcoded
-        // parity assumption — read it back from the same trace-level
+        // parity assumption â€” read it back from the same trace-level
         // "focus changed" events `apply_focus_transition` emits.
         let last_committed = log
             .records()
@@ -2268,11 +2303,11 @@ mod tests {
 
         // The budget resets per outermost call rather than leaking state
         // across calls: with the ping-pong wiring removed, a plain request
-        // from outside now behaves like any other healthy transition —
-        // applied immediately, publishing exactly one edge — proving the
+        // from outside now behaves like any other healthy transition â€”
+        // applied immediately, publishing exactly one edge â€” proving the
         // manager was left fully functional after the bounded drop.
-        nodes[0].remove_listener(listener_0);
-        nodes[1].remove_listener(listener_1);
+        listener_0.detach();
+        listener_1.detach();
         edges.borrow_mut().clear();
         let settled = manager
             .primary_focus()
@@ -2294,8 +2329,8 @@ mod tests {
         );
     }
 
-    /// Once the manager closes — even reentrantly, from inside a
-    /// notification already in flight — no further manager-level
+    /// Once the manager closes â€” even reentrantly, from inside a
+    /// notification already in flight â€” no further manager-level
     /// publication happens and any request still queued by a reentrant
     /// listener is dropped rather than applied.
     fn queued_requests_are_dropped_when_the_manager_closes_mid_drain() {
@@ -2304,19 +2339,19 @@ mod tests {
 
         let edges = Rc::new(RefCell::new(Vec::new()));
         let edges_for_listener = Rc::clone(&edges);
-        manager.add_listener(Rc::new(move |previous, current| {
+        let _edges_listening = manager.listen(move |previous, current| {
             edges_for_listener.borrow_mut().push((
                 previous.map(|node| node.id()),
                 current.map(|node| node.id()),
             ));
-        }));
+        });
 
         let manager_for_listener = Rc::clone(&manager);
         let sibling = Rc::clone(&nodes[2]);
-        nodes[1].add_listener(Rc::new(move || {
+        let _edges_listening = nodes[1].listen(move || {
             manager_for_listener.close();
             let _ = sibling.request_focus();
-        }));
+        });
 
         let _ = nodes[1].request_focus();
 

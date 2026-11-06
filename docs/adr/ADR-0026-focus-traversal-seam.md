@@ -10,6 +10,9 @@
 - **Superseded-by:** [ADR-0165](ADR-0165-focus-policy-groups-and-directional-traversal.md)
   (§2's scope-only resolver and §3's scope-only parent retry; groups and directional
   traversal below are now implemented)
+- **Related:** [ADR-0314](ADR-0314-the-focus-ledgers-are-the-notification-channels.md) —
+  the listener ledgers named in §1 are that record's notification channels; its owned
+  registrations replace the `ListenerId` forms this record once taught.
 
 ## Context
 
@@ -40,11 +43,14 @@ Reference: Flutter `widgets/focus_scope.dart` (`Focus`, `FocusScope`, `_FocusSta
   be the field's ancestor to see the keys it ignores.
 - Lifecycle: `init_state` resolves the parent, attaches, applies autofocus once and registers a
   focus listener; `did_change_dependencies` reparents through `FocusScopeNode::adopt_node`,
-  which keeps primary focus across the move; `dispose` removes the listener and detaches (an
-  external node is left to its owner). The manager comes from the lifecycle context
-  (ADR-0078), one per UI runtime.
-- The node layer gained two primitives for this: `remove_listener(ListenerId)` and
-  `adopt_node` (reparent without dropping focus).
+  which keeps primary focus across the move; `dispose` drops the subscription (which
+  withdraws the listener) and detaches (an external node is left to its owner). The manager
+  comes from the lifecycle context (ADR-0078), one per UI runtime.
+- The node layer gained `adopt_node` (reparent without dropping focus). Its listener
+  ledgers are the notification channels now
+  ([ADR-0314](ADR-0314-the-focus-ledgers-are-the-notification-channels.md)): node listeners hold the
+  owned `Subscription` and the manager's change listeners subscribe through
+  `FocusManager::listen`; no listener id is exposed.
 - `ModalRoute` creates a scope, wraps its page in `FocusScope::with_external_node`, makes the
   scope the manager's active scope when the route becomes current, and on reveal
   (`did_pop_next`) restores the scope's remembered focused child, or unfocuses a field left on
@@ -107,7 +113,8 @@ root); custom embedders can install it themselves.
 
 ## Consequences
 
-- The node layer grew two small primitives; everything else is widget plumbing over the same
+- The node layer grew `adopt_node` and its listener ledgers became the
+  notification channels (ADR-0314); everything else is widget plumbing over the same
   inherited-provider pattern `GestureArenaScope` and `HeroScope` use.
 - One resolver over one sorted list means edge behavior, first Tab and `set_first_focus` cannot
   drift apart.

@@ -10,7 +10,7 @@ use flui_animation::{
     Animation, AnimationController, AnimationStatus, DrivenController, MotionPolicy,
 };
 use flui_foundation::geometry::{Axis, Rect, Size};
-use flui_foundation::{ChangeNotifier, Listenable, ListenerId};
+use flui_foundation::{ChangeNotifier, Listenable};
 use flui_interaction::{FocusManager, FocusNode};
 use flui_objects::{
     CarouselConfig, CarouselGeometry, CarouselItemFrames, CarouselLayout, MAX_ITEM_EXTENT,
@@ -382,7 +382,7 @@ pub struct CarouselState {
     scroll_listener: Option<flui_foundation::Subscription>,
     pause_listener: Option<flui_foundation::Subscription>,
     focus: Rc<FocusNode>,
-    focus_manager: Option<(Rc<FocusManager>, ListenerId)>,
+    focus_manager: Option<(Rc<FocusManager>, flui_foundation::Subscription)>,
     lifecycle: Option<LifecycleSubscription>,
     rebuild: Option<RebuildHandle>,
     timer: DrivenController,
@@ -583,15 +583,15 @@ impl ViewState<Carousel> for CarouselState {
         let focus = Rc::clone(&self.focus);
         let shared = Rc::downgrade(&self.shared);
         let has_autoplay = self.autoplay.is_some();
-        let id = manager.add_listener(Rc::new(move |_previous, _next| {
+        let listening = manager.listen(move |_previous, _next| {
             if has_autoplay
                 && focus.has_focus()
                 && let Some(shared) = shared.upgrade()
             {
                 shared.controller.borrow().set_paused(true);
             }
-        }));
-        self.focus_manager = Some((manager, id));
+        });
+        self.focus_manager = Some((manager, listening));
 
         if let Some(lifecycle) = ctx.lifecycle_handle() {
             let shared = Rc::downgrade(&self.shared);
@@ -790,9 +790,9 @@ impl ViewState<Carousel> for CarouselState {
     fn dispose(&mut self) {
         self.shared.alive.set(false);
         self.scroll_listener.take();
-        if let Some((manager, id)) = self.focus_manager.take() {
-            manager.remove_listener(id);
-        }
+        // The subscription's own drop detaches it; the manager itself is not
+        // held by this slot.
+        if let Some((_manager, _listening)) = self.focus_manager.take() {}
         self.lifecycle.take();
         self.timer_status.take();
         self.detach();

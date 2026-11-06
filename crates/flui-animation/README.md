@@ -253,9 +253,10 @@ controller.animate_with(sim)?;
 
 ### Listening
 
-Value listeners come from `flui_foundation::Listenable` and return a `ListenerId`.
-Status subscriptions come from `Animation` and return a `StatusSubscription`
-that removes the callback when dropped. Both take an `Rc`'d callback.
+Value listeners come from `flui_foundation::Listenable` and return the channel's
+owned `Subscription`, which withdraws the listener when dropped. Status
+subscriptions come from `Animation` and return a `StatusSubscription` that
+removes the callback when dropped. Both take an `Rc`'d callback.
 
 ```rust
 # use std::rc::Rc;
@@ -265,8 +266,8 @@ use flui_foundation::Listenable;
 # let controller = AnimationController::builder(Duration::from_millis(300)).build();
 
 // Value changes
-let id = controller.add_listener(Rc::new(|| println!("value changed")));
-controller.remove_listener(id);
+let value_listening = controller.listen(Rc::new(|| println!("value changed")));
+drop(value_listening);
 
 // Status changes
 let subscription = controller.subscribe_status(Rc::new(|status| {

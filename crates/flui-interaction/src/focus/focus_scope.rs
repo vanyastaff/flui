@@ -14,9 +14,9 @@ use std::{
 };
 
 use super::traversal::{FocusTraversalOverrides, GroupConfig, GroupOrderCache, GroupOrderSnapshot};
-use flui_foundation::IdMint;
-use flui_foundation::ListenerId;
+use flui_foundation::ChangeNotifier;
 use flui_foundation::geometry::Rect;
+use flui_foundation::panic::RecoveryScope;
 use flui_painting::typography::TextDirection;
 use flui_platform::keyboard::KeyEvent;
 use thiserror::Error;
@@ -387,27 +387,9 @@ impl FocusAttachment {
     }
 }
 
-/// Ownership of one focus-node listener registration.
-///
-/// Dropping the subscription withdraws its listener. The subscription holds a
-/// weak node reference, so retaining it cannot keep the focus tree alive.
-/// Withdrawal commits before callback captures are retired and follows the
-/// owner's existing panic-preservation policy.
-#[must_use = "retain the subscription for as long as the listener should remain installed"]
-#[derive(Debug)]
-pub struct FocusSubscription {
-    node: Weak<FocusNode>,
-    listener_id: ListenerId,
-}
-
-impl Drop for FocusSubscription {
-    fn drop(&mut self) {
-        if let Some(node) = self.node.upgrade() {
-            node.remove_listener(self.listener_id);
-        }
-    }
-}
-
+/// A node property that registrations install: the value, and the generation
+/// of the write that installed it, so a registration dropped after a later
+/// write leaves that write's value alone.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FocusNodeRegistrationKind {
     KeyHandler,
@@ -558,10 +540,7 @@ pub struct FocusNode {
     scope_owner: RefCell<Option<Weak<FocusScopeNode>>>,
     on_key_event: Registered<KeyEventHandler>,
     on_key_cancel: Registered<KeyCancelHandler>,
-    listeners: RefCell<Vec<(ListenerId, FocusNodeChangeCallback)>>,
-    /// The owner-local mint whose refusal is sticky: a listener id is
-    /// never issued twice.
-    listener_mint: IdMint<ListenerId>,
+    listeners: ChangeNotifier,
     rect: Cell<Rect<f64>>,
     rect_provider: Registered<RectProvider>,
     context: Registered<NodeContext>,
@@ -661,7 +640,7 @@ pub(super) struct ClosedFocusNode {
 }
 
 impl ClosedFocusNode {
-    pub(super) fn retire(self, failure: &mut FocusClosePanic) {
+    pub(super) fn retire(self, recovery: &mut RecoveryScope<'_>) {
         let Self {
             node,
             key_handler,
@@ -673,19 +652,20 @@ impl ClosedFocusNode {
             entry,
         } = self;
         // The order a healthy close always kept: key handlers, listeners,
-        // rect provider, context.
-        failure.retire(key_handler);
-        failure.retire(key_cancel);
-        let listeners = std::mem::take(&mut *node.listeners.borrow_mut());
-        for (_, listener) in listeners {
-            failure.retire(listener);
+        // rect provider, context. The listeners retire through the channel's
+        // dispose, which closes the ledger with the node.
+        recovery.retire(key_handler);
+        recovery.retire(key_cancel);
+        let listeners = node.listeners.dispose_and_take_listeners();
+        for listener in listeners {
+            recovery.retire(listener);
         }
-        failure.retire(rect_provider);
-        failure.retire(context);
-        failure.retire(policy);
-        failure.retire(group_policy);
-        failure.retire(entry);
-        failure.retire(node);
+        recovery.retire(rect_provider);
+        recovery.retire(context);
+        recovery.retire(policy);
+        recovery.retire(group_policy);
+        recovery.retire(entry);
+        recovery.retire(node);
     }
 }
 
@@ -722,8 +702,7 @@ impl FocusNode {
             scope_owner: RefCell::new(scope_owner),
             on_key_event: Registered::new(),
             on_key_cancel: Registered::new(),
-            listeners: RefCell::new(Vec::new()),
-            listener_mint: IdMint::new(),
+            listeners: ChangeNotifier::new(),
             rect: Cell::new(Rect::ZERO),
             rect_provider: Registered::new(),
             context: Registered::new(),
@@ -1019,99 +998,71 @@ impl FocusNode {
     }
 
     /// Register a listener for focus or focusability changes on this node.
-    pub(super) fn add_listener(&self, callback: FocusNodeChangeCallback) -> ListenerId {
-        let id = self
-            .listener_mint
-            .next()
-            .expect("BUG: focus-node listener ID space exhausted");
+    ///
+    /// The listeners are the notification channel: delivery snapshots the
+    /// channel's membership, skips a listener withdrawn earlier in the same
+    /// dispatch, and contains a panicking listener in the notifying round.
+    /// A closed node refuses the admission before the channel sees it.
+    pub(super) fn listen(&self, listener: impl Fn() + 'static) -> flui_foundation::Subscription {
         if self.is_closed() {
             let mut failure = FocusClosePanic::for_rejection(self.close_mode());
-            failure.retire(callback);
+            failure.retire(listener);
             failure.finish();
-        } else {
-            self.listeners.borrow_mut().push((id, callback));
+            return flui_foundation::Subscription::inert();
         }
-        id
+        self.listeners.listen(Rc::new(listener))
     }
 
-    /// Subscribe to focus or focusability changes until the returned guard is dropped.
-    pub fn subscribe(self: &Rc<Self>, callback: FocusNodeChangeCallback) -> FocusSubscription {
-        FocusSubscription {
-            node: Rc::downgrade(self),
-            listener_id: self.add_listener(callback),
-        }
+    /// Subscribe to focus or focusability changes until the subscription is dropped.
+    pub fn subscribe(&self, listener: impl Fn() + 'static) -> flui_foundation::Subscription {
+        self.listen(listener)
     }
 
-    /// Remove one node listener.
-    pub(super) fn remove_listener(&self, id: ListenerId) {
-        let removed = {
-            let mut listeners = self.listeners.borrow_mut();
-            listeners
-                .iter()
-                .position(|(held, _)| *held == id)
-                .map(|index| listeners.remove(index))
-        };
-        let mut failure = FocusClosePanic::for_rejection(self.close_mode());
-        if let Some((_, callback)) = removed {
-            failure.retire(callback);
-        }
-        failure.finish();
-    }
-
+    /// Deliver this node's listener round on its notification channel. The
+    /// callers pass the recovery scope of the round that owns them: the
+    /// manager's transition round, or this method's own for the
+    /// property-change notifies.
     pub(crate) fn notify_listeners(&self) {
-        let mut failure = FocusClosePanic::for_rejection(self.close_mode());
-        self.notify_listeners_in_round(&mut failure);
-        failure.finish();
+        if self.is_closed() {
+            let failure = FocusClosePanic::for_rejection(self.close_mode());
+            failure.finish();
+            return;
+        }
+        let mut round = flui_foundation::panic::PanicRecovery::new();
+        self.notify_listeners_in_round(&mut round.scope());
+        round.finish();
     }
 
-    pub(super) fn notify_listeners_in_round(&self, failure: &mut FocusClosePanic) {
+    /// Deliver this node's listeners inside `recovery` — the round the
+    /// manager's transition owns. The node's channel snapshots its own
+    /// membership, so a listener removed earlier in the same dispatch is
+    /// never called.
+    pub(super) fn notify_listeners_in_round(
+        &self,
+        recovery: &mut flui_foundation::panic::RecoveryScope<'_>,
+    ) {
         if self.parent.borrow().is_none() {
             return;
         }
-        self.notify_tree_change_in_round(failure);
+        self.notify_tree_change_in_round(recovery);
     }
 
-    pub(super) fn notify_tree_change_in_round(&self, failure: &mut FocusClosePanic) {
-        let ids: Vec<_> = self.listeners.borrow().iter().map(|(id, _)| *id).collect();
-        for id in ids {
-            // Mirrors `FocusManager::notify_listeners`: a listener removed
-            // by an earlier one in this same dispatch (itself included) is
-            // never called.
-            let listener = self
-                .listeners
-                .borrow()
-                .iter()
-                .find(|(registered, _)| *registered == id)
-                .map(|(_, listener)| Rc::clone(listener));
-            if let Some(listener) = listener {
-                let owner = self.manager();
-                let failure_guard = owner
-                    .as_ref()
-                    .map(|owner| owner.notification_failure_scope(failure));
-                failure.adopt(self.close_mode());
-                let _ = failure.invoke(|| listener());
-                if let Some(guard) = &failure_guard {
-                    guard.preserve(failure.preserving());
-                }
-                failure.retire(listener);
-            }
-        }
+    pub(super) fn notify_tree_change_in_round(
+        &self,
+        recovery: &mut flui_foundation::panic::RecoveryScope<'_>,
+    ) {
+        self.listeners.notify_listeners_with_recovery(recovery);
     }
 
-    pub(super) fn notify_close_listeners(&self, failure: &mut FocusClosePanic) {
-        let ids: Vec<_> = self.listeners.borrow().iter().map(|(id, _)| *id).collect();
-        for id in ids {
-            let listener = self
-                .listeners
-                .borrow()
-                .iter()
-                .find(|(registered, _)| *registered == id)
-                .map(|(_, listener)| Rc::clone(listener));
-            if let Some(listener) = listener {
-                failure.run(|| listener());
-                failure.retire(listener);
-            }
-        }
+    /// Deliver this node's listeners inside the manager's close, on the
+    /// close round's recovery scope: the channel snapshots its membership
+    /// and delivers, the round's own first-failure rule keeps the custody,
+    /// and the close retires what the channel's `dispose` hands back.
+    pub(super) fn notify_close_listeners(
+        &self,
+        recovery: &mut flui_foundation::panic::RecoveryScope<'_>,
+    ) {
+        self.listeners.notify_listeners_with_recovery(recovery);
     }
 
     fn close_mode(&self) -> CloseMode {
@@ -1926,17 +1877,23 @@ pub(crate) fn focus_node_identity_exhaustion_preserves_notifications() {
         .attach_node(&last)
         .expect("last node attaches");
     let notifications = Rc::new(RefCell::new(Vec::new()));
+    let mut held_listeners = Vec::new();
     for (name, node) in [("first", &first), ("last", &last)] {
         let notifications = Rc::clone(&notifications);
         let node = Rc::downgrade(node);
         let target = node.upgrade().expect("live node");
-        target.add_listener(Rc::new(move || {
+        held_listeners.push(target.listen(move || {
             let node = node.upgrade().expect("attached node");
             notifications
                 .borrow_mut()
                 .push((name, node.has_primary_focus()));
         }));
     }
+    assert_eq!(
+        held_listeners.len(),
+        2,
+        "both endpoints hold their subscriptions while the matrix runs"
+    );
     let _ = first.request_focus();
     let _ = last.request_focus();
     for _ in 0..8 {

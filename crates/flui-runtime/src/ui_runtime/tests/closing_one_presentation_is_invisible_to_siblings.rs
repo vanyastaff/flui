@@ -158,7 +158,7 @@ struct CursorCapture {
 }
 
 /// Two captures in one aggregate. Only `first` may fail: a second field whose
-/// destructor panics while the first unwinds aborts, as in std (ADR-0281 §1).
+/// destructor panics while the first unwinds aborts, as in std (ADR-0281 Â§1).
 struct DropCompetition {
     first: CursorCapture,
     second: CursorCapture,
@@ -222,7 +222,7 @@ impl flui_foundation::ViewKey for RetirementKey {
         let mut clone = self.clone();
         clone.cloned = true;
         // Only key 1 fails: a second destructor that panics while the key
-        // registry unwinds from the first aborts, as in std (ADR-0281 §1).
+        // registry unwinds from the first aborts, as in std (ADR-0281 Â§1).
         clone.captures = Some((
             ArmedKeyCapture {
                 armed: Arc::clone(&self.armed),
@@ -255,7 +255,7 @@ impl Drop for RetirementKey {
             }
         });
         // Only the first destroyed copy of key 1 fails: a second destructor that
-        // panics while the registry unwinds from the first aborts (ADR-0281 §1).
+        // panics while the registry unwinds from the first aborts (ADR-0281 Â§1).
         assert!(
             !self.fail || self.id != 1 || earlier != 0,
             "custom key retirement failure"
@@ -354,7 +354,7 @@ fn run_custom_key_child(fail: bool) {
         assert!(close.expect("healthy custom key close"));
     }
     // A failing key stops none of the rest: every copy of both keys is
-    // destroyed, as in a healthy close (ADR-0281 §3).
+    // destroyed, as in a healthy close (ADR-0281 Â§3).
     let (first_drops, second_drops) = (
         first_drops.load(Ordering::Relaxed),
         second_drops.load(Ordering::Relaxed),
@@ -1180,14 +1180,14 @@ pub(crate) fn run_presentation_close_child(kind: &str) {
     let focus_calls = Rc::new(Cell::new(0));
     let calls = Rc::clone(&focus_calls);
     let weak_focus = Rc::downgrade(&focus);
-    focus.add_listener(Rc::new(move |_, new| {
+    let _listening = focus.listen(move |_, new| {
         if new.is_none() {
             calls.set(calls.get() + 1);
             // Real callback reentry must see close already committed.
             weak_focus.upgrade().expect("held manager").close();
             assert!(!focus_failure, "focus loss failure");
         }
-    }));
+    });
     let drops = Arc::new(AtomicUsize::new(0));
     let capture = CursorCapture {
         fail: cursor_failure,
@@ -1369,7 +1369,7 @@ pub(crate) fn run_presentation_close_child(kind: &str) {
         assert!(focus.is_closed());
         assert_eq!(input.ensure_open(), Err(TextInputError::OwnerGone));
         // A held failure, an incoming unwind included, skips optional
-        // disposal; the values are still destroyed (ADR-0281 §3).
+        // disposal; the values are still destroyed (ADR-0281 Â§3).
         assert!(
             seen.borrow().is_empty(),
             "recovering forest skips optional disposal"
@@ -1489,13 +1489,13 @@ pub(crate) fn run_presentation_close_child(kind: &str) {
         );
     } else {
         // A held failure, an incoming unwind included, skips optional
-        // disposal; the values are still destroyed (ADR-0281 §3).
+        // disposal; the values are still destroyed (ADR-0281 Â§3).
         assert!(seen.borrow().is_empty(), "recovery skips optional disposal");
     }
     assert_eq!(
         input.ensure_open(),
         Err(TextInputError::OwnerGone),
-        "removal destroys the physical owner, after a failure too (ADR-0281 §3)"
+        "removal destroys the physical owner, after a failure too (ADR-0281 Â§3)"
     );
     assert!(focus.primary_focus().is_none());
     assert!(
@@ -1696,7 +1696,7 @@ pub(crate) fn presentation_close_retirement_failures_preserve_focus_ime_and_sibl
 }
 
 /// Oracle: a LAYER-TREE COMPARE (`format!("{:?}", ...)` on the
-/// produced `LayerTree`), never a rebuild/flush count — B's own
+/// produced `LayerTree`), never a rebuild/flush count â€” B's own
 /// render output, not merely whether B ran, must be byte-for-byte
 /// unaffected by A closing.
 pub(crate) fn closing_presentation_a_leaves_sibling_layer_tree_identical() {
@@ -1861,7 +1861,7 @@ fn failing_teardown_runtime() -> UiRuntime {
 /// A `dispose` that panics and a pending future whose `Drop` panics, in one
 /// runtime's drop: each is contained where it runs, so the rest of the tree
 /// still disposes and the future is dropped once; the first contained
-/// failure is then the drop's own (ADR-0258 §2: destroying a runtime is
+/// failure is then the drop's own (ADR-0258 Â§2: destroying a runtime is
 /// terminal at loop exit), and the process does not abort.
 fn a_failing_dispose_and_future_drop_do_not_abort() {
     let ui_runtime = failing_teardown_runtime();
@@ -1880,7 +1880,7 @@ fn a_failing_dispose_and_future_drop_do_not_abort() {
 }
 
 /// The same runtime dropped while an outer panic unwinds destroys its
-/// application values, each under containment (ADR-0281 §3): the pending
+/// application values, each under containment (ADR-0281 Â§3): the pending
 /// future is dropped once, its destructor's panic is contained, and the
 /// outer failure is the one that unwinds.
 fn a_runtime_dropped_inside_an_unwind_destroys_its_values() {
@@ -1906,7 +1906,7 @@ fn a_runtime_dropped_inside_an_unwind_destroys_its_values() {
 /// queued cross-thread signal write still holds a capture that fails too:
 /// the write's capture is destroyed by the drop itself, under containment,
 /// never left to the drop glue that runs inside the raised failure's unwind,
-/// so the first failure is the one raised (#1165, ADR-0281 §3).
+/// so the first failure is the one raised (#1165, ADR-0281 Â§3).
 fn a_queued_command_outliving_a_teardown_failure_does_not_abort() {
     let ui_runtime = UiRuntime::for_test();
     let id = ui_runtime.presentation_id();
@@ -1972,7 +1972,7 @@ impl flui_foundation::observe::TreeObserver for DetachCounter {
 }
 
 /// A presentation closed while it holds a caught failure (ADR-0123) is
-/// destroyed under containment (ADR-0281 §3): its owner drops, the observer is
+/// destroyed under containment (ADR-0281 Â§3): its owner drops, the observer is
 /// told `detached()` once and released, and the held failure is the one that
 /// resumes.
 fn a_close_that_holds_a_failure_detaches_once() {

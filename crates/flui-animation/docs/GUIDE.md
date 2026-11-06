@@ -225,10 +225,10 @@ use flui_foundation::Listenable;
 
 // Value changes (the callback owns its own handle to the controller)
 let observed = controller.clone();
-let id = controller.add_listener(Rc::new(move || {
+let value_listening = controller.listen(Rc::new(move || {
     println!("value: {}", observed.value());
 }));
-controller.remove_listener(id);
+drop(value_listening);
 
 // Status changes
 let subscription = controller.subscribe_status(Rc::new(|status| {

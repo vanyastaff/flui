@@ -8,7 +8,6 @@ use std::{
     rc::Rc,
 };
 
-use flui_foundation::ListenerId;
 use flui_foundation::geometry::{Bounds, Offset, Point, Rect};
 use flui_foundation::notifier::Listenable;
 use flui_foundation::panic::FirstPanic;
@@ -824,12 +823,12 @@ pub struct EditableTextState {
     rebuild_notifier: flui_foundation::notifier::ChangeNotifier,
     /// ID for the focus-change listener we added to the [`FocusManager`], so
     /// dispose removes exactly ours.
-    focus_listener_id: Option<ListenerId>,
+    focus_listening: Option<flui_foundation::Subscription>,
     /// ID for the second `FocusManager` listener — attaches/detaches the IME
     /// client on this field's own focus transitions. Kept separate from
     /// `focus_listener_id` so the (already-tested) rebuild-on-focus-change
     /// listener is untouched by the IME wiring.
-    ime_focus_listener_id: Option<ListenerId>,
+    ime_focus_listening: Option<flui_foundation::Subscription>,
     /// Reusable focus-edge operation shared by the manager listener and live
     /// focus-node replacement reconciliation.
     ime_focus_transition: Option<ImeFocusTransition>,
@@ -955,8 +954,8 @@ impl StatefulView for EditableText {
             controller: Rc::new(RefCell::new(self.controller.clone())),
             controller_listener_id: None,
             rebuild_notifier: flui_foundation::notifier::ChangeNotifier::new(),
-            focus_listener_id: None,
-            ime_focus_listener_id: None,
+            focus_listening: None,
+            ime_focus_listening: None,
             ime_focus_transition: None,
             ime_handle: None,
             ime_token: Rc::new(RefCell::new(None)),
@@ -1811,21 +1810,19 @@ impl ViewState<EditableText> for EditableTextState {
         //    gains or loses focus. Removed by id in `dispose`.
         let rebuild_notifier_for_focus = self.rebuild_notifier.clone();
         let focus_node_for_rebuild = Rc::clone(&self.observed_focus_node);
-        self.focus_listener_id = Some(self.manager().add_listener(Rc::new(
-            move |previous, current| {
-                let focus_node = focus_node_for_rebuild.borrow();
-                // Only rebuild when this node's focus state actually changed.
-                let was_focused = previous
-                    .as_ref()
-                    .is_some_and(|node| Rc::ptr_eq(node, &focus_node));
-                let now_focused = current
-                    .as_ref()
-                    .is_some_and(|node| Rc::ptr_eq(node, &focus_node));
-                if was_focused != now_focused {
-                    rebuild_notifier_for_focus.notify_listeners();
-                }
-            },
-        )));
+        self.focus_listening = Some(self.manager().listen(move |previous, current| {
+            let focus_node = focus_node_for_rebuild.borrow();
+            // Only rebuild when this node's focus state actually changed.
+            let was_focused = previous
+                .as_ref()
+                .is_some_and(|node| Rc::ptr_eq(node, &focus_node));
+            let now_focused = current
+                .as_ref()
+                .is_some_and(|node| Rc::ptr_eq(node, &focus_node));
+            if was_focused != now_focused {
+                rebuild_notifier_for_focus.notify_listeners();
+            }
+        }));
 
         // 5. Attach/detach the IME client on this field's own focus
         //    transitions, through the handle acquired in 1b.
@@ -1930,33 +1927,31 @@ impl ViewState<EditableText> for EditableTextState {
         let focus_node_for_ime = Rc::clone(&self.observed_focus_node);
         let handles_for_focus = Rc::downgrade(&self.touch_handles);
         let drag_for_focus = Rc::downgrade(&self.selection_drag);
-        self.ime_focus_listener_id = Some(self.manager().add_listener(Rc::new(
-            move |previous, current| {
-                let focus_node = focus_node_for_ime.borrow();
-                let was_focused = previous
-                    .as_ref()
-                    .is_some_and(|node| Rc::ptr_eq(node, &focus_node));
-                let now_focused = current
-                    .as_ref()
-                    .is_some_and(|node| Rc::ptr_eq(node, &focus_node));
-                drop(focus_node);
-                if was_focused == now_focused {
-                    return;
-                }
-                // The focus leaving takes a touch's handles and the contact
-                // still down, whose release would show them again; the input
-                // method still hears of it though that fails.
-                let mut failure = FirstPanic::new();
-                if !now_focused && let Some(drag) = drag_for_focus.upgrade() {
-                    drag.set(None);
-                }
-                if !now_focused && let Some(handles) = handles_for_focus.upgrade() {
-                    handles.abandon(&mut failure);
-                }
-                failure.contain(|| ime_focus_transition(now_focused));
-                failure.resume();
-            },
-        )));
+        self.ime_focus_listening = Some(self.manager().listen(move |previous, current| {
+            let focus_node = focus_node_for_ime.borrow();
+            let was_focused = previous
+                .as_ref()
+                .is_some_and(|node| Rc::ptr_eq(node, &focus_node));
+            let now_focused = current
+                .as_ref()
+                .is_some_and(|node| Rc::ptr_eq(node, &focus_node));
+            drop(focus_node);
+            if was_focused == now_focused {
+                return;
+            }
+            // The focus leaving takes a touch's handles and the contact
+            // still down, whose release would show them again; the input
+            // method still hears of it though that fails.
+            let mut failure = FirstPanic::new();
+            if !now_focused && let Some(drag) = drag_for_focus.upgrade() {
+                drag.set(None);
+            }
+            if !now_focused && let Some(handles) = handles_for_focus.upgrade() {
+                handles.abandon(&mut failure);
+            }
+            failure.contain(|| ime_focus_transition(now_focused));
+            failure.resume();
+        }));
 
         self.touch_handles.mount(HandleParts {
             pipeline: self.pipeline_owner.clone(),
@@ -2355,14 +2350,11 @@ impl ViewState<EditableText> for EditableTextState {
         }
         self.action_chain = None;
         self.enclosing_action_chain = None;
-        // Remove the focus-change listener we registered in init_state.
-        if let Some(id) = self.focus_listener_id.take() {
-            self.manager().remove_listener(id);
-        }
-        // Remove the IME focus-change listener we registered in init_state.
-        if let Some(id) = self.ime_focus_listener_id.take() {
-            self.manager().remove_listener(id);
-        }
+        // Withdraw the focus-change listener registered in init_state: the
+        // owned subscription detaches on its drop.
+        drop(self.focus_listening.take());
+        // Withdraw the IME focus-change listener registered in init_state.
+        drop(self.ime_focus_listening.take());
         self.ime_focus_transition = None;
 
         // Detach the IME client if this field still has one attached — the
