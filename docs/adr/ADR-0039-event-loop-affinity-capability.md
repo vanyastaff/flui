@@ -92,7 +92,7 @@ backend's state lock or mutate the window map mid-frame. Errors are typed and
 
 ### 2. What stays on `Platform`
 
-`run`, `capabilities`/`name`/`compositor_name`,
+`run`, `capabilities`/`name`,
 `app_path`, the `on_*` registrations (registration writes a `Send` callback;
 delivery is owner-thread by construction), `clipboard()` and `data_transfer()`
 (resolution is thread-safe; §5), and the shell dispatches

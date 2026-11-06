@@ -56,10 +56,6 @@ impl Services for Idle {
     ) -> Task<Result<Option<PathBuf>, PlatformError>> {
         Task::ready(Ok(None))
     }
-
-    fn compositor_name(&self) -> &'static str {
-        ""
-    }
 }
 
 struct WithoutStorage;

@@ -607,10 +607,6 @@ impl host::Services for HeadlessLoop {
         let _ = (directory, suggested_name);
         crate::Task::ready(Ok(None))
     }
-
-    fn compositor_name(&self) -> &'static str {
-        ""
-    }
 }
 
 /// What the headless backend implements unless a test says otherwise.
