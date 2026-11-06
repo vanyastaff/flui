@@ -267,18 +267,26 @@ Framework owners in higher layers use `cancel_with_recovery` when status cleanup
 belongs to an already-started retirement round. This preserves its first failure
 and opaque capture policy rather than starting independent cleanup.
 
-Controller withdrawal commits removal under its existing state borrow. During
-delivery, callback retirement joins its existing FIFO; outside delivery it runs
-after releasing the borrow. The guard neither owns a second channel nor keeps the
-controller owner alive. Scrollable activity and AnimatedSize completion callbacks
-retain the owning subscription beside their driven controller.
+Controller withdrawal commits removal through the channel: `take_callback`
+under its existing state borrow. During a delivery the withdrawn callback
+joins the controller's existing FIFO tail; outside delivery it retires through
+the inherited recovery after releasing the borrow. The guard neither owns a
+second channel nor keeps the controller owner alive. Scrollable activity and
+AnimatedSize completion callbacks retain the owning subscription beside their
+driven controller.
 
-Disposed controller and switch status admission returns an inert guard and
-retires rejected captures outside state borrows, using any established delivery
-failure. The controller refuses before minting an identity. A live exhausted
-counter refuses permanently after releasing the borrow; panic hooks can read
-the public source. `exhausted_status_identities_refuse_outside_the_state_borrow`
-pins hook reentry, permanent refusal and delivery to the last admitted callback.
+The controller's status ledger is the notification channel (`Notifier`
+through `flui-foundation`): a committed status snapshots the channel's
+membership tickets into the delivery FIFO, and the turn resolves them there,
+so a removal before its turn silences the entry. Disposed controller and
+switch status admission returns an inert guard and retires rejected captures
+outside state borrows, using any established delivery failure. Admission
+itself runs with the state borrow released, so a channel whose identities are
+exhausted refuses with its own typed panic while panic hooks can read the
+public source; that exhausted-mint contract is the channel's, pinned by the
+foundation's `IdMint` suite. A status whose turn is already queued is
+delivered only while the controller lives; a dispose between a commit and
+its turn silences it.
 
 Reverse, curved and tween subscriptions identify their shared `ParentLinks`
 owner, while proxy and switch subscriptions identify their respective owners.

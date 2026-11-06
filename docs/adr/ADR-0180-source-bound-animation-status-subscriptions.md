@@ -28,9 +28,11 @@ notification keeps the separate `Listenable` contract.
 
 A disposed controller or switch refuses status admission with an inert guard.
 Rejected captures retire outside state borrows and inherit any enclosing delivery
-failure. Refusal does not consume a controller registration identity. A live
-controller's exhausted counter refuses permanently; its panic occurs after
-releasing the state borrow, so panic hooks may query the public source.
+failure. Refusal consumes no controller registration identity: the controller's
+status ledger is the notification channel, so an exhausted counter refuses inside
+the channel, with the foundation `IdMint`'s typed, permanent refusal; the
+controller's own admission releases its state borrow before the channel mints,
+so the panic leaves the public source queryable through panic hooks.
 
 The guard holds a weak reference to the logical source owner, a copyable
 registration token and a removal function pointer. It cannot keep the animation
@@ -72,12 +74,12 @@ replacement and an actual switch hop. Its enclosing-cleanup row verifies that
 cancellation inherits an already established failure. Its capture-retirement
 row releases the last wrapper owner and reenters the parent; the detached tail
 must remain silent for reverse, curved, tween, proxy and switch sources.
-Disposed admission rows exercise capture reentry. The private counter-injection
-rows in `failure_modes_are_contained` and
-`exhausted_status_identities_refuse_outside_the_state_borrow` observe public
-subscription and delivery: closed admission stays inert at the terminal counter,
-live refusal stays permanent, panic-hook reads succeed, and the last accepted
-callback remains deliverable.
+Disposed admission rows exercise capture reentry and the status channel's
+disposed gate: a status committed before a dispose silences at its queued turn.
+Live-admission refusal through an exhausted channel identity is the foundation
+channel's own contract, pinned by the foundation `IdMint` suite; the
+controller-level rows pin capture retirement, delivery to the last admitted
+callback and source terminality without it.
 
 `thread_boundary_ui` rejects
 `status_removal_requires_owning_subscription`. Restoring the former manual
