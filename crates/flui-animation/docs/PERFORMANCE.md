@@ -654,7 +654,7 @@ let value = animation.value(); // dynamic dispatch into the curved layer
 
 Value and status listeners are `Rc<dyn Fn ...>` callbacks. Reusing one
 callback across several animations shares its `Rc` and captures, but
-notifier-backed `add_listener` still wraps each registration in a fresh `Rc`
+channel-backed `listen` still wraps each registration in a fresh `Rc`
 (plus any map growth), so each such registration costs at least one allocation.
 Fixed animations such as `ConstantAnimation` do not store callbacks or allocate
 registration wrappers:
@@ -669,8 +669,8 @@ use flui_foundation::{Listenable, ListenerCallback};
 
 // The captures are shared; each registration still allocates its own wrapper
 let callback: ListenerCallback = Rc::new(|| println!("changed"));
-controller.add_listener(Rc::clone(&callback));
-other.add_listener(callback);
+let _first = controller.listen(Rc::clone(&callback));
+let _second = other.listen(callback);
 # drop(controller);
 # drop(other);
 ```
