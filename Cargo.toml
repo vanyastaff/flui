@@ -191,7 +191,7 @@ js-sys = "0.3"
 keyboard-types = "0.8"
 
 # SYNCHRONIZATION - Used by multiple crates
-parking_lot = "0.12"
+parking_lot = "0.13"
 # No `once_cell`: std's `OnceLock`/`LazyLock` replace it, and deny.toml's
 # `[bans.std-replacements]` rejects a manifest that declares it.
 # Bounded typed mailboxes (private render-invalidation channel, UiRuntime
