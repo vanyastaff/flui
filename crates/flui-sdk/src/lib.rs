@@ -213,7 +213,7 @@ pub mod interaction {
     pub use flui_interaction::TransformLock;
     pub use flui_interaction::cancel_all;
     pub use flui_interaction::focus::FocusNode;
-    pub use flui_interaction::focus::FocusSubscription;
+    pub use flui_interaction::focus::FocusNodeChangeCallback;
     pub use flui_interaction::gesture::CompositionBranch;
     pub use flui_interaction::gesture::CompositionError;
     pub use flui_interaction::gesture::CompositionKind;

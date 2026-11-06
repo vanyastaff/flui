@@ -777,14 +777,14 @@ fn pull_owner(host: Rc<Host>) -> Rc<TextInputOwner> {
     TextInputOwner::new(TextInputBackend::Pull(host))
 }
 
-/// Type "かな" after "ab", leaving it composing.
+/// Type "ã‹ãª" after "ab", leaving it composing.
 fn composing_store() -> Rc<InMemoryTextStore> {
     let store = InMemoryTextStore::new("ab");
     store.set_commit_gate(CommitGate::new());
     let applied = project_ime_event(
         &*store,
         &ImeEvent::Preedit {
-            text: "かな".to_owned(),
+            text: "ã‹ãª".to_owned(),
             cursor: Some((0, 0)),
         },
     );
@@ -1099,7 +1099,7 @@ fn host_close_completion_whose_unwind_parks_a_failure() {
     );
 }
 
-/// A field composing "かな" whose completion is queued inside a frame, and
+/// A field composing "ã‹ãª" whose completion is queued inside a frame, and
 /// whose presentation closes before that frame's anchor: the host abandons
 /// the composition, and the close commits it in place before it retires the
 /// store, so the controller the field keeps holds no composing range.
@@ -1115,7 +1115,7 @@ fn host_close_before_the_anchor_commits_a_queued_completion() {
         project_ime_event(
             &*field,
             &ImeEvent::Preedit {
-                text: "かな".to_owned(),
+                text: "ã‹ãª".to_owned(),
                 cursor: Some((0, 0)),
             },
         ),
@@ -1139,11 +1139,11 @@ fn host_close_before_the_anchor_commits_a_queued_completion() {
         None,
         "the close committed the abandoned composition before retiring the store"
     );
-    assert_eq!(controller.text(), "かな", "the composed text stays");
+    assert_eq!(controller.text(), "ã‹ãª", "the composed text stays");
     drop(harness);
 }
 
-/// A field composing "かな", moved to a push presentation whose completion
+/// A field composing "ã‹ãª", moved to a push presentation whose completion
 /// is asked for inside a frame: the in-place commit is queued in the store
 /// behind the shut gate, beside a grant the platform queued before it.
 fn push_completion_queued_in_a_frame(
@@ -1166,7 +1166,7 @@ fn push_completion_queued_in_a_frame(
         project_ime_event(
             &*field,
             &ImeEvent::Preedit {
-                text: "かな".to_owned(),
+                text: "ã‹ãª".to_owned(),
                 cursor: Some((0, 0)),
             },
         ),
@@ -1209,7 +1209,7 @@ fn push_close_before_the_anchor_commits_a_queued_completion() {
         None,
         "the close committed the queued completion before retiring the store"
     );
-    assert_eq!(controller.text(), "かな", "the composed text stays");
+    assert_eq!(controller.text(), "ã‹ãª", "the composed text stays");
     assert_eq!(*log.borrow(), ["earlier grant"], "in the order accepted");
     drop(harness);
 }
@@ -1271,7 +1271,7 @@ fn completion_inside_a_failing_grant_then_closed(owner: &Rc<TextInputOwner>) {
         None,
         "the close ran the commit it accepted"
     );
-    assert_eq!(store.text(), "abかな", "the composed text stays");
+    assert_eq!(store.text(), "abã‹ãª", "the composed text stays");
     assert_eq!(
         edit(&*store, "z"),
         Ok(LockOutcome::Granted),
@@ -1318,7 +1318,7 @@ fn owner_dropped_with_two_completing_stores_whose_drops_panic() {
     the_owner_keeps_working(&self::owner());
 }
 
-/// A field whose preedit "かな" follows "ab", focused through `mount`, and
+/// A field whose preedit "ã‹ãª" follows "ab", focused through `mount`, and
 /// whose `on_changed` panics the first time it hears the committed text.
 fn composing_field(
     mount: fn(EditableText) -> Harness,
@@ -1343,11 +1343,11 @@ fn composing_field(
     harness.tick();
     preedit(&harness);
     assert!(controller.is_composing(), "the preedit is composing");
-    assert_eq!(controller.text(), "abかな");
+    assert_eq!(controller.text(), "abã‹ãª");
     (harness, controller, node, heard)
 }
 
-const PREEDIT: &str = "かな";
+const PREEDIT: &str = "ã‹ãª";
 
 /// Blur the field mid-preedit: its composition is committed before its
 /// client detaches (ADR-0142 item 4), the commit's `on_changed` panics, and
@@ -1369,8 +1369,8 @@ fn editable_blur_during_preedit(
         "the commit's failure is raised"
     );
     assert!(!controller.is_composing(), "the composition is committed");
-    assert_eq!(controller.text(), "abかな", "keeping its text");
-    assert_eq!(*heard.borrow(), ["abかな"], "the owner heard the commit");
+    assert_eq!(controller.text(), "abã‹ãª", "keeping its text");
+    assert_eq!(*heard.borrow(), ["abã‹ãª"], "the owner heard the commit");
     assert!(detached(&harness), "the client detached after the failure");
     assert_eq!(raised(|| harness.tick()), None, "nothing is reported twice");
 
@@ -1379,9 +1379,9 @@ fn editable_blur_during_preedit(
     preedit(&harness);
     node.unfocus();
     assert_eq!(raised(|| harness.tick()), None, "the next blur");
-    assert_eq!(controller.text(), "abかなかな");
+    assert_eq!(controller.text(), "abã‹ãªã‹ãª");
     assert!(!controller.is_composing(), "the next blur commits too");
-    assert_eq!(*heard.borrow(), ["abかな", "abかなかな"]);
+    assert_eq!(*heard.borrow(), ["abã‹ãª", "abã‹ãªã‹ãª"]);
 }
 
 fn editable_blur_during_preedit_pull() {
@@ -3033,7 +3033,7 @@ fn attach_whose_outgoing_commit_panics() {
         outgoing.composition().is_none(),
         "the outgoing composition is committed"
     );
-    assert_eq!(outgoing.text(), "abかな", "keeping its text");
+    assert_eq!(outgoing.text(), "abã‹ãª", "keeping its text");
     assert_eq!(
         raised(|| owner.dispatch(&ImeEvent::Commit("x".into()))).as_deref(),
         Some("outgoing commit failure"),
@@ -3754,9 +3754,9 @@ fn editable_update_whose_observer_and_focus_listener_panic() {
     field.set_observer(Some(Rc::new(FailsOnStatus)));
     let heard = Rc::new(Cell::new(false));
     let listener = Rc::clone(&heard);
-    let _listening = old.subscribe(Rc::new(move || {
+    let _listening = old.subscribe(move || {
         assert!(listener.replace(true), "focus listener failure");
-    }));
+    });
     let previous_elements = harness.elements_of_type(std::any::TypeId::of::<EditableText>());
     assert_eq!(previous_elements.len(), 1);
     // Recovery must report the observer's earlier failure rather than the

@@ -143,10 +143,10 @@ fn bench_focus_delivery(c: &mut Criterion) {
     ];
     let deliveries = Rc::new(Cell::new(0_usize));
     let calls = deliveries.clone();
-    let _listener = manager.add_listener(Rc::new(move |previous, current| {
+    let _listener = manager.listen(move |previous, current| {
         black_box((previous, current));
         calls.set(calls.get() + 1);
-    }));
+    });
     assert_eq!(nodes[0].request_focus(), FocusRequestOutcome::Focused);
     deliveries.set(0);
     assert_eq!(nodes[1].request_focus(), FocusRequestOutcome::Focused);

@@ -1,4 +1,4 @@
-//! Focus transitions and key delivery through the public focus API: notification
+﻿//! Focus transitions and key delivery through the public focus API: notification
 //! order, refused nested replacement, stale widget nodes, removal of the focused
 //! node, traversal units, the key ledger and input modality.
 
@@ -32,16 +32,16 @@ fn run_rows(rows: &[(&str, fn())]) {
 
 type Edges = Rc<RefCell<Vec<(Option<FocusNodeId>, Option<FocusNodeId>)>>>;
 
-fn record_edges(manager: &FocusManager) -> Edges {
+fn record_edges(manager: &FocusManager) -> (Edges, flui_foundation::Subscription) {
     let edges: Edges = Rc::default();
     let log = Rc::clone(&edges);
-    manager.add_listener(Rc::new(move |previous, current| {
+    let listening = manager.listen(move |previous, current| {
         log.borrow_mut().push((
             previous.map(|node| node.id()),
             current.map(|node| node.id()),
         ));
-    }));
-    edges
+    });
+    (edges, listening)
 }
 
 /// `count` nodes in one row below the root scope, left to right.
@@ -67,7 +67,7 @@ fn primary(manager: &FocusManager) -> Option<FocusNodeId> {
     manager.primary_focus().map(|node| node.id())
 }
 
-// ── Transitions ─────────────────────────────────────────────────────────
+// â”€â”€ Transitions â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 #[test]
 fn focus_transition_contracts() {
@@ -199,18 +199,18 @@ fn superseded_inner_first_focus_leaves_the_scope_restoration() {
 fn reentrant_request_during_notification_is_applied_after_and_published_in_order() {
     let (manager, nodes, _attachments) = manager_with_nodes(3);
     let _ = nodes[0].request_focus();
-    let edges = record_edges(&manager);
+    let (edges, _listening) = record_edges(&manager);
 
     let next = Rc::clone(&nodes[2]);
     let intermediate = Rc::downgrade(&nodes[1]);
-    let _subscription = nodes[1].subscribe(Rc::new(move || {
+    let _subscription = nodes[1].subscribe(move || {
         if intermediate
             .upgrade()
             .is_some_and(|node| node.has_primary_focus())
         {
             let _ = next.request_focus();
         }
-    }));
+    });
 
     let _ = nodes[1].request_focus();
 
@@ -229,7 +229,7 @@ fn reentrant_request_during_notification_is_applied_after_and_published_in_order
 fn nested_replacement_publishes_no_stale_edge() {
     let (manager, nodes, mut attachments) = manager_with_nodes(2);
     let _ = nodes[0].request_focus();
-    let edges = record_edges(&manager);
+    let (edges, _listening) = record_edges(&manager);
 
     let held = Rc::new(RefCell::new(Some(attachments.remove(1))));
     let replacement = FocusNode::with_debug_label("replacement");
@@ -239,7 +239,7 @@ fn nested_replacement_publishes_no_stale_edge() {
         Rc::clone(&replacement),
         Rc::clone(&outcome),
     );
-    manager.add_listener(Rc::new(move |_, current| {
+    let _focus_listening = manager.listen(move |_, current| {
         if current.is_some() && listener_outcome.borrow().is_none() {
             let result = listener_held
                 .borrow()
@@ -249,7 +249,7 @@ fn nested_replacement_publishes_no_stale_edge() {
                 .map(|_| ());
             *listener_outcome.borrow_mut() = Some(result);
         }
-    }));
+    });
 
     let _ = nodes[1].request_focus();
 
@@ -318,7 +318,7 @@ fn widget_node_let_go_answers_stale() {
 fn removal_publishes_one_edge_to_the_next_candidate() {
     let (manager, nodes, mut attachments) = manager_with_nodes(3);
     let _ = nodes[1].request_focus();
-    let edges = record_edges(&manager);
+    let (edges, _listening) = record_edges(&manager);
 
     let _ = attachments.remove(1).detach();
     assert!(edges.borrow().is_empty(), "removal publishes nothing");
@@ -354,7 +354,7 @@ fn removals_in_one_frame_keep_the_first_position() {
 fn removal_leaves_no_focus_only_without_candidates() {
     let (manager, nodes, mut attachments) = manager_with_nodes(1);
     let _ = nodes[0].request_focus();
-    let edges = record_edges(&manager);
+    let (edges, _listening) = record_edges(&manager);
     let _ = attachments.remove(0).detach();
     manager.settle_orphaned_focus();
     assert_eq!(primary(&manager), None);
@@ -374,7 +374,7 @@ fn removal_of_the_scope_focuses_the_enclosing_scope() {
     let inside = FocusNode::with_debug_label("inside");
     route.attach_node(&inside).expect("attach");
     let _ = inside.request_focus();
-    let edges = record_edges(&manager);
+    let (edges, _listening) = record_edges(&manager);
 
     let _ = route_attachment.detach();
     manager.settle_orphaned_focus();
@@ -403,7 +403,7 @@ fn removal_never_parks_focus_on_a_scope() {
 fn removed_node_put_back_keeps_the_focus() {
     let (manager, nodes, mut attachments) = manager_with_nodes(2);
     let _ = nodes[0].request_focus();
-    let edges = record_edges(&manager);
+    let (edges, _listening) = record_edges(&manager);
     let _ = attachments.remove(0).detach();
     let _back = manager.root_scope().attach_node(&nodes[0]).expect("attach");
     manager.settle_orphaned_focus();
@@ -414,7 +414,7 @@ fn removed_node_put_back_keeps_the_focus() {
 fn explicit_request_replaces_the_successor() {
     let (manager, nodes, mut attachments) = manager_with_nodes(3);
     let _ = nodes[1].request_focus();
-    let edges = record_edges(&manager);
+    let (edges, _listening) = record_edges(&manager);
     let _ = attachments.remove(1).detach();
     let _ = nodes[0].request_focus();
     manager.settle_orphaned_focus();
@@ -428,7 +428,7 @@ fn explicit_request_replaces_the_successor() {
 fn traversal_settles_the_removal_first() {
     let (manager, nodes, mut attachments) = manager_with_nodes(4);
     let _ = nodes[1].request_focus();
-    let edges = record_edges(&manager);
+    let (edges, _listening) = record_edges(&manager);
     let _ = attachments.remove(1).detach();
     assert!(manager.focus_next());
     assert_eq!(
@@ -460,7 +460,7 @@ fn removal_inside_a_unit_enters_the_unit() {
     assert!(rows[2].has_primary_focus());
 }
 
-// ── Traversal units ─────────────────────────────────────────────────────
+// â”€â”€ Traversal units â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 /// A list as one Tab stop: `before`, the list with three rows, `after`.
 struct ListFixture {
@@ -633,7 +633,7 @@ fn dropping_the_registration_ends_the_unit() {
     assert!(fixture.rows[0].has_primary_focus());
 }
 
-// ── Keys ────────────────────────────────────────────────────────────────
+// â”€â”€ Keys â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 fn key(state: KeyState, key: Key, code: Code) -> KeyEvent {
     KeyEvent::new(state, key, code, EventTime::from_nanos(0))
@@ -975,7 +975,7 @@ fn a_failing_cancellation_stays_the_first_failure() {
     let _ = manager.dispatch_key_event(&arrow(KeyState::Down));
     let _ = nodes[1].request_focus();
     manager.note_pointer_input();
-    let _subscription = nodes[1].subscribe(Rc::new(|| panic!("modality failure")));
+    let _subscription = nodes[1].subscribe(|| panic!("modality failure"));
     let failure = catch_unwind(AssertUnwindSafe(|| {
         manager.dispatch_key_event(&arrow(KeyState::Down))
     }))
@@ -1095,7 +1095,7 @@ fn a_key_down_no_release_follows_is_held_by_nobody() {
     let _ = nodes[0].request_focus();
     let node_keys = count_keys(&nodes[0]);
     let (cancelled, _registration) = record_cancels(&nodes[0]);
-    let stray = key(KeyState::Down, Key::character("é"), Code::Unidentified)
+    let stray = key(KeyState::Down, Key::character("Ã©"), Code::Unidentified)
         .with_release(KeyRelease::Never);
     assert!(manager.dispatch_key_event(&stray).is_handled());
     assert_eq!(node_keys.get(), 1, "the character reaches the focus");
@@ -1149,7 +1149,7 @@ fn an_orphan_release_is_reported_with_the_ledger_let_go() {
         }));
     });
     flui_testing::log_capture::disarm_interest_cache();
-    let release = key(KeyState::Up, Key::character("é"), Code::Unidentified);
+    let release = key(KeyState::Up, Key::character("Ã©"), Code::Unidentified);
     let result = tracing::subscriber::with_default(ReenteringWarning, || {
         catch_unwind(AssertUnwindSafe(|| manager.dispatch_key_event(&release)))
     });
@@ -1228,7 +1228,7 @@ fn modality_change_notifies_the_focused_node() {
     assert!(manager.focus_next());
     let notified = Rc::new(Cell::new(0));
     let seen = Rc::clone(&notified);
-    let _subscription = nodes[0].subscribe(Rc::new(move || seen.set(seen.get() + 1)));
+    let _subscription = nodes[0].subscribe(move || seen.set(seen.get() + 1));
     manager.note_pointer_input();
     manager.note_pointer_input();
     assert_eq!(notified.get(), 1, "only a change notifies");

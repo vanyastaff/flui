@@ -1,4 +1,4 @@
-//! [`TextField`] — the Material single-line text field: an
+﻿//! [`TextField`] â€” the Material single-line text field: an
 //! [`EditableText`] wrapped directly in an [`InputDecorator`], with live
 //! focus/enabled/error plumbing and a press target spanning the whole
 //! decorated area.
@@ -6,13 +6,13 @@
 //! The field composes a raw [`EditableText`] and [`InputDecorator`] inline,
 //! with no
 //! [`flui_sdk::widgets::RawTextField`](flui_sdk::widgets::text::text_field::RawTextField)
-//! in the middle — that type is this crate's theme-free sibling for a tree
+//! in the middle â€” that type is this crate's theme-free sibling for a tree
 //! with no `Theme` ancestor, named `RawTextField` (not `TextField`)
 //! specifically so this Material type gets to be the one thing named
 //! `TextField` throughout the facade; see that type's own module doc for
 //! the naming rationale.
 //!
-//! # Live plumbing — what's wired and how
+//! # Live plumbing â€” what's wired and how
 //!
 //! - **Focus**: the state owns its effective [`FocusNode`] (or retains the
 //!   caller-provided node), passes that exact node to [`EditableText`], and
@@ -25,45 +25,45 @@
 //! - **Hover**: the oracle owns `_isHovering` at the `TextField` level via
 //!   its own outer `MouseRegion` and threads it into
 //!   `InputDecorator.isHovering` (`text_field.dart:1463-1470,1773,1797-1800`).
-//!   This substrate does **not** duplicate that — `InputDecorator` already
+//!   This substrate does **not** duplicate that â€” `InputDecorator` already
 //!   self-tracks hover through its own internal `MouseRegion` wrapping the
 //!   entire decorated area (see `input_decorator.rs`'s module docs), and
 //!   that `MouseRegion` sits *inside* the tree this `TextField` composes.
 //!   Adding a second, outer `MouseRegion` here would double-track the same
-//!   pointer with two independent state machines for no behavioral gain —
+//!   pointer with two independent state machines for no behavioral gain â€”
 //!   named divergence: `TextField` delegates hover entirely to the
 //!   decorator it wraps.
-//! - **Error**: [`InputDecoration::error_text`] presence — already the
-//!   decorator's own state input — drives both the error row/underline (in
+//! - **Error**: [`InputDecoration::error_text`] presence â€” already the
+//!   decorator's own state input â€” drives both the error row/underline (in
 //!   `InputDecorator`) and this widget's caret color (see below). There is
 //!   no separate "has error" flag on `TextField` itself, matching the
 //!   oracle's `_hasError` being derived from the decoration, not a widget
 //!   field of its own (`text_field.dart:1196-1201`, narrowed here: the
-//!   oracle's `maxLength`-driven intrinsic error has no FLUI counterpart —
+//!   oracle's `maxLength`-driven intrinsic error has no FLUI counterpart â€”
 //!   `maxLength` is not ported).
 //! - **Enabled**: resolved exactly like the oracle's `_isEnabled`
 //!   (`widget.enabled ?? widget.decoration?.enabled ?? true`,
-//!   `text_field.dart:1183`), narrowed to two links —
+//!   `text_field.dart:1183`), narrowed to two links â€”
 //!   [`TextField::enabled`] is `Option<bool>`; `Some` wins outright,
 //!   `None` falls through to [`InputDecoration::enabled`] (which already
 //!   defaults `true`, covering the oracle's trailing `?? true`). The
 //!   resolved value is written into the effective decoration before it
 //!   reaches [`InputDecorator`] (mirroring `_getEffectiveDecoration()`'s
 //!   `.copyWith(enabled: _isEnabled)`, `text_field.dart:1206-1213`) and
-//!   passed straight to [`EditableText::enabled`] — both sinks always agree
+//!   passed straight to [`EditableText::enabled`] â€” both sinks always agree
 //!   because both are computed from the one resolved value, never read
 //!   from two different fields independently.
 //!
-//! # Controller identity — a swap retargets BOTH halves, or neither
+//! # Controller identity â€” a swap retargets BOTH halves, or neither
 //!
 //! `MaterialTextFieldState` (this widget) and `EditableTextState` (the
 //! interior) each hold their own view of the controller, and a parent that
 //! swaps in a different [`TextEditingController`] on an already-mounted
 //! `TextField` retargets both in the same `did_update_view` pass.
 //!
-//! Both, deliberately: retargeting one alone split-brains the composite —
+//! Both, deliberately: retargeting one alone split-brains the composite â€”
 //! this widget's `is_empty` tracking the new controller while `EditableText`
-//! keeps typing into the old one — which is worse than ignoring the swap.
+//! keeps typing into the old one â€” which is worse than ignoring the swap.
 //! That is why it WAS ignored at both layers, and why the fix had to land at
 //! both. The interior retargets everything that reaches a controller by
 //! writing one shared cell (`EditableTextState::controller`); this layer only
@@ -75,12 +75,12 @@
 //!
 //! Caret color: `colors.error` when [`InputDecoration::error_text`] is set,
 //! `colors.primary` otherwise (an error always wins over any caret color
-//! override). No `cursorColor`/`cursorErrorColor` override slot yet — named
+//! override). No `cursorColor`/`cursorErrorColor` override slot yet â€” named
 //! deferral.
 //!
-//! Text style: `theme.text_theme.body_large`, unconditionally — the M3 input
+//! Text style: `theme.text_theme.body_large`, unconditionally â€” the M3 input
 //! style. The per-state resolution table and the `TextField.style` override
-//! are both named deferrals — this substrate always renders `bodyLarge` verbatim.
+//! are both named deferrals â€” this substrate always renders `bodyLarge` verbatim.
 //!
 //! # Press-to-focus over the whole decorated area
 //!
@@ -101,20 +101,20 @@
 //! # DEFERRED (v1)
 //!
 //! Everything [`EditableText`] itself defers applies here too (multi-line,
-//! input formatters, overflow scrolling) — see its own module docs.
+//! input formatters, overflow scrolling) â€” see its own module docs.
 //! Additionally, narrowed at this layer:
-//! - **Per-field selection colors** — every field highlights with the
+//! - **Per-field selection colors** â€” every field highlights with the
 //!   `Theme`'s `selection`, which reaches it as the inherited
 //!   `DefaultSelectionStyle`; `TextField` exposes no override of its own.
-//! - **`cursorColor`/style overrides** — see the caret-color/text-style
+//! - **`cursorColor`/style overrides** â€” see the caret-color/text-style
 //!   sections above.
-//! - **Label/hint/helper/error as `Widget`** — `InputDecoration` is
+//! - **Label/hint/helper/error as `Widget`** â€” `InputDecoration` is
 //!   `String`-only V1 (see `input_decorator.rs`'s module docs).
 
 use std::rc::Rc;
 
 use flui_sdk::foundation::{Listenable, Subscription};
-use flui_sdk::interaction::{FocusNode, FocusSubscription};
+use flui_sdk::interaction::FocusNode;
 use flui_sdk::platform::TextInputPurpose;
 use flui_sdk::view::RebuildHandle;
 use flui_sdk::view::prelude::*;
@@ -127,7 +127,7 @@ use crate::theme::Theme;
 // TextField
 // ============================================================================
 
-/// The Material single-line text field — [`EditableText`] decorated by
+/// The Material single-line text field â€” [`EditableText`] decorated by
 /// [`InputDecorator`], with live focus/enabled/error plumbing. See the
 /// module docs for exactly what's wired and what's deferred.
 #[derive(Clone)]
@@ -138,18 +138,18 @@ pub struct TextField {
     enabled: Option<bool>,
     /// Forwarded to [`EditableText::autofocus`].
     autofocus: bool,
-    /// Forwarded to [`EditableText::obscure_text`] — a password field.
+    /// Forwarded to [`EditableText::obscure_text`] â€” a password field.
     obscure_text: bool,
     /// Forwarded to [`EditableText::input_purpose`].
     input_purpose: TextInputPurpose,
-    /// Forwarded to [`EditableText::required`] — see [`Self::required`].
+    /// Forwarded to [`EditableText::required`] â€” see [`Self::required`].
     required: bool,
-    /// Forwarded to [`EditableText::identifier`] — see [`Self::identifier`].
+    /// Forwarded to [`EditableText::identifier`] â€” see [`Self::identifier`].
     identifier: Option<std::sync::Arc<str>>,
-    /// Forwarded to [`EditableText::on_submitted`] — see
+    /// Forwarded to [`EditableText::on_submitted`] â€” see
     /// [`Self::on_submitted`].
     on_submitted: Option<SubmitCallback>,
-    /// Forwarded to [`EditableText::on_changed`] — see [`Self::on_changed`].
+    /// Forwarded to [`EditableText::on_changed`] â€” see [`Self::on_changed`].
     on_changed: Option<TextChanged>,
 }
 
@@ -187,7 +187,7 @@ impl std::fmt::Debug for TextField {
 }
 
 impl TextField {
-    /// Show every character as a bullet — a password field (default
+    /// Show every character as a bullet â€” a password field (default
     /// `false`). Not only pixels: the substitution is upstream of the render
     /// object, so its diagnostics carry the mask too.
     ///
@@ -197,7 +197,7 @@ impl TextField {
     /// it.
     ///
     /// Deliberately narrow: there is no `obscuringCharacter` override, and no
-    /// `!obscureText || maxLines == 1` invariant to check — this field is
+    /// `!obscureText || maxLines == 1` invariant to check â€” this field is
     /// single-line by construction. The character override is available one
     /// layer down on `EditableText` until a caller needs it here.
     #[must_use]
@@ -233,9 +233,9 @@ impl TextField {
     }
 
     /// Create a `TextField` driven by `controller`, with no decoration
-    /// (label/hint/helper/error all unset — see [`InputDecoration::default`])
+    /// (label/hint/helper/error all unset â€” see [`InputDecoration::default`])
     /// and no `enabled` override (falls through to
-    /// [`InputDecoration::enabled`]'s own `true` default — see
+    /// [`InputDecoration::enabled`]'s own `true` default â€” see
     /// [`Self::enabled`]).
     #[must_use]
     pub fn new(controller: TextEditingController) -> Self {
@@ -262,9 +262,9 @@ impl TextField {
         self
     }
 
-    /// Set the field's decoration — label, hint, helper/error text, and
+    /// Set the field's decoration â€” label, hint, helper/error text, and
     /// fill. `decoration.enabled` is respected as-is unless [`Self::enabled`]
-    /// is *also* called — see the module docs' "Enabled" section for the
+    /// is *also* called â€” see the module docs' "Enabled" section for the
     /// resolution order.
     #[must_use]
     pub fn decoration(mut self, decoration: InputDecoration) -> Self {
@@ -273,7 +273,7 @@ impl TextField {
     }
 
     /// Override whether the field accepts focus and input, beating whatever
-    /// [`InputDecoration::enabled`] the decoration carries — see the module
+    /// [`InputDecoration::enabled`] the decoration carries â€” see the module
     /// docs' "Enabled" section for the full resolution chain. Absent this
     /// call, [`InputDecoration::enabled`] decides.
     #[must_use]
@@ -291,7 +291,7 @@ impl TextField {
     }
 
     /// Call `callback` with the field's current text when Enter is pressed
-    /// while it has focus. Forwards to [`EditableText::on_submitted`] — see
+    /// while it has focus. Forwards to [`EditableText::on_submitted`] â€” see
     /// that method's doc for exactly when it fires and why it is Enter
     /// rather than an IME action-button commit. The callback receives the
     /// dispatch's `&mut EventCx<'_>` first (ADR-0086).
@@ -330,14 +330,14 @@ impl View for TextField {
     }
 }
 
-/// Persistent state behind [`TextField`] — owns the effective focus node and
+/// Persistent state behind [`TextField`] â€” owns the effective focus node and
 /// the live controller/focus listeners described in the module docs.
 pub struct MaterialTextFieldState {
     controller: TextEditingController,
     focus_node: Rc<FocusNode>,
     rebuild: Option<RebuildHandle>,
     controller_listener_id: Option<Subscription>,
-    focus_subscription: Option<FocusSubscription>,
+    focus_subscription: Option<Subscription>,
 }
 
 impl std::fmt::Debug for MaterialTextFieldState {
@@ -367,26 +367,26 @@ impl StatefulView for TextField {
 }
 
 impl MaterialTextFieldState {
-    fn subscribe_focus(&self, node: &Rc<FocusNode>) -> FocusSubscription {
+    fn subscribe_focus(&self, node: &Rc<FocusNode>) -> Subscription {
         let rebuild = self
             .rebuild
             .as_ref()
             .expect("BUG: MaterialTextFieldState must retain its rebuild handle")
             .clone();
-        node.subscribe(Rc::new(move || {
+        node.subscribe(move || {
             rebuild.schedule(flui_sdk::view::RebuildReason::StateChange);
-        }))
+        })
     }
 }
 
 impl ViewState<TextField> for MaterialTextFieldState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         // ADR-0018: `rebuild_handle()` is acquired here, fired later from
-        // the listeners below — never called from `build`.
+        // the listeners below â€” never called from `build`.
         let rebuild = ctx.rebuild_handle();
         self.rebuild = Some(rebuild.clone());
 
-        // Rebuild on every edit — `is_empty` (fed to `InputDecorator`) is
+        // Rebuild on every edit â€” `is_empty` (fed to `InputDecorator`) is
         // recomputed fresh in `build`, so a text change must trigger one.
         let rebuild_on_edit = rebuild;
         self.controller_listener_id = Some(self.controller.listen(std::rc::Rc::new(move || {
@@ -402,7 +402,7 @@ impl ViewState<TextField> for MaterialTextFieldState {
         // The controller half, mirroring `EditableTextState`'s: drop the
         // listener from the old, adopt the replacement, add it to the new.
         // This layer only tracks `is_empty` for the decoration's floating
-        // label, so retargeting is the listener plus the pinned clone —
+        // label, so retargeting is the listener plus the pinned clone â€”
         // the interior does the rest, and does it through a shared cell.
         if !self.controller.is_same_controller(&new_view.controller) {
             // The subscription withdraws through its own channel.
@@ -464,7 +464,7 @@ impl ViewState<TextField> for MaterialTextFieldState {
 
         // `self.controller`, which `did_update_view` keeps pointed at the
         // current one. Reading `view.controller` directly here would be
-        // correct too, now that both halves retarget — but it would take the
+        // correct too, now that both halves retarget â€” but it would take the
         // listener registration out of step with the value this reads, and
         // one place deciding "which controller is mine" is what keeps the
         // two halves from disagreeing (see the module docs).

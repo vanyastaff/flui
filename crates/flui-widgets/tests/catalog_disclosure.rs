@@ -424,11 +424,11 @@ pub(crate) fn disclosure_focus_reentry_cannot_activate_after_focus_manager_close
     );
     let manager = app.focus_manager();
     let closing = Rc::clone(&manager);
-    manager.add_listener(Rc::new(move |_old, next| {
+    let _listening = manager.listen(move |_old, next| {
         if next.is_some() {
             closing.close();
         }
-    }));
+    });
     app.dispatch_pointer_down(20.0, 10.0);
     app.dispatch_pointer_up(20.0, 10.0);
     assert!(

@@ -147,7 +147,7 @@ fn bounded_focus_reentry_publishes_in_order_and_recovers() {
     let enabled = Rc::clone(&bouncing);
     let targets = nodes.each_ref().map(Rc::downgrade);
     let first_id = targets[0].upgrade().expect("attached node").id();
-    let listener = manager.add_listener(Rc::new(move |_, current| {
+    let listener = manager.listen(move |_, current: Option<Rc<FocusNode>>| {
         let current = current.expect("fixture always requests a node");
         observed.borrow_mut().push(current.id());
         // A fixture ceiling keeps a missing framework budget from hanging
@@ -163,7 +163,7 @@ fn bounded_focus_reentry_publishes_in_order_and_recovers() {
                 "reentrant request waits for publication"
             );
         }
-    }));
+    });
     let _ = nodes[0].request_focus();
     assert!(
         (2..128).contains(&edges.borrow().len()),
@@ -192,7 +192,7 @@ fn bounded_focus_reentry_publishes_in_order_and_recovers() {
         "the next outer call has no stale tail"
     );
     assert!(nodes[next].has_primary_focus());
-    manager.remove_listener(listener);
+    listener.detach();
     drop(attachments);
 }
 
@@ -254,21 +254,21 @@ fn commit_diagnostics_preserve_focus_round_and_queued_requests() {
         let first_probe = Rc::downgrade(&first);
         let fail = Rc::new(Cell::new(observer_fails));
         let callback_fail = Rc::clone(&fail);
-        let subscription = first.subscribe(Rc::new(move || {
+        let subscription = first.subscribe(move || {
             let focused = first_probe.upgrade().expect("first").has_primary_focus();
             callback_log.borrow_mut().push(("node", focused));
             assert!(
                 !(focused && callback_fail.get()),
                 "focus observer second failure"
             );
-        }));
+        });
         let manager_log = Rc::clone(&log);
         let first_id = first.id();
-        manager.add_listener(Rc::new(move |_, new| {
+        let _manager_listening = manager.listen(move |_, new| {
             manager_log
                 .borrow_mut()
                 .push(("manager", new.is_some_and(|node| node.id() == first_id)));
-        }));
+        });
         let next_probe = Rc::downgrade(&next);
         COMMIT_DIAGNOSTIC.with(|slot| {
             *slot.borrow_mut() = Some((
@@ -676,9 +676,9 @@ fn subscription_withdrawal_preserves_independent_listeners() {
     let _attachment = manager.root_scope().attach_node(&node).expect("attach");
     let calls = Rc::new(RefCell::new(Vec::new()));
     let first_calls = Rc::clone(&calls);
-    let first = node.subscribe(Rc::new(move || first_calls.borrow_mut().push("first")));
+    let first = node.subscribe(move || first_calls.borrow_mut().push("first"));
     let second_calls = Rc::clone(&calls);
-    let second = node.subscribe(Rc::new(move || second_calls.borrow_mut().push("second")));
+    let second = node.subscribe(move || second_calls.borrow_mut().push("second"));
     let _ = node.request_focus();
     assert_eq!(*calls.borrow(), ["first", "second"]);
     calls.borrow_mut().clear();
@@ -693,9 +693,9 @@ fn subscription_withdrawal_preserves_independent_listeners() {
     let detached = FocusNode::new();
     let owner = Rc::downgrade(&detached);
     let (captured, capture_owner) = capture();
-    let subscription = detached.subscribe(Rc::new(move || {
+    let subscription = detached.subscribe(move || {
         let _ = &captured;
-    }));
+    });
     drop(detached);
     assert!(owner.upgrade().is_none());
     assert!(capture_owner.upgrade().is_none());
@@ -706,14 +706,14 @@ fn subscription_retirement_can_reenter_the_same_node() {
     struct SubscribeOnDrop {
         node: Weak<FocusNode>,
         calls: Rc<Cell<usize>>,
-        replacement: Rc<RefCell<Option<flui_interaction::FocusSubscription>>>,
+        replacement: Rc<RefCell<Option<flui_foundation::Subscription>>>,
     }
     impl Drop for SubscribeOnDrop {
         fn drop(&mut self) {
             let node = self.node.upgrade().expect("caller retains node");
             let calls = Rc::clone(&self.calls);
             *self.replacement.borrow_mut() =
-                Some(node.subscribe(Rc::new(move || calls.set(calls.get() + 1))));
+                Some(node.subscribe(move || calls.set(calls.get() + 1)));
         }
     }
     let manager = FocusManager::new();
@@ -726,9 +726,9 @@ fn subscription_retirement_can_reenter_the_same_node() {
         calls: Rc::clone(&calls),
         replacement: Rc::clone(&replacement),
     };
-    let subscription = node.subscribe(Rc::new(move || {
+    let subscription = node.subscribe(move || {
         let _ = &captured;
-    }));
+    });
     drop(subscription);
     let _ = node.request_focus();
     assert_eq!(calls.get(), 1);
@@ -738,7 +738,7 @@ fn subscription_retirement_can_reenter_the_same_node() {
     assert_eq!(calls.get(), 1);
 }
 
-fn subscription_failure_preserves_unwind_and_allows_recovery() {
+fn subscription_withdrawal_propagates_the_capture_failure_and_recovers() {
     struct FailingCapture(Rc<Cell<usize>>);
     impl Drop for FailingCapture {
         fn drop(&mut self) {
@@ -746,40 +746,38 @@ fn subscription_failure_preserves_unwind_and_allows_recovery() {
             panic!("subscription capture");
         }
     }
-    for already_unwinding in [false, true] {
-        let manager = FocusManager::new();
-        let node = FocusNode::new();
-        let _attachment = manager.root_scope().attach_node(&node).expect("attach");
-        let drops = Rc::new(Cell::new(0));
-        let captured = FailingCapture(Rc::clone(&drops));
-        let subscription = node.subscribe(Rc::new(move || {
-            let _ = &captured;
-        }));
-        let failure = catch_unwind(AssertUnwindSafe(|| {
-            let subscription = subscription;
-            assert!(!already_unwinding, "earlier failure");
-            drop(subscription);
-        }))
-        .expect_err("failure propagates");
-        assert_eq!(
-            flui_foundation::panic::payload_text(failure.as_ref()),
-            Some(if already_unwinding {
-                "earlier failure"
-            } else {
-                "subscription capture"
-            })
-        );
-        flui_foundation::panic::discard_payload(failure);
-        assert_eq!(drops.get(), 1, "the subscription capture is destroyed once");
-        let calls = Rc::new(Cell::new(0));
-        let observed = Rc::clone(&calls);
-        let healthy = node.subscribe(Rc::new(move || observed.set(observed.get() + 1)));
-        let _ = node.request_focus();
-        assert_eq!(calls.get(), 1);
-        drop(healthy);
-        manager.unfocus();
-        assert_eq!(calls.get(), 1);
-    }
+    let manager = FocusManager::new();
+    let node = FocusNode::new();
+    let _attachment = manager.root_scope().attach_node(&node).expect("attach");
+    let drops = Rc::new(Cell::new(0));
+    let captured = FailingCapture(Rc::clone(&drops));
+    let subscription = node.subscribe(move || {
+        let _ = &captured;
+    });
+    // The withdrawal is an ordinary exit: the capture's destructor panic
+    // propagates outward from the subscription's own drop and the owner's
+    // catch keeps it. A second panic raises while the thread is already
+    // unwinding — destructor panics during an unwind abort, and FLUI makes
+    // no defence against them (ADR-0281) — so a withdrawal made inside an
+    // unwind is not observable here and is not pinned.
+    let failure = catch_unwind(AssertUnwindSafe(|| {
+        drop(subscription);
+    }))
+    .expect_err("the withdrawal propagates its capture destructor's failure");
+    assert_eq!(
+        flui_foundation::panic::payload_text(failure.as_ref()),
+        Some("subscription capture")
+    );
+    flui_foundation::panic::discard_payload(failure);
+    assert_eq!(drops.get(), 1, "the subscription capture is destroyed once");
+    let calls = Rc::new(Cell::new(0));
+    let observed = Rc::clone(&calls);
+    let healthy = node.subscribe(move || observed.set(observed.get() + 1));
+    let _ = node.request_focus();
+    assert_eq!(calls.get(), 1);
+    drop(healthy);
+    manager.unfocus();
+    assert_eq!(calls.get(), 1);
 }
 
 fn key_dispatch_preserves_propagation_outcomes() {
@@ -840,11 +838,11 @@ fn focus_listener_capture_dies_with_its_manager() {
     let manager = FocusManager::new();
     let node = FocusNode::with_debug_label("focused");
     let attachment = manager.root_scope().attach_node(&node).expect("attach");
-    manager.add_listener(Rc::new(move |_, new| {
+    let _listening = manager.listen(move |_, new| {
         let _ = &capture;
         // Only the gain fails; teardown's focus loss is healthy.
         assert!(new.is_none(), "focus listener");
-    }));
+    });
     expect_failure(|| {
         let _ = node.request_focus();
     });
@@ -1039,21 +1037,22 @@ fn assert_focus_notification_recovery(node_panics: bool, manager_panics: usize) 
         let log = Rc::clone(&log);
         let fail = Rc::clone(&fail);
         let node_probe = Rc::downgrade(&node);
-        subscriptions.push(node.subscribe(Rc::new(move || {
+        subscriptions.push(node.subscribe(move || {
             let focused = node_probe.upgrade().expect("live node").has_primary_focus();
             log.borrow_mut().push((label, focused));
             if panics && fail.get() {
                 std::panic::panic_any("first node failure");
             }
-        })));
+        }));
     }
+    let mut manager_subscriptions = Vec::new();
     for (index, label) in ["manager first", "manager second", "manager later"]
         .into_iter()
         .enumerate()
     {
         let log = Rc::clone(&log);
         let fail = Rc::clone(&fail);
-        manager.add_listener(Rc::new(move |_, new| {
+        manager_subscriptions.push(manager.listen(move |_, new| {
             log.borrow_mut().push((label, new.is_some()));
             if index < manager_panics && fail.get() {
                 std::panic::panic_any(if index == 0 {
@@ -1106,6 +1105,7 @@ fn assert_focus_notification_recovery(node_panics: bool, manager_panics: usize) 
         "the next focus transition publishes normally after containment"
     );
     drop(subscriptions);
+    drop(manager_subscriptions);
     drop(attachment);
 }
 
@@ -1118,7 +1118,7 @@ fn reentrant_listener_replacement_survives_a_failed_notification() {
     let node_probe = Rc::downgrade(&node);
     let callback_log = Rc::clone(&log);
     let callback_subscription = Rc::clone(&subscription);
-    let guard = node.subscribe(Rc::new(move || {
+    let guard = node.subscribe(move || {
         callback_log.borrow_mut().push("reentrant");
         let node = node_probe.upgrade().expect("live node");
         let previous = callback_subscription
@@ -1128,15 +1128,14 @@ fn reentrant_listener_replacement_survives_a_failed_notification() {
         drop(previous);
         let late_log = Rc::clone(&callback_log);
         *callback_subscription.borrow_mut() =
-            Some(node.subscribe(Rc::new(move || late_log.borrow_mut().push("late"))));
+            Some(node.subscribe(move || late_log.borrow_mut().push("late")));
         std::panic::panic_any("reentrant listener failure");
-    }));
+    });
     *subscription.borrow_mut() = Some(guard);
     let stable_log = Rc::clone(&log);
-    let _stable_subscription =
-        node.subscribe(Rc::new(move || stable_log.borrow_mut().push("stable")));
+    let _stable_subscription = node.subscribe(move || stable_log.borrow_mut().push("stable"));
     let edge_log = Rc::clone(&log);
-    manager.add_listener(Rc::new(move |_, _| edge_log.borrow_mut().push("manager")));
+    let _edges_listening = manager.listen(move |_, _| edge_log.borrow_mut().push("manager"));
 
     let payload =
         catch_unwind(AssertUnwindSafe(|| node.request_focus())).expect_err("listener failed");
@@ -1198,17 +1197,17 @@ fn assert_nested_close_preserves_observer_failure(panicking_retirement: bool) {
         panics: panicking_retirement,
     }))
     .relinquish();
-    manager.add_listener(Rc::new(move |_, new| {
+    let _earlier_listening = manager.listen(move |_, new| {
         if new.is_some() {
             std::panic::panic_any("earlier observer failure");
         }
-    }));
+    });
     let manager_probe = Rc::downgrade(&manager);
-    manager.add_listener(Rc::new(move |_, new| {
+    let _closing_listening = manager.listen(move |_, new| {
         if new.is_some() {
             manager_probe.upgrade().expect("live manager").close();
         }
-    }));
+    });
     let payload = catch_unwind(AssertUnwindSafe(|| node.request_focus()))
         .expect_err("earlier observer failure propagates");
     assert_eq!(
@@ -1287,7 +1286,7 @@ fn assert_queued_diagnostic_recovery(earlier_failure: bool) {
     let queued_owner = RefCell::new(Some((queued, queued_attachment)));
     let last_probe = Rc::downgrade(&last);
     let first_id = first.id();
-    manager.add_listener(Rc::new(move |_, new| {
+    let _stale_listening = manager.listen(move |_, new| {
         if new.as_ref().is_none_or(|node| node.id() != first_id) {
             return;
         }
@@ -1300,15 +1299,15 @@ fn assert_queued_diagnostic_recovery(earlier_failure: bool) {
         if earlier_failure {
             std::panic::panic_any("earlier observer failure");
         }
-    }));
+    });
     let log = Rc::new(RefCell::new(Vec::new()));
     let edge_log = Rc::clone(&log);
-    manager.add_listener(Rc::new(move |previous, new| {
+    let _edges_listening = manager.listen(move |previous, new| {
         edge_log.borrow_mut().push((
             previous.as_ref().map(|node| node.id()),
             new.as_ref().map(|node| node.id()),
         ));
-    }));
+    });
     flui_testing::log_capture::disarm_interest_cache();
     let payload = tracing::subscriber::with_default(StaleFocusDiagnosticPanic, || {
         catch_unwind(AssertUnwindSafe(|| first.request_focus()))
@@ -1381,7 +1380,7 @@ fn assert_queued_retirement_recovery(earlier_failure: bool) {
     let queued_owner = RefCell::new(Some((queued, queued_attachment)));
     let last_probe = Rc::downgrade(&last);
     let first_id = first.id();
-    manager.add_listener(Rc::new(move |_, new| {
+    let _stale_listening = manager.listen(move |_, new| {
         if new.as_ref().is_none_or(|node| node.id() != first_id) {
             return;
         }
@@ -1398,15 +1397,15 @@ fn assert_queued_retirement_recovery(earlier_failure: bool) {
         if earlier_failure {
             std::panic::panic_any("earlier observer failure");
         }
-    }));
+    });
     let log = Rc::new(RefCell::new(Vec::new()));
     let edge_log = Rc::clone(&log);
-    manager.add_listener(Rc::new(move |previous, new| {
+    let _edges_listening = manager.listen(move |previous, new| {
         edge_log.borrow_mut().push((
             previous.as_ref().map(|node| node.id()),
             new.as_ref().map(|node| node.id()),
         ));
-    }));
+    });
     let payload = catch_unwind(AssertUnwindSafe(|| first.request_focus()))
         .expect_err("first failure propagates after queued retirement");
     assert_eq!(
@@ -1483,9 +1482,12 @@ fn assert_queued_focus_recovery(from_node: bool, competing: bool) {
         std::panic::panic_any("first queued focus failure");
     });
     let first_id = nodes[0].id();
-    let _node_subscription = if from_node {
+    // The subscription lives past this `if` — a `let _listening = …` inside a
+    // block drops it at the block's end and detaches, while the id-form it
+    // replaces registered for the owner's lifetime.
+    let _queued_subscription = if from_node {
         let first_probe = Rc::downgrade(&nodes[0]);
-        Some(nodes[0].subscribe(Rc::new(move || {
+        Some(nodes[0].subscribe(move || {
             if first_probe
                 .upgrade()
                 .expect("live first")
@@ -1493,33 +1495,32 @@ fn assert_queued_focus_recovery(from_node: bool, competing: bool) {
             {
                 queue_then_fail();
             }
-        })))
+        }))
     } else {
-        manager.add_listener(Rc::new(move |_, new| {
+        Some(manager.listen(move |_, new| {
             if new.as_ref().is_some_and(|node| node.id() == first_id) {
                 queue_then_fail();
             }
-        }));
-        None
+        }))
     };
     let second_id = nodes[1].id();
     let later_failure = Rc::clone(&fail);
-    manager.add_listener(Rc::new(move |_, new| {
+    let _competing_listening = manager.listen(move |_, new| {
         if competing
             && later_failure.get()
             && new.as_ref().is_some_and(|node| node.id() == second_id)
         {
             std::panic::panic_any("second queued focus failure");
         }
-    }));
+    });
     let log = Rc::new(RefCell::new(Vec::new()));
     let edge_log = Rc::clone(&log);
-    manager.add_listener(Rc::new(move |previous, new| {
+    let _edges_listening = manager.listen(move |previous, new| {
         edge_log.borrow_mut().push((
             previous.as_ref().map(|node| node.id()),
             new.as_ref().map(|node| node.id()),
         ));
-    }));
+    });
     let payload = catch_unwind(AssertUnwindSafe(|| nodes[0].request_focus()))
         .expect_err("first listener failure propagates after delivery");
     assert_eq!(
@@ -1593,8 +1594,8 @@ fn caught_callback_failures_leave_captures_with_their_owner() {
             subscription_retirement_can_reenter_the_same_node,
         ),
         (
-            "subscription failure preservation and recovery",
-            subscription_failure_preserves_unwind_and_allows_recovery,
+            "subscription withdrawal failure and recovery",
+            subscription_withdrawal_propagates_the_capture_failure_and_recovers,
         ),
         (
             "key dispatch propagation outcomes",
@@ -1698,7 +1699,10 @@ struct DropRecorder(&'static str, Rc<RefCell<Vec<&'static str>>>);
 fn manager_listener_withdrawal_preserves_a_caught_failure() {
     let cases: &[(&str, fn())] = &[
         ("individual listener", remove_manager_listener_after_failure),
-        ("all listeners", clear_manager_listeners_after_failure),
+        (
+            "the second subscription",
+            drop_second_subscription_after_failure,
+        ),
         ("all global keys", clear_global_keys_after_failure),
     ];
     let mut failed = Vec::new();
@@ -1715,7 +1719,7 @@ fn remove_manager_listener_after_failure() {
     manager_withdrawal_after_failure(0);
 }
 
-fn clear_manager_listeners_after_failure() {
+fn drop_second_subscription_after_failure() {
     manager_withdrawal_after_failure(1);
 }
 
@@ -1739,19 +1743,26 @@ fn manager_withdrawal_after_failure(withdrawal: usize) {
         .attach_node(&node)
         .expect("attach node");
     let retired = Rc::new(Cell::new(0));
-    let later = Rc::new(Cell::new(None));
-    let first = manager.add_listener(Rc::new(|_, _| panic!("first observer")));
+    // The later listener the withdrawing rows dispose of; the row that drops
+    // the second subscription withdraws through its own detach.
+    let later: Rc<RefCell<Option<flui_foundation::Subscription>>> = Rc::new(RefCell::new(None));
+    let first = manager.listen(|_, _| panic!("first observer"));
     let owner = Rc::downgrade(&manager);
-    let later_id = Rc::clone(&later);
-    let second = manager.add_listener(Rc::new(move |_, _| {
+    let later_cell = Rc::clone(&later);
+    let second = manager.listen(move |_, _| {
         let manager = owner.upgrade().expect("live owner");
+        let later_cell = Rc::clone(&later_cell);
         match withdrawal {
-            0 => manager.remove_listener(later_id.get().expect("installed listener")),
-            1 => manager.clear_listeners(),
+            0 => later_cell
+                .borrow_mut()
+                .take()
+                .expect("installed listener")
+                .detach(),
+            1 => drop(later_cell.borrow_mut().take().expect("installed listener")),
             2 => manager.clear_global_key_handlers(),
             _ => unreachable!(),
         }
-    }));
+    });
     let hostile = HostileCapture(Rc::clone(&retired));
     if withdrawal == 2 {
         manager.add_global_key_handler(Rc::new(move |_| {
@@ -1759,10 +1770,11 @@ fn manager_withdrawal_after_failure(withdrawal: usize) {
             panic!("withdrawn key handler ran");
         }));
     } else {
-        later.set(Some(manager.add_listener(Rc::new(move |_, _| {
+        let listening = manager.listen(move |_, _| {
             let _ = &hostile;
             panic!("withdrawn listener ran");
-        }))));
+        });
+        later.borrow_mut().replace(listening);
     }
 
     let failure = catch_unwind(AssertUnwindSafe(|| node.request_focus()))
@@ -1773,8 +1785,8 @@ fn manager_withdrawal_after_failure(withdrawal: usize) {
         1,
         "withdrawal {withdrawal}: the hostile last owner is destroyed after the caught failure"
     );
-    manager.remove_listener(first);
-    manager.remove_listener(second);
+    first.detach();
+    second.detach();
     manager.unfocus();
     assert!(
         manager.primary_focus().is_none(),
@@ -2074,13 +2086,13 @@ fn scoped_keys_preserve_a_caught_observer_failure() {
         &manager,
         Rc::clone(&drops),
     ))));
-    let first = manager.add_listener(Rc::new(|_, _| panic!("first observer")));
+    let first = manager.listen(|_, _| panic!("first observer"));
     let withdrawn = Rc::clone(&token);
-    let second = manager.add_listener(Rc::new(move |_, _| {
+    let second = manager.listen(move |_, _| {
         let retired = withdrawn.borrow_mut().take();
         drop(retired);
         panic!("competing observer");
-    }));
+    });
     let failure = catch_unwind(AssertUnwindSafe(|| node.request_focus()))
         .expect_err("first observer propagates");
     assert_eq!(failure.downcast_ref::<&str>(), Some(&"first observer"));
@@ -2094,8 +2106,8 @@ fn scoped_keys_preserve_a_caught_observer_failure() {
         KeyEventResult::Handled,
         "the destroyed capture's destructor registered a healthy sibling"
     );
-    manager.remove_listener(first);
-    manager.remove_listener(second);
+    first.detach();
+    second.detach();
     manager.unfocus();
     let healthy = manager
         .register_global_key_handler(Rc::new(|_| KeyEventResult::Handled))
@@ -2182,14 +2194,14 @@ fn nested_key_dispatch_after_focus_failure(key_panics: bool) {
         }))
         .expect("live global handler");
     *token.borrow_mut() = Some(registration);
-    let first = manager.add_listener(Rc::new(|_, _| panic!("first focus observer")));
+    let first = manager.listen(|_, _| panic!("first focus observer"));
     let owner = Rc::downgrade(&manager);
-    let second = manager.add_listener(Rc::new(move |_, _| {
+    let second = manager.listen(move |_, _| {
         let _ = owner
             .upgrade()
             .expect("live owner")
             .dispatch_key_event(&key_event());
-    }));
+    });
     let failure = catch_unwind(AssertUnwindSafe(|| node.request_focus()))
         .expect_err("first focus failure propagates");
     assert_eq!(
@@ -2201,8 +2213,8 @@ fn nested_key_dispatch_after_focus_failure(key_panics: bool) {
         1,
         "the nested key snapshot is destroyed after the caught focus failure"
     );
-    manager.remove_listener(first);
-    manager.remove_listener(second);
+    first.detach();
+    second.detach();
     manager.unfocus();
     assert_eq!(
         manager.dispatch_key_event(&key_event()),
@@ -2253,9 +2265,9 @@ fn healthy_close_retires_children_before_their_parent() {
     }
     // Within one node: key handler, then listeners, then context.
     let recorder = DropRecorder("nested listener", Rc::clone(&log));
-    let _subscription = nested.subscribe(Rc::new(move || {
+    let _subscription = nested.subscribe(move || {
         let _ = &recorder;
-    }));
+    });
     let recorder = DropRecorder("nested key handler", Rc::clone(&log));
     nested.set_on_key_event(Rc::new(move |_| {
         let _ = &recorder;

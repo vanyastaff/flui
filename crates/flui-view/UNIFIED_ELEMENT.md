@@ -63,13 +63,13 @@ Successfully unified all 6 element types (StatelessElement, ProxyElement, Statef
 #### AnimatedBehavior<V>
 - **Type**: Composes StatefulBehavior<V>
   - `stateful: StatefulBehavior<V>` - Embedded state management
-  - `listener_id: Option<ListenerId>` - Listenable subscription tracking
+  - `listening: Option<Subscription>` - Owned Listenable subscription
 - **Logic**: Automatically subscribes to Listenable (Animation), marks dirty on changes
 - **Arity**: Single (exactly one child, inherited from StatefulView)
 - **Lifecycle**:
-  - `on_mount()`: Subscribe to animation.add_listener() with mark_dirty callback
-  - `on_unmount()`: Unsubscribe via animation.remove_listener()
-  - `on_update()`: Resubscribe to new listenable
+  - `on_mount()`: Subscribe through `Listenable::listen` with a mark_dirty callback
+  - `on_unmount()`: drop the subscription (it withdraws through its channel)
+  - `on_update()`: drop and resubscribe to the new listenable
 - **Benefits**: Eliminates ~20 lines of listener boilerplate per animated widget
 
 ## Type Aliases

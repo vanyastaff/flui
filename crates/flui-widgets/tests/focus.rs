@@ -279,7 +279,7 @@ pub(crate) fn widget_scope_edge_configuration_reaches_the_tab_path() {
     }
 }
 
-/// A root that can drop the focus subtree without changing its own type —
+/// A root that can drop the focus subtree without changing its own type â€”
 /// `swap_root` dispatches by `TypeId`.
 #[derive(Clone)]
 struct Host {
@@ -320,7 +320,7 @@ impl StatelessView for Host {
 ///
 /// Also covers autofocus on mount.
 ///
-/// Red-check: make `enclosing_scope` always answer the root scope — the
+/// Red-check: make `enclosing_scope` always answer the root scope â€” the
 /// node parents to the root and the first assertion fails.
 pub(crate) fn a_focus_widget_attaches_under_the_nearest_scope_and_unmount_releases() {
     let scope = FocusScopeNode::with_debug_label("host-scope");
@@ -455,9 +455,9 @@ fn focus_after_rebuild(
     }
     let edges = Rc::new(std::cell::RefCell::new(Vec::new()));
     let seen = Rc::clone(&edges);
-    let _listener = manager.add_listener(Rc::new(move |old, new| {
+    let _listener = manager.listen(move |old, new| {
         seen.borrow_mut().push((label(old), label(new)));
-    }));
+    });
     harness.swap_root(Fields(after.to_vec()));
     let edges = edges.borrow().clone();
     (label(manager.primary_focus()), edges)
@@ -572,9 +572,9 @@ pub(crate) fn the_successor_rebuilds_in_the_frame_that_moved_focus() {
     assert_eq!(label(manager.primary_focus()).as_deref(), Some("a"));
     let edges = Rc::new(std::cell::RefCell::new(Vec::new()));
     let seen = Rc::clone(&edges);
-    let _listener = manager.add_listener(Rc::new(move |old, new| {
+    let _listener = manager.listen(move |old, new| {
         seen.borrow_mut().push((label(old), label(new)));
-    }));
+    });
     let pair = |old: &str, new: &str| (Some(old.to_owned()), Some(new.to_owned()));
 
     show_a.set(false);
@@ -601,7 +601,7 @@ pub(crate) fn the_successor_rebuilds_in_the_frame_that_moved_focus() {
 // Traversal order
 // ------------------------------------------------------------------------
 
-/// Widget-mounted nodes traverse in **reading order**, not attach order —
+/// Widget-mounted nodes traverse in **reading order**, not attach order â€”
 /// the ADR-0026 traversal-geometry gap, closed: every `Focus` anchors
 /// its child and installs a rect provider, so `ReadingOrderPolicy` sorts
 /// real committed geometry. The attach order (`a`, `b`, `c`) is chosen so
@@ -609,7 +609,7 @@ pub(crate) fn the_successor_rebuilds_in_the_frame_that_moved_focus() {
 /// from `a`, geometry says `c` next, attach order would say `b`.
 ///
 /// Red-check (the pre-fix behavior): skip `install_rect_provider` in
-/// `init_state` — every rect reads zero, the sort degenerates to attach
+/// `init_state` â€” every rect reads zero, the sort degenerates to attach
 /// order, and the first assertion gets `b`.
 pub(crate) fn tab_traversal_follows_geometry_not_attach_order() {
     let scope = FocusScopeNode::with_debug_label("traversal-scope");
@@ -648,7 +648,7 @@ pub(crate) fn tab_traversal_follows_geometry_not_attach_order() {
     manager.focus_next();
     assert!(
         c.has_primary_focus(),
-        "after the middle node comes the bottom one — reading order, not attach order"
+        "after the middle node comes the bottom one â€” reading order, not attach order"
     );
     manager.focus_next();
     assert!(b.has_primary_focus(), "wraparound lands on the top node");
@@ -1116,13 +1116,13 @@ pub(crate) fn a_refused_node_replacement_is_made_by_the_next_rebuild() {
             Rc::clone(&after),
             tree.clone(),
         );
-        manager.add_listener(Rc::new(move |_, _| {
+        let _listening = manager.listen(move |_, _| {
             if listener_armed.replace(false) {
                 let mut laid = listener_laid.borrow_mut();
                 let laid = laid.as_mut().expect("mounted");
                 laid.pump_widget(listener_tree(&listener_after));
             }
-        }));
+        });
         let _ = trigger.request_focus();
         assert!(!armed.get(), "{label}: the trigger's gain rebuilt the tree");
         assert!(
@@ -1233,7 +1233,7 @@ impl ViewState<MountProbe> for MountProbeState {
 /// (which cancels a gesture in flight under it).
 ///
 /// Red-check: wrap the child in `Semantics` only while the node can take
-/// focus — the probe mounts a second time on every row.
+/// focus â€” the probe mounts a second time on every row.
 pub(crate) fn a_focus_keeps_its_subtree_when_it_stops_being_focusable() {
     let own = FocusNode::with_debug_label("own flag");
     let page = FocusScopeNode::new();
@@ -1316,7 +1316,7 @@ impl StatelessView for ControllerInBuild {
 /// contact moves and every step of a held drag paints new content.
 ///
 /// Red-check: have an element's update rebuild its child whether or not the
-/// child's view is the one it already holds — the frames freeze after the
+/// child's view is the one it already holds â€” the frames freeze after the
 /// first step.
 pub(crate) fn the_first_focus_gain_does_not_rebuild_the_app_under_a_drag() {
     use crate::common::{lay_out, tight};
