@@ -271,7 +271,7 @@ impl Default for WindowOptions {
 /// it issued, and a handle that is not in the map names no window.
 ///
 /// There is no conversion from a number outside the `testing` feature's
-/// [`try_from_raw`](Self::try_from_raw), which a recording decoder uses.
+/// `try_from_raw`, which a recording decoder uses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct WindowId(NonZeroU64);
 
