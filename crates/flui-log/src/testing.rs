@@ -375,7 +375,7 @@ impl Subscriber for InterestSentinel {
 /// # Example
 ///
 /// ```
-/// # use flui_testing::log_capture::disarm_interest_cache;
+/// # use flui_log::testing::disarm_interest_cache;
 /// disarm_interest_cache();
 /// // …now install a thread-local subscriber and capture without racing…
 /// ```
