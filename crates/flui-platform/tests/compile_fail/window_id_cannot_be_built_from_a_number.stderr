@@ -33,6 +33,11 @@ error[E0599]: no associated function or constant named `new` found for struct `W
 10 |     let _ = WindowId::new(1);
    |                       ^^^ associated function or constant not found in `WindowId`
    |
+note: if you're trying to build a new `WindowId`, consider using `WindowId::try_from_raw` which returns `Option<WindowId>`
+  --> src/window.rs
+   |
+   |     pub const fn try_from_raw(raw: u64) -> Option<Self> {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 help: there is a method `ne` with a similar name
    |
 10 -     let _ = WindowId::new(1);
