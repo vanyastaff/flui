@@ -1,4 +1,12 @@
 //! Posted owner turns with a kernel-event fallback when queue admission fails.
+//!
+//! If `PostMessageW` is refused, the unnamed auto-reset event joins the FLUI
+//! loop's wait beside the message queue and frame/source deadlines, including
+//! an infinite idle wait with no user windows. Post and fallback drive the same
+//! owner-turn slot and quit policy. A foreign modal loop does not wait on this
+//! private event; delivery resumes when the FLUI loop returns. If both post and
+//! `SetEvent` fail, the caller receives the error and `OwnerSignal` retains its
+//! delivery debt.
 
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 use windows::Win32::{

@@ -225,12 +225,35 @@ impl Client {
 
     fn hello_as(address: &str, role: Option<&str>) -> Self {
         let (client, welcome) = Self::greeted_as(address, role);
+        client.check_welcome(welcome)
+    }
+
+    fn check_welcome(self, welcome: Value) -> Self {
         assert_eq!(
             welcome["hello"]["protocol"],
             json!(PROTOCOL_VERSION.to_string()),
             "the agent greets in the client's protocol: {welcome}"
         );
-        client
+        self
+    }
+
+    /// Connects once the previous driver's connection thread has released its seat.
+    fn hello_after_driver_leaves(address: &str) -> Self {
+        let deadline = Instant::now() + RECV;
+        loop {
+            let (client, welcome) = Self::greeted(address);
+            if welcome["error"]["code"] == "not_driver" {
+                assert_eq!(welcome["error"]["retry"], "soon", "{welcome}");
+                drop(client);
+                assert!(
+                    Instant::now() < deadline,
+                    "the previous driver releases its seat"
+                );
+                std::thread::sleep(Duration::from_millis(10));
+            } else {
+                return client.check_welcome(welcome);
+            }
+        }
     }
 
     fn send_bytes(&mut self, bytes: &[u8]) -> io::Result<()> {
@@ -250,6 +273,44 @@ impl Client {
             }
             if Instant::now() > deadline {
                 return Err(io::ErrorKind::TimedOut.into());
+            }
+        }
+        Ok(())
+    }
+
+    /// Writes a line the agent may refuse before it ends, preserving an early reply for `recv`.
+    fn send_bytes_while_reading(&mut self, bytes: &[u8]) -> io::Result<()> {
+        let deadline = Instant::now() + RECV;
+        let mut written = 0;
+        let mut chunk = [0_u8; 8192];
+        while written < bytes.len() {
+            let end = bytes.len().min(written + 512);
+            match (&self.stream).write(&bytes[written..end]) {
+                Ok(count) if count > 0 => written += count,
+                Ok(_) => std::thread::sleep(Duration::from_micros(200)),
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(Duration::from_micros(200));
+                }
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+                Err(error) => return Err(error),
+            }
+            if written % (512 * 64) == 0 {
+                match read_some(&self.stream, &mut chunk) {
+                    Ok(0) => return Err(io::ErrorKind::BrokenPipe.into()),
+                    Ok(read) => self.buffer.extend_from_slice(&chunk[..read]),
+                    Err(error)
+                        if matches!(
+                            error.kind(),
+                            io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted
+                        ) => {}
+                    Err(error) => return Err(error),
+                }
+            }
+            if Instant::now() > deadline {
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    format!("wrote {written} of {} bytes", bytes.len()),
+                ));
             }
         }
         Ok(())
@@ -707,7 +768,7 @@ fn a_connection_without_the_right_hello_is_refused() {
             "it answers no request: {refusal}"
         );
 
-        let mut client = Client::hello(&at);
+        let mut client = Client::hello_after_driver_leaves(&at);
         assert_eq!(client.windows().len(), 1, "a right client is served next");
     });
     assert_eq!(owner.presses(), 0);
@@ -864,8 +925,8 @@ fn malformed_unknown_and_unserved_requests() {
 
         let mut oversized = vec![b'a'; MAX_LINE + 16];
         oversized.push(b'\n');
-        // The agent may stop reading before the line ends.
-        let _ = client.send_bytes(&oversized);
+        // The agent may stop reading before the line ends; keep draining its early refusal.
+        let _ = client.send_bytes_while_reading(&oversized);
         let reply = client.reply("an oversized line");
         assert_eq!(reply["error"]["code"], "invalid_argument", "{reply}");
         assert!(
@@ -1173,6 +1234,18 @@ fn a_client_that_stops_reading_does_not_hold_up_detach() {
                 Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
                     refused_since.get_or_insert_with(Instant::now);
                     std::thread::sleep(Duration::from_millis(1));
+                }
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        io::ErrorKind::BrokenPipe
+                            | io::ErrorKind::ConnectionReset
+                            | io::ErrorKind::ConnectionAborted
+                    ) =>
+                {
+                    // Closing a slow consumer is another way the agent stops reading;
+                    // the assertion below still proves that detach never waits on it.
+                    break;
                 }
                 Err(error) => panic!("the connection failed: {error}"),
             }

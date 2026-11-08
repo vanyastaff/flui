@@ -189,8 +189,8 @@ pub use flui_interaction::focus::{
 };
 pub use flui_interaction::ids::FocusNodeId;
 pub use flui_interaction::pointer::{
-    HitTestEntry, HitTestHandle, HitTestSnapshot, InteractionDispatchError, PointerCapture,
-    PointerCaptureError, PointerDispatch,
+    EventPropagation, HitTestBehavior, HitTestEntry, HitTestHandle, HitTestSnapshot,
+    InteractionDispatchError, PointerCapture, PointerCaptureError, PointerDispatch,
 };
 pub use flui_interaction::text_input::{
     ClientToken, ClipboardBackend, ClipboardCapability, ClipboardHandle, DetachOutcome,
@@ -198,3 +198,11 @@ pub use flui_interaction::text_input::{
     PrimarySelectionCapability, PrimarySelectionHandle, SelectionText, TextInputClient,
     TextInputError, TextInputHandle,
 };
+
+/// Text-store values a custom text-editing widget shares with the platform.
+/// Backend and owner construction remain internal to the runtime.
+pub mod text_input {
+    pub use flui_interaction::text_input::{
+        CompositionLedger, EditGeneration, LockArbiter, committed_text,
+    };
+}

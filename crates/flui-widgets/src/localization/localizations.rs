@@ -116,7 +116,7 @@ impl fmt::Debug for BoxedLocalizationsDelegate {
 /// A boxed [`WidgetsLocalizations`] trait object, `Sized` so it can be a
 /// [`LocalizationsDelegate::Resources`] and stored in the `Localizations`
 /// resource map. `Deref`s to the trait, so callers read it like the
-/// underlying resource (`BoxedWidgetsLocalizations::of(ctx).text_direction()`).
+/// underlying resource (`BoxedWidgetsLocalizations::of(ctx).copy_button_label()`).
 #[derive(Debug)]
 pub struct BoxedWidgetsLocalizations(Box<dyn WidgetsLocalizations>);
 
@@ -161,8 +161,8 @@ impl std::ops::Deref for BoxedWidgetsLocalizations {
 }
 
 /// A [`LocalizationsDelegate`] that always resolves to
-/// [`DefaultWidgetsLocalizations`] (US English, LTR), regardless of the
-/// requested locale.
+/// [`DefaultWidgetsLocalizations`] (US English), regardless of the requested
+/// locale.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct DefaultWidgetsLocalizationsDelegate;
 
@@ -247,9 +247,8 @@ impl Localizations {
     /// # Panics
     ///
     /// In debug builds, panics if no delegate produces
-    /// [`BoxedWidgetsLocalizations`].
-    /// [`text_direction`](WidgetsLocalizations::text_direction) has nothing
-    /// to resolve without it.
+    /// [`BoxedWidgetsLocalizations`], the resource set required by the widget
+    /// catalog. Text direction is resolved from `locale` independently.
     #[must_use]
     pub fn new(
         locale: Locale,
@@ -261,8 +260,7 @@ impl Localizations {
                 .iter()
                 .any(|d| d.0.resource_type_id() == TypeId::of::<BoxedWidgetsLocalizations>()),
             "BUG: Localizations::new requires at least one delegate producing \
-             BoxedWidgetsLocalizations (add DefaultWidgetsLocalizationsDelegate or \
-             GlobalWidgetsLocalizationsDelegate)"
+             BoxedWidgetsLocalizations (add DefaultWidgetsLocalizationsDelegate)"
         );
         Self {
             locale,
@@ -357,18 +355,11 @@ impl StatelessView for Localizations {
             resources.insert(type_id, delegate.0.load(&self.locale));
         }
 
-        // Same sanctioned site as `Localizations::maybe_of` (this fn's own
-        // doc marks the reason) — resolves the text direction `build` wraps
-        // its child in.
-        let widgets_localizations = resources
-            .get(&TypeId::of::<BoxedWidgetsLocalizations>())
-            .cloned()
-            .and_then(|erased| erased.downcast::<BoxedWidgetsLocalizations>().ok()) // localizations resource-map lookup, see Localizations::maybe_of's doc
-            .expect(
-                "BUG: Localizations::new's debug_assert should have caught a missing \
-                 BoxedWidgetsLocalizations delegate before this build ran",
-            );
-        let text_direction = widgets_localizations.text_direction();
+        let text_direction = if self.locale.is_rtl() {
+            flui_painting::typography::TextDirection::Rtl
+        } else {
+            flui_painting::typography::TextDirection::Ltr
+        };
 
         LocalizationsScope {
             snapshot: LocalizationsSnapshot {

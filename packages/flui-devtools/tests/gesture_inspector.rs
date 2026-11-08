@@ -224,7 +224,7 @@ fn host() -> HeadlessHost {
             .on_tap(|_| {})
             .on_long_press(|_| {})
             .child(flui_sdk::widgets::ColoredBox::new(
-                flui_sdk::painting::Color::RED,
+                flui_sdk::painting::styling::Color::RED,
             )),
     )
     .expect("attach");
@@ -342,7 +342,7 @@ impl StatelessView for App {
             .on_tap(|_| {})
             .on_long_press(|_| {})
             .child(flui_sdk::widgets::ColoredBox::new(
-                flui_sdk::painting::Color::RED,
+                flui_sdk::painting::styling::Color::RED,
             ))
     }
 }

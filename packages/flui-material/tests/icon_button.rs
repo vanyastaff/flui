@@ -19,10 +19,8 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use common::{lay_out, tight};
-use flui_material::{
-    ButtonStyle, IconButton, IconButtonThemeData, Theme, ThemeData, ThemeDataOverrides,
-};
-use flui_sdk::painting::Color;
+use flui_material::{ButtonStyle, IconButton, IconButtonThemeData, Theme, ThemeData};
+use flui_sdk::painting::styling::Color;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{IconTheme, IconThemeData, SizedBox, WidgetStateProperty};
 
@@ -46,7 +44,7 @@ impl StatelessView for IconThemeProbe {
 }
 
 /// The middle cascade tier, proven end to end: a configured
-/// `icon_button_theme.style.foreground_color` must reach the icon's
+/// `IconButtonThemeData.style.foreground_color` must reach the icon's
 /// `IconTheme` — the same coalesce `resolve_property` performs for
 /// `IconButton::build`'s widget-level override, here with a theme-tier value
 /// and no widget-level override in the way.
@@ -56,14 +54,11 @@ pub fn icon_button_theme_slot_reaches_the_icons_icon_theme() {
     let probe = IconThemeProbe {
         captured: Rc::clone(&captured),
     };
-    let theme = ThemeData::light().copy_with(ThemeDataOverrides {
-        icon_button_theme: Some(IconButtonThemeData {
-            style: Some(ButtonStyle {
-                foreground_color: Some(WidgetStateProperty::all(Some(themed_color))),
-                ..Default::default()
-            }),
+    let theme = ThemeData::light().with_component(IconButtonThemeData {
+        style: Some(ButtonStyle {
+            foreground_color: Some(WidgetStateProperty::all(Some(themed_color))),
+            ..Default::default()
         }),
-        ..Default::default()
     });
 
     let _laid = lay_out(
@@ -78,14 +73,14 @@ pub fn icon_button_theme_slot_reaches_the_icons_icon_theme() {
     assert_eq!(
         resolved.color,
         Some(themed_color),
-        "a configured icon_button_theme.style.foreground_color must reach the icon's IconTheme",
+        "a configured IconButtonThemeData.style.foreground_color must reach the icon's IconTheme",
     );
 }
 
 /// A toggle button reports its selection as a toggle button's pressed state, both ways; a
 /// button never made a toggle reports none.
 pub fn a_toggle_icon_button_announces_its_selection() {
-    use flui_testing::a11y::{Role, Toggled};
+    use flui_sdk::testing::a11y::{Role, Toggled};
 
     let announced = |button: IconButton| {
         let mut laid = lay_out(
@@ -208,7 +203,7 @@ pub fn a_toggle_cross_fades_to_its_selected_icon() {
 /// A hovered toggle lays its state layer in `primary` while selected and in
 /// `on_surface_variant` while not.
 pub fn a_selected_icon_button_hovers_in_primary() {
-    use flui_painting::DrawOp;
+    use flui_sdk::painting::DrawOp;
 
     let colors = ThemeData::light().color_scheme;
     let hovered_colors = |selected| -> Vec<Color> {

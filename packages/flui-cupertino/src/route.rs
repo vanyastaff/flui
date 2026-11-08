@@ -45,7 +45,7 @@
 
 use std::rc::Rc;
 
-use flui_sdk::painting::Color;
+use flui_sdk::painting::styling::Color;
 use flui_sdk::view::BoxedView;
 use flui_sdk::view::prelude::BuildContext;
 use flui_sdk::widgets::{PageRoute, ParallaxPageTransition, RouteAnimation};
@@ -80,7 +80,7 @@ fn barrier_color() -> Color {
 #[must_use]
 pub fn cupertino_page_route<T, F>(builder: F) -> PageRoute<T>
 where
-    T: Send + Clone + 'static,
+    T: 'static,
     F: Fn(&dyn BuildContext, &RouteAnimation, &RouteAnimation) -> BoxedView + 'static,
 {
     PageRoute::new(builder)

@@ -31,7 +31,9 @@ positions remain canonical render-tree state
 Authored accessible regions cross the render/semantics boundary through the
 normal box/sliver adapters ([ADR-0223](../../docs/adr/ADR-0223-authored-semantics-regions.md)).
 The pipeline retains their presentation-local identity authority across semantics
-owner replacement. A pass stages all graft anchors, validates key scopes and
+owner replacement. Synthetic identities use tagged generational slots (ADR-0314);
+retiring a region or text-run key releases its slot, and reuse advances the
+generation. A pass stages all graft anchors, validates key scopes and
 reserves complete identity batches before mutating the current arena.
 `harness_custom_paint_region_failure_keeps_all_anchors_and_retries` observes
 mutation-free refusal and retry through `PipelineOwner::run_frame`.
@@ -1070,15 +1072,13 @@ they were removed rather than adapted: they could not fail for a reason a user w
 
 ### Render-tree storage uses a `NodeSlab` with generational `RenderId` keys
 
-**Amended by [ADR-0252](../../docs/adr/ADR-0252-layout-walk-leases-nodes-on-demand.md):** the tree stores nodes in its own `NodeSlab` (`storage/node_slab.rs`), a `Vec` of slots with a free list. Each slot carries its generation, an in-flight bit and the parent link, its only copy, outside the `UnsafeCell` that holds the node, and a layout walk takes one `TreeLease` and acquires nodes on demand. The slab mints every `RenderId`: emptying a slot advances its generation, and a slot that runs out of generations retires instead of issuing one again. Removal takes the nodes out before any destructor runs, so a destructor that panics finds the tree and the owner already committed. The paragraphs below describe the original `Slab<RenderNode>` choice; the reasons for an arena with generational ids still stand.
+**Rule:** strategy clause "Behavior as floor, everything else designed for Rust"; constitution Anti-Patterns list ("`Arc<Mutex<>>` for tree structures — use arena/slotmap"); the ID-offset pattern documented in [`docs/architecture.md`](../../docs/architecture.md), [ADR-0252](../../docs/adr/ADR-0252-layout-walk-leases-nodes-on-demand.md) and [ADR-0313](../../docs/adr/ADR-0313-a-generational-slot-never-mints-an-id-twice.md).
 
-**Rule:** strategy clause "Behavior as floor, everything else designed for Rust"; constitution Anti-Patterns list ("`Arc<Mutex<>>` for tree structures — use arena/slotmap"); the ID-offset pattern documented in [`docs/architecture.md`](../../docs/architecture.md).
+**Choice:** `RenderTree` stores nodes in its own `NodeSlab` (`storage/node_slab.rs`): a `Vec` of slots, a free list and a `flui_foundation::generation::GenSlots` ledger parallel to the slots. A slot header carries only the in-flight bit and the canonical parent link outside the `UnsafeCell<SlotState>`. Fresh slots mint through `GenSlots::mint_fresh`; release peeks before mutation and commits the generation step before the node returns to the caller for destruction. Exhaustion marks the slot `Retired` and leaves it off the free list. A layout walk holds one `TreeLease`, resolves both the ledger generation and `Occupied`, and acquires nodes on demand. The occupied check matters for a retired slot, whose ledger entry deliberately keeps the last generation. Removal takes every selected node out before any destructor runs, so a panicking destructor finds the tree and owner committed.
 
-**Choice:** `RenderTree` stores `Slab<RenderNode>`. `RenderId` is a `NonZeroUsize` newtype that adds `+1` to the slab index, so `Option<RenderId>` niche-optimises to 8 bytes for parent / child references. The slab is reached from one strong root (`PipelineOwner::root_id`) and every other node is reached by walking child IDs in `NodeLinks`.
+**Alternatives:** a graph of references with direct child pointers on every render object would require `Arc<RwLock<RenderObject>>` or `Rc<RefCell<RenderObject>>` for parent/child cycles, which the constitution forbids for tree structures. `typed-arena::Arena` cannot delete individual entries. Moving storage and the free list into the foundation ledger would replace load-bearing layout machinery to share only generation bookkeeping; ADR-0313 rejects that shape.
 
-**Alternatives:** a graph of references with direct child pointers on every render object would require `Arc<RwLock<RenderObject>>` or `Rc<RefCell<RenderObject>>` for parent/child cycles, which the constitution forbids for tree structures. `typed-arena::Arena` was considered but cannot delete individual entries, which the element reconciler needs.
-
-**Accepted trade-off:** one extra indirection (slab lookup) on the tree-walk hot path, paid back by O(1) insert/delete, deterministic ID stability across mutations, and elimination of `Arc<Mutex<>>` cycles. The same pattern is used by `flui-view`'s `ElementTree`.
+**Accepted trade-off:** resolution consults a parallel generation vector in addition to the slot storage. In return, O(1) insertion and deletion, deterministic IDs across mutations, one checked exhaustion policy and no lock or reference-counted parent/child cycle. The same ledger is used by `flui-view`'s element tree and reactive graph.
 
 ### `RenderEntry<P>` owns the render object by value (no lock, no interior mutability)
 

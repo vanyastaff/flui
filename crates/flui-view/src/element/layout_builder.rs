@@ -262,6 +262,14 @@ impl ElementBehavior<LayoutBuilder, Variable> for LayoutBuilderBehavior {
             return Vec::new();
         }
 
+        if self.inner.configure_render_object(core, owner) {
+            // The configuration changed layout inputs, so the retained
+            // constraints are stale. The next layout publishes fresh ones and
+            // schedules the builder again before paint.
+            core.clear_dirty();
+            return Vec::new();
+        }
+
         // No layout pass has run yet, so no constraints exist. Build no child
         // rather than inventing one: `RenderLayoutBuilder` sizes to
         // `constraints.smallest()` for this single pass, publishes, and the
@@ -355,14 +363,6 @@ impl ElementBehavior<LayoutBuilder, Variable> for LayoutBuilderBehavior {
         }
         self.cell = None;
         self.inner.on_unmount(core, owner);
-    }
-
-    fn on_update(
-        &mut self,
-        core: &ElementCore<LayoutBuilder, Variable>,
-        owner: &mut crate::ElementOwner<'_>,
-    ) {
-        self.inner.on_update(core, owner);
     }
 }
 

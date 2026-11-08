@@ -60,11 +60,12 @@ use std::time::Duration;
 use flui_sdk::animation::Animatable;
 use flui_sdk::animation::{Animation, AnimationController, DrivenController, Tween};
 use flui_sdk::geometry::Radius;
-use flui_sdk::interaction::GestureEndReason;
-use flui_sdk::painting::{Alignment, Clip};
-use flui_sdk::painting::{BorderRadius, BorderRadiusExt, Color};
+use flui_sdk::interaction::{GestureEndReason, HitTestBehavior};
+use flui_sdk::painting::Alignment;
+use flui_sdk::painting::paint::Clip;
+use flui_sdk::painting::styling::{BorderRadius, BorderRadiusExt, Color};
 use flui_sdk::pipeline::TranslationFraction;
-use flui_sdk::rendering::{BoxConstraints, HitTestBehavior};
+use flui_sdk::rendering::BoxConstraints;
 use flui_sdk::view::environment::MediaQuery;
 use flui_sdk::view::environment::VsyncScope;
 use flui_sdk::view::prelude::*;
@@ -251,7 +252,7 @@ impl std::fmt::Debug for Drawer {
 
 impl StatelessView for Drawer {
     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
-        let theme = Theme::of(ctx);
+        let colors = Theme::required_color_scheme_of(ctx);
         // No dependency needed: alignment is fixed for the controller's
         // whole life, same reasoning `GestureArenaScope`'s ambient lookup
         // documents.
@@ -261,7 +262,7 @@ impl StatelessView for Drawer {
 
         let background_color = self
             .background_color
-            .unwrap_or(theme.color_scheme.surface_container_low);
+            .unwrap_or(colors.surface_container_low);
 
         let mut material = Material::new(background_color)
             .elevation(self.elevation)

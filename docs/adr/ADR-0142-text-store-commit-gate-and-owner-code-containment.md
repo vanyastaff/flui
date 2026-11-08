@@ -81,7 +81,7 @@ framework does not control is contained.
    granted (after the grants queued ahead of it), so an `on_changed` that edits the field lands
    after the session and reaches the platform as an application edit. A panic in `settle` does
    not undo the grant, which already ran: the arbiter catches it, hands the first payload to the
-   store's `CommitGate` (`defer_failure`; later ones are retained per ADR-0127), and the queue
+   store's `CommitGate` (`defer_failure`; later ones go to `discard_payload` per ADR-0281), and the queue
    keeps running; the gate's owner takes it (`take_failure`) and reports it at its next turn
    through the UI runtime's panic report: `TextInputOwner::dispatch` and `run_deferred_grants` take it
    once they return and resume it inside their containment (the first failure stays
@@ -143,33 +143,33 @@ framework does not control is contained.
    queue (ADR-0135 §4), diagnostics (a `tracing` subscriber is user code), and the destruction of
    any snapshot, refused or queued grant, replaced value, client, store or host clone — goes
    through `text_store::OwnerCalls`, whose module doc lists them; a gate whose last clone goes
-   with a failure no owner took retains it. What the code is owed (obligations with their values,
-   the gate a failure belongs to) is read before it runs, never after, since it may reenter,
-   settle a nested session or move the store to another presentation; so the `on_changed` an edit
-   is owed to is the one installed when the edit is accepted (a session written back, a key or
-   semantic edit before it runs), though the edit's listeners rebuild the field and remove or
-   replace it before the owner hears of the change. Each call is contained and
+   with a failure no owner took discards that payload under containment. What the code is owed
+   (obligations with their values, the gate a failure belongs to) is read before it runs, never
+   after, since it may reenter, settle a nested session or move the store to another presentation;
+   so the `on_changed` an edit is owed to is the one installed when the edit is accepted (a session
+   written back, a key or semantic edit before it runs), though the edit's listeners rebuild the
+   field and remove or replace it before the owner hears of the change. Each call is contained and
    the first failure in time is authoritative: a settle parks its failure in the admitting gate
    the moment it is caught, ahead of any session the owner's later code opens; a failure a call
    parked in a gate before its own panic came first, so it is taken first, while one the gate
    already held waits for its owner's turn (a dispatch, an anchor, a completion, a close); a
-   later one is retained (ADR-0127). The gate records whether the thread was unwinding when a
-   failure was parked: one parked while it was (a guard's `Drop` in the call's cleanup requested a
-   grant whose settle failed) came after the panic that started that unwind, and is kept behind
-   the call's own. When a panic began is not observable from outside it (the panic hook is
-   process-global and the application's), so a failure parked during an unwind the call caught
-   itself and then outlived is ordered behind the call's panic too; that is the conservative
-   order, and both are kept. An operation completes its own state changes before it raises a
-   failure it caught: attach admits the client and returns its token, and a failure after that
-   point waits in the gate for the owner's next turn unless the owner closed meanwhile; an
-   update, a key edit, a semantic edit, the cursor-area loop and dispose each finish their
-   steps. Work stays deliverable: an asynchronous request behind a failing queued grant is
-   queued, and a synchronous one, or one refused because the flush before it failed, is retained
-   rather than destroyed during the unwind. A snapshot retires inside the scope: dropped while
-   the scope is healthy, retained once it has failed or while the thread unwinds. Nested work
-   runs in the caller's scope, so it sees the caller's failure. A session the field was unmounted
-   under is not written back. Presentation close keeps its own containment (ADR-0123) under the
-   same retention rule.
+   later one goes to `discard_payload` (ADR-0281). The gate records whether the thread was
+   unwinding when a failure was parked: one parked while it was (a guard's `Drop` in the call's
+   cleanup requested a grant whose settle failed) came after the panic that started that unwind,
+   and is ordered behind the call's own. When a panic began is not observable from outside it (the
+   panic hook is process-global and the application's), so a failure parked during an unwind the
+   call caught itself and then outlived is ordered behind the call's panic too; that is the
+   conservative order, and only the first failure is reported. An operation completes its own state
+   changes before it raises a failure it caught: attach admits the client and returns its token,
+   and a failure after that point waits in the gate for the owner's next turn unless the owner
+   closed meanwhile; an update, a key edit, a semantic edit, the cursor-area loop and dispose each
+   finish their steps. Work stays deliverable: an asynchronous request behind a failing queued
+   grant is queued, and a synchronous one, or one refused because the flush before it failed, is
+   destroyed unrun under containment. A snapshot retires inside the scope and is destroyed under
+   containment after a failure too; a destructor that panics while the thread is already unwinding
+   aborts, as in std (ADR-0281). Nested work runs in the caller's scope, so it sees the caller's
+   failure. A session the field was unmounted under is not written back. Presentation close keeps
+   its own containment (ADR-0123) under the same destruction rule.
 
 ## Alternatives considered
 
@@ -187,7 +187,7 @@ framework does not control is contained.
   `OwnerCalls`; the conformance kit's version 2 checks the notification rules.
 - A failure in owner code after a grant no longer escapes the platform call that granted it: it
   reaches the UI runtime's report from the presentation's next dispatch, anchor or close.
-- Values a failed scope retains are leaked by design (ADR-0127).
+- Values withdrawn by a failed scope are destroyed under containment (ADR-0281).
 
 ## Verification
 

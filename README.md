@@ -72,9 +72,9 @@ flui = { path = "…" }
 
 | Feature | Default | Enables |
 |---|---|---|
-| `material` | off | `flui::material` and the Material half of `flui::prelude` |
+| `material` | off | `flui::material` and the Material-owned glob at `flui::material::prelude`; `flui::prelude` stays feature-independent |
 | `cupertino` | off | `flui::cupertino` |
-| `localizations` | off | nothing: deprecated and empty; the global widgets localizations are in `flui::widgets` |
+| `assets` | off | `flui::assets` and asset/network `Image` providers: application-owned decoded images with shared loads and a byte-budgeted LRU |
 | `hot-reload` | off | desktop, iOS and Android development reload machinery; absent from an ordinary production graph |
 | `testing` | off | `flui::testing` for headless application tests; add it to the development dependency, as the counter template does |
 | `serde` | off | serialization for supported geometry, painting, locale, layout, interaction, and animation values |
@@ -175,8 +175,8 @@ fn main() -> Result<(), LaunchError> {
 
 Run with `cargo run --example counter`. For a tour of the wider widget
 catalog, see the `flui-widgets` crate. More examples live under
-`examples/` and per-target crates (`examples/desktop_scene/`,
-`examples/web_demo/`, `examples/painting_demo/`) — see
+`examples/` and per-target crates beside their owners (`crates/flui-engine/examples/`,
+`crates/flui-native/examples/web_demo/`) — see
 [`examples/README.md`](examples/README.md) for the full index.
 
 ## Minimum Supported Rust Version

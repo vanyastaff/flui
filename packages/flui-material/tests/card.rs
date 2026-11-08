@@ -9,24 +9,21 @@
 use crate::common;
 
 use common::{lay_out, rgba, tight};
-use flui_material::{Card, CardThemeData, Theme, ThemeData, ThemeDataOverrides};
+use flui_material::{Card, CardThemeData, Theme, ThemeData};
 use flui_sdk::foundation::inspect::Rgba;
-use flui_sdk::painting::Color;
+use flui_sdk::painting::styling::Color;
 use flui_sdk::widgets::ColoredBox;
 
-/// The middle cascade tier, proven end to end: a `ThemeData.card_theme` with
+/// The middle cascade tier, proven end to end: a `CardThemeData` entry with
 /// custom `color`/`elevation` reaches the mounted `Material`, per field —
-/// an unset `shape` on the same theme slot must still fall through to the
+/// an unset `shape` on the same entry must still fall through to the
 /// M3 default independently (proven via `card.rs`'s own unit tests; this
 /// mount only needs to prove the theme tier is reachable at all).
 pub fn card_theme_slot_reaches_the_mounted_materials_color_and_elevation() {
     let themed_color = Color::rgb(77, 88, 99);
-    let theme = ThemeData::light().copy_with(ThemeDataOverrides {
-        card_theme: Some(CardThemeData {
-            color: Some(themed_color),
-            elevation: Some(15.0),
-            ..Default::default()
-        }),
+    let theme = ThemeData::light().with_component(CardThemeData {
+        color: Some(themed_color),
+        elevation: Some(15.0),
         ..Default::default()
     });
 
@@ -42,7 +39,7 @@ pub fn card_theme_slot_reaches_the_mounted_materials_color_and_elevation() {
     assert_eq!(
         material_node.get::<Rgba>("color"),
         Ok(rgba(themed_color)),
-        "a configured card_theme.color must reach the mounted Material",
+        "a configured CardThemeData.color must reach the mounted Material",
     );
     assert_eq!(material_node.get::<f64>("elevation"), Ok(15.0));
 }

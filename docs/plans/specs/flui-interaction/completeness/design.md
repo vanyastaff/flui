@@ -58,7 +58,7 @@
 
 | Имя | Крейт | Уровень | `surface.rs` | Первый продакшн-вызывающий |
 |---|---|---|---|---|
-| `HostInput`, `InputSequenceId`, `InputSurface` | `flui-runtime` (`HostInput`), `flui-foundation` (тип `InputSequenceId`, рядом с `DataTransferId`, чтобы контрактные крейты могли его называть), `flui-interaction` (выдаёт `GestureBinding`), `flui-platform-api` (`PointerKind::Virtual`) | Evolving / Stable | `InputSequenceId` — да (`foundation`); `HostInput`, `InputSurface` — нет: граница хоста (`flui::app::HostInput`, `GestureBinding::embed_surface`), пакет на `flui-sdk` хоста не видит (ADR-0088 §4) | `flui-app` runner, `GestureBinding` |
+| `HostInput`, `InputSequenceId`, `InputSurface` | `flui-runtime` (`HostInput`), `flui-foundation` (тип `InputSequenceId`, рядом с `DataTransferId`, чтобы контрактные крейты могли его называть), `flui-interaction` (выдаёт `GestureBinding`), `flui-platform-api` (`PointerKind::Virtual`) | Evolving / Stable | `InputSequenceId` — да (`foundation`); `HostInput`, `InputSurface` — нет: граница хоста (`flui_app::HostInput`, `GestureBinding::embed_surface`), пакет на `flui-sdk` хоста не видит (ADR-0088 §4) | `flui-app` runner, `GestureBinding` |
 | арена, композиция, `PanClaim`, `allowed_devices`, `AxisLock`, `TransformLock`, свайп, трейт распознавателя, сдерживание | `flui-interaction` | Evolving через SDK | да | `GestureDetector`, `Scrollable` |
 | `RawGestureDetector`, слоты `GestureDetector` | `flui-widgets` | Evolving | да | все детекторы |
 | канал прокрутки, `SnapPolicy`, `OverscrollBehavior` | `flui-widgets` (`scroll::nested`) | Evolving | да | `Scrollable`, `PageView`, `RefreshIndicator`, `InteractiveViewer`, `AnchoredDrag` |
@@ -67,7 +67,7 @@
 | `HapticFeedback` (+варианты), `PanZoomPhase`, `PointerEvent::Revise`, поля пера | `flui-platform-api` | Stable | реэкспорт | бэкенды, binding |
 | `HapticPattern` и части, `HapticRequest`, `HapticOutcome`, `HapticCapabilities`, `InputCapabilities`, `Availability` | `flui-platform-api` за фичей `unstable-input` | Unstable до таблиц деградации и соответствия | реэкспорт за фичей | виджеты через lifecycle-возможность |
 | DnD-сессии | `flui-interaction` поверх ADR-0038 | Evolving | да | `Draggable`, `ReorderableList` |
-| `InputTap` | `flui-runtime` (реестр у рантайма), реэкспорт и установка — `flui-app` | Evolving | нет: установка хостом (`flui::app::InputTap`, `AppConfig::with_input_tap`), пакету не нужна | запись (dev/tool сборка) |
+| `InputTap` | `flui-runtime` (реестр у рантайма), реэкспорт и установка — `flui-app` | Evolving | нет: установка хостом (`flui_app::InputTap`, `AppConfig::with_input_tap`), пакету не нужна | запись (dev/tool сборка) |
 | запись, скрипты, проверки | `flui-testing` (бестиповый фрейминг, DTO); нативный кодек — тесты `flui-platform` | тестовый | нет | тесты всех слоёв |
 | `GestureObserver` / `GestureInspector` | `flui-interaction` / `flui-devtools` | Evolving / пакет | наблюдатель — да | `flui-devtools` |
 | `GestureAlternatives`, `Alternative`, `ControlSpec`, `MenuSpec`, `GestureCommand`, `CommandHandle`, `MenuRequest`, `ShowContextMenuIntent` | `flui-widgets` (`interaction::gesture_alternatives`; ключи меню — `DefaultFocusTraversal`) | Evolving | да | `Dismissible` |

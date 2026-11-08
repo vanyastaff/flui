@@ -38,11 +38,11 @@ pub fn content_is_padded_below_the_nav_bar_plus_the_top_inset() {
         ..MediaQueryData::default()
     };
     let laid = lay_out(
-        MediaQuery::new(
+        common::themed(MediaQuery::new(
             media,
             CupertinoPageScaffold::new(SizedBox::new(60.0, 30.0))
                 .navigation_bar(CupertinoNavigationBar::new()),
-        ),
+        )),
         tight(400.0, 600.0),
     );
 

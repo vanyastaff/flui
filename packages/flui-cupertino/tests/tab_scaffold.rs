@@ -74,7 +74,7 @@ pub fn an_inactive_tabs_state_survives_switching_away_and_back() {
         });
 
     let mut laid = lay_out(
-        MediaQuery::new(MediaQueryData::default(), scaffold),
+        common::themed(MediaQuery::new(MediaQueryData::default(), scaffold)),
         tight(400.0, 800.0),
     );
     laid.tick();
@@ -111,7 +111,7 @@ pub fn tapping_a_tab_item_switches_the_active_tab() {
     });
 
     let mut laid = lay_out(
-        MediaQuery::new(MediaQueryData::default(), scaffold),
+        common::themed(MediaQuery::new(MediaQueryData::default(), scaffold)),
         tight(400.0, 800.0),
     );
     laid.tick();
@@ -140,7 +140,10 @@ pub fn out_of_range_controller_selection_reports_error_and_recovers() {
     let mut laid = lay_out(
         // Keep the harness render root mounted while the scaffold replaces
         // its own subtree with ErrorView, then builds valid tabs again.
-        SizedBox::new(400.0, 800.0).child(MediaQuery::new(MediaQueryData::default(), scaffold)),
+        SizedBox::new(400.0, 800.0).child(common::themed(MediaQuery::new(
+            MediaQueryData::default(),
+            scaffold,
+        ))),
         tight(400.0, 800.0),
     );
     assert_eq!(laid.find_all_by_render_type("RenderErrorBox"), []);
@@ -214,7 +217,7 @@ pub fn controller_mutation_during_build_is_refused() {
     });
 
     let mut laid = lay_out(
-        MediaQuery::new(MediaQueryData::default(), scaffold),
+        common::themed(MediaQuery::new(MediaQueryData::default(), scaffold)),
         tight(400.0, 800.0),
     );
     laid.tick();

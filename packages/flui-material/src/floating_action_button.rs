@@ -74,8 +74,8 @@
 use flui_sdk::foundation::{Listenable, Subscription};
 use flui_sdk::geometry::Radius;
 use flui_sdk::geometry::Size;
-use flui_sdk::painting::BorderRadius;
-use flui_sdk::painting::Color;
+use flui_sdk::painting::styling::BorderRadius;
+use flui_sdk::painting::styling::Color;
 use flui_sdk::rendering::BoxConstraints;
 use flui_sdk::view::RebuildHandle;
 use flui_sdk::view::prelude::*;
@@ -90,7 +90,6 @@ use crate::ink_well::InkWell;
 use crate::material::Material;
 use crate::shape::MaterialShape;
 use crate::theme::Theme;
-use crate::theme_data::ThemeData;
 
 /// The regular (non-mini) floating action button's side length: tight
 /// constraints of 56.0 × 56.0.
@@ -225,9 +224,11 @@ struct ResolvedFabStyle {
     elevation: f64,
 }
 
-fn resolve_colors(theme: &ThemeData) -> ResolvedFabStyle {
+fn resolve_colors(
+    theme: &crate::theme::BaseTheme,
+    fab_theme: Option<&crate::FabThemeData>,
+) -> ResolvedFabStyle {
     let colors = theme.color_scheme;
-    let fab_theme = theme.floating_action_button_theme.as_ref();
 
     ResolvedFabStyle {
         background_color: fab_theme
@@ -313,12 +314,13 @@ impl ViewState<FloatingActionButton> for FloatingActionButtonState {
     }
 
     fn build(&self, view: &FloatingActionButton, ctx: &dyn BuildContext) -> impl IntoView {
-        let theme = Theme::of(ctx);
+        let theme = Theme::required_base_of(ctx);
+        let component = Theme::component_of::<crate::FabThemeData>(ctx);
         let ResolvedFabStyle {
             background_color,
             foreground_color,
             elevation: enabled_elevation,
-        } = resolve_colors(&theme);
+        } = resolve_colors(&theme, component.as_ref());
         let states = self.states.value();
 
         let elevation = resolve_elevation(&states, enabled_elevation);

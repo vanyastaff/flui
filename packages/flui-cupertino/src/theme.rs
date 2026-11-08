@@ -14,7 +14,7 @@
 //! has no dependency on `flui-material` and nothing here needs to change to
 //! support it later.
 
-use flui_sdk::painting::Color;
+use flui_sdk::painting::styling::Color;
 use flui_sdk::platform::Brightness;
 use flui_sdk::view::environment::MediaQuery;
 use flui_sdk::view::prelude::*;
@@ -228,14 +228,37 @@ impl CupertinoTheme {
         }
     }
 
-    /// Retrieves the [`CupertinoThemeData`] from the closest ancestor
-    /// [`CupertinoTheme`], or [`CupertinoThemeData::default`] if there is no
-    /// ancestor — resolved against `ctx` either way, so ordinary consumers
-    /// always see concrete colors (see [`CupertinoThemeData::resolve_from`]).
+    /// Access the resolved [`CupertinoThemeData`] from the nearest ancestor
+    /// [`CupertinoTheme`], registering a dependency so this element rebuilds
+    /// when the theme changes. Returned colors are concrete (see
+    /// [`CupertinoThemeData::resolve_from`]).
+    ///
+    /// # Panics
+    ///
+    /// Panics if there is no [`CupertinoTheme`] ancestor. Use
+    /// [`maybe_of`](Self::maybe_of) for a non-panicking variant.
+    ///
+    /// [`CupertinoApp`](crate::CupertinoApp) publishes its resolved default
+    /// theme, so ordinary application subtrees have an ancestor. A standalone
+    /// subtree must install a [`CupertinoTheme`] explicitly; this accessor does
+    /// not invent a default.
     #[must_use]
     pub fn of(ctx: &dyn BuildContext) -> CupertinoThemeData {
-        let ambient = ctx.depend_on::<Self, _>(|theme| theme.data.clone());
-        ambient.unwrap_or_default().resolve_from(ctx)
+        Self::maybe_of(ctx).expect(
+            "BUG: CupertinoTheme::of called with no CupertinoTheme ancestor in the tree — wrap the \
+             subtree in a CupertinoTheme or CupertinoApp, or use CupertinoTheme::maybe_of with \
+             a caller-chosen default",
+        )
+    }
+
+    /// Look up the nearest ancestor [`CupertinoTheme`]'s data, registering a
+    /// dependency. Returns `None` if there is no [`CupertinoTheme`] ancestor.
+    /// Any returned data is resolved against `ctx`, so its colors are concrete
+    /// (see [`CupertinoThemeData::resolve_from`]).
+    #[must_use]
+    pub fn maybe_of(ctx: &dyn BuildContext) -> Option<CupertinoThemeData> {
+        ctx.depend_on::<Self, _>(|theme| theme.data.clone())
+            .map(|data| data.resolve_from(ctx))
     }
 
     /// The brightness that descendant Cupertino widgets should use: the

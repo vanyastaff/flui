@@ -1,19 +1,12 @@
-//! Asset registry for central asset management.
-//!
-//! The registry provides a centralized system for loading and caching assets.
+//! Application-owned decoded-image registries.
 
-use std::any::{Any, TypeId};
-use std::collections::HashMap;
+#[cfg(feature = "images")]
 use std::sync::Arc;
 
 use flui_foundation::memory::{MemoryPressureLevel, ReclaimMemory};
-use parking_lot::RwLock;
 
-use crate::cache::{AssetCache, AssetCacheConfig, CacheCapacity};
-use crate::core::Asset;
-use crate::error::{AssetError, Result};
-use crate::types::AssetHandle;
-
+#[cfg(feature = "images")]
+mod decode;
 #[cfg(feature = "images")]
 mod images;
 #[cfg(feature = "images")]
@@ -24,11 +17,11 @@ pub use images::{ImageLoad, ImageSource, LoadServices, NetworkSource};
 /// How a registry keeps and decodes images.
 #[cfg(feature = "images")]
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct ImageConfig {
+struct ImageConfig {
     /// The most decoded pixel bytes kept.
-    pub(crate) budget: usize,
+    budget: usize,
     /// The most decodes running at once.
-    pub(crate) decode_threads: std::num::NonZeroUsize,
+    decode_threads: std::num::NonZeroUsize,
 }
 
 #[cfg(feature = "images")]
@@ -41,134 +34,60 @@ impl Default for ImageConfig {
     }
 }
 
-/// Asset registry for central asset management.
+/// An application-owned cache of decoded images and their loads in flight.
 ///
-/// The registry manages caches for different asset types and provides
-/// a unified API for loading assets.
+/// The application shares one registry through an `Arc` and passes it to image
+/// widgets or calls [`load_image`](Self::load_image) directly. The registry
+/// starts no runtime or thread: each load uses the [`LoadServices`] supplied by
+/// its caller, or runs where its returned [`ImageLoad`] is polled.
 ///
-/// # Examples
-///
-/// ```rust,ignore
-/// use flui_assets::{AssetRegistryBuilder, ImageAsset};
-///
-/// // Create a registry
-/// let registry = AssetRegistryBuilder::new().with_default_capacity().build();
-///
-/// // Load an image
-/// let image = ImageAsset::file("logo.png");
-/// let handle = registry.load(image).await?;
-///
-/// println!("Loaded: {}x{}", handle.width(), handle.height());
-/// ```
+/// Completed images share one byte-budgeted LRU. Requests for one source join
+/// one load; failures are not retained, so a later request can recover.
+#[derive(Debug)]
 pub struct AssetRegistry {
-    /// Type-erased caches for different asset types.
-    /// Key: TypeId of the Asset type
-    /// Value: `Box<dyn Any>` containing `AssetCache<T>`
-    caches: Arc<RwLock<HashMap<TypeId, Box<dyn Any + Send + Sync>>>>,
-
-    /// Count capacity and expiration applied separately to each asset type.
-    pub(crate) cache_config: AssetCacheConfig,
-
     /// Decoded images and the loads in flight that fill them.
     #[cfg(feature = "images")]
     decoded_images: Arc<images::DecodedImages>,
 }
 
-impl std::fmt::Debug for AssetRegistry {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("AssetRegistry")
-            .field("cache_count", &self.caches.read().len())
-            .field("cache_config", &self.cache_config)
-            .finish_non_exhaustive()
-    }
-}
-
 impl AssetRegistry {
-    /// Creates a new empty registry with the given default capacity.
-    fn new(cache_config: AssetCacheConfig) -> Self {
-        #[cfg(feature = "images")]
-        {
-            Self::with_images(cache_config, ImageConfig::default())
-        }
-        #[cfg(not(feature = "images"))]
-        {
-            Self {
-                caches: Arc::new(RwLock::new(HashMap::new())),
-                cache_config,
-            }
-        }
-    }
-
-    /// As [`new`](Self::new), additionally recording how decoded images are
-    /// kept and decoded.
-    #[cfg(feature = "images")]
-    fn with_images(cache_config: AssetCacheConfig, image_config: ImageConfig) -> Self {
-        Self {
-            caches: Arc::new(RwLock::new(HashMap::new())),
-            cache_config,
-            decoded_images: Arc::new(images::DecodedImages::new(
-                image_config.budget,
-                image_config.decode_threads,
-            )),
-        }
-    }
-
-    /// Loads and decodes the image asset at `path` on `services`, through
-    /// this registry's decoded-image cache.
+    /// Loads and decodes the image at `path` through this registry.
     ///
-    /// A completed image for `path` is returned at once and made most recently
-    /// used; a request for a path already loading joins that load; otherwise
-    /// the file is read on the IO lane of the services' lanes and decoded on
-    /// their compute lane, at most
-    /// [`with_decode_threads`](AssetRegistryBuilder::with_decode_threads)
-    /// decodes at a time. The decoded image is kept within
-    /// [`with_decoded_image_budget`](AssetRegistryBuilder::with_decoded_image_budget);
-    /// failures are not kept, so a later request retries.
+    /// A completed image is returned immediately and made most recently used;
+    /// a request for a path already loading joins that load. Otherwise the
+    /// file is read on the services' IO lane and decoded on their compute
+    /// lane, at most [`with_decode_threads`](AssetRegistryBuilder::with_decode_threads)
+    /// decodes at a time. With no lanes the work runs where the returned
+    /// [`ImageLoad`] is polled.
     ///
-    /// With no lanes, or lanes too full or unable to take the load, it runs
-    /// inside the returned [`ImageLoad`], on the thread that polls it. The
-    /// registry starts no runtime or thread of its own.
-    ///
-    /// The load is the registry's, shared by every request for `path`:
-    /// dropping one [`ImageLoad`] leaves it running for the rest, and dropping
-    /// the last cancels it (the file is read in chunks and stops at the next
-    /// one, and a decode that has not started never runs). A load dropped
-    /// unfinished by the lanes or the request it ran in is taken over by the
-    /// next request still waiting, on that request's services. Loads start
-    /// reading in the order they were requested, up to four per decode
-    /// thread; a decode slot goes to the earliest-requested load whose bytes
-    /// are ready, never held for one still fetching.
-    ///
-    /// This method does not consult or populate [`AssetRegistry::load`]'s
-    /// typed cache (`AssetCache<ImageAsset>`): the decoded-image cache is the
-    /// one a UI layer probes synchronously with [`cached_image`](Self::cached_image).
+    /// The load belongs to the registry, not one waiter. Dropping one waiter
+    /// leaves it running for the rest; dropping the last cancels it. A load
+    /// dropped unfinished by its lanes or request is taken over by the next
+    /// waiter on that waiter's services.
     ///
     /// # Errors
     ///
-    /// Returns [`AssetError::LoadFailed`] if the file cannot be read, or if
-    /// the load panicked or kept being dropped unfinished;
-    /// [`AssetError::DecodeFailed`] if it cannot be decoded; and
-    /// [`AssetError::LanesRefused`] if the lanes are shutting down.
+    /// Returns [`crate::error::AssetError::LoadFailed`] for file or decode failures,
+    /// [`crate::error::AssetError::DecodeFailed`] when a decoder panics, and
+    /// [`crate::error::AssetError::LanesRefused`] when the supplied lanes are shutting down.
     #[cfg(feature = "images")]
     pub fn load_image(&self, path: impl Into<Arc<str>>, services: LoadServices) -> ImageLoad {
         self.decoded_images
             .load(ImageSource::Asset(path.into()), services)
     }
 
-    /// Fetches and decodes an image over HTTP or HTTPS with the services'
-    /// HTTP client, through the same decoded-image cache, lanes, sharing and
-    /// cancellation as [`load_image`](Self::load_image).
+    /// Fetches and decodes an HTTP or HTTPS image through this registry.
     ///
-    /// The request is sent from the IO lane; the client drives it, so the
-    /// lane needs no async runtime of its own. Dropping the last waiter
-    /// drops the request. A body over 256 MiB fails without being read whole.
+    /// Fetching uses the caller's HTTP capability and the same cache, lanes,
+    /// sharing, cancellation and handover as [`load_image`](Self::load_image).
+    /// A response body over 256 MiB fails without being buffered in full.
     ///
     /// # Errors
     ///
-    /// Returns [`AssetError::HttpUnavailable`] when the services have no HTTP
-    /// client; [`AssetError::Http`] when the request fails and
-    /// [`AssetError::HttpStatus`] when it answers a status other than 2xx;
-    /// and otherwise the errors of [`load_image`](Self::load_image).
+    /// Returns [`crate::error::AssetError::HttpUnavailable`] when `services` has no HTTP
+    /// client, [`crate::error::AssetError::Http`] for a failed request,
+    /// [`crate::error::AssetError::HttpStatus`] for a non-2xx response, and otherwise the
+    /// errors of [`load_image`](Self::load_image).
     #[cfg(feature = "images")]
     pub fn load_network_image(
         &self,
@@ -179,213 +98,24 @@ impl AssetRegistry {
             .load(services.network_source(url.into()), services)
     }
 
-    /// The completed decoded image this registry keeps for `source`, made most
-    /// recently used — the synchronous probe a frame makes before starting a
-    /// load.
+    /// Returns the completed image for `source`, making it most recently used.
+    ///
+    /// This synchronous probe lets a frame use an already decoded image before
+    /// starting a load. It never performs file, network or decode work.
     #[cfg(feature = "images")]
     #[must_use]
     pub fn cached_image(&self, source: &ImageSource) -> Option<crate::Image> {
         self.decoded_images.cached(source)
     }
-
-    /// Loads an asset, using the cache if available.
-    ///
-    /// Validates each supplied asset before consulting the cache. A rejected
-    /// descriptor returns its validation error even on a cache hit, without
-    /// loading or changing previously cached data.
-    /// If the asset is already cached, returns the cached version immediately.
-    /// Built-in [`crate::FontAsset`] loads share same-key pending work.
-    /// Images and custom assets run independently on a cold miss, including reentry through
-    /// spawned tasks. Each success publishes; later completion may replace earlier
-    /// data without invalidating its handles. Exactly-once side effects are not
-    /// guaranteed. Errors are not cached. Cancelling one custom load does not
-    /// cancel another; later calls can retry. Built-in waiters may restart after
-    /// elected cancellation or panic, subject to Moka's finite retry policy.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if:
-    /// - The asset cannot be loaded (`AssetError::LoadFailed`)
-    /// - The asset data is invalid (`AssetError::DecodeFailed`)
-    /// - The asset format is unsupported (`AssetError::UnsupportedFormat`)
-    /// - Any I/O error occurs (`AssetError::Io`)
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// let image = ImageAsset::file("logo.png");
-    /// let handle = registry.load(image).await?;
-    /// ```
-    pub async fn load<T>(&self, asset: T) -> Result<AssetHandle<T::Data, T::Key>>
-    where
-        T: Asset<Error = AssetError>,
-        T::Key: std::hash::Hash + Eq + Clone,
-    {
-        asset.validate()?;
-        let key = asset.key();
-        let cache = self.get_or_create_cache::<T>();
-
-        cache.load(key, &asset).await
-    }
-
-    /// Gets an asset from cache without loading.
-    ///
-    /// Returns `None` if the asset is not cached.
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// let key = AssetKey::new("logo.png");
-    /// if let Some(handle) = registry.get::<ImageAsset>(&key).await {
-    ///     println!("Found in cache!");
-    /// }
-    /// ```
-    pub async fn get<T>(&self, key: &T::Key) -> Option<AssetHandle<T::Data, T::Key>>
-    where
-        T: Asset,
-        T::Key: std::hash::Hash + Eq + Clone,
-    {
-        self.get_cache::<T>()?.get(key).await
-    }
-
-    /// Preloads an asset into the cache.
-    ///
-    /// This is useful for warming up the cache before assets are needed.
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// // Preload critical assets at startup
-    /// registry.preload(ImageAsset::file("logo.png")).await?;
-    /// registry.preload(FontAsset::file("Roboto-Regular.ttf")).await?;
-    /// ```
-    pub async fn preload<T>(&self, asset: T) -> Result<()>
-    where
-        T: Asset<Error = AssetError>,
-        T::Key: std::hash::Hash + Eq + Clone,
-    {
-        self.load(asset).await?;
-        Ok(())
-    }
-
-    /// Invalidates (removes) an asset from the cache.
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// let key = AssetKey::new("logo.png");
-    /// registry.invalidate::<ImageAsset>(&key).await;
-    /// ```
-    pub async fn invalidate<T>(&self, key: &T::Key)
-    where
-        T: Asset,
-        T::Key: std::hash::Hash + Eq + Clone,
-    {
-        if let Some(cache) = self.get_cache::<T>() {
-            cache.invalidate(key).await;
-        }
-    }
-
-    /// Clears all cached assets of a specific type.
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// // Clear all cached images
-    /// registry.clear::<ImageAsset>().await;
-    /// ```
-    pub async fn clear<T>(&self)
-    where
-        T: Asset,
-        T::Key: std::hash::Hash + Eq + Clone,
-    {
-        if let Some(cache) = self.get_cache::<T>() {
-            cache.clear().await;
-        }
-    }
-
-    /// Detaches all typed caches before retiring their ownership. Generic data
-    /// destructors may reenter this registry and create fresh caches.
-    /// In-flight loads can still return handles from their detached cache.
-    #[expect(
-        clippy::unused_async,
-        reason = "public API: uniform async surface with the genuinely-async `invalidate`/`clear` siblings"
-    )]
-    pub async fn clear_all(&self) {
-        self.retire_caches();
-    }
-
-    /// Detaches every typed cache and drops it with no lock held.
-    fn retire_caches(&self) {
-        let retired = {
-            let mut caches = self.caches.write();
-            std::mem::take(&mut *caches)
-        };
-        drop(retired);
-    }
-
-    /// Gets the cache for a specific asset type, if it exists.
-    fn get_cache<T>(&self) -> Option<AssetCache<T>>
-    where
-        T: Asset,
-        T::Key: std::hash::Hash + Eq + Clone,
-    {
-        let caches = self.caches.read();
-        let type_id = TypeId::of::<T>();
-
-        caches
-            .get(&type_id)
-            .and_then(|any| any.downcast_ref::<AssetCache<T>>().cloned())
-    }
-
-    /// Gets or creates the cache for a specific asset type.
-    fn get_or_create_cache<T>(&self) -> AssetCache<T>
-    where
-        T: Asset,
-        T::Key: std::hash::Hash + Eq + Clone,
-    {
-        let type_id = TypeId::of::<T>();
-
-        // Fast path: cache already exists
-        {
-            let caches = self.caches.read();
-            if let Some(any) = caches.get(&type_id)
-                && let Some(cache) = any.downcast_ref::<AssetCache<T>>()
-            {
-                return cache.clone();
-            }
-        }
-
-        // Slow path: create new cache
-        let mut caches = self.caches.write();
-
-        // Double-check in case another thread created it
-        if let Some(any) = caches.get(&type_id)
-            && let Some(cache) = any.downcast_ref::<AssetCache<T>>()
-        {
-            return cache.clone();
-        }
-
-        // Create new cache
-        let cache = AssetCache::<T>::with_config(self.cache_config);
-        caches.insert(type_id, Box::new(cache.clone()));
-        cache
-    }
 }
 
-/// Under memory pressure the registry gives back every completed typed-cache
-/// entry, and decoded images by level.
+/// Gives decoded images back according to memory pressure.
 ///
-/// A typed asset reloads from its source on the next request, and there is no
-/// cheaper half-way to give back, so each level drops the same entries.
-/// Decoded images (`images` feature) are kept by recency: moderate pressure
-/// trims them to half the decoded-image budget
-/// (`AssetRegistryBuilder::with_decoded_image_budget`), critical pressure drops
-/// them all. Handles and images already given out keep their data, and loads
-/// in flight finish into the caches they started with.
+/// Moderate pressure trims the cache to half its configured byte budget;
+/// critical pressure clears it. Images already returned to callers stay alive,
+/// and loads in flight retain their sharing and cancellation behavior.
 impl ReclaimMemory for AssetRegistry {
     fn reclaim(&self, level: MemoryPressureLevel) {
-        self.retire_caches();
         #[cfg(feature = "images")]
         self.decoded_images.reclaim(level);
         #[cfg(not(feature = "images"))]
@@ -395,139 +125,44 @@ impl ReclaimMemory for AssetRegistry {
 
 impl Default for AssetRegistry {
     fn default() -> Self {
-        Self::new(AssetCacheConfig::default())
+        AssetRegistryBuilder::new().build()
     }
 }
 
-// ===== Type State Builder Pattern =====
-
-/// Type-state marker: Capacity not yet set.
-#[derive(Debug, Clone, Copy)]
-pub struct NoCapacity;
-
-/// Type-state marker: Capacity has been set.
-#[derive(Debug, Clone, Copy)]
-pub struct HasCapacity(pub(crate) AssetCacheConfig);
-
-/// Builder for constructing an asset registry with compile-time validation.
+/// Configures an [`AssetRegistry`].
 ///
-/// This builder uses the type-state pattern to ensure required configuration
-/// is provided at compile-time. The `build()` method is only available after
-/// capacity has been set.
+/// No cache-capacity selection is required: decoded-image retention has a
+/// platform-appropriate byte default, and `build` is available immediately.
 ///
-/// # Type States
-///
-/// - `AssetRegistryBuilder<NoCapacity>` - Initial state, capacity must be set
-/// - `AssetRegistryBuilder<HasCapacity>` - Ready to build
-///
-/// # Examples
-///
-/// ```rust,ignore
+/// ```
 /// use flui_assets::AssetRegistryBuilder;
 ///
-/// // This compiles - capacity is set
-/// let registry = AssetRegistryBuilder::new()
-///     .with_capacity(flui_assets::CacheCapacity::Entries(std::num::NonZeroU64::new(1_024).expect("nonzero capacity"))) // entry count
-///     .build();
-///
-/// // This won't compile - capacity not set
-/// // let registry = AssetRegistryBuilder::new().build(); // ❌ ERROR
-/// ```
-///
-/// # Default Capacity
-///
-/// If you want a registry with default capacity, use `with_default_capacity()`:
-///
-/// ```rust,ignore
-/// let registry = AssetRegistryBuilder::new()
-///     .with_default_capacity() // entry count
-///     .build();
+/// let registry = AssetRegistryBuilder::new().build();
 /// ```
 #[derive(Debug)]
-pub struct AssetRegistryBuilder<C = NoCapacity> {
-    capacity: C,
-    /// Set via [`with_decoded_image_budget`](Self::with_decoded_image_budget)
-    /// and [`with_decode_threads`](Self::with_decode_threads).
+pub struct AssetRegistryBuilder {
     #[cfg(feature = "images")]
     images: ImageConfig,
 }
 
-// ===== Initial State: NoCapacity =====
-
-impl AssetRegistryBuilder<NoCapacity> {
-    /// Creates a new registry builder.
-    ///
-    /// You must call `with_capacity()` or `with_default_capacity()` before building.
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// let builder = AssetRegistryBuilder::new();
-    /// // builder.build(); // ❌ Won't compile - capacity not set
-    /// ```
+impl AssetRegistryBuilder {
+    /// Creates a builder with the default decoded-image byte budget and decode
+    /// concurrency.
+    #[must_use]
     pub fn new() -> Self {
         Self {
-            capacity: NoCapacity,
             #[cfg(feature = "images")]
             images: ImageConfig::default(),
         }
     }
 
-    /// Sets completed-entry retention separately for each asset type.
-    ///
-    /// This capacity is used for each asset type's cache.
-    ///
-    /// # Arguments
-    ///
-    /// * `capacity` - An explicit count bound or disabled retention.
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// let registry = AssetRegistryBuilder::new()
-    ///     .with_capacity(flui_assets::CacheCapacity::Entries(std::num::NonZeroU64::new(1_024).expect("nonzero capacity"))) // entry count
-    ///     .build();
-    /// ```
-    pub fn with_capacity(self, capacity: CacheCapacity) -> AssetRegistryBuilder<HasCapacity> {
-        self.with_cache_config(AssetCacheConfig {
-            capacity,
-            ..AssetCacheConfig::default()
-        })
-    }
-
-    /// Configures count capacity and expiration for every typed cache.
-    pub fn with_cache_config(self, config: AssetCacheConfig) -> AssetRegistryBuilder<HasCapacity> {
-        AssetRegistryBuilder {
-            capacity: HasCapacity(config),
-            #[cfg(feature = "images")]
-            images: self.images,
-        }
-    }
-
-    /// Sets the default capacity (10,240 entries per asset type).
-    ///
-    /// This is a convenience method for the common case.
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// let registry = AssetRegistryBuilder::new()
-    ///     .with_default_capacity()
-    ///     .build();
-    /// ```
-    pub fn with_default_capacity(self) -> AssetRegistryBuilder<HasCapacity> {
-        self.with_cache_config(AssetCacheConfig::default())
-    }
-}
-
-impl<C> AssetRegistryBuilder<C> {
-    /// Bounds the decoded images the registry keeps, in pixel bytes
+    /// Bounds retained decoded images in RGBA8 pixel bytes
     /// (`width * height * 4` each).
     ///
-    /// The least recently used images go first once the total passes `bytes`;
-    /// an image larger than `bytes` is handed to its waiters and not kept, and
-    /// `0` keeps none. Loads in flight are still shared. The default is 256 MiB,
-    /// and 64 MiB on Android, iOS and the web.
+    /// Least recently used images are evicted once the total exceeds `bytes`.
+    /// An image larger than `bytes` is returned to its waiters but not kept;
+    /// zero disables retention without disabling load sharing. The default is
+    /// 256 MiB, and 64 MiB on Android, iOS and the web.
     #[cfg(feature = "images")]
     #[must_use]
     pub fn with_decoded_image_budget(mut self, bytes: usize) -> Self {
@@ -537,97 +172,30 @@ impl<C> AssetRegistryBuilder<C> {
 
     /// Bounds how many images decode at once.
     ///
-    /// Decodes run on the compute lane of the lanes each load is given, never
-    /// on its IO lane. The default is half the available cores, at most four.
+    /// Decodes run on each load's compute lane, never its IO lane. The default
+    /// is half the available cores, at most four.
     #[cfg(feature = "images")]
     #[must_use]
     pub fn with_decode_threads(mut self, threads: std::num::NonZeroUsize) -> Self {
         self.images.decode_threads = threads;
         self
     }
-}
 
-// ===== Final State: HasCapacity =====
-
-impl AssetRegistryBuilder<HasCapacity> {
-    /// Builds the asset registry.
-    ///
-    /// This method is only available after capacity has been set.
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// let registry = AssetRegistryBuilder::new()
-    ///     .with_capacity(flui_assets::CacheCapacity::Entries(std::num::NonZeroU64::new(1_024).expect("nonzero capacity")))
-    ///     .build();
-    /// ```
+    /// Builds the registry.
+    #[must_use]
     pub fn build(self) -> AssetRegistry {
-        #[cfg(feature = "images")]
-        {
-            AssetRegistry::with_images(self.capacity.0, self.images)
-        }
-        #[cfg(not(feature = "images"))]
-        {
-            AssetRegistry::new(self.capacity.0)
-        }
-    }
-
-    /// Updates the capacity after it has been set.
-    ///
-    /// This allows changing the capacity even after calling `with_capacity()`.
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// let registry = AssetRegistryBuilder::new()
-    ///     .with_capacity(flui_assets::CacheCapacity::Entries(std::num::NonZeroU64::new(1_024).expect("nonzero capacity")))
-    ///     .with_capacity(flui_assets::CacheCapacity::Entries(std::num::NonZeroU64::new(1_024).expect("nonzero capacity"))) // Override previous value
-    ///     .build();
-    /// ```
-    pub fn with_capacity(self, capacity: CacheCapacity) -> AssetRegistryBuilder<HasCapacity> {
-        let mut config = self.capacity.0;
-        config.capacity = capacity;
-        self.with_cache_config(config)
-    }
-
-    /// Replaces the typed-cache capacity and expiration configuration.
-    pub fn with_cache_config(self, config: AssetCacheConfig) -> AssetRegistryBuilder<HasCapacity> {
-        AssetRegistryBuilder {
-            capacity: HasCapacity(config),
+        AssetRegistry {
             #[cfg(feature = "images")]
-            images: self.images,
+            decoded_images: Arc::new(images::DecodedImages::new(
+                self.images.budget,
+                self.images.decode_threads,
+            )),
         }
     }
 }
 
-// ===== Convenience: Default Implementation =====
-
-impl Default for AssetRegistryBuilder<NoCapacity> {
+impl Default for AssetRegistryBuilder {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::assets::FontAsset;
-    use crate::types::AssetKey;
-
-    #[tokio::test]
-    async fn test_registry_invalidate() {
-        let registry = AssetRegistry::default();
-
-        let ttf_bytes = vec![0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
-        let font = FontAsset::from_bytes("test.ttf", ttf_bytes);
-
-        let _handle = registry.load(font).await.unwrap();
-
-        let key = AssetKey::new("test.ttf");
-        assert!(registry.get::<FontAsset>(&key).await.is_some());
-
-        // Invalidate
-        registry.invalidate::<FontAsset>(&key).await;
-        assert!(registry.get::<FontAsset>(&key).await.is_none());
     }
 }

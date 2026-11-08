@@ -30,6 +30,7 @@ use std::task::Poll;
 use flui::foundation::{
     ChangeNotifier, ConnectionState, Listenable, Subscription, ValueKey, ViewKey,
 };
+use flui::foundation::{ChangeNotifier, Listenable, ListenerId, ValueKey, ViewKey};
 use flui::geometry::{EdgeInsets, Size};
 use flui::interaction::FocusNode;
 use flui::material::{ButtonStyle, InputDecoration, TextButton, TextFormField, Theme, ThemeData};
@@ -39,8 +40,8 @@ use flui::view::element::ElementKind;
 use flui::view::persist::{DecodeError, Document, PersistError, Persisted, Revision, SaveStatus};
 use flui::view::{AsyncDriver, CloseGuard, StaleClose, TaskToken, View};
 use flui::widgets::{
-    AnimatedBuilder, BoxedResultFuture, Form, FormHandle, FutureBuilder, SafeArea, Scrollable,
-    WidgetStateProperty, column,
+    AnimatedBuilder, AsyncSnapshot, BoxedResultFuture, Form, FormHandle, FutureBuilder, SafeArea,
+    Scrollable, WidgetStateProperty, column,
 };
 use serde::{Deserialize, Serialize};
 
@@ -820,15 +821,21 @@ impl ViewState<Root> for RootState {
                 }) as BoxedResultFuture<Read, LoadFailure>
             }),
             Rc::new(move |_cx, snapshot| {
-                if snapshot.connection_state() != ConnectionState::Done {
-                    // Reload replaces the load under way: its future is
-                    // dropped, so nothing it read is applied.
-                    let reload = TextButton::new(Text::new("Reload")).on_pressed(move |cx| {
-                        attempt.update(cx, |attempt| *attempt = attempt.wrapping_add(1))
-                    });
-                    return Column::new(column![Text::new("Loading notes"), reload]).boxed();
+                match snapshot {
+                    AsyncSnapshot::None(_) | AsyncSnapshot::Waiting(_) => {
+                        // Reload replaces the load under way: its future is
+                        // dropped, so nothing it read is applied.
+                        let reload = TextButton::new(Text::new("Reload")).on_pressed(move |cx| {
+                            attempt.update(cx, |attempt| *attempt = attempt.wrapping_add(1))
+                        });
+                        return Column::new(column![Text::new("Loading notes"), reload]).boxed();
+                    }
+                    AsyncSnapshot::Active(_) => {
+                        unreachable!("BUG: a FutureBuilder never publishes an active snapshot")
+                    }
+                    AsyncSnapshot::Done(_) => {}
                 }
-                if let Some(error) = snapshot.error() {
+                if let AsyncSnapshot::Done(Some(Err(error))) = snapshot {
                     let resume = documents.data.clone();
                     let resuming = Rc::clone(&starting_over);
                     let retry = TextButton::new(Text::new("Retry")).on_pressed(move |cx| {
@@ -855,10 +862,20 @@ impl ViewState<Root> for RootState {
                         });
                     return Column::new(column![message, retry, start_over]).boxed();
                 }
-                let read = snapshot
-                    .data()
-                    .cloned()
-                    .expect("BUG: a load done without an error has its value");
+                let read = match snapshot {
+                    AsyncSnapshot::Done(Some(Ok(read))) => read.clone(),
+                    AsyncSnapshot::Done(None) => {
+                        unreachable!("BUG: a completed load always has a result")
+                    }
+                    AsyncSnapshot::Done(Some(Err(_))) => {
+                        unreachable!("BUG: a failed load returns its error UI above")
+                    }
+                    AsyncSnapshot::None(_)
+                    | AsyncSnapshot::Waiting(_)
+                    | AsyncSnapshot::Active(_) => {
+                        unreachable!("BUG: an unfinished load returns its loading UI above")
+                    }
+                };
                 Loaded {
                     read,
                     documents: documents.clone(),

@@ -16,7 +16,8 @@
 //!   the system font scale;
 //! - `web`: the browser's `EditContext` or a hidden textarea, which mirrors
 //!   the focused field;
-//! - `headless`: the recording double of IME requests.
+//! - `headless`: the production no-op sink; its recording double lives in the
+//!   native testing kit.
 //!
 //! The model's `ime` is built for the two hosts that mirror a field and for
 //! tests. The key a backend's input method owns is the input feature's

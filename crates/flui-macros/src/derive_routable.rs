@@ -17,8 +17,8 @@
 //! `from_path`; `from_path` tries the patterns from the most specific, so a
 //! literal segment wins over a parameter whatever the declaration order.
 //!
-//! The generated code names only `flui_widgets` items: the trait, `RoutePath`,
-//! `RouteParseError` and the hidden `router::__derive` helpers.
+//! The generated code names only `flui_widgets` items: the public trait and
+//! the hidden `router::__derive` helpers, including its route-value imports.
 
 mod pattern;
 
@@ -116,15 +116,15 @@ pub(crate) fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
     Ok(quote! {
         #[automatically_derived]
         impl #widgets::Routable for #name {
-            fn to_path(&self) -> #widgets::RoutePath {
+            fn to_path(&self) -> #widgets::router::__derive::RoutePath {
                 match self {
                     #(#to_path_arms)*
                 }
             }
 
             fn from_path(
-                path: &#widgets::RoutePath,
-            ) -> ::core::result::Result<Self, #widgets::RouteParseError> {
+                path: &#widgets::router::__derive::RoutePath,
+            ) -> ::core::result::Result<Self, #widgets::router::__derive::RouteParseError> {
                 #(#assertions)*
                 let __flui_decoded = #widgets::router::__derive::segments(path);
                 let __flui_segments: ::std::vec::Vec<&str> = __flui_decoded
@@ -289,7 +289,7 @@ fn to_path_arm(route: &Route<'_>, widgets: &Path) -> TokenStream {
         quote!(Self::#variant)
     };
     quote! {
-        #pattern => #widgets::RoutePath::root() #(#joins)*,
+        #pattern => #widgets::router::__derive::RoutePath::root() #(#joins)*,
     }
 }
 

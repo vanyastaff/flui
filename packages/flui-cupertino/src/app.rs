@@ -30,18 +30,18 @@
 //!   hero controller, so no explicit scope is needed here.
 //! - **`CupertinoLocalizations`** — FLUI ships no Cupertino resource set
 //!   yet; when one lands its delegate is appended here.
-//! - **`Title`/`color`, named routes/`Router`, restoration, debug overlays**
-//!   — deferred at the `WidgetsApp` layer; see its module docs.
+//! - **`Title`/`color`, restoration, debug overlays** — deferred at the
+//!   `WidgetsApp` layer; see its module docs.
 
 use std::fmt;
-use std::rc::Rc;
 use std::sync::Arc;
 
 use flui_sdk::platform::Locale;
 use flui_sdk::view::BoxedView;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{
-    AppBuilder, BoxedLocalizationsDelegate, NavigatorHandle, NavigatorObserver, WidgetsApp,
+    AppForm, BoxedLocalizationsDelegate, NavigatorForm, NavigatorHandle, NavigatorObserver,
+    Routable, Router, RouterForm, WidgetsApp,
 };
 
 use crate::theme::{CupertinoTheme, CupertinoThemeData};
@@ -66,49 +66,26 @@ use crate::theme::{CupertinoTheme, CupertinoThemeData};
 /// )?;
 /// ```
 #[derive(Clone, StatelessView)]
-pub struct CupertinoApp {
-    home: Option<BoxedView>,
-    navigator: Option<NavigatorHandle>,
-    observers: Vec<Arc<dyn NavigatorObserver>>,
-    builder: Option<AppBuilder>,
+pub struct CupertinoApp<F: AppForm = NavigatorForm> {
+    app: WidgetsApp<F>,
     theme: Option<CupertinoThemeData>,
-    locale: Option<Locale>,
-    supported_locales: Vec<Locale>,
-    localizations_delegates: Vec<BoxedLocalizationsDelegate>,
 }
 
-impl fmt::Debug for CupertinoApp {
+impl<F: AppForm> fmt::Debug for CupertinoApp<F> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("CupertinoApp")
-            .field("has_home", &self.home.is_some())
-            .field("has_builder", &self.builder.is_some())
+            .field("app", &self.app)
             .field("has_theme", &self.theme.is_some())
             .finish_non_exhaustive()
     }
 }
 
-impl CupertinoApp {
-    fn bare() -> Self {
-        Self {
-            home: None,
-            navigator: None,
-            observers: Vec::new(),
-            builder: None,
-            theme: None,
-            locale: None,
-            supported_locales: vec![Locale::en_us()],
-            localizations_delegates: Vec::new(),
-        }
-    }
-
+impl CupertinoApp<NavigatorForm> {
     /// A Cupertino app whose navigator shows `home` as its root route — see
     /// `WidgetsApp::new` for the seeding contract.
     #[must_use]
     pub fn new(home: impl IntoView) -> Self {
-        Self {
-            home: Some(home.into_view().boxed()),
-            ..Self::bare()
-        }
+        Self::from_widgets_app(WidgetsApp::new(home))
     }
 
     /// A Cupertino app with no navigator: `builder` receives `None` and
@@ -118,10 +95,40 @@ impl CupertinoApp {
     pub fn with_builder(
         builder: impl Fn(&dyn BuildContext, Option<BoxedView>) -> BoxedView + 'static,
     ) -> Self {
-        Self {
-            builder: Some(Rc::new(builder)),
-            ..Self::bare()
-        }
+        Self::from_widgets_app(WidgetsApp::with_builder(builder))
+    }
+
+    /// Drive the navigator through a caller-owned handle — see
+    /// `WidgetsApp::navigator` for the pre-seeded-handle contract.
+    #[must_use]
+    pub fn navigator(mut self, handle: NavigatorHandle) -> Self {
+        self.app = self.app.navigator(handle);
+        self
+    }
+
+    /// Register `observer` on the navigator at mount; see
+    /// `WidgetsApp::observer`.
+    #[must_use]
+    pub fn observer(mut self, observer: Arc<dyn NavigatorObserver>) -> Self {
+        self.app = self.app.observer(observer);
+        self
+    }
+}
+
+impl CupertinoApp<RouterForm> {
+    /// A Cupertino app rooted in `router`, below the published Cupertino theme.
+    ///
+    /// The returned router form has no `navigator` or `observer` builder:
+    /// the Router owns the app's only navigator (ADR-0093 §4).
+    #[must_use]
+    pub fn router<R: Routable>(router: Router<R>) -> Self {
+        Self::from_widgets_app(WidgetsApp::router(router))
+    }
+}
+
+impl<F: AppForm> CupertinoApp<F> {
+    fn from_widgets_app(app: WidgetsApp<F>) -> Self {
+        Self { app, theme: None }
     }
 
     /// The app-wide theme, default
@@ -130,22 +137,6 @@ impl CupertinoApp {
     #[must_use]
     pub fn theme(mut self, theme: CupertinoThemeData) -> Self {
         self.theme = Some(theme);
-        self
-    }
-
-    /// Drive the navigator through a caller-owned handle — see
-    /// `WidgetsApp::navigator` for the pre-seeded-handle contract.
-    #[must_use]
-    pub fn navigator(mut self, handle: NavigatorHandle) -> Self {
-        self.navigator = Some(handle);
-        self
-    }
-
-    /// Register `observer` on the navigator at mount; see
-    /// `WidgetsApp::observer`.
-    #[must_use]
-    pub fn observer(mut self, observer: Arc<dyn NavigatorObserver>) -> Self {
-        self.observers.push(observer);
         self
     }
 
@@ -158,7 +149,7 @@ impl CupertinoApp {
         mut self,
         builder: impl Fn(&dyn BuildContext, Option<BoxedView>) -> BoxedView + 'static,
     ) -> Self {
-        self.builder = Some(Rc::new(builder));
+        self.app = self.app.builder(builder);
         self
     }
 
@@ -166,7 +157,7 @@ impl CupertinoApp {
     /// resolved-against-supported contract.
     #[must_use]
     pub fn locale(mut self, locale: Locale) -> Self {
-        self.locale = Some(locale);
+        self.app = self.app.locale(locale);
         self
     }
 
@@ -180,12 +171,7 @@ impl CupertinoApp {
     /// resolution reads the first supported locale.
     #[must_use]
     pub fn supported_locales(mut self, locales: Vec<Locale>) -> Self {
-        debug_assert!(
-            !locales.is_empty(),
-            "BUG: supported_locales requires at least one locale \
-             (the oracle asserts supportedLocales.isNotEmpty)"
-        );
-        self.supported_locales = locales;
+        self.app = self.app.supported_locales(locales);
         self
     }
 
@@ -193,12 +179,12 @@ impl CupertinoApp {
     /// `WidgetsApp::localizations_delegates` for the ordering contract.
     #[must_use]
     pub fn localizations_delegates(mut self, delegates: Vec<BoxedLocalizationsDelegate>) -> Self {
-        self.localizations_delegates = delegates;
+        self.app = self.app.localizations_delegates(delegates);
         self
     }
 }
 
-impl StatelessView for CupertinoApp {
+impl<F: AppForm> StatelessView for CupertinoApp<F> {
     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
         // The theme (or the default) is resolved HERE, in this element's own context, so the
         // MediaQuery dependency registered by dynamic-color resolution
@@ -207,39 +193,7 @@ impl StatelessView for CupertinoApp {
 
         // The resolved theme's text style is the application-level text style.
         let text_style = effective.text_theme().text_style();
-
-        let pass_through = |builder: &AppBuilder| {
-            let shared = Rc::clone(builder);
-            move |ctx: &dyn BuildContext, child: Option<BoxedView>| (*shared)(ctx, child)
-        };
-        let mut app = match (&self.home, &self.builder) {
-            (Some(home), Some(builder)) => {
-                WidgetsApp::new(home.clone()).builder(pass_through(builder))
-            }
-            (Some(home), None) => WidgetsApp::new(home.clone()),
-            (None, Some(builder)) => WidgetsApp::with_builder(pass_through(builder)),
-            (None, None) => {
-                // `WidgetsApp` requires a home or a builder; mirror its own
-                // construction guarantee at this crate's boundary.
-                unreachable!(
-                    "BUG: CupertinoApp has neither home nor builder; CupertinoApp::new and \
-                     CupertinoApp::with_builder each guarantee one"
-                )
-            }
-        };
-        app = app
-            .supported_locales(self.supported_locales.clone())
-            .localizations_delegates(self.localizations_delegates.clone())
-            .text_style(text_style);
-        if let Some(locale) = &self.locale {
-            app = app.locale(locale.clone());
-        }
-        if let Some(handle) = &self.navigator {
-            app = app.navigator(handle.clone());
-        }
-        for observer in &self.observers {
-            app = app.observer(Arc::clone(observer));
-        }
+        let app = self.app.clone().text_style(text_style);
 
         // The published theme sits ABOVE the WidgetsApp.
         CupertinoTheme::new(effective, app)

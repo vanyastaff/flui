@@ -15,12 +15,13 @@ use std::time::Duration;
 use crate::common::{LaidOut, lay_out, tight};
 use flui_animation::{SharedCurve, Vsync, curves};
 use flui_rendering::constraints::BoxConstraints;
+use flui_rendering::semantics::SemanticsRole;
 use flui_rendering::view::ScrollDirection;
 use flui_view::environment::VsyncScope;
 use flui_view::{IntoView, SignalWriteExt, ViewExt};
 use flui_widgets::{
     BouncingScrollPhysics, ClampingScrollPhysics, ScrollController, Scrollable, Scrollbar,
-    SemanticsRole, SharedScrollPhysics, SizedBox,
+    SharedScrollPhysics, SizedBox,
 };
 
 #[derive(Clone, flui_view::prelude::StatelessView)]
@@ -2333,7 +2334,7 @@ pub(crate) fn a_click_during_wheel_easing_taps_and_a_press_on_a_fling_catches_it
             vsync.clone(),
             Scrollable::new().controller(scroll.clone()).child(
                 GestureDetector::new()
-                    .behavior(flui_widgets::HitTestBehavior::Opaque)
+                    .behavior(flui_interaction::HitTestBehavior::Opaque)
                     .on_tap(move |_| tapped.set(tapped.get() + 1))
                     .child(SizedBox::new(300.0, 5000.0)),
             ),
@@ -3496,7 +3497,7 @@ pub(crate) fn a_fresh_physics_each_build_keeps_the_fling_and_its_bounce() {
                 .physics(physics)
                 .child(
                     GestureDetector::new()
-                        .behavior(flui_widgets::HitTestBehavior::Opaque)
+                        .behavior(flui_interaction::HitTestBehavior::Opaque)
                         .on_tap(move |_| taps.set(taps.get() + 1))
                         .child(SizedBox::new(300.0, 800.0)),
                 ),

@@ -10,17 +10,19 @@ use flui_material::{
     LinearProgressIndicator, LinearWavyProgressIndicator, LoadingIndicator, MaterialApp,
     MaterialStyle, Theme, ThemeData, ThemeDataOverrides,
 };
-use flui_painting::paint::PathCommand;
 use flui_sdk::animation::{MotionOverride, Vsync};
 use flui_sdk::geometry::Point;
-use flui_sdk::painting::{Color, DrawOp, TextDirection};
+use flui_sdk::painting::DrawOp;
+use flui_sdk::painting::paint::PathCommand;
+use flui_sdk::painting::styling::Color;
+use flui_sdk::painting::typography::TextDirection;
+use flui_sdk::testing::a11y::Role;
 use flui_sdk::view::environment::VsyncScope;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{
     Alternative, ControlSpec, Directionality, GestureAlternatives, RefreshController,
     RefreshIndicator, RefreshIntent, ScrollController, Scrollable, SizedBox,
 };
-use flui_testing::a11y::Role;
 
 use crate::common::{LaidOut, lay_out_animated, tight};
 
@@ -828,10 +830,9 @@ pub fn expressive_material_app_refresh_shows_the_loading_indicator() {
         SizedBox::new(24.0, 24.0),
     )))
     .expect("one labelled command");
-    let theme = ThemeData::light().copy_with(ThemeDataOverrides {
-        style: Some(MaterialStyle::Expressive),
-        ..Default::default()
-    });
+    let mut overrides = ThemeDataOverrides::default();
+    overrides.style = Some(MaterialStyle::Expressive);
+    let theme = ThemeData::light().copy_with(overrides);
     let mut laid = lay_out_animated(
         VsyncScope::new(
             vsync.clone(),

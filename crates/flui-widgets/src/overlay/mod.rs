@@ -44,15 +44,15 @@
 //! [`maintain_state`]: OverlayEntry::set_maintain_state
 //! [`RenderTheater`]: flui_objects::RenderTheater
 //!
-//! # Threading and locks
+//! # Owner-local state and borrowing
 //!
 //! [`OverlayHandle`] answers "how does something outside the tree mutate the
-//! overlay?": an owned, `'static`, cloneable capability, not a `GlobalKey`
-//! lookup. Mutation takes a private `Mutex` and then schedules a rebuild
-//! through the [`RebuildHandle`] the state published at `init_state`. No
-//! element-tree borrow is held, no second lock is taken under a first, and no
-//! `GlobalKey` registry is consulted. `Navigator` will reach its overlay the
-//! same way.
+//! overlay?": an owned, `'static`, cloneable, owner-local capability backed by
+//! `Rc`, not a `GlobalKey` lookup. Mutation takes a private `RefCell` borrow,
+//! releases it, and then schedules a rebuild through a cloned [`RebuildHandle`]
+//! published at `init_state`. Callbacks, diagnostics and replaced values run or
+//! drop outside shared borrows, and no `GlobalKey` registry is consulted.
+//! `Navigator` will reach its overlay the same way.
 //!
 //! [`RebuildHandle`]: flui_view::RebuildHandle
 
@@ -72,8 +72,9 @@ mod theater;
 #[cfg(test)]
 mod tests;
 
+use std::cell::RefCell;
 use std::fmt;
-use std::sync::Arc;
+use std::rc::Rc;
 
 pub use entry::{OverlayEntry, OverlayEntryId};
 use flui_foundation::{RenderId, ViewKey};
@@ -81,7 +82,6 @@ use flui_objects::SubtreeAnchor;
 use flui_view::element::ElementKind;
 use flui_view::prelude::*;
 use flui_view::{BoxedView, InheritedView, RebuildHandle, ValueKey, impl_inherited_view};
-use parking_lot::Mutex;
 
 use self::theater::Theater;
 use crate::anchored_box::AnchoredBox;
@@ -104,19 +104,19 @@ pub enum InsertPosition {
 
 /// The entry list plus the capability to rebuild the mounted [`Overlay`].
 ///
-/// Shared by `Arc` between the [`OverlayHandle`] the caller holds and the
+/// Shared by `Rc` between the [`OverlayHandle`] the caller holds and the
 /// `OverlayState` the framework owns. This is deliberate: mutation arrives from
 /// outside the tree (from a `Navigator`'s route flush), so the list cannot
 /// live behind `&mut OverlayState` — nothing can obtain one.
 pub(crate) struct OverlayShared {
     /// Bottom → top. The last entry paints on top.
-    entries: Mutex<Vec<OverlayEntry>>,
+    entries: RefCell<Vec<OverlayEntry>>,
 
     /// `Some` only while the `Overlay` is mounted; published in `init_state` and
     /// cleared in `dispose` (never acquired in
     /// `build`). A handle for an unmounted overlay is the reason a stale
     /// [`OverlayHandle`] is inert rather than a panic.
-    rebuild: Mutex<Option<RebuildHandle>>,
+    rebuild: RefCell<Option<RebuildHandle>>,
 
     /// Where the serving `Overlay`'s render node publishes its id: what an
     /// entry placed at a point given in another node's space (a context
@@ -137,7 +137,8 @@ impl Drop for OverlayShared {
 impl OverlayShared {
     /// Schedule the mounted overlay to rebuild. No-op when unmounted.
     pub(crate) fn schedule_rebuild(&self) {
-        if let Some(handle) = self.rebuild.lock().as_ref() {
+        let handle = self.rebuild.borrow().clone();
+        if let Some(handle) = handle {
             handle.schedule(flui_view::RebuildReason::StateChange);
         }
     }
@@ -145,16 +146,17 @@ impl OverlayShared {
     /// Whether the overlay is mounted.
     pub(crate) fn is_mounted(&self) -> bool {
         self.rebuild
-            .lock()
+            .borrow()
             .as_ref()
             .is_some_and(RebuildHandle::is_active)
     }
 
     /// Retain the entries matching `keep`. Used by [`OverlayEntry::remove`].
     pub(crate) fn retain_entries(&self, keep: impl FnMut(&OverlayEntry) -> bool) {
-        let mut entries = std::mem::take(&mut *self.entries.lock());
+        let mut entries = std::mem::take(&mut *self.entries.borrow_mut());
         entries.retain(keep);
-        let _prev = std::mem::replace(&mut *self.entries.lock(), entries);
+        let previous = std::mem::replace(&mut *self.entries.borrow_mut(), entries);
+        drop(previous);
     }
 
     /// Take the rebuild slot for the mounted `Overlay` element `handle` names.
@@ -164,32 +166,45 @@ impl OverlayShared {
     /// PANIC-POLICY) and the caller builds nothing. Re-claiming by the element
     /// that holds it is a no-op success.
     fn claim_rebuild(&self, handle: &RebuildHandle) -> bool {
-        let mut slot = self.rebuild.lock();
-        if let Some(held) = slot.as_ref().filter(|held| held.is_active())
-            && held.element_id() != handle.element_id()
-        {
+        let replacement = handle.clone();
+        let (previous, refusal) = {
+            let mut slot = self.rebuild.borrow_mut();
+            if let Some(held) = slot.as_ref().filter(|held| held.is_active())
+                && held.element_id() != handle.element_id()
+            {
+                (None, Some((held.element_id(), handle.element_id())))
+            } else {
+                (slot.replace(replacement), None)
+            }
+        };
+        drop(previous);
+        if let Some((holder, refused)) = refusal {
             tracing::error!(
-                holder = ?held.element_id(),
-                refused = ?handle.element_id(),
+                holder = ?holder,
+                refused = ?refused,
                 "an OverlayHandle is already mounted by another Overlay; one handle \
                  serves one mounted Overlay, so this one builds nothing"
             );
             return false;
         }
-        let _prev = slot.replace(handle.clone());
         true
     }
 
     /// Give the rebuild slot back, but only if `element` holds it: a refused
     /// second mount disposing must not unmount the first.
     fn release_rebuild(&self, element: Option<flui_foundation::ElementId>) {
-        let mut slot = self.rebuild.lock();
-        if slot
-            .as_ref()
-            .is_some_and(|held| held.element_id() == element)
-        {
-            let _prev = slot.take();
-        }
+        let previous = {
+            let mut slot = self.rebuild.borrow_mut();
+            if slot
+                .as_ref()
+                .is_some_and(|held| held.element_id() == element)
+            {
+                slot.take()
+            } else {
+                None
+            }
+        };
+        drop(previous);
     }
 
     /// The entries of `candidates` this overlay may take: not owned by another
@@ -197,49 +212,62 @@ impl OverlayShared {
     /// `candidates` (the first occurrence wins). Each refusal is logged; none
     /// panics (PANIC-POLICY: this is caller error).
     fn admissible(
-        self: &Arc<Self>,
+        self: &Rc<Self>,
         candidates: &[OverlayEntry],
         held_ok: bool,
     ) -> Vec<OverlayEntry> {
-        let list = self.entries.lock();
+        enum Refusal {
+            OwnedElsewhere,
+            Duplicate,
+            AlreadyHeld,
+        }
+
+        let list = self.entries.borrow().clone();
         let mut accepted: Vec<OverlayEntry> = Vec::with_capacity(candidates.len());
+        let mut refusals = Vec::new();
         for entry in candidates {
             if let Some(owner) = entry.attached_overlay()
-                && !Arc::ptr_eq(&owner, self)
+                && !Rc::ptr_eq(&owner, self)
             {
-                tracing::error!(
-                    entry = entry.id().get(),
-                    "OverlayEntry belongs to another overlay; remove it there first"
-                );
+                refusals.push((entry.id(), Refusal::OwnedElsewhere));
                 continue;
             }
             if accepted.iter().any(|seen| seen.is_same(entry)) {
-                tracing::error!(
-                    entry = entry.id().get(),
-                    "OverlayEntry passed twice in one call"
-                );
+                refusals.push((entry.id(), Refusal::Duplicate));
                 continue;
             }
             if !held_ok && list.iter().any(|held| held.is_same(entry)) {
-                tracing::error!(
-                    entry = entry.id().get(),
-                    "OverlayEntry is already in this overlay"
-                );
+                refusals.push((entry.id(), Refusal::AlreadyHeld));
                 continue;
             }
             accepted.push(entry.clone());
+        }
+        for (entry, refusal) in refusals {
+            match refusal {
+                Refusal::OwnedElsewhere => tracing::error!(
+                    entry = entry.get(),
+                    "OverlayEntry belongs to another overlay; remove it there first"
+                ),
+                Refusal::Duplicate => {
+                    tracing::error!(entry = entry.get(), "OverlayEntry passed twice in one call");
+                }
+                Refusal::AlreadyHeld => tracing::error!(
+                    entry = entry.get(),
+                    "OverlayEntry is already in this overlay"
+                ),
+            }
         }
         accepted
     }
 }
 
-/// An owned, `'static` capability to mutate an [`Overlay`]'s entry list.
+/// An owned, `'static`, owner-local capability to mutate an [`Overlay`]'s entry list.
 ///
 /// Create one with [`OverlayHandle::new`], hand a clone to [`Overlay::new`],
 /// and keep one: every clone names the same overlay (ADR-0076).
 ///
-/// The entry list lives here, not in the mounted view, so mutation is legal at
-/// any time:
+/// The entry list lives here, not in the mounted view, so mutation is legal on
+/// the owner thread at any time:
 ///
 /// - **before mount**, the first build reads whatever the list holds;
 /// - **while mounted**, each mutation schedules the overlay to rebuild;
@@ -252,7 +280,7 @@ impl OverlayShared {
 /// the lock already held for the ancestor walk.
 #[derive(Clone)]
 pub struct OverlayHandle {
-    shared: Arc<OverlayShared>,
+    shared: Rc<OverlayShared>,
 }
 
 impl OverlayHandle {
@@ -262,9 +290,9 @@ impl OverlayHandle {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            shared: Arc::new(OverlayShared {
-                entries: Mutex::new(Vec::new()),
-                rebuild: Mutex::new(None),
+            shared: Rc::new(OverlayShared {
+                entries: RefCell::new(Vec::new()),
+                rebuild: RefCell::new(None),
                 anchor: SubtreeAnchor::new(),
             }),
         }
@@ -286,7 +314,7 @@ impl OverlayHandle {
     pub fn is_mounted(&self) -> bool {
         self.shared
             .rebuild
-            .lock()
+            .borrow()
             .as_ref()
             .is_some_and(RebuildHandle::is_active)
     }
@@ -296,14 +324,14 @@ impl OverlayHandle {
     pub(crate) fn ids_bottom_to_top(&self) -> Vec<OverlayEntryId> {
         self.shared
             .entries
-            .lock()
+            .borrow()
             .iter()
             .map(OverlayEntry::id)
             .collect()
     }
 
     pub(crate) fn len(&self) -> usize {
-        self.shared.entries.lock().len()
+        self.shared.entries.borrow().len()
     }
 
     /// Whether two handles name the same overlay. Identity, not structural
@@ -311,7 +339,7 @@ impl OverlayHandle {
     /// [`InheritedView::update_should_notify`] so a rebuild that hands down
     /// the *same* handle again does not churn dependents.
     pub(crate) fn is_same(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.shared, &other.shared)
+        Rc::ptr_eq(&self.shared, &other.shared)
     }
 
     /// Insert `entry` at `position` and, if the overlay is mounted, schedule it
@@ -344,7 +372,7 @@ impl OverlayHandle {
             entry.attach(&self.shared);
         }
         {
-            let mut list = self.shared.entries.lock();
+            let mut list = self.shared.entries.borrow_mut();
             let index = insertion_index(&list, position);
             list.splice(index..index, entries);
         }
@@ -381,7 +409,7 @@ impl OverlayHandle {
         }
 
         {
-            let mut list = self.shared.entries.lock();
+            let mut list = self.shared.entries.borrow_mut();
 
             if list.len() == new_entries.len()
                 && list
@@ -592,7 +620,7 @@ impl StatefulView for Overlay {
 
     fn create_state(&self) -> Self::State {
         OverlayState {
-            shared: crate::support::retirement::Terminal::new(Arc::clone(&self.handle.shared)),
+            shared: crate::support::retirement::Terminal::new(Rc::clone(&self.handle.shared)),
             rebuild: None,
             serving: false,
         }
@@ -601,7 +629,7 @@ impl StatefulView for Overlay {
 
 /// Persistent state for [`Overlay`].
 ///
-/// Holds the shared entry list. The list is `Arc`-shared rather than owned
+/// Holds the shared entry list. The list is `Rc`-shared rather than owned
 /// outright because `ViewState::build` takes `&self` and no caller can ever
 /// obtain `&mut OverlayState`.
 ///
@@ -609,7 +637,7 @@ impl StatefulView for Overlay {
 /// [`Overlay`] itself — its field stays private, and nothing outside this
 /// module constructs or names it.
 pub struct OverlayState {
-    shared: crate::support::retirement::Terminal<Arc<OverlayShared>>,
+    shared: crate::support::retirement::Terminal<Rc<OverlayShared>>,
     /// This element's own rebuild capability, kept so the slot can move to a
     /// replacement handle (`did_update_view`) and be released only by its
     /// holder (`dispose`).
@@ -629,8 +657,9 @@ impl Drop for OverlayState {
 
 impl fmt::Debug for OverlayState {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let entries = self.shared.entries.borrow().len();
         f.debug_struct("OverlayState")
-            .field("entries", &self.shared.entries.lock().len())
+            .field("entries", &entries)
             .finish_non_exhaustive()
     }
 }
@@ -652,14 +681,14 @@ impl ViewState<Overlay> for OverlayState {
     /// unmounted from now on) and the new one is claimed, so `build` reads the
     /// new list and the new handle's mutations reach this element.
     fn did_update_view(&mut self, _old: &Overlay, new: &Overlay) {
-        if Arc::ptr_eq(&self.shared, &new.handle.shared) {
+        if Rc::ptr_eq(&self.shared, &new.handle.shared) {
             return;
         }
         let element = self.rebuild.as_ref().and_then(RebuildHandle::element_id);
         if self.serving {
             self.shared.release_rebuild(element);
         }
-        *self.shared = Arc::clone(&new.handle.shared);
+        *self.shared = Rc::clone(&new.handle.shared);
         self.serving = self
             .rebuild
             .as_ref()
@@ -677,13 +706,13 @@ impl ViewState<Overlay> for OverlayState {
             // A second concurrent mount of one handle: see `claim_rebuild`.
             return Theater::new(Vec::new(), 0).boxed();
         }
-        let entries = self.shared.entries.lock();
+        let entries = self.shared.entries.borrow().clone();
         let plan = onstage_plan(&entries);
         // The handle every entry's `OverlayScope` marker provides to
-        // `Overlay::of`/`maybe_of` — the same `Arc` this `OverlayState` was
+        // `Overlay::of`/`maybe_of` — the same `Rc` this `OverlayState` was
         // constructed from, so `OverlayHandle::is_same` matches it.
         let handle = OverlayHandle {
-            shared: Arc::clone(&self.shared),
+            shared: Rc::clone(&self.shared),
         };
         let children: Vec<BoxedView> = plan
             .build

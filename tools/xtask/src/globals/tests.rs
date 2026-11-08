@@ -141,7 +141,7 @@ fn lifetime_static_in_macro_tokens_is_not_an_item() {
          (&'static $t:ty) => {}",
     ))
     .into_iter()
-    .map(|(name, _)| name)
+    .map(|entry| entry.name)
     .collect();
     assert_eq!(found, ["REAL", "M", "$name"]);
 }
@@ -152,7 +152,7 @@ fn quote_interpolated_static_in_macro_tokens_is_an_item() {
          static mut #counter: u8 = 0; #[doc = \"x\"] fn f() {} #(#items)* }",
     ))
     .into_iter()
-    .map(|(name, _)| name)
+    .map(|entry| entry.name)
     .collect();
     assert_eq!(found, ["#name", "#counter"]);
 }
@@ -626,7 +626,7 @@ fn immutable_class_refuses_interior_mutable_types() {
     }
 }
 
-fn counter_and_diagnostic_classes_check_their_shapes() {
+fn counter_diagnostic_and_image_classes_check_their_shapes() {
     let source = r#"
         use std::sync::{Once, atomic::{AtomicBool, AtomicU64, Ordering::Relaxed}};
         static ESCAPED: AtomicU64 = AtomicU64::new(1);
@@ -638,6 +638,9 @@ fn counter_and_diagnostic_classes_check_their_shapes() {
         #[cfg(debug_assertions)]
         static SEEN: std::sync::Mutex<u8> = std::sync::Mutex::new(0);
         static STATE: std::sync::Mutex<u8> = std::sync::Mutex::new(0);
+        thread_local! {
+            static IMAGE_STATE: std::cell::RefCell<u8> = const { std::cell::RefCell::new(0) };
+        }
         #[cfg(all(debug_assertions, unix))]
         static DEBUG_UNIX: std::sync::Mutex<u8> = std::sync::Mutex::new(0);
         #[cfg(not(debug_assertions))]
@@ -667,6 +670,93 @@ fn counter_and_diagnostic_classes_check_their_shapes() {
     assert!(fits(Class::Diagnostic, "SEEN"));
     assert!(!fits(Class::Diagnostic, "STATE"));
     assert!(fits(Class::Process, "STATE"));
+    assert!(fits(Class::Image, "IMAGE_STATE"));
+    assert!(!fits(Class::Image, "STATE"));
+}
+
+fn macro_generated_globals_keep_their_shapes_and_counter_rules() {
+    let source = r"
+        macro_rules! app_plugin {
+            () => {
+                static __FLUI_APP_PINNED_THREAD: ::std::sync::OnceLock<u64> =
+                    ::std::sync::OnceLock::new();
+                static __FLUI_APP_NEXT_THREAD_TOKEN: ::std::sync::atomic::AtomicU64 =
+                    ::std::sync::atomic::AtomicU64::new(1);
+                ::std::thread_local! {
+                    static __FLUI_APP_STATE: ::std::cell::Cell<u64> =
+                        const { ::std::cell::Cell::new(0) };
+                }
+                pub fn build() {
+                    let _ = __FLUI_APP_NEXT_THREAD_TOKEN.try_update(
+                        ::std::sync::atomic::Ordering::Relaxed,
+                        ::std::sync::atomic::Ordering::Relaxed,
+                        |next| next.checked_add(1),
+                    );
+                }
+            };
+        }
+    ";
+    let files = [("crates/flui-hot-reload/src/lib.rs", source)];
+    let grants = json!([
+        { "item": "app_plugin!::__FLUI_APP_PINNED_THREAD", "grant": "ADR-0097", "class": "immutable", "reason": "a test" },
+        { "item": "app_plugin!::__FLUI_APP_NEXT_THREAD_TOKEN", "grant": "ADR-0097", "class": "counter", "reason": "a test" },
+        { "item": "app_plugin!::__FLUI_APP_STATE", "grant": "ADR-0097", "class": "image", "reason": "a test" },
+    ]);
+    assert_eq!(problems(&files, &[krate("flui-hot-reload", &grants)]), []);
+
+    let defs = scan(&files).expect("the macro scans");
+    let shape = |name: &str| {
+        defs.iter()
+            .find(|def| def.item == format!("app_plugin!::{name}"))
+            .map(|def| def.shape)
+            .expect("the macro global has its original key")
+    };
+    assert_eq!(shape("__FLUI_APP_PINNED_THREAD"), Shape::Static);
+    assert_eq!(shape("__FLUI_APP_NEXT_THREAD_TOKEN"), Shape::Static);
+    assert_eq!(shape("__FLUI_APP_STATE"), Shape::ThreadLocal);
+
+    let bad_source = r"
+        macro_rules! emit {
+            () => {
+                static COUNTER: ::std::sync::atomic::AtomicU64 =
+                    ::std::sync::atomic::AtomicU64::new(1);
+                static NOT_IMAGE: ::std::cell::Cell<u64> = ::std::cell::Cell::new(0);
+                thread_local! {
+                    static NOT_COUNTER: ::std::cell::Cell<u64> =
+                        const { ::std::cell::Cell::new(0) };
+                }
+                pub fn reset() {
+                    COUNTER.store(0, ::std::sync::atomic::Ordering::Relaxed);
+                }
+            };
+        }
+    ";
+    let bad_files = [("crates/flui-widgets/src/lib.rs", bad_source)];
+    let bad_grants = json!([
+        { "item": "emit!::COUNTER", "grant": "ADR-0097", "class": "counter", "reason": "a test" },
+        { "item": "emit!::NOT_IMAGE", "grant": "ADR-0097", "class": "image", "reason": "a test" },
+        { "item": "emit!::NOT_COUNTER", "grant": "ADR-0097", "class": "counter", "reason": "a test" },
+    ]);
+    assert_eq!(
+        problems(&bad_files, &[krate("flui-widgets", &bad_grants)]),
+        [
+            (
+                "flui-widgets".to_owned(),
+                "emit!::COUNTER".to_owned(),
+                CLASS
+            ),
+            (
+                "flui-widgets".to_owned(),
+                "emit!::NOT_COUNTER".to_owned(),
+                CLASS
+            ),
+            (
+                "flui-widgets".to_owned(),
+                "emit!::NOT_IMAGE".to_owned(),
+                CLASS
+            ),
+        ]
+    );
 }
 
 #[test]
@@ -727,8 +817,12 @@ fn globals_contract() {
                 immutable_class_refuses_interior_mutable_types as fn(),
             ),
             (
-                "counter_and_diagnostic_classes_check_their_shapes",
-                counter_and_diagnostic_classes_check_their_shapes as fn(),
+                "counter_diagnostic_and_image_classes_check_their_shapes",
+                counter_diagnostic_and_image_classes_check_their_shapes as fn(),
+            ),
+            (
+                "macro_generated_globals_keep_their_shapes_and_counter_rules",
+                macro_generated_globals_keep_their_shapes_and_counter_rules as fn(),
             ),
         ],
     );

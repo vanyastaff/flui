@@ -56,11 +56,6 @@ kind = "double"
 names = ["MockSource", "MockState"]
 
 [[allow]]
-path = "crates/flui-assets/src/cache/builtin_load_tests.rs"
-kind = "double"
-names = ["Probe"]
-
-[[allow]]
 path = "crates/flui-engine/src/fake_window_target.rs"
 kind = "double"
 names = ["FakeTarget"]
@@ -271,7 +266,7 @@ kind = "double"
 names = ["Probe"]
 
 [[allow]]
-path = "examples/hot_reload_lifecycle_fixture/tests/reload_lifecycle.rs"
+path = "crates/flui-hot-reload/examples/hot_reload_lifecycle_fixture/tests/reload_lifecycle.rs"
 kind = "pump"
 names = ["tick"]
 

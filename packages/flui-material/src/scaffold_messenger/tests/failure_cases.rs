@@ -30,7 +30,7 @@ impl ViewState<RebuildProbe> for RebuildProbeState {
     }
 }
 struct MountedProbe {
-    binding: flui_testing::HeadlessBinding,
+    binding: flui_sdk::testing::HeadlessBinding,
     handle: RebuildHandle,
     builds: Rc<Cell<usize>>,
 }
@@ -42,10 +42,14 @@ impl MountedProbe {
             handle: Rc::clone(&handle),
             builds: Rc::clone(&builds),
         };
-        let mut owners = flui_testing::MountOwners::fresh();
+        let mut owners = flui_sdk::testing::MountOwners::fresh();
         owners.build_owner.set_on_build_scheduled(wake);
-        let mut binding = flui_testing::HeadlessBinding::new();
-        binding.mount_root(&view, owners, flui_testing::MountOptions::tight(32.0, 32.0));
+        let mut binding = flui_sdk::testing::HeadlessBinding::new();
+        binding.mount_root(
+            &view,
+            owners,
+            flui_sdk::testing::MountOptions::tight(32.0, 32.0),
+        );
         binding.pump_frame(Duration::from_millis(16));
         let handle = handle
             .borrow()

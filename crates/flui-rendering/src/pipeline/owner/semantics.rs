@@ -101,8 +101,8 @@ impl PipelineOwner<Semantics> {
         }
 
         let _span = tracing::debug_span!(
-            target: "flui.frame",
-            "semantics",
+            target: flui_foundation::diagnostics::FrameSpan::Semantics.target(),
+            flui_foundation::diagnostics::FrameSpan::Semantics.name(),
             dirty_nodes = self.scheduler.semantics_queue_len(),
         )
         .entered();
@@ -285,14 +285,13 @@ enum SemanticsSource {
     Region(RegionSource),
 }
 
-/// A text run's full identity (ADR-0204): an edit that changes any part gives
-/// the run a new identity, so an old position never lands on other text.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+/// A text run's stable identity (ADR-0204): edits change its payload, not its
+/// place in the field. The owner refuses positions whose text has not yet been
+/// delivered, so a stable id cannot make an old position land on other text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct TextRunKey {
     field: SemanticsSource,
     ordinal: usize,
-    start: usize,
-    text: Box<str>,
 }
 /// The pipeline keeps the authority across accessibility disable/enable and
 /// owner replacement. Only a successfully assembled scope retires missing keys.
@@ -305,8 +304,8 @@ pub(super) struct RegionIdentities {
     announcements: Option<flui_semantics::Announcements>,
     /// The identity space ran out before the announcer nodes were minted.
     announcements_exhausted: bool,
-    /// Each field's text runs and their identities, kept while the run is
-    /// the same: the same node, place, start and text.
+    /// Each field's text runs and their identities, keyed by field and ordinal.
+    /// Text, start and geometry are payloads, not identity.
     text_runs: FxHashMap<TextRunKey, flui_semantics::SemanticsRegionId>,
     /// The identity space ran out before a field's runs were given theirs.
     text_runs_exhausted: bool,
@@ -387,11 +386,9 @@ impl RegionIdentities {
                     .runs()
                     .iter()
                     .enumerate()
-                    .map(|(ordinal, run)| TextRunKey {
+                    .map(|(ordinal, _)| TextRunKey {
                         field: node.source,
                         ordinal,
-                        start: run.byte_range().start,
-                        text: run.text().into(),
                     })
                     .collect();
                 let missing: Vec<&TextRunKey> = keys
@@ -401,7 +398,7 @@ impl RegionIdentities {
                 match self.source.allocate(missing.len()) {
                     Ok(ids) => {
                         for (key, id) in missing.into_iter().zip(ids) {
-                            self.text_runs.insert(key.clone(), id);
+                            self.text_runs.insert(*key, id);
                         }
                         let ids = keys.iter().map(|key| self.text_runs[key]).collect();
                         let content = content
@@ -423,13 +420,21 @@ impl RegionIdentities {
             stack.extend(node.children.iter_mut());
         }
         let retained = &self.retained;
-        self.text_runs.retain(|key, _| {
-            live.contains(key)
+        let identities = &mut self.source;
+        self.text_runs.retain(|key, id| {
+            let keep = live.contains(key)
                 || (!rebuilt.contains(&key.field)
                     && match key.field {
                         SemanticsSource::Render(id) => tree.contains(id),
                         SemanticsSource::Region(source) => retained.contains_key(&source),
-                    })
+                    });
+            if !keep {
+                assert!(
+                    identities.release(*id),
+                    "BUG: a retained text run holds its identity's current generation"
+                );
+            }
+            keep
         });
     }
     /// Spends the identity source.
@@ -467,9 +472,17 @@ impl RegionIdentities {
             .source
             .allocate(missing.len())
             .map_err(|_| SemanticsAssemblyError::RegionIdentityExhausted)?;
-        self.retained.retain(|source, _| {
-            tree.contains(source.host)
-                && (!regions.visited.contains(&source.host) || regions.authored.contains(source))
+        let identities = &mut self.source;
+        self.retained.retain(|source, id| {
+            let keep = tree.contains(source.host)
+                && (!regions.visited.contains(&source.host) || regions.authored.contains(source));
+            if !keep {
+                assert!(
+                    identities.release(*id),
+                    "BUG: a retained region holds its identity's current generation"
+                );
+            }
+            keep
         });
         self.retained.extend(missing.into_iter().zip(ids));
         Ok(())

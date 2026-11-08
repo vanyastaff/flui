@@ -72,7 +72,7 @@ when the UI runtime cannot run.
 ### §1. Close reasons
 
 ```rust
-// flui-view; re-exported as flui::view::CloseReason and flui::app::CloseReason
+// flui-view; re-exported as flui::view::CloseReason
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum CloseReason { User, Program, SessionEnd }

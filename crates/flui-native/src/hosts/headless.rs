@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use crate::host::MemoryClipboard;
 
-use crate::accessibility::headless::FakeAccessibility;
+use crate::accessibility::headless::HeadlessAccessibility;
 use crate::display::headless::{DisplaySpec, laid_out};
 use crate::drag::headless::{DragDouble, HeadlessDragSource};
 use crate::drag::offers::OfferTable;
@@ -20,8 +20,8 @@ use crate::owner::headless::{
 use crate::owner::notices::NoticeChannel;
 use crate::platform::HostPlatform;
 use crate::preferences::headless::HeadlessPreferences;
-use crate::text::headless::FakeTextInput;
-use crate::window::headless::{FakeSystemChrome, HeadlessWindows, MockWindow};
+use crate::text::headless::HeadlessTextInput;
+use crate::window::headless::{HeadlessSystemChrome, HeadlessWindow, HeadlessWindows};
 
 /// The headless host's table.
 #[derive(Debug)]
@@ -31,18 +31,18 @@ impl Host for Headless {
     const NAME: &'static str = "Headless";
 
     type Loop = HeadlessLoop;
-    type Window = MockWindow;
+    type Window = HeadlessWindow;
     type Displays = HeadlessLoop;
     type Input = HeadlessInputDevices;
-    type Text = FakeTextInput;
-    type Accessibility = FakeAccessibility;
+    type Text = HeadlessTextInput;
+    type Accessibility = HeadlessAccessibility;
     type Clipboard = MemoryClipboard;
     type PrimarySelection = crate::host::Absent<crate::host::position::PrimarySelection>;
     type Drag = DragDouble;
     type Haptics = HeadlessHaptics;
     type Preferences = HeadlessPreferences;
     type Lifecycle = HeadlessHostEvents;
-    type Chrome = FakeSystemChrome;
+    type Chrome = HeadlessSystemChrome;
     type Storage = crate::storage::HeadlessData;
 }
 
@@ -82,6 +82,16 @@ impl HostPlatform<Headless> {
         Self::from_parts(HeadlessWindows::new, |windows| {
             HeadlessLoop::new::<Headless>(Arc::clone(windows) as _)
         })
+    }
+
+    /// Install recording text, accessibility and system-chrome doubles in
+    /// windows opened after this call, and retain their window-command
+    /// histories. The default production host allocates none of these histories.
+    #[cfg(any(test, feature = "testing"))]
+    #[must_use]
+    pub fn with_test_doubles(self) -> Self {
+        self.window_shared().enable_test_doubles();
+        self
     }
 }
 

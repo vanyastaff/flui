@@ -5,16 +5,13 @@
 //! delegate loading, no `Semantics` wrapper).
 
 mod directionality;
-mod global_widgets_localizations;
 mod locale_resolution;
 mod localizations;
 mod widgets_localizations;
 
+pub use directionality::Directionality;
 pub use directionality::axis_direction_from_axis_reverse_and_directionality;
-pub use directionality::{Directionality, resolve_alignment};
-pub use global_widgets_localizations::{
-    GlobalWidgetsLocalizations, GlobalWidgetsLocalizationsDelegate, RTL_LANGUAGES,
-};
+pub(crate) use directionality::resolve_alignment;
 pub use locale_resolution::basic_locale_list_resolution;
 pub use localizations::{
     BoxedLocalizationsDelegate, BoxedWidgetsLocalizations, DefaultWidgetsLocalizationsDelegate,

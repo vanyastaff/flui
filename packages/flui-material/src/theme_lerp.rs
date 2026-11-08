@@ -1,11 +1,13 @@
 //! [`Lerp`] for the theme values, so a theme change can animate.
 //!
 //! Colours interpolate in premultiplied Oklab like every other colour;
-//! text styles follow `Lerp for TextStyle`. A brightness, and each optional
-//! component theme, switches half way: they are choices, not magnitudes.
+//! text styles follow `Lerp for TextStyle`. Brightness switches half way.
+//! Component entries use their own typed interpolation, which defaults to
+//! the same halfway switch.
 
 use flui_sdk::geometry::Lerp;
-use flui_sdk::widgets::{FocusRingStyle, SelectionStyle};
+use flui_sdk::pipeline::FocusRingStyle;
+use flui_sdk::widgets::SelectionStyle;
 
 use crate::color_scheme::ColorScheme;
 use crate::text_theme::TextTheme;
@@ -83,10 +85,10 @@ impl Lerp for ColorScheme {
 /// A role set on both ends interpolates; one set on one end only switches
 /// half way.
 fn lerp_role(
-    from: Option<&flui_sdk::painting::TextStyle>,
-    to: Option<&flui_sdk::painting::TextStyle>,
+    from: Option<&flui_sdk::painting::typography::TextStyle>,
+    to: Option<&flui_sdk::painting::typography::TextStyle>,
     t: f64,
-) -> Option<flui_sdk::painting::TextStyle> {
+) -> Option<flui_sdk::painting::typography::TextStyle> {
     match (from, to) {
         (Some(from), Some(to)) => Some(from.lerp_to(to, t)),
         _ if t < 0.5 => from.cloned(),
@@ -128,14 +130,16 @@ impl Lerp for TextTheme {
     }
 }
 
-/// The colour scheme, text theme, focus ring and selection interpolate; every component theme
-/// switches half way.
+/// The colour scheme, text theme, focus ring and selection interpolate;
+/// component entries dispatch to their typed `ComponentTheme::lerp_to`.
 impl Lerp for ThemeData {
     fn lerp_to(&self, other: &Self, t: f64) -> Self {
-        Self {
-            color_scheme: self.color_scheme.lerp_to(&other.color_scheme, t),
-            text_theme: self.text_theme.lerp_to(&other.text_theme, t),
-            focus_ring: FocusRingStyle {
+        self.lerp_with_base(
+            other,
+            t,
+            &self.color_scheme.lerp_to(&other.color_scheme, t),
+            self.text_theme.lerp_to(&other.text_theme, t),
+            FocusRingStyle {
                 outer: self.focus_ring.outer.lerp_to(&other.focus_ring.outer, t),
                 inner: self.focus_ring.inner.lerp_to(&other.focus_ring.inner, t),
                 outer_width: self
@@ -147,13 +151,12 @@ impl Lerp for ThemeData {
                     .inner_width
                     .lerp_to(&other.focus_ring.inner_width, t),
             },
-            selection: SelectionStyle::new(
+            SelectionStyle::new(
                 self.selection.active.lerp_to(&other.selection.active, t),
                 self.selection
                     .inactive
                     .lerp_to(&other.selection.inactive, t),
             ),
-            ..if t < 0.5 { self.clone() } else { other.clone() }
-        }
+        )
     }
 }

@@ -416,7 +416,7 @@ const HOST_MAIN: &str = r#"//! Host binary for the hot-reload app.
 use std::sync::{Arc, atomic::AtomicI32};
 
 use __TYPES_CRATE__::{CounterApp, CounterShell};
-use flui::app::{AppConfig, AppLaunch, LaunchError, run_app};
+use flui::{AppConfig, AppLaunch, LaunchError, run_app};
 use flui::hot_reload::{WorkerReloadHook, engine::env};
 
 /// Default worker dylib path, used when `FLUI_WORKER_PLUGIN` is unset (a bare

@@ -11,10 +11,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use common::{lay_out, tight};
 use flui_material::{ListTile, Radio, Theme, ThemeData};
+use flui_sdk::testing::a11y::Role;
 use flui_sdk::view::IntoView;
 use flui_sdk::view::environment::{MediaQuery, MediaQueryData};
 use flui_sdk::widgets::{MergeSemantics, Text};
-use flui_testing::a11y::Role;
 
 /// `ListTile::build` reads `SafeArea`, which panics without an ambient
 /// `MediaQuery` (`tests/app_bar.rs`'s own tests wrap the same way) — every
@@ -120,7 +120,8 @@ pub fn merge_semantics_over_a_tile_and_radio_announces_as_one_radio_button() {
 /// Neither drops a state its role does not carry (the harness fails a frame
 /// that does).
 pub fn a_selectable_tile_is_an_option_whether_or_not_selected() {
-    use flui_sdk::widgets::{Semantics, SemanticsRole};
+    use flui_sdk::rendering::SemanticsRole;
+    use flui_sdk::widgets::Semantics;
 
     for (selectable, selected, role, announced) in [
         (true, true, Role::ListBoxOption, Some(true)),

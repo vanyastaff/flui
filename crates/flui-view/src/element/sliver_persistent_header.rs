@@ -530,6 +530,14 @@ impl<R: PersistentHeaderRenderObject> ElementBehavior<PersistentHeaderView<R>, V
             return Vec::new();
         }
 
+        if self.inner.configure_render_object(core, owner) {
+            // The configuration changed layout inputs, so the retained shrink
+            // pair belongs to the old extents. Let layout publish the clamped
+            // pair and schedule the one delegate build that observes it.
+            core.clear_dirty();
+            return Vec::new();
+        }
+
         // No layout pass has run yet, so no shrink state exists. Build no
         // child rather than guessing `0.0`: the render object sizes from its
         // extents alone for this single pass, publishes, and the fixpoint
@@ -632,13 +640,5 @@ impl<R: PersistentHeaderRenderObject> ElementBehavior<PersistentHeaderView<R>, V
         }
         self.cell = None;
         self.inner.on_unmount(core, owner);
-    }
-
-    fn on_update(
-        &mut self,
-        core: &ElementCore<PersistentHeaderView<R>, Variable>,
-        owner: &mut crate::ElementOwner<'_>,
-    ) {
-        self.inner.on_update(core, owner);
     }
 }

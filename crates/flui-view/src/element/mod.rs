@@ -8,6 +8,7 @@
 //! - RenderObject connections
 
 pub(crate) mod async_slot;
+pub(crate) mod async_snapshot;
 pub(crate) mod child_manager;
 pub(crate) mod future_builder;
 mod inherited_access;
@@ -46,6 +47,7 @@ pub use flui_foundation::IndexedSlot;
 // Re-export commonly used arity and generic types
 pub use arity::{ElementArity, Leaf, Optional, Single, Variable};
 pub use async_slot::{InitialDataFactory, SnapshotBuilder};
+pub use async_snapshot::AsyncSnapshot;
 pub use behavior::{
     AnimatedBehavior, DependentEntry, ElementBehavior, InheritedBehavior, ParentDataBehavior,
     ProxyBehavior, RenderBehavior, StatefulBehavior, StatelessBehavior,

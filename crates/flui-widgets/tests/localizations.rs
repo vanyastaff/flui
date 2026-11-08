@@ -10,7 +10,7 @@ use flui_platform::Locale;
 use flui_view::prelude::*;
 use flui_widgets::SizedBox;
 use flui_widgets::localization::{
-    BoxedLocalizationsDelegate, Directionality, GlobalWidgetsLocalizationsDelegate, Localizations,
+    BoxedLocalizationsDelegate, DefaultWidgetsLocalizationsDelegate, Directionality, Localizations,
 };
 
 use crate::common::harness::mount;
@@ -62,17 +62,15 @@ fn capture<T: Clone + Send + Sync + 'static>(
     )
 }
 
-/// The global delegate is what makes a right-to-left locale's subtree
-/// right-to-left: `Localizations` wraps its child in the `Directionality`
-/// its widgets resource names, and `GlobalWidgetsLocalizationsDelegate`
-/// resolves `ar` to RTL where the default delegate is always LTR.
-pub(crate) fn the_global_delegate_makes_an_rtl_locale_subtree_rtl() {
+/// Resource strings and reading direction have independent owners: even the
+/// English default resources leave an Arabic subtree right-to-left.
+pub(crate) fn the_default_delegate_does_not_override_locale_direction() {
     let (probe, captured) = capture(Directionality::of);
     let _harness = mount(
         Localizations::new(
             Locale::try_new("ar", None::<&str>).expect("valid Arabic locale"),
             vec![BoxedLocalizationsDelegate::new(
-                GlobalWidgetsLocalizationsDelegate,
+                DefaultWidgetsLocalizationsDelegate,
             )],
             probe,
         )

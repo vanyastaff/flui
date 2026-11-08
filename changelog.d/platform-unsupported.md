@@ -23,8 +23,8 @@
   `TextStoreHostError::Unsupported(_)` (was `TextStoreHostError::Unavailable`). `CursorError`
   is `#[non_exhaustive]`.
 - **`flui-platform`**: `Availability` is named at the crate root
-  (`flui_platform::Availability`), not in `input_capabilities`; `flui-sdk` keeps it at
-  `platform::input_capabilities::Availability` under `unstable-input`.
+  (`flui_platform::Availability`), not in `input_capabilities`; `flui-sdk` and the facade keep
+  the same `platform::Availability` path without an input-feature gate.
 - **`flui-native`**: a window's haptics answer why nothing played: no pen in range of a Win32
   window is `Unavailable` and a pen without a controller `NotOnThisDevice`; a browser without
   vibration is `NotOnThisDevice` and a page before user activation `Unavailable`.

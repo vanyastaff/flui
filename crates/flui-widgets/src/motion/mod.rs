@@ -27,7 +27,6 @@ mod transition;
 pub use animate::{Animate, AnimateExt, AnimateState, Trigger};
 pub use effect::Effect;
 pub use effects::Effects;
-pub use flui_objects::ShimmerBand;
 pub use particles::{ParticleController, ParticleEmitter, ParticleEmitterState};
 pub use shimmer::{Shimmer, ShimmerState, Skeleton, SkeletonState};
 pub use switcher::{

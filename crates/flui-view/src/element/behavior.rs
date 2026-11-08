@@ -1049,6 +1049,77 @@ impl<V: RenderView> RenderBehavior<V> {
     pub fn render_id(&self) -> Option<RenderId> {
         self.render_id
     }
+
+    /// Configure the live render object from the current view and inherited
+    /// dependencies. Wrappers with an authoritative build path call this before
+    /// reading published render state or running user build code. The return
+    /// value reports whether configuration requested layout, in which case
+    /// previously published layout state is stale.
+    pub(crate) fn configure_render_object<A: ElementArity>(
+        &self,
+        core: &mut ElementCore<V, A>,
+        owner: &mut crate::ElementOwner<'_>,
+    ) -> bool {
+        // Configuration is authoritative here, where the render element has a
+        // live build context. This covers the initial build, parent-driven view
+        // replacement, and provider-only dependency changes through one path.
+        // The mount hook creates the storage with a detached context; this
+        // update resolves inherited configuration before the first layout.
+        let render_target = match (self.render_id, core.pipeline_owner()) {
+            (Some(render_id), Some(pipeline_owner)) => Some((render_id, pipeline_owner)),
+            (None, None) => None,
+            (None, Some(_)) => {
+                panic!("BUG: RenderBehavior with a PipelineOwner must own a RenderId during build")
+            }
+            (Some(_), None) => {
+                panic!("BUG: active RenderBehavior must have a PipelineOwner during build")
+            }
+        };
+        let Some((render_id, pipeline_owner)) = render_target else {
+            return false;
+        };
+        let ctx_choice = make_build_ctx(core, owner);
+        let ctx = crate::RenderObjectContext::new(
+            owner.interaction_dispatch.as_ref(),
+            Some(owner.reactive),
+            Some(ctx_choice.as_ctx()),
+        );
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: a render view's update panic is recorded and the element recovers"
+        )]
+        let outcome = std::panic::catch_unwind(AssertUnwindSafe(|| {
+            let impact = pipeline_owner.with_mut(|pipeline_owner| {
+                let node = pipeline_owner
+                    .render_tree_mut()
+                    .get_mut(render_id)
+                    .expect("BUG: RenderBehavior's RenderId must resolve to a live node during build");
+                let render_object = node.downcast_render_object_mut::<V::RenderObject>().expect(
+                    "BUG: RenderBehavior's live node must match RenderView::RenderObject during build",
+                );
+                core.view().update_render_object(&ctx, render_object)
+            });
+            let needs_layout = impact.needs_layout();
+            pipeline_owner.with_mut(|pipeline_owner| {
+                pipeline_owner.apply_render_update_impact(render_id, impact);
+            });
+            needs_layout
+        }));
+        match outcome {
+            Ok(needs_layout) => needs_layout,
+            Err(payload) => {
+                owner.record_armed_lifecycle_panic(
+                    core.self_id(),
+                    core.creation_site(),
+                    TypeId::of::<V>(),
+                    LifecycleHook::Update,
+                    payload.as_ref(),
+                    "updating the render object of RenderElement during build",
+                );
+                std::panic::resume_unwind(payload);
+            }
+        }
+    }
 }
 
 impl<V: RenderView> Default for RenderBehavior<V> {
@@ -1081,7 +1152,7 @@ where
     fn build_into_views(
         &mut self,
         core: &mut ElementCore<V, A>,
-        _owner: &mut crate::ElementOwner<'_>,
+        owner: &mut crate::ElementOwner<'_>,
     ) -> Vec<Box<dyn View>> {
         if !core.should_build() {
             tracing::trace!(
@@ -1108,6 +1179,8 @@ where
             });
         }
 
+        self.configure_render_object(core, owner);
+
         core.clear_dirty();
 
         tracing::debug!(
@@ -1127,6 +1200,7 @@ where
             let ctx = crate::RenderObjectContext::new(
                 owner.interaction_dispatch.as_ref(),
                 Some(owner.reactive),
+                None,
             );
             let render_object = core.view().create_render_object(&ctx);
 
@@ -1240,6 +1314,7 @@ where
             let ctx = crate::RenderObjectContext::new(
                 owner.interaction_dispatch.as_ref(),
                 Some(owner.reactive),
+                None,
             );
             pipeline_owner.with_mut(|pipeline_owner| {
                 #[expect(clippy::disallowed_methods, reason = "ADR-0287: the view's unmount hook runs contained; the element still unmounts")]
@@ -1273,54 +1348,6 @@ where
         );
         self.render_id = None;
     }
-
-    fn on_update(&mut self, core: &ElementCore<V, A>, owner: &mut crate::ElementOwner<'_>) {
-        // Apply the widget's new configuration to the *existing* render object
-        // before marking it dirty (`update_render_object`). Without this the
-        // render object keeps its `create_render_object()` configuration and a
-        // `setState` that changes a render-object widget (padding, size, text,
-        // colour, …) would never be reflected after the first frame.
-        // An element mounted with no `PipelineOwner` in scope (a render-less
-        // unit-test tree) minted no render object in `on_mount` — that path
-        // warns and continues — so there is nothing here to update either.
-        // The symmetric tolerance keeps such a tree usable. Every other
-        // half-state is still the invariant violation it always was: an owner
-        // without a render id means `on_mount` failed to mint, a render id
-        // without an owner means the owner was withdrawn under a live node.
-        let (render_id, pipeline_owner) = match (self.render_id, core.pipeline_owner()) {
-            (Some(render_id), Some(owner)) => (render_id, owner),
-            (None, None) => {
-                tracing::trace!(
-                    "RenderBehavior::on_update skipped: mounted without a PipelineOwner, \
-                     no render object to update"
-                );
-                return;
-            }
-            (None, Some(_)) => {
-                panic!("BUG: RenderBehavior with a PipelineOwner must own a RenderId during update")
-            }
-            (Some(_), None) => {
-                panic!("BUG: active RenderBehavior must have a PipelineOwner during update")
-            }
-        };
-        let ctx = crate::RenderObjectContext::new(
-            owner.interaction_dispatch.as_ref(),
-            Some(owner.reactive),
-        );
-        let impact = pipeline_owner.with_mut(|pipeline_owner| {
-            let node = pipeline_owner
-                .render_tree_mut()
-                .get_mut(render_id)
-                .expect("BUG: RenderBehavior's RenderId must resolve to a live node during update");
-            let render_object = node.downcast_render_object_mut::<V::RenderObject>().expect(
-                "BUG: RenderBehavior's live node must match RenderView::RenderObject during update",
-            );
-            core.view().update_render_object(&ctx, render_object)
-        });
-        pipeline_owner.with_mut(|pipeline_owner| {
-            pipeline_owner.apply_render_update_impact(render_id, impact);
-        });
-    }
 }
 
 // Helper function for RenderObject insertion
@@ -1338,14 +1365,11 @@ where
 // ============================================================================
 
 /// One dependent of an `InheritedElement`: its tree depth (for the dirty heap)
-/// and the fields it read (issue #1090; [`FieldSet::ALL`] for a whole-type
-/// dependency).
+/// and the fields and dynamically typed entries it read.
 ///
-/// Only `depth` is public: the recorded field sets are crate-private, so
-/// one provider's set cannot be read out and reused against another.
-///
-/// [`FieldSet::ALL`]: crate::view::FieldSet::ALL
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Only `depth` is public: the recorded sets are crate-private, so one
+/// provider's sets cannot be read out and reused against another.
+#[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct DependentEntry {
     /// Depth captured at `depend_on_inherited` time.
@@ -1353,10 +1377,14 @@ pub struct DependentEntry {
     /// Fields read in the dependent's latest `build` (re-derived per build,
     /// ADR-0074 §5.5 reset-on-build).
     pub(crate) mask: crate::view::FieldSet,
+    /// Entries read in the dependent's latest successful `build`.
+    pub(crate) entries: crate::view::EntrySet,
     /// Fields read in `init_state` / `did_change_dependencies`: kept until
     /// unmount, never reset by a rebuild (a state that acquires a value in a
     /// lifecycle hook and does not re-read it in `build` stays subscribed).
     pub(crate) lifecycle_mask: crate::view::FieldSet,
+    /// Entries read in lifecycle hooks, kept until unmount.
+    pub(crate) lifecycle_entries: crate::view::EntrySet,
     /// When this dependent first registered with its provider, relative to
     /// the provider's other dependents.
     pub(crate) registered: u64,
@@ -1369,6 +1397,18 @@ impl DependentEntry {
     pub(crate) fn fields(&self) -> crate::view::FieldSet {
         self.mask | self.lifecycle_mask
     }
+
+    /// Whether either build or lifecycle reads include a changed entry.
+    #[must_use]
+    pub(crate) fn reads_entries(&self, changed: &crate::view::EntrySet) -> bool {
+        self.entries.intersects(changed) || self.lifecycle_entries.intersects(changed)
+    }
+
+    /// Whether this dependent has no reads of either coordinate system.
+    #[must_use]
+    pub(crate) fn is_unread(&self) -> bool {
+        self.fields().is_empty() && self.entries.is_empty() && self.lifecycle_entries.is_empty()
+    }
 }
 
 /// Behavior for InheritedView elements.
@@ -1379,9 +1419,9 @@ impl DependentEntry {
 /// # Dependents map
 ///
 /// Stored as `HashMap<ElementId, DependentEntry>` — dependent id mapped to its
-/// depth in the element tree and the provider fields it read
-/// ([`FieldSet`](crate::view::FieldSet), #1090). The depth is captured at
-/// `depend_on_inherited` time and used during `on_view_updated` to call
+/// depth in the element tree and the provider fields and entries it read. The
+/// depth is captured at `depend_on_inherited` time and used during
+/// `on_view_updated` to call
 /// `ElementOwner::schedule_build_for` with a typed rebuild reason, without an
 /// extra tree traversal (the tree is not in scope at `on_view_updated`
 /// time because we only see `ElementCore<V, A>`).
@@ -1436,7 +1476,9 @@ impl<V: InheritedView> InheritedBehavior<V> {
             DependentEntry {
                 depth,
                 mask: crate::view::FieldSet::NONE,
+                entries: crate::view::EntrySet::NONE,
                 lifecycle_mask: crate::view::FieldSet::NONE,
+                lifecycle_entries: crate::view::EntrySet::NONE,
                 registered,
             }
         });
@@ -1459,19 +1501,25 @@ impl<V: InheritedView> InheritedBehavior<V> {
         element: ElementId,
         depth: usize,
         mask: crate::view::FieldSet,
+        entries: crate::view::EntrySet,
     ) {
-        self.dependent_entry(element, depth).mask |= mask;
+        let entry = self.dependent_entry(element, depth);
+        entry.mask |= mask;
+        entry.entries |= entries;
     }
 
     /// Register a dependent read made in a lifecycle hook: unions into the
-    /// kept-until-unmount `lifecycle_mask`.
+    /// kept-until-unmount field and entry sets.
     pub(crate) fn add_lifecycle_dependent(
         &mut self,
         element: ElementId,
         depth: usize,
         mask: crate::view::FieldSet,
+        entries: crate::view::EntrySet,
     ) {
-        self.dependent_entry(element, depth).lifecycle_mask |= mask;
+        let entry = self.dependent_entry(element, depth);
+        entry.lifecycle_mask |= mask;
+        entry.lifecycle_entries |= entries;
     }
 
     /// Remove a dependent element.
@@ -1506,8 +1554,9 @@ where
         dependent: ElementId,
         depth: usize,
         mask: crate::view::FieldSet,
+        entries: crate::view::EntrySet,
     ) {
-        self.add_dependent(dependent, depth, mask);
+        self.add_dependent(dependent, depth, mask, entries);
     }
 
     fn record_lifecycle_dependent(
@@ -1516,13 +1565,15 @@ where
         dependent: ElementId,
         depth: usize,
         mask: crate::view::FieldSet,
+        entries: crate::view::EntrySet,
     ) {
-        self.add_lifecycle_dependent(dependent, depth, mask);
+        self.add_lifecycle_dependent(dependent, depth, mask, entries);
     }
 
     fn reset_dependent_mask(&mut self, _token: crate::context::CrateToken, dependent: ElementId) {
         if let Some(entry) = self.dependents.get_mut(&dependent) {
             entry.mask = crate::view::FieldSet::NONE;
+            entry.entries = crate::view::EntrySet::NONE;
         }
     }
 
@@ -1532,7 +1583,7 @@ where
         dependent: ElementId,
     ) -> bool {
         match self.dependents.get(&dependent) {
-            Some(entry) if entry.fields().is_empty() => {
+            Some(entry) if entry.is_unread() => {
                 self.dependents.remove(&dependent);
                 true
             }
@@ -1583,21 +1634,16 @@ where
         self.data = core.view().data().clone();
         self.view_cache = core.view().clone();
 
-        // Compare old vs new view: `changed_fields(old)` says WHICH fields
-        // changed (`ALL`/`NONE` from `update_should_notify` for a
-        // provider that never opted in), and only dependents whose recorded
-        // mask intersects are scheduled.
-        //
-        // Field-granular (#1090): the provider reports WHICH fields changed
-        // (`ALL` for a provider that never opted in — the
-        // `update_should_notify` default), and only dependents whose recorded
-        // mask intersects are scheduled. One path for both granularities.
-        let changed = core.view().changed_fields(old_view).erase();
-        if changed.is_empty() {
-            tracing::trace!("InheritedBehavior::on_view_updated no notify (no field changed)");
+        // Compute each coordinate system once. A dependent is scheduled when
+        // either its field reads or its entry reads intersect the update.
+        let changed_fields = core.view().changed_fields(old_view).erase();
+        let changed_entries = core.view().changed_entries(old_view);
+        if changed_fields.is_empty() && changed_entries.is_empty() {
+            tracing::trace!("InheritedBehavior::on_view_updated no notify (nothing changed)");
         } else {
             tracing::debug!(
-                changed = changed.bits(),
+                changed = changed_fields.bits(),
+                ?changed_entries,
                 "InheritedBehavior::on_view_updated notifying dependents of {} candidates",
                 self.dependents.len()
             );
@@ -1608,7 +1654,10 @@ where
             let mut notified: Vec<(u64, ElementId, usize)> = self
                 .dependents
                 .iter()
-                .filter(|(_, entry)| entry.fields().intersects(changed))
+                .filter(|(_, entry)| {
+                    entry.fields().intersects(changed_fields)
+                        || entry.reads_entries(&changed_entries)
+                })
                 .map(|(&dep_id, entry)| (entry.registered, dep_id, entry.depth))
                 .collect();
             notified.sort_unstable();

@@ -289,8 +289,8 @@ pub(crate) fn dismissal_updates_follow_owner_lifetime() {
 
 pub(crate) fn dismissible_slides_without_rebuilding_per_frame() {
     use flui_testing::{HeadlessBinding, MountOptions, MountOwners, PointerScript};
-    use flui_view::environment::GestureArenaScope;
-    use flui_widgets::{FocusRoot, SizedBox};
+    use flui_view::environment::{FocusTreeRoot, GestureArenaScope};
+    use flui_widgets::SizedBox;
     for (vertical, sign) in [(false, 1.0), (false, -1.0), (true, 1.0), (true, -1.0)] {
         let mut binding = HeadlessBinding::new();
         let progress = Rc::new(std::cell::RefCell::new(Vec::new()));
@@ -322,7 +322,7 @@ pub(crate) fn dismissible_slides_without_rebuilding_per_frame() {
         }
         let root = GestureArenaScope::new(
             binding.arena().clone(),
-            FocusRoot::new(VsyncScope::new(binding.vsync().clone(), card)),
+            FocusTreeRoot::new(VsyncScope::new(binding.vsync().clone(), card)),
         );
         let _ = binding.mount_root(
             &root,

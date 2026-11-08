@@ -88,14 +88,15 @@ use flui_sdk::animation::{AnimatedValue, AnimatedValueView, Animation, MotionSpe
 use flui_sdk::foundation::{Listenable, Subscription};
 use flui_sdk::geometry::{Point, RRect, Rect, Size};
 use flui_sdk::painting::Canvas;
-use flui_sdk::painting::Color;
+use flui_sdk::painting::CustomPainter;
 use flui_sdk::painting::Paint;
-use flui_sdk::painting::TextDirection;
+use flui_sdk::painting::styling::Color;
+use flui_sdk::painting::typography::TextDirection;
 use flui_sdk::view::environment::VsyncScope;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{
-    CustomPaint, CustomPainter, Directionality, MotionBuilder, Semantics, WidgetState,
-    WidgetStateProperty, WidgetStates, WidgetStatesController,
+    CustomPaint, Directionality, MotionBuilder, Semantics, WidgetState, WidgetStateProperty,
+    WidgetStates, WidgetStatesController,
 };
 
 use crate::color_scheme::ColorScheme;
@@ -328,9 +329,8 @@ impl ViewState<Switch> for SwitchState {
     }
 
     fn build(&self, view: &Switch, ctx: &dyn BuildContext) -> impl IntoView {
-        let theme = Theme::of(ctx);
-        let switch_theme = theme.switch_theme.clone();
-        let colors = theme.color_scheme;
+        let colors = Theme::required_color_scheme_of(ctx);
+        let switch_theme = Theme::component_of::<crate::SwitchThemeData>(ctx);
 
         let states = self.states.value();
 

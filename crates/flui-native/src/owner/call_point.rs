@@ -73,7 +73,7 @@ impl<R> Called<R> {
 
     /// What the handler returned, or `fallback` when none ran or it panicked,
     /// for a caller with no frame to unwind into (an OS callback): the panic
-    /// is logged under `handler` and its payload retained.
+    /// is logged under `handler` and its payload destroyed under containment.
     #[cfg(any(
         target_os = "windows",
         target_os = "macos",

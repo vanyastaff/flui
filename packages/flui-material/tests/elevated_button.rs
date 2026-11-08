@@ -17,26 +17,21 @@
 use crate::common;
 
 use common::{lay_out, rgba, tight};
-use flui_material::{
-    ButtonStyle, ElevatedButton, ElevatedButtonThemeData, Theme, ThemeData, ThemeDataOverrides,
-};
+use flui_material::{ButtonStyle, ElevatedButton, ElevatedButtonThemeData, Theme, ThemeData};
+use flui_sdk::testing::a11y::Role;
 use flui_sdk::widgets::{Text, WidgetStateProperty};
-use flui_testing::a11y::Role;
 
 /// The highest tier still wins over a configured theme: an explicit
-/// `.style(..)` override on the widget itself must resolve over the theme's
-/// `elevated_button_theme` (`widget_style ?? theme_style ?? default`).
-pub fn widget_level_style_wins_over_the_elevated_button_theme() {
-    let themed_background = flui_sdk::painting::Color::rgb(1, 1, 1);
-    let widget_background = flui_sdk::painting::Color::rgb(9, 9, 9);
-    let theme = ThemeData::light().copy_with(ThemeDataOverrides {
-        elevated_button_theme: Some(ElevatedButtonThemeData {
-            style: Some(ButtonStyle {
-                background_color: Some(WidgetStateProperty::all(Some(themed_background))),
-                ..Default::default()
-            }),
+/// `.style(..)` override on the widget itself must resolve over the
+/// `ElevatedButtonThemeData` entry (`widget_style ?? theme_style ?? default`).
+pub fn widget_level_style_wins_over_the_elevated_button_component() {
+    let themed_background = flui_sdk::painting::styling::Color::rgb(1, 1, 1);
+    let widget_background = flui_sdk::painting::styling::Color::rgb(9, 9, 9);
+    let theme = ThemeData::light().with_component(ElevatedButtonThemeData {
+        style: Some(ButtonStyle {
+            background_color: Some(WidgetStateProperty::all(Some(themed_background))),
+            ..Default::default()
         }),
-        ..Default::default()
     });
 
     let laid = lay_out(
@@ -59,7 +54,7 @@ pub fn widget_level_style_wins_over_the_elevated_button_theme() {
         laid.render_node(material)
             .get::<flui_sdk::foundation::inspect::Rgba>("color"),
         Ok(rgba(widget_background)),
-        "an explicit widget-level style must win over a configured elevated_button_theme",
+        "an explicit widget-level style must win over a configured ElevatedButtonThemeData",
     );
 }
 

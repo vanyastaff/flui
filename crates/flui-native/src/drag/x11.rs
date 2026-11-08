@@ -25,11 +25,10 @@
 //!   representation's type at the drag's last time, into a window made for
 //!   that fetch alone and destroyed as it ends, so an answer a source writes
 //!   late reaches no later fetch. It is read on the owner thread as the
-//!   loop hands over the `SelectionNotify`, `INCR` a chunk at a time. At
-//!   most [`MAX_FETCHES`] run at once, more wait their turn; each is held to
-//!   its request's limit and gets [`TRANSFER_TIMEOUT`] between answers,
-//!   which the loop wakes for, rung when a request from another thread
-//!   starts a fetch.
+//!   loop hands over the `SelectionNotify`, `INCR` a chunk at a time. The
+//!   shared intake policy bounds their number and the wait between answers;
+//!   each is held to its request's limit, and the loop wakes for a deadline,
+//!   rung when a request from another thread starts a fetch.
 //!
 //! A window is a source too: its drag source runs the runtime's OS session
 //! over XDND from the window ([`source`]).
@@ -55,7 +54,6 @@ pub(crate) use source::X11DragSource;
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::sync::atomic::AtomicU32;
-use std::time::Duration;
 
 use flui_foundation::DataTransferId;
 use flui_foundation::geometry::Point;
@@ -72,36 +70,21 @@ use x11rb::connection::Connection as _;
 use x11rb::errors::{ConnectionError, ReplyOrIdError};
 use x11rb::protocol::Event;
 use x11rb::protocol::xproto::{
-    self, AtomEnum, ClientMessageEvent, ConnectionExt as _, CreateWindowAux, EventMask, PropMode,
-    Property, PropertyNotifyEvent, SelectionNotifyEvent, WindowClass,
+    self, AtomEnum, ClientMessageEvent, ConnectionExt as _, CreateWindowAux, EventMask,
+    GetPropertyReply, PropMode, Property, PropertyNotifyEvent, SelectionNotifyEvent, WindowClass,
 };
 use x11rb::wrapper::ConnectionExt as _;
 use x11rb::{COPY_FROM_PARENT, CURRENT_TIME, NONE};
 
-use crate::drag::offers::{Kind, OfferTable, representations, too_large};
+use crate::drag::offers::{Kind, OfferTable, representations};
 use crate::owner::linux::x11::{InputTarget, LoopDrag, WindowRef, X11Connection};
 use crate::owner::slot::OwnerCell;
+use crate::transfer::intake::Intake;
+use crate::transfer::linux::x11::{RESERVE_CAP, ReadProgress, ReadRefusal, SelectionRead};
 use model::{Message, MessageAtoms};
-
-/// How long a fetch waits for the source between answers.
-const TRANSFER_TIMEOUT: Duration = Duration::from_secs(5);
-
-/// The most fetches converting at once, one property each; more wait.
-const MAX_FETCHES: usize = 4;
-
-/// The most bytes an `INCR` fetch reserves on its announcement.
-const RESERVED: usize = 4 * 1024 * 1024;
-
-/// The most types read of a source's `XdndTypeList`.
-const MAX_TYPES: u32 = 100;
 
 /// The most atom names the transfer keeps, of the types sources offered.
 const MAX_NAMES: usize = 1024;
-
-/// The longest type name read as a type: a media type's type and subtype are
-/// at most 127 characters each (RFC 6838), so a longer name offers nothing,
-/// and no name held or compared is longer.
-const MAX_NAME_LEN: usize = 255;
 
 /// The most actions read of a source's `XdndActionList`.
 const MAX_ACTIONS: u32 = 16;
@@ -515,7 +498,7 @@ struct Wanted {
     target: xproto::Atom,
     kind: Kind,
     time: xproto::Timestamp,
-    limit: u64,
+    limits: TransferLimits,
     completer: TransferCompleter,
 }
 
@@ -526,19 +509,7 @@ struct Wanted {
 struct Fetch {
     requestor: xproto::Window,
     wanted: Wanted,
-    /// The bytes of an `INCR` transfer, once announced.
-    incremental: Option<Vec<u8>>,
-    deadline: Instant,
-}
-
-/// What a fetch's read of its property came to.
-enum Read {
-    /// The whole payload, or an `INCR` transfer's last (empty) chunk.
-    Done(Vec<u8>),
-    /// The owner goes `INCR`, announcing this many bytes.
-    Incremental(usize),
-    /// One `INCR` chunk.
-    Chunk(Vec<u8>),
+    read: SelectionRead,
 }
 
 /// What the transfer's lock guards.
@@ -548,13 +519,14 @@ struct State {
     windows: HashMap<xproto::Window, InputTarget>,
     hover: Option<Hover>,
     offers: HashMap<DataTransferId, Offer>,
-    /// The fetches converting, at most [`MAX_FETCHES`].
+    /// The fetches converting, bounded by the shared intake policy.
     fetches: Vec<Fetch>,
     /// Requests waiting for a fetch to end.
     waiting: VecDeque<Wanted>,
     /// What the server answered for each atom a source offered, at most
     /// [`MAX_NAMES`]: its name, or `None` for one it cannot name or names
-    /// past [`MAX_NAME_LEN`], so a source repeating it costs no lookup.
+    /// past the shared intake policy's name bound, so a source repeating it
+    /// costs no lookup.
     names: HashMap<xproto::Atom, Option<String>>,
 }
 
@@ -711,7 +683,7 @@ impl State {
     /// Start the waiting requests the fetches have room for, each with a
     /// requestor of its own.
     fn start_waiting(&mut self, wire: &Wire<'_>, after: &mut After) {
-        while self.fetches.len() < MAX_FETCHES {
+        while self.fetches.len() < Intake::DEFAULT.max_fetches {
             let Some(wanted) = self.waiting.pop_front() else {
                 return;
             };
@@ -736,9 +708,12 @@ impl State {
             after.started = true;
             self.fetches.push(Fetch {
                 requestor,
+                read: SelectionRead::new(
+                    wanted.limits.max_bytes,
+                    RESERVE_CAP,
+                    Instant::now() + Intake::DEFAULT.fetch_timeout,
+                ),
                 wanted,
-                incremental: None,
-                deadline: Instant::now() + TRANSFER_TIMEOUT,
             });
         }
     }
@@ -920,7 +895,7 @@ impl X11Drag {
             .map(|(atom, cookie)| {
                 let name = cookie
                     .and_then(|cookie| cookie.reply().ok())
-                    .filter(|reply| reply.name.len() <= MAX_NAME_LEN)
+                    .filter(|reply| reply.name.len() <= Intake::DEFAULT.max_type_len)
                     .and_then(|reply| String::from_utf8(reply.name).ok());
                 (atom, name)
             })
@@ -1008,7 +983,8 @@ impl X11Drag {
     /// The hover `source` entered offers the types it lists, or `types`.
     fn learn_types(&self, source: xproto::Window, listed: bool, types: Vec<xproto::Atom>) {
         let types = if listed {
-            self.atoms_of(source, self.atoms.type_list, MAX_TYPES)
+            let most = u32::try_from(Intake::DEFAULT.max_types).unwrap_or(u32::MAX);
+            self.atoms_of(source, self.atoms.type_list, most)
         } else {
             types
         };
@@ -1018,6 +994,7 @@ impl X11Drag {
             .iter()
             .filter_map(|atom| Some((*atom, state.names.get(atom)?.as_deref()?)))
             .collect();
+        let named = Intake::DEFAULT.admit_types(named, |entry| entry.1);
         let offered: Arc<[(xproto::Atom, Kind)]> = representations(&named).into();
         if let Some(hover) = state.hover.as_mut().filter(|hover| hover.source == source) {
             hover.types = offered;
@@ -1285,51 +1262,63 @@ impl X11Drag {
         }
     }
 
-    /// The fetch converting into `requestor` read `read`, or failed.
-    fn fetched(&self, requestor: xproto::Window, read: Result<Read, TransferError>) {
+    /// The fetch converting into `requestor` read its first answer or next
+    /// `INCR` chunk, or failed.
+    fn fetched(
+        &self,
+        requestor: xproto::Window,
+        reply: Result<GetPropertyReply, TransferError>,
+        first: bool,
+    ) {
         let mut after = After::default();
         {
             let mut state = self.state.lock();
             let Some(fetch) = state.fetch(requestor) else {
                 return;
             };
-            let limit = fetch.wanted.limit;
-            let outcome = match read {
-                Err(error) => Some(Err(error)),
-                Ok(Read::Incremental(announced)) => {
-                    if let Some(error) = too_large(announced, limit) {
-                        Some(Err(error))
-                    } else {
-                        // What a source announces is reserved only up to a
-                        // bound: the chunks prove the rest.
-                        fetch.incremental = Some(Vec::with_capacity(announced.min(RESERVED)));
-                        fetch.deadline = Instant::now() + TRANSFER_TIMEOUT;
-                        None
-                    }
+            let progress = match reply {
+                Err(error) => {
+                    after.end(
+                        &self.wire(),
+                        state
+                            .take_fetch(requestor)
+                            .expect("BUG: the fetch was found under this lock"),
+                        Err(error),
+                    );
+                    state.start_waiting(&self.wire(), &mut after);
+                    drop(state);
+                    self.finish(after);
+                    return;
                 }
-                Ok(Read::Chunk(chunk)) => {
-                    let bytes = fetch
-                        .incremental
-                        .as_mut()
-                        .expect("BUG: a chunk is read only of an INCR fetch");
-                    if let Some(error) = too_large(bytes.len().saturating_add(chunk.len()), limit) {
-                        Some(Err(error))
-                    } else {
-                        bytes.extend_from_slice(&chunk);
-                        fetch.deadline = Instant::now() + TRANSFER_TIMEOUT;
-                        None
-                    }
+                Ok(reply) if first => fetch.read.first(reply, self.atoms.incr),
+                Ok(reply) => fetch.read.chunk(reply),
+            };
+            let outcome = match progress {
+                ReadProgress::Progress => {
+                    fetch
+                        .read
+                        .refresh(Instant::now() + Intake::DEFAULT.fetch_timeout);
+                    None
                 }
-                Ok(Read::Done(bytes)) => {
-                    let bytes = fetch.incremental.take().unwrap_or(bytes);
+                ReadProgress::Done(bytes) => {
                     // Measured before it is made, which can take more than
                     // the bytes read.
-                    let len = fetch.wanted.kind.decoded_len(&bytes);
+                    let actual =
+                        u64::try_from(fetch.wanted.kind.decoded_len(&bytes)).unwrap_or(u64::MAX);
                     Some(
-                        too_large(len, limit)
-                            .map_or_else(|| Ok(fetch.wanted.kind.payload(bytes)), Err),
+                        fetch
+                            .wanted
+                            .limits
+                            .check(actual)
+                            .map(|()| fetch.wanted.kind.payload(bytes)),
                     )
                 }
+                ReadProgress::Refused(refusal) => Some(Err(match refusal {
+                    ReadRefusal::TooLarge { actual, limit } => {
+                        TransferError::TooLarge { actual, limit }
+                    }
+                    ReadRefusal::Timeout | ReadRefusal::Protocol => TransferError::SourceGone,
+                })),
             };
             if let Some(outcome) = outcome {
                 let fetch = state
@@ -1344,23 +1333,22 @@ impl X11Drag {
 
     /// The source answered a conversion.
     fn selection_notify(&self, event: &SelectionNotifyEvent) {
-        let limit = {
+        {
             let mut state = self.state.lock();
             let Some(fetch) = state.fetch(event.requestor) else {
                 return;
             };
-            if fetch.incremental.is_some() || fetch.wanted.target != event.target {
+            if fetch.read.is_incremental() || fetch.wanted.target != event.target {
                 return;
             }
-            fetch.wanted.limit
-        };
-        let read = if event.property == NONE {
+        }
+        let reply = if event.property == NONE {
             // The source refuses a type it offered.
             Err(TransferError::SourceGone)
         } else {
-            self.read_property(event.requestor, None, limit)
+            self.read_property(event.requestor)
         };
-        self.fetched(event.requestor, read);
+        self.fetched(event.requestor, reply, true);
     }
 
     /// The source wrote an `INCR` chunk.
@@ -1368,77 +1356,44 @@ impl X11Drag {
         if event.state != Property::NEW_VALUE || event.atom != self.atoms.property {
             return;
         }
-        let found = {
-            let mut state = self.state.lock();
-            state.fetch(event.window).and_then(|fetch| {
-                let held = fetch.incremental.as_ref()?.len();
-                Some((held, fetch.wanted.limit))
-            })
-        };
-        let Some((held, limit)) = found else {
+        let incremental = self
+            .state
+            .lock()
+            .fetch(event.window)
+            .is_some_and(|fetch| fetch.read.is_incremental());
+        if !incremental {
             return;
-        };
-        let read = self.read_property(event.window, Some(held), limit);
-        self.fetched(event.window, read);
+        }
+        let reply = self.read_property(event.window);
+        self.fetched(event.window, reply, false);
     }
 
-    /// Read and delete the property of `requestor`, refusing it when it
-    /// would take the fetch past `limit` bytes before it is read: the first
-    /// answer of a conversion, or an `INCR` chunk after the `held` bytes.
-    fn read_property(
-        &self,
-        requestor: xproto::Window,
-        held: Option<usize>,
-        limit: u64,
-    ) -> Result<Read, TransferError> {
-        let first = held.is_none();
-        let held = held.unwrap_or_default();
+    /// Read and delete `requestor`'s property through the shared read's
+    /// bounded request. A partial reply is not deleted by the server, so
+    /// delete it explicitly before its oversize outcome is delivered.
+    fn read_property(&self, requestor: xproto::Window) -> Result<GetPropertyReply, TransferError> {
+        let words = {
+            let mut state = self.state.lock();
+            let Some(fetch) = state.fetch(requestor) else {
+                return Err(TransferError::SourceGone);
+            };
+            fetch.read.request_words()
+        };
         let xcb = self.connection.xcb();
         let property = self.atoms.property;
         let failed = |error: &dyn std::fmt::Display| {
             tracing::debug!(%error, "cannot read the XDND source's data");
             TransferError::SourceGone
         };
-        // One read, deleting what it takes: at most a byte past what the
-        // fetch has left, so a value past the limit says so in
-        // `bytes_after` and is measured without being held. The server
-        // sends only what the property holds.
-        let room = limit.saturating_sub(u64::try_from(held).unwrap_or(u64::MAX));
-        let words = u32::try_from(room / 4 + 1).unwrap_or(u32::MAX);
         let reply = xcb
             .get_property(true, requestor, property, AtomEnum::ANY, 0, words)
             .map_err(|error| failed(&error))?
             .reply()
             .map_err(|error| failed(&error))?;
-        if first && reply.type_ == self.atoms.incr {
-            // The announcement is its first word, whatever else the source
-            // wrote; deleting it asked for the first chunk.
-            if reply.bytes_after != 0 {
-                drop(xcb.delete_property(requestor, property));
-            }
-            let announced = reply
-                .value32()
-                .and_then(|mut words| words.next())
-                .ok_or(TransferError::SourceGone)?;
-            return Ok(Read::Incremental(
-                usize::try_from(announced).unwrap_or(usize::MAX),
-            ));
-        }
-        let len = usize::try_from(reply.bytes_after)
-            .unwrap_or(usize::MAX)
-            .saturating_add(reply.value.len())
-            .saturating_add(held);
-        if reply.bytes_after != 0 || too_large(len, limit).is_some() {
-            // The server deletes a property only once it is read whole.
+        if reply.bytes_after != 0 {
             drop(xcb.delete_property(requestor, property));
-            return Err(too_large(len, limit).unwrap_or(TransferError::SourceGone));
         }
-        let bytes = reply.value;
-        Ok(if first || bytes.is_empty() {
-            Read::Done(bytes)
-        } else {
-            Read::Chunk(bytes)
-        })
+        Ok(reply)
     }
 }
 
@@ -1544,7 +1499,7 @@ impl LoopDrag for X11Drag {
             .lock()
             .fetches
             .iter()
-            .map(|fetch| fetch.deadline)
+            .map(|fetch| fetch.read.deadline())
             .min();
         fetches.into_iter().chain(self.session_deadline()).min()
     }
@@ -1560,7 +1515,9 @@ impl LoopDrag for X11Drag {
             let mut state = self.state.lock();
             let (ended, live): (Vec<Fetch>, Vec<Fetch>) = std::mem::take(&mut state.fetches)
                 .into_iter()
-                .partition(|fetch| fetch.deadline <= now || fetch.wanted.completer.is_cancelled());
+                .partition(|fetch| {
+                    fetch.read.expire(now).is_some() || fetch.wanted.completer.is_cancelled()
+                });
             state.fetches = live;
             if !ended.is_empty() {
                 for fetch in ended {
@@ -1599,14 +1556,14 @@ impl DragTransport for X11Drag {
                 target,
                 kind,
                 time,
-                limit: limits.max_bytes,
+                limits,
                 completer,
             });
             state.start_waiting(&self.wire(), &mut after);
             request
         };
         self.finish(after);
-        request
+        request.enforce(limits)
     }
 
     fn update_drop_feedback(&self, id: DataTransferId, feedback: DropFeedback) {

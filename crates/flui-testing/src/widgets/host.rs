@@ -3,7 +3,7 @@
 //! [`WidgetHost`] attaches one root, [`HarnessRoot`], to a [`HeadlessHost`]
 //! and never replaces it: the tree under test lives in a slot the root reads
 //! in `build`, so a root swap is a rebuild of that one element and the
-//! UI runtime's own root scopes (`GestureArenaScope`, `VsyncScope`, `FocusRoot`,
+//! UI runtime's own root scopes (`GestureArenaScope`, `VsyncScope`, `FocusTreeRoot`,
 //! `MediaQuery`) stay mounted across it. Every frame is the UI runtime's
 //! `UiRuntime::pump`.
 

@@ -9,14 +9,14 @@ use std::cell::Cell;
 use std::rc::Rc;
 
 use flui_sdk::geometry::{Axis, Offset, Size};
-use flui_sdk::painting::Color;
+use flui_sdk::interaction::DragEndDetails;
+use flui_sdk::painting::styling::Color;
 use flui_sdk::rendering::BoxConstraints;
 use flui_sdk::view::prelude::*;
 use flui_sdk::view::{BoxedView, ViewExt};
 use flui_sdk::widgets::{
-    Actions, Alternative, CallbackAction, ColoredBox, ContactAdmission, ControlSpec,
-    DragEndDetails, DragSlot, GestureAlternatives, GestureCommand, GestureDetector, Intent,
-    SingleActivator, SizedBox,
+    Actions, Alternative, CallbackAction, ColoredBox, ContactAdmission, ControlSpec, DragSlot,
+    GestureAlternatives, GestureCommand, GestureDetector, Intent, SingleActivator, SizedBox,
 };
 use flui_testing::replay::PointerScript;
 use flui_testing::widgets::lay_out;

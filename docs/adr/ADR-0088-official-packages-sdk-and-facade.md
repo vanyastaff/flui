@@ -1,384 +1,259 @@
-# ADR-0088: Official packages live in this workspace, build on `flui-sdk`, and the facade names none of them
+# ADR-0088: Official packages live in this workspace, build on `flui-sdk`, and join the facade by feature
 
-- **Status:** Proposed (2026-09-25)
+- **Status:** Accepted (2026-11-07)
 - **Date:** 2026-09-25
-- **Superseded-by:** [ADR-0154](ADR-0154-capability-crates.md) in part: official packages keep their rules; capability crates are a second kind of package with rules of their own.
-- **Amended by:** [ADR-0098](ADR-0098-owned-f64-geometry-values.md) (§8) — `flui-geometry` and
-  `flui-types` are deleted, so the duplicate-guard list below names two crates that no longer
-  exist.
-- **Related:** [ADR-0028](ADR-0028-design-system-decoupling-contract.md) (the design systems'
-  placement this record would replace; see Context),
-  [ADR-0040](ADR-0040-tree-observation-seam.md) (the devtools observation seam, whose §8 this
-  record would replace; see Context),
-  [ADR-0041](ADR-0041-workspace-topology-contract.md) (the manifest-as-source rule, which stands; ADR-0081 supersedes its numbered layer table in full and deleted the `layer` key), [ADR-0042](ADR-0042-theming-ownership.md) (`MaterialApp` stays in the design
-  system), [ADR-0043](ADR-0043-presentation-bundled-trees-and-realm-globalkey-scope.md),
-  [ADR-0081](ADR-0081-workspace-tiers-and-reach-facts.md) (tiers, `tier-kind`, reach facts),
-  [ADR-0089](ADR-0089-upstream-types-in-stable-signatures.md) (what a Stable signature may name),
-  [ADR-0311](ADR-0311-development-reload-is-a-hook-the-application-installs.md) (the reload hook
-  that removed the `flui-app → flui-hot-reload` edge; the plugin ABI's items in `hooks`)
-- **Refs:** decisions D7 and D17 and owner decisions 1, 2 and 6 in
-  [`design/decisions.md`](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/design/decisions.md); the panel record in
+- **Superseded-by:** [ADR-0315](ADR-0315-first-party-packages-remain-train-aligned-facade-features.md)
+  for former §6 and move 5b only (facade package features and re-exports remain; their release and
+  prelude rules are stated there)
+- **Related:** [ADR-0028](ADR-0028-design-system-decoupling-contract.md) (design-system decoupling),
+  [ADR-0040](ADR-0040-tree-observation-seam.md) (the devtools observation seam),
+  [ADR-0041](ADR-0041-workspace-topology-contract.md) (the manifest-as-source rule),
+  [ADR-0042](ADR-0042-theming-ownership.md) (`MaterialApp` stays in the design system),
+  [ADR-0081](ADR-0081-workspace-tiers-and-reach-facts.md) (tiers, kinds and reach facts),
+  [ADR-0089](ADR-0089-upstream-types-in-stable-signatures.md) (the Stable signature closure),
+  [ADR-0098](ADR-0098-owned-f64-geometry-values.md) (the deleted duplicate value crates),
+  [ADR-0154](ADR-0154-capability-crates.md) (capability crates are a distinct package kind),
+  [ADR-0311](ADR-0311-development-reload-is-a-hook-the-application-installs.md) (the reload hook and
+  host boundary), [ADR-0315](ADR-0315-first-party-packages-remain-train-aligned-facade-features.md)
+  (standing facade aggregation)
+- **Sources:** decisions D7 and D17 and owner decisions 1, 2 and 6 in
+  [`design/decisions.md`](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/design/decisions.md);
+  the panel record in
   [`report-decisions.ru.md` §1, §2, §6](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/2026-09-25-architecture-review/report-decisions.ru.md)
 
-## Context
+## Context and problem statement
 
-Once accepted, this record would replace three things. From
-[ADR-0028](ADR-0028-design-system-decoupling-contract.md): the placement of Material and Cupertino
-as core-workspace crates, and the exemption set `{flui-app, flui}` that may depend on them (it
-named `flui-localizations` too until ADR-0081 deleted that crate); its decoupling rules (shared
-substrate below both, mechanism goes down, capability seams instead of platform branches, raw
-primitives, injected selection chrome, no god-widget entry point) would stand. From
-[ADR-0040](ADR-0040-tree-observation-seam.md) §8: the devtools inspector's
-`flui-foundation`-only dependency and the observation-seam test's place in `flui-testing`; the
-inspector would reach the seam through `flui-sdk` and the test would live in
-`packages/flui-devtools`, while the seam itself, and the rule that no core crate names devtools,
-would stand. And the delivery-layer sentence of the product plan (the living plan linked from
-[`docs/ROADMAP.md`](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/ROADMAP.md)),
-which puts official packages "in separate repositories, one release train".
+Material and Cupertino began as workspace crates that named many internal crates directly. An
+external package author would have to reproduce that manifest and track every core topology change.
+The review also found that the catalog and core usually changed together, that a nested `packages/`
+workspace compiled the core twice, and that facade-plus-package graphs without a train guard could
+resolve two incompatible copies of internal crates.
 
-### Where the design systems sit today
+Official packages therefore need a package-author surface smaller than the host-bearing facade, one
+workspace and lockfile for first-party development, and one train identity in every resolved graph.
+The facade's application-facing aggregation is a separate decision: ADR-0315 keeps it permanent and
+defines its semver and release consequences.
 
-Material and Cupertino are workspace members (`Cargo.toml:33-34`) at layer 7. ADR-0028's rule is
-enforced by their own manifests: both list `allowed-dependents = ["flui-app", "flui"]` and
-the same `allowed-dev-dependents`
-(the design systems' manifests before moves 2 and 3), checked by
-`cargo xtask workspace` (`tools/xtask/src/workspace.rs:9-14`, `:146`, `:240-257`). In practice
-only the facade depends on them: `flui-material` and `flui-cupertino` are optional facade
-dependencies (`Cargo.toml:525-526`) behind `material` and `cupertino` features (`:605-606`), and
-`default = ["material"]` (`:598`). `flui-app` is exempted but declares no such edge.
+## Decision drivers
 
-`flui-material` reaches into nine internal crates in its normal dependencies — widgets, view,
-types, objects, rendering, foundation, animation, interaction, scheduler
-(its manifest before move 2) — each with an exact `=0.2.0-dev` pin
-(`Cargo.toml:106` sets the workspace version). A package author outside this repository would
-have to copy that list, and any change to the core's crate topology would break their manifest.
-The panel counted 172 such exact pins across the workspace (145 in `crates/*/Cargo.toml`, 27 in
-the root manifest), 14 of them in `flui-material`.
+- Official packages build against public extension points, not the core's changing crate topology.
+- First-party packages and the core change together and use exact train pins.
+- The package-author surface must not pull the application host, engine or wgpu into a package.
+- Cargo must resolve one FLUI train in a graph, rather than failing later with incompatible types.
+- The facade and SDK expose the same items at matching paths, never wrappers with distinct type
+  identity.
+- Facade aggregation is opt-in and train-aligned under ADR-0315; it is not a reason to reverse the
+  package dependency direction.
 
-The facade publicly re-exports Material: `pub use flui_material as material` behind the feature
-(`src/lib.rs:146-149`) and a Material half of the prelude (`src/lib.rs:267-276`). The facade
-also carries a `hot-reload` feature that pulls `flui-hot-reload` and `flui-app/hot-reload`
-(`Cargo.toml:630`), and `flui-app` has its own optional edge to `flui-hot-reload`
-(`crates/flui-app/Cargo.toml:65`, `:108`; since removed, see move 4).
-`flui-material` has no `prelude` module.
+## Considered options
 
-Other edges from core crates to what the review classifies as official packages:
-
-- `flui-testing` has a dev-dependency on `flui-devtools` for the observation-seam test
-  (`crates/flui-testing/Cargo.toml:104-106`);
-- `flui-cli` has a path-only dev-dependency on `flui-hot-reload`
-  (`crates/flui-cli/Cargo.toml:112-114`);
-- `flui-hot-reload` enabled `flui-view/runtime-internals` (`crates/flui-hot-reload/Cargo.toml:27`);
-  removed 2026-09-29, when the feature became the hidden module `flui_view::__runtime`.
-
-`crates/flui-widgets/Cargo.toml:85` and `:182` mention the design systems only in comments; the
-edge there runs from the design systems to `flui-widgets`.
-
-### What the panel measured
-
-The panel record (`report-decisions.ru.md` §1, §2, §6) reports, from `git log` and from probes in
-a scratch workspace:
-
-- 68 of the 123 commits that touched the catalog crates also touched another crate under
-  `crates/`, so the catalog and the core still change together;
-- no `flui-*` crate is published yet, so there is no train to build packages against;
-- a nested `packages/` workspace compiled the shared core twice (two fingerprints), `[patch]`
-  works only at a workspace root, and `"0.2"` does not match a `0.2.0-dev` prerelease;
-- `cargo tree` with deduplication counts 191 crates under the facade against 127 under
-  `flui-material`, because the facade pulls `flui-app`, `flui-engine`, wgpu and naga;
-- without a one-train guard, an application on `flui = "1"` and a package on `flui-sdk = "0.1"`
-  resolved two copies of the internal crates and failed with E0308; with `links` on a shared
-  bottom crate the resolver chose one train;
-- the facade with `default = ["material"]` still built once Material depended on an sdk crate
-  instead of the facade; the Cargo cycle appears only when a package depends on the facade.
-
-These are probe results, not repository tests; §Verification lists the tests that replace them.
+1. Root-workspace official packages on `flui-sdk`, one train guard, and opt-in facade aggregation.
+2. A nested `packages/` workspace built against the published train.
+3. Separate package repositories from the start.
+4. Packages depending on the facade.
+5. The package-author surface inside the Stable facade.
+6. Packages pinning internal crates directly.
+7. Removing every facade package feature and requiring direct package dependencies.
 
 ## Decision
 
+Chosen option: 1. It gives package authors a host-free SDK and first-party packages one train,
+while ADR-0315 preserves the application facade's opt-in aggregation.
+
 ### 1. Official packages are members of the root workspace
 
-- `packages/` is a directory of members of the **root** workspace: one `Cargo.lock`, one
-  `cargo metadata`, path dependencies with exact train pins. It is not a nested workspace.
-- A package declares `[package.metadata.flui] tier-kind = "official"` (the key is defined by
-  ADR-0081).
-- A crate moves into `packages/` in the same change that ports it onto `flui-sdk`, never in a
-  change of its own. The first official packages are `flui-material`, `flui-cupertino`,
-  `flui-devtools` and `flui-hot-reload`.
+- `packages/` contains members of the root workspace: one `Cargo.lock`, one `cargo metadata`, and
+  path dependencies with exact train pins. It is not a nested workspace.
+- An official package declares `[package.metadata.flui] tier-kind = "official"` under ADR-0081.
+- A crate moves into `packages/` in the same change that ports it onto `flui-sdk`. The first
+  official packages are `flui-material`, `flui-cupertino`, `flui-devtools` and `flui-hot-reload`.
+  Capability crates follow ADR-0154 instead.
 
 ### 2. The dependency gate generalises `allowed-dependents`
 
-`cargo xtask workspace` keys the rule by `tier-kind` (the kind rule of ADR-0081 §3) and admits
-a refused edge through the dependent's `edge-exceptions` entry, the list the direction rule
-already reads; no parallel allowlist is added, and an entry that admits nothing is stale.
+`cargo xtask workspace` keys the rule by `tier-kind` and admits an otherwise refused edge through
+the dependent's `edge-exceptions`; no parallel per-package allowlist is added.
 
 - **Forward.** An official package's normal and build dependencies are only `flui-sdk`,
-  `flui-platform` and `flui-protocol`, plus declared official-to-official edges; its other
-  dev-dependencies are free. An edge to another official package, in any kind (dev included),
-  is refused unless the dependent's `edge-exceptions` declares it, so ADR-0028's "Material and
-  Cupertino do not depend on each other" holds without per-package lists. Until a package
-  moves onto `flui-sdk` its internal-crate edges are `edge-exceptions` entries in its manifest
-  (`flui-hot-reload`'s four; `flui-devtools`' two went when it moved); the list only shrinks,
-  each package's entries go when it moves, and a member under `packages/` may list none.
-- **Reverse, strict from the start.** No core crate names an official package in any form:
-  normal, optional, build or dev. Named exceptions, each with its reason and exit:
-
-  | Edge | Reason | Exit |
-  |---|---|---|
-  | `flui-testing` dev → `flui-devtools` | observation-seam test links both halves | expired: the test moved into `packages/flui-devtools` with move 4 |
-  | `flui-app` optional → `flui-hot-reload` | reload driver | expired: `flui-app` reaches a reload tool only through an installed `DevReloadHook` ([ADR-0311](ADR-0311-development-reload-is-a-hook-the-application-installs.md) §1) |
-  | `flui` optional → `flui-hot-reload` (`hot-reload` feature) | facade feature | the same change (ADR-0311 §6) |
-  | `flui` dev → `flui-hot-reload` (`Cargo.toml:554`) | a root-package example and test that name it (`examples/scene_render.rs`, `tests/facade_consumer.rs`) | the same change; the example moves with the package |
-  | `flui` optional → `flui-material`, `flui-cupertino` | facade features | removed by §6 |
-
-  `flui-cli`'s dev-dependency on `flui-hot-reload` (`crates/flui-cli/Cargo.toml:114`) is not an
-  exception: `flui-cli` has kind `tool`, which the rule exempts (ADR-0081 §3).
+  `flui-platform` and `flui-protocol`, plus declared official-to-official edges. Other
+  dev-dependencies are free. An edge to another official package, dev included, requires a declared
+  exception. A member under `packages/` has no internal-crate `edge-exceptions`.
+- **Reverse.** No core crate other than the facade names an official package in normal, optional,
+  build or dev dependencies. The facade's optional, feature-gated aggregation edges are the
+  standing exception of ADR-0315 §2, not temporary debt. Applications and tools retain the
+  exemptions stated by ADR-0081.
+- `flui-app` reaches reload only through `DevReloadHook`; it has no edge to `flui-hot-reload`.
+  `flui-hot-reload`'s remaining internal-crate edges exit through ADR-0311 §6 when that package
+  completes its SDK move.
 
 ### 3. Parity with an external author is proven on every change
 
-- An `xtask` command packages `flui-sdk` and every official package with `cargo package`
-  (offline, local registry) and builds each from its tarball against its neighbours' tarballs.
-  It catches a missing `include`, a feature that exists only through a path dependency, and a
-  wrong pin. It runs in `cargo xtask checks` or in a merge-gating CI job.
-- An out-of-tree fixture package, outside `members`, depends only on
-  `flui-sdk = "=<train>"` through `[patch]` to the path, and uses the public extension points: a
-  custom widget, a theme extension, a plugin.
-- After the first publication, `cargo-semver-checks` runs on `flui-sdk` in advisory mode.
-- There is no job that strips path dependencies and builds against the last published train:
-  `main` pins the next, unpublished version, and rewriting the pins down builds a combination no
-  user receives. The published pair is checked by `cargo publish` at release.
+- An `xtask` command packages `flui-sdk` and every official package with `cargo package`, offline
+  against a local registry, and builds each from its tarball against its neighbours' tarballs. It
+  catches missing files, path-only features and wrong pins, and runs in `cargo xtask checks` or a
+  merge-gating CI job.
+- `crates/flui-sdk/tests/package_parity.rs` builds an out-of-tree fixture package against the
+  unpacked SDK archive. The fixture has a version-only SDK dependency, opts into its test kit through
+  the dev-dependency, and exercises a custom widget, a theme extension and a plugin through the
+  public extension points. Cargo metadata must prove that the resolved SDK manifest is the unpacked
+  archive, not the checkout.
+- After first publication, `cargo-semver-checks` runs on `flui-sdk` in advisory mode. Facade semver
+  checks include every feature so aggregated package APIs are covered under ADR-0315 §4.
+- No job rewrites the next unpublished train's pins down to the previous release. The published
+  combination is checked by `cargo publish` at release.
 
 ### 4. `flui-sdk` is the package-author surface
 
-- A separate crate in tier K (ADR-0081), stability kind **Evolving**, host-free: no
-  `flui-app`, `flui-engine` or wgpu in its normal dependency closure.
-- Version `0.N`, bumped on every train, published in the same run as the train, patches
-  included. It pins the internal crates exactly.
-- **Stable closure:** whole modules re-exported at the facade's paths
-  (`pub use flui_x as x`), with no wrappers or newtypes, so `flui_sdk::m::T` and `flui::m::T` are
-  the same type.
-- **Evolving part:** only the named modules `pipeline`, `hooks` and `gpu`. Evolving painting and
-  rendering items go in `pipeline`; there is no Evolving `paint` module, because `painting` is the
-  Stable path the facade already uses. A package's exposure to them is
-  `grep -E 'flui_sdk::(pipeline|hooks|gpu)::'`.
-- The facade neither depends on nor re-exports `flui-sdk`. An experimental facade module, if one
-  is ever needed, is gated by `--cfg flui_unstable`, not by a Cargo feature, which feature
-  unification would leak.
-- **Curated facade modules.** Where the facade curates a module instead of re-exporting a crate
-  (`interaction`, `painting`, `rendering`), the SDK has the same module at the same path, holding
-  the subset of its items that packages use, as the same items. An item packages use that no
-  facade module exposes goes into an Evolving module. The subset also carries the extension
-  surface a third-party author writes against (a custom recognizer, a drag source, the haptics
-  handle) when the facade module holds the same items, because the SDK is where an external
-  package author looks first; such an item is pinned in `crates/flui-sdk/tests/surface.rs` like
-  any other. An item that no package uses and that is not part of a documented extension surface
-  (the input regions of ADR-0217, for one) stays out until it has a user. A type has one path in
-  both crates: the haptics handle is `interaction::HapticsHandle`, not under `platform::haptics`,
-  and is present only under `unstable-input`.
-- **Surface ceiling.** When `flui-sdk` is created its Evolving surface is measured from rustdoc
-  JSON. More than about 30 items beyond the hooks means the sdk is becoming a second facade, and
-  this decision is revisited. At creation `pipeline` holds three items (`PathClipConfiguration`,
-  `RenderPhysicalShape`, `TranslationFraction`), counted from source, because the rustdoc JSON
-  tooling is not in place yet; the measurement is in `crates/flui-sdk/ARCHITECTURE.md`. Move 4
-  adds `hooks` with one item (`FrameSnapshot`), outside the ceiling.
-- **Version.** The crate's own `version = "0.1.0-dev"`, not the workspace's; `cargo xtask
-  workspace` refuses a `tier-kind = "evolving"` crate that inherits the version or has a major
-  above 0.
-- **Graduation (after H3).** An Evolving item moves into a Stable facade module when it has
-  survived N trains unchanged and has a second consumer; `flui-sdk` keeps re-exporting it at the
-  old path. `gpu` and the development hooks may stay Evolving indefinitely.
-- Until `flui-sdk` exists, no documentation invites third-party authors to depend on internal
-  crates.
+- `flui-sdk` is a tier-K, Evolving, host-free crate. Its normal dependency closure contains no
+  `flui-app`, `flui-engine` or wgpu.
+- It has its own `0.N` version, bumped on every train and published in the same run, patches
+  included. It pins internal crates exactly. `cargo xtask workspace` refuses an Evolving crate that
+  inherits the workspace version or has a major above zero.
+- **Stable closure:** whole modules are re-exported at facade paths (`pub use flui_x as x`) without
+  wrappers or newtypes, so `flui_sdk::m::T` and `flui::m::T` are the same type.
+- **Evolving part:** the ordinary surface's Evolving modules are `pipeline` and `gpu`.
+  Evolving painting and rendering items go in `pipeline`; there is no second Evolving `paint` module.
+  Development hooks required by ADR-0311 may be introduced as Evolving surface when their actual
+  producer and consumer land; no empty `hooks` module or scheduler snapshot bridge is kept ahead
+  of them. The opt-in `testing` feature mirrors `flui::testing` and keeps its additional
+  package-test helpers in Evolving test surface, absent from an ordinary dependency graph.
+- The facade neither depends on nor re-exports `flui-sdk`. An experimental facade module, if ever
+  needed, is gated by `--cfg flui_unstable`, not a unified Cargo feature.
+- **Curated modules.** Where the facade curates `interaction`, `painting` or `rendering`, the SDK
+  exposes the same items at the same paths for package extension tasks. An item packages need that
+  has no Stable facade path goes into an Evolving module.
+- **Surface ceiling.** The Evolving surface is measured from rustdoc JSON. Growth substantially
+  beyond the small development-hook and extension surface triggers a review of whether the SDK is
+  becoming a second facade. Development hooks needed by ADR-0311 remain outside that ceiling.
+- **Graduation.** An Evolving item can move into a Stable facade module after surviving the agreed
+  trains unchanged and gaining a second consumer; the SDK keeps its old path as a re-export.
+- No documentation invites third-party authors to depend directly on internal crates.
 
 ### 5. One train per graph
 
-One bottom crate that everything on the train depends on, `flui-foundation`, declares
-`links = "flui_train"` with a trivial build script. Cargo then refuses to put two trains in one
-graph: a mismatched application and package resolve to one train or fail in the resolver, never
-with E0308. The same guard protects facade-plus-sdk and facade-plus-Material pairs.
+`flui-foundation`, a bottom crate shared by the train, declares `links = "flui_train"` with a
+minimal build script. Cargo refuses two trains in one graph: a mismatched application and package
+resolve to one train or fail in the resolver, never later with an internal type mismatch.
 
-The guard is on `flui-foundation` and not on `flui-sdk` because the facade does not depend on the
-SDK: with `links` on the SDK alone, an application on `flui` train 2 and a package on `flui-sdk`
-train 1 would hold one SDK and two copies of every internal crate, and fail with E0308 as before.
-`flui-foundation` is in the normal dependency closure of the SDK, the facade, `flui-platform`
-and every crate from tier S up except `flui-log`, `flui-assets` and the `flui-cli` tool. `cargo xtask workspace` requires the key on `flui-foundation` and refuses
-it on any other member.
+The guard is on `flui-foundation`, not `flui-sdk`, because the facade does not depend on the SDK.
+It covers the facade, SDK, platform contract and first-party packages through their shared normal
+closure. `cargo xtask workspace` requires the key on `flui-foundation` and refuses it on another
+member.
 
-The cost is recorded, not hidden: a minor `flui` upgrade in an application waits for its
-third-party packages to be re-released on the new train. First-party packages do not lag,
-because they are published in the same run. Third-party lag is accepted until H3 and revisited
-there.
+A third-party package can lag a train until it is rebuilt and released against the new exact pins.
+A facade-aggregated first-party package cannot lag: ADR-0315 §4 requires it to ship with the train.
 
-### 6. The facade names no official package
+### 6. The facade aggregates first-party packages by opt-in feature
 
-- The facade gets `default = []` and no `material`, `cupertino`, `devtools` or `hot-reload`
-  features. `pub use flui_material as material` and the Material half of the prelude go.
-- `flui create` adds `flui-material` to a new project explicitly, and `flui-material` gains a
-  `prelude` module with the names the facade prelude carries today, so an application imports
-  `flui::prelude::*` and `flui_material::prelude::*`.
-- **The reason is semver and train order, not a Cargo cycle.** A Stable facade that publicly
-  re-exports an Evolving package makes every major of that package a major of `flui`; publishing
-  `flui` must not wait for a package; and the reverse gate of §2 then has no exceptions. The cycle
-  exists only if a package depends on the facade, which §2 forbids.
-- **Order.** The facade loses the feature only after `flui-material` can be depended on directly
-  from a project outside the workspace, that is after its move onto `flui-sdk`.
-- **Cadence.** There is no independent cadence for official packages: with exact pins a new
-  `flui` and an old `flui-material` do not resolve together, so Material is released in the same
-  run as the train.
-- A meta-crate bundling the facade with Material is deferred until the two-line install is shown
-  to get in the way.
+ADR-0315 owns the complete facade rule. In particular:
 
-### 7. When a package leaves this repository
+- `flui` has `default = []` and keeps `material`, `cupertino`, `devtools` and `hot-reload` as
+  standing opt-in features and re-exports.
+- Official capability crates use features and paths of the form `flui::services::<name>`.
+- `flui::prelude` is feature-independent. Material owns both `flui_material::prelude` and
+  `flui::material::prelude`; the compatibility feature `localizations` is removed.
+- Every facade-aggregated package ships with the train and participates in facade semver. Before
+  adopting independent cadence it leaves the facade under ADR-0315 §4.
 
-A package moves to its own repository only when one of these holds, checked at each train:
+This record's earlier removal of facade package features was not selected.
 
-- its release cadence has diverged from the train for two consecutive trains;
-- it has a maintainer outside the core team;
-- fewer than 20% of its commits over the trailing six months also touch core crates (today, for
-  the catalog, 55%). The threshold and window are this record's proposal; the method is the
-  `git log` count the panel used.
+### 7. Repository and cadence changes follow the facade boundary
 
-A split repository versions in lockstep with the train. OS plugins and the A2UI renderer are the
-first candidates; Material and Cupertino move last.
+A package can move to its own repository when its maintenance and coupling justify independent
+infrastructure. That move alone does not permit an independent version cadence while the facade
+still re-exports it.
+
+Before independent cadence, the package first leaves the facade under ADR-0315 §4 and satisfies the
+contract-version conditions of ADR-0153. Material and Cupertino move last because their APIs and
+release compatibility are closely coupled to the core catalog.
 
 ## Migration
 
-Five moves, each of which leaves `main` green and merges on its own. The
-[migration plan](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/plans/2026-09-25-architecture-migration-plan.md) tracks them.
+The move names preserve the order constraints; current package-surface behavior is the rule above,
+not a pending removal of facade features.
 
-| Move | What changes | Waits on |
+| Move | Required change | Waits on |
 |---|---|---|
-| 1. SDK and guard (in place) | `crates/flui-sdk` is created: tier K, `tier-kind = "evolving"`, `order = 6`, layer 6, `version = "0.1.0-dev"`, with the measured surface of §4 and no consumer yet. `flui-foundation` declares `links = "flui_train"` with a build script that does nothing else (§5). `cargo xtask workspace` requires an evolving crate's own `0.N` version and the guard on `flui-foundation` alone; `cargo xtask reach` states that `flui-foundation` is in the SDK's and the facade's builds | — |
-| 2. Material (in place) | `flui-material`'s nine internal normal dependencies become `flui-sdk` (plus `tracing`), its imports move to SDK paths, and it moves to `packages/flui-material` in the same change, with its dev-dependency paths rewritten. Done when no `flui_(widgets\|view\|types\|objects\|rendering\|foundation\|animation\|interaction\|scheduler\|painting)::` path is left in its `src`. Its examples stay with the facade until move 5b. **Outcome:** done, with no change to the SDK's surface; the view, inherited and animation derives resolve through `flui-sdk` first, so a package on the SDK alone can use them (the `Diagnosticable` derive has no SDK path yet); the kind rule of §2 is checked, and Material's `allowed-dependents` lists are replaced by it. It landed ahead of the parity command of §3, which still waits | move 1; the `cargo package` parity command of §3 |
-| 3. Cupertino (in place) | The same for `flui-cupertino`, which moves to `packages/flui-cupertino`. **Outcome:** done, with no change to the SDK's surface: its normal dependencies are `flui-sdk` and `tracing`, and its six seeded internal-crate exceptions and `allowed-dependents` lists are gone | move 1; independent of move 2 |
-| 4. Devtools and hot reload | `flui-devtools` moves onto the SDK and the observation-seam test moves into it, removing `flui-testing`'s dev edge. `flui-hot-reload` moves together with the `DevReloadHook` of ADR-0311 §6, which deletes the `flui-app` edge and the facade's `hot-reload` feature. **Outcome for devtools:** done. Its normal dependencies are `flui-sdk` plus six third-party crates, and its two internal-crate exceptions are gone. The SDK gained `hooks` with one item, `FrameSnapshot`, which the timeline records; the facade has no scheduler module, so the item is Evolving. No public API produces a `FrameSnapshot` yet (only `flui-app`'s crate-private presentation calls `FrameClock::frames_since`), so the timeline bridge is reachable from tests only; a public snapshot source, a frame-telemetry capability on the UI runtime or on `LifecycleContext`, is the follow-up, recorded in [`docs/plans/2026-09-25-architecture-migration-plan.md`](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/plans/2026-09-25-architecture-migration-plan.md), and lands after the UI runtime moves into `flui-runtime`. The observation seam (ADR-0040) needed no new item: `foundation::observe` and `foundation::RebuildReason` are Stable paths inside the whole `foundation` re-export, and putting them in `hooks` would break the facade-path rule of §4. The seam test and the observer-overhead bench moved from `flui-testing` to `packages/flui-devtools`. **Hot reload stays in `crates/`.** `flui-app` no longer names it: the development reload hook landed ([ADR-0311](ADR-0311-development-reload-is-a-hook-the-application-installs.md)), the dlopen worker and the Android scene plugin implement it, and the application installs it on its `AppConfig`, reaching the trait as `flui_sdk::view::dev_reload` with no new SDK item. The facade still names it (its `hot-reload` feature, optional and dev edges). Two things block the move. The `app-plugin` half is internal-crate code: it names `flui_view::{WidgetsBinding, __runtime}` (the feature it turned on became that hidden module on 2026-09-29, which the SDK shadows by design and will never carry), `flui_rendering::pipeline::{PipelineCell, PipelineOwner}` and `flui_layer::{Scene, LayerTree}` through `edge-exceptions` that `cargo xtask workspace` refuses under `packages/`, and none of them is a package-author item; ADR-0311 §6 settles it: those items become Evolving items of `hooks`, outside the ceiling of §4, and leave with the dlopen path (ADR-0311 §7). And CI's wasm32 check of the facade names the `hot-reload` feature, which would stay as an empty deprecated name until the workflow changes. Its two `reach-exceptions` and six `globals` entries do not block it: ADR-0081's table lets a `pkg` crate carry named exceptions, and `cargo xtask workspace` refuses only `edge-exceptions` under `packages/` | move 1; for hot reload also the plugin ABI's items in `hooks` (ADR-0311 §6) and the workflow's wasm32 facade check |
-| 5a. Facade defaults (in place) | §6: `default = []`. **Outcome:** done. Every catalog is opt-in: the facade's examples and tests already declared `required-features`; [`examples/web_counter`](https://github.com/vanyastaff/flui/tree/e8a42673ad23a2e88614940a266cd01224dcb25f/examples/web_counter), the local and fast-lane test scopes and [`cargo xtask demo-snapshots`](https://github.com/vanyastaff/flui/blob/e8a42673ad23a2e88614940a266cd01224dcb25f/tools/xtask/src/tasks.rs) name `material` (and `cupertino`) explicitly. The `flui create` templates use no catalog yet, so a generated project names none and turns Material on by hand (`features = ["material"]` on `flui`) until 5b | moves 2 and 3 |
-| 5b. Facade names no package | §6: no `material`/`cupertino` features, dependencies, `edge-exceptions`, re-exports or Material prelude half; `flui_material::prelude`; `flui create` adds `flui-material`, with a CLI test that checks the generated project; Material examples move to `packages/flui-material/examples`; `cargo xtask facade-combos` and the documents from the `rg` list of the Consequences are updated; the CI Material example build changes with the owner's sign-off | move 5a |
+| 1. SDK and guard | Create `flui-sdk`, the Evolving-version gate and `flui-foundation`'s train guard | — |
+| 2. Material | Move Material onto `flui-sdk` and into `packages/` together | move 1 and the package parity check |
+| 3. Cupertino | Move Cupertino onto `flui-sdk` and into `packages/` together | move 1 |
+| 4. Devtools and hot reload | Move devtools' observation tests into the package. Complete hot reload's SDK move through ADR-0311's Evolving hooks without adding a host edge; the facade keeps its opt-in re-export | move 1; hot reload also waits on ADR-0311 §6 |
+| 5a. Facade defaults | Keep `default = []`; every package feature is explicit | moves 2 and 3 for the catalogs |
+| 5b. Facade package surface | Keep the standing package features and re-exports under ADR-0315; split Material's prelude from the feature-independent facade prelude and remove `localizations` | move 5a |
 
-Material's and Cupertino's `allowed-dependents` lists were replaced in moves 2 and 3 by the kind
-rule of §2, which refuses every edge they refused: a core crate names either design system only
-through a named exception (the facade's edges are such exceptions until move 5b), and another
-official package names one, in any dependency kind, only through a declared exception, none of
-which exists.
+## Pros and cons of the options
 
-## Alternatives considered
+### 1. Root-workspace packages on the SDK (chosen)
 
-- **A nested `packages/` workspace built against the published train.** Rejected: no train is
-  published, so until then it is path dependencies with extra cost — the core compiled twice,
-  `[patch]` only at a root, prerelease pins, a change classifier that loads one root
-  (`tools/xtask/src/change_scope/classify.rs:325-330`), a new CI job.
-- **Separate repositories now.** Rejected: two-way pins and a roller bot, as Flutter ran before
-  consolidating its own repositories; 55% of catalog commits touch the core.
-- **Packages depend on the facade.** Rejected: every package would pull the host, engine and
-  wgpu (191 against 127 crates), and optional facade features naming packages would form a Cargo
-  cycle.
-- **The package surface inside the Stable facade.** Rejected: it freezes about a dozen unproven
-  internals (`DrawOp`, `Canvas`, `RenderUpdateImpact`, `LocalPostFrameHandle`, …) and still pulls
-  the host into every package.
-- **An Evolving module in the facade behind an `unstable` feature.** Rejected: feature
-  unification leaks it to every crate in the graph.
-- **Status quo: packages pin internal crates exactly.** Rejected: the core's crate topology
-  becomes part of every external manifest, and each topology change breaks all of them.
-- **Keep `default = ["material"]`.** Rejected: cheap now and a semver break after the first
-  Stable release, and it needs an exception in the reverse gate.
+- Good, because package authors use a bounded public surface and first-party development keeps one
+  lockfile and train.
+- Good, because facade aggregation remains simple for applications without reversing package
+  dependencies.
+- Bad, because every train releases the SDK and every facade-aggregated first-party package.
+
+### 2. A nested workspace against the published train
+
+- Good, because package development would resemble an external consumer's workspace.
+- Bad, because before publication it adds path patches, duplicate core builds, prerelease-pin
+  handling and another CI topology without proving more than the tarball fixture.
+
+### 3. Separate repositories from the start
+
+- Good, because package infrastructure can be independent.
+- Bad, because tightly coupled first-party changes would need coordinated pins and rollouts across
+  repositories; independent cadence would still require leaving the facade first.
+
+### 4. Packages depending on the facade
+
+- Good, because all facade items would already be available.
+- Bad, because every package would pull the host, engine and wgpu, and optional facade features
+  naming those packages would form a Cargo cycle.
+
+### 5. The package surface inside the Stable facade
+
+- Good, because there would be one crate to depend on.
+- Bad, because it would freeze unproven internals and retain the host-bearing dependency closure.
+
+### 6. Packages pinning internal crates directly
+
+- Good, because no SDK abstraction is needed.
+- Bad, because every core topology change becomes a breaking change for package manifests and
+  imports.
+
+### 7. Removing every facade package feature
+
+- Good, because packages could version independently without first leaving the facade.
+- Bad, because applications lose the selected opt-in dependency model and capability namespace;
+  ADR-0315 rejects this option.
 
 ## Consequences
 
-- ADR-0028's placement and exemption set are replaced; `flui-material` and `flui-cupertino`
-  manifests drop `allowed-dependents` in favour of `tier-kind`. This record owns that partial
-  supersession of ADR-0028; ADR-0081 supplies the kind rule it uses and supersedes ADR-0041's
-  layer table in full.
-- **Breaks for applications.** `flui::material::…` becomes `flui_material::…`;
-  `features = ["material"]` / `["cupertino"]` / `["hot-reload"]` on `flui` disappear; an
-  application adds `flui-material` (and development tools) as its own dependencies. The CHANGELOG
-  carries the migration note.
-- **Breaks for this repository.** Material examples move to `packages/flui-material/examples`;
-  `cargo xtask facade-combos` and the `docs/extending.md` row about
-  `[[example]] required-features` are rewritten; `tests/facade_smoke.rs`, README, the crate docs
-  and the book are updated from the list
-  `rg 'flui::(material|cupertino)|features.*(material|cupertino)'` produces.
-  `.github/workflows/ci.yml:924` builds `--features material` [`--example sliver_demo`](https://github.com/vanyastaff/flui/blob/e8a42673ad23a2e88614940a266cd01224dcb25f/examples/sliver_demo.rs); that line changes, which needs the owner's sign-off and the Linux CI gate.
-- The name `flui-sdk` is free on crates.io (checked 2026-09-26, when the crate was created); the
-  fallback `flui-package-sdk` is not needed.
-- **The guard also ties platform plugins to the train.** `flui-platform` depends on
-  `flui-foundation` (ADR-0082), so a plugin built on one train and an application on another
-  now fail in the resolver instead of with E0308.
-- **The guard does not cover a lone duplicate outside its closure.** Two copies of `flui-geometry`,
-  `flui-types`, `flui-macros`, `flui-protocol`, `flui-log` or `flui-assets` with one
-  `flui-foundation` are not refused; only a crate that depends on those internal crates directly,
-  which is not supported for third parties, can produce that graph.
-- Ordering relative to the other records is in
-  [the migration plan](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/plans/2026-09-25-architecture-migration-plan.md).
+- Official packages use `flui_sdk::…`, while applications can enable the corresponding facade
+  features and use `flui::material`, `flui::cupertino`, `flui::devtools`, `flui::hot_reload` and
+  `flui::services::<name>`.
+- Material glob users import `flui::material::prelude::*` or `flui_material::prelude::*` beside
+  `flui::prelude::*`; enabling Material does not alter the design-neutral facade prelude.
+- The train guard also ties platform plugins to one compatible contract train. It does not claim to
+  reject a duplicate crate outside `flui-foundation`'s dependency closure.
+- Remaining implementation work for accepted sections is tracked in `docs/gaps.md`, not by changing
+  this record to Implemented.
 
-## Verification
+### Confirmation
 
-In place with move 1:
-
-- **One train per graph (§5).** `two_trains_refuse_to_resolve` in `tools/xtask` reads
-  `flui-foundation`'s `links` from this repository's `cargo metadata`, builds an application
-  that depends on an SDK over one copy of `flui-foundation` and a facade over another, and
-  requires `cargo metadata --offline` to fail on the shared `links` value; the same graph
-  without `links` resolves both copies, which is where E0308 came from. It uses path packages
-  rather than a local registry: the resolver's `links` rule is the same for both sources.
-  `cargo xtask workspace` requires the key on `flui-foundation` and refuses it on any other
-  member (its self-test plants a second guard).
-- **Type identity (§4).** `crates/flui-sdk/tests/surface.rs` checks, for each curated item and
-  one type of each whole-module re-export, that `flui_sdk::m::T` is `flui::m::T`; it fails to
-  build on a wrapper or newtype. The same file pins the list of re-exports and names every
-  measured item through its SDK path.
-- **Host-free (§4).** `cargo xtask reach` checks `flui-sdk` at its defaults and with all
-  features against tier K's forbid set, which contains `wgpu`, `flui-engine` and `flui-app`, so
-  no separate absence fact is needed; its facts state that `flui-foundation` is in the SDK's
-  build and in the facade's `--no-default-features` build. After move 2, "`wgpu` is absent from
-  `flui-material`'s closure" follows from the `pkg` tier's forbid set. These are reach facts,
-  not `cargo tree -i` probes, because `cargo tree -i` errors on an absent package instead of
-  printing nothing.
-- **Own version (§4).** `cargo xtask workspace` refuses an evolving crate that inherits the
-  workspace version or has a major above 0.
-
-In place with moves 2 and 3:
-
-- **The kind rule (§2).** `cargo xtask workspace` fails, in its own self-test, on a core crate
-  that names an official package (normal and dev planted), on an official package whose normal
-  edge leaves the SDK, on an official package's dev edge to another official package, and on a member under `packages/` that is not official or lists
-  `edge-exceptions`; excepted edges and a `tool` crate's edge stay silent.
-- **The design systems on the SDK alone.** The manifests are
-  `packages/flui-material/Cargo.toml` and `packages/flui-cupertino/Cargo.toml`, and each one's
-  normal and build dependencies are `flui-sdk` and `tracing`; the kind rule above fails
-  `cargo xtask workspace` on any other framework edge, and neither keeps an
-  `allowed-dependents` list.
-- **Derives through the SDK.** A consumer on `flui-sdk` alone (plain and renamed), and one with
-  the facade as a dev-dependency, each builds with the FLUI derives. **Unasserted:** no test pins
-  this.
-
-In place with move 4 (devtools):
-
-- **Devtools on the SDK alone.** The manifest is `packages/flui-devtools/Cargo.toml`, it lists
-  no `edge-exceptions`, and its only framework normal dependency is `flui-sdk` (the rest are
-  `parking_lot`, `serde`, `serde_json`, `tracing`, `tracing-subscriber` and `web-time`), held
-  by the kind rule. The seeded `edge-exceptions` no longer hold devtools' or
-  `flui-testing`'s entries, and `crates/flui-sdk/tests/surface.rs` pins `hooks::FrameSnapshot`
-  and names the `foundation::observe` items.
-
-In place with move 5a:
-
-- **No default feature.** `the_facade_turns_no_feature_on_by_default` in `tools/xtask` reads the
-  real metadata and requires the facade's `default` to be absent or empty.
-- **An outside consumer gets no catalog.** `ordinary_facade_graph_excludes_test_support` in
-  `tests/facade_consumer.rs` resolves a consumer's normal graph with and without
-  `default-features` and requires neither `flui-material` nor `flui-cupertino` in it.
-- **Generated projects pull in no catalog yet.** Until `flui create` adds `flui-material`
-  (move 5b), the template checks in
-  `crates/flui-cli/tests/cli_create.rs` resolve every generated project's normal graph and
-  require no `flui-testing`, `flui-material` or `flui-cupertino` in it, after `cargo check`
-  proves the project builds with the features its manifest names.
-
-Not yet in place:
-
-- The `cargo package` parity command of §3 passes on every change.
-- The out-of-tree fixture builds against `flui-sdk` alone.
-- The Evolving surface counted from rustdoc JSON instead of from source.
-- A `flui-cli` test generates the counter template and runs `cargo check` on it with
-  `flui-material` as a direct dependency.
-- A doctest that `use flui::prelude::*; use flui_material::prelude::*;` resolves without
-  ambiguity.
+- **One train per graph.** `two_trains_refuse_to_resolve` in `tools/xtask` builds a graph with two
+  foundation copies and requires the shared `links` value to make resolution fail; the graph
+  without the guard resolves both.
+- **Type identity.** `crates/flui-sdk/tests/surface.rs` pins the re-export list and checks that
+  representative `flui_sdk::m::T` and `flui::m::T` paths name the same types.
+- **Host-free SDK.** `cargo xtask reach` checks the SDK at defaults and with all features against
+  tier K's host, engine and GPU forbid set.
+- **Package direction.** `cargo xtask workspace` checks official-package dependencies, rejects a
+  non-facade core edge to an official package, and implements ADR-0315's standing facade exception.
+- **No default package.** `the_facade_turns_no_feature_on_by_default` and the facade consumer graph
+  checks require no catalog in an ordinary default graph.
+- **Feature combinations.** `cargo xtask facade-combos` builds each supported facade combination in
+  isolation.
+- **Packaged-SDK external parity.** `flui-sdk::package_parity` resolves an external consumer to the
+  unpacked SDK archive and runs its custom theme extension and capability plugin, including the
+  opt-in package-test surface. The all-official-package tarball command and rustdoc-JSON surface
+  measurement remain required confirmations and are entries of `docs/gaps.md` until built.

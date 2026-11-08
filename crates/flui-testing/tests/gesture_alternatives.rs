@@ -12,6 +12,7 @@ use flui_animation::{
 };
 use flui_foundation::geometry::Offset;
 use flui_painting::styling::Color;
+use flui_rendering::semantics::SemanticsAnchor;
 use flui_testing::replay::PointerScript;
 use flui_testing::widgets::tight;
 use flui_testing::{AlternativesSubject, GestureAlternativesCheck, assert_gesture_alternatives};
@@ -21,7 +22,7 @@ use flui_view::{BoxedView, ViewExt};
 use flui_widgets::{
     Actions, Alternative, CallbackAction, ColoredBox, Column, CompanionLink, CompanionRegistration,
     CompanionSpec, ControlSpec, Dismissible, GestureAlternatives, GestureCommand, Intent, Listener,
-    MenuSpec, RawButton, Semantics, SemanticsAnchor, SizedBox,
+    MenuSpec, RawButton, Semantics, SizedBox,
 };
 
 /// Count one removal.

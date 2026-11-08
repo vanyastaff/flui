@@ -38,7 +38,7 @@ use super::observer::{Notification, Observation, ObservationQueues};
 use super::result::RouteResult;
 use super::route::{
     AnyResult, ErasedRoute, PushCompletion, Route, RouteId, RoutePopDisposition, RouteRecord,
-    UndeliveredResult,
+    TerminalResultCompletion, UndeliveredResult,
 };
 
 /// What was last announced to a route's `did_change_next` / `did_change_previous`.
@@ -312,15 +312,11 @@ impl RouteEntry {
     fn handle_pop(&mut self) -> (bool, Option<UndeliveredResult>) {
         self.state = RouteLifecycle::Popping;
 
-        if self.route.is_completed() {
-            // Already completed elsewhere; nothing further to do — but a pending
-            // result now has nowhere to go, and it is the caller's value.
-            return (
-                true,
-                self.pending_result.take().map(UndeliveredResult::no_target),
-            );
-        }
-
+        // Completion and route lifecycle are separate authorities. In particular,
+        // final unmount completes pending results without popping routes; a later
+        // stale-handle pop must still run `did_pop` so local history claims and
+        // severs its owed removals. `RouteRecord::did_complete` is idempotent and
+        // returns any newly supplied value as undelivered.
         let result = self.pending_result.take();
         let (popped, undelivered) = self.route.did_pop(result);
         if !popped {
@@ -607,6 +603,15 @@ impl RouteHistory {
 
     fn entry_mut(&mut self, id: RouteId) -> Option<&mut RouteEntry> {
         self.entries.iter_mut().find(|entry| entry.id() == id)
+    }
+
+    /// Prepare every pending result's terminal completion for final navigator
+    /// unmount. The caller runs the returned actions after releasing the lock.
+    pub(crate) fn terminal_result_completions(&mut self) -> Vec<TerminalResultCompletion> {
+        self.entries
+            .iter_mut()
+            .filter_map(|entry| entry.route.terminal_result_completion())
+            .collect()
     }
 
     /// Take what the most recent flush left to apply. `None` if already taken.

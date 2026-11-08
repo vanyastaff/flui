@@ -530,9 +530,6 @@ fn the_page_label_comes_from_the_widgets_localizations() {
     #[derive(Debug)]
     struct German;
     impl WidgetsLocalizations for German {
-        fn text_direction(&self) -> TextDirection {
-            TextDirection::Ltr
-        }
         fn reorder_item_to_start(&self) -> &'static str {
             DefaultWidgetsLocalizations.reorder_item_to_start()
         }

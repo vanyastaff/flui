@@ -8,6 +8,12 @@ pub mod app;
 #[cfg(target_os = "macos")]
 pub mod appkit;
 pub mod clipboard;
+pub mod drag;
+pub mod headless;
+
+pub use crate::window::headless::{HeadlessWindow, HeadlessWindowSystem, UnknownDisplay};
+pub use headless::{FakeAccessibility, FakeSystemChrome, FakeTextInput};
+
 /// The request-per-thread HTTP client's scripted stack.
 #[cfg(test)]
 pub(crate) mod http;

@@ -6,10 +6,12 @@
 use std::time::Duration;
 
 use flui_sdk::animation::{Cubic, Curve, Vsync};
-use flui_sdk::painting::{Color, DrawOp, TextDirection};
+use flui_sdk::painting::DrawOp;
+use flui_sdk::painting::styling::Color;
+use flui_sdk::painting::typography::TextDirection;
+use flui_sdk::testing::a11y::Role;
 use flui_sdk::view::environment::VsyncScope;
 use flui_sdk::widgets::Directionality;
-use flui_testing::a11y::Role;
 
 use crate::common::{LaidOut, lay_out_animated, tight};
 use flui_material::{LinearProgressIndicator, Theme, ThemeData};

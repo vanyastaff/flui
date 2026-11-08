@@ -33,7 +33,7 @@ use crate::app::{AppConfig, AppLaunch, LaunchError};
 ///         .config(AppConfig::new().with_title("My App"))
 ///         .capabilities(AppCapabilities::new().plugin(MyPlugin));
 ///     // `run_app_android` logs why it could not start.
-///     let _started = flui_app::run_app_android(app, MyRootView, launch);
+///     let _started = flui_app::native::android::run_app_android(app, MyRootView, launch);
 /// }
 /// ```
 ///
@@ -274,6 +274,7 @@ where
         );
         ui_runtime
             .install_captured_text_sizing_for(ui_runtime.presentation_id(), native_sizing.source());
+        let root = flui_widgets::app_root(root);
         let attach = ui_runtime.enter(|ui_runtime| {
             ui_runtime.attach_root_widget_with_size(
                 &root,

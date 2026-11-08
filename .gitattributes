@@ -43,5 +43,8 @@
 # Java sources (the digest `cargo xtask android-dex` checks reads LF bytes)
 *.java text eol=lf
 
+# Unified diffs require a space prefix on blank context lines.
+*.patch text eol=lf whitespace=-blank-at-eol
+
 # Lock files (exact match, no diff)
 Cargo.lock text eol=lf -diff linguist-generated=true

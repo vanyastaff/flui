@@ -20,15 +20,17 @@ use flui_material::{
 };
 use flui_sdk::animation::{Curve, MotionOverride, Vsync, curves};
 use flui_sdk::geometry::{EdgeInsets, Point, Radius};
-use flui_sdk::painting::{Alignment, BorderRadius, Color, DrawOp};
+use flui_sdk::painting::styling::{BorderRadius, Color};
+use flui_sdk::painting::{Alignment, DrawOp};
+use flui_sdk::pipeline::{CrossAxisAlignment, MainAxisSize};
+use flui_sdk::testing::a11y::{Action, ActionRequest, TreeId};
 use flui_sdk::view::environment::VsyncScope;
 use flui_sdk::view::prelude::*;
+use flui_sdk::view::{RouteParseError, RoutePath};
 use flui_sdk::widgets::{
-    ColoredBox, Column, CrossAxisAlignment, MainAxisSize, NavigatorHandle, Padding, PageRoute,
-    Routable, RouteParseError, RoutePath, Router, ScrollController, Semantics,
-    SingleChildScrollView, SizedBox, Transform, WidgetsApp,
+    ColoredBox, Column, NavigatorHandle, Padding, PageRoute, Routable, RouteResultError, Router,
+    ScrollController, Semantics, SingleChildScrollView, SizedBox, Transform, WidgetsApp,
 };
-use flui_testing::{Action, ActionRequest, TreeId};
 
 const WIDTH: f64 = 400.0;
 const HEIGHT: f64 = 800.0;
@@ -50,6 +52,8 @@ const CLOSED_RADIUS: f64 = 12.0;
 const CLOSED_LABEL: &str = "Open details";
 const PAGE_LABEL: &str = "Details page";
 
+type CloseResults = Rc<RefCell<Vec<Result<Option<i32>, RouteResultError>>>>;
+
 struct Rig {
     navigator: Rc<RefCell<Option<NavigatorHandle>>>,
     /// Space above the app, from [`Setup::inset`].
@@ -59,7 +63,7 @@ struct Rig {
     app: LaidOut,
     registry: Vsync,
     scroll: ScrollController,
-    results: Rc<RefCell<Vec<Option<i32>>>>,
+    results: CloseResults,
     close: Rc<RefCell<Option<CloseAction<i32>>>>,
     open: Rc<RefCell<Option<OpenAction>>>,
 }
@@ -315,7 +319,7 @@ fn assert_closed_again(rig: &Rig) {
 }
 
 /// The fill path the morph's surface paints in `color`, in its own coordinates.
-fn surface_path(app: &LaidOut, color: Color) -> Option<flui_sdk::painting::Path> {
+fn surface_path(app: &LaidOut, color: Color) -> Option<flui_sdk::painting::paint::Path> {
     app.draw_ops()
         .into_iter()
         .find_map(|command| match command.op {
@@ -467,8 +471,8 @@ fn the_transitions_fade_content_on_their_own_schedules() {
     }
 }
 
-/// Closing with a value resolves `on_closed` with it, closing with none
-/// resolves `None`, and the source comes back each time.
+/// Closing with a value resolves `on_closed` with `Ok(Some(value))`, closing
+/// with none resolves `Ok(None)`, and the source comes back each time.
 fn pop_with_a_result_resolves_on_closed() {
     let mut rig = rig(ContainerTransition::Fade);
     rig.open();
@@ -491,7 +495,10 @@ fn pop_with_a_result_resolves_on_closed() {
     );
     rig.app.pump_for(ms(150));
     rig.finish_exit();
-    assert_eq!(*rig.results.borrow(), vec![Some(7)], "the result arrives");
+    assert!(
+        matches!(rig.results.borrow().as_slice(), [Ok(Some(7))]),
+        "the result arrives"
+    );
     assert_closed_again(&rig);
     assert_eq!(rig.routes(), 1, "the page left the navigator");
 
@@ -499,7 +506,34 @@ fn pop_with_a_result_resolves_on_closed() {
     rig.settle();
     rig.dismiss();
     rig.finish_exit();
-    assert_eq!(*rig.results.borrow(), vec![Some(7), None]);
+    assert!(matches!(
+        rig.results.borrow().as_slice(),
+        [Ok(Some(7)), Ok(None)]
+    ));
+    assert_closed_again(&rig);
+}
+
+/// A route result of the wrong type reaches `on_closed` unchanged instead of
+/// being collapsed into an ordinary dismissal without a value.
+fn a_mismatched_pop_result_reaches_on_closed_as_an_error() {
+    let mut rig = rig(ContainerTransition::Fade);
+    rig.open();
+    rig.settle();
+
+    let popped = rig
+        .navigator
+        .borrow()
+        .as_ref()
+        .expect("the closed content found its navigator")
+        .pop_with("not an i32");
+    assert!(popped, "the page is the current route");
+    rig.app.pump_for(Duration::ZERO);
+    rig.finish_exit();
+
+    assert!(matches!(
+        rig.results.borrow().as_slice(),
+        [Err(RouteResultError::TypeMismatch { .. })]
+    ));
     assert_closed_again(&rig);
 }
 
@@ -584,7 +618,7 @@ fn reduced_motion_settles_on_the_first_frame() {
     assert!(sample_of(&rig.app, PAGE).is_none(), "the page is gone");
     rig.finish_exit();
     assert_closed_again(&rig);
-    assert_eq!(*rig.results.borrow(), vec![None]);
+    assert!(matches!(rig.results.borrow().as_slice(), [Ok(None)]));
 }
 
 /// The closed container is one button; while the page flies neither the frozen
@@ -598,7 +632,7 @@ fn the_closed_container_is_a_button_and_one_surface_is_announced() {
     let tree = rig.app.a11y_tree().expect("semantics enabled");
     let buttons = tree.find_all_by_label(CLOSED_LABEL);
     assert_eq!(buttons.len(), 1, "{}", tree.describe());
-    assert_eq!(buttons[0].role(), flui_testing::a11y::Role::Button);
+    assert_eq!(buttons[0].role(), flui_sdk::testing::a11y::Role::Button);
     assert!(buttons[0].supports_action(Action::Click));
     let id = buttons[0].id();
     rig.app
@@ -768,7 +802,7 @@ fn a_zero_duration_opens_at_once() {
     rig.dismiss();
     rig.finish_exit();
     assert_closed_again(&rig);
-    assert_eq!(*rig.results.borrow(), vec![None]);
+    assert!(matches!(rig.results.borrow().as_slice(), [Ok(None)]));
 }
 
 /// Under a `Router`, whose navigator admits only popups, the container still
@@ -797,7 +831,7 @@ fn it_opens_under_a_router() {
     assert!(close_action.close_with(3));
     rig.app.pump_for(Duration::ZERO);
     rig.finish_exit();
-    assert_eq!(*rig.results.borrow(), vec![Some(3)]);
+    assert!(matches!(rig.results.borrow().as_slice(), [Ok(Some(3))]));
     assert_closed_again(&rig);
 }
 
@@ -815,7 +849,7 @@ fn an_untappable_container_is_no_button() {
     let tree = rig.app.a11y_tree().expect("semantics enabled");
     let nodes = tree.find_all_by_label(CLOSED_LABEL);
     assert_eq!(nodes.len(), 1, "{}", tree.describe());
-    assert_ne!(nodes[0].role(), flui_testing::a11y::Role::Button);
+    assert_ne!(nodes[0].role(), flui_sdk::testing::a11y::Role::Button);
     assert!(!nodes[0].supports_action(Action::Click));
 
     rig.open();
@@ -866,6 +900,10 @@ pub fn open_container_morph_by_scenario() {
             the_transitions_fade_content_on_their_own_schedules,
         ),
         ("pop result", pop_with_a_result_resolves_on_closed),
+        (
+            "mismatched pop result",
+            a_mismatched_pop_result_reaches_on_closed_as_an_error,
+        ),
         ("flipped exit", the_exit_runs_the_curve_flipped),
         (
             "reverse re-measure",

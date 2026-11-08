@@ -43,7 +43,7 @@ fn a_recycled_slot_steps_to_the_generation_it_mints_next() {
 #[test]
 fn an_exhausted_slot_has_no_release_step_and_closes_forever() {
     let mut slots = GenSlots::new();
-    slots.seed_generation(3, u32::MAX);
+    slots.seed_generation(3, Generation::LAST.as_u32());
     assert!(
         slots.generation(3).is_some_and(Generation::is_last),
         "the seeded terminal generation is the slot's carry"
@@ -63,7 +63,7 @@ fn an_exhausted_slot_has_no_release_step_and_closes_forever() {
     );
     assert_eq!(
         slots.generation(3).map(Generation::as_u32),
-        Some(u32::MAX),
+        Some(Generation::LAST.as_u32()),
         "the closed slot keeps its final generation"
     );
 }

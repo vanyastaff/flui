@@ -17,7 +17,9 @@ use flui_animation::{
     ProxyAnimation, RepeatMode,
 };
 use flui_foundation::geometry::Size;
-use flui_objects::{RenderPaintAnchor, RenderSkeleton, ShimmerBand};
+use flui_objects::{
+    CrossAxisAlignment, MainAxisSize, RenderPaintAnchor, RenderSkeleton, ShimmerBand,
+};
 use flui_painting::styling::Color;
 use flui_rendering::RenderUpdateImpact;
 use flui_rendering::constraints::AxisDirection;
@@ -28,7 +30,7 @@ use flui_view::{
     InheritedView, RenderObjectContext, RenderView, impl_inherited_view, impl_render_view,
 };
 
-use crate::{Column, CrossAxisAlignment, MainAxisSize, Semantics, SizedBox, TickerMode};
+use crate::{Column, Semantics, SizedBox, TickerMode};
 use flui_view::environment::MediaQuery;
 use flui_view::environment::VsyncScope;
 

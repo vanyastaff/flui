@@ -59,5 +59,8 @@ pub(crate) fn run_table(cases: &[(&str, fn())]) {
 #[path = "inspect.rs"]
 mod inspect;
 
+#[path = "diagnostics.rs"]
+mod diagnostics;
+
 #[path = "geometry/window_metrics.rs"]
 mod window_metrics;

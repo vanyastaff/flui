@@ -18,9 +18,9 @@
 //! - **`MediaQuery`.** The UI runtime publishes the live root `MediaQuery`
 //!   (size / device-pixel-ratio / platform-brightness republish); the shell
 //!   never introduces its own.
-//! - **Focus root and default traversal.** The UI runtime wraps the root in
-//!   [`FocusRoot`](crate::FocusRoot), which installs the standard Tab /
-//!   Shift+Tab traversal bindings.
+//! - **Focus root and default traversal.** The host adds standard Tab /
+//!   Shift+Tab bindings through [`app_root`](crate::app_root), and the UI runtime
+//!   installs [`FocusTreeRoot`](flui_view::environment::FocusTreeRoot).
 //! - **Vsync scope and gesture arena.** Runtime-installed
 //!   (`VsyncScope`, `GestureArenaScope`).
 //!
@@ -36,26 +36,18 @@
 //!   preferred languages, unless [`locale`](WidgetsApp::locale) is set.
 //!   An unavailable host observation falls back to the first supported locale.
 //!   Native observation availability depends on the backend.
-//! - **Named-route table, at the *app* level.** The mechanism
-//!   itself exists — [`route`](NavigatorHandle::route),
-//!   [`on_generate_route`](NavigatorHandle::on_generate_route) and
-//!   [`on_unknown_route`](NavigatorHandle::on_unknown_route) carry the
-//!   `routes` map and its two hooks, and
-//!   [`push_named`](NavigatorHandle::push_named) and its five siblings drive
-//!   them (ADR-0024). What this shell does not yet do is *forward* them: there
-//!   is no `WidgetsApp::routes(..)` folding `home` + a table + a user generator
-//!   into one hook, so an app
-//!   registers on the handle it hands to [`WidgetsApp::navigator`]. When that
-//!   forwarding lands, the reconciliation contract is already fixed: the app
-//!   builder replaces the table wholesale at mount, and the handle mutators
-//!   serve imperative or late registration (`ARCHITECTURE.md`,
-//!   `## Mapping decisions`). New code roots the app in a typed
-//!   [`Router`] with [`WidgetsApp::router`] instead (ADR-0093); the
-//!   navigator form stays for code that has not moved.
 //! - **Restoration scope, `SharedAppData`, `NavigationNotification`,
 //!   shortcut/action overrides, performance overlay, debug banner.** Each
 //!   depends on infrastructure FLUI has not built (state restoration,
 //!   notification bubbling, tooltip registry, overlay diagnostics).
+//!
+//! ## Routing
+//!
+//! Application routes are typed values mounted through [`WidgetsApp::router`].
+//! The shell owns no app-level route registry or generator hooks. A
+//! [`WidgetsApp::with_builder`] application composes its own subtree instead;
+//! its [`builder`](WidgetsApp::builder) hook receives no routing child unless
+//! the configuration supplies one.
 //!
 //! ## Documented limits
 //!
@@ -355,9 +347,9 @@ impl<F: AppForm> WidgetsApp<F> {
     ///
     /// The default widgets-localizations delegate is appended **after**
     /// these, and only the first delegate of a given resource type loads, so
-    /// a caller-supplied `WidgetsLocalizations` delegate (for example
-    /// [`GlobalWidgetsLocalizationsDelegate`](crate::GlobalWidgetsLocalizationsDelegate))
-    /// overrides the US-English default.
+    /// a caller-supplied `WidgetsLocalizations` delegate overrides the US-English
+    /// strings. The resolved [`Locale`](flui_platform::Locale), rather than a
+    /// resource delegate, determines the subtree's text direction.
     #[must_use]
     pub fn localizations_delegates(mut self, delegates: Vec<BoxedLocalizationsDelegate>) -> Self {
         self.localizations_delegates = delegates;
@@ -401,11 +393,10 @@ impl<F: AppForm> WidgetsApp<F> {
 pub struct WidgetsAppState {
     /// `None` in the builder-only form (no navigator at all) until an update introduces routing.
     ///
-    /// Only `home` and a caller-supplied handle give the shell a navigator:
-    /// it has no named-route table or route-generator hooks of its own to
-    /// consult (the module docs say why), so a handle whose *named* routes
-    /// are registered directly must be handed in through
-    /// [`WidgetsApp::navigator`] to make this `Some`.
+    /// Only `home` and a caller-supplied handle give the shell a navigator.
+    /// The shell owns no route registry, so a caller-built stack must arrive
+    /// through [`WidgetsApp::navigator`] to make this `Some`; the typed Router
+    /// form owns its navigator inside the routing subtree instead.
     navigator: Option<NavigatorHandle>,
     /// The seeded home route and the live cell its content builder reads —
     /// `did_update_view` writes the current view's `home` into the cell and

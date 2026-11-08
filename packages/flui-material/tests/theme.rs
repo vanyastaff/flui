@@ -19,7 +19,7 @@ use crate::common;
 
 use common::{lay_out, loose};
 use flui_material::{ColorSchemeOverrides, Theme, ThemeData, ThemeDataOverrides};
-use flui_sdk::painting::Color;
+use flui_sdk::painting::styling::Color;
 use flui_sdk::platform::Brightness;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::SizedBox;
@@ -54,10 +54,9 @@ pub fn theme_of_panicking_accessor_returns_ancestor_theme_data() {
         primary: Some(sentinel),
         ..Default::default()
     });
-    let provided = base.copy_with(ThemeDataOverrides {
-        color_scheme: Some(scheme),
-        ..Default::default()
-    });
+    let mut overrides = ThemeDataOverrides::default();
+    overrides.color_scheme = Some(scheme);
+    let provided = base.copy_with(overrides);
 
     let _laid = lay_out(
         Theme::new(
@@ -88,9 +87,9 @@ struct PaintedThemeRoles;
 
 impl StatelessView for PaintedThemeRoles {
     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
-        use flui_painting::typography::TextSpan;
         use flui_sdk::foundation::{TextScaleProfile, TextSizingIntent};
-        use flui_sdk::painting::TextStyle;
+        use flui_sdk::painting::typography::TextSpan;
+        use flui_sdk::painting::typography::TextStyle;
         use flui_sdk::widgets::{Column, RichText, Text};
 
         let theme = Theme::of(ctx).text_theme;
@@ -126,9 +125,9 @@ impl StatelessView for PaintedThemeRoles {
 /// Theme roles with equal authored sizes must retain different growth profiles
 /// through style merging, measurement and the submitted paragraph glyphs.
 pub fn retained_theme_roles_paint_distinct_numeric_sizing_answers() {
-    use flui_painting::glyphs::FontRegistry;
-    use flui_painting::{DrawOp, TextSizing};
     use flui_sdk::foundation::{TextScaleProfile, TextSize, TextSizeRequest};
+    use flui_sdk::painting::{DrawOp, TextSizing};
+    use flui_sdk::testing::painting::FontRegistry;
     use flui_sdk::view::environment::{MediaQuery, MediaQueryData};
 
     let view = |text_sizing| {
@@ -261,13 +260,11 @@ pub fn theme_installs_the_focus_ring_style() {
     let manager = laid.focus_manager();
     let _ = laid.enter_owner_scope(|| {
         manager.dispatch_key_event(
-            &flui_interaction::testing::input::KeyEventBuilder::new(
-                flui_interaction::events::Code::Tab,
-            )
-            .with_key(flui_interaction::events::Key::Named(
-                flui_interaction::events::NamedKey::Tab,
-            ))
-            .build(),
+            &flui_sdk::testing::input::KeyEventBuilder::new(flui_sdk::interaction::Code::Tab)
+                .with_key(flui_sdk::interaction::Key::Named(
+                    flui_sdk::interaction::NamedKey::Tab,
+                ))
+                .build(),
         )
     });
     laid.pump();

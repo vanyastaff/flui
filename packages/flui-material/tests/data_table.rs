@@ -15,7 +15,8 @@ use flui_material::{
     DataCell, DataColumn, DataRow, DataTable, DataTableThemeData, Theme, ThemeData,
 };
 use flui_sdk::foundation::RenderId;
-use flui_sdk::widgets::{TableColumnWidth, Text};
+use flui_sdk::pipeline::TableColumnWidth;
+use flui_sdk::widgets::Text;
 
 fn text_column(label: &str) -> DataColumn {
     DataColumn::new(Text::new(label.to_string()))
@@ -47,8 +48,7 @@ fn center_of(laid: &LaidOut, id: RenderId) -> (f64, f64) {
 /// widget-vs-theme halves are already unit-tested in isolation against
 /// `resolve_style`; this closes the loop end to end).
 pub fn widget_override_beats_theme_beats_default_on_a_mounted_tree() {
-    let mut theme = ThemeData::light();
-    theme.data_table_theme = Some(DataTableThemeData {
+    let theme = ThemeData::light().with_component(DataTableThemeData {
         heading_row_height: Some(80.0),
         ..Default::default()
     });
@@ -71,8 +71,7 @@ pub fn widget_override_beats_theme_beats_default_on_a_mounted_tree() {
 }
 
 fn table_cell_insets(theme_margin: Option<f64>, widget_margin: Option<f64>) -> [f64; 3] {
-    let mut theme = ThemeData::light();
-    theme.data_table_theme = Some(DataTableThemeData {
+    let theme = ThemeData::light().with_component(DataTableThemeData {
         checkbox_horizontal_margin: theme_margin,
         ..Default::default()
     });

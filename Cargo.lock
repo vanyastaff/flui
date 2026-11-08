@@ -1149,15 +1149,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "crossbeam-epoch"
-version = "0.9.21"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dc74980687109a3b14c72fd458107bf0baa1da1a1a805e178d15501ba9b86d9d"
-dependencies = [
- "crossbeam-utils",
-]
-
-[[package]]
 name = "crossbeam-utils"
 version = "0.8.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1684,6 +1675,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "filetime"
+version = "0.2.29"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5c287a33c7f0a620c38e641e7f60827713987b3c0f26e8ddc9462cc69cf75759"
+dependencies = [
+ "cfg-if",
+ "libc",
+]
+
+[[package]]
 name = "find-msvc-tools"
 version = "0.1.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1722,6 +1723,7 @@ dependencies = [
  "cargo_metadata",
  "flui-animation",
  "flui-app",
+ "flui-assets",
  "flui-cupertino",
  "flui-devtools",
  "flui-engine",
@@ -1739,14 +1741,12 @@ dependencies = [
  "flui-testing",
  "flui-view",
  "flui-widgets",
- "image",
  "pollster",
  "serde",
  "serde_json",
  "tempfile",
  "toml",
  "tracing",
- "tracing-subscriber",
  "trybuild",
 ]
 
@@ -1820,7 +1820,6 @@ dependencies = [
  "flui-platform",
  "image",
  "lru",
- "moka",
  "parking_lot",
  "thiserror 2.0.21",
  "tokio",
@@ -1865,9 +1864,7 @@ dependencies = [
 name = "flui-cupertino"
 version = "0.2.0-dev"
 dependencies = [
- "flui-painting",
  "flui-sdk",
- "flui-testing",
  "tracing",
 ]
 
@@ -1912,7 +1909,6 @@ name = "flui-devtools"
 version = "0.2.0-dev"
 dependencies = [
  "criterion",
- "flui-log",
  "flui-objects",
  "flui-rendering",
  "flui-scheduler",
@@ -1935,7 +1931,9 @@ dependencies = [
  "crossbeam-channel",
  "etagere",
  "flui-foundation",
+ "flui-hot-reload",
  "flui-layer",
+ "flui-native",
  "flui-objects",
  "flui-painting",
  "flui-platform",
@@ -1952,6 +1950,7 @@ dependencies = [
  "static_assertions",
  "thiserror 2.0.21",
  "tracing",
+ "tracing-subscriber",
  "trybuild",
  "wasm-bindgen-test",
  "web-time",
@@ -2068,11 +2067,7 @@ dependencies = [
 name = "flui-material"
 version = "0.2.0-dev"
 dependencies = [
- "flui-interaction",
- "flui-layer",
- "flui-painting",
  "flui-sdk",
- "flui-testing",
  "tracing",
 ]
 
@@ -2328,6 +2323,8 @@ dependencies = [
 name = "flui-sdk"
 version = "0.1.0-dev"
 dependencies = [
+ "cargo_metadata",
+ "flate2",
  "flui",
  "flui-animation",
  "flui-foundation",
@@ -2336,10 +2333,12 @@ dependencies = [
  "flui-painting",
  "flui-platform",
  "flui-rendering",
- "flui-scheduler",
  "flui-testing",
  "flui-view",
  "flui-widgets",
+ "tar",
+ "tempfile",
+ "toml",
  "trybuild",
 ]
 
@@ -2360,6 +2359,7 @@ dependencies = [
  "smol_str",
  "thiserror 2.0.21",
  "tracing",
+ "trybuild",
 ]
 
 [[package]]
@@ -2368,7 +2368,6 @@ version = "0.2.0-dev"
 dependencies = [
  "flui-platform",
  "flui-sdk",
- "flui-testing",
  "futures-util",
  "libc",
  "raw-window-handle",
@@ -2428,6 +2427,7 @@ dependencies = [
  "flui-testing",
  "futures-core",
  "parking_lot",
+ "percent-encoding",
  "serde",
  "serde_json",
  "serial_test",
@@ -2479,7 +2479,6 @@ dependencies = [
  "futures-core",
  "image",
  "parking_lot",
- "percent-encoding",
  "proptest",
  "smallvec",
  "static_assertions",
@@ -2909,35 +2908,6 @@ name = "hex"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
-
-[[package]]
-name = "hot-reload-counter-host"
-version = "0.2.0-dev"
-dependencies = [
- "flui-app",
- "flui-hot-reload",
- "hot-reload-counter-types",
- "tracing",
-]
-
-[[package]]
-name = "hot-reload-counter-logic"
-version = "0.2.0-dev"
-dependencies = [
- "flui-hot-reload",
- "flui-painting",
- "flui-view",
- "flui-widgets",
- "hot-reload-counter-types",
-]
-
-[[package]]
-name = "hot-reload-counter-types"
-version = "0.2.0-dev"
-dependencies = [
- "flui-hot-reload",
- "flui-view",
-]
 
 [[package]]
 name = "http"
@@ -3824,26 +3794,6 @@ dependencies = [
  "log",
  "wasi",
  "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "moka"
-version = "0.12.16"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4293f18e7567a1caf3c584855554377025c65e0aa445344d04171f5ad63d19b9"
-dependencies = [
- "async-lock",
- "crossbeam-channel",
- "crossbeam-epoch",
- "crossbeam-utils",
- "equivalent",
- "event-listener",
- "futures-util",
- "parking_lot",
- "portable-atomic",
- "smallvec",
- "tagptr",
- "uuid",
 ]
 
 [[package]]
@@ -5857,10 +5807,15 @@ dependencies = [
 ]
 
 [[package]]
-name = "tagptr"
-version = "0.2.0"
+name = "tar"
+version = "0.4.46"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7b2093cf4c8eb1e67749a6762251bc9cd836b6fc171623bd0a9d324d37af2417"
+checksum = "3f6221d9a6003c78398e3b239969f352578258df48c8eb051caadae0015bc840"
+dependencies = [
+ "filetime",
+ "libc",
+ "xattr",
+]
 
 [[package]]
 name = "target-lexicon"
@@ -7475,6 +7430,16 @@ name = "x11rb-protocol"
 version = "0.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ea6fc2961e4ef194dcbfe56bb845534d0dc8098940c7e5c012a258bfec6701bd"
+
+[[package]]
+name = "xattr"
+version = "1.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "32e45ad4206f6d2479085147f02bc2ef834ac85886624a23575ae137c8aa8156"
+dependencies = [
+ "libc",
+ "rustix 1.1.5",
+]
 
 [[package]]
 name = "xcap"

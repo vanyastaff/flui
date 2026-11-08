@@ -376,8 +376,9 @@ impl RenderingBinding {
     /// `Scene`. Two callers hit this exact problem — [`allow_first_frame`]
     /// (a deferred frame becoming presentable) and the UI runtime's own
     /// scheduler's frames-disabled→enable re-enable edge (see `ADR-0035`
-    /// and `emit_lifecycle_transition`'s doc in `runner.rs`), which has no
-    /// retained scene to re-present either — so the shared logic lives
+    /// and `UiRuntime::reconcile_lifecycle_after_failure` in
+    /// `ui_runtime/presentation_lifecycle.rs`), which has no retained scene
+    /// to re-present either — so the shared logic lives
     /// here, once.
     ///
     /// Routed through [`PipelineOwner::local_render_invalidation_handle`].

@@ -85,11 +85,10 @@ impl Theme {
         ctx.depend_on::<Self, _>(|t| t.data.clone())
     }
 
-    /// Depend on **one slot group** of the nearest `Theme` (issue #1090):
-    /// `mask` is one or more `ThemeData::FIELD_*` constants (one per
-    /// `ThemeData` field, from `#[derive(InheritedData)]`), and this element
-    /// rebuilds only when a masked slot changes. `Theme::of` stays the
-    /// whole-theme dependency. `None` without a `Theme` ancestor.
+    /// Depend on selected base fields of the nearest `Theme`.
+    ///
+    /// Dynamic component entries are not part of this mask. `Theme::of` stays
+    /// the whole-theme dependency across both base fields and entries.
     pub fn depend_on_fields<R>(
         ctx: &dyn BuildContext,
         mask: FieldMask<ThemeData>,
@@ -109,6 +108,59 @@ impl Theme {
     pub fn text_theme_of(ctx: &dyn BuildContext) -> Option<crate::text_theme::TextTheme> {
         Self::depend_on_fields(ctx, ThemeData::FIELD_TEXT_THEME, |d| d.text_theme.clone())
     }
+
+    /// Clone component `T` from the nearest `Theme`, depending only on that entry.
+    ///
+    /// Returns `None` when there is no `Theme` ancestor or the nearest one does
+    /// not contain `T`. A missing entry never continues into an outer `Theme`.
+    #[must_use]
+    pub fn component_of<T: crate::ComponentTheme>(ctx: &dyn BuildContext) -> Option<T> {
+        ctx.depend_on_entry::<Self, T, _>(|theme| theme.data.component::<T>().cloned())
+            .flatten()
+    }
+
+    pub(crate) fn color_and_text_of(
+        ctx: &dyn BuildContext,
+    ) -> Option<(crate::ColorScheme, crate::TextTheme)> {
+        let colors = Self::color_scheme_of(ctx)?;
+        let text_theme = Self::text_theme_of(ctx)?;
+        Some((colors, text_theme))
+    }
+
+    pub(crate) fn base_of(ctx: &dyn BuildContext) -> Option<BaseTheme> {
+        Self::color_and_text_of(ctx).map(|(color_scheme, text_theme)| BaseTheme {
+            color_scheme,
+            text_theme,
+        })
+    }
+
+    pub(crate) fn required_color_scheme_of(ctx: &dyn BuildContext) -> crate::ColorScheme {
+        Self::color_scheme_of(ctx).unwrap_or_else(|| Self::of(ctx).color_scheme)
+    }
+
+    pub(crate) fn required_color_and_text_of(
+        ctx: &dyn BuildContext,
+    ) -> (crate::ColorScheme, crate::TextTheme) {
+        Self::color_and_text_of(ctx).unwrap_or_else(|| {
+            let theme = Self::of(ctx);
+            (theme.color_scheme, theme.text_theme)
+        })
+    }
+
+    pub(crate) fn required_base_of(ctx: &dyn BuildContext) -> BaseTheme {
+        Self::base_of(ctx).unwrap_or_else(|| {
+            let theme = Self::of(ctx);
+            BaseTheme {
+                color_scheme: theme.color_scheme,
+                text_theme: theme.text_theme,
+            }
+        })
+    }
+}
+
+pub(crate) struct BaseTheme {
+    pub(crate) color_scheme: crate::ColorScheme,
+    pub(crate) text_theme: crate::TextTheme,
 }
 
 impl std::fmt::Debug for Theme {
@@ -138,6 +190,15 @@ impl InheritedView for Theme {
     fn changed_fields(&self, old: &Self) -> FieldMask<ThemeData> {
         self.data.field_mask_diff(&old.data)
     }
+
+    fn changed_entries(&self, old: &Self) -> flui_sdk::view::EntrySet {
+        self.data
+            .changed_component_types(&old.data)
+            .into_iter()
+            .fold(flui_sdk::view::EntrySet::NONE, |changed, id| {
+                changed.union(flui_sdk::view::EntrySet::from_type_id(id))
+            })
+    }
 }
 
 impl_inherited_view!(Theme);
@@ -150,8 +211,9 @@ impl InheritedTheme for Theme {
 
 /// A [`Theme`] that animates to each new [`ThemeData`].
 ///
-/// The colour scheme and text theme interpolate; component themes switch
-/// half way. A change mid-flight starts from the theme shown. Under reduced
+/// The colour scheme and text theme interpolate; component themes use their
+/// typed interpolation, which switches half way by default. A change mid-flight
+/// starts from the theme shown. Under reduced
 /// motion the new theme applies on the next frame.
 ///
 /// ```

@@ -64,6 +64,51 @@ impl Owner {
     }
 }
 
+struct UnavailableExecutor;
+
+impl flui_platform::executor::Executor for UnavailableExecutor {
+    fn spawn_compute(
+        &self,
+        _job: flui_platform::executor::ComputeJob,
+    ) -> Result<(), flui_platform::executor::SpawnError> {
+        Err(flui_platform::executor::SpawnError::Unavailable)
+    }
+
+    fn spawn_io(
+        &self,
+        _future: flui_platform::executor::IoFuture,
+    ) -> Result<(), flui_platform::executor::SpawnError> {
+        Err(flui_platform::executor::SpawnError::Unavailable)
+    }
+
+    fn room(&self, _lane: flui_platform::executor::Lane) -> flui_platform::executor::RoomFuture {
+        flui_platform::executor::RoomFuture::ready(Err(
+            flui_platform::executor::SpawnError::Unavailable,
+        ))
+    }
+}
+
+#[test]
+fn provider_context_exposes_only_the_executor_its_host_supplied() {
+    let owner = Owner::new();
+    let locals = flui_platform::capability::RuntimeLocals::new();
+    let cx = flui_platform::capability::ProviderContext::new(
+        owner.source.poster(),
+        &owner.source,
+        &locals,
+        None,
+    );
+    assert!(
+        cx.executor().is_none(),
+        "the compatibility constructor supplies no executor"
+    );
+
+    let expected: Arc<dyn flui_platform::executor::Executor> = Arc::new(UnavailableExecutor);
+    let cx = cx.with_executor(Arc::clone(&expected));
+    let actual = cx.executor().expect("the host supplied an executor");
+    assert!(Arc::ptr_eq(actual, &expected));
+}
+
 /// Records that it was dropped, to tell "dropped unrun" from "never dropped".
 struct DropFlag(Rc<Cell<bool>>);
 

@@ -20,7 +20,8 @@ use flui_material::{
 };
 use flui_sdk::animation::{Cubic, Curve, MotionOverride, Vsync, curves};
 use flui_sdk::geometry::Point;
-use flui_sdk::painting::{Color, DrawOp};
+use flui_sdk::painting::DrawOp;
+use flui_sdk::painting::styling::Color;
 use flui_sdk::platform::TargetPlatform;
 use flui_sdk::view::BuildContext;
 use flui_sdk::view::environment::VsyncScope;
@@ -55,7 +56,7 @@ fn sample(app: &LaidOut) -> Option<Sample> {
 
 /// Where whatever paints `color` lands, and at what alpha.
 pub(crate) fn sample_of(app: &LaidOut, color: Color) -> Option<Sample> {
-    use flui_layer::Layer;
+    use flui_sdk::testing::rendering::Layer;
     let tree = app.layer_tree().expect("a committed scene");
     for (_, node) in tree.iter() {
         let Layer::Picture(picture) = node.layer() else {

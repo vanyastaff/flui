@@ -18,6 +18,21 @@
 //! the [`NavigatorHandle`] an observer holds usable from `did_push`: it can read the
 //! stack, and it can mutate it.
 //!
+//! # Lifecycle callbacks are registration-scoped and panic-contained
+//!
+//! Each registration commits its own attachment state before calling user code.
+//! Attachment rechecks that a registration from its snapshot is still current, so
+//! re-entrant removal before `did_attach` produces neither callback; removal after
+//! it produces exactly one `did_detach`. Repeated additions of one observer `Arc`
+//! remain distinct registrations. Detachment is idempotent across removal and
+//! navigator teardown.
+//!
+//! Each callback is contained independently. Every still-current registration in
+//! the snapshot receives its notification, observer ownership is retired under the
+//! same panic custody, and only then does the first panic resume. One failing
+//! observer cannot leave the rest attached or detached without their corresponding
+//! notification.
+//!
 //! # Observers receive [`RouteId`], not route objects
 //!
 //! Handing out `&mut dyn ErasedRoute`

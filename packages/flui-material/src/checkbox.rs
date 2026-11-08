@@ -76,16 +76,17 @@ use std::rc::Rc;
 
 use flui_sdk::foundation::{Listenable, Subscription};
 use flui_sdk::painting::Canvas;
-use flui_sdk::painting::{BorderSide, BorderStyle};
-use flui_sdk::painting::{Paint, Path};
+use flui_sdk::painting::paint::Path;
+use flui_sdk::painting::styling::{BorderSide, BorderStyle};
+use flui_sdk::painting::{CustomPainter, Paint};
+use flui_sdk::rendering::Toggled;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{
-    CustomPaint, CustomPainter, Semantics, Toggled, WidgetState, WidgetStateProperty, WidgetStates,
-    WidgetStatesController,
+    CustomPaint, Semantics, WidgetState, WidgetStateProperty, WidgetStates, WidgetStatesController,
 };
 use flui_sdk::{
     geometry::{Point, RRect, Rect, Size},
-    painting::Color,
+    painting::styling::Color,
 };
 
 use crate::color_scheme::ColorScheme;
@@ -357,9 +358,8 @@ impl ViewState<Checkbox> for CheckboxState {
     }
 
     fn build(&self, view: &Checkbox, ctx: &dyn BuildContext) -> impl IntoView {
-        let theme = Theme::of(ctx);
-        let checkbox_theme = theme.checkbox_theme.clone();
-        let colors = theme.color_scheme;
+        let colors = Theme::required_color_scheme_of(ctx);
+        let checkbox_theme = Theme::component_of::<crate::CheckboxThemeData>(ctx);
 
         // The live states set: Selected (owned by this state), Hovered/
         // Focused/Pressed/Disabled (owned by the InkWell built below, on the

@@ -8,7 +8,7 @@
 //!   span `UpdateScheduler::drive_frame` opens and the `build`/`layout`/
 //!   `paint`/`compositing` spans the pipeline emits inside it.
 //! - **`timeline`** — [`timeline::Timeline`], an event recorder with Chrome
-//!   trace export and a bridge from the scheduler's `FrameSnapshot`s.
+//!   trace export and a view over the shared frame-span capture.
 //! - **`inspector`** — [`gesture_inspector::GestureInspector`], which reports
 //!   what a gesture arena decided per contest through `GestureObserver`, and
 //!   [`gesture_overlay::GestureInspectorOverlay`], a debug overlay that draws
@@ -30,23 +30,19 @@
 //! use std::sync::Arc;
 //!
 //! use flui_devtools::{FrameTimingLayer, Profiler};
-//! use flui_log::{InstallPolicy, LogBridgePolicy, LogConfig};
 //! use tracing_subscriber::layer::SubscriberExt;
 //!
-//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let profiler = Arc::new(Profiler::new());
-//! // FLUI's own log subscriber, with the profiler layer beside it. The layer
-//! // carries its own filter, so the log filter's level does not affect it.
-//! let subscriber = LogConfig::default()
-//!     .subscriber()?
+//! // The layer carries its own filter, so another layer's level does not
+//! // affect it.
+//! let subscriber = tracing_subscriber::registry()
 //!     .with(FrameTimingLayer::new(Arc::clone(&profiler)));
-//! flui_log::install_subscriber(subscriber, InstallPolicy::Auto, LogBridgePolicy::Auto)?;
-//! // ...run the app; `flui-app` inherits an installed subscriber...
+//! tracing::subscriber::set_global_default(subscriber)
+//!     .expect("no subscriber installed yet");
+//! // ...run the app...
 //! if let Some(frame) = profiler.frame_stats() {
 //!     println!("last frame: {:.2} ms", frame.total_time_ms());
 //! }
-//! # Ok(())
-//! # }
 //! ```
 //!
 //! # Feature flags
@@ -55,8 +51,7 @@
 //!
 //! - `profiling`: [`Profiler`] and [`FrameTimingLayer`] (`tracing` +
 //!   `tracing-subscriber`).
-//! - `timeline`: [`timeline`] (`flui_sdk::hooks::FrameSnapshot` for the
-//!   scheduler bridge, `serde` for the exporters).
+//! - `timeline`: [`timeline`] (`serde` for the exporters).
 //! - `inspector`: [`inspector`] (`flui_sdk::foundation::observe` for the
 //!   seam), [`gesture_overlay`] (`flui_sdk::widgets`) and [`gesture_inspector`] (`flui_sdk::interaction`'s arena
 //!   observation).

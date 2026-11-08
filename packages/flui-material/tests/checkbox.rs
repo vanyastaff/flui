@@ -27,7 +27,7 @@ use std::rc::Rc;
 
 use common::{lay_out, tight};
 use flui_material::{Checkbox, Theme, ThemeData};
-use flui_testing::a11y::Toggled;
+use flui_sdk::testing::a11y::Toggled;
 
 /// The checkbox's full tap target — the minimum interactive dimension
 /// (`48.0`), the branch `Checkbox` always takes in this V1 (no

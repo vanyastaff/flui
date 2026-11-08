@@ -11,6 +11,7 @@ fn thread_boundary_ui() {
     );
     cases.compile_fail("crates/flui-animation/tests/compile_fail/registering_a_bare_controller_does_not_compile.rs");
     cases.compile_fail("tests/ui/thread_boundary/*.rs");
+    cases.compile_fail("tests/ui/app/*.rs");
     // A catalog's controllers are reachable exactly with its feature.
     if cfg!(feature = "material") {
         cases.compile_fail("tests/ui/thread_boundary/material/*.rs");

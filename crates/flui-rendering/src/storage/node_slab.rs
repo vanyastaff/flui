@@ -1,19 +1,19 @@
 //! Slot storage for the render tree, with a lease for the layout walk.
 //!
-//! A [`NodeSlab`] is a `Vec` of slots with a free list, and the only place that mints a
-//! [`RenderId`] or empties a slot. Each slot has a header (its generation, an in-flight bit and
-//! the parent link, all outside the `UnsafeCell`) and a state: vacant, occupied by a
-//! [`RenderNode`], or retired. The layout walk takes one [`TreeLease`] and acquires slots one at a
-//! time as it reaches them, instead of borrowing every node of the dirty subtree up front.
+//! A [`NodeSlab`] is a `Vec` of slots with a free list and a [`GenSlots`] generation ledger, and
+//! the only place that mints a [`RenderId`] or empties a slot. Each slot has a header (an
+//! in-flight bit and the parent link, both outside the `UnsafeCell`) and a state: vacant, occupied
+//! by a [`RenderNode`], or retired. The layout walk takes one [`TreeLease`] and acquires slots one
+//! at a time as it reaches them, instead of borrowing every node of the dirty subtree up front.
 //!
 //! # Generations
 //!
-//! A slot's generation is its occupant's, or, while the slot is vacant, the one its next id will
-//! carry. Emptying a slot advances it, so every id of the old occupant goes stale. Ids carry
-//! generations below [`RETIRED`]; a slot whose generation cannot advance below it takes
-//! [`RETIRED`] instead and leaves circulation for good. An id therefore matches its slot's
-//! generation exactly while its node occupies the slot, and that comparison is the whole check
-//! a lease makes.
+//! A slot's generation lives in the ledger parallel to the slots: it is its occupant's, or, while
+//! the slot is vacant, the one its next id will carry. Emptying a slot advances it, so every id of
+//! the old occupant goes stale. A slot emptied at its last generation becomes retired and never
+//! rejoins the free list; its ledger entry keeps that last generation. A lease therefore checks
+//! both the generation and that the slot is occupied, since a retired slot's last id still matches
+//! the ledger.
 //!
 //! # Lease invariants
 //!
@@ -31,15 +31,11 @@
 
 use std::cell::{Cell, UnsafeCell};
 use std::marker::PhantomData;
-use std::num::NonZeroU32;
 
 use flui_foundation::RenderId;
+use flui_foundation::generation::{GenSlots, Generation};
 
 use super::node::RenderNode;
-
-/// The generation of a slot that has used every other one. No id carries it, so no id matches a
-/// retired slot.
-const RETIRED: NonZeroU32 = NonZeroU32::MAX;
 
 /// What a slot holds.
 #[expect(
@@ -57,9 +53,6 @@ enum SlotState {
 }
 
 struct Slot {
-    /// The occupant's generation, the next id's while vacant, [`RETIRED`] once retired. Written
-    /// through `&mut NodeSlab` alone.
-    generation: NonZeroU32,
     /// Set while a layout walk holds the slot's `&mut RenderNode`.
     in_flight: Cell<bool>,
     /// The occupant's parent, written by [`NodeSlab::set_parent`] alone. It lives here and not in
@@ -70,14 +63,15 @@ struct Slot {
 }
 
 /// The id of the node in slot `index` at `generation`.
-fn id_at(index: usize, generation: NonZeroU32) -> RenderId {
+fn id_at(index: usize, generation: Generation) -> RenderId {
     let index = u32::try_from(index).expect("BUG: a slot index is checked against u32 at insert");
-    RenderId::new_gen(index, generation)
+    RenderId::new_gen(index, generation.as_nonzero())
 }
 
 /// Render-node storage. Ids are slot indices with the slot's generation.
 pub(super) struct NodeSlab {
     slots: Vec<Slot>,
+    generations: GenSlots,
     free_head: Option<u32>,
     len: usize,
 }
@@ -95,6 +89,7 @@ impl NodeSlab {
     pub(super) const fn new() -> Self {
         Self {
             slots: Vec::new(),
+            generations: GenSlots::new(),
             free_head: None,
             len: 0,
         }
@@ -103,6 +98,7 @@ impl NodeSlab {
     pub(super) fn with_capacity(capacity: usize) -> Self {
         Self {
             slots: Vec::with_capacity(capacity),
+            generations: GenSlots::new(),
             free_head: None,
             len: 0,
         }
@@ -122,9 +118,17 @@ impl NodeSlab {
 
     /// The slot `id`'s node occupies, or `None` for a stale id.
     fn resolve(&self, id: RenderId) -> Option<&Slot> {
-        self.slots
-            .get(id.index() as usize)
-            .filter(|slot| slot.generation == id.generation())
+        let generation = self.generations.generation(id.index())?;
+        if generation.as_nonzero() != id.generation() {
+            return None;
+        }
+        let slot = self.slots.get(id.index() as usize)?;
+        // SAFETY: `&self` excludes a lease and every `&mut` into a slot, so the state read cannot
+        // overlap a mutable access.
+        match unsafe { &*slot.state.get() } {
+            SlotState::Occupied(_) => Some(slot),
+            SlotState::Vacant { .. } | SlotState::Retired => None,
+        }
     }
 
     pub(super) fn contains(&self, id: RenderId) -> bool {
@@ -142,10 +146,11 @@ impl NodeSlab {
     }
 
     pub(super) fn get_mut(&mut self, id: RenderId) -> Option<&mut RenderNode> {
-        let slot = self
-            .slots
-            .get_mut(id.index() as usize)
-            .filter(|slot| slot.generation == id.generation())?;
+        let generation = self.generations.generation(id.index())?;
+        if generation.as_nonzero() != id.generation() {
+            return None;
+        }
+        let slot = self.slots.get_mut(id.index() as usize)?;
         match slot.state.get_mut() {
             SlotState::Occupied(node) => Some(node),
             SlotState::Vacant { .. } | SlotState::Retired => None,
@@ -154,28 +159,32 @@ impl NodeSlab {
 
     /// Stores `node` in the first free slot, or a new one, and mints its id.
     pub(super) fn insert(&mut self, node: RenderNode) -> RenderId {
-        let index = if let Some(head) = self.free_head {
+        let (index, generation) = if let Some(head) = self.free_head {
+            let generation = self
+                .generations
+                .generation(head)
+                .expect("BUG: every slot has a generation ledger entry");
             let slot = &mut self.slots[head as usize];
             let SlotState::Vacant { next_free } = *slot.state.get_mut() else {
                 unreachable!("BUG: the free list names a slot that is not vacant");
             };
             *slot.state.get_mut() = SlotState::Occupied(node);
             self.free_head = next_free;
-            head as usize
+            (head as usize, generation)
         } else {
             let index = self.slots.len();
             u32::try_from(index)
                 .expect("BUG: render tree exceeds u32::MAX slots; RenderId index field is 32 bits");
+            let generation = self.generations.mint_fresh();
             self.slots.push(Slot {
-                generation: NonZeroU32::MIN,
                 in_flight: Cell::new(false),
                 parent: Cell::new(None),
                 state: UnsafeCell::new(SlotState::Occupied(node)),
             });
-            index
+            (index, generation)
         };
         self.len += 1;
-        id_at(index, self.slots[index].generation)
+        id_at(index, generation)
     }
 
     /// Empties the slot `id`'s node occupies and returns the node, which the caller drops after
@@ -195,9 +204,9 @@ impl NodeSlab {
         nodes
     }
 
-    /// Empties an occupied slot and advances its generation, or retires the slot when no
-    /// generation below [`RETIRED`] is left. Nothing after the first write can fail, so the slot,
-    /// its generation and the free list are consistent on every exit.
+    /// Empties an occupied slot and advances its generation, or retires the slot when its last
+    /// generation is released. Nothing after the first write can fail, so the slot, its generation
+    /// and the free list are consistent on every exit.
     fn vacate(&mut self, index: usize) -> Option<RenderNode> {
         let slot = self.slots.get_mut(index)?;
         if !matches!(slot.state.get_mut(), SlotState::Occupied(_)) {
@@ -205,23 +214,21 @@ impl NodeSlab {
         }
         let link =
             u32::try_from(index).expect("BUG: a slot index is checked against u32 at insert");
-        let next = slot
-            .generation
-            .checked_add(1)
-            .filter(|generation| *generation != RETIRED);
-        let emptied = match next {
-            Some(_) => SlotState::Vacant {
+        let release = self.generations.peek(link);
+        let emptied = if release.is_some() {
+            SlotState::Vacant {
                 next_free: self.free_head,
-            },
-            None => SlotState::Retired,
+            }
+        } else {
+            SlotState::Retired
         };
         let SlotState::Occupied(node) = std::mem::replace(slot.state.get_mut(), emptied) else {
             unreachable!("BUG: checked occupied just above");
         };
         slot.parent.set(None);
         slot.in_flight.set(false);
-        slot.generation = next.unwrap_or(RETIRED);
-        if next.is_some() {
+        if let Some(release) = release {
+            self.generations.commit(release);
             self.free_head = Some(link);
         }
         self.len -= 1;
@@ -229,21 +236,37 @@ impl NodeSlab {
     }
 
     pub(super) fn iter(&self) -> impl Iterator<Item = (RenderId, &RenderNode)> + '_ {
-        self.slots.iter().enumerate().filter_map(|(index, slot)| {
-            // SAFETY: as in `get`.
-            match unsafe { &*slot.state.get() } {
-                SlotState::Occupied(node) => Some((id_at(index, slot.generation), node)),
-                SlotState::Vacant { .. } | SlotState::Retired => None,
-            }
-        })
+        let generations = &self.generations;
+        self.slots
+            .iter()
+            .enumerate()
+            .filter_map(move |(index, slot)| {
+                // SAFETY: as in `get`.
+                match unsafe { &*slot.state.get() } {
+                    SlotState::Occupied(node) => {
+                        let link = u32::try_from(index)
+                            .expect("BUG: a slot index is checked against u32 at insert");
+                        let generation = generations
+                            .generation(link)
+                            .expect("BUG: every slot has a generation ledger entry");
+                        Some((id_at(index, generation), node))
+                    }
+                    SlotState::Vacant { .. } | SlotState::Retired => None,
+                }
+            })
     }
 
     pub(super) fn iter_mut(&mut self) -> impl Iterator<Item = (RenderId, &mut RenderNode)> + '_ {
+        let generations = &self.generations;
         self.slots
             .iter_mut()
             .enumerate()
-            .filter_map(|(index, slot)| {
-                let generation = slot.generation;
+            .filter_map(move |(index, slot)| {
+                let link = u32::try_from(index)
+                    .expect("BUG: a slot index is checked against u32 at insert");
+                let generation = generations
+                    .generation(link)
+                    .expect("BUG: every slot has a generation ledger entry");
                 match slot.state.get_mut() {
                     SlotState::Occupied(node) => Some((id_at(index, generation), node)),
                     SlotState::Vacant { .. } | SlotState::Retired => None,
@@ -265,20 +288,21 @@ impl NodeSlab {
     }
 
     /// Ages the slot the next insert takes to the last generation an id can carry, so a test
-    /// reaches exhaustion without `u32::MAX` removals. `false` when no slot is free.
+    /// reaches exhaustion without reciting its release history. `false` when no slot is free.
     #[cfg(any(test, feature = "testing"))]
     pub(super) fn age_free_head(&mut self) -> bool {
         let Some(head) = self.free_head else {
             return false;
         };
-        self.slots[head as usize].generation =
-            NonZeroU32::new(RETIRED.get() - 1).expect("BUG: RETIRED is above 1");
+        self.generations
+            .seed_generation(head, Generation::LAST.as_u32());
         true
     }
 
     /// Takes the exclusive borrow for a layout walk.
     pub(super) fn lease(&mut self) -> TreeLease<'_> {
         TreeLease {
+            generations: &self.generations,
             base: self.slots.as_mut_ptr(),
             len: self.slots.len(),
             _slab: PhantomData,
@@ -289,26 +313,36 @@ impl NodeSlab {
 /// A layout walk's access to the render tree: resolves ids and hands out nodes one at a time,
 /// with no per-walk collection of the subtree. See the module docs for the invariants.
 pub(crate) struct TreeLease<'a> {
+    generations: &'a GenSlots,
     base: *mut Slot,
     len: usize,
     _slab: PhantomData<&'a mut NodeSlab>,
 }
 
 impl TreeLease<'_> {
-    /// The slot `id`'s node occupies, or `None` for a stale id. A retired slot carries a
-    /// generation no id has, so the generation alone answers.
+    /// The slot `id`'s node occupies, or `None` for a stale id. Both the generation and occupied
+    /// state are checked: a retired slot's ledger entry keeps its last generation.
     fn slot(&self, id: RenderId) -> Option<*mut Slot> {
         let index = id.index() as usize;
-        if index >= self.len {
+        if index >= self.len
+            || self
+                .generations
+                .generation(id.index())
+                .map(Generation::as_nonzero)
+                != Some(id.generation())
+        {
             return None;
         }
         // SAFETY: `index < len` keeps the offset inside the allocation `base` came from.
         let slot = unsafe { self.base.add(index) };
-        // SAFETY: a field projection of a slot inside the leased allocation; the generation is a
-        // header outside the `UnsafeCell` (invariant 4) and nothing writes it while the lease
-        // lives (invariant 1).
-        let generation = unsafe { (*slot).generation };
-        (generation == id.generation()).then_some(slot)
+        // SAFETY: the leased allocation contains this slot (invariants 1–2), and reading only the
+        // state discriminant through a raw projection does not overlap the unique node borrow
+        // guaranteed by invariant 3.
+        let occupied = unsafe {
+            let state = UnsafeCell::raw_get(&raw const (*slot).state);
+            matches!(*state, SlotState::Occupied(_))
+        };
+        occupied.then_some(slot)
     }
 
     /// `true` when `child` is a current id and its header names `parent`. Reads headers only, so
@@ -377,6 +411,8 @@ impl TreeLease<'_> {
 
 #[cfg(test)]
 mod tests {
+    use std::num::NonZeroU32;
+
     use flui_foundation::Leaf;
     use flui_foundation::geometry::Size;
 

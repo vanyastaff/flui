@@ -6,12 +6,12 @@
 //! keeps two things:
 //!
 //! - **A plain push of a pageless popup** (`PopupRoute`, so `show_dialog`
-//!   keeps working until dialogs move to overlay entries). `push` and
-//!   `push_named` refuse every other route: `PageRoute`, `SimpleRoute`, and
-//!   any third-party `NavigatorRoute`. The doors that replace, sweep or seed
-//!   (`push_replacement[_with]`, `push_and_remove_until`, `seed_initial`, and
-//!   their named forms) refuse every route, a popup included, because what
-//!   they would remove or place beneath is the Router's.
+//!   keeps working until dialogs move to overlay entries). `push` refuses every
+//!   other route: `PageRoute`, `SimpleRoute`, and any third-party
+//!   `NavigatorRoute`. The doors that replace, sweep or seed
+//!   (`push_replacement[_with]`, `push_and_remove_until`, and `seed_initial`)
+//!   refuse every route, a popup included, because what they would remove or
+//!   place beneath is the Router's.
 //! - **Pops and removals that leave a page.** `pop`, `pop_with`, `maybe_pop`,
 //!   `remove_route` and `pop_until` never take the Router's last page, whether
 //!   it is on top or under a popup: a Router always has a location.
@@ -19,8 +19,7 @@
 //! A refused typed push cannot answer with a `Result` without changing a
 //! public signature, so it returns a [`RouteResult`] already completed with
 //! `None`, logs the refusal with `tracing::error!`, and fails a debug
-//! assertion. A named door answers `NamedRouteError::NotAddressable`. Either
-//! way the stack is untouched and the refused route is disposed unpushed.
+//! assertion. The stack is untouched and the refused route is disposed unpushed.
 
 use std::collections::HashSet;
 use std::fmt;
@@ -29,10 +28,9 @@ use parking_lot::Mutex;
 
 use crate::navigator::binding::is_pageless_popup;
 use crate::navigator::history::{ReplaceTarget, RouteHistory};
-use crate::navigator::named_route::{GeneratedRoute, NamedRouteError, requested_name};
 use crate::navigator::overlay_route::NavigatorRoute;
 use crate::navigator::result::{Completer, RouteResult};
-use crate::navigator::route::{Route, RouteId, RouteSettings};
+use crate::navigator::route::{Route, RouteId};
 
 use super::{NavigatorHandle, RouteReservation, report_undelivered};
 
@@ -120,8 +118,7 @@ impl NavigatorHandle {
         self.shared.addressing.is_none()
     }
 
-    /// Why a plain push (`push`, `push_named`) may not place `route`, if it
-    /// may not.
+    /// Why a plain push may not place `route`, if it may not.
     pub(super) fn push_refusal<P: NavigatorRoute>(&self, route: &P) -> Option<Refusal> {
         (self.shared.addressing.is_some() && !is_pageless_popup(route.binding_slot()))
             .then_some(Refusal::NoPath)
@@ -137,26 +134,6 @@ impl NavigatorHandle {
         } else {
             Some(Refusal::NoPath)
         }
-    }
-
-    /// [`push_refusal`](Self::push_refusal) for a route a named door
-    /// generated.
-    pub(super) fn admits_generated(&self, route: &GeneratedRoute) -> bool {
-        self.shared.addressing.is_none() || route.is_pageless_popup()
-    }
-
-    /// Refuse a named door that replaces or sweeps, before it resolves
-    /// anything: under a Router it may not run at all.
-    pub(super) fn refuse_named_placement(
-        &self,
-        settings: &RouteSettings,
-    ) -> Result<(), NamedRouteError> {
-        if self.shared.addressing.is_some() {
-            return Err(NamedRouteError::NotAddressable {
-                name: requested_name(settings),
-            });
-        }
-        Ok(())
     }
 
     /// Whether removing `id` would take a Router's last page.
@@ -194,7 +171,7 @@ impl NavigatorHandle {
     }
 
     /// Refuse `route` at a typed public door: dispose it unpushed, report, and
-    /// hand back a result that is already complete with `None`.
+    /// hand back a result that is already complete with `Ok(None)`.
     ///
     /// # Panics
     ///
@@ -220,7 +197,7 @@ impl NavigatorHandle {
         drop(route);
         tracing::error!(operation, route_type = report.route_type, "{report}");
         let (completer, result) = Completer::new();
-        completer.complete(None);
+        completer.complete(Ok(None));
         debug_assert!(false, "{report}");
         result
     }
@@ -231,19 +208,20 @@ impl NavigatorHandle {
     }
 
     /// Push a Router page with its entrance transition. Commit its typed
-    /// entry before observers receive the push.
+    /// entry before observers receive the push, and return that same route's
+    /// result even when an observer immediately pops it.
     pub(crate) fn push_page<P: NavigatorRoute, O>(
         &self,
         route: P,
         commit: impl FnOnce(RouteId) -> O,
-    ) -> O {
+    ) -> (O, RouteResult<P::Output>) {
         let mut route = super::super::lifecycle::Terminal::new(route);
         let mut commit = super::super::lifecycle::Terminal::new(commit);
         let id = self.prepare(&*route);
         self.commit_pages(
             "push",
             |history| history.push_with_id(id, route.take_value()).1,
-            || commit.take_value()(id),
+            |result| (commit.take_value()(id), result),
         )
     }
 
@@ -270,7 +248,10 @@ impl NavigatorHandle {
                     )
                     .1
             },
-            || commit.take_value()(id),
+            |result| {
+                drop(result);
+                commit.take_value()(id)
+            },
         )
     }
 
@@ -324,22 +305,22 @@ impl NavigatorHandle {
             |history| {
                 history.replace_tail_with_ids(keep, below.take_value(), (top_id, top.take_value()));
             },
-            || commit.take_value()(ids),
+            |()| commit.take_value()(ids),
         )
     }
 
     /// Commit the Router's typed stack before the flush delivers user effects.
-    /// The framework-only commit runs without the history lock. Its return
-    /// value owns outgoing entries until delivery finishes, including unwind.
+    /// The framework-only commit consumes the mutation value without the
+    /// history lock. Its return value owns outgoing entries until delivery
+    /// finishes, including unwind.
     fn commit_pages<V, O>(
         &self,
         operation: &'static str,
         mutate: impl FnOnce(&mut RouteHistory) -> V,
-        commit: impl FnOnce() -> O,
+        commit: impl FnOnce(V) -> O,
     ) -> O {
-        let (value, retired, undelivered) = self.shared.mutate_committing(mutate, commit);
+        let (committed, undelivered) = self.shared.mutate_committing(mutate, commit);
         report_undelivered(operation, undelivered);
-        drop(value);
-        retired
+        committed
     }
 }

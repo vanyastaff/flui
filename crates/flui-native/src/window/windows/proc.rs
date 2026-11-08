@@ -360,7 +360,7 @@ impl WindowContext {
         };
         let published = self
             .snapshot
-            .state_with(|| sample_state(hwnd, &record, self.tracking(hwnd)));
+            .state_with(|| sample_state(hwnd, &record, &self.tracking(hwnd)));
         // `WindowHandler::state_changed` when the revision grew.
         if published.changed {
             self.delivery.dispatch_state_changed();
@@ -379,7 +379,7 @@ impl WindowContext {
             return Publication::Unchanged;
         };
         self.snapshot
-            .state_with(|| sample_state(hwnd, &record, self.tracking(hwnd)))
+            .state_with(|| sample_state(hwnd, &record, &self.tracking(hwnd)))
             .outcome()
     }
 
@@ -1538,7 +1538,7 @@ fn window_text(hwnd: HWND) -> Option<String> {
 pub(crate) fn sample_state(
     hwnd: HWND,
     record: &Mutex<WindowRecord>,
-    tracking: OwnerTracking,
+    tracking: &OwnerTracking,
 ) -> WindowState {
     let OwnerTracking {
         mode,
@@ -1551,7 +1551,7 @@ pub(crate) fn sample_state(
         hovered,
         capabilities,
         frame,
-    } = tracking;
+    } = *tracking;
     let (scale, visible, focused, cached) = {
         let record = record.lock();
         (

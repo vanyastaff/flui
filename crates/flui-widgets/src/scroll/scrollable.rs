@@ -111,7 +111,7 @@ use flui_platform::{
     keyboard::Modifiers,
     pointer::{ScrollEvent, ScrollPhase, ScrollPrecision, ScrollUnit},
 };
-use flui_rendering::semantics::{Reveal, ScrollUnit as SemanticsScrollUnit};
+use flui_rendering::semantics::{Reveal, ScrollUnit as SemanticsScrollUnit, SemanticsRole};
 use flui_scheduler::PostFrameHandle;
 use flui_view::environment::GestureArenaScope;
 use flui_view::environment::VsyncScope;
@@ -1904,7 +1904,7 @@ fn scroll_semantics(
     let (axis, reversed) = (direction.axis(), direction.is_reversed());
     let mut semantics = Semantics::new()
         .container(true)
-        .role(crate::SemanticsRole::ScrollView)
+        .role(SemanticsRole::ScrollView)
         .scroll_source(controller.position(), direction);
     if let Some(label) = label {
         semantics = semantics.label(label);
@@ -1913,7 +1913,7 @@ fn scroll_semantics(
     let adjustment = Semantics::new()
         .container(true)
         .explicit_child_nodes(true)
-        .role(crate::SemanticsRole::Slider)
+        .role(SemanticsRole::Slider)
         .label(position_label)
         .scroll_source(controller.position(), direction);
     let reveal_controller = controller.clone();

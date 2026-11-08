@@ -23,7 +23,7 @@ use flui_platform::{
 use parking_lot::Mutex;
 use wasm_bindgen_futures::JsFuture;
 
-use crate::host::{NativeClipboard, admit_utf16, host_text, owned_text};
+use crate::host::{NativeClipboard, admit_utf16, decoded_utf16_len, host_text, owned_text};
 
 pub struct WebClipboard {
     /// What this page last wrote: the answer to a read the browser refuses,
@@ -87,10 +87,10 @@ impl NativeClipboard for WebClipboard {
             let text = match JsFuture::from(promise).await {
                 Ok(value) => wasm_bindgen::JsCast::dyn_ref::<js_sys::JsString>(&value).map_or(
                     Ok(None),
-                    // Measured in UTF-16 units before the copy into Rust.
+                    // Decode for length only before wasm-bindgen allocates the Rust string.
                     |text| {
                         let units = usize::try_from(text.length()).unwrap_or(usize::MAX);
-                        admit_utf16(units)?;
+                        admit_utf16(units, || decoded_utf16_len(text.iter()))?;
                         host_text(String::from(text))
                     },
                 ),

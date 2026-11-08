@@ -57,8 +57,8 @@ use flui_runtime::sink::{FrameSink, SubmitVerdict};
 use flui_runtime::ui_runtime::{RuntimeHostServices, UiRuntime};
 use flui_scheduler::{ClockSource, PostFrameHandle};
 use flui_semantics::platform::{
-    AccessibilityActionListener, AccessibilityActivationListener, AssistiveFocusListener,
-    PlatformAccessibility,
+    AccessibilityAlreadyAttached, AccessibilityAttachment, AccessibilityCapabilities,
+    AccessibilityHandler, AssistiveFocusSupport, PlatformAccessibility, RouteChangeSupport,
 };
 use flui_view::__runtime::{FlushHost, FlushWrite, OwnerNotify};
 use flui_view::CloseReason;
@@ -531,26 +531,24 @@ impl PlatformTextInput for RecordingTextInput {
 
 /// The accessibility bridge of a [`HeadlessHost`]'s window: assistive
 /// technology attaches when a test asks, published updates are folded into
-/// the tree an adapter would hold, and the action listener the UI runtime
-/// registers is handed to a test that plays the adapter.
+/// the tree an adapter would hold, and the UI runtime's one handler receives
+/// the events a test plays as the adapter.
 #[derive(Default)]
 struct HeadlessAccessibility {
     active: AtomicBool,
-    activation: Mutex<Option<AccessibilityActivationListener>>,
-    action: Mutex<Option<AccessibilityActionListener>>,
-    assistive_focus: Mutex<Option<AssistiveFocusListener>>,
+    handler: Mutex<Option<Arc<dyn AccessibilityHandler>>>,
     published: Mutex<Option<accesskit::TreeUpdate>>,
 }
 
 impl HeadlessAccessibility {
-    /// Attach assistive technology: the listener the UI runtime registered flips
+    /// Attach assistive technology: the handler the UI runtime registered flips
     /// the presentation's semantics flag, which the next frame reconciles
     /// onto the pipeline.
     fn attach(&self) {
         self.active.store(true, Ordering::Relaxed);
-        let listener = self.activation.lock().clone();
-        if let Some(listener) = listener {
-            listener(true);
+        let handler = self.handler.lock().clone();
+        if let Some(handler) = handler {
+            handler.activation_changed(true);
         }
     }
 }
@@ -592,26 +590,31 @@ impl PlatformAccessibility for HeadlessAccessibility {
         }
     }
 
-    fn is_active(&self) -> bool {
-        self.active.load(Ordering::Relaxed)
+    fn attach(
+        &self,
+        handler: Arc<dyn AccessibilityHandler>,
+    ) -> Result<AccessibilityAttachment, AccessibilityAlreadyAttached> {
+        let mut slot = self.handler.lock();
+        if slot.is_some() {
+            return Err(AccessibilityAlreadyAttached);
+        }
+        *slot = Some(handler);
+        drop(slot);
+        let capabilities = AccessibilityCapabilities::new(
+            AssistiveFocusSupport::Reported,
+            RouteChangeSupport::Announced,
+        );
+        let active = self.active.load(Ordering::Relaxed);
+        Ok(AccessibilityAttachment::new(active, capabilities))
     }
 
-    fn set_activation_listener(&self, listener: AccessibilityActivationListener) {
-        *self.activation.lock() = Some(listener);
+    fn detach_handler(&self) {
+        let handler = self.handler.lock().take();
+        drop(handler);
     }
 
-    fn set_action_listener(&self, listener: AccessibilityActionListener) {
-        *self.action.lock() = Some(listener);
-    }
-
-    /// A test plays the screen reader, so the cursor is reported: through
-    /// [`HeadlessHost::move_assistive_focus`].
-    fn assistive_focus_support(&self) -> flui_semantics::AssistiveFocusSupport {
-        flui_semantics::AssistiveFocusSupport::Reported
-    }
-
-    fn set_assistive_focus_listener(&self, listener: AssistiveFocusListener) {
-        *self.assistive_focus.lock() = Some(listener);
+    fn route_changed(&self, change: flui_semantics::platform::RouteChange) {
+        drop(change);
     }
 }
 
@@ -944,6 +947,9 @@ impl HeadlessHost {
             needs_redraw,
             &fonts,
             ClockSource::Manual(clock.clone()),
+        )
+        .with_executor(
+            Arc::clone(&scripted.background.services) as Arc<dyn flui_platform::executor::Executor>
         );
         let registry = capabilities.unwrap_or_else(|| {
             let mut built_ins = scripted.registrar();
@@ -1068,8 +1074,9 @@ impl HeadlessHost {
     }
 
     /// Attach `view` as the UI runtime's root widget, the root view sized to the
-    /// window. The UI runtime wraps it in its root scopes (`GestureArenaScope`,
-    /// `VsyncScope`, `FocusRoot`, `MediaQuery`); the first
+    /// window. The host adds `app_root`'s keyboard policy, and the UI runtime
+    /// wraps it in its root scopes (`GestureArenaScope`, `VsyncScope`,
+    /// `FocusTreeRoot`, `MediaQuery`); the first
     /// [`pump`](Self::pump) builds, lays out and paints it.
     ///
     /// # Errors
@@ -1079,8 +1086,9 @@ impl HeadlessHost {
     where
         V: flui_view::View + Clone + 'static,
     {
+        let root = flui_widgets::app_root(view.clone());
         self.ui_runtime.attach_root_widget_with_size(
-            view,
+            &root,
             self.window.size.width,
             self.window.size.height,
         )
@@ -1277,13 +1285,19 @@ impl HeadlessHost {
             .expect("BUG: a headless ui_runtime's window stays resident while the ui_runtime lives")
     }
 
-    /// The listener the UI runtime registered for actions assistive technology
-    /// requests. It is `Send + Sync`: a test plays the platform adapter by
-    /// calling it, from any thread, and the UI runtime queues the request in its
-    /// owner inbox for the next pump to apply.
-    #[must_use]
-    pub fn accessibility_action_listener(&self) -> Option<AccessibilityActionListener> {
-        self.accessibility.action.lock().clone()
+    /// Request an accessibility action as the platform adapter does: the UI
+    /// runtime queues it in its owner inbox for the next pump to apply.
+    ///
+    /// # Panics
+    ///
+    /// Before the UI runtime registered its handler, which it does as the
+    /// window opens.
+    pub fn request_accessibility_action(&self, request: accesskit::ActionRequest) {
+        let handler =
+            self.accessibility.handler.lock().clone().expect(
+                "BUG: the UI runtime registers its accessibility handler as the window opens",
+            );
+        handler.action_requested(request);
     }
 
     /// Move the screen reader's cursor to `node` of the published tree, or
@@ -1293,16 +1307,14 @@ impl HeadlessHost {
     ///
     /// # Panics
     ///
-    /// Before the UI runtime registered its listener, which it does as the
+    /// Before the UI runtime registered its handler, which it does as the
     /// window opens.
     pub fn move_assistive_focus(&self, node: Option<accesskit::NodeId>) {
-        let listener = self
-            .accessibility
-            .assistive_focus
-            .lock()
-            .clone()
-            .expect("BUG: the UI runtime registers its cursor listener as the window opens");
-        listener(node);
+        let handler =
+            self.accessibility.handler.lock().clone().expect(
+                "BUG: the UI runtime registers its accessibility handler as the window opens",
+            );
+        handler.assistive_focus_changed(node);
     }
 
     /// Run `f` inside the UI runtime's owner scope (its interaction lane, global
@@ -1532,10 +1544,11 @@ impl HeadlessHost {
             return self.attach(view);
         }
         // The same environment the primary root gets: this window's own
-        // `MediaQuery` and its size.
+        // `MediaQuery` and its size, plus the standard keyboard policy.
         let size = self.secondary_of(window).window.size;
+        let root = flui_widgets::app_root(view.clone());
         self.ui_runtime
-            .attach_root_widget_with_size_to(window.0, view, size.width, size.height)
+            .attach_root_widget_with_size_to(window.0, &root, size.width, size.height)
     }
 
     /// Attach assistive technology to `window`; see

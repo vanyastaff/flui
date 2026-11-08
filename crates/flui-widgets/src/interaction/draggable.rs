@@ -30,6 +30,7 @@ use flui_interaction::{
     MultiDragEndDetails, MultiDragGestureRecognizer, MultiDragHandle, MultiDragUpdateDetails,
     PointerEvent, PointerId, PointerKindSet,
 };
+use flui_objects::StackFit;
 use flui_platform::data_transfer::TransferActions;
 use flui_platform::haptics::{HapticRequest, HapticTiming};
 use flui_platform::pointer::PointerInfo;
@@ -48,7 +49,7 @@ use super::gesture_alternatives::{
 use super::recognizer_attachment::RecognizerAttachment;
 use crate::overlay::{InsertPosition, Overlay, OverlayEntry, OverlayHandle};
 use crate::support::{EventCallback, ValueCallback, event_callback, value_callback};
-use crate::{IgnorePointer, Listener, MouseRegion, Positioned, Stack, StackFit};
+use crate::{IgnorePointer, Listener, MouseRegion, Positioned, Stack};
 
 /// Where a drag's feedback sits relative to the pointer.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]

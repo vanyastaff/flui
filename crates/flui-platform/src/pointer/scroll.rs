@@ -51,7 +51,8 @@ impl ScrollDelta {
     /// # Errors
     ///
     /// [`InputValueError::NonFinite`] when either component is NaN or infinite. A producer
-    /// whose event carries a phase still delivers it, with [`ScrollDelta::zero`].
+    /// drops such an event rather than substituting [`ScrollDelta::zero`]; a finite zero
+    /// reported by the platform remains valid, including for a terminal phase.
     pub fn try_new(unit: ScrollUnit, x: f64, y: f64) -> Result<Self, InputValueError> {
         Ok(Self {
             unit,

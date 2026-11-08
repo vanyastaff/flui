@@ -20,10 +20,12 @@ use flui_sdk::animation::{
 };
 use flui_sdk::foundation::Listenable;
 use flui_sdk::geometry::{RRect, Rect, Size};
-use flui_sdk::painting::{Canvas, Color, Paint};
+use flui_sdk::painting::styling::Color;
+use flui_sdk::painting::{Canvas, CustomPainter, Paint};
+use flui_sdk::rendering::SemanticsRole;
 use flui_sdk::view::environment::VsyncScope;
 use flui_sdk::view::prelude::*;
-use flui_sdk::widgets::{CustomPaint, CustomPainter, Semantics, SemanticsRole};
+use flui_sdk::widgets::{CustomPaint, Semantics};
 
 use crate::colors::CupertinoDynamicColor;
 

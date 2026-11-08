@@ -62,6 +62,8 @@ mod composition;
 mod controller_labels;
 #[path = "custom_multi_child_layout.rs"]
 mod custom_multi_child_layout;
+#[path = "directional_alignment.rs"]
+mod directional_alignment;
 #[path = "directionality_dependency.rs"]
 mod directionality_dependency;
 #[path = "dismissible.rs"]

@@ -4,7 +4,7 @@
 //! Every vtable method is a boundary: its body runs under [`com_method`]
 //! or [`com_hresult`], so a panic (a hostile diagnostics subscriber, a
 //! provider) never unwinds into OLE; it answers `E_UNEXPECTED` and its
-//! payload is retained.
+//! payload is destroyed under containment.
 
 use crate::owner::panic_boundary::{AfterPanic, contain_os_entry, os_entry};
 use std::cell::{Cell, RefCell};

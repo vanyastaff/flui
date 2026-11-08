@@ -443,17 +443,12 @@ mod cases {
             },
         );
         until_heard(&target, &source, &Heard::Target(Some(TEXT.to_owned())));
-        let limited = resolve(
-            &target,
-            transfer.request(
-                id,
-                RepresentationIndex(0),
-                TransferLimits::default().with_max_bytes(10),
-            ),
-        );
-        assert!(
-            matches!(limited, Err(TransferError::TooLarge { limit: 10, .. })),
-            "past the limit: {limited:?}"
+        flui_native::testing::drag::oversized_delivery(
+            transfer.as_ref(),
+            id,
+            RepresentationIndex(0),
+            TransferLimits::default().with_max_bytes(10),
+            |request| resolve(&target, request),
         );
         let started = Instant::now();
         let silent = resolve(

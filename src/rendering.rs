@@ -11,9 +11,15 @@ pub use flui_rendering::context::{
     BoxDryBaselineCtx, BoxDryLayoutCtx, BoxHitTestContext, BoxIntrinsicsCtx, BoxLayoutContext,
     PaintCx, SliverHitTestContext, SliverLayoutContext,
 };
+pub use flui_rendering::delegates::{
+    AspectRatioDelegate, CenterLayoutDelegate, FlowDelegate, FlowPaintingContext,
+    MultiChildLayoutContext, MultiChildLayoutDelegate, SingleChildLayoutDelegate,
+    SliverGridDelegate, SliverGridDelegateWithFixedCrossAxisCount,
+    SliverGridDelegateWithMaxCrossAxisExtent, SliverGridLayout,
+};
 pub use flui_rendering::hit_testing::{
-    CursorIcon, HitMetadata, HitTestBehavior, MouseTrackerAnnotation, PanZoomTarget, PointerTarget,
-    ScrollTarget, SmartZoomTarget,
+    HitMetadata, MouseTrackerAnnotation, PanZoomTarget, PointerTarget, ScrollTarget,
+    SmartZoomTarget,
 };
 pub use flui_rendering::parent_data::{
     BoxParentData, ContainerBoxParentData, FlexFit, FlexParentData, FlowParentData,
@@ -26,12 +32,16 @@ pub use flui_rendering::parent_data::{
 pub use flui_rendering::pipeline::RenderInvalidationHandle;
 pub use flui_rendering::protocol::{BoxProtocol, Protocol, SliverProtocol, UsageByParent};
 pub use flui_rendering::semantics::{
-    NumericRange, NumericRangeError, SemanticsConfiguration, SemanticsRole,
+    ActionCall, AnnounceError, Announcer, AutoComplete, CellPosition, Current, HasPopup,
+    HeadingLevel, Invalid, LiveSetting, NumericRange, NumericRangeError, Reveal, ScrollUnit,
+    SemanticsAnchor, SemanticsConfiguration, SemanticsRole, SetSize, SortDirection, TableShape,
+    TextDirection, TextSelection, Toggled, Urgency,
 };
 pub use flui_rendering::traits::{
     HitTestOutcome, PaintClip, PaintEffects, PaintOpacity, RenderBox, RenderObject, RenderSliver,
     TextBaseline,
 };
+pub use flui_rendering::view::ScrollPosition;
 pub use flui_rendering::{RenderError, RenderResult, RenderUpdateImpact};
 pub use flui_rendering::{
     forward_single_child_box_hit_test, forward_single_child_box_layout,

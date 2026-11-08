@@ -35,7 +35,26 @@ dark.
    the Web all use it, so `MediaQueryData::platform_brightness` starts at the user's theme
    in every window.
 
-The native source on each backend is recorded in `crates/flui-native/ARCHITECTURE.md`.
+The native source is the user's setting on each backend:
+
+- Linux reads `org.freedesktop.appearance/color-scheme` from the Settings
+  portal: `1` is dark; no preference, prefers light and a missing key are light.
+- Windows reads `AppsUseLightTheme`. The DWM dark title-bar flag follows that
+  value until the application chooses its own chrome; reading the flag back is
+  not an observation of the user's theme.
+- macOS resolves the window's `effectiveAppearance` against Aqua and DarkAqua,
+  with `viewDidChangeEffectiveAppearance` as the change source.
+- iOS samples `userInterfaceStyle` on construction,
+  `traitCollectionDidChange:` and `didMoveToWindow`, independently of layout or
+  window attachment.
+- Android reads the configuration's night mode on `ConfigChanged`.
+- Web observes `prefers-color-scheme` and its `change` event.
+
+A host keeps an accepted theme beside the preference snapshot because brightness
+is presentation-specific. A failed preference read neither discards nor delays
+another accepted observation. The window publishes the user's theme rather than
+a backend-chosen chrome color, and its state revision changes only when that
+theme changes.
 
 ## Consequences
 

@@ -40,20 +40,13 @@ use wayland_client::{Connection, Dispatch, Proxy, QueueHandle, event_created_chi
 
 use crate::owner::linux::wayland::WaylandState;
 use crate::owner::slot::OwnerCell;
+use crate::transfer::intake::Intake;
 
 pub(crate) mod pipe;
 
 /// The newest `wl_data_device_manager`: version 3 adds the drag actions,
 /// version 2 lets a device be released.
 const MANAGER_VERSION: u32 = 3;
-
-/// The most MIME types an offer keeps: a source offering more offers
-/// nothing past them.
-pub(crate) const MAX_TYPES: usize = 100;
-
-/// The longest MIME type kept: a media type's type and subtype are at most
-/// 127 characters each (RFC 6838), so a longer name names nothing.
-pub(crate) const MAX_TYPE_LEN: usize = 255;
 
 /// What a feature hears of the devices.
 pub(crate) trait DeviceListener: Send + Sync {
@@ -379,13 +372,20 @@ pub(crate) struct DeviceData {
     shared: Weak<Shared>,
 }
 
+/// The source entries an offer announced and the types admitted from them.
+#[derive(Default)]
+struct OfferTypes {
+    /// Every entry read, including duplicates and refused names.
+    read: usize,
+    /// Each type offered, once, in the order first offered.
+    admitted: Vec<String>,
+}
+
 /// A data offer's user data: the MIME types it offers, as its `offer`
 /// events name them, read on the owner thread alone.
 pub(crate) struct OfferData {
-    /// Each type offered, once, in the order first offered: at most
-    /// [`MAX_TYPES`], none longer than [`MAX_TYPE_LEN`], however often the
-    /// owner repeats an `offer` event.
-    types: OwnerCell<Vec<String>>,
+    /// The offer's admitted types and its bounded source-entry count.
+    types: OwnerCell<OfferTypes>,
     /// The actions a drag's source permits (`source_actions`, version 3),
     /// [`UNTOLD`] before the compositor told them.
     source_actions: AtomicU32,
@@ -407,15 +407,16 @@ impl OfferData {
         }
     }
 
-    /// Record an `offer` event: a type not offered before, while the offer
-    /// holds fewer than [`MAX_TYPES`].
-    pub(crate) fn offer(&self, mime_type: String) {
-        if mime_type.len() > MAX_TYPE_LEN {
-            return;
-        }
+    /// Record an `offer` event under [`Intake::DEFAULT`]. Repeated and
+    /// refused entries count toward the source-entry bound too.
+    pub(crate) fn admit_type(&self, mime_type: String) {
         self.types.with(|types| {
-            if types.len() < MAX_TYPES && !types.contains(&mime_type) {
-                types.push(mime_type);
+            if types.read == Intake::DEFAULT.max_types {
+                return;
+            }
+            types.read += 1;
+            if Intake::DEFAULT.admit_type(&types.admitted, &mime_type, String::as_str) {
+                types.admitted.push(mime_type);
             }
         });
     }
@@ -423,7 +424,7 @@ impl OfferData {
     /// Run `f` with the types offered, in the order first offered; `None`
     /// off the owner thread.
     pub(crate) fn types<R>(&self, f: impl FnOnce(&[String]) -> R) -> Option<R> {
-        self.types.with(|types| f(types))
+        self.types.with(|types| f(&types.admitted))
     }
 
     /// The actions a drag's source permits; `None` before the compositor
@@ -585,7 +586,7 @@ impl Dispatch<WlDataOffer, OfferData> for WaylandState {
         _: &QueueHandle<Self>,
     ) {
         match event {
-            wl_data_offer::Event::Offer { mime_type } => data.offer(mime_type),
+            wl_data_offer::Event::Offer { mime_type } => data.admit_type(mime_type),
             wl_data_offer::Event::SourceActions { source_actions } => data
                 .source_actions
                 .store(u32::from(source_actions), Ordering::Release),
@@ -601,17 +602,17 @@ impl Dispatch<WlDataOffer, OfferData> for WaylandState {
 mod tests {
     use super::*;
 
-    /// An owner that repeats its `offer` events grows nothing past one entry
-    /// per type, keeps the order first offered, and keeps nothing past
-    /// [`MAX_TYPES`] or longer than [`MAX_TYPE_LEN`].
+    /// Repeated events keep one entry per type and consume the same bounded
+    /// source-entry budget as new ones; an overlong name is refused too.
     #[test]
     fn an_offer_keeps_each_type_once_and_no_more_than_its_bound() {
         let data = OfferData::new();
         for _ in 0..10_000 {
-            data.offer("text/plain;charset=UTF-8".to_owned());
-            data.offer("UTF8_STRING".to_owned());
+            data.admit_type("text/plain;charset=UTF-8".to_owned());
+            data.admit_type("UTF8_STRING".to_owned());
         }
-        data.offer("x".repeat(MAX_TYPE_LEN + 1));
+        data.admit_type("x".repeat(Intake::DEFAULT.max_type_len + 1));
+        data.admit_type("application/x-later".to_owned());
         assert_eq!(
             data.types(<[String]>::to_vec),
             Some(vec![
@@ -619,9 +620,15 @@ mod tests {
                 "UTF8_STRING".to_owned()
             ])
         );
+
+        let data = OfferData::new();
+        data.admit_type("x".repeat(Intake::DEFAULT.max_type_len + 1));
         for n in 0..10_000 {
-            data.offer(format!("application/x-{n}"));
+            data.admit_type(format!("application/x-{n}"));
         }
-        assert_eq!(data.types(<[String]>::len), Some(MAX_TYPES));
+        assert_eq!(
+            data.types(<[String]>::len),
+            Some(Intake::DEFAULT.max_types - 1)
+        );
     }
 }

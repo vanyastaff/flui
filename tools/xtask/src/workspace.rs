@@ -256,7 +256,9 @@ impl Member {
     }
 
     fn is_example_or_tool(&self) -> bool {
-        self.rel.starts_with("examples/") || self.rel.starts_with("tools/")
+        self.rel.starts_with("examples/")
+            || self.rel.starts_with("tools/")
+            || self.rel.contains("/examples/")
     }
 
     /// The in-repository dependencies.

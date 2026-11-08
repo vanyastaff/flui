@@ -11,10 +11,10 @@ use crate::common;
 
 use common::{lay_out, tight};
 use flui_material::{AppBar, Theme, ThemeData};
+use flui_sdk::testing::a11y::Role;
 use flui_sdk::view::environment::{MediaQuery, MediaQueryData};
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{Navigator, NavigatorHandle, SimpleRoute, Text};
-use flui_testing::a11y::Role;
 
 // ── Implied leading: a BackButton synthesized when the navigator can pop ──
 //

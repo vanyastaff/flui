@@ -42,9 +42,9 @@
 //! ADR-0152). It returns a [`LaunchError`] when the registrations conflict or
 //! the platform cannot start. On desktop it drives the native event loop until
 //! shutdown; on iOS it enters UIKit; on the web it starts the browser runner.
-//! On Android it panics: call `flui::run_app_android` from `android_main`,
-//! passing the system-provided `AndroidApp` available through
-//! `flui::android_activity` and the same [`AppLaunch`].
+//! On Android it panics: enable `native` and call
+//! `flui::native::android::run_app_android` from `android_main`, passing the
+//! system-provided `AndroidApp` and the same [`AppLaunch`].
 //!
 #![cfg_attr(
     all(
@@ -55,7 +55,7 @@
     doc = "For fallible desktop startup, use [`Application::new`] with a root factory and
 call [`Application::run`], which returns `Result<(), AppRunError>`. The factory runs
 on the owner thread and creates a fresh tree whenever the main window is reopened.
-Use [`Application::on_ready`] to obtain an [`AppHandle`] for cross-thread show and
+Use [`Application::on_ready`] to obtain an [`app::AppHandle`] for cross-thread show and
 quit requests. A successful show-command admission is not window completion:
 await its returned request or poll `try_result` to obtain the window result."
 )]
@@ -63,21 +63,20 @@ await its returned request or poll `try_result` to obtain the window result."
 //! # Choosing a catalog
 //!
 //! The base surface — [`widgets`], [`view`], [`animation`], [`run_app`], and
-//! the non-Material half of [`prelude`] — needs no feature at all; that
-//! includes the global widgets localizations in [`widgets`]. The design
-//! systems are feature-selected:
+//! [`prelude`] — needs no feature at all; that includes the global widgets
+//! localizations in [`widgets`]. The design systems are feature-selected:
 //!
 //! | Feature | Default | Enables |
 //! |---|---|---|
-//! | `material` | off | `flui::material` and the Material half of [`prelude`] |
+//! | `material` | off | `flui::material` and its everyday glob at `flui::material::prelude` |
 //! | `cupertino` | off | `flui::cupertino` |
-//! | `localizations` | off | nothing; deprecated, kept so existing feature lists resolve |
+//! | `assets` | off | `flui::assets`: application-owned decoded file and network images |
 //! | `hot-reload` | off | re-exports `flui-hot-reload` as `hot_reload`; install its hook with `AppConfig::with_dev_reload` |
 //! | `devtools` | off | re-exports `flui-devtools` as `devtools`: the frame profiler, timeline and inspector counters |
 //! | `driver` | off | the driver agent in an optimized build; every debug build serves its windows to a driver launched with an endpoint (ADR-0239) |
 //! | `native` | off | `flui::native`, the operating systems' window extensions (Evolving) |
 //!
-//! Nothing is on by default (ADR-0088 §6): an application names the catalog it
+//! Nothing is on by default (ADR-0315 §1): an application names the catalog it
 //! uses, e.g. `features = ["material"]`; with no feature the facade still gives
 //! the full widget layer, navigation, focus, and media information. A module whose feature is off is
 //! **absent**, not empty — `flui::cupertino` without the `cupertino` feature is
@@ -107,15 +106,14 @@ await its returned request or poll `try_result` to obtain the window result."
 //!
 //! # Using a design system
 //!
-//! [`prelude`] curates the everyday `flui-widgets` surface plus — when the
-//! `material` feature is on — the common Material widgets (see [`prelude`]'s
-//! own docs for the curation rule); the full catalogs live at `flui::material`
-//! and `flui::cupertino`:
+//! [`prelude`] curates the design-neutral application surface. Material owns
+//! its everyday glob at `flui::material::prelude`; the full catalogs live at
+//! `flui::material` and `flui::cupertino`:
 //!
 #![cfg_attr(
     feature = "material",
     doc = r#"```no_run
-use flui::material::{AppBar, Scaffold, Theme, ThemeData};
+use flui::material::prelude::*;
 use flui::prelude::*;
 
 #[derive(Clone, StatelessView)]
@@ -152,10 +150,11 @@ fn main() -> Result<(), flui::LaunchError> {
 //! | [`view`] | `flui-view` | — | View/Element tree |
 //! | [`widgets`] | `flui-widgets` | — | user-facing widget catalog |
 //! | [`animation`] | `flui-animation` | — | curves, tweens, tickers |
+//! | `assets` | `flui-assets` | `assets` | decoded file and network images |
 //! | `material` | `flui-material` | `material` | Material Design theming + widget catalog |
 //! | `cupertino` | `flui-cupertino` | `cupertino` | iOS-style theming + widget catalog |
-//! | [`app`] | `flui-app` | — | `run_app` + bindings |
-//! | `native` | `flui-native`, through `flui-app` | `native` | one operating system's window extensions |
+//! | [`app`] | selected `flui-app` contracts | — | cross-thread control and host executors |
+//! | `native` | `flui-native`, through `flui-app` | `native` | OS window extensions and Android entry points |
 //!
 //! [`painting`], [`rendering`], and [`interaction`] expose selected authoring
 //! contracts for custom drawing, render objects, and gestures. Arena storage,
@@ -177,7 +176,26 @@ pub mod rendering;
 pub mod testing;
 
 pub use flui_animation as animation;
-pub use flui_app as app;
+/// Cross-thread application control and host-provided execution contracts.
+///
+/// Ordinary launch, configuration and window-creation items live at the crate
+/// root and in [`prelude`]. This module deliberately does not expose the
+/// runner, bindings, embedder or a second prelude.
+pub mod app {
+    #[cfg(all(
+        not(target_os = "android"),
+        not(target_os = "ios"),
+        not(target_arch = "wasm32")
+    ))]
+    pub use flui_app::app::AppHandle;
+    pub use flui_app::app::{
+        ComputeJob, DeterministicExecutors, HostComputePool, HostExecutors, HostIoPool, IoFuture,
+        SpawnError,
+    };
+}
+/// Decoded image assets (`flui-assets`). Requires the `assets` feature.
+#[cfg(feature = "assets")]
+pub use flui_assets as assets;
 /// The iOS-style design system (`flui-cupertino`). Requires the `cupertino`
 /// feature.
 #[cfg(feature = "cupertino")]
@@ -215,20 +233,23 @@ pub mod services {
 /// presentation is drawn in, by the address a window request resolves to or a
 /// close request names; a widget that holds only its `WindowHandle` has no
 /// address to give it yet (that path comes with the window handler passed at
-/// open, ADR-0254 §4). Each system's module has an extension trait
+/// open, ADR-0254 §4). The Windows and macOS modules have an extension trait
 /// implemented for `dyn HostWindow`, the window as the core host hands it out.
 /// Its one method narrows the window to that system's view of it (`win32()`,
 /// `appkit()`) and answers `None` for a window of any other host (headless,
 /// another system), so nothing is asked of a window that cannot take it
 /// and nothing panics. The views take and return FLUI types; a raw window or
 /// display handle leaves only through `raw-window-handle`'s `HasWindowHandle`
-/// and `HasDisplayHandle`, which every window implements.
+/// and `HasDisplayHandle`, which every window implements. Android's module
+/// carries the system-provided `AndroidApp` and its application entry point.
 ///
 /// What a window is created with on one system is a value of that system's
 /// type in [`platform::os_options::OsWindowOptions`], given to
 /// [`AppConfig::with_os_options`].
 #[cfg(feature = "native")]
 pub mod native {
+    #[cfg(target_os = "android")]
+    pub use flui_app::native::android;
     #[cfg(target_os = "macos")]
     pub use flui_app::native::macos;
     #[cfg(windows)]
@@ -307,16 +328,12 @@ pub mod view {
     mod __runtime {}
 }
 
-/// The `android-activity` crate `android_main` receives its `AndroidApp`
-/// from, so an application declares no Android dependency of its own.
-#[cfg(target_os = "android")]
-pub use flui_app::android_activity;
-/// Application configuration. Re-exported from [`app`] (`flui-app`).
+/// Application configuration. Re-exported from `flui-app`.
 pub use flui_app::app::AppConfig;
 /// The errors a window request can fail with — what [`open_window`] and
-/// [`AppHandle`] report, and what an [`Application`] window-error observer
-/// receives. Re-exported from [`app`] (`flui-app`); desktop only, like the
-/// entry points that produce it.
+/// [`app::AppHandle`] report, and what an [`Application`] window-error observer
+/// receives. Re-exported from `flui-app`; desktop only, like the entry points
+/// that produce it.
 #[cfg(all(
     not(target_os = "android"),
     not(target_os = "ios"),
@@ -324,8 +341,8 @@ pub use flui_app::app::AppConfig;
 ))]
 pub use flui_app::app::AppWindowError;
 /// Whether an additional window joins the caller's UI runtime or gets its own.
-/// Re-exported from [`app`] (`flui-app`); absent on iOS, where no
-/// secondary-window entry point exists.
+/// Re-exported from `flui-app`; absent on iOS, where no secondary-window entry
+/// point exists.
 #[cfg(not(target_os = "ios"))]
 pub use flui_app::app::WindowPolicy;
 /// Open an additional top-level window without widget content.
@@ -333,9 +350,8 @@ pub use flui_app::app::WindowPolicy;
 /// Desktop only. Call on the owner thread while its event loop is live.
 /// Success can mean creation was admitted for a later owner turn; this API
 /// does not provide a completion receiver or a renderer. Use [`open_window`]
-/// for widget content. See [`app::app::open_secondary_window`] for policy,
-/// deferred-failure, and ownership details.
-/// Re-exported from [`app`] (`flui-app`).
+/// for widget content. See [`flui_app::app::open_secondary_window`] for policy,
+/// deferred-failure, and ownership details. Re-exported from `flui-app`.
 #[cfg(all(
     not(target_os = "android"),
     not(target_os = "ios"),
@@ -348,46 +364,41 @@ pub use flui_app::app::open_secondary_window;
 /// [`WindowPolicy::Isolated`]. `WindowPolicy::Shared` is refused with
 /// [`AppWindowError::UnsupportedPolicy`]. As with [`open_secondary_window`],
 /// success can mean admission for deferred creation rather than completed
-/// installation; see [`app::app::open_window`] for the error contract.
-/// Re-exported from [`app`] (`flui-app`).
+/// installation; see [`flui_app::app::open_window`] for the error contract.
+/// Re-exported from `flui-app`.
 #[cfg(all(
     not(target_os = "android"),
     not(target_os = "ios"),
     not(target_arch = "wasm32")
 ))]
 pub use flui_app::app::open_window;
-/// The resident-application builder and its control surface: a reusable
-/// main-window factory, windowless startup, and a `Send + Sync` handle that
-/// can show the window or quit from any thread. Re-exported from [`app`]
-/// (`flui-app`); desktop only.
+/// The resident-application builder: a reusable main-window factory and
+/// windowless startup. Its cross-thread control handle is [`app::AppHandle`].
+/// Re-exported from `flui-app`; desktop only.
 #[cfg(all(
     not(target_os = "android"),
     not(target_os = "ios"),
     not(target_arch = "wasm32")
 ))]
-pub use flui_app::app::{AppControlError, AppHandle, AppRunError, Application, StartupWindow};
+pub use flui_app::app::{AppControlError, AppRunError, Application, StartupWindow};
 /// The application entry point — builds the tree, opens a window, and drives
 /// the frame loop with an [`AppLaunch`]'s configuration and capabilities.
-/// Re-exported from [`app`] (`flui-app`).
+/// Re-exported from `flui-app`.
 ///
 /// The root must implement [`view::StatelessView`]. It returns a
 /// [`LaunchError`] when the capability registrations conflict or the platform
 /// cannot start; on desktop it returns after shutdown and panics on an
-/// event-loop failure. On Android it panics: use `flui::run_app_android` with
-/// the system's `AndroidApp` instead.
+/// event-loop failure. On Android it panics: use
+/// `flui::native::android::run_app_android` with the system's `AndroidApp`.
 pub use flui_app::run_app;
-/// The Android entry point, called from the `cdylib`'s `android_main`
-/// (`flui create` writes one). Re-exported from `flui-app`.
-#[cfg(target_os = "android")]
-pub use flui_app::run_app_android;
-/// What [`run_app`] and `run_app_android` start a run with, the capability
-/// registrations it carries, and why starting fails. Re-exported from [`app`]
-/// (`flui-app`).
+/// What [`run_app`] and Android's native entry point start a run with, the
+/// capability registrations they carry, and why starting fails. Re-exported
+/// from `flui-app`.
 pub use flui_app::{
     AppCapabilities, AppLaunch, BackendFailure, GpuBackend, LaunchError, UnsupportedSystem,
 };
 /// Registers a font's faces with the app, for measurement, paint and carets.
-/// Re-exported from [`app`] (`flui-app`).
+/// Re-exported from `flui-app`.
 ///
 /// Call on the app's owner thread, before startup or from an app callback.
 /// Registration on a worker thread does not update the running app: send the
@@ -396,53 +407,26 @@ pub use flui_app::{
 ///
 /// Invalid font bytes, repeated bytes, and reentry while the runtime is borrowed
 /// return [`FontRegistrationError`] without adding a face. See
-/// [`app::register_font`] for the individual error variants.
+/// [`flui_app::register_font`] for the individual error variants.
 pub use flui_app::{FontRegistrationError, register_font};
 
-/// Everything an application author needs in scope to write widget code:
-/// the widget catalog prelude, [`run_app`], and — with the `material` feature
-/// on — the everyday Material widgets.
+/// The design-neutral application prelude: [`flui_widgets::prelude`], the
+/// application entry points and their ordinary configuration types.
 ///
-/// # Two halves
+/// This module is independent of Cargo features. Enabling a design system
+/// never adds names here or changes what an existing name resolves to. An
+/// application that wants Material's everyday glob imports both preludes:
 ///
-/// The **base half** ([`flui_widgets::prelude`] plus [`run_app`]) is always
-/// present. It is design-system-neutral, so an application that selects no
-/// catalog still writes ordinary screens off `use flui::prelude::*`.
+/// ```rust
+/// # #[cfg(feature = "material")]
+/// use flui::material::prelude::*;
+/// use flui::prelude::*;
+/// ```
 ///
-/// The **Material half** is `#[cfg(feature = "material")]`. Turning the
-/// feature off removes those names from the glob rather than replacing them
-/// with stubs; a build that was relying on them fails at the use site.
-///
-/// # Curation rule (Material half)
-///
-/// This module answers "what does *every* app touch" — not "what does
-/// `flui-material` export." A type belongs here when an app author reaches
-/// for it while writing ordinary screens: layout/text/interaction primitives
-/// (via [`flui_widgets::prelude`]), theming (`Theme`, `ThemeData`,
-/// `ColorScheme`, `TextTheme`), the app shell (`Scaffold`, `AppBar`,
-/// `Drawer`), the standard button family, and the common
-/// data-display/feedback/navigation widgets a Material screen composes
-/// (`Card`, `ListTile`, `Dialog`, `SnackBar`, `NavigationBar`, the tab
-/// family, …).
-///
-/// It does **not** include: `*State` handles an app never constructs
-/// directly (`InkWellState`, `TabBarState`, …), component-theme override
-/// structs (`AppBarThemeData` and friends — advanced per-widget
-/// customization, reach them at `flui::material`), or `flui-material`
-/// internals like the raw M3 type-scale table (`english_like_2021`).
-///
-/// **`TextField` names the Material type, unambiguously** — `flui-widgets`'
-/// own theme-free stand-in is named [`flui_widgets::RawTextField`], not
-/// `TextField`, specifically so this glob never has to choose between two
-/// same-named types or make `TextField`'s meaning depend on whether the
-/// `material` feature happens to be on. See this module's own
-/// `## Mapping decisions` entry in `ARCHITECTURE.md` for the two earlier
-/// revisions this superseded (first an omission, then an explicit-shadow
-/// that solved the ambiguity but broke feature-additivity). The Cupertino
-/// catalog has no such collision (every type is `Cupertino`-prefixed), but
-/// its surface is app-shell-shaped rather than everyday-widget-shaped
-/// (`CupertinoPageScaffold`, `CupertinoTabScaffold`, …), so it stays at
-/// `flui::cupertino` rather than joining this glob.
+/// The design-neutral editing primitives are named
+/// [`flui_widgets::RawTextField`] and [`flui_widgets::RawTextFormField`], so
+/// the two globs do not make Material's `TextField` or `TextFormField`
+/// ambiguous. Cupertino's app-shell-shaped catalog remains at `flui::cupertino`.
 pub mod prelude {
     pub use flui_app::app::AppConfig;
     #[cfg(not(target_os = "ios"))]
@@ -454,15 +438,5 @@ pub mod prelude {
     ))]
     pub use flui_app::app::{AppWindowError, open_secondary_window, open_window};
     pub use flui_app::{AppCapabilities, AppLaunch, LaunchError, register_font, run_app};
-    #[cfg(feature = "material")]
-    pub use flui_material::{
-        AlertDialog, AppBar, BackButton, Card, Checkbox, Chip, ColorScheme, DefaultTabController,
-        Dialog, Divider, Drawer, ElevatedButton, FilledButton, FilterChip, FloatingActionButton,
-        IconButton, InkWell, ListTile, Material, MaterialApp, NavigationBar, NavigationDestination,
-        OutlinedButton, Radio, Scaffold, ScaffoldMessenger, ScaffoldMessengerHandle,
-        ScaffoldMessengerScope, SnackBar, Switch, Tab, TabBar, TabBarView, TabController,
-        TextButton, TextField, TextFormField, TextTheme, Theme, ThemeData, ThemeMode,
-        VerticalDivider, show_dialog,
-    };
     pub use flui_widgets::prelude::*;
 }

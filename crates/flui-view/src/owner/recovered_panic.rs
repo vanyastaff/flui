@@ -418,6 +418,26 @@ impl StagedRecoveredPanic {
         *self.0
     }
 
+    /// Update recovery reports its committed replacement; other lifecycle
+    /// hooks retain their exact element attribution.
+    pub(crate) fn at_substitute(
+        mut self,
+        substitute: ElementId,
+        parent: ElementId,
+        slot: usize,
+    ) -> Self {
+        if self.0.hook == LifecycleHook::Update {
+            let element = self.0.element();
+            self.0.at = RecoveredAt::Substituted {
+                element,
+                substitute,
+                parent,
+                slot,
+            };
+        }
+        self
+    }
+
     /// Fill the record's path from `tree` while its element is still a node: for a seam about
     /// to remove that element, after which the drain could not find it.
     pub(crate) fn locate_in(&mut self, tree: &ElementTree) {

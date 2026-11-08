@@ -5,7 +5,8 @@
 - **Supersedes:** [ADR-0204](ADR-0204-synthetic-semantics-nodes.md), §1 for identity authority and authored-region action routing
 - **Superseded-by:** [ADR-0281](ADR-0281-a-destructor-that-panics-during-an-unwind-aborts-as-in-std.md),
   only where a rejected configuration retains unproven callback owners without running their
-  destructors: they are destroyed under the containment of the caller's recovery scope.
+  destructors: they are destroyed under the containment of the caller's recovery scope;
+  [ADR-0314](ADR-0314-synthetic-semantics-ids-use-a-tagged-generational-slot.md) for the identity-source encoding and release policy.
 - **Related:** [ADR-0206](ADR-0206-typed-semantics-attributes.md)
 
 ## Context
@@ -52,16 +53,18 @@ reinsertion receives a new ID. Unvisited mounted scopes retain their keys, so
 partial assembly and temporary ancestor exclusion cannot retire unrelated
 content. Removed render generations are pruned at the next assembly pass.
 
-The pipeline owns an opaque monotonic identity source throughout the
+The pipeline owns an opaque generational identity source throughout the
 presentation's lifetime, independently of replaceable `SemanticsOwner` values.
-Its reserved range is `1..=u32::MAX`, disjoint from nonzero render generations.
-Batch reservation is all-or-nothing and never wraps. Duplicate keys in one
-contribution list and exhausted reservations return a semantics frame error,
-retain the existing tree and queued marks, and permit a later retry. Every graft
-anchor is staged before the first arena mutation. An abandoned graft plan does
-not allocate or retire identities. An incoming owner's synthetic tree cannot
-import another allocator's authority: it is cleared and rebuilt using the
-pipeline source. Hand-built render-boundary trees remain supported.
+ADR-0314 reserves the published top bit for synthetic identities and shares the
+`GenSlots` policy. Retiring a key releases its slot; reuse carries a new
+generation, and a terminal slot leaves circulation. Batch reservation is
+all-or-nothing and never wraps. Duplicate keys in one contribution list and
+exhausted reservations return a semantics frame error, retain the existing tree
+and queued marks, and permit a later retry. Every graft anchor is staged before
+the first arena mutation. An abandoned graft plan does not allocate or retire
+identities. An incoming owner's synthetic tree cannot import another allocator's
+authority: it is cleared and rebuilt using the pipeline source. Hand-built
+render-boundary trees remain supported.
 
 A duplicate-key or exhaustion error remains authoritative during rejection.
 The pass pins registered standard and custom action handlers immediately after

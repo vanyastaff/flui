@@ -139,6 +139,10 @@ wesl = { workspace = true }
 flui-objects = { workspace = true }
 flui-rendering = { workspace = true, features = ["testing"] }
 flui-painting = { path = "../flui-painting", version = "=0.2.0-dev", features = ["testing"] }
+# The scene_render example owns a native window and optionally loads a scene plugin.
+flui-native = { path = "../flui-native", version = "=0.2.0-dev" }
+flui-hot-reload = { path = "../flui-hot-reload", version = "=0.2.0-dev" }
+tracing-subscriber = { workspace = true }
 pollster = { workspace = true }
 criterion = { workspace = true }
 # PNG encoding for GPU readback frame dumps (`wgpu::readback_dump` test
@@ -200,6 +204,9 @@ ignored-paths = ["tests/compile_fail/*.rs"]
 tier = "R"
 tier-kind = "internal"
 order = 4
+edge-exceptions = [
+    { to = "flui-hot-reload", exit = "ADR-0311", reason = "the dev-only scene_render example is a low-level reload host; the engine library has no hot-reload edge" },
+]
 reach-exceptions = [
     { to = "wgpu", grant = "ADR-0081", reason = "the one R crate that may reach wgpu, and through it wgpu-hal's `windows` (DX12)" },
 ]

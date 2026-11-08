@@ -5,16 +5,15 @@
   device of the platform has it) and `NotOnThisDevice` (this device or OS build lacks it). It is
   not retryable
   ([ADR-0152](/docs/adr/ADR-0152-capability-seam-revised.md)).
-- **`flui-platform`**: `CapabilityAbsence` (`NotOnThisPlatform`, `NotOnThisDevice`,
-  `NotYetOnThisHost`), where a window capability is missing, converting to the reason a refusal
-  answers ([ADR-0254](/docs/adr/ADR-0254-window-contract.md)).
 
 ### Changed
 
-- **`flui-platform`**: `WindowCapabilities::unavailable(command, absence)` marks a command's
-  capability `Unavailable` with the `CapabilityAbsence` admission answers, in place of
-  `unavailable_on_this_device`; `WindowCapabilities::refusal` returns the `CapabilityAbsence`.
-  An absence counts for equality only while its capability is unavailable.
+- **`flui-platform`**: `WindowCapabilities::unavailable`,
+  `unavailable_on_this_device` and `unavailable_not_yet_on_this_host` mark a command's capability
+  `Unavailable` and record its lasting `UnsupportedReason`;
+  `WindowCapabilities::command_capability` answers that reason as `Unsupported`. An absence counts
+  for equality only while its capability is unavailable
+  ([ADR-0254](/docs/adr/ADR-0254-window-contract.md)).
 - **`flui-native`**: what the OS has and the host does not drive yet answers `NotYetOnThisHost`
   from the version that has it, and `NotOnThisDevice` below it: the window material on iOS, on
   Android (API 31, where the device blurs across windows) and on an AppKit window off the main

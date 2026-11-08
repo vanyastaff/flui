@@ -50,17 +50,15 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use flui_sdk::animation::prelude::*;
-use flui_sdk::painting::Clip;
+use flui_sdk::painting::paint::Clip;
+use flui_sdk::rendering::SemanticsRole;
 use flui_sdk::view::RebuildHandle;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{
     Align, AnimatedBuilder, ClipRect, DefaultTextStyle, Expanded, MouseRegion, Padding, Row,
-    SafeArea, Semantics, SemanticsRole, WidgetStateProperty,
+    SafeArea, Semantics, WidgetStateProperty,
 };
-use flui_sdk::{
-    geometry::EdgeInsets,
-    painting::{Alignment, Color},
-};
+use flui_sdk::{geometry::EdgeInsets, painting::Alignment, painting::styling::Color};
 
 use crate::button_style::ButtonStyle;
 use crate::material::Material;
@@ -69,7 +67,6 @@ use crate::scaffold_messenger::{
 };
 use crate::text_button::TextButton;
 use crate::theme::Theme;
-use crate::theme_data::ThemeData;
 
 /// `_snackBarDisplayDuration` (`snack_bar.dart:29`) — the default
 /// [`SnackBar::duration`].
@@ -237,8 +234,7 @@ impl ViewState<SnackBarAction> for SnackBarActionState {
     }
 
     fn build(&self, view: &SnackBarAction, ctx: &dyn BuildContext) -> impl IntoView {
-        let theme = Theme::of(ctx);
-        let colors = theme.color_scheme;
+        let colors = Theme::required_color_scheme_of(ctx);
         // `_SnackbarDefaultsM3.actionTextColor`/`.disabledActionTextColor`
         // (`snack_bar.dart:952-970`) both resolve to `inversePrimary` — the
         // disabled state is distinguished visually by the button becoming
@@ -278,7 +274,7 @@ impl ViewState<SnackBarAction> for SnackBarActionState {
 /// Builds the static (non-animated) visual content of a [`SnackBar`]:
 /// `Material(color, elevation) > SafeArea(top: false) > Padding > Row[content,
 /// action?]`, narrowed to the fixed-behavior branches (see the module docs).
-fn build_content(snack_bar: &SnackBar, theme: &ThemeData) -> BoxedView {
+fn build_content(snack_bar: &SnackBar, theme: &crate::theme::BaseTheme) -> BoxedView {
     let colors = theme.color_scheme;
     let background_color = snack_bar.background_color.unwrap_or(colors.inverse_surface);
     let elevation = snack_bar.elevation.unwrap_or(DEFAULT_ELEVATION);
@@ -450,7 +446,7 @@ impl ViewState<SnackBarPresenter> for SnackBarPresenterState {
     }
 
     fn build(&self, view: &SnackBarPresenter, ctx: &dyn BuildContext) -> impl IntoView {
-        let theme = Theme::of(ctx);
+        let theme = Theme::required_base_of(ctx);
         let content = build_content(&view.snack_bar, &theme);
         let animation = view.animation.clone();
         let listenable = std::rc::Rc::new(view.animation.clone()) as std::rc::Rc<dyn Listenable>;

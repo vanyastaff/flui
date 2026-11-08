@@ -1470,7 +1470,7 @@ fn preferred_locales_select_resources_and_direction() {
     use flui_painting::typography::TextDirection;
     use flui_platform::{Locale, SystemPreferences};
     use flui_widgets::localization::{
-        BoxedLocalizationsDelegate, Directionality, GlobalWidgetsLocalizationsDelegate,
+        BoxedLocalizationsDelegate, DefaultWidgetsLocalizationsDelegate, Directionality,
         Localizations, LocalizationsDelegate,
     };
 
@@ -1539,7 +1539,7 @@ fn preferred_locales_select_resources_and_direction() {
             ])
             .localizations_delegates(vec![
                 BoxedLocalizationsDelegate::new(Greetings),
-                BoxedLocalizationsDelegate::new(GlobalWidgetsLocalizationsDelegate),
+                BoxedLocalizationsDelegate::new(DefaultWidgetsLocalizationsDelegate),
             ]);
         let app = match explicit {
             Some(locale) => app.locale(locale),
@@ -1677,7 +1677,7 @@ fn preferred_locales_select_resources_and_direction() {
                     ])
                     .localizations_delegates(vec![
                         BoxedLocalizationsDelegate::new(Greetings),
-                        BoxedLocalizationsDelegate::new(GlobalWidgetsLocalizationsDelegate),
+                        BoxedLocalizationsDelegate::new(DefaultWidgetsLocalizationsDelegate),
                     ]),
                 800.0,
                 600.0,
@@ -4411,13 +4411,14 @@ fn resize_failure_preserves_other_batched_window_state() {
 
 fn pointer_stream_and_keyboard_survive_interleaved_resize() {
     use flui_foundation::geometry::Offset;
+    use flui_interaction::pointer::HitTestBehavior;
     use flui_interaction::{
         events::{Code, PointerKind},
         testing::input::{KeyEventBuilder, pointer_cancel, pointer_down, pointer_move, pointer_up},
     };
     use flui_platform::{PlatformInput, WindowExecutionState};
     use flui_runtime::owner::InputOutcome;
-    use flui_widgets::{Listener, SizedBox, prelude::HitTestBehavior};
+    use flui_widgets::{Listener, SizedBox};
 
     for (pointer_type, resampling) in [
         (PointerKind::Mouse, false),

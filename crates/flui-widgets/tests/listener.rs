@@ -8,8 +8,8 @@ use std::rc::Rc;
 
 use crate::common::{lay_out, tight};
 use flui_interaction::PointerDispatch;
+use flui_interaction::pointer::HitTestBehavior;
 use flui_view::EventCx;
-use flui_widgets::prelude::HitTestBehavior;
 use flui_widgets::{Listener, SizedBox};
 
 /// The hosted frame's manual time, not wall time, selects the measured

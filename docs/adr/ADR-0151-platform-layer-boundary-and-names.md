@@ -207,11 +207,20 @@ bridge in [ADR-0152](ADR-0152-capability-seam-revised.md) and
 The contract takes the name of the path users already write (`flui::platform::WindowOptions`).
 The core host is the code that talks to the OS. There is no `-core` crate and no crate per OS.
 
-Carried over from ADR-0082 §2, which this section replaces: only `flui-app` depends on the core
-host, apart from test and example dev-dependencies that drive a host (`allowed-dependents`);
-`PlatformAccessibility` and its listener aliases live in `flui_semantics::platform`, while
-`HostWindow::accessibility` stays in the core host; an out-of-crate host cannot mint the
-`OwnerPlatform` its `run` needs, and section 5 makes that seal explicit.
+Only `flui-app` depends on the core host, apart from test and example dev-dependencies that drive a
+host (`allowed-dependents`). `PlatformAccessibility`, `AccessibilityHandler`,
+`AccessibilityAttachment`, `AccessibilityCapabilities` and their support and route-change types live
+in `flui_semantics::platform`, while `HostWindow::accessibility` stays in the core host. An
+out-of-crate host cannot mint the `OwnerPlatform` its `run` needs, and section 5 makes that seal
+explicit.
+
+`PlatformAccessibility::attach` is the single registration point for one
+`Arc<dyn AccessibilityHandler>` and returns an atomic snapshot of initial activation and immutable
+capabilities. Activation, action requests and assistive-focus moves are required methods of that
+handler. A second attachment fails with `AccessibilityAlreadyAttached` and leaves the live handler
+untouched; `detach_handler` removes it and permits a later presentation to attach. There are no
+separate event registrations or independent activation and capability queries to disagree with the
+snapshot.
 
 **One crate for Windows, macOS, iOS, Android, Web, Linux and headless.** winit 0.31 and GPUI
 split into a crate per host on top of an open host seam, for out-of-tree hosts and for
@@ -340,9 +349,9 @@ lowest crate that names it (ADR-0152); only the OS provider lives in the capabil
 ### 4. One vocabulary for absence
 
 `Unsupported { reason }` is the one type that says "not here", embedded in every error that can
-mean absence, in place of the nine spellings found today (`WindowCommandError`,
-`WindowShowError`, `CursorError`, `DragError`, the haptic outcome enum, `StorageError`,
-`PreferenceQueryError`, `TextStoreHostError` and `Availability`). Its reasons are
+mean absence: the window command errors, `CursorError`, `DragError`, the haptic outcome,
+`StorageError`, `PreferenceQueryError`, `TextStoreHostError`, `LaunchError` and `DialogError`.
+`Availability` separately describes how a present capability is delivered. Its reasons are
 `NotOnThisPlatform`, `NotOnThisDevice` (the OS build or the hardware of this device lacks it; the
 value names no version), `NotYetOnThisHost` (the OS has it and this host does not implement it
 yet; added 2026-10-27, ADR-0152), `NotDeclared { what }`, `Unavailable` (temporary; trying again may
@@ -467,8 +476,8 @@ containment, the owner hearing committed text) stand. `InMemoryTextStore` moves 
   `HtmlCanvasElement`, `tokio::runtime::Handle`) become `pub(crate)`. Deeper control from outside goes through
   capability crates and the host bridge (ADR-0152). The Activity, which the system hands only to
   the application's `android_main`, enters through one function of the core host,
-  `android_platform(app)`, as the facade's `run_app_android` takes it; nothing the core host hands
-  back names it.
+  `android_platform(app)`, as the facade's `native::android::run_app_android` takes it; nothing the
+  core host hands back names it.
 
 ### 9. `Platform` slims; one `AppHandler` replaces the application-level registrations
 
@@ -547,9 +556,13 @@ crates/flui-native/
                             the same shape: the feature's model beside one file per platform
     version/                floor.rs gate.rs (ADR-0244)
     storage/                file_store.rs page_store.rs os_error.rs
+    transfer/               the OS objects the clipboard and drag share
+                            (the Wayland seats' data devices)
 ```
 
-`shared/`, `traits/` and `platforms/` disappear.
+`shared/`, `traits/` and `platforms/` disappear. `transfer/` is the only
+cross-feature directory: it holds an OS object through which the clipboard and
+a drag reach the same selection, not a general home for shared code.
 
 - **Names.** The platform vocabulary is std's: `windows`, `apple`, `android`, `web`, `linux`,
   `headless`. `apple/` and `linux/` open into `macos`/`ios` and `wayland`/`x11` only
@@ -561,9 +574,10 @@ crates/flui-native/
   are fixed: a *platform* is an operating environment, a *host* is FLUI's integration with one,
   and *backend* names only the GPU backend and `TextInputBackend` (option 4).
 - **Where code lives.** Code two or more platforms use is the feature's model, beside its
-  platform files; code only macOS and iOS share is the feature's `apple/mod.rs`. There is no
-  cross-feature directory for shared code: the version gates are `version/`, the display registry's
-  source is `display/source.rs`, the pointer assembly is `input/assembly/`.
+  platform files; code only macOS and iOS share is the feature's `apple/mod.rs`. The only
+  cross-feature directory is `transfer/`, for the OS objects through which clipboard and drag
+  reach one selection. The version gates are `version/`, the display registry's source is
+  `display/source.rs`, the pointer assembly is `input/assembly/`.
 - **Pure and FFI.** The pure part of a platform file (event decoding, geometry, the mode from
   flags) is a module under `cfg(any(<os>, test))` and `forbid(unsafe_code)`, compiled and tested on
   the Linux CI host; the FFI and the `unsafe` stay under `cfg(<os>)`. The halves are modules
@@ -588,11 +602,12 @@ crates/flui-native/
   every position it does not fill, so the parity rows of a new platform are read off its table,
   and it is a ready platform (GLOSSARY) when every position the parity table marks applicable is
   filled and every row of the core and system-service sections ran there.
-- **Direction is checked.** `cargo heli xtask module-dag` is extended to `flui-native`: `owner/`
-  and `version/` depend on no feature; a feature's platform file depends on its feature's model, on
-  `owner/`, on `version/` and on other features' models, never on another feature's platform file,
-  on another platform, or on `hosts/`; `hosts/` depends on every feature and nothing depends on
-  it. An OS multiplexer that serves several features (the Win32 window class and its procedure,
+- **Direction is checked.** `cargo heli xtask module-dag` is extended to `flui-native`: the base
+  modules `owner/`, `version/`, `storage/` and `transfer/` depend on no feature; a feature's
+  platform file depends on its feature's model, on the base modules and on other features' models,
+  never on another feature's platform file, on another platform, or on `hosts/`; `hosts/` depends
+  on every feature and nothing depends on it. An OS multiplexer that serves several features (the
+  Win32 window class and its procedure,
   the broadcast receiver, DirectManipulation's viewport callbacks, the UIKit responder chain) is
   `owner/`'s: it dispatches through hook traits declared beside it, each feature's platform file
   implements the hooks for the messages it owns, and `hosts/<os>.rs` registers them.

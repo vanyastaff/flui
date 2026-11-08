@@ -6,17 +6,17 @@ use crate::common;
 
 use common::{lay_out, loose, tight};
 use flui_cupertino::CupertinoButton;
+use flui_sdk::testing::a11y::Role;
 use flui_sdk::view::SignalWriteExt;
 use flui_sdk::widgets::SizedBox;
 use flui_sdk::widgets::Text;
-use flui_testing::a11y::Role;
 
 pub fn tap_callback_writes_a_signal_and_rebuilds_its_reader() {
     let probe = common::SignalProbe::new(|signals| {
         CupertinoButton::new(SizedBox::shrink())
             .on_pressed(move |cx| signals.count.update(cx, |count| *count += 1))
     });
-    let mut laid = lay_out(probe.view(), tight(100.0, 44.0));
+    let mut laid = lay_out(common::themed(probe.view()), tight(100.0, 44.0));
     laid.dispatch_pointer_down(50.0, 22.0);
     laid.dispatch_pointer_up(50.0, 22.0);
     assert_eq!(probe.value(), Ok(1));
@@ -38,7 +38,8 @@ fn exercise_button_fade_migration(releasing: bool) {
     use std::time::Duration;
 
     use flui_sdk::animation::Vsync;
-    use flui_sdk::painting::{Color, DrawOp};
+    use flui_sdk::painting::DrawOp;
+    use flui_sdk::painting::styling::Color;
     use flui_sdk::view::environment::VsyncScope;
     use flui_sdk::widgets::ColoredBox;
 
@@ -62,13 +63,13 @@ fn exercise_button_fade_migration(releasing: bool) {
     let taps = Rc::new(Cell::new(0));
     let tree = |registry| {
         let taps = Rc::clone(&taps);
-        VsyncScope::new(
+        common::themed(VsyncScope::new(
             registry,
             CupertinoButton::new(ColoredBox::new(Color::RED).child(SizedBox::new(40.0, 20.0)))
                 .on_pressed(move |_| {
                     taps.set(taps.get() + 1);
                 }),
-        )
+        ))
     };
     let mut laid = common::lay_out_animated(tree(old.clone()), tight(100.0, 44.0), old.clone());
     laid.dispatch_pointer_down(50.0, 22.0);
@@ -157,7 +158,7 @@ pub fn disabled_button_announces_disabled() {
 }
 
 fn assert_button_announcement(button: CupertinoButton, disabled: bool) {
-    let mut laid = lay_out(button, loose(200.0));
+    let mut laid = lay_out(common::themed(button), loose(200.0));
     laid.enable_semantics();
     laid.pump();
 
@@ -187,9 +188,11 @@ fn assert_button_announcement(button: CupertinoButton, disabled: bool) {
 /// `author_id` of the button's node, and is never announced.
 pub fn button_publishes_its_identifier() {
     let mut laid = lay_out(
-        CupertinoButton::new(Text::new("Tap"))
-            .on_pressed(|_cx| {})
-            .identifier("tap-button"),
+        common::themed(
+            CupertinoButton::new(Text::new("Tap"))
+                .on_pressed(|_cx| {})
+                .identifier("tap-button"),
+        ),
         loose(200.0),
     );
     laid.enable_semantics();

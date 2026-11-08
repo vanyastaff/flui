@@ -835,10 +835,11 @@ pub(crate) fn tab_stops_on_each_link_and_enter_opens_it() {
 /// Red-checks: drop the ring from the paragraph's paint (no band), or draw it
 /// around the paragraph's box (one band, not one per line).
 pub(crate) fn a_focused_link_rings_each_line_of_its_glyphs() {
+    use flui_objects::FocusRingStyle;
     use flui_painting::display_list::DrawOp;
     use flui_painting::styling::Color;
     use flui_platform::keyboard::{Key, NamedKey};
-    use flui_widgets::{DefaultFocusRingStyle, FocusRingStyle};
+    use flui_widgets::DefaultFocusRingStyle;
 
     const STYLE: FocusRingStyle = FocusRingStyle {
         outer: Color::rgb(200, 0, 0),

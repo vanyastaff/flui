@@ -29,7 +29,7 @@ use flui_material::{
 };
 use flui_sdk::animation::Vsync;
 use flui_sdk::foundation::RenderId;
-use flui_sdk::painting::Color;
+use flui_sdk::painting::styling::Color;
 use flui_sdk::view::environment::VsyncScope;
 use flui_sdk::view::environment::{MediaQuery, MediaQueryData};
 use flui_sdk::view::prelude::*;
@@ -567,11 +567,11 @@ pub fn a_shown_snack_bar_is_announced_as_a_polite_status() {
 
     let tree = laid.a11y_tree().expect("semantics enabled");
     let status = tree
-        .find(flui_testing::a11y::Role::Status)
+        .find(flui_sdk::testing::a11y::Role::Status)
         .unwrap_or_else(|error| panic!("{error}\n{}", tree.describe()));
     assert_eq!(
         status.live(),
-        Some(flui_testing::a11y::Live::Polite),
+        Some(flui_sdk::testing::a11y::Live::Polite),
         "{}",
         tree.describe()
     );

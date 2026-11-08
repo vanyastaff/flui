@@ -18,28 +18,26 @@
 //!   doing that under a `BuildContext`'s tree borrow is a lock-order hazard.
 //! - **No mid-frame deferral.** [`RebuildHandle::schedule`] only inserts an
 //!   id into an inbox drained by the next `build_scope`, so `remove` is already
-//!   safe from any phase and any thread; there is no need to defer it to a
-//!   post-frame callback.
+//!   safe from any phase; there is no need to defer it to a post-frame callback.
 //! - **No ticker muting for covered entries.** There is no per-subtree ticker
 //!   gate, so the animations of a `maintain_state` entry that an opaque entry
 //!   covers keep running. Recorded, not claimed.
 //! - **No overlay sizing under unbounded constraints.** It only bites there; see
 //!   [`RenderTheater`](flui_objects::RenderTheater).
 //! - **Not a listenable, no separate `dispose()`.** `OverlayEntry`
-//!   is a cheap `Arc`-backed handle with no listener list and
+//!   is a cheap `Rc`-backed handle with no listener list and
 //!   no disposal step of its own; dropping every clone is enough. A second
 //!   `remove()` is inert rather than panicking.
 //!
 //! [`Overlay`]: super::Overlay
 //! [`RebuildHandle`]: flui_view::RebuildHandle
 
+use std::cell::{Cell, RefCell};
 use std::fmt;
-use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Weak};
+use std::rc::{Rc, Weak};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use flui_view::{BoxedView, BuildContext, RebuildHandle};
-use parking_lot::Mutex;
 
 use super::OverlayShared;
 
@@ -116,28 +114,28 @@ struct EntryInner {
     /// [`OverlayEntry::mark_needs_build`] correctly inert in both windows.
     ///
     /// Acquired in `init_state` — never in `build`.
-    rebuild: Mutex<Option<RebuildHandle>>,
+    rebuild: RefCell<Option<RebuildHandle>>,
 
     /// Whether this entry occludes the whole overlay, so the ones below it need
     /// not be built.
-    opaque: AtomicBool,
+    opaque: Cell<bool>,
 
     /// Whether this entry stays in the tree even when an [`opaque`] entry covers
     /// it.
     ///
     /// [`opaque`]: EntryInner::opaque
-    maintain_state: AtomicBool,
+    maintain_state: Cell<bool>,
 
     /// Whether this entry is modal: while it is onstage, the entries below it
     /// stay visible but are hidden from assistive technology.
-    modal: AtomicBool,
+    modal: Cell<bool>,
 
     /// The overlay currently holding this entry, or `None` when detached.
     ///
     /// `Weak`, so an entry outliving its overlay does not keep the overlay's
     /// entry list alive, and so [`OverlayEntry::remove`] on a dropped overlay is
     /// a no-op rather than a resurrection.
-    overlay: Mutex<Option<Weak<OverlayShared>>>,
+    overlay: RefCell<Option<Weak<OverlayShared>>>,
 }
 
 impl Drop for EntryInner {
@@ -157,7 +155,7 @@ impl Drop for EntryInner {
 /// one in its list, and the view tree hold a third.
 #[derive(Clone)]
 pub struct OverlayEntry {
-    inner: Arc<EntryInner>,
+    inner: Rc<EntryInner>,
 }
 
 impl OverlayEntry {
@@ -194,14 +192,14 @@ impl OverlayEntry {
     ) -> Self {
         let id = allocate_id();
         Self {
-            inner: Arc::new(EntryInner {
+            inner: Rc::new(EntryInner {
                 id,
                 builder: crate::support::retirement::Terminal::new(Rc::new(builder)),
-                rebuild: Mutex::new(None),
-                opaque: AtomicBool::new(false),
-                maintain_state: AtomicBool::new(false),
-                modal: AtomicBool::new(false),
-                overlay: Mutex::new(None),
+                rebuild: RefCell::new(None),
+                opaque: Cell::new(false),
+                maintain_state: Cell::new(false),
+                modal: Cell::new(false),
+                overlay: RefCell::new(None),
             }),
         }
     }
@@ -209,38 +207,36 @@ impl OverlayEntry {
     /// Builder form of [`set_opaque`](Self::set_opaque), for an entry that is not
     /// yet attached (so no rebuild is needed).
     pub(crate) fn with_opaque(self, opaque: bool) -> Self {
-        self.inner.opaque.store(opaque, Ordering::Relaxed);
+        self.inner.opaque.set(opaque);
         self
     }
 
     /// Builder form of [`set_maintain_state`](Self::set_maintain_state).
     pub(crate) fn with_maintain_state(self, maintain_state: bool) -> Self {
-        self.inner
-            .maintain_state
-            .store(maintain_state, Ordering::Relaxed);
+        self.inner.maintain_state.set(maintain_state);
         self
     }
 
     /// Builder form of the modal flag, for an entry not yet attached: while
     /// it is onstage, the entries below it are hidden from semantics.
     pub(crate) fn with_modal(self, modal: bool) -> Self {
-        self.inner.modal.store(modal, Ordering::Relaxed);
+        self.inner.modal.set(modal);
         self
     }
 
     /// Whether this entry hides the entries below it from semantics.
     pub(crate) fn modal(&self) -> bool {
-        self.inner.modal.load(Ordering::Relaxed)
+        self.inner.modal.get()
     }
 
     /// Whether this entry occludes the entire overlay.
     pub(crate) fn opaque(&self) -> bool {
-        self.inner.opaque.load(Ordering::Relaxed)
+        self.inner.opaque.get()
     }
 
     /// Whether this entry stays built even when covered by an opaque entry.
     pub(crate) fn maintain_state(&self) -> bool {
-        self.inner.maintain_state.load(Ordering::Relaxed)
+        self.inner.maintain_state.get()
     }
 
     /// Set whether this entry covers the whole overlay, so the entries below it
@@ -264,8 +260,8 @@ impl OverlayEntry {
     }
 
     /// Store `value`, and rebuild the whole overlay only if it changed.
-    fn set_build_flag(&self, flag: &AtomicBool, value: bool) {
-        if flag.swap(value, Ordering::Relaxed) == value {
+    fn set_build_flag(&self, flag: &Cell<bool>, value: bool) {
+        if flag.replace(value) == value {
             return;
         }
         if let Some(shared) = self.attached_overlay() {
@@ -287,7 +283,7 @@ impl OverlayEntry {
     pub(crate) fn is_mounted(&self) -> bool {
         self.inner
             .rebuild
-            .lock()
+            .borrow()
             .as_ref()
             .is_some_and(RebuildHandle::is_active)
     }
@@ -313,7 +309,7 @@ impl OverlayEntry {
     pub(crate) fn element_id(&self) -> Option<flui_foundation::ElementId> {
         self.inner
             .rebuild
-            .lock()
+            .borrow()
             .as_ref()
             .and_then(RebuildHandle::element_id)
     }
@@ -334,7 +330,8 @@ impl OverlayEntry {
     ///
     /// [`remove`]: Self::remove
     pub fn mark_needs_build(&self) {
-        if let Some(handle) = self.inner.rebuild.lock().as_ref() {
+        let handle = self.inner.rebuild.borrow().clone();
+        if let Some(handle) = handle {
             handle.schedule(flui_view::RebuildReason::StateChange);
         }
     }
@@ -380,15 +377,15 @@ impl OverlayEntry {
 
     /// Take the overlay back-reference, upgrading it. `None` when this entry is
     /// attached to nothing, or when its overlay's shared state has been dropped.
-    pub(super) fn attached_overlay(&self) -> Option<Arc<OverlayShared>> {
-        self.inner.overlay.lock().as_ref().and_then(Weak::upgrade)
+    pub(super) fn attached_overlay(&self) -> Option<Rc<OverlayShared>> {
+        self.inner.overlay.borrow().as_ref().and_then(Weak::upgrade)
     }
 
     /// Clear the back-reference and return the overlay it pointed at, so a
     /// second [`remove`](Self::remove) finds nothing and cannot evict a
     /// same-position entry that took this one's place.
-    fn detach(&self) -> Option<Arc<OverlayShared>> {
-        let weak = self.inner.overlay.lock().take()?;
+    fn detach(&self) -> Option<Rc<OverlayShared>> {
+        let weak = self.inner.overlay.borrow_mut().take()?;
         weak.upgrade()
     }
 
@@ -396,14 +393,16 @@ impl OverlayEntry {
     ///
     /// Re-attaching a previously removed entry is legal: removal only clears the
     /// back-reference and does not poison the entry.
-    pub(crate) fn attach(&self, shared: &Arc<OverlayShared>) {
-        *self.inner.overlay.lock() = Some(Arc::downgrade(shared));
+    pub(crate) fn attach(&self, shared: &Rc<OverlayShared>) {
+        let previous = self.inner.overlay.replace(Some(Rc::downgrade(shared)));
+        drop(previous);
     }
 
     /// Publish the mounted subtree's rebuild capability. Called from the entry
     /// view's `init_state`.
     pub(crate) fn publish_rebuild(&self, handle: RebuildHandle) {
-        let _prev = self.inner.rebuild.lock().replace(handle);
+        let previous = self.inner.rebuild.replace(Some(handle));
+        drop(previous);
     }
 
     /// Drop the rebuild capability, but only if `element` published it.
@@ -415,18 +414,23 @@ impl OverlayEntry {
     /// An unconditional clear would then revoke the live view's capability,
     /// leaving `mark_needs_build` inert on an entry that is on screen.
     pub(crate) fn clear_rebuild(&self, element: Option<flui_foundation::ElementId>) {
-        let mut slot = self.inner.rebuild.lock();
-        if slot
-            .as_ref()
-            .is_some_and(|held| held.element_id() == element)
-        {
-            let _prev = slot.take();
-        }
+        let previous = {
+            let mut slot = self.inner.rebuild.borrow_mut();
+            if slot
+                .as_ref()
+                .is_some_and(|held| held.element_id() == element)
+            {
+                slot.take()
+            } else {
+                None
+            }
+        };
+        drop(previous);
     }
 
     /// Whether two handles name the same entry.
     pub(crate) fn is_same(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.inner, &other.inner)
+        Rc::ptr_eq(&self.inner, &other.inner)
     }
 }
 
@@ -550,7 +554,7 @@ impl fmt::Debug for OverlayEntry {
         f.debug_struct("OverlayEntry")
             .field("id", &self.inner.id.get())
             .field("mounted", &self.is_mounted())
-            .field("attached", &self.inner.overlay.lock().is_some())
+            .field("attached", &self.inner.overlay.borrow().is_some())
             .finish()
     }
 }

@@ -176,10 +176,9 @@ enum Expect {
 
 /// Hot reload must be absent from the application crate's graph under every
 /// feature, not merely unused by it: `flui-app` reaches a reload tool only
-/// through an installed `DevReloadHook` (ADR-0094 §1). The facade's
-/// `hot-reload` feature must bring the tool in, and the first-party host, the
-/// executable contract for `flui run`, must enable the tool's `app-plugin`
-/// (the worker's rebuild requests reach the host through it). The hooks
+/// through an installed `DevReloadHook` (ADR-0311). The facade's
+/// `hot-reload` feature must bring the tool in and enable its `app-plugin`
+/// (the worker's rebuild requests reach a generated host through it). The hooks
 /// come through `flui-sdk`, so the tool's own default graph, which every
 /// scene plugin and worker `cdylib` builds, must stay free of the widget
 /// catalog; only its `host-hook` feature brings the SDK in. The train
@@ -209,11 +208,11 @@ const FACTS: [Fact; 7] = [
         failure: "the facade's hot-reload feature did not bring in flui-hot-reload",
     },
     Fact {
-        what: "hot-reload-counter-host must enable flui-hot-reload/app-plugin",
-        root: "hot-reload-counter-host",
-        selection: "",
+        what: "the facade's hot-reload feature must enable flui-hot-reload/app-plugin",
+        root: "flui",
+        selection: "--no-default-features --features hot-reload",
         expect: Expect::Enables("flui-hot-reload", "app-plugin"),
-        failure: "hot-reload-counter-host does not enable flui-hot-reload/app-plugin",
+        failure: "the facade's hot-reload feature does not enable flui-hot-reload/app-plugin",
     },
     Fact {
         what: "flui-widgets must be absent from flui-hot-reload's default graph",

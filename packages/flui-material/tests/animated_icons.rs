@@ -5,10 +5,11 @@
 use std::time::Duration;
 
 use flui_material::AnimatedIcons;
-use flui_painting::paint::PathCommand;
 use flui_sdk::animation::{ConstantAnimation, Vsync};
 use flui_sdk::geometry::Point;
-use flui_sdk::painting::{DrawOp, TextDirection};
+use flui_sdk::painting::DrawOp;
+use flui_sdk::painting::paint::PathCommand;
+use flui_sdk::painting::typography::TextDirection;
 use flui_sdk::view::environment::VsyncScope;
 use flui_sdk::widgets::{AnimatedIcon, AnimatedIconData, Directionality};
 

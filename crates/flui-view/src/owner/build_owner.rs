@@ -1501,8 +1501,8 @@ impl BuildOwner {
         // `drain_build_scope` once the drain completes — declared empty here
         // so the field exists on the span from the start.
         let _span = tracing::debug_span!(
-            target: "flui.frame",
-            "build",
+            target: flui_foundation::diagnostics::FrameSpan::Build.target(),
+            flui_foundation::diagnostics::FrameSpan::Build.name(),
             dirty_elements = self.dirty_count(),
             absorbed_mid_drain = tracing::field::Empty,
         )
@@ -1557,12 +1557,11 @@ impl BuildOwner {
         &mut self,
         tree: &mut ElementTree,
         failed: ElementId,
-        replacement_location: (ElementId, usize),
+        (parent, slot): (ElementId, usize),
         dirty: DirtyElement,
         mut staged: StagedRecoveredPanic,
         payload: Box<dyn Any + Send>,
     ) {
-        let (parent, slot) = replacement_location;
         // The failed element is replaced below, after which the drain could not find it: read its
         // path while it is a node.
         staged.locate_in(tree);
@@ -1587,8 +1586,8 @@ impl BuildOwner {
         self.dirty_reasons.remove(&failed);
         self.pending_dependency_changes.remove(&failed);
         let mut element_owner = self.element_owner_mut();
-        tree.replace_child_with(parent, slot, &recovery_view, &mut element_owner);
-        element_owner.commit_staged_lifecycle_panic(staged);
+        let substitute = tree.replace_child_with(parent, slot, &recovery_view, &mut element_owner);
+        element_owner.commit_staged_lifecycle_panic(staged.at_substitute(substitute, parent, slot));
     }
 
     pub(crate) fn drain_prepared_build_target(
@@ -1983,18 +1982,16 @@ impl BuildOwner {
                 }
             }
             // Reset-on-build (ADR-0074 §5.5; dependencies do not
-            // accumulate until unmount): the fields this
-            // element is recorded as reading at each of its providers go back
-            // to NONE, the build's own reads are re-applied from the sink, and a
-            // provider it no longer read drops the entry. A field read only in
-            // an earlier build therefore stops rebuilding this element.
+            // accumulate until unmount): the build's field and entry reads at
+            // each provider go back to NONE, its latest reads are re-applied
+            // from the sink, and a provider it no longer read drops the entry.
             //
             // A build that panicked and was recovered (ErrorView substituted;
             // `build_or_recover` sets the owner's `build_recovered` flag) may
             // have stopped before reading its providers: the empty sink says nothing
-            // about what the element depends on, so its previous masks are kept
-            // (the sink's records are still added) and it keeps receiving the
-            // notifications that let a fixed condition rebuild it.
+            // about what the element depends on, so its previous field and entry
+            // sets are kept (the sink's records are still added) and it keeps
+            // receiving the notifications that let a fixed condition rebuild it.
             let previous_providers = if build_recovered.get() {
                 super::inherited_dependencies::ProviderIds::default()
             } else {
@@ -2029,6 +2026,7 @@ impl BuildOwner {
                         record.dependent,
                         record.depth,
                         record.mask,
+                        record.entries,
                     );
                 } else {
                     accessor.record_dependent(
@@ -2036,6 +2034,7 @@ impl BuildOwner {
                         record.dependent,
                         record.depth,
                         record.mask,
+                        record.entries,
                     );
                 }
                 self.inherited_dependencies

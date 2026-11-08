@@ -127,11 +127,18 @@ export function hidePage(hidden) {
 export function sleep(millis) { return new Promise(resolve => setTimeout(resolve, millis)); }
 let drag;
 // A drag over the canvas: string representations [[type, data]], files
-// [[name, type, content]].
+// [[name, type, content, readContent?]]. A file with readContent reports the
+// former's size but asynchronously reads the latter, exercising decoded limits.
 export function beginDrag(strings, files, effectAllowed) {
     drag = new DataTransfer();
     for (const [type, data] of JSON.parse(strings)) drag.setData(type, data);
-    for (const [name, type, content] of JSON.parse(files)) drag.items.add(new File([content], name, { type }));
+    for (const [name, type, content, readContent] of JSON.parse(files)) {
+        const file = new File([content], name, { type });
+        if (readContent !== undefined) {
+            file.arrayBuffer = async () => new TextEncoder().encode(readContent).buffer;
+        }
+        drag.items.add(file);
+    }
     // A constructed DataTransfer ignores both effects outside a real drag;
     // they are supplied as plain properties (a trusted drag
     // checks the browser's own).
@@ -982,6 +989,68 @@ async fn an_html_drag_over_the_canvas_is_offered_and_dropped() {
             .await,
         Err(TransferError::StaleOffer(_))
     ));
+}
+
+/// A direct transport caller gets the same final byte ceiling for a string
+/// copied at the drop and a file read asynchronously afterwards.
+#[wasm_bindgen_test]
+async fn direct_requests_refuse_oversized_ready_and_pending_deliveries() {
+    let window = CanvasWindow::open();
+    window.accept.set(Some(TransferActions::COPY));
+    begin_drag(
+        r#"[["text/plain","longer than ten bytes"]]"#,
+        r#"[["notes.txt","text/markdown","x","also longer than ten bytes"]]"#,
+        "copy",
+    );
+    assert!(drag_answer("dragenter").prevented);
+    assert!(drag_answer("dragover").prevented);
+    assert!(drag_answer("drop").prevented);
+    let events = window.drag_events();
+    let [
+        DragDropEvent::Entered { offer, .. },
+        DragDropEvent::Moved { .. },
+        DragDropEvent::Dropped { id, .. },
+    ] = events.as_slice()
+    else {
+        panic!("enter, move, drop: {events:?}");
+    };
+    let transfer = window.platform.data_transfer();
+    let limits = TransferLimits::default().with_max_bytes(10);
+    flui_native::testing::drag::oversized_delivery(
+        transfer.as_ref(),
+        *id,
+        text_index(offer),
+        limits,
+        |request| {
+            let mut request = std::pin::pin!(request);
+            let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+            match std::future::Future::poll(request.as_mut(), &mut context) {
+                std::task::Poll::Ready(result) => result,
+                std::task::Poll::Pending => panic!("a copied string answers at once"),
+            }
+        },
+    );
+    let file = offer
+        .find(&TransferFormat::Custom {
+            mime: Mime::new("text/markdown"),
+        })
+        .expect("the file is offered by its type");
+    flui_native::testing::drag::oversized_delivery_async(
+        transfer.as_ref(),
+        *id,
+        file,
+        limits,
+        |request| async move {
+            let mut request = std::pin::pin!(request);
+            let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+            assert!(
+                std::future::Future::poll(request.as_mut(), &mut context).is_pending(),
+                "the file's arrayBuffer read is pending"
+            );
+            request.await
+        },
+    )
+    .await;
 }
 
 fn text_index(offer: &DataTransferOffer) -> RepresentationIndex {

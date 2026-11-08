@@ -16,8 +16,9 @@
 //! like the defect -- and applying the fix did not turn it green.
 
 use crate::common::{lay_out, tight};
+use flui_objects::CrossAxisAlignment;
 use flui_painting::typography::TextDirection;
-use flui_widgets::{Column, CrossAxisAlignment, Directionality, SizedBox};
+use flui_widgets::{Column, Directionality, SizedBox};
 
 /// Dependents of the ambient `Directionality` for a `Column` with `cross`.
 fn directionality_dependents(cross: CrossAxisAlignment) -> usize {

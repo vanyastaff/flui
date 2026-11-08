@@ -52,6 +52,8 @@ mod headless_drag;
 #[path = "headless_redraw.rs"]
 #[cfg(not(target_arch = "wasm32"))]
 mod headless_redraw;
+#[path = "headless_test_doubles.rs"]
+mod headless_test_doubles;
 #[path = "input_capabilities.rs"]
 mod input_capabilities;
 #[path = "input_regions.rs"]

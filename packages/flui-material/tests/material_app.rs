@@ -15,13 +15,32 @@ use crate::common;
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use common::{LaidOut, lay_out, loose};
+use common::{LaidOut, lay_out, lay_out_animated, loose};
 use flui_material::{ColorSchemeOverrides, MaterialApp, Theme, ThemeData, ThemeMode};
-use flui_sdk::painting::Color;
+use flui_sdk::animation::Vsync;
+use flui_sdk::painting::styling::Color;
 use flui_sdk::platform::Brightness;
-use flui_sdk::view::environment::{MediaQuery, MediaQueryData};
+use flui_sdk::view::environment::{MediaQuery, MediaQueryData, VsyncScope};
 use flui_sdk::view::prelude::*;
-use flui_sdk::widgets::SizedBox;
+use flui_sdk::widgets::{Routable, Router, RouterForm, SizedBox};
+
+#[derive(Routable, Debug, Clone, PartialEq)]
+enum MaterialRoute {
+    #[route("/")]
+    Home,
+}
+
+pub fn router_mounts_pages_below_the_material_theme() {
+    let (probe, captured) = theme_capture();
+    let router = Router::new(MaterialRoute::Home, move |_route: &MaterialRoute, _ctx| {
+        probe.clone().boxed()
+    });
+    let app: MaterialApp<RouterForm> = MaterialApp::router(router).theme(light_sentinel());
+    let vsync = Vsync::new();
+    let _tree = lay_out_animated(VsyncScope::new(vsync.clone(), app), loose(800.0), vsync);
+
+    assert_eq!(captured_theme(&captured), light_sentinel());
+}
 
 /// A light theme with a sentinel primary color no preset uses, so an
 /// assertion can tell "my theme arrived" from "some default arrived".

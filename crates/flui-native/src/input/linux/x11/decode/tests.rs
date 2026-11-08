@@ -162,7 +162,7 @@ fn scrolls(events: &[PointerEvent]) -> Vec<(f64, f64, ScrollPrecision)> {
 /// fractional and precise for a touchpad; the first value after the pointer
 /// enters only sets where it starts. A legacy wheel button of a device with
 /// no scroll valuator is a whole detent, and one the server emulated from a
-/// valuator is not read twice.
+/// valuator is not read twice. Non-finite values emit no substitute zero.
 #[test]
 fn a_wheel_is_detents_and_a_touchpad_scrolls_precisely() {
     let mut pointers = pointers();
@@ -186,6 +186,8 @@ fn a_wheel_is_detents_and_a_touchpad_scrolls_precisely() {
             wheel(5, false),
             wheel(4, true),
             wheel(6, false),
+            scrolled(f64::NAN, 470.0),
+            scrolled(1022.5, f64::INFINITY),
         ],
     );
     assert_eq!(

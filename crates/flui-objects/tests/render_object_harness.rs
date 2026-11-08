@@ -6421,7 +6421,7 @@ fn harness_custom_paint_semantic_regions_keep_order_geometry_identity_and_action
         original[0].1, original[3].1,
         "background and foreground have separate namespaces"
     );
-    assert!(u32::try_from(original[0].1.as_u64()).is_ok());
+    assert_ne!(original[0].1.as_u64() & (1 << 63), 0);
     let target = original[0].1;
     run.owner()
         .semantics_owner()

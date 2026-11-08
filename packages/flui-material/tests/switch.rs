@@ -25,13 +25,14 @@ use std::time::Duration;
 
 use common::{LaidOut, lay_out, lay_out_animated, tight};
 use flui_material::{Switch, Theme, ThemeData};
-use flui_painting::DrawOp;
 use flui_sdk::animation::{MotionOverride, Vsync};
-use flui_sdk::painting::{Color, TextDirection};
+use flui_sdk::painting::DrawOp;
+use flui_sdk::painting::styling::Color;
+use flui_sdk::painting::typography::TextDirection;
+use flui_sdk::testing::a11y::{Role, Toggled};
 use flui_sdk::view::View;
 use flui_sdk::view::environment::VsyncScope;
 use flui_sdk::widgets::Directionality;
-use flui_testing::a11y::{Role, Toggled};
 
 /// The switch's full tap target (track + M3 default horizontal padding).
 const TAP_TARGET_WIDTH: f64 = 60.0;

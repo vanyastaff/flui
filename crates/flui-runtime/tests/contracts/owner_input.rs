@@ -603,18 +603,24 @@ impl flui_semantics::platform::PlatformAccessibility for RecordingBridge {
     fn publish(&self, update: accesskit::TreeUpdate) {
         self.updates.lock().expect("updates").push(update);
     }
-    fn is_active(&self) -> bool {
-        true
-    }
-    fn set_activation_listener(
-        &self,
-        _: flui_semantics::platform::AccessibilityActivationListener,
-    ) {
-    }
-    fn set_action_listener(&self, _: flui_semantics::platform::AccessibilityActionListener) {}
 
-    fn assistive_focus_support(&self) -> flui_semantics::AssistiveFocusSupport {
-        flui_semantics::AssistiveFocusSupport::Unreported
+    fn attach(
+        &self,
+        _: std::sync::Arc<dyn flui_semantics::platform::AccessibilityHandler>,
+    ) -> Result<
+        flui_semantics::platform::AccessibilityAttachment,
+        flui_semantics::platform::AccessibilityAlreadyAttached,
+    > {
+        Ok(flui_semantics::platform::AccessibilityAttachment::new(
+            true,
+            flui_semantics::platform::AccessibilityCapabilities::NONE,
+        ))
+    }
+
+    fn detach_handler(&self) {}
+
+    fn route_changed(&self, change: flui_semantics::platform::RouteChange) {
+        drop(change);
     }
 }
 
@@ -934,7 +940,7 @@ fn a_platform_entry_while_the_runtime_is_checked_out_runs_no_owner_code() {
 
     let owner = OwnerHost::new();
     let text_input: std::sync::Arc<dyn flui_platform::PlatformTextInput> =
-        std::sync::Arc::new(flui_native::FakeTextInput::new());
+        std::sync::Arc::new(flui_native::testing::FakeTextInput::new());
     let mut runtime = UiRuntime::for_test_with_text_input(Some(text_input));
     let store = InMemoryTextStore::new("ab");
     let erased: Rc<dyn TextStore> = store.clone(); // the presentation holds the field's store through the erased contract.

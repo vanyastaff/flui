@@ -34,6 +34,13 @@ impl Generation {
     /// A fresh slot's first generation.
     pub const FIRST: Self = Self(NonZeroU32::MIN);
 
+    /// The last generation a packed key can carry.
+    ///
+    /// Packed generational keys reserve the top bit of their 64-bit value for a
+    /// domain tag. The high 32-bit generation therefore uses 31 bits.
+    pub const LAST: Self =
+        Self(NonZeroU32::new(0x7FFF_FFFF).expect("BUG: the packed generation maximum is non-zero"));
+
     /// The packed value every generational key carries for this generation.
     #[must_use]
     pub const fn as_u32(self) -> u32 {
@@ -50,12 +57,15 @@ impl Generation {
     /// the slot ([`GenSlots::peek`] answers `None`).
     #[must_use]
     pub const fn is_last(self) -> bool {
-        self.0.get() == u32::MAX
+        self.0.get() == Self::LAST.as_u32()
     }
 
     /// The generation after this one, or `None` past the slot's last.
     #[must_use]
     pub const fn next(self) -> Option<Self> {
+        if self.is_last() {
+            return None;
+        }
         match self.0.checked_add(1) {
             Some(generation) => Some(Self(generation)),
             None => None,
@@ -193,11 +203,14 @@ impl GenSlots {
     ///
     /// # Panics
     ///
-    /// A seed names a non-zero generation: zero names no generation, and a
-    /// seeded zero names a broken invariant.
+    /// A seed names a non-zero generation no greater than [`Generation::LAST`].
     pub fn seed_generation(&mut self, slot: u32, generation: u32) {
         let generation =
             NonZeroU32::new(generation).expect("BUG: a generation is named by a non-zero u32");
+        assert!(
+            generation <= Generation::LAST.as_nonzero(),
+            "BUG: a packed generational key reserves its top bit for a domain tag"
+        );
         let generation = Generation(generation);
         if slot as usize >= self.live.len() {
             self.live.resize(slot as usize + 1, Generation::FIRST);

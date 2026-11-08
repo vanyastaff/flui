@@ -516,7 +516,7 @@ pub(crate) fn cancelling_a_hero_mapping_does_not_refreeze_the_previous_page() {
                         Hero::new(
                             ValueKey::new("shared"),
                             flui_widgets::GestureDetector::new()
-                                .behavior(flui_widgets::HitTestBehavior::Opaque)
+                                .behavior(flui_interaction::HitTestBehavior::Opaque)
                                 .on_tap(move |_| taps.set(taps.get() + 1))
                                 .child(SizedBox::new(60.0, 45.0)),
                         )

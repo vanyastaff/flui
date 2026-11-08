@@ -44,9 +44,6 @@ flui-foundation = { path = "../flui-foundation", version = "=0.2.0-dev" }
 # (flui-rendering's dirty-flag storage); same house style for a small,
 # closed set of boolean flags.
 bitflags = { workspace = true }
-# `RoutePath` percent-encodes each segment it joins and decodes each segment it
-# yields, with the URL path-segment set.
-percent-encoding = { workspace = true }
 # `#[derive(Routable)]`, re-exported beside the trait it implements.
 flui-macros = { workspace = true }
 # Gesture recognizers + arena that `GestureDetector` drives.
@@ -168,6 +165,12 @@ harness = true
 [[test]]
 name = "nested_scroll_ui"
 path = "tests/nested_scroll_ui.rs"
+harness = true
+
+# Owner-affine overlay handles (ADR-0076 §2b), also a nested cargo build.
+[[test]]
+name = "overlay_ui"
+path = "tests/overlay_ui.rs"
 harness = true
 
 # The counted perf scenarios `cargo xtask perf` runs. A target of its own, not

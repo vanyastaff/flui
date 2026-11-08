@@ -6,12 +6,12 @@
 //! reusing `PointerId::PRIMARY` for every contact after the canonical
 //! harness moved to a fresh pointer id per Down (production-faithful — a
 //! platform never recycles an id into a still-tracked gesture). The harness
-//! now lives once in [`flui_testing::widgets`], so mount ordering, contact
+//! now lives once in [`flui_sdk::testing::widgets`], so mount ordering, contact
 //! identity, and virtual-clock policy are shared instead of forked. Note the
 //! dispatch consequences: a contact Move/Up requires a preceding Down, and a
 //! contactless hover is `dispatch_pointer_hover`, not `dispatch_pointer_move`.
 
-pub use flui_testing::widgets::*;
+pub use flui_sdk::testing::widgets::*;
 
 /// Runs every `(name, scenario)` row of a table-driven test. Every row runs,
 /// and the failure report names each row that failed.

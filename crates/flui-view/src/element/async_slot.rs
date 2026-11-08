@@ -9,8 +9,8 @@
 
 use std::{rc::Rc, sync::Arc};
 
+use super::async_snapshot::AsyncSnapshot;
 use crate::RebuildHandle;
-use flui_foundation::{AsyncSnapshot, ConnectionState};
 use parking_lot::Mutex;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 
@@ -51,6 +51,8 @@ pub(crate) struct Slot<T, E> {
     pub(crate) inline_window: bool,
 }
 
+type SnapshotTransition<T, E> = fn(Option<Result<T, E>>) -> AsyncSnapshot<T, E>;
+
 impl<T, E> Slot<T, E> {
     /// A slot holding `snapshot` at generation 0, outside any inline window.
     pub(crate) fn new(snapshot: AsyncSnapshot<T, E>) -> Self {
@@ -61,20 +63,20 @@ impl<T, E> Slot<T, E> {
         }
     }
 
-    /// Publish only a connection-state change, preserving owned data/error.
-    pub(crate) fn set_connection_state(&mut self, state: ConnectionState) {
-        let snapshot = core::mem::replace(&mut self.snapshot, AsyncSnapshot::nothing());
-        self.snapshot = snapshot.in_state(state);
+    /// Change only the connection variant, moving the latest result into it.
+    pub(crate) fn transition(&mut self, to: SnapshotTransition<T, E>) {
+        let snapshot = core::mem::replace(&mut self.snapshot, AsyncSnapshot::None(None));
+        self.snapshot = to(snapshot.into_last());
     }
 }
 
 /// Shared handle to the snapshot.
 pub(crate) type SharedSlot<T, E> = Arc<Mutex<Slot<T, E>>>;
 
-/// Closed updates used by the builders: replacement or payload-preserving state.
+/// Closed updates used by the builders: replacement or stream completion.
 pub(crate) enum SnapshotUpdate<T, E> {
     Replace(AsyncSnapshot<T, E>),
-    State(ConnectionState),
+    Done,
 }
 
 /// Publish under the subscription fence, then retire and request a rebuild
@@ -92,8 +94,8 @@ pub(crate) fn apply_update<T, E>(
                 SnapshotUpdate::Replace(snapshot) => {
                     Some(core::mem::replace(&mut slot.snapshot, snapshot))
                 }
-                SnapshotUpdate::State(state) => {
-                    slot.set_connection_state(state);
+                SnapshotUpdate::Done => {
+                    slot.transition(AsyncSnapshot::Done);
                     None
                 }
             };
@@ -101,7 +103,7 @@ pub(crate) fn apply_update<T, E>(
         } else {
             let rejected = match update {
                 SnapshotUpdate::Replace(snapshot) => Some(snapshot),
-                SnapshotUpdate::State(_) => None,
+                SnapshotUpdate::Done => None,
             };
             (false, false, rejected)
         }

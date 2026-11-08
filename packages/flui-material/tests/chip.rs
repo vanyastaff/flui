@@ -184,7 +184,7 @@ pub fn disabled_chip_and_its_delete_icon_are_both_inert_through_dispatch() {
 /// `selected` (the harness fails a frame that drops one).
 pub fn a_filter_chip_announces_its_selection_as_pressed() {
     use flui_material::FilterChip;
-    use flui_testing::a11y::{Role, Toggled};
+    use flui_sdk::testing::a11y::{Role, Toggled};
 
     for (selected, pressed) in [(true, Toggled::True), (false, Toggled::False)] {
         let mut laid = lay_out(

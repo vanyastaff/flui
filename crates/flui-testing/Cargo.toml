@@ -36,8 +36,8 @@ workspace = true
 # `replay` builds its scripted events through flui-interaction's own
 # `make_*_event_for_id` constructors, so a script cannot drift from the event
 # shape a real platform translation produces. This crate is itself test
-# support and never enters a production graph (dev edges only, plus the
-# facade's optional `testing` feature), so the feature travels nowhere new.
+# support and never enters an ordinary production graph (dev edges only, plus
+# the facade's and SDK's optional `testing` features), so it travels nowhere new.
 flui-interaction = { path = "../flui-interaction", version = "=0.2.0-dev", features = ["testing"] }
 # PresentationId, the multi-presentation clock registry's key -- it now
 # appears directly in HeadlessBinding's own public method signatures
@@ -62,8 +62,8 @@ flui-view = { path = "../flui-view", version = "=0.2.0-dev" }
 # widget harness (`widgets`) reads.
 flui-rendering = { path = "../flui-rendering", version = "=0.2.0-dev", features = ["testing"] }
 # The widget harness (`widgets`): the catalog widgets it wraps a root in
-# (`Align`, `ConstrainedBox`, `UnconstrainedBox`, `FocusRoot`), and the
-# concrete render objects its probes downcast.
+# (`Align`, `ConstrainedBox`, `UnconstrainedBox`), the standard keyboard policy
+# added by `app_root`, and the concrete render objects its probes downcast.
 flui-widgets = { path = "../flui-widgets", version = "=0.2.0-dev" }
 flui-objects = { workspace = true }
 # `HeadlessHost` hosts a `UiRuntime` and drives its frame transaction
@@ -117,7 +117,7 @@ flui-protocol = { workspace = true, features = ["serde"] }
 [dev-dependencies]
 static_assertions.workspace = true
 # The headless backend whose windows the conformance checks run against.
-flui-native = { path = "../flui-native", version = "=0.2.0-dev" }
+flui-native = { path = "../flui-native", version = "=0.2.0-dev", features = ["testing"] }
 # Enable flui-view's `testing` feature in test builds so the layout-builder
 # seam test can plant a registry entry (`register_layout_builder_for_test`).
 # Same dev-only feature-unification pattern used by flui-app; the hook stays out
@@ -136,9 +136,9 @@ path = "tests/main.rs"
 [package.metadata.flui]
 tier = "K"
 tier-kind = "internal"
-# Above `flui-widgets`, `flui-runtime` and `flui-sdk`: the test driver wraps
-# the catalog and the frame runtime (ADR-0083 §4). Every crate below names it
-# only on a dev edge.
+# Above `flui-widgets` and `flui-runtime`, below `flui-sdk`: the test driver
+# wraps the catalog and frame runtime (ADR-0083 §4). Lower crates name it only
+# on dev edges; the SDK's optional `testing` feature is the one normal consumer.
 order = 6
 # The log capture's process state moves with it: `flui_log::testing` holds the
 # SINK and the interest-cache sentinels now (its own manifest carries them).

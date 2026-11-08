@@ -4,9 +4,10 @@ use std::any::Any;
 use std::f64::consts::{FRAC_PI_2, TAU};
 
 use flui_sdk::geometry::{Rect, Size};
-use flui_sdk::painting::{Canvas, Color, Paint, StrokeCap};
+use flui_sdk::painting::styling::Color;
+use flui_sdk::painting::{Canvas, CustomPainter, Paint, StrokeCap};
 use flui_sdk::view::prelude::*;
-use flui_sdk::widgets::{ActivityIndicator, CustomPaint, CustomPainter};
+use flui_sdk::widgets::{ActivityIndicator, CustomPaint};
 
 use super::{Fraction, GAP, STROKE, progress_semantics};
 use crate::theme::Theme;
@@ -90,7 +91,7 @@ impl StatefulView for CircularProgressIndicator {
 
 impl ViewState<CircularProgressIndicator> for CircularProgressIndicatorState {
     fn build(&self, view: &CircularProgressIndicator, ctx: &dyn BuildContext) -> impl IntoView {
-        let colors = Theme::of(ctx).color_scheme;
+        let colors = Theme::required_color_scheme_of(ctx);
         if view.value.is_none() {
             return ActivityIndicator::new()
                 .color(colors.primary)

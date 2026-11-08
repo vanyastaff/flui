@@ -125,11 +125,6 @@ class = "slice"
 count = 3
 
 [[allow]]
-path = "crates/flui-native/ARCHITECTURE.md"
-class = "tracker-h"
-count = 2
-
-[[allow]]
 path = "crates/flui-native/src/lib.rs"
 class = "wave"
 count = 1
@@ -137,7 +132,7 @@ count = 1
 [[allow]]
 path = "crates/flui-native/src/owner/mod.rs"
 class = "slice"
-count = 3
+count = 2
 
 [[allow]]
 path = "crates/flui-native/src/platform.rs"

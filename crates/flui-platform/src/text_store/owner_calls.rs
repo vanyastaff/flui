@@ -10,14 +10,14 @@
 //! | a grant's session body; the admitting gate, read before it | `LockArbiter::run_one` (`lock.rs`) |
 //! | a store's settle, in a scope that parks each failure in the admitting gate as it is caught | `LockArbiter::run_one` (`lock.rs`) |
 //! | a grant refused (synchronous, queue full) | `LockArbiter::defer_or_refuse` (`lock.rs`) |
-//! | the caller's grant when an earlier queued grant fails: queued if asynchronous, retained if synchronous | `LockArbiter::request` (`lock.rs`) |
+//! | the caller's grant when an earlier queued grant fails: queued if asynchronous, retired under containment if synchronous | `LockArbiter::request` (`lock.rs`) |
 //! | queued grants dropped unrun, by a detach or with the store | `LockArbiter::clear`, `Drop for LockArbiter` (`lock.rs`) |
 //! | the gate a store follows, replaced outside the borrow | `LockArbiter::set_gate` (`lock.rs`) |
 //! | a parked failure no owner took when the gate's last clone goes | `CommitGate`'s failure cell (`lock.rs`), which discards it as a scope does |
 //! | the in-memory owner listener, and its snapshot | `InMemoryTextStore::settle` (`in_memory.rs`) |
 //! | a replaced in-memory owner listener or observer, and both when the store goes | `InMemoryTextStore::set_owner_listener`, `set_observer`, `Drop` (`in_memory.rs`) |
 //! | observer notifications and the observer snapshot, in the caller's scope (a settle's included) | `InMemoryTextStore::flush_notifications` (`in_memory.rs`), `EditableTextStore::flush_notifications`, `notify` (`flui-widgets` `text/text_store.rs`) |
-//! | the flush before a request: a failure there refuses it and retains the grant | `request_lock` of `InMemoryTextStore` (`in_memory.rs`) and `EditableTextStore` (`flui-widgets` `text/text_store.rs`) |
+//! | the flush before a request: a failure there refuses it and retires the grant under containment | `request_lock` of `InMemoryTextStore` (`in_memory.rs`) and `EditableTextStore` (`flui-widgets` `text/text_store.rs`) |
 //! | the flush after a request's grants, behind what the last one's settle parked in the gate that admitted it ([`OwnerCalls::run_behind_parked`], [`OwnerCalls::parking_gate`]) | `request_lock`, `run_deferred_grants` of both stores |
 //! | a grant a detached field refuses | `EditableTextStore::request_lock` (`flui-widgets` `text/text_store.rs`) |
 //! | a grant's body reading or editing the in-memory store: no borrow is held across it, and an application edit wins | `InMemoryTextStore::open` (`in_memory.rs`) |

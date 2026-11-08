@@ -10,6 +10,17 @@ behaviour taxonomy and remains a sibling appendix.
 
 ## Mapping decisions
 
+### Navigation intents stay on the presentation's owner thread
+
+ADR-0093 §5. `RoutePath` and the navigation intent vocabulary live here, below the
+widget catalog. A presentation has one owner-local `UrlOwnerSlot`; its outermost
+router holds the only `UrlOwnerRegistration`. Registrations carry never-reused
+generations, so a stale registration cannot remove its successor, and an owner's
+`Rc` is retired only after the slot borrow ends. `url_owner_slot` is a lifecycle
+capability, not a build/layout/paint capability. Route normalization and the
+registration contract are pinned by `route_locations_preserve_encoded_segment_identity`
+and `url_owner_slot_contract_matrix`.
+
 ### Lazy collection declarations are independent of resident slots
 
 The generic adaptor installs `SemanticSetMapping::declared_count` through the
@@ -406,20 +417,51 @@ a live tree without re-locking the tree the drain already holds.
 stashed and used after its element is defunct. Capability acquisition is split out by type (ADR-0078:
 `LifecycleContext` in `init_state`/`did_change_dependencies`, `BuildContext` in `build`).
 
-### Inherited reads are O(1) and field-precise; reading is depending
+### Inherited reads are O(1), field- and entry-precise; reading is depending
 
 **Rule.** Each element node carries its resolved inherited scope — an `Arc<HashMap>` built at
 mount, shared by refcount down runs of non-providers, re-inserted by each provider so nested
 providers of the same type shadow nearest-first. `find_inherited_provider` is one map lookup.
-`#[derive(InheritedData)]` generates `FieldMask` constants per field; `InheritedView::changed_fields`
-diffs old and new data per field; `depend_on_field(mask, …)` records a masked dependency, and a
-provider update rebuilds only dependents whose mask intersects the change. The whole-type read
-is the all-bits mask; an empty mask is promoted to a whole-provider dependency rather than
-silently opting out. There is no read path that does not record a dependency.
+`#[derive(InheritedData)]` generates `FieldMask` constants per static field;
+`InheritedView::changed_fields` diffs old and new data per field, and `depend_on_field(mask, …)`
+records a masked field dependency. Dynamic entries use the independent `EntrySet` coordinate:
+`InheritedView::changed_entries` reports changed entry `TypeId`s, and
+`BuildContextExt::depend_on_entry::<Provider, Entry, _>` records exactly one. A provider update
+rebuilds a dependent when either coordinate intersects its reads.
 
-**Typing.** Aspects are compile-time field masks and every public read depends. There is no blanket `Data: PartialEq` bound — the diff
-comes from the opt-in derive. Inherited field dependencies and signal reads have separate
-registries, feeding the same owner scheduler and depth-ordered build drain (ADR-0074 §5.5).
+`depend_on` is the whole-provider read across all fields and all entries; a field-only read has
+no entry dependency and an entry-only read has no field dependency. An empty static field mask is
+promoted to a whole-field dependency rather than silently opting out. Registration precedes the
+read callback, so its panic cannot lose the dependency. There is no read path that does not record
+a dependency.
+
+**Typing and lifetimes.** Static aspects are compile-time field masks; entry sets carry `TypeId`s
+without borrowing field bits. There is no blanket `Data: PartialEq` bound — the static diff comes
+from the opt-in derive, while each provider supplies its entry content diff. Successful builds
+replace and prune both kinds of build reads; lifecycle reads of both kinds persist until unmount,
+and panic recovery preserves previous reads. Inherited dependencies and signal reads have separate
+registries, feeding the same owner scheduler and depth-ordered build drain (ADR-0074 §5.5,
+ADR-0318). `tests/inherited_entries.rs` pins exact dispatch, whole reads, reset/pruning, lifecycle
+persistence, misses, GlobalKey reparenting and callback/build panic recovery.
+
+### Render views configure against the live build context
+
+`RenderBehavior::configure_render_object` is the authoritative render-configuration path. On the
+initial build, a parent-driven view replacement and an inherited-only dependency change it calls
+`update_render_object` with a `RenderObjectContext` backed by the live `BuildContext`, then applies
+the returned `RenderUpdateImpact`. The generic `RenderBehavior::build_into_views` invokes it once;
+a behavior wrapping an inner `RenderBehavior` must invoke the same helper in its own authoritative
+build before reading published render state or running user build code, rather than delegating to a
+separate update hook. The helper reports layout-affecting configuration; a wrapper that builds from
+published layout state then waits for the next publication instead of consuming the stale value.
+Mount still calls `create_render_object` with a detached context, so inherited
+reads there return `None`; the initial build supplies their resolved values before the first layout.
+Typed `depend_on`, `depend_on_field` and `depend_on_entry` reads buffer into the build's dependency
+sink, and
+reset-on-build registers the resulting read set after the element returns to its slot. A
+provider-only change therefore reconfigures the same render element and render object rather than
+replacing either one. The regression is
+`render_inherited_dependency::provider_only_change_reconfigures_the_same_render_view`.
 
 ### Signal reads subscribe through a private sink
 
@@ -640,14 +682,19 @@ is the only seam between a host and a reload tool.
 It sits in this crate, below the runtime, so the host (`flui-app`) and the tool
 (`flui-hot-reload`) each name it without naming each other, and a package reaches it through
 `flui-sdk`'s `view` glob re-export with no new SDK item. The trait is the driver half — `attach`, `detach`,
-`poll` and `scene_frame`; the per-call seam a code patcher needs arrives with its first
-producer (ADR-0311 §7). Its bound is still `Send + 'static` because the instance travels in the
+`poll` and `scene_frame`. Its bound is still `Send + 'static` because the instance travels in the
 application's configuration; it is only ever called on the owner thread. ADR-0311 makes it
 `'static` alone, built on the owner thread from a factory, with `scene_frame` in a scene hook of
 its own; `docs/gaps.md` (entry 43) lists that as not built. `scene_frame` lends the scene to a
 callback so a scene built by a plugin image cannot outlive it. Pinned by
 `scene_frame_default_never_calls_render` and by the host's tests in `flui-app`
 (`app/hot_reload/tests.rs`).
+
+[ADR-0316](../../docs/adr/ADR-0316-the-dlopen-worker-host-development-cycle-is-supported.md)
+supports this dynamic-image development cycle independently of any future code patcher. A patcher's
+per-call seam requires its own ADR. `REGISTRY_STACK` has ADR-0097's `image` grant: it belongs to one
+dynamically loaded image's owner thread and is never shared between UI runtimes. `TEST_REGISTRY`
+retains its ADR-0316 exit until the legacy fixture lane uses production scoped registry activation.
 
 ### The development-agent hook lives here too
 
@@ -881,8 +928,9 @@ retirement panics, rebuild scheduling is still attempted; the first panic then
 resumes, and a competing wake payload is discarded (ADR-0281). The new snapshot already
 belongs to the slot, so unwinding the old value cannot destroy it. Inline future
 completion still suppresses a redundant rebuild and keeps its `Done` guard.
-Connection-state-only transitions preserve owned data/error without retirement.
-Stale incoming values retire outside the slot lock and schedule no rebuild.
+Variant-only transitions preserve the last `Result` without retirement or a
+`Clone` bound. Stale incoming values retire outside the slot lock and schedule
+no rebuild.
 
 The task that panicked remains failed under the driver's policy. Recovery means
 that the queued next build can read the published snapshot and a fresh keyed
@@ -901,19 +949,24 @@ an accepted-update failure the first failure resumes and the slot keeps no
 extra owner: disposal of the failed producer or element destroys the published
 incoming value normally (ADR-0281).
 
-### GlobalKey identity exhaustion is permanent
+### GlobalKey identity is typed and its exhaustion is permanent
 
-`GlobalKey::new` issues every identity in `1..=u64::MAX` once, then refuses
-all further allocations. Zero is an internal exhaustion sentinel, never a key.
-The atomic transition publishes the last identity and sentinel together, so
-catching a refusal cannot wrap the allocator into an earlier identity. This
-changes identity admission only; GlobalKey registries remain UI runtime-owned.
+`GlobalKey::id` returns `GlobalKeyId`, a newtype over a private `NonZeroU64`,
+not an alias that can be confused with an arbitrary `u64`. Its read-only
+`get()` is for diagnostics and the key hash; there is no public numeric
+constructor. `GlobalKey::new` uses the process-wide
+`AtomicIdMint<NonZeroU64>` because standalone keys can be created on any
+thread. The mint issues every identity in `1..=u64::MAX` once, then refuses
+all further allocations permanently, without a zero sentinel or wrapping.
+GlobalKey registries remain UI runtime-owned.
 
 `exhausted_global_key_counter_never_reissues_an_identity` joins the existing
-private `element_tree_contract_matrix`. It drives the production mint helper
-with a local terminal counter because a consumer cannot exhaust the real
-identity space. It admits both final identities, catches repeated refusal and
-checks subsequent ordinary allocation from an independent local counter.
+private `element_tree_contract_matrix`. It drives the production constructor
+with a local terminal mint because a consumer cannot exhaust the real identity
+space. It admits both final identities, catches repeated refusal and checks
+subsequent ordinary allocation from an independent local mint. The public
+`global_key_duplication` matrix compares the diagnostic hash through
+`GlobalKeyId::get`.
 
 ### Closed presentation authority
 

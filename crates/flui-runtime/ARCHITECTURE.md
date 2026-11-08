@@ -1,13 +1,10 @@
 # flui-runtime Architecture
 
 The frame runtime of [ADR-0083](../../docs/adr/ADR-0083-one-frame-transaction-in-flui-runtime.md) §1: the
-UI runtime (`ui_runtime::UiRuntime`) and the per-presentation frame machinery it
-drives, placed below the hosts (`flui-app`'s runners, platform wiring, raster
-lane and UI runtime dispatch layer) and above the widget spine. It arrived in
-steps; the ADR's `## Migration` section lists them, and what is still to move
-(the UI runtime-neutral owner host and typed operation application). Native-window
-demultiplexing and the platform/raster tails of an owner turn remain in the
-host.
+UI runtime (`ui_runtime::UiRuntime`), the per-presentation frame machinery it
+drives, `OwnerHost` and typed owner-operation application, placed below the
+hosts and above the widget spine. `flui-app` retains the runners, native-window
+demultiplexing and the platform/raster tails of an owner turn.
 
 ## Invariants
 
@@ -185,6 +182,11 @@ host.
   bridge is `flui_semantics::platform::PlatformAccessibility` (ADR-0082 §2,
   amended), and the development reload tier is this crate's own
   `reload::ReloadTier`, which the host translates from its hot-reload driver.
+  The normal graph also does not reach `flui-widgets`: root environment views,
+  including `FocusTreeRoot`, live in `flui-view`, while `flui-app` and the
+  headless host add catalog keyboard policy through `flui_widgets::app_root`.
+  The crate's own `reach-forbid = ["flui-widgets"]` enforces that boundary;
+  catalog views used by tests stay on a dev edge.
 - **A UI runtime is owner-affine.** `UiRuntime` is `!Send + !Sync` (a raw-pointer
   `PhantomData` marker; pinned by `assert_not_impl_any!` in the UI runtime tests).
   Everything that crosses a thread goes through a `UiCommandSender` into a
@@ -320,8 +322,8 @@ host.
 - **The execution host-injection seam carries the Stable promise.**
   `HostExecutors`, `HostComputePool`, `HostIoPool`, `ComputeJob`, `IoFuture`,
   `SpawnError` and `DeterministicExecutors` are defined in `execution` but
-  re-exported as `flui_app::…` and, through the facade's
-  `pub use flui_app as app`, as `flui::app::…`; `AppConfig::with_executors`
+  re-exported as `flui_app::…` and through the facade's curated `app` module
+  as `flui::app::…`; `AppConfig::with_executors`
   takes `HostExecutors`. The promise follows the item, not its crate's
   `tier-kind` (ADR-0089 §1), so a change to any of these signatures is a
   breaking change of `flui` (`SpawnError` is `#[non_exhaustive]`, so a new
@@ -1134,9 +1136,9 @@ applied the change, lays nothing out. Pinned by `font_registration_matrix`
 
 ### Incarnation exhaustion cannot reissue a stale address
 
-The incarnation counter issues every nonzero `u32` generation once, then keeps
-zero as a permanent exhaustion sentinel. Catching an exhaustion panic cannot
-restart identity allocation. `exhausted_incarnations_never_alias_previous_ui_runtimes`
+The incarnation counter issues every generation from one through
+`Generation::LAST` once, then keeps zero as a permanent exhaustion sentinel.
+Catching an exhaustion panic cannot restart identity allocation. `exhausted_incarnations_never_alias_previous_ui_runtimes`
 in `ui_runtime_and_presentation_isolation_matrix` exercises the production allocator
 with a local counter at its terminal boundary; exhausting the actual global
 source is impractical and would invalidate unrelated UI runtime tests.

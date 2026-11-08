@@ -1,4 +1,5 @@
-use flui_widgets::{Routable, RoutePath};
+use flui_view::RoutePath;
+use flui_widgets::Routable;
 
 #[derive(Routable, Debug, Clone, PartialEq)]
 enum AppRoute {

@@ -10,25 +10,19 @@
 use crate::common;
 
 use common::{lay_out, rgba, tight};
-use flui_material::{
-    FabThemeData, FloatingActionButton, Scaffold, Theme, ThemeData, ThemeDataOverrides,
-};
+use flui_material::{FabThemeData, FloatingActionButton, Scaffold, Theme, ThemeData};
 use flui_sdk::view::environment::{MediaQuery, MediaQueryData};
 use flui_sdk::widgets::SizedBox;
 
-/// The middle cascade tier, proven end to end: a
-/// `ThemeData.floating_action_button_theme` with a custom
-/// `background_color`/`elevation` reaches the mounted `Material` — both the
-/// enabled-default and (per `resolve_elevation`'s doc comment) the disabled
+/// The middle cascade tier, proven end to end: a `FabThemeData` entry with a
+/// custom `background_color`/`elevation` reaches the mounted `Material` — both
+/// the enabled-default and (per `resolve_elevation`'s doc comment) the disabled
 /// tier of the elevation state chain.
 pub fn fab_theme_slot_reaches_the_mounted_materials_color_and_elevation() {
-    let themed_background = flui_sdk::painting::Color::rgb(70, 80, 90);
-    let theme = ThemeData::light().copy_with(ThemeDataOverrides {
-        floating_action_button_theme: Some(FabThemeData {
-            background_color: Some(themed_background),
-            elevation: Some(12.0),
-            ..Default::default()
-        }),
+    let themed_background = flui_sdk::painting::styling::Color::rgb(70, 80, 90);
+    let theme = ThemeData::light().with_component(FabThemeData {
+        background_color: Some(themed_background),
+        elevation: Some(12.0),
         ..Default::default()
     });
 
@@ -47,13 +41,12 @@ pub fn fab_theme_slot_reaches_the_mounted_materials_color_and_elevation() {
     assert_eq!(
         material_node.get::<flui_sdk::foundation::inspect::Rgba>("color"),
         Ok(rgba(themed_background)),
-        "a configured floating_action_button_theme.background_color must reach the mounted \
-         Material",
+        "a configured FabThemeData.background_color must reach the mounted Material",
     );
     assert_eq!(
         material_node.get::<f64>("elevation"),
         Ok(12.0),
-        "a configured floating_action_button_theme.elevation must reach the enabled tier",
+        "a configured FabThemeData.elevation must reach the enabled tier",
     );
 }
 

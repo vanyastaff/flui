@@ -155,34 +155,29 @@ impl<'a> DragView<'a> {
     pub fn request(&self, format: &TransferFormat, limits: TransferLimits) -> Option<DragFetch> {
         if let Some(data) = self.data {
             let index = data.find(format)?;
-            let result = data
-                .serialized(index)
-                .and_then(|payload| within_limit(payload, limits));
-            return Some(DragFetch::new(TransferRequest::ready(result), None));
+            let result = data.serialized(index);
+            return Some(DragFetch::new(
+                TransferRequest::ready(result).enforce(limits),
+                None,
+            ));
         }
         let offer = self.offer?;
         let index = offer.find(format)?;
+        let descriptor = offer
+            .representations()
+            .get(usize::from(index.0))
+            .expect("BUG: offer find returned an unknown representation");
         let source = self.source?;
         let guard = self.in_flight.map(FetchGuard::new);
-        Some(DragFetch::new(
-            source.request(offer.id(), index, limits),
-            guard,
-        ))
+        let request = match descriptor.declared_len {
+            Some(actual) => match limits.check(actual) {
+                Ok(()) => source.request(offer.id(), index, limits),
+                Err(error) => TransferRequest::ready(Err(error)),
+            },
+            None => source.request(offer.id(), index, limits),
+        };
+        Some(DragFetch::new(request.enforce(limits), guard))
     }
-}
-
-fn within_limit(
-    payload: TransferPayload,
-    limits: TransferLimits,
-) -> Result<TransferPayload, TransferError> {
-    let actual = payload.byte_len();
-    if actual > limits.max_bytes {
-        return Err(TransferError::TooLarge {
-            actual,
-            limit: limits.max_bytes,
-        });
-    }
-    Ok(payload)
 }
 
 /// How the owner is woken from another thread: a request made from a drop

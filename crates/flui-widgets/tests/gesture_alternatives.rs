@@ -16,6 +16,7 @@ use flui_painting::styling::Color;
 use flui_painting::typography::TextDirection;
 use flui_platform::TargetPlatform;
 use flui_platform::keyboard::NamedKey;
+use flui_rendering::semantics::SemanticsAnchor;
 use flui_testing::a11y::{Action, Role};
 use flui_testing::replay::{MouseScript, PointerScript, TouchScript};
 use flui_testing::widgets::SharedSignal;
@@ -27,8 +28,8 @@ use flui_widgets::{
     CompanionRegistration, CompanionSpec, ControlPlacement, ControlSpec, Directionality,
     DismissDirection, Dismissible, Expanded, GestureAlternatives, GestureAlternativesError,
     GestureCommand, Intent, MenuRequest, MenuSpec, PageController, PageIntent, PageView, RawButton,
-    Row, Semantics, SemanticsAnchor, SingleActivator, SizedBox, SwipeAction, SwipeActions,
-    SwipeAlternative, SwipeEdge, Text, ViewportFraction,
+    Row, Semantics, SingleActivator, SizedBox, SwipeAction, SwipeActions, SwipeAlternative,
+    SwipeEdge, Text, ViewportFraction,
 };
 
 use crate::common::{lay_out, tight};
@@ -1280,7 +1281,7 @@ pub(crate) fn the_revealed_menu_control_draws_its_glyph_on_its_own_surface() {
     )))
     .expect("one labelled command");
     // A ring in colours nothing else paints, to find its bands among the ops.
-    let ring = flui_widgets::FocusRingStyle {
+    let ring = flui_objects::FocusRingStyle {
         outer: Color::rgb(200, 0, 0),
         inner: Color::rgb(0, 200, 0),
         outer_width: 2.0,

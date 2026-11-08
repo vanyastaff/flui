@@ -34,8 +34,8 @@ members = [
     "crates/flui-view",    # View/Element, BuildContext/LifecycleContext, reconciliation, signals
     "crates/flui-widgets", # Widget catalog
     "crates/flui-runtime", # Frame runtime a UI runtime drives (ADR-0083)
-    "crates/flui-sdk",     # Package-author surface (ADR-0088)
     "crates/flui-testing", # Headless UI runtime host, widget harness, substrate driver
+    "crates/flui-sdk",     # Package-author surface and optional package-test kit (ADR-0088)
 
     # H: hosts
     "crates/flui-native", # The core host: native and headless hosts
@@ -50,15 +50,12 @@ members = [
     "crates/flui-system",      # Capability crate: launcher and file dialogs (ADR-0154)
 
     # Examples and tools (tier-kind = "tool")
-    "examples/desktop_scene",                # Hot-reloadable scene plugin, loaded by HotReloadDriver
-    "examples/hot_reload_counter/types",
-    "examples/hot_reload_counter/logic",
-    "examples/hot_reload_counter/host",
-    "examples/hot_reload_lifecycle_fixture", # app_plugin! fixture flui-hot-reload's reload-lifecycle test loads
-    "examples/web_demo",                     # wasm32 cdylibs; build steps in examples/README.md
-    "examples/painting_demo",
-    "tools/desktop-mcp",                     # MCP server that drives desktop apps
-    "tools/xtask",                           # `cargo xtask`: gates, change scoping, release and weekly tooling
+    "crates/flui-engine/examples/desktop_scene",                    # Hot-reloadable scene plugin, loaded by HotReloadDriver
+    "crates/flui-engine/examples/painting_demo",                    # wasm32 cdylib; build steps in examples/README.md
+    "crates/flui-native/examples/web_demo",                         # wasm32 cdylib; build steps in examples/README.md
+    "crates/flui-hot-reload/examples/hot_reload_lifecycle_fixture", # app_plugin! fixture for reload-lifecycle tests
+    "tools/desktop-mcp",                                            # MCP server that drives desktop apps
+    "tools/xtask",                                                  # `cargo xtask`: gates, change scoping, release and weekly tooling
 ]
 # A vendored crate is built by the members that depend on it, under its own
 # lints, not as a member of FLUI's (third_party/README.md).
@@ -291,13 +288,13 @@ flui-objects = { path = "crates/flui-objects", version = "=0.2.0-dev" }
 
 # TEST SUPPORT — the deterministic headless frame driver (`pump_frame(dt)` over
 # the gesture arena + virtual clock) and the home for future test harness APIs.
-# Sits above flui-widgets, below flui-app, and is only ever a *dev*-dependency of
-# a shipped library: a normal edge would link the test driver into production.
+# Sits above flui-widgets and below the SDK. Ordinary libraries use it only on
+# dev edges; the SDK and facade admit it through their optional testing features.
 flui-testing = { path = "crates/flui-testing", version = "=0.2.0-dev" }
 
 # PACKAGE-AUTHOR SURFACE — what an official or third-party package builds on
-# instead of the internal crates (ADR-0088 §4). Its own `0.N` version, not the
-# train's: the SDK is Evolving.
+# instead of the internal crates (ADR-0088 §4), plus its optional testing kit.
+# Its own `0.N` version, not the train's: the SDK is Evolving.
 flui-sdk = { path = "crates/flui-sdk", version = "=0.1.0-dev" }
 
 # PLATFORM CONTRACTS — the capability traits and the window/input vocabulary,
@@ -335,7 +332,7 @@ tracing-wasm = "0.2"
 flui-log = { path = "crates/flui-log", version = "=0.2.0-dev" }
 
 # === Shared GPU/Window dependencies ===
-# Used by flui-engine, flui-app, and root examples
+# Used by flui-engine, flui-app, and facade GPU tests
 # GPU RENDERING (WGPU BACKEND) - Track latest stable (30.x).
 # Update policy: bump within the same minor on security/bug fixes; bump major after
 # verifying API migration on a dedicated branch (see docs/adr/ADR-0027-owner-affine-ui-realms.md).
@@ -377,9 +374,8 @@ futures-util = { version = "0.3", default-features = false, features = ["alloc"]
 
 # Recency order for each asset registry's byte-budgeted decoded-image cache
 # (`flui_assets::registry::images`), the one a frame probes synchronously
-# before starting a bridged image load. No time-based eviction. flui-assets'
-# Moka cache stores typed loaded results with configurable expiration; bridged
-# image loads use this cache instead.
+# before starting a bridged image load. No time-based eviction or second typed
+# cache: this is the registry's only completed-image store.
 lru = "0.19.0"
 
 
@@ -440,9 +436,6 @@ zip = { version = "9.0.4", default-features = false }
 # - lyon (tessellation)
 # - guillotiere (texture atlas)
 
-# CACHING - Used by flui-assets
-moka = { version = "0.12.16", features = ["future"] }
-
 # NETWORKING - the built-in HTTP client (ADR-0280)
 # The blocking HTTP stack of the native hosts without a system one (Linux and
 # the BSDs, flui-native's `http` feature). The TLS backend is rustls with the
@@ -462,7 +455,7 @@ cursor-icon = "1.2"
 
 # UTILITIES - Used by multiple crates
 bitflags = "2.10"
-# Percent-encoding of route path segments (`flui_widgets::RoutePath`): the
+# Percent-encoding of route path segments (`flui_view::RoutePath`): the
 # servo/rust-url implementation of the URL path-segment set. Already in the
 # graph through `url`.
 percent-encoding = "2"
@@ -728,18 +721,31 @@ categories = ["gui", "rendering::engine"]
 tier = "H"
 tier-kind = "stable"
 order = 4
-# The facade names official packages until they build on the SDK.
+# Standing aggregation permission; the packages remain train-aligned (ADR-0315).
 edge-exceptions = [
-    { to = "flui-cupertino", exit = "ADR-0088", reason = "the optional `cupertino` catalog re-export" },
-    { to = "flui-devtools", exit = "ADR-0088", reason = "the optional `devtools` re-export" },
-    { to = "flui-hot-reload", exit = "ADR-0311", reason = "the optional `hot-reload` feature" },
-    { to = "flui-material", exit = "ADR-0088", reason = "the optional `material` catalog re-export" },
+    { to = "flui-cupertino", exit = "ADR-0315", reason = "the optional `cupertino` catalog re-export" },
+    { to = "flui-devtools", exit = "ADR-0315", reason = "the optional `devtools` re-export" },
+    { to = "flui-hot-reload", exit = "ADR-0315", reason = "the optional `hot-reload` feature" },
+    { to = "flui-material", exit = "ADR-0315", reason = "the optional `material` catalog re-export" },
+]
+
+# The Stable facade closure includes every optional and target-conditional API.
+[package.metadata.flui.api-closure]
+exceptions = [{ crate = "accesskit", exit = "ADR-0089" }]
+targets = [
+    { target = "x86_64-unknown-linux-gnu", all-features = true },
+    { target = "x86_64-pc-windows-msvc", all-features = true },
+    { target = "aarch64-apple-darwin", all-features = true },
+    { target = "aarch64-apple-ios", all-features = true },
+    { target = "aarch64-linux-android", all-features = true },
+    { target = "wasm32-unknown-unknown", all-features = true },
 ]
 
 # cargo-shear reports these as unlinked: `tests/thread_boundary_ui.rs` hands the
 # trybuild inputs to rustc by glob.
 [package.metadata.cargo-shear]
 ignored-paths = [
+    "tests/ui/app/*.rs",
     "tests/ui/thread_boundary/*.rs",
     "tests/ui/thread_boundary/material/*.rs",
     "tests/ui/thread_boundary/cupertino/*.rs",
@@ -779,6 +785,7 @@ flui-cupertino = { path = "packages/flui-cupertino", version = "=0.2.0-dev", opt
 # Capability crates (ADR-0154 §8): the facade alone names them, each behind
 # the feature of its name under `flui::services`.
 flui-system = { path = "crates/flui-system", version = "=0.2.0-dev", optional = true }
+flui-assets = { version = "=0.2.0-dev", path = "crates/flui-assets", optional = true }
 
 [dev-dependencies]
 tempfile.workspace = true
@@ -793,11 +800,8 @@ flui-rendering = { path = "crates/flui-rendering", version = "=0.2.0-dev", featu
 flui-objects = { path = "crates/flui-objects", version = "=0.2.0-dev" }
 flui-interaction = { path = "crates/flui-interaction", version = "=0.2.0-dev" }
 
-# === Platform (for examples) ===
+# === Platform (the native-surface integration test) ===
 flui-native = { path = "crates/flui-native", version = "=0.2.0-dev" }
-
-# === Hot-Reload (for examples) ===
-flui-hot-reload = { path = "crates/flui-hot-reload", version = "=0.2.0-dev" }
 
 # === Test support (the widget harness `flui_testing::widgets` that
 # tests/agent_workflow.rs drives) ===
@@ -811,26 +815,23 @@ trybuild = { workspace = true }
 # NOTE: flui-material / flui-cupertino moved to [dependencies] above — the
 # facade's own src/lib.rs re-exports them as `flui::material`/`flui::cupertino`.
 
-# === Engine (for GPU examples and the readback test) ===
+# === Engine (for the GPU readback test) ===
 flui-engine = { path = "crates/flui-engine", version = "=0.2.0-dev", features = ["dx12"] }
 pollster = { workspace = true }
-# === Image encoding (scene_render example) ===
-image.workspace = true
 
 # === Logging ===
 tracing.workspace = true
-tracing-subscriber.workspace = true
 
 [features]
 testing = ["dep:flui-testing", "flui-rendering/testing"]
 animation-diagnostics = ["flui-animation/diagnostics"]
 # No catalog, tool or capability is on by default: an application names what it
-# uses (ADR-0088 §6). The base widget surface (`flui::widgets`, `flui::prelude`
-# minus the Material glob, `flui::run_app`) needs no feature at all;
+# uses (ADR-0315 §1). The base widget surface (`flui::widgets`,
+# `flui::prelude`, `flui::run_app`) needs no feature at all;
 # `cargo xtask facade-combos` builds every combination.
 default = []
 
-# === Catalogs and localization ===
+# === Catalogs ===
 # Each gates both the Cargo edge and the matching `flui::<module>` re-export.
 # There is deliberately no empty placeholder module when a feature is off:
 # absent means absent, so a missing feature is a name-resolution error at the
@@ -839,14 +840,9 @@ material = ["dep:flui-material"]
 cupertino = ["dep:flui-cupertino"]
 
 # === Capability crates (ADR-0154 §8) ===
-# Off by default like every capability (ADR-0088 §6): `system` gives
+# Off by default like every capability (ADR-0315 §1): `system` gives
 # `flui::services::system`, the providers of the launcher and the file dialogs.
 system = ["dep:flui-system"]
-# Deprecated and empty. The global widgets localizations now live in
-# `flui::widgets` and need no feature; this name stays only so a build that
-# still passes `flui/localizations` (the weekly workflow does) keeps resolving.
-# It is removed once nothing names it (ADR-0081).
-localizations = []
 
 # === GPU readback tests ===
 # Opt-in, and OFF by default on purpose. `tests/composited_layer_update_readback.rs`
@@ -860,8 +856,8 @@ gpu-readback-tests = []
 
 # === Unstable input surface ===
 # Additive. Re-exports the handle-less input capabilities
-# (`flui::platform::input_capabilities`: `InputCapabilities`, `Availability`,
-# `PointerKindSet`) and the second haptic tier (`flui::platform::haptics`,
+# (`flui::platform::input_capabilities`: `InputCapabilities`, `PointerKindSet`)
+# and the second haptic tier (`flui::platform::haptics`,
 # `flui::interaction::HapticsHandle`), until every backend passes its
 # conformance rows (ADR-0213 §5, ADR-0210 §9); `flui-sdk` has the matching
 # feature for packages. The platform crates build the types regardless.
@@ -895,6 +891,10 @@ devtools = ["dep:flui-devtools"]
 driver = ["flui-app/driver"]
 
 # === Core Features ===
+# Application-owned decoded file and network images. This gates both the
+# `flui::assets` module and the asset/network constructors on `Image`.
+assets = ["dep:flui-assets", "flui-assets/images", "flui-widgets/asset-images"]
+
 # Serialization of the value types, in every crate that owns some: geometry
 # (foundation, through painting), paint and style (painting), locale and
 # brightness (platform-api), velocity and gesture details (interaction), the

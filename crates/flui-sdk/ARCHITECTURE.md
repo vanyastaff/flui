@@ -13,11 +13,16 @@ topology is not part of any package manifest.
 - **Same items, not copies.** Every path is a `pub use` of the item itself: a whole crate
   (`pub use flui_widgets as widgets`) or one item (`pub use flui_painting::Canvas`). No wrapper,
   newtype or re-declared trait, so `flui_sdk::m::T` and `flui::m::T` are one type wherever the
-  facade has that path. `tests/surface.rs` (`the_re_exports_are_the_facades_types`) fails to
-  build if a curated item or a whole-module representative stops being the facade's type.
+  facade has that path. `tests/surface.rs` (`the_re_exports_are_the_facades_types`) expands each
+  identity assertion with the same path on both sides, so a matching name at a different path
+  does not satisfy it.
 - **Facade paths.** A module that the facade also has sits at the facade's path and holds a
   subset of it; an item the facade does not expose goes into an Evolving module, never into a
-  facade-named one.
+  facade-named one. Painting keeps the facade's `paint`, `styling` and `typography` submodules;
+  `TextInputPurpose` is under `platform::text_store`, and `Availability` is the ungated
+  `platform::Availability` in both surfaces. Pointer, gesture and hit-test vocabulary belongs to
+  `interaction`; semantics and scroll-state contracts belong to `rendering`. The whole `widgets`
+  re-export does not turn those owning-layer types into widget aliases or a second canonical path.
 - **The composition-root seam is private.** The SDK's `view` module shadows
   `flui_view::__runtime`. `trybuild_ui::ui_tests` in
   `tests/compiler_guards.rs` checks the exact E0603 diagnostic when a package
@@ -28,10 +33,12 @@ topology is not part of any package manifest.
   the `pub use`/`pub mod` lines of `src/lib.rs` with a pinned list, so adding an item is a
   visible decision, and its `measured` module names every measured item through its SDK path,
   so removing one fails to build.
-- **Evolving surface under the ceiling.** `pipeline` and `hooks` are Evolving. The four
-  `pipeline` items count toward the ceiling; `hooks` holds one (`FrameSnapshot`) and, like every
-  development hook, sits outside it. ADR-0088 §4 revisits the crate when its Evolving surface
-  beyond the hooks passes about thirty items.
+- **Evolving surface under the ceiling.** `pipeline` is Evolving and owns
+  render-catalog configuration values needed by official packages; moving them out of `widgets`
+  does not promote them to Stable facade paths. Development hooks added for ADR-0311 remain
+  outside the ceiling. ADR-0088 §4 revisits the crate when its other Evolving surface passes
+  about thirty items. There is no snapshot bridge or direct scheduler dependency: devtools reads
+  `foundation::diagnostics` and `foundation::observe` through the whole-foundation re-export.
 - **Own version.** `version = "0.N"`, not the workspace's: `cargo xtask workspace` refuses an
   evolving crate that inherits the version or leaves major 0.
 - **One train per graph.** The guard is not here: `flui-foundation` declares
@@ -97,29 +104,46 @@ their tests, measured at `431c8757c` (2026-09-26):
 | Crate | Leaf paths | SDK path |
 |---|---|---|
 | `flui_widgets` | 90 | `widgets` (whole crate) |
-| `flui_types` (split by owner, ADR-0098 §8) | 37 | `geometry` (the whole `flui_foundation::geometry` module); `painting::{Alignment, Clip, Paint, Path, Border, BorderRadius, BorderRadiusExt, BorderSide, BorderStyle, BoxDecoration, Color, FontWeight, TextDirection, TextStyle}` from `flui_painting`; `platform::{Brightness, Locale}` from `flui_platform` |
+| `flui_types` (split by owner, ADR-0098 §8) | 37 | `geometry` (the whole `flui_foundation::geometry` module); `painting::{Alignment, Paint}`; `painting::paint::{Clip, Path}`; `painting::styling::{Border, BorderRadius, BorderRadiusExt, BorderSide, BorderStyle, BoxDecoration, Color}`; `painting::typography::{FontWeight, TextDirection, TextStyle}` from `flui_painting`; `platform::{Brightness, Locale}` from `flui_platform` |
 | `flui_view` | 29 | `view` (glob of the whole crate, `__runtime` shadowed); its macros expand through `$crate::`, so they work through the re-export |
 | `flui_animation` | 19 | `animation` (whole crate) |
 | `flui_foundation` | 7 | `foundation` (whole crate) |
-| `flui_rendering` | 6 | `rendering::{RenderUpdateImpact, BoxConstraints, HitTestBehavior, BoxProtocol}`; `pipeline::Canvas` is `flui_painting::Canvas`, so `painting::Canvas` |
+| `flui_rendering` | 6 | `rendering::{RenderUpdateImpact, BoxConstraints, BoxProtocol}`; `interaction::HitTestBehavior`; `pipeline::Canvas` is `flui_painting::Canvas`, so `painting::Canvas` |
 | `flui_interaction` | 3 | `interaction::{DragDownDetails, FocusNode}` |
 | `flui_objects` | 3 | `pipeline::{PathClipConfiguration, RenderPhysicalShape, TranslationFraction}` |
 | `flui_rendering::view` | 1 | `pipeline::ScrollDirection`, read by the tab controller to tell a user scroll from a programmatic one; the facade has no path for it |
 | `flui_scheduler` | 1 | `LocalPostFrameHandle`, which `flui_view` already re-exports: `view::LocalPostFrameHandle` |
 
 `painting::DrawOp` is added for the packages' paint tests, the only place they name it.
-`painting::ClipOp` is added for `flui-material`'s ink, which clips its ripple anti-aliased.
-`painting::Shadow` and `painting::BlurSigma` are added because `TextStyle::shadows` and
+`painting::paint::ClipOp` is added for `flui-material`'s ink, which clips its ripple anti-aliased.
+`painting::styling::Shadow` and `painting::BlurSigma` are added because `TextStyle::shadows` and
 `DrawOp::ParagraphShadow` name them (ADR-0309): a package styles shadowed text and its paint
 tests read the shadow op.
-`painting::{TextDecoration, TextDecorationLines, TextDecorationStyle, DecorationThickness}`
+`painting::typography::{TextDecoration, TextDecorationLines, TextDecorationStyle, DecorationThickness}`
 are added because `TextStyle::decoration` names them (ADR-0310): a package underlines a link
 or strikes through a price.
-`flui-devtools`, measured the same way when it moved, adds `hooks::FrameSnapshot` and the
-`foundation::observe` paths (see Consumers). Their
-tests under `tests/` also use `flui-interaction`'s `testing` feature and `flui-testing` (whose
-`widgets` module is the widget harness); those stay dev-dependencies of the packages and are
-not SDK surface.
+`flui-devtools`, measured the same way when it moved, uses the `foundation::diagnostics` and
+`foundation::observe` paths (see Consumers).
+
+## Package tests and external parity
+
+The opt-in `testing` feature exposes the package-author test kit. It enables `flui-testing` on an
+optional normal edge and the `testing` features of interaction and rendering; with the feature off,
+the SDK's normal graph contains no headless driver. The SDK is tier K, order 7, immediately above
+`flui-testing` at order 6. Official packages enable this feature on their SDK dev-dependency instead
+of naming the internal test kits directly.
+
+`testing` mirrors `flui::testing` at matching paths. Evolving additions needed by package tests live
+in its own host, input and inspection exports, never under a facade-named path that does not exist.
+`tests/surface.rs` pins these paths and checks type identity for both the mirrored and additional
+surface.
+
+`tests/package_parity.rs` packages the SDK, unpacks the archive into a temporary external workspace,
+and resolves a version-only consumer against that unpacked manifest. `cargo metadata` must prove the
+resolved SDK path is the archive rather than this checkout. The consumer's own theme extension and
+capability plugin then run through `flui_sdk::testing`. This proves the packaged SDK extension and
+test surface; the all-official-package tarball build and rustdoc-JSON surface measurement remain the
+separate gaps named in `docs/gaps.md`.
 
 ## Consumers
 
@@ -135,20 +159,21 @@ not SDK surface.
   `animation::prelude`; tests reach `RenderId` as `foundation::RenderId`.
 - **`flui-devtools`** (`packages/flui-devtools`) builds on this crate alone: its normal
   dependencies are `flui-sdk` plus `parking_lot`, `serde`, `serde_json`, `tracing`,
-  `tracing-subscriber` and `web-time`. It needed one new item, `hooks::FrameSnapshot`, which
-  its timeline turns into Chrome-trace events; the facade has no scheduler module, so the item
-  sits in an Evolving module. Its inspector's ADR-0040 observation seam is
-  `foundation::observe` (`TreeObserver`, the four event types) and `foundation::RebuildReason`,
-  already inside the whole `foundation` re-export at the facade's path, so the `measured`
-  module names them and `src/lib.rs` gains no line for them.
+  `tracing-subscriber` and `web-time`. Frame consumers share `foundation::diagnostics::FrameSpan`
+  and its field constants with framework producers; the profiler, timeline and trace export read
+  one typed capture stream. Its inspector's ADR-0040 observation seam is `foundation::observe`
+  (`TreeObserver`, the four event types) and `foundation::RebuildReason`. All are already inside
+  the whole `foundation` re-export at the facade's path, so the `measured` module names them and
+  `src/lib.rs` gains no line for them. There is no SDK scheduler edge or `FrameSnapshot` bridge.
 
 The kind rule of `cargo xtask workspace` (ADR-0081 §3, ADR-0088 §2) keeps the three
 manifests on the SDK: an official package's normal and build dependencies are `flui-sdk` and
 the contract crates, and its self-test plants each way of leaving it.
 
 An item a package needs that is not here is added by ADR-0088 §4 (at the facade's path when the
-facade has one, otherwise in an Evolving module: `pipeline` for render internals, `hooks` for
-development hooks) with a line in `tests/surface.rs`'s pinned list.
+facade has one, otherwise in an Evolving module: `pipeline` for render internals) with a line in
+`tests/surface.rs`'s pinned list. A future development hook follows ADR-0311 when its real
+producer and consumer land, rather than reserving an empty module.
 
 ## The derives resolve through the SDK
 

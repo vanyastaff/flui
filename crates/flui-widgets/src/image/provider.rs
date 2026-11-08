@@ -409,15 +409,14 @@ impl ImageProviderError {
 /// unsupported format, …) happens before any bytes reach a decoder. Shared by
 /// `AssetImage` and `NetworkImage`.
 ///
-/// As of `flui-assets` 0.2, `ImageAsset::load`'s file-read branch wraps I/O
-/// errors — including "not found" — as `AssetError::LoadFailed`, not
-/// `AssetError::NotFound`, so [`SourceNotFound`](ImageProviderError::SourceNotFound)
-/// is not reachable through a missing local file today; a missing file
-/// currently surfaces as [`AssetLoadFailed`](ImageProviderError::AssetLoadFailed)
-/// with the underlying I/O message preserved. The match here still handles
-/// `NotFound` correctly so this stays honest if that upstream distinction is
-/// added later — the important, load-bearing guarantee this function makes
-/// today is only "never mislabel a load failure as `DecodeFailed`".
+/// `AssetRegistry::load_image` wraps file I/O errors — including "not found" —
+/// as `AssetError::LoadFailed`, not `AssetError::NotFound`, so
+/// [`SourceNotFound`](ImageProviderError::SourceNotFound) is not reachable
+/// through a missing local file today; a missing file surfaces as
+/// [`AssetLoadFailed`](ImageProviderError::AssetLoadFailed) with the underlying
+/// I/O message preserved. The match still handles `NotFound` correctly if a
+/// provider produces that distinction. The load-bearing guarantee is that a
+/// source failure is never mislabeled as widget-side `DecodeFailed`.
 #[cfg(feature = "asset-images")]
 impl ImageProviderError {
     pub(crate) fn from_asset_error(source: String, error: flui_assets::AssetError) -> Self {

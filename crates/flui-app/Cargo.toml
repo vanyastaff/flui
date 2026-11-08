@@ -56,11 +56,10 @@ web = []
 # Honest note (verified 2026-08-04): also no-op selectors — zero
 # `feature = "debug-overlay"` / `feature = "performance-overlay"` references
 # in this crate's src. There is one runtime toggle for this, not two:
-# `AppConfig::show_performance_overlay` (`app/config.rs`), which `runner.rs`
-# also calls "the debug overlay" in comments — it is the same overlay under
-# both names, controlled entirely at runtime, not by either compile-time
-# feature. Kept for the same forward-compatible-name reason as the platform
-# features above.
+# `AppConfig::show_performance_overlay` (`app/config.rs`), applied by each
+# backend bootstrap (`runner/{desktop,android,ios,web}.rs`). It is controlled
+# entirely at runtime, not by either compile-time feature. Kept for the same
+# forward-compatible-name reason as the platform features above.
 debug-overlay = []
 performance-overlay = []
 
@@ -73,7 +72,7 @@ native = []
 # The `testing` module (ADR-0243): an application run on the headless platform,
 # driven from the test thread. Off by default and not part of the release API;
 # this crate's tests turn it on through the dev-dependency on itself.
-testing = []
+testing = ["flui-native/testing"]
 
 # The driver agent (ADR-0239) in an optimized build: a debug build always
 # carries it. It serves the app's windows only when the launch names an
@@ -99,9 +98,9 @@ flui-engine = { path = "../flui-engine", version = "=0.2.0-dev" }
 # `native-capture`: the native journal a debug build serving the driver agent records
 # (ADR-0288 §11). Its code is compiled in debug builds only; a release build links none.
 flui-native = { path = "../flui-native", version = "=0.2.0-dev", features = ["native-capture"] }
-# Widget catalog: `UiRuntime::attach_root_widget*` takes a catalog view and
-# auto-wraps the root in the presentation scopes — `FocusRoot` plus
-# `VsyncScope`/`GestureArenaScope` from `flui_view::environment`. Zero new
+# Widget catalog: the runners add `app_root`'s standard keyboard policy before
+# `UiRuntime::attach_root_widget*` installs `FocusTreeRoot`,
+# `VsyncScope` and `GestureArenaScope` from `flui_view::environment`. Zero new
 # link-time deps: every crate flui-widgets pulls is already transitively
 # present in flui-app's closure (verified via `cargo tree -p flui-app`); this adds
 # only a direct Cargo edge + re-exports. The layering allows app → widgets

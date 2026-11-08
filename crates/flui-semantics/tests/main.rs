@@ -21,6 +21,8 @@ mod identifier;
 mod incremental_flush;
 #[path = "locate.rs"]
 mod locate;
+#[path = "platform_contract.rs"]
+mod platform_contract;
 #[path = "reading_order.rs"]
 mod reading_order;
 #[path = "route_change.rs"]

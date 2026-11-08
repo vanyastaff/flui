@@ -71,7 +71,13 @@ properties.
 7. **Tracing convention.**
    - Contract targets are `flui.<subsystem>`.
    - Spans are intervals and events are points.
-   - Frame-path fields are primitives only, with ids as `u64` and kinds as `&'static str`.
+   - `flui_foundation::diagnostics::FrameSpan` owns every framework frame, presentation, phase and
+     animation `(target, name)` identity. Producers use `target()`/`name()` and consumers use
+     `FrameSpan::of`; `FrameSpan::ALL` is the complete typed wire table. `LayoutRoot` is diagnostic
+     detail, not a profiler phase.
+   - Frame-path fields are primitives only, with ids as `u64` and kinds as `&'static str`. The
+     shared `RUNTIME`, `PRESENTATION` and `PERIOD_US` constants name partition and display-period
+     fields.
    - Phase spans (build, layout, compositing, paint, semantics, commit, submit) are DEBUG. Per-node
      spans are TRACE, at relayout-boundary and rebuild roots only.
    - Costly fields are gated behind `tracing::enabled!`, and nothing allocates while disabled.
@@ -80,7 +86,8 @@ properties.
      prefix matching.
 8. **One span stream.** A capture layer partitioned by runtime and presentation id feeds the
    profiler, the timeline (now a view over the capture), the driver and a Chrome/Perfetto export
-   with `X` events. Phases are matched by `(target, name)` from one table.
+   with `X` events. `CapturedSpan` retains its typed `FrameSpan`; `Phase` maps the profiler subset
+   rather than defining another wire table. Capture explicitly excludes `LayoutRoot` and events.
 9. **Creation sites.** `CreationSite` moves from `flui-animation` to `flui-foundation`. It is
    debug-only and zero-sized in release, and is filled by `#[track_caller]` constructors and builders
    (the widget derive generates them). Elements copy it at mount.
@@ -125,12 +132,19 @@ The survey records the reasons in full:
   - a value-mapping table;
   - a derive table, with trybuild fixtures for the unmapped-field error;
   - zero allocations for a counting sink (an allocation-counting test allocator);
-  - renderer and compact-`Display` goldens with round-trip tests.
+  - renderer and compact-`Display` goldens with round-trip tests;
+  - `frame_span_identities_are_the_exact_unique_wire_contract` pins all `FrameSpan::ALL` pairs,
+    uniqueness and round trips, including const classification;
+  - `frame_span_classification_requires_the_exact_target_and_name` rejects application,
+    unknown-name and cross-target lookalikes.
 - `flui-rendering` and `flui-objects`: the harness reads typed fields, and a diff of two layouts
   reports the moved node with its delta.
 - Tracing:
   - an `EnvFilter` test for the new targets and aliases;
-  - a phase-table test showing an app span named `paint` is not counted;
+  - `a_real_frame_reaches_the_profiler_with_its_phases` drives both build producers and the
+    painted commit/submit/semantics path, then checks typed captured identities;
+  - capture tests show an app span named `paint`, a `LayoutRoot` span and non-span events are not
+    admitted;
   - a disabled-level test showing the frame path allocates nothing;
   - recognizer spans entered or turned into events;
   - `element_rebuild` at TRACE with numeric ids.

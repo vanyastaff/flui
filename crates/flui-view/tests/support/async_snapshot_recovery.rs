@@ -1,9 +1,10 @@
 //! Real async builders publish before retiring caller-owned values.
-use flui_foundation::{AsyncSnapshot, ConnectionState};
 use flui_scheduler::{OwnerFrame, UpdateScheduler};
 use flui_view::{
     BuildOwner, ElementTree, ErrorView, RebuildReason, ViewExt,
-    element::{FutureBuilder, FutureFactory, SnapshotBuilder, StreamBuilder, StreamFactory},
+    element::{
+        AsyncSnapshot, FutureBuilder, FutureFactory, SnapshotBuilder, StreamBuilder, StreamFactory,
+    },
 };
 use futures_core::Stream;
 use parking_lot::Mutex;
@@ -19,6 +20,32 @@ use std::{
     },
     task::{Context, Poll, Waker},
 };
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SnapshotKind {
+    None,
+    Waiting,
+    Active,
+    Done,
+}
+
+fn snapshot_kind<T, E>(snapshot: &AsyncSnapshot<T, E>) -> SnapshotKind {
+    match snapshot {
+        AsyncSnapshot::None(_) => SnapshotKind::None,
+        AsyncSnapshot::Waiting(_) => SnapshotKind::Waiting,
+        AsyncSnapshot::Active(_) => SnapshotKind::Active,
+        AsyncSnapshot::Done(_) => SnapshotKind::Done,
+    }
+}
+
+fn last_result<T, E>(snapshot: &AsyncSnapshot<T, E>) -> Option<&Result<T, E>> {
+    match snapshot {
+        AsyncSnapshot::None(result)
+        | AsyncSnapshot::Waiting(result)
+        | AsyncSnapshot::Done(result) => result.as_ref(),
+        AsyncSnapshot::Active(result) => Some(result),
+    }
+}
 
 struct Value {
     number: i32,
@@ -79,13 +106,13 @@ fn send(mailbox: &Arc<Mutex<Mailbox>>, value: Value) {
         waker.wake();
     }
 }
-fn builder(log: &Arc<Mutex<Vec<(ConnectionState, i32)>>>) -> SnapshotBuilder<Value, ()> {
+fn builder(log: &Arc<Mutex<Vec<(SnapshotKind, i32)>>>) -> SnapshotBuilder<Value, ()> {
     let log = Arc::clone(log);
     Rc::new(move |_, snapshot: &AsyncSnapshot<Value, ()>| {
-        log.lock().push((
-            snapshot.connection_state(),
-            snapshot.data().map_or(-1, |value| value.number),
-        ));
+        let number = last_result(snapshot)
+            .and_then(|result| result.as_ref().ok())
+            .map_or(-1, |value| value.number);
+        log.lock().push((snapshot_kind(snapshot), number));
         ErrorView::new("snapshot leaf").boxed()
     })
 }
@@ -129,10 +156,7 @@ fn run_child(stream: bool, competing_value: bool, competing_wake: bool) {
     let root = tree.mount_root(&view, &mut owner.element_owner_mut());
     owner.schedule_build_for(root, 0, RebuildReason::InitialMount);
     owner.build_scope(&mut tree);
-    assert_eq!(
-        log.lock().last().copied(),
-        Some((ConnectionState::Waiting, 0))
-    );
+    assert_eq!(log.lock().last().copied(), Some((SnapshotKind::Waiting, 0)));
     if stream {
         owner_frame.pump_background(|| {}).expect("live owner turn");
     }
@@ -172,9 +196,9 @@ fn run_child(stream: bool, competing_value: bool, competing_wake: bool) {
         "publication queued a real build, without test dirtiness"
     );
     let published = if stream {
-        ConnectionState::Active
+        SnapshotKind::Active
     } else {
-        ConnectionState::Done
+        SnapshotKind::Done
     };
     assert_eq!(log.lock().last().copied(), Some((published, 1)));
 
@@ -188,6 +212,11 @@ fn run_child(stream: bool, competing_value: bool, competing_wake: bool) {
     tree.update(root, &next_view, &mut owner.element_owner_mut());
     owner.schedule_build_for(root, 0, RebuildReason::StateChange);
     owner.build_scope(&mut tree);
+    assert_eq!(
+        log.lock().last().copied(),
+        Some((SnapshotKind::Waiting, 1)),
+        "reconnect preserves the last result without reapplying initial data"
+    );
     if stream {
         owner_frame.pump_background(|| {}).expect("live owner turn");
     }
@@ -286,7 +315,15 @@ fn eager_disposal() {
         Some(2),
         Rc::new(|| Box::pin(std::future::ready(Ok(4)))),
         Rc::new(move |_, snapshot| {
-            observed.lock().push(snapshot.data().copied());
+            let value = match snapshot {
+                AsyncSnapshot::None(result)
+                | AsyncSnapshot::Waiting(result)
+                | AsyncSnapshot::Done(result) => result
+                    .as_ref()
+                    .and_then(|result| result.as_ref().ok().copied()),
+                AsyncSnapshot::Active(result) => result.as_ref().ok().copied(),
+            };
+            observed.lock().push(value);
             ErrorView::new("healthy eager leaf").boxed()
         }),
     );

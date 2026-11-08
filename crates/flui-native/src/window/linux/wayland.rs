@@ -91,8 +91,7 @@ pub(crate) mod configure {
 
     use flui_foundation::geometry::Size;
     use flui_platform::{
-        Availability, CapabilityAbsence, SizeConstraints, WindowCapabilities, WindowCommand,
-        WindowFrame, WindowMode,
+        Availability, SizeConstraints, WindowCapabilities, WindowCommand, WindowFrame, WindowMode,
     };
 
     /// `xdg_toplevel.state` values.
@@ -254,63 +253,57 @@ pub(crate) mod configure {
     }
 
     /// What a Wayland window honours, given what its compositor announced
-    /// (`None` before version 5, or before it said), why it cannot have its
-    /// frame turned on and off (`decoration`, `None` where it can), why it
-    /// cannot take a title bar of the application's (`app_title_bar`, `None`
-    /// where it can: its own frame keeps the margins, ADR-0286 §11) and
-    /// whether the compositor takes activation requests (`activation`):
-    /// the title, the size and its
-    /// limits, the modes the compositor offers, and closing. Resizability is
-    /// emulated with equal limits; placement, hiding, showing and position
-    /// are not the client's on Wayland. Activation is emulated: the window
-    /// asks with a token, and the compositor decides from it whether the
-    /// window takes the focus or only asks for the user's attention
-    /// (`activation`). A window the compositor tiles and neither maximized
-    /// nor made fullscreen (`states`) takes the size the compositor gives
-    /// it: the client's size is no request it honours. A compositor that
-    /// announces no `wm_capabilities` (before version 5; sway 1.9) is taken
-    /// to offer every mode, as the window cannot know which it ignores.
+    /// (`None` before version 5, or before it said), whether its frame cannot
+    /// be turned on and off (`decoration_unavailable`), whether it cannot take
+    /// a title bar of the application's (`app_title_bar_unavailable`: its own
+    /// frame keeps the margins, ADR-0286 §11) and whether the compositor takes
+    /// activation requests (`activation`): the title, the size and its limits,
+    /// the modes the compositor offers, and closing. Resizability is emulated
+    /// with equal limits; placement, hiding, showing and position are not the
+    /// client's on Wayland. Activation is emulated: the window asks with a
+    /// token, and the compositor decides from it whether the window takes the
+    /// focus or only asks for the user's attention (`activation`). A window
+    /// the compositor tiles and neither maximized nor made fullscreen (`states`)
+    /// takes the size the compositor gives it: the client's size is no request
+    /// it honours. A compositor that announces no `wm_capabilities` (before
+    /// version 5; sway 1.9) is taken to offer every mode, as the window cannot
+    /// know which it ignores.
     pub(crate) fn capabilities(
         announced: Option<WmCapabilities>,
-        decoration: Option<CapabilityAbsence>,
-        app_title_bar: Option<CapabilityAbsence>,
+        decoration_unavailable: bool,
+        app_title_bar_unavailable: bool,
         states: ToplevelStates,
         activation: Activation,
     ) -> WindowCapabilities {
         let mut capabilities = WindowCapabilities::ALL
             // The text-input protocol reports no keyboard geometry, and a
             // desktop compositor keeps no edges for system gestures.
-            .without_keyboard_inset(CapabilityAbsence::NotOnThisPlatform)
-            .without_system_gestures(CapabilityAbsence::NotOnThisPlatform)
-            .unavailable(
-                &WindowCommand::SetPosition(flui_foundation::geometry::Point::new(0.0, 0.0)),
-                CapabilityAbsence::NotOnThisPlatform,
-            )
-            .unavailable(&WindowCommand::Hide, CapabilityAbsence::NotOnThisPlatform)
-            .unavailable(&WindowCommand::Show, CapabilityAbsence::NotOnThisPlatform)
-            .unavailable(
-                &WindowCommand::SetMaterial(flui_platform::WindowMaterial::System),
-                CapabilityAbsence::NotOnThisPlatform,
-            );
+            .without_keyboard_inset()
+            .without_system_gestures()
+            .unavailable(&WindowCommand::SetPosition(
+                flui_foundation::geometry::Point::new(0.0, 0.0),
+            ))
+            .unavailable(&WindowCommand::Hide)
+            .unavailable(&WindowCommand::Show)
+            .unavailable(&WindowCommand::SetMaterial(
+                flui_platform::WindowMaterial::System,
+            ));
         match activation {
             Activation::Offered => capabilities.activates = Availability::Emulated,
             Activation::Missing => {
-                capabilities = capabilities
-                    .unavailable(&WindowCommand::Activate, CapabilityAbsence::NotOnThisDevice);
+                capabilities = capabilities.unavailable_on_this_device(&WindowCommand::Activate);
             }
         }
-        if let Some(absence) = decoration {
-            capabilities =
-                capabilities.unavailable(&WindowCommand::SetFrame(WindowFrame::System), absence);
+        if decoration_unavailable {
+            capabilities = capabilities
+                .unavailable_on_this_device(&WindowCommand::SetFrame(WindowFrame::System));
         }
-        if let Some(absence) = app_title_bar {
-            capabilities = capabilities.without_app_title_bar(absence);
+        if app_title_bar_unavailable {
+            capabilities = capabilities.without_app_title_bar_on_this_device();
         }
         if states.tiled_by_compositor() {
-            capabilities = capabilities.unavailable(
-                &WindowCommand::SetSize(Size::new(1.0, 1.0)),
-                CapabilityAbsence::NotOnThisDevice,
-            );
+            capabilities = capabilities
+                .unavailable_on_this_device(&WindowCommand::SetSize(Size::new(1.0, 1.0)));
         }
         capabilities.sets_resizable = Availability::Emulated;
         capabilities.observes_position = Availability::Unavailable;
@@ -319,22 +312,16 @@ pub(crate) mod configure {
         capabilities.frame_rate_hint = Availability::Unavailable;
         if let Some(announced) = announced {
             if !announced.maximize {
-                capabilities = capabilities.unavailable(
-                    &WindowCommand::SetMode(WindowMode::Maximized),
-                    CapabilityAbsence::NotOnThisDevice,
-                );
+                capabilities = capabilities
+                    .unavailable_on_this_device(&WindowCommand::SetMode(WindowMode::Maximized));
             }
             if !announced.fullscreen {
-                capabilities = capabilities.unavailable(
-                    &WindowCommand::SetMode(WindowMode::Fullscreen),
-                    CapabilityAbsence::NotOnThisDevice,
-                );
+                capabilities = capabilities
+                    .unavailable_on_this_device(&WindowCommand::SetMode(WindowMode::Fullscreen));
             }
             if !announced.minimize {
-                capabilities = capabilities.unavailable(
-                    &WindowCommand::SetMode(WindowMode::Minimized),
-                    CapabilityAbsence::NotOnThisDevice,
-                );
+                capabilities = capabilities
+                    .unavailable_on_this_device(&WindowCommand::SetMode(WindowMode::Minimized));
             }
         }
         capabilities
@@ -629,29 +616,23 @@ pub(crate) mod configure {
         #[test]
         fn the_capabilities_follow_the_compositor() {
             let free = ToplevelStates::default();
-            let unannounced = capabilities(
-                None,
-                Some(CapabilityAbsence::NotOnThisDevice),
-                Some(CapabilityAbsence::NotOnThisDevice),
-                free,
-                Activation::Missing,
-            );
+            let unannounced = capabilities(None, true, true, free, Activation::Missing);
             assert!(unannounced.maximizes.is_available());
             assert!(unannounced.minimizes.is_available());
             assert!(unannounced.sets_size.is_available());
             assert_eq!(unannounced.sets_resizable, Availability::Emulated);
             assert_eq!(
-                capabilities(None, None, None, free, Activation::Missing).sets_frame,
+                capabilities(None, false, false, free, Activation::Missing).sets_frame,
                 Availability::Native,
                 "a compositor that draws frames takes the command"
             );
             assert_eq!(
-                capabilities(None, None, None, free, Activation::Offered).activates,
+                capabilities(None, false, false, free, Activation::Offered).activates,
                 Availability::Emulated,
                 "the compositor decides what an activation request does"
             );
             assert!(
-                capabilities(None, None, None, free, Activation::Missing)
+                capabilities(None, false, false, free, Activation::Missing)
                     .app_title_bar
                     .is_available(),
                 "a window that draws its own margins takes the application's title bar"
@@ -692,8 +673,8 @@ pub(crate) mod configure {
             }
             let announced = capabilities(
                 Some(WmCapabilities::decode(&array(&[CAN_FULLSCREEN]))),
-                None,
-                None,
+                false,
+                false,
                 free,
                 Activation::Offered,
             );
@@ -717,7 +698,13 @@ pub(crate) mod configure {
         fn a_tiled_window_takes_no_size() {
             let tiled = ToplevelStates::decode(&array(&[TILED_LEFT, ACTIVATED]));
             let refused = WindowCommand::SetSize(Size::new(640.0, 480.0))
-                .admit(&capabilities(None, None, None, tiled, Activation::Missing))
+                .admit(&capabilities(
+                    None,
+                    false,
+                    false,
+                    tiled,
+                    Activation::Missing,
+                ))
                 .expect_err("the tiling holds the size");
             assert_eq!(
                 refused.unsupported().map(|unsupported| unsupported.reason),
@@ -725,13 +712,13 @@ pub(crate) mod configure {
             );
             let maximized = ToplevelStates::decode(&array(&[TILED_LEFT, MAXIMIZED]));
             assert!(
-                capabilities(None, None, None, maximized, Activation::Missing)
+                capabilities(None, false, false, maximized, Activation::Missing)
                     .sets_size
                     .is_available()
             );
             let floating = ToplevelStates::decode(&array(&[ACTIVATED]));
             assert!(
-                capabilities(None, None, None, floating, Activation::Missing)
+                capabilities(None, false, false, floating, Activation::Missing)
                     .sets_size
                     .is_available()
             );
@@ -1082,7 +1069,7 @@ pub(crate) mod presented {
 
     use std::time::Duration;
 
-    use flui_platform::{CapabilityAbsence, WindowCapabilities};
+    use flui_platform::WindowCapabilities;
 
     /// The time a `presented` event carries, from its three words: the
     /// seconds split into high and low halves, and the nanoseconds.
@@ -1099,13 +1086,13 @@ pub(crate) mod presented {
     /// where it offers no `wp_presentation`, a window learns nothing of when
     /// its frames are shown.
     pub(crate) const fn reported(
-        capabilities: WindowCapabilities,
+        capabilities: &WindowCapabilities,
         offered: bool,
     ) -> WindowCapabilities {
         if offered {
-            capabilities
+            *capabilities
         } else {
-            capabilities.without_presentation_feedback(CapabilityAbsence::NotOnThisDevice)
+            capabilities.without_presentation_feedback_on_this_device()
         }
     }
 
@@ -1135,9 +1122,9 @@ pub(crate) mod presented {
         /// report, for want of the device's compositor, not the platform.
         #[test]
         fn the_report_follows_the_compositor() {
-            let offered = reported(WindowCapabilities::ALL, true);
+            let offered = reported(&WindowCapabilities::ALL, true);
             assert_eq!(offered.presentation_feedback(), Ok(Availability::Native));
-            let missing = reported(WindowCapabilities::ALL, false);
+            let missing = reported(&WindowCapabilities::ALL, false);
             assert_eq!(
                 missing
                     .presentation_feedback()
@@ -1652,10 +1639,10 @@ mod toplevel {
                 hovered: self.hovered,
                 active: states.activated,
                 capabilities: presented::reported(
-                    capabilities(
+                    &capabilities(
                         applied.told.wm,
-                        decoration.absence(),
-                        decoration.app_title_bar_absence(),
+                        decoration.frame_unavailable(),
+                        decoration.app_title_bar_unavailable(),
                         states,
                         self.activation,
                     ),
@@ -2907,10 +2894,10 @@ mod toplevel {
                 answered: false,
             };
             presented::reported(
-                capabilities(
+                &capabilities(
                     None,
-                    decoration.absence(),
-                    decoration.app_title_bar_absence(),
+                    decoration.frame_unavailable(),
+                    decoration.app_title_bar_unavailable(),
                     ToplevelStates::default(),
                     if owner.offers_activation() {
                         Activation::Offered

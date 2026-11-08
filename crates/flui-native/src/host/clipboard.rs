@@ -34,6 +34,14 @@ pub trait NativeClipboard {
     }
 }
 
+#[cfg(any(windows, target_os = "android", target_arch = "wasm32", test))]
+mod encoding;
+
+#[cfg(target_os = "android")]
+pub(crate) use encoding::decoded_mutf8_len;
+#[cfg(any(windows, target_arch = "wasm32"))]
+pub(crate) use encoding::decoded_utf16_len;
+
 /// The most bytes of text a clipboard or primary-selection read answers, on
 /// every host: past it the read answers
 /// [`ClipboardError::TooLarge`](flui_platform::ClipboardError::TooLarge).
@@ -73,12 +81,27 @@ pub(crate) fn host_text(text: String) -> ClipboardRead {
     Ok(Some(Arc::from(text)))
 }
 
-/// Refuse text the host holds as `units` UTF-16 code units (an `NSString`, a
-/// JavaScript or Java string) before it is copied out, when it is past
-/// [`MAX_TEXT`] on length alone: each unit takes at least one byte of UTF-8.
-/// A host calls this before its copy and hands the copy to [`host_text`],
-/// which measures text within the bound exactly, so the answer is the same on
-/// every host and text a read refuses for its length is never copied.
+/// Admit a decoded host string only while its UTF-8 form fits [`MAX_TEXT`].
+#[cfg(any(
+    windows,
+    target_os = "android",
+    target_os = "macos",
+    target_os = "ios",
+    target_arch = "wasm32",
+    test
+))]
+fn admit_utf8(bytes: usize) -> Result<(), flui_platform::ClipboardError> {
+    if bytes > MAX_TEXT {
+        tracing::warn!(
+            bytes,
+            "a clipboard read past {MAX_TEXT} bytes was refused before its Rust copy"
+        );
+        return Err(flui_platform::ClipboardError::TooLarge);
+    }
+    Ok(())
+}
+
+/// The cheap UTF-16 barrier, before a host makes even its own string copy.
 #[cfg(any(
     target_os = "android",
     target_os = "macos",
@@ -86,15 +109,34 @@ pub(crate) fn host_text(text: String) -> ClipboardRead {
     target_arch = "wasm32",
     test
 ))]
-pub(crate) fn admit_utf16(units: usize) -> Result<(), flui_platform::ClipboardError> {
+pub(crate) fn admit_utf16_units(units: usize) -> Result<(), flui_platform::ClipboardError> {
     if units > MAX_TEXT {
         tracing::warn!(
             units,
-            "a clipboard read past {MAX_TEXT} bytes was refused before its copy"
+            "a clipboard read past {MAX_TEXT} UTF-16 units was refused before its copy"
         );
         return Err(flui_platform::ClipboardError::TooLarge);
     }
     Ok(())
+}
+
+/// Refuse text the host holds as `units` UTF-16 code units (an `NSString`, a
+/// JavaScript or Java string) before it is copied into Rust. The unit count is
+/// a cheap first barrier; `decoded_len` then measures the exact UTF-8 result in
+/// the host's representation, without allocating the Rust [`String`].
+#[cfg(any(
+    target_os = "android",
+    target_os = "macos",
+    target_os = "ios",
+    target_arch = "wasm32",
+    test
+))]
+pub(crate) fn admit_utf16(
+    units: usize,
+    decoded_len: impl FnOnce() -> Result<usize, flui_platform::ClipboardError>,
+) -> Result<(), flui_platform::ClipboardError> {
+    admit_utf16_units(units)?;
+    admit_utf8(decoded_len()?)
 }
 
 /// A clipboard the operating system reads synchronously: its read answers
@@ -244,7 +286,9 @@ impl<C: NativePrimarySelection + ?Sized> NativePrimarySelection for Arc<C> {
     )
 ))]
 mod tests {
-    use flui_platform::ClipboardError;
+    use std::cell::Cell;
+
+    use flui_platform::{ClipboardError, ClipboardRead};
 
     use super::{MAX_TEXT, admit_utf16, host_text};
 
@@ -261,23 +305,41 @@ mod tests {
         assert_eq!(host_text(past), Err(ClipboardError::TooLarge));
     }
 
-    /// Text a host holds as UTF-16 is refused on its length before a copy
-    /// past the limit is made; text within it is measured exactly as UTF-8,
-    /// so two-byte characters that fit as units but not as bytes are refused
-    /// once copied.
+    /// A host measures its UTF-16 text before copying it into Rust; a copy
+    /// callback that runs for text past the byte limit is the defect.
     #[test]
     fn utf16_text_past_the_limit_is_refused_before_its_copy() {
-        assert_eq!(admit_utf16(MAX_TEXT + 1), Err(ClipboardError::TooLarge));
-        assert_eq!(admit_utf16(MAX_TEXT), Ok(()));
+        fn read_utf16(
+            units: usize,
+            decoded_len: impl FnOnce() -> Result<usize, ClipboardError>,
+            copy: impl FnOnce() -> String,
+        ) -> ClipboardRead {
+            admit_utf16(units, decoded_len)?;
+            host_text(copy())
+        }
 
+        let copied = Cell::new(false);
         let units = MAX_TEXT / 2 + 1;
-        assert_eq!(admit_utf16(units), Ok(()));
-        assert_eq!(
-            host_text("é".repeat(units)),
-            Err(ClipboardError::TooLarge),
-            "admitted on units, refused on its {} bytes",
-            2 * units
+        let read = read_utf16(
+            units,
+            || Ok(2 * units),
+            || {
+                copied.set(true);
+                "é".repeat(units)
+            },
         );
+        assert_eq!(read, Err(ClipboardError::TooLarge));
+        assert!(!copied.get(), "the refused text was copied into Rust");
+
+        let measured = Cell::new(false);
+        assert_eq!(
+            admit_utf16(MAX_TEXT + 1, || {
+                measured.set(true);
+                Ok(0)
+            }),
+            Err(ClipboardError::TooLarge)
+        );
+        assert!(!measured.get(), "the unit barrier did not run first");
     }
 }
 

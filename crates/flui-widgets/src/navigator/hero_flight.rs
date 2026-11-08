@@ -51,6 +51,7 @@ use flui_animation::{
 };
 use flui_foundation::geometry::Rect;
 use flui_foundation::{ChangeNotifier, Listenable, RenderId};
+use flui_objects::StackFit;
 use flui_scheduler::PostFrameHandle;
 use flui_view::prelude::*;
 use flui_view::{AnimatedView, BoxedView, ViewExt, impl_animated_view};
@@ -60,7 +61,7 @@ use super::hero_controller::{FlightDirection, HeroFlightManifest};
 use super::hero_tags::{HeroTags, TagSeat};
 use super::lifecycle::{RetiredValues, Terminal};
 use super::navigator::UserGestureSignal;
-use crate::{IgnorePointer, Opacity, Positioned, Stack, StackFit};
+use crate::{IgnorePointer, Opacity, Positioned, Stack};
 use crate::{InsertPosition, OverlayEntry, OverlayHandle};
 
 /// The manifest-derived facts a divert can replace: which way the

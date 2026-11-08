@@ -14,7 +14,7 @@ use flui_sdk::interaction::{
     GestureRecognizer, MotionRole, PointerDispatch, PointerEvent, PointerEventExt, PointerKind,
     PointerKindSet, PrimaryContact,
 };
-use flui_sdk::painting::Color;
+use flui_sdk::painting::styling::Color;
 use flui_sdk::rendering::BoxConstraints;
 use flui_sdk::widgets::{
     ColoredBox, GestureRecognizerFactory, RawGestureDetector, RecognizerContext,

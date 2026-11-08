@@ -517,7 +517,7 @@ pub(crate) struct AppRuntime {
 
 impl AppRuntime {
     /// Construct the composition root: cheap, side-effect-free.
-    /// Called as the `APP_RUNTIME` TLS slot's own initializer (`runner.rs`),
+    /// Called as the `APP_RUNTIME` TLS slot's own initializer (`runner/host.rs`),
     /// so simply *touching* the thread-local -- for any reason, on any
     /// thread -- can never itself run singleton construction or full
     /// system-font enumeration. Real service resolution happens only when a
@@ -1114,8 +1114,8 @@ impl AppRuntime {
         )),
         expect(
             dead_code,
-            reason = "runner.rs::install_exit_policy_hook (its one production caller) is \
-                      desktop-only -- android/wasm32 have no caller outside this crate's own tests"
+            reason = "runner/host.rs::install_exit_policy_hook (its one production caller) is \
+                      desktop-only -- android/ios/wasm32 have no caller outside this crate's own tests"
         )
     )]
     pub(super) fn should_exit(&mut self, policy: ExitPolicy) -> bool {
@@ -1203,7 +1203,7 @@ impl AppRuntime {
     /// host font feed. Each UI runtime has its own weak-window wake instead.
     /// This method stays a direct, same-thread convenience —
     /// exercised today by this module's own tests and the ordering proof in
-    /// `runner.rs`'s `desktop_bootstrap_stores_the_window_before_the_first_synchronous_redraw_observes_it`.
+    /// `runner/mod.rs`'s `desktop_bootstrap_stores_the_window_before_the_first_synchronous_redraw_observes_it`.
     #[cfg_attr(
         not(test),
         expect(

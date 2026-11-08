@@ -1,8 +1,8 @@
 //! Widget-level coverage for the accessibility semantics wrappers.
 
 use crate::common::{lay_out, loose};
-use flui_rendering::semantics::{ActionCall, ActionDecodeError, SemanticsAction};
-use flui_widgets::{MergeSemantics, Semantics, SemanticsRole, SizedBox};
+use flui_rendering::semantics::{ActionCall, ActionDecodeError, SemanticsAction, SemanticsRole};
+use flui_widgets::{MergeSemantics, Semantics, SizedBox};
 
 struct CollectionChanges;
 impl accesskit_consumer::TreeChangeHandler for CollectionChanges {
@@ -271,11 +271,11 @@ pub(crate) fn collection_consumer_uses_member_totals_for_separated_and_composed_
                     Rc::new(|index| index.is_multiple_of(2).then_some(index / 2)),
                     3,
                 )
-                .composed_at(0, flui_widgets::SetSize::Known(5)),
+                .composed_at(0, flui_rendering::semantics::SetSize::Known(5)),
             );
             second = second.semantics(
                 SemanticSetMapping::one_to_one(ItemCount::Exact(2))
-                    .composed_at(3, flui_widgets::SetSize::Known(5)),
+                    .composed_at(3, flui_rendering::semantics::SetSize::Known(5)),
             );
         }
         Viewport::new((first, second))
@@ -690,8 +690,9 @@ pub(crate) fn flow_repaint_and_delegate_replacement_update_accessible_children()
 pub(crate) fn custom_painter_regions_follow_semantics_only_updates_and_layout_size() {
     use flui_foundation::geometry::{Point, Rect, Size};
     use flui_painting::Canvas;
+    use flui_rendering::delegates::CustomPainter;
     use flui_rendering::semantics::{SemanticsConfiguration, SemanticsRegion, SemanticsRegionKey};
-    use flui_widgets::{CustomPaint, CustomPainter};
+    use flui_widgets::CustomPaint;
 
     #[derive(Debug)]
     struct Painter {
@@ -756,18 +757,18 @@ pub(crate) fn custom_painter_regions_follow_semantics_only_updates_and_layout_si
     }
 }
 
-/// A field's text runs keep their identities while their text stays, take
-/// new ones when it changes, and, once the identity space is exhausted, the
-/// field is published without runs or selection rather than with runs it
-/// cannot name.
-pub(crate) fn a_fields_runs_keep_their_identities_until_their_text_changes() {
+/// A field's runs keep their identities through edits, including after the
+/// identity space is exhausted. Only a new ordinal needs another identity;
+/// without one, the whole run and selection model is withheld.
+pub(crate) fn a_fields_runs_keep_their_identities_through_text_edits() {
     use flui_foundation::geometry::{Point, Rect, Size};
     use flui_painting::Canvas;
+    use flui_rendering::delegates::CustomPainter;
     use flui_rendering::semantics::{
         SemanticsConfiguration, SemanticsRegion, SemanticsRegionKey, TextContent, TextRun,
         TextRunParts, TextRunPosition, TextRunSelection,
     };
-    use flui_widgets::{CustomPaint, CustomPainter};
+    use flui_widgets::CustomPaint;
 
     /// A custom-drawn field: one run per line, each character ten wide.
     #[derive(Debug)]
@@ -791,7 +792,7 @@ pub(crate) fn a_fields_runs_keep_their_identities_until_their_text_changes() {
                         text,
                         start,
                         line,
-                        flui_widgets::SemanticsTextDirection::Ltr,
+                        flui_rendering::semantics::TextDirection::Ltr,
                         Rect::from_origin_size(
                             Point::new(0.0, 10.0 * line as f64),
                             Size::new(10.0 * text.len() as f64, 10.0),
@@ -834,14 +835,27 @@ pub(crate) fn a_fields_runs_keep_their_identities_until_their_text_changes() {
     let mut laid = lay_out(view("ab\ncd"), loose(200.0));
     laid.enable_semantics();
     laid.tick();
-    let runs = |laid: &crate::common::LaidOut| {
-        let tree = laid.a11y_tree().expect("semantics enabled");
-        let field = tree.find_by_label("Name").expect("the field is published");
-        let selection = field.raw().text_selection().copied();
-        (field.child_ids().to_vec(), selection)
+    let consumer = collection_consumer(&mut laid);
+    let runs = || {
+        let consumer = consumer.lock().expect("consumer lock");
+        let state = consumer.state();
+        let mut pending = vec![state.root()];
+        let field = loop {
+            let node = pending.pop().expect("the field is published");
+            if node.label().as_deref() == Some("Name") {
+                break node;
+            }
+            pending.extend(node.children());
+        };
+        (
+            field.data().children().to_vec(),
+            field.data().text_selection().copied(),
+            field.data().value().unwrap_or_default().to_owned(),
+        )
     };
-    let (first, selection) = runs(&laid);
+    let (first, selection, text) = runs();
     assert_eq!(first.len(), 2, "one run per line");
+    assert_eq!(text, "ab\ncd");
     assert_eq!(
         selection.map(|selection| selection.focus.node),
         Some(first[0]),
@@ -849,24 +863,48 @@ pub(crate) fn a_fields_runs_keep_their_identities_until_their_text_changes() {
     );
 
     laid.pump_widget(view("ab\ncd"));
-    assert_eq!(runs(&laid).0, first, "the same text keeps its runs");
+    assert_eq!(runs().0, first, "the same text keeps its runs");
 
-    laid.pump_widget(view("ab\nce"));
-    let edited = runs(&laid).0;
-    assert_eq!(edited[0], first[0], "an unchanged line keeps its run");
-    assert_ne!(edited[1], first[1], "an edited line is a new run");
+    laid.pump_widget(view("a\nce"));
+    let (edited, selection, text) = runs();
+    assert_eq!(edited, first, "both edited lines keep their runs");
+    assert_eq!(text, "a\nce", "the consumer received the edit");
+    assert_eq!(
+        selection.map(|selection| selection.focus.node),
+        Some(first[0]),
+        "the selection follows the same run"
+    );
 
     laid.pipeline_owner()
         .with_mut(flui_rendering::pipeline::PipelineOwner::exhaust_semantics_identities);
-    laid.pump_widget(view("ab\ncf"));
-    let (withheld, selection) = runs(&laid);
+    for text in ["x\nyz", "mn\nq", "ab\ncf"] {
+        laid.pump_widget(view(text));
+        let (edited, selection, delivered) = runs();
+        assert_eq!(edited, first, "same-count edits allocate no identities");
+        assert_eq!(delivered, text, "the consumer received every edit");
+        assert_eq!(
+            selection.map(|selection| selection.focus.node),
+            Some(first[0]),
+            "the selection remains publishable"
+        );
+    }
+
+    laid.pump_widget(view("one\ntwo\nthree"));
+    let (withheld, selection, _) = runs();
     assert!(
         withheld.is_empty(),
-        "no identity for the edited line: no runs"
+        "a new ordinal cannot be named: no runs"
     );
-    assert!(
-        selection.is_none(),
-        "and no selection on a run not published"
+    assert!(selection.is_none(), "and no selection without runs");
+
+    laid.pump_widget(view("last\nok"));
+    let (restored, selection, delivered) = runs();
+    assert_eq!(restored, first, "the existing ordinals need no new ids");
+    assert_eq!(delivered, "last\nok");
+    assert_eq!(
+        selection.map(|selection| selection.focus.node),
+        Some(first[0]),
+        "their selection returns with them"
     );
 }
 
@@ -1612,11 +1650,8 @@ pub(crate) fn queued_directional_actions_and_numeric_values_reach_the_frame_prod
             .child(SizedBox::new(40.0, 20.0))
     });
     let (mut laid, _, node_id) = pump_labelled(expanded.view());
-    let listener = laid
-        .accessibility_action_listener()
-        .expect("production platform listener");
-    listener(request(Action::Expand, node_id, None));
-    listener(request(Action::Expand, node_id, None));
+    laid.request_accessibility_action(request(Action::Expand, node_id, None));
+    laid.request_accessibility_action(request(Action::Expand, node_id, None));
     laid.tick();
     assert_eq!(expanded.value(), Ok(1), "two expands must not toggle twice");
     let tree = laid.a11y_tree().expect("published expanded frame");
@@ -1624,12 +1659,12 @@ pub(crate) fn queued_directional_actions_and_numeric_values_reach_the_frame_prod
     assert_eq!(node.raw().is_expanded(), Some(true));
     assert!(node.supports_action(Action::Collapse));
     assert!(!node.supports_action(Action::Expand));
-    listener(request(Action::Collapse, node_id, None));
-    listener(request(Action::Collapse, node_id, None));
+    laid.request_accessibility_action(request(Action::Collapse, node_id, None));
+    laid.request_accessibility_action(request(Action::Collapse, node_id, None));
     laid.tick();
     assert_eq!(expanded.value(), Ok(0), "two collapses remain collapsed");
-    listener(request(Action::Click, node_id, None));
-    listener(request(Action::Expand, node_id, None));
+    laid.request_accessibility_action(request(Action::Click, node_id, None));
+    laid.request_accessibility_action(request(Action::Expand, node_id, None));
     laid.tick();
     assert_eq!(
         expanded.value(),
@@ -1652,10 +1687,7 @@ pub(crate) fn queued_directional_actions_and_numeric_values_reach_the_frame_prod
             .child(SizedBox::new(40.0, 20.0))
     });
     let (mut laid, _, node_id) = pump_labelled(numeric.view());
-    let listener = laid
-        .accessibility_action_listener()
-        .expect("production platform listener");
-    listener(request(
+    laid.request_accessibility_action(request(
         Action::SetValue,
         node_id,
         Some(ActionData::NumericValue(2.375)),
@@ -1676,7 +1708,7 @@ pub(crate) fn queued_directional_actions_and_numeric_values_reach_the_frame_prod
     assert_eq!(node.raw().max_numeric_value(), Some(10.0));
     assert_eq!(node.raw().numeric_value_step(), Some(1.0));
     for rejected in [f64::NAN, f64::INFINITY, -0.5, 10.5] {
-        listener(request(
+        laid.request_accessibility_action(request(
             Action::SetValue,
             node_id,
             Some(ActionData::NumericValue(rejected)),
@@ -1693,7 +1725,7 @@ pub(crate) fn queued_directional_actions_and_numeric_values_reach_the_frame_prod
             "rejected request must not perform a signal write"
         );
     }
-    listener(request(
+    laid.request_accessibility_action(request(
         Action::SetValue,
         node_id,
         Some(ActionData::NumericValue(10.0)),
@@ -2724,9 +2756,10 @@ pub(crate) fn controls_publish_their_identifier_on_the_node_they_form() {
 /// a slider's axis and large step, and the role words a screen reader says.
 pub(crate) fn authored_properties_and_relations_reach_the_published_node() {
     use flui_foundation::geometry::Axis;
-    use flui_widgets::{
-        AutoComplete, Column, Current, HasPopup, Invalid, NumericRange, SemanticsAnchor,
+    use flui_rendering::semantics::{
+        AutoComplete, Current, HasPopup, Invalid, NumericRange, SemanticsAnchor,
     };
+    use flui_widgets::Column;
 
     let help = SemanticsAnchor::new();
     let error = SemanticsAnchor::new();

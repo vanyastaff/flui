@@ -26,7 +26,8 @@ pub(crate) mod sample {
     //! display query is virtual-mode aware. Every host runs their tests.
 
     use flui_platform::{
-        CapabilityAbsence, ColorGamut, DisplayColor, DisplayId, DisplayKey, Headroom, RefreshPeriod,
+        ColorGamut, DisplayColor, DisplayId, DisplayKey, Headroom, RefreshPeriod, Unsupported,
+        UnsupportedReason,
     };
 
     use crate::version::gate::Gate;
@@ -153,27 +154,25 @@ pub(crate) mod sample {
     /// range in BT.2020, its headroom the peak over the SDR white level; a peak
     /// or white level it does not report leaves the headroom absent rather than
     /// guessed. A colour space this host does not know is not read yet.
-    pub(crate) fn display_color(
-        output: Option<OutputColor>,
-    ) -> Result<DisplayColor, CapabilityAbsence> {
-        let output = output.ok_or(CapabilityAbsence::NotOnThisDevice)?;
+    pub(crate) fn display_color(output: Option<OutputColor>) -> Result<DisplayColor, Unsupported> {
+        let output = output.ok_or(Unsupported::new(UnsupportedReason::NotOnThisDevice))?;
         match output.color_space {
             OutputColorSpace::Srgb => Ok(DisplayColor::standard(ColorGamut::Srgb)),
             OutputColorSpace::WideGamutSdr => Ok(DisplayColor::standard(ColorGamut::Rec2020)),
             OutputColorSpace::Hdr10 => {
                 let headroom = output
                     .sdr_white_level
-                    .ok_or(CapabilityAbsence::NotOnThisDevice)
+                    .ok_or(Unsupported::new(UnsupportedReason::NotOnThisDevice))
                     .and_then(|level| {
                         // 1000 is 80 nits; the product of a `u32` and 0.08 is
                         // finite in `f32`.
                         let white_nits = level as f32 * 0.08;
                         Headroom::from_luminance(output.max_luminance, white_nits)
-                            .map_err(|_| CapabilityAbsence::NotOnThisDevice)
+                            .map_err(|_| Unsupported::new(UnsupportedReason::NotOnThisDevice))
                     });
                 Ok(DisplayColor::high(ColorGamut::Rec2020, headroom))
             }
-            OutputColorSpace::Unread => Err(CapabilityAbsence::NotYetOnThisHost),
+            OutputColorSpace::Unread => Err(Unsupported::new(UnsupportedReason::NotYetOnThisHost)),
         }
     }
 
@@ -182,8 +181,8 @@ pub(crate) mod sample {
         use std::time::Duration;
 
         use flui_platform::{
-            CapabilityAbsence, ColorGamut, DisplayColor, DisplayKey, DisplayRegistry, Headroom,
-            RefreshPeriod,
+            ColorGamut, DisplayColor, DisplayKey, DisplayRegistry, Headroom, RefreshPeriod,
+            Unsupported, UnsupportedReason,
         };
 
         use super::{
@@ -227,12 +226,12 @@ pub(crate) mod sample {
             );
             assert_eq!(
                 display_color(None),
-                Err(CapabilityAbsence::NotOnThisDevice),
+                Err(Unsupported::new(UnsupportedReason::NotOnThisDevice)),
                 "no DXGI output for the monitor"
             );
             assert_eq!(
                 display_color(Some(output(3, 400.0, None))),
-                Err(CapabilityAbsence::NotYetOnThisHost),
+                Err(Unsupported::new(UnsupportedReason::NotYetOnThisHost)),
                 "a studio-range space this host does not read"
             );
         }
@@ -251,7 +250,7 @@ pub(crate) mod sample {
                     display_color(Some(output(DXGI_HDR10, peak, level))),
                     Ok(DisplayColor::high(
                         ColorGamut::Rec2020,
-                        Err(CapabilityAbsence::NotOnThisDevice)
+                        Err(Unsupported::new(UnsupportedReason::NotOnThisDevice))
                     )),
                     "peak {peak}, white level {level:?}"
                 );

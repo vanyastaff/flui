@@ -1,10 +1,11 @@
 //! [`Phase`]: the spans the framework opens that measure a part of a frame.
 //!
-//! One table, here, says which `(target, name)` pairs are phases. The frame profiler, the
-//! timeline and the trace export all ask [`Phase::of`], so a span an application opens with
-//! the name `paint` is not the framework's paint phase, and a phase added here reaches every
-//! consumer at once.
+//! [`FrameSpan`] owns the one `(target, name)` wire table shared with producers. `Phase` selects
+//! the profiler-facing subset and supplies display labels; the frame profiler, timeline and trace
+//! export all ask [`Phase::of`], so an application span named `paint` is not framework paint, and
+//! a phase added to the shared contract reaches every consumer through this mapping.
 
+use flui_sdk::foundation::diagnostics::FrameSpan;
 use tracing::Metadata;
 
 /// A part of a frame the framework measures.
@@ -55,34 +56,43 @@ impl Phase {
     /// The tracing target of the span that measures this phase.
     #[must_use]
     pub const fn target(self) -> &'static str {
-        match self {
-            Self::Build
-            | Self::Layout
-            | Self::Compositing
-            | Self::Paint
-            | Self::Semantics
-            | Self::Commit
-            | Self::Submit => "flui.frame",
-            Self::AnimationTick | Self::AnimationSampling | Self::AnimationListeners => {
-                "flui.animation"
-            }
-        }
+        self.span().target()
     }
 
     /// The name of the span that measures this phase.
     #[must_use]
     pub const fn name(self) -> &'static str {
+        self.span().name()
+    }
+
+    const fn span(self) -> FrameSpan {
         match self {
-            Self::Build => "build",
-            Self::Layout => "layout",
-            Self::Compositing => "compositing",
-            Self::Paint => "paint",
-            Self::Semantics => "semantics",
-            Self::Commit => "commit",
-            Self::Submit => "submit",
-            Self::AnimationTick => "animation_tick",
-            Self::AnimationSampling => "animation_sampling",
-            Self::AnimationListeners => "animation_listeners",
+            Self::Build => FrameSpan::Build,
+            Self::Layout => FrameSpan::Layout,
+            Self::Compositing => FrameSpan::Compositing,
+            Self::Paint => FrameSpan::Paint,
+            Self::Semantics => FrameSpan::Semantics,
+            Self::Commit => FrameSpan::Commit,
+            Self::Submit => FrameSpan::Submit,
+            Self::AnimationTick => FrameSpan::AnimationTick,
+            Self::AnimationSampling => FrameSpan::AnimationSampling,
+            Self::AnimationListeners => FrameSpan::AnimationListeners,
+        }
+    }
+
+    pub(crate) const fn of_span(span: FrameSpan) -> Option<Self> {
+        match span {
+            FrameSpan::Build => Some(Self::Build),
+            FrameSpan::Layout => Some(Self::Layout),
+            FrameSpan::Compositing => Some(Self::Compositing),
+            FrameSpan::Paint => Some(Self::Paint),
+            FrameSpan::Semantics => Some(Self::Semantics),
+            FrameSpan::Commit => Some(Self::Commit),
+            FrameSpan::Submit => Some(Self::Submit),
+            FrameSpan::AnimationTick => Some(Self::AnimationTick),
+            FrameSpan::AnimationSampling => Some(Self::AnimationSampling),
+            FrameSpan::AnimationListeners => Some(Self::AnimationListeners),
+            _ => None,
         }
     }
 
@@ -109,9 +119,7 @@ impl Phase {
         if !metadata.is_span() {
             return None;
         }
-        Self::ALL
-            .into_iter()
-            .find(|phase| phase.target() == metadata.target() && phase.name() == metadata.name())
+        FrameSpan::of(metadata.target(), metadata.name()).and_then(Self::of_span)
     }
 }
 

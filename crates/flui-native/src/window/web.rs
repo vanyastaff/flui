@@ -1163,7 +1163,7 @@ pub(crate) const fn window_capabilities() -> WindowCapabilities {
     // from its visual viewport (`keyboard_over`), which is an estimate;
     // `page_capabilities` says where it names the keyboard itself.
     capabilities.reports_keyboard_inset = flui_platform::Availability::Emulated;
-    capabilities.without_presentation_feedback(flui_platform::CapabilityAbsence::NotOnThisPlatform)
+    capabilities.without_presentation_feedback()
 }
 
 /// What this page's window honours: [`window_capabilities`], with the
@@ -1715,6 +1715,12 @@ impl Drop for DeadlineTimer {
     }
 }
 
+/// One actual canvas's owned DOM registration.
+///
+/// Closing fences delivery before releasing subscriptions. Callbacks and close
+/// notifications already admitted retain their order in the window FIFO. When
+/// `ResizeObserver` is absent, registration requires the window-`resize`
+/// fallback; failure to install that mandatory fallback refuses the open.
 pub(crate) struct Registration {
     pub(crate) accepting: Rc<Cell<bool>>,
     canvas: web_sys::HtmlCanvasElement,

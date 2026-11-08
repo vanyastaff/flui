@@ -38,6 +38,7 @@ use flui_platform::HapticFeedback;
 use flui_platform::haptics::{HapticRequest, HapticTiming};
 use flui_rendering::constraints::AxisDirection;
 use flui_rendering::pipeline::WeakPipelineCell;
+use flui_rendering::semantics::SemanticsRole;
 use flui_view::element::ElementKind;
 use flui_view::{
     AnimatedView, BoxedView, BuildContext, EventCx, IntoView, LifecycleContext, StatefulView, View,
@@ -56,7 +57,7 @@ use crate::interaction::raw_gesture_detector::ContactAdmission;
 use crate::transitions::transform_view::AnimatedTransformView;
 use crate::{
     Action, ActionOutcome, Actions, Directionality, GestureAlternatives, Intent, Listener,
-    Semantics, SemanticsRole, Shortcuts, SingleActivator,
+    Semantics, Shortcuts, SingleActivator,
 };
 use flui_objects::TransformMotion;
 use flui_platform::keyboard::NamedKey;

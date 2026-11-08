@@ -1471,10 +1471,10 @@ impl PlatformWindow for MacOSWindow {
         _hint: flui_platform::FrameRateHint,
     ) -> Result<(), flui_platform::Unsupported> {
         let absence = self.displays.get().map_or(
-            flui_platform::CapabilityAbsence::NotOnThisDevice,
+            flui_platform::UnsupportedReason::NotOnThisDevice,
             |displays| frame_rate_absence(displays.version()),
         );
-        Err(absence.into())
+        Err(flui_platform::Unsupported::new(absence))
     }
 
     /// The content view answers a left press from the move areas of a title
@@ -1797,7 +1797,7 @@ impl MacOSWindow {
                 capabilities: capabilities_of(
                     flags,
                     heading,
-                    appkit_window_capabilities(self.owner_is_main),
+                    &appkit_window_capabilities(self.owner_is_main),
                 ),
             }
             .onto(state)

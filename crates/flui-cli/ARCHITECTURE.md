@@ -3,10 +3,30 @@
 `flui-cli` owns command parsing, project template selection, generation of
 consumer dependency declarations, platform scaffolding and build
 orchestration (`src/build/`), and the dev-loop source watcher
-(`src/watch.rs`). It links no FLUI crate: the runtime half of hot reload
-lives in `flui-hot-reload`, which the *app* links, and the only contract
-between the two is a pair of environment-variable names pinned by a
-dev-dependency test.
+(`src/watch.rs`). Its only normal FLUI dependency is `flui-protocol`, for the
+driver-agent contract. The runtime half of hot reload lives in
+`flui-hot-reload`, which the *app* links, and the only contract between the
+two is a pair of environment-variable names pinned by a dev-dependency test.
+
+## Application identifier parity without framework linkage
+
+`flui_log::AppId` owns the running application's identifier grammar for the
+native log sinks and storage host. `app_id::AppId` independently owns the same
+grammar for `flui.toml`, project creation and the CLI's Android and Apple name
+derivations. The CLI parser stays crate-private and carries CLI errors and
+serialization; `AppIdentity` and its display-name policy remain with logging.
+
+This duplication is the distribution boundary, not a missing shared crate.
+`flui-protocol` is agent wire vocabulary, not application packaging identity.
+Making `flui-platform` the owner would put the platform contract graph in
+`cargo install flui-cli`, while linking `flui-log` would install a subscriber
+backend the CLI deliberately does not use. Neither cost buys new behavior.
+
+The path-only `flui-log` dev-dependency is therefore the whole coupling.
+`the_cli_and_the_framework_accept_the_same_identifiers` compares both production
+parsers over grammar boundaries, every Java-reserved word and every Windows
+device name in every label position, and checks preserved text on acceptance.
+A grammar change must update both parsers and that corpus in the same change.
 
 ## One output policy, no logging framework
 

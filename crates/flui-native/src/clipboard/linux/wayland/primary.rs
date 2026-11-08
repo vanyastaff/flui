@@ -495,7 +495,7 @@ impl Dispatch<ZwpPrimarySelectionOfferV1, OfferData> for WaylandState {
         _: &QueueHandle<Self>,
     ) {
         if let zwp_primary_selection_offer_v1::Event::Offer { mime_type } = event {
-            data.offer(mime_type);
+            data.admit_type(mime_type);
         }
     }
 }

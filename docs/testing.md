@@ -18,6 +18,20 @@ The `testing` feature is off by default. Independent consumer tests check that
 ordinary dependency graphs do not include the headless test driver. The tier
 map below describes implementation ownership for framework contributors.
 
+## Package tests through the SDK
+
+An official or third-party FLUI package uses the same model without naming internal crates. Keep its
+ordinary `flui-sdk` dependency version-only, and enable `features = ["testing"]` on the SDK entry in
+`[dev-dependencies]`. Use `flui_sdk::testing::widgets::{lay_out, loose}` for widget tests,
+`flui_sdk::testing::HeadlessHost` for a whole runtime frame, and
+`flui_sdk::testing::rendering::RenderTester` for render objects. The common paths mirror
+`flui::testing`; additional host, input and inspection helpers are Evolving SDK surface.
+
+The SDK's `testing` feature is also off by default, so an ordinary package dependency graph contains
+no headless driver. `flui-sdk::package_parity` packages and unpacks the SDK, proves that an external
+workspace resolves to that archive, and runs a custom theme extension and capability plugin through
+this surface.
+
 ## Map of the testing layer
 
 FLUI's test support is a stack, not one harness. Each tier drives the machine at
@@ -243,8 +257,9 @@ The nested tests dominate the suite's wall-clock: tests that run a `cargo` or
 `compile_fail` suites (`flui-engine`, `flui-rendering`, `flui-painting`,
 `flui-view`'s `trybuild_ui`, `flui-widgets`' `routable_ui`), whose compiler
 output does not depend on the host; and `nested-cargo`, the `flui-cli`
-template tests (`cli_create::generated_*`) and every `flui::facade_consumer`
-test, which build a project with its own feature graph on the host. Locally,
+template tests (`cli_create::generated_*`), every `flui::facade_consumer` test
+and `flui-sdk::package_parity`, which build projects with their own feature
+graphs on the host. Locally,
 with their build caches cold, most take one to five minutes; the rest are
 quick. `.config/nextest.toml` names each group with one filter;
 `cargo nextest show-config test-groups` lists the members. Selecting by group needs nextest 0.9.133 or newer (the
@@ -300,13 +315,13 @@ slower cold (713.6 s vs 563.1 s) and warm (25.9 s vs 13.7 s).
 
 Where their builds go: each nested build needs a target directory other than
 the outer one, because under `cargo test` the outer Cargo holds its build lock
-for the whole run. The template and facade-consumer builds use
-`cli-template-check/` and `facade-consumer-check/` under the workspace target
-directory as Cargo resolves it (`cargo metadata`'s `target_directory`), so a
-`CARGO_TARGET_DIR` is honored. Before this, they wrote to `<checkout>/target`
-whatever `CARGO_TARGET_DIR` said. trybuild keeps its own `tests/trybuild/` there, since
-it builds with a different `--cfg` and would thrash a shared cache. Nothing
-prunes these three directories: they grow with every FLUI version and feature
+for the whole run. The template, facade-consumer and packaged-SDK builds use
+`cli-template-check/`, `facade-consumer-check/` and `sdk-package-parity-check/`
+under the workspace target directory as Cargo resolves it (`cargo metadata`'s
+`target_directory`), so a `CARGO_TARGET_DIR` is honored. Before this, they wrote
+to `<checkout>/target` whatever `CARGO_TARGET_DIR` said. trybuild keeps its own
+`tests/trybuild/` there, since it builds with a different `--cfg` and would
+thrash a shared cache. Nothing prunes these four directories: they grow with every FLUI version and feature
 set built through them (1.5-3 GB each is normal). `cargo heli xtask clean-nested`
 deletes them once no build or test heli runs in this checkout is using them
 (`.config/heli.toml` makes it a mutating command); `cargo sweep --installed .`
@@ -589,7 +604,7 @@ The constitution requires `///` doc comments on every public item and `//!` over
 - **Unit tests** live in the same file under `#[cfg(test)] mod tests { ... }`.
   `flui-widgets` unit tests must not use the headless harness: `flui-testing` depends on
   `flui-widgets`, so a unit test under `src/` links a second copy of the library. It still
-  compiles, but the UI runtime's inherited scopes (`MediaQuery`, `FocusRoot`, `VsyncScope`) are the
+  compiles, but the UI runtime's inherited scopes (`MediaQuery`, `VsyncScope`) are the
   other copy's types, so the test's own lookups of them read `None`. Nothing but review
   catches it; a test that mounts a tree lives in `crates/flui-widgets/tests/` (ADR-0083 §4).
 - **Integration tests** live in `tests/` per crate. Cross-crate pipelines are tested in `flui-engine`.

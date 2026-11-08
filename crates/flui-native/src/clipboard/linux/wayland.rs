@@ -680,7 +680,7 @@ mod tests {
             "text/plain;charset=UTF-8",
             "text/plain;charset=utf-8",
         ] {
-            data.offer(mime.to_owned());
+            data.admit_type(mime.to_owned());
         }
         assert_eq!(
             preferred(&data),

@@ -27,9 +27,8 @@
 
 - `TextSpan::mouse_cursor` and `TextSpan::with_mouse_cursor` take `CursorIcon`, the type the
   platform cursor output takes; a span's cursor now applies over its glyphs and its children's.
-- `FocusRingStyle` is defined in `flui-objects` (still re-exported as
-  `flui_widgets::FocusRingStyle`) and gains `outer_band` and `inner_band`, the widths that
-  paint.
+- `FocusRingStyle` is defined in `flui-objects` (available through the widgets prelude and
+  `flui_sdk::pipeline`) and gains `outer_band` and `inner_band`, the widths that paint.
 
 ### Removed
 

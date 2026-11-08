@@ -12,6 +12,38 @@ recorded so far.
 
 ## Mapping decisions
 
+### Component themes are typed entries beside seven static base fields
+
+`ThemeData` has seven ordinary fields with `FieldMask` dependencies: `color_scheme`, `text_theme`,
+`focus_ring`, `selection`, `platform`, `style` and `page_transitions_theme`. Component
+configurations are not additional public fields. They live in a private `BTreeMap<TypeId,
+Rc<dyn ErasedComponentTheme>>`; the public `ComponentTheme: Clone + Debug + PartialEq + 'static`
+contract preserves typed equality, access and interpolation behind that erasure. Cloning a theme
+shares immutable entries, while `with_component`, `without_component` and `component` insert,
+remove and borrow one `T`. `ThemeDataOverrides` uses the same typed operations, with an explicit
+removal tombstone distinct from an absent patch.
+
+Light and dark baselines share one base-field constructor and start without component overrides;
+component defaults remain at component resolution instead of being duplicated in each baseline.
+Every production component reader uses `Theme::component_of::<T>`, which records only that entry
+and returns `None` when the nearest `Theme` lacks it, without searching an outer theme. Base-only
+readers use the private `required_color_scheme_of`, `required_color_and_text_of` or two-field
+`required_base_of`, whose successful paths retain only their exact static-field reads. Their `None`
+branch lazily delegates to the established `Theme::of` missing-ancestor policy; no whole-theme read
+occurs on the successful path. `Theme::of`/`maybe_of` explicitly depend on every field and entry.
+
+`Theme::changed_entries` content-diffs the union of old and new component keys, so equal values do
+not rebuild and add/remove/replace affects only that component's readers plus whole-theme readers.
+`ComponentTheme::lerp_to` switches halfway by default and may provide continuous interpolation;
+one-sided entries appear or disappear at `t = 0.5` (ADR-0318).
+
+`tests/component_themes.rs` pins this model through public APIs:
+`entries_insert_replace_remove_and_compare_by_content`,
+`copy_with_distinguishes_absent_insert_replace_and_remove_patches`,
+`lerp_uses_typed_interpolation_and_halfway_presence_switching`,
+`changed_entries_rebuild_only_their_readers_and_whole_theme_readers`, and
+`nearest_theme_scope_does_not_fall_through_to_an_outer_entry`.
+
 ### `InkWell` owns its ripple; no ink-feature registry
 
 Each `InkWell` owns its feedback (Compose's `Indication` model): a state layer

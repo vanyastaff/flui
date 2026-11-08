@@ -10,9 +10,9 @@
 //! (`0xc0000374`). Instances exist on several threads, so a per-instance lock
 //! cannot close the race; this one can.
 //!
-//! Not covered: third-party code in the same process that opens the
-//! clipboard on its own thread bypasses this lock. Win32 shuts it out of a
-//! `WindowsClipboard` session by the owner window ([safety review](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/safety-review.md)).
+//! Third-party code in the same process bypasses this lock. With a non-NULL
+//! owner, Win32 excludes it from a `WindowsClipboard` session by the distinct
+//! owner window; the logged NULL-owner fallback cannot provide that exclusion.
 
 use parking_lot::{Mutex, MutexGuard};
 

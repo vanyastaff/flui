@@ -131,8 +131,9 @@ pub(super) fn wake_action(
 /// an armed device-recovery retry deadline. Dropping that last term is
 /// exactly the bug `DeviceRecoveryBackoff`'s own doc describes: a deadline
 /// wired into the wake-deadline hook but invisible to this gate reaches
-/// `WakeAction::Skip` and returns before `render_frame_with_device_recovery`
-/// is ever called, no matter how faithfully the platform actuates the wake.
+/// `WakeAction::Skip` and returns before
+/// `device_recovery.rs::pump_with_device_recovery` is ever called, no matter
+/// how faithfully the platform actuates the wake.
 // Absent on wasm: its two production callers are the desktop and Android
 // frame closures, neither of which exists there, and the web runner has
 // no `DeviceRecoveryBackoff` deadline term to fold in.

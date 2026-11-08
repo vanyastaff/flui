@@ -49,6 +49,10 @@ pub type ListenerObserver = Rc<dyn Fn(&mut RecoveryScope<'_>)>;
 ///
 /// Listener state belongs to the UI owner thread.
 ///
+/// Admission returns a registered [`ListenerId`], or [`ListenerId::inert`]
+/// when the source stores no callback. An inert result belongs to no numeric
+/// identity namespace, so removing it through any listenable is a no-op.
+///
 /// There are two variants of this interface:
 ///
 /// - [`ValueListenable`]: A `Listenable` that also exposes a current value.

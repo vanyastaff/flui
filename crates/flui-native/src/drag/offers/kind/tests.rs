@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
-use flui_platform::data_transfer::{Mime, TransferError, TransferFormat, TransferPayload};
+use flui_platform::data_transfer::{Mime, TransferFormat, TransferPayload};
 
-use super::{Kind, representations, too_large};
+use super::{Kind, representations};
 use crate::clipboard::text::TextForm;
 
 /// The platform's transfer values compare by what they print: they hold no
@@ -110,17 +110,4 @@ fn bytes_make_their_payload() {
         assert_eq!(len, expected.byte_len(), "{case}: measured as made");
         assert_same!(kind.payload(bytes), expected, "{case}");
     }
-}
-
-/// A payload past the limit is refused, one at it is not.
-#[test]
-fn a_payload_past_its_limit_is_too_large() {
-    assert_same!(too_large(10, 10), None::<TransferError>);
-    assert_same!(
-        too_large(11, 10),
-        Some(TransferError::TooLarge {
-            actual: 11,
-            limit: 10
-        })
-    );
 }

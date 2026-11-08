@@ -211,7 +211,6 @@ pub(crate) struct HeadlessState {
     /// The windows the platform tracks: the window feature's.
     pub(crate) windows: Arc<dyn TrackedWindows>,
     pub(crate) keyboard_layout: String,
-    opened_urls: Vec<String>,
     /// Deferred-window-open test mode (see
     /// [`HeadlessPlatform::enable_deferred_window_open`](crate::HeadlessPlatform::enable_deferred_window_open)): when `true`,
     /// `Platform::run` installs `HeadlessDeferredOwnerHooks` instead of
@@ -340,7 +339,6 @@ impl HeadlessLoop {
             is_running: false,
             windows,
             keyboard_layout: "en-US".to_string(),
-            opened_urls: Vec::new(),
             deferred_window_open: false,
             pending_opens: Vec::new(),
             exit_reevaluation_requested: false,
@@ -576,11 +574,7 @@ impl host::Services for HeadlessLoop {
         Ok(PathBuf::from("/mock/app/path"))
     }
 
-    fn open_url(&self, url: &str) {
-        self.with_state(|state| {
-            state.opened_urls.push(url.to_string());
-        });
-    }
+    fn open_url(&self, _: &str) {}
 
     // Nothing is shown, so no path is revealed or opened and no prompt runs.
     fn reveal_path(&self, path: &std::path::Path) {
@@ -781,7 +775,7 @@ impl HeadlessExitReevaluation {
     /// Runs the owner-thread half of a parked re-evaluation request: if
     /// one is parked AND no window is tracked, consult the exit-policy
     /// hook exactly as the window-close path does
-    /// (`MockWindow::notify_closed`, including its "no hook -> never
+    /// (`HeadlessWindow::notify_closed`, including its "no hook -> never
     /// quit" headless default and its call outside the lock) and quit if
     /// the hook now allows it. Returns `true` iff a quit was actually
     /// issued.
@@ -818,7 +812,7 @@ impl HeadlessExitReevaluation {
             state.exit_reevaluation_requested = false;
         }
         // The hook is not one-shot: a veto leaves it in place for the next
-        // consult (same rule as `MockWindow::notify_closed`).
+        // consult (same rule as `HeadlessWindow::notify_closed`).
         consult_exit_policy(&platform_state)
     }
 }
@@ -828,7 +822,7 @@ impl HeadlessExitReevaluation {
 /// completing the [`PendingWindow`] a `HeadlessDeferredOwnerHooks` call
 /// returned. `Weak`: this handle must never keep the platform state alive
 /// past the platform's own lifetime (same rationale as
-/// `MockWindow::platform_state`).
+/// `HeadlessWindow::platform_state`).
 pub struct HeadlessDeferredWindowOpens {
     state: Weak<Mutex<HeadlessState>>,
 }
@@ -863,7 +857,7 @@ impl HeadlessDeferredWindowOpens {
         let platform_state = self.state.upgrade()?;
 
         // Pop the request and build its window under one lock acquisition,
-        // then deliver OUTSIDE the lock (same discipline `MockWindow::
+        // then deliver OUTSIDE the lock (same discipline `HeadlessWindow::
         // notify_closed` uses) -- `deliver`'s injected wake callback is a
         // no-op here, but a future caller reusing this pattern must not
         // rely on that.

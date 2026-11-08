@@ -12,6 +12,7 @@ use flui_objects::{RenderToolbarItems, ToolbarItemsSplit};
 use flui_painting::typography::TextDirection;
 use flui_rendering::hit_testing::HitTestBehavior;
 use flui_rendering::protocol::BoxProtocol;
+use flui_rendering::semantics::SemanticsRole;
 use flui_view::element::ElementKind;
 use flui_view::prelude::*;
 use flui_view::seq::ViewSeq;
@@ -19,7 +20,7 @@ use flui_view::{BoxedView, CreationSite, RebuildHandle, RebuildReason, View};
 
 use crate::interaction::{ExcludeFocus, GestureDetector};
 use crate::localization::{BoxedWidgetsLocalizations, Directionality};
-use crate::{ExcludeSemantics, Padding, Semantics, SemanticsRole, Text};
+use crate::{ExcludeSemantics, Padding, Semantics, Text};
 
 /// Whether a [`ToolbarItems`] shows its left-over items in place of its row,
 /// and which items its last layout left over.

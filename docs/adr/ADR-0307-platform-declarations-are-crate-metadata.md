@@ -8,7 +8,8 @@
 - **Related:** [ADR-0255](ADR-0255-mobile-and-web-hosts.md) decision 6 (the generated Android
   manifest); [ADR-0280](ADR-0280-http-is-a-capability-of-the-host.md) (the HTTP capability, whose Android
   stack needs the network permission); [ADR-0088](ADR-0088-official-packages-sdk-and-facade.md)
-  (facade features)
+  (official packages and the SDK); [ADR-0315](ADR-0315-first-party-packages-remain-train-aligned-facade-features.md)
+  (standing facade features, whose declaration and registration behavior this record owns)
 
 ## Context and problem statement
 
@@ -169,7 +170,9 @@ plugin = "SystemPlugin"
 ```
 
 `flui add <name>` resolves `name` as the facade feature that enables one optional crate
-(`system` → `flui-system`) and enables it in `Cargo.toml`, keeping the file's formatting; without
+(`system` → `flui-system`) and enables it in `Cargo.toml`, keeping the file's formatting. That
+feature is standing aggregation under ADR-0315; this record changes no facade feature or re-export.
+Without
 the facade, or for a name the facade does not carry and the application already depends on, it is
 a crate name, added with `cargo add` from the FLUI checkout the application's other FLUI
 dependencies come from when that checkout has it. It then reads the linked crate's table and

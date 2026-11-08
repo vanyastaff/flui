@@ -227,6 +227,7 @@ struct UpdateRecoveryExpectation {
     substitute: ElementId,
     parent: ElementId,
     slot: usize,
+    moved_before_update: bool,
     failed_view_type_id: TypeId,
     panic_classification: PanicClassification,
 }
@@ -242,6 +243,7 @@ fn assert_update_recovery(
         substitute,
         parent,
         slot,
+        moved_before_update,
         failed_view_type_id,
         panic_classification,
     } = expected;
@@ -274,10 +276,20 @@ fn assert_update_recovery(
         })
         .copied()
         .collect();
+    let mut expected_resident_events = Vec::with_capacity(2);
+    if moved_before_update {
+        // Render configuration runs after reconciliation, so a real move is
+        // observed before a later update panic removes the resident.
+        expected_resident_events.push(DenseObservation::Move {
+            element: resident,
+            parent,
+            slot,
+        });
+    }
+    expected_resident_events.push(DenseObservation::Unmount { element: resident });
     assert_eq!(
-        resident_events,
-        vec![DenseObservation::Unmount { element: resident }],
-        "the failed resident must unmount once without a stale move or rebuild"
+        resident_events, expected_resident_events,
+        "the failed resident must unmount once without a stale rebuild"
     );
 
     let substitute_events: Vec<_> = new_events
@@ -384,6 +396,7 @@ fn assert_phase_one_did_update_view_panic_containment(
             substitute,
             parent,
             slot: PHASE_ONE_FAILED_SLOT,
+            moved_before_update: false,
             failed_view_type_id: TypeId::of::<DenseDidUpdateView>(),
             panic_classification: expected_classification,
         },
@@ -441,6 +454,7 @@ pub(crate) fn phase_five_a_shifted_suffix_update_panic_uses_final_slot() {
             substitute,
             parent,
             slot: 10,
+            moved_before_update: true,
             failed_view_type_id: TypeId::of::<DenseRenderUpdateLeaf>(),
             panic_classification: PanicClassification::Ordinary,
         },

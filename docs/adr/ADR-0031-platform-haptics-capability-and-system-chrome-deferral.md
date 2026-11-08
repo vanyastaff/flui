@@ -55,8 +55,9 @@ with one device-global engine returns the same `Arc` from every window.
 
 - **winit:** no override. Desktop winit targets have no haptic hardware; `None`
   is the permanent correct answer, not a stub.
-- **Headless:** `FakeHaptics` records every call in order (`calls()`,
-  `last()`); `MockWindow` returns the same instance on every `haptics()` call.
+- **Headless:** the production actuator plays and retains nothing; a test that
+  installs `FakeHaptics` reads every call in order (`calls()`, `last()`).
+  `HeadlessWindow` returns the same actuator instance on every `haptics()` call.
 - **`flui-app`:** `PresentationState::perform_haptic_feedback` resolves its own
   window's capability through its `Weak` window reference; `UiRuntime` forwards
   to it. A closed window or a window without haptics is a silent no-op —

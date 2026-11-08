@@ -4,11 +4,10 @@
 use std::any::Any;
 use std::fmt;
 
-use flui_painting::typography::TextDirection;
-
 /// Interface for localized resource values consumed by the lowest levels of
-/// the widget catalog (reorderable-list semantics labels, text-editing menu
-/// labels, and the resolved reading [`TextDirection`] for a locale).
+/// the widget catalog (reorderable-list semantics labels and text-editing menu
+/// labels). Text direction belongs to [`Locale`](flui_platform::Locale), not to
+/// this resource contract.
 ///
 /// A `WidgetsLocalizations` implementation is what a [`LocalizationsDelegate`]
 /// (see the sibling `localizations` module) produces for a given
@@ -22,9 +21,6 @@ use flui_painting::typography::TextDirection;
 /// [`LocalizationsDelegate`]: crate::LocalizationsDelegate
 /// [`Localizations::of`]: crate::Localizations::of
 pub trait WidgetsLocalizations: Any + fmt::Debug + Send + Sync {
-    /// The reading direction for text in this locale.
-    fn text_direction(&self) -> TextDirection;
-
     /// Semantics label to reorder an item to the start of a reorderable list.
     fn reorder_item_to_start(&self) -> &'static str;
     /// Semantics label to reorder an item to the end of a reorderable list.
@@ -96,20 +92,12 @@ pub trait WidgetsLocalizations: Any + fmt::Debug + Send + Sync {
     fn reorder_item_moved(&self, item: Option<&str>, position: usize, count: usize) -> String;
 }
 
-/// US English localizations for the widgets library — the only locale FLUI
-/// ships resource strings for today.
-///
-/// Always [`TextDirection::Ltr`]; only
-/// [`GlobalWidgetsLocalizations`](super::GlobalWidgetsLocalizations)
-/// resolves RTL locales.
+/// US English resources for the widgets library — the only translated string
+/// set FLUI ships today. These strings do not determine text direction.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct DefaultWidgetsLocalizations;
 
 impl WidgetsLocalizations for DefaultWidgetsLocalizations {
-    fn text_direction(&self) -> TextDirection {
-        TextDirection::Ltr
-    }
-
     fn reorder_item_to_start(&self) -> &'static str {
         "Move to the start"
     }

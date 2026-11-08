@@ -48,8 +48,8 @@ fn image_placement_builders_reach_the_painted_scene() {
     use crate::common::tight;
     use flui_foundation::geometry::Rect;
     use flui_painting::DrawOp;
+    use flui_painting::paint::ImageRepeat;
     use flui_painting::{Alignment, BoxFit};
-    use flui_widgets::ImageRepeat;
 
     let regions = |laid: &crate::common::LaidOut| {
         laid.draw_ops()

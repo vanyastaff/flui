@@ -6,15 +6,13 @@ use std::num::{NonZeroU32, NonZeroUsize};
 use std::rc::Rc;
 
 use crate::common::{LaidOut, lay_out, tight};
+use flui_rendering::semantics::{CellPosition, SemanticsRole, SetSize, SortDirection, TableShape};
 use flui_testing::A11yTree;
 use flui_testing::a11y::{A11ySortDirection, Role};
 use flui_view::ViewExt;
 use flui_view::element::{ItemCount, SemanticSetMapping};
 use flui_widgets::prelude::*;
-use flui_widgets::{
-    CellPosition, CustomScrollView, IndexedSemantics, SemanticsRole, SetSize, SliverList,
-    SortDirection, TableShape,
-};
+use flui_widgets::{CustomScrollView, IndexedSemantics, SliverList};
 
 /// A row announcing itself as `label`.
 fn labelled(label: String) -> flui_view::BoxedView {

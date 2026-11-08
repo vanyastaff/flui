@@ -1,14 +1,17 @@
 //! A text field's runs and selection, read the way assistive technology reads
 //! them (ADR-0204, semantics-model R12 and R14).
 
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use accesskit::{Action, ActionData, ActionRequest, NodeId, TextPosition, TextSelection, TreeId};
 use flui_foundation::geometry::Rect;
 use flui_semantics::{
-    ActionCall, ActionDecodeError, MAX_RUN_CHARACTERS, SemanticsDiagnostic,
-    SemanticsIdentitySource, SemanticsRegionId, SemanticsRole, TextContent, TextDirection, TextRun,
-    TextRunError, TextRunParts, TextRunPosition, TextRunSelection, TreeUpdate,
+    ActionCall, ActionDecodeError, DocumentPosition, DocumentSelection, MAX_RUN_CHARACTERS,
+    SemanticsAnchor, SemanticsDiagnostic, SemanticsIdentitySource, SemanticsRegionId,
+    SemanticsRole, TextContent, TextDirection, TextRun, TextRunError, TextRunParts,
+    TextRunPosition, TextRunSelection, TreeUpdate,
 };
 use parking_lot::Mutex;
 
@@ -197,6 +200,248 @@ fn select(field: u32, anchor: (NodeId, usize), focus: (NodeId, usize)) -> Action
                 character_index: focus.1,
             },
         })),
+    }
+}
+
+struct NoChanges;
+impl accesskit_consumer::TreeChangeHandler for NoChanges {
+    fn node_added(&mut self, _: &accesskit_consumer::NodeRef<'_>) {}
+    fn node_updated(
+        &mut self,
+        _: &accesskit_consumer::NodeRef<'_>,
+        _: &accesskit_consumer::NodeRef<'_>,
+    ) {
+    }
+    fn focus_moved(
+        &mut self,
+        _: Option<&accesskit_consumer::NodeRef<'_>>,
+        _: Option<&accesskit_consumer::NodeRef<'_>>,
+    ) {
+    }
+    fn node_removed(&mut self, _: &accesskit_consumer::NodeRef<'_>) {}
+}
+
+fn replace_text(fixture: &mut Fixture, value: &str, text: TextContent) {
+    let id = fixture.id_of(2);
+    let mut node = fixture
+        .owner
+        .tree()
+        .get(id)
+        .expect("the field is in the tree")
+        .clone();
+    node.config_mut().set_value(value);
+    node.config_mut().set_text_content(text);
+    assert!(
+        fixture.owner.tree_mut().replace_node(id, node),
+        "the field is live"
+    );
+}
+
+/// Editing every run and moving the caret keeps their identities and reaches a
+/// live consumer incrementally. A selection-only change carries just its field.
+#[test]
+fn text_runs_follow_edits_incrementally() {
+    let mut source = SemanticsIdentitySource::default();
+    let (initial, ids) = content(
+        &mut source,
+        vec![
+            run("ab\n", 0, 0, TextDirection::Ltr),
+            run("cd", 3, 1, TextDirection::Ltr),
+        ],
+        Some(TextRunSelection::collapsed(TextRunPosition::new(0, 1))),
+    );
+    let (mut fixture, received) = fields(
+        |c| {
+            c.set_value("ab\ncd");
+            c.set_text_content(initial);
+        },
+        |_| {},
+    );
+    let mut consumer = accesskit_consumer::Tree::new(received.lock()[0].clone(), true);
+
+    let edited = TextContent::try_new(vec![
+        run("a\n", 0, 0, TextDirection::Ltr),
+        run("xyz", 2, 1, TextDirection::Ltr),
+    ])
+    .expect("the edited runs are contiguous")
+    .with_selection(TextRunSelection::collapsed(TextRunPosition::new(1, 2)))
+    .expect("the edited caret is in the second run")
+    .with_run_identities(ids.clone())
+    .expect("the run identities survive the edit");
+    replace_text(&mut fixture, "a\nxyz", edited);
+    fixture.owner.flush();
+    let update = received
+        .lock()
+        .last()
+        .expect("an edit is delivered")
+        .clone();
+    assert!(update.tree.is_none(), "the edit is incremental");
+    consumer.update_and_process_changes(update, &mut NoChanges);
+    let field = consumer
+        .state()
+        .node_by_tree_local_id(field_id(2), TreeId::ROOT)
+        .expect("the field remains published");
+    assert_eq!(field.document_range().text(), "a\nxyz");
+    assert_eq!(
+        field
+            .text_selection_focus()
+            .expect("the edited caret is published")
+            .to_global_usv_index(),
+        4
+    );
+    let second = consumer
+        .state()
+        .node_by_tree_local_id(NodeId(ids[1].accessibility_id().as_u64()), TreeId::ROOT)
+        .expect("the second run keeps its identity");
+    assert_eq!(second.data().value(), Some("xyz"));
+    assert_eq!(second.data().character_widths(), Some(&[10.0; 3][..]));
+    let bounds = second.data().bounds().expect("the run has bounds");
+    assert_eq!(
+        (bounds.x0, bounds.y0, bounds.x1, bounds.y1),
+        (0.0, 20.0, 30.0, 40.0)
+    );
+
+    let selection_only = TextContent::try_new(vec![
+        run("a\n", 0, 0, TextDirection::Ltr),
+        run("xyz", 2, 1, TextDirection::Ltr),
+    ])
+    .expect("the runs are unchanged")
+    .with_selection(TextRunSelection::collapsed(TextRunPosition::new(0, 0)))
+    .expect("the new caret is in the first run")
+    .with_run_identities(ids.clone())
+    .expect("the run identities remain assigned");
+    replace_text(&mut fixture, "a\nxyz", selection_only);
+    fixture.owner.flush();
+    let update = received
+        .lock()
+        .last()
+        .expect("the selection is delivered")
+        .clone();
+    assert!(update.tree.is_none(), "the selection edit is incremental");
+    assert!(
+        update.nodes.iter().any(|(id, _)| *id == field_id(2)),
+        "the field carries its new selection"
+    );
+    for identity in ids {
+        assert!(
+            update
+                .nodes
+                .iter()
+                .all(|(id, _)| { *id != NodeId(identity.accessibility_id().as_u64()) }),
+            "an unchanged run is not republished"
+        );
+    }
+    consumer.update_and_process_changes(update, &mut NoChanges);
+    let field = consumer
+        .state()
+        .node_by_tree_local_id(field_id(2), TreeId::ROOT)
+        .expect("the field remains published");
+    assert_eq!(
+        field
+            .text_selection_focus()
+            .expect("the new caret is published")
+            .to_global_usv_index(),
+        0
+    );
+}
+
+/// A stable run id does not authorize a position against text the adapter has
+/// not received. This holds for field and document selections alike.
+#[test]
+fn text_positions_wait_for_their_text_to_be_delivered() {
+    for document in [false, true] {
+        let mut source = SemanticsIdentitySource::default();
+        let (initial, ids) = content(&mut source, vec![run("a", 0, 0, TextDirection::Ltr)], None);
+        let text_anchor = SemanticsAnchor::new();
+        let declared_anchor = text_anchor.clone();
+        let failing = Arc::new(AtomicBool::new(false));
+        let reject = Arc::clone(&failing);
+        let mut fixture = Fixture::new();
+        fixture.owner = flui_semantics::SemanticsOwner::new(Arc::new(move |_: &TreeUpdate| {
+            assert!(!reject.load(Ordering::Relaxed), "text delivery rejected");
+        }));
+        fixture.add(None, 1, (0.0, 0.0, 400.0, 200.0), |c| {
+            c.set_label("Window");
+        });
+        if document {
+            fixture.add(Some(1), 4, (0.0, 0.0, 300.0, 100.0), |c| {
+                c.set_role(SemanticsRole::Document);
+                c.set_merge_boundary(true);
+                c.add_action(
+                    flui_semantics::SemanticsAction::SetTextSelection,
+                    std::rc::Rc::new(|_| {}),
+                );
+            });
+        }
+        fixture
+            .add(
+                Some(if document { 4 } else { 1 }),
+                2,
+                (10.0, 10.0, 300.0, 40.0),
+                |c| {
+                    c.set_role(if document {
+                        SemanticsRole::None
+                    } else {
+                        SemanticsRole::TextInput
+                    });
+                    c.set_value("a");
+                    c.set_text_content(initial);
+                    if document {
+                        c.add_anchor(declared_anchor);
+                    } else {
+                        c.add_action(
+                            flui_semantics::SemanticsAction::SetTextSelection,
+                            std::rc::Rc::new(|_| {}),
+                        );
+                    }
+                },
+            )
+            .flush();
+
+        let edited = TextContent::try_new(vec![run("é", 0, 0, TextDirection::Ltr)])
+            .expect("one edited run")
+            .with_run_identities(ids.clone())
+            .expect("the run keeps its identity");
+        replace_text(&mut fixture, "é", edited);
+        failing.store(true, Ordering::Relaxed);
+        let failure = catch_unwind(AssertUnwindSafe(|| fixture.owner.flush()))
+            .expect_err("the adapter rejects the edited text");
+        failing.store(false, Ordering::Relaxed);
+        flui_foundation::panic::discard_payload(failure);
+
+        let run_id = NodeId(ids[0].accessibility_id().as_u64());
+        let request = select(2, (run_id, 1), (run_id, 1));
+        let target =
+            flui_semantics::AccessibilityNodeId::from(render_id(if document { 4 } else { 2 }, 5));
+        assert_eq!(
+            fixture.owner.semantics_action_request_for(&request),
+            Err(ActionDecodeError::InvalidTextPosition { node_id: target }),
+            "document={document}: undelivered text cannot decode an old position"
+        );
+
+        fixture.owner.flush();
+        let decoded = fixture
+            .owner
+            .semantics_action_request_for(&request)
+            .expect("delivery makes the same run position current");
+        assert_eq!(decoded.node_id, target);
+        if document {
+            assert_eq!(
+                decoded.call,
+                ActionCall::SetDocumentSelection(DocumentSelection::new(
+                    DocumentPosition::new(text_anchor.clone(), 2),
+                    DocumentPosition::new(text_anchor, 2),
+                ))
+            );
+        } else {
+            assert_eq!(
+                decoded.call,
+                ActionCall::SetTextSelection(flui_semantics::TextSelection {
+                    anchor: 2,
+                    focus: 2,
+                })
+            );
+        }
     }
 }
 

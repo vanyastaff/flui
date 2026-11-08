@@ -2,6 +2,7 @@
 
 use flui::animation::Animation;
 use flui::geometry::{Offset, Point, Rect, Size};
+use flui::interaction::HitTestBehavior;
 use flui::painting::{Canvas, CustomPainter, DrawOp, Paint};
 use flui::prelude::*;
 use flui::rendering::{
@@ -41,7 +42,7 @@ impl CustomPainter for RectanglePainter {
     }
 
     fn semantics_regions(&self, size: Size) -> Vec<flui::painting::SemanticsRegion> {
-        let mut config = flui::widgets::SemanticsConfiguration::new();
+        let mut config = flui::rendering::SemanticsConfiguration::new();
         config.set_label("painted rectangle");
         vec![flui::painting::SemanticsRegion::new(
             flui::painting::SemanticsRegionKey(1),
@@ -366,7 +367,7 @@ fn typed_drag_down_callback_is_available_from_the_widget_surface() {
     let tree = lay_out(
         GestureDetector::new()
             .drag(flui::widgets::DragSlot::horizontal().on_down(
-                move |_cx, _details: flui::widgets::DragDownDetails| {
+                move |_cx, _details: flui::interaction::DragDownDetails| {
                     observed.fetch_add(1, Ordering::SeqCst);
                 },
             ))
@@ -405,7 +406,7 @@ impl flui::interaction::GestureRecognizer for DistanceRecognizer {
             .expect("fixture contact admitted");
     }
 
-    fn handle_event(&self, dispatch: flui::widgets::PointerDispatch<'_>) {
+    fn handle_event(&self, dispatch: flui::interaction::PointerDispatch<'_>) {
         use flui::interaction::{PointerEvent, PointerEventExt};
         if let PointerEvent::Move(_) = dispatch.local {
             let origin = self.contact.current().expect("tracked pointer").local;
@@ -431,7 +432,7 @@ fn downstream_custom_recognizer_competes_in_the_arena() {
         ArenaMembership, GestureArenaMember, GestureRecognizer, PointerId, PrimaryContact,
     };
     use flui::testing::replay::{PointerPhase, ScriptedPointer};
-    use flui::widgets::PointerDispatch;
+    use flui::interaction::PointerDispatch;
     use std::rc::Rc;
 
     let binding = flui::testing::HeadlessBinding::new();
@@ -860,9 +861,9 @@ fn presentation_lifecycle_capability_is_absent_when_not_installed() {
 #[test]
 fn secondary_window_entry_point_requires_a_running_application() {
     assert!(
-        flui::app::open_secondary_window(
-            flui::app::AppConfig::default(),
-            flui::app::WindowPolicy::Isolated,
+        flui::open_secondary_window(
+            flui::AppConfig::default(),
+            flui::WindowPolicy::Isolated,
         )
         .is_err()
     );

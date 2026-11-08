@@ -64,6 +64,9 @@ use x11rb::{COPY_DEPTH_FROM_PARENT, COPY_FROM_PARENT, CURRENT_TIME, NONE};
 
 use crate::clipboard::text::{CONCEALED_HINT, CONCEALED_HINT_VALUE, TextForm};
 use crate::host::{MAX_TEXT, owned_text};
+use crate::transfer::linux::x11::{
+    RESERVE_CAP, ReadProgress, ReadRefusal, SelectionRead, SelectionWrite,
+};
 
 /// How long a transfer may wait for its peer: a whole read, the next chunk
 /// of an `INCR` write, or the owner thread's text for the primary
@@ -338,18 +341,15 @@ impl Owned {
     }
 }
 
-/// An `INCR` write: the requestor's property, filled a chunk at a time.
+/// An `INCR` write: protocol state shared with XDND, and the text encoding
+/// state that belongs to the clipboard alone.
 struct Transfer {
-    requestor: xproto::Window,
-    property: xproto::Atom,
-    kind: xproto::Atom,
+    write: SelectionWrite,
     form: TextForm,
     text: Arc<str>,
-    /// The byte of `text` the next chunk starts at.
-    written: usize,
-    /// Whether the zero-length chunk that ends it is written.
-    ended: bool,
-    deadline: Instant,
+    /// The UTF-8 byte of `text` the next encoded chunk starts at. For UTF-8
+    /// forms this equals `write`'s encoded offset; for Latin-1 it does not.
+    text_offset: usize,
 }
 
 /// A request for the primary selection's text, waiting on the owner
@@ -362,14 +362,12 @@ struct Ask {
     deadline: Instant,
 }
 
-/// The read under way: the form asked for and what came so far.
+/// The read under way: the form asked for and the shared protocol machine.
 struct Reading {
     form: TextForm,
     /// The server's time the read asks at; `None` until it arrives.
     time: Option<xproto::Timestamp>,
-    /// The bytes of an `INCR` read, once the owner announced one.
-    incremental: Option<Vec<u8>>,
-    deadline: Instant,
+    read: SelectionRead,
 }
 
 /// One selection: what the application owns it with, and the reads of it.
@@ -466,8 +464,11 @@ impl Selection {
             self.reading = Some(Reading {
                 form: READ_ORDER[0],
                 time: None,
-                incremental: None,
-                deadline: Instant::now() + TRANSFER_TIMEOUT,
+                read: SelectionRead::new(
+                    MAX_TEXT as u64,
+                    RESERVE_CAP,
+                    Instant::now() + TRANSFER_TIMEOUT,
+                ),
             });
             // The server stamps the property's change with its time.
             connection.change_property8(
@@ -603,94 +604,82 @@ impl Selection {
             return Ok(());
         }
         let form = reading.form;
-        let reply = self.take_property(connection, window, MAX_TEXT)?;
-        if reply.type_ == atoms.incr {
-            // The owner says how much is coming, at least: room for that is
-            // taken once, so honest chunks land without growing the buffer.
-            let announced = reply
-                .value32()
-                .and_then(|mut value| value.next())
-                .and_then(|size| usize::try_from(size).ok())
-                .unwrap_or(0);
-            // The header is let go before the room is taken: an owner may pad
-            // it to the read's limit.
-            drop(reply);
-            if announced > MAX_TEXT {
-                // Deleting the property asked for the first chunk: it lands
-                // where no read looks.
-                self.retire_destination();
-                self.answer(Err(ClipboardError::TooLarge));
-                return Ok(());
-            }
-            // Deleting the property asked for the first chunk.
-            if let Some(reading) = &mut self.reading {
-                reading.incremental = Some(Vec::with_capacity(announced));
-            }
-            return Ok(());
-        }
-        let text = if reply.bytes_after == 0 {
-            form.answer(reply.value)
-        } else {
-            Err(ClipboardError::TooLarge)
-        };
-        self.answer(text);
+        let reply = self.take_property(connection, window)?;
+        let progress = self
+            .reading
+            .as_mut()
+            .expect("BUG: a converted selection has a read")
+            .read
+            .first(reply, atoms.incr);
+        self.progress(form, progress);
         Ok(())
     }
 
-    /// The owner wrote an `INCR` chunk: read at most what the read has left
-    /// of [`MAX_TEXT`], the first chunk kept as it came.
+    /// The owner wrote an `INCR` chunk: read at most what the shared read
+    /// has left of its limit, then let it measure and accumulate the chunk.
     fn read_chunk(
         &mut self,
         connection: &RustConnection,
         window: xproto::Window,
     ) -> Result<(), ReplyOrIdError> {
-        let Some(received) = self
+        if self
             .reading
             .as_ref()
-            .and_then(|reading| reading.incremental.as_ref())
-            .map(Vec::len)
-        else {
+            .is_none_or(|reading| !reading.read.is_incremental())
+        {
             return Ok(());
-        };
-        let reply = self.take_property(connection, window, MAX_TEXT.saturating_sub(received))?;
-        let Some(reading) = &mut self.reading else {
-            return Ok(());
-        };
-        let Some(bytes) = &mut reading.incremental else {
-            return Ok(());
-        };
-        // A chunk past what the read has left reads as empty with bytes after
-        // it, which is not the end of the transfer.
-        if bytes.len() + reply.value.len() > MAX_TEXT || reply.bytes_after != 0 {
-            // The owner's transfer goes on: its chunks land where no read looks.
-            self.retire_destination();
-            self.answer(Err(ClipboardError::TooLarge));
-        } else if reply.value.is_empty() {
-            let form = reading.form;
-            let bytes = std::mem::take(bytes);
-            self.answer(form.answer(bytes));
-        } else if bytes.capacity() == 0 {
-            // Nothing announced: the first chunk is kept as it came.
-            *bytes = reply.value;
-        } else {
-            append(bytes, &reply.value);
         }
+        let form = self
+            .reading
+            .as_ref()
+            .expect("BUG: the read was just found")
+            .form;
+        let reply = self.take_property(connection, window)?;
+        let progress = self
+            .reading
+            .as_mut()
+            .expect("BUG: a chunk has a read")
+            .read
+            .chunk(reply);
+        self.progress(form, progress);
         Ok(())
     }
 
-    /// Read and delete the window's destination property, at most `limit`
-    /// bytes of it, rounded up to whole 32-bit units; a longer value says
-    /// so in `bytes_after`.
+    /// Apply the shared protocol outcome, retiring this destination on every
+    /// refusal so late chunks land where no later read looks.
+    fn progress(&mut self, form: TextForm, progress: ReadProgress) {
+        match progress {
+            ReadProgress::Progress => {}
+            ReadProgress::Done(bytes) => self.answer(form.answer(bytes)),
+            ReadProgress::Refused(refusal) => {
+                self.retire_destination();
+                self.answer(Err(clipboard_refusal(refusal)));
+            }
+        }
+    }
+
+    /// Read and delete the window's destination property through the shared
+    /// read's bounded request. A partial reply is not deleted by the server,
+    /// so delete it explicitly before its oversize outcome is delivered.
     fn take_property(
         &self,
         connection: &RustConnection,
         window: xproto::Window,
-        limit: usize,
     ) -> Result<GetPropertyReply, ReplyOrIdError> {
-        let longs = u32::try_from(limit.div_ceil(4)).expect("BUG: the text limit fits a request");
-        Ok(connection
-            .get_property(true, window, self.destination(), AtomEnum::ANY, 0, longs)?
-            .reply()?)
+        let destination = self.destination();
+        let longs = self
+            .reading
+            .as_ref()
+            .expect("BUG: a property is taken only for a read")
+            .read
+            .request_words();
+        let reply = connection
+            .get_property(true, window, destination, AtomEnum::ANY, 0, longs)?
+            .reply()?;
+        if reply.bytes_after != 0 {
+            connection.delete_property(window, destination)?;
+        }
+        Ok(reply)
     }
 
     /// End the read under way if it waited past `now`.
@@ -698,7 +687,7 @@ impl Selection {
         if self
             .reading
             .as_ref()
-            .is_some_and(|reading| reading.deadline <= now)
+            .is_some_and(|reading| reading.read.expire(now).is_some())
         {
             tracing::debug!("an X11 selection read timed out");
             self.retire_destination();
@@ -1206,9 +1195,8 @@ impl Selections {
             )?;
             return Ok(true);
         }
-        self.transfers.retain(|transfer| {
-            transfer.requestor != request.requestor || transfer.property != property
-        });
+        self.transfers
+            .retain(|transfer| !transfer.write.matches(request.requestor, property));
         if self.transfers.len() >= MAX_WRITERS {
             tracing::debug!("an X11 selection transfer past {MAX_WRITERS} at once was refused");
             return Ok(false);
@@ -1233,14 +1221,16 @@ impl Selections {
             &[size],
         )?;
         self.transfers.push(Transfer {
-            requestor: request.requestor,
-            property,
-            kind,
+            write: SelectionWrite::new(
+                request.requestor,
+                property,
+                kind,
+                size,
+                Instant::now() + TRANSFER_TIMEOUT,
+            ),
             form,
             text,
-            written: 0,
-            ended: false,
-            deadline: Instant::now() + TRANSFER_TIMEOUT,
+            text_offset: 0,
         });
         Ok(true)
     }
@@ -1255,28 +1245,29 @@ impl Selections {
         let Some(at) = self
             .transfers
             .iter()
-            .position(|transfer| transfer.requestor == requestor && transfer.property == property)
+            .position(|transfer| transfer.write.matches(requestor, property))
         else {
             return Ok(());
         };
         let transfer = &mut self.transfers[at];
-        if transfer.ended {
+        if transfer.write.ended() {
             let transfer = self.transfers.swap_remove(at);
-            self.forget(transfer.requestor)?;
+            self.forget(transfer.write.requestor())?;
             return Ok(());
         }
+        let range = transfer
+            .write
+            .next_chunk(self.chunk, Instant::now() + TRANSFER_TIMEOUT);
         let (chunk, next) =
             transfer
                 .form
-                .encode_chunk(&transfer.text, transfer.written, self.chunk);
-        transfer.ended = chunk.is_empty();
-        transfer.written = next;
-        transfer.deadline = Instant::now() + TRANSFER_TIMEOUT;
+                .encode_chunk(&transfer.text, transfer.text_offset, range.len());
+        transfer.text_offset = next;
         self.connection.change_property8(
             PropMode::REPLACE,
             requestor,
             property,
-            transfer.kind,
+            transfer.write.target(),
             &chunk,
         )?;
         Ok(())
@@ -1307,7 +1298,7 @@ impl Selections {
             && self
                 .transfers
                 .iter()
-                .all(|transfer| transfer.requestor != requestor);
+                .all(|transfer| transfer.write.requestor() != requestor);
         if unheard {
             self.connection.change_window_attributes(
                 requestor,
@@ -1323,11 +1314,11 @@ impl Selections {
         self.primary.expire(now);
         let (expired, kept): (Vec<Transfer>, Vec<Transfer>) = std::mem::take(&mut self.transfers)
             .into_iter()
-            .partition(|transfer| transfer.deadline <= now);
+            .partition(|transfer| transfer.write.expired(now));
         self.transfers = kept;
         for transfer in expired {
             tracing::debug!("an X11 selection transfer timed out");
-            self.forget(transfer.requestor)?;
+            self.forget(transfer.write.requestor())?;
         }
         let (expired, kept): (Vec<Ask>, Vec<Ask>) = std::mem::take(&mut self.asks)
             .into_iter()
@@ -1355,8 +1346,12 @@ impl Selections {
         [&self.clipboard, &self.primary]
             .into_iter()
             .filter_map(|selection| selection.reading.as_ref())
-            .map(|reading| reading.deadline)
-            .chain(self.transfers.iter().map(|transfer| transfer.deadline))
+            .map(|reading| reading.read.deadline())
+            .chain(
+                self.transfers
+                    .iter()
+                    .map(|transfer| transfer.write.deadline()),
+            )
             .chain(self.asks.iter().map(|ask| ask.deadline))
             .min()
     }
@@ -1428,20 +1423,13 @@ fn report(diagnostic: impl FnOnce()) {
     }
 }
 
-/// Append `chunk` to an `INCR` read's `bytes`, which stay within
-/// [`MAX_TEXT`] with it: past the room taken, the buffer grows exactly,
-/// at most doubling and never past the limit, so a read holds less than
-/// twice [`MAX_TEXT`] even while it grows.
-fn append(bytes: &mut Vec<u8>, chunk: &[u8]) {
-    let needed = bytes.len() + chunk.len();
-    if needed > bytes.capacity() {
-        let grown = bytes
-            .capacity()
-            .saturating_mul(2)
-            .clamp(needed, MAX_TEXT.max(needed));
-        bytes.reserve_exact(grown - bytes.len());
+/// Translate the protocol refusal into the clipboard's public vocabulary.
+fn clipboard_refusal(refusal: ReadRefusal) -> ClipboardError {
+    match refusal {
+        ReadRefusal::Timeout => ClipboardError::Timeout,
+        ReadRefusal::TooLarge { .. } => ClipboardError::TooLarge,
+        ReadRefusal::Protocol => ClipboardError::Unavailable,
     }
-    bytes.extend_from_slice(chunk);
 }
 
 fn steps(
@@ -1503,7 +1491,7 @@ fn not_before(time: xproto::Timestamp, since: xproto::Timestamp) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{MAX_TEXT, append, not_before};
+    use super::not_before;
 
     /// A time just past the clock's wrap is later than one just before it.
     #[test]
@@ -1513,21 +1501,5 @@ mod tests {
         assert!(not_before(5, 5));
         assert!(not_before(6, 5));
         assert!(!not_before(5, 6));
-    }
-
-    /// An `INCR` read's buffer grows exactly within its limit: past the room
-    /// taken it at most doubles, and never past [`MAX_TEXT`].
-    #[test]
-    fn a_read_buffer_grows_within_the_limit() {
-        let mut bytes = Vec::with_capacity(4);
-        append(&mut bytes, b"0123456789");
-        assert_eq!(bytes.capacity(), 10, "grown to what the chunk needs");
-        append(&mut bytes, b"ab");
-        assert_eq!(bytes.capacity(), 20, "doubled");
-        assert_eq!(bytes, b"0123456789ab");
-
-        let mut bytes = vec![0_u8; MAX_TEXT * 3 / 4];
-        append(&mut bytes, b"x");
-        assert_eq!(bytes.capacity(), MAX_TEXT, "not doubled past the limit");
     }
 }

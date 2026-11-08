@@ -7,7 +7,8 @@ use std::time::Duration;
 use flui_material::{InkWell, RippleConfiguration, RippleScope, StateLayerAlpha, Theme, ThemeData};
 use flui_sdk::animation::MotionOverride;
 use flui_sdk::geometry::{Point, Rect};
-use flui_sdk::painting::{Alignment, Color, DrawOp};
+use flui_sdk::painting::styling::Color;
+use flui_sdk::painting::{Alignment, DrawOp};
 use flui_sdk::view::environment::VsyncScope;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{
@@ -440,9 +441,8 @@ pub fn a_long_press_winning_the_arena_cancels_the_wave() {
 /// contact that lands while it is pending grows no wave, and the tracked one
 /// fades once it moves past the slop.
 pub fn a_second_contact_grows_no_wave_beside_a_pending_tap() {
-    use flui_interaction::events::{
-        PointerId, PointerKind, make_down_event_for_id, make_move_event_for_id,
-    };
+    use flui_sdk::interaction::{PointerId, PointerKind};
+    use flui_sdk::testing::input::{make_down_event_for_id, make_move_event_for_id};
     let contact = |id: u64| PointerId::new(std::num::NonZeroU64::new(id).expect("non-zero"));
     let at = |x: f64| flui_sdk::geometry::Offset::new(x, 20.0);
     let (first, second) = (contact(901), contact(902));
@@ -476,10 +476,11 @@ pub fn a_second_contact_grows_no_wave_beside_a_pending_tap() {
 /// Pressing and releasing another button while the primary is held (a
 /// `ButtonChange` each way) keeps the press.
 pub fn releasing_another_button_leaves_the_primary_pressing() {
-    use flui_interaction::events::{
+    use flui_sdk::interaction::{
         ButtonChange, PointerButton, PointerButtons, PointerEvent, PointerId, PointerKind,
-        PointerPress, PointerRelease, make_down_event_for_id_with_button,
+        PointerPress, PointerRelease,
     };
+    use flui_sdk::testing::input::make_down_event_for_id_with_button;
     let mut laid = mount(tinted(well()));
     let pointer = PointerId::new(std::num::NonZeroU64::new(903).expect("non-zero"));
     let down = make_down_event_for_id_with_button(
@@ -520,10 +521,11 @@ pub fn releasing_another_button_leaves_the_primary_pressing() {
 /// The primary button coming up while another is still held ends the press,
 /// though the contact goes on until that other button is released.
 pub fn a_primary_release_under_another_button_ends_the_press() {
-    use flui_interaction::events::{
+    use flui_sdk::interaction::{
         ButtonChange, PointerButton, PointerButtons, PointerEvent, PointerId, PointerKind,
-        PointerRelease, make_down_event_for_id_with_button,
+        PointerRelease,
     };
+    use flui_sdk::testing::input::make_down_event_for_id_with_button;
     let mut laid = mount(tinted(well()));
     let pointer = PointerId::new(std::num::NonZeroU64::new(900).expect("non-zero"));
     let down = make_down_event_for_id_with_button(

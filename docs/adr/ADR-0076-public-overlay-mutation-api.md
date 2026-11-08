@@ -83,6 +83,16 @@ asserts the same preconditions):
 - **A replacement handle takes over.** An `Overlay` rebuilt with a different handle releases
   the old handle's slot and claims the new one.
 
+### 2b. Owner-local mutation commits before scheduling
+
+`OverlayHandle` and `OverlayEntry` are `Rc`-backed owner-thread capabilities. Entry lists,
+back-references and rebuild slots use `RefCell`; flags use `Cell`. A mutation commits its state
+and releases every borrow before it schedules through a cloned `RebuildHandle`. Diagnostics and
+replaced values likewise run or drop outside shared borrows. A frame-request hook may therefore
+re-enter `insert`, `rearrange`, `remove` or `mark_needs_build` without deadlocking or panicking
+on a nested borrow. The public regression is
+`frame_request_reentry_is_processed_without_deadlocking` in `crates/flui-widgets/tests/overlay.rs`.
+
 ### 3. Bookkeeping stays private
 
 `OverlayEntry::{id, element_id, builder}`, `OverlayHandle::{len, is_same, insert_all}`, the
@@ -102,11 +112,11 @@ one with no extra code.
 
 `Overlay::maybe_of` resolves through `depend_on`, which registers a dependency. **This diverges
 from Flutter**, whose `Overlay.maybeOf` passes `createDependency: false`. The reason is
-FLUI-specific: `Draggable`'s drag session is a `Send + Sync` gesture object with no
-`BuildContext`, so it cannot re-run the lookup mid-drag as Flutter's `_DragAvatar` does. The
-handle is resolved ahead of time in `init_state`/`did_change_dependencies` and cached; the
-dependency re-notifies the state if a different overlay identity replaces the resolved one
-(`OverlayScope::update_should_notify` compares handles with `Arc::ptr_eq`).
+FLUI-specific: `Draggable`'s owner-local drag session holds no `BuildContext`, so it cannot
+re-run the lookup mid-drag as Flutter's `_DragAvatar` does. The handle is resolved ahead of time
+in `init_state`/`did_change_dependencies` and cached; the dependency re-notifies the state if a
+different overlay identity replaces the resolved one
+(`OverlayScope::update_should_notify` compares handles with `Rc::ptr_eq`).
 
 The lookup is an ordinary inherited read, like `Theme::of`, not a lifecycle capability.
 

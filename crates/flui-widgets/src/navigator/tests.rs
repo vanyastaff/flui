@@ -153,7 +153,7 @@ fn double_pop_or_double_remove_does_not_double_complete() {
     let (top, result) = history.push(Probe::new(&log));
 
     history.remove_route(top, Some(boxed(1)));
-    assert_eq!(result.try_take(), Some(Some(1)));
+    assert_eq!(result.try_take(), Some(Ok(Some(1))));
 
     // The entry is gone; a second removal finds nothing.
     assert!(!history.remove_route(top, Some(boxed(2))));
@@ -343,7 +343,11 @@ fn route_binding_finalize_during_flush_is_deferred_not_reentrant() {
         "the finalized route was disposed and dropped"
     );
     assert_eq!(history.len(), 1);
-    assert_eq!(result.try_take(), Some(Some(5)), "and it still completed");
+    assert_eq!(
+        result.try_take(),
+        Some(Ok(Some(5))),
+        "and it still completed"
+    );
     assert_eq!(
         history.last_flush_passes(),
         2,
@@ -356,12 +360,11 @@ fn route_binding_finalize_during_flush_is_deferred_not_reentrant() {
 // 11. PURITY
 // ============================================================================
 
-/// History failure paths: double completion, re-entered flush, deferred finalization and
-/// registrations that re-enter the registry from `Drop`. Each row runs to completion and a
-/// failing row is named.
+/// History failure paths: double completion, re-entered flush and deferred finalization.
+/// Each row runs to completion and a failing row is named.
 #[test]
 fn history_reentrancy_and_completion_contracts() {
-    let rows: [(&str, fn()); 6] = [
+    let rows: [(&str, fn()); 5] = [
         (
             "route_identity_exhaustion_preserves_history_authority",
             super::route::route_identity_exhaustion_preserves_history_authority,
@@ -374,14 +377,13 @@ fn history_reentrancy_and_completion_contracts() {
             "double_pop_or_double_remove_does_not_double_complete",
             double_pop_or_double_remove_does_not_double_complete,
         ),
-        ("reentrant_flush_panics_with_bug", reentrant_flush_panics_with_bug),
+        (
+            "reentrant_flush_panics_with_bug",
+            reentrant_flush_panics_with_bug,
+        ),
         (
             "route_binding_finalize_during_flush_is_deferred_not_reentrant",
             route_binding_finalize_during_flush_is_deferred_not_reentrant,
-        ),
-        (
-            "a_registration_dropped_while_replacing_or_clearing_may_re_enter_the_registry",
-            super::navigator_tests::a_registration_dropped_while_replacing_or_clearing_may_re_enter_the_registry,
         ),
     ];
     let mut failures = Vec::new();

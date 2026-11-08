@@ -116,8 +116,9 @@ the vocabulary of every transfer, the clipboard's later read included (§7):
 - `TransferActions` (`COPY`, `MOVE`, `LINK`) and `DropFeedback { accept }`, `None` to refuse.
 - `TransferPayload`: `Text`, `Html`, and `Custom { mime, bytes }` for every other type, a URI
   list as the bytes of `text/uri-list` (RFC 2483), an image as the encoded bytes of its container.
-- `TransferLimits { max_bytes }` (16 MiB by default, `#[non_exhaustive]`), checked against the
-  declared length at the request and the accumulated length during delivery.
+- `TransferLimits { max_bytes }` (16 MiB by default, `#[non_exhaustive]`). `DragView` checks a
+  known declared length before calling the source and checks the final payload's actual length;
+  a length equal to the limit is valid. Backends bound accumulated reads and may refuse early.
 - `TransferError`: `StaleOffer`, `UnknownRepresentation`, `TooLarge`, `Decode`, `SourceGone`,
   `Cancelled` (`#[non_exhaustive]`).
 
@@ -139,9 +140,14 @@ pub trait DragTransport: Send + Sync {
 /// For a host with no drag transport: every request answers `StaleOffer`.
 pub struct NullDragTransport;
 
+impl TransferLimits {
+    pub fn check(self, actual: u64) -> Result<(), TransferError>;
+}
+
 impl TransferRequest {
     pub fn pending() -> (TransferRequest, TransferCompleter);
     pub fn ready(result: Result<TransferPayload, TransferError>) -> TransferRequest;
+    pub fn enforce(self, limits: TransferLimits) -> TransferRequest;
 }
 
 // flui_native
@@ -159,6 +165,16 @@ future polled by the frame-driven async driver; dropping it cancels, which the p
 without completing resolves the request `SourceGone`, so a producer that panics never leaves a
 target waiting. `data_transfer()` is required, so the compiler makes every host answer; a host
 with no drag transport answers `NullDragTransport`.
+
+`DragView::request` checks an oversized `declared_len` before calling `DragTransport::request`,
+then applies `TransferRequest::enforce` at its receiver seam. Every backend also returns its
+request with `enforce(limits)`, so a direct `DragTransport` caller gets the same final check:
+`TransferLimits::check` measures a successful payload whether the request was ready immediately
+or resolved after `Pending`. Source errors, cancellation and the prohibition on polling after
+resolution stay unchanged. Backends own declared, accumulated and decoded-length checks too:
+they read with a byte ceiling and may return `TooLarge` before materializing more data. Final
+enforcement is not a substitute for a bounded read, because it cannot undo an allocation the
+source already made.
 
 ### §5. Drag and drop enters as `PlatformInput::DragDrop`
 
@@ -274,6 +290,16 @@ Until then no type of §7 exists; `docs/gaps.md` lists the section.
   `concurrent_sessions_are_independent` (`flui-interaction`), and
   `drag_and_drop_reaches_the_runtime` (`flui-runtime`, §5), with each host's drag tests
   (`drag::x11::tests`, `wayland_drag`, `ole_drag_and_drop_on_real_windows`).
+- Declared/final limits: `final_limits` (`flui-platform`) covers ready and pending payloads, the
+  inclusive boundary, source errors, cancellation and polling after resolution;
+  `an_external_ready_payload_over_limit_is_rejected`,
+  `an_external_pending_payload_over_limit_is_rejected`,
+  `an_oversized_declared_len_never_reaches_the_source` and
+  `transfer_limit_boundary_and_source_errors_are_preserved` (`flui-interaction`) cover the public
+  `DragView` seam, including a source that lies after `Pending`. The shared
+  `testing::drag::oversized_delivery` and `oversized_delivery_async` drive `DragTransport::request`
+  directly; the headless, Wayland and Web `direct_requests_refuse_oversized_ready_and_pending_deliveries`
+  cases prove backend-side final enforcement without relying on `DragView`.
 - The clipboard's tests (§6): `copy_and_paste_round_trip_through_the_headless_clipboard`,
   `reads_asked_while_one_is_in_flight_share_its_answer` and
   `a_concealed_write_reaches_the_host_marked`, in the `capability_seam` table of `flui-testing`.

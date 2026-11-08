@@ -237,7 +237,7 @@ fn web_startup_samples_native_changes_after_mount_and_observer_registration() {
                 let window: Rc<dyn PlatformWindow> = host.clone();
                 let native = host
                     .as_any()
-                    .downcast_ref::<flui_native::MockWindow>()
+                    .downcast_ref::<flui_native::testing::HeadlessWindow>()
                     .expect("headless window");
                 if matches!(change, NativeChange::InitiallyUnfocused) {
                     native.simulate_focus(false);
@@ -734,7 +734,7 @@ fn system_key_default_follows_the_ui_runtimes_decision() {
     install_input_wiring(dispatcher, window.as_ref());
     let native = host
         .as_any()
-        .downcast_ref::<flui_native::MockWindow>()
+        .downcast_ref::<flui_native::testing::HeadlessWindow>()
         .expect("headless test window");
     let alt_f4 = || {
         PlatformInput::Keyboard(
@@ -775,7 +775,7 @@ fn system_key_default_follows_the_ui_runtimes_decision() {
             ));
             let native = turn_window
                 .as_any()
-                .downcast_ref::<flui_native::MockWindow>()
+                .downcast_ref::<flui_native::testing::HeadlessWindow>()
                 .expect("headless test window");
             in_turn_result.set(Some((
                 native.inject_event(alt_f4()).default_prevented,
@@ -1033,7 +1033,7 @@ fn native_keyboard_cannot_overtake_queued_window_changes_and_keys() {
         with_owner_callback(|_| {
             let native = host
                 .as_any()
-                .downcast_ref::<flui_native::MockWindow>()
+                .downcast_ref::<flui_native::testing::HeadlessWindow>()
                 .expect("native mock");
             let result = native.inject_event(PlatformInput::Keyboard(
                 KeyEventBuilder::new(Code::F5).build(),
@@ -1957,7 +1957,7 @@ fn platform_brightness_follows_the_window_appearance() {
     let (host, window) = test_host_window();
     let native = host
         .as_any()
-        .downcast_ref::<flui_native::MockWindow>()
+        .downcast_ref::<flui_native::testing::HeadlessWindow>()
         .expect("headless window")
         .clone();
     // The desktop is already dark when the window opens.

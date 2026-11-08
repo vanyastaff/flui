@@ -1,11 +1,12 @@
 # Application runtime architecture
 
 `flui-app` is the composition root: the platform runners, the loop-scoped
-`AppRuntime`, the UI runtime dispatch layer, the raster lane and the platform
-wiring. The UI runtime itself (`UiRuntime`, its presentations and their frame
-transaction) lives in `flui-runtime` (ADR-0083); `crate::app::ui_runtime`,
-`presentation` and `lifecycle_state` alias its modules for the runners until
-the dispatch layer moves there too.
+`AppRuntime`, native owner-dispatch tails, the raster lane and the platform
+wiring. `UiRuntime`, its presentations and frame transaction, `OwnerHost` and
+typed owner-operation application live in `flui-runtime` (ADR-0083);
+`crate::app::ui_runtime`, `presentation` and `lifecycle_state` alias its modules
+for the runners' existing `crate::app::…` paths. Native-window demultiplexing
+and the platform/raster tails of an owner turn remain here.
 
 ## Invariants
 
@@ -28,8 +29,9 @@ the dispatch layer moves there too.
   loop-identity and logical-host checks as desktop delivery. DOM invalidation
   posts the shared owner signal rather than entering the runtime directly;
   source values reach the ADR-0195 projection through the existing host path.
-  WASM platform adapter acceptance uses the controlled JS boundary described
-  in `flui-native/ARCHITECTURE.md`; rendered browser live-update acceptance
+  WASM platform adapter acceptance uses the native web host's single-thread JS
+  boundary (`flui-native/src/owner/web.rs`) and its exact-canvas registration
+  (`flui-native/src/window/web.rs`); rendered browser live-update acceptance
   remains separate.
 
 - **Window delivery retains its address.** Runtime wakes and redraw debt are
@@ -162,8 +164,9 @@ the dispatch layer moves there too.
   blocks in `accept`, and each
   connection's thread parks until the session's waker or deadline wakes it:
   on Unix a reader thread blocks on the socket and a stop shuts it down; a
-  Windows pipe takes no timeout, so its connection looks for input every
-  10 ms while nothing else wakes it. No thread waits on an answer. An app
+  Windows pipe takes no timeout, so its connection yields while input is
+  actively arriving and returns to a 10 ms park after 50 ms idle. No thread
+  waits on an answer. An app
   launched without an endpoint runs no agent thread
   (`an_app_launched_without_an_endpoint_starts_no_agent`). Under
   `EXIT_ON_DISCONNECT` the connection admitted as the driver (ADR-0288 §8) is the one: when
@@ -301,8 +304,9 @@ the dispatch layer moves there too.
   requests a full repaint of the primary, which owns the current UI runtime sink.
   Native surface callbacks release their raster-lane guard before dispatch.
   `TestCallback` exists only under `cfg(test)` for private failure injection.
-  The installed driver executes its backend frame protocol; extracting the owner
-  host remains ADR-0083's migration work.
+  The installed driver executes its backend frame protocol; `OwnerHost` and
+  typed operation application live in `flui-runtime`, while this module retains
+  the native dispatch tails.
   `owner_dispatch_matrix` pins font registration fan-out/reentry and
   `recovered_surface_notification_resubmits_the_scene` pins a real scene
   submission after an idle frame, rather than a dirty-flag change.

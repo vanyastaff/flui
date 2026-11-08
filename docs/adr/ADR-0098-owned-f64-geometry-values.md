@@ -83,9 +83,8 @@ doc comment names the invariant (§5's `DevicePixelRatio` and `DeviceF64` are tw
   would halve `DrawOp` (224 bytes now) but split the conversion across every recorder; measure
   before moving it.
 - **One widening point.** Parley's `f32` metrics widen at the text boundary; widening is exact.
-- **Tolerances follow Flutter's scale.** Scroll-axis comparisons use Flutter's
-  `precisionErrorTolerance` (1e-10). Every `EPSILON_F32` and `1e-3` layout tolerance is
-  re-derived.
+- **Tolerances follow Flutter's scale.** Scroll-axis comparisons use the shared `f64` `EPSILON`
+  (1e-10). Other layout tolerances are re-derived locally.
 
 ### 3. Public value types
 

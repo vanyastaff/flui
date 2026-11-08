@@ -13,13 +13,14 @@ use flui_native::journal::codec::{
 };
 use flui_native::testing::app::{AppCall, AppLog, run_keeping_owner};
 use flui_native::{
-    HeadlessDisplayControls, HeadlessHostEvents, HeadlessPlatform, HeadlessPreferences, MockWindow,
-    OwnerPlatform,
+    HeadlessDisplayControls, HeadlessHostEvents, HeadlessPlatform, HeadlessPreferences,
+    HeadlessWindow, OwnerPlatform,
 };
 use flui_platform::{
-    CapabilityAbsence, DisplayId, DisplayKey, DisplayParts, DisplayRegistry, Headroom, ImeEvent,
-    MemoryPressureLevel, PlatformInput, SessionEndPhase, SystemNotice, SystemPreferences,
-    WindowOptions, WindowState, WindowStateParts,
+    DisplayId, DisplayKey, DisplayParts, DisplayRegistry, Headroom, ImeEvent, MemoryPressureLevel,
+    PlatformInput, SessionEndPhase, SystemNotice, SystemPreferences,
+    Unsupported as PlatformUnsupported, UnsupportedReason, WindowOptions, WindowState,
+    WindowStateParts,
 };
 use flui_testing::window_handler::{HandlerCall, RecordingWindowHandler};
 
@@ -64,7 +65,7 @@ impl ReplayTarget for HostEventsTarget {
 }
 
 /// Replays a window stream into a headless window.
-pub(super) struct WindowTarget(pub(super) MockWindow);
+pub(super) struct WindowTarget(pub(super) HeadlessWindow);
 
 impl ReplayTarget for WindowTarget {
     fn ime(&mut self, event: &ImeEvent) -> Result<(), Unsupported> {
@@ -210,13 +211,13 @@ impl ReplayTarget for PlatformTarget<'_> {
 /// published as the window system's report, on the display the replay
 /// issued for its label, and what the window published is kept.
 pub(super) struct WindowStateTarget<'a> {
-    window: MockWindow,
+    window: HeadlessWindow,
     labels: &'a Labels,
     pub(super) published: Vec<WindowState>,
 }
 
 impl<'a> WindowStateTarget<'a> {
-    pub(super) fn new(window: MockWindow, labels: &'a Labels) -> Self {
+    pub(super) fn new(window: HeadlessWindow, labels: &'a Labels) -> Self {
         Self {
             window,
             labels,
@@ -228,7 +229,11 @@ impl<'a> WindowStateTarget<'a> {
 impl ReplayTarget for WindowStateTarget<'_> {
     fn window_state(&mut self, state: &RecordedWindowState) -> Result<(), Unsupported> {
         let display = state.display().map(|label| self.labels.id(label));
-        let sample = state.clone().into_parts(display).into_state();
+        let sample = state
+            .clone()
+            .into_parts(display)
+            .try_into_state()
+            .expect("the codec accepted only lasting capability reasons");
         self.published.push(self.window.simulate_state(sample));
         Ok(())
     }
@@ -320,7 +325,7 @@ fn recorded_states(recording: &NativeRecording) -> Vec<(Option<u64>, WindowState
 /// A headless window, opened on `owner` with a recording handler.
 pub(super) fn headless_window(
     owner: &flui_native::OwnerPlatform,
-) -> (MockWindow, std::rc::Rc<RecordingWindowHandler>) {
+) -> (HeadlessWindow, std::rc::Rc<RecordingWindowHandler>) {
     let handler = RecordingWindowHandler::new();
     let window = owner
         .open_window(WindowOptions::default(), handler.clone())
@@ -329,7 +334,7 @@ pub(super) fn headless_window(
         .expect("at once");
     let mock = window
         .as_any()
-        .downcast_ref::<MockWindow>()
+        .downcast_ref::<HeadlessWindow>()
         .expect("a headless window")
         .clone();
     (mock, handler)
@@ -459,7 +464,9 @@ fn platform_recordings_replay_on_the_headless_host() {
     );
     assert_eq!(
         displays[1].1.color,
-        Err(CapabilityAbsence::NotYetOnThisHost)
+        Err(PlatformUnsupported::new(
+            UnsupportedReason::NotYetOnThisHost
+        ))
     );
     assert!(
         matches!(&target.reads[4], Read::Displays(Err(failure)) if failure.kind == FailureKind::Displays),
@@ -467,6 +474,74 @@ fn platform_recordings_replay_on_the_headless_host() {
     );
 
     assert_eq!(labels.len(), 2, "one id for each label, kept across reads");
+}
+
+/// The display schema mirrors only the three lasting, unnamed refusals. A
+/// capability name or a transient reason is a typed error, at either colour
+/// level, rather than being silently reduced to a `UnsupportedReason`.
+fn display_refusals_outside_the_recording_vocabulary_are_not_written() {
+    let recording = family("headless_platform_reads");
+    let display = recording
+        .rows
+        .iter()
+        .find_map(|row| {
+            let Row::Displays {
+                read: DisplayRead::Observed { displays, .. },
+                ..
+            } = row
+            else {
+                return None;
+            };
+            displays.first().cloned()
+        })
+        .expect("the platform recording observes a display");
+    let row = |display| Row::Displays {
+        read: DisplayRead::Observed {
+            revision: 1,
+            displays: vec![display],
+        },
+        redacted: false,
+    };
+    for (case, unsupported) in [
+        (
+            "a named colour refusal",
+            PlatformUnsupported::named("display.color", UnsupportedReason::NotOnThisDevice),
+        ),
+        (
+            "a transient colour refusal",
+            PlatformUnsupported::new(UnsupportedReason::Unavailable),
+        ),
+    ] {
+        let mut display = display.clone();
+        display.parts.color = Err(unsupported);
+        assert!(
+            matches!(
+                row(display).to_wire(),
+                Err(CodecError::Unmirrored {
+                    line: 0,
+                    what: "Unsupported"
+                })
+            ),
+            "{case}"
+        );
+    }
+
+    let mut display = display;
+    let Ok(mut color) = display.parts.color else {
+        panic!("the recorded display has colour parts");
+    };
+    color.headroom = Err(PlatformUnsupported::named(
+        "display.headroom",
+        UnsupportedReason::NotOnThisDevice,
+    ));
+    display.parts.color = Ok(color);
+    assert!(matches!(
+        row(display).to_wire(),
+        Err(CodecError::Unmirrored {
+            line: 0,
+            what: "Unsupported"
+        })
+    ));
 }
 
 /// A window state stream replays on a headless window: each snapshot is
@@ -500,7 +575,7 @@ fn window_state_recordings_replay_on_the_headless_host() {
     );
     assert_eq!(
         last.capabilities.into_parts().maximizes,
-        Err(CapabilityAbsence::NotYetOnThisHost),
+        Err(UnsupportedReason::NotYetOnThisHost),
         "an absence survives the replay"
     );
     assert_eq!(
@@ -520,9 +595,12 @@ fn app_title_bar_snapshots_keep_their_wire_values_and_replay() {
     use flui_testing::window_commands::AdmitAndApply as _;
 
     let mut capabilities = WindowCapabilities::ALL.into_parts();
-    capabilities.sets_frame = Err(CapabilityAbsence::NotYetOnThisHost);
-    let platform =
-        HeadlessPlatform::new().with_window_capabilities(capabilities.into_capabilities());
+    capabilities.sets_frame = Err(UnsupportedReason::NotYetOnThisHost);
+    let platform = HeadlessPlatform::new().with_window_capabilities(
+        capabilities
+            .try_into_capabilities()
+            .expect("a lasting capability reason"),
+    );
     let window = platform
         .open_window(WindowOptions::default(), RecordingWindowHandler::new())
         .expect("a headless window opens");
@@ -584,7 +662,7 @@ fn app_title_bar_snapshots_keep_their_wire_values_and_replay() {
         let capabilities = state.capabilities.into_parts();
         assert_eq!(
             capabilities.sets_frame,
-            Err(CapabilityAbsence::NotYetOnThisHost)
+            Err(UnsupportedReason::NotYetOnThisHost)
         );
         assert_eq!(capabilities.app_title_bar, Ok(Availability::Native));
     }
@@ -717,7 +795,7 @@ fn a_header_out_of_its_stream_is_refused() {
 }
 
 /// The cases of the streams beside a registry's.
-pub(super) const CASES: [(&str, fn()); 7] = [
+pub(super) const CASES: [(&str, fn()); 8] = [
     (
         "app_title_bar_snapshots_keep_their_wire_values_and_replay",
         app_title_bar_snapshots_keep_their_wire_values_and_replay,
@@ -733,6 +811,10 @@ pub(super) const CASES: [(&str, fn()); 7] = [
     (
         "platform_recordings_replay_on_the_headless_host",
         platform_recordings_replay_on_the_headless_host,
+    ),
+    (
+        "display_refusals_outside_the_recording_vocabulary_are_not_written",
+        display_refusals_outside_the_recording_vocabulary_are_not_written,
     ),
     (
         "window_state_recordings_replay_on_the_headless_host",

@@ -15,6 +15,7 @@
   reclaims itself)
 - **Related:** [ADR-0105](ADR-0105-asset-validation-and-bridge-progress.md) (bridge runtime
   selection, unchanged)
+- **Revised:** 2026-11-07 — names only the decoded-image registry after generic typed caches were removed
 
 ## Context
 
@@ -72,18 +73,17 @@ an async worker, and sent the result down a oneshot. Five defects followed from 
 5. **Memory pressure.** The renderer reclaims image textures itself: moderate pressure evicts
    those the last frame did not draw, critical pressure evicts all and releases the image atlas texture. The
    registry's `ReclaimMemory` trims decoded images to half the budget (moderate) or drops them
-   (critical). The application owns its registry and registers it with
-   `AppConfig::with_memory_reclaim`, as it already registers the registry's typed caches; the host
-   does not own a registry it could reclaim unasked.
+   (critical). The application owns its registry and registers its decoded-pixel retention with
+   `AppConfig::with_memory_reclaim`; the host does not own a registry it could reclaim unasked.
 
 ## Consequences
 
-- `load_image_bridged` and `load_network_image_bridged` return `ImageLoad` and consult the
-  registry's decoded-image cache; a second load of a decoded source is a hit, not a request.
+- `load_image` and `load_network_image` return `ImageLoad` and consult the registry's decoded-image
+  cache; a second load of a decoded source is a hit, not a request.
 - `ImageCacheKey::Asset`, `ImageCacheKey::Network` and `NetworkImageKey` are gone; a custom
   provider that used `ImageCacheKey::Asset(label)` moves to `ImageCacheKey::custom(value)`.
-- `NetworkLoader::try_new` has connect, read and whole-request timeouts, and `load_url` refuses bodies
-  over 256 MiB. Every image decode refuses an image whose RGBA8 pixels would pass 256 MiB
+- The caller's HTTP client applies its request deadlines and the registry refuses bodies over 256 MiB.
+  Every image decode refuses an image whose RGBA8 pixels would pass 256 MiB
   (128 MiB on Android, iOS and the web) before it allocates them.
 - An application that does not register its registry keeps its decoded images under pressure.
   Removing that opt-in needs host-owned asset services, which is a separate decision.

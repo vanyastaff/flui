@@ -2,7 +2,6 @@
 
 - **Status:** Accepted (2026-07-09)
 - **Date:** 2026-07-09
-- **Amended:** 2026-10-11 — complete owner-turn execution follows ADR-0182; weak owner-local task ownership remains ADR-0136 §2.
 - **Superseded in part by:** ADR-0078 (capability acquisition)
 
 ## Context
@@ -67,22 +66,34 @@ the frame thread reproduces that. CPU-bound work is the caller's to offload in b
 
 `spawn_local_eager` polls once inline at subscribe time, so an immediately-ready future shows
 `Done` on the first build with no `Waiting` (Flutter's `SynchronousFuture` case).
-`StreamBuilder` uses plain `spawn_local`: Dart's `listen` never delivers synchronously and
-`afterConnected` is unconditional, so `Waiting` always precedes the first event.
+`StreamBuilder` uses plain `spawn_local`: Dart's `listen` never delivers synchronously, so
+`Waiting` always precedes the first event.
 
 ### D4. Snapshot model
 
-`ConnectionState { None, Waiting, Active, Done }` and `AsyncSnapshot<T, E>` live in
-`flui-foundation` as pure data with no bounds on `T`/`E`. `with_data` clears the error and
-`with_error` clears the data, upholding Flutter's `data == null || error == null` by
-construction. The `FutureBuilder` transitions and `StreamBuilder` folds (`initial`,
-`after_connected`, `after_data`, `after_error`, `after_done`, `after_disconnected`) follow
-`async.dart` one to one, including `in_state` preserving the payload across a resubscribe and
-`initial_data` not being re-applied on reconfiguration.
+`AsyncSnapshot<T, E>` lives in `flui-view` as pure data with no bounds on `T`/`E`:
 
-A stream of `Result<T, E>` continues after an error, like a Dart stream without
-`cancelOnError`. Dropping the token cancels the producer itself, where Dart only ignores late
-callbacks. A generation counter on the slot backs up the cancellation, as Flutter's
+```rust
+pub enum AsyncSnapshot<T, E> {
+    None(Option<Result<T, E>>),
+    Waiting(Option<Result<T, E>>),
+    Active(Result<T, E>),
+    Done(Option<Result<T, E>>),
+}
+```
+
+`None` has no subscription, `Waiting` has a pending producer, `Active` carries a stream's
+latest event, and `Done` carries the last result after future completion or stream end. The
+`Option` distinguishes an empty stream (`Done(None)`) from one whose last result is retained.
+A future publishes `Done(Some(result))`; its initial snapshot is `None(Some(Ok(initial)))`
+when initial data is supplied and `None(None)` otherwise. A stream publishes each event as
+`Active(result)`, including errors, and finishes as `Done(last_result)`. It continues after
+an error, like a Dart stream without `cancelOnError`.
+
+Reconfiguration changes the variant without cloning or dropping the last result: a new key
+moves to `Waiting(last_result)`, while a removed key moves to `None(last_result)`. Initial
+data is not reapplied. Dropping the token cancels the producer itself, where Dart only ignores
+late callbacks. A generation counter on the slot backs up the cancellation, as Flutter's
 `_activeCallbackIdentity` does.
 
 ### D5. Identity is an explicit key
@@ -94,10 +105,10 @@ StreamBuilder::keyed(key: Option<K>, make: StreamFactory<T, E>, builder: Snapsho
 
 `K: Clone + PartialEq + Debug + 'static` (the owner-local bounds supersede the former
 `Send + Sync` requirement under [ADR-0136 §2](ADR-0136-owner-local-ui-surfaces.md)).
-Same key: no resubscribe (Flutter's early
-return). Different key: unsubscribe, `in_state(None)`, resubscribe, `Waiting`. `None`: no
-subscription. The factory is an `Fn` called once per subscription, and `initial_data` is an
-`Fn() -> T` factory, so the view stays `Clone` without `T: Clone`.
+Same key: no resubscribe (Flutter's early return). Different key: unsubscribe, preserve the
+last result through `None` and `Waiting`, then resubscribe. `None`: no subscription. The
+factory is an `Fn` called once per subscription, and `initial_data` is an `Fn() -> T` factory,
+so the view stays `Clone` without `T: Clone`.
 
 The divergence is forced (`==` on futures cannot be written), and it is the better API:
 Flutter's most common `FutureBuilder` bug — calling an `async` function inside `build`, which
@@ -109,9 +120,9 @@ mints a new future each rebuild and re-enters `Waiting` forever — cannot be ex
 |---|---|---|
 | identity via `future ==` | `key: Option<K>` + factory | Rust futures are move-only and not `Eq` (D5) |
 | `error: Object?` + `StackTrace` | generic `E`, no stack trace | errors are in `Result<T, E>`; no ambient stack traces |
-| `requireData` throws | absent; `data()` returns `Option<&T>` | Dart lacks `Option` |
+| `requireData` throws | absent; callers pattern-match snapshot variants | Rust makes the result and connection variant explicit |
 | snapshot by value | builder gets `&AsyncSnapshot<T, E>` | avoids `T: Clone` |
-| `hasData` false for `Future<void>` | `has_data()` true for `Future<()>` | `Some(())` is data |
+| `hasData` false for `Future<void>` | `Done(Some(Ok(())))` retains the unit result | `Some(())` is a result |
 | `debugRethrowError` | absent | no Dart zone |
 | `StreamBuilderBase<T, S>` | absent | no second consumer |
 

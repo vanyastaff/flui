@@ -14,7 +14,7 @@
 //! - `AsyncDriver` — reached through [`LifecycleContext::async_driver`], which
 //!   yields the driver *this binding's frame step polls*. The task is spawned
 //!   with `spawn_local_eager`, so an immediately-ready future completes inline.
-//! - [`AsyncSnapshot`] / [`ConnectionState`] — the state machine.
+//! - [`AsyncSnapshot`] — the connection state and latest result.
 //!
 //! # Identity is an explicit key
 //!
@@ -40,18 +40,19 @@
 //!
 //! While that inline poll runs, `inline_window` is set: a completion landing in
 //! it writes the snapshot but does **not** schedule a rebuild, because the build
-//! that will read it has not happened yet. `after_subscribe` then leaves an
-//! already-`Done` snapshot alone rather than dragging it back to `Waiting`.
+//! that will read it has not happened yet. The post-spawn transition then
+//! leaves an already-`Done` snapshot alone rather than dragging it back to
+//! `Waiting`.
 
 use std::{future::Future, pin::Pin, rc::Rc, sync::Arc};
 
-use flui_foundation::{AsyncSnapshot, ConnectionState};
 use flui_scheduler::{AsyncDriver, TaskToken};
 use parking_lot::Mutex;
 
 use super::async_slot::{
     InitialDataFactory, SharedSlot, Slot, SnapshotBuilder, SnapshotUpdate, apply_update,
 };
+use super::async_snapshot::AsyncSnapshot;
 use crate::{
     RebuildHandle,
     context::{BuildContext, LifecycleContext},
@@ -68,7 +69,6 @@ pub type FutureFactory<T, E> = Rc<dyn Fn() -> BoxedResultFuture<T, E>>;
 
 /// Fold a completion into the shared snapshot, honouring the generation guard.
 ///
-/// `Ok` ⇒ `after_success` (Done + data); `Err` ⇒ `after_failure` (Done + error).
 /// Publish, retire the old value, and schedule outside the snapshot lock.
 fn apply_completion<T, E>(
     slot: &SharedSlot<T, E>,
@@ -76,10 +76,7 @@ fn apply_completion<T, E>(
     result: Result<T, E>,
     handle: &RebuildHandle,
 ) {
-    let snapshot = match result {
-        Ok(data) => AsyncSnapshot::with_data(ConnectionState::Done, data),
-        Err(error) => AsyncSnapshot::with_error(ConnectionState::Done, error),
-    };
+    let snapshot = AsyncSnapshot::Done(Some(result));
     apply_update(slot, generation, SnapshotUpdate::Replace(snapshot), handle);
 }
 
@@ -167,7 +164,7 @@ where
         // the configuration the first subscription needs is copied here. Later
         // rebuilds reach the fresh view through `did_update_view` / `build`.
         FutureBuilderState {
-            slot: Arc::new(Mutex::new(Slot::new(AsyncSnapshot::nothing()))),
+            slot: Arc::new(Mutex::new(Slot::new(AsyncSnapshot::None(None)))),
             handle: None,
             driver: None,
             token: None,
@@ -229,7 +226,7 @@ where
         let slot = self.slot.lock();
         f.debug_struct("FutureBuilderState")
             .field("key", &self.key)
-            .field("connection_state", &slot.snapshot.connection_state())
+            .field("connection_state", &slot.snapshot.state_name())
             .field("generation", &slot.generation)
             .field("subscribed", &self.token.is_some())
             .finish_non_exhaustive()
@@ -286,8 +283,8 @@ where
         {
             let mut slot = self.slot.lock();
             slot.inline_window = false;
-            if slot.snapshot.connection_state() != ConnectionState::Done {
-                slot.set_connection_state(ConnectionState::Waiting);
+            if !matches!(&slot.snapshot, AsyncSnapshot::Done(_)) {
+                slot.transition(AsyncSnapshot::Waiting);
             }
         }
 
@@ -309,10 +306,9 @@ where
         self.handle = Some(ctx.rebuild_handle());
         self.driver = ctx.async_driver();
 
-        // `initial(Some(d))` is `with_data(None, d)`; `initial(None)` is `nothing()`.
         let initial = match &self.initial_data {
-            Some(initial_data) => AsyncSnapshot::with_data(ConnectionState::None, initial_data()),
-            None => AsyncSnapshot::nothing(),
+            Some(initial_data) => AsyncSnapshot::None(Some(Ok(initial_data()))),
+            None => AsyncSnapshot::None(None),
         };
         let previous = core::mem::replace(&mut self.slot.lock().snapshot, initial);
         drop(previous);
@@ -345,7 +341,7 @@ where
 
         if self.token.is_some() || self.key.is_some() {
             self.unsubscribe();
-            self.slot.lock().set_connection_state(ConnectionState::None);
+            self.slot.lock().transition(AsyncSnapshot::None);
         }
 
         if let Some(key) = new_view.key.clone() {
@@ -378,10 +374,36 @@ mod tests {
     #[derive(Debug, PartialEq)]
     struct Boom(&'static str);
 
+    #[derive(Debug, PartialEq, Clone, Copy)]
+    enum SnapshotKind {
+        None,
+        Waiting,
+        Active,
+        Done,
+    }
+
+    fn snapshot_kind<T, E>(snapshot: &AsyncSnapshot<T, E>) -> SnapshotKind {
+        match snapshot {
+            AsyncSnapshot::None(_) => SnapshotKind::None,
+            AsyncSnapshot::Waiting(_) => SnapshotKind::Waiting,
+            AsyncSnapshot::Active(_) => SnapshotKind::Active,
+            AsyncSnapshot::Done(_) => SnapshotKind::Done,
+        }
+    }
+
+    fn last_result<T, E>(snapshot: &AsyncSnapshot<T, E>) -> Option<&Result<T, E>> {
+        match snapshot {
+            AsyncSnapshot::None(last)
+            | AsyncSnapshot::Waiting(last)
+            | AsyncSnapshot::Done(last) => last.as_ref(),
+            AsyncSnapshot::Active(result) => Some(result),
+        }
+    }
+
     /// What a build observed, flattened so the test can assert without `Clone`.
     #[derive(Debug, PartialEq, Clone, Copy)]
     struct Seen {
-        state: ConnectionState,
+        state: SnapshotKind,
         data: Option<i32>,
         error: Option<&'static str>,
     }
@@ -444,10 +466,15 @@ mod tests {
     /// Records every snapshot the builder was handed.
     fn recording_builder(log: Arc<Mutex<Vec<Seen>>>) -> SnapshotBuilder<Payload, Boom> {
         Rc::new(move |_ctx, snapshot| {
+            let result = last_result(snapshot);
             log.lock().push(Seen {
-                state: snapshot.connection_state(),
-                data: snapshot.data().map(|payload| payload.0),
-                error: snapshot.error().map(|boom| boom.0),
+                state: snapshot_kind(snapshot),
+                data: result
+                    .and_then(|result| result.as_ref().ok())
+                    .map(|payload| payload.0),
+                error: result
+                    .and_then(|result| result.as_ref().err())
+                    .map(|boom| boom.0),
             });
             ErrorView::new("leaf").into_view().boxed()
         })
@@ -528,7 +555,7 @@ mod tests {
         assert_eq!(
             last(&log),
             Seen {
-                state: ConnectionState::Waiting,
+                state: SnapshotKind::Waiting,
                 data: None,
                 error: None
             },
@@ -542,7 +569,7 @@ mod tests {
         assert_eq!(
             last(&log),
             Seen {
-                state: ConnectionState::Done,
+                state: SnapshotKind::Done,
                 data: Some(42),
                 error: None
             },
@@ -551,7 +578,108 @@ mod tests {
         assert_eq!(harness.owner_frame.async_driver().pending_task_count(), 0);
     }
 
+    fn future_builder_ready_result_is_done_on_the_first_build() {
+        fn assert_ready(result: Result<Payload, Boom>, expected: Seen) {
+            let log = Arc::new(Mutex::new(Vec::new()));
+            let completer = Completer::new();
+            completer.complete(result);
+            let view = FutureBuilder::keyed(
+                Some(1_u32),
+                completer.factory(),
+                recording_builder(Arc::clone(&log)),
+            );
+
+            let harness = Harness::mount(&view);
+            assert_eq!(last(&log), expected);
+            assert_eq!(seen(&log).len(), 1, "no Waiting build precedes Done");
+            assert_eq!(harness.owner_frame.async_driver().pending_task_count(), 0);
+        }
+
+        assert_ready(
+            Ok(Payload(7)),
+            Seen {
+                state: SnapshotKind::Done,
+                data: Some(7),
+                error: None,
+            },
+        );
+        assert_ready(
+            Err(Boom("ready")),
+            Seen {
+                state: SnapshotKind::Done,
+                data: None,
+                error: Some("ready"),
+            },
+        );
+    }
+
     // ── update semantics ────────────────────────────────────────────────────
+
+    fn future_builder_reconfigure_preserves_the_last_result() {
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let first = Completer::new();
+        let first_view = FutureBuilder::keyed(
+            Some(1_u32),
+            first.factory(),
+            recording_builder(Arc::clone(&log)),
+        )
+        .with_initial_data(Rc::new(|| Payload(1)));
+        let mut harness = Harness::mount(&first_view);
+        assert_eq!(last(&log).data, Some(1));
+
+        first.complete(Ok(Payload(2)));
+        harness.frame();
+        assert_eq!(last(&log).state, SnapshotKind::Done);
+
+        let second = Completer::new();
+        let second_view = FutureBuilder::keyed(
+            Some(2_u32),
+            second.factory(),
+            recording_builder(Arc::clone(&log)),
+        )
+        .with_initial_data(Rc::new(|| Payload(99)));
+        harness.tree.update(
+            harness.root,
+            &second_view,
+            &mut harness.owner.element_owner_mut(),
+        );
+        harness
+            .owner
+            .schedule_build_for(harness.root, 0, crate::RebuildReason::StateChange);
+        harness.owner.build_scope(&mut harness.tree);
+        assert_eq!(
+            last(&log),
+            Seen {
+                state: SnapshotKind::Waiting,
+                data: Some(2),
+                error: None,
+            },
+            "reconfigure preserves the old result and ignores new initial data",
+        );
+
+        let absent = FutureBuilder::keyed(
+            None::<u32>,
+            second.factory(),
+            recording_builder(Arc::clone(&log)),
+        );
+        harness.tree.update(
+            harness.root,
+            &absent,
+            &mut harness.owner.element_owner_mut(),
+        );
+        harness
+            .owner
+            .schedule_build_for(harness.root, 0, crate::RebuildReason::StateChange);
+        harness.owner.build_scope(&mut harness.tree);
+        assert_eq!(
+            last(&log),
+            Seen {
+                state: SnapshotKind::None,
+                data: Some(2),
+                error: None,
+            },
+        );
+    }
 
     /// A disposed `FutureBuilder` neither rebuilds nor resolves: dropping the
     /// `TaskToken` cancels the task, so its writer never runs.
@@ -598,6 +726,14 @@ mod tests {
                 (
                     "future_builder_pending_future_waits_then_completes_with_data",
                     future_builder_pending_future_waits_then_completes_with_data as fn(),
+                ),
+                (
+                    "future_builder_ready_result_is_done_on_the_first_build",
+                    future_builder_ready_result_is_done_on_the_first_build as fn(),
+                ),
+                (
+                    "future_builder_reconfigure_preserves_the_last_result",
+                    future_builder_reconfigure_preserves_the_last_result as fn(),
                 ),
                 (
                     "future_builder_dispose_cancels_and_never_rebuilds",

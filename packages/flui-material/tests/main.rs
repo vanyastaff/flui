@@ -29,6 +29,9 @@ mod checkbox;
 #[path = "chip.rs"]
 mod chip;
 
+#[path = "component_themes.rs"]
+mod component_themes;
+
 #[path = "data_table.rs"]
 mod data_table;
 
@@ -140,8 +143,8 @@ fn action_component_contracts() {
             elevated_button::material_controls_publish_their_identifier,
         ),
         (
-            "elevated_button::widget level style wins over the elevated button theme",
-            elevated_button::widget_level_style_wins_over_the_elevated_button_theme,
+            "elevated_button::widget level style wins over the elevated button component",
+            elevated_button::widget_level_style_wins_over_the_elevated_button_component,
         ),
         (
             "icon_button::icon button theme slot reaches the icons icon theme",
@@ -753,6 +756,10 @@ fn theme_and_app_contracts() {
             material_app::theme_mode_switch_animates_through_a_blended_theme,
         ),
         (
+            "material_app::router mounts pages below the material theme",
+            material_app::router_mounts_pages_below_the_material_theme,
+        ),
+        (
             "material_app::two presentations resolve different themes simultaneously",
             material_app::two_presentations_resolve_different_themes_simultaneously,
         ),
@@ -942,6 +949,33 @@ fn carousel_view_contracts() {
         (
             "carousel_view::a tap reports its card and cards are buttons only with on_tap",
             carousel_view::a_tap_reports_its_card_and_cards_are_buttons_only_with_on_tap,
+        ),
+    ]);
+}
+
+/// Typed component entries: storage, patching, interpolation, scope and exact invalidation.
+#[test]
+fn component_theme_contracts() {
+    common::run_cases(&[
+        (
+            "component_themes::entries insert replace remove and compare by content",
+            component_themes::entries_insert_replace_remove_and_compare_by_content,
+        ),
+        (
+            "component_themes::copy with distinguishes absent insert replace and remove patches",
+            component_themes::copy_with_distinguishes_absent_insert_replace_and_remove_patches,
+        ),
+        (
+            "component_themes::lerp uses typed interpolation and halfway presence switching",
+            component_themes::lerp_uses_typed_interpolation_and_halfway_presence_switching,
+        ),
+        (
+            "component_themes::changed entries rebuild only their readers and whole theme readers",
+            component_themes::changed_entries_rebuild_only_their_readers_and_whole_theme_readers,
+        ),
+        (
+            "component_themes::nearest theme scope does not fall through to an outer entry",
+            component_themes::nearest_theme_scope_does_not_fall_through_to_an_outer_entry,
         ),
     ]);
 }

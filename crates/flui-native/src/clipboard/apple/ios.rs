@@ -68,8 +68,14 @@ impl SyncClipboard for IOSClipboard {
         let Some(string) = (unsafe { pasteboard.string() }) else {
             return Ok(None);
         };
-        // Measured in UTF-16 units before the copy into Rust.
-        admit_utf16(string.length())?;
+        // `NSString::len` is the exact UTF-8 length `to_string` will produce.
+        admit_utf16(string.length(), || {
+            let bytes = string.len();
+            if bytes == 0 && string.length() != 0 {
+                return Err(ClipboardError::Malformed);
+            }
+            Ok(bytes)
+        })?;
         host_text(string.to_string())
     }
 

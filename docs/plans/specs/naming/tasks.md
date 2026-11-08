@@ -174,7 +174,7 @@ design.md §7; в таблице стоит рекомендуемый вари�
 | W14 | `AnimatedBuilder`, `AnimatedBuilderState`, `ValueListenableBuilder`, `ValueListenableBuilderState` | `ListenableView`, `ListenableViewState`, `ValueListenableView`, `ValueListenableViewState` (**О2**) | C-BUILDER | исходные | 79/22 | С |
 | W15 | псевдонимы `ValueWidgetBuilder<T>`, `DragTargetBuilder<T>`, `AppBuilder`, `ViewportBuilder`, `AnimatedSwitcherTransitionBuilder`, `AnimatedSwitcherLayoutBuilder`, `RouteContentBuilder`, `RoutePageBuilder`, `RouteTransitionsBuilder` | `ValueViewFn<T>`, `DragTargetViewFn<T>`, `AppWrapperFn`, `ViewportFn`, `SwitcherTransitionFn`, `SwitcherLayoutFn`, `RouteContentFn`, `RoutePageFn`, `RouteTransitionsFn` (**О2**) | C-BUILDER; `Widget` вместо `View` | — | ~60 | С |
 | W16 | `SliverChildBuilderDelegate` | `LazyChildren` (**О3**). Альт.: `ChildrenByIndex` | Дети по индексу, лениво; ср. Compose `LazyColumn` | `SliverChildBuilderDelegate` | 22 | Н |
-| W17 | `LocalizationsDelegate`, `BoxedLocalizationsDelegate`, `DefaultWidgetsLocalizationsDelegate`, `GlobalWidgetsLocalizationsDelegate` | `LocalizationsLoader`, `BoxedLocalizationsLoader`, `DefaultWidgetsLocalizationsLoader`, `GlobalWidgetsLocalizationsLoader` (**О3**) | Объект загружает локализацию для локали — имя по действию | `LocalizationsDelegate` | 75 | С |
+| W17 | `LocalizationsDelegate`, `BoxedLocalizationsDelegate`, `DefaultWidgetsLocalizationsDelegate` | `LocalizationsLoader`, `BoxedLocalizationsLoader`, `DefaultWidgetsLocalizationsLoader` (**О3**) | Объект загружает локализацию для локали — имя по действию | `LocalizationsDelegate` | 75 | С |
 | W18 | `SingleActivator` | `Keystroke` | GPUI `Keystroke` (клавиша + модификаторы). Альт.: `KeyChord` | `SingleActivator` | 39 | Н |
 | W19 | `TextFormFieldCore`, `form/text_form_field_core.rs` | `TextFormFieldModel`, `text_form_field_model.rs` | `Core`; закреплён в `flui-sdk/tests/surface.rs:68` | — | 17 | С |
 | W20 | `FocusChangeHandler` | — (`FocusChangeCallback`) | N6 | — | 8 | Н |
@@ -298,7 +298,7 @@ RT…HR 9, M 10, C 2; сводные строки фасада, SDK и macros н
 | X15 | `lerp_impls.rs`, `seq/tuple_impls.rs`, `seq/vec_impls.rs` | `lerp.rs`, `seq/tuple.rs`, `seq/vec.rs` | `_impls` | 11 |
 | X16 | `tests/support/` (5 крейтов), `tests/public_support/`, `tests/common/` (4 крейта) | по содержимому: `child_process.rs`, `row_runner/`, `recovery_fixtures/`, `mcp_client/`, `harness.rs` | мешки | 36 |
 | X17 | `flui-assets/tests/network_support.rs`, `examples/support/ai_http.rs`, `flui-view/benches/shared/`, `flui-rendering/benches/helpers.rs` | `local_http_server.rs`, `examples/ai_streaming/http.rs`, `benches/mocks/`, `benches/tree_builders.rs` | мешки | 6 |
-| X18 | пакет `hot-reload-counter-types` | `hot-reload-counter-model` | `types` | — |
+| X18 | пакет `<app>-types`, создаваемый `flui create --hot-reload` | `<app>-model` | `types` | — |
 | X19 | `run_app_impl`, `run_app_with_config_impl` | `run_app`, `run_app_with_config` в месте определения | `_impl` | 7 |
 | X20 | файлы переименованных публичных типов: `rrect.rs`, `clip_rrect.rs` (×3), `meta_data.rs` (×2), `widget_state.rs`, `hero*.rs`, `future_builder.rs`, `stream_builder.rs`, `layout_builder.rs`, `ink_well.rs`, `snack_bar.rs`, `list_tile.rs`, `container_mixin.rs`, `text_form_field_core.rs`, `sliver_adaptor.rs`, `font_data.rs`, `theme_data.rs` | по новому имени типа | Следуют за §1 | — |
 

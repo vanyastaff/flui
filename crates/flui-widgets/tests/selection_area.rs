@@ -223,15 +223,17 @@ pub(crate) fn selection_area_refuses_stale_or_foreign_positions() {
             SelectionArea::new(Text::new("Other")),
         ))
     };
-    let mut laid = mounted(view("Alpha"));
+    let initial = "a".repeat(300);
+    let mut laid = mounted(view(&initial));
     let (mine, foreign) = {
         let tree = consumer(&laid);
         let state = tree.state();
         (
-            runs_of(&paragraph(state, "Alpha")),
+            runs_of(&paragraph(state, &initial)),
             runs_of(&paragraph(state, "Other")),
         )
     };
+    assert!(mine.len() > 1, "the initial text has several runs");
     let refused = |result: Result<(), InvokeActionError>| {
         matches!(
             result,
@@ -251,14 +253,18 @@ pub(crate) fn selection_area_refuses_stale_or_foreign_positions() {
 
     laid.pump_widget(view("Alpine"));
     let current = runs_of(&paragraph(consumer(&laid).state(), "Alpine"));
-    assert_ne!(current, mine, "the edited text has new runs");
+    assert_eq!(current.len(), 1, "the short edit has one run");
+    assert_eq!(
+        current[0], mine[0],
+        "the surviving ordinal keeps its identity"
+    );
     assert!(
         refused(laid.invoke_semantics_action(selection_request(
             current[0],
             at(current[0], 0),
-            at(mine[0], 1)
+            at(mine[1], 1)
         ))),
-        "a current end with a stale one is refused"
+        "a current end with one in a removed run is refused"
     );
 
     // An area nested in another holds its own texts: the outer document
@@ -369,11 +375,13 @@ pub(crate) fn a_control_inside_a_selection_area_under_an_outer_merger_keeps_its_
 pub(crate) fn a_document_selection_snaps_into_its_texts_or_is_withheld() {
     use flui_foundation::geometry::{Point, Rect, Size};
     use flui_painting::Canvas;
+    use flui_rendering::delegates::CustomPainter;
     use flui_rendering::semantics::{
         DocumentPosition, DocumentSelection, SemanticsAnchor, SemanticsConfiguration,
-        SemanticsRegion, SemanticsRegionKey, TextContent, TextRun, TextRunParts,
+        SemanticsRegion, SemanticsRegionKey, SemanticsRole, TextContent, TextDirection, TextRun,
+        TextRunParts,
     };
-    use flui_widgets::{CustomPaint, CustomPainter, SemanticsRole};
+    use flui_widgets::CustomPaint;
 
     /// Static text "héllo" declaring `anchor`, one run, each character ten
     /// wide; 'é' is two bytes.
@@ -389,7 +397,7 @@ pub(crate) fn a_document_selection_snaps_into_its_texts_or_is_withheld() {
                 "héllo",
                 0,
                 0,
-                flui_widgets::SemanticsTextDirection::Ltr,
+                TextDirection::Ltr,
                 Rect::from_origin_size(Point::ZERO, Size::new(50.0, 10.0)),
             );
             for (index, length) in [1_u8, 2, 1, 1, 1].into_iter().enumerate() {
@@ -643,13 +651,11 @@ pub(crate) fn a_panicking_wake_still_reports_the_committed_selection() {
 /// Red-check: leave a document's children in tree order (every case but
 /// the RTL row reads its texts in authored order).
 pub(crate) fn a_document_reads_its_texts_where_they_are_laid_out() {
-    use flui_objects::VerticalDirection;
+    use flui_objects::{CrossAxisAlignment, VerticalDirection};
     use flui_painting::typography::TextStyle;
     use flui_view::{BoxedView, ViewExt};
     use flui_widgets::prelude::Axis;
-    use flui_widgets::{
-        CrossAxisAlignment, Directionality, Positioned, Row, SizedBox, Stack, Wrap,
-    };
+    use flui_widgets::{Directionality, Positioned, Row, SizedBox, Stack, Wrap};
 
     fn cell(text: &'static str) -> SizedBox {
         SizedBox::new(60.0, 20.0).child(Text::new(text))

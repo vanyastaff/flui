@@ -8,11 +8,29 @@ use std::sync::{Arc, Mutex};
 use accesskit::{Action, ActionRequest, Node, NodeId, Rect, Role, TreeId, TreeInfo, TreeUpdate};
 use flui_native::{HostWindow, Platform, WebPlatform};
 use flui_platform::WindowOptions;
-use flui_semantics::platform::PlatformAccessibility;
+use flui_semantics::platform::{AccessibilityHandler, PlatformAccessibility};
 use flui_testing::window_commands::AdmitAndApply as _;
 use flui_testing::window_handler::RecordingWindowHandler;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_test::wasm_bindgen_test;
+
+#[derive(Default)]
+struct AccessibilityEvents {
+    activations: Arc<Mutex<Vec<bool>>>,
+    actions: Arc<Mutex<Vec<ActionRequest>>>,
+}
+
+impl AccessibilityHandler for AccessibilityEvents {
+    fn activation_changed(&self, active: bool) {
+        self.activations.lock().expect("the record").push(active);
+    }
+
+    fn action_requested(&self, request: ActionRequest) {
+        self.actions.lock().expect("the record").push(request);
+    }
+
+    fn assistive_focus_changed(&self, _node: Option<NodeId>) {}
+}
 
 #[wasm_bindgen(inline_js = r#"
 function host() { return document.querySelector('flui-semantics-host'); }
@@ -337,18 +355,17 @@ fn open_on_page(
 #[wasm_bindgen_test]
 fn the_tree_reaches_the_dom_once_the_placeholder_is_activated() {
     let (_platform, window, accessibility) = open();
-    let activations = Arc::new(Mutex::new(Vec::new()));
-    let heard = Arc::clone(&activations);
-    accessibility.set_activation_listener(Arc::new(move |active| {
-        heard.lock().expect("the record").push(active);
-    }));
+    let events = Arc::new(AccessibilityEvents::default());
+    let activations = Arc::clone(&events.activations);
+    let attachment = accessibility
+        .attach(events)
+        .expect("the accessibility handler attaches");
     accessibility.publish(counter(0));
-    assert!(!accessibility.is_active());
+    assert!(!attachment.is_active());
     assert_eq!(placeholder_label().as_deref(), Some("Enable accessibility"));
     assert_eq!(tree(), serde_json::Value::Null, "no tree before activation");
 
     activate_placeholder();
-    assert!(accessibility.is_active());
     assert_eq!(*activations.lock().expect("the record"), [true]);
     assert_eq!(placeholder_label(), None, "the placeholder gave way");
     assert_eq!(
@@ -382,18 +399,15 @@ fn the_tree_reaches_the_dom_once_the_placeholder_is_activated() {
             "children": [{ "role": null, "text": "taps" }],
         })
     );
+    accessibility.detach_handler();
     window.close_now();
 }
 
 /// A click on an element is the action its node supports, and only that.
 #[wasm_bindgen_test]
-fn a_click_on_an_element_reaches_the_action_listener() {
+fn a_click_on_an_element_reaches_the_action_handler() {
     let (_platform, window, accessibility) = open();
-    let actions: Arc<Mutex<Vec<ActionRequest>>> = Arc::default();
-    let heard = Arc::clone(&actions);
-    accessibility.set_action_listener(Arc::new(move |request| {
-        heard.lock().expect("the record").push(request);
-    }));
+    let actions = record_actions(&accessibility);
     accessibility.publish(counter(0));
     activate_placeholder();
 
@@ -406,6 +420,7 @@ fn a_click_on_an_element_reaches_the_action_listener() {
         .collect();
     assert_eq!(asked, [(Action::Click, BUTTON)], "the label has no action");
     drop(actions);
+    accessibility.detach_handler();
     window.close_now();
 }
 
@@ -685,15 +700,15 @@ fn under_root(children: Vec<(NodeId, Node)>) -> TreeUpdate {
     }
 }
 
-/// The action listener's record.
+/// The action handler's record.
 fn record_actions(
     accessibility: &Arc<dyn PlatformAccessibility>,
 ) -> Arc<Mutex<Vec<ActionRequest>>> {
-    let actions: Arc<Mutex<Vec<ActionRequest>>> = Arc::default();
-    let heard = Arc::clone(&actions);
-    accessibility.set_action_listener(Arc::new(move |request| {
-        heard.lock().expect("the record").push(request);
-    }));
+    let events = Arc::new(AccessibilityEvents::default());
+    let actions = Arc::clone(&events.actions);
+    accessibility
+        .attach(events)
+        .expect("the accessibility handler attaches");
     actions
 }
 
@@ -746,6 +761,7 @@ fn a_link_is_an_anchor_whose_click_is_the_node_s_action() {
         .map(|request| (request.action, request.target_node))
         .collect();
     assert_eq!(asked, [(Action::Click, LINK)]);
+    accessibility.detach_handler();
     window.close_now();
 }
 
@@ -814,6 +830,7 @@ fn moving_a_slider_s_input_asks_the_node_for_its_value() {
         focus: ROOT,
     });
     assert_eq!(slider_value("volume"), "55", "the published value stays");
+    accessibility.detach_handler();
     window.close_now();
 }
 
@@ -918,6 +935,7 @@ async fn scrolling_a_scroller_asks_the_node_for_its_offset() {
     super::wait(50).await;
     assert_eq!(scroll_of("list"), 380.0, "scrolled once its ancestor shows");
     assert!(actions.lock().expect("the record").is_empty());
+    accessibility.detach_handler();
     window.close_now();
     remove_scroller();
 }
@@ -1476,6 +1494,7 @@ async fn the_page_s_selection_is_the_selection_of_static_text() {
     );
     assert_eq!(asked(), []);
     remove_page_text();
+    accessibility.detach_handler();
     window.close_now();
 }
 

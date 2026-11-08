@@ -937,7 +937,7 @@ allow = ["cursor_icon", "parking_lot", "raw_window_handle", "smallvec", "web_tim
 traits = [{ trait = "flui_semantics::platform::PlatformAccessibility", crate = "accesskit" }]
 # The Activity is the system's, handed only to the application's
 # `android_main`: the composition root passes it on through this one entry, as
-# the facade's `run_app_android` takes it.
+# the facade's `native::android::run_app_android` takes it.
 entries = [{ item = "flui_native::android_platform", crate = "android_activity" }]
 # Each target the core builds a host for, with the features that add public
 # items there.

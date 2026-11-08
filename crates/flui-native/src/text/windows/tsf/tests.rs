@@ -266,8 +266,8 @@ impl tracing::Subscriber for PanicsOnTsfErrors {
 /// A field losing focus inside a TSF call (queued, applied when the call
 /// returns) whose observer retirement panics, under a subscriber that panics
 /// on the error the teardown logs: nothing unwinds out of the COM entry, the
-/// teardown's payload is retained rather than destroyed, and TSF is back on
-/// the empty document.
+/// teardown's payload is destroyed under containment, and TSF is back on the
+/// empty document.
 fn a_queued_unfocus_whose_teardown_and_diagnostic_panic_stays_in_the_com_entry(hwnd: HWND) {
     let services =
         TextServices::activate(window_ref(hwnd), unscaled(), apartment()).expect("TSF activates");
@@ -286,8 +286,8 @@ fn a_queued_unfocus_whose_teardown_and_diagnostic_panic_stays_in_the_com_entry(h
     }));
     assert!(answer.is_ok(), "no panic leaves the COM entry");
     assert!(
-        !dropped.load(Ordering::SeqCst),
-        "the teardown's payload is retained, not destroyed"
+        dropped.load(Ordering::SeqCst),
+        "the teardown's payload is destroyed under containment"
     );
     assert!(
         matches!(*services.serving.borrow(), Serving::Nothing),

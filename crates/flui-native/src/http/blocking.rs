@@ -27,6 +27,8 @@ use flui_platform::http::{
 };
 use tokio::sync::oneshot;
 
+use super::head::declared_too_large;
+
 /// Body chunks a response holds unread before the request's thread waits for
 /// the reader.
 pub(crate) const CHUNKS_IN_FLIGHT: usize = 4;
@@ -156,12 +158,7 @@ fn run(
         Ok(head) => head,
         Err(error) => return refuse(exchange, head_tx, error),
     };
-    let declared = head
-        .headers
-        .get("content-length")
-        .and_then(|length| length.to_str())
-        .and_then(|length| length.trim().parse::<u64>().ok());
-    if declared.is_some_and(|length| length > limit) {
+    if declared_too_large(&head.headers, limit) {
         return refuse(exchange, head_tx, HttpError::TooLarge { limit });
     }
     let body = Chunks {

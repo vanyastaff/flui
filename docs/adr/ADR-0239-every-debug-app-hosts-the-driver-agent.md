@@ -2,6 +2,8 @@
 
 - **Status:** Accepted (2026-10-20)
 - **Date:** 2026-10-17
+- **Revised:** 2026-11-07 — the host-installation rationale accounts for the facade's standing
+  package aggregation under ADR-0315
 - **Supersedes in part:** [ADR-0095](ADR-0095-agent-protocol-schema-crate.md) §3 as amended on
   acceptance: where the server lives (`flui-devtools` → `flui-app`), who installs it (the host,
   not application code), which hosts drive it (every host, not desktop and iOS only) and the
@@ -14,6 +16,8 @@
 - **Related:** [ADR-0238](ADR-0238-flui-driver-protocol.md),
   [ADR-0083](ADR-0083-one-frame-transaction-in-flui-runtime.md),
   [ADR-0088](ADR-0088-official-packages-sdk-and-facade.md),
+  [ADR-0315](ADR-0315-first-party-packages-remain-train-aligned-facade-features.md) (the facade's
+  standing package aggregation, which does not give the host a package dependency),
   [ADR-0215](ADR-0215-input-recording-and-backend-conformance.md), ADR-0237 (the Android Java
   view, landing with `interaction/completeness`)
 - **Spec:** [flui-driver](../plans/specs/flui-driver/design.md)
@@ -21,11 +25,12 @@
 ## Context
 
 ADR-0095 §3 put the in-process server in `flui-devtools`, installed by application code through
-`AppConfig::with_dev_agent`. `flui-app` could not name an official package, and the facade names
-none (ADR-0088). The result is that no example is drivable as built, a test tool cannot drive an
-app it did not write, and Android and web drive no hook at all. Flutter's experience points the
-same way: its driver needed an extension each app had to enable, and `integration_test` replaced
-that with a binding every test app gets.
+`AppConfig::with_dev_agent`. `flui-app` cannot name an official package. The facade's standing
+aggregation under ADR-0315 is not a dependency channel back into the host, and requiring the
+`devtools` feature would not install a driver in every debug application. The result is that no
+example is drivable as built, a test tool cannot drive an app it did not write, and Android and web
+drive no hook at all. Flutter's experience points the same way: its driver needed an extension each
+app had to enable, and `integration_test` replaced that with a binding every test app gets.
 
 ## Decision
 
@@ -77,9 +82,10 @@ that with a binding every test app gets.
 
 ## Alternatives considered
 
-- **Keep the server in `flui-devtools` and have the facade install it.** Rejected: the facade names
-  no package (ADR-0088), and an exception for a debug-only server would be the first breach of
-  that rule.
+- **Keep the server in `flui-devtools` and have the facade install it.** Rejected: facade
+  aggregation cannot give `flui-app` a package dependency, and an opt-in `devtools` feature would
+  not install the driver in every debug application. The host must own installation independently
+  of package selection.
 - **App code installs it (status quo).** Rejected: no example and no third-party app would be
   drivable without editing it, which is exactly what the tool must avoid.
 - **A TCP endpoint for devices.** Rejected: an `adb`-forwarded abstract socket reaches the device

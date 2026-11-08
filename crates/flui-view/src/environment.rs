@@ -1,7 +1,8 @@
 //! Inherited presentation data and subtree-scoped presentation services:
-//! [`MediaQuery`]/[`MediaQueryData`], the gesture arena and its inherited
-//! input policy ([`GestureArenaScope`], [`GesturePolicy`]), and the shared
-//! frame registry for implicitly-animated widgets ([`VsyncScope`]).
+//! [`MediaQuery`]/[`MediaQueryData`], the focus-tree root ([`FocusTreeRoot`]),
+//! the gesture arena and its inherited input policy ([`GestureArenaScope`],
+//! [`GesturePolicy`]), and the shared frame registry for implicitly-animated
+//! widgets ([`VsyncScope`]).
 //!
 //! These are the views the runtime installs above one root and the catalog,
 //! the runtime, and the packages all read; the widget catalog owns nothing
@@ -24,10 +25,11 @@
 //! These require platform event plumbing (accessibility bridge, IME state)
 //! that lives above this layer.
 
-use std::sync::Arc;
+use std::{rc::Rc, sync::Arc};
 
 use flui_animation::{MotionPolicy, Vsync};
 use flui_foundation::geometry::{EdgeInsets, Edges, Size};
+use flui_interaction::focus::{FocusManager, FocusNode};
 use flui_interaction::gesture::{GestureArena, SweepModel};
 use flui_interaction::{GestureSettingsProvider, WheelPreferencesProvider};
 use flui_painting::TextSizing;
@@ -766,3 +768,142 @@ impl InheritedView for VsyncScope {
 }
 
 impl_inherited_view!(VsyncScope);
+
+// ---------------------------------------------------------------------------
+// Focus tree root
+// ---------------------------------------------------------------------------
+
+/// Provides the nearest enclosing focus node to descendant focus widgets.
+///
+/// This is framework plumbing shared with `flui-widgets`, not application API.
+/// Construct it through [`FocusParentProvider::new`] when a focus widget publishes
+/// its own node.
+#[doc(hidden)]
+#[derive(Clone)]
+pub struct FocusParentProvider {
+    parent: Rc<FocusNode>,
+    revision: u64,
+    child: BoxedView,
+}
+
+impl FocusParentProvider {
+    /// Publish `parent` and its notification `revision` around `child`.
+    #[must_use]
+    pub fn new(parent: Rc<FocusNode>, revision: u64, child: BoxedView) -> Self {
+        Self {
+            parent,
+            revision,
+            child,
+        }
+    }
+}
+
+impl std::fmt::Debug for FocusParentProvider {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FocusParentProvider")
+            .field("parent_id", &self.parent.id())
+            .field("revision", &self.revision)
+            .finish_non_exhaustive()
+    }
+}
+
+impl InheritedView for FocusParentProvider {
+    type Data = Rc<FocusNode>;
+
+    fn data(&self) -> &Self::Data {
+        &self.parent
+    }
+
+    fn child(&self) -> &dyn View {
+        &self.child
+    }
+
+    fn update_should_notify(&self, old: &Self) -> bool {
+        !Rc::ptr_eq(&self.parent, &old.parent) || self.revision != old.revision
+    }
+}
+
+impl_inherited_view!(FocusParentProvider);
+
+/// Return the focus parent a mounting or reparenting focus widget must use.
+///
+/// Every runtime presentation installs [`FocusTreeRoot`], so a missing provider
+/// is a broken embedder invariant rather than an optional environment.
+#[doc(hidden)]
+pub fn enclosing_focus_parent(ctx: &dyn BuildContext) -> Rc<FocusNode> {
+    ctx.depend_on::<FocusParentProvider, _>(|provider| Rc::clone(&provider.parent))
+        .expect(
+            "BUG: focus widget mounted outside FocusTreeRoot; every presentation root must install \
+             the focus-tree provider",
+        )
+}
+
+/// Return the nearest focus node, registering a dependency on its provider.
+#[doc(hidden)]
+pub fn nearest_focus_node(ctx: &dyn BuildContext) -> Option<Rc<FocusNode>> {
+    ctx.depend_on::<FocusParentProvider, _>(|provider| Rc::clone(&provider.parent))
+}
+
+/// Establishes one presentation's focus-tree root around a subtree.
+///
+/// The runtime installs this view below its other root scopes. Standard keyboard
+/// bindings are catalog policy instead: `flui-app` and `HeadlessHost` add them
+/// with `flui_widgets::app_root`, keeping the runtime independent of the widget
+/// catalog. Custom embedders compose the two pieces explicitly.
+#[derive(Clone, Debug, StatefulView)]
+pub struct FocusTreeRoot {
+    child: BoxedView,
+}
+
+impl FocusTreeRoot {
+    /// Create the focus-tree root for a presentation subtree.
+    #[must_use]
+    pub fn new(child: impl IntoView) -> Self {
+        Self {
+            child: child.into_view().boxed(),
+        }
+    }
+}
+
+/// Presentation-local state behind [`FocusTreeRoot`].
+pub struct FocusTreeRootState {
+    manager: Option<Rc<FocusManager>>,
+}
+
+impl std::fmt::Debug for FocusTreeRootState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FocusTreeRootState")
+            .field("initialized", &self.manager.is_some())
+            .finish()
+    }
+}
+
+impl StatefulView for FocusTreeRoot {
+    type State = FocusTreeRootState;
+
+    fn create_state(&self) -> Self::State {
+        FocusTreeRootState { manager: None }
+    }
+}
+
+impl ViewState<FocusTreeRoot> for FocusTreeRootState {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
+        self.manager = Some(ctx.focus_manager());
+    }
+
+    fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
+        self.manager = Some(ctx.focus_manager());
+    }
+
+    fn build(&self, view: &FocusTreeRoot, _ctx: &dyn BuildContext) -> impl IntoView {
+        let manager = self
+            .manager
+            .as_ref()
+            .expect("BUG: FocusTreeRoot built before init_state");
+        FocusParentProvider::new(
+            Rc::clone(manager.root_scope().as_focus_node()),
+            0,
+            view.child.clone(),
+        )
+    }
+}

@@ -25,7 +25,7 @@ use flui_sdk::widgets::{GestureDetector, SizedBox};
 
 #[derive(Clone, StatelessView)]
 struct DrawerFlingProfile {
-    provider: flui_interaction::gesture::GestureSettingsProvider,
+    provider: flui_sdk::interaction::GestureSettingsProvider,
     child: flui_sdk::view::BoxedView,
 }
 
@@ -48,7 +48,7 @@ pub fn open_drawer_settling_uses_the_captured_fling_profile() {
 }
 
 pub fn a_drawer_release_keeps_finger_speed() {
-    use flui_sdk::painting::Color;
+    use flui_sdk::painting::styling::Color;
     use flui_sdk::widgets::ColoredBox;
     let color = Color::rgb(17, 83, 149);
     let painted_x = |laid: &common::LaidOut| {
@@ -164,7 +164,7 @@ fn grabbing_closing_drawer(
     closing_millis: u64,
     above_half: bool,
 ) {
-    use flui_sdk::painting::Color;
+    use flui_sdk::painting::styling::Color;
     use flui_sdk::widgets::ColoredBox;
 
     let vsync = Vsync::new();
@@ -318,12 +318,12 @@ fn grabbing_closing_drawer(
 /// Observe the authored rectangle in the committed scene, including the
 /// compositor ancestors that move and fade a retained picture.
 fn drawer_scene_sample(
-    tree: &flui_layer::LayerTree,
-    color: flui_sdk::painting::Color,
+    tree: &flui_sdk::testing::rendering::LayerTree,
+    color: flui_sdk::painting::styling::Color,
 ) -> (f64, f64) {
-    use flui_layer::Layer;
     use flui_sdk::geometry::Point;
     use flui_sdk::painting::DrawOp;
+    use flui_sdk::testing::rendering::Layer;
     for (_, node) in tree.iter() {
         let Layer::Picture(picture) = node.layer() else {
             continue;
@@ -360,10 +360,10 @@ fn drawer_scene_sample(
 
 pub fn drawer_slides_without_rebuilding_per_frame() {
     use flui_sdk::geometry::Offset;
-    use flui_sdk::painting::Color;
-    use flui_sdk::view::environment::GestureArenaScope;
-    use flui_sdk::widgets::{ColoredBox, FocusRoot};
-    use flui_testing::{HeadlessBinding, MountOptions, MountOwners, PointerScript};
+    use flui_sdk::painting::styling::Color;
+    use flui_sdk::testing::{HeadlessBinding, MountOptions, MountOwners, PointerScript};
+    use flui_sdk::view::environment::{FocusTreeRoot, GestureArenaScope};
+    use flui_sdk::widgets::ColoredBox;
 
     for (end, settling_frames, panel_tap, both) in [
         (false, 0, false, false),
@@ -394,7 +394,7 @@ pub fn drawer_slides_without_rebuilding_per_frame() {
         .drawer_scrim_color(scrim);
         let root = GestureArenaScope::new(
             binding.arena().clone(),
-            FocusRoot::new(themed_animated(scaffold, binding.vsync())),
+            FocusTreeRoot::new(themed_animated(scaffold, binding.vsync())),
         );
         let _ = binding.mount_root(
             &root,
@@ -538,7 +538,7 @@ pub fn drawer_slides_without_rebuilding_per_frame() {
 }
 
 pub fn incoming_end_drawer_scrim_covers_the_outgoing_start_panel() {
-    use flui_sdk::painting::Color;
+    use flui_sdk::painting::styling::Color;
     use flui_sdk::widgets::ColoredBox;
 
     let vsync = Vsync::new();
@@ -609,11 +609,11 @@ pub fn incoming_end_drawer_scrim_covers_the_outgoing_start_panel() {
 fn drawer_settling_uses_profile(initially_open: bool) {
     for (min, max) in [(50.0, 100.0), (5000.0, 5000.0)] {
         let profile = |min, max| {
-            flui_interaction::GestureSettings::default()
+            flui_sdk::interaction::GestureSettings::default()
                 .try_with_fling_velocity(min, max)
                 .expect("valid fling range")
         };
-        let source = flui_interaction::gesture::GestureSettingsSource::new(profile(min, max));
+        let source = flui_sdk::testing::input::GestureSettingsSource::new(profile(min, max));
         let slot = Rc::new(RefCell::new(None));
         let probe = HandleProbe {
             slot: Rc::clone(&slot),

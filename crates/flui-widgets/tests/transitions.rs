@@ -29,10 +29,10 @@ use flui_painting::typography::TextDirection;
 use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
 use flui_testing::{FrameReport, HeadlessBinding, MountOptions, MountOwners};
 use flui_view::RebuildReason;
-use flui_view::environment::GestureArenaScope;
+use flui_view::environment::{FocusTreeRoot, GestureArenaScope};
 use flui_view::{BoxedView, View, ViewExt};
 use flui_widgets::{
-    Align, AlignTransition, ColoredBox, Column, DecoratedBoxTransition, FocusRoot, GestureDetector,
+    Align, AlignTransition, ColoredBox, Column, DecoratedBoxTransition, GestureDetector,
     PositionedTransition, RotationTransition, ScaleTransition, SizeTransition, SizedBox,
     SlideTransition, Stack, row,
 };
@@ -79,7 +79,7 @@ impl Headless {
         let mut binding = HeadlessBinding::new();
         let root = GestureArenaScope::new(
             binding.arena().clone(),
-            FocusRoot::new(Align::new(Alignment::TOP_LEFT).child(view)),
+            FocusTreeRoot::new(Align::new(Alignment::TOP_LEFT).child(view)),
         );
         let _ = binding.mount_root(
             &root,
@@ -588,7 +588,7 @@ pub(crate) fn a_moving_slide_preserves_selected_pointer_coordinates() {
         .text_direction(direction);
         let root = GestureArenaScope::new(
             binding.arena().clone(),
-            FocusRoot::new(Align::new(Alignment::CENTER).child(slide)),
+            FocusTreeRoot::new(Align::new(Alignment::CENTER).child(slide)),
         );
         let _mounted = binding.mount_root(
             &root,

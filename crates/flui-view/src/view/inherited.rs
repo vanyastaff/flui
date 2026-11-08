@@ -8,7 +8,112 @@
 
 use super::view::View;
 
-use std::marker::PhantomData;
+use std::{any::TypeId, collections::HashSet, marker::PhantomData};
+
+/// A set of dynamically typed entries read from, or changed in, an
+/// [`InheritedView`].
+///
+/// Entries occupy their own coordinate system: a `TypeId` never becomes a bit
+/// in [`FieldSet`]. `ALL` is the dependency registered by a whole-provider
+/// [`BuildContextExt::depend_on`](crate::BuildContextExt::depend_on) read;
+/// [`BuildContextExt::depend_on_entry`](crate::BuildContextExt::depend_on_entry)
+/// records one entry. Providers construct a change set from entry type ids when
+/// they override [`InheritedView::changed_entries`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EntrySet(EntrySetInner);
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum EntrySetInner {
+    None,
+    All,
+    Entries(HashSet<TypeId>),
+}
+
+impl EntrySet {
+    /// No entry.
+    pub const NONE: Self = Self(EntrySetInner::None);
+    /// Every entry, including entries added by future provider versions.
+    pub const ALL: Self = Self(EntrySetInner::All);
+
+    /// The set containing entry `E`.
+    #[must_use]
+    pub fn of<E: 'static>() -> Self {
+        Self::from_type_id(TypeId::of::<E>())
+    }
+
+    /// The set containing the entry identified by `type_id`.
+    ///
+    /// This is for providers reporting dynamically stored entries from
+    /// [`InheritedView::changed_entries`]. Dependents use the typed
+    /// [`BuildContextExt::depend_on_entry`](crate::BuildContextExt::depend_on_entry)
+    /// extension rather than passing an untyped set to a context.
+    #[must_use]
+    pub fn from_type_id(type_id: TypeId) -> Self {
+        Self(EntrySetInner::Entries(HashSet::from([type_id])))
+    }
+
+    /// Both sets.
+    #[must_use]
+    pub fn union(self, other: Self) -> Self {
+        match (self.0, other.0) {
+            (EntrySetInner::All, _) | (_, EntrySetInner::All) => Self::ALL,
+            (EntrySetInner::None, other) => Self(other),
+            (this, EntrySetInner::None) => Self(this),
+            (EntrySetInner::Entries(mut this), EntrySetInner::Entries(other)) => {
+                this.extend(other);
+                Self(EntrySetInner::Entries(this))
+            }
+        }
+    }
+
+    /// Whether the two sets share at least one entry.
+    #[must_use]
+    pub fn intersects(&self, other: &Self) -> bool {
+        match (&self.0, &other.0) {
+            (EntrySetInner::None, _) | (_, EntrySetInner::None) => false,
+            (EntrySetInner::All, _) | (_, EntrySetInner::All) => true,
+            (EntrySetInner::Entries(this), EntrySetInner::Entries(other)) => {
+                this.iter().any(|entry| other.contains(entry))
+            }
+        }
+    }
+
+    /// Whether no entry is set.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        match &self.0 {
+            EntrySetInner::None => true,
+            EntrySetInner::All => false,
+            EntrySetInner::Entries(entries) => entries.is_empty(),
+        }
+    }
+}
+
+impl Default for EntrySet {
+    fn default() -> Self {
+        Self::NONE
+    }
+}
+
+impl From<TypeId> for EntrySet {
+    fn from(type_id: TypeId) -> Self {
+        Self::from_type_id(type_id)
+    }
+}
+
+impl std::ops::BitOr for EntrySet {
+    type Output = Self;
+
+    fn bitor(self, rhs: Self) -> Self {
+        self.union(rhs)
+    }
+}
+
+impl std::ops::BitOrAssign for EntrySet {
+    fn bitor_assign(&mut self, rhs: Self) {
+        *self = std::mem::take(self).union(rhs);
+    }
+}
 
 /// An **untyped** set of provider-data fields — the type-erased form of
 /// [`FieldMask<D>`] that element storage and the object-safe context methods
@@ -333,6 +438,18 @@ pub trait InheritedView: Clone + 'static + Sized {
         } else {
             FieldMask::NONE
         }
+    }
+
+    /// Which dynamically typed entries changed since `old`.
+    ///
+    /// Entry changes are independent of [`changed_fields`](Self::changed_fields):
+    /// a dependent rebuilds when either set intersects its reads. Providers must
+    /// include added, removed and replaced entries and omit content-equal ones.
+    /// The default reports no entry changes, preserving the behavior of providers
+    /// that expose only ordinary data fields.
+    fn changed_entries(&self, old: &Self) -> EntrySet {
+        let _ = old;
+        EntrySet::NONE
     }
 }
 

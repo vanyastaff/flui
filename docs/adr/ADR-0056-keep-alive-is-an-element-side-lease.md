@@ -103,10 +103,12 @@ forbidden — so a `GlobalKey` state mounted outside a list and later moved into
 would have no supported way to ask.
 
 The table lives on `BuildOwner`, not in an `InheritedView` scope. Every other
-`BuildContext` capability resolves from the owner (ADR-0018/0021/0030/0037), and
-an inherited scope would additionally need a per-item `StatefulView` wrapper and
-a config field on all three sliver widgets, because the *host* also needs to read
-the table and is a render behavior that cannot read inherited data ambiently.
+`BuildContext` capability resolves from the owner (ADR-0018/0021/0030/0037).
+Although render configuration can read inherited data, an inherited lease table would
+still need a per-item `StatefulView` wrapper and a config field on all three sliver
+widgets so each stateful child could acquire its lease during `init_state`. The owner's
+typed table also gives the host direct access without routing per-item lifecycle state
+through render configuration.
 
 `keep_alive_lease` must not be acquired from `build`: there it would be re-taken
 on every rebuild, and the previous lease's `Drop` would release the old hold,
@@ -208,7 +210,7 @@ eviction-timing contract) and folding them in would make one change four.
 | Keep the `keep_alive` parent-data field as the flag's home | Dead field, zero readers; a second writer on a struct the index stamp owns |
 | Bubbling `KeepAliveNotification` with a holder id and a liveness sweep | Foundation has zero production use; needs a four-site trait-signature change for an `&ElementTree`; index-keyed leases are relocation-unsafe; the sweep misses a `GlobalKey` retake, which reparents rather than removes |
 | A `set_keep_alive(bool)` setter or a bool on a marker view | Last-writer-wins across N independent holders — the case Flutter uses a handle *set* for |
-| An `InheritedView` `KeepAliveScope` (the `VsyncScope` idiom) | The host is a render behavior and cannot read inherited data; forces a wrapper element plus a config field on all three sliver widgets |
+| An `InheritedView` `KeepAliveScope` (the `VsyncScope` idiom) | Still forces a per-item wrapper element plus a config field on all three sliver widgets for lifecycle acquisition; routing the owner-local lease table through inherited render configuration would add scope plumbing without replacing the per-item holds |
 | A per-item aggregation element (porting `AutomaticKeepAlive`) | Unnecessary once the table is keyed by `ElementId`; would contend with the existing `RepaintBoundary` for the wrapper slot |
 | `drop_child` park plus a keep-alive bucket | Parentless ⇒ standalone relayout root against stale constraints; solves a problem the placed-generation stamp already solved |
 | Snapshot-and-restore into an LRU instead of parking | The only bounded-by-construction option, and the reason it is recorded here rather than dismissed. Rejected because it loses focus, in-flight animations and nested scroll offsets — most of what keep-alive is actually asked for |

@@ -375,8 +375,7 @@ pub(crate) mod support {
     #![forbid(unsafe_code)]
 
     use flui_platform::{
-        Availability, CapabilityAbsence, WindowCapabilities, WindowCommand, WindowMaterial,
-        WindowMode,
+        Availability, WindowCapabilities, WindowCommand, WindowMaterial, WindowMode,
     };
 
     /// The `_NET_SUPPORTED` atoms this model reads, as the server numbered
@@ -424,37 +423,33 @@ pub(crate) mod support {
     /// moves and resizes at the window's request (ADR-0286 §10), so it needs a
     /// window manager that takes `_NET_WM_MOVERESIZE`.
     pub(crate) fn capabilities(support: WindowManagerSupport) -> WindowCapabilities {
-        let device = CapabilityAbsence::NotOnThisDevice;
         let mut capabilities = WindowCapabilities::ALL
-            .unavailable(
-                &WindowCommand::SetMaterial(WindowMaterial::System),
-                CapabilityAbsence::NotOnThisPlatform,
-            )
+            .unavailable(&WindowCommand::SetMaterial(WindowMaterial::System))
             // The GPU driver presents through the Present extension on a
             // connection of its own, and the server reports a present's
             // completion to that connection alone: no other client learns when
             // the window's frames reached the screen.
-            .without_presentation_feedback(CapabilityAbsence::NotOnThisPlatform)
+            .without_presentation_feedback()
             // X11 has no on-screen keyboard protocol and no system gesture
             // edges.
-            .without_keyboard_inset(CapabilityAbsence::NotOnThisPlatform)
-            .without_system_gestures(CapabilityAbsence::NotOnThisPlatform);
+            .without_keyboard_inset()
+            .without_system_gestures();
         capabilities.frame_rate_hint = Availability::Unavailable;
         if !support.moves_and_resizes {
-            capabilities = capabilities.without_app_title_bar(device);
+            capabilities = capabilities.without_app_title_bar_on_this_device();
         }
         if !support.managed {
-            capabilities =
-                capabilities.unavailable(&WindowCommand::SetMode(WindowMode::Minimized), device);
+            capabilities = capabilities
+                .unavailable_on_this_device(&WindowCommand::SetMode(WindowMode::Minimized));
             capabilities.observes_minimized = Availability::Unavailable;
         }
         if !support.maximizes {
-            capabilities =
-                capabilities.unavailable(&WindowCommand::SetMode(WindowMode::Maximized), device);
+            capabilities = capabilities
+                .unavailable_on_this_device(&WindowCommand::SetMode(WindowMode::Maximized));
         }
         if !support.fullscreen {
-            capabilities =
-                capabilities.unavailable(&WindowCommand::SetMode(WindowMode::Fullscreen), device);
+            capabilities = capabilities
+                .unavailable_on_this_device(&WindowCommand::SetMode(WindowMode::Fullscreen));
         }
         capabilities
     }

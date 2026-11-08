@@ -8,13 +8,13 @@ use flui_interaction::FocusNode;
 use flui_painting::styling::Color;
 use flui_painting::typography::TextStyle;
 use flui_platform::text_store::TextInputPurpose;
+use flui_rendering::semantics::LiveSetting;
 use flui_view::element::ElementKind;
 use flui_view::prelude::*;
 
 use super::AutovalidateMode;
 use super::form_field::FormFieldHandle;
 use super::text_form_field_core::{TextFormFieldConfig, TextFormFieldCore};
-use crate::LiveSetting;
 use crate::flex::Column;
 use crate::semantics::Semantics;
 use crate::support::{event_callback, ref_callback};
@@ -29,8 +29,8 @@ const ERROR_COLOR: Color = Color::rgb(176, 0, 32);
 /// plain error line — the theme-free text form field;
 /// `flui_material::TextFormField` is the themed one.
 ///
-/// Named `Raw…` for the reason [`RawTextField`] is: the facade's
-/// `TextFormField` means the Material one whenever that feature is on.
+/// Named `Raw…` for the reason [`RawTextField`] is: the base and Material
+/// preludes can be imported together without making `TextFormField` ambiguous.
 ///
 /// Two constructors put "an initial value or a controller, not both"
 /// into the types: [`Self::new`] edits a caller's controller and

@@ -393,14 +393,17 @@ rectangle available; replacement completion restores its live render geometry.
 The runtime's `parked_text_preparation_does_not_publish_partial_ime_geometry`
 also pins the focus and lifecycle hit-test paths through an actual editable.
 
-`MediaQuery` and `MediaQueryData` live in `flui_view::environment`; this crate
-and its tests import the types from there, and package authors reach them as
-the SDK's `flui_sdk::view::environment`. `flui_widgets` owns no presentation-data
-module: the `app` module provides the shell and `SafeArea`, not the source of
-inherited presentation data. The gesture arena and the shared frame registry
-(`GestureArenaScope`, `VsyncScope`) live there too, for the same reason: they
-are views the presentation installs, not catalog widgets. Field-specific
-dependency behavior is pinned by `a_size_only_change_rebuilds_size_and_whole_readers_only`.
+`MediaQuery`, `MediaQueryData` and `FocusTreeRoot` live in
+`flui_view::environment`; this crate and its tests import the types from there,
+and package authors reach them as the SDK's `flui_sdk::view::environment`.
+`flui_widgets` owns no presentation-data module: the `app` module provides the
+shell, `SafeArea` and `app_root`, not the source of inherited presentation data.
+The gesture arena and the shared frame registry (`GestureArenaScope`,
+`VsyncScope`) live there too, for the same reason: they are views the
+presentation installs, not catalog widgets. `app_root` adds the catalog's
+standard keyboard policy before the runtime installs those environment views;
+`flui-app` and `HeadlessHost` compose the two halves. Field-specific dependency
+behavior is pinned by `a_size_only_change_rebuilds_size_and_whole_readers_only`.
 
 `MediaQuery::motion_of` observes the presentation's resolved policy, while
 controllers obey the clock rather than an inherited subtree override. Physical
@@ -424,10 +427,15 @@ removal and nested-provider precedence. The runtime's
 
 `RichText` reads inherited text sizing and weight adjustment during its stateless
 build and passes them with its unchanged authored spans to a private render view.
-Native settings and inherited lookups do not enter `RenderObjectContext`. The paragraph
-update reports layout and semantics invalidation when sizing changes, so the same
-render object produces updated geometry. Weight changes likewise invalidate layout
-and semantics; EditableText forwards the same inherited adjustment to its painter.
+The paragraph update reports layout and semantics invalidation when sizing changes,
+so the same render object produces updated geometry. Weight changes likewise invalidate
+layout and semantics; EditableText forwards the same inherited adjustment to its painter.
+
+Render configuration can also make typed inherited reads through `RenderObjectContext`.
+`Align`, `Stack` and `IndexedStack` store `AlignmentGeometry`; directional alignment resolves
+against `Directionality` during `update_render_object`, while absolute alignment registers no
+direction dependency. A direction change reconfigures the same render object before layout.
+`directional_alignment.rs` pins all three widgets and the directional-to-absolute transition.
 The common shaping policy runs after authored span inheritance (ADR-0174).
 `Text` composes this path after merging its ambient style. `MediaQueryData`
 carries one validated numeric sizing policy rather than a writable scalar.
@@ -534,11 +542,10 @@ replacement result are destroyed by the refusal's unwind (ADR-0281).
 
 An admission reserves every identity it spends, route and overlay entry alike,
 before its first observable side effect: a recorded Router page, a filled
-binding slot, an inserted entry, a dismissed predecessor (`pop_and_push_named`
-reserves before it pops), a hero frozen as a placeholder. Batch replacement
-reserves for every member before preparing any. Exhaustion therefore fails the
-whole operation with nothing changed, and caller-owned values carried across
-the reservation (a named request's arguments, a result, a predicate, a
+binding slot, an inserted entry, a dismissed predecessor, a hero frozen as a
+placeholder. Batch replacement reserves for every member before preparing any.
+Exhaustion therefore fails the whole operation with nothing changed, and
+caller-owned values carried across the reservation (a result, a predicate, a
 Router's unseeded initial values) are destroyed on refusal. Spent reservations
 are not returned.
 
@@ -553,6 +560,27 @@ Router parser inputs and partially built router clones are owned before any
 user code runs, so a failure there destroys them under the same rule. A route result and the waker waiting for it are retired
 separately. Tested by `delivered_route_results_remain_completed` and
 `terminal_binding_authority_is_closed_before_route_retirement`.
+
+Final `NavigatorState::dispose` runs after `detach_observers` and calls
+`complete_terminal_results`. Under a short history lock, history prepares an
+owner-local `TerminalResultCompletion` for every pending result; those
+completions run after the lock is released, with `FirstPanic` retaining the
+first failure while later completions still run. Terminal unmount resolves each
+pending result with `Ok(None)` and performs no route lifecycle callback,
+observer notification or Router stack edit. Deactivation followed by activation
+is not terminal and leaves the result pending.
+
+Result completion and route lifecycle remain separate after unmount.
+`RouteEntry::handle_pop` performs route lifecycle even when terminal completion
+has already resolved its result, so a stale-handle pop still runs `did_pop` and
+severs local-history callbacks; idempotent `RouteRecord::did_complete` cannot
+complete the result twice. User wakers are not cloned, woken or dropped under
+the history lock, and a panicking waker does not skip another terminal
+completion. These rules are pinned by
+`unmount_completes_a_pending_result_without_a_router_edit`,
+`global_key_reactivation_leaves_a_route_result_pending`,
+`a_panicking_terminal_waker_does_not_block_another_completion` and
+`a_mismatched_pop_result_is_reported_and_dropped_outside_the_history_lock`.
 
 ## Event callback phase boundary
 
@@ -685,7 +713,7 @@ for its drag and `ListView` or `GridView` (`scroll`) for its rows.
 field composes `RawTextField` (`text`), a `Focus` wrapper (`interaction`) and
 the error line's `Column` and `Semantics`, and nothing below names a form.
 The clipboard intents live in `interaction`, not `text`, so the
-`DefaultFocusTraversal` that `FocusRoot` builds can bind them without naming
+`DefaultFocusTraversal` that `app_root` installs can bind them without naming
 the text module that answers them.
 
 A new module takes a place in `layers`; a move that changes the direction
@@ -1360,602 +1388,50 @@ removed when the session ends or when the operating system takes the drag and
 draws its own image. The feedback takes no pointer input, so the targets
 beneath it are found. **Test:** `a_drag_drops_on_the_target_that_accepted_its_last_move`.
 
-### 4. Named routes split into six untyped entry points and two typed ones, and a request that cannot be served is a typed error
-
-**Rule:** [ADR-0024](../../docs/adr/ADR-0024-named-routes-seam.md), which
-[ADR-0093](../../docs/adr/ADR-0093-router-is-the-primary-navigation-api.md) §4
-supersedes: named routes, `RouteKey<T>` and `on_generate_route` are removed,
-with no replacement but the typed `Router`. §4–§12 describe the named-route
-code until that removal ([`docs/gaps.md`](../../docs/gaps.md) entry 43,
-"ADR-0093"); no new code builds on it.
-
-**Problem:** a name that no table entry or generator resolves, and a caller's
-result type that differs from the route's, are both failures a
-`Future<T?>`-shaped push cannot express.
-
-**Choice:** two shapes, not one.
-
-- Six untyped operations — `push_named`, `push_replacement_named`,
-  `push_replacement_named_with`, `pop_and_push_named`,
-  `pop_and_push_named_with`, `push_named_and_remove_until` — return
-  `Result<RouteId, NamedRouteError>`. They never name the route's result type,
-  so their only error is `Unresolved`.
-- One typed operation, `push_named_typed::<T>`, additionally returns the route's
-  `RouteResult<T>` and can answer `ResultType { name, expected, actual }`. It
-  compares `TypeId::of::<T>()` against a `TypeId` the `GeneratedRoute` captured
-  at construction, so the refusal lands **before** the carrier can reach a front
-  door — expressed in the type system as `GeneratedRoute::checked` yielding a
-  `TypedPush<T>` token that is the only thing with a `push` method.
-
-Both failures are total **for the operation itself**: it pushes, pops, replaces
-and removes nothing, and the generated route is disposed (§7).
-
-That qualifier is load-bearing, and the earlier revision of this entry lacked it.
-Resolution runs a user factory, and although §9 no longer *offers* a way to
-navigate from one, a factory that captures a handle can still do it — so a
-factory that navigates and *then* declines has already changed the stack and
-notified observers by the time the name comes back unresolved: `push_named`
-returns `Err(Unresolved)` with the stack one deeper and `["push", "changeTop"]`
-observed. **Unasserted:** no test pins this. Those are the factory's own
-mutations, deliberate on its part, and they are not rolled back for the same
-reason §5 does not undo a factory's nested push: it is not this operation's to
-undo. What the guarantee covers is that **the failing operation adds nothing of
-its own**.
-
-**Why not type every entry point.** That was the first design, and it was worse
-than the bug it fixed. `push_named::<()>("/settings")` against a
-`PageRoute<i32>` generator would return `Err` and *not navigate* — a caller who
-just wants to go to a screen has no reason to know what that screen completes
-with. Trading a
-silent-`None` for a refusal-to-navigate in the common case is a regression. The
-split keeps the strong guarantee exactly where the caller has asserted a type.
-Typed siblings for replacement and remove-until are deliberately not offered:
-no consumer yet, and each is purely additive later.
-
-**Why a typed error.** Two reasons, one per variant:
-
-- A route name is *caller input*, not a framework invariant, and
-  [`PANIC-POLICY`](../../docs/PANIC-POLICY.md) puts caller input on the `Result`
-  side; a debug-only assert would behave differently in release.
-- The type mismatch is genuinely detectable in Rust: FLUI's registration stays
-  typed, so the generated route knows its own `Output`. Reporting it as an indistinguishable `None` at delivery — this ADR's
-  own first answer — would have thrown that information away for nothing.
-
-**Consequence, named rather than left to be discovered:** the *result* a `_with`
-variant delivers to the departing route keeps the ordinary delivery-time
-contract (`pop_with`'s), because the navigator still cannot know the departing
-route's `Output`. Only `push_named_typed`'s `T` is checked early. So
-`push_replacement_named_with(name, Wrong)` still completes the replaced route
-with `None` and a log line, exactly as `push_replacement_with` does.
-
-**Replacement tests:** in `tests/navigator_public.rs` —
-`push_named_typed_with_the_wrong_result_type_errors_disposes_the_route_and_changes_nothing`
-for the guarantee the typed entry point keeps, asserting the error's own fields
-*and* that the stack and the observer stream are unchanged; deleting the
-`TypeId` comparison in `GeneratedRoute::checked` fails it. The untyped half — a
-registered `PageRoute<i32>` reached through `push_named` and the other five
-untyped operations with no `T` in sight, the regression the split prevents, and
-an unresolvable name leaving the stack and the observer stream untouched:
-**Unasserted:** no test pins this.
-
-### 5. Named operations capture their target, then resolve, then act on the captured route
-
-**Rule:** as §4 above; same ADR.
-
-**Choice:** read the target route's id **first**, then resolve the name, then act
-on that captured id. Resolution happens before any mutation, so an unresolvable
-name changes nothing; and the operation acts on the route the caller meant, not
-on whatever happens to be on top after resolution.
-
-**Why the capture is needed, and what it cost to learn.** Resolving runs a user
-factory, and a factory can navigate — `RouteRequest::navigator()` advertises
-exactly that. So "resolve, then act on the current top" is a
-time-of-check/time-of-use bug: a factory that pushes during resolution makes the
-following `pop()` remove the *nested* route while the caller's target survives
-uncompleted, and `pop_and_push_named_with` then delivers the caller's result
-value to a route it has never heard of. Four entry points shared the shape.
-`push_named_and_remove_until` did not, for a structural reason worth preserving:
-its removal is defined by a **predicate**, not by a captured top, so a nested
-push is swept along with everything else — do not harmonise it into the captured
-shape.
-
-**Three consequences, all only for a re-entrant factory:**
-
-1. **Ordering.** The nested `didPush` precedes the dismissal of the caller's
-   route, because the pop is deferred until after resolution.
-
-   **The `RouteRequest::navigator()` accessor is withdrawn (§9), so these two
-   consequences change meaning rather than disappearing.** They were the price of
-   a capability the crate offered. They are now what still happens if a factory mutates the stack
-   — which the crate no longer offers a way to do, and cannot prevent, because a
-   factory is an `Rc<dyn Fn>` and closures capture freely. Measured, not assumed:
-   a factory that captures a handle reproduces the window exactly, and reverting
-   the capture-then-resolve fix reproduces the original defect through it
-   (`stack=[root, victim, arrived]`, the caller's route surviving uncompleted).
-   So the defences below are not overhead left behind by a retired feature; they
-   are the operations being correct unconditionally.
-2. **Kind, on the dismissal path.** Once a factory has pushed on top, the
-   caller's route is no longer the top, and a route that is not on top cannot be
-   popped. `dismiss_captured` therefore has three cases, all documented on it and
-   all asserted: still on top → an ordinary `pop` (`didPop`, and
-   `Route::did_pop` may still refuse); buried → removed by id (`didRemove`);
-   already gone → a no-op, and the operation still returns `Ok` with its new
-   route pushed.
-3. **Identity, on the replacement path.** `didReplace(new, old)` names the route
-   the replacement **actually completed** — the captured one — and this had to be
-   fixed as a second-order consequence of the capture itself. Completing by id
-   while deriving the observation from position left two sources of truth that
-   agreed only while nothing could run in between; with a re-entrant factory they
-   diverged, and observers were told the *factory's* route had been replaced
-   while it was still on the stack, with the genuinely replaced route never
-   reported at all. An observer acting on that would tear down a live route.
-   `RouteEntry::replacing` now carries the id the completion used, resolved once,
-   and the observation reads it. Note this is invisible to a kind-only assertion:
-   the stream is identical either way, which is why the pin asserts the payload.
-
-   The sibling arms keep the positional answer, deliberately: `Push` means "the
-   route below", which is positional by definition and replaces nothing, and the
-   generic mid-stack `Replace` resolves its target positionally in the first
-   place, so for it position *is* the single source of truth.
-
-Non-re-entrant calls — every ordinary one — are unaffected and still emit
-`["pop", "changeTop", "push", "changeTop"]`.
-
-**Every case, measured rather than described.** Two of these are not what a
-reader would guess, which is why the table is here and not a summary:
-
-| operation | factory | stream | `didReplace(new, old)` |
-|---|---|---|---|
-| `pop_and_push_named` | none | `pop, changeTop, push, changeTop` | never emits it |
-| `pop_and_push_named` | pushes (target buried) | `push, changeTop, **remove**, push, changeTop` | — |
-| `pop_and_push_named` | pops (target gone) | `pop, changeTop, push, changeTop` | — |
-| `push_replacement_named` | none | `replace, changeTop` | `(new, target)` |
-| `push_replacement_named` | pushes (target buried) | `push, changeTop, replace, changeTop` | `(new, target)` |
-| `push_replacement_named` | pops (target gone) | `pop, changeTop, replace, changeTop` | `(new, None)` |
-| `push_replacement_named` | target not present (mid-exit) | `replace, changeTop` | `(new, None)` |
-
-The two surprises:
-
-- **A buried replacement still reports the captured target**, not `None`. Only
-  *gone* and *not present* report `None`. The buried case is the one that used to
-  be wrong, so it is the one worth stating.
-- **The "gone" pop-and-push case is indistinguishable from the no-factory case.**
-  The factory's own `pop` produces the `pop`, and the operation's dismissal is
-  then a no-op — so consequence 2 shows only in the *buried* case, not in every
-  factory mutation.
-
-**Undelivered results.** A caller-supplied result that reaches no route is
-**reported and dropped outside any guard**. The location is the load-bearing
-half, not the log: its `Drop` is user code, and this crate has already been bitten
-by running user code under a non-reentrant mutex — the failure there is a hang,
-not a test failure. `warn` when there was no route to deliver to; `error` when a
-route received it and the type did not match its `Output`. One wording per
-condition, on one path, so this sentence is true in exactly one way.
-
-**The invariant is what to rely on, not a count: every caller-supplied result is
-either delivered to a route or reported exactly once, and dropped outside any
-guard.** The list below is illustrative — it is here because most of these are not
-the edge cases a reader expects, not as an inventory to keep in step: an empty stack, a top mid-exit-transition, a
-target already completed, an id belonging to another navigator, an unmounted
-handle, a named capture that came back empty, a user `Route::did_pop` returning
-`false` (a public trait whose default is `true`, and ADR-0024 sanctions user
-routes), `maybe_pop_with` under a `PopScope` veto — which reports *handled* while
-discarding, so it is worse than the case below — and **`maybe_pop` on a lone
-route**.
-
-A tenth condition, "a result displaced from an entry that already carried one",
-is armed for in `arm_pop` and is believed **unreachable**: every arming site
-flushes inside the same locked section, and every flush arm takes the pending
-result. It is left armed rather than removed, because reachability here is a
-property of the current call graph and this feature has already watched that
-graph change four times.
-
-That last one is not an edge case at all. `Route::pop_disposition` is
-`isFirst ? bubble : pop`, so the bottom-most route **bubbles by design**; before
-this was fixed, `maybe_pop_with(v)` on a one-route navigator discarded the
-caller's value on *every* call, under the guard. The commonest possible stack
-shape was the undelivered-result path.
-
-**Ordering, and exactly what it covers.** An operation's own observations reach
-observers **before anything a re-entrant *drop* triggers**: a `pop_with` whose
-payload's `Drop` pops again is observed as `didPop(target)` then `didPop(middle)`
-— cause before effect. That is measured both ways; reporting before the flush
-outcome is applied inverts it to `[middle, target]`, from which an observer cannot
-reconstruct the sequence. So the drains apply the outcome first and report second.
-
-**It does not cover every re-entrancy, and the scope is load-bearing.** `apply`
-runs step 0 — everything the flush owes user code, including deferred `PopScope`
-effects (`notify_pop_invoked`, `drain_local_history`) — *before* step 1 delivers
-to observers. So a navigation issued from a `PopScope` callback **is** observed
-before the operation that triggered it. That is a different path from a value's
-`Drop`, it is not closed by the drain ordering above, and the guarantee here is
-deliberately worded to the drop case rather than generalised.
-**Unasserted:** no test pins this. `apply` deliberately runs
-re-entrant user code — deferred `PopScope` effects, observer delivery,
-`Route::dispose` — and a value's `Drop` running after all of it is a consequence
-landing where consequences belong.
-
-**How they were found, because the axis was wrong twice.** The first enumeration
-read `history.rs`, where the state machine *consumes* a result — and missed the
-sites where a *decision* discards one, which live on the handle. The second
-enumerated `Option<AnyResult>` — the **erased** type — and missed the two sites
-that drop the caller's value *before* erasure, on a `?` that returns while it is
-still `TO`. Those two sweeps have **zero overlap** — not "the first one missed
-some", but two disjoint sets, which is what proves the axis was wrong rather than
-the search sloppy. The correct axis is the caller-supplied generic,
-traced from the parameter to a delivery or a report, accounting for every early
-return in between.
-
-Worth knowing when editing these: four of the six methods carrying a caller value
-are safe only because `Some(Box::new(result))` happens to be their first
-expression. An early return added above it reintroduces the defect silently.
-
-**Where the target is resolved.** The unnamed front doors resolve theirs at
-flush time, because nothing can run between their call and the flush. The named
-ones capture it *before* resolving, because a factory can. That difference is
-the whole of this entry.
-
-**Replacement tests:** each behavior below is one a test would have to catch;
-the success path cannot see the resolve-before-pop ordering, because both
-orderings pop and then push.
-
-- An unresolvable name passed to `pop_and_push_named[_with]` pops nothing and
-  delivers its result to nobody. **Unasserted:** no test pins this.
-- A re-entrant factory: the operation acts on the captured target, not on the
-  current top. **Unasserted:** no test pins this.
-- A pop-and-push is not a replacement wearing its name. Stack shape and result
-  delivery cannot tell those apart, so the discriminator is the observer stream:
-  a pop-and-push emits `didPop` + `didPush`, a replacement emits `didReplace` and
-  neither. **Unasserted:** no test pins this.
-- Point 3 on the `didReplace` **payload**: deriving the reported id positionally
-  makes it name the factory's route, and the observer stream alone does not
-  change when the identity is wrong. **Unasserted:** no test pins this.
-
-### 6. Named-route registration lives on the handle alone
-
-**Rule:** as §4 above; ADR-0024, superseded by ADR-0093.
-
-**Choice:** all three register on `NavigatorHandle` — `route(name, factory)`,
-`on_generate_route`, `on_unknown_route` — and one private `RouteRegistry`
-resolves them in order (table → generator → unknown). FLUI's
-`Navigator` widget is a thin shell over the handle and every push already goes
-through it, so a widget-level generator would need widget-diff plumbing to reach
-the same place. There is no second registration site: no `WidgetsApp::routes(..)`
-table is built, since ADR-0093 removes named routes rather than extending them.
-
-**Registrations are not mount-scoped, and that asymmetry with observers is
-deliberate.** `NavigatorState::dispose` detaches observers, because an observer
-holds a handle exactly while the navigator is mounted. It does **not** clear the
-registry: an app that registers once against a handle it retains would
-otherwise get `Unresolved` from every `push_named` after its first unmount.
-Clearing on dispose was tried and reverted for exactly that reason.
-**Unasserted:** no test pins this.
-
-**Consequence, named rather than left to be discovered:** a factory that clones
-its own `NavigatorHandle` in still closes an `Arc` cycle through the registry,
-and nothing reclaims it implicitly. §9 removed the *reason* to capture one —
-`RouteRequest` hands the factory its navigator — so this is no longer what the
-natural code does, and `NavigatorHandle::clear_routes` is the explicit escape for
-a caller who captured anyway. Caller-controlled by necessity: only the caller
-knows whether it intends to register again.
-
-**Replacement tests:**
-`a_factory_that_pushes_re_entrantly_does_not_deadlock` in
-`tests/navigator_public.rs`. The lifecycle contract above (registrations
-surviving an unmount and remount, `clear_routes` dropping every registration
-including the generator hooks), the resolution order (a table entry wins and the
-generator is never consulted; `on_unknown_route` runs only after the generator
-declined, and sees the caller's payload) and per-handle registries:
-**Unasserted:** no test pins this.
-
-### 7. A generated route that is never pushed still runs `dispose`
-
-**Rule:** as §4 above — "never lose an edge case by accident".
-
-**Choice:** `GeneratedRoute` holds its erased route in an `Option` and
-implements `Drop`, which forwards to `Route::dispose` through a
-`dispose_unpushed` arm on the private `ErasedPush` trait. The push takes the
-`Option`, so the drop that follows a successful push finds nothing and cannot
-double-dispose. `TypedPush<T>` owns the `GeneratedRoute` rather than the box, so
-a checked-but-unpushed token disposes through the same path.
-
-**Why it needs saying.** In Rust `dispose` is not `Drop`, and this codebase's
-route machinery assumes a never-installed route gets disposed. The refusal path
-in §4 makes an unpushed `GeneratedRoute` a **routine** occurrence rather than a
-rare one — every wrong-`T` `push_named_typed`, and every factory that builds a
-route and then answers `None` after all — so the obligation is load-bearing, not
-theoretical. It is also invisible: nothing observes the omission except a route
-that quietly never released what it held.
-
-**Test:**
-`push_named_typed_with_the_wrong_result_type_errors_disposes_the_route_and_changes_nothing`
-(`tests/navigator_public.rs`) counts `dispose()` calls on a probe route and
-asserts exactly one. Deleting `impl Drop for GeneratedRoute` fails it.
-
-### 8. `RouteSettings::with_arguments_shared` relays a payload without changing its identity
-
-**Rule:** as §4 above.
-
-**Need:** tests assert a route's arguments by pointer identity, not value
-equality, so relaying one settings object's arguments onto another must keep
-the same payload.
-
-**Choice:** `with_arguments<T>(value)` keeps taking the value and minting a
-fresh `Arc` (it is the construction case), and a second constructor
-`with_arguments_shared(RouteArguments)` forwards an existing payload untouched.
-
-**Why:** `RouteSettings`' own `PartialEq` compares the payload by `Arc::ptr_eq`,
-so a relay through `with_arguments` silently changes the answer to the exact
-question identity-based assertions ask — and the two constructors are one character apart at
-the call site with no type error between them.
-
-**What it does *not* claim.** It is not the only way to move a payload: a caller
-holding a `RouteSettings` can already `clone()` the `Arc` out of
-[`arguments`](RouteSettings::arguments) and carry it by hand, and the test that
-motivated this constructor could have done exactly that. What the constructor
-buys is that the identity-preserving relay is *expressible as a builder call*,
-so the safe form is as short as the unsafe one — rather than a fact about
-`with_arguments` that every relay site has to remember. That is a real but
-modest gain, and it is stated here as such.
-
-**Replacement tests:** the identity-preserving relay through
-`RouteSettings::with_arguments_shared` (and the contrast: `with_arguments` on an
-identical value is *not* `ptr_eq`), and through the keyed counterpart
-`RouteKey::with_arguments_shared`, which exists because `RouteKey::with_arguments`
-takes its payload by value and would wrap an `Arc` in another `Arc` — making the
-factory's `argument::<OriginalType>()` answer `None` silently.
-**Unasserted:** no test pins this.
-
-### 9. A route factory is handed the request only — the navigator accessor is withdrawn
-
-**Choice:** the factory takes a `RouteRequest<'_>` carrying the request only —
-`settings()`, `name()`, `argument::<T>()`. A redirect is expressed by *returning a
-different route*, which is what a factory is for.
-
-**Superseded, kept visible with its correction.** This entry originally added a
-`navigator()` accessor handing the factory its own handle, on the argument below.
-Both are withdrawn, for two reasons:
-
-- **The argument was circular.** It existed to remove the *reason* to capture a
-  handle. But a route's content never needed one either — a `RouteContentBuilder`
-  receives `&dyn BuildContext` and `NavigatorHandle::maybe_of(ctx)` resolves from
-  it. With no need to capture there was
-  no cycle to avoid, and the accessor's only remaining use was navigating
-  *during resolution*.
-- **It had zero production call sites.** All four were tests, every one
-  exercising that window.
-
-What it did **not** do is close the window, and this was measured before the
-removal rather than assumed: a factory that captures a handle mutates during
-resolution identically, and with the capture-then-resolve defence reverted it
-reproduces the original defect through that path. So removing the accessor
-withdraws the *advertised* path and not the possible one. §5's defences stay, and
-`RouteRequest`'s own docs now say **survivable**, not supported.
-
-A runtime guard was considered and rejected: to earn deleting the defences it
-would have to refuse mutation from `pop()` and `remove_route()` too, which return
-`bool` — leaving silent failure, a `docs/PANIC-POLICY.md` violation, or a partial
-guard that does not close the window anyway.
-
-**Why the handle is not captured.** Rust does not collect cycles, and
-the registry is owned by the navigator. A factory that captured a
-`NavigatorHandle` — the obvious way to navigate from inside one — closed
-`Arc<NavigatorShared>` → registry → `Rc<dyn Fn>` → handle → back on itself, so
-the navigator's route stack, overlay entries and observers were never reclaimed,
-not even after it unmounted. Nothing in the crate could break that cycle for the
-user. Passing the handle in removes the *reason* to capture one, which is a fix
-rather than a warning; the warning survives only as "if you capture one anyway,
-the cycle is yours".
-
-Note the route's *content* never needed a captured handle: a
-`RouteContentBuilder` receives a `&dyn BuildContext` and `NavigatorHandle::maybe_of(ctx)`
-resolves from it. So after this change
-there is no remaining case where capturing is the right answer.
-
-**Consequences, named rather than left to be discovered.** Two, and the second
-is the one that cost a review round:
-
-- It is a breaking change to every registration call site, deliberately so — a
-  compile error at each, which is the cheapest it will ever be.
-- **It made re-entrant navigation *advertised*, which is what surfaced §5's
-  hazard.** Handing the factory a navigator turned "a factory could conceivably
-  navigate" into a documented, ergonomic shape with a passing test. §5's
-  captured-target fix, its three observable consequences, and §4's qualifier about a
-  declining factory's own mutations were all written because of that. Withdrawing
-  the accessor un-advertises the shape; it does not un-reach it, so all three
-  survive the withdrawal — see the measurement above. What the accessor really
-  cost, then, was not the defences (those defend an invariant that was always
-  worth defending) but the six rounds it took to notice they were needed.
-
-**Replacement tests:**
-`a_route_key_carries_its_result_type_from_registration_to_delivery` pins that
-the caller's arguments reach the factory through the request; that the request
-also carries the caller's name: **Unasserted:** no test pins this. Whether
-`navigator()` returned *this* navigator rather than any navigator is a claim
-whose subject no longer exists, so nothing pins it and nothing needs to.
-`a_factory_that_pushes_re_entrantly_does_not_deadlock` now obtains its handle by
-an ordinary capture, through an `Rc<RefCell<Option<NavigatorHandle>>>` cell,
-since the accessor it used to call no longer exists. It still pins that the
-registry guard is released before the factory runs — holding it deadlocks the
-owner thread — and its claim is now the weaker *survivable*, not *supported*.
-
-### 10. `RouteKey<T>` moves the result-type check from run time to the registration site
-
-**Rule:** as §9 above.
-
-**Problem:** a route addressed by a bare string is re-typed unchecked, so
-nothing connects `'/details'` to the `PageRoute<Order>` behind it.
-
-**Choice:** `RouteKey<T>` — a `&'static str` plus `PhantomData<fn() -> T>`,
-`const`-constructible so an app declares its routes once as constants.
-`route_keyed(key, factory)` is bounded `R: NavigatorRoute + Route<Output = T>`,
-so registering a `SimpleRoute<String>` under a `RouteKey<u32>` **does not
-compile**; `push_keyed(key)` infers `T` from the key, so the caller writes no
-turbofish and can produce no `ResultType`. `Clone`/`Copy`/`PartialEq`/`Eq`/`Hash`/`Debug`
-are written by hand rather than derived: a derive would add `T: Clone`/`T: Hash`
-bounds, and a key's identity is its *name* — the `T` is a compile-time promise
-with no runtime representation. That is what lets keys live in a `HashMap` for an
-`Output` that is neither `Hash` nor `Eq`.
-
-Arguments ride on `RouteKey::with_arguments(args)`, producing a `KeyedSettings<T>` that
-`push_keyed` takes via `impl Into<_>` — mirroring the string path's
-`impl Into<RouteSettings>`, so `push_keyed(ORDER)` and
-`push_keyed(ORDER.with_arguments(id))` are one method. Deliberately **not**
-`push_keyed_with(key, args)`: on this handle `_with` means "a result delivered to
-the departing route" (`pop_with`, `push_replacement_with`, `remove_route_with`,
-`maybe_pop_with`), and spending that suffix on arguments would make one word mean
-two things.
-
-**Why `KeyedSettings<T>` and not a bare `RouteSettings`** — the question
-`untyped()` provokes, since it converts between them. The type parameter is what
-makes `push_keyed` *inferrable*: `push_keyed(ORDER.with_arguments(id))` needs `T`
-to arrive from the value rather than from a turbofish, and that is the whole
-ergonomic difference from `push_named_typed::<T>(..)`. A bare `RouteSettings`
-would erase `T` at the builder and force the turbofish back, collapsing the keyed
-path into the string path with extra syntax. So `KeyedSettings<T>` carries the
-key's promise from `RouteKey` all the way to the push.
-
-**`KeyedSettings::untyped`** is the explicit, one-way exit from that promise: it
-discards the key's result type so a key's *arguments* can ride an untyped
-operation — the one of eight `push_keyed` did not serve. It is a named verb
-rather than a `From` impl on purpose. Dropping `T` on an untyped operation is not
-a downgrade — it is §4's documented semantics, and it was already reachable as
-`push_replacement_named(ORDER.name())` — but as a `From` the discard would be an
-invisible coercion inside `impl Into<RouteSettings>`. The verb makes it the
-caller's decision, visible at the call site.
-
-**Replacement test:** a key's arguments carried onto an untyped operation, which
-returning `RouteSettings::named(name)` without the payload would break.
-**Unasserted:** no test pins this.
-
-**The hole, stated rather than hidden.** A `RouteKey` type-checks one
-*registration site*; the table it registers into is keyed by **name**. So any two
-sites that disagree about one name meet at run time and the key's promise stops
-describing what is registered. Three ways in, and the first is keyed-only — this
-is *not* a defect confined to mixing the typed and untyped paths, which is what
-this entry claimed before the keyed-vs-keyed case was written down and run:
-
-- two `RouteKey`s spelling the same string with different `T`
-  (`RouteKey::<u32>::new("/order")` and `RouteKey::<String>::new("/order")`),
-  each self-consistent, both compiling, the second replacing the first;
-- the same name bound through the untyped `route`;
-- `on_generate_route` answering the name when the table misses.
-
-Closing it properly needs a type-carrying registry key, which the string-keyed
-table cannot express and the `on_generate_route` fallback would defeat
-anyway.
-
-**What the `TypeId` guard actually buys: a pre-mutation, non-panicking
-failure.** Not type safety — the `RouteResult` downcast underneath is checked, so
-a silently wrong result was never reachable. Removing the guard does not produce
-a `RouteResult<u32>` fed by a `String` route; it makes `TypedPush::push` land the
-push and *then* fail its `BUG:` `expect`, panicking mid-operation with the stack
-already mutated. That is the stronger and more honest claim.
-
-**Tests:**
-`a_route_key_carries_its_result_type_from_registration_to_delivery` (dropping
-`push_keyed`'s result handle fails it). A `RouteKey`'s identity being its name
-and costing its `Output` type no bounds, and the two collisions — typed-vs-untyped and
-keyed-vs-keyed, the case that falsified this entry's original claim — reported
-as a clean `Err` rather than a **panic** inside `TypedPush::push` after the push
-has landed: **Unasserted:** no test pins this.
-
-### 11. A route's `settings` are write-only, so the factory relays values instead — recorded, with its trigger
-
-**Choice:** the request's name and arguments are not relayed onto the built
-route. No FLUI route builder accepts a `RouteSettings` —
-`SimpleRoute` / `PageRoute` / `PopupRoute` offer `.named(name)` only — so a
-named-pushed route's own `settings().argument::<T>()` is always `None`. The
-factory reads `request.argument::<T>()` and **moves the value into the content
-builder** instead.
-
-**Why not close it now.** The relay would be public API on three builders
-populating a field nothing can read. `ErasedRoute` — the framework's only view of
-a route once it is in the history — does not expose `settings()` at all, and
-workspace-wide the only consumers are two internal delegations
-(`modal_route.rs`, `page_route.rs`) and one `Debug` field. There is no
-`ModalRoute::of`, no observer that reports a route name, no name-based finder. A
-pushed route's settings are written by its author and read by nobody. And the
-capability a relay would serve is served by moving the value
-into the builder, which is a typed capture.
-
-**The trigger — this is the part that makes recording correct rather than a
-trap.** The first read path added — an observer reporting route names, a
-`ModalRoute::of`, a name-based route finder — makes the empty `settings`
-silently wrong, and `with_settings` on `SimpleRoute` / `PageRoute` / `PopupRoute`
-must land **in that same change**, not after it. `RouteSettings::with_arguments_shared`
-(§8) already exists as the identity-preserving half such a builder needs.
-
-**Test:** none, and deliberately — there is no behavior to pin, only
-an absent capability. What is pinned is the *documentation*: `RouteRequest::settings`
-no longer claims a relay that does not exist, which is what its doc said before.
-
-### 12. A name re-registered with a different `Output` is reported at the registration site
-
-**Rule:** as §11 above. The house rule for caller error in this repo is
-repair-and-warn, not refuse.
-
-**Problem:** a hazard `RouteKey<T>` creates by making a promise the name-keyed
-table cannot keep.
-
-**Choice:** each table entry stores `TypeId::of::<R::Output>()` and its
-`type_name` beside the factory — `route` has `R` in scope and `route_keyed` knows
-the key's `T`, so it costs one line and 16 bytes an entry. A re-registration that
-changes a name's `Output` type emits a **latched** `tracing::warn!` naming the
-route and both type names.
-
-**Why a warn and not a `Result`.** Three reasons, in order of weight:
-
-- It collides with §6's own contract. "The app builder replaces the table
-  wholesale at mount" means an app deliberately changing a route's `Output`
-  between rebuilds is making a *legitimate* change; refusing it would be wrong
-  even restricted to type conflicts.
-- It is programmer error at startup, and `Result` at every `route_keyed` call
-  site is a large tax for that.
-- Repair-and-warn is what this repo already does for caller misconfiguration.
-
-Latched rather than per-call because an app that rebuilds its table in a loop
-would otherwise emit one warning per pass. The latch is per **registry**, not a
-process-global `static`, so one navigator's conflict cannot silence another's.
-
-**The decision and the latch commit together, under the lock.** A review raised
-that latching *after* the emit would let a `tracing` subscriber re-entering
-registration during the warn see a stale flag and emit a second warning. Measured:
-that half is not reachable — `tracing` suppresses re-entrant event dispatch on the
-same thread, so the inner `warn!` never reaches a subscriber and the event count
-is 1 either way. Committing both in one locked step keeps a subscriber that
-re-enters registration from observing a stale latch.
-
-**What this does not close.** The erased fall-through: a table entry that
-declines and an `on_generate_route` / `on_unknown_route` that answers with a
-differently-typed route. Nothing at those hooks' registration sites knows what
-`Output` they will produce, so `GeneratedRoute::checked`'s runtime comparison
-stays — with its documented remit shrunk to exactly that one shape for keyed
-callers, instead of implying it is the general guard.
-
-**A registration is user code, and displacing one drops it.** Every path that
-replaces or discards a registration — `register_named`, `register_generator`,
-`register_unknown_fallback`, `clear` — moves the displaced closure out of the
-locked block and drops it with the guard released. Its captured state may run
-arbitrary `Drop`, and a `Drop` that reaches back into the registry deadlocks a
-non-reentrant `parking_lot::Mutex`. This is not hypothetical for `clear`: the
-closure it drops is, by design, the one that captured a `NavigatorHandle`. There
-is no compile-time oracle — dropping under the guard compiles clean and hangs —
-so it is pinned by a test rather than by review, and the pin was written after
-all four paths had shipped with the defect.
-
-**Tests:**
-`a_registration_dropped_while_replacing_or_clearing_may_re_enter_the_registry`
-covers all four displacement paths; reverting any one of them to drop under the
-guard makes it **hang** rather than fail, which is why it asserts progress
-counters as it goes rather than only at the end. The warning itself — once per
-navigator, naming both result types, silent for a same-type replacement — the
-re-entrant subscriber above, and the declining keyed entry whose generator's type
-is still checked: **Unasserted:** no test pins this.
+### 4. Every route result has a terminal outcome, and replacement reports the route it completed
+
+**Rule:** [ADR-0019](../../docs/adr/ADR-0019-navigator-routing-seam.md) §1's
+history flush and result completion remain in force under
+[ADR-0093](../../docs/adr/ADR-0093-router-is-the-primary-navigation-api.md).
+The typed `Router` is the navigation model; named-route registration, factories
+and front doors have no replacement.
+
+**Result custody:** every caller-supplied result is either delivered to a route
+or reported exactly once, and is dropped outside every internal guard. A result
+with no route to receive it is a `warn`; a result whose type does not match the
+receiving route's `Output` is an `error`. The drop location is part of the
+contract: `Drop` is user code and may re-enter navigation. This covers an empty
+stack, a top route mid-exit, an already completed target, an id from another
+navigator, an unmounted handle, `Route::did_pop` refusing the pop, a `PopScope`
+veto, and `maybe_pop` bubbling on a lone route. A result displaced from an entry
+that already carried one remains armed for in `arm_pop`, even though every
+current arming site flushes in the same locked section and every flush arm takes
+the pending result.
+
+Every operation that accepts a result takes custody before its first early
+return. Audit the caller-supplied generic from the parameter to delivery or a
+report; auditing only the erased `Option<AnyResult>` misses values dropped before
+erasure. A removed route still completes its result future, so removal cannot
+leave an awaiting caller hanging.
+
+**Replacement identity:** a replacement completes and reports the same route.
+`RouteEntry::replacing` carries the `RouteId` used for completion, and
+`didReplace(new, old)` reads that id rather than deriving `old` from a position
+that re-entrant code could have changed. A target already gone or not present
+reports `None`. A pop-and-push is not a replacement: it emits `didPop` and
+`didPush`, never `didReplace`.
+
+**Ordering:** an operation's own observations reach observers before anything a
+re-entrant result `Drop` triggers. The flush applies its outcome first and
+reports second, so a payload whose `Drop` pops again is observed as the original
+pop followed by the nested pop. This guarantee is specifically about `Drop`:
+`PopScope` effects run earlier in the flush and have the distinct ordering in
+§13.
 
 ### 13. A `PopScope` callback runs before the observers, and may navigate, so an effect can be observed before its cause
 
-**Rule:** as §4 above; same ADR.
+**Rule:** ADR-0019 §1's pure-data history flush. §4 separates this callback
+ordering from the result-`Drop` ordering.
 
 **Choice:** `apply` runs step 0 — everything the flush owes user
 code, including deferred `PopScope` effects — before step 1 delivers to observers.
@@ -2612,13 +2088,16 @@ on the second contact's DOWN before that contact lifts, and the
 participation-gating fix, since this detector sets `on_double_tap_down` alone
 and would otherwise never join the arena.
 
-### 21. The `Router` is derived from the route type, and its handle is lifecycle-only
+### 21. The `Router` is derived from the route type, and its handle returns owner-local results
 
 **Choice:** `Router<R>` (`src/router/`, ADR-0093) needs only `R: Routable` —
 `to_path`, `from_path`, and a provided `back_stack` — and keeps its stack
-of `R` itself; the parser and delegate are the route type. The page per value
-is a `PageRoute<()>` named with the value's path, on a `Navigator` the router
-builds, so transitions, heroes and `PopScope` are unchanged.
+of `R` itself; the parser and delegate are the route type.
+`RouterShared::page_route<T>` names a `PageRoute<T>` with the value's path on
+the `Navigator` the router builds. Seeding, `replace`, `go` and ordinary
+`RouterHandle::push` use `PageRoute<()>`; ordinary push shares the private
+`push_inner::<()>` with the typed door, while `push_for_result<T>` creates a
+`PageRoute<T>`. Transitions, heroes and `PopScope` are unchanged.
 `Router::<R>::handle` takes `&dyn LifecycleContext` (ADR-0078), so a handle
 is acquired in `init_state`/`did_change_dependencies` and resolves the
 **nearest** `Router<R>`, as `Navigator`'s handle does. The page builder
@@ -2626,29 +2105,53 @@ and transitions are shared with every page, so a parent rebuild reaches the
 pages already on the stack; a transition duration is fixed when a page is
 placed, because the page's animation controller is made with it.
 
+`Route::Output` is only `'static`: it need not be `Send` or `Clone`.
+`RouteResult<T>` is an owner-local `Rc<RefCell<_>>` channel, therefore `!Send`,
+and implements `Future<Output = Result<Option<T>, RouteResultError>>`. Its
+`try_take() -> Option<Result<Option<T>, RouteResultError>>` withdraws a completed
+outcome at most once without resetting completion; route completion and outcome
+delivery are each exactly once. `RouterHandle` exposes `push_for_result<T>`,
+`pop_with<T>` and `maybe_pop() -> Result<bool, RouterError>`. Resultless pop,
+`replace` and `go` complete a pending typed result with `Ok(None)`. A mismatched
+`pop_with` still commits the pop and completes with
+`Err(RouteResultError::TypeMismatch { expected })`, where `expected` is the
+route's `&'static str` type name; there is no route fallback. `maybe_pop`
+preserves both `PopScope` and the last-page guard.
+
+Navigator mutation uses `mutate_committing` with `commit: FnOnce(R) -> C`;
+`push_page` returns `(O, RouteResult<P::Output>)`. Consequently the Router's
+stack edit commits before observers run, and a reentrant observer pop during
+`apply` completes the very `RouteResult` returned to the pushing caller rather
+than displacing it with a later operation's result.
+
 **Pinned by:** the `compile_fail` doctest on `Router::handle`. A nested handle
 resolving the nearest `Router<R>`, a parent rebuild reaching the pages already
 on the stack, a handle with no `Router` above it answering `NoRouter`, and a
-hand-written `Routable` round trip: **Unasserted:** no test pins this.
+hand-written `Routable` round trip: **Unasserted:** no test pins this. Typed
+results are pinned by `typed_results_accept_a_non_send_non_clone_value`,
+`resultless_pop_replace_and_go_complete_with_none`,
+`a_wrong_result_type_is_an_error_and_the_pop_still_commits`,
+`a_reentrant_observer_pop_with_delivers_the_push_result`,
+`router_maybe_pop_honours_pop_scope_and_the_last_page_guard` and
+`typed_result_apis_refuse_an_unmounted_router`;
+`delivered_route_results_remain_completed` pins exactly-once delivery while
+completion remains observable.
 
 ### 22. A Router's navigator refuses pages pushed through its facade, and admits pageless popups
 
 **Choice:** every page on a Router's stack has a path (ADR-0093 §2), and only
 the Router places, replaces or seeds pages. The navigator a Router builds is
-*addressed*. A plain `push` (and `push_named`) admits only routes whose
-binding slot a framework `TransitionRoute` marked `TransitionGroup::Default`
-— `PopupRoute` — and refuses `PageRoute`, `SimpleRoute` and every
-third-party route. The doors that replace, sweep or seed
-(`push_replacement[_with]`, `push_and_remove_until`, `seed_initial`, and the
-named `push_replacement_named[_with]`, `pop_and_push_named[_with]` and
-`push_named_and_remove_until`) refuse every route, a popup included, because
-what they remove or place beneath belongs to the Router, whose stack would
-otherwise name a page that is gone. The typed doors cannot return a `Result`
-without a public signature change, so a refusal disposes the route unpushed,
-returns a `RouteResult` already complete with `None`, logs `tracing::error!`
-with the reason, and fails a `debug_assert!`. The named doors answer
-`NamedRouteError::NotAddressable` before anything is resolved, dismissed or
-pushed. Popups stay admitted, because `show_dialog` pushes a `PopupRoute` on
+*addressed*. A plain `push` admits only routes whose binding slot a framework
+`TransitionRoute` marked `TransitionGroup::Default` — `PopupRoute` — and
+refuses `PageRoute`, `SimpleRoute` and every third-party route. The doors that
+replace, sweep or seed (`push_replacement[_with]`, `push_and_remove_until` and
+`seed_initial`) refuse every route, a popup included, because what they remove
+or place beneath belongs to the Router, whose stack would otherwise name a page
+that is gone. The typed doors cannot return a `Result` without a public
+signature change, so a refusal disposes the route unpushed, returns a
+`RouteResult` already complete with `Ok(None)`, logs `tracing::error!` with the
+reason, and fails a `debug_assert!`. Popups stay admitted, because
+`show_dialog` pushes a `PopupRoute` on
 the root navigator, until dialogs move to overlay entries (ADR-0093 §4). Every
 pop the navigator makes — the facade's, a back gesture's, a barrier's —
 reaches the Router's stack through an internal `NavigatorObserver`, so the
@@ -2705,33 +2208,24 @@ route change on every navigation, with no app bar required.
 
 **Unasserted:** no test pins this.
 
-### 26. Global widgets localizations live in the catalog, not in a separate package
+### 26. Locale owns text direction; delegates own resource strings
 
-**Choice:** `GlobalWidgetsLocalizations`, `GlobalWidgetsLocalizationsDelegate`
-and `RTL_LANGUAGES` live in `flui_widgets::localization`, next to the
-`WidgetsLocalizations` contract they implement.
+**Choice:** `flui_platform::Locale::is_rtl` resolves direction from an explicit
+script first and from one language table otherwise. `Localizations` publishes
+that direction through `Directionality`; `WidgetsLocalizations` carries only
+localized resources and cannot override geometry. An explicit `Directionality`
+ancestor remains the application-level override.
 
-**Why not a separate package.** A separate package pays off when it carries
-translated strings. Here there are none: every string
-forwards to `DefaultWidgetsLocalizations`, and the only behavior is the RTL
-language table and the delegate. A separate crate held that one table in a
-layer of its own, which ADR-0081 deleted; the table moved down into the
-crate whose contract it implements.
+**Consequences:** an application needs no direction-specific delegate, and an
+English resource fallback cannot turn an RTL locale into LTR layout. Translated
+string catalogs remain a separate resource decision and do not reopen a crate
+for direction.
 
-**Consequences:**
-
-- The delegate's `is_supported` is always `true`: a gate on "this locale has
-  translated strings" would, with no translations for any locale, only
-  produce false negatives.
-- Translated string catalogs, when they arrive, are a separate decision
-  about where FLUI sources translations; they do not reopen a crate here.
-
-**Tests:**
-`flui-widgets::tests::localizations::the_global_delegate_makes_an_rtl_locale_subtree_rtl`
-mounts `Localizations` with the global delegate for `ar` and reads
-`Directionality::of` from inside the subtree; the unit tests in
-`localization/global_widgets_localizations.rs` pin the table, the `iw`
-alias, and `is_supported`.
+**Tests:** `widgets_app::the_default_localizations_resolve_a_preferred_rtl_locale`
+mounts a default `WidgetsApp` with Hebrew preferred and reads RTL from its
+subtree. Public `flui-platform` tests cover explicit script overrides and the
+language table; `localizations::the_default_delegate_does_not_override_locale_direction`
+pins direction independently of resource delegates.
 
 ### 22. A form field validates at the event, not in `build`
 
@@ -2823,9 +2317,10 @@ technology reads when it appears. **Unasserted:** no test pins this.
 
 ### 27. Clipboard bindings come from `DefaultFocusTraversal`
 
-**Choice:** `DefaultFocusTraversal`, which every `FocusRoot` builds, binds the
-three chords (Cmd on macOS and iOS, Control elsewhere — a pure table resolved
-once per state from `TargetPlatform::current()`). The chord resolves at the
+**Choice:** `app_root` installs `DefaultFocusTraversal`; `flui-app` and
+`HeadlessHost` call it above every application root. It binds the three chords
+(Cmd on macOS and iOS, Control elsewhere — a pure table resolved once per state
+from `TargetPlatform::current()`). The chord resolves at the
 primary focus like the traversal keys: an `EditableText` answers it on its own
 node, and with no text field focused nothing does, so the chord keeps
 bubbling. **Tests:** `tests/editable_text_clipboard.rs`
@@ -2848,11 +2343,10 @@ carriage return is never text the user meant (denying only `\n` would leave a
 
 ### 30. `RawTextFormField`, not `TextFormField`
 
-**Choice:** the theme-free form field is named `RawTextFormField` for the
-facade-additivity reason `RawTextField` is: with the `material` feature on,
-`flui::prelude::TextFormField` means exactly the Material type, and enabling a
-feature never changes what an existing name resolves to.
-`flui_material::TextFormField` is the Material type.
+**Choice:** the theme-free form field is named `RawTextFormField` for the same
+facade-additivity reason as `RawTextField`. `flui::prelude` is feature-independent and exports no
+Material names. `flui_material::TextFormField` is the Material type, imported through
+`flui_material::prelude` or `flui::material::prelude`, never through `flui::prelude`.
 
 ### 31. `SingleActivator` compares ASCII letters without case
 

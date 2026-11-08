@@ -28,7 +28,8 @@ use flui_interaction::{
 };
 use flui_platform::data_transfer::{
     DataTransferOffer, DragTransport, DropFeedback, RepresentationIndex, TransferActions,
-    TransferCompleter, TransferFormat, TransferLimits, TransferPayload, TransferRequest,
+    TransferCompleter, TransferError, TransferFormat, TransferLimits, TransferPayload,
+    TransferRequest,
 };
 use flui_platform::drag::{OsDragEnd, OsDragRequest, OsDragStart, PlatformDragSource};
 use flui_platform::{
@@ -76,6 +77,7 @@ struct RecordingSource {
     /// Concluding a drop panics, as a failing backend would.
     fail_conclude: std::sync::atomic::AtomicBool,
     requests: Mutex<Vec<(DataTransferId, RepresentationIndex, TransferCompleter)>>,
+    ready_results: Mutex<Vec<Result<TransferPayload, TransferError>>>,
 }
 
 impl DragTransport for RecordingSource {
@@ -85,6 +87,10 @@ impl DragTransport for RecordingSource {
         representation: RepresentationIndex,
         _limits: TransferLimits,
     ) -> TransferRequest {
+        let ready = self.ready_results.lock().pop();
+        if let Some(result) = ready {
+            return TransferRequest::ready(result);
+        }
         let (request, completer) = TransferRequest::pending();
         self.requests.lock().push((id, representation, completer));
         request
@@ -196,6 +202,7 @@ struct Spot {
     values: RefCell<Vec<Option<String>>>,
     /// Ask for the text representation on entry, keeping the request.
     fetch_text: bool,
+    fetch_limits: TransferLimits,
     fetched: RefCell<Vec<DragFetch>>,
     on_spring: RefCell<Option<Box<dyn Fn()>>>,
     on_autoscroll: RefCell<Option<AutoscrollHook>>,
@@ -224,7 +231,7 @@ impl DropReceiver for Spot {
             .borrow_mut()
             .push(drag.value::<String>().cloned());
         if self.fetch_text
-            && let Some(fetch) = drag.request(&TransferFormat::Text, TransferLimits::default())
+            && let Some(fetch) = drag.request(&TransferFormat::Text, self.fetch_limits)
         {
             self.fetched.borrow_mut().push(fetch);
         }
@@ -428,6 +435,7 @@ impl Fixture {
             scopes: RefCell::default(),
             values: RefCell::default(),
             fetch_text: false,
+            fetch_limits: TransferLimits::default(),
             fetched: RefCell::default(),
             on_spring: RefCell::new(None),
             on_autoscroll: RefCell::new(None),
@@ -446,10 +454,14 @@ impl Fixture {
 
     /// An OS offer of plain text, as another application would make it.
     fn text_offer(&self) -> DataTransferOffer {
+        self.text_offer_with_len(None)
+    }
+
+    fn text_offer_with_len(&self, declared_len: Option<u64>) -> DataTransferOffer {
         let representations: Arc<[_]> = Arc::from(vec![
             flui_platform::data_transfer::RepresentationDescriptor {
                 format: TransferFormat::Text,
-                declared_len: None,
+                declared_len,
             },
         ]);
         DataTransferOffer::new(self.mint(), representations)
@@ -1118,6 +1130,7 @@ fn a_drop_is_concluded_once_its_requests_resolve() {
             scopes: RefCell::default(),
             values: RefCell::default(),
             fetch_text: true,
+            fetch_limits: TransferLimits::default(),
             fetched: RefCell::default(),
             on_spring: RefCell::new(None),
             on_autoscroll: RefCell::new(None),
@@ -1180,6 +1193,127 @@ fn a_drop_is_concluded_once_its_requests_resolve() {
             "the OS hears the target is done"
         );
         assert_eq!(f.owner.next_deadline(), None);
+    });
+}
+
+// --- transfer limits at the DragView seam ---------------------------------------------------------
+
+fn external_text_fetch(f: &Fixture, declared_len: Option<u64>, max_bytes: u64) -> DragFetch {
+    let mut target = f.unregistered("limits", Some(COPY), None);
+    let spot = Rc::get_mut(&mut target).expect("a fresh receiver has no aliases");
+    spot.fetch_text = true;
+    spot.fetch_limits = TransferLimits::default().with_max_bytes(max_bytes);
+    f.register(&target, 0.0, 100.0);
+    f.deliver(
+        f.presentation,
+        DragDropEvent::Entered {
+            offer: f.text_offer_with_len(declared_len),
+            allowed: COPY,
+            position: Some(Point::new(5.0, 5.0)),
+        },
+    );
+    target
+        .fetched
+        .borrow_mut()
+        .pop()
+        .expect("the external text was requested")
+}
+
+fn poll_fetch(fetch: &mut DragFetch) -> std::task::Poll<Result<TransferPayload, TransferError>> {
+    std::pin::Pin::new(fetch).poll(&mut std::task::Context::from_waker(std::task::Waker::noop()))
+}
+
+fn complete_external(f: &Fixture, result: Result<TransferPayload, TransferError>) {
+    let completer = f
+        .source
+        .requests
+        .lock()
+        .pop()
+        .expect("the source received the request")
+        .2;
+    completer.complete(result);
+}
+
+fn an_external_ready_payload_over_limit_is_rejected() {
+    in_lane(|f| {
+        f.source
+            .ready_results
+            .lock()
+            .push(Ok(TransferPayload::Text("12345".into())));
+        let mut fetch = external_text_fetch(f, None, 4);
+        assert!(matches!(
+            poll_fetch(&mut fetch),
+            std::task::Poll::Ready(Err(TransferError::TooLarge {
+                actual: 5,
+                limit: 4
+            }))
+        ));
+    });
+}
+
+fn an_external_pending_payload_over_limit_is_rejected() {
+    in_lane(|f| {
+        let mut fetch = external_text_fetch(f, None, 4);
+        assert!(poll_fetch(&mut fetch).is_pending());
+        complete_external(f, Ok(TransferPayload::Text("12345".into())));
+        assert!(matches!(
+            poll_fetch(&mut fetch),
+            std::task::Poll::Ready(Err(TransferError::TooLarge {
+                actual: 5,
+                limit: 4
+            }))
+        ));
+    });
+}
+
+fn an_oversized_declared_len_never_reaches_the_source() {
+    in_lane(|f| {
+        let mut fetch = external_text_fetch(f, Some(5), 4);
+        assert!(
+            f.source.requests.lock().is_empty(),
+            "the source must not start a delivery already known to be too large"
+        );
+        assert!(matches!(
+            poll_fetch(&mut fetch),
+            std::task::Poll::Ready(Err(TransferError::TooLarge {
+                actual: 5,
+                limit: 4
+            }))
+        ));
+    });
+}
+
+fn transfer_limit_boundary_and_source_errors_are_preserved() {
+    in_lane(|f| {
+        f.source
+            .ready_results
+            .lock()
+            .push(Ok(TransferPayload::Text("1234".into())));
+        let mut boundary = external_text_fetch(f, Some(4), 4);
+        let std::task::Poll::Ready(Ok(TransferPayload::Text(text))) = poll_fetch(&mut boundary)
+        else {
+            panic!("a payload whose declared and actual lengths equal the limit is valid");
+        };
+        assert_eq!(text, "1234");
+    });
+    in_lane(|f| {
+        f.source
+            .ready_results
+            .lock()
+            .push(Err(TransferError::Cancelled));
+        let mut ready_error = external_text_fetch(f, None, 0);
+        assert!(matches!(
+            poll_fetch(&mut ready_error),
+            std::task::Poll::Ready(Err(TransferError::Cancelled))
+        ));
+    });
+    in_lane(|f| {
+        let mut pending_error = external_text_fetch(f, None, 0);
+        complete_external(f, Err(TransferError::Cancelled));
+        assert!(matches!(
+            poll_fetch(&mut pending_error),
+            std::task::Poll::Ready(Err(TransferError::Cancelled))
+        ));
     });
 }
 
@@ -1303,6 +1437,7 @@ fn closing_the_window_that_took_a_drop_waits_for_its_fetch() {
             scopes: RefCell::default(),
             values: RefCell::default(),
             fetch_text: true,
+            fetch_limits: TransferLimits::default(),
             fetched: RefCell::default(),
             on_spring: RefCell::new(None),
             on_autoscroll: RefCell::new(None),
@@ -1406,6 +1541,7 @@ fn value_is_redeemed_only_in_source_runtime() {
             scopes: RefCell::default(),
             values: RefCell::default(),
             fetch_text: true,
+            fetch_limits: TransferLimits::default(),
             fetched: RefCell::default(),
             on_spring: RefCell::new(None),
             on_autoscroll: RefCell::new(None),
@@ -1562,6 +1698,7 @@ fn spring_loading_hook_fires_once_per_hover() {
             scopes: RefCell::default(),
             values: RefCell::default(),
             fetch_text: false,
+            fetch_limits: TransferLimits::default(),
             fetched: RefCell::default(),
             on_spring: RefCell::new(None),
             on_autoscroll: RefCell::new(None),
@@ -2500,6 +2637,7 @@ fn fetched_over_a_window_that_left(f: &Fixture, stay: bool) -> (DataTransferOffe
         scopes: RefCell::default(),
         values: RefCell::default(),
         fetch_text: true,
+        fetch_limits: TransferLimits::default(),
         fetched: RefCell::default(),
         on_spring: RefCell::new(None),
         on_autoscroll: RefCell::new(None),
@@ -2607,6 +2745,7 @@ fn dropped_while_fetching_elsewhere(f: &Fixture) -> (DataTransferId, DragFetch) 
         scopes: RefCell::default(),
         values: RefCell::default(),
         fetch_text: true,
+        fetch_limits: TransferLimits::default(),
         fetched: RefCell::default(),
         on_spring: RefCell::new(None),
         on_autoscroll: RefCell::new(None),
@@ -2864,6 +3003,22 @@ fn drag_sessions() {
             (
                 "a_drop_is_concluded_once_its_requests_resolve",
                 a_drop_is_concluded_once_its_requests_resolve,
+            ),
+            (
+                "an_external_ready_payload_over_limit_is_rejected",
+                an_external_ready_payload_over_limit_is_rejected,
+            ),
+            (
+                "an_external_pending_payload_over_limit_is_rejected",
+                an_external_pending_payload_over_limit_is_rejected,
+            ),
+            (
+                "an_oversized_declared_len_never_reaches_the_source",
+                an_oversized_declared_len_never_reaches_the_source,
+            ),
+            (
+                "transfer_limit_boundary_and_source_errors_are_preserved",
+                transfer_limit_boundary_and_source_errors_are_preserved,
             ),
             (
                 "a_receiver_that_cancels_the_session_while_entered_still_leaves_once",

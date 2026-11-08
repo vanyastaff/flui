@@ -2,6 +2,8 @@
 
 - **Status:** Accepted (2026-10-20)
 - **Date:** 2026-10-06
+- **Revised:** 2026-11-07 — an aggregated capability leaves the facade before adopting an
+  independent cadence, under ADR-0315 §4
 - **Revised:** 2026-10-20 — the open question became a decision; the experiments below stay as the
   context for it. A new crate for geometry is not on the table: ADR-0098 dissolved `flui-geometry`
   and `flui-types`.
@@ -11,7 +13,9 @@
   [ADR-0081](ADR-0081-workspace-tiers-and-reach-facts.md) §3 (kinds; only `evolving` sets its own
   version), [ADR-0151](ADR-0151-platform-layer-boundary-and-names.md),
   [ADR-0152](ADR-0152-capability-seam-revised.md),
-  [ADR-0154](ADR-0154-capability-crates.md)
+  [ADR-0154](ADR-0154-capability-crates.md),
+  [ADR-0315](ADR-0315-first-party-packages-remain-train-aligned-facade-features.md) (a capability
+  leaves the facade before adopting an independent cadence)
 
 ## Context and problem statement
 
@@ -113,7 +117,9 @@ below).
    incompatible change. The change that moves the contract also amends the kind rule of ADR-0081
    §3 so that the contract, and then each capability crate, may set its own version, and
    reproduces cases A and B with the real crates. A capability crate versions on its own only
-   after the contract does.
+   after the contract does and after it leaves the facade under ADR-0315 §4; while
+   `flui::services::<name>` re-exports it, it remains train-aligned and participates in facade
+   semver.
 4. **Option 2 is the fallback, not the plan.** If a train reports an incompatible change to one of
    the five items that could not be avoided, the narrow split is proposed by an amendment to
    ADR-0098, with that report as its evidence. No geometry crate is created before that.

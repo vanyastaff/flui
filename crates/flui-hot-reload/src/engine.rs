@@ -1,6 +1,7 @@
 //! Hot reload engine — tiers, outcomes, and host/worker contract.
 //!
-//! See `docs/hot-reload.md` for the runtime protocol and ADR-0094 for the decision.
+//! See `docs/hot-reload.md` for the runtime protocol, ADR-0311 for the seam,
+//! and ADR-0316 for the supported dlopen cycle.
 
 /// How a code change is applied at runtime.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

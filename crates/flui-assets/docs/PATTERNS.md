@@ -1,130 +1,96 @@
 # Design patterns in flui_assets
 
-## Type-state configuration
+## Application-owned registry
 
-`AssetRegistryBuilder<NoCapacity>` cannot build a registry until the caller
-selects capacity or a complete cache configuration. `with_default_capacity`
-selects 10,240 completed entries per asset type. Explicit capacity separates
-disabled retention from a positive count:
+`AssetRegistry` is an ordinary value normally shared as `Arc<AssetRegistry>`.
+Its cache, pending loads, byte budget and decode slots belong to that value, not
+to a process or host singleton. Equal sources in two registries are independent.
 
-```rust
-use flui_assets::{AssetRegistryBuilder, CacheCapacity};
-use std::num::NonZeroU64;
-
-let registry = AssetRegistryBuilder::new()
-    .with_capacity(CacheCapacity::Entries(NonZeroU64::new(128).expect("nonzero entry limit")))
-    .build();
-
-let uncached = AssetRegistryBuilder::new()
-    .with_capacity(CacheCapacity::Disabled)
-    .build();
-```
-
-`with_cache_config` supplies `AssetCacheConfig`, including independently validated
-lifetime and idle expiration. Capacity transitions preserve configured expiration
-and any host runtime or HTTP policy. The type-state transition requires an
-explicit policy; it does not claim a memory budget.
-
-## Shared handle ownership
-
-`AssetHandle<Data, Key>` owns an `Arc<Data>` and a caller-selected key. Cloning a
-handle shares data and clones its key; data does not need to implement `Clone`.
-A weak handle observes data ownership without extending the data's lifetime,
-but still owns its generic key strongly. Eviction removes cache ownership, not
-ownership held by existing handles.
-
-`AssetKey` owns a nonempty `Arc<str>`. Clones share its allocation, while equality
-and hashing use contents even for independently constructed names. Its borrowed
-`as_str` result cannot outlive the key. Font and image descriptors keep shared
-names and clone them when producing keys. Name reclamation follows those owners;
-there is no process-global retaining arena or integer identity.
+The builder has no type-state capacity transition:
 
 ```rust
-use flui_assets::{AssetHandle, AssetKey};
-use std::sync::Arc;
+use flui_assets::AssetRegistryBuilder;
 
-let first = AssetHandle::new(Arc::new(vec![1, 2, 3]), AssetKey::new("bytes"));
-let shared = first.clone();
-let independent = AssetHandle::new(Arc::new(vec![1, 2, 3]), AssetKey::new("bytes"));
-assert!(first.ptr_eq(&shared));
-assert!(!first.ptr_eq(&independent));
+let registry = AssetRegistryBuilder::new().build();
 ```
 
-Equal keys identify equivalent requested assets, not equal allocation ownership.
-Reloading an evicted key may create another allocation while old handles remain
-live. `ptr_eq` checks shared ownership directly.
+This is deliberate: decoded pixels already have a trustworthy weight, so no
+caller must choose an arbitrary per-type entry count before constructing a
+registry.
 
-## Sealed core traits and extensions
+## One completed-image store
 
-`AssetHandleCore` and `AssetCacheCore` are sealed. Their extension traits provide
-convenience operations for the supported handles and caches. Presence and
-capacity are core cache observations; batch insertion is an extension operation.
+The registry's LRU is the only completed-image cache. `load_image` and
+`load_network_image` populate it, and `cached_image` probes it synchronously.
+There is no parallel typed cache or widget-global LRU that could disagree about
+identity, retention or memory pressure.
 
-```rust
-use flui_assets::{AssetCache, AssetCacheExt, AssetKey, CacheCapacity, FontAsset};
+A cached `Image` shares ownership with its caller. Eviction removes registry
+ownership; it does not invalidate a value already returned.
 
-let cache = AssetCache::<FontAsset>::new(CacheCapacity::default());
-let key = AssetKey::new("font.ttf");
-assert!(!cache.contains(&key));
-assert_eq!(cache.stats().total_requests(), 0);
-assert_eq!(cache.utilization(), 0.0);
-```
+## Typed source identity
 
-`contains` is synchronous and does not refresh idle expiration. `get` retrieves
-shared data asynchronously and records a request. Sealing controls who implements
-the core traits; it does not make every public API change backward compatible.
+`ImageSource` distinguishes asset paths from network requests. A network source
+contains both its URL and the fetching client's `HttpAuthority`. This prevents
+one URL served by two clients with different content from coalescing or cache
+sharing incorrectly.
 
-## Fallible shared initialization
+Ticket allocation identity distinguishes generations of an in-flight load. An
+old load finishing after cancellation or replacement cannot complete the newer
+entry.
 
-Generic `get_or_insert_with` gets completed data or runs its own initializer,
-then inserts each successful result. Cold calls, including direct or awaited
-spawned reentry, do not wait on pending same-key work. Late completion may replace
-an earlier entry; existing handles keep their data. Errors remain owned and are
-not cached. Cancellation affects only that call; independent work survives and
-later requests can retry. No exactly-once side effects are guaranteed.
+## Subscriber-owned shared futures
 
-Registry loading validates every descriptor. Only closed built-in FontAsset producers share pending work through Moka.
-ImageAsset keeps registered image decoder hooks and uses the independent helper,
-as custom assets do. Font failures are shared but not cached; cancellation or
-panic allows a waiter to restart subject to Moka's finite retry policy. No public
-custom coalescing opt-in or mandatory spawn API is introduced.
+Every `ImageLoad` is one subscriber to registry-owned work. The work survives
+while at least one subscriber remains and is cancelled when the last leaves.
+This is stronger than cancelling whichever caller happened to start the load,
+and avoids orphaned file reads, requests and queued decodes.
 
-```rust
-use flui_assets::{Asset, AssetCache, CacheCapacity, FontAsset};
+A run dropped unfinished closes rather than fabricating a decode error. A
+remaining subscriber can become the new lead on its own services. A real failure
+produces a typed error and is not retained.
 
-let cache = AssetCache::<FontAsset>::new(CacheCapacity::default());
-let font = FontAsset::file("font.ttf");
-let handle = cache.get_or_insert_with(font.key(), || font.load()).await?;
-```
+## Execution as a caller capability
 
-Registry validation still runs for cache hits. Invalidation affects completed
-entries, not pending initialization; a successful load can publish afterward.
+`LoadServices` carries execution lanes and, when needed, HTTP. The registry
+does not select a global runtime:
 
-## Type-erased registry storage
+- read/fetch on IO;
+- decode on compute;
+- wait for compute-lane room without occupying the IO worker;
+- with no lanes, run synchronously where the future is polled.
 
-A registry maps each asset type's `TypeId` to its typed `AssetCache`. An existing
-cache is cloned under the map lock, then used after releasing that lock. Moka
-entries and FLUI operation counters remain shared across these clones.
+This keeps UI frame code synchronous and makes headless tests independent of an
+ambient Tokio reactor.
 
-`clear_all` detaches the map under its write guard and retires the outgoing map
-after releasing that guard. Generic data destructors may reenter the same
-registry and observe the committed state. Last-owner teardown exposes an
-absent-owner fallback through weak ownership; it cannot resurrect the registry.
+## HTTP as a separate capability
 
-## Source and presentation boundaries
+The registry needs an `Http` client, not a concrete networking stack. Hosts and
+tests provide that client through `LoadServices`. The crate therefore has no
+`network` feature, connection pool or TLS backend. Missing HTTP is an immediate
+`HttpUnavailable` result, not a runtime stub that first performs other work.
 
-An `Asset` selects bytes, validates its descriptor and decodes its typed data.
-`BytesFileLoader` and the caller's HTTP client supply byte sources; they are not generic
-cache-key-to-asset factories. Embedded constructors take an identifier and owned
-bytes. Ordinary registry loads cache loaded results, including decoded images.
+## Bounded work queues
 
-Widget bridge methods bypass registry caching and deliver decoded images to the
-widget layer's synchronous LRU. This preserves synchronous build/layout/paint
-while async IO runs at the loading edge. Subscriber ownership determines when
-abandoned shared widget loads leave their pending map.
+Admission and decode reservations are separate. Four load slots per decode
+thread bound reads/fetches and encoded bytes waiting for decode. Decode slots
+go to the earliest admitted load whose bytes are ready, avoiding head-of-line
+blocking behind a slow response. Cancelled reservations release their place
+without running user decoding.
+
+Locks protect state transitions, not user code. Wakers, lane submission,
+completion sends, cancellation and pixel destruction happen after internal
+locks are released.
+
+## Memory-pressure ownership
+
+`ReclaimMemory` acts on decoded pixels only. The application explicitly
+registers the registry it owns. Renderer textures and caller-held images have
+their own lifetimes and are not hidden behind the same operation.
 
 ## References
 
 - [Architecture](ARCHITECTURE.md)
 - [User guide](GUIDE.md)
-- [Cache behavior and performance](PERFORMANCE.md)
+- [Performance and memory](PERFORMANCE.md)
+- [ADR-0317](../../../docs/adr/ADR-0317-the-asset-registry-is-image-only-and-the-facade-opts-into-it.md)

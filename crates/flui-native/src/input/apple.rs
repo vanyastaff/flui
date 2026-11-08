@@ -555,8 +555,8 @@ pub(crate) mod wheel {
     //! AppKit's wheel step. An `NSEvent`'s `scrollingDeltaX` and
     //! `scrollingDeltaY` move the content, in points when the device reports
     //! `hasPreciseScrollingDeltas` (a trackpad, a precise mouse) and in lines
-    //! otherwise; they go through the one wheel rule, and a step it refuses is
-    //! zero in its unit.
+    //! otherwise; they go through the one wheel rule, and a step it refuses
+    //! delivers no event.
 
     #![forbid(unsafe_code)]
 
@@ -565,12 +565,13 @@ pub(crate) mod wheel {
     use crate::input::scroll::{WheelAmount, wheel_step};
 
     /// The step and precision of a scroll event whose deltas are
-    /// `scrolling_delta_x` and `scrolling_delta_y`, precise or not.
+    /// `scrolling_delta_x` and `scrolling_delta_y`, precise or not; `None`
+    /// when either delta is not finite.
     pub(crate) fn step(
         precise: bool,
         scrolling_delta_x: f64,
         scrolling_delta_y: f64,
-    ) -> (ScrollDelta, ScrollPrecision) {
+    ) -> Option<(ScrollDelta, ScrollPrecision)> {
         let (unit, precision) = if precise {
             (ScrollUnit::Pixels, ScrollPrecision::Precise)
         } else {
@@ -581,21 +582,22 @@ pub(crate) mod wheel {
             WheelAmount::content(scrolling_delta_x),
             WheelAmount::content(scrolling_delta_y),
         )
-        .unwrap_or_else(|_| ScrollDelta::zero(unit));
-        (delta, precision)
+        .ok()?;
+        Some((delta, precision))
     }
 
     /// The step of a UIKit discrete scroll (a mouse wheel's notches), which
-    /// the pan recognizer reports as a translation in points.
+    /// the pan recognizer reports as a translation in points; `None` when
+    /// either delta is not finite.
     #[cfg(any(target_os = "ios", test))]
-    pub(crate) fn notched_points(dx: f64, dy: f64) -> (ScrollDelta, ScrollPrecision) {
+    pub(crate) fn notched_points(dx: f64, dy: f64) -> Option<(ScrollDelta, ScrollPrecision)> {
         let delta = wheel_step(
             ScrollUnit::Pixels,
             WheelAmount::content(dx),
             WheelAmount::content(dy),
         )
-        .unwrap_or_else(|_| ScrollDelta::zero(ScrollUnit::Pixels));
-        (delta, ScrollPrecision::Notched)
+        .ok()?;
+        Some((delta, ScrollPrecision::Notched))
     }
 }
 
@@ -868,18 +870,23 @@ pub(crate) mod indirect {
     }
 
     impl IndirectGestures {
-        /// A pan's change in `phase` to `translation`; a non-finite
-        /// translation moves nothing.
+        /// A pan's change in `phase` to `translation`; `None` for a
+        /// non-finite translation. A terminal invalid reading still ends the
+        /// cumulative baseline without manufacturing a zero scroll.
         pub(crate) fn translate(
             &mut self,
             phase: GesturePhase,
             translation: (f64, f64),
-        ) -> (f64, f64) {
+        ) -> Option<(f64, f64)> {
+            if !(translation.0.is_finite() && translation.1.is_finite()) {
+                if matches!(phase, GesturePhase::Ended | GesturePhase::Cancelled) {
+                    self.translation = None;
+                }
+                return None;
+            }
             let last = self.translation.unwrap_or((0.0, 0.0));
-            let finite = translation.0.is_finite() && translation.1.is_finite();
-            let now = if finite { translation } else { last };
-            self.translation = keep(phase, now);
-            (now.0 - last.0, now.1 - last.1)
+            self.translation = keep(phase, translation);
+            Some((translation.0 - last.0, translation.1 - last.1))
         }
 
         /// A pinch's change in `phase` to `scale`, as a ratio; a scale that
@@ -929,19 +936,25 @@ pub(crate) mod indirect {
         #[test]
         fn cumulative_recognizer_values_become_changes() {
             let mut gestures = IndirectGestures::default();
-            assert_eq!(gestures.translate(Began, (2.0, -1.0)), (2.0, -1.0));
-            assert_eq!(gestures.translate(Changed, (5.0, -1.0)), (3.0, 0.0));
+            assert_eq!(gestures.translate(Began, (2.0, -1.0)), Some((2.0, -1.0)));
+            assert_eq!(gestures.translate(Changed, (5.0, -1.0)), Some((3.0, 0.0)));
             assert_eq!(
                 gestures.translate(Changed, (f64::NAN, 0.0)),
-                (0.0, 0.0),
+                None,
                 "no reading"
             );
-            assert_eq!(gestures.translate(Ended, (6.0, 1.0)), (1.0, 2.0));
+            assert_eq!(gestures.translate(Ended, (6.0, 1.0)), Some((1.0, 2.0)));
             assert_eq!(
                 gestures.translate(Began, (1.0, 1.0)),
-                (1.0, 1.0),
+                Some((1.0, 1.0)),
                 "the next pan starts from rest"
             );
+            assert_eq!(
+                gestures.translate(Ended, (f64::NAN, 1.0)),
+                None,
+                "an invalid terminal reading emits nothing"
+            );
+            assert_eq!(gestures.translate(Began, (0.0, 0.0)), Some((0.0, 0.0)));
 
             assert_eq!(gestures.scale(Began, 2.0), 2.0);
             assert_eq!(gestures.scale(Changed, 3.0), 1.5);
@@ -958,11 +971,21 @@ pub(crate) mod indirect {
         #[test]
         fn a_wheel_notch_reads_as_notched_points_and_a_trackpad_as_precise() {
             use flui_platform::pointer::{ScrollPrecision, ScrollUnit};
-            let (notch, precision) = crate::input::apple::wheel::notched_points(0.0, 12.0);
+            let (notch, precision) = crate::input::apple::wheel::notched_points(0.0, 12.0)
+                .expect("a finite wheel notch");
             assert_eq!(precision, ScrollPrecision::Notched);
             assert_eq!(notch.unit(), ScrollUnit::Pixels);
-            let (_, precision) = crate::input::apple::wheel::step(true, 0.0, 12.0);
+            let (_, precision) =
+                crate::input::apple::wheel::step(true, 0.0, 12.0).expect("a finite trackpad step");
             assert_eq!(precision, ScrollPrecision::Precise);
+            let (zero, _) = crate::input::apple::wheel::notched_points(0.0, 0.0)
+                .expect("a native zero remains an event");
+            assert_eq!((zero.x(), zero.y()), (0.0, 0.0));
+            assert_eq!(crate::input::apple::wheel::step(true, f64::NAN, 0.0), None);
+            assert_eq!(
+                crate::input::apple::wheel::notched_points(0.0, f64::INFINITY),
+                None
+            );
         }
 
         #[test]
@@ -1469,25 +1492,34 @@ pub(crate) mod macos {
                 y: f64,
                 modifiers: Modifiers,
             ) -> Vec<PlatformInput> {
-                let Ok(position) =
-                    PointerPosition::try_new(flui_foundation::geometry::Point::new(x, y))
-                else {
+                let precise = event.hasPreciseScrollingDeltas();
+                let (phase, momentum) = (event.phase(), event.momentumPhase());
+                let position =
+                    PointerPosition::try_new(flui_foundation::geometry::Point::new(x, y));
+                let step = crate::input::apple::wheel::step(
+                    precise,
+                    event.scrollingDeltaX(),
+                    event.scrollingDeltaY(),
+                );
+                let (Ok(position), Some((delta, precision))) = (position, step) else {
+                    self.scrolling.reject(
+                        NativeSurface::default(),
+                        None,
+                        ScrollReading {
+                            fingers: native_phase(phase),
+                            momentum: native_phase(momentum),
+                            precise,
+                        },
+                    );
                     return Vec::new();
                 };
                 let pointer = self
                     .contacts
                     .pointer(NativeSurface::default(), None, MOUSE)
                     .unwrap_or_else(mouse_info);
-                let precise = event.hasPreciseScrollingDeltas();
-                let (delta, precision) = crate::input::apple::wheel::step(
-                    precise,
-                    event.scrollingDeltaX(),
-                    event.scrollingDeltaY(),
-                );
                 let mut scroll = ScrollEvent::new(pointer, time, position, delta)
                     .with_modifiers(modifiers)
                     .with_precision(precision);
-                let (phase, momentum) = (event.phase(), event.momentumPhase());
                 if phase == NSEventPhase::MayBegin && momentum == NSEventPhase::None {
                     // Fingers came to rest on the trackpad: a fling in
                     // progress stops, as the platform's own momentum would.
@@ -2028,12 +2060,12 @@ pub(crate) mod ios {
             };
             let (component, delta) = match gesture {
                 TrackpadGesture::Scroll { translation } => {
-                    let (dx, dy) = self.indirect.translate(phase, translation);
-                    return self.trackpad_scroll(true, phase, (dx, dy), (x, y), reading_time);
+                    let delta = self.indirect.translate(phase, translation);
+                    return self.trackpad_scroll(true, phase, delta, (x, y), reading_time);
                 }
                 TrackpadGesture::Wheel { translation } => {
-                    let (dx, dy) = self.wheel.translate(phase, translation);
-                    return self.trackpad_scroll(false, phase, (dx, dy), (x, y), reading_time);
+                    let delta = self.wheel.translate(phase, translation);
+                    return self.trackpad_scroll(false, phase, delta, (x, y), reading_time);
                 }
                 TrackpadGesture::Pinch { scale } => (
                     GestureComponent::Scale,
@@ -2085,15 +2117,34 @@ pub(crate) mod ios {
 
         /// One step of a scroll, `delta` in view points the content moves:
         /// a trackpad's two fingers are precise and phased, a mouse wheel's
-        /// notches are neither, so no notch opens a trackpad contact.
+        /// notches are neither, so no notch opens a trackpad contact. A rejected
+        /// delta delivers nothing and never opens a phase.
         fn trackpad_scroll(
             &mut self,
             precise: bool,
             phase: GesturePhase,
-            (dx, dy): (f64, f64),
+            delta: Option<(f64, f64)>,
             (x, y): (f64, f64),
             reading_time: ReadingTime,
         ) -> Vec<PlatformInput> {
+            let step = delta.and_then(|(dx, dy)| {
+                if precise {
+                    crate::input::apple::wheel::step(true, dx, dy)
+                } else {
+                    crate::input::apple::wheel::notched_points(dx, dy)
+                }
+            });
+            let position = PointerPosition::try_new(flui_foundation::geometry::Point::new(x, y));
+            let (Some((delta, precision)), Ok(position)) = (step, position) else {
+                if precise {
+                    self.scrolling.reject(
+                        NativeSurface::default(),
+                        None,
+                        ScrollReading::fingers(phase, true),
+                    );
+                }
+                return Vec::new();
+            };
             let owned = if precise {
                 let Some(owned) = self.scrolling.phase(
                     NativeSurface::default(),
@@ -2111,11 +2162,6 @@ pub(crate) mod ios {
                 }
                 None
             };
-            let Ok(position) =
-                PointerPosition::try_new(flui_foundation::geometry::Point::new(x, y))
-            else {
-                return Vec::new();
-            };
             let time = self
                 .contacts
                 .clock()
@@ -2128,11 +2174,6 @@ pub(crate) mod ios {
                     PointerInfo::new(PointerId::new(NonZeroU64::MIN), PointerKind::Mouse)
                         .with_role(PointerRole::Primary)
                 });
-            let (delta, precision) = if precise {
-                crate::input::apple::wheel::step(true, dx, dy)
-            } else {
-                crate::input::apple::wheel::notched_points(dx, dy)
-            };
             let scroll = ScrollEvent::new(pointer, time, position, delta).with_precision(precision);
             let scroll = match owned {
                 Some(owned) => scroll.with_phase(owned),

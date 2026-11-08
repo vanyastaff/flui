@@ -14,7 +14,7 @@ use flui_platform::{ClipboardError, ClipboardRead, ClipboardWrite, Concealment};
 use jni::objects::JObject;
 use jni::{JValue, jni_sig, jni_str};
 
-use crate::host::{SyncClipboard, admit_utf16, host_text};
+use crate::host::{SyncClipboard, admit_utf16, admit_utf16_units, decoded_mutf8_len, host_text};
 use crate::owner::android::activity::with_activity;
 use crate::version::gate::android::{AndroidApi, ClipExtras};
 
@@ -95,12 +95,13 @@ impl SyncClipboard for AndroidClipboard {
             if text.is_null() {
                 return Ok(Ok(None));
             }
-            // Measured in UTF-16 units before either copy: Java's `toString`
-            // and the one into Rust.
+            // The unit barrier runs before Java's `toString`; JNI's modified
+            // UTF-8 buffer is then measured exactly before the Rust `String`.
             let units = env
                 .call_method(&text, jni_str!("length"), jni_sig!("()I"), &[])?
                 .i()?;
-            if let Err(refused) = admit_utf16(usize::try_from(units).unwrap_or(0)) {
+            let units = usize::try_from(units).unwrap_or(usize::MAX);
+            if let Err(refused) = admit_utf16_units(units) {
                 return Ok(Err(refused));
             }
             let text = env
@@ -112,7 +113,11 @@ impl SyncClipboard for AndroidClipboard {
                 )?
                 .l()?;
             let text = env.cast_local::<jni::objects::JString<'_>>(text)?;
-            Ok(host_text(text.try_to_string(env)?))
+            let text = text.mutf8_chars(env)?;
+            if let Err(refused) = admit_utf16(units, || decoded_mutf8_len(text.to_bytes())) {
+                return Ok(Err(refused));
+            }
+            Ok(host_text(text.to_string()))
         })
         .unwrap_or_else(|error| {
             tracing::warn!(

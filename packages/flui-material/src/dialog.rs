@@ -121,8 +121,11 @@
 //! cuts, as any `PopupRoute` does.
 //!
 //! Return value: `navigator.push` already returns a [`RouteResult<T>`] — a
-//! `Future<Option<T>>` — which is FLUI's `Future<T?>`, so `show_dialog`
-//! returns it unchanged rather than wrapping or narrowing it.
+//! `Future<Output = Result<Option<T>, RouteResultError>>`, where the error is
+//! [`RouteResultError`](flui_sdk::widgets::RouteResultError). `Ok(Some(value))`
+//! carries a typed result, `Ok(None)` means the dialog closed without one, and
+//! a result-type mismatch remains `Err`. `show_dialog` returns the future
+//! unchanged rather than wrapping or narrowing it.
 //!
 //! **Not ported**, and named:
 //!
@@ -146,25 +149,21 @@
 //!   `Theme`, which the oracle's capture step exists specifically to fix.
 
 use flui_sdk::geometry::Radius;
-use flui_sdk::painting::BorderRadius;
-use flui_sdk::painting::Clip;
-use flui_sdk::painting::TextStyle;
-use flui_sdk::rendering::BoxConstraints;
+use flui_sdk::painting::paint::Clip;
+use flui_sdk::painting::styling::BorderRadius;
+use flui_sdk::painting::typography::TextStyle;
+use flui_sdk::pipeline::{CrossAxisAlignment, MainAxisAlignment, MainAxisSize};
+use flui_sdk::rendering::{BoxConstraints, SemanticsAnchor, SemanticsRole};
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{
-    Align, Column, ConstrainedBox, CrossAxisAlignment, DefaultTextStyle, Flexible, IntrinsicWidth,
-    MainAxisAlignment, MainAxisSize, MergeSemantics, NavigatorHandle, Padding, PopupRoute,
-    RouteResult, Row, Semantics, SemanticsAnchor, SemanticsRole, SizedBox,
+    Align, Column, ConstrainedBox, DefaultTextStyle, Flexible, IntrinsicWidth, MergeSemantics,
+    NavigatorHandle, Padding, PopupRoute, RouteResult, Row, Semantics, SizedBox,
 };
-use flui_sdk::{
-    geometry::EdgeInsets,
-    painting::{Alignment, Color},
-};
+use flui_sdk::{geometry::EdgeInsets, painting::Alignment, painting::styling::Color};
 
 use crate::material::Material;
 use crate::shape::MaterialShape;
 use crate::theme::Theme;
-use crate::theme_data::ThemeData;
 
 /// The M3 dialog's default elevation.
 const DEFAULT_ELEVATION: f64 = 6.0;
@@ -299,17 +298,16 @@ struct ResolvedDialogStyle {
 
 /// Resolve `Dialog`'s M3 defaults through the widget → theme → default
 /// cascade, per field: `color`/`elevation`/`shape` each fall back through
-/// `ThemeData.dialog_theme`'s own field before the `_DialogDefaultsM3`
+/// the `DialogThemeData` entry's own field before the `_DialogDefaultsM3`
 /// constant: `backgroundColor ?? dialogTheme.backgroundColor ??
 /// defaults.backgroundColor` (and the `elevation`/`shape` equivalents).
 fn resolve_style(
-    theme: &ThemeData,
+    theme: &crate::theme::BaseTheme,
+    dialog_theme: Option<&crate::DialogThemeData>,
     color: Option<Color>,
     elevation: Option<f64>,
     shape: Option<MaterialShape>,
 ) -> ResolvedDialogStyle {
-    let dialog_theme = theme.dialog_theme.as_ref();
-
     let color = color
         .or_else(|| dialog_theme.and_then(|t| t.background_color))
         .unwrap_or(theme.color_scheme.surface_container_high);
@@ -331,12 +329,19 @@ fn resolve_style(
 
 impl StatelessView for Dialog {
     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
-        let theme = Theme::of(ctx);
+        let theme = Theme::required_base_of(ctx);
+        let component = Theme::component_of::<crate::DialogThemeData>(ctx);
         let ResolvedDialogStyle {
             color,
             elevation,
             shape,
-        } = resolve_style(&theme, self.color, self.elevation, self.shape);
+        } = resolve_style(
+            &theme,
+            component.as_ref(),
+            self.color,
+            self.elevation,
+            self.shape,
+        );
         let inset_padding = self.inset_padding.unwrap_or_else(|| {
             EdgeInsets::symmetric(INSET_PADDING_VERTICAL, INSET_PADDING_HORIZONTAL)
         });
@@ -442,10 +447,11 @@ impl AlertDialog {
 /// crate exposes. Factored out as a pure
 /// function (like `Dialog`'s own `resolve_style`) so the cascade is
 /// unit-testable without mounting a widget tree.
-fn resolve_title_style(theme: &ThemeData) -> TextStyle {
-    theme
-        .dialog_theme
-        .as_ref()
+fn resolve_title_style(
+    theme: &crate::theme::BaseTheme,
+    dialog_theme: Option<&crate::DialogThemeData>,
+) -> TextStyle {
+    dialog_theme
         .and_then(|t| t.title_text_style.clone())
         .unwrap_or_else(|| theme.text_theme.headline_small.clone().unwrap_or_default())
 }
@@ -453,17 +459,19 @@ fn resolve_title_style(theme: &ThemeData) -> TextStyle {
 /// `AlertDialog`'s content text style — same theme → default cascade as
 /// [`resolve_title_style`]: `contentTextStyle ??
 /// dialogTheme.contentTextStyle ?? defaults.contentTextStyle!`.
-fn resolve_content_style(theme: &ThemeData) -> TextStyle {
-    theme
-        .dialog_theme
-        .as_ref()
+fn resolve_content_style(
+    theme: &crate::theme::BaseTheme,
+    dialog_theme: Option<&crate::DialogThemeData>,
+) -> TextStyle {
+    dialog_theme
         .and_then(|t| t.content_text_style.clone())
         .unwrap_or_else(|| theme.text_theme.body_medium.clone().unwrap_or_default())
 }
 
 impl StatelessView for AlertDialog {
     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
-        let theme = Theme::of(ctx);
+        let theme = Theme::required_base_of(ctx);
+        let component = Theme::component_of::<crate::DialogThemeData>(ctx);
         let mut children: Vec<BoxedView> = Vec::new();
         // Created per build, for both ends at once: the title's node and the
         // dialog naming itself by it (ADR-0205).
@@ -481,7 +489,7 @@ impl StatelessView for AlertDialog {
                             Semantics::new()
                                 .anchor(anchor.clone())
                                 .child(DefaultTextStyle::new(
-                                    resolve_title_style(&theme),
+                                    resolve_title_style(&theme, component.as_ref()),
                                     title.clone(),
                                 )),
                         ),
@@ -495,7 +503,10 @@ impl StatelessView for AlertDialog {
             // available height shrink instead of overflowing.
             children.push(
                 Flexible::new(Padding::new(EdgeInsets::new(16.0, 24.0, 24.0, 24.0)).child(
-                    DefaultTextStyle::new(resolve_content_style(&theme), content.clone()),
+                    DefaultTextStyle::new(
+                        resolve_content_style(&theme, component.as_ref()),
+                        content.clone(),
+                    ),
                 ))
                 .boxed(),
             );
@@ -542,7 +553,7 @@ const BARRIER_COLOR: Color = Color::from_argb(0x8A00_0000);
 /// `BuildContext`, and what the returned [`RouteResult<T>`] is.
 pub fn show_dialog<T, F, W>(navigator: &NavigatorHandle, builder: F) -> RouteResult<T>
 where
-    T: Send + Clone + 'static,
+    T: 'static,
     F: Fn(&dyn BuildContext) -> W + 'static,
     W: IntoView,
 {

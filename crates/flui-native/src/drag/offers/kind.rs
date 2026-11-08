@@ -3,7 +3,7 @@
 //! types, beside the X text forms (`UTF8_STRING`, `STRING`, `TEXT`) that
 //! toolkits offer on both. The X11 and Wayland drags share it.
 
-use flui_platform::data_transfer::{Mime, TransferError, TransferFormat, TransferPayload};
+use flui_platform::data_transfer::{Mime, TransferFormat, TransferPayload};
 
 use crate::clipboard::text::TextForm;
 use crate::drag::offers::{format_of, payload_of_bytes};
@@ -168,12 +168,6 @@ pub(crate) fn bytes_of(payload: TransferPayload) -> Vec<u8> {
         TransferPayload::Text(text) | TransferPayload::Html(text) => text.into_bytes(),
         TransferPayload::Custom { bytes, .. } => bytes.to_vec(),
     }
-}
-
-/// The error a payload of `len` bytes past `limit` is refused with.
-pub(crate) fn too_large(len: usize, limit: u64) -> Option<TransferError> {
-    let actual = u64::try_from(len).unwrap_or(u64::MAX);
-    (actual > limit).then_some(TransferError::TooLarge { actual, limit })
 }
 
 #[cfg(test)]

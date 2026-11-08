@@ -97,12 +97,12 @@ use std::rc::Rc;
 use flui_sdk::foundation::{Listenable, Subscription};
 use flui_sdk::geometry::{Point, Size};
 use flui_sdk::painting::Canvas;
-use flui_sdk::painting::Color;
+use flui_sdk::painting::CustomPainter;
 use flui_sdk::painting::Paint;
+use flui_sdk::painting::styling::Color;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{
-    CustomPaint, CustomPainter, Semantics, WidgetState, WidgetStateProperty, WidgetStates,
-    WidgetStatesController,
+    CustomPaint, Semantics, WidgetState, WidgetStateProperty, WidgetStates, WidgetStatesController,
 };
 
 use crate::color_scheme::ColorScheme;
@@ -287,9 +287,8 @@ impl<T: PartialEq + Clone + 'static> ViewState<Radio<T>> for RadioState {
     }
 
     fn build(&self, view: &Radio<T>, ctx: &dyn BuildContext) -> impl IntoView {
-        let theme = Theme::of(ctx);
-        let radio_theme = theme.radio_theme.clone();
-        let colors = theme.color_scheme;
+        let colors = Theme::required_color_scheme_of(ctx);
+        let radio_theme = Theme::component_of::<crate::RadioThemeData>(ctx);
 
         let states = self.states.value();
 

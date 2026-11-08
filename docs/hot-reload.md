@@ -2,7 +2,7 @@
 
 # Hot Reload
 
-FLUI targets **hot reload** (state preserved, `build()` re-run). The operational two-layer model below is the dev-time/build side; the runtime hook is [ADR-0311](adr/ADR-0311-development-reload-is-a-hook-the-application-installs.md), which also says when a code patcher such as Subsecond (rejected for now, [ADR-0094](adr/ADR-0094-hot-reload-through-subsecond.md)) replaces the dlopen path, and the plugin boundary's invariants in [`crates/flui-hot-reload/ARCHITECTURE.md`](../crates/flui-hot-reload/ARCHITECTURE.md).
+FLUI supports **hot reload** (state preserved, `build()` re-run) as a development-only workflow. The operational two-layer model below is the dev-time/build side; the runtime hook is [ADR-0311](adr/ADR-0311-development-reload-is-a-hook-the-application-installs.md), and [ADR-0316](adr/ADR-0316-the-dlopen-worker-host-development-cycle-is-supported.md) makes the dlopen worker-host cycle on desktop/iOS and the Android scene-plugin cycle supported paths rather than temporary scaffolding for a code patcher. The plugin boundary's invariants are in [`crates/flui-hot-reload/ARCHITECTURE.md`](../crates/flui-hot-reload/ARCHITECTURE.md). Any future code patcher requires its own ADR; the rejected Subsecond spike remains historical evidence in [ADR-0094](adr/ADR-0094-hot-reload-through-subsecond.md).
 
 ## Target vs today
 
@@ -22,12 +22,13 @@ cd my-app
 flui run
 ```
 
-`--hot-reload` emits the three-crate workspace the protocol requires
+`--hot-reload` deliberately emits a three-crate workspace
 (`my-app-types` + `my-app-logic` + `my-app-host`) and a `[hot_reload]` section
-in `flui.toml`. Edit `my-app-logic/src/lib.rs` and save: `flui run` rebuilds the
-worker, the host reloads it in-process, and `State` is preserved. Edit
-`my-app-types/src/` and the CLI restarts the host instead (the shared type
-layout changed — bump `TYPE_FINGERPRINT`).
+in `flui.toml`. The split isolates the reloadable image and its shared data layout; it is a supported
+cost of the development cycle, not a temporary shape awaiting a code patcher (ADR-0316). Edit
+`my-app-logic/src/lib.rs` and save: `flui run` rebuilds the worker, the host reloads it in-process,
+and `State` is preserved. Edit `my-app-types/src/` and the CLI restarts the host instead (the shared
+type layout changed — bump `TYPE_FINGERPRINT`).
 
 ### Staging: why the worker path changes on every rebuild
 
@@ -113,7 +114,7 @@ This is still layer 2: the watcher watches the **artifact**, never `src/` (layer
 where it can wake a sleeping loop rather than only at a frame nothing is
 producing.
 
-`examples/hot_reload_counter/` is the hand-written equivalent of that workspace.
+Use `flui create my-app --hot-reload` to generate that workspace; the CLI templates are its maintained source.
 
 ## Two-Layer Model (build orchestration)
 
@@ -126,7 +127,7 @@ producing.
                                 │ .so / .dll / binary updated
 ┌───────────────────────────────▼─────────────────────────────────────┐
 │  Layer 2 — Artifact reload (runtime, native only)                   │
-│  HotReloadDriver  →  mtime poll  →  dlopen reload  →  new Scene     │
+│  Worker/scene driver → artifact poll → image load → new frame       │
 │  Crate: flui-hot-reload (always on non-wasm targets)                │
 └─────────────────────────────────────────────────────────────────────┘
 ```
@@ -134,22 +135,26 @@ producing.
 | Layer | Trigger | Action | State preserved |
 |-------|---------|--------|-----------------|
 | 1 | Source file change (`notify`) | Rebuild artifact | N/A (build step) |
-| 2 | Artifact mtime change | `unload` → `dlopen` → `build_scene()` | No (hot restart for widgets) |
+| 2 | Artifact identity change | Admit the replacement and reassemble the worker tree or rebuild the scene | Worker `State`: yes; scene: rebuilt |
 
 **Rule:** layer 1 never reloads code directly. It only produces a new artifact. Layer 2 never watches `src/` — it only watches the plugin path on disk.
 
-## Reload Strategies
+## Reload workflows
 
-[`ReloadStrategy`](https://github.com/flui-rs/flui/blob/main/crates/flui-hot-reload/src/strategy.rs) in `flui-hot-reload` describes how changes reach the running app:
+The supported commands and host behaviors are:
 
-| Strategy | Command / setup | Layer 1 | Layer 2 | Host process |
+| Workflow | Command / setup | Layer 1 | Layer 2 | Host process |
 |----------|-----------------|---------|---------|--------------|
-| `ProcessRestart` | `flui run` (default) | watch `src/` → `cargo build` → kill + respawn | — | restarted |
-| `PluginDylib` | `FLUI_SCENE_PLUGIN=…` + host loop | manual / `cargo watch` | `HotReloadDriver::poll()` | kept alive |
-| `BuildAndDeploy` | `flui run --scene` (Android) | watch scene `src/` → ndk build → `adb push` | host polls mtime on device | kept alive |
-| `None` | `flui run --release`, WASM | — | — | — |
+| Process restart | `flui run` (default) | watch `src/` → `cargo build` → kill + respawn | — | restarted |
+| Worker host (desktop/iOS) | `flui create --hot-reload` + `flui run` | watch worker sources → build worker and host | `WorkerReloadHook` admits the worker and reassembles with `State` kept | kept alive for logic edits; restarted for shared-type changes |
+| Scene dylib (desktop) | `FLUI_SCENE_PLUGIN=…` + host loop | manual / `cargo watch` | `HotReloadDriver::poll()` | kept alive |
+| Android scene deploy | `flui run --scene` | watch scene `src/` → ndk build → `adb push` | host polls the artifact on device and rebuilds the scene | kept alive |
+| Web page reload | `flui run --device browser:<browser>` | rebuild wasm32 | reload the open page; page state is reset | kept alive |
+| No reload | `flui run --release` | — | — | — |
 
-Constants and debounce intervals live in `flui_hot_reload::strategy::{env, timing}`.
+Constants and debounce intervals live in `flui_hot_reload::strategy::{env, timing}`. The CLI's
+`ReloadStrategy` trait is a separate live orchestration mechanism; it is not the removed public
+`flui_hot_reload::ReloadStrategy` descriptor enum and keeps its name.
 
 ## Host / Plugin Split
 
@@ -174,7 +179,7 @@ Following the standard Rust hot-reload pattern (host owns persistent state, work
 Build a `Scene` directly — best for GPU demos and custom painters.
 
 ```rust
-// examples/desktop_scene/src/lib.rs
+// crates/flui-engine/examples/desktop_scene/src/lib.rs
 fn my_scene(width: f32, height: f32) -> Scene { /* ... */ }
 scene_plugin!(my_scene);
 ```
@@ -187,7 +192,7 @@ Runs Build → Layout → Paint inside the `.so` via `PluginPipeline`. Hot reloa
 
 | Crate | Responsibility |
 |-------|----------------|
-| **`flui-hot-reload`** | Runtime half, linked by the app: `DynLib`, `ScenePlugin`, `HotReloadDriver`, `ReloadStrategy`, the worker/host ABI, and `WorkerReloadHook`/`ScenePluginHook`, the `DevReloadHook`s a host installs with `AppConfig::with_dev_reload` |
+| **`flui-hot-reload`** | Runtime half, linked by the app: `DynLib`, `ScenePlugin`, `HotReloadDriver`, the worker/host ABI, and `WorkerReloadHook`/`ScenePluginHook`, installed through `AppConfig`'s development-hook configuration. Shared orchestration constants remain in `strategy::{env, timing}`; there is no public `ReloadStrategy` descriptor enum |
 | **`flui-cli`** | Dev-machine half: the `SourceWatcher` (`src/watch.rs`), the build pipeline (`src/build/`, once `flui-build`), `flui run`, `flui run --scene` |
 
 Do **not** add a second file-watcher implementation. Extend `flui-cli`'s `watch::SourceWatcher`. The env-var names the CLI sets (`FLUI_HOT_RELOAD`, `FLUI_WORKER_PLUGIN`) are duplicated from `flui_hot_reload::{strategy, engine}::env` and pinned by a test in `commands/run.rs`.
@@ -197,18 +202,18 @@ Do **not** add a second file-watcher implementation. Extend `flui-cli`'s `watch:
 Terminal 1 — build plugin on change:
 
 ```bash
-cargo watch -w examples/desktop_scene -x "build -p flui-desktop-scene"
+cargo watch -w crates/flui-engine/examples/desktop_scene -x "build -p flui-desktop-scene"
 ```
 
 Terminal 2 — run host with in-process reload:
 
 ```bash
 # Linux/macOS
-FLUI_SCENE_PLUGIN=target/debug/libflui_scene.so cargo run --example scene_render
+FLUI_SCENE_PLUGIN=target/debug/libflui_scene.so cargo run -p flui-engine --example scene_render
 
 # Windows
 set FLUI_SCENE_PLUGIN=target\debug\flui_scene.dll
-cargo run --example scene_render
+cargo run -p flui-engine --example scene_render
 ```
 
 The host calls `HotReloadDriver::poll()` in its frame loop; when the `.so` mtime changes, it reloads without restarting.
@@ -227,11 +232,14 @@ flui run --scene --scene-crate <scene-crate> --package com.example.app --target 
 
 ## WASM / Web
 
-WASM has no `dlopen`. `flui run --device browser:<browser>` serves the wasm32 build and reloads the open page on every rebuild (`r` rebuilds by hand). Strategy: `ReloadStrategy::None` at runtime.
+WASM has no `dlopen` worker or scene-image path. `flui run --device browser:<browser>` serves the
+wasm32 build and reloads the open page on every rebuild (`r` rebuilds by hand). This is CLI page
+orchestration, not state-preserving widget reload: the new page starts with fresh state. No runtime
+`ReloadStrategy` value is involved.
 
 ## iOS
 
-iOS runs the same host/worker path as desktop and Android (`run_app` → `bootstrap_ios`): it loads the worker, starts the artifact watcher, and reassembles on change. This is usable in the **Simulator** (and a dev-signed build); a production App Store build has no mutable dylib to load, so `AppConfig`'s worker field is `None` and the capability is inert. Verified end-to-end on an iOS-Simulator: a worker edit re-stages the dylib and the UI runtime reassembles with state preserved.
+iOS runs the same supported worker-host path as desktop (`run_app` → `bootstrap_ios`): it loads the worker, starts the artifact watcher, and reassembles on change. This is usable in the **Simulator** (and a dev-signed build); a production App Store build has no mutable dylib to load, so `AppConfig`'s worker field is `None` and the capability is inert. Verified end-to-end on an iOS-Simulator: a worker edit re-stages the dylib and the UI runtime reassembles with state preserved.
 
 One iOS-specific requirement is structural rather than a platform limit. A worker `cdylib` statically links its own `flui-painting` while never linking `flui-engine`. iOS exposes no system font to a fontdb scan, so a worker that shaped on host fonts alone would have no face. Every `FontCollection` holds the embedded `Roboto-Regular` with `bundled-fonts`, and the plugin's pipeline shapes on a bundled-only collection (ADR-0092 §10 step 3b), so every image linking the shaper renders text without the engine and without a host scan.
 
@@ -265,6 +273,6 @@ For a full `flui-app` desktop runner, the same `HotReloadDriver` can wrap a plug
 ## See Also
 
 - [`crates/flui-hot-reload`](../crates/flui-hot-reload/src/lib.rs) — API and module docs
-- [`examples/scene_render.rs`](../examples/scene_render.rs) — reference host integration
-- [`examples/desktop_scene`](../examples/desktop_scene/) — reference plugin crate
+- [`crates/flui-engine/examples/scene_render.rs`](../crates/flui-engine/examples/scene_render.rs) — reference host integration
+- [`crates/flui-engine/examples/desktop_scene`](../crates/flui-engine/examples/desktop_scene/) — reference plugin crate
 - [Architecture](architecture.md) — workspace tiers (hot-reload sits in pkg, an official package under crates/ per ADR-0088)

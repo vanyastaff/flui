@@ -30,12 +30,12 @@ fn retire_span(span: tracing::Span, failed: bool) {
     drop(recovery.into_failure());
 }
 
-/// A [`ProfileSpan`] named `$name`; an empty one without `diagnostics`.
+/// A [`ProfileSpan`] for `$span`; an empty one without `diagnostics`.
 macro_rules! profile_span {
-    ($name:literal) => {{
+    ($span:expr) => {{
         #[cfg(feature = "diagnostics")]
         {
-            ProfileSpan::new(|| tracing::debug_span!(target: "flui.animation", $name))
+            ProfileSpan::new(|| tracing::debug_span!(target: $span.target(), $span.name()))
         }
         #[cfg(not(feature = "diagnostics"))]
         {
@@ -90,17 +90,17 @@ impl ProfileSpan {
 
     #[inline]
     pub(crate) fn tick() -> Self {
-        profile_span!("animation_tick")
+        profile_span!(flui_foundation::diagnostics::FrameSpan::AnimationTick)
     }
 
     #[inline]
     pub(crate) fn sampling() -> Self {
-        profile_span!("animation_sampling")
+        profile_span!(flui_foundation::diagnostics::FrameSpan::AnimationSampling)
     }
 
     #[inline]
     pub(crate) fn listeners() -> Self {
-        profile_span!("animation_listeners")
+        profile_span!(flui_foundation::diagnostics::FrameSpan::AnimationListeners)
     }
 }
 
@@ -124,9 +124,9 @@ impl ControllerTrace {
         Self {
             span: observe(|| {
                 tracing::debug_span!(
-                    target: "flui.animation.diagnostics",
+                    target: flui_foundation::diagnostics::FrameSpan::AnimationController.target(),
                     parent: None,
-                    "animation_controller",
+                    flui_foundation::diagnostics::FrameSpan::AnimationController.name(),
                     label,
                     created_at,
                 )

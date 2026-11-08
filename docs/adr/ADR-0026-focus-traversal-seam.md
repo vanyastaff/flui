@@ -84,9 +84,10 @@ unfocuses and reports the key unconsumed; the embedder handoff has no channel ye
 defaulted `to_key_event_result(intent, outcome)`, so a Tab that moves nothing leaves the key
 unconsumed for an outer handler. `Actions` must wrap `Shortcuts`, because `Shortcuts` resolves
 its action chain from its own position (ADR-0023); the reverse nesting silently dead-keys Tab.
-`DefaultFocusTraversal` packages the Tab/Shift+Tab bindings in that order, and `FocusRoot`
-installs it for every standard presentation (Flutter's `WidgetsApp` does the same at the app
-root); custom embedders can install it themselves.
+`DefaultFocusTraversal` packages the Tab/Shift+Tab bindings in that order. `flui-app` and
+`HeadlessHost` install it through `flui_widgets::app_root` for every standard presentation,
+below the runtime's `flui_view::environment::FocusTreeRoot`; custom embedders compose the same
+function themselves.
 
 ## Flutter divergences
 

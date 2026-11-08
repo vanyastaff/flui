@@ -98,22 +98,25 @@ use flui_sdk::animation::Vsync;
 use flui_sdk::foundation::panic::PanicRecovery;
 use flui_sdk::foundation::{Listenable, Subscription};
 use flui_sdk::geometry::{EdgeInsets, Rect, Size};
-use flui_sdk::painting::{Canvas, Color, Paint, TextDirection, TextStyle};
+use flui_sdk::painting::styling::Color;
+use flui_sdk::painting::typography::{TextDirection, TextStyle};
+use flui_sdk::painting::{Canvas, CustomPainter, Paint};
+use flui_sdk::pipeline::CrossAxisAlignment;
+use flui_sdk::rendering::{SemanticsAnchor, SemanticsRole};
 use flui_sdk::view::environment::VsyncScope;
 use flui_sdk::view::prelude::*;
 use flui_sdk::view::{BoxedView, RebuildHandle};
 use flui_sdk::widgets::{
-    Center, Column, CompanionRegistration, Container, CrossAxisAlignment, CustomPaint,
-    CustomPainter, DefaultTextStyle, Directionality, Expanded, IgnorePointer, MergeSemantics,
-    Padding, Positioned, PreferredSizeView, Row, Semantics, SemanticsAnchor, SemanticsRole,
-    SizedBox, Stack, Text, WidgetState, WidgetStateConstraint, WidgetStateProperty,
+    Center, Column, CompanionRegistration, Container, CustomPaint, DefaultTextStyle,
+    Directionality, Expanded, IgnorePointer, MergeSemantics, Padding, Positioned,
+    PreferredSizeView, Row, Semantics, SizedBox, Stack, Text, WidgetState, WidgetStateConstraint,
+    WidgetStateProperty,
 };
 
 use crate::ink_well::InkWell;
 use crate::ripple::StateLayerAlpha;
 use crate::tab_controller::{ClockLease, DefaultTabController, TabController, TabPosition};
 use crate::theme::Theme;
-use crate::theme_data::ThemeData;
 
 /// A `Tab` with no icon's height.
 pub const TAB_HEIGHT: f64 = 46.0;
@@ -398,8 +401,10 @@ struct ResolvedTabBarStyle {
 /// | `divider_color` | `ColorScheme.outlineVariant` |
 /// | `divider_height` | `1.0` |
 /// | `overlay_color` | pressed→`onSurface@0.1`, hovered→`onSurface@0.08`, focused→`onSurface@0.1`, else none |
-fn resolve_style(theme: &ThemeData) -> ResolvedTabBarStyle {
-    let tab_bar_theme = theme.tab_bar_theme.as_ref();
+fn resolve_style(
+    theme: &crate::theme::BaseTheme,
+    tab_bar_theme: Option<&crate::TabBarThemeData>,
+) -> ResolvedTabBarStyle {
     let colors = &theme.color_scheme;
     let title_small = theme.text_theme.title_small.clone().unwrap_or_default();
 
@@ -615,8 +620,9 @@ impl ViewState<TabBar> for TabBarState {
 
     fn build(&self, view: &TabBar, ctx: &dyn BuildContext) -> impl IntoView {
         let controller = self.resolve_controller(view, ctx);
-        let theme = Theme::of(ctx);
-        let resolved = resolve_style(&theme);
+        let theme = Theme::required_base_of(ctx);
+        let component = Theme::component_of::<crate::TabBarThemeData>(ctx);
+        let resolved = resolve_style(&theme, component.as_ref());
         let height = bar_height(&view.tabs, view.indicator_weight);
 
         if view.tabs.is_empty() {

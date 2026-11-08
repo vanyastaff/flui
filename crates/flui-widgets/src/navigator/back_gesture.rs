@@ -38,6 +38,7 @@ use flui_interaction::gesture::horizontal_drag;
 use flui_interaction::{
     DragEndDetails, DragGestureRecognizer, DragStartDetails, DragUpdateDetails, GestureRecognizer,
 };
+use flui_objects::StackFit;
 use flui_painting::typography::TextDirection;
 use flui_rendering::hit_testing::HitTestBehavior;
 use flui_view::environment::GesturePolicy;
@@ -48,7 +49,7 @@ use super::binding::PopPacing;
 use super::navigator::NavigatorHandle;
 use super::route::RouteId;
 use crate::interaction::recognizer_attachment::RecognizerAttachment;
-use crate::{Directionality, Listener, Positioned, SizedBox, Stack, StackFit};
+use crate::{Directionality, Listener, Positioned, SizedBox, Stack};
 
 /// The width of the edge-anchored hit region that can start a drag.
 pub(crate) const BACK_GESTURE_WIDTH: f64 = 20.0;

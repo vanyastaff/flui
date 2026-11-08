@@ -84,8 +84,8 @@
 //! `flui-widgets::animated`'s existing `ImplicitController` machinery)
 //! without changing this type's shape.
 
-use flui_sdk::painting::Clip;
-use flui_sdk::painting::Color;
+use flui_sdk::painting::paint::Clip;
+use flui_sdk::painting::styling::Color;
 use flui_sdk::pipeline::{PathClipConfiguration, RenderPhysicalShape};
 use flui_sdk::rendering::BoxProtocol;
 use flui_sdk::view::prelude::*;

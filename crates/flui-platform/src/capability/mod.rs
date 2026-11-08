@@ -83,10 +83,13 @@ pub struct ProviderContext<'a> {
     completions: &'a CompletionSource,
     locals: &'a RuntimeLocals,
     window: Option<WindowRef>,
+    executor: Option<std::sync::Arc<dyn crate::executor::Executor>>,
 }
 
 impl<'a> ProviderContext<'a> {
-    /// The context a UI runtime hands its providers.
+    /// The context a UI runtime hands its providers, without a background
+    /// executor. Use [`with_executor`](Self::with_executor) when the host
+    /// supplies one.
     #[must_use]
     pub fn new(
         owner: &'a OwnerPoster,
@@ -99,7 +102,26 @@ impl<'a> ProviderContext<'a> {
             completions,
             locals,
             window,
+            executor: None,
         }
+    }
+
+    /// Supply the host's background executor to this acquisition.
+    #[must_use]
+    pub fn with_executor(
+        mut self,
+        executor: std::sync::Arc<dyn crate::executor::Executor>,
+    ) -> Self {
+        self.executor = Some(executor);
+        self
+    }
+
+    /// The host's background executor, or `None` when the host supplied none.
+    /// A provider that requires one must report itself unavailable rather than
+    /// creating a hidden executor of its own.
+    #[must_use]
+    pub fn executor(&self) -> Option<&std::sync::Arc<dyn crate::executor::Executor>> {
+        self.executor.as_ref()
     }
 
     /// A poster that runs a closure on the owner thread; it may be cloned and

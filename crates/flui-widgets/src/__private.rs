@@ -18,6 +18,7 @@ pub use crate::anchored_box::AnchoredBox;
 pub use crate::form::text_form_field_core::{
     TextFormFieldConfig, TextFormFieldCore, TextFormFieldInput,
 };
-pub use crate::interaction::focus::{enclosing_focus_parent, install_rect_provider};
+pub use crate::interaction::focus::install_rect_provider;
 pub use crate::navigator::flight_seat::{FlightSeat, SeatClaim, SeatHold};
 pub use crate::paint::repaint_boundary::SaltingChildKey;
+pub use flui_view::environment::enclosing_focus_parent;

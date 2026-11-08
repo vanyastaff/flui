@@ -37,7 +37,7 @@ alone. `WindowExecutionState::Detached` forgets the last delivery, so the next f
 after reattaching resends. A window without the capability records no delivery, so a
 backend that gains it later still receives the current style.
 
-The headless backend records deliveries. Android applies the style on the Java
+The headless backend drops deliveries by default; its explicit testing doubles record them. Android applies the style on the Java
 main thread: `WindowInsetsController.setSystemBarsAppearance` with
 `APPEARANCE_LIGHT_STATUS_BARS` on API 30+, the `SYSTEM_UI_FLAG_LIGHT_STATUS_BAR`
 visibility flag on API 23–29, nothing below 23 (the icon colour is not

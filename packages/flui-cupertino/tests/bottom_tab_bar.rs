@@ -20,7 +20,10 @@ fn two_items() -> Vec<CupertinoTabBarItem> {
 /// of the render objects used to compose them. This is not a rasterization test.
 pub fn every_item_mounts_its_icon_and_label() {
     let laid = lay_out(
-        MediaQuery::new(MediaQueryData::default(), CupertinoTabBar::new(two_items())),
+        common::themed(MediaQuery::new(
+            MediaQueryData::default(),
+            CupertinoTabBar::new(two_items()),
+        )),
         tight(400.0, 50.0),
     );
 

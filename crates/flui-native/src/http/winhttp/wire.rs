@@ -11,6 +11,8 @@
 
 use flui_platform::http::{HeaderName, HeaderValue, Headers, HttpError};
 
+use super::super::head::HeadBuilder;
+
 /// Where in the exchange WinHTTP failed: what an error code means when it
 /// says nothing more.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -119,7 +121,7 @@ pub(super) fn response_headers(raw: &[u16]) -> Result<Headers, HttpError> {
     let broken = |line: &[u8]| HttpError::Protocol {
         detail: format!("not a header line: {:?}", String::from_utf8_lossy(line)),
     };
-    let mut headers = Headers::new();
+    let mut headers = HeadBuilder::new();
     // The status line comes first.
     for line in bytes.split(|&byte| byte == b'\n').skip(1) {
         let line = line.strip_suffix(b"\r").unwrap_or(line);
@@ -134,9 +136,9 @@ pub(super) fn response_headers(raw: &[u16]) -> Result<Headers, HttpError> {
         let value = line[colon + 1..].trim_ascii();
         let name = HeaderName::try_new(name.trim_ascii()).map_err(|_| broken(line))?;
         let value = HeaderValue::try_new(value).map_err(|_| broken(line))?;
-        headers.append(name, value);
+        headers.try_append(name, value)?;
     }
-    Ok(headers)
+    Ok(headers.finish())
 }
 
 /// The object a request names on its server: the URL's path and query
@@ -293,6 +295,20 @@ mod tests {
         );
         assert!(matches!(
             response_headers(&wide("HTTP/1.1 200 OK\r\nno colon here\r\n")),
+            Err(HttpError::Protocol { .. })
+        ));
+    }
+
+    /// The response contract, not a backend's incidental buffer size, bounds
+    /// how many headers FLUI accepts.
+    #[test]
+    fn response_headers_refuse_the_thousand_and_twenty_fifth() {
+        let mut raw = wide("HTTP/1.1 200 OK\r\n");
+        for _ in 0..1025 {
+            raw.extend(wide("X: a\r\n"));
+        }
+        assert!(matches!(
+            response_headers(&raw),
             Err(HttpError::Protocol { .. })
         ));
     }

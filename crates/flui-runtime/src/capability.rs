@@ -343,6 +343,7 @@ impl Drop for OwnerJobs {
 /// runtime's registry, its completions and the presentation's window.
 pub(crate) struct PresentationCapabilities {
     pub(crate) registry: CapabilityRegistry,
+    pub(crate) executor: Option<Arc<dyn flui_platform::executor::Executor>>,
     pub(crate) completions: CompletionSource,
     pub(crate) locals: flui_platform::capability::RuntimeLocals,
     pub(crate) window: std::rc::Weak<dyn PlatformWindow>,
@@ -359,6 +360,10 @@ impl CapabilitySource for PresentationCapabilities {
         });
         let poster = self.completions.poster();
         let cx = ProviderContext::new(poster, &self.completions, &self.locals, window);
+        let cx = match &self.executor {
+            Some(executor) => cx.with_executor(Arc::clone(executor)),
+            None => cx,
+        };
         self.registry.acquire(capability, name, &cx)
     }
 }

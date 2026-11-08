@@ -70,9 +70,11 @@ src/
 ### Optional observation
 
 The `diagnostics` feature emits transition receipts and CPU spans through
-`tracing` (ADR-0202). Immutable scalar receipts join the existing controller
-FIFO; subscriber callbacks run after the controller borrow is released.
-Span identity and run generation correlate lifetime and completion/cancellation.
+`tracing` (ADR-0202). Producers open the tick, sampling, listener and controller spans through
+`flui_foundation::diagnostics::FrameSpan`, whose exact `(target, name)` identities are also what
+devtools captures. Immutable scalar receipts join the existing controller FIFO; subscriber
+callbacks run after the controller borrow is released. Span identity and run generation correlate
+lifetime and completion/cancellation.
 Receipts use the controller span's owning dispatcher; subscriber-local IDs are
 never sent through a different current dispatcher. Value listener snapshots
 and registry admission fences precede optional span creation/entry, so subscriber
@@ -549,15 +551,16 @@ the changelog fragment rather than preserving parallel legacy spellings.
 
 ### Fixed values admit no listener identity
 
-`ConstantAnimation` drops value callbacks and recovery relays at admission.
-It returns the inert `ListenerId` at `usize::MAX`, which core notifier allocation
-cannot issue because it checks a representable successor before admission.
-No process counter, callback storage or wrap/reissue path is needed for a source
-that cannot notify. Value IDs otherwise remain source-scoped; status removal
+`ConstantAnimation` drops value callbacks and recovery relays at admission and
+returns `ListenerId::inert()`. That result is outside the numeric namespace of
+every `IdMint`, rather than a sentinel a future allocator could issue. No process
+counter, callback storage or wrap/reissue path is needed for a source that
+cannot notify. Value IDs otherwise remain source-scoped; status removal
 authority is bound to its source by `StatusSubscription`.
-`constant_listener_tokens_never_withdraw_live_callbacks` observes callback
-retirement and later notifications from a real `ChangeNotifier`; the previous
-counter token collided with its first live listener and fails that assertion.
+`constant_listener_tokens_never_withdraw_live_callbacks` observes callback and
+observer retirement and later notifications from a real `ChangeNotifier`; the
+previous counter token collided with its first live listener and fails that
+assertion.
 
 ### Perceptual spring parameters retain physical retargeting
 

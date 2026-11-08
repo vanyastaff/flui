@@ -362,7 +362,7 @@ pub fn error_line_sits_below_the_indicator_outside_the_tap_target() {
 /// and hint are not announced a second time as loose text, and the error line
 /// is a polite live region, read when it appears.
 pub fn the_field_carries_its_label_hint_and_error_for_assistive_technology() {
-    use flui_testing::a11y::{Live, Role};
+    use flui_sdk::testing::a11y::{Live, Role};
 
     let decoration = InputDecoration {
         label_text: Some("Email".to_owned()),
@@ -431,11 +431,11 @@ pub fn the_field_carries_its_label_hint_and_error_for_assistive_technology() {
 /// `TextField` builds its `EditableText` — the store keeps reporting `Text`.
 pub fn the_input_purpose_reaches_the_text_store() {
     use flui_material::TextFormField;
-    use flui_sdk::platform::TextInputPurpose;
+    use flui_sdk::platform::text_store::TextInputPurpose;
 
     let controller = TextEditingController::new();
     let focus_node = FocusNode::with_debug_label("purpose");
-    let mut harness = flui_testing::widgets::harness::mount_with_ime(Theme::new(
+    let mut harness = flui_sdk::testing::widgets::harness::mount_with_ime(Theme::new(
         ThemeData::light(),
         SizedBox::new(300.0, 100.0).child(
             TextField::new(controller)
@@ -450,7 +450,7 @@ pub fn the_input_purpose_reaches_the_text_store() {
 
     let form_controller = TextEditingController::new();
     let form_focus = FocusNode::with_debug_label("form purpose");
-    let mut form = flui_testing::widgets::harness::mount_with_ime(Theme::new(
+    let mut form = flui_sdk::testing::widgets::harness::mount_with_ime(Theme::new(
         ThemeData::light(),
         SizedBox::new(300.0, 100.0).child(
             TextFormField::new(form_controller)

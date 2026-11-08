@@ -87,8 +87,8 @@ impl PipelineOwner<PaintPhase> {
         }
 
         let _span = tracing::debug_span!(
-            target: "flui.frame",
-            "paint",
+            target: flui_foundation::diagnostics::FrameSpan::Paint.target(),
+            flui_foundation::diagnostics::FrameSpan::Paint.name(),
             dirty_nodes = self.scheduler.paint_queue_len(),
             // How many of those are queued only to have some node's own effect
             // layers rebuilt. A frame whose two counts are equal repainted

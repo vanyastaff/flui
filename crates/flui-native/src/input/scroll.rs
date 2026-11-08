@@ -6,9 +6,9 @@
 //! (Win32's detents, the DOM's `deltaMode`, Android's axis factors, AppKit's
 //! precise deltas), and in its own
 //! direction ([`WheelDirection`]); [`wheel_step`] turns each axis to FLUI's
-//! direction and refuses an amount that is not finite. What a refused step
-//! becomes is the backend's: AppKit delivers a zero step in the
-//! event's unit, the Web and Android drop the event.
+//! direction and refuses an amount that is not finite. Every backend drops a
+//! refused step instead of delivering a zero scroll that could open or extend
+//! a scroll sequence. A finite zero reported by the OS remains an event.
 
 use flui_platform::pointer::{InputValueError, ScrollDelta, ScrollUnit};
 
@@ -179,8 +179,9 @@ mod mapping {
     }
 
     /// AppKit's `scrollingDeltaX`/`Y` for the turn, from a notched wheel.
-    fn appkit((x, y): (f64, f64)) -> ScrollDelta {
-        crate::input::apple::wheel::step(false, moving_the_content(x), moving_the_content(y)).0
+    fn appkit((x, y): (f64, f64)) -> Option<ScrollDelta> {
+        crate::input::apple::wheel::step(false, moving_the_content(x), moving_the_content(y))
+            .map(|(delta, _)| delta)
     }
 
     /// Every backend whose wheel step runs on this host takes each turn alike.
@@ -196,7 +197,7 @@ mod mapping {
                 ("Win32", win32(amounts)),
                 ("DOM", dom(amounts)),
                 ("Android", android(amounts)),
-                ("AppKit", Some(appkit(amounts))),
+                ("AppKit", appkit(amounts)),
             ];
             for (backend, delta) in steps {
                 let Some(delta) = delta else {
@@ -213,15 +214,14 @@ mod mapping {
         }
     }
 
-    /// An amount that is not finite is refused: the Web and Android drop the
-    /// event, AppKit delivers a zero step in the event's unit.
+    /// An amount that is not finite is refused rather than delivered as a
+    /// zero scroll.
     #[test]
     fn a_turn_that_is_not_finite_steps_nothing() {
         for amount in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
             assert_eq!(dom((amount, 0.0)), None, "DOM: {amount}");
             assert_eq!(android((0.0, amount)), None, "Android: {amount}");
-            let zero = appkit((amount, 0.0));
-            assert_eq!((zero.x(), zero.y()), (0.0, 0.0), "AppKit: {amount}");
+            assert_eq!(appkit((amount, 0.0)), None, "AppKit: {amount}");
         }
     }
 }

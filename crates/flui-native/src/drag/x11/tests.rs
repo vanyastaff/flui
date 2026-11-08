@@ -40,6 +40,7 @@ use super::model::{self, ActionAtoms, Message, MessageAtoms};
 use super::source::FINISH_TIMEOUT;
 use crate::owner::linux::x11::{InputTarget, LoopDrag as _, WindowRef, WindowScale, X11Connection};
 use crate::owner::window_delivery::WindowDelivery;
+use crate::transfer::intake::Intake;
 
 // ============================================================================
 // The model
@@ -944,7 +945,7 @@ fn a_retired_offer_frees_its_fetches_for_the_requests_waiting() {
     };
 
     let woken = target.wakes.load(Ordering::SeqCst);
-    let held: Vec<TransferRequest> = (0..super::MAX_FETCHES)
+    let held: Vec<TransferRequest> = (0..Intake::DEFAULT.max_fetches)
         .map(|_| {
             target
                 .drag
@@ -955,7 +956,7 @@ fn a_retired_offer_frees_its_fetches_for_the_requests_waiting() {
         target.wakes.load(Ordering::SeqCst) > woken,
         "a fetch started off the loop wakes it"
     );
-    let unanswered = conversions(&target, &source, super::MAX_FETCHES);
+    let unanswered = conversions(&target, &source, Intake::DEFAULT.max_fetches);
     let waiting = target
         .drag
         .request(hovering, RepresentationIndex(0), TransferLimits::default());
@@ -997,7 +998,7 @@ fn a_type_unnamed_or_named_past_a_media_type_is_refused_once() {
     target.answer(Some(TransferActions::COPY));
     let source = Source::new();
     let atoms = &source.atoms;
-    let long = format!("text/{}", "x".repeat(super::MAX_NAME_LEN));
+    let long = format!("text/{}", "x".repeat(Intake::DEFAULT.max_type_len));
     let long = source
         .connection
         .intern_atom(false, long.as_bytes())
@@ -1572,6 +1573,102 @@ fn a_session_drops_on_a_target_that_accepts() {
         model::finished(foreign.window, Some(atoms.copy)),
     );
     let deadline = Instant::now() + STEP;
+    while ended.get().is_none() {
+        assert!(Instant::now() < deadline, "the session never ended");
+        target.deliver_events();
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    assert_eq!(ended.get(), Some(OsDragEnd::Dropped(TransferActions::COPY)));
+}
+
+/// A payload larger than one request is announced `INCR`, served a bounded
+/// chunk at a time after each deletion, and ended by an empty chunk.
+#[test]
+fn a_session_serves_a_large_payload_incrementally() {
+    let _server = server();
+    let Some(target) = Target::open(1.0) else {
+        return;
+    };
+    let other = Source::new();
+    let foreign = Foreign::open(&other);
+    let atoms = &other.atoms;
+    let _held = Held::press(&other.connection);
+    let ended = Rc::new(Cell::new(None));
+    let text = format!("{}конец", "x".repeat(300_000));
+    let served = text.clone();
+    let mut large = request(&ended);
+    large.provider = Box::new(move |RepresentationIndex(index)| match index {
+        0 => Ok(TransferPayload::Text(served.clone())),
+        _ => Err(TransferError::Cancelled),
+    });
+    accepted(&target, &other, &foreign, large);
+    target.release(101);
+    heard_by(&other, &target, atoms.drop);
+
+    other
+        .connection
+        .convert_selection(
+            foreign.window,
+            atoms.selection,
+            atoms.utf8,
+            atoms.utf8,
+            101_u32,
+        )
+        .expect("the conversion is asked");
+    other.connection.flush().expect("the conversion is asked");
+    let deadline = Instant::now() + STEP;
+    let notify = loop {
+        target.deliver_events();
+        if let Some(Event::SelectionNotify(notify)) = other.poll() {
+            break notify;
+        }
+        assert!(Instant::now() < deadline, "the source never answered");
+        std::thread::sleep(Duration::from_millis(2));
+    };
+    assert_eq!(notify.property, atoms.utf8);
+
+    let mut received = Vec::new();
+    let mut announcement = true;
+    loop {
+        // Deleting the previous property asked this connection for the next
+        // chunk. Let the session answer before reading it.
+        target.deliver_events();
+        let reply = other
+            .connection
+            .get_property(true, foreign.window, atoms.utf8, AtomEnum::ANY, 0, u32::MAX)
+            .expect("the property read is sent")
+            .reply()
+            .expect("the server answers");
+        if reply.type_ == NONE {
+            assert!(Instant::now() < deadline, "the next chunk never came");
+            std::thread::sleep(Duration::from_millis(2));
+            continue;
+        }
+        if announcement {
+            assert_eq!(reply.type_, atoms.incr);
+            assert_eq!(
+                reply.value32().and_then(|mut value| value.next()),
+                u32::try_from(text.len()).ok(),
+                "the whole byte length is announced"
+            );
+            announcement = false;
+        } else {
+            assert_eq!(reply.type_, atoms.utf8);
+            if reply.value.is_empty() {
+                break;
+            }
+            received.extend_from_slice(&reply.value);
+        }
+        assert!(Instant::now() < deadline, "the transfer never ended");
+    }
+    assert_eq!(received, text.as_bytes());
+    target.deliver_events();
+
+    other.send(
+        target.session(),
+        atoms.finished,
+        model::finished(foreign.window, Some(atoms.copy)),
+    );
     while ended.get().is_none() {
         assert!(Instant::now() < deadline, "the session never ended");
         target.deliver_events();

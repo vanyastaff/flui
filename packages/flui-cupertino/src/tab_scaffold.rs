@@ -51,14 +51,15 @@ use std::rc::Rc;
 
 use flui_sdk::foundation::{BuildPhase, ChangeNotifier, Listenable, MutatedDuringBuild};
 use flui_sdk::geometry::EdgeInsets;
-use flui_sdk::painting::BoxDecoration;
+use flui_sdk::painting::styling::BoxDecoration;
+use flui_sdk::pipeline::StackFit;
 use flui_sdk::view::BoxedView;
 use flui_sdk::view::environment::MediaQuery;
 use flui_sdk::view::prelude::*;
 use flui_sdk::view::{AnimatedView, impl_animated_view};
 use flui_sdk::widgets::{
     DecoratedBox, HeroMode, Offstage, Padding, Positioned, PreferredSizeView, SizedBox, Stack,
-    StackFit, TickerMode,
+    TickerMode,
 };
 
 use crate::bottom_tab_bar::CupertinoTabBar;

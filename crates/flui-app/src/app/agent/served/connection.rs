@@ -8,7 +8,7 @@
 //!
 //! Windows: a pipe takes no timeout, and a blocking read on it cannot be woken without
 //! discarding what the client has not read yet. The connection's thread reads the pipe without
-//! blocking instead, looking for input every 10 ms while nothing else wakes it, and
+//! blocking instead, polling frequently while input arrives and slowing after 50 ms idle, and
 //! writes it a chunk at a time, giving up after [`WRITE_TIMEOUT`] or when the agent stops.
 
 use std::sync::Arc;
@@ -220,8 +220,13 @@ mod platform {
     use super::super::endpoint::{Done, Transport};
     use super::{CHUNK, WRITE_TIMEOUT};
 
-    /// How often the connection's thread looks for input while nothing else wakes it.
+    /// How often the connection's thread looks for input after a real idle interval.
     const PIPE_POLL: Duration = Duration::from_millis(10);
+
+    /// How long after the last successful read the connection yields instead of sleeping.
+    /// A named-pipe write does not unpark this thread, so even a short timer can otherwise
+    /// bound throughput to one small pipe buffer per timer tick.
+    const ACTIVE_READ: Duration = Duration::from_millis(50);
 
     /// How long a write that made no progress waits before it tries again.
     const WRITE_RETRY: Duration = Duration::from_millis(1);
@@ -253,6 +258,7 @@ mod platform {
             return;
         };
         let mut chunk = vec![0_u8; CHUNK];
+        let mut read_progress = Instant::now();
         loop {
             let now = Instant::now();
             let mut received = false;
@@ -265,6 +271,7 @@ mod platform {
                     Ok(read) => {
                         session.receive(&chunk[..read], now);
                         received = true;
+                        read_progress = now;
                     }
                     Err(error) if error.kind() == io::ErrorKind::WouldBlock => break,
                     Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
@@ -284,7 +291,11 @@ mod platform {
                 return;
             }
             if !received {
-                super::park(session.next_deadline(), Some(PIPE_POLL));
+                if read_progress.elapsed() < ACTIVE_READ {
+                    std::thread::yield_now();
+                } else {
+                    super::park(session.next_deadline(), Some(PIPE_POLL));
+                }
             }
         }
     }

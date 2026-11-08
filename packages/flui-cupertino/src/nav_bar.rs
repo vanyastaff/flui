@@ -73,13 +73,14 @@
 //! grow wide enough to visually collide with it.
 
 use flui_sdk::geometry::Size;
-use flui_sdk::painting::{Border, BorderSide, BorderStyle, BoxDecoration, Color};
+use flui_sdk::painting::styling::{Border, BorderSide, BorderStyle, BoxDecoration, Color};
+use flui_sdk::rendering::HeadingLevel;
 use flui_sdk::view::BoxedView;
 use flui_sdk::view::environment::MediaQuery;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{
-    Center, DecoratedBox, DefaultTextStyle, HeadingLevel, Positioned, PreferredSizeView, SafeArea,
-    Semantics, SizedBox, Stack,
+    Center, DecoratedBox, DefaultTextStyle, Positioned, PreferredSizeView, SafeArea, Semantics,
+    SizedBox, Stack,
 };
 
 use crate::colors::CupertinoColor;

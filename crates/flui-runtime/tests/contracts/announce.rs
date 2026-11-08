@@ -3,10 +3,10 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use flui_rendering::semantics::{Announcer, Urgency};
 use flui_runtime::presentation::PresentationWindow;
 use flui_runtime::ui_runtime::UiRuntime;
 use flui_view::prelude::*;
-use flui_widgets::{Announcer, Urgency};
 
 type Slot = Arc<parking_lot::Mutex<Option<Announcer>>>;
 
@@ -46,18 +46,24 @@ impl flui_semantics::platform::PlatformAccessibility for Bridge {
     fn publish(&self, update: accesskit::TreeUpdate) {
         self.updates.lock().expect("updates").push(update);
     }
-    fn is_active(&self) -> bool {
-        true
-    }
-    fn set_activation_listener(
-        &self,
-        _: flui_semantics::platform::AccessibilityActivationListener,
-    ) {
-    }
-    fn set_action_listener(&self, _: flui_semantics::platform::AccessibilityActionListener) {}
 
-    fn assistive_focus_support(&self) -> flui_semantics::AssistiveFocusSupport {
-        flui_semantics::AssistiveFocusSupport::Unreported
+    fn attach(
+        &self,
+        _: Arc<dyn flui_semantics::platform::AccessibilityHandler>,
+    ) -> Result<
+        flui_semantics::platform::AccessibilityAttachment,
+        flui_semantics::platform::AccessibilityAlreadyAttached,
+    > {
+        Ok(flui_semantics::platform::AccessibilityAttachment::new(
+            true,
+            flui_semantics::platform::AccessibilityCapabilities::NONE,
+        ))
+    }
+
+    fn detach_handler(&self) {}
+
+    fn route_changed(&self, change: flui_semantics::platform::RouteChange) {
+        drop(change);
     }
 }
 

@@ -11,7 +11,7 @@ exit = "ADR-0287"
 
 [[allow]]
 path = "crates/flui-view/src/owner/build_owner.rs"
-lines = 3008
+lines = 3007
 reason = "the ADR-0303 §6 expectations on its hand-written catches pushed it past the limit; each site that moves to a primitive removes its expectation"
 exit = "ADR-0287"
 

@@ -1,4 +1,5 @@
-use flui_widgets::{Routable, RouteParseError};
+use flui_view::RouteParseError;
+use flui_widgets::Routable;
 
 #[derive(Routable, Debug, Clone, PartialEq)]
 enum AppRoute {

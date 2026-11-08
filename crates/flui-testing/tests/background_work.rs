@@ -171,6 +171,32 @@ pub(crate) fn a_refused_spawn_answers_refused_at_the_next_pump() {
     );
 }
 
+pub(crate) fn a_provider_runs_on_the_headless_hosts_context_executor() {
+    let mut registrar = CapabilityRegistrar::new();
+    registrar.provide::<BackgroundCapability>(|cx: &ProviderContext<'_>| {
+        let executor = cx
+            .executor()
+            .cloned()
+            .expect("the headless host supplies its deterministic executor");
+        Ok(Background::new(executor, cx.completions().clone()))
+    });
+    let registry = CapabilityRegistry::builder()
+        .overrides(registrar)
+        .build()
+        .expect("one provider");
+    let mut host = HeadlessHost::with_capabilities(window(), registry);
+    let background = background(&mut host);
+    let mut task = background.compute(|| 42);
+    assert_eq!(
+        host.pending_background(),
+        1,
+        "the context executor queues on this host's own lane"
+    );
+    let _ = host.pump(Duration::ZERO);
+    assert_eq!(task.poll(), Some(Ok(42)));
+    assert_eq!(host.pending_background(), 0);
+}
+
 /// Hands each job and future to the test, so it chooses the thread and the
 /// waker they run with.
 #[derive(Clone, Default)]

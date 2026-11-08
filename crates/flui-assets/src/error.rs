@@ -1,21 +1,21 @@
-//! Error types for asset operations.
+//! Error types for decoded-image operations.
 
 use thiserror::Error;
 
-/// Result type for asset operations.
+/// Result type for decoded-image operations.
 pub type Result<T> = std::result::Result<T, AssetError>;
 
-/// Errors that can occur during asset operations.
+/// Errors produced while loading, fetching or decoding an image.
 #[derive(Error, Debug, Clone)]
 pub enum AssetError {
-    /// Asset was not found at the specified location.
+    /// The requested source was not found.
     #[error("Asset not found: {path}")]
     NotFound {
         /// The path or identifier that was not found.
         path: String,
     },
 
-    /// Failed to load the asset from its source.
+    /// The source could not be read or its image could not be decoded.
     #[error("Failed to load asset '{path}': {reason}")]
     LoadFailed {
         /// The asset path or identifier.
@@ -24,7 +24,7 @@ pub enum AssetError {
         reason: String,
     },
 
-    /// Failed to decode the asset data.
+    /// The decoder failed after the source was read.
     #[error("Failed to decode asset '{path}': {reason}")]
     DecodeFailed {
         /// The asset path or identifier.
@@ -33,26 +33,7 @@ pub enum AssetError {
         reason: String,
     },
 
-    /// The asset format is not supported.
-    #[error("Unsupported asset format for '{path}': {format}")]
-    UnsupportedFormat {
-        /// The asset path or identifier.
-        path: String,
-        /// The unsupported format.
-        format: String,
-    },
-
-    /// Invalid asset data.
-    #[error("Invalid asset data for '{path}': {reason}")]
-    InvalidData {
-        /// The asset path or identifier.
-        path: String,
-        /// The reason the data is invalid.
-        reason: String,
-    },
-
-    /// A network image was requested without an HTTP client: the caller's
-    /// host provides none.
+    /// A network image was requested without an HTTP client.
     #[error("No HTTP client to fetch '{url}'")]
     HttpUnavailable {
         /// The URL that was not fetched.
@@ -68,8 +49,7 @@ pub enum AssetError {
         source: flui_platform::http::HttpError,
     },
 
-    /// The server answered a network image's request with a status other
-    /// than 2xx.
+    /// The server answered with a status other than 2xx.
     #[error("Fetching '{url}' answered HTTP {status}")]
     HttpStatus {
         /// The URL that was fetched.
@@ -86,32 +66,4 @@ pub enum AssetError {
         /// Why the lanes refused it.
         reason: flui_platform::executor::SpawnError,
     },
-
-    /// I/O error occurred.
-    #[error("I/O error: {0}")]
-    Io(String),
-
-    /// Cache error.
-    #[error("Cache error: {0}")]
-    Cache(String),
-
-    /// Bundle error.
-    #[error("Bundle error: {0}")]
-    Bundle(String),
-}
-
-impl From<std::io::Error> for AssetError {
-    fn from(err: std::io::Error) -> Self {
-        AssetError::Io(err.to_string())
-    }
-}
-
-#[cfg(feature = "images")]
-impl From<image::ImageError> for AssetError {
-    fn from(err: image::ImageError) -> Self {
-        AssetError::DecodeFailed {
-            path: "unknown".to_string(),
-            reason: err.to_string(),
-        }
-    }
 }

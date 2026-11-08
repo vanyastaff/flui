@@ -40,6 +40,37 @@ impl UiRuntime {
         Ok(())
     }
 
+    /// Apply an owner-thread navigation intent to exactly `presentation`'s URL owner.
+    ///
+    /// # Errors
+    ///
+    /// [`NoPresentation`](flui_view::NavigationRefused::NoPresentation) when the
+    /// generational address is not live, [`NoUrlOwner`](flui_view::NavigationRefused::NoUrlOwner)
+    /// when that presentation has no registered outermost Router, or the URL
+    /// owner's own refusal. Neither absence is redirected to another presentation.
+    pub fn navigate(
+        &self,
+        presentation: PresentationId,
+        intent: flui_view::NavigationIntent,
+    ) -> Result<(), flui_view::NavigationRefused> {
+        let owner = self
+            .presentations
+            .get(presentation)
+            .ok_or(flui_view::NavigationRefused::NoPresentation)?
+            .widgets()
+            .with_build_owner(|build_owner| {
+                build_owner
+                    .capabilities()
+                    .url_owner
+                    .as_ref()
+                    .and_then(flui_view::UrlOwnerSlot::owner)
+            })
+            .ok_or(flui_view::NavigationRefused::NoUrlOwner)?;
+        // The build-owner read guard and the slot's RefCell borrow both ended
+        // while cloning `owner`; owner code may reenter this runtime.
+        owner.navigate(intent)
+    }
+
     /// Current presentation incarnation.
     #[must_use]
     pub fn presentation_id(&self) -> PresentationId {
@@ -47,14 +78,8 @@ impl UiRuntime {
     }
 
     /// True if `id` names this UI runtime's ONLY currently-hosted presentation.
-    ///
-    /// `runner.rs`'s `RuntimeTask::ClosePresentation` handling reads this
-    /// BEFORE calling [`Self::close_presentation_entered`]: closing the
-    /// UI runtime's sole presentation would leave the forest empty, and every
-    /// other method on this UI runtime (`widgets()`, `presentation_id()`, a
-    /// future frame pump) assumes `PresentationForest::primary()` always
-    /// resolves — closing the last presentation is closing the UI runtime, and
-    /// must route there instead (see that match arm's own doc).
+    /// Closing that presentation closes the UI runtime rather than leaving an
+    /// empty forest whose `PresentationForest::primary()` cannot resolve.
     #[must_use]
     pub fn is_sole_presentation(&self, id: PresentationId) -> bool {
         self.presentations.len() == 1 && self.presentations.get(id).is_some()
@@ -73,10 +98,9 @@ impl UiRuntime {
     /// shift produces: if `id` is the CURRENT primary, the new primary is
     /// whichever presentation is next in mount order; otherwise removing
     /// `id` cannot move index 0 at all, so the primary is unchanged.
-    /// `None` only if `id` names the UI runtime's only presentation — unreachable
-    /// from that same dispatch handling, which checks
-    /// [`Self::is_sole_presentation`] first and never reaches this call in
-    /// that case.
+    /// `None` if `id` names the UI runtime's only presentation;
+    /// `OwnerCore::close_presentation` (`owner/close.rs`) uses that case to
+    /// retire the whole UI runtime.
     #[must_use]
     pub fn primary_id_excluding(&self, id: PresentationId) -> Option<PresentationId> {
         if self.presentations.primary().id() != id {
@@ -137,7 +161,7 @@ impl UiRuntime {
     /// installing it into the forest yet. Deliberately split from
     /// [`Self::install_presentation`] below: a caller that must register a
     /// `WindowRegistry` mapping before this presentation is safely
-    /// dispatchable (`runner.rs::install_presentation_alongside`) can do so
+    /// dispatchable (`flui-app`'s `runner/owner_dispatch.rs::prepare_presentation_alongside`) can do so
     /// BETWEEN assembly and installation — if registration fails, the
     /// assembled-but-never-installed `PresentationState` is simply dropped
     /// (no forest membership to roll back; its construction has no
@@ -176,7 +200,7 @@ impl UiRuntime {
     /// `assemble_presentation` and this call) — `UiRuntime` has no access to
     /// that registry (ADR-0037 §2), exactly the same split
     /// [`Self::close_presentation_entered`]'s own doc states for teardown.
-    /// `runner.rs::install_presentation_alongside` is that caller in
+    /// `flui-app`'s `runner/owner_dispatch.rs::prepare_presentation_alongside` is that caller in
     /// production; `Self::install_second_presentation_for_test`
     /// (`cfg(test)`-only, no stable link target in a non-test doc build) is
     /// the test-only counterpart for `UiRuntime`-only tests that never touch
@@ -302,14 +326,12 @@ impl UiRuntime {
     }
 
     /// [`Self::install_presentation`], with a throwaway test window — for
-    /// `UiRuntime`-only tests (this module's own `mod tests`, plus
-    /// `runner.rs`'s dispatch-seam tests) that exercise a genuine
-    /// multi-presentation UI runtime WITHOUT ever touching `AppRuntime`'s
-    /// `WindowRegistry` — that layer is a different module's own test
-    /// concern (`runner.rs`'s `install_presentation_alongside`, exercised by
-    /// the three tests that need a REAL window mapping for the second
-    /// presentation). `pub(crate)` so `runner.rs`'s own tests that only need
-    /// forest membership, never registry routing, can still use it.
+    /// `UiRuntime`-only tests in this module and `owner/presentation_dispatch.rs`
+    /// that exercise a genuine multi-presentation UI runtime without touching
+    /// `AppRuntime`'s `WindowRegistry`. Native registry routing is covered by
+    /// `flui-app`'s `runner/owner_dispatch.rs` tests; their
+    /// `install_presentation_alongside` fixture installs a real window mapping.
+    /// `pub(crate)` so the owner tests that need only forest membership can use it.
     #[cfg(test)]
     pub(crate) fn install_second_presentation_for_test(&mut self) -> PresentationId {
         let window: Rc<dyn flui_platform::PlatformWindow> =
@@ -328,9 +350,8 @@ impl UiRuntime {
     }
 
     /// Whether `id`'s own [`FrameClock`](flui_scheduler::FrameClock) is
-    /// currently marked hidden — for
-    /// the isolation suite (`runner.rs`) proving `WindowVisibility` events
-    /// gate exactly the presentation they were addressed to, never a
+    /// currently marked hidden — for isolation tests proving `WindowVisibility`
+    /// observations gate exactly the presentation they address, never a
     /// sibling's. `None` if `id` is not resident (already closed, or a
     /// forged/mixed address).
     #[cfg(any(test, feature = "testing"))]
@@ -378,20 +399,18 @@ impl UiRuntime {
     }
 
     /// The primary presentation's own `FrameClock::produced_count` — for
-    /// tests in a sibling module (`runner.rs`) that need to observe the
-    /// clock's produce count without reaching into the private
-    /// `presentations` field directly.
+    /// tests that need to observe the clock's produce count without reaching
+    /// into the private `presentations` field directly.
     #[cfg(any(test, feature = "testing"))]
     #[must_use]
     pub fn primary_produced_count_for_test(&self) -> u64 {
         self.presentations.primary().clock().produced_count()
     }
 
-    /// This UI runtime's own scheduler — the strong root. `runner.rs`'s
-    /// UI runtime-scoped lifecycle sites (`UiRuntime::update_host_lifecycle`, the
-    /// per-backend frame pumps) read through here instead of a process-global
-    /// singleton; see [`Self::scheduler`]'s field doc for the ownership
-    /// story.
+    /// This UI runtime's own scheduler — the strong root. Owner operation
+    /// implementations and per-backend frame pumps read through here instead
+    /// of a process-global singleton; see [`Self::scheduler`]'s field doc for
+    /// the ownership story.
     #[must_use]
     pub fn scheduler(&self) -> &flui_scheduler::UpdateScheduler {
         &self.scheduler
@@ -640,9 +659,9 @@ impl UiRuntime {
 
     /// Gate `presentation_id`'s own
     /// [`FrameClock`](flui_scheduler::FrameClock) on a real visibility
-    /// signal — the presentation-level counterpart of the
-    /// UI runtime-wide `AppLifecycleState` derivation
-    /// `PlatformToUi::WindowVisibility` (`runner.rs`) also drives. A stale
+    /// signal — the presentation-level counterpart of the UI runtime-wide
+    /// `AppLifecycleState` derivation also driven by `flui-app`'s
+    /// `RuntimeEvent::WindowVisibility` (`runner/owner_dispatch.rs`). A stale
     /// or unknown `presentation_id` (already closed, or a forged/mixed
     /// address) is a
     /// traced no-op, matching [`Self::notify_presentation_focus_gained`]'s
@@ -682,17 +701,13 @@ impl UiRuntime {
 
     /// Close and remove exactly one presentation from this UI runtime's forest.
     ///
-    /// Called from `runner.rs`'s `dispatch_platform_ui_runtime` loop, which
-    /// special-cases `RuntimeTask::ClosePresentation` to call this with
-    /// `&mut self` directly (the UI runtime sits checked out of `AppRuntime`'s
-    /// registry as an owned local at that point, so `&mut` is naturally
-    /// available — no other caller reaches this method). That same
-    /// dispatch has ALREADY set `dispatched_ui_runtime_id` for the whole
-    /// checkout, so a dispose callback this method's own step 3 runs is
-    /// covered by the identical TLS deferral guard every other UI runtime-map
-    /// mutation already respects: one deferral authority, not a second one
-    /// to keep in sync with it. See `runner.rs::close_presentation` for the
-    /// request-shaped public entry point (`enqueue + wake`) that gets here.
+    /// Typed owner close reaches this through
+    /// `Self::close_presentation_after_failure` from
+    /// `OwnerCore::close_presentation` (`owner/close.rs`), with the UI runtime
+    /// checked out and `&mut self` available. The native entry point is
+    /// `dispatch_platform_ui_runtime` in `flui-app`'s
+    /// `runner/owner_dispatch.rs`; its `close_presentation` helper admits the
+    /// addressed close through the owner FIFO.
     ///
     /// A no-op (returns `false`) if `id` does not name a presentation this
     /// UI runtime currently hosts.
@@ -702,20 +717,16 @@ impl UiRuntime {
     /// 1. **Unregistering this presentation's window mapping from the
     ///    process-wide `WindowRegistry` is NOT this method's job.**
     ///    `UiRuntime` has no access to that registry (`AppRuntime`-owned,
-    ///    ADR-0037 §2's single authority) — the caller must have already
-    ///    removed the registry entry before calling this. The real (and
-    ///    today's only) caller is `dispatch_platform_ui_runtime`'s
-    ///    `RuntimeTask::ClosePresentation` handling in `runner.rs`, NOT
-    ///    `AppRuntime`'s UI runtime-teardown path (`apply_uninstall`/
-    ///    `teardown_platform_ui_runtime` close a WHOLE UI runtime and never call this
-    ///    method at all — a UI runtime's own `Drop` closes every remaining
-    ///    presentation directly). That dispatch handling unregisters this
-    ///    exact presentation's own window mapping first when a SIBLING
-    ///    presentation is staying open, and routes to a full UI runtime
-    ///    uninstall instead of calling this method at all when `id` names
-    ///    the UI runtime's only presentation (seeing [`Self::is_sole_presentation`]
-    ///    return `true`) — this method's own contract never has to reason
-    ///    about leaving the forest empty.
+    ///    ADR-0037 §2's single authority). `flui-app`'s
+    ///    `dispatch_platform_ui_runtime` fences native routing before typed
+    ///    close delivery, and `OwnerCore::close_presentation` (`owner/close.rs`)
+    ///    retires the native presentation before terminal observers. When a
+    ///    sibling survives, that owner calls this method through
+    ///    `Self::close_presentation_after_failure`; when none survives, it
+    ///    stops the whole UI runtime instead. `AppRuntime`'s whole-runtime
+    ///    teardown (`apply_uninstall`/`teardown_platform_ui_runtime`) does not
+    ///    call this method — a UI runtime's own `Drop` closes every remaining
+    ///    presentation directly.
     /// 2. IME detach + focus deactivate — `PresentationState::close`'s
     ///    first half.
     /// 3. `detach_root_widget` through this exact presentation's own

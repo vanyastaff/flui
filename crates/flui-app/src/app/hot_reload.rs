@@ -1,4 +1,4 @@
-//! The host half of the development-reload seam (ADR-0094 §1).
+//! The host half of the development-reload seam (ADR-0311).
 //!
 //! `flui-app` names no reload tool. An application that wants hot reload
 //! installs a [`DevReloadHook`] on its configuration

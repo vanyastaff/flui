@@ -359,7 +359,7 @@ where
     {
         let _ = (root, launch);
         panic!(
-            "On Android, use flui_app::run_app_android() from android_main() \
+            "On Android, use flui::native::android::run_app_android() from android_main() \
              instead of run_app(). AndroidApp must be provided by the system."
         );
     }

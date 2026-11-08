@@ -797,7 +797,7 @@ impl DecodedImages {
             )]
             Some(
                 std::panic::catch_unwind(AssertUnwindSafe(|| {
-                    crate::assets::image::decode_rgba8(&label, &bytes)
+                    super::decode::decode_rgba8(&label, &bytes)
                 }))
                 .unwrap_or_else(|_| {
                     Err(AssetError::DecodeFailed {

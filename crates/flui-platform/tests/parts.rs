@@ -7,12 +7,13 @@ use std::time::Duration;
 
 use flui_foundation::geometry::{Bounds, DeviceSize, EdgeInsets, Point, Size, WindowMetrics};
 use flui_platform::{
-    AppTitleBar, Availability, CapabilitiesOwner, CapabilityAbsence, ColorGamut, DisplayColor,
-    DisplayInfo, DisplayKey, DisplayRegistry, GesturePreferences, HourCycle, KeyboardInset, Locale,
-    MeasurementSystem, MotionPreference, NumberingSystem, RegionOverride, RegionalFormats,
-    SizeConstraints, SystemPreferences, TextWeightPreference, Weekday, WheelPreferences, WheelStep,
-    WindowAppearance, WindowCapabilities, WindowCommand, WindowExecutionState, WindowFrame,
-    WindowGeometry, WindowInsets, WindowMaterial, WindowMode, WindowState,
+    AppTitleBar, Availability, CapabilitiesOwner, ColorGamut, DisplayColor, DisplayInfo,
+    DisplayKey, DisplayRegistry, GesturePreferences, HourCycle, InvalidCapabilityReason,
+    KeyboardInset, Locale, MeasurementSystem, MotionPreference, NumberingSystem, RegionOverride,
+    RegionalFormats, SizeConstraints, SystemPreferences, TextWeightPreference, Unsupported,
+    UnsupportedReason, Weekday, WheelPreferences, WheelStep, WindowAppearance, WindowCapabilities,
+    WindowCommand, WindowExecutionState, WindowFrame, WindowGeometry, WindowInsets, WindowMaterial,
+    WindowMode, WindowState,
 };
 
 fn preferences_round_trip_through_their_parts() {
@@ -71,7 +72,10 @@ fn a_display_round_trips_through_its_parts() {
     .with_persistent_key("studio")
     .with_color(Ok(DisplayColor::high(
         ColorGamut::DisplayP3,
-        Err(CapabilityAbsence::NotOnThisDevice),
+        Err(Unsupported::named(
+            "display.headroom",
+            UnsupportedReason::NotOnThisDevice,
+        )),
     )));
     let (taken, parts) = display.clone().into_parts();
     assert_eq!(taken, id);
@@ -81,10 +85,10 @@ fn a_display_round_trips_through_its_parts() {
 fn a_window_state_round_trips_through_its_parts() {
     let material = WindowCommand::SetMaterial(WindowMaterial::System);
     let capabilities = WindowCapabilities::ALL
-        .unavailable(&material, CapabilityAbsence::NotYetOnThisHost)
-        .without_presentation_feedback(CapabilityAbsence::NotOnThisDevice)
-        .without_keyboard_inset(CapabilityAbsence::NotOnThisPlatform)
-        .without_system_gestures(CapabilityAbsence::NotYetOnThisHost);
+        .unavailable_not_yet_on_this_host(&material)
+        .without_presentation_feedback_on_this_device()
+        .without_keyboard_inset()
+        .without_system_gestures_not_yet_on_this_host();
     let metrics = WindowMetrics::try_new(DeviceSize::new(1600, 1200), 2.0).expect("valid");
     let state = WindowState::new(
         WindowGeometry::new(Some(Point::new(10.0, 20.0)), Size::new(820.0, 640.0)),
@@ -117,15 +121,15 @@ fn a_window_state_round_trips_through_its_parts() {
     let parts = state.clone().into_parts();
     assert_eq!(
         parts.capabilities.material,
-        Err(CapabilityAbsence::NotYetOnThisHost)
+        Err(UnsupportedReason::NotYetOnThisHost)
     );
     assert_eq!(
         parts.capabilities.reports_presentation,
-        Err(CapabilityAbsence::NotOnThisDevice)
+        Err(UnsupportedReason::NotOnThisDevice)
     );
     assert_eq!(
         parts.capabilities.reports_system_gestures,
-        Err(CapabilityAbsence::NotYetOnThisHost)
+        Err(UnsupportedReason::NotYetOnThisHost)
     );
     assert_eq!(
         state
@@ -135,7 +139,7 @@ fn a_window_state_round_trips_through_its_parts() {
         Err(flui_platform::UnsupportedReason::NotOnThisPlatform)
     );
     assert_eq!(parts.capabilities.sets_title, Ok(Availability::Native));
-    assert_eq!(parts.into_state(), state);
+    assert_eq!(parts.try_into_state(), Ok(state));
 }
 
 fn parts_leave_the_revision_and_owner_to_the_publishing_window() {
@@ -148,13 +152,39 @@ fn parts_leave_the_revision_and_owner_to_the_publishing_window() {
     let published = first
         .successor(first.clone().with_focused(true))
         .expect("a revision is left");
-    let sample = published.clone().into_parts().into_state();
+    let sample = published
+        .clone()
+        .into_parts()
+        .try_into_state()
+        .expect("lasting capability reasons");
     assert_eq!(sample.revision.get(), 0, "a sample carries no revision");
     let again = published.successor(sample).expect("a revision is left");
     assert_eq!(
         again.revision, published.revision,
         "the sample of a published snapshot is no change to it"
     );
+}
+
+fn capability_parts_refuse_every_non_lasting_reason() {
+    for reason in [
+        UnsupportedReason::NotDeclared {
+            what: "a permission",
+        },
+        UnsupportedReason::Unavailable,
+        UnsupportedReason::NotRegistered,
+        UnsupportedReason::NoWindow,
+    ] {
+        let mut parts = WindowCapabilities::ALL.into_parts();
+        parts.sets_title = Err(reason);
+        let error = parts
+            .try_into_capabilities()
+            .expect_err("a transient reason cannot enter a snapshot");
+        assert_eq!(error, InvalidCapabilityReason(reason));
+        assert_eq!(
+            error.to_string(),
+            format!("a window capability cannot have this non-lasting reason: {reason}")
+        );
+    }
 }
 
 #[test]
@@ -181,6 +211,10 @@ fn parts_table() {
             (
                 "parts_leave_the_revision_and_owner_to_the_publishing_window",
                 parts_leave_the_revision_and_owner_to_the_publishing_window as fn(),
+            ),
+            (
+                "capability_parts_refuse_every_non_lasting_reason",
+                capability_parts_refuse_every_non_lasting_reason as fn(),
             ),
         ],
     );

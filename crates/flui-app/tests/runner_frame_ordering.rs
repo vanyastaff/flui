@@ -202,10 +202,9 @@ fn every_background_wake_calls_pump_background() {
 /// Red-check: revert any native bootstrap to `Arc<Mutex<Renderer>>` +
 /// `DirectSink` and the corresponding count here breaks.
 fn native_frame_sites_drive_the_raster_mailbox_not_the_direct_backend() {
-    // `main` split the flat `runner.rs` into the `runner/` module, so this
-    // pin scans every file in it (the shared `RUNNER_SOURCES` list) rather
-    // than one path — otherwise a native site that moved between submodules
-    // would drop out of the count silently.
+    // Scan every file in `runner/` (the shared `RUNNER_SOURCES` list) rather
+    // than one path, so a native site that moves between submodules cannot
+    // drop out of the count silently.
     let code_lines: Vec<&str> = RUNNER_SOURCES
         .iter()
         .flat_map(|source| production_lines(source))

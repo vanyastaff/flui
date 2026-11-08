@@ -69,18 +69,21 @@ pub(crate) trait ViewTransfer: flui_platform::data_transfer::DragTransport {
         result: bool,
     ) -> bool;
 
-    /// The drop at `position`, whose clip carried `text`, `html` and `uris`:
-    /// the key of the offer the drop holds, which the view hands back, or 0
-    /// when the drop is refused.
+    /// The hovering offer's key, under which the view saves its clip before
+    /// the drop can wake the owner, or zero when no offer hovers.
+    fn hover_key(&self) -> i64;
+
+    /// The drop at `position` of the clip saved under `key`, described by
+    /// `descriptors`: whether the target took it. Payload items do not cross
+    /// this callback; `DragTransport::request` reads them lazily from the view.
     fn drop_clip(
         &self,
         view: &JavaView,
+        key: i64,
         position: (f64, f64),
         local: bool,
-        text: Option<String>,
-        html: Option<String>,
-        uris: Vec<String>,
-    ) -> i64;
+        descriptors: &[String],
+    ) -> bool;
 
     /// FLUI's own drag, which the view runs, advertises `allowed` to a target
     /// of this activity, or has ended (`None`).
@@ -657,8 +660,13 @@ fn register_natives(env: &mut Env<'_>, class: &JClass<'_>) -> jni::errors::Resul
                 native_drag as *mut std::ffi::c_void,
             ),
             NativeMethod::from_raw_parts(
+                jni_str!("nativeDropOffer"),
+                jni_str!("(J)J"),
+                native_drop_offer as *mut std::ffi::c_void,
+            ),
+            NativeMethod::from_raw_parts(
                 jni_str!("nativeDrop"),
-                jni_str!("(JFFZLjava/lang/String;Ljava/lang/String;[Ljava/lang/String;)J"),
+                jni_str!("(JJFFZ[Ljava/lang/String;)Z"),
                 native_drop as *mut std::ffi::c_void,
             ),
             NativeMethod::from_raw_parts(
@@ -797,41 +805,43 @@ extern "system" fn native_drag<'local>(
     })
 }
 
+extern "system" fn native_drop_offer<'local>(
+    _env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    handle: jlong,
+) -> jlong {
+    jni_native("nativeDropOffer", || {
+        bridge(handle).map_or(0, |view| view.transfer.hover_key())
+    })
+}
+
 extern "system" fn native_drop<'local>(
     mut env: EnvUnowned<'local>,
     _class: JClass<'local>,
     handle: jlong,
+    key: jlong,
     x: jfloat,
     y: jfloat,
     local: jboolean,
-    text: JString<'local>,
-    html: JString<'local>,
-    uris: JObjectArray<'local>,
-) -> jlong {
+    descriptors: JObjectArray<'local>,
+) -> jboolean {
     jni_native("nativeDrop", || {
         let Some(view) = bridge(handle) else {
-            return 0;
+            return false;
         };
-        let read = env
-            .with_env(|env| -> jni::errors::Result<_> {
-                Ok((
-                    string(env, &text)?,
-                    string(env, &html)?,
-                    strings(env, &uris)?,
-                ))
-            })
+        let descriptors = env
+            .with_env(|env| strings(env, &descriptors))
             .into_outcome();
-        let jni::Outcome::Ok((text, html, uris)) = read else {
-            return 0;
+        let jni::Outcome::Ok(descriptors) = descriptors else {
+            return false;
         };
         let scale = view.scale();
         view.transfer.drop_clip(
             &view,
+            key,
             (f64::from(x) / scale, f64::from(y) / scale),
             local,
-            text,
-            html,
-            uris,
+            &descriptors,
         )
     })
 }

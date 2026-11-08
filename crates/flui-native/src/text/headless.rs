@@ -1,115 +1,60 @@
-//! The headless host's text input: a recorder of the IME requests a window's
-//! presentation sends, and the text-store host a test makes its windows offer.
+//! The headless host's text input: a no-op production sink, an opt-in call
+//! recorder for tests, and the text-store host a test makes its windows offer.
 
 use std::rc::Rc;
 use std::sync::Arc;
 
-use flui_foundation::geometry::Bounds;
 use flui_platform::PlatformTextInput;
 use flui_platform::text_store::TextStoreHost;
-use parking_lot::Mutex;
 
 use super::WindowTextInput;
 use crate::host::Host;
 use crate::owner::headless::HeadlessLoop;
 use crate::platform::HostPlatform;
 
-/// Recording fake for [`PlatformTextInput`], backing the headless backend's
-/// [`PlatformWindow::text_input`](flui_platform::PlatformWindow::text_input).
-///
-/// Every `set_ime_allowed`/`set_ime_cursor_area` call is appended to an
-/// in-memory history so a test can assert exactly what a presentation-owned
-/// text-input session told the platform to do, rather than only that the call
-/// didn't panic.
-#[derive(Default)]
-pub struct FakeTextInput {
-    state: Mutex<FakeTextInputState>,
+/// The production headless text-input sink. It retains no request history.
+#[derive(Debug, Default)]
+pub struct HeadlessTextInput;
+
+macro_rules! impl_headless_text_input {
+    ($type:ty) => {
+        impl super::TextInput for Arc<$type> {
+            fn window_text_input(&self) -> Option<WindowTextInput> {
+                Some(WindowTextInput::Ime(
+                    Arc::clone(self) as Arc<dyn PlatformTextInput>
+                ))
+            }
+
+            fn capture_sizing(
+                &self,
+            ) -> Result<crate::TextSizingCaptureState, crate::TextSizingCaptureError> {
+                Ok(crate::TextSizingCaptureState::Unsupported)
+            }
+
+            fn invalidate_sizing(&self) {}
+
+            fn fence_sizing(&self) {}
+
+            fn detach(&self) {}
+        }
+    };
 }
 
-#[derive(Default, Clone)]
-struct FakeTextInputState {
-    ime_allowed_calls: Vec<bool>,
-    cursor_area_calls: Vec<Bounds<f64>>,
-}
+impl_headless_text_input!(HeadlessTextInput);
 
-impl FakeTextInput {
-    /// Create a fresh recorder with no recorded calls.
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
-    }
+impl PlatformTextInput for HeadlessTextInput {
+    fn set_ime_allowed(&self, _: bool) {}
 
-    /// Every `set_ime_allowed` call, in delivery order.
-    #[must_use]
-    pub fn ime_allowed_calls(&self) -> Vec<bool> {
-        self.state.lock().ime_allowed_calls.clone()
-    }
+    fn set_ime_cursor_area(&self, _: flui_foundation::geometry::Bounds<f64>) {}
 
-    /// The most recent `set_ime_allowed` call, if any.
-    #[must_use]
-    pub fn last_ime_allowed(&self) -> Option<bool> {
-        self.state.lock().ime_allowed_calls.last().copied()
-    }
+    fn set_field_status(&self, _: flui_platform::text_store::TextStoreStatus) {}
 
-    /// Every `set_ime_cursor_area` call, in delivery order.
-    #[must_use]
-    pub fn cursor_area_calls(&self) -> Vec<Bounds<f64>> {
-        self.state.lock().cursor_area_calls.clone()
-    }
-}
-
-impl std::fmt::Debug for FakeTextInput {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let state = self.state.lock();
-        f.debug_struct("FakeTextInput")
-            .field("ime_allowed_calls", &state.ime_allowed_calls)
-            .field("cursor_area_calls", &state.cursor_area_calls)
-            .finish()
-    }
-}
-
-impl PlatformTextInput for FakeTextInput {
-    fn set_ime_allowed(&self, allowed: bool) {
-        self.state.lock().ime_allowed_calls.push(allowed);
-    }
-
-    fn set_ime_cursor_area(&self, area: Bounds<f64>) {
-        self.state.lock().cursor_area_calls.push(area);
-    }
-
-    /// No input method learns from or shows a headless window's field.
-    fn set_field_status(&self, _status: flui_platform::text_store::TextStoreStatus) {}
-
-    /// No input method composes in a headless window.
     fn discard_composition(&self) {}
 }
 
-impl super::TextInput for Arc<FakeTextInput> {
-    fn window_text_input(&self) -> Option<WindowTextInput> {
-        Some(WindowTextInput::Ime(
-            Arc::clone(self) as Arc<dyn PlatformTextInput>
-        ))
-    }
-
-    fn capture_sizing(
-        &self,
-    ) -> Result<crate::TextSizingCaptureState, crate::TextSizingCaptureError> {
-        Ok(crate::TextSizingCaptureState::Unsupported)
-    }
-
-    /// The headless text size is linear: nothing is captured.
-    fn invalidate_sizing(&self) {}
-
-    fn fence_sizing(&self) {}
-
-    /// The recorder put nothing on its window.
-    fn detach(&self) {}
-}
-
-/// Each headless window gets a recorder of its own.
-impl crate::host::Text<()> for FakeTextInput {
+impl crate::host::Text<()> for HeadlessTextInput {
     fn for_window((): &()) -> Arc<dyn super::TextInput> {
-        Arc::new(Arc::new(Self::new()))
+        Arc::new(Arc::new(Self))
     }
 }
 

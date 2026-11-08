@@ -7,7 +7,7 @@
 //! then drives a real headless frame and exposes the resulting render-node
 //! geometry. The tree is the root of a [`HeadlessHost`](crate::HeadlessHost):
 //! every frame is the UI runtime's own `UiRuntime::pump` on a manual clock, under
-//! the UI runtime's root scopes (`GestureArenaScope`, `VsyncScope`, `FocusRoot`,
+//! the UI runtime's root scopes (`GestureArenaScope`, `VsyncScope`, `FocusTreeRoot`,
 //! `MediaQuery`), exactly as a runner drives it on screen. No GPU, no OS
 //! window, no process-global state, so the tests are order-independent and
 //! run in parallel.
@@ -674,13 +674,16 @@ impl LaidOut {
         host.move_to_display(window, display);
     }
 
-    /// The listener the UI runtime registered on its window for actions assistive
-    /// technology requests; see
-    /// [`HeadlessHost::accessibility_action_listener`](crate::HeadlessHost::accessibility_action_listener).
-    pub fn accessibility_action_listener(
-        &self,
-    ) -> Option<flui_semantics::platform::AccessibilityActionListener> {
-        self.host.ui_runtime().accessibility_action_listener()
+    /// Request an accessibility action through the handler the UI runtime
+    /// registered on its window; see
+    /// [`HeadlessHost::request_accessibility_action`](crate::HeadlessHost::request_accessibility_action).
+    ///
+    /// # Panics
+    ///
+    /// Before the UI runtime registered its handler, which it does as the
+    /// window opens.
+    pub fn request_accessibility_action(&self, request: accesskit::ActionRequest) {
+        self.host.ui_runtime().request_accessibility_action(request);
     }
 
     /// The current render id of the root widget's render object.

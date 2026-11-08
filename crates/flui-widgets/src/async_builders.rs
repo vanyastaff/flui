@@ -19,8 +19,8 @@
 //! seam and its documented limits.
 
 pub use flui_view::element::{
-    BoxedResultFuture, BoxedResultStream, FutureBuilder, FutureFactory, InitialDataFactory,
-    SnapshotBuilder, StreamBuilder, StreamFactory,
+    AsyncSnapshot, BoxedResultFuture, BoxedResultStream, FutureBuilder, FutureFactory,
+    InitialDataFactory, SnapshotBuilder, StreamBuilder, StreamFactory,
 };
 /// The `Stream` trait a [`StreamBuilder`] consumes.
 ///

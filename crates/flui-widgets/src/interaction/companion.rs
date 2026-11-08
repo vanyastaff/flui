@@ -147,7 +147,8 @@ impl<I: Intent> LinkedCompanions for Registry<I> {
 /// companions.
 ///
 /// ```
-/// use flui_widgets::{CompanionLink, PageIntent, SemanticsAnchor};
+/// use flui_rendering::semantics::SemanticsAnchor;
+/// use flui_widgets::{CompanionLink, PageIntent};
 ///
 /// let link = CompanionLink::<PageIntent>::new();
 /// let next_page = SemanticsAnchor::new();

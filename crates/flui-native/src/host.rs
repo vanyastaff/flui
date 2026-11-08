@@ -35,7 +35,7 @@
 
 mod clipboard;
 
-#[cfg(any(windows, wayland_host, x11_host))]
+#[cfg(any(wayland_host, x11_host))]
 pub(crate) use clipboard::MAX_TEXT;
 #[cfg(any(
     target_os = "android",
@@ -44,6 +44,12 @@ pub(crate) use clipboard::MAX_TEXT;
     target_arch = "wasm32"
 ))]
 pub(crate) use clipboard::admit_utf16;
+#[cfg(target_os = "android")]
+pub(crate) use clipboard::admit_utf16_units;
+#[cfg(target_os = "android")]
+pub(crate) use clipboard::decoded_mutf8_len;
+#[cfg(any(windows, target_arch = "wasm32"))]
+pub(crate) use clipboard::decoded_utf16_len;
 #[cfg(any(
     windows,
     target_os = "android",
@@ -73,7 +79,8 @@ use flui_platform::{
     WindowCapabilities, WindowHandler, WindowId, WindowOptions,
 };
 use flui_semantics::platform::{
-    AccessibilityActionListener, AccessibilityActivationListener, PlatformAccessibility,
+    AccessibilityAlreadyAttached, AccessibilityAttachment, AccessibilityCapabilities,
+    AccessibilityHandler, PlatformAccessibility, RouteChange,
 };
 
 use crate::error::PlatformError;
@@ -539,21 +546,21 @@ impl PlatformAccessibility for Absent<position::Accessibility> {
         drop(update);
     }
 
-    fn is_active(&self) -> bool {
-        false
+    fn attach(
+        &self,
+        handler: Arc<dyn AccessibilityHandler>,
+    ) -> Result<AccessibilityAttachment, AccessibilityAlreadyAttached> {
+        drop(handler);
+        Ok(AccessibilityAttachment::new(
+            false,
+            AccessibilityCapabilities::NONE,
+        ))
     }
 
-    fn set_activation_listener(&self, listener: AccessibilityActivationListener) {
-        drop(listener);
-    }
+    fn detach_handler(&self) {}
 
-    fn set_action_listener(&self, listener: AccessibilityActionListener) {
-        drop(listener);
-    }
-
-    /// No adapter, no cursor to report.
-    fn assistive_focus_support(&self) -> flui_semantics::AssistiveFocusSupport {
-        flui_semantics::AssistiveFocusSupport::Unreported
+    fn route_changed(&self, change: RouteChange) {
+        drop(change);
     }
 }
 

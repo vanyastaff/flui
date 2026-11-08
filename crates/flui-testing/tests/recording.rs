@@ -635,8 +635,7 @@ fn set_password(host: &mut HeadlessHost, text: &str) {
         .find(|node| node.supports_action(accesskit::Action::SetValue))
         .expect("the password field takes SetValue")
         .id();
-    host.accessibility_action_listener()
-        .expect("platform listener")(accesskit::ActionRequest {
+    host.request_accessibility_action(accesskit::ActionRequest {
         action: accesskit::Action::SetValue,
         target_tree: accesskit::TreeId::ROOT,
         target_node: field,

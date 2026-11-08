@@ -1218,7 +1218,9 @@ fn a_provider_that_panicked_is_dropped_and_not_called_again() {
     });
     let data = data_object(session);
     for _ in 0..2 {
-        assert!(super::fetch(&data, &NativeFormat::UnicodeText, 1 << 20).is_err());
+        assert!(
+            super::fetch(&data, &NativeFormat::UnicodeText, TransferLimits::default()).is_err()
+        );
     }
     assert_eq!(calls.get(), 1, "the panicked provider was called again");
     drop(data);

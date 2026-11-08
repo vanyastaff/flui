@@ -138,7 +138,11 @@ fn options(token: &str) -> Options {
 
 fn launch_error(error: PortalError) -> LaunchError {
     match error {
-        PortalError::Unavailable(reason) => LaunchError::Unavailable(reason),
+        PortalError::Unsupported(unsupported) => {
+            LaunchError::from(flui_platform::Unsupported::of::<
+                flui_platform::launch::LauncherCapability,
+            >(unsupported.reason))
+        }
         PortalError::Failed => LaunchError::Failed { code: 0 },
     }
 }

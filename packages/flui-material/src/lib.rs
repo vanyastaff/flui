@@ -172,9 +172,34 @@ pub use text_theme::TextTheme;
 pub use theme::{AnimatedTheme, Theme};
 pub use theme_data::{
     AppBarThemeData, CardThemeData, CarouselViewThemeData, CheckboxThemeData, ChipThemeData,
-    DataTableThemeData, DialogThemeData, DividerThemeData, ElevatedButtonThemeData, FabThemeData,
-    FilledButtonThemeData, IconButtonThemeData, InputDecorationThemeData, ListTileThemeData,
-    MaterialStyle, NavigationBarThemeData, OutlinedButtonThemeData, RadioThemeData,
-    SwitchThemeData, TabBarThemeData, TextButtonThemeData, ThemeData, ThemeDataOverrides,
+    ComponentTheme, DataTableThemeData, DialogThemeData, DividerThemeData, ElevatedButtonThemeData,
+    FabThemeData, FilledButtonThemeData, IconButtonThemeData, InputDecorationThemeData,
+    ListTileThemeData, MaterialStyle, NavigationBarThemeData, OutlinedButtonThemeData,
+    RadioThemeData, SwitchThemeData, TabBarThemeData, TextButtonThemeData, ThemeData,
+    ThemeDataOverrides,
 };
 pub use typography::english_like_2021;
+
+/// The everyday Material catalog for glob import beside `flui::prelude` or
+/// `flui_sdk::widgets::prelude`.
+///
+/// This module answers "what does an ordinary Material screen touch", not
+/// "what does this crate export". It includes theming, the app shell, standard
+/// buttons, and common data-display, feedback and navigation widgets. Advanced
+/// component themes, state handles and the raw M3 type-scale table remain at
+/// their owning paths.
+///
+/// The design-neutral field types are named `RawTextField` and
+/// `RawTextFormField`, so importing both preludes leaves [`TextField`] and
+/// [`TextFormField`] unambiguous.
+pub mod prelude {
+    pub use crate::{
+        AlertDialog, AppBar, BackButton, Card, Checkbox, Chip, ColorScheme, DefaultTabController,
+        Dialog, Divider, Drawer, ElevatedButton, FilledButton, FilterChip, FloatingActionButton,
+        IconButton, InkWell, ListTile, Material, MaterialApp, NavigationBar, NavigationDestination,
+        OutlinedButton, Radio, Scaffold, ScaffoldMessenger, ScaffoldMessengerHandle,
+        ScaffoldMessengerScope, SnackBar, Switch, Tab, TabBar, TabBarView, TabController,
+        TextButton, TextField, TextFormField, TextTheme, Theme, ThemeData, ThemeMode,
+        VerticalDivider, show_dialog,
+    };
+}

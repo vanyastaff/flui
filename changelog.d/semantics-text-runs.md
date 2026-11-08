@@ -4,7 +4,7 @@
   word and line and follows the caret and selection. The render object that lays out the text
   declares a `TextContent` of `TextRun`s (`SemanticsConfiguration::set_text_content`), checked
   against AccessKit's model by `TextRun::try_new` and `TextContent::try_new`; the pipeline gives
-  each run an identity that lasts while its text does. `TextRunPosition` and `TextRunSelection`
+  each run a stable identity keyed by its field and ordinal. `TextRunPosition` and `TextRunSelection`
   name places in the runs, and `TextContent` converts them to bytes of the value.
 - `Semantics::on_set_text_selection` and `Semantics::on_replace_selected_text`.
 - `SemanticsDiagnostic::TextRunsWithheld`: a field published without its runs and selection,

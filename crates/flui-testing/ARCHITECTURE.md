@@ -3,6 +3,9 @@
 The workspace's test support, placed above the frame runtime and the widget
 catalog (tier K, `order = 6`) so its driver can run the product frame
 transaction ([ADR-0083](../../docs/adr/ADR-0083-one-frame-transaction-in-flui-runtime.md) §4).
+`flui-sdk` sits immediately above it at order 7 and exposes it through the SDK's optional `testing`
+feature, so an official package's tests need no direct internal-crate dependency. That feature is
+off in an ordinary SDK graph; the facade's matching optional feature serves applications.
 Two drivers live here while that move is in progress: `HeadlessHost`, which
 pumps a `flui_runtime::ui_runtime::UiRuntime`, and `HeadlessBinding`, the
 substrate driver over raw owners, which the raw-owner suites still use.
@@ -109,7 +112,7 @@ substrate driver over raw owners, which the raw-owner suites still use.
   tests use only `log_capture`, which names no type of either crate. The
   compiler does not refuse more: a `flui-widgets` unit test could hand
   `widgets::lay_out` a view (the `View` trait lives in `flui-view`, of which
-  there is one copy), and its lookups of `MediaQuery`, `FocusRoot` or
+  there is one copy), and its lookups of `MediaQuery` or
   `VsyncScope` would then silently miss the scopes the UI runtime installed from
   the other copy. Review keeps harness tests in `tests/`.
 - **The UI runtime stays behind its host.** `HeadlessHost::UI runtime` and

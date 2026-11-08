@@ -430,11 +430,11 @@ pub(crate) mod mode {
     pub(crate) fn capabilities_of(
         flags: WindowFlags,
         heading: Option<WindowMode>,
-        every: flui_platform::WindowCapabilities,
+        every: &flui_platform::WindowCapabilities,
     ) -> flui_platform::WindowCapabilities {
         use flui_platform::Availability::Unavailable;
 
-        let mut honoured = every;
+        let mut honoured = *every;
         if !flags.resizable {
             honoured.maximizes = Unavailable;
             honoured.enters_fullscreen = Unavailable;
@@ -1005,7 +1005,7 @@ pub(crate) mod mode {
                 },
             ];
             for expected in rows {
-                let honoured = capabilities_of(flags(expected.flags), None, every);
+                let honoured = capabilities_of(flags(expected.flags), None, &every);
                 let actual = Row {
                     flags: expected.flags,
                     maximizes: honoured.maximizes,
@@ -1030,8 +1030,9 @@ pub(crate) mod mode {
 
             let mut every = WindowCapabilities::NONE;
             every.sets_resizable = Native;
-            let fixed =
-                |flags: WindowFlags, heading| capabilities_of(flags, heading, every).sets_resizable;
+            let fixed = |flags: WindowFlags, heading| {
+                capabilities_of(flags, heading, &every).sets_resizable
+            };
             let now = Instant::now();
 
             let mut sequence = ModeSequence::default();
@@ -1185,7 +1186,7 @@ pub(crate) mod mode {
 
             let mut every = WindowCapabilities::NONE;
             every.sets_resizable = flui_platform::Availability::Native;
-            let honoured = capabilities_of(flags("FR"), Some(Normal), every);
+            let honoured = capabilities_of(flags("FR"), Some(Normal), &every);
             assert_eq!(honoured.sets_resizable, Unavailable);
         }
     }

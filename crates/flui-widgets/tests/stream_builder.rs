@@ -17,13 +17,12 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::task::{Context, Poll, Waker};
 
 use crate::common::{lay_out, loose};
-use flui_foundation::ConnectionState;
 use flui_widgets::Stream;
 use parking_lot::Mutex;
 
 // Exercise the public prelude import path.
 use flui_widgets::prelude::*;
-use flui_widgets::{SizedBox, SnapshotBuilder, StreamFactory};
+use flui_widgets::{AsyncSnapshot, SizedBox, SnapshotBuilder, StreamFactory};
 
 /// Deliberately neither `Clone` nor `Copy`.
 #[derive(Debug, PartialEq)]
@@ -36,10 +35,36 @@ struct Boom(&'static str);
 /// One queued stream event; `None` ends the stream.
 type Event = Option<Result<Payload, Boom>>;
 
+#[derive(Debug, PartialEq, Clone, Copy)]
+enum SnapshotKind {
+    None,
+    Waiting,
+    Active,
+    Done,
+}
+
+fn snapshot_kind<T, E>(snapshot: &AsyncSnapshot<T, E>) -> SnapshotKind {
+    match snapshot {
+        AsyncSnapshot::None(_) => SnapshotKind::None,
+        AsyncSnapshot::Waiting(_) => SnapshotKind::Waiting,
+        AsyncSnapshot::Active(_) => SnapshotKind::Active,
+        AsyncSnapshot::Done(_) => SnapshotKind::Done,
+    }
+}
+
+fn last_result<T, E>(snapshot: &AsyncSnapshot<T, E>) -> Option<&Result<T, E>> {
+    match snapshot {
+        AsyncSnapshot::None(last) | AsyncSnapshot::Waiting(last) | AsyncSnapshot::Done(last) => {
+            last.as_ref()
+        }
+        AsyncSnapshot::Active(result) => Some(result),
+    }
+}
+
 /// What a build observed, flattened so the test can assert without `Clone`.
 #[derive(Debug, PartialEq, Clone, Copy)]
 struct Seen {
-    state: ConnectionState,
+    state: SnapshotKind,
     data: Option<i32>,
     error: Option<&'static str>,
 }
@@ -114,10 +139,15 @@ impl Sender {
 /// Records every snapshot the builder was handed, by reference.
 fn recording_builder(log: Arc<Mutex<Vec<Seen>>>) -> SnapshotBuilder<Payload, Boom> {
     Rc::new(move |_ctx, snapshot| {
+        let result = last_result(snapshot);
         log.lock().push(Seen {
-            state: snapshot.connection_state(),
-            data: snapshot.data().map(|payload| payload.0),
-            error: snapshot.error().map(|boom| boom.0),
+            state: snapshot_kind(snapshot),
+            data: result
+                .and_then(|result| result.as_ref().ok())
+                .map(|payload| payload.0),
+            error: result
+                .and_then(|result| result.as_ref().err())
+                .map(|boom| boom.0),
         });
         SizedBox::new(10.0, 10.0).into_view().boxed()
     })
@@ -129,7 +159,7 @@ fn last(log: &Arc<Mutex<Vec<Seen>>>) -> Seen {
 
 fn active(data: Option<i32>, error: Option<&'static str>) -> Seen {
     Seen {
-        state: ConnectionState::Active,
+        state: SnapshotKind::Active,
         data,
         error,
     }
@@ -137,7 +167,15 @@ fn active(data: Option<i32>, error: Option<&'static str>) -> Seen {
 
 fn waiting(data: Option<i32>, error: Option<&'static str>) -> Seen {
     Seen {
-        state: ConnectionState::Waiting,
+        state: SnapshotKind::Waiting,
+        data,
+        error,
+    }
+}
+
+fn done(data: Option<i32>, error: Option<&'static str>) -> Seen {
+    Seen {
+        state: SnapshotKind::Done,
         data,
         error,
     }
@@ -168,7 +206,7 @@ pub(crate) fn stream_builder_data_error_data_then_done() {
     assert_eq!(
         last(&log),
         active(None, Some("mid")),
-        "after_error clears the stale value"
+        "an error replaces the stale value",
     );
 
     sender.data(2);
@@ -176,18 +214,76 @@ pub(crate) fn stream_builder_data_error_data_then_done() {
     assert_eq!(
         last(&log),
         active(Some(2), None),
-        "after_data clears the stale error"
+        "data replaces the stale error",
     );
 
     sender.end();
     laid.tick();
-    assert_eq!(
-        last(&log),
-        Seen {
-            state: ConnectionState::Done,
-            data: Some(2),
-            error: None
-        },
-        "after_done preserves the last value"
+    assert_eq!(last(&log), done(Some(2), None));
+
+    stream_builder_empty_stream_finishes_without_a_result();
+    stream_builder_error_is_preserved_by_done();
+    stream_builder_coalesced_events_leave_the_latest_result();
+}
+
+fn stream_builder_empty_stream_finishes_without_a_result() {
+    let log = Arc::new(Mutex::new(Vec::new()));
+    let sender = Sender::new();
+    let mut laid = lay_out(
+        StreamBuilder::keyed(
+            Some(1_u32),
+            sender.factory(),
+            recording_builder(Arc::clone(&log)),
+        ),
+        loose(400.0),
     );
+    assert_eq!(last(&log), waiting(None, None));
+
+    sender.end();
+    laid.tick();
+    assert_eq!(last(&log), done(None, None));
+}
+
+fn stream_builder_error_is_preserved_by_done() {
+    let log = Arc::new(Mutex::new(Vec::new()));
+    let sender = Sender::new();
+    let mut laid = lay_out(
+        StreamBuilder::keyed(
+            Some(1_u32),
+            sender.factory(),
+            recording_builder(Arc::clone(&log)),
+        )
+        .with_initial_data(Rc::new(|| Payload(1))),
+        loose(400.0),
+    );
+    assert_eq!(last(&log), waiting(Some(1), None));
+
+    sender.error("last");
+    laid.tick();
+    assert_eq!(last(&log), active(None, Some("last")));
+
+    sender.end();
+    laid.tick();
+    assert_eq!(last(&log), done(None, Some("last")));
+}
+
+fn stream_builder_coalesced_events_leave_the_latest_result() {
+    let log = Arc::new(Mutex::new(Vec::new()));
+    let sender = Sender::new();
+    let mut laid = lay_out(
+        StreamBuilder::keyed(
+            Some(1_u32),
+            sender.factory(),
+            recording_builder(Arc::clone(&log)),
+        ),
+        loose(400.0),
+    );
+
+    sender.data(1);
+    sender.error("middle");
+    sender.data(3);
+    sender.end();
+    laid.tick();
+
+    assert_eq!(last(&log), done(Some(3), None));
 }

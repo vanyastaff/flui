@@ -113,8 +113,10 @@ until the session's waker or deadline wakes it:
 - Unix: a reader thread blocks on the socket and hands each read over; a stop shuts the socket
   down, which ends its blocking reads and writes; a write blocked for 5 s drops the connection.
 - Windows: a pipe takes no timeout, and a blocking read on it cannot be woken without
-  discarding what the client has not read yet. The connection's thread reads without blocking
-  and looks for input every 10 ms while nothing else wakes it; answers and events wake it at once.
+  discarding what the client has not read yet. The connection's thread reads without blocking,
+  yields while input is actively arriving, and returns to a 10 ms park after 50 ms idle;
+  answers and events wake it at once. The active phase avoids making large-line throughput
+  depend on the timer's granularity.
 
 Android is the Unix transport over an abstract socket. On Linux and Android an address `@name`
 names the abstract socket `name`, the only kind Android's driver reaches, through
@@ -291,9 +293,10 @@ with `input` (`native` alone is `invalid_argument`):
 - Good, because `flui-app` no longer depends on `serde` or `serde_json` outside its tests.
 - Bad, because `flui-runtime` gains `serde`, `serde_json` and `flui-protocol/serde` as normal
   dependencies, in every build.
-- Bad, because a Windows connection still looks for input every 10 ms, and a Windows client that
-  stops reading holds its connection until it reads, leaves or the agent stops, since the pipe
-  takes no write timeout.
+- Neutral, because an idle Windows connection still wakes every 10 ms; active input uses the
+  connection's existing thread with bounded yielding rather than another blocking reader.
+- Bad, because a Windows client that stops reading holds its connection until it reads, leaves
+  or the agent stops, since the pipe takes no write timeout.
 - Bad, because a page's agent stops a turn after it is asked to: the page export is not `Send`,
   so a task of the page's executor holds it, and a stop reaches it at the page's next turn. The
   service refuses new conversations at once.

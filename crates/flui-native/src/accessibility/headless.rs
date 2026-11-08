@@ -1,122 +1,95 @@
-//! The headless host's accessibility: a counter of what a window published.
+//! The headless host's production accessibility sink.
 
+use std::sync::Arc;
+
+use flui_semantics::platform::{
+    AccessibilityAlreadyAttached, AccessibilityAttachment, AccessibilityCapabilities,
+    AccessibilityHandler, PlatformAccessibility, RouteChange,
+};
 use parking_lot::Mutex;
 
-/// The headless host's [`PlatformAccessibility`](flui_semantics::platform::PlatformAccessibility),
-/// backing its windows'
-/// [`HostWindow::accessibility`](crate::HostWindow::accessibility).
-///
-/// Counts the trees published while an assistive technology is attached, so a
-/// test can tell that publishing reached the platform only then. Activation is
-/// drivable ([`set_active`](Self::set_active)) because the interesting
-/// behaviour is conditional on it: a composition root must start assembly on
-/// attach and stop on detach, and neither is observable without being able to
-/// fake the signal. Its own methods name no AccessKit type (ADR-0151 §8): the
-/// trees and action listeners it hears come through `PlatformAccessibility`,
-/// `flui-semantics`' trait.
 #[derive(Default)]
-pub struct FakeAccessibility {
-    state: Mutex<FakeAccessibilityState>,
-}
-
-#[derive(Default)]
-struct FakeAccessibilityState {
+struct AccessibilityState {
     active: bool,
-    published: usize,
-    activation_listener: Option<flui_semantics::platform::AccessibilityActivationListener>,
+    handler: Option<Arc<dyn AccessibilityHandler>>,
 }
 
-impl FakeAccessibility {
-    /// Create a fresh recorder, inactive and with nothing published.
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
-    }
+/// The production headless accessibility bridge. Published trees are dropped;
+/// no tree or publication history is retained.
+#[derive(Default)]
+pub struct HeadlessAccessibility {
+    state: Mutex<AccessibilityState>,
+}
 
-    /// How many trees were published while active.
-    #[must_use]
-    pub fn published_count(&self) -> usize {
-        self.state.lock().published
-    }
-
-    /// Simulate assistive technology attaching or detaching, notifying the
-    /// registered listener.
-    ///
-    /// The listener is cloned out of the lock before being called, so a
-    /// listener that publishes (or otherwise re-enters this fake) does not
-    /// deadlock against the guard that dispatched it — the same
-    /// clone-and-release discipline the real platform paths use.
-    pub fn set_active(&self, active: bool) {
-        let listener = {
+impl HeadlessAccessibility {
+    #[cfg(any(test, feature = "testing"))]
+    pub(crate) fn set_active(&self, active: bool) {
+        let handler = {
             let mut state = self.state.lock();
-            // Attach/detach is a *transition*. Re-notifying on an unchanged
-            // state would drive redundant enable/disable cycles in a
-            // composition root that starts and stops assembly off this signal.
             if state.active == active {
                 return;
             }
             state.active = active;
-            state.activation_listener.clone()
+            state.handler.clone()
         };
-        if let Some(listener) = listener {
-            listener(active);
+        if let Some(handler) = handler {
+            handler.activation_changed(active);
         }
+    }
+
+    #[cfg(any(test, feature = "testing"))]
+    pub(crate) fn is_active(&self) -> bool {
+        self.state.lock().active
     }
 }
 
-impl std::fmt::Debug for FakeAccessibility {
+impl std::fmt::Debug for HeadlessAccessibility {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let state = self.state.lock();
-        f.debug_struct("FakeAccessibility")
-            .field("active", &state.active)
-            .field("published_count", &state.published)
+        f.debug_struct("HeadlessAccessibility")
+            .field("active", &self.state.lock().active)
             .finish_non_exhaustive()
     }
 }
 
-impl flui_semantics::platform::PlatformAccessibility for FakeAccessibility {
-    fn publish(&self, _update: accesskit::TreeUpdate) {
-        let mut state = self.state.lock();
-        // Inactive means nothing is listening: the update is dropped rather
-        // than counted, mirroring the real adapter's `update_if_active`.
-        if state.active {
-            state.published = state.published.saturating_add(1);
-        }
+impl PlatformAccessibility for HeadlessAccessibility {
+    fn publish(&self, update: accesskit::TreeUpdate) {
+        drop(update);
     }
 
-    fn is_active(&self) -> bool {
-        self.state.lock().active
-    }
-
-    fn set_activation_listener(
+    fn attach(
         &self,
-        listener: flui_semantics::platform::AccessibilityActivationListener,
-    ) {
-        self.state.lock().activation_listener = Some(listener);
+        handler: Arc<dyn AccessibilityHandler>,
+    ) -> Result<AccessibilityAttachment, AccessibilityAlreadyAttached> {
+        let mut state = self.state.lock();
+        if state.handler.is_some() {
+            return Err(AccessibilityAlreadyAttached);
+        }
+        let attachment =
+            AccessibilityAttachment::new(state.active, AccessibilityCapabilities::NONE);
+        state.handler = Some(handler);
+        Ok(attachment)
     }
 
-    /// No assistive technology asks a headless window for an action, so the
-    /// listener is dropped here, outside any lock.
-    fn set_action_listener(&self, listener: flui_semantics::platform::AccessibilityActionListener) {
-        drop(listener);
+    fn detach_handler(&self) {
+        let handler = self.state.lock().handler.take();
+        drop(handler);
     }
 
-    /// The native headless host plays no screen reader; `flui-testing`'s does.
-    fn assistive_focus_support(&self) -> flui_semantics::AssistiveFocusSupport {
-        flui_semantics::AssistiveFocusSupport::Unreported
+    fn route_changed(&self, change: RouteChange) {
+        drop(change);
     }
 }
 
-/// The recorder put nothing on its window and records no focus.
-impl crate::host::WindowAccessibility for FakeAccessibility {
-    fn detach(&self) {}
+impl crate::host::WindowAccessibility for HeadlessAccessibility {
+    fn detach(&self) {
+        self.detach_handler();
+    }
 
     fn focus_changed(&self, _: bool) {}
 }
 
-/// Each headless window gets a recorder of its own.
-impl crate::host::Accessibility<()> for FakeAccessibility {
+impl crate::host::Accessibility<()> for HeadlessAccessibility {
     fn for_window((): &()) -> std::sync::Arc<dyn crate::host::WindowAccessibility> {
-        std::sync::Arc::new(Self::new())
+        std::sync::Arc::new(Self::default())
     }
 }

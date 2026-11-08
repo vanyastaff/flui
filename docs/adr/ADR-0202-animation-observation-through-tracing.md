@@ -24,9 +24,9 @@ forward it as `animation-diagnostics`. `flui-devtools/profiling` enables the SDK
 feature and observes the spans; no framework crate depends on devtools.
 Warnings and errors remain available without the feature.
 
-A controller owns an `animation_controller` span at target
-`flui_animation::diagnostics`. Its subscriber-issued identity and monotonically
-increasing run generation identify observation within that controller lifetime.
+A controller owns the `FrameSpan::AnimationController` identity: an
+`animation_controller` span at target `flui.animation.diagnostics`. Its subscriber-issued identity
+and monotonically increasing run generation identify observation within that controller lifetime.
 No global controller counter, display-name lookup or memory address is invented.
 Without an interested subscriber, that span is disabled and no external identity
 is promised. Reused subscriber IDs are interpreted with their span lifetimes.
@@ -47,13 +47,14 @@ The outcome and its generation describe the resolved run, separately from the
 possibly newer active run in the same receipt. Ordinary unchanged samples emit
 no transition event.
 
-The optional span contract is:
+`flui_foundation::diagnostics::FrameSpan` owns the exact identities for both producers and
+consumers. The optional span contract is:
 
-| Target | Span | Meaning | Profiler phase |
-|---|---|---|---|
-| `flui_animation` | `animation_tick` | The admitted public registry walk, including delivery and retirement | `Custom("Animation tick")` |
-| `flui_animation` | `animation_sampling` | Time, simulation or repeat position computation before publication | `Custom("Animation sampling")` |
-| `flui_animation` | `animation_listeners` | Value/status listeners, run continuations/wakers and their retirement | `Custom("Animation listeners")` |
+| `FrameSpan` | Target | Span | Meaning | Profiler phase |
+|---|---|---|---|---|
+| `AnimationTick` | `flui.animation` | `animation_tick` | The admitted public registry walk, including delivery and retirement | `Custom("Animation tick")` |
+| `AnimationSampling` | `flui.animation` | `animation_sampling` | Time, simulation or repeat position computation before publication | `Custom("Animation sampling")` |
+| `AnimationListeners` | `flui.animation` | `animation_listeners` | Value/status listeners, run continuations/wakers and their retirement | `Custom("Animation listeners")` |
 
 Durations are inclusive extents, not disjoint portions of a CPU total. Registry
 time includes its sampling and listener work. They must not be summed to infer

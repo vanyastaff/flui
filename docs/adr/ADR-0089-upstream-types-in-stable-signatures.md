@@ -5,6 +5,8 @@
   vocabulary and its flags only (FLUI's roles and actions now cover ARIA 1.2 where AccessKit has
   a counterpart, and role-bearing flags are roles). The rule that stable signatures carry no
   upstream type stands.
+- **Revised:** 2026-11-07 — facade-aggregated first-party package APIs are explicitly inside the
+  Stable closure and train-aligned under ADR-0315
 - **Revised:** 2026-10-30 — §6's loader also feeds `cargo xtask send-positions`, the list of
   `Send` and `Sync` positions in the facade's API (ADR-0136); synthetic auto-trait impls are not
   positions.
@@ -23,6 +25,8 @@
   [ADR-0081](ADR-0081-workspace-tiers-and-reach-facts.md) (tiers and stability kinds),
   [ADR-0082](ADR-0082-platform-api-contract-crate.md) (the contract crate),
   [ADR-0088](ADR-0088-official-packages-sdk-and-facade.md) (`flui-sdk` and the facade),
+  [ADR-0315](ADR-0315-first-party-packages-remain-train-aligned-facade-features.md) (facade package
+  aggregation, train alignment and semver),
   [ADR-0095](ADR-0095-agent-protocol-schema-crate.md) (`flui-protocol`)
 - **Refs:** decision D8 and owner decision 3 in the [decision index](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/design/decisions.md);
   panel record in
@@ -56,9 +60,10 @@ Upstream types reach public paths today in four ways, each checked in this tree:
   `SemanticsRole` has 33 variants including `None` (`crates/flui-semantics/src/role.rs:32`),
   `SemanticsAction` 24 (`crates/flui-semantics/src/action.rs:23`), and neither is
   `#[non_exhaustive]`.
-- **GPU and native.** `pub use ::wgpu` (`crates/flui-engine/src/lib.rs:229`);
-  `pub use android_activity` (`crates/flui-app/src/lib.rs:116`, re-exported again by the facade at
-  `src/lib.rs:157`).
+- **GPU and native.** `pub use ::wgpu` remains in the internal `flui-engine`, which no Stable
+  crate re-exports. Android's upstream `AndroidApp` and entry point live only in Evolving
+  `flui::native::android` behind the facade's `native` feature; no Stable root signature names
+  `android-activity`.
 - **Raw handles.** `PlatformWindow` already exposes only the borrowed
   `HasWindowHandle`/`HasDisplayHandle` path (`crates/flui-platform/src/platform_window.rs`),
   which [ADR-0063](ADR-0063-the-renderer-owns-its-surface-target.md) moved the renderer to. The
@@ -94,6 +99,12 @@ facade re-exports whole internal crates (`pub use flui_types as types`, `src/lib
 item reachable from a Stable crate's public API therefore carries the Stable promise, whatever
 its crate's `tier-kind`; the `internal` kind's "no promise" covers only items outside that
 closure. The closure gate of §6 is what lists them.
+
+The same rule includes every first-party package API the facade re-exports under ADR-0315. Optional
+features do not exclude those APIs: the closure is measured with every facade feature enabled, and
+the aggregated package ships with the facade train. A package adopts an independent cadence only
+after leaving the facade (ADR-0315 §4), so the Stable facade never delegates its compatibility to
+an independently versioned aggregate.
 
 ### 2. What may appear
 
@@ -141,28 +152,36 @@ from ui-events reaches a Stable path.
 
 ### 5. Escape modules are Evolving and arrive with a consumer
 
-Interop that must name an upstream type lives in a versioned module of the Evolving `flui-sdk`
-([ADR-0088](ADR-0088-official-packages-sdk-and-facade.md)), named for the upstream major it pins,
-and never in a Stable crate:
+Interop that must name an upstream type lives in an Evolving module, never in the Stable closure.
+Versioned `flui-sdk` modules name the upstream major they pin
+([ADR-0088](ADR-0088-official-packages-sdk-and-facade.md)); operating-system entry-point interop
+lives under the facade's feature-gated `native` module:
 
-- Now: `flui_sdk::gpu` behind a feature named for the pinned wgpu major (`wgpu-30` for the
-  workspace's `wgpu = "30.0"`, `Cargo.toml:224`). Its consumer is external GPU content. `pub use
-  ::wgpu` leaves every path reachable from a Stable crate.
-- Later, each only in the PR that adds its first consumer and additively in a minor release: an
-  accesskit role/property hook (`flui_sdk::a11y::accesskit_NNN`) and a ui-events module. The
-  accesskit hook runs last, may fill only properties the owning semantics model left empty, and
-  cannot change node identity or tree structure.
-- `android_activity` moves to an Evolving `native` module. The `flui-testing` accesskit
-  re-exports move to an internal or Evolving path; Stable test helpers assert on `SemanticsRole`
-  and `SemanticsAction`.
+- `flui_sdk::gpu`, behind a feature named for the pinned wgpu major (`wgpu-30` for the workspace's
+  `wgpu = "30.0"`), arrives with its external-GPU consumer. Until then `pub use ::wgpu` remains in
+  the internal `flui-engine`, outside every Stable path.
+- An accesskit role/property hook (`flui_sdk::a11y::accesskit_NNN`) and a ui-events module each
+  arrive only with their first consumer, additively in a minor release. The accesskit hook runs
+  last, may fill only properties the owning semantics model left empty, and cannot change node
+  identity or tree structure.
+- Android's `AndroidApp` and `run_app_android` are re-exported only as
+  `flui::native::android::{AndroidApp, run_app_android}` on Android behind `native`. The old Stable
+  root `android_activity` and `run_app_android` items are gone.
+- The `flui-testing` accesskit re-exports still reach `flui::testing::a11y` as recorded debt. They
+  move to an internal or Evolving path; Stable test helpers then assert on `SemanticsRole` and
+  `SemanticsAction`.
 
 ### 6. The gate
 
-A `cargo xtask api-closure` command (working name) walks rustdoc JSON for `flui`,
-`flui-platform` and `flui-protocol`, applies the denylist and the allowlist of §2, and fails
-on any other upstream path. Before it joins `cargo xtask checks`, it is proven able to fail: a
-scratch crate with `pub fn f() -> accesskit::Role` must be rejected (its `--self-test`, as
-[ADR-0081](ADR-0081-workspace-tiers-and-reach-facts.md) §5 asks of every gate).
+`cargo xtask api-closure` walks rustdoc JSON for `flui`, `flui-platform` and `flui-protocol`,
+applies the denylist and the allowlist of §2, and fails on any other upstream path. The facade is
+built with every feature on Linux, Windows, macOS, iOS, Android and wasm32, so the closure includes
+every package API aggregated under ADR-0315 and every supported target's conditional surface.
+Android has no exception. The existing AccessKit testing re-export has an explicit temporary
+`accesskit` exception, which keeps the remaining debt visible rather than declaring it resolved.
+The command's `--self-test` plants a scratch crate with `pub fn f() -> accesskit::Role` and proves
+that the rule rejects it, as [ADR-0081](ADR-0081-workspace-tiers-and-reach-facts.md) §5 asks of
+every gate.
 
 The same loader feeds `cargo xtask send-positions`
 ([ADR-0136](ADR-0136-owner-local-ui-surfaces.md)): from the public re-exports of `flui` and
@@ -188,7 +207,7 @@ must stay `!Send`, a consumer test the handles meant to cross a thread.
 - **Ship the escape modules up front.** Not chosen by default: it publishes Evolving surface no
   code uses. Whether to ship them early is an open owner question
   ([open questions](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/design/open-questions.md)); the default is on demand, with
-  `flui_sdk::gpu` the only one now.
+  each waits for its consumer.
 - **Pin the outbound mapping with an exhaustive match.** Rejected: `#[non_exhaustive]` forces a
   `_` arm in any other crate, and the pin evaporates.
 
@@ -196,20 +215,19 @@ must stay `!Send`, a consumer test the handles meant to cross a thread.
 
 - Breaking changes before H3: the facade's input re-exports change type (same names, FLUI's own
   definitions); `SemanticsRole`/`SemanticsAction` gain `#[non_exhaustive]`, so downstream matches
-  need a `_` arm; `flui::testing` stops exposing accesskit types; `flui::android_activity` moves;
+  need a `_` arm; Android interop moves from the Stable root to Evolving `flui::native::android`;
   the legacy `Window::raw_window_handle` is deleted with the rest of the legacy `Window` family
   ([ADR-0082](ADR-0082-platform-api-contract-crate.md) §5).
-- An accesskit or ui-events major becomes an internal change plus, at most, a regenerated key
-  table — no FLUI major.
+- The AccessKit testing re-export remains a visible exception until `flui::testing` stops exposing
+  accesskit types. An accesskit or ui-events major otherwise becomes an internal change plus, at
+  most, a regenerated key table — no FLUI major.
 - The accessibility vocabulary is narrower than AccessKit's by design. A role FLUI lacks reaches
   the OS only through the Evolving hook once it exists.
-- The gate needs rustdoc JSON, which may need a pinned nightly toolchain. That is a hypothesis;
-  if true, one nightly pin serves this gate, the `flui-sdk` surface measurement and the H3
-  semver checks together.
-- Migration order: the `#[non_exhaustive]` + `ALL` test and the exhaustive inbound matches first;
-  the generated input types when `flui-platform` is extracted
-  ([ADR-0082](ADR-0082-platform-api-contract-crate.md)); moving `pub use ::wgpu` and
-  `android_activity` with the `flui-sdk` work; `api-closure` in `checks` before H3.
+- The gate uses the pinned nightly toolchain's rustdoc JSON, shared with the `flui-sdk` surface
+  measurement and the H3 semver checks.
+- Remaining migration: move `pub use ::wgpu` with the `flui-sdk` GPU consumer and replace the
+  AccessKit testing re-export with FLUI-owned assertions. Android's move and the facade's
+  all-feature, all-target closure are complete.
 
 ## Verification
 

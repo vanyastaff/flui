@@ -10,6 +10,10 @@
 - **Revised:** 2026-11-03 — after a callback panic, and when another panic already has priority
   (§5.3), a capture bundle or retired value is destroyed under containment instead of leaked
   (ADR-0281 §2–§3).
+- **Revised:** 2026-11-08 — §5.5 states the current two-coordinate inherited-dependency rule,
+  including typed entries, build reset, lifecycle persistence and panic recovery.
+- **Superseded-by:** [ADR-0318](ADR-0318-component-themes-are-typed-inherited-entries.md) for §5.5
+  only, the field-mask-only dependency record and dispatch rule
 - **Related:** [ADR-0075](ADR-0075-derived-state-and-effects.md) (derived values and effects,
   `Computed<T>` and `Effect`, which this decision does not cover)
 - **Supersedes:** the signals clause of [FOUNDATIONS](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/FOUNDATIONS.md) C1 (now §7's wording) and ADR-0008's
@@ -224,13 +228,13 @@ signal.set(v)                         // owner thread, outside build
 Deferred to [ADR-0075](ADR-0075-derived-state-and-effects.md) with derived values. Until then,
 side effects run from callbacks, `did_update_view`, or UI runtime commands.
 
-### 5.5 One scheduler and one discipline, two registries: `InheritedView` field masks (#1090)
+### 5.5 One scheduler and lifecycle, with field and entry coordinates
 
-The reader set keyed by `SignalSlot` is the same kind of edge #1090 needs keyed by
-`(provider TypeId, field bit)`. The field-mask half uses the same scheduler
-(`RebuildReason::DependencyChange`) and the same re-derive-per-build discipline, but its own
-registry (`InheritedBehavior::dependents` plus the reverse index in `InheritedDependencies`).
-Unifying the two registries is #1254's question.
+The signal reader set keyed by `SignalSlot` remains a separate registry. Inherited reads use the
+same scheduler (`RebuildReason::DependencyChange`) and re-derive-per-build discipline through
+`InheritedBehavior::dependents` and the reverse index in `InheritedDependencies`. Each inherited
+dependency has two independent coordinates: statically typed fields and dynamically typed entries.
+ADR-0318 defines the entry and Material component-theme contract.
 
 - `FieldMask<D>` — a 64-bit field set typed by the provider's data type — and the opt-in
   `#[derive(InheritedData)]` (one `FIELD_<NAME>: FieldMask<Self>` constant per field plus
@@ -239,41 +243,54 @@ Unifying the two registries is #1254's question.
   object-safe context method carry the untyped `FieldSet`; the lowering (`FieldMask::erase`) is
   crate-private, so outside `flui-view` a `FieldSet` is only `NONE`/`ALL` (a second `compile_fail`
   doctest). The marker is invariant in `D`, and `BuildContext` is sealed so a downstream context
-  cannot forward an erased set to a different provider. Compose and SwiftUI track per property
-  with no untyped selector; a typed mask is the closest static shape.
-- `InheritedView::changed_fields(old)` — `ALL`/`NONE` from `update_should_notify` by default,
-  per-field for data implementing `InheritedData`.
-- `InheritedBehavior::dependents` stores `DependentEntry { depth, mask, lifecycle_mask }`;
-  `on_view_updated` schedules a dependent only if `mask | lifecycle_mask` intersects the changed
-  set. `depend_on::<T, _>` records `FieldSet::ALL` through the same path.
-- Field accessors: `MediaQuery::size_of(cx)`, `text_scale_factor_of`, …, `Theme::color_scheme_of`,
-  `text_theme_of`, and the general `depend_on_fields(cx, mask, f)`; `MediaQuery::of`/`Theme::of`
-  keep the whole-provider dependency.
+  cannot forward an erased set to a different provider.
+- `EntrySet` is a cloneable `NONE`, `ALL`, or finite set of entry `TypeId`s.
+  `InheritedView::changed_entries(old)` defaults to `NONE`; a provider with dynamic entries
+  overrides it to report additions, removals and content changes. Entry identity never consumes
+  a field bit. `BuildContextExt::depend_on_entry::<Provider, Entry, _>` records one entry before
+  invoking its callback.
+- `InheritedView::changed_fields(old)` remains `ALL`/`NONE` from `update_should_notify` by
+  default, or per-field for data implementing `InheritedData`.
+- A dependent record stores build and lifecycle masks for both coordinates. An update schedules
+  it when either its field masks intersect `changed_fields` or its entry masks intersect
+  `changed_entries`. `depend_on::<T, _>` records `ALL` for both; `depend_on_field` records no
+  entries, and `depend_on_entry` records no fields. Matching readers are scheduled once.
+- Field accessors include `MediaQuery::size_of(cx)`, `text_scale_factor_of`,
+  `Theme::color_scheme_of` and `text_theme_of`. `Theme::component_of::<T>` is the corresponding
+  entry accessor. `MediaQuery::of` and `Theme::of` retain whole-provider dependencies.
 
 **Mapping decision — reset-on-build (deliberate divergence from Flutter).** Flutter's
 `_dependencies`/`_dependents` accumulate until unmount: a widget that read `MediaQuery.sizeOf`
-once keeps rebuilding on size changes after it stopped reading it. Here the fields recorded for
-an element are those of its **latest** build: in `BuildOwner::drain_build_scope`, right after the
-element's `build`, its masks at previous providers reset to `NONE`, the build's reads
-re-accumulate, and an entry still at `NONE` is removed. The `LayoutBuilder`-scoped drain uses the
-same function. **Unasserted:** no test pins this. Cost: one hash lookup per previous provider per
-build.
+once keeps rebuilding on size changes after it stopped reading it. Here the fields and entries
+recorded for an element are those of its **latest successful** build: in
+`BuildOwner::drain_build_scope`, right after the element's `build`, its previous build masks reset
+to `NONE`, the build's reads re-accumulate, and a dependent with no field or entry reads in either
+lifetime is removed. The `LayoutBuilder`-scoped drain uses the same function.
+`successful_builds_replace_and_prune_entry_reads` pins entry replacement and pruning.
 
-- Reads in `init_state` / `did_change_dependencies` go to `lifecycle_mask`, which **accumulates
-  until unmount**, as in Flutter. It is not re-derived per `did_change_dependencies` (that hook
+- Reads in `init_state` / `did_change_dependencies` go to the lifecycle masks, which **accumulate
+  until unmount**, as in Flutter. They are not re-derived per `did_change_dependencies` (that hook
   does not run on the first build after `init_state`, so resetting would drop `init_state`'s
   reads). States such as `FocusState` and `DraggableState` acquire an inherited value in a
-  lifecycle hook and must stay subscribed. **Unasserted:** no test pins this.
+  lifecycle hook and must stay subscribed. `lifecycle_entry_reads_survive_builds_that_do_not_reread_them`
+  pins the entry lifetime.
 - A build that panics is not evidence of what the element reads: when `build_or_recover`
   recovers it with an `ErrorView`, previous masks are kept and new records only added; the signal
   registry likewise restores the previous read set
   (`a_build_that_panics_before_reading_keeps_its_dependency`,
-  `a_build_that_unwinds_keeps_its_previous_read_set`).
+  `a_build_that_unwinds_keeps_its_previous_read_set`). Entry registration precedes the user
+  callback, including when that callback or the remainder of build panics;
+  `direct_context_callback_panic_keeps_the_entry_registration`,
+  `build_panic_after_entry_read_keeps_recovery_subscription` and
+  `entry_callback_panic_during_build_recovers_on_the_next_entry_change` pin recovery.
 
-#1090's acceptance tests (`crates/flui-widgets/tests/media_query_fields.rs`,
-`packages/flui-material/tests/theme_fields.rs`) pin: a size-only change rebuilds size readers and
-whole-`of` readers, not text-scale readers, and the reverse; an equal provider swap rebuilds
-nobody; a field reader still rebuilds on its own field after an unrelated change.
+The field acceptance tests (`crates/flui-widgets/tests/media_query_fields.rs`,
+`packages/flui-material/tests/theme_fields.rs`) retain static-field coverage.
+`crates/flui-view/tests/inherited_entries.rs` covers exact add/remove/replace/equal dispatch,
+whole reads, reset/pruning, lifecycle persistence, misses, GlobalKey reparenting and panic recovery.
+`entry_read_reroutes_after_global_key_reparent` proves that the old provider loses the registration
+and only the new provider can schedule the moved reader.
+`packages/flui-material/tests/component_themes.rs` covers the production component reader.
 
 ### 5.6 What the three screens look like
 

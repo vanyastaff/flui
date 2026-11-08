@@ -4,7 +4,7 @@
 use flui_layer::Scene;
 use flui_rendering::TextContextHandle;
 use flui_sdk::geometry::{Rect, Size};
-use flui_sdk::painting::Color;
+use flui_sdk::painting::styling::Color;
 use flui_sdk::widgets::ColoredBox;
 use flui_view::{BuildContext, IntoView, StatelessView, View, element::ElementKind};
 

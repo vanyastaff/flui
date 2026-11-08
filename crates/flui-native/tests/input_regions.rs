@@ -5,7 +5,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use flui_foundation::geometry::{DevicePoint, DeviceRect, Rect};
-use flui_native::{HeadlessPlatform, HostWindow, MockWindow, OwnerPlatform, Platform as _};
+use flui_native::{HeadlessPlatform, HeadlessWindow, HostWindow, OwnerPlatform, Platform as _};
 use flui_platform::Availability;
 use flui_platform::WindowOptions;
 use flui_platform::input_capabilities::InputCapabilities;
@@ -18,12 +18,16 @@ use crate::run_table;
 const EXCLUSION: InputRegionKind = InputRegionKind::SystemGestureExclusion;
 
 fn owner() -> OwnerPlatform {
-    started(HeadlessPlatform::new())
+    started(HeadlessPlatform::new().with_test_doubles())
 }
 
 /// A headless owner whose simulated OS honours the region kinds `availability` names.
 fn owner_honouring(availability: InputCapabilities) -> OwnerPlatform {
-    started(HeadlessPlatform::new().with_input_availability(availability))
+    started(
+        HeadlessPlatform::new()
+            .with_input_availability(availability)
+            .with_test_doubles(),
+    )
 }
 
 fn started(platform: HeadlessPlatform) -> OwnerPlatform {
@@ -49,8 +53,11 @@ fn open(
         .expect("ready")
 }
 
-fn mock(window: &Rc<dyn HostWindow>) -> &MockWindow {
-    window.as_any().downcast_ref::<MockWindow>().expect("mock")
+fn mock(window: &Rc<dyn HostWindow>) -> &HeadlessWindow {
+    window
+        .as_any()
+        .downcast_ref::<HeadlessWindow>()
+        .expect("mock")
 }
 
 fn device(left: i32, top: i32, right: i32, bottom: i32) -> DeviceInputRegion {

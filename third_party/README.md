@@ -71,9 +71,13 @@ semantics identifier (ADR-0240) reaches Android's `viewIdResourceName`, as it re
 
 **Change** (`accesskit_android.patch`, the whole difference from the published crate):
 
-- `Adapter::accessibility_focus`, a read accessor: the node and tree that hold accessibility
-  focus, or `None` when no node of the tree holds it. FLUI reads it after each action, hover
-  event and update it hands the adapter, and tells the application when the answer changed.
+- `PlatformFocusHandler`, the same public push-hook shape as the iOS fork, and
+  `Adapter::with_platform_focus_handler`: the handler receives `Some((NodeId, TreeId))` when
+  TalkBack's cursor enters a node and `None` when a matching clear or a tree update removes it;
+- cursor transitions are delivered by `QueuedEvents::raise`, outside the adapter borrow and before
+  JNI events that can re-enter it. Re-entrant and concurrent moves are queued FIFO without calling
+  the handler recursively, and a panic leaves later moves queued for the next delivery. Removing
+  the focused node also clears its stored virtual ID, so re-adding that ID does not revive focus;
 - `populate_node_info` sets `viewIdResourceName` from the node's `author_id`, when it has one.
 
 **Drop it when** an `accesskit_android` release reports the cursor to the application and sets
@@ -81,21 +85,22 @@ the resource name. The text for those upstream pull requests is below; neither h
 
 ### Upstream pull request (not sent)
 
-> **android: let the application read where TalkBack's cursor is**
+> **android: tell the application where TalkBack's cursor is**
 >
 > An application sometimes needs to know that TalkBack is reading part of its interface: a
 > carousel that advances on a timer has to stop while TalkBack is on it (WCAG 2.2.2). The adapter
-> already tracks the cursor (`Adapter::accessibility_focus`, the virtual view that
-> `ACTION_ACCESSIBILITY_FOCUS` moved to) but keeps it to itself.
+> already tracks the cursor (the virtual view that `ACTION_ACCESSIBILITY_FOCUS` moved to) but keeps
+> it to itself.
 >
-> This adds `Adapter::accessibility_focus(&self) -> Option<(NodeId, TreeId)>`, the AccessKit node
-> under the cursor, or `None` when there is none or the node has left the tree. It is a read
-> only: the low-level adapter's caller already holds it around every call that can move the
-> cursor (`perform_action`, `on_hover_event`, `update_if_active`), so it can compare before and
-> after without a callback, and without running application code inside the adapter.
+> This adds `PlatformFocusHandler` and `Adapter::with_platform_focus_handler`. The handler is told
+> `Some((node, tree))` when the cursor moves onto a node and `None` when it leaves the tree, either
+> because TalkBack cleared it or because an update removed the node. It runs from
+> `QueuedEvents::raise` on the UI thread, outside every borrow of the adapter and before JNI events
+> that can re-enter it. A move made while the handler runs is queued and delivered after it returns;
+> a handler panic leaves later moves queued. `Adapter::default` is unchanged.
 >
-> This is not the tree's focus, which the application owns. The iOS adapter keeps the same state
-> (`Context::platform_focus`); a shared trait in `accesskit` is a follow-up if the two shapes
+> This is not the tree's focus, which the application owns. The iOS adapter reports the equivalent
+> state through the same trait shape; a shared trait in `accesskit` is a follow-up if the two shapes
 > should converge.
 
 ### Upstream pull request (not sent)

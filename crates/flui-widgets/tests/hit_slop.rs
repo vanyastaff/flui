@@ -14,15 +14,15 @@ use crate::gesture_settings::SettingsScope;
 use flui_foundation::geometry::EdgeInsets;
 use flui_interaction::events::PointerKind;
 use flui_interaction::{GestureSettings, GestureSettingsSource};
+use flui_objects::HitShape;
 use flui_painting::paint::TextureId;
 use flui_painting::styling::Color;
 use flui_platform::TargetPlatform;
 use flui_view::{IntoView, ViewExt};
 use flui_widgets::row;
 use flui_widgets::{
-    AbsorbPointer, Center, ColoredBox, ContentShape, GestureDetector, HitShape, HitSlop,
-    InsertPosition, Overlay, OverlayEntry, OverlayHandle, Positioned, RepaintBoundary, SizedBox,
-    Stack, Texture,
+    AbsorbPointer, Center, ColoredBox, ContentShape, GestureDetector, HitSlop, InsertPosition,
+    Overlay, OverlayEntry, OverlayHandle, Positioned, RepaintBoundary, SizedBox, Stack, Texture,
 };
 
 /// A `side`-square tap target that counts its taps.

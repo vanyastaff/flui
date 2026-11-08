@@ -502,8 +502,8 @@ fn a_slide_tick_moves_pixels_without_rebuilding() {
     use flui_objects::TranslationFraction;
     use flui_painting::{Alignment, styling::Color};
     use flui_testing::{HeadlessBinding, MountOptions, MountOwners};
-    use flui_view::environment::GestureArenaScope;
-    use flui_widgets::{Align, ColoredBox, FocusRoot, SizedBox, SlideTransition};
+    use flui_view::environment::{FocusTreeRoot, GestureArenaScope};
+    use flui_widgets::{Align, ColoredBox, SizedBox, SlideTransition};
 
     let mut binding = HeadlessBinding::new();
     let owner =
@@ -518,7 +518,7 @@ fn a_slide_tick_moves_pixels_without_rebuilding() {
     );
     let root = GestureArenaScope::new(
         binding.arena().clone(),
-        FocusRoot::new(Align::new(Alignment::TOP_LEFT).child(SlideTransition::new(
+        FocusTreeRoot::new(Align::new(Alignment::TOP_LEFT).child(SlideTransition::new(
             position,
             SizedBox::new(40.0, 40.0).child(ColoredBox::new(Color::rgb(255, 0, 0))),
         ))),
@@ -586,13 +586,14 @@ fn a_color_tween_preserves_sub_byte_alpha_until_rasterization() {
     use std::rc::Rc;
     use std::time::Duration;
 
-    use flui::painting::{Canvas, CustomPainter, Paint};
+    use flui::painting::CustomPainter;
+    use flui::painting::{Canvas, Paint};
     use flui_animation::{Animatable, Animation, AnimationController, Tween};
     use flui_foundation::{Listenable, geometry::Rect};
     use flui_painting::styling::Color;
     use flui_testing::{HeadlessBinding, MountOptions, MountOwners};
-    use flui_view::environment::GestureArenaScope;
-    use flui_widgets::{CustomPaint, FocusRoot};
+    use flui_view::environment::{FocusTreeRoot, GestureArenaScope};
+    use flui_widgets::CustomPaint;
 
     #[derive(Debug)]
     struct FadePainter(Rc<dyn Animation<Color>>, Rc<std::cell::Cell<Option<Color>>>);
@@ -631,7 +632,7 @@ fn a_color_tween_preserves_sub_byte_alpha_until_rasterization() {
     let painted = Rc::new(std::cell::Cell::new(None));
     let root = GestureArenaScope::new(
         binding.arena().clone(),
-        FocusRoot::new(
+        FocusTreeRoot::new(
             CustomPaint::new()
                 .size(Size::new(16.0, 16.0))
                 .painter(FadePainter(color.clone(), painted.clone())),

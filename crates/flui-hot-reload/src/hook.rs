@@ -1,4 +1,5 @@
-//! The dlopen reload paths as development reload hooks (ADR-0094 §1).
+//! The dlopen reload paths as development reload hooks (ADR-0311, with the
+//! supported dlopen cycle in ADR-0316).
 //!
 //! A host application installs one of these on its configuration, and
 //! `flui-app` drives it through [`DevReloadHook`] without naming this crate:

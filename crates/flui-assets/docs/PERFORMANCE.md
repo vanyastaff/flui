@@ -1,138 +1,96 @@
-# Cache behavior and performance
+# Performance and memory
 
-Moka manages concurrent admission and eviction of typed loaded results. FLUI
-stores each result in an `Arc`, so a cache hit shares data instead of copying a
-decoded image or font. No project benchmark establishes a latency, throughput,
-memory-layout or hit-rate advantage over another cache.
+The registry's performance contract is bounded sharing and retention, not a
+claimed latency or throughput advantage. Measure the actual image formats,
+sizes, source latency and access pattern of an application before changing its
+budget or lane configuration.
 
-## Name ownership
+## Decoded-byte retention
 
-`AssetKey` owns a nonempty `Arc<str>` instead of an integer in a global interner.
-Cloned keys share storage, and built-in descriptors share their name allocation
-with their returned keys. Independently constructed equal names remain equal by
-contents; comparison and hashing are string operations, not a promised
-constant-time integer operation. This change trades global deduplication and
-Copy keys for reclamation of names when their final owner disappears. It makes
-no claim of a measured speed or fixed-size advantage.
+Each cached RGBA8 image weighs:
 
-Consumer handles preserve their names after registry or cache ownership ends.
-Weak data handles also own their keys strongly; account for them when tracking
-name retention. `as_str()` borrows from a key and supplies no static-lifetime
-storage guarantee. Shared `Arc<str>` input can be transferred into a key without
-copying its string contents.
-
-## Capacity
-
-Capacity counts completed entries separately for each asset type:
-
-```rust
-use flui_assets::{AssetRegistryBuilder, CacheCapacity};
-use std::num::NonZeroU64;
-
-let registry = AssetRegistryBuilder::new()
-    .with_capacity(CacheCapacity::Entries(NonZeroU64::new(256).expect("nonzero entry limit")))
-    .build();
+```text
+width × height × 4 bytes
 ```
 
-The default is 10,240 entries per type. `CacheCapacity::Disabled` loads data
-without retaining completed entries. Concurrent `Registry::load(FontAsset)`
-requests share pending work; images, custom assets and the public cache helper
-initialize independently. A subsequent request loads again.
+`with_decoded_image_budget` bounds the sum retained by one registry. The default
+is 256 MiB, and 64 MiB on Android, iOS and the web. Hits and explicit cache
+probes refresh recency; eviction is least recently used first. There is no idle
+or lifetime expiration.
 
-This policy does not bound decoded bytes or process memory. Entry sizes can vary
-widely, and consumer handles retain their data after cache eviction. Select a
-count from measured asset sizes and access patterns rather than interpreting it
-as a byte budget. Reducing the count can reduce cache ownership, but cannot free
-data that a consumer still owns.
+An over-budget image is returned without being cached. A zero budget disables
+completed retention, but concurrent requests still share loads. The budget does
+not include pixels held by callers after eviction, renderer textures, encoded
+bytes or temporary decoder allocations.
 
-Moka applies its capacity policy during maintenance. `len()` is an estimated
-`u64` entry count; `sync().await` improves accuracy after operations settle.
-Concurrent operations and expiration can still change the result.
+Moderate memory pressure trims to half the configured budget; critical pressure
+clears completed images. Neither level cancels in-flight work.
 
-## Expiration
+## Input and decode bounds
 
-`AssetCacheConfig` independently configures lifetime and idle expiration. Defaults
-are five minutes since insertion and one minute since a retrieving cache read.
-`CacheExpiration::NEVER` disables either policy. `CacheExpiration::after` returns
-an error for intervals above Moka's supported 1,000-year maximum; zero expires
-immediately.
+A regular file is checked before opening and read in 256 KiB chunks. Files and
+HTTP response bodies are capped at 256 MiB, preventing unbounded encoded
+buffering. Non-regular files are refused so a device or FIFO cannot block a
+shared IO worker in `open`.
 
-A synchronous `contains(&key)` is an observation: it does not clone data, record
-requests, update popularity or refresh idle expiration. `get(&key).await` retrieves
-shared data and records a read. Expiration and invalidation do not revoke handles
-already returned to consumers or cancel in-flight initializers.
+Before pixel production, the decoder checks dimensions with checked arithmetic.
+Decoded RGBA8 output is capped at 256 MiB, or 128 MiB on Android, iOS and the
+web; the same value is the decoder allocation limit. Small compressed input
+therefore cannot request unbounded pixel allocation.
 
-## Coalescing
+At most `with_decode_threads` decodes run concurrently. The default is half the
+available cores, at most four, so transient decoder memory is bounded separately
+from the retention budget.
 
-Generic `get_or_insert_with` gets completed data or runs its own initializer,
-then inserts each successful result. Cold calls, including direct or awaited
-spawned reentry, do not wait on pending same-key work. Late completion may replace
-an earlier entry; existing handles keep their data. Errors remain owned and are
-not cached. Cancellation affects only that call; independent work survives and
-later requests can retry. No exactly-once side effects are guaranteed.
+## Admission and scheduling
 
-Registry loading validates every descriptor. Only closed built-in FontAsset producers share pending work through Moka.
-ImageAsset keeps registered image decoder hooks and uses the independent helper,
-as custom assets do. Font failures are shared but not cached; cancellation or
-panic allows a waiter to restart subject to Moka's finite retry policy. No public
-custom coalescing opt-in or mandatory spawn API is introduced.
+A registry grants four load slots per decode thread in admission order. A load
+holds its slot from before reading until its decode returns. This bounds:
 
-## Observing a typed cache
+- file reads and HTTP requests in flight;
+- encoded buffers waiting for decode;
+- work queued ahead of visible images.
 
-```rust
-use flui_assets::{AssetCache, AssetCacheExt, CacheCapacity, FontAsset};
+Once bytes are ready, the earliest admitted ready load gets a decode slot. A
+slow earlier fetch holds no decode slot, so it cannot leave the decoder idle
+while a later file is ready. Abandoned loads release their slots and never start
+a queued decode.
 
-let cache = AssetCache::<FontAsset>::new(CacheCapacity::default());
-cache.sync().await;
-println!("Estimated entries: {}", cache.len());
-println!("Entry utilization: {:.1}%", cache.utilization() * 100.0);
-let stats = cache.stats();
-println!("Hits: {}, misses: {}, invalidation requests: {}",
-    stats.hits, stats.misses, stats.invalidations);
-```
+IO and compute are separate. Decodes never occupy the IO lane, and waiting for
+compute room does not block its worker. With no lanes, work happens only while
+the returned future is polled; holding unpolled no-lane loads does not consume
+registry admission slots.
 
-Counters are shared across cache clones and saturate rather than wrap. For
-initialization, hits and misses describe the initial presence observation,
-which can race concurrent changes. A fresh returned entry counts as a completed
-insertion; cancellation after backend publication can leave an entry without
-that completed count. `invalidations` counts explicit invalidation requests,
-including absent keys; it does not count capacity eviction or expiration.
+## Sharing versus duplication
 
-`utilization()` divides the estimated count by configured entry capacity and
-clamps maintenance lag to one. It returns zero for disabled retention and does
-not measure bytes. `clear().await` invalidates completed entries and resets
-counters; `reset_stats()` resets counters without invalidation. Neither operation
-is a snapshot of concurrent requests. The registry exposes no public typed-cache
-lookup or aggregated statistics API.
+One source in one registry has at most one active load. Subscribers share its
+outcome and decoded allocation. Failures are not retained, so retries perform
+new work. Separate registries intentionally duplicate caches and loads.
 
-`insert_many` performs sequential inserts and returns handles in input order.
-Use independent async loads when concurrency is needed, keeping expensive IO and
-decoding outside the synchronous build/layout/paint path.
-
-## Widget image loading
-
-Ordinary `registry.load(ImageAsset)` caches decoded images in Moka. Widget image
-providers use the registry's image loads, which bypass that typed cache. Their
-small non-expiring LRU supports a synchronous frame-path probe and shares
-in-flight work by subscriber lifetime. This routing avoids a second typed-cache
-lookup for those loads; it is not a claim that all applications should maintain
-two image caches.
+Network identity includes HTTP client authority. This may create separate
+entries for one URL when clients differ; that is required for correctness when
+they can return different bytes.
 
 ## Measuring an application
 
-Measure cold IO/decoding separately from warm cache retrieval, and record feature
-flags, input assets and runtime configuration. Inspect retained handles alongside
-cache counts when investigating memory pressure. A high miss rate can result
-from expiration, insufficient entry capacity, disabled retention or distinct
-keys; increasing capacity does not address every cause.
+Record cold source time, decode time, warm hits, retained decoded bytes and
+caller-held images separately. Include the registry configuration and image
+inputs in any benchmark. A cache hit does not measure network or decode
+performance, and entry count alone is not a memory measurement.
 
-Use real workload measurements before changing admission policy, hashers or
-expiration defaults. Moka already supplies concurrency and TinyLFU admission;
-wrapping its whole cache in an application mutex would serialize those operations.
-FLUI's statistics have a separate short lock.
+If memory remains high after lowering the budget, inspect:
+
+1. `Image` values retained by mounted widgets or application state;
+2. admitted encoded bodies and files;
+3. concurrent decoder allocations;
+4. renderer textures and atlases;
+5. additional registries.
+
+Do not put a mutex around the whole registry to serialize loads. Its internal
+locks already protect short state transitions, while source work and callbacks
+run outside them.
 
 ## References
 
-- [Moka future cache](https://docs.rs/moka/0.12.16/moka/future/struct.Cache.html)
-- [Moka entry selector](https://docs.rs/moka/0.12.16/moka/future/struct.RefKeyEntrySelector.html)
 - [Architecture and behavior tests](ARCHITECTURE.md)
+- [User guide](GUIDE.md)

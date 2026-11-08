@@ -390,6 +390,7 @@ where
     );
     ui_runtime
         .install_captured_text_sizing_for(ui_runtime.presentation_id(), native_sizing.source());
+    let root = flui_widgets::app_root(root);
     let attach = ui_runtime.enter(|ui_runtime| {
         ui_runtime.attach_root_widget_with_size(&root, logical.width, logical.height)
     });

@@ -1,6 +1,6 @@
 //! Public transport delivery, cancellation and executor recovery contracts.
 use flui_platform::data_transfer::{
-    TransferCompleter, TransferError, TransferPayload, TransferRequest,
+    TransferCompleter, TransferError, TransferLimits, TransferPayload, TransferRequest,
 };
 use std::future::Future;
 use std::io::Read;
@@ -264,6 +264,64 @@ fn ready_skips_executor_clone() {
     );
     next_request();
 }
+fn final_limits() {
+    let limits = TransferLimits::default().with_max_bytes(4);
+
+    let mut ready =
+        TransferRequest::ready(Ok(TransferPayload::Text("12345".into()))).enforce(limits);
+    assert!(matches!(
+        poll(&mut ready, Waker::noop()),
+        Poll::Ready(Err(TransferError::TooLarge {
+            actual: 5,
+            limit: 4
+        }))
+    ));
+    retain_failure(
+        catch_unwind(AssertUnwindSafe(|| {
+            let _ = poll(&mut ready, Waker::noop());
+        })),
+        "BUG: TransferRequest polled again after it resolved",
+    );
+
+    let mut ready_boundary =
+        TransferRequest::ready(Ok(TransferPayload::Text("1234".into()))).enforce(limits);
+    assert_text(&mut ready_boundary, "1234");
+
+    let (request, completer) = TransferRequest::pending();
+    let mut pending = request.enforce(limits);
+    assert!(poll(&mut pending, Waker::noop()).is_pending());
+    completer.complete(Ok(TransferPayload::Text("12345".into())));
+    assert!(matches!(
+        poll(&mut pending, Waker::noop()),
+        Poll::Ready(Err(TransferError::TooLarge {
+            actual: 5,
+            limit: 4
+        }))
+    ));
+
+    let (request, completer) = TransferRequest::pending();
+    let mut pending_boundary = request.enforce(limits);
+    completer.complete(Ok(TransferPayload::Text("1234".into())));
+    assert_text(&mut pending_boundary, "1234");
+
+    let mut ready_error = TransferRequest::ready(Err(TransferError::Cancelled)).enforce(limits);
+    assert!(matches!(
+        poll(&mut ready_error, Waker::noop()),
+        Poll::Ready(Err(TransferError::Cancelled))
+    ));
+    let (request, completer) = TransferRequest::pending();
+    let mut pending_error = request.enforce(limits);
+    completer.complete(Err(TransferError::Cancelled));
+    assert!(matches!(
+        poll(&mut pending_error, Waker::noop()),
+        Poll::Ready(Err(TransferError::Cancelled))
+    ));
+
+    let (request, completer) = TransferRequest::pending();
+    drop(request.enforce(limits));
+    assert!(completer.is_cancelled());
+    next_request();
+}
 fn cancellation_and_disconnect_resolve() {
     fn require_send<T: Send>(_: &T) {}
     let (request, completer) = TransferRequest::pending();
@@ -316,6 +374,7 @@ fn transfer_request_recovery() {
             displaced_executor_retirement_reenters_producer,
         ),
         ("ready skips executor clone", ready_skips_executor_clone),
+        ("final limits", final_limits),
         (
             "cancellation and disconnect resolve",
             cancellation_and_disconnect_resolve,

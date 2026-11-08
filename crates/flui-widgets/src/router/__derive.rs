@@ -5,7 +5,7 @@ use std::borrow::Cow;
 use std::fmt::Display;
 use std::str::FromStr;
 
-use super::path::{RouteParseError, RoutePath};
+pub use flui_view::{RouteParseError, RoutePath};
 
 /// The decoded segments of `path`, first to last.
 #[must_use]

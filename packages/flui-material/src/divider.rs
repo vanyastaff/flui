@@ -39,12 +39,11 @@
 //! - **`PopupMenuDivider`** — a distinct oracle type, out of this scope.
 
 use flui_sdk::geometry::EdgeInsets;
-use flui_sdk::painting::{BorderRadius, BoxDecoration, Color};
+use flui_sdk::painting::styling::{BorderRadius, BoxDecoration, Color};
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{Center, Container, SizedBox};
 
 use crate::theme::Theme;
-use crate::theme_data::ThemeData;
 
 /// `_DividerDefaultsM3`'s height/width (`divider.dart`, oracle tag `3.44.0`).
 const DEFAULT_SPACE: f64 = 16.0;
@@ -131,9 +130,11 @@ impl Divider {
 
 impl StatelessView for Divider {
     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
-        let theme = Theme::of(ctx);
+        let theme = Theme::required_base_of(ctx);
+        let component = Theme::component_of::<crate::DividerThemeData>(ctx);
         let resolved = resolve_style(
             &theme,
+            component.as_ref(),
             self.height,
             self.thickness,
             self.indent,
@@ -232,9 +233,11 @@ impl VerticalDivider {
 
 impl StatelessView for VerticalDivider {
     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
-        let theme = Theme::of(ctx);
+        let theme = Theme::required_base_of(ctx);
+        let component = Theme::component_of::<crate::DividerThemeData>(ctx);
         let resolved = resolve_style(
             &theme,
+            component.as_ref(),
             self.width,
             self.thickness,
             self.indent,
@@ -277,9 +280,13 @@ struct ResolvedDividerStyle {
 /// cascade, per field: `this.height ?? dividerTheme.space ??
 /// defaults.space!` (and the `thickness`/`indent`/`endIndent`/`color`
 /// equivalents).
-// a per-field cascade; a patch struct would only relocate this
+#[expect(
+    clippy::too_many_arguments,
+    reason = "a per-field cascade; a patch struct would only relocate this"
+)]
 fn resolve_style(
-    theme: &ThemeData,
+    theme: &crate::theme::BaseTheme,
+    divider_theme: Option<&crate::DividerThemeData>,
     space: Option<f64>,
     thickness: Option<f64>,
     indent: Option<f64>,
@@ -287,8 +294,6 @@ fn resolve_style(
     color: Option<Color>,
     radius: Option<BorderRadius>,
 ) -> ResolvedDividerStyle {
-    let divider_theme = theme.divider_theme.as_ref();
-
     ResolvedDividerStyle {
         space: space
             .or_else(|| divider_theme.and_then(|t| t.space))

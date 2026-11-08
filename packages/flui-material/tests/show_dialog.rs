@@ -13,13 +13,13 @@ use std::time::Duration;
 use common::{lay_out_animated, tight};
 use flui_material::{AlertDialog, Theme, ThemeData, show_dialog};
 use flui_sdk::animation::Vsync;
-use flui_sdk::painting::Color;
+use flui_sdk::painting::styling::Color;
+use flui_sdk::testing::a11y::Role;
 use flui_sdk::view::environment::VsyncScope;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{
     Center, ColoredBox, GestureDetector, Navigator, NavigatorHandle, Semantics, SimpleRoute, Text,
 };
-use flui_testing::a11y::Role;
 
 /// `PopupRoute`'s framework-default transition (300 ms, the default every
 /// `flui-widgets` route builder picks), since `show_dialog` pushes a

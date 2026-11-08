@@ -1,0 +1,71 @@
+error[E0277]: `Rc<flui_widgets::overlay::OverlayShared>` cannot be sent between threads safely
+ --> tests/overlay_ui/handles_are_not_send_or_sync.rs:7:21
+  |
+7 |     requires_send::<OverlayHandle>();
+  |                     ^^^^^^^^^^^^^ `Rc<flui_widgets::overlay::OverlayShared>` cannot be sent between threads safely
+  |
+  = help: within `OverlayHandle`, the trait `Send` is not implemented for `Rc<flui_widgets::overlay::OverlayShared>`
+note: required because it appears within the type `OverlayHandle`
+ --> src/overlay/mod.rs
+  |
+  | pub struct OverlayHandle {
+  |            ^^^^^^^^^^^^^
+note: required by a bound in `requires_send`
+ --> tests/overlay_ui/handles_are_not_send_or_sync.rs:3:21
+  |
+3 | fn requires_send<T: Send>() {}
+  |                     ^^^^ required by this bound in `requires_send`
+
+error[E0277]: `Rc<flui_widgets::overlay::OverlayShared>` cannot be shared between threads safely
+ --> tests/overlay_ui/handles_are_not_send_or_sync.rs:8:21
+  |
+8 |     requires_sync::<OverlayHandle>();
+  |                     ^^^^^^^^^^^^^ `Rc<flui_widgets::overlay::OverlayShared>` cannot be shared between threads safely
+  |
+  = help: within `OverlayHandle`, the trait `Sync` is not implemented for `Rc<flui_widgets::overlay::OverlayShared>`
+note: required because it appears within the type `OverlayHandle`
+ --> src/overlay/mod.rs
+  |
+  | pub struct OverlayHandle {
+  |            ^^^^^^^^^^^^^
+note: required by a bound in `requires_sync`
+ --> tests/overlay_ui/handles_are_not_send_or_sync.rs:4:21
+  |
+4 | fn requires_sync<T: Sync>() {}
+  |                     ^^^^ required by this bound in `requires_sync`
+
+error[E0277]: `Rc<flui_widgets::overlay::entry::EntryInner>` cannot be sent between threads safely
+ --> tests/overlay_ui/handles_are_not_send_or_sync.rs:9:21
+  |
+9 |     requires_send::<OverlayEntry>();
+  |                     ^^^^^^^^^^^^ `Rc<flui_widgets::overlay::entry::EntryInner>` cannot be sent between threads safely
+  |
+  = help: within `OverlayEntry`, the trait `Send` is not implemented for `Rc<flui_widgets::overlay::entry::EntryInner>`
+note: required because it appears within the type `OverlayEntry`
+ --> src/overlay/entry.rs
+  |
+  | pub struct OverlayEntry {
+  |            ^^^^^^^^^^^^
+note: required by a bound in `requires_send`
+ --> tests/overlay_ui/handles_are_not_send_or_sync.rs:3:21
+  |
+3 | fn requires_send<T: Send>() {}
+  |                     ^^^^ required by this bound in `requires_send`
+
+error[E0277]: `Rc<flui_widgets::overlay::entry::EntryInner>` cannot be shared between threads safely
+  --> tests/overlay_ui/handles_are_not_send_or_sync.rs:10:21
+   |
+10 |     requires_sync::<OverlayEntry>();
+   |                     ^^^^^^^^^^^^ `Rc<flui_widgets::overlay::entry::EntryInner>` cannot be shared between threads safely
+   |
+   = help: within `OverlayEntry`, the trait `Sync` is not implemented for `Rc<flui_widgets::overlay::entry::EntryInner>`
+note: required because it appears within the type `OverlayEntry`
+  --> src/overlay/entry.rs
+   |
+   | pub struct OverlayEntry {
+   |            ^^^^^^^^^^^^
+note: required by a bound in `requires_sync`
+  --> tests/overlay_ui/handles_are_not_send_or_sync.rs:4:21
+   |
+ 4 | fn requires_sync<T: Sync>() {}
+   |                     ^^^^ required by this bound in `requires_sync`

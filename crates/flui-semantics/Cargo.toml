@@ -68,6 +68,7 @@ criterion = { workspace = true }
 flui-protocol = { workspace = true, features = ["serde"] }
 parking_lot = "0.12"
 serde_json = { workspace = true }
+trybuild.workspace = true
 
 # Cost of a semantics-enabled frame as a function of tree size — the number the
 # pipeline's scalability work has to beat.

@@ -12,3 +12,6 @@
   the `builder` hook. It returns a `WidgetsApp<RouterForm>`, which has no `navigator` or
   `observer` builder; `WidgetsApp` alone still names the navigator form
   (`WidgetsApp<NavigatorForm>`), and the sealed `AppForm` trait bounds the two.
+- **`MaterialApp::router` and `CupertinoApp::router`**: root the corresponding design-system
+  shell in a typed `Router` while preserving its theme, localization and builder configuration.
+  Both return their `RouterForm`, without the navigator-only `navigator` and `observer` builders.

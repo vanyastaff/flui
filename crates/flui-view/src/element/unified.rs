@@ -502,7 +502,7 @@ where
         self.behavior.data()
     }
 
-    /// Get all dependent elements: id -> (depth, fields read) (#1090).
+    /// Get all dependent elements: id -> (depth, field and entry reads).
     pub fn dependents(
         &self,
     ) -> &std::collections::HashMap<ElementId, crate::element::DependentEntry> {

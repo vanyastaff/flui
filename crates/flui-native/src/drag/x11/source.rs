@@ -42,8 +42,9 @@ use x11rb::connection::{Connection as _, RequestConnection as _};
 use x11rb::protocol::Event;
 use x11rb::protocol::xinput::{self, ConnectionExt as _};
 use x11rb::protocol::xproto::{
-    self, AtomEnum, ConnectionExt as _, CreateWindowAux, EventMask, KeyButMask, PropMode,
-    SELECTION_NOTIFY_EVENT, SelectionNotifyEvent, SelectionRequestEvent, WindowClass,
+    self, AtomEnum, ChangeWindowAttributesAux, ConnectionExt as _, CreateWindowAux, EventMask,
+    KeyButMask, PropMode, Property, PropertyNotifyEvent, SELECTION_NOTIFY_EVENT,
+    SelectionNotifyEvent, SelectionRequestEvent, WindowClass,
 };
 use x11rb::wrapper::ConnectionExt as _;
 use x11rb::{COPY_FROM_PARENT, CURRENT_TIME, NONE};
@@ -53,10 +54,18 @@ use super::{Atoms, X11Drag};
 use crate::drag::offers::{bytes_of, names_of};
 use crate::owner::linux::x11::WindowRef;
 use crate::owner::panic_boundary::contain_owner_callback;
+use crate::transfer::linux::x11::SelectionWrite;
 
 /// How long a target has to finish a drop before the session ends as
 /// cancelled, and to answer the last position before a release decides.
 pub(super) const FINISH_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// The most outgoing `INCR` transfers a session serves at once.
+const MAX_WRITERS: usize = 4;
+
+/// The largest chunk written in one request, below the server's request
+/// limit whatever it is.
+const MAX_CHUNK: usize = 256 * 1024;
 
 /// The keysym of Escape.
 const ESCAPE: xproto::Keysym = 0xff1b;
@@ -96,6 +105,15 @@ pub(super) struct Session {
     escape: Vec<xproto::Keycode>,
     over: Option<Over>,
     phase: Phase,
+    /// Large answers being written, each holding its payload once.
+    outgoing: Vec<Outgoing>,
+}
+
+/// One outgoing `INCR` answer. Protocol offsets live in the shared writer;
+/// the XDND session alone owns the payload and its requestor's event mask.
+struct Outgoing {
+    write: SelectionWrite,
+    bytes: Vec<u8>,
 }
 
 /// The target under the pointer.
@@ -255,6 +273,7 @@ impl X11Drag {
             escape: self.escape_keys(),
             over: None,
             phase: Phase::Dragging,
+            outgoing: Vec::new(),
         };
         self.session.with(|slot| *slot = Some(session));
         // The press the window's input holds gets no release now: the loop
@@ -464,6 +483,9 @@ impl X11Drag {
                 };
                 self.replied(reply);
                 true
+            }
+            Event::PropertyNotify(property) if property.state == Property::DELETE => {
+                self.write_chunk(property)
             }
             Event::SelectionRequest(request)
                 if request.owner == source && request.selection == self.atoms.selection =>
@@ -816,27 +838,42 @@ impl X11Drag {
         self.finish_step(session, then);
     }
 
-    /// When the session gives up on its target.
+    /// When the session next gives up on its target or an `INCR` requestor.
     pub(super) fn session_deadline(&self) -> Option<Instant> {
         self.session
-            .with(|session| match session.as_ref()?.phase {
-                Phase::Dragging => None,
-                Phase::Released { deadline, .. } | Phase::Dropped { deadline } => Some(deadline),
+            .with(|slot| {
+                let session = slot.as_ref()?;
+                let phase = match session.phase {
+                    Phase::Dragging => None,
+                    Phase::Released { deadline, .. } | Phase::Dropped { deadline } => {
+                        Some(deadline)
+                    }
+                };
+                session
+                    .outgoing
+                    .iter()
+                    .map(|outgoing| outgoing.write.deadline())
+                    .chain(phase)
+                    .min()
             })
             .flatten()
     }
 
-    /// End a session whose target did not answer by `now`.
+    /// Retire writers whose requestor stopped deleting, then end a session
+    /// whose target did not answer by `now`.
     pub(super) fn session_expire(&self, now: Instant) {
-        if self
-            .session_deadline()
-            .is_none_or(|deadline| deadline > now)
-        {
-            return;
-        }
         let Some(mut session) = self.take_session() else {
             return;
         };
+        self.expire_writers(&mut session, now);
+        let due = match session.phase {
+            Phase::Dragging => false,
+            Phase::Released { deadline, .. } | Phase::Dropped { deadline } => deadline <= now,
+        };
+        if !due {
+            self.put_session(session);
+            return;
+        }
         if let (Phase::Released { .. }, Some(over)) = (session.phase, session.over.as_ref()) {
             self.leave_visit(over);
             session.over = None;
@@ -858,6 +895,7 @@ impl X11Drag {
             return Then::Nothing;
         };
         self.let_go_of_keyboard(session);
+        self.abandon_writers(session);
         let xcb = self.connection.xcb();
         let released = if session.owns {
             xcb.set_selection_owner(NONE, self.atoms.selection, self.time())
@@ -939,29 +977,8 @@ impl X11Drag {
             // The types stay listed, as `XdndTypeList` lists them anyway.
             false
         } else {
-            self.provide(request.target).is_some_and(|bytes| {
-                // An answer past one request would need `INCR`, which the
-                // source does not write yet.
-                let room = self
-                    .connection
-                    .xcb()
-                    .maximum_request_bytes()
-                    .saturating_sub(64);
-                if bytes.len() > room {
-                    tracing::debug!(len = bytes.len(), "a drag's payload is past one request");
-                    return false;
-                }
-                self.connection
-                    .xcb()
-                    .change_property8(
-                        PropMode::REPLACE,
-                        request.requestor,
-                        property,
-                        request.target,
-                        &bytes,
-                    )
-                    .is_ok()
-            })
+            self.provide(request.target)
+                .is_some_and(|bytes| self.answer_payload(request, property, bytes))
         };
         let notify = SelectionNotifyEvent {
             response_type: SELECTION_NOTIFY_EVENT,
@@ -980,6 +997,205 @@ impl X11Drag {
             tracing::debug!(%error, "cannot answer a drag's conversion");
         }
         self.flush();
+    }
+
+    /// Answer with `bytes` whole, or announce and retain one bounded `INCR`
+    /// writer. The provider has returned: revalidate the session and drop
+    /// access before retaining anything it produced.
+    fn answer_payload(
+        &self,
+        request: &SelectionRequestEvent,
+        property: xproto::Atom,
+        bytes: Vec<u8>,
+    ) -> bool {
+        let Some(mut session) = self.take_session() else {
+            return false;
+        };
+        let mask = self.connection.xcb().setup().resource_id_mask;
+        let live = session.source == request.owner
+            && session.owns
+            && matches!(session.phase, Phase::Dropped { .. })
+            && session
+                .over
+                .as_ref()
+                .is_some_and(|over| over.target & !mask == request.requestor & !mask)
+            && session
+                .types
+                .iter()
+                .any(|(atom, _)| *atom == request.target);
+        if !live {
+            self.put_session(session);
+            return false;
+        }
+        let xcb = self.connection.xcb();
+        let room = self.chunk();
+        let answered = 'answer: {
+            // A new conversion into the same property replaces its previous
+            // answer, whole or incremental.
+            session
+                .outgoing
+                .retain(|outgoing| !outgoing.write.matches(request.requestor, property));
+            if bytes.len() <= room {
+                let answered = xcb
+                    .change_property8(
+                        PropMode::REPLACE,
+                        request.requestor,
+                        property,
+                        request.target,
+                        &bytes,
+                    )
+                    .is_ok();
+                self.forget_requestor(&session, request.requestor);
+                break 'answer answered;
+            }
+            let Ok(size) = u32::try_from(bytes.len()) else {
+                self.forget_requestor(&session, request.requestor);
+                break 'answer false;
+            };
+            if session.outgoing.len() >= MAX_WRITERS {
+                self.forget_requestor(&session, request.requestor);
+                break 'answer false;
+            }
+            if xcb
+                .change_window_attributes(
+                    request.requestor,
+                    &ChangeWindowAttributesAux::new().event_mask(EventMask::PROPERTY_CHANGE),
+                )
+                .is_err()
+                || xcb
+                    .change_property32(
+                        PropMode::REPLACE,
+                        request.requestor,
+                        property,
+                        self.atoms.incr,
+                        &[size],
+                    )
+                    .is_err()
+            {
+                self.forget_requestor(&session, request.requestor);
+                break 'answer false;
+            }
+            session.outgoing.push(Outgoing {
+                write: SelectionWrite::new(
+                    request.requestor,
+                    property,
+                    request.target,
+                    size,
+                    Instant::now() + FINISH_TIMEOUT,
+                ),
+                bytes,
+            });
+            Self::write_progress(&mut session);
+            true
+        };
+        self.put_session(session);
+        answered
+    }
+
+    /// A requestor deleted an outgoing `INCR` property: write its next
+    /// bounded chunk, and retire the writer after the terminal empty chunk.
+    fn write_chunk(&self, event: &PropertyNotifyEvent) -> bool {
+        let Some(mut session) = self.take_session() else {
+            return false;
+        };
+        let Some(at) = session
+            .outgoing
+            .iter()
+            .position(|outgoing| outgoing.write.matches(event.window, event.atom))
+        else {
+            self.put_session(session);
+            return false;
+        };
+        let mut failure = None;
+        if session.outgoing[at].write.ended() {
+            session.outgoing.swap_remove(at);
+            self.forget_requestor(&session, event.window);
+        } else {
+            let outgoing = &mut session.outgoing[at];
+            let range = outgoing
+                .write
+                .next_chunk(self.chunk(), Instant::now() + FINISH_TIMEOUT);
+            let target = outgoing.write.target();
+            if let Err(error) = self.connection.xcb().change_property8(
+                PropMode::REPLACE,
+                event.window,
+                event.atom,
+                target,
+                &outgoing.bytes[range],
+            ) {
+                failure = Some(error);
+                session.outgoing.swap_remove(at);
+                self.forget_requestor(&session, event.window);
+            } else {
+                Self::write_progress(&mut session);
+            }
+        }
+        self.put_session(session);
+        if let Some(error) = failure {
+            tracing::debug!(%error, "cannot write an XDND INCR chunk");
+        }
+        self.flush();
+        true
+    }
+
+    /// The largest property chunk this connection can carry.
+    fn chunk(&self) -> usize {
+        self.connection
+            .xcb()
+            .maximum_request_bytes()
+            .min(MAX_CHUNK)
+            .saturating_sub(64)
+            .max(1)
+    }
+
+    /// Keep the drop's finish timeout aligned with the latest outgoing chunk.
+    fn write_progress(session: &mut Session) {
+        if let Phase::Dropped { deadline } = &mut session.phase {
+            *deadline = Instant::now() + FINISH_TIMEOUT;
+        }
+    }
+
+    /// Stop hearing a requestor with no remaining writers.
+    fn forget_requestor(&self, session: &Session, requestor: xproto::Window) {
+        if session
+            .outgoing
+            .iter()
+            .any(|outgoing| outgoing.write.requestor() == requestor)
+        {
+            return;
+        }
+        if let Err(error) = self.connection.xcb().change_window_attributes(
+            requestor,
+            &ChangeWindowAttributesAux::new().event_mask(EventMask::NO_EVENT),
+        ) {
+            tracing::debug!(%error, "cannot stop hearing an XDND INCR requestor");
+        }
+    }
+
+    /// Retire writers whose requestor did not delete the next chunk in time.
+    fn expire_writers(&self, session: &mut Session, now: Instant) {
+        let (expired, kept): (Vec<Outgoing>, Vec<Outgoing>) = std::mem::take(&mut session.outgoing)
+            .into_iter()
+            .partition(|outgoing| outgoing.write.expired(now));
+        session.outgoing = kept;
+        for outgoing in expired {
+            self.forget_requestor(session, outgoing.write.requestor());
+            tracing::debug!("an XDND INCR write timed out");
+        }
+    }
+
+    /// End every writer and stop hearing all of their requestors.
+    fn abandon_writers(&self, session: &mut Session) {
+        let mut requestors: Vec<xproto::Window> = session
+            .outgoing
+            .drain(..)
+            .map(|outgoing| outgoing.write.requestor())
+            .collect();
+        requestors.sort_unstable();
+        requestors.dedup();
+        for requestor in requestors {
+            self.forget_requestor(session, requestor);
+        }
     }
 
     /// Whether the session dropped on a target of the client that made

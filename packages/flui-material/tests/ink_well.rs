@@ -11,18 +11,19 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use common::{LaidOut, lay_out, tight};
-use flui_interaction::KeyEventResult;
-use flui_interaction::events::{Code, Key, KeyEvent, NamedKey};
-use flui_interaction::testing::input::KeyEventBuilder;
 use flui_material::{Checkbox, InkWell, Theme, ThemeData};
-use flui_painting::display_list::DrawOp;
-use flui_painting::styling::Color;
 use flui_sdk::geometry::Offset;
 use flui_sdk::interaction::FocusNode;
+use flui_sdk::interaction::KeyEventResult;
+use flui_sdk::interaction::{Code, Key, KeyEvent, NamedKey};
+use flui_sdk::painting::DrawOp;
+use flui_sdk::painting::styling::Color;
+use flui_sdk::pipeline::FocusRingStyle;
+use flui_sdk::testing::input::KeyEventBuilder;
+use flui_sdk::testing::replay::MouseScript;
 use flui_sdk::view::IntoView;
 use flui_sdk::view::SignalWriteExt;
-use flui_sdk::widgets::{FocusRingStyle, SizedBox, WidgetState, WidgetStatesController};
-use flui_testing::replay::MouseScript;
+use flui_sdk::widgets::{SizedBox, WidgetState, WidgetStatesController};
 
 pub fn press_highlight_lasts_its_delay_under_reduced_motion() {
     use flui_sdk::animation::MotionOverride;

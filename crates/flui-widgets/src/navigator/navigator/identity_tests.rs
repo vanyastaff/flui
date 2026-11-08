@@ -5,8 +5,8 @@ use std::sync::atomic::AtomicU64;
 
 use crate::support::child_process::child_test;
 
-// Each case runs in its own child process: the named-operation cases spend
-// the process-global identity counters, and every refusal is checked against
+// Each case runs in its own child process: these cases spend the
+// process-global identity counters, and every refusal is checked against
 // a fresh one.
 
 child_test! {
@@ -28,92 +28,6 @@ child_test! {
     fn batch_overlay_refusal_publishes_nothing() {
         assert_identity_batch_admission_custody("tail-entry");
     }
-}
-child_test! {
-    fn pop_and_push_named_refusal_keeps_the_departing_route() {
-        assert_named_refusal_changes_nothing("pop_and_push_named");
-    }
-}
-child_test! {
-    fn pop_and_push_named_with_refusal_destroys_result_and_request() {
-        assert_named_refusal_changes_nothing("pop_and_push_named_with");
-    }
-}
-child_test! {
-    fn push_named_typed_refusal_destroys_the_request() {
-        assert_named_refusal_changes_nothing("push_named_typed");
-    }
-}
-
-/// A caller value that counts its destruction once armed.
-struct ArmedPayload {
-    armed: Arc<AtomicBool>,
-    drops: Arc<AtomicU32>,
-}
-
-impl Drop for ArmedPayload {
-    fn drop(&mut self) {
-        if self.armed.load(Ordering::SeqCst) {
-            self.drops.fetch_add(1, Ordering::SeqCst);
-        }
-    }
-}
-
-/// A named operation refused at route-identity exhaustion fails whole: the
-/// departing route stays, nothing is pushed, the caller's request arguments
-/// and result are destroyed during the unwind (ADR-0281), and the same
-/// handle keeps navigating.
-fn assert_named_refusal_changes_nothing(operation: &str) {
-    use crate::navigator::named_route::RouteRequest;
-    use crate::navigator::overlay_route::SimpleRoute;
-    let armed = Arc::new(AtomicBool::new(false));
-    let drops = Arc::new(AtomicU32::new(0));
-    let payload = || ArmedPayload {
-        armed: Arc::clone(&armed),
-        drops: Arc::clone(&drops),
-    };
-    let navigator = NavigatorHandle::new();
-    navigator.route("/next", |_request: &RouteRequest<'_>| {
-        Some(SimpleRoute::<()>::new(|_| crate::Text::new("next").boxed()))
-    });
-    navigator.push(SimpleRoute::<()>::new(|_| crate::Text::new("base").boxed()));
-    navigator.push(SimpleRoute::<()>::new(|_| {
-        crate::Text::new("departing").boxed()
-    }));
-    let before = navigator.route_ids();
-    let departing = navigator.current().expect("departing route");
-    RouteId::leave_process_identities(0);
-    let request = RouteSettings::named("/next").with_arguments(payload());
-    let result = (operation == "pop_and_push_named_with").then(payload);
-    armed.store(true, Ordering::SeqCst);
-    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match operation {
-        "pop_and_push_named" => navigator.pop_and_push_named(request).map(|_| ()),
-        "pop_and_push_named_with" => navigator
-            .pop_and_push_named_with(request, result.expect("caller result"))
-            .map(|_| ()),
-        "push_named_typed" => navigator.push_named_typed::<()>(request).map(|_| ()),
-        other => unreachable!("unknown named operation {other}"),
-    }))
-    .expect_err("route identity refusal fails the operation");
-    assert_eq!(
-        flui_foundation::panic::payload_text(failure.as_ref()),
-        Some("BUG: route identity capacity exhausted"),
-        "the capacity failure stays authoritative"
-    );
-    assert_eq!(
-        drops.load(Ordering::SeqCst),
-        if operation == "pop_and_push_named_with" {
-            2
-        } else {
-            1
-        },
-        "every caller value is destroyed during the unwind"
-    );
-    armed.store(false, Ordering::SeqCst);
-    assert_eq!(navigator.route_ids(), before, "nothing dismissed or pushed");
-    assert_eq!(navigator.current(), Some(departing));
-    assert!(navigator.pop(), "the same handle keeps navigating");
-    assert_eq!(navigator.route_ids(), before[..1].to_vec());
 }
 
 fn assert_identity_admission_custody(case: &str) {

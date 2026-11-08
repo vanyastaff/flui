@@ -22,8 +22,8 @@ autotests = false
 all-features = true
 
 [dependencies]
-# The package-author surface (ADR-0088 §4): `hooks::FrameSnapshot` for the
-# timeline's scheduler bridge and `foundation::observe` for the inspector's
+# The package-author surface (ADR-0088 §4): `foundation::diagnostics` for the
+# profiler's typed span contract and `foundation::observe` for the inspector's
 # ADR-0040 seam. Devtools names no internal crate in a normal dependency.
 # Not optional: an app that links devtools already compiles the SDK's closure
 # through the facade, so the edge costs only the SDK crate itself, and every
@@ -63,7 +63,7 @@ profiling = ["dep:tracing", "dep:tracing-subscriber", "flui-sdk/animation-diagno
 # through `dep:` (the feature-matrix job runs exactly that command).
 serde = ["dep:serde"]
 
-# Event timeline with Chrome-trace export and the FrameSnapshot bridge.
+# Event timeline with Chrome-trace export and a shared frame-capture view.
 timeline = ["serde", "dep:serde_json"]
 
 # Counting/logging tree observer over the ADR-0040 observation seam, which
@@ -85,8 +85,6 @@ flui-scheduler = { path = "../../crates/flui-scheduler", version = "=0.2.0-dev" 
 # and the pipeline owner the binding lays it out with. Neither is SDK surface.
 flui-objects = { path = "../../crates/flui-objects", version = "=0.2.0-dev" }
 flui-rendering = { path = "../../crates/flui-rendering", version = "=0.2.0-dev" }
-# The composition an app ships: FLUI's log subscriber plus the profiler layer.
-flui-log = { path = "../../crates/flui-log", version = "=0.2.0-dev" }
 # The observer-overhead bench.
 criterion = { workspace = true }
 

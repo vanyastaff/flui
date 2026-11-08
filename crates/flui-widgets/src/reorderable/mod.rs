@@ -487,7 +487,8 @@ impl ReorderableList {
 /// use std::cell::RefCell;
 /// use std::rc::Rc;
 ///
-/// use flui_widgets::{ReorderableGrid, SliverGridDelegateWithFixedCrossAxisCount, Text};
+/// use flui_rendering::delegates::SliverGridDelegateWithFixedCrossAxisCount;
+/// use flui_widgets::{ReorderableGrid, Text};
 ///
 /// let photos = Rc::new(RefCell::new(vec!["Beach", "Forest", "Harbour", "Dunes"]));
 /// let (keys, labels, model) = (Rc::clone(&photos), Rc::clone(&photos), Rc::clone(&photos));

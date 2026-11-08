@@ -1,0 +1,24 @@
+[package]
+name = "flui-desktop-scene"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+description = "Hot-reloadable scene plugin for desktop (Windows/macOS/Linux)"
+
+[lib]
+crate-type = ["cdylib"]
+name = "flui_scene"
+
+[dependencies]
+flui-hot-reload = { path = "../../../flui-hot-reload" }
+flui-layer = { path = "../../../flui-layer" }
+flui-painting = { path = "../../../flui-painting" }
+flui-foundation = { path = "../../../flui-foundation" }
+
+[lints]
+workspace = true
+
+[package.metadata.flui]
+tier-kind = "tool"

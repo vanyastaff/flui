@@ -992,10 +992,7 @@ pub(crate) fn platform_focus_requests_the_mounted_node_and_rejects_disabled_focu
         target.supports_action(Action::Focus),
         "focusable control must expose the action"
     );
-    let listener = laid
-        .accessibility_action_listener()
-        .expect("production platform listener");
-    listener(ActionRequest {
+    laid.request_accessibility_action(ActionRequest {
         action: Action::Focus,
         target_tree: TreeId::ROOT,
         target_node: target.id(),
@@ -1174,10 +1171,7 @@ pub(crate) fn an_adopted_external_node_ignores_the_old_elements_focus_action() {
         .adopt_node(&node)
         .expect("a live node moves under another owner");
 
-    let listener = laid
-        .accessibility_action_listener()
-        .expect("production platform listener");
-    listener(ActionRequest {
+    laid.request_accessibility_action(ActionRequest {
         action: Action::Focus,
         target_tree: TreeId::ROOT,
         target_node: target,

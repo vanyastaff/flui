@@ -264,6 +264,8 @@ pub struct UiRuntime {
     /// presentation at construction and to every later one through
     /// [`Self::assemble_presentation`] (ADR-0152).
     capabilities: crate::capability::CapabilityRegistry,
+    /// The host executor every presentation hands its providers, when supplied.
+    executor: Option<Arc<dyn flui_platform::executor::Executor>>,
     /// Where providers' answers come back to the owner thread: drained after
     /// the command inbox at every Idle drain, retired when the UI runtime drops.
     owner_jobs: crate::capability::OwnerJobs,
@@ -298,8 +300,8 @@ pub struct UiRuntime {
     /// process-global singleton: when this UI runtime drops, this field drops
     /// with it, and every retained weak handle starts failing closed.
     /// Read directly for the idle-only commit-gate phase probe in
-    /// [`Self::drain_commands`] and vended to `runner.rs`'s lifecycle sites
-    /// via [`Self::scheduler`].
+    /// [`Self::drain_commands`] and vended to the owner operation
+    /// implementations and native frame drivers via [`Self::scheduler`].
     scheduler: UpdateScheduler,
     /// The embedder's typed frame-failure callback, if one was registered
     /// (`AppConfig::with_frame_failure_handler`, wired by each backend's

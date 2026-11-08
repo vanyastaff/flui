@@ -1,10 +1,25 @@
 # flui-devtools Architecture
 
-The profiling, timeline and inspector modules observe through the SDK;
-the optional development agent serves its host hook through a local endpoint.
-The feature and production wiring map is in [README.md](README.md).
+The profiling, timeline and inspector modules observe through the SDK. The package opens no
+endpoint: the development agent belongs to its application host. The feature and production
+wiring map is in [README.md](README.md).
 
 ## Mapping decisions
+
+### One typed span contract feeds every frame consumer
+
+Producers and devtools share `flui_sdk::foundation::diagnostics::FrameSpan`, including its exact
+`(target, name)` wire identities and the `runtime`, `presentation` and `period_us` field names.
+`CapturedSpan::kind` preserves that identity; `Phase` remains the profiler-facing subset and
+trace/display mapping rather than a second wire table. `Capture` admits frames, presentation
+segments, all profiler phases and animation-controller identities. `LayoutRoot` remains
+per-root diagnostic detail and is not captured as a phase. Non-span events are excluded.
+
+The profiler, timeline and Chrome/Perfetto export read the same `Capture`, partitioned by runtime
+and presentation. Scheduler `FrameSnapshot` values stay internal to the scheduler/runtime
+overlay, histogram and structured-event paths; neither the SDK nor the timeline exposes a
+snapshot bridge. Applications install `FrameTimingLayer` on their own `tracing-subscriber`
+registry rather than linking the internal logging composition root.
 
 ### Animation work belongs to its nearest scheduler frame
 

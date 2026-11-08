@@ -15,11 +15,11 @@ pub(crate) mod sealed {
     /// Implemented only by `flui-view`'s build contexts.
     pub trait Sealed {}
 
-    /// Proof that a call comes from inside `flui-view`: the field-granular
-    /// recording method takes one, and only this crate can construct it, so
-    /// the untyped [`FieldSet`](crate::view::FieldSet) entry point is
-    /// uncallable from application code (the sealed-method pattern; sealing
-    /// the trait alone stops implementations, not calls).
+    /// Proof that a call comes from inside `flui-view`: the untyped dependency
+    /// recording method takes one, and only this crate can construct it, so its
+    /// [`FieldSet`](crate::view::FieldSet) and [`EntrySet`](crate::view::EntrySet)
+    /// parameters are uncallable from application code (the sealed-method
+    /// pattern; sealing the trait alone stops implementations, not calls).
     #[derive(Clone, Copy, Debug)]
     pub struct CrateToken(());
 
@@ -75,29 +75,35 @@ pub(crate) mod sealed {
 ///
 /// Only `flui-view` implements this trait (the live drain context and
 /// `ElementBuildContext`). A downstream implementation could forward the
-/// untyped [`FieldSet`](crate::view::FieldSet) that
-/// [`BuildContextExt::depend_on_field`] passes to
-/// [`depend_on_inherited_fields`](Self::depend_on_inherited_fields) to a
-/// different provider `TypeId`, registering one data type's field bits against
-/// another provider; sealing keeps the typed selector the only way a field
-/// dependency is recorded (ADR-0074 §5.5).
+/// untyped [`FieldSet`](crate::view::FieldSet) or
+/// [`EntrySet`](crate::view::EntrySet) to
+/// [`depend_on_inherited_fields`](Self::depend_on_inherited_fields) under a
+/// different provider `TypeId`; sealing keeps the typed extensions the only
+/// public way to record field and entry dependencies (ADR-0074 §5.5).
 ///
 /// ```compile_fail,E0277
 /// struct Mine;
 /// impl flui_view::BuildContext for Mine {}
 /// ```
 ///
-/// Nor can application code call the untyped field-recording method: it takes
-/// a token only `flui-view` can construct, so an empty or foreign
-/// [`FieldSet`](crate::view::FieldSet) cannot be registered.
+/// Nor can application code call the untyped dependency-recording method: it
+/// takes a token only `flui-view` can construct, so an empty or foreign
+/// [`FieldSet`](crate::view::FieldSet) or [`EntrySet`](crate::view::EntrySet)
+/// cannot be registered.
 ///
 /// ```compile_fail,E0603
 /// use std::any::TypeId;
-/// use flui_view::{BuildContext, FieldSet};
+/// use flui_view::{BuildContext, EntrySet, FieldSet};
 ///
 /// fn sneak(ctx: &dyn BuildContext) {
 ///     let token = flui_view::context::build_context::sealed::CrateToken::new();
-///     ctx.depend_on_inherited_fields(token, TypeId::of::<u8>(), FieldSet::NONE, &mut |_| {});
+///     ctx.depend_on_inherited_fields(
+///         token,
+///         TypeId::of::<u8>(),
+///         FieldSet::NONE,
+///         EntrySet::NONE,
+///         &mut |_| {},
+///     );
 /// }
 /// ```
 pub trait BuildContext: sealed::Sealed + flui_foundation::read_scope::ReadScope {
@@ -161,23 +167,25 @@ pub trait BuildContext: sealed::Sealed + flui_foundation::read_scope::ReadScope 
         callback: &mut dyn FnMut(&dyn std::any::Any),
     ) -> bool;
 
-    /// [`depend_on_inherited`](Self::depend_on_inherited) at **field**
-    /// granularity (issue #1090): the dependency is recorded with `mask`, and
-    /// a later provider update schedules this element only if a field in the
-    /// mask changed ([`InheritedView::changed_fields`]). `FieldSet::ALL`
-    /// is exactly `depend_on_inherited`. The set is untyped here (this
-    /// method is object-safe), so it is **uncallable outside `flui-view`**: it
-    /// takes a crate-private token. Application code records a per-field
-    /// dependency only through the typed [`BuildContextExt::depend_on_field`];
-    /// an empty or foreign set cannot be registered.
+    /// [`depend_on_inherited`](Self::depend_on_inherited) with explicit field
+    /// and entry sets: a later provider update schedules this element when a
+    /// recorded field changed ([`InheritedView::changed_fields`]) or a recorded
+    /// entry changed ([`InheritedView::changed_entries`]). `FieldSet::ALL` plus
+    /// `EntrySet::ALL` is exactly `depend_on_inherited`. The sets are untyped
+    /// here (this method is object-safe), so it is **uncallable outside
+    /// `flui-view`**: it takes a crate-private token. Application code uses the
+    /// typed [`BuildContextExt::depend_on_field`] and
+    /// [`BuildContextExt::depend_on_entry`] extensions.
     ///
     /// [`InheritedView::changed_fields`]: crate::InheritedView::changed_fields
+    /// [`InheritedView::changed_entries`]: crate::InheritedView::changed_entries
     #[doc(hidden)]
     fn depend_on_inherited_fields(
         &self,
         token: sealed::CrateToken,
         type_id: TypeId,
         mask: crate::view::FieldSet,
+        entries: crate::view::EntrySet,
         callback: &mut dyn FnMut(&dyn std::any::Any),
     ) -> bool;
 
@@ -567,6 +575,14 @@ pub trait LifecycleContext: BuildContext {
         None
     }
 
+    /// The presentation's single URL-owner registration slot (ADR-0093 §5).
+    ///
+    /// The outermost router registers itself here in `init_state` and keeps the
+    /// returned registration in its state. `None` on a bare owner, or until the
+    /// presentation installs its slot. Acquire it only in `init_state` or
+    /// `did_change_dependencies`, never in build/layout/paint.
+    fn url_owner_slot(&self) -> Option<crate::UrlOwnerSlot>;
+
     /// The host's flush registry, which a
     /// [`Persisted`](crate::persist::Persisted) document publishes into.
     /// Uncallable outside `flui-view`: it takes a crate-private token, so
@@ -876,17 +892,36 @@ pub trait BuildContextExt: BuildContext {
         // An empty mask would read the provider and never rebuild: the read
         // is promoted to the whole-provider dependency instead of silently
         // opting out (read-is-depend holds for every public read path).
-        let set = if mask.is_empty() {
+        let (fields, entries) = if mask.is_empty() {
             tracing::debug!(
                 target: "flui.signals",
                 provider = std::any::type_name::<T>(),
                 "depend_on_field with an empty mask; recorded as a whole-provider dependency"
             );
-            crate::view::FieldSet::ALL
+            (crate::view::FieldSet::ALL, crate::view::EntrySet::ALL)
         } else {
-            mask.erase()
+            (mask.erase(), crate::view::EntrySet::NONE)
         };
-        depend_on_set::<T, R, _>(self, set, f)
+        depend_on_sets::<T, R, _>(self, fields, entries, f)
+    }
+
+    /// Read an ancestor provider while depending only on its dynamically typed
+    /// entry `E`.
+    ///
+    /// The dependency is recorded before `f` runs, including when `f` panics.
+    /// The element rebuilds when [`InheritedView::changed_entries`] includes
+    /// `E`; ordinary field changes do not rebuild an entry-only reader. A missed
+    /// lookup records the same ancestry dependency as [`depend_on`](Self::depend_on).
+    fn depend_on_entry<T: crate::InheritedView, E: 'static, R>(
+        &self,
+        f: impl FnOnce(&T) -> R,
+    ) -> Option<R> {
+        depend_on_sets::<T, R, _>(
+            self,
+            crate::view::FieldSet::NONE,
+            crate::view::EntrySet::of::<E>(),
+            f,
+        )
     }
 
     /// Look up data from an ancestor InheritedView (with dependency).
@@ -914,8 +949,13 @@ pub trait BuildContextExt: BuildContext {
     /// let color: Option<Color> = ctx.depend_on::<MyTheme, _>(|t| t.data().primary_color);
     /// ```
     fn depend_on<T: 'static, R>(&self, f: impl FnOnce(&T) -> R) -> Option<R> {
-        // One path: the whole-provider dependency is the ALL set.
-        depend_on_set::<T, R, _>(self, crate::view::FieldSet::ALL, f)
+        // One path: the whole-provider dependency is ALL fields and ALL entries.
+        depend_on_sets::<T, R, _>(
+            self,
+            crate::view::FieldSet::ALL,
+            crate::view::EntrySet::ALL,
+            f,
+        )
     }
 
     /// Look up data from an ancestor InheritedView (without dependency).
@@ -1026,15 +1066,14 @@ pub trait BuildContextExt: BuildContext {
     }
 }
 
-/// The one recording path behind [`BuildContextExt::depend_on`] and
-/// [`BuildContextExt::depend_on_field`]: look up `T`, record the dependency
-/// with `set`, and call `f`. Crate-private on purpose — an untyped set must
-/// not reach a provider from application code, or a selector of another data
-/// type could be registered (the typed `depend_on_field` is the only public
-/// field-granular entry).
-fn depend_on_set<T: 'static, R, C: BuildContext + ?Sized>(
+/// The one recording path behind the three typed inherited reads: look up `T`,
+/// record its field and entry dependencies, and call `f`. Crate-private on
+/// purpose — untyped sets must not reach a provider from application code, or a
+/// selector of another data type could be registered.
+fn depend_on_sets<T: 'static, R, C: BuildContext + ?Sized>(
     ctx: &C,
-    set: crate::view::FieldSet,
+    fields: crate::view::FieldSet,
+    entries: crate::view::EntrySet,
     f: impl FnOnce(&T) -> R,
 ) -> Option<R> {
     let mut result: Option<R> = None;
@@ -1042,7 +1081,8 @@ fn depend_on_set<T: 'static, R, C: BuildContext + ?Sized>(
     ctx.depend_on_inherited_fields(
         sealed::CrateToken::new(),
         TypeId::of::<T>(),
-        set,
+        fields,
+        entries,
         &mut |any| {
             if let (Some(typed), Some(call)) = (any.downcast_ref::<T>(), once.take()) {
                 result = Some(call(typed));

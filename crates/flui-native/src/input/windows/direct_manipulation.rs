@@ -1163,16 +1163,18 @@ pub mod manipulation {
             (dx, dy): (f64, f64),
             frame: TouchpadFrame,
         ) -> Option<PlatformInput> {
-            let phase = self.scrolling.phase(self.surface, None, reading)?;
-            let time = contacts.clock().stamp(frame.time, ClockChoice::Counter)?;
             let scale = frame.scale;
+            let delta = ScrollDelta::try_new(ScrollUnit::Pixels, dx / scale, dy / scale).ok();
+            let time = contacts.clock().stamp(frame.time, ClockChoice::Counter);
             let position = PointerPosition::try_new(Point::new(
                 frame.position.0 / scale,
                 frame.position.1 / scale,
-            ))
-            .ok()?;
-            let delta = ScrollDelta::try_new(ScrollUnit::Pixels, dx / scale, dy / scale)
-                .unwrap_or_else(|_| ScrollDelta::zero(ScrollUnit::Pixels));
+            ));
+            let (Some(delta), Some(time), Ok(position)) = (delta, time, position) else {
+                self.scrolling.reject(self.surface, None, reading);
+                return None;
+            };
+            let phase = self.scrolling.phase(self.surface, None, reading)?;
             Some(PlatformInput::Pointer(PointerEvent::Scroll(
                 ScrollEvent::new(primary_mouse_info(), time, position, delta)
                     .with_precision(ScrollPrecision::Precise)

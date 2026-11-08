@@ -18,7 +18,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use flui_platform::http::{
-    HeaderName, HeaderValue, Headers, HttpClient, HttpError, HttpFuture, HttpRequest, HttpResponse,
+    HeaderName, HeaderValue, HttpClient, HttpError, HttpFuture, HttpRequest, HttpResponse,
     StatusCode,
 };
 use ureq::http::{Request, Uri};
@@ -26,6 +26,7 @@ use ureq::tls::{RootCerts, TlsConfig, TlsProvider};
 use ureq::{Agent, Body, Error};
 
 use super::blocking::{Abort, BlockingClient, Connection, Head, Stack};
+use super::head::HeadBuilder;
 
 /// The longest a connect, a name lookup or a wait for the next bytes may take
 /// before the exchange fails with [`HttpError::Timeout`], whatever its own
@@ -227,18 +228,21 @@ impl Connection for UreqConnection {
         };
         let response = answer.map_err(|error| failure(&error, Stage::Send, &self.url))?;
         let status = StatusCode::try_new(response.status().as_u16())?;
-        let mut headers = Headers::new();
+        let mut headers = HeadBuilder::new();
         for (name, value) in response.headers() {
             let broken = || HttpError::Protocol {
                 detail: format!("a response header the contract refuses: {name}"),
             };
-            headers.append(
+            headers.try_append(
                 HeaderName::try_new(name.as_str()).map_err(|_| broken())?,
                 HeaderValue::try_new(value.as_bytes()).map_err(|_| broken())?,
-            );
+            )?;
         }
         self.body = Some(Body::into_reader(response.into_body()));
-        Ok(Head { status, headers })
+        Ok(Head {
+            status,
+            headers: headers.finish(),
+        })
     }
 
     fn read(&mut self) -> Result<Option<Vec<u8>>, HttpError> {

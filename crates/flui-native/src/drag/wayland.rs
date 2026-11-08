@@ -25,8 +25,8 @@
 //!   (version 3) and destroys it.
 //! - **Fetching.** A request asks the offer to write the representation's
 //!   type into a pipe (`receive`), which a thread of its own reads, bounded
-//!   by the request's limit and [`TRANSFER_TIMEOUT`]. At most
-//!   [`MAX_FETCHES`] read at once and more wait their turn; a fetch whose
+//!   by the request's limit and the shared intake policy's deadline. At most
+//!   its fetch bound read at once and more wait their turn; a fetch whose
 //!   offer retires answers [`TransferError::SourceGone`] at once, and keeps
 //!   its place until its thread ends.
 //!
@@ -45,7 +45,6 @@
 use std::collections::{HashMap, VecDeque};
 use std::os::fd::AsFd as _;
 use std::sync::{Arc, Weak};
-use std::time::Duration;
 
 use flui_foundation::DataTransferId;
 use flui_foundation::geometry::Point;
@@ -64,19 +63,14 @@ use wayland_client::protocol::wl_data_offer::WlDataOffer;
 use wayland_client::protocol::wl_seat::WlSeat;
 use web_time::Instant;
 
-use crate::drag::offers::{Kind, OfferTable, representations, too_large};
+use crate::drag::offers::{Kind, OfferTable, representations};
 use crate::owner::linux::wayland::{DragWindow, LastInput, WaylandDrag};
 use crate::owner::slot::OwnerCell;
+use crate::transfer::intake::Intake;
 use crate::transfer::linux::wayland::pipe::{self, PipeError};
 use crate::transfer::linux::wayland::{DataDevices, DragListener, DragWire, OfferData};
 
 mod source;
-
-/// How long a fetch waits for the source to write its answer.
-const TRANSFER_TIMEOUT: Duration = Duration::from_secs(5);
-
-/// The most fetches reading at once, a thread each; more wait.
-const MAX_FETCHES: usize = 4;
 
 /// `wl_data_offer.set_actions` and `finish` exist from version 3.
 const ACTIONS_VERSION: u32 = 3;
@@ -199,7 +193,7 @@ struct Wanted {
     id: DataTransferId,
     mime: String,
     kind: Kind,
-    limit: u64,
+    limits: TransferLimits,
     completer: TransferCompleter,
 }
 
@@ -219,7 +213,7 @@ struct State {
     windows: Vec<DragWindow>,
     hover: Option<Hover>,
     offers: HashMap<DataTransferId, Offer>,
-    /// The fetches reading, at most [`MAX_FETCHES`].
+    /// The fetches reading, bounded by the shared intake policy.
     fetches: Vec<Fetch>,
     /// Requests waiting for a fetch to end.
     waiting: VecDeque<Wanted>,
@@ -654,7 +648,7 @@ impl SeatDrag {
 
     /// Start the waiting requests the fetches have room for.
     fn start_waiting(&self, state: &mut State, after: &mut After) {
-        while state.fetches.len() < MAX_FETCHES {
+        while state.fetches.len() < Intake::DEFAULT.max_fetches {
             let Some(wanted) = state.waiting.pop_front() else {
                 return;
             };
@@ -682,16 +676,16 @@ impl SeatDrag {
             state.tickets = state.tickets.wrapping_add(1);
             let ticket = state.tickets;
             let shared = Arc::downgrade(&self.shared);
-            let (kind, limit) = (wanted.kind, wanted.limit);
+            let (kind, limits) = (wanted.kind, wanted.limits);
             let spawned = std::thread::Builder::new()
                 .name("flui-wayland-drop".to_owned())
                 .spawn(move || {
                     let bytes = pipe::read(
                         reader,
-                        Instant::now() + TRANSFER_TIMEOUT,
-                        usize::try_from(limit).unwrap_or(usize::MAX),
+                        Instant::now() + Intake::DEFAULT.fetch_timeout,
+                        usize::try_from(limits.max_bytes).unwrap_or(usize::MAX),
                     );
-                    fetched(&shared, ticket, outcome(&kind, limit, bytes));
+                    fetched(&shared, ticket, outcome(&kind, limits, bytes));
                 });
             match spawned {
                 Ok(_) => state.fetches.push(Fetch {
@@ -721,19 +715,23 @@ fn complete_all(
     }
 }
 
-/// What a fetch of `kind` read comes to, held to `limit`: measured before
+/// What a fetch of `kind` read comes to, held to `limits`: measured before
 /// it is made, which can take more than the bytes read.
 fn outcome(
     kind: &Kind,
-    limit: u64,
+    limits: TransferLimits,
     bytes: Result<Vec<u8>, PipeError>,
 ) -> Result<TransferPayload, TransferError> {
     match bytes {
         Ok(bytes) => {
-            too_large(kind.decoded_len(&bytes), limit).map_or_else(|| Ok(kind.payload(bytes)), Err)
+            let actual = u64::try_from(kind.decoded_len(&bytes)).unwrap_or(u64::MAX);
+            limits.check(actual).map(|()| kind.payload(bytes))
         }
         Err(PipeError::TooLarge { read }) => {
-            Err(too_large(read, limit).unwrap_or(TransferError::SourceGone))
+            let actual = u64::try_from(read).unwrap_or(u64::MAX);
+            limits
+                .check(actual)
+                .map_or_else(Err, |()| Err(TransferError::SourceGone))
         }
         Err(PipeError::Timeout | PipeError::Failed) => Err(TransferError::SourceGone),
     }
@@ -867,14 +865,14 @@ impl DragTransport for SeatDrag {
                 id,
                 mime,
                 kind,
-                limit: limits.max_bytes,
+                limits,
                 completer,
             });
             self.start_waiting(&mut state, &mut after);
             request
         };
         self.finish(after);
-        request
+        request.enforce(limits)
     }
 
     fn update_drop_feedback(&self, id: DataTransferId, feedback: DropFeedback) {

@@ -26,6 +26,7 @@ pub struct RuntimeHostServices<'a> {
     pub(crate) wake: Arc<dyn Fn() + Send + Sync>,
     pub(crate) needs_redraw: Arc<AtomicBool>,
     pub(crate) capabilities: crate::capability::CapabilityRegistry,
+    pub(crate) executor: Option<Arc<dyn flui_platform::executor::Executor>>,
     pub(crate) fonts: &'a FontCollection,
     pub(crate) clock: ClockSource,
     pub(crate) preferences: Option<crate::owner::SystemPreferencesSnapshot>,
@@ -69,6 +70,7 @@ impl<'a> RuntimeHostServices<'a> {
             wake,
             needs_redraw,
             capabilities: crate::capability::CapabilityRegistry::empty(),
+            executor: None,
             fonts,
             clock,
             preferences: None,
@@ -85,6 +87,15 @@ impl<'a> RuntimeHostServices<'a> {
     #[must_use]
     pub fn with_capabilities(mut self, registry: crate::capability::CapabilityRegistry) -> Self {
         self.capabilities = registry;
+        self
+    }
+
+    /// The host's background executor, handed to every capability provider
+    /// through its [`ProviderContext`](flui_platform::capability::ProviderContext).
+    /// Without it providers receive no executor.
+    #[must_use]
+    pub fn with_executor(mut self, executor: Arc<dyn flui_platform::executor::Executor>) -> Self {
+        self.executor = Some(executor);
         self
     }
 
@@ -158,6 +169,8 @@ pub(crate) struct RuntimeServices {
     /// The providers every presentation of this UI runtime acquires platform
     /// capabilities from (ADR-0152).
     pub(crate) capabilities: crate::capability::CapabilityRegistry,
+    /// The host executor handed to those providers, when the host supplied one.
+    pub(crate) executor: Option<Arc<dyn flui_platform::executor::Executor>>,
     /// Where the UI runtime reads time: its frame-time origin, and every
     /// presentation's gesture arena and frame clock.
     pub(crate) clock: ClockSource,
@@ -187,6 +200,7 @@ impl RuntimeServices {
             wake,
             needs_redraw,
             capabilities,
+            executor,
             fonts,
             clock,
             preferences,
@@ -207,6 +221,7 @@ impl RuntimeServices {
             wake,
             needs_redraw,
             capabilities,
+            executor,
             clock,
             preferences,
             text: TextContextHandle::new(TextContext::new(fonts)),
@@ -229,10 +244,11 @@ pub(crate) fn next_identity() -> (UiRuntimeId, PresentationId) {
 }
 
 fn next_identity_with_counter(counter: &AtomicU32) -> (UiRuntimeId, PresentationId) {
+    let last = flui_foundation::generation::Generation::LAST.as_u32();
     let incarnation = counter
         .try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
-            // Zero is permanent exhaustion; MAX remains the last valid generation.
-            (current != 0).then(|| current.wrapping_add(1))
+            // Zero is permanent exhaustion; the packed key's LAST remains valid.
+            (current != 0 && current <= last).then(|| if current == last { 0 } else { current + 1 })
         })
         .expect("BUG: ui_runtime incarnation space exhausted");
     let generation = NonZeroU32::new(incarnation)
@@ -247,13 +263,24 @@ fn next_identity_with_counter(counter: &AtomicU32) -> (UiRuntimeId, Presentation
 pub(crate) fn exhausted_incarnations_never_alias_previous_ui_runtimes() {
     // A local counter reaches an otherwise impractical failure boundary without
     // changing the process-global identity source used by unrelated ui_runtime tests.
-    let counter = AtomicU32::new(u32::MAX - 1);
+    let terminal = flui_foundation::generation::Generation::LAST.as_u32();
+    let counter = AtomicU32::new(terminal - 1);
     let (before_last, before_last_presentation) = next_identity_with_counter(&counter);
     let (last, last_presentation) = next_identity_with_counter(&counter);
+    assert_eq!(before_last.generation().get(), terminal - 1);
+    assert_eq!(last.generation().get(), terminal);
+    assert_eq!(last.as_u64() >> 63, 0);
     assert_ne!(before_last, last);
     assert_ne!(before_last_presentation, last_presentation);
     for _ in 0..3 {
-        assert!(std::panic::catch_unwind(|| next_identity_with_counter(&counter)).is_err());
+        let failure = std::panic::catch_unwind(|| next_identity_with_counter(&counter))
+            .expect_err("an exhausted incarnation source refuses every later allocation");
+        assert!(
+            flui_foundation::panic::payload_text(failure.as_ref())
+                .is_some_and(|message| message.contains("ui_runtime incarnation space exhausted")),
+            "exhaustion must be refused by the counter, not by packed-key construction"
+        );
+        assert_eq!(counter.load(Ordering::Relaxed), 0);
     }
     let fresh = AtomicU32::new(1);
     let (ui_runtime, presentation) = next_identity_with_counter(&fresh);

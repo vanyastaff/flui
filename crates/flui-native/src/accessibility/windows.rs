@@ -38,9 +38,9 @@ use parking_lot::Mutex;
 use windows::Win32::Foundation::HWND;
 
 use super::bridge::{Action, Activation, BridgeShared};
-use flui_semantics::{
-    platform::AccessibilityActionListener, platform::AccessibilityActivationListener,
-    platform::PlatformAccessibility,
+use flui_semantics::platform::{
+    AccessibilityAlreadyAttached, AccessibilityAttachment, AccessibilityCapabilities,
+    AccessibilityHandler, PlatformAccessibility, RouteChange,
 };
 
 /// UIA accessibility for one window.
@@ -134,6 +134,7 @@ impl crate::host::WindowAccessibility for WindowsAccessibility {
     /// while the window still exists. Every later call through a still-live
     /// capability `Arc` is a no-op. Idempotent.
     fn detach(&self) {
+        self.shared.detach_handler();
         let adapter = self.adapter.lock().take();
         drop(adapter);
     }
@@ -194,24 +195,22 @@ impl PlatformAccessibility for WindowsAccessibility {
         }
     }
 
-    fn is_active(&self) -> bool {
-        self.shared.is_active()
+    fn attach(
+        &self,
+        handler: Arc<dyn AccessibilityHandler>,
+    ) -> Result<AccessibilityAttachment, AccessibilityAlreadyAttached> {
+        self.shared.attach(
+            handler,
+            AccessibilityCapabilities::new(Self::ASSISTIVE_FOCUS, Self::ROUTE_CHANGE),
+        )
     }
 
-    fn set_activation_listener(&self, listener: AccessibilityActivationListener) {
-        self.shared.set_activation_listener(listener);
+    fn detach_handler(&self) {
+        self.shared.detach_handler();
     }
 
-    fn set_action_listener(&self, listener: AccessibilityActionListener) {
-        self.shared.set_action_listener(listener);
-    }
-
-    fn assistive_focus_support(&self) -> flui_semantics::AssistiveFocusSupport {
-        Self::ASSISTIVE_FOCUS
-    }
-
-    fn route_change_support(&self) -> flui_semantics::platform::RouteChangeSupport {
-        Self::ROUTE_CHANGE
+    fn route_changed(&self, change: RouteChange) {
+        drop(change);
     }
 }
 
@@ -233,8 +232,23 @@ mod tests {
     use std::sync::Arc;
 
     use accesskit::{ActionHandler, ActionRequest, ActivationHandler, NodeId, TreeId};
+    use flui_semantics::platform::{AccessibilityCapabilities, AccessibilityHandler};
 
     use super::{Action, Activation, BridgeShared};
+
+    struct PanickingHandler;
+
+    impl AccessibilityHandler for PanickingHandler {
+        fn activation_changed(&self, _: bool) {
+            panic!("activation listener");
+        }
+
+        fn action_requested(&self, _: ActionRequest) {
+            panic!("action listener");
+        }
+
+        fn assistive_focus_changed(&self, _: Option<NodeId>) {}
+    }
 
     /// AccessKit calls the handlers from its UIA vtable methods, which are
     /// `extern "system"`: a panic of the composition root's listener is
@@ -244,8 +258,9 @@ mod tests {
     #[test]
     fn a_panicking_listener_stays_inside_its_handler() {
         let shared = Arc::new(BridgeShared::new());
-        shared.set_activation_listener(Arc::new(|_| panic!("activation listener")));
-        shared.set_action_listener(Arc::new(|_| panic!("action listener")));
+        shared
+            .attach(Arc::new(PanickingHandler), AccessibilityCapabilities::NONE)
+            .expect("the first handler attaches");
 
         let contained = catch_unwind(AssertUnwindSafe(|| {
             let initial = Activation(Arc::clone(&shared)).request_initial_tree();

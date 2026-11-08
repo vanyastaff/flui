@@ -33,6 +33,7 @@ use flui_interaction::InputSequenceId;
 use flui_interaction::focus::FocusNode;
 use flui_painting::Alignment;
 use flui_rendering::pipeline::WeakPipelineCell;
+use flui_rendering::semantics::SemanticsRole;
 use flui_view::prelude::StatefulView;
 use flui_view::{BoxedView, BuildContext, IntoView, LifecycleContext, ViewExt, ViewState};
 
@@ -45,10 +46,7 @@ use super::scroll_owner::{SharedSnapPolicy, settle_spring, snap_target};
 use super::scroll_physics::rest_slop;
 use super::{ClampingScrollPhysics, ScrollMetrics, ScrollPhysics};
 use crate::interaction::focus_reveal::{FocusRevealScope, RevealTarget, SharedRevealTarget};
-use crate::{
-    AnimatedBuilder, ClipRect, Column, Expanded, Focus, OverflowBox, Semantics, SemanticsRole,
-    SizedBox,
-};
+use crate::{AnimatedBuilder, ClipRect, Column, Expanded, Focus, OverflowBox, Semantics, SizedBox};
 use flui_view::environment::VsyncScope;
 
 /// Why [`HeaderExtents::try_new`] refused a pair of extents.

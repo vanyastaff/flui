@@ -4,6 +4,7 @@ use flui_objects::RenderIcon;
 use flui_painting::styling::Color;
 use flui_painting::typography::{FontVariation, TextStyle};
 use flui_rendering::protocol::BoxProtocol;
+use flui_rendering::semantics::SemanticsRole;
 use flui_view::prelude::StatelessView;
 use flui_view::{BuildContext, CreationSite, IntoView, RenderView, ViewExt, impl_render_view};
 
@@ -196,9 +197,7 @@ impl StatelessView for Icon {
         };
         let mut semantics = Semantics::new();
         if let Some(label) = self.semantic_label.as_ref() {
-            semantics = semantics
-                .label(label.clone())
-                .role(crate::SemanticsRole::Image);
+            semantics = semantics.label(label.clone()).role(SemanticsRole::Image);
         }
         let built = semantics.child(icon).boxed();
         match self.effect.as_ref().or(theme.symbol_effect.as_ref()) {

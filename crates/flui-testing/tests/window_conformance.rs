@@ -6,7 +6,8 @@
 use std::rc::Rc;
 use std::sync::Arc;
 
-use flui_native::{HeadlessPlatform, HostWindow, MockWindow, Platform};
+use flui_native::testing::HeadlessWindow;
+use flui_native::{HeadlessPlatform, HostWindow, Platform};
 use flui_platform::input_capabilities::InputCapabilities;
 use flui_platform::{
     AdmittedCommand, ApplyError, CommandRefusal, CursorError, CursorIcon, PlatformHaptics,
@@ -14,8 +15,7 @@ use flui_platform::{
     WindowMode, WindowState,
 };
 use flui_platform::{
-    Availability, CapabilityAbsence, EventTime, FramePresented, FrameRequest, WindowCapabilities,
-    WindowOptions,
+    Availability, EventTime, FramePresented, FrameRequest, WindowCapabilities, WindowOptions,
 };
 use flui_testing::window_conformance::{self, Readback, WindowFixture};
 use flui_testing::window_handler::{HandlerCall, RecordingWindowHandler};
@@ -63,9 +63,7 @@ impl PlatformWindow for Faulty {
                 state.capabilities.reports_presentation = Availability::Native;
             }
             Fault::DisclaimsPresentation => {
-                state.capabilities = state
-                    .capabilities
-                    .without_presentation_feedback(CapabilityAbsence::NotOnThisPlatform);
+                state.capabilities = state.capabilities.without_presentation_feedback();
             }
             _ => {}
         }
@@ -165,10 +163,10 @@ struct Fixture {
 }
 
 impl Fixture {
-    fn mock(&self) -> &MockWindow {
+    fn mock(&self) -> &HeadlessWindow {
         self.model
             .as_any()
-            .downcast_ref::<MockWindow>()
+            .downcast_ref::<HeadlessWindow>()
             .expect("a headless platform opens mock windows")
     }
 }
@@ -212,18 +210,18 @@ enum Fault {
 }
 
 impl Fixture {
-    fn new(capabilities: WindowCapabilities, fault: Option<Fault>) -> Self {
+    fn new(capabilities: &WindowCapabilities, fault: Option<Fault>) -> Self {
         Self::with_input(capabilities, None, fault)
     }
 
     /// A headless window under `capabilities` whose platform delivers
     /// `input` in place of its default input availability.
     fn with_input(
-        capabilities: WindowCapabilities,
+        capabilities: &WindowCapabilities,
         input: Option<InputCapabilities>,
         fault: Option<Fault>,
     ) -> Self {
-        let mut platform = HeadlessPlatform::new().with_window_capabilities(capabilities);
+        let mut platform = HeadlessPlatform::new().with_window_capabilities(*capabilities);
         if let Some(input) = input {
             platform = platform.with_input_availability(input);
         }
@@ -399,14 +397,14 @@ fn the_headless_window_conforms_under_every_capability_set() {
         ("move and size only", only_the_move_and_size_commands()),
         ("no fullscreen or minimize", no_fullscreen_or_minimize()),
     ] {
-        let violations = window_conformance::check(&mut Fixture::new(capabilities, None));
+        let violations = window_conformance::check(&mut Fixture::new(&capabilities, None));
         assert!(violations.is_empty(), "{name}: {violations:?}");
     }
     let without_input_regions = InputCapabilities::builder()
         .pen(Availability::Native)
         .build();
     let violations = window_conformance::check(&mut Fixture::with_input(
-        WindowCapabilities::ALL,
+        &WindowCapabilities::ALL,
         Some(without_input_regions),
         None,
     ));
@@ -417,7 +415,7 @@ fn a_window_whose_verbs_ignore_their_capabilities_is_caught() {
     for capabilities in [WindowCapabilities::NONE, WindowCapabilities::ALL] {
         let without_input_regions = InputCapabilities::builder().build();
         let checks: Vec<_> = window_conformance::check(&mut Fixture::with_input(
-            capabilities,
+            &capabilities,
             Some(without_input_regions),
             Some(Fault::VerbsIgnoreTheirCapabilities),
         ))
@@ -432,7 +430,7 @@ fn a_window_whose_verbs_ignore_their_capabilities_is_caught() {
 }
 
 fn caught(fault: Fault) -> Vec<&'static str> {
-    window_conformance::check(&mut Fixture::new(WindowCapabilities::ALL, Some(fault)))
+    window_conformance::check(&mut Fixture::new(&WindowCapabilities::ALL, Some(fault)))
         .into_iter()
         .map(|violation| violation.check)
         .collect()
@@ -453,7 +451,7 @@ fn a_window_that_stays_open_is_caught_accepting_commands_after_close() {
 
 fn a_window_that_claims_what_it_cannot_do_is_caught() {
     let checks: Vec<_> = window_conformance::check(&mut Fixture::new(
-        WindowCapabilities::NONE,
+        &WindowCapabilities::NONE,
         Some(Fault::ClaimsWhatItCannot),
     ))
     .into_iter()
@@ -495,7 +493,7 @@ fn a_surface_target_that_blocks_or_withholds_is_caught() {
 fn a_window_whose_presentation_reports_disagree_with_its_capabilities_is_caught() {
     assert_eq!(
         window_conformance::check(&mut Fixture::new(
-            WindowCapabilities::NONE,
+            &WindowCapabilities::NONE,
             Some(Fault::ClaimsPresentation),
         ))
         .into_iter()
@@ -532,7 +530,7 @@ fn a_window_hidden_by_minimizing_is_caught_whatever_its_readback_says() {
 /// The snapshot's occlusion is the window system's, and is compared only
 /// while the window is shown and not minimized.
 fn the_snapshot_follows_the_window_systems_occlusion() {
-    let mut fixture = Fixture::new(WindowCapabilities::ALL, None);
+    let mut fixture = Fixture::new(&WindowCapabilities::ALL, None);
     fixture.mock().simulate_occlusion(true);
     let state = fixture.window.state();
     assert!(

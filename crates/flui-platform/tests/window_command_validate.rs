@@ -4,10 +4,10 @@
 use flui_foundation::geometry::{EdgeInsets, Point, Size, WindowMetrics};
 use flui_platform::{
     AdmissionError, AdmittedCommand, AppTitleBar, ApplyError, Availability, CapabilitiesOwner,
-    CapabilityAbsence, ControlsOffset, InvalidControlsOffset, KeyboardInset, SizeConstraints,
-    SystemControls, Unsupported, UnsupportedReason, WindowAppearance, WindowCapabilities,
-    WindowCommand, WindowExecutionState, WindowFrame, WindowGeometry, WindowInsets, WindowMaterial,
-    WindowMode, WindowOptions, WindowRevision, WindowRevisionExhausted, WindowState,
+    ControlsOffset, InvalidControlsOffset, KeyboardInset, SizeConstraints, SystemControls,
+    Unsupported, UnsupportedReason, WindowAppearance, WindowCapabilities, WindowCommand,
+    WindowExecutionState, WindowFrame, WindowGeometry, WindowInsets, WindowMaterial, WindowMode,
+    WindowOptions, WindowRevision, WindowRevisionExhausted, WindowState,
 };
 
 fn size(width: f64, height: f64) -> Size<f64> {
@@ -231,36 +231,45 @@ fn admit_refuses_exactly_when_the_capability_is_unavailable() {
             ))),
             "{command:?} on a window that honours nothing"
         );
+        assert_eq!(
+            WindowCapabilities::ALL
+                .unavailable(&command)
+                .command_capability(&command),
+            Err(Unsupported::new(UnsupportedReason::NotOnThisPlatform)),
+            "{command:?}: the platform constructor"
+        );
         // A capability this device lacks where the platform has it, and one
         // the operating system has that the host does not implement yet:
         // admission answers the reason the host marked, not the platform's.
-        for (absence, reason) in [
-            (
-                CapabilityAbsence::NotOnThisDevice,
-                UnsupportedReason::NotOnThisDevice,
-            ),
-            (
-                CapabilityAbsence::NotYetOnThisHost,
-                UnsupportedReason::NotYetOnThisHost,
-            ),
+        for (device, reason) in [
+            (true, UnsupportedReason::NotOnThisDevice),
+            (false, UnsupportedReason::NotYetOnThisHost),
         ] {
-            let marked = WindowCapabilities::ALL.unavailable(&command, absence);
+            let marked = if device {
+                WindowCapabilities::ALL.unavailable_on_this_device(&command)
+            } else {
+                WindowCapabilities::ALL.unavailable_not_yet_on_this_host(&command)
+            };
             assert_eq!(
                 marked.availability(&command),
                 Availability::Unavailable,
-                "{command:?} taken away, {absence:?}"
+                "{command:?} taken away, {reason:?}"
             );
             assert_eq!(
                 admits(&command, &marked),
                 Err(AdmissionError::Unsupported(Unsupported::new(reason))),
-                "{command:?} without its capability, {absence:?}"
+                "{command:?} without its capability, {reason:?}"
             );
-            assert_eq!(marked.refusal(&command), absence, "{command:?}");
+            assert_eq!(
+                marked.command_capability(&command),
+                Err(Unsupported::new(reason)),
+                "{command:?}"
+            );
             assert_ne!(marked, WindowCapabilities::ALL, "{command:?}");
         }
         assert_ne!(
-            WindowCapabilities::ALL.unavailable(&command, CapabilityAbsence::NotOnThisDevice),
-            WindowCapabilities::ALL.unavailable(&command, CapabilityAbsence::NotYetOnThisHost),
+            WindowCapabilities::ALL.unavailable_on_this_device(&command),
+            WindowCapabilities::ALL.unavailable_not_yet_on_this_host(&command),
             "{command:?}: the absence is part of what the window honours"
         );
     }
@@ -272,8 +281,7 @@ fn admit_refuses_exactly_when_the_capability_is_unavailable() {
 /// left behind.
 fn an_absence_left_in_an_available_slot_is_no_difference() {
     let material = WindowCommand::SetMaterial(WindowMaterial::System);
-    let mut restored =
-        WindowCapabilities::ALL.unavailable(&material, CapabilityAbsence::NotYetOnThisHost);
+    let mut restored = WindowCapabilities::ALL.unavailable_not_yet_on_this_host(&material);
     restored.material = Availability::Native;
     assert_eq!(restored, WindowCapabilities::ALL);
     assert_eq!(
@@ -303,39 +311,84 @@ fn hash_of(capabilities: &WindowCapabilities) -> u64 {
     BuildHasherDefault::<DefaultHasher>::default().hash_one(capabilities)
 }
 
-/// Each absence a capability carries converts to the reason of the same name,
-/// and none asks to be tried again: a capability stays `Unavailable` until
-/// the host publishes it again.
+/// No lasting absence asks to be tried again: a capability stays
+/// `Unavailable` until the host publishes it again.
 fn no_absence_is_retryable() {
-    for (absence, reason) in [
-        (
-            CapabilityAbsence::NotOnThisPlatform,
-            UnsupportedReason::NotOnThisPlatform,
-        ),
-        (
-            CapabilityAbsence::NotOnThisDevice,
-            UnsupportedReason::NotOnThisDevice,
-        ),
-        (
-            CapabilityAbsence::NotYetOnThisHost,
-            UnsupportedReason::NotYetOnThisHost,
-        ),
+    for reason in [
+        UnsupportedReason::NotOnThisPlatform,
+        UnsupportedReason::NotOnThisDevice,
+        UnsupportedReason::NotYetOnThisHost,
     ] {
-        assert_eq!(UnsupportedReason::from(absence), reason);
         assert!(
-            !Unsupported::from(absence).is_retryable(),
-            "{absence:?} asks to be retried"
+            !Unsupported::new(reason).is_retryable(),
+            "{reason:?} asks to be retried"
+        );
+    }
+}
+
+fn every_typed_report_constructor_keeps_its_reason() {
+    let app_title_bar: [fn(WindowCapabilities) -> WindowCapabilities; 3] = [
+        WindowCapabilities::without_app_title_bar,
+        WindowCapabilities::without_app_title_bar_on_this_device,
+        WindowCapabilities::without_app_title_bar_not_yet_on_this_host,
+    ];
+    let presentation: [fn(WindowCapabilities) -> WindowCapabilities; 3] = [
+        WindowCapabilities::without_presentation_feedback,
+        WindowCapabilities::without_presentation_feedback_on_this_device,
+        WindowCapabilities::without_presentation_feedback_not_yet_on_this_host,
+    ];
+    let keyboard: [fn(WindowCapabilities) -> WindowCapabilities; 3] = [
+        WindowCapabilities::without_keyboard_inset,
+        WindowCapabilities::without_keyboard_inset_on_this_device,
+        WindowCapabilities::without_keyboard_inset_not_yet_on_this_host,
+    ];
+    let gestures: [fn(WindowCapabilities) -> WindowCapabilities; 3] = [
+        WindowCapabilities::without_system_gestures,
+        WindowCapabilities::without_system_gestures_on_this_device,
+        WindowCapabilities::without_system_gestures_not_yet_on_this_host,
+    ];
+    let app_command = WindowCommand::SetFrame(WindowFrame::AppTitleBar(AppTitleBar::new()));
+    for (index, reason) in [
+        UnsupportedReason::NotOnThisPlatform,
+        UnsupportedReason::NotOnThisDevice,
+        UnsupportedReason::NotYetOnThisHost,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        assert_eq!(
+            app_title_bar[index](WindowCapabilities::ALL)
+                .command_capability(&app_command)
+                .map_err(|absent| absent.reason),
+            Err(reason)
+        );
+        assert_eq!(
+            presentation[index](WindowCapabilities::ALL)
+                .presentation_feedback()
+                .map_err(|absent| absent.reason),
+            Err(reason)
+        );
+        assert_eq!(
+            keyboard[index](WindowCapabilities::ALL)
+                .keyboard_inset()
+                .map_err(|absent| absent.reason),
+            Err(reason)
+        );
+        assert_eq!(
+            gestures[index](WindowCapabilities::ALL)
+                .system_gestures()
+                .map_err(|absent| absent.reason),
+            Err(reason)
         );
     }
 }
 
 fn restoring_normal_needs_no_capability() {
+    let normal = WindowCommand::SetMode(WindowMode::Normal);
+    assert_eq!(admits(&normal, &WindowCapabilities::NONE), Ok(()));
     assert_eq!(
-        admits(
-            &WindowCommand::SetMode(WindowMode::Normal),
-            &WindowCapabilities::NONE
-        ),
-        Ok(())
+        WindowCapabilities::NONE.command_capability(&normal),
+        Ok(Availability::Native)
     );
 }
 
@@ -783,6 +836,10 @@ fn window_command_validate() {
             ),
             ("no_absence_is_retryable", no_absence_is_retryable),
             (
+                "every_typed_report_constructor_keeps_its_reason",
+                every_typed_report_constructor_keeps_its_reason,
+            ),
+            (
                 "the_presentation_report_answers_why_it_is_missing",
                 the_presentation_report_answers_why_it_is_missing,
             ),
@@ -804,15 +861,14 @@ fn the_presentation_report_answers_why_it_is_missing() {
         Err(UnsupportedReason::NotOnThisPlatform),
         "set by hand, the platform's"
     );
-    let host =
-        WindowCapabilities::ALL.without_presentation_feedback(CapabilityAbsence::NotYetOnThisHost);
+    let host = WindowCapabilities::ALL.without_presentation_feedback_not_yet_on_this_host();
     assert_eq!(
         host.presentation_feedback(),
         Err(Unsupported::new(UnsupportedReason::NotYetOnThisHost))
     );
     assert_ne!(
         host,
-        WindowCapabilities::ALL.without_presentation_feedback(CapabilityAbsence::NotOnThisDevice),
+        WindowCapabilities::ALL.without_presentation_feedback_on_this_device(),
         "the absence is part of what the window honours"
     );
     let shown = flui_platform::FramePresented::new(flui_platform::EventTime::from_nanos(1));

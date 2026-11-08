@@ -28,21 +28,23 @@
 
 ## Context and problem statement
 
-An application navigates three ways on `main`, each with its own semantics for deep links and
-restoration:
+Before this decision an application could navigate through string-named routes (ADR-0024),
+imperative `NavigatorHandle` operations, or the typed `Router<R>`. Only the typed Router owns
+pages and their paths now; the remaining NavigatorHandle operations serve pageless presentation
+and local stack history rather than offering a second path-addressed navigation model.
 
 | What | Where | Users |
 |:--|:--|:--|
-| String-named routes (ADR-0024): `route`, `on_generate_route`, `on_unknown_route`, seven `*_named*` doors, `push_keyed`, `RouteKey<T>`, `RouteArguments` | `crates/flui-widgets/src/navigator/named_route.rs`, `navigator.rs` | none outside `flui-widgets`: its tests and `widgets_app.rs`'s docs |
-| Imperative pushes on `NavigatorHandle` (ADR-0019): `push`, `pop_with`, `remove_route`, `maybe_pop`, …, found from `build` through `maybe_of`/`maybe_of_root` | `crates/flui-widgets/src/navigator/navigator.rs` (38 `pub fn`) | `show_dialog`, popup menus, `OpenContainer`, Material's back button and app bar |
+| Imperative operations on `NavigatorHandle` (ADR-0019): `push`, `pop_with`, `remove_route`, `maybe_pop`, …, found from `build` through `maybe_of`/`maybe_of_root` | `crates/flui-widgets/src/navigator/navigator.rs` | `show_dialog`, popup menus, `OpenContainer`, Material's back button and app bar |
 | The typed `Router<R>` with `#[derive(Routable)]` | `crates/flui-widgets/src/router/`, `crates/flui-macros/src/derive_routable.rs` | the acceptance app (`tests/fixtures/acceptance_app/app.rs`: `Router::from_stack`, `WidgetsApp::router`) |
 
-A pop result crosses the stack as `Box<dyn Any + Send>` and `RouteResult<T>` shares an
-`Arc<Mutex<_>>` (`crates/flui-widgets/src/navigator/result.rs`), although only the owner thread
-polls it; `tools/xtask/allowlists/send-positions.toml` lists 29 navigator positions.
-`MaterialApp` and `CupertinoApp` take only `.navigator(…)`, so an application on Material roots
-itself in `WidgetsApp::router` and gives up the design system's app shell. The cross-thread
-navigation command (`UiCommand::Navigation`) had no producer and is deleted.
+Before the owner-local typed result, a pop result crossed the stack as `Box<dyn Any + Send>` and
+`RouteResult<T>` shared an `Arc<Mutex<_>>` (`crates/flui-widgets/src/navigator/result.rs`), although
+only the owner thread polled it; `tools/xtask/allowlists/send-positions.toml` then listed 15
+navigator positions.
+`MaterialApp::router` and `CupertinoApp::router` mount a typed Router below the corresponding
+design system's theme. The cross-thread navigation command (`UiCommand::Navigation`) had no
+producer and is deleted.
 
 Flutter went through this twice: named routes are no longer recommended because they cannot
 customise deep-link handling or support the browser's forward button, and page-backed routes
@@ -189,9 +191,12 @@ A page's result is typed and stays on the owner thread:
 impl<R: Routable> RouterHandle<R> {
     pub fn push_for_result<T: 'static>(&self, route: R) -> Result<RouteResult<T>, RouterError>;
     pub fn pop_with<T: 'static>(&self, value: T) -> Result<bool, RouterError>;
-    pub fn maybe_pop(&self) -> bool; // honours `PopScope`
+    pub fn maybe_pop(&self) -> Result<bool, RouterError>; // honours `PopScope`
 }
 pub struct RouteResult<T> { /* Rc<RefCell<_>>: !Send */ }
+impl<T: 'static> RouteResult<T> {
+    pub fn try_take(&self) -> Option<Result<Option<T>, RouteResultError>>;
+}
 impl<T: 'static> Future for RouteResult<T> {
     type Output = Result<Option<T>, RouteResultError>; // `Ok(None)`: left without a value
 }
@@ -199,10 +204,18 @@ impl<T: 'static> Future for RouteResult<T> {
 pub enum RouteResultError { TypeMismatch { expected: &'static str } }
 ```
 
-The value crosses the stack as `Box<dyn Any>` in the result's `Rc`/`RefCell` channel, and a
-value of another type is `RouteResultError::TypeMismatch`, not a silent `None`. A page removed
-without a value (replaced, swept, its Router unmounted) completes `Ok(None)`, so no awaiting
-caller hangs. System back goes to the URL-owning Router's `maybe_pop`.
+The value crosses the stack as `Box<dyn Any>` in the result's `Rc`/`RefCell` channel.
+`Route::Output` and the value passed to `pop_with` require only `'static`, not `Send` or `Clone`.
+A value of another type still commits the pop and completes with
+`Err(RouteResultError::TypeMismatch { expected })`, not a silent `None`; it does not invoke the
+route's result fallback. An ordinary `pop`, `replace` or `go` without a value, and terminal
+unmount, complete `Ok(None)`, so no awaiting caller hangs.
+
+Navigator disposal completes pending results after `detach_observers`, without route lifecycle
+callbacks, observer notification or a Router stack edit. Deactivation and reactivation leave a
+result pending. A reentrant observer pop during `push_for_result` completes the very result the
+caller receives. `maybe_pop` goes through the Navigator and honours both `PopScope` and the
+last-page guard. System back goes to the URL-owning Router's `maybe_pop`.
 
 A widget that pops its own page without knowing `R` (Material's back button, a close button)
 acquires a `PageHandle` in a lifecycle hook: `can_pop` and `maybe_pop` of the page it is on,
@@ -302,16 +315,37 @@ ADR-0027 §9's vocabulary closed: no second channel without a producer.
   (`from_stack_restores_back_order`, `stack_reads_every_committed_edit`, `empty_stack_is_refused`).
 - §3: the `compile_fail` doctest on `Router::handle` beside its compiling twin; the commit order
   under re-entrant observers (`router_push_commits_before_a_reentrant_observer_pop` and its
-  `replace` and `go` siblings, `router_push_preserves_its_commit_after_an_observer_panic`).
+  `replace` and `go` siblings, `router_push_preserves_its_commit_after_an_observer_panic`). Typed
+  results are pinned in `crates/flui-widgets/tests/router.rs`, through rows of the
+  `router_and_widgets_app` table in `crates/flui-widgets/tests/contracts.rs`:
+  `typed_results_accept_a_non_send_non_clone_value` (an owner-local value without `Send` or
+  `Clone`), `resultless_pop_replace_and_go_complete_with_none` (all three resultless exits),
+  `a_wrong_result_type_is_an_error_and_the_pop_still_commits` (type mismatch),
+  `a_reentrant_observer_pop_with_delivers_the_push_result` (the caller's exact result),
+  `router_maybe_pop_honours_pop_scope_and_the_last_page_guard`,
+  `typed_result_apis_refuse_an_unmounted_router` (all three APIs),
+  `unmount_completes_a_pending_result_without_a_router_edit`,
+  `global_key_reactivation_leaves_a_route_result_pending`, and
+  `a_panicking_terminal_waker_does_not_block_another_completion`. The last row makes the headless
+  host contain the panicking waker at its own boundary and requires both results to complete; it
+  does not require the panic to propagate through the host.
 - §4: `widgets_app_router_navigates_by_handle_and_the_url_follows` and
   `switching_widgets_app_from_home_to_router_releases_the_navigator`
   (`crates/flui-widgets/tests/widgets_app_router.rs`), and the compile-fail case
-  `router_app_takes_no_navigator`. Once the doors are removed, `cargo xtask send-positions`
-  holds the navigator's rows at zero, and the change that removes them adds the same compile-fail
-  case for `MaterialApp::router` and `CupertinoApp::router`.
-- §5: the change that builds `UiRuntime::navigate` adds a test in which, in one UI runtime with
-  two presentations, an intent addressed to the second changes that presentation's Router and not
-  the first's, and an intent for a presentation without a Router is `NoUrlOwner`.
+  `router_app_takes_no_navigator`. `router_mounts_pages_below_the_material_theme` and
+  `router_mounts_pages_below_the_cupertino_theme` mount the design-system router forms and prove
+  that their pages inherit the shell's theme. Once the doors are removed,
+  `cargo xtask send-positions` holds the navigator's rows at zero, and the change that removes
+  them adds the same compile-fail case for `MaterialApp::router` and `CupertinoApp::router`.
+- §5: `navigation_addressed_to_the_second_presentation_reaches_only_its_url_owner`,
+  `live_presentation_without_a_router_refuses_instead_of_using_a_sibling`,
+  `invalid_and_closed_presentations_refuse_without_disturbing_the_sibling` and
+  `url_owner_can_navigate_reentrantly_after_runtime_guards_are_released` in
+  `crates/flui-runtime/tests/contracts/navigation.rs` pin addressed delivery, both absence
+  refusals and guard release. `url_owner_slot_contract_matrix` in `flui-view` pins registration
+  identity and retirement. The URL rows of `router_and_widgets_app` in `flui-widgets` pin all four
+  operations, outermost-Router registration, unknown-location notification, unmount refusal,
+  reentrant `Busy` and its restoration after a callback panic.
 - The Navigator's own lifecycle order stays pinned by `crates/flui-widgets/tests/navigator.rs`
   and `navigator_public.rs`, which move onto a Router with the doors.
 

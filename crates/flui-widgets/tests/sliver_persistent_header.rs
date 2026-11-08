@@ -161,8 +161,8 @@ impl SliverPersistentHeaderDelegate for SnappingDelegate {
         120.0
     }
 
-    fn snap_configuration(&self) -> Option<flui_widgets::FloatingHeaderSnapConfiguration> {
-        Some(flui_widgets::FloatingHeaderSnapConfiguration::new(
+    fn snap_configuration(&self) -> Option<flui_objects::FloatingHeaderSnapConfiguration> {
+        Some(flui_objects::FloatingHeaderSnapConfiguration::new(
             flui_animation::SharedCurve::new(flui_animation::curves::LINEAR),
             std::time::Duration::from_millis(64),
         ))

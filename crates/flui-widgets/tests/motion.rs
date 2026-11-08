@@ -13,7 +13,7 @@ use flui_animation::{
 };
 use flui_foundation::RenderId;
 use flui_foundation::geometry::{Offset, Size};
-use flui_objects::TranslationFraction;
+use flui_objects::{ShimmerBand, TranslationFraction};
 use flui_painting::Alignment;
 use flui_painting::display_list::DrawOp;
 use flui_painting::paint::Shader;
@@ -22,7 +22,7 @@ use flui_testing::a11y::Role;
 use flui_view::environment::VsyncScope;
 use flui_view::{BoxedView, ViewExt};
 use flui_widgets::motion::{
-    Animate, AnimateExt, Effect, Effects, Shimmer, ShimmerBand, Skeleton, Transition, Trigger,
+    Animate, AnimateExt, Effect, Effects, Shimmer, Skeleton, Transition, Trigger,
 };
 use flui_widgets::{AnimatedSwitcher, ColoredBox, Column, Row, SizedBox, Text, TickerMode};
 

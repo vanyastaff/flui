@@ -16,9 +16,11 @@
 //! - **Curated modules** at the facade's paths: [`interaction`], [`painting`],
 //!   [`platform`] and [`rendering`] hold the subset of the facade's module that
 //!   packages use, as the same items, not wrappers.
-//! - **Evolving modules** [`pipeline`] and [`hooks`]: render-object internals
-//!   and development hooks the facade does not expose. A package's exposure to
-//!   them is `grep -E 'flui_sdk::(pipeline|hooks)::'`.
+//! - **Evolving module** [`pipeline`]: render-object internals the facade does
+//!   not expose. Development-hook surface is added only with its real producer
+//!   and consumer; there is no empty hooks module or scheduler snapshot bridge.
+//! - **Opt-in package tests** [`testing`]: the facade's test-kit paths plus
+//!   Evolving host, input and inspection helpers, absent from an ordinary graph.
 //!
 //! Each item is here because `flui-material`, `flui-cupertino` or
 //! `flui-devtools` imports it outside its tests, or because an approved
@@ -62,6 +64,7 @@ pub mod view {
 /// notices the host delivers.
 pub mod platform {
     pub use flui_platform::AdmissionError;
+    pub use flui_platform::Availability;
     pub use flui_platform::Brightness;
     pub use flui_platform::ClipboardError;
     pub use flui_platform::ClipboardRead;
@@ -97,7 +100,10 @@ pub mod platform {
     pub use flui_platform::WheelStep;
     pub use flui_platform::WindowMode;
     pub use flui_platform::WindowState;
-    pub use flui_platform::text_store::TextInputPurpose;
+    /// Platform text-store vocabulary shared with text-editing widgets.
+    pub mod text_store {
+        pub use flui_platform::text_store::TextInputPurpose;
+    }
 
     /// The capability seam (ADR-0152): what a package declares, provides and
     /// registers a platform capability with, and the owner-thread result of a
@@ -122,7 +128,6 @@ pub mod platform {
     /// under the additive `unstable-input` feature.
     #[cfg(feature = "unstable-input")]
     pub mod input_capabilities {
-        pub use flui_platform::Availability;
         pub use flui_platform::input_capabilities::InputCapabilities;
         pub use flui_platform::input_capabilities::PointerKindSet;
     }
@@ -176,6 +181,9 @@ pub mod interaction {
     pub use flui_interaction::ContactId;
     pub use flui_interaction::ContactSnapshot;
     pub use flui_interaction::DragDownDetails;
+    pub use flui_interaction::DragEndDetails;
+    pub use flui_interaction::DragStartDetails;
+    pub use flui_interaction::DragUpdateDetails;
     pub use flui_interaction::GestureArena;
     pub use flui_interaction::GestureArenaEntry;
     pub use flui_interaction::GestureArenaMember;
@@ -191,7 +199,10 @@ pub mod interaction {
     pub use flui_interaction::HapticObserver;
     #[cfg(feature = "unstable-input")]
     pub use flui_interaction::HapticsHandle;
+    pub use flui_interaction::MultiTapCount;
+    pub use flui_interaction::MultiTapCountError;
     pub use flui_interaction::ObserverHandle;
+    pub use flui_interaction::PanZoomEvent;
     pub use flui_interaction::PhysicalEdge;
     pub use flui_interaction::PointerDispatch;
     pub use flui_interaction::PointerEvent;
@@ -210,10 +221,20 @@ pub mod interaction {
     pub use flui_interaction::SwipeDetails;
     pub use flui_interaction::SwipeGestureRecognizer;
     pub use flui_interaction::SwipeStart;
+    pub use flui_interaction::TapDetails;
     pub use flui_interaction::TransformLock;
     pub use flui_interaction::cancel_all;
+    pub use flui_interaction::events::ButtonChange;
+    pub use flui_interaction::events::Code;
+    pub use flui_interaction::events::CursorIcon;
+    pub use flui_interaction::events::Key;
+    pub use flui_interaction::events::KeyEvent;
+    pub use flui_interaction::events::KeyState;
+    pub use flui_interaction::events::NamedKey;
+    pub use flui_interaction::events::PointerButtons;
     pub use flui_interaction::focus::FocusNode;
     pub use flui_interaction::focus::FocusNodeChangeCallback;
+    pub use flui_interaction::focus::KeyEventResult;
     pub use flui_interaction::gesture::CompositionBranch;
     pub use flui_interaction::gesture::CompositionError;
     pub use flui_interaction::gesture::CompositionKind;
@@ -227,7 +248,13 @@ pub mod interaction {
     pub use flui_interaction::gesture::PanClaim;
     pub use flui_interaction::gesture::RejectionReason;
     pub use flui_interaction::gesture::SequencedBranch;
+    pub use flui_interaction::ids::DeviceId;
+    pub use flui_interaction::pointer::EventPropagation;
+    pub use flui_interaction::pointer::HitTestBehavior;
     pub use flui_platform::EventTime;
+    pub use flui_platform::pointer::PointerButton;
+    pub use flui_platform::pointer::PointerPress;
+    pub use flui_platform::pointer::PointerRelease;
 
     /// Drag-and-drop (ADR-0211): what a source widget starts through the
     /// presentation's `DragAndDrop` and what a receiver answers, the surface
@@ -274,41 +301,94 @@ pub mod painting {
     pub use flui_painting::BlurSigma;
     pub use flui_painting::Canvas;
     pub use flui_painting::DrawOp;
+    pub use flui_painting::ImagePlacement;
     pub use flui_painting::TextSizing;
-    pub use flui_painting::paint::Clip;
-    pub use flui_painting::paint::ClipOp;
-    pub use flui_painting::paint::Morph;
     pub use flui_painting::paint::Paint;
-    pub use flui_painting::paint::Path;
-    pub use flui_painting::paint::PathCommand;
-    pub use flui_painting::paint::RoundedPolygon;
     pub use flui_painting::paint::StrokeCap;
-    pub use flui_painting::paint::shapes::material_shapes;
-    pub use flui_painting::styling::Border;
-    pub use flui_painting::styling::BorderRadius;
-    pub use flui_painting::styling::BorderRadiusExt;
-    pub use flui_painting::styling::BorderSide;
-    pub use flui_painting::styling::BorderStyle;
-    pub use flui_painting::styling::BoxDecoration;
-    pub use flui_painting::styling::BoxShadow;
-    pub use flui_painting::styling::Color;
-    pub use flui_painting::styling::Shadow;
-    pub use flui_painting::typography::DecorationThickness;
-    pub use flui_painting::typography::FontWeight;
-    pub use flui_painting::typography::TextDecoration;
-    pub use flui_painting::typography::TextDecorationLines;
-    pub use flui_painting::typography::TextDecorationStyle;
-    pub use flui_painting::typography::TextDirection;
-    pub use flui_painting::typography::TextStyle;
+    pub use flui_rendering::delegates::CustomPainter;
     pub use flui_rendering::semantics::SemanticsRegion;
     pub use flui_rendering::semantics::SemanticsRegionKey;
+
+    /// Paths, clips and shape morphing, at the facade's path.
+    pub mod paint {
+        pub use flui_painting::paint::Clip;
+        pub use flui_painting::paint::ClipOp;
+        pub use flui_painting::paint::ImageRepeat;
+        pub use flui_painting::paint::Morph;
+        pub use flui_painting::paint::Path;
+        pub use flui_painting::paint::PathCommand;
+        pub use flui_painting::paint::RoundedPolygon;
+        pub use flui_painting::paint::shapes::material_shapes;
+    }
+
+    /// Colours, borders, decorations and shadows, at the facade's path.
+    pub mod styling {
+        pub use flui_painting::styling::Border;
+        pub use flui_painting::styling::BorderRadius;
+        pub use flui_painting::styling::BorderRadiusExt;
+        pub use flui_painting::styling::BorderSide;
+        pub use flui_painting::styling::BorderStyle;
+        pub use flui_painting::styling::BoxDecoration;
+        pub use flui_painting::styling::BoxShadow;
+        pub use flui_painting::styling::Color;
+        pub use flui_painting::styling::Shadow;
+        pub use flui_painting::styling::TableBorder;
+    }
+
+    /// Text styles and decoration vocabulary, at the facade's path.
+    pub mod typography {
+        pub use flui_painting::typography::DecorationThickness;
+        pub use flui_painting::typography::FontWeight;
+        pub use flui_painting::typography::TextDecoration;
+        pub use flui_painting::typography::TextDecorationLines;
+        pub use flui_painting::typography::TextDecorationStyle;
+        pub use flui_painting::typography::TextDirection;
+        pub use flui_painting::typography::TextSpan;
+        pub use flui_painting::typography::TextStyle;
+    }
 }
 
-/// Render-object authoring, at the paths `flui::rendering` uses.
+/// Render-object and semantics authoring, at the paths `flui::rendering` uses.
 pub mod rendering {
     pub use flui_rendering::constraints::BoxConstraints;
-    pub use flui_rendering::hit_testing::HitTestBehavior;
+    pub use flui_rendering::delegates::AspectRatioDelegate;
+    pub use flui_rendering::delegates::CenterLayoutDelegate;
+    pub use flui_rendering::delegates::FlowDelegate;
+    pub use flui_rendering::delegates::FlowPaintingContext;
+    pub use flui_rendering::delegates::MultiChildLayoutContext;
+    pub use flui_rendering::delegates::MultiChildLayoutDelegate;
+    pub use flui_rendering::delegates::SingleChildLayoutDelegate;
+    pub use flui_rendering::delegates::SliverGridDelegate;
+    pub use flui_rendering::delegates::SliverGridDelegateWithFixedCrossAxisCount;
+    pub use flui_rendering::delegates::SliverGridDelegateWithMaxCrossAxisExtent;
+    pub use flui_rendering::delegates::SliverGridLayout;
+    pub use flui_rendering::parent_data::{FlexFit, TableCellVerticalAlignment};
     pub use flui_rendering::protocol::BoxProtocol;
+    pub use flui_rendering::semantics::ActionCall;
+    pub use flui_rendering::semantics::AnnounceError;
+    pub use flui_rendering::semantics::Announcer;
+    pub use flui_rendering::semantics::AutoComplete;
+    pub use flui_rendering::semantics::CellPosition;
+    pub use flui_rendering::semantics::Current;
+    pub use flui_rendering::semantics::HasPopup;
+    pub use flui_rendering::semantics::HeadingLevel;
+    pub use flui_rendering::semantics::Invalid;
+    pub use flui_rendering::semantics::LiveSetting;
+    pub use flui_rendering::semantics::NumericRange;
+    pub use flui_rendering::semantics::NumericRangeError;
+    pub use flui_rendering::semantics::Reveal;
+    pub use flui_rendering::semantics::ScrollUnit;
+    pub use flui_rendering::semantics::SemanticsAnchor;
+    pub use flui_rendering::semantics::SemanticsConfiguration;
+    pub use flui_rendering::semantics::SemanticsRole;
+    pub use flui_rendering::semantics::SetSize;
+    pub use flui_rendering::semantics::SortDirection;
+    pub use flui_rendering::semantics::TableShape;
+    pub use flui_rendering::semantics::TextDirection;
+    pub use flui_rendering::semantics::TextSelection;
+    pub use flui_rendering::semantics::Toggled;
+    pub use flui_rendering::semantics::Urgency;
+    pub use flui_rendering::view::ScrollPosition;
     pub use flui_rendering::{RenderError, RenderResult, RenderUpdateImpact};
 }
 
@@ -318,21 +398,69 @@ pub mod rendering {
 /// change or move on any train; an item graduates into a facade module once it
 /// has stayed unchanged across trains and has a second consumer (ADR-0088 §4).
 pub mod pipeline {
+    pub use flui_objects::CarouselLayout;
+    pub use flui_objects::CarouselLayoutError;
+    pub use flui_objects::CarouselLayoutKind;
+    pub use flui_objects::CrossAxisAlignment;
+    pub use flui_objects::FloatingHeaderSnapConfiguration;
+    pub use flui_objects::FocusRingStyle;
+    pub use flui_objects::HitShape;
+    pub use flui_objects::InvalidSliverCrossAxisExtent;
+    pub use flui_objects::MAX_ITEM_EXTENT;
+    pub use flui_objects::MainAxisAlignment;
+    pub use flui_objects::MainAxisSize;
+    pub use flui_objects::Oval;
+    pub use flui_objects::OverScrollHeaderStretchConfiguration;
+    pub use flui_objects::OverflowBoxFit;
     pub use flui_objects::PathClipConfiguration;
     pub use flui_objects::RenderPhysicalShape;
+    pub use flui_objects::ShimmerBand;
+    pub use flui_objects::StackFit;
+    pub use flui_objects::StretchTriggerSignal;
+    pub use flui_objects::TableColumnWidth;
     pub use flui_objects::TranslationFraction;
+    pub use flui_objects::WrapAlignment;
+    pub use flui_objects::WrapCrossAlignment;
     pub use flui_rendering::view::ScrollDirection;
 }
 
-/// Development hooks the facade does not expose.
+/// Deterministic package tests, available only with the `testing` feature.
 ///
-/// **Evolving** (ADR-0088 §4), like [`pipeline`]: frame telemetry that
-/// development tooling reads. The tree-observation seam is not here; it is
-/// `foundation::observe`, at the facade's path.
-///
-/// No public API produces a `FrameSnapshot` yet: the
-/// presentation's frame clock is internal to the app host. A public snapshot
-/// source is the follow-up recorded in ADR-0088's move 4.
-pub mod hooks {
-    pub use flui_scheduler::FrameSnapshot;
+/// The common surface mirrors `flui::testing` at the same paths. The additional
+/// host, input and inspection helpers are Evolving SDK surface for packages
+/// whose tests need more than the Stable facade exposes.
+#[cfg(feature = "testing")]
+pub mod testing {
+    pub use flui_testing::widgets;
+    pub use flui_testing::{
+        AlternativesSubject, BuildCapabilities, GestureAlternativesCheck, HeadlessBinding,
+        HeadlessHost, HeadlessWindow, MountOptions, MountOwners, Mounted, PointerScript,
+        TouchScript, assert_gesture_alternatives,
+    };
+    pub use flui_testing::{DropLedger, DropSentinel};
+    pub use flui_testing::{a11y, log_capture, replay, storage};
+
+    /// Synthetic keyboard and pointer input for package tests.
+    pub mod input {
+        pub use flui_interaction::events::make_down_event_for_id;
+        pub use flui_interaction::events::make_down_event_for_id_with_button;
+        pub use flui_interaction::events::make_move_event_for_id;
+        pub use flui_interaction::gesture::GestureSettingsSource;
+        pub use flui_interaction::testing::input::KeyEventBuilder;
+    }
+
+    /// Text measurement resources a package's painting tests inspect.
+    pub mod painting {
+        pub use flui_painting::glyphs::FontRegistry;
+    }
+
+    /// Render-object tests and committed layer-tree inspection.
+    pub mod rendering {
+        pub use flui_rendering::layer::{Layer, LayerTree};
+        pub use flui_rendering::testing::inspect::render_snapshot;
+        pub use flui_rendering::testing::{
+            BoxQueryRun, DrawCommandSummary, DrawKind, FrameRun, LayoutRun, PaintRun, Probe,
+            RenderTester, TreeNode, box_node, collect_commands, sliver_node,
+        };
+    }
 }

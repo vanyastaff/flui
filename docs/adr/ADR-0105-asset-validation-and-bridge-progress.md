@@ -1,64 +1,50 @@
-# ADR-0105: Asset validation and bridged load progress
+# ADR-0105: Image load admission and progress
 
 - **Status:** Accepted (2026-10-03)
 - **Date:** 2026-10-03
-- **Superseded-by:** [ADR-0279](ADR-0279-image-loads-run-on-the-lanes-their-caller-holds.md)
-  for the second and third paragraphs of "Decision" only (the bridge's runtime)
-- **Related:** [ADR-0018](ADR-0018-async-builder-seam.md),
-  [ADR-0047](ADR-0047-unified-execution-services.md),
-  [ADR-0097](ADR-0097-no-process-global-state-gate.md)
+- **Superseded-by:** [ADR-0279](ADR-0279-image-loads-run-on-the-lanes-their-caller-holds.md) for runtime
+  selection and execution; [ADR-0317](ADR-0317-the-asset-registry-is-image-only-and-the-facade-opts-into-it.md)
+  for generic descriptor validation
+- **Related:** [ADR-0047](ADR-0047-unified-execution-services.md),
+  [ADR-0250](ADR-0250-asset-registry-keeps-decoded-images.md)
+- **Revised:** 2026-11-07 — states the image-only admission and failure contract after the generic asset
+  API was removed
 
-## Context
+## Context and problem statement
 
-`Asset::validate` advertises validation before loading, but the registry previously
-never called it. Returning a cached result also silently accepted a descriptor whose
-validation rejected it. The asset bridge returns a reactor-free completion future
-for the frame-driven scheduler, but entering an ambient current-thread Tokio runtime
-does not drive tasks spawned on it. Such a bridge could remain pending indefinitely.
-Starting the registry's fallback runtime can fail because OS resources are unavailable.
+The original registry accepted arbitrary asset descriptors but did not consistently validate them, and
+its image bridge could remain pending when it relied on an ambient current-thread runtime. The generic
+validation decision and registry-owned fallback runtime have since been replaced. The remaining current
+question is how a concrete image source is admitted, how progress is driven, and which failures a caller
+observes.
 
 ## Decision
 
-`AssetRegistry::load` validates the supplied descriptor before computing its key,
-accessing a cache, or invoking its loader. Validation rejection is authoritative on
-both misses and hits. It does not evict data previously loaded through an accepted
-descriptor; `get` remains a cache lookup without a descriptor to validate. Direct
-`Asset::load` callers remain responsible for invoking validation when needed.
+An image request is an `ImageSource`, not a user-defined descriptor with a validation callback. Cold
+admission creates registry-owned shared work; a request for the same source joins it, and a completed
+source resolves from the decoded-image LRU. Source identity and ticket generations, rather than generic
+keys or validation hooks, determine which work and pixels a request observes.
 
-Bridged image loads use an explicitly injected runtime first, then an ambient
-multi-thread Tokio runtime, then a registry-owned single-worker runtime. Ambient
-current-thread runtimes are skipped even when currently driven: the bridge cannot
-rely on their continued progress when its completion future is polled by FLUI.
-Injection is an explicit host ownership promise: the runtime must remain alive and
-driven until loads finish. A current-thread handle can be injected when the host
-drives its runtime with `Runtime::block_on`; entering the handle alone is insufficient.
-Runtime-neutral host execution services remain the separate contract of ADR-0047;
-this decision does not add an executor singleton or move runtime ownership upward.
+`load_image` and `load_network_image` return `ImageLoad`. Execution uses the `LoadServices` of the
+request under ADR-0279: no ambient current-thread runtime is assumed and the registry owns no fallback
+runtime. With no lanes, polling the returned future drives progress.
 
-Owned runtime creation is serialized in a registry-local infrastructure mutex.
-Construction errors become `AssetError::Io` through the same completion channel
-as loading errors. Failure leaves the owned runtime absent, so the next operation
-can retry. Successful initialization is reused, and teardown continues to use
-`shutdown_background` so dropping a registry from a Tokio task does not block.
+A source that cannot be read or decoded resolves to `LoadFailed` or `DecodeFailed`. HTTP capability,
+request and status failures use their dedicated variants, and lanes shutting down use `LanesRefused`.
+Errors are not retained, so the next request can succeed. Dropping one subscriber does not cancel the
+others; an unfinished run can be taken over by a remaining waiter.
 
 ## Behavioral evidence
 
-- `validation_precedes_loading_and_cache_hits_without_poisoning_accepted_data`
-  rejects misses before loading/caching, rejects hits, preserves accepted cached
-  data, and accepts the next request without reloading.
-- `load_image_bridged_completes_both_the_success_and_the_failure_path` decodes the
-  committed PNG with a reactor-free executor, reports a missing file and then
-  decodes successfully using the same registry. It repeats recovery while a
-  current-thread runtime is entered but never driven; the poll loop has a deadline.
-- `the_bridge_resolves_a_live_runtime_and_survives_its_own_teardown` includes a
-  private runtime-construction failure seam, asserts the typed error and proves
-  a subsequent successful initialization actually executes a task. It also checks
-  explicit injection, stale ambient handles, and teardown inside an owned task.
+- `image_loads_run_on_their_lanes_and_survive_the_requests_that_leave` checks lane and no-lane progress,
+  missing-file recovery, sharing, cancellation and handover.
+- `network_loads_fetch_with_the_callers_client_and_recover_after_errors` checks malformed-image recovery,
+  no-client and HTTP failures.
+- `assets_feature_exposes_and_loads_images_through_the_facade` drives a real external-consumer image to
+  completion through the public facade.
 
 ## Consequences
 
-Validation can reject an asset descriptor even when its key already has cached
-data. Ambient current-thread applications use a background worker for bridged loads
-unless they explicitly inject a driven runtime. Resource exhaustion is a recoverable
-operation error rather than an internal-invariant panic. Unsupported generic loader
-interfaces and byte-source unification are separate decisions and remain unchanged.
+There is no descriptor-validation hook to run on a cache hit and no registry runtime initialization to
+fail. Source and execution errors remain ordinary operation results, and no-lane callers must poll their
+futures. Generic custom-asset validation is outside the crate after ADR-0317.

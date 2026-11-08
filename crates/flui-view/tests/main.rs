@@ -43,6 +43,8 @@ mod global_key_duplication;
 mod global_key_reparent;
 #[path = "inherited_dependency.rs"]
 mod inherited_dependency;
+#[path = "inherited_entries.rs"]
+mod inherited_entries;
 #[path = "inspect_reentry.rs"]
 mod inspect_reentry;
 #[path = "support/lifecycle_hook_payload_retirement.rs"]
@@ -75,6 +77,8 @@ mod reconcile_capture;
 mod recovered_panic_context;
 #[path = "recovered_panics.rs"]
 mod recovered_panics;
+#[path = "render_inherited_dependency.rs"]
+mod render_inherited_dependency;
 #[path = "runtime_seam.rs"]
 mod runtime_seam;
 #[path = "signal_reads.rs"]

@@ -214,7 +214,7 @@ pub use system_chrome::{PlatformSystemChrome, SystemUiOverlayStyle};
 pub use target_platform::TargetPlatform;
 pub use text_input::PlatformTextInput;
 pub use text_store::{TextStore, TextStoreEdit, TextStoreHost, TextStoreObserver, TextStoreRead};
-pub use unsupported::{Availability, CapabilityAbsence, Unsupported, UnsupportedReason};
+pub use unsupported::{Availability, Unsupported, UnsupportedReason};
 pub use window::{
     CursorError, InputLatency, WindowAppearance, WindowExecutionState, WindowId, WindowIdMint,
     WindowMaterial, WindowOptions, WindowReveal,
@@ -226,7 +226,7 @@ pub use window_handler::{CloseDecision, FrameOutcome, SurfaceChange, WindowHandl
 pub use window_insets::{InsetCurve, InsetMotion, InvalidInsets, KeyboardInset, WindowInsets};
 pub use window_state::{
     AdmissionError, AdmittedCommand, ApplyError, CapabilitiesOwner, CapabilityParts,
-    CommandRefusal, PlatformFailure, SizeConstraints, SubmitError, WindowCapabilities,
-    WindowCommand, WindowControl, WindowGeometry, WindowMode, WindowRevision,
+    CommandRefusal, InvalidCapabilityReason, PlatformFailure, SizeConstraints, SubmitError,
+    WindowCapabilities, WindowCommand, WindowControl, WindowGeometry, WindowMode, WindowRevision,
     WindowRevisionExhausted, WindowState, WindowStateParts,
 };

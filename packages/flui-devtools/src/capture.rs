@@ -21,16 +21,20 @@
 //!
 //! # What is captured
 //!
-//! Only spans inside a `frame` span count. A phase span outside any frame, such as a headless
+//! Only spans inside a `FrameSpan::Frame` count. A phase outside any frame, such as a headless
 //! bootstrap or a one-off layout pass, is not a frame, and attributing it to one would be a
-//! fabricated measurement. A phase is recognized by [`Phase::of`], so an application span named
-//! `paint` is not captured. A phase reentered inside the same phase is covered by the outer
-//! extent, and a span retained after it closed cannot restart a measurement.
+//! fabricated measurement. The shared [`FrameSpan`] table identifies producers exactly; `Phase`
+//! selects its profiler subset, so an application span named `paint` is not captured. Capture
+//! also admits presentation segments and animation-controller identities, but deliberately
+//! excludes `LayoutRoot`, non-span events and identities added later without an explicit consumer
+//! decision. A phase reentered inside the same phase is covered by the outer extent, and a span
+//! retained after it closed cannot restart a measurement.
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::thread::ThreadId;
 
+use flui_sdk::foundation::diagnostics::{FrameSpan, PERIOD_US, PRESENTATION, RUNTIME};
 use flui_sdk::foundation::{PresentationId, UiRuntimeId};
 use parking_lot::Mutex;
 use tracing::field::{Field, Visit};
@@ -43,30 +47,26 @@ use web_time::{Duration, Instant};
 
 use crate::phase::Phase;
 
-/// The target of the framework's frame and segment spans.
-const FRAME_TARGET: &str = "flui.frame";
-/// The span the scheduler opens around every frame.
-const FRAME_SPAN: &str = "frame";
-/// The span the runtime opens around one presentation's segment of a frame.
-const SEGMENT_SPAN: &str = "presentation";
-
 fn is_frame(metadata: &Metadata<'_>) -> bool {
-    metadata.is_span() && metadata.target() == FRAME_TARGET && metadata.name() == FRAME_SPAN
+    metadata.is_span()
+        && FrameSpan::of(metadata.target(), metadata.name()) == Some(FrameSpan::Frame)
 }
 
 fn is_segment(metadata: &Metadata<'_>) -> bool {
-    metadata.is_span() && metadata.target() == FRAME_TARGET && metadata.name() == SEGMENT_SPAN
+    metadata.is_span()
+        && FrameSpan::of(metadata.target(), metadata.name()) == Some(FrameSpan::Presentation)
 }
 
 /// The spans a capture layer admits: frames, segments, phases, and the animation controller
-/// identities that keep an animation span's ancestry visible to the layer.
+/// identities that keep an animation span's ancestry visible to the layer. `LayoutRoot` and
+/// identities added to `FrameSpan` later are not captured implicitly.
 fn is_captured(metadata: &Metadata<'_>) -> bool {
     metadata.is_span()
         && (is_frame(metadata)
             || is_segment(metadata)
             || Phase::of(metadata).is_some()
-            || (metadata.target() == "flui.animation.diagnostics"
-                && metadata.name() == "animation_controller"))
+            || FrameSpan::of(metadata.target(), metadata.name())
+                == Some(FrameSpan::AnimationController))
 }
 
 /// The filter a capture layer carries.
@@ -124,8 +124,7 @@ impl Partition {
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub struct CapturedSpan {
-    target: &'static str,
-    name: &'static str,
+    kind: FrameSpan,
     phase: Option<Phase>,
     partition: Partition,
     start: Duration,
@@ -134,16 +133,22 @@ pub struct CapturedSpan {
 }
 
 impl CapturedSpan {
+    /// The typed producer identity shared with the framework.
+    #[must_use]
+    pub const fn kind(&self) -> FrameSpan {
+        self.kind
+    }
+
     /// The span's tracing target.
     #[must_use]
     pub const fn target(&self) -> &'static str {
-        self.target
+        self.kind.target()
     }
 
     /// The span's name.
     #[must_use]
     pub const fn name(&self) -> &'static str {
-        self.name
+        self.kind.name()
     }
 
     /// The phase the span measures; `None` for a frame or a segment.
@@ -179,7 +184,7 @@ impl CapturedSpan {
     /// Whether this is a frame span.
     #[must_use]
     pub fn is_frame(&self) -> bool {
-        self.target == FRAME_TARGET && self.name == FRAME_SPAN
+        self.kind == FrameSpan::Frame
     }
 }
 
@@ -541,8 +546,7 @@ struct FrameState {
 
 /// A phase or segment that ended inside a frame, until the frame closes and names its runtime.
 struct Ended {
-    target: &'static str,
-    name: &'static str,
+    kind: FrameSpan,
     phase: Option<Phase>,
     presentation: Option<u64>,
     start: Instant,
@@ -574,9 +578,9 @@ struct Fields {
 impl Visit for Fields {
     fn record_u64(&mut self, field: &Field, value: u64) {
         match field.name() {
-            "runtime" => self.runtime = Some(value),
-            "presentation" => self.presentation = Some(value),
-            "period_us" => self.period_us = Some(value),
+            RUNTIME => self.runtime = Some(value),
+            PRESENTATION => self.presentation = Some(value),
+            PERIOD_US => self.period_us = Some(value),
             _ => {}
         }
     }
@@ -839,7 +843,10 @@ where
             }
             return;
         }
-        let phase = Phase::of(metadata);
+        let Some(kind) = FrameSpan::of(metadata.target(), metadata.name()) else {
+            return;
+        };
+        let phase = Phase::of_span(kind);
         if phase.is_none() && !is_segment(metadata) {
             return;
         }
@@ -863,8 +870,7 @@ where
         };
         let Some(visit) = visit else { return };
         let ended = Ended {
-            target: metadata.target(),
-            name: metadata.name(),
+            kind,
             phase,
             presentation: presentation_of(&span, owner),
             start: visit.start,
@@ -885,8 +891,7 @@ impl CaptureLayer {
         let epoch = self.capture.shared.epoch;
         let runtime = state.runtime.and_then(UiRuntimeId::from_u64);
         let span_of = |ended: &Ended| CapturedSpan {
-            target: ended.target,
-            name: ended.name,
+            kind: ended.kind,
             phase: ended.phase,
             partition: Partition::new(
                 runtime,
@@ -898,8 +903,7 @@ impl CaptureLayer {
         };
         let frame = CapturedFrame {
             span: CapturedSpan {
-                target: FRAME_TARGET,
-                name: FRAME_SPAN,
+                kind: FrameSpan::Frame,
                 phase: None,
                 partition: Partition::new(runtime, None),
                 start: start.saturating_duration_since(epoch),
@@ -1145,7 +1149,8 @@ mod tests {
         assert_eq!(capture.frames_of(None).len(), 1);
     }
 
-    /// Fails when a phase is recognized by name alone, or a phase outside a frame is kept.
+    /// Fails when a phase is recognized by name alone, diagnostic detail or an event is admitted,
+    /// or a phase outside a frame is kept.
     #[test]
     fn only_the_frameworks_phases_inside_a_frame_are_captured() {
         let capture = capturing(|| {
@@ -1155,11 +1160,23 @@ mod tests {
             }
             let _frame = tracing::debug_span!(target: "flui.frame", "frame").entered();
             let _app = tracing::debug_span!(target: "my_app", "paint").entered();
+            let _root = tracing::trace_span!(target: "flui.frame", "layout_root").entered();
+            tracing::debug!(target: "flui.frame", "an event is not a span");
             let _layout = tracing::debug_span!(target: "flui.frame", "layout").entered();
         });
 
         let frames = capture.frames();
         assert_eq!(frames.len(), 1);
+        assert_eq!(frames[0].span().kind(), FrameSpan::Frame);
+        assert_eq!(
+            frames[0]
+                .spans()
+                .iter()
+                .map(CapturedSpan::kind)
+                .collect::<Vec<_>>(),
+            [FrameSpan::Layout],
+            "only the real layout phase is retained"
+        );
         let phases: Vec<_> = frames[0]
             .spans()
             .iter()

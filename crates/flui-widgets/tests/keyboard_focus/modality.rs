@@ -7,11 +7,12 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use flui_foundation::geometry::Offset;
+use flui_objects::FocusRingStyle;
 use flui_painting::display_list::DrawOp;
 use flui_painting::styling::Color;
 use flui_platform::keyboard::{Key, KeyRepeat, KeyState, NamedKey};
 use flui_testing::{Action, ActionRequest, MouseScript, TreeId};
-use flui_widgets::{DefaultFocusRingStyle, Focus, FocusRingStyle, RawButton, Text};
+use flui_widgets::{DefaultFocusRingStyle, Focus, RawButton, Text};
 
 use super::{key, press, tab};
 use crate::common::{LaidOut, lay_out, loose};

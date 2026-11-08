@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use flui_animation::{MotionOverride, Vsync};
 use flui_foundation::geometry::Offset;
-use flui_objects::CarouselGeometry;
+use flui_objects::{CarouselGeometry, CarouselLayout, CarouselLayoutError};
 use flui_painting::Alignment;
 use flui_painting::styling::Color;
 use flui_testing::a11y::Role;
@@ -18,7 +18,7 @@ use flui_view::environment::VsyncScope;
 use flui_view::prelude::*;
 use flui_widgets::{
     Carousel, CarouselAutoplay, CarouselAutoplayError, CarouselController, CarouselItemScope,
-    CarouselLayout, CarouselLayoutError, ColoredBox, GestureDetector, KeylineSnap, Semantics,
+    ColoredBox, GestureDetector, KeylineSnap, Semantics,
 };
 
 use crate::common::{LaidOut, lay_out_animated, tight};

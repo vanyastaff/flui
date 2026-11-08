@@ -425,7 +425,7 @@ pub(crate) fn two_parents_declaring_one_key_in_one_frame_are_reported() {
         "one key, two declaring parents, one report: {reports:?}",
     );
     let report = &reports[0];
-    assert_eq!(report.key_hash, key.id());
+    assert_eq!(report.key_hash, key.id().get());
     let surviving = a_children
         .first()
         .or_else(|| b_children.first())

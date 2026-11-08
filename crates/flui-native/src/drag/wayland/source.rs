@@ -15,7 +15,7 @@
 //!
 //! - **`send`** asks for a type into a pipe: the provider serves the
 //!   representation it names, and a thread of its own writes it, at most
-//!   [`MAX_WRITERS`] at once, each held to [`super::TRANSFER_TIMEOUT`].
+//!   [`MAX_WRITERS`] at once, each held to the shared intake deadline.
 //! - **`action`** is what the compositor chose from the source's and the
 //!   target's actions; the last one told is the session's.
 //! - **`dnd_drop_performed`** says the user dropped; the target reads on.
@@ -45,10 +45,11 @@ use wayland_client::protocol::wl_seat::WlSeat;
 use wayland_client::{Connection, Dispatch, Proxy as _, QueueHandle};
 use web_time::Instant;
 
-use super::{ACTIONS_VERSION, SeatDrag, Shared, TRANSFER_TIMEOUT, transfer_actions};
+use super::{ACTIONS_VERSION, SeatDrag, Shared, transfer_actions};
 use crate::drag::offers::{bytes_of, names_of};
 use crate::owner::linux::wayland::WaylandState;
 use crate::owner::panic_boundary::contain_owner_callback;
+use crate::transfer::intake::Intake;
 use crate::transfer::linux::wayland::pipe;
 
 /// The writes of a session's data at once; a `send` past them is answered
@@ -294,7 +295,7 @@ impl SeatDrag {
         let spawned = std::thread::Builder::new()
             .name("flui-wayland-drag".to_owned())
             .spawn(move || {
-                pipe::write(fd, &bytes, Instant::now() + TRANSFER_TIMEOUT);
+                pipe::write(fd, &bytes, Instant::now() + Intake::DEFAULT.fetch_timeout);
                 drop(permit);
             });
         if let Err(error) = spawned {

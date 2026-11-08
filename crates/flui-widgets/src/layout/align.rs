@@ -2,19 +2,20 @@
 //! multiple of the child's size.
 
 use flui_objects::RenderAlign;
-use flui_painting::Alignment;
+use flui_painting::AlignmentGeometry;
 use flui_rendering::protocol::BoxProtocol;
-use flui_view::{Child, CreationSite, IntoView, RenderView, impl_render_view};
+use flui_view::{Child, CreationSite, IntoView, RenderObjectContext, RenderView, impl_render_view};
 
 /// Aligns its child within itself.
 ///
 /// Backed by `RenderAlign`. With no size factors the box expands to fill the
 /// incoming constraints (or shrinks to the child when a dimension is
 /// unbounded); a `width_factor`/`height_factor` sizes the box to that multiple
-/// of the child's corresponding dimension.
+/// of the child's corresponding dimension. Both absolute and directional
+/// alignments are accepted; directional alignments follow [`Directionality`](crate::Directionality).
 #[derive(Clone, Debug)]
 pub struct Align {
-    alignment: Alignment,
+    alignment: AlignmentGeometry,
     width_factor: Option<f64>,
     height_factor: Option<f64>,
     child: Child,
@@ -22,11 +23,11 @@ pub struct Align {
 }
 
 impl Align {
-    /// Align a child at the given [`Alignment`] (e.g. [`Alignment::CENTER`]).
+    /// Align a child at the given absolute or directional alignment.
     #[track_caller]
-    pub fn new(alignment: Alignment) -> Self {
+    pub fn new(alignment: impl Into<AlignmentGeometry>) -> Self {
         Self {
-            alignment,
+            alignment: alignment.into(),
             width_factor: None,
             height_factor: None,
             child: Child::empty(),
@@ -55,8 +56,9 @@ impl Align {
         self
     }
 
-    fn build_render_object(&self) -> RenderAlign {
-        let mut render_object = RenderAlign::new(self.alignment);
+    fn build_render_object(&self, ctx: &RenderObjectContext<'_>) -> RenderAlign {
+        let alignment = crate::localization::resolve_alignment(ctx, self.alignment);
+        let mut render_object = RenderAlign::new(alignment);
         if let Some(factor) = self.width_factor {
             render_object = render_object.with_width_factor(factor);
         }
@@ -71,19 +73,17 @@ impl RenderView for Align {
     type Protocol = BoxProtocol;
     type RenderObject = RenderAlign;
 
-    fn create_render_object(
-        &self,
-        _ctx: &flui_view::RenderObjectContext<'_>,
-    ) -> Self::RenderObject {
-        self.build_render_object()
+    fn create_render_object(&self, ctx: &RenderObjectContext<'_>) -> Self::RenderObject {
+        self.build_render_object(ctx)
     }
 
     fn update_render_object(
         &self,
-        _ctx: &flui_view::RenderObjectContext<'_>,
+        ctx: &RenderObjectContext<'_>,
         render_object: &mut Self::RenderObject,
     ) -> flui_rendering::RenderUpdateImpact {
-        render_object.update_configuration(self.alignment, self.width_factor, self.height_factor)
+        let alignment = crate::localization::resolve_alignment(ctx, self.alignment);
+        render_object.update_configuration(alignment, self.width_factor, self.height_factor)
     }
 
     flui_view::single_child_view_children!();

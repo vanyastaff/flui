@@ -1,0 +1,7 @@
+error[E0046]: not all trait items implemented, missing: `assistive_focus_changed`
+ --> tests/ui/assistive_focus_changed_is_required.rs:6:1
+  |
+6 | impl AccessibilityHandler for MissingAssistiveFocusChanged {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ missing `assistive_focus_changed` in implementation
+  |
+  = help: implement the missing item: `fn assistive_focus_changed(&self, _: Option<NodeId>) { todo!() }`

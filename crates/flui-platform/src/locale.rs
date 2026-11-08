@@ -159,16 +159,50 @@ impl Locale {
     pub fn to_language_tag(&self) -> String {
         self.0.as_str().to_owned()
     }
-    /// Whether the language's default text direction is left-to-right.
+    /// Whether the locale's text direction is left-to-right.
     #[must_use]
     pub fn is_ltr(&self) -> bool {
         !self.is_rtl()
     }
-    /// Whether the language's default text direction is right-to-left.
-    /// This language-based policy does not infer direction from a script override.
+    /// Whether the locale's text direction is right-to-left.
+    ///
+    /// An explicit script takes precedence over the language's default. Without
+    /// one, the language table supplies the direction. Resource translations do
+    /// not participate in this decision.
     #[must_use]
     pub fn is_rtl(&self) -> bool {
-        matches!(self.language(), "ar" | "fa" | "he" | "ps" | "ur" | "yi")
+        match self.script() {
+            Some(script) => matches!(
+                script,
+                "Adlm"
+                    | "Arab"
+                    | "Chrs"
+                    | "Elym"
+                    | "Hatr"
+                    | "Hebr"
+                    | "Mand"
+                    | "Mani"
+                    | "Merc"
+                    | "Mero"
+                    | "Nkoo"
+                    | "Ougr"
+                    | "Palm"
+                    | "Phli"
+                    | "Phlp"
+                    | "Prti"
+                    | "Rohg"
+                    | "Sarb"
+                    | "Sogd"
+                    | "Sogo"
+                    | "Syrc"
+                    | "Thaa"
+                    | "Yezi"
+            ),
+            None => matches!(
+                self.language(),
+                "ar" | "ckb" | "dv" | "fa" | "he" | "ks" | "ps" | "sd" | "ug" | "ur" | "yi"
+            ),
+        }
     }
     /// Parse a full language tag, returning `None` for malformed input.
     #[must_use]

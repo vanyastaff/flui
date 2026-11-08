@@ -116,34 +116,35 @@ release, not in the move.
 ### 2. `flui-native` keeps the backends and the host-facing surface
 
 `flui-native` becomes tier H, kind `internal`. It keeps every OS backend, the host-facing
-`Platform` trait, `OwnerPlatform`, `SharedPlatform`, `PlatformProxy`, `PendingWindow`/`WindowOpen`,
-the prompt APIs, and, until the amendment below, `PlatformAccessibility` (its signatures are
-AccessKit's). Only composition
-roots depend on it: `flui-app`, and tests that drive a backend.
+`Platform` trait, `OwnerPlatform`, `SharedPlatform`, `PlatformProxy`, `PendingWindow`/`WindowOpen`
+and the prompt APIs. Only composition roots depend on it: `flui-app`, and tests that drive a
+backend.
 
 `PlatformAccessibility` has two consumers in `flui-app`, not one: the runner reads the bridge from
 `HostWindow::accessibility` when a window opens, and the UI runtime core (`PresentationWindow`, and
-`PresentationState`, which wires and withdraws the bridge) holds it. It is the one
-`flui_native` name the UI runtime core's production code still uses, so moving the UI runtime core into
-`flui-runtime` (ADR-0083) has to amend this section first: either a runtime-owned accessibility
-port, typed through `flui_semantics`, that a host adapter implements over
-`Arc<dyn PlatformAccessibility>`, or `PlatformAccessibility` itself moved to a crate at tier S
-or below that may depend on `accesskit`.
+`PresentationState`, which wires and withdraws the bridge) holds it.
 
-**Amended (2026-09-26): the second option.** `PlatformAccessibility` and its two listener aliases
-(`AccessibilityActivationListener`, `AccessibilityActionListener`) move to
-`flui_semantics::platform`, next to the AccessKit translation that produces what `publish`
-carries (`tree_to_update`, `semantics_action_for`). `flui-semantics` is tier S and already
-depends on `accesskit`. `flui-native` depends on `flui-semantics` and re-exports the three names
-at `flui_native::traits`, so no backend or host path changes (`flui-native` sits
-in tier H over `flui-semantics`' tier S, the same edge [ADR-0081](ADR-0081-workspace-tiers-and-reach-facts.md)'s
-table states today). `HostWindow::accessibility` stays in `flui-native`: only the trait
-moved, not the discovery. A runtime-owned port was not chosen because it has one implementation
-and would move the translation in `PresentationState` into the host. The trait is still not in
-`flui-platform`: [ADR-0084](ADR-0084-open-capability-seam-and-plugins.md) (Proposed) asks
-every backend, third-party ones included, to implement it, and an out-of-tree backend would then
-depend on the internal `flui-semantics`; that clause has to re-home the trait, or re-export it
-through a contract crate, when it is accepted.
+`PlatformAccessibility`, `AccessibilityHandler`, `AccessibilityAttachment`,
+`AccessibilityCapabilities` and their support and route-change types live in
+`flui_semantics::platform`, next to the AccessKit translation that produces what `publish` carries
+(`tree_to_update`, `semantics_action_for`). `flui-semantics` is tier S and already depends on
+`accesskit`; `flui-native` depends on it and implements the accessibility capability in its
+adapters. `HostWindow::accessibility` stays in `flui-native`: discovery is host-side, while the
+runtime names the contract without linking a host.
+
+`PlatformAccessibility::attach` installs one `Arc<dyn AccessibilityHandler>` and atomically returns
+an `AccessibilityAttachment` with the initial activation state and immutable capabilities. The
+handler's required `activation_changed`, `action_requested` and `assistive_focus_changed` methods
+are the complete inbound event surface. A second attachment is refused with
+`AccessibilityAlreadyAttached` without replacing the live handler. `detach_handler` withdraws it
+and permits a later presentation to attach one.
+
+Keeping the contract in `flui-semantics` avoids a runtime-owned port with one implementation and
+keeps translation in `PresentationState` out of the host. The trait is not in `flui-platform`:
+[ADR-0084](ADR-0084-open-capability-seam-and-plugins.md) (Proposed) asks every backend,
+third-party ones included, to implement it, and an out-of-tree backend would then depend on the
+internal `flui-semantics`; that clause has to re-home the trait, or re-export it through a contract
+crate, when it is accepted.
 
 `Platform` stays effectively sealed, as ADR-0039 §1 describes: an out-of-crate backend cannot mint
 the `OwnerPlatform` its `run()` hands to `on_ready`. This record does not open that minting seam;

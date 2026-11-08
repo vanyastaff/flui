@@ -18,11 +18,16 @@ use crate::common::{LaidOut, child_process, lay_out_animated, tight};
 use flui_animation::Vsync;
 use flui_foundation::notifier::Listenable;
 use flui_painting::styling::Color;
+use flui_testing::{HeadlessHost, HeadlessWindow};
 use flui_view::environment::VsyncScope;
+use flui_view::{
+    NavigationIntent, NavigationOp, NavigationRefused, RouteParseError, RoutePath, UrlOwner,
+    UrlOwnerSlot,
+};
 use flui_widgets::prelude::*;
 use flui_widgets::{
     ColoredBox, GestureDetector, NavigatorHandle, NavigatorObserver, PopupRoute, RouteAnimation,
-    RouteId, RouteParseError, RouterError, Text,
+    RouteId, RouterError, Text,
 };
 
 const FRAME: Duration = Duration::from_millis(50);
@@ -89,6 +94,7 @@ struct Probe {
     navigator: Rc<RefCell<Option<NavigatorHandle>>>,
     inits: Rc<Cell<usize>>,
     driver: Rc<RefCell<Option<flui_scheduler::AsyncDriver>>>,
+    url_slot: Rc<RefCell<Option<UrlOwnerSlot>>>,
 }
 
 impl Probe {
@@ -98,6 +104,15 @@ impl Probe {
             .clone()
             .expect("the page was mounted")
             .expect("a Router<AppRoute> is above the page")
+    }
+
+    fn url_owner(&self) -> Rc<dyn UrlOwner> {
+        let slot = self
+            .url_slot
+            .borrow()
+            .clone()
+            .expect("the page belongs to a presentation");
+        slot.owner().expect("the outer Router owns the URL")
     }
 
     fn driver(&self) -> flui_scheduler::AsyncDriver {
@@ -148,6 +163,7 @@ impl ViewState<Page> for PageState {
         *self.probe.handle.borrow_mut() = Some(Router::<AppRoute>::handle(cx));
         *self.probe.navigator.borrow_mut() = NavigatorHandle::maybe_of(cx);
         *self.probe.driver.borrow_mut() = cx.async_driver();
+        *self.probe.url_slot.borrow_mut() = cx.url_owner_slot();
     }
 
     fn build(&self, view: &Page, _cx: &dyn BuildContext) -> impl IntoView {
@@ -729,10 +745,8 @@ fn router_observer_failure_and_terminal_retirement() {
         match case.as_str() {
             "replace" => an_observer_failure_destroys_the_replaced_router_value(),
             "go" => a_go_observer_failure_destroys_temporary_route_values(),
-            "terminal-factories" => terminal_named_factory_competition(),
             "terminal-observers" => terminal_observer_competition(),
             "terminal-incoming" => terminal_navigator_during_incoming_unwind(),
-            "terminal-aliases" => terminal_aliases_preserve_healthy_factories(),
             "terminal-router" => terminal_router_config_destroys_factories_after_route_failure(),
             "terminal-route" => terminal_route_result_failure_destroys_later_observer(),
             "terminal-record-waker" => terminal_route_record_destroys_pending_waker(),
@@ -755,10 +769,8 @@ fn router_observer_failure_and_terminal_retirement() {
         &[
             "replace",
             "go",
-            "terminal-factories",
             "terminal-observers",
             "terminal-incoming",
-            "terminal-aliases",
             "terminal-router",
             "terminal-route",
             "terminal-record-waker",
@@ -819,37 +831,11 @@ fn assert_terminal_failure(failure: Box<dyn std::any::Any + Send>, expected: &st
     );
     // A fresh owner must remain operational after terminal containment.
     let next = NavigatorHandle::new();
-    let calls = Rc::new(Cell::new(0));
-    let during = Rc::clone(&calls);
-    next.on_generate_route(move |_| {
-        during.set(during.get() + 1);
-        None
-    });
-    assert!(next.push_named("/same").is_err());
-    assert!(next.push_named("/same").is_err());
-    assert_eq!(calls.get(), 2);
-    next.clear_routes();
-}
-
-fn terminal_named_factory_competition() {
-    let navigator = NavigatorHandle::new();
-    let first = TerminalBomb::new("first factory");
-    let first_calls = Rc::clone(&first.calls);
-    let second = TerminalBomb::counting("second factory");
-    let second_calls = Rc::clone(&second.calls);
-    navigator.on_generate_route(move |_| {
-        let _ = &first;
-        None
-    });
-    navigator.on_unknown_route(move |_| {
-        let _ = &second;
-        None
-    });
-    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(navigator)))
-        .expect_err("the first terminal factory must fail");
-    assert_terminal_failure(failure, "first factory");
-    assert_eq!(first_calls.get(), 1);
-    assert_eq!(second_calls.get(), 1, "the later factory is destroyed too");
+    next.seed_initial(SimpleRoute::<()>::new(|_| Text::new("base").boxed()));
+    next.push(SimpleRoute::<()>::new(|_| Text::new("pushed").boxed()));
+    assert_eq!(next.route_ids().len(), 2);
+    assert!(next.pop());
+    assert_eq!(next.route_ids().len(), 1);
 }
 
 struct TerminalObserver(
@@ -886,14 +872,8 @@ fn terminal_observer_competition() {
 )]
 fn terminal_navigator_during_incoming_unwind() {
     let navigator = NavigatorHandle::new();
-    let factory = TerminalBomb::counting("factory");
-    let factory_calls = Rc::clone(&factory.calls);
     let observer = TerminalBomb::counting("observer");
     let observer_calls = Rc::clone(&observer.calls);
-    navigator.on_generate_route(move |_| {
-        let _ = &factory;
-        None
-    });
     navigator.add_observer(Arc::new(TerminalObserver(observer)));
     let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
         let _owner = navigator;
@@ -901,46 +881,7 @@ fn terminal_navigator_during_incoming_unwind() {
     }))
     .expect_err("the incoming failure reaches the caller");
     assert_terminal_failure(failure, "incoming failure");
-    assert_eq!(factory_calls.get(), 1);
     assert_eq!(observer_calls.get(), 1);
-}
-
-fn terminal_aliases_preserve_healthy_factories() {
-    let navigator = NavigatorHandle::new();
-    let alias = navigator.clone();
-    let first = TerminalBomb::new("healthy factory");
-    first.armed.set(false);
-    let first_calls = Rc::clone(&first.calls);
-    let second = TerminalBomb::new("healthy fallback");
-    second.armed.set(false);
-    let second_calls = Rc::clone(&second.calls);
-    let deliveries = Rc::new(Cell::new(0));
-    let delivered = Rc::clone(&deliveries);
-    navigator.on_generate_route(move |_| {
-        let _ = &first;
-        delivered.set(delivered.get() + 1);
-        None
-    });
-    navigator.on_unknown_route(move |_| {
-        let _ = &second;
-        None
-    });
-    drop(navigator);
-    assert_eq!(first_calls.get(), 0);
-    assert_eq!(second_calls.get(), 0);
-    assert!(alias.push_named("/retained").is_err());
-    assert_eq!(
-        deliveries.get(),
-        1,
-        "a surviving owner can still invoke its factory"
-    );
-    drop(alias);
-    assert_eq!(
-        first_calls.get(),
-        1,
-        "healthy final retirement runs normally"
-    );
-    assert_eq!(second_calls.get(), 1);
 }
 
 fn terminal_router_config_destroys_factories_after_route_failure() {
@@ -1959,7 +1900,7 @@ pub(crate) fn a_named_page_is_announced_when_pushed_and_when_uncovered() {
     let polite = |laid: &LaidOut| {
         laid.a11y_tree()
             .expect("semantics enabled")
-            .announcement(flui_widgets::Urgency::Polite)
+            .announcement(flui_rendering::semantics::Urgency::Polite)
             .map(str::to_owned)
     };
     assert_eq!(polite(&laid), None, "the first page is not announced");
@@ -2178,4 +2119,542 @@ pub(crate) fn a_stack_listener_may_navigate() {
         ],
         "the listener's push is the next delivery"
     );
+}
+
+// ============================================================================
+// Presentation URL ownership (ADR-0093 §5)
+// ============================================================================
+
+fn mount_on_host(router: Router<AppRoute>) -> HeadlessHost {
+    let mut host = HeadlessHost::new(HeadlessWindow::new(400, 400));
+    host.attach(&router).expect("a fresh headless host");
+    let _ = host.pump(FRAME);
+    host
+}
+
+fn navigate(owner: &Rc<dyn UrlOwner>, op: NavigationOp) -> Result<(), NavigationRefused> {
+    owner.navigate(NavigationIntent::new(op))
+}
+
+pub(crate) fn url_unknown_locations_notify_once_and_leave_the_stack() {
+    let home = Probe::default();
+    let unknown = Rc::new(RefCell::new(Vec::new()));
+    let heard = Rc::clone(&unknown);
+    let router = Router::new(AppRoute::Home, pages(&home)).on_unknown(move |path| {
+        heard.borrow_mut().push(path.clone());
+    });
+    let _host = mount_on_host(router);
+    let owner = home.url_owner();
+    let handle = home.handle();
+    let before = handle.stack();
+
+    let missing = RoutePath::parse("/missing").expect("a valid location");
+    let invalid = RoutePath::parse("/note/not-a-number").expect("a valid location");
+    assert_eq!(
+        navigate(&owner, NavigationOp::Push(missing.clone())),
+        Err(NavigationRefused::NoMatch(missing.clone()))
+    );
+    assert_eq!(
+        navigate(&owner, NavigationOp::Go(invalid.clone())),
+        Err(NavigationRefused::NoMatch(invalid.clone()))
+    );
+    assert_eq!(handle.stack(), before);
+    assert_eq!(*unknown.borrow(), [missing, invalid]);
+
+    assert!(matches!(
+        handle.go("/note/not-a-number"),
+        Err(RouterError::Parse(RouteParseError::Param { .. }))
+    ));
+    assert_eq!(unknown.borrow().len(), 2, "a direct go has no URL callback");
+    assert_eq!(handle.stack(), before);
+}
+
+pub(crate) fn url_operations_map_to_the_router_and_last_pop_is_a_no_op() {
+    let home = Probe::default();
+    let _host = mount_on_host(Router::new(AppRoute::Home, pages(&home)));
+    let owner = home.url_owner();
+    let handle = home.handle();
+
+    navigate(
+        &owner,
+        NavigationOp::Push(RoutePath::parse("/note/1").expect("a valid location")),
+    )
+    .expect("URL push");
+    assert_eq!(handle.stack(), [AppRoute::Home, AppRoute::Note { id: 1 }]);
+
+    navigate(
+        &owner,
+        NavigationOp::Replace(RoutePath::parse("/tag/primary").expect("a valid location")),
+    )
+    .expect("URL replace");
+    assert_eq!(
+        handle.stack(),
+        [
+            AppRoute::Home,
+            AppRoute::Tag {
+                name: "primary".into(),
+            },
+        ]
+    );
+
+    navigate(
+        &owner,
+        NavigationOp::Go(RoutePath::parse("/note/2/edit").expect("a valid location")),
+    )
+    .expect("URL go");
+    assert_eq!(
+        handle.stack(),
+        [
+            AppRoute::Home,
+            AppRoute::Note { id: 2 },
+            AppRoute::NoteEdit { id: 2 },
+        ]
+    );
+    navigate(&owner, NavigationOp::Pop).expect("URL pop");
+    assert_eq!(handle.stack(), [AppRoute::Home, AppRoute::Note { id: 2 }]);
+
+    navigate(&owner, NavigationOp::Go(RoutePath::root())).expect("return home");
+    navigate(&owner, NavigationOp::Pop).expect("the last page refuses no intent");
+    assert_eq!(handle.stack(), [AppRoute::Home]);
+}
+
+pub(crate) fn url_navigation_targets_only_the_outer_router() {
+    let outer = Probe::default();
+    let inner = Probe::default();
+    let inner_router = Router::new(AppRoute::Home, recording_pages(&inner));
+    let record_outer = recording_pages(&outer);
+    let nested_pages = {
+        let outer = outer.clone();
+        move |route: &AppRoute, cx: &dyn BuildContext| {
+            if *route == AppRoute::Home {
+                let child = inner_router.clone();
+                page(&outer, move || child.clone().into_view().boxed())
+            } else {
+                record_outer(route, cx)
+            }
+        }
+    };
+    let _host = mount_on_host(Router::new(AppRoute::Home, nested_pages));
+    let owner = outer.url_owner();
+    let outer_handle = outer.handle();
+    let inner_handle = inner.handle();
+
+    navigate(
+        &owner,
+        NavigationOp::Push(RoutePath::parse("/note/7").expect("a valid location")),
+    )
+    .expect("the outer Router accepts the URL");
+    assert_eq!(outer_handle.current(), AppRoute::Note { id: 7 });
+    assert_eq!(inner_handle.current(), AppRoute::Home);
+
+    inner_handle
+        .push(AppRoute::Note { id: 9 })
+        .expect("the nearest nested handle still works");
+    assert_eq!(inner_handle.current(), AppRoute::Note { id: 9 });
+    assert_eq!(outer_handle.current(), AppRoute::Note { id: 7 });
+}
+
+pub(crate) fn an_unmounted_url_owner_is_refused() {
+    let home = Probe::default();
+    let host = mount_on_host(Router::new(AppRoute::Home, pages(&home)));
+    let owner = home.url_owner();
+    let handle = home.handle();
+    drop(host);
+
+    assert_eq!(
+        navigate(&owner, NavigationOp::Pop),
+        Err(NavigationRefused::NoUrlOwner)
+    );
+    assert_eq!(handle.pop(), Err(RouterError::Disposed));
+}
+
+pub(crate) fn a_reentrant_url_navigation_is_busy_then_succeeds() {
+    let home = Probe::default();
+    let owner_cell: Rc<RefCell<Option<Rc<dyn UrlOwner>>>> = Rc::new(RefCell::new(None));
+    let during = Rc::new(RefCell::new(Vec::new()));
+    let callback_owner = Rc::clone(&owner_cell);
+    let callback_results = Rc::clone(&during);
+    let router = Router::new(AppRoute::Home, pages(&home)).on_unknown(move |_| {
+        let owner = callback_owner
+            .borrow()
+            .clone()
+            .expect("the test installed the owner");
+        callback_results.borrow_mut().push(navigate(
+            &owner,
+            NavigationOp::Go(RoutePath::parse("/note/3").expect("a valid location")),
+        ));
+    });
+    let _host = mount_on_host(router);
+    let owner = home.url_owner();
+    *owner_cell.borrow_mut() = Some(Rc::clone(&owner));
+
+    let missing = RoutePath::parse("/missing").expect("a valid location");
+    assert_eq!(
+        navigate(&owner, NavigationOp::Push(missing.clone())),
+        Err(NavigationRefused::NoMatch(missing))
+    );
+    assert_eq!(*during.borrow(), [Err(NavigationRefused::Busy)]);
+    assert_eq!(home.handle().current(), AppRoute::Home);
+
+    navigate(
+        &owner,
+        NavigationOp::Go(RoutePath::parse("/note/3").expect("a valid location")),
+    )
+    .expect("the guard is released after the refused navigation");
+    assert_eq!(home.handle().current(), AppRoute::Note { id: 3 });
+}
+
+pub(crate) fn an_unknown_callback_panic_releases_url_navigation() {
+    let home = Probe::default();
+    let router = Router::new(AppRoute::Home, pages(&home)).on_unknown(|_| {
+        panic!("unknown callback failure");
+    });
+    let _host = mount_on_host(router);
+    let owner = home.url_owner();
+
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ = navigate(
+            &owner,
+            NavigationOp::Push(RoutePath::parse("/missing").expect("a valid location")),
+        );
+    }))
+    .expect_err("the notification panic reaches its caller");
+
+    navigate(
+        &owner,
+        NavigationOp::Push(RoutePath::parse("/note/4").expect("a valid location")),
+    )
+    .expect("the busy guard is restored during unwind");
+    assert_eq!(home.handle().current(), AppRoute::Note { id: 4 });
+}
+
+// ============================================================================
+// Typed, owner-local route results
+// ============================================================================
+
+pub(crate) fn typed_results_accept_a_non_send_non_clone_value() {
+    struct OwnerLocal(Rc<Cell<u32>>);
+
+    let (mut laid, home) = two_screen_app();
+    let router = home.handle();
+    let result = router
+        .push_for_result::<OwnerLocal>(AppRoute::Note { id: 1 })
+        .expect("mounted router");
+    let shared = Rc::new(Cell::new(41));
+    assert_eq!(router.pop_with(OwnerLocal(Rc::clone(&shared))), Ok(true));
+    settle(&mut laid);
+
+    let returned = result
+        .try_take()
+        .expect("the popped route completed")
+        .expect("the result type matched")
+        .expect("pop_with supplied a value");
+    returned.0.set(returned.0.get() + 1);
+    assert_eq!(shared.get(), 42, "the original Rc crossed unchanged");
+}
+
+pub(crate) fn resultless_pop_replace_and_go_complete_with_none() {
+    let (mut laid, home) = two_screen_app();
+    let router = home.handle();
+
+    let popped = router
+        .push_for_result::<u32>(AppRoute::Note { id: 1 })
+        .expect("mounted router");
+    assert_eq!(router.pop(), Ok(true));
+    settle(&mut laid);
+    assert_eq!(popped.try_take(), Some(Ok(None)));
+
+    let replaced = router
+        .push_for_result::<u32>(AppRoute::Note { id: 1 })
+        .expect("mounted router");
+    router
+        .replace(AppRoute::Note { id: 2 })
+        .expect("mounted router");
+    settle(&mut laid);
+    assert_eq!(replaced.try_take(), Some(Ok(None)));
+
+    let swept = router
+        .push_for_result::<u32>(AppRoute::NoteEdit { id: 2 })
+        .expect("mounted router");
+    router.go("/").expect("the root location is known");
+    settle(&mut laid);
+    assert_eq!(swept.try_take(), Some(Ok(None)));
+    assert_eq!(router.current(), AppRoute::Home);
+}
+
+pub(crate) fn a_wrong_result_type_is_an_error_and_the_pop_still_commits() {
+    let (mut laid, home) = two_screen_app();
+    let router = home.handle();
+    let result = router
+        .push_for_result::<u32>(AppRoute::Note { id: 1 })
+        .expect("mounted router");
+
+    assert_eq!(router.pop_with("not a u32"), Ok(true));
+    settle(&mut laid);
+    assert_eq!(router.current(), AppRoute::Home);
+    match result.try_take() {
+        Some(Err(flui_widgets::RouteResultError::TypeMismatch { expected })) => {
+            assert_eq!(expected, std::any::type_name::<u32>());
+        }
+        other => panic!("the wrong value type must be reported, got {other:?}"),
+    }
+}
+
+pub(crate) fn a_reentrant_observer_pop_with_delivers_the_push_result() {
+    let (mut laid, home) = two_screen_app();
+    let router = home.handle();
+    let during = router.clone();
+    observe_once(&home.navigator(), move || {
+        assert_eq!(during.current(), AppRoute::Note { id: 1 });
+        assert_eq!(during.pop_with(17_u32), Ok(true));
+    });
+
+    let result = router
+        .push_for_result::<u32>(AppRoute::Note { id: 1 })
+        .expect("the push returns its already-completed result");
+    assert_eq!(result.try_take(), Some(Ok(Some(17))));
+    settle(&mut laid);
+    assert_eq!(router.current(), AppRoute::Home);
+    assert_eq!(home.navigator().route_ids().len(), 1);
+}
+
+pub(crate) fn router_maybe_pop_honours_pop_scope_and_the_last_page_guard() {
+    let home = Probe::default();
+    let outcomes = Rc::new(RefCell::new(Vec::new()));
+    let page_probe = home.clone();
+    let page_outcomes = Rc::clone(&outcomes);
+    let router = Router::new(AppRoute::Home, move |route: &AppRoute, _cx| {
+        if matches!(route, AppRoute::Note { id: 1 }) {
+            let outcomes = Rc::clone(&page_outcomes);
+            page(&page_probe, move || {
+                let outcomes = Rc::clone(&outcomes);
+                PopScope::new(Text::new("Guarded"))
+                    .can_pop(false)
+                    .on_pop_invoked(move |_cx, did_pop| {
+                        outcomes.borrow_mut().push(did_pop);
+                    })
+                    .into_view()
+                    .boxed()
+            })
+        } else {
+            let label = route.to_path().to_string();
+            page(&page_probe, move || text(label.clone()))
+        }
+    });
+    let mut laid = mount(router);
+    let router = home.handle();
+    let result = router
+        .push_for_result::<u32>(AppRoute::Note { id: 1 })
+        .expect("mounted router");
+    settle(&mut laid);
+
+    assert_eq!(router.maybe_pop(), Ok(true), "the veto handles the pop");
+    assert_eq!(*outcomes.borrow(), [false]);
+    assert!(
+        !result.is_completed(),
+        "a refused pop leaves the result pending"
+    );
+    assert_eq!(router.current(), AppRoute::Note { id: 1 });
+
+    assert_eq!(
+        router.pop(),
+        Ok(true),
+        "a programmatic pop ignores the veto"
+    );
+    settle(&mut laid);
+    assert_eq!(*outcomes.borrow(), [false, true]);
+    assert_eq!(result.try_take(), Some(Ok(None)));
+    assert_eq!(router.maybe_pop(), Ok(false), "the last page bubbles");
+    assert_eq!(router.current(), AppRoute::Home);
+}
+
+pub(crate) fn typed_result_apis_refuse_an_unmounted_router() {
+    let (mut laid, home) = two_screen_app();
+    let router = home.handle();
+    laid.pump_widget(SizedBox::shrink());
+
+    assert!(matches!(
+        router.push_for_result::<u32>(AppRoute::Note { id: 1 }),
+        Err(RouterError::Disposed)
+    ));
+    assert_eq!(router.pop_with(7_u32), Err(RouterError::Disposed));
+    assert_eq!(router.maybe_pop(), Err(RouterError::Disposed));
+}
+
+pub(crate) fn unmount_completes_a_pending_result_without_a_router_edit() {
+    let (mut laid, home) = two_screen_app();
+    let router = home.handle();
+    let heard = listen(&router);
+    let result = router
+        .push_for_result::<u32>(AppRoute::Note { id: 1 })
+        .expect("mounted router");
+    settle(&mut laid);
+    heard.borrow_mut().clear();
+    let before = router.stack();
+
+    laid.pump_widget(SizedBox::shrink());
+    laid.pump();
+
+    assert_eq!(result.try_take(), Some(Ok(None)));
+    assert_eq!(router.stack(), before, "unmount is not a stack edit");
+    assert!(heard.borrow().is_empty(), "unmount notifies no listener");
+}
+
+#[derive(Clone)]
+struct KeyedRouter {
+    key: flui_view::GlobalKey<KeyedRouterState>,
+    router: Router<AppRoute>,
+    deactivations: Rc<Cell<usize>>,
+    activations: Rc<Cell<usize>>,
+}
+
+struct KeyedRouterState {
+    deactivations: Rc<Cell<usize>>,
+    activations: Rc<Cell<usize>>,
+}
+
+impl View for KeyedRouter {
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateful(self)
+    }
+
+    fn key(&self) -> Option<&dyn flui_foundation::ViewKey> {
+        Some(&self.key)
+    }
+}
+
+impl StatefulView for KeyedRouter {
+    type State = KeyedRouterState;
+
+    fn create_state(&self) -> Self::State {
+        KeyedRouterState {
+            deactivations: Rc::clone(&self.deactivations),
+            activations: Rc::clone(&self.activations),
+        }
+    }
+}
+
+impl ViewState<KeyedRouter> for KeyedRouterState {
+    fn build(&self, view: &KeyedRouter, _cx: &dyn BuildContext) -> impl IntoView {
+        view.router.clone()
+    }
+
+    fn deactivate(&mut self) {
+        self.deactivations.set(self.deactivations.get() + 1);
+    }
+
+    fn activate(&mut self) {
+        self.activations.set(self.activations.get() + 1);
+    }
+}
+
+pub(crate) fn global_key_reactivation_leaves_a_route_result_pending() {
+    let home = Probe::default();
+    let key = flui_view::GlobalKey::new();
+    let router = Router::new(AppRoute::Home, pages(&home));
+    let deactivations = Rc::new(Cell::new(0));
+    let activations = Rc::new(Cell::new(0));
+    let vsync = Vsync::new();
+    let tree = |moved: bool| {
+        let child = KeyedRouter {
+            key: key.clone(),
+            router: router.clone(),
+            deactivations: Rc::clone(&deactivations),
+            activations: Rc::clone(&activations),
+        }
+        .boxed();
+        let empty = SizedBox::shrink().boxed();
+        let (left, right) = if moved {
+            (empty, child)
+        } else {
+            (child, empty)
+        };
+        VsyncScope::new(
+            vsync.clone(),
+            Row::new((Center::new().child(left), Center::new().child(right))),
+        )
+    };
+    let mut laid = lay_out_animated(tree(false), tight(400.0, 400.0), vsync.clone());
+    laid.pump_for(FRAME);
+    let router = home.handle();
+    let result = router
+        .push_for_result::<u32>(AppRoute::Note { id: 1 })
+        .expect("mounted router");
+    settle(&mut laid);
+
+    laid.pump_widget(tree(true));
+
+    assert_eq!(deactivations.get(), 1, "the keyed router deactivated");
+    assert_eq!(activations.get(), 1, "the same keyed router reactivated");
+    assert!(!result.is_completed());
+    assert_eq!(router.current(), AppRoute::Note { id: 1 });
+    assert_eq!(router.pop_with(23_u32), Ok(true));
+    assert_eq!(result.try_take(), Some(Ok(Some(23))));
+}
+
+pub(crate) fn a_panicking_terminal_waker_does_not_block_another_completion() {
+    use std::future::Future as _;
+    use std::pin::Pin;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::task::{Context, Poll, Wake, Waker};
+
+    struct PanickingWake {
+        armed: AtomicBool,
+        wakes: AtomicUsize,
+    }
+
+    impl Wake for PanickingWake {
+        fn wake(self: Arc<Self>) {
+            self.wakes.fetch_add(1, Ordering::Relaxed);
+            assert!(
+                !self.armed.swap(false, Ordering::Relaxed),
+                "terminal result waker"
+            );
+        }
+    }
+
+    struct CountingWake(AtomicUsize);
+
+    impl Wake for CountingWake {
+        fn wake(self: Arc<Self>) {
+            self.0.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    let (mut laid, home) = two_screen_app();
+    let router = home.handle();
+    let mut first = router
+        .push_for_result::<u32>(AppRoute::Note { id: 1 })
+        .expect("mounted router");
+    let mut second = router
+        .push_for_result::<u32>(AppRoute::Note { id: 2 })
+        .expect("mounted router");
+    settle(&mut laid);
+    let before = router.stack();
+
+    let panicking = Arc::new(PanickingWake {
+        armed: AtomicBool::new(true),
+        wakes: AtomicUsize::new(0),
+    });
+    let counting = Arc::new(CountingWake(AtomicUsize::new(0)));
+    let first_waker = Waker::from(Arc::clone(&panicking));
+    let second_waker = Waker::from(Arc::clone(&counting));
+    assert_eq!(
+        Pin::new(&mut first).poll(&mut Context::from_waker(&first_waker)),
+        Poll::Pending
+    );
+    assert_eq!(
+        Pin::new(&mut second).poll(&mut Context::from_waker(&second_waker)),
+        Poll::Pending
+    );
+
+    // The headless host contains the panicking wake at its own boundary. The
+    // Navigator's contract is that this failure cannot skip the other result.
+    laid.pump_widget(SizedBox::shrink());
+
+    assert_eq!(panicking.wakes.load(Ordering::Relaxed), 1);
+    assert_eq!(counting.0.load(Ordering::Relaxed), 1);
+    assert_eq!(first.try_take(), Some(Ok(None)));
+    assert_eq!(second.try_take(), Some(Ok(None)));
+    assert_eq!(router.stack(), before, "unmount is not a stack edit");
 }

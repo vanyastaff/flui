@@ -44,16 +44,14 @@
 
 use flui_sdk::geometry::EdgeInsets;
 use flui_sdk::geometry::Radius;
-use flui_sdk::painting::BorderRadius;
-use flui_sdk::painting::Clip;
-use flui_sdk::painting::Color;
+use flui_sdk::painting::paint::Clip;
+use flui_sdk::painting::styling::{BorderRadius, Color};
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::Padding;
 
 use crate::material::Material;
 use crate::shape::MaterialShape;
 use crate::theme::Theme;
-use crate::theme_data::ThemeData;
 
 /// The M3 elevated card's corner radius.
 const DEFAULT_CORNER_RADIUS: f64 = 12.0;
@@ -161,17 +159,16 @@ struct ResolvedCardStyle {
 
 /// Resolve `Card`'s M3 defaults through the widget → theme → default
 /// cascade, per field: `color`/`elevation`/`shape`/`margin` each fall back
-/// through `ThemeData.card_theme`'s own field before the M3 default
+/// through the `CardThemeData` entry's own field before the M3 default
 /// constant.
 fn resolve_style(
-    theme: &ThemeData,
+    theme: &crate::theme::BaseTheme,
+    card_theme: Option<&crate::CardThemeData>,
     color: Option<Color>,
     elevation: Option<f64>,
     shape: Option<MaterialShape>,
     margin: Option<EdgeInsets>,
 ) -> ResolvedCardStyle {
-    let card_theme = theme.card_theme.as_ref();
-
     let color = color
         .or_else(|| card_theme.and_then(|t| t.color))
         .unwrap_or(theme.color_scheme.surface_container_low);
@@ -197,13 +194,21 @@ fn resolve_style(
 
 impl StatelessView for Card {
     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
-        let theme = Theme::of(ctx);
+        let theme = Theme::required_base_of(ctx);
+        let card_theme = Theme::component_of::<crate::CardThemeData>(ctx);
         let ResolvedCardStyle {
             color,
             elevation,
             shape,
             margin,
-        } = resolve_style(&theme, self.color, self.elevation, self.shape, self.margin);
+        } = resolve_style(
+            &theme,
+            card_theme.as_ref(),
+            self.color,
+            self.elevation,
+            self.shape,
+            self.margin,
+        );
 
         Padding::new(margin).child(
             Material::new(color)

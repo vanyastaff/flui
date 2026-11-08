@@ -53,7 +53,7 @@ proptest! {
 }
 
 fn canonical_location(input: &str, expected: &str, name: &str) {
-    let path = flui_widgets::RoutePath::parse(input).expect("valid encoded location");
+    let path = flui_view::RoutePath::parse(input).expect("valid encoded location");
     assert_eq!(path.as_str(), expected);
     assert_eq!(
         TestRoute::from_path(&path),
@@ -107,8 +107,8 @@ fn dot_segments_are_literal_route_values() {
 fn malformed_location(input: &str) {
     assert!(
         matches!(
-            flui_widgets::RoutePath::parse(input),
-            Err(flui_widgets::RouteParseError::Malformed { location, .. }) if location == input
+            flui_view::RoutePath::parse(input),
+            Err(flui_view::RouteParseError::Malformed { location, .. }) if location == input
         ),
         "invalid location must be rejected without replacing data: {input:?}"
     );

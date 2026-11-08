@@ -19,7 +19,8 @@ use flui_material::{
 };
 use flui_sdk::animation::{MotionOverride, MotionSpec, SharedCurve, Vsync, curves};
 use flui_sdk::foundation::{Listenable as _, Subscription};
-use flui_sdk::painting::{DrawOp, TextDirection};
+use flui_sdk::painting::DrawOp;
+use flui_sdk::painting::typography::TextDirection;
 use flui_sdk::rendering::BoxConstraints;
 use flui_sdk::view::BoxedView;
 use flui_sdk::view::environment::VsyncScope;

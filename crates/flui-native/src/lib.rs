@@ -103,10 +103,10 @@
 //!
 //! ### What Headless Mode Provides
 //!
-//! - **Mock Windows**: `open_window()` returns mock windows (no OS windows
-//!   created)
+//! - **Headless windows**: `open_window()` returns in-memory windows (no OS
+//!   windows created)
 //! - **In-Memory Clipboard**: a clipboard that reads back what the application wrote
-//! - **Mock Displays**: Single virtual display at 1920x1080
+//! - **Virtual displays**: a single virtual display at 1920x1080
 //! - **Background Executor**: Async task execution with tokio runtime
 //! - **Fast Tests**: <100ms overhead, suitable for rapid test iteration
 //! - **Parallel Safe**: Thread-safe, no race conditions in parallel test
@@ -237,7 +237,6 @@ mod table_test;
 pub mod task;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
-#[cfg(wayland_host)]
 mod transfer;
 // Reachable for the text position's trait, which bounds a host's table; not
 // an embedding API.
@@ -280,8 +279,8 @@ pub use hosts::WaylandPlatform;
 pub use hosts::WindowsPlatform;
 #[cfg(x11_host)]
 pub use hosts::X11Platform;
-// The headless host's test controls and doubles, each its feature's.
-pub use accessibility::headless::FakeAccessibility;
+// The headless host's controls and production window. Recording doubles live
+// in `testing`, behind that feature (ADR-0243).
 pub use display::headless::{
     DisplayChange, DisplayChangeError, DisplaySpec, HeadlessDisplayControls,
 };
@@ -292,9 +291,8 @@ pub use owner::headless::{
     HeadlessDeferredWindowOpens, HeadlessExitReevaluation, HeadlessOwnerTurns,
 };
 pub use preferences::headless::HeadlessPreferences;
-pub use text::headless::FakeTextInput;
 pub use window::headless::{
-    HeadlessOpenWindows, HeadlessWindowPolicy, HeadlessWindowSystem, MockWindow, UnknownDisplay,
+    HeadlessOpenWindows, HeadlessWindow, HeadlessWindowPolicy, HeadlessWindowSystem, UnknownDisplay,
 };
 // What a UIKit scene tells the composition root.
 #[cfg(target_os = "ios")]
@@ -776,7 +774,7 @@ pub fn headless_platform() -> Box<dyn Platform> {
 /// The one public item of the core host that names an `android-activity`
 /// type: the system hands the Activity only to the application's
 /// `android_main`, and the composition root passes it on here, as the
-/// facade's `run_app_android` takes it (ADR-0151 §8). Nothing the platform
+/// facade's `native::android::run_app_android` takes it (ADR-0151 §8). Nothing the platform
 /// hands back names it.
 ///
 /// ```rust,ignore

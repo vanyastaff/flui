@@ -747,7 +747,7 @@ impl SeatAssembly {
                         device,
                         surface,
                         GesturePhase::Cancelled,
-                        [0.0; 2],
+                        ScrollDelta::zero(ScrollUnit::Pixels),
                         time,
                         &mut out,
                     );
@@ -832,36 +832,47 @@ impl SeatAssembly {
         let time = axes.time.unwrap_or(time);
         match axes.source {
             Some(AxisSource::Finger) => {
-                if axes.turned {
+                if axes.turned
+                    && let Some(delta) = step(ScrollUnit::Pixels, axes.values)
+                {
                     let phase = if self.pointer_state(device).fingers {
                         GesturePhase::Changed
                     } else {
                         GesturePhase::Began
                     };
                     self.pointer_state(device).fingers = true;
-                    self.finger_step(device, surface, phase, axes.values, time, out);
+                    self.finger_step(device, surface, phase, delta, time, out);
                 }
                 if axes.stopped && std::mem::take(&mut self.pointer_state(device).fingers) {
-                    self.finger_step(device, surface, GesturePhase::Ended, [0.0; 2], time, out);
+                    self.finger_step(
+                        device,
+                        surface,
+                        GesturePhase::Ended,
+                        ScrollDelta::zero(ScrollUnit::Pixels),
+                        time,
+                        out,
+                    );
                 }
             }
             Some(AxisSource::Continuous) if axes.turned => {
-                let delta = step(ScrollUnit::Pixels, axes.values);
-                self.scroll(
-                    device,
-                    surface,
-                    None,
-                    delta,
-                    ScrollPrecision::Precise,
-                    time,
-                    out,
-                );
+                if let Some(delta) = step(ScrollUnit::Pixels, axes.values) {
+                    self.scroll(
+                        device,
+                        surface,
+                        None,
+                        delta,
+                        ScrollPrecision::Precise,
+                        time,
+                        out,
+                    );
+                }
             }
             Some(AxisSource::Wheel | AxisSource::WheelTilt) | None
                 if axes.turned || axes.value120.iter().any(Option::is_some) =>
             {
-                let (delta, precision) = wheel(&axes);
-                self.scroll(device, surface, None, delta, precision, time, out);
+                if let Some((delta, precision)) = wheel(&axes) {
+                    self.scroll(device, surface, None, delta, precision, time, out);
+                }
             }
             _ => {}
         }
@@ -872,14 +883,13 @@ impl SeatAssembly {
         device: NativeDevice,
         surface: NativeSurface,
         phase: GesturePhase,
-        values: [f64; 2],
+        delta: ScrollDelta,
         time: WireTime,
         out: &mut Out,
     ) {
         let phase =
             self.scrolling
                 .phase(surface, Some(device), ScrollReading::fingers(phase, true));
-        let delta = step(ScrollUnit::Pixels, values);
         self.scroll(
             device,
             surface,
@@ -1329,19 +1339,19 @@ fn touch_reading(
 
 /// A scroll step of `values` (horizontal, vertical) in `unit`, in FLUI's
 /// direction: a Wayland axis value grows the scroll offset as FLUI's delta
-/// does. A value that is not finite steps zero.
-fn step(unit: ScrollUnit, values: [f64; 2]) -> ScrollDelta {
+/// does. `None` for a value that is not finite.
+fn step(unit: ScrollUnit, values: [f64; 2]) -> Option<ScrollDelta> {
     wheel_step(
         unit,
         WheelAmount::offset(values[0]),
         WheelAmount::offset(values[1]),
     )
-    .unwrap_or_else(|_| ScrollDelta::zero(unit))
+    .ok()
 }
 
 /// A wheel frame's step: detents from `value120` (precise when they are not
 /// whole), else from the discrete notches, else the values in pixels.
-fn wheel(axes: &AxisFrame) -> (ScrollDelta, ScrollPrecision) {
+fn wheel(axes: &AxisFrame) -> Option<(ScrollDelta, ScrollPrecision)> {
     if axes.value120.iter().any(Option::is_some) {
         let detents = axes
             .value120
@@ -1355,16 +1365,13 @@ fn wheel(axes: &AxisFrame) -> (ScrollDelta, ScrollPrecision) {
         } else {
             ScrollPrecision::Precise
         };
-        return (step(ScrollUnit::Detents, detents), precision);
+        return step(ScrollUnit::Detents, detents).map(|delta| (delta, precision));
     }
     if axes.discrete.iter().any(Option::is_some) {
         let detents = axes.discrete.map(|value| f64::from(value.unwrap_or(0)));
-        return (step(ScrollUnit::Detents, detents), ScrollPrecision::Notched);
+        return step(ScrollUnit::Detents, detents).map(|delta| (delta, ScrollPrecision::Notched));
     }
-    (
-        step(ScrollUnit::Pixels, axes.values),
-        ScrollPrecision::Notched,
-    )
+    step(ScrollUnit::Pixels, axes.values).map(|delta| (delta, ScrollPrecision::Notched))
 }
 
 #[cfg(test)]

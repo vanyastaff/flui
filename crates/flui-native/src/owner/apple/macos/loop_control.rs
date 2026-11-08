@@ -1,4 +1,22 @@
-//! Standalone AppKit loop ownership and orderly, policy-aware stopping.
+//! Standalone AppKit loop ownership, serialized reopen delivery and orderly,
+//! policy-aware stopping.
+//!
+//! The Objective-C reopen callback only records a signal and wakes weak loop
+//! control. It returns `false`; AppKit's `hasVisibleWindows` is not presentation
+//! visibility or frame eligibility. Pending, queued and active state serializes
+//! owner-lane delivery across nested native loops. Active delivery includes
+//! callback destruction, and starting-phase signals wait for `Running`.
+//! Explicit quit immediately fences registration, delivery, restoration and
+//! window admission; an old delegate cannot act on a later run.
+//!
+//! Only a standalone `NSApplication` is accepted: a running application or an
+//! existing delegate is refused before mutation. The run scope restores the
+//! previous activation policy only while its own delegate and policy remain
+//! current. Explicit quit bypasses the last-window veto and wakes the native
+//! wait with `stop(None)` and an event; quit during bootstrap skips `run`.
+//! Shutdown closes admission, clears callbacks and windows on main, then calls
+//! the application's quit once outside locks. Bootstrap errors and unwinds use
+//! the same cleanup.
 use std::sync::{Arc, Weak};
 
 use block2::RcBlock;

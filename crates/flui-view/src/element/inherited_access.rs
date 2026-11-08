@@ -71,37 +71,39 @@ pub trait InheritedElementAccess {
     ///
     /// Idempotent: re-registering the same id overwrites its depth
     /// (HashMap keyed by id) so reconciliation-driven depth changes are
-    /// captured without leaving stale entries, and unions `mask` into the
-    /// fields it depends on (issue #1090: a dependent that read two fields in
-    /// two builds depends on both).
+    /// captured without leaving stale entries, and unions the field and entry
+    /// sets into this build's reads.
     fn record_dependent(
         &mut self,
         token: crate::context::CrateToken,
         dependent: ElementId,
         depth: usize,
         mask: crate::view::FieldSet,
+        entries: crate::view::EntrySet,
     );
 
     /// Like [`record_dependent`](Self::record_dependent), for a read made in a
     /// lifecycle hook (`init_state`, `did_change_dependencies`) or outside a
-    /// build drain: the fields are kept until the dependent unmounts, and
-    /// [`reset_dependent_mask`](Self::reset_dependent_mask) does not clear them.
+    /// build drain: the fields and entries are kept until the dependent
+    /// unmounts, and [`reset_dependent_mask`](Self::reset_dependent_mask) does
+    /// not clear them.
     fn record_lifecycle_dependent(
         &mut self,
         token: crate::context::CrateToken,
         dependent: ElementId,
         depth: usize,
         mask: crate::view::FieldSet,
+        entries: crate::view::EntrySet,
     );
 
-    /// Reset the fields `dependent` read in `build` to `FieldSet::NONE`
-    /// (keeping its depth), right before the build drain re-applies the reads
-    /// of its latest build. A no-op when the id is not registered.
+    /// Reset the fields and entries `dependent` read in `build` (keeping its
+    /// lifecycle reads and depth), right before the build drain re-applies the
+    /// reads of its latest build. A no-op when the id is not registered.
     fn reset_dependent_mask(&mut self, token: crate::context::CrateToken, dependent: ElementId);
 
-    /// Drop `dependent` if its mask is still `NONE` after the build's reads
-    /// were re-applied — the build no longer read this provider. Returns
-    /// whether an entry was removed.
+    /// Drop `dependent` if it has no build or lifecycle reads of either kind
+    /// after the build's reads were re-applied. Returns whether an entry was
+    /// removed.
     fn prune_unread_dependent(
         &mut self,
         token: crate::context::CrateToken,

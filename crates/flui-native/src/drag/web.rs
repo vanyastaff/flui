@@ -52,6 +52,7 @@ mod mapping {
     use flui_platform::drag::OsDragProvider;
 
     use crate::drag::offers::{format_of, payload_of_bytes};
+    use crate::transfer::intake::Intake;
 
     /// The actions an `effectAllowed` value permits. `uninitialized` (a drag
     /// from outside the page) and unknown values permit every action, as the
@@ -128,49 +129,77 @@ mod mapping {
     /// declared length zero), then one per file, by its media type
     /// (`application/octet-stream` when the browser has none).
     #[must_use]
-    pub(super) fn offered<'a>(
-        types: impl IntoIterator<Item = &'a str>,
-        file_types: impl IntoIterator<Item = &'a str>,
+    pub(super) fn offered<S: AsRef<str>, F: AsRef<str>>(
+        types: impl IntoIterator<Item = S>,
+        file_types: impl IntoIterator<Item = F>,
     ) -> Vec<(DomSource, RepresentationDescriptor)> {
-        let mut offered: Vec<(DomSource, RepresentationDescriptor)> = Vec::new();
-        for dom_type in types {
-            let Some(format) = format_of(dom_type) else {
-                continue;
-            };
-            if offered.iter().any(|(_, known)| known.format == format) {
-                continue;
-            }
-            let declared_len = format.is_drag_identity().then_some(0);
-            offered.push((
-                DomSource::Data(dom_type.to_owned()),
-                RepresentationDescriptor {
-                    format,
-                    declared_len,
-                },
-            ));
+        enum Announced<S, F> {
+            Data(S),
+            File(usize, F),
         }
-        for (index, file_type) in file_types.into_iter().enumerate() {
-            let mime = if file_type.is_empty() {
-                "application/octet-stream"
-            } else {
-                file_type
-            };
-            let format = if mime.starts_with("image/") {
-                TransferFormat::Image {
-                    mime: Mime::new(mime),
+
+        let announced = types.into_iter().map(Announced::Data).chain(
+            file_types
+                .into_iter()
+                .enumerate()
+                .map(|(index, mime)| Announced::File(index, mime)),
+        );
+        let admitted = Intake::DEFAULT.admit_types(announced, |entry| match entry {
+            Announced::Data(dom_type) => dom_type.as_ref(),
+            Announced::File(_, file_type) => {
+                let mime = file_type.as_ref();
+                if mime.is_empty() {
+                    "application/octet-stream"
+                } else {
+                    mime
                 }
-            } else {
-                TransferFormat::Custom {
-                    mime: Mime::new(mime),
+            }
+        });
+        let mut offered: Vec<(DomSource, RepresentationDescriptor)> = Vec::new();
+        for entry in admitted {
+            match entry {
+                Announced::Data(dom_type) => {
+                    let dom_type = dom_type.as_ref();
+                    let Some(format) = format_of(dom_type) else {
+                        continue;
+                    };
+                    if offered.iter().any(|(_, known)| known.format == format) {
+                        continue;
+                    }
+                    let declared_len = format.is_drag_identity().then_some(0);
+                    offered.push((
+                        DomSource::Data(dom_type.to_owned()),
+                        RepresentationDescriptor {
+                            format,
+                            declared_len,
+                        },
+                    ));
                 }
-            };
-            offered.push((
-                DomSource::File(index),
-                RepresentationDescriptor {
-                    format,
-                    declared_len: None,
-                },
-            ));
+                Announced::File(index, file_type) => {
+                    let file_type = file_type.as_ref();
+                    let mime = if file_type.is_empty() {
+                        "application/octet-stream"
+                    } else {
+                        file_type
+                    };
+                    let format = if mime.starts_with("image/") {
+                        TransferFormat::Image {
+                            mime: Mime::new(mime),
+                        }
+                    } else {
+                        TransferFormat::Custom {
+                            mime: Mime::new(mime),
+                        }
+                    };
+                    offered.push((
+                        DomSource::File(index),
+                        RepresentationDescriptor {
+                            format,
+                            declared_len: None,
+                        },
+                    ));
+                }
+            }
         }
         offered
     }
@@ -506,24 +535,11 @@ impl DragTransport for WebTransfer {
             }
         };
         match found {
-            Found::Payload(payload) => {
-                let actual = payload.byte_len();
-                TransferRequest::ready(if actual > limits.max_bytes {
-                    Err(TransferError::TooLarge {
-                        actual,
-                        limit: limits.max_bytes,
-                    })
-                } else {
-                    Ok(payload)
-                })
-            }
+            Found::Payload(payload) => TransferRequest::ready(Ok(payload)).enforce(limits),
             Found::File(file, format) => {
                 let size = file.size() as u64;
-                if size > limits.max_bytes {
-                    return TransferRequest::ready(Err(TransferError::TooLarge {
-                        actual: size,
-                        limit: limits.max_bytes,
-                    }));
+                if let Err(error) = limits.check(size) {
+                    return TransferRequest::ready(Err(error));
                 }
                 let (request, completer) = TransferRequest::pending();
                 js_sys::futures::spawn_local(async move {
@@ -532,18 +548,14 @@ impl DragTransport for WebTransfer {
                         .map(|buffer| js_sys::Uint8Array::new(&buffer).to_vec())
                         .map_err(|_| TransferError::SourceGone)
                         .and_then(|bytes| {
-                            if bytes.len() as u64 > limits.max_bytes {
-                                Err(TransferError::TooLarge {
-                                    actual: bytes.len() as u64,
-                                    limit: limits.max_bytes,
-                                })
-                            } else {
-                                Ok(payload_of_bytes(&format, bytes))
-                            }
+                            let actual = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+                            limits
+                                .check(actual)
+                                .map(|()| payload_of_bytes(&format, bytes))
                         });
                     completer.complete(result);
                 });
-                request
+                request.enforce(limits)
             }
         }
     }
@@ -756,22 +768,17 @@ fn drag_position(event: &web_sys::Event) -> Point {
 /// What a hovering drag offers.
 #[cfg(target_arch = "wasm32")]
 fn offered_by(transfer: &web_sys::DataTransfer) -> Vec<(DomSource, RepresentationDescriptor)> {
-    let types: Vec<String> = transfer
+    let types = transfer
         .types()
-        .iter()
+        .into_iter()
         .filter_map(|value| value.as_string())
-        .filter(|dom_type| dom_type != FILES_TYPE)
-        .collect();
+        .filter(|dom_type| dom_type != FILES_TYPE);
     let items = transfer.items();
-    let file_types: Vec<String> = (0..items.length())
+    let file_types = (0..items.length())
         .filter_map(|index| items.get(index))
         .filter(|item| item.kind() == "file")
-        .map(|item| item.type_())
-        .collect();
-    offered(
-        types.iter().map(String::as_str),
-        file_types.iter().map(String::as_str),
-    )
+        .map(|item| item.type_());
+    offered(types, file_types)
 }
 
 /// Register the canvas's drop target and drag source listeners.

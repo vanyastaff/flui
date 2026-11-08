@@ -58,25 +58,33 @@ impl ScrollPhases {
     /// The owned phase of `reading` from `device` on `surface`, committing
     /// whether its finger gesture is open.
     ///
-    /// Momentum wins over a finger phase reported with it. A `Changed`
-    /// outside an open gesture is a phased step only when precise: a notched
-    /// wheel that reports "moved" with no begin is a wheel tick, with no
-    /// phase. A `Cancelled` outside an open gesture has no phase either.
+    /// Momentum wins over a finger phase reported with it, while terminal
+    /// fingers still close their sequence. A `Changed` outside an open gesture
+    /// is a phased step only when precise: a notched wheel that reports "moved"
+    /// with no begin is a wheel tick, with no phase. A `Cancelled` outside an
+    /// open gesture has no phase either.
     pub fn phase(
         &mut self,
         surface: NativeSurface,
         device: Option<NativeDevice>,
         reading: ScrollReading,
     ) -> Option<ScrollPhase> {
+        let key = (surface, device);
+        let open = self.open.iter().position(|entry| *entry == key);
         if let Some(momentum) = reading.momentum {
+            if matches!(
+                reading.fingers,
+                Some(GesturePhase::Ended | GesturePhase::Cancelled)
+            ) && let Some(index) = open
+            {
+                self.open.swap_remove(index);
+            }
             return Some(match momentum {
                 GesturePhase::Began => ScrollPhase::MomentumBegan,
                 GesturePhase::Changed => ScrollPhase::MomentumChanged,
                 GesturePhase::Ended | GesturePhase::Cancelled => ScrollPhase::MomentumEnded,
             });
         }
-        let key = (surface, device);
-        let open = self.open.iter().position(|entry| *entry == key);
         match reading.fingers? {
             GesturePhase::Began => {
                 if open.is_none() {
@@ -100,6 +108,24 @@ impl ScrollPhases {
                 ScrollPhase::Cancelled
             }),
         }
+    }
+
+    /// Reconcile a reading whose event was rejected. Non-terminal readings
+    /// commit nothing; terminal fingers close their open gesture without a
+    /// substitute event, independently of momentum reported beside them.
+    pub(crate) fn reject(
+        &mut self,
+        surface: NativeSurface,
+        device: Option<NativeDevice>,
+        reading: ScrollReading,
+    ) {
+        if !matches!(
+            reading.fingers,
+            Some(GesturePhase::Ended | GesturePhase::Cancelled)
+        ) {
+            return;
+        }
+        let _closed = self.phase(surface, device, reading);
     }
 
     /// Forget the gestures open on `surface` (the window closed or lost its
@@ -156,5 +182,94 @@ impl ContactRegistry {
             scroll = scroll.with_phase(phase);
         }
         Some(PlatformInput::Pointer(PointerEvent::Scroll(scroll)))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_rejected_non_terminal_reading_does_not_open_a_sequence() {
+        let mut phases = ScrollPhases::default();
+        let surface = NativeSurface::default();
+        phases.reject(
+            surface,
+            None,
+            ScrollReading::fingers(GesturePhase::Began, true),
+        );
+        assert_eq!(
+            phases.phase(
+                surface,
+                None,
+                ScrollReading::fingers(GesturePhase::Cancelled, true),
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn delivered_momentum_does_not_leave_terminal_fingers_open() {
+        let mut phases = ScrollPhases::default();
+        let surface = NativeSurface::default();
+        assert_eq!(
+            phases.phase(
+                surface,
+                None,
+                ScrollReading::fingers(GesturePhase::Began, true),
+            ),
+            Some(ScrollPhase::Began)
+        );
+        assert_eq!(
+            phases.phase(
+                surface,
+                None,
+                ScrollReading {
+                    fingers: Some(GesturePhase::Ended),
+                    momentum: Some(GesturePhase::Ended),
+                    precise: true,
+                },
+            ),
+            Some(ScrollPhase::MomentumEnded)
+        );
+        assert_eq!(
+            phases.phase(
+                surface,
+                None,
+                ScrollReading::fingers(GesturePhase::Cancelled, true),
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn a_rejected_terminal_reading_closes_fingers_even_with_momentum() {
+        let mut phases = ScrollPhases::default();
+        let surface = NativeSurface::default();
+        assert_eq!(
+            phases.phase(
+                surface,
+                None,
+                ScrollReading::fingers(GesturePhase::Began, true),
+            ),
+            Some(ScrollPhase::Began)
+        );
+        phases.reject(
+            surface,
+            None,
+            ScrollReading {
+                fingers: Some(GesturePhase::Ended),
+                momentum: Some(GesturePhase::Ended),
+                precise: true,
+            },
+        );
+        assert_eq!(
+            phases.phase(
+                surface,
+                None,
+                ScrollReading::fingers(GesturePhase::Cancelled, true),
+            ),
+            None
+        );
     }
 }

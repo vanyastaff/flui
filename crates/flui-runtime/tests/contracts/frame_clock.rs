@@ -770,7 +770,7 @@ fn delivery_case(delivery: Delivery) {
     let primary_mounted = Rc::new(RefCell::new(None));
     let primary_builds = Rc::new(RefCell::new(Vec::new()));
     let root = flui_widgets::GestureDetector::new()
-        .behavior(flui_widgets::HitTestBehavior::Opaque)
+        .behavior(flui_interaction::HitTestBehavior::Opaque)
         .on_long_press(move |_| {
             if delivery == Delivery::Deadline && deadline_armed.replace(false) {
                 std::panic::panic_any("primary deadline delivery");

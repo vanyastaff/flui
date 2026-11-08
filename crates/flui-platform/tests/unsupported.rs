@@ -163,11 +163,27 @@ fn every_error_carries_its_reason() {
             ("storage", storage),
             ("preference queries", preference_queries),
             ("text store hosts", text_store_hosts),
+            ("launches", launches),
             ("haptic outcomes", haptic_outcomes),
             (
                 "each reason answers retry and message",
                 each_reason_answers_retry_and_message,
             ),
         ],
+    );
+}
+
+fn launches() {
+    use flui_platform::launch::{LaunchError, LauncherCapability};
+
+    carries(LaunchError::from, LaunchError::unsupported);
+    assert_eq!(LaunchError::Denied.unsupported(), None);
+
+    let unsupported = Unsupported::of::<LauncherCapability>(UnsupportedReason::Unavailable);
+    let error = LaunchError::from(unsupported);
+    assert_eq!(error.unsupported(), Some(unsupported));
+    assert_eq!(
+        error.to_string(),
+        "the launch service is unavailable: unsupported: launcher: unavailable for now"
     );
 }

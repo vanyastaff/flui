@@ -2,8 +2,9 @@
 
 - **Status:** Accepted (2026-10-04)
 - **Date:** 2026-10-04
-- **Related:** [ADR-0311](ADR-0311-development-reload-is-a-hook-the-application-installs.md) §7
-  (the dlopen path whose worker images this record keeps mapped, and its exit);
+- **Related:** [ADR-0311](ADR-0311-development-reload-is-a-hook-the-application-installs.md) (the
+  development reload hook); [ADR-0316](ADR-0316-the-dlopen-worker-host-development-cycle-is-supported.md)
+  (the supported dlopen path whose admitted worker images this record keeps mapped);
   [ADR-0094](ADR-0094-hot-reload-through-subsecond.md) (the rejected record that first described
   the worker's unload hazard)
 - **Revised:** 2026-11-04 — the pair with ADR-0094 became `Related`, since ADR-0094 is rejected.

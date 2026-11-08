@@ -14,10 +14,10 @@ use crate::common;
 
 use common::{lay_out, offset, size, tight};
 use flui_material::{AppBar, Card, ListTile, MaterialApp, Scaffold, Theme, ThemeData};
-use flui_painting::DrawOp;
-use flui_painting::glyphs::FontRegistry;
 use flui_sdk::geometry::EdgeInsets;
-use flui_sdk::painting::Color;
+use flui_sdk::painting::DrawOp;
+use flui_sdk::painting::styling::Color;
+use flui_sdk::testing::painting::FontRegistry;
 use flui_sdk::view::ViewExt;
 use flui_sdk::view::environment::{MediaQuery, MediaQueryData};
 use flui_sdk::widgets::{Column, SizedBox, Text};

@@ -1,6 +1,6 @@
 //! [`Routable`] — a typed set of locations.
 
-use super::path::{RouteParseError, RoutePath};
+use flui_view::{RouteParseError, RoutePath};
 
 /// A typed set of locations: the route type a [`Router`](super::Router) keeps
 /// a stack of.
@@ -26,7 +26,8 @@ use super::path::{RouteParseError, RoutePath};
 /// # Example
 ///
 /// ```
-/// use flui_widgets::{Routable, RouteParseError, RoutePath};
+/// use flui_view::{RouteParseError, RoutePath};
+/// use flui_widgets::Routable;
 ///
 /// #[derive(Routable, Debug, Clone, PartialEq)]
 /// enum AppRoute {

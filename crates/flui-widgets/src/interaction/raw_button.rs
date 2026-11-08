@@ -4,6 +4,7 @@
 use std::rc::Rc;
 
 use flui_rendering::hit_testing::HitTestBehavior;
+use flui_rendering::semantics::SemanticsRole;
 use flui_view::prelude::*;
 
 use super::actions::{
@@ -170,7 +171,7 @@ impl StatelessView for RawButton {
         // annotation below joins.
         Semantics::new()
             .container(true)
-            .role(crate::SemanticsRole::Button)
+            .role(SemanticsRole::Button)
             .enabled(enabled)
             .identifier_if(self.identifier.as_ref())
             .child(detector)

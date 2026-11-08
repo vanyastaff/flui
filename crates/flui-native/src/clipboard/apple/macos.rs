@@ -23,7 +23,7 @@
 //! `owner::apple::macos::owner_lane` module — this file only decides what
 //! runs on the lane.
 
-use flui_platform::{ClipboardRead, ClipboardWrite, Concealment};
+use flui_platform::{ClipboardError, ClipboardRead, ClipboardWrite, Concealment};
 use objc2::rc::Retained;
 use objc2_app_kit::{NSPasteboard, NSPasteboardContentsOptions, NSPasteboardType};
 use objc2_foundation::NSString;
@@ -166,8 +166,14 @@ impl SyncClipboard for MacOSClipboard {
             let Some(ns_string) = pasteboard.stringForType(&string_type) else {
                 return Ok(None);
             };
-            // Measured in UTF-16 units before the copy into Rust.
-            admit_utf16(ns_string.length())?;
+            // `NSString::len` is the exact UTF-8 length `to_string` will produce.
+            admit_utf16(ns_string.length(), || {
+                let bytes = ns_string.len();
+                if bytes == 0 && ns_string.length() != 0 {
+                    return Err(ClipboardError::Malformed);
+                }
+                Ok(bytes)
+            })?;
             host_text(ns_string.to_string())
         })
     }

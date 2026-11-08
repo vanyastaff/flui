@@ -29,15 +29,15 @@ use std::time::Duration;
 
 use flui_sdk::foundation::geometry::Offset;
 use flui_sdk::foundation::{ChangeNotifier, RebuildReason};
-use flui_sdk::interaction::{EventTime, GestureArena, PointerEventExt, PointerId};
-use flui_sdk::painting::{Color, TextStyle};
-use flui_sdk::rendering::HitTestBehavior;
+use flui_sdk::interaction::{EventTime, GestureArena, HitTestBehavior, PointerEventExt, PointerId};
+use flui_sdk::painting::styling::Color;
+use flui_sdk::painting::typography::TextStyle;
+use flui_sdk::pipeline::{CrossAxisAlignment, MainAxisSize, StackFit};
 use flui_sdk::view::environment::GestureArenaScope;
 use flui_sdk::view::prelude::*;
 use flui_sdk::view::{PostFrameHandle, RebuildHandle};
 use flui_sdk::widgets::{
-    ColoredBox, Column, CrossAxisAlignment, IgnorePointer, Listener, MainAxisSize, Padding,
-    Positioned, SizedBox, Stack, StackFit, Text,
+    ColoredBox, Column, IgnorePointer, Listener, Padding, Positioned, SizedBox, Stack, Text,
 };
 
 use crate::gesture_inspector::{

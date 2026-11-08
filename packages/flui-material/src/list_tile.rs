@@ -127,26 +127,26 @@
 //!   `IconTheme` already wraps this tile), matching `IconTheme.merge`'s own
 //!   contract, not a blanket replacement. Only `IconButtonTheme` has no
 //!   port: FLUI has no `IconButtonTheme` ambient/`InheritedWidget` at all yet
-//!   (`IconButton` reads `ThemeData.icon_button_theme` directly — see
-//!   `crate::icon_button`'s module docs), so a nested `IconButton` in
+//!   (`IconButton` reads its typed `IconButtonThemeData` entry through
+//!   `Theme::component_of` — see `crate::icon_button`'s module docs), so a nested `IconButton` in
 //!   `leading`/`trailing` will not automatically pick up this tile's
 //!   resolved icon color.
 
 use flui_sdk::geometry::EdgeInsets;
-use flui_sdk::painting::Color;
-use flui_sdk::painting::TextStyle;
-use flui_sdk::rendering::BoxConstraints;
+use flui_sdk::painting::styling::Color;
+use flui_sdk::painting::typography::TextStyle;
+use flui_sdk::pipeline::{CrossAxisAlignment, MainAxisSize};
+use flui_sdk::rendering::{BoxConstraints, SemanticsRole};
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{
-    Column, ConstrainedBox, CrossAxisAlignment, DefaultTextStyle, Expanded, IconTheme,
-    MainAxisSize, Padding, Row, SafeArea, Semantics, SemanticsRole, SizedBox,
+    Column, ConstrainedBox, DefaultTextStyle, Expanded, IconTheme, Padding, Row, SafeArea,
+    Semantics, SizedBox,
 };
 
 use crate::ink_well::InkWell;
 use crate::material::Material;
 use crate::shape::MaterialShape;
 use crate::theme::Theme;
-use crate::theme_data::ThemeData;
 
 /// The M3 content padding start inset.
 const CONTENT_PADDING_START: f64 = 16.0;
@@ -524,8 +524,11 @@ fn resolve_content_color(
 /// Resolve `ListTile`'s M3 defaults through the widget → theme → default
 /// cascade — see the module docs' token table and "State-color cascade"
 /// section.
-fn resolve_style(theme: &ThemeData, view: &ListTile) -> ResolvedListTileStyle {
-    let tile_theme = theme.list_tile_theme.as_ref();
+fn resolve_style(
+    theme: &crate::theme::BaseTheme,
+    tile_theme: Option<&crate::ListTileThemeData>,
+    view: &ListTile,
+) -> ResolvedListTileStyle {
     let colors = theme.color_scheme;
     let disabled_content = colors.on_surface.with_opacity(DISABLED_CONTENT_OPACITY);
 
@@ -765,8 +768,9 @@ impl StatelessView for ListTile {
             "ListTile::is_three_line(true) requires ListTile::subtitle to be set"
         );
 
-        let theme = Theme::of(ctx);
-        let resolved = resolve_style(&theme, self);
+        let theme = Theme::required_base_of(ctx);
+        let component = Theme::component_of::<crate::ListTileThemeData>(ctx);
+        let resolved = resolve_style(&theme, component.as_ref(), self);
 
         // An `IconTheme.merge` over the ambient theme,
         // not a replacement: only `color` is overridden, every other field

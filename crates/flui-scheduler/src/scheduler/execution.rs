@@ -374,11 +374,11 @@ impl OwnerFrame {
         let span = if recovery.first.is_none() {
             recovery.attempt(|| {
                 tracing::debug_span!(
-                    target: "flui.frame",
-                    "frame",
+                    target: flui_foundation::diagnostics::FrameSpan::Frame.target(),
+                    flui_foundation::diagnostics::FrameSpan::Frame.name(),
                     id = tracing::field::Empty,
-                    period_us = tracing::field::Empty,
-                    runtime = tracing::field::Empty
+                    { flui_foundation::diagnostics::PERIOD_US } = tracing::field::Empty,
+                    { flui_foundation::diagnostics::RUNTIME } = tracing::field::Empty
                 )
             })
         } else {
@@ -391,7 +391,7 @@ impl OwnerFrame {
                 && let Some(runtime) = self.trace_runtime()
             {
                 recovery.attempt(|| {
-                    span.record("runtime", runtime);
+                    span.record(flui_foundation::diagnostics::RUNTIME, runtime);
                 });
             }
             let entered = recovery.attempt(|| span.enter());
@@ -400,7 +400,10 @@ impl OwnerFrame {
                     *scheduler.inner.frame.idle_deadline.borrow_mut() = Some(deadline.0);
                     let id = scheduler.handle_begin_frame(timestamp, self);
                     span.record("id", tracing::field::debug(id));
-                    span.record("period_us", scheduler.budget_period_micros());
+                    span.record(
+                        flui_foundation::diagnostics::PERIOD_US,
+                        scheduler.budget_period_micros(),
+                    );
                     scheduler.handle_draw_frame();
                     *scheduler.inner.frame.idle_deadline.borrow_mut() = None;
                     output = Some(pipeline());

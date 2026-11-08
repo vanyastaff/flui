@@ -21,5 +21,5 @@ pub(crate) mod registry;
 // Re-export widget-layer keys (source of truth is here)
 // Re-export foundation keys for convenience
 pub use flui_foundation::{Key, KeyRef, Keyed, UniqueKey, ValueKey, ViewKey, WithKey};
-pub use global_key::GlobalKey;
+pub use global_key::{GlobalKey, GlobalKeyId};
 pub use object_key::ObjectKey;

@@ -15,23 +15,21 @@
 use std::sync::Arc;
 
 use flui_platform::http::{
-    HeaderName, HeaderValue, Headers, HttpAuthority, HttpClient, HttpError, HttpFuture,
-    HttpRequest, HttpResponse, StatusCode,
+    Headers, HttpAuthority, HttpClient, HttpError, HttpFuture, HttpRequest, HttpResponse,
+    StatusCode,
 };
 use jni::objects::{JByteArray, JObject, JString};
 use jni::refs::Global;
 use jni::{Env, JValue, JavaVM, jni_sig, jni_str};
 
 use super::blocking::{Abort, BlockingClient, Connection, Head, Stack};
+use super::head::HeadBuilder;
 
 /// How long a connection may take to open, and a read to answer.
 const SOCKET_TIMEOUT_MS: i32 = 30_000;
 
 /// The size of each body read.
 const READ_BUFFER: usize = 16 * 1024;
-
-/// The most response headers a head may carry.
-const MAX_HEADERS: i32 = 1024;
 
 /// An HTTP client over Android's `HttpURLConnection` (ADR-0280).
 ///
@@ -377,8 +375,9 @@ fn read_headers(
     env: &mut Env<'_>,
     connection: &Global<JObject<'static>>,
 ) -> jni::errors::Result<Result<Headers, HttpError>> {
-    let mut headers = Headers::new();
-    for index in 0..MAX_HEADERS {
+    let mut headers = HeadBuilder::new();
+    let mut index = 0;
+    loop {
         let key = env
             .call_method(
                 connection,
@@ -395,38 +394,18 @@ fn read_headers(
                 &[JValue::Int(index)],
             )?
             .l()?;
+        index += 1;
         if value.is_null() {
-            return Ok(Ok(headers));
+            return Ok(Ok(headers.finish()));
         }
         if key.is_null() {
             continue;
         }
         let key = env.cast_local::<JString<'_>>(key)?.try_to_string(env)?;
         let value = env.cast_local::<JString<'_>>(value)?.try_to_string(env)?;
-        // The stack decodes header bytes one character per byte.
-        let Ok(value) = value
-            .chars()
-            .map(|c| u8::try_from(u32::from(c)))
-            .collect::<Result<Vec<u8>, _>>()
-        else {
-            return Ok(Err(protocol("a header value is not a byte string")));
-        };
-        let name = match HeaderName::try_new(&key) {
-            Ok(name) => name,
-            Err(error) => return Ok(Err(protocol(error))),
-        };
-        let value = match HeaderValue::try_new(value) {
-            Ok(value) => value,
-            Err(error) => return Ok(Err(protocol(error))),
-        };
-        headers.append(name, value);
-    }
-    Ok(Err(protocol(format!("more than {MAX_HEADERS} headers"))))
-}
-
-fn protocol(error: impl std::fmt::Display) -> HttpError {
-    HttpError::Protocol {
-        detail: error.to_string(),
+        if let Err(error) = headers.try_push_byte_string(&key, &value) {
+            return Ok(Err(error));
+        }
     }
 }
 

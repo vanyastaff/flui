@@ -52,16 +52,22 @@ fn workspace_target_dir(root: &Path) -> PathBuf {
 /// The check gets its own `--target-dir`: reusing the workspace's would
 /// deadlock, since the outer `cargo test` holds that directory's build lock for
 /// the duration of the run.
-fn assert_generated_project_compiles(template: &str) {
+fn assert_generated_project_compiles(template: &str, hot_reload: bool) {
     let root = repo_root();
     let target = workspace_target_dir(&root);
-    let name = format!("flui-tmpl-check-{template}");
+    let name = if hot_reload {
+        format!("flui-tmpl-check-{template}-hot-reload")
+    } else {
+        format!("flui-tmpl-check-{template}")
+    };
+    let mode = if hot_reload { " --hot-reload" } else { "" };
     let output_dir = TempDir::new().expect("external output directory");
     let project = output_dir.path().join(&name);
 
     // The explicit check below is the compile oracle; skip the CLI's advisory
     // check so it cannot resolve a fresh graph or build into a private target.
-    flui()
+    let mut create = flui();
+    create
         .current_dir(&root)
         .env("CARGO_NET_OFFLINE", "true")
         .args([
@@ -73,13 +79,41 @@ fn assert_generated_project_compiles(template: &str) {
             "com.test",
             "--local",
             "--no-check",
-        ])
+        ]);
+    if hot_reload {
+        create.arg("--hot-reload");
+    }
+    create
         .arg("--path")
         .arg(output_dir.path())
         .assert()
         .success();
 
-    if template == "counter" {
+    if matches!(template, "empty" | "basic" | "counter") && !hot_reload {
+        let source = std::fs::read_to_string(project.join("src/lib.rs")).expect("generated source");
+        assert!(source.contains("use flui::native::android::{AndroidApp, run_app_android};"));
+        assert!(source.contains("fn android_main(app: AndroidApp)"));
+        assert!(source.contains("let _started = run_app_android(app,"));
+        assert!(!source.contains("flui::android_activity"));
+        assert!(!source.contains("flui::run_app_android"));
+
+        let manifest: toml::Table = std::fs::read_to_string(project.join("Cargo.toml"))
+            .expect("manifest")
+            .parse()
+            .expect("valid TOML");
+        assert_eq!(
+            manifest["target"]["cfg(target_os = \"android\")"]["dependencies"]["flui"]["features"]
+                .as_array()
+                .expect("Android features"),
+            &[toml::Value::String("native".into())]
+        );
+        assert!(
+            manifest["dependencies"]["flui"].get("features").is_none(),
+            "the ordinary dependency must not enable `native` on desktop"
+        );
+    }
+
+    if template == "counter" && !hot_reload {
         // The app and its tests live in the library; main.rs only mounts it.
         let source = std::fs::read_to_string(project.join("src/lib.rs")).expect("generated source");
         for test in GENERATED_COUNTER_TESTS {
@@ -117,11 +151,15 @@ fn assert_generated_project_compiles(template: &str) {
 
     // Template checks share a separate target so the enclosing cargo test's
     // build lock cannot deadlock them. External output paths exercise the same
-    // dependency resolution users get outside the framework checkout.
+    // dependency resolution users get outside the framework checkout. Checking
+    // the generated hot-reload workspace compiles its types, worker and host.
     let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
-    let output = std::process::Command::new(&cargo)
-        .arg("check")
-        .arg("--offline")
+    let mut check = std::process::Command::new(&cargo);
+    check.arg("check").arg("--offline");
+    if hot_reload {
+        check.arg("--workspace");
+    }
+    let output = check
         .arg("--target-dir")
         .arg(target.join("cli-template-check"))
         .current_dir(&project)
@@ -130,24 +168,28 @@ fn assert_generated_project_compiles(template: &str) {
 
     assert!(
         output.status.success(),
-        "`flui create --template {template}` generated a project that does not compile:\n{}",
+        "`flui create --template {template}{mode}` generated a project that does not compile:\n{}",
         String::from_utf8_lossy(&output.stderr),
     );
     // A template names exactly the packages and features its source uses
     // (ADR-0088 §6). None uses a design system today, so none may pull one in
     // -- through a facade default included -- nor test support.
     {
-        let output = std::process::Command::new(&cargo)
-            .args([
-                "tree",
-                "--offline",
-                "--edges",
-                "normal,build",
-                "--prefix",
-                "none",
-                "--format",
-                "{p}",
-            ])
+        let mut tree = std::process::Command::new(&cargo);
+        tree.args([
+            "tree",
+            "--offline",
+            "--edges",
+            "normal,build",
+            "--prefix",
+            "none",
+            "--format",
+            "{p}",
+        ]);
+        if hot_reload {
+            tree.arg("--workspace");
+        }
+        let output = tree
             .current_dir(&project)
             .output()
             .expect("normal dependency graph");
@@ -160,13 +202,13 @@ fn assert_generated_project_compiles(template: &str) {
         for unused in ["flui-testing ", "flui-material ", "flui-cupertino "] {
             assert!(
                 !graph.lines().any(|line| line.starts_with(unused)),
-                "`flui create --template {template}` must not depend on `{}`, \
+                "`flui create --template {template}{mode}` must not depend on `{}`, \
                  which its source does not use:\n{graph}",
                 unused.trim_end()
             );
         }
     }
-    if template == "counter" {
+    if template == "counter" && !hot_reload {
         run_generated_counter_tests(&cargo, &project, &target);
     }
 }
@@ -229,22 +271,27 @@ fn run_generated_counter_tests(cargo: &str, project: &Path, target: &Path) {
 
 #[test]
 fn generated_basic_project_compiles() {
-    assert_generated_project_compiles("basic");
+    assert_generated_project_compiles("basic", false);
 }
 
 #[test]
 fn generated_counter_project_compiles() {
-    assert_generated_project_compiles("counter");
+    assert_generated_project_compiles("counter", false);
 }
 
 #[test]
 fn generated_empty_project_compiles() {
-    assert_generated_project_compiles("empty");
+    assert_generated_project_compiles("empty", false);
 }
 
 #[test]
 fn generated_widget_project_compiles() {
-    assert_generated_project_compiles("widget");
+    assert_generated_project_compiles("widget", false);
+}
+
+#[test]
+fn generated_hot_reload_project_compiles() {
+    assert_generated_project_compiles("counter", true);
 }
 
 /// The widget template ships a widget test (`greeting_renders_its_name`); a

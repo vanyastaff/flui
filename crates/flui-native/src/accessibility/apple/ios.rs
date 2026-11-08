@@ -46,8 +46,8 @@ use crate::owner::accessibility_slot::{ViewAccessibility, ViewPoint};
 use crate::owner::apple::ios::{NativeOwner, ViewRef};
 use crate::owner::panic_boundary::{AfterPanic, os_entry};
 use flui_semantics::platform::{
-    AccessibilityActionListener, AccessibilityActivationListener, AssistiveFocusListener,
-    PlatformAccessibility, RouteChange, RouteChangeSupport,
+    AccessibilityAlreadyAttached, AccessibilityAttachment, AccessibilityCapabilities,
+    AccessibilityHandler, PlatformAccessibility, RouteChange, RouteChangeSupport,
 };
 
 /// The adapter as the window's view reaches it, through the slot its
@@ -143,6 +143,7 @@ impl crate::host::WindowAccessibility for IosAccessibility {
     /// when UIKit is inside it, as the outermost call returns
     /// (`AdapterCell::detach`). Idempotent.
     fn detach(&self) {
+        PlatformAccessibility::detach_handler(self);
         if let Some(marker) = MainThreadMarker::new() {
             self.adapter.get(marker).detach();
         }
@@ -179,28 +180,18 @@ impl PlatformAccessibility for IosAccessibility {
         }
     }
 
-    fn is_active(&self) -> bool {
-        self.shared.is_active()
+    fn attach(
+        &self,
+        handler: Arc<dyn AccessibilityHandler>,
+    ) -> Result<AccessibilityAttachment, AccessibilityAlreadyAttached> {
+        self.shared.attach(
+            handler,
+            AccessibilityCapabilities::new(Self::ASSISTIVE_FOCUS, Self::ROUTE_CHANGE),
+        )
     }
 
-    fn set_activation_listener(&self, listener: AccessibilityActivationListener) {
-        self.shared.set_activation_listener(listener);
-    }
-
-    fn set_action_listener(&self, listener: AccessibilityActionListener) {
-        self.shared.set_action_listener(listener);
-    }
-
-    fn assistive_focus_support(&self) -> flui_semantics::AssistiveFocusSupport {
-        Self::ASSISTIVE_FOCUS
-    }
-
-    fn set_assistive_focus_listener(&self, listener: AssistiveFocusListener) {
-        self.shared.set_assistive_focus_listener(listener);
-    }
-
-    fn route_change_support(&self) -> RouteChangeSupport {
-        Self::ROUTE_CHANGE
+    fn detach_handler(&self) {
+        self.shared.detach_handler();
     }
 
     /// UIKit's notice of a new screen, with the route's name as its argument:

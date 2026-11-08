@@ -27,15 +27,15 @@ use flui_platform::pointer::{
     ScrollPrecision, ScrollUnit,
 };
 use flui_platform::{
-    AppTitleBar, Availability, CapabilityAbsence, CapabilityParts, ColorGamut, ColorParts,
-    ControlsOffset, DisplayId, DisplayInfo, DisplayParts, DynamicRange, GestureParts, Headroom,
-    HourCycle, ImeEvent, InsetCurve, InsetMotion, InvalidPreference, KeyboardInset, Locale,
-    MeasurementSystem, MemoryPressureLevel, MotionPreference, NativeMouseGeometry,
-    NativeTouchGeometry, NumberingSystem, PlatformInput, PreferenceParts, RefreshPeriod,
-    RegionOverride, RegionalParts, SessionEndPhase, SizeConstraints, SystemControls, SystemNotice,
-    SystemPreferences, TextWeightPreference, Weekday, WheelParts, WheelStep, WindowAppearance,
-    WindowExecutionState, WindowFrame, WindowGeometry, WindowInsets, WindowMode, WindowState,
-    WindowStateParts,
+    AppTitleBar, Availability, CapabilityParts, ColorGamut, ColorParts, ControlsOffset, DisplayId,
+    DisplayInfo, DisplayParts, DynamicRange, GestureParts, Headroom, HourCycle, ImeEvent,
+    InsetCurve, InsetMotion, InvalidPreference, KeyboardInset, Locale, MeasurementSystem,
+    MemoryPressureLevel, MotionPreference, NativeMouseGeometry, NativeTouchGeometry,
+    NumberingSystem, PlatformInput, PreferenceParts, RefreshPeriod, RegionOverride, RegionalParts,
+    SessionEndPhase, SizeConstraints, SystemControls, SystemNotice, SystemPreferences,
+    TextWeightPreference, Unsupported as PlatformUnsupported, UnsupportedReason, Weekday,
+    WheelParts, WheelStep, WindowAppearance, WindowExecutionState, WindowFrame, WindowGeometry,
+    WindowInsets, WindowMode, WindowState, WindowStateParts,
 };
 use flui_protocol::native_recording as wire;
 use serde::Serialize;
@@ -2022,22 +2022,33 @@ const fn bounds_from_wire([x, y, width, height]: [i32; 4]) -> Bounds<i32> {
     Bounds::new(Point::new(x, y), Size::new(width, height))
 }
 
-fn absence_to_wire(absence: CapabilityAbsence) -> DtoResult<wire::Absence> {
+fn absence_to_wire(absence: UnsupportedReason) -> DtoResult<wire::Absence> {
     Ok(match absence {
-        CapabilityAbsence::NotOnThisPlatform => wire::Absence::NotOnThisPlatform,
-        CapabilityAbsence::NotOnThisDevice => wire::Absence::NotOnThisDevice,
-        CapabilityAbsence::NotYetOnThisHost => wire::Absence::NotYetOnThisHost,
-        _ => return Err(DtoError::Unmirrored("CapabilityAbsence")),
+        UnsupportedReason::NotOnThisPlatform => wire::Absence::NotOnThisPlatform,
+        UnsupportedReason::NotOnThisDevice => wire::Absence::NotOnThisDevice,
+        UnsupportedReason::NotYetOnThisHost => wire::Absence::NotYetOnThisHost,
+        _ => return Err(DtoError::Unmirrored("UnsupportedReason")),
     })
 }
 
-fn absence_from_wire(absence: wire::Absence) -> DtoResult<CapabilityAbsence> {
+fn absence_from_wire(absence: wire::Absence) -> DtoResult<UnsupportedReason> {
     Ok(match absence {
-        wire::Absence::NotOnThisPlatform => CapabilityAbsence::NotOnThisPlatform,
-        wire::Absence::NotOnThisDevice => CapabilityAbsence::NotOnThisDevice,
-        wire::Absence::NotYetOnThisHost => CapabilityAbsence::NotYetOnThisHost,
+        wire::Absence::NotOnThisPlatform => UnsupportedReason::NotOnThisPlatform,
+        wire::Absence::NotOnThisDevice => UnsupportedReason::NotOnThisDevice,
+        wire::Absence::NotYetOnThisHost => UnsupportedReason::NotYetOnThisHost,
         other => return Err(unread(other.name())),
     })
+}
+
+fn display_absence_to_wire(unsupported: PlatformUnsupported) -> DtoResult<wire::Absence> {
+    if unsupported.capability().is_some() {
+        return Err(DtoError::Unmirrored("Unsupported"));
+    }
+    absence_to_wire(unsupported.reason).map_err(|_| DtoError::Unmirrored("Unsupported"))
+}
+
+fn display_absence_from_wire(absence: wire::Absence) -> DtoResult<PlatformUnsupported> {
+    Ok(PlatformUnsupported::new(absence_from_wire(absence)?))
 }
 
 /// `display` in the schema, through [`DisplayParts`] and [`ColorParts`]: a
@@ -2072,10 +2083,10 @@ fn display_to_wire(display: &RecordedDisplay) -> DtoResult<wire::Display> {
             },
             headroom: match headroom {
                 Ok(headroom) => wire::Headroom::Multiple(headroom.get()),
-                Err(absence) => wire::Headroom::Absent(absence_to_wire(absence)?),
+                Err(absence) => wire::Headroom::Absent(display_absence_to_wire(absence)?),
             },
         }),
-        Err(absence) => wire::DisplayColor::Absent(absence_to_wire(absence)?),
+        Err(absence) => wire::DisplayColor::Absent(display_absence_to_wire(absence)?),
     };
     Ok(wire::Display {
         label: display.label,
@@ -2125,11 +2136,11 @@ fn display_from_wire(wire: wire::Display) -> DtoResult<RecordedDisplay> {
             headroom: match headroom {
                 wire::Headroom::Multiple(multiple) => Ok(Headroom::try_new(multiple)
                     .map_err(|error| invalid(format!("headroom {multiple}: {error}")))?),
-                wire::Headroom::Absent(absence) => Err(absence_from_wire(absence)?),
+                wire::Headroom::Absent(absence) => Err(display_absence_from_wire(absence)?),
                 _ => return Err(unread("Headroom")),
             },
         }),
-        wire::DisplayColor::Absent(absence) => Err(absence_from_wire(absence)?),
+        wire::DisplayColor::Absent(absence) => Err(display_absence_from_wire(absence)?),
         _ => return Err(unread("DisplayColor")),
     };
     let refresh_period = refresh_period_ns
@@ -2205,7 +2216,7 @@ fn availability_from_wire(availability: wire::Availability) -> DtoResult<Availab
 }
 
 fn capability_to_wire(
-    honoured: Result<Availability, CapabilityAbsence>,
+    honoured: Result<Availability, UnsupportedReason>,
 ) -> DtoResult<wire::Capability> {
     Ok(match honoured {
         Ok(Availability::Native) => wire::Capability::Native,
@@ -2221,7 +2232,7 @@ fn capability_to_wire(
 
 fn capability_from_wire(
     capability: wire::Capability,
-) -> DtoResult<Result<Availability, CapabilityAbsence>> {
+) -> DtoResult<Result<Availability, UnsupportedReason>> {
     Ok(match capability {
         wire::Capability::Native => Ok(Availability::Native),
         wire::Capability::Emulated => Ok(Availability::Emulated),
@@ -2232,7 +2243,7 @@ fn capability_from_wire(
 
 /// `capabilities` in the schema, through [`CapabilityParts`]: a capability
 /// added there fails to compile here until it is mirrored.
-fn capabilities_to_wire(capabilities: CapabilityParts) -> DtoResult<wire::Capabilities> {
+fn capabilities_to_wire(capabilities: &CapabilityParts) -> DtoResult<wire::Capabilities> {
     let CapabilityParts {
         sets_title,
         sets_position,
@@ -2256,7 +2267,7 @@ fn capabilities_to_wire(capabilities: CapabilityParts) -> DtoResult<wire::Capabi
         observes_minimized,
         places_at_open,
         frame_rate_hint,
-    } = capabilities;
+    } = *capabilities;
     Ok(wire::Capabilities {
         sets_title: capability_to_wire(sets_title)?,
         sets_position: capability_to_wire(sets_position)?,
@@ -2444,7 +2455,7 @@ fn window_state_to_wire(state: &RecordedWindowState) -> DtoResult<wire::WindowSt
         },
         hovered,
         active,
-        capabilities: capabilities_to_wire(capabilities)?,
+        capabilities: capabilities_to_wire(&capabilities)?,
     })
 }
 
@@ -2603,6 +2614,10 @@ fn window_state_from_wire(wire: wire::WindowState) -> DtoResult<RecordedWindowSt
         active,
         capabilities: capabilities_from_wire(capabilities)?,
     };
+    let parts = parts
+        .try_into_state()
+        .map_err(|error| invalid(format!("capabilities: {error}")))?
+        .into_parts();
     Ok(RecordedWindowState {
         revision,
         display,

@@ -16,59 +16,50 @@ itself and compiles both intended caller paths. Checking the module directly
 keeps an exposed empty module from hiding a privacy regression behind a missing
 trait import.
 
-### `TextField` prelude collision — renamed the widgets primitive, not shadowed
+### Design-neutral and Material preludes
 
-`flui-widgets` and `flui-material` used to ship two distinct types both named
-`TextField` — a design-agnostic text-editing primitive and the M3-styled
-input. Three revisions of how `flui::prelude` handles this, kept in order
-because each corrected a real flaw in the one before it:
+The design-neutral editing primitives are
+[`flui_widgets::RawTextField`](crates/flui-widgets/src/text/text_field.rs) and
+`flui_widgets::RawTextFormField`; `RawTextFieldState` names the raw field's state, and the shared
+`SubmitCallback` stays in `flui-widgets`. Material owns `TextField` and `TextFormField`.
 
-1. **Omission.** The first revision left the Material type out of the
-   curated glob entirely, reasoning that "a curated glob cannot carry both
-   without one silently shadowing the other," and kept `flui_widgets::TextField`
-   as the ambient default. That reasoning stated the mechanism correctly but
-   reached the wrong conclusion for this prelude's actual audience: an
-   application author writing an ordinary Material screen with
-   `use flui::prelude::*;` who reached for `TextField` got a *compiling*
-   result either way, so the omission never surfaced as an error — it
-   surfaced as an unstyled field silently rendered where a themed one was
-   expected, exactly the "quiet Material-shaped mistake" this facade's
-   curation exists to prevent for every other Material type.
-2. **Explicit shadow.** The second revision had `flui::prelude` explicitly
-   name `flui_material::TextField` in its material re-export list (Rust's
-   explicit-import-over-glob-import rule, the same pattern every other name
-   in that list already follows, e.g. `ElevatedButton`/`IconButton` are also
-   explicit despite not being ambiguous), shadowing the
-   `flui_widgets::prelude::*` glob's copy of the same name whenever the
-   `material` feature was on. This fixed the silent-mistake problem but
-   introduced a different one: `TextField`'s meaning then depended on
-   whether the `material` feature happened to be enabled, which violates
-   Cargo's feature-additivity contract — enabling a feature is supposed to
-   only *add* symbols, never change what an existing name already resolves
-   to for code that hasn't opted into the new feature's own symbols.
-3. **Rename (current).** `flui-widgets`' primitive is now
-   [`flui_widgets::RawTextField`](crates/flui-widgets/src/text/text_field.rs),
-   not `TextField` — a breaking rename, sanctioned pre-1.0. `TextField`
-   belongs to `flui_material` alone, unconditionally; `flui::prelude` lists
-   it in the material re-export block like every other Material type, with
-   no shadowing and no feature-dependent meaning. `RawTextFieldState` was
-   renamed alongside it for the same reason (an orphaned `TextFieldState`
-   with no `TextField` beside it would have been confusing); `SubmitCallback`
-   (the shared `Rc<dyn Fn(&str)>` alias both `on_submitted` methods use) was
-   made `pub` and exported from `flui-widgets` so `flui_material::TextField`
-   reuses the same type instead of declaring its own copy.
+`flui::prelude` is feature-independent and design-system-neutral: it exports no Material names, and
+enabling `material` never changes what an existing prelude name resolves to. `flui-material` owns
+`flui_material::prelude`, also available through the facade as `flui::material::prelude`. An
+application that wants Material's glob selects it explicitly:
 
-Every real caller of `flui::material::TextField` in the codebase
-already imported it explicitly under all three revisions and needed no
-changes across any of them — every fix here was about what an *unqualified*
-`TextField` resolves to for code that hasn't been written yet, never about
-existing call sites.
+```rust
+use flui::material::prelude::*;
+use flui::prelude::*;
+```
+
+This ownership rule is part of [ADR-0315](docs/adr/ADR-0315-first-party-packages-remain-train-aligned-facade-features.md) §3.
+
+### Standing first-party package features
+
+The facade keeps `default = []` and permanent opt-in `material`, `cupertino`, `devtools` and
+`hot-reload` features with their corresponding re-exports. Official capabilities use the same
+mechanism behind off-by-default features and appear as `flui::services::<name>`. The facade is the
+only standing aggregation exception to the core dependency-direction rule; aggregation gives no
+core crate a package dependency.
+
+An aggregated package ships with the framework train and participates in facade semver with every
+feature enabled. It must leave the facade before adopting an independent release cadence. See
+[ADR-0315](docs/adr/ADR-0315-first-party-packages-remain-train-aligned-facade-features.md) §1–§4.
 
 ### Explicit authoring modules
 
 `painting`, `rendering`, and `interaction` expose canonical framework types through
 explicit reexports. They complement the existing `view`, `widgets`, `types`, and
 `foundation` modules rather than introduce wrapper types or a second widget model.
+A support type has one canonical facade path in its owning layer: pointer,
+gesture and hit-test vocabulary is under `interaction`; painting values and
+custom-painter contracts are under `painting`; render-object, layout-delegate,
+scroll-state and semantics contracts are under `rendering`. The widget catalog's
+public modules re-export catalog-owned views and their local configuration, not
+support types owned by another layer. Its prelude is a curated convenience
+namespace, not another canonical owner. SDK-only render-catalog values live in
+its Evolving `pipeline` module rather than acquiring a second facade home.
 
 The export set follows concrete extension tasks: implement `CustomPainter`,
 implement box/sliver rendering behind a `RenderView`, and create gesture

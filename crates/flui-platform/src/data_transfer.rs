@@ -287,16 +287,16 @@ impl TransferPayload {
 // Limits + errors
 // ============================================================================
 
-/// Stage-3 resource bounds, enforced by the transport before and during
-/// delivery. `#[non_exhaustive]`: deferred timeout work may add a field;
-/// construct via `Default` + `with_*`.
+/// Stage-3 resource bounds. `DragView` checks a known declared length before
+/// calling the source and applies [`TransferRequest::enforce`] to the final
+/// payload; backends bound accumulated reads and may refuse early.
+/// `#[non_exhaustive]`: deferred timeout work may add a field; construct via
+/// `Default` + `with_*`.
 #[derive(Debug, Clone, Copy)]
 #[non_exhaustive]
 pub struct TransferLimits {
     /// Deliveries larger than this fail with [`TransferError::TooLarge`].
-    /// Checked against [`RepresentationDescriptor::declared_len`] at request
-    /// time when known, and against actual accumulated bytes during delivery
-    /// regardless.
+    /// A declared or delivered length equal to this ceiling is valid.
     pub max_bytes: u64,
 }
 
@@ -306,6 +306,18 @@ impl TransferLimits {
     pub fn with_max_bytes(mut self, max_bytes: u64) -> Self {
         self.max_bytes = max_bytes;
         self
+    }
+
+    /// Check a declared or delivered byte length against this ceiling.
+    /// A payload whose length equals the ceiling is accepted.
+    pub fn check(self, actual: u64) -> Result<(), TransferError> {
+        if actual > self.max_bytes {
+            return Err(TransferError::TooLarge {
+                actual,
+                limit: self.max_bytes,
+            });
+        }
+        Ok(())
     }
 }
 
@@ -339,7 +351,7 @@ pub enum TransferError {
     /// The payload exceeds the requested [`TransferLimits::max_bytes`].
     #[error("payload exceeds limit: {actual} > {limit} bytes")]
     TooLarge {
-        /// Declared or accumulated payload size in bytes.
+        /// Declared, accumulated, or final payload size in bytes.
         actual: u64,
         /// The limit the request set.
         limit: u64,
@@ -381,6 +393,7 @@ enum RequestState {
 pub struct TransferRequest {
     state: RequestState,
     resolved: bool,
+    limits: Option<TransferLimits>,
 }
 
 impl TransferRequest {
@@ -403,6 +416,7 @@ impl TransferRequest {
             Self {
                 state: RequestState::Pending(handle),
                 resolved: false,
+                limits: None,
             },
             TransferCompleter { slot },
         )
@@ -414,7 +428,18 @@ impl TransferRequest {
         Self {
             state: RequestState::Ready(Some(result)),
             resolved: false,
+            limits: None,
         }
+    }
+
+    /// Enforce `limits` on a successful payload when this request resolves.
+    /// Both ready and pending deliveries take this final receiver-side check;
+    /// an error supplied by the source passes through unchanged. Backends still
+    /// bound their reads: this check cannot undo an allocation already made.
+    #[must_use = "dropping a TransferRequest cancels the delivery"]
+    pub fn enforce(mut self, limits: TransferLimits) -> Self {
+        self.limits = Some(limits);
+        self
     }
 }
 
@@ -442,6 +467,12 @@ impl std::future::Future for TransferRequest {
                     panic!("BUG: TransferRequest polled again after it resolved")
                 }
             },
+        };
+        let outcome = match self.limits {
+            Some(limits) => {
+                outcome.and_then(|payload| limits.check(payload.byte_len()).map(|()| payload))
+            }
+            None => outcome,
         };
         self.resolved = true;
         Poll::Ready(outcome)
@@ -502,7 +533,9 @@ pub trait DragTransport: Send + Sync {
     /// Stage 3: request one representation of a live offer. Returns
     /// immediately; delivery completes through the returned future. A
     /// backend whose data is already in memory returns
-    /// [`TransferRequest::ready`].
+    /// [`TransferRequest::ready`]. `DragView` enforces the final payload limit
+    /// on that request; the backend still bounds accumulated reads and may
+    /// reject an oversized delivery early.
     fn request(
         &self,
         id: DataTransferId,

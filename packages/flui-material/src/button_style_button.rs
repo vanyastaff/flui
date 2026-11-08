@@ -5,17 +5,13 @@
 //!
 //! Rust has no implementation inheritance, so there is no abstract button base
 //! class: each concrete button (`elevated_button.rs` etc.)
-//! is a thin [`StatelessView`] that reads
-//! the ambient [`Theme`](crate::Theme), computes its own `default_style`
-//! table, reads its own `ThemeData` component-theme slot (`elevated_button_theme`
-//! and friends), and hands all three to this module's [`ButtonStyleButtonCore`]
-//! — the `StatefulView` that owns the interactive-state machinery and the
-//! actual composition. **Named reduction**: there is no standalone
-//! per-button theme widget (so a subtree cannot override just that button's
-//! style without touching the whole `ThemeData`); FLUI V1 has no per-widget
-//! inherited-theme wrappers yet, so every concrete button reads only its
-//! `ThemeData` slot via `Theme::of` — see each concrete button's own module
-//! docs for the simplified chain this collapses to.
+//! is a thin [`StatelessView`] that reads the ambient base theme, computes its
+//! own `default_style` table, reads its typed component entry through
+//! [`Theme::component_of`](crate::Theme::component_of), and hands all three to
+//! this module's [`ButtonStyleButtonCore`] — the `StatefulView` that owns the
+//! interactive-state machinery and the actual composition. **Named reduction**:
+//! there is no standalone per-button theme widget, so a subtree overrides a
+//! button's style by installing a new component entry in its nearest `Theme`.
 //!
 //! # The resolve-then-coalesce cascade
 //!
@@ -26,11 +22,9 @@
 //! and coalesced with `Option::or_else`.
 //!
 //! `theme_style` is threaded in via [`ButtonStyleButtonCore::theme_style`] —
-//! each concrete button passes its own `ThemeData` component-theme slot's
-//! `style` (when configured) at the same `Theme::of` read it already
-//! performs to compute `default_style`. A button whose slot is unset passes
-//! nothing, so `theme_style` stays `None` and the cascade falls straight
-//! through to `default_style` — unchanged from before this slot was wired.
+//! each concrete button passes its typed component entry's `style` (when
+//! configured). A button whose entry is unset passes nothing, so `theme_style`
+//! stays `None` and the cascade falls straight through to `default_style`.
 //!
 //! # Composition
 //!
@@ -80,14 +74,15 @@
 //! keep resolving it fresh.
 
 use flui_sdk::foundation::{Listenable, Subscription};
-use flui_sdk::painting::Color;
-use flui_sdk::painting::TextStyle;
 use flui_sdk::rendering::BoxConstraints;
+use flui_sdk::painting::styling::Color;
+use flui_sdk::painting::typography::TextStyle;
+use flui_sdk::rendering::{BoxConstraints, SemanticsRole, Toggled};
 use flui_sdk::view::RebuildHandle;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{
-    ConstrainedBox, DefaultTextStyle, Padding, Semantics, SemanticsRole, Toggled, WidgetState,
-    WidgetStateProperty, WidgetStates, WidgetStatesController,
+    ConstrainedBox, DefaultTextStyle, Padding, Semantics, WidgetState, WidgetStateProperty,
+    WidgetStates, WidgetStatesController,
 };
 
 use crate::button_style::ButtonStyle;
@@ -181,11 +176,10 @@ impl ButtonStyleButtonCore {
 
     /// Sets the theme-level style — the middle tier in the resolve cascade,
     /// between [`style`](Self::style) (widget-explicit, highest precedence)
-    /// and `default_style` (lowest). The caller passes its own `ThemeData`
-    /// component-theme slot's `style` here; leaving this unset (the default
-    /// from [`new`](Self::new)) means the cascade skips straight from
-    /// `style` to `default_style`, exactly as it did before this tier
-    /// existed.
+    /// and `default_style` (lowest). The caller passes its typed component
+    /// entry's `style` here; leaving this unset (the default from
+    /// [`new`](Self::new)) means the cascade skips straight from `style` to
+    /// `default_style`.
     #[must_use]
     pub(crate) fn theme_style(mut self, style: ButtonStyle) -> Self {
         self.theme_style = Some(style);
@@ -307,8 +301,8 @@ impl ViewState<ButtonStyleButtonCore> for ButtonStyleButtonCoreState {
         let states = self.states.value();
         let widget_style = view.style.as_ref();
         let default_style = Some(&view.default_style);
-        // Set by the caller via `theme_style` when its `ThemeData`
-        // component-theme slot is configured — see the module docs.
+        // Set by the caller via `theme_style` when its typed component entry
+        // is configured — see the module docs.
         let theme_style = view.theme_style.as_ref();
 
         let background_color = resolve_field!(

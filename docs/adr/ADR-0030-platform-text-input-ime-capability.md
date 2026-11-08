@@ -56,11 +56,11 @@ default `None` — the same discovery shape as `PlatformWindow::display()`. A
 backend that cannot do IME returns `None` instead of inheriting methods it
 cannot honor. `PlatformInput` carries IME events as `PlatformInput::Ime`.
 
-The winit backend converts `WindowEvent::Ime` in a pure, unit-tested function
-and returns a `WinitTextInput` wrapping its `Arc<winit::window::Window>`. The
-headless backend's `FakeTextInput` records every call, and `MockWindow`
-returns the same instance on every `text_input()` call so tests can observe
-the history independently of whoever attached.
+The headless backend's production `HeadlessTextInput` accepts and drops IME
+requests. `HeadlessPlatform::with_test_doubles` instead installs
+`flui_native::testing::FakeTextInput`, which records every call; each
+`HeadlessWindow` returns the same instance on every `text_input()` call so a
+test can observe the history independently of whoever attached.
 
 ### 3. Session contract
 

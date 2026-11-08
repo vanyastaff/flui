@@ -995,16 +995,18 @@ where
     }
 
     /// Returns empty — the dense reconciler must not touch lazy children.
-    ///
-    /// The inner `RenderBehavior::build_into_views` also returns empty
-    /// because `SliverMultiBoxAdaptor::has_children() = false`; we forward
-    /// for the `should_build` guard and `clear_dirty` side effect.
     fn build_into_views(
         &mut self,
         core: &mut ElementCore<SliverMultiBoxAdaptor<R>, Variable>,
         owner: &mut ElementOwner<'_>,
     ) -> Vec<Box<dyn View>> {
-        self.inner.build_into_views(core, owner)
+        if !super::behavior_commons::should_build_with_trace(core, "SliverAdaptorBehavior") {
+            return Vec::new();
+        }
+
+        self.inner.configure_render_object(core, owner);
+        core.clear_dirty();
+        Vec::new()
     }
 
     /// Creates the render object, registers the manager, and stamps
@@ -1085,26 +1087,15 @@ where
         self.inner.on_unmount(core, owner);
     }
 
-    fn on_update(
-        &mut self,
-        core: &ElementCore<SliverMultiBoxAdaptor<R>, Variable>,
-        owner: &mut crate::ElementOwner<'_>,
-    ) {
-        self.inner.on_update(core, owner);
-    }
-
     fn on_view_updated(
         &mut self,
         core: &ElementCore<SliverMultiBoxAdaptor<R>, Variable>,
         old_view: &SliverMultiBoxAdaptor<R>,
         owner: &mut ElementOwner<'_>,
     ) {
-        // NOTE: `item_count`/`config` do NOT travel through this call —
-        // `RenderBehavior` has no `on_view_updated` override, so this hits
-        // the empty trait default. They reach the render object via this
-        // behavior's `on_update` delegation (`RenderBehavior::on_update` →
-        // `RenderView::update_render_object` → `set_item_count` / `update`),
-        // a separate, already-working path this fix does not touch.
+        // `item_count`/`config` do not travel through this hook. The subsequent
+        // build configures them through `configure_render_object`, which calls
+        // `RenderView::update_render_object` with the live build context.
         self.inner.on_view_updated(core, old_view, owner);
 
         // Refresh the stored builder and flag the resident children for

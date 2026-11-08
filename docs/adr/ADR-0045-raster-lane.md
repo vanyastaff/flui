@@ -103,8 +103,7 @@ an `Arc<Device>`.
 
 **Decision:** a `flui_engine::GpuServices` holding instance/adapter/device/queue/capabilities, the
 shared `ShaderCache`, one `device_lost: Arc<AtomicBool>` behind exactly one callback install, and an
-immutable `GpuResourceGeneration` (prefixed because `flui_foundation::epoch::ResourceGeneration`
-already names worker-cache freshness). It lives in `flui-engine`, which owns all wgpu state.
+immutable `GpuResourceGeneration`. It lives in `flui-engine`, which owns all wgpu state.
 
 - **Status of the type.** An offscreen-only `GpuServices` shipped first and was deleted: it had no
   production consumer, and a public constructor no windowed caller could reach is a misleading API.

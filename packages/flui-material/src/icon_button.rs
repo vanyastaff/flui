@@ -78,11 +78,11 @@
 //! (`24.0`); no per-call override exists yet (`IconButton::icon_size` is a
 //! natural, additive V1+ follow-up).
 //!
-//! **This divergence extends verbatim to the theme tier
-//! (`icon_button_theme`).** `theme_style`'s `foreground_color` is folded
+//! **This divergence extends verbatim to the `IconButtonThemeData` component
+//! entry.** `theme_style`'s `foreground_color` is folded
 //! into the SAME `resolve_property` call as `self.style`'s, against the
-//! SAME static `disabled`-only snapshot — so a
-//! `Theme.icon_button_theme.style.foreground_color` that varies by
+//! SAME static `disabled`-only snapshot — so an
+//! `IconButtonThemeData.style.foreground_color` that varies by
 //! `Pressed`/`Hovered`/`Focused` behaves identically to a state-varying
 //! widget-level override: the live variation reaches
 //! `ButtonStyleButtonCore`'s own `DefaultTextStyle`/`InkWell` (which DO hold
@@ -101,7 +101,7 @@
 //!
 //! [`IconButton::selected`] makes the button a toggle: `Selected` joins the
 //! states every property resolves against, and the node reports
-//! [`Toggled`](flui_sdk::widgets::Toggled). [`IconButton::selected_icon`]
+//! [`Toggled`](flui_sdk::rendering::Toggled). [`IconButton::selected_icon`]
 //! names the icon shown while selected; the swap runs through the ambient
 //! [`SymbolEffect::replace`], so two glyph `Icon`s cross-fade and only the
 //! new label is heard. Two icons of different view types swap at once, and
@@ -127,10 +127,9 @@ use flui_sdk::widgets::{
 };
 use flui_sdk::{
     geometry::{EdgeInsets, Size},
-    painting::Color,
+    painting::styling::Color,
 };
 
-use crate::ThemeData;
 use crate::button_style::ButtonStyle;
 use crate::button_style_button::{ButtonStyleButtonCore, PressCallback, resolve_property};
 use crate::elevated_button::pressed_hovered_overlay;
@@ -252,14 +251,10 @@ impl IconButton {
 
 impl StatelessView for IconButton {
     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
-        let theme = Theme::of(ctx);
-        let default = default_style(&theme);
-        // Middle cascade tier — see `crate::elevated_button`'s identical
-        // "simplified from `ElevatedButtonTheme.of`" note.
-        let theme_style = theme
-            .icon_button_theme
-            .as_ref()
-            .and_then(|t| t.style.clone());
+        let colors = Theme::required_color_scheme_of(ctx);
+        let default = default_style(&colors);
+        let theme_style =
+            Theme::component_of::<crate::IconButtonThemeData>(ctx).and_then(|theme| theme.style);
 
         // A static enabled-or-disabled snapshot — see the module docs'
         // "Icon color and size" section for why that's sufficient for
@@ -275,8 +270,8 @@ impl StatelessView for IconButton {
         // The SAME widget-then-theme-then-default coalesce
         // `ButtonStyleButtonCore` performs internally (`resolve_property`)
         // — computed here too so a caller's `.style(ButtonStyle {
-        // foreground_color: .. })` override, OR a theme-configured
-        // `icon_button_theme`, reaches the icon's `IconTheme`, not just
+        // foreground_color: .. })` override, OR a configured
+        // `IconButtonThemeData` entry, reaches the icon's `IconTheme`, not just
         // `DefaultTextStyle`. The `unwrap_or` fallback is unreachable in
         // practice: `default_style` always sets `foreground_color`, so the
         // coalesce always resolves `Some` — kept only because
@@ -325,9 +320,8 @@ impl StatelessView for IconButton {
 /// Field-by-field port of `_IconButtonDefaultsM3`, standard variant
 /// (`icon_button.dart`, oracle tag `3.44.0`), narrowed to the V1 slots — see
 /// the module docs.
-fn default_style(theme: &ThemeData) -> ButtonStyle {
-    let colors = theme.color_scheme;
-
+fn default_style(colors: &crate::ColorScheme) -> ButtonStyle {
+    let colors = *colors;
     ButtonStyle {
         background_color: Some(WidgetStateProperty::all(Some(Color::TRANSPARENT))),
         foreground_color: Some(WidgetStateProperty::resolve_with(move |states| {

@@ -8,8 +8,6 @@
 )]
 mod cases;
 
-mod memory_trim;
-
 #[path = "image_asset_integration.rs"]
 mod image_asset_integration;
 
@@ -22,9 +20,6 @@ mod image_load;
     reason = "shared with the decode-scheduling binary, which uses the IO handle"
 )]
 mod lanes;
-
-#[path = "load_contract.rs"]
-mod load_contract;
 
 #[cfg(feature = "images")]
 mod network_load;

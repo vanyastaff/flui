@@ -2,18 +2,22 @@
 
 - **Status:** Accepted (2026-10-20)
 - **Date:** 2026-10-06
+- **Revised:** 2026-11-07 — facade aggregation is standing, and independent capability cadence
+  requires leaving the facade first under ADR-0315 §4
 - **Revised:** 2026-10-20 — after reading how Tauri, Flutter, Capacitor, Expo, Bevy and the Rust
   mobile crates ship platform services (sources below): the carve-out for handles that framework
   widgets name, the native-code tiers, declarations, the host bridge, testing, the line between the
   core host and capability crates, and the first crate's contents.
 - **Supersedes:** [ADR-0081](ADR-0081-workspace-tiers-and-reach-facts.md) §3 in part (the kinds
-  gain `capability`) and §2 in part (the reach table gains its row);
-  [ADR-0088](ADR-0088-official-packages-sdk-and-facade.md) in part (official packages keep their
-  rules; capability crates are a second kind of package with rules of their own).
+  gain `capability`) and §2 in part (the reach table gains its row).
 - **Superseded-by:** [ADR-0307](ADR-0307-platform-declarations-are-crate-metadata.md) for §7
   (declarations: a versioned `[package.metadata.flui.declares]` in any crate) and for §8's step
-  of `flui add` that writes declarations (the crate states its plugin instead)
-- **Related:** [ADR-0152](ADR-0152-capability-seam-revised.md) (the seam this record builds on),
+  of `flui add` that writes declarations (the crate states its plugin instead);
+  [ADR-0315](ADR-0315-first-party-packages-remain-train-aligned-facade-features.md) for §8's
+  facade aggregation mechanism only (the features and `flui::services` paths are standing)
+- **Related:** [ADR-0088](ADR-0088-official-packages-sdk-and-facade.md) (official packages keep
+  their rules; capability crates are a second kind of package with rules of their own),
+  [ADR-0152](ADR-0152-capability-seam-revised.md) (the seam this record builds on),
   [ADR-0153](ADR-0153-release-train-and-capability-crates.md) (capability crates ship in lockstep
   with the train until the contract has its own version),
   [ADR-0151](ADR-0151-platform-layer-boundary-and-names.md) §3 (the core host's
@@ -139,7 +143,8 @@ grows with the number of crates.
 - is a **leaf** below the facade: no FLUI crate other than the facade, which re-exports it behind
   a feature (§8), and no other capability crate depends on it normally;
 - is released with the train while the contract rides it (ADR-0153), and may set its own version
-  once the contract has one;
+  once the contract has one, but only after leaving the facade under ADR-0315 §4; while
+  `flui::services::<name>` re-exports it, it remains train-aligned and participates in facade semver;
 - registers through the seam with a `Plugin` and ships a simulated provider and a conformance
   table that every platform it claims must pass (decision 10);
 - keeps no process-global state (ADR-0152). ADR-0097's gate scans the workspace, so it enforces
@@ -277,13 +282,16 @@ keys, Electron, Robius) is how applications ship without a usage string.
 
 ### 8. `flui add <capability>`
 
-Capability crates reach an application two ways. The facade re-exports each official capability
-crate behind a feature of the same name, under one namespace: `flui = { features = ["location",
-"bluetooth"] }` gives `flui::services::location::*`, the way `material` and `cupertino` already
-sit behind facade features (ADR-0088); the crates stay separate, one per permission set, so a
-breaking change in one reaches only the applications that enabled it. And `flui add <capability>`
-runs `cargo add`, enables the facade feature, writes the declarations (decision 7) and shows the
-registration snippet, as `tauri add` does ([tauri-apps/tauri@9318ab84b8
+Capability crates reach an application two ways. Under ADR-0315 §1, the facade permanently
+re-exports each official capability crate behind an off-by-default feature of the same name, under
+one namespace: `flui = { features = ["location", "bluetooth"] }` gives
+`flui::services::location::*`. The crates stay separate, one per permission set, and every
+facade-aggregated crate ships with the train and participates in facade semver (ADR-0315 §4).
+
+`flui add <capability>` enables the facade feature or adds a direct crate dependency where
+ADR-0307 §5 permits it, then reads the crate's declaration and plugin metadata and shows the
+registration snippet. It does not write declarations itself; ADR-0307 owns that behavior. The CLI
+shape follows `tauri add` ([tauri-apps/tauri@9318ab84b8
 crates/tauri-cli/src/add.rs](https://github.com/tauri-apps/tauri/blob/9318ab84b8/crates/tauri-cli/src/add.rs)).
 
 ### 9. The host bridge

@@ -1,7 +1,7 @@
 //! Copy, cut and paste in a mounted [`EditableText`], through the key path a
 //! platform chord takes: `FocusManager::dispatch_key_event` → the field's key
 //! handler leaves the chord unconsumed → `DefaultFocusTraversal`'s
-//! `Shortcuts` (installed by the harness's `FocusRoot`) resolves the intent
+//! `Shortcuts` (installed by the harness's `app_root`) resolves the intent
 //! against the chain the field recorded on its node. The clipboard read back
 //! is the one the harness installs, the headless platform's type.
 
@@ -545,7 +545,7 @@ pub(crate) fn the_harness_releases_the_button_it_pressed() {
     let seen = Rc::new(std::cell::RefCell::new(Vec::new()));
     let mut harness = crate::common::harness::mount(
         flui_widgets::Listener::new()
-            .behavior(flui_widgets::prelude::HitTestBehavior::Opaque)
+            .behavior(flui_interaction::HitTestBehavior::Opaque)
             .on_pointer_move({
                 let seen = Rc::clone(&seen);
                 move |_, event| {

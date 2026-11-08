@@ -15,6 +15,7 @@ use std::time::Duration;
 use crate::common::{LaidOut, lay_out_animated, loose, tight};
 use flui_animation::{MotionOverride, MotionSpec, SharedCurve, Vsync, curves};
 use flui_foundation::geometry::{Angle, EdgeInsets, Matrix4, Offset};
+use flui_objects::TranslationFraction;
 use flui_painting::Alignment;
 use flui_painting::styling::Color;
 use flui_view::environment::VsyncScope;
@@ -24,7 +25,7 @@ use flui_widgets::{
     Animated, AnimatedAlign, AnimatedContainer, AnimatedCrossFade, AnimatedDefaultTextStyle,
     AnimatedLerp, AnimatedOpacity, AnimatedPadding, AnimatedPositioned, AnimatedRotation,
     AnimatedScale, AnimatedSlide, Center, ColoredBox, CrossFadeState, MotionBuilder, Opacity,
-    RotationPath, Semantics, SizedBox, Stack, Text, TranslationFraction,
+    RotationPath, Semantics, SizedBox, Stack, Text,
 };
 use parking_lot::Mutex;
 

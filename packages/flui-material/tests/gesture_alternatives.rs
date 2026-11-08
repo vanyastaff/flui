@@ -11,15 +11,17 @@ use std::time::Duration;
 use flui_material::{Tab, TabBar, TabBarView, TabController, Theme, ThemeData};
 use flui_sdk::geometry::Offset;
 use flui_sdk::platform::TargetPlatform;
+use flui_sdk::testing::a11y::{Action, ActionData, ActionRequest, Role, TreeId};
+use flui_sdk::testing::log_capture::capture;
+use flui_sdk::testing::replay::MouseScript;
+use flui_sdk::testing::{
+    AlternativesSubject, GestureAlternativesCheck, assert_gesture_alternatives,
+};
 use flui_sdk::view::BoxedView;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{
     Alternative, Column, CompanionGap, CompanionSpec, Expanded, GestureCommand, SizedBox,
 };
-use flui_testing::a11y::{Action, ActionData, ActionRequest, Role, TreeId};
-use flui_testing::log_capture::capture;
-use flui_testing::replay::MouseScript;
-use flui_testing::{AlternativesSubject, GestureAlternativesCheck, assert_gesture_alternatives};
 
 const SIZE: f64 = 400.0;
 
@@ -63,7 +65,7 @@ fn selection(controller: &TabController) -> (usize, i64) {
 
 /// A swipe toward the reading start, slow enough to rest on the page it
 /// reaches: it performs "Previous tab".
-fn swipe_back() -> flui_testing::replay::PointerScript {
+fn swipe_back() -> flui_sdk::testing::replay::PointerScript {
     let mut swipe = MouseScript::new("swipe back").press(Offset::new(60.0, 250.0));
     for step in 1..=10 {
         swipe = swipe

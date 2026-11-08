@@ -218,15 +218,14 @@ fn tap_node(tree: &A11yTree) -> flui_testing::NodeId {
         .id()
 }
 
-/// An assistive-technology action the platform adapter raises on its own
-/// thread travels the UI runtime's owner inbox, and the next harness pump applies
-/// it (the pump's apply-commands step), which runs the tap and writes its
-/// signal.
+/// An assistive-technology action the platform adapter raises travels the UI
+/// runtime's owner inbox, and the next harness pump applies it (the pump's
+/// apply-commands step), which runs the tap and writes its signal.
 ///
-/// Fails against a harness with no owner inbox: no action listener is
-/// registered on any window, so there is nothing to call.
+/// Fails against a harness with no owner inbox: no accessibility handler is
+/// registered on any window, so there is nothing to receive the request.
 #[test]
-fn an_action_sent_off_thread_is_applied_by_the_next_harness_pump() {
+fn an_action_request_is_applied_by_the_next_harness_pump() {
     let probe = SignalProbe::new(|ProbeSignals { count, .. }| {
         labelled(GestureDetector::new().on_tap(move |cx| count.update(cx, |n| *n += 1)))
     });
@@ -234,20 +233,13 @@ fn an_action_sent_off_thread_is_applied_by_the_next_harness_pump() {
     laid.enable_semantics();
     laid.tick();
     let node = tap_node(&laid.a11y_tree().expect("semantics is on"));
-    let listener = laid
-        .accessibility_action_listener()
-        .expect("the ui_runtime registers an action listener on its window");
 
-    std::thread::spawn(move || {
-        listener(ActionRequest {
-            action: Action::Click,
-            target_tree: TreeId::ROOT,
-            target_node: node,
-            data: None,
-        });
-    })
-    .join()
-    .expect("the adapter thread ran");
+    laid.request_accessibility_action(ActionRequest {
+        action: Action::Click,
+        target_tree: TreeId::ROOT,
+        target_node: node,
+        data: None,
+    });
     assert_eq!(probe.value(), Ok(0), "the request waits in the owner inbox");
 
     laid.tick();

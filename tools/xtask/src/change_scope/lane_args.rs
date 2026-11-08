@@ -320,8 +320,8 @@ pub(super) fn lane_args(repo: &Repo, scope: &Scope, event: Event) -> anyhow::Res
             p(set.iter().copied())
         };
         let mut feats: Vec<String> = testing.iter().map(|n| format!("{n}/testing")).collect();
-        // the facade's catalogs are off by default: name them, or rustdoc and
-        // the doctests skip the Material-gated half of the facade
+        // The facade's catalogs are off by default: name them, or rustdoc and
+        // the doctests skip the Material catalog and its prelude.
         if has("flui") {
             feats.extend(FACADE_CATALOGS.iter().map(|f| (*f).to_owned()));
         }
@@ -607,8 +607,8 @@ mod tests {
     }
 
     fn rustdoc_and_doctests_name_the_facades_catalogs_when_it_is_in_scope() {
-        // neither catalog is a default feature: without them the Material-gated
-        // half of the facade is neither documented nor doctested
+        // Neither catalog is a default feature: without them the Material
+        // catalog and its prelude are neither documented nor doctested.
         let a = args(&["packages/flui-material/src/lib.rs"]);
         assert!(
             a.doc_args.contains("flui/material,flui/cupertino"),

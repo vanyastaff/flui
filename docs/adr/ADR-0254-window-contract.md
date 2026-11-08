@@ -11,14 +11,6 @@
   `FrameOutcome { Produced, Declined }`, because without it the host cannot tell a frame that was
   served from one nothing ran, and a wake deadline delivered to a handler with nothing to draw
   with re-arms on every paint and spins the loop.
-- **Amended:** 2026-10-27 — decision 6, following the owner's decision of 2026-10-27 that adds
-  `NotYetOnThisHost` to the reasons (ADR-0152): a command's capability carries where it is
-  missing, a `CapabilityAbsence` (`NotOnThisPlatform`, `NotOnThisDevice`, `NotYetOnThisHost`),
-  set with `WindowCapabilities::unavailable(command, absence)`, and admission refuses the command
-  with that reason. The type admits no retryable reason, since a capability stays `Unavailable`
-  until the host publishes it again; an absence counts for equality only while its capability is
-  unavailable. The verbs outside the command queue (the frame-rate hint, the input regions) answer
-  their reason themselves: nothing admits them against the capabilities.
 - **Amended:** 2026-10-27 — decision 4, approved by the owner: `AppHandler::exit_policy` answers
   an `ExitAnswer { End, KeepRunning, HostDecides }` instead of a `bool`. An application with no
   exit policy of its own had to answer `false`, which silently changed the hosts' behaviour (the
@@ -392,14 +384,20 @@ the vocabulary of the window side too. It replaces the unit `Unsupported` and `U
 variants of `WindowCommandError`, `WindowShowError`, `CursorError` and the other window-side enums,
 which embed it. The reasons are ADR-0152's: `NotOnThisPlatform`, `NotOnThisDevice` (the OS build
 or the hardware of this device lacks it), `NotYetOnThisHost` (the OS has it and this host does not
-implement it yet; amended 2026-10-27), `NotDeclared`, `Unavailable` (temporary: trying again
-may succeed), `NotRegistered` and `NoWindow`. A window builds the value with
-`Unsupported::new(reason)`; `Unsupported::of::<C>(reason)`, which names a capability, is for the
-seam.
+implement it yet), `NotDeclared`, `Unavailable` (temporary: trying again may succeed),
+`NotRegistered` and `NoWindow`. A window builds the value with `Unsupported::new(reason)`;
+`Unsupported::of::<C>(reason)`, which names a capability, is for the seam.
 
 - `Availability` (`Native`, `Emulated`, `Unavailable`; ADR-0213) extends from `InputCapabilities`
   to `WindowCapabilities`. A capability that can be honoured approximately says `Emulated`, which
   a boolean cannot. A command is refused exactly when its capability is `Unavailable`.
+- A published capability stores its `UnsupportedReason` directly. The typed `WindowCapabilities`
+  constructors admit only the lasting reasons `NotOnThisPlatform`, `NotOnThisDevice` and
+  `NotYetOnThisHost`; `command_capability` answers `Result<Availability, Unsupported>` from the
+  same snapshot admission reads. `CapabilityParts::try_into_capabilities` and
+  `WindowStateParts::try_into_state` reject every other reason at a mirror boundary. An absence
+  counts for equality only while its capability is unavailable. The verbs outside the command queue
+  (the frame-rate hint and input regions) answer their reason themselves.
 - **OS versions never appear in the contract.** `NotOnThisDevice` names no version, and no
   accessor orders the running OS. The gate that produced it stays a `Since<F>` proof in the
   host (ADR-0244), so `if sdk >= 29` cannot be written outside FLUI.

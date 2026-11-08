@@ -355,6 +355,10 @@ fn background_work() {
                 background_work::a_compute_job_answers_at_the_pump_that_runs_it as fn(),
             ),
             (
+                "background_work::a_provider_runs_on_the_headless_hosts_context_executor",
+                background_work::a_provider_runs_on_the_headless_hosts_context_executor as fn(),
+            ),
+            (
                 "background_work::on_complete_keeps_the_work_and_runs_once_with_its_answer",
                 background_work::on_complete_keeps_the_work_and_runs_once_with_its_answer as fn(),
             ),

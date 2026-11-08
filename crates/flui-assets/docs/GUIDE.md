@@ -1,280 +1,144 @@
-# User Guide
+# User guide
 
-## Quick Start
+## Enable image assets
 
-Add the asset crate and a Tokio runtime to your application:
+Most applications consume the registry through the facade:
 
 ```toml
 [dependencies]
-flui-assets = { git = "https://github.com/vanyastaff/flui" }
-tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+flui = { path = "…", features = ["assets"] }
 ```
 
-```rust
-use flui_assets::{AssetRegistryBuilder, FontAsset};
+This exposes `flui::assets`, enables `flui-assets/images` and turns on
+`flui-widgets/asset-images`. It does not change `flui::prelude`. Without the
+feature, `flui::assets` is absent rather than an empty compatibility module.
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let registry = AssetRegistryBuilder::new().with_default_capacity().build();
-    let font = registry.load(FontAsset::file("assets/font.ttf")).await?;
-    println!("Font loaded: {} bytes", font.bytes.len());
-    Ok(())
-}
+Direct users enable `flui-assets/images`. Network loading is part of that same
+feature and uses a caller-provided HTTP client; no `network` feature exists.
+
+## Own one registry per asset domain
+
+```rust
+use std::sync::Arc;
+use flui::assets::AssetRegistryBuilder;
+use flui::widgets::Image;
+
+let registry = Arc::new(AssetRegistryBuilder::new().build());
+let logo = Image::asset(Arc::clone(&registry), "assets/logo.png");
+let avatar = Image::network(
+    Arc::clone(&registry),
+    "https://example.com/avatar.png",
+);
 ```
 
-Build one registry for a shared asset domain and pass a reference or `Arc` to
-consumers. Different registries own independent typed caches and loading policy.
+The application decides the registry's lifetime and which widgets share it.
+Different registries retain different images and pending loads even for equal
+paths. The framework has no process-wide registry and the host does not acquire
+one implicitly.
 
-## Basic Usage
+`AssetRegistryBuilder::new().build()` is complete without a capacity call. Its
+only retention setting is a decoded-byte budget; decode concurrency is the
+other optional setting.
 
-### Capacity and expiration
-
-The default retains up to 10,240 completed entries per asset type after pending
-maintenance settles. Capacity counts entries, not bytes:
+## Load directly
 
 ```rust
-use flui_assets::{AssetRegistryBuilder, CacheCapacity};
-use std::num::NonZeroU64;
+use flui_assets::{AssetRegistryBuilder, LoadServices};
+
+# async fn example() -> Result<(), flui_assets::AssetError> {
+let registry = AssetRegistryBuilder::new().build();
+let image = registry
+    .load_image("assets/logo.png", LoadServices::new())
+    .await?;
+assert_eq!(image.data().len(), image.width() as usize * image.height() as usize * 4);
+# Ok(())
+# }
+```
+
+`load_network_image(url, services)` has the same cache, sharing and cancellation
+behavior. Its `services` must include an HTTP client or the future resolves to
+`AssetError::HttpUnavailable` without sending a request.
+
+A load reads or fetches on the services' IO lane and decodes on their compute
+lane. With `LoadServices::new()` there are no lanes: work happens where the
+returned `ImageLoad` is polled. The registry never starts an ambient runtime or
+a thread of its own.
+
+## Probe from a frame
+
+`cached_image(&ImageSource)` returns a completed image synchronously and marks
+it most recently used. It performs no file, network or decode work. Asset
+sources use `ImageSource::Asset(path)`. A network source includes the fetching
+client's authority; construct it through the same client rather than assuming a
+URL alone identifies its bytes.
+
+The widget providers perform this probe before subscribing to a load. This
+keeps build/layout/paint synchronous while IO and decoding remain at the loading
+edge.
+
+## Choose a decoded-byte budget
+
+```rust
+use flui_assets::AssetRegistryBuilder;
 
 let registry = AssetRegistryBuilder::new()
-    .with_capacity(CacheCapacity::Entries(NonZeroU64::new(256).expect("nonzero entry limit")))
+    .with_decoded_image_budget(128 * 1024 * 1024)
     .build();
 ```
 
-Use `CacheCapacity::Disabled` to retain no completed entries. Concurrent cold
-custom requests run independently; font requests share pending work. Later
-requests reload. Full configuration independently selects lifetime and idle expiration:
+The budget counts `width * height * 4` for each retained image. The default is
+256 MiB, and 64 MiB on Android, iOS and the web. Once the total exceeds the
+budget, least recently used images go first. There is no time-based expiration.
 
-```rust
-use flui_assets::{AssetCacheConfig, AssetRegistryBuilder, CacheCapacity, CacheExpiration};
-use std::time::Duration;
+An image larger than the budget is delivered to its waiters but not retained.
+A zero budget likewise disables completed-image retention without disabling
+load sharing. Returned `Image` values own their pixels independently of later
+cache eviction.
 
-let config = AssetCacheConfig {
-    capacity: CacheCapacity::default(),
-    time_to_live: CacheExpiration::NEVER,
-    time_to_idle: CacheExpiration::after(Duration::from_mins(2))?,
-};
-let registry = AssetRegistryBuilder::new().with_cache_config(config).build();
-```
+`with_decode_threads(NonZeroUsize)` bounds concurrent decodes. The default is
+half the available cores, capped at four.
 
-`CacheExpiration::after` rejects unsupported durations before cache construction.
-Defaults are five-minute lifetime and one-minute idle expiration. Neither capacity
-nor expiration limits memory retained by consumer handles.
+## Sharing, cancellation and recovery
 
-### Loaded data and identity
+A request for a source already loading joins that load. Dropping one `ImageLoad`
+leaves work alive for other waiters. Dropping the last waiter cancels the ticket:
+an HTTP request is dropped, a chunked file read stops at its next chunk, and a
+decode that has not started does not run.
 
-```rust
-use flui_assets::{AssetRegistryBuilder, FontAsset};
+If lanes or the polling request drop a load without an outcome, another waiter
+can take it over using its own lanes and HTTP client. Ticket identity prevents
+an old completion from overwriting a newer load for the same source.
 
-let registry = AssetRegistryBuilder::new().with_default_capacity().build();
-let first = registry.load(FontAsset::file("font.ttf")).await?;
-let second = registry.load(FontAsset::file("font.ttf")).await?;
-assert!(first.ptr_eq(&second));
-println!("Loaded bytes: {}", first.bytes.len());
-```
+Errors are not retained. Missing files, malformed bytes, transport failures and
+non-2xx responses can therefore be followed by a successful retry. A panicking
+decoder fails that load rather than unwinding through a background lane.
 
-A cache hit shares the loaded allocation. Equal typed keys identify equivalent
-requests; callers must use different keys when the requested data differ.
-Cloned handles share data without requiring `Data: Clone`.
+## Memory pressure
 
-`AssetKey` owns a nonempty `Arc<str>`. Its clones share string storage; keys
-constructed independently compare and hash by their contents. There is no global
-interner keeping names alive after their owners disappear. `as_str()` borrows
-from the key and cannot outlive it; clone the key when transferring ownership.
-Keys no longer implement Copy or expose an interner integer.
+The registry implements `ReclaimMemory`. Moderate pressure trims completed
+images to half their configured budget; critical pressure clears them. Loads in
+flight continue under their normal subscriber rules. An application that wants
+this behavior registers its application-owned registry with
+`AppConfig::with_memory_reclaim`; the host still does not own the registry.
 
-Built-in descriptors accept `&str`, owned `String` or `Arc<str>` names and share
-their allocation with returned keys. Adapt a borrowed `String` with `as_str()`:
-
-```rust
-use flui_assets::FontAsset;
-
-let path = String::from("font.ttf");
-let font = FontAsset::file(path.as_str());
-```
-
-### Cache management
-
-```rust
-use flui_assets::{AssetKey, AssetRegistryBuilder, FontAsset};
-
-let registry = AssetRegistryBuilder::new().with_default_capacity().build();
-let key = AssetKey::new("font.ttf");
-registry.invalidate::<FontAsset>(&key).await;
-registry.clear::<FontAsset>().await;
-registry.clear_all().await;
-```
-
-Invalidation excludes completed cached values from subsequent lookups. It does
-not cancel an in-flight initializer, which may insert afterward. Previously
-returned handles remain valid. `clear_all` detaches the registry's cache map
-before retiring data so generic destructors can reenter the committed registry.
-
-## Asset Types
-
-### Fonts
-
-Fonts are available without optional features. Embedded sources take a cache
-identifier and an owned byte vector:
-
-```rust
-use flui_assets::FontAsset;
-
-let bytes = std::fs::read("font.ttf")?;
-let asset = FontAsset::from_bytes("embedded-font", bytes);
-let font = registry.load(asset).await?;
-```
-
-### Images
-
-Enable `images` to use `ImageAsset`; `full` additionally enables `network`:
-
-```toml
-flui-assets = { git = "https://github.com/vanyastaff/flui", features = ["images"] }
-```
-
-```rust
-use flui_assets::ImageAsset;
-
-let image = registry.load(ImageAsset::file("logo.png")).await?;
-println!("Image: {}x{}", image.width(), image.height());
-let bytes = std::fs::read("logo.png")?;
-let embedded = registry.load(ImageAsset::from_bytes("embedded-logo", bytes)).await?;
-```
-
-Ordinary registry loading caches the decoded result. Widget image bridges bypass
-this cache and deliver results to the widget layer's synchronous LRU.
-
-### Custom assets
-
-Implement `Asset` with typed data, key and error. `Data` is shared and need not be
-Clone. `validate` runs before every registry cache lookup, including hits; direct
-callers of `Asset::load` are responsible for validation themselves.
-
-```rust
-use flui_assets::{Asset, AssetError};
-
-struct TextAsset { path: String }
-
-impl Asset for TextAsset {
-    type Data = String;
-    type Key = String;
-    type Error = AssetError;
-
-    fn key(&self) -> String { self.path.clone() }
-
-    async fn load(&self) -> Result<String, AssetError> {
-        Ok(tokio::fs::read_to_string(&self.path).await?)
-    }
-}
-```
-
-## Advanced Features
-
-### Typed cache operations
-
-A separately owned `AssetCache` exposes counters and maintenance. Registry cache
-lookup is private; there is no aggregated registry statistics API.
-
-```rust
-use flui_assets::{Asset, AssetCache, AssetCacheExt, CacheCapacity, FontAsset};
-
-let cache = AssetCache::<FontAsset>::new(CacheCapacity::default());
-let font = FontAsset::file("font.ttf");
-let key = font.key();
-let loaded = cache.get_or_insert_with(key, || font.load()).await?;
-assert!(cache.contains(loaded.key()));
-cache.sync().await;
-println!("Estimated entries: {}, utilization: {}", cache.len(), cache.utilization());
-println!("Invalidation requests: {}", cache.stats().invalidations);
-```
-
-`contains` is synchronous and does not count a request or refresh idle expiration.
-Generic `get_or_insert_with` gets completed data or runs its own initializer,
-then inserts each successful result. Cold calls, including direct or awaited
-spawned reentry, do not wait on pending same-key work. Late completion may replace
-an earlier entry; existing handles keep their data. Errors remain owned and are
-not cached. Cancellation affects only that call; independent work survives and
-later requests can retry. No exactly-once side effects are guaranteed.
-
-Registry loading validates every descriptor. Only closed built-in FontAsset producers share pending work through Moka.
-ImageAsset keeps registered image decoder hooks and uses the independent helper,
-as custom assets do. Font failures are shared but not cached; cancellation or
-panic allows a waiter to restart subject to Moka's finite retry policy. No public
-custom coalescing opt-in or mandatory spawn API is introduced.
-
-Counters are shared across clones. Hit/miss counts for initialization describe
-an initial presence probe; concurrent changes can race it. Insertions count
-every generic publication and fresh returned built-in results, not guaranteed
-resident entries. `invalidations` includes requests for absent keys and excludes
-automatic eviction. `len` and utilization are estimates, not memory measurements.
-
-### Weak ownership
-
-```rust
-let font = registry.load(FontAsset::file("font.ttf")).await?;
-let weak = font.downgrade();
-drop(font);
-if let Some(still_loaded) = weak.upgrade() {
-    println!("Retained bytes: {}", still_loaded.bytes.len());
-}
-```
-
-Weak handles do not retain data. Their upgrade can succeed because the cache or
-another consumer still owns it, including a consumer holding an evicted value.
-Eviction itself does not depend on dropping consumer handles. A weak asset handle
-still owns its key strongly: releasing the loaded data does not release its name
-while that weak handle remains. Drop every descriptor, key and handle to release
-a particular shared name.
-
-### Byte sources
-
-```rust
-use flui_assets::BytesFileLoader;
-
-let loader = BytesFileLoader::new("assets");
-let bytes = loader.load_bytes("logo.png").await?;
-let text = loader.load_string("config.json").await?;
-```
-
-A network image is fetched with the HTTP client its caller passes in `LoadServices`
-(the host's `HttpCapability`, ADR-0280); this crate links no HTTP stack.
-Asset implementations own source selection and decoding; loaders do not infer
-arbitrary decoded types from keys.
-
-## Best Practices
-
-Share a registry within one asset domain, preload only needed assets, and measure
-real decoded sizes and access patterns before selecting entry counts. Keep IO and
-decoding outside synchronous UI build/layout/paint. Handle loading failures as
-results rather than assuming sources exist. Preload different asset types through
-separate typed calls:
-
-```rust
-registry.preload(FontAsset::file("font.ttf")).await?;
-// With the images feature:
-registry.preload(flui_assets::ImageAsset::file("logo.png")).await?;
-```
+Cache reclamation does not revoke images already returned to widgets or direct
+callers. GPU texture reclamation is a separate renderer responsibility.
 
 ## Troubleshooting
 
-For missing files, check the application's working directory and the path supplied
-to the descriptor. For unexpected cache misses, inspect keys, capacity and
-expiration. For memory pressure, inspect retained consumer handles and decoded
-asset sizes as well as cache counts. Increasing entry capacity does not address
-failures, source changes hidden behind equal keys or data retained outside caches.
+- **An import does not resolve:** enable facade `assets` or crate `images` and
+  import the registry explicitly; it is not in the prelude.
+- **A network load returns `HttpUnavailable`:** supply the host's HTTP client in
+  `LoadServices`.
+- **A warm source reloads:** check that both requests use the same registry and
+  source identity, and that the decoded-byte budget can retain it.
+- **Memory remains high after eviction:** account for images held by callers,
+  encoded bytes in admitted loads, decoder allocations and GPU textures.
+- **Work makes no progress without lanes:** poll the returned `ImageLoad`; no
+  hidden executor drives it.
 
-## Feature Flags
-
-| Feature | Description |
-|---------|-------------|
-| `images` | Image asset decoding |
-| `network` | HTTP/HTTPS byte loading |
-| `full` | Both stable optional features |
-
-## Next Steps
+## Next steps
 
 - [Architecture](ARCHITECTURE.md)
 - [Design patterns](PATTERNS.md)
-- [Cache behavior and performance](PERFORMANCE.md)
-- `cargo doc -p flui-assets --open`
+- [Performance and memory](PERFORMANCE.md)

@@ -1,7 +1,15 @@
-//! Windows clipboard implementation
+//! Windows clipboard access through one process-wide message-only owner.
 //!
-//! Provides clipboard access using the Windows Clipboard API.
-//! Thread-safe wrapper with proper clipboard lifecycle management.
+//! The lazy, never-destroyed `HWND_MESSAGE` window lives on the dedicated
+//! `flui-clipboard-owner` thread, which only pumps `GetMessageW` and
+//! `DispatchMessageW` into `DefWindowProcW`. That pump is mandatory: another
+//! process's `EmptyClipboard` synchronously sends `WM_DESTROYCLIPBOARD` to the
+//! owner. A dedicated thread works before the application loop starts, under a
+//! headless host, and without making a worker wait for the UI thread.
+//!
+//! The process-wide clipboard lock serializes sessions that share this owner.
+//! If owner-window creation fails, sessions use the logged `NULL`-owner
+//! fallback, which the same lock still serializes among FLUI's callers.
 
 // This module calls the operating system directly, which has no safe wrapper:
 // the workspace lint `unsafe_code = "warn"` is opted out here, at the module
@@ -35,7 +43,7 @@ use windows::{
 };
 
 use crate::clipboard::lock;
-use crate::host::{MAX_TEXT, NativeClipboard, SyncClipboard, host_text};
+use crate::host::{NativeClipboard, SyncClipboard, decoded_utf16_len, host_text};
 use crate::owner::panic_boundary::{AfterPanic, os_entry};
 
 /// Windows clipboard implementation
@@ -69,14 +77,6 @@ impl crate::host::Clipboard<crate::owner::windows::WindowsLoop> for WindowsClipb
     fn clipboard(_: &crate::owner::windows::WindowsLoop) -> std::rc::Rc<dyn NativeClipboard> {
         std::rc::Rc::new(WindowsClipboard::new())
     }
-}
-
-/// How many UTF-8 bytes `wide` decodes to, each unpaired surrogate as
-/// U+FFFD, as `String::from_utf16_lossy` writes it.
-fn decoded_len(wide: &[u16]) -> usize {
-    char::decode_utf16(wide.iter().copied())
-        .map(|unit| unit.map_or(char::REPLACEMENT_CHARACTER.len_utf8(), char::len_utf8))
-        .sum()
 }
 
 impl SyncClipboard for WindowsClipboard {
@@ -162,12 +162,10 @@ impl SyncClipboard for WindowsClipboard {
             }
 
             let wide_slice = std::slice::from_raw_parts(wide_ptr, len);
-            // The text is measured before anything is allocated for it: past
-            // the limit nothing is decoded.
-            if decoded_len(wide_slice) > MAX_TEXT {
+            // The length-only decode stops at the limit, before the allocation.
+            if let Err(refused) = decoded_utf16_len(wide_slice.iter().copied()) {
                 let _ = GlobalUnlock(hglobal);
-                tracing::warn!("a clipboard read past {MAX_TEXT} bytes was refused");
-                return Err(ClipboardError::TooLarge);
+                return Err(refused);
             }
             let rust_string = String::from_utf16_lossy(wide_slice);
 
@@ -477,7 +475,10 @@ mod tests {
             &[0xd800, 0x61],
             &[],
         ] {
-            assert_eq!(decoded_len(text), String::from_utf16_lossy(text).len());
+            assert_eq!(
+                decoded_utf16_len(text.iter().copied()),
+                Ok(String::from_utf16_lossy(text).len())
+            );
         }
     }
 

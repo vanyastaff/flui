@@ -19,30 +19,28 @@
 //! poll lets a ready future complete inside `init_state`. A stream must **not**
 //! do that.
 //!
-//! Subscribing applies `after_connected` unconditionally, with no `Done` guard,
-//! and a stream subscription never delivers an event synchronously — the first
-//! event always arrives later. So `Waiting` is *always* observed before the
-//! first event. An eager inline poll could yield an item before `after_connected`
-//! ran, and `after_connected` would then drag `Active` back to `Waiting`.
-//! `spawn_local` (first poll on the next frame's driver step) is the correct
-//! shape, and also the simpler one.
+//! Subscribing enters `Waiting` unconditionally, with no `Done` guard, and a
+//! stream subscription never delivers an event synchronously — the first event
+//! always arrives later. So `Waiting` is *always* observed before the first
+//! event. An eager inline poll could yield an item before the `Waiting`
+//! transition ran, dragging `Active` back to `Waiting`. `spawn_local` (first
+//! poll on the next frame's driver step) is the correct shape, and also the
+//! simpler one.
 //!
-//! # Folds
+//! # Transitions
 //!
-//! | Event | Fold | Result |
-//! |---|---|---|
-//! | subscribe | `after_connected` | `Waiting`, payload preserved |
-//! | `Some(Ok(d))` | `after_data(d)` | `Active` + data, **error cleared** |
-//! | `Some(Err(e))` | `after_error(e)` | `Active` + error, **data cleared** |
-//! | `None` (end) | `after_done` | `Done`, last payload preserved |
-//! | key change / dispose | `after_disconnected` | `None`, payload preserved |
+//! | Event | Snapshot |
+//! |---|---|
+//! | subscribe | `Waiting(last)`, result preserved |
+//! | `Some(result)` | `Active(result)`, replacing the previous result |
+//! | `None` (end) | `Done(last)`, last result preserved |
+//! | key change / dispose | `None(last)`, result preserved |
 //!
 //! A `Stream<Item = Result<T, E>>` keeps yielding after an error, so an error
 //! leaves the state `Active` and polling continues.
 
 use std::{pin::Pin, rc::Rc, sync::Arc};
 
-use flui_foundation::{AsyncSnapshot, ConnectionState};
 use flui_scheduler::{AsyncDriver, TaskToken};
 use futures_core::Stream;
 use parking_lot::Mutex;
@@ -50,6 +48,7 @@ use parking_lot::Mutex;
 use super::async_slot::{
     InitialDataFactory, SharedSlot, Slot, SnapshotBuilder, SnapshotUpdate, apply_update,
 };
+use super::async_snapshot::AsyncSnapshot;
 use crate::{
     RebuildHandle,
     context::{BuildContext, LifecycleContext},
@@ -73,13 +72,8 @@ fn apply_event<T, E>(
     handle: &RebuildHandle,
 ) -> bool {
     let update = match event {
-        Some(Ok(data)) => {
-            SnapshotUpdate::Replace(AsyncSnapshot::with_data(ConnectionState::Active, data))
-        }
-        Some(Err(error)) => {
-            SnapshotUpdate::Replace(AsyncSnapshot::with_error(ConnectionState::Active, error))
-        }
-        None => SnapshotUpdate::State(ConnectionState::Done),
+        Some(result) => SnapshotUpdate::Replace(AsyncSnapshot::Active(result)),
+        None => SnapshotUpdate::Done,
     };
     apply_update(slot, generation, update, handle)
 }
@@ -162,7 +156,7 @@ where
         // `ViewState::init_state` is handed a `BuildContext` but NOT the view, so
         // the configuration the first subscription needs is copied here.
         StreamBuilderState {
-            slot: Arc::new(Mutex::new(Slot::new(AsyncSnapshot::nothing()))),
+            slot: Arc::new(Mutex::new(Slot::new(AsyncSnapshot::None(None)))),
             handle: None,
             driver: None,
             token: None,
@@ -222,7 +216,7 @@ where
         let slot = self.slot.lock();
         f.debug_struct("StreamBuilderState")
             .field("key", &self.key)
-            .field("connection_state", &slot.snapshot.connection_state())
+            .field("connection_state", &slot.snapshot.state_name())
             .field("generation", &slot.generation)
             .field("subscribed", &self.token.is_some())
             .finish_non_exhaustive()
@@ -248,9 +242,8 @@ where
 
     /// Start a subscription for `key`.
     ///
-    /// Mirrors `_StreamBuilderBaseState._subscribe`: listen, then
-    /// `after_connected` — unconditionally. See the module docs for why this uses
-    /// `spawn_local` rather than `spawn_local_eager`.
+    /// Listen, then unconditionally enter `Waiting`. See the module docs for why
+    /// this uses `spawn_local` rather than `spawn_local_eager`.
     fn subscribe(&mut self, key: K, make: &StreamFactory<T, E>) {
         let Some(driver) = self.driver.clone() else {
             tracing::warn!(
@@ -292,9 +285,7 @@ where
             }
         }));
 
-        self.slot
-            .lock()
-            .set_connection_state(ConnectionState::Waiting);
+        self.slot.lock().transition(AsyncSnapshot::Waiting);
 
         self.token = Some(token);
         self.key = Some(key);
@@ -315,8 +306,8 @@ where
         self.driver = ctx.async_driver();
 
         let initial = match &self.initial_data {
-            Some(initial_data) => AsyncSnapshot::with_data(ConnectionState::None, initial_data()),
-            None => AsyncSnapshot::nothing(),
+            Some(initial_data) => AsyncSnapshot::None(Some(Ok(initial_data()))),
+            None => AsyncSnapshot::None(None),
         };
         let previous = core::mem::replace(&mut self.slot.lock().snapshot, initial);
         drop(previous);
@@ -335,9 +326,8 @@ where
     }
 
     /// `_StreamBuilderBaseState.didUpdateWidget`: an unchanged key is an early
-    /// return; a changed one unsubscribes, applies `after_disconnected`
-    /// (**preserving the payload**), and resubscribes. `initialData` is never
-    /// re-applied.
+    /// return; a changed one unsubscribes, enters `None` while preserving the
+    /// latest result, and resubscribes. `initialData` is never re-applied.
     fn did_update_view(
         &mut self,
         old_view: &StreamBuilder<K, T, E>,
@@ -349,7 +339,7 @@ where
 
         if self.token.is_some() || self.key.is_some() {
             self.unsubscribe();
-            self.slot.lock().set_connection_state(ConnectionState::None);
+            self.slot.lock().transition(AsyncSnapshot::None);
         }
 
         if let Some(key) = new_view.key.clone() {

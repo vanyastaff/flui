@@ -90,6 +90,8 @@ pub(crate) struct RuntimeCapabilities<'a> {
     /// The providers this presentation's widgets acquire platform
     /// capabilities from, and where their completions settle (ADR-0152).
     pub(crate) capabilities: crate::capability::CapabilityRegistry,
+    /// The host executor handed to those providers, when the host supplied one.
+    pub(crate) executor: Option<Arc<dyn flui_platform::executor::Executor>>,
     pub(crate) completions: flui_platform::capability::CompletionSource,
     /// What providers keep for the UI runtime (ADR-0152 §5).
     pub(crate) locals: flui_platform::capability::RuntimeLocals,
@@ -241,7 +243,8 @@ impl PresentationWindow {
 
 /// A test-only conversion that bypasses any accessibility bridge the
 /// concrete window has: the presentation is built with none, even when the
-/// window is a headless `MockWindow` carrying a `FakeAccessibility`. A test
+/// window is a headless `HeadlessWindow` carrying a
+/// `flui_native::testing::FakeAccessibility`. A test
 /// that needs the bridge wired names it in [`PresentationWindow::new`]
 /// instead.
 #[cfg(any(test, feature = "testing"))]
@@ -615,6 +618,64 @@ pub struct PresentationState {
     flush_count: Cell<u32>,
 }
 
+/// The one inbound accessibility handler attached by a presentation.
+///
+/// Adapter threads only update atomic activation state, request owner work,
+/// or enqueue bounded commands. All tree mutation and action dispatch stays
+/// on the presentation's owner thread.
+struct PresentationAccessibilityHandler {
+    enabled: Arc<AtomicBool>,
+    republish: Arc<AtomicBool>,
+    wake: Arc<dyn Fn() + Send + Sync>,
+    redraw: Arc<dyn flui_platform::RedrawRequester>,
+    commands: super::ui_runtime::UiCommandSender,
+}
+
+impl flui_semantics::platform::AccessibilityHandler for PresentationAccessibilityHandler {
+    fn activation_changed(&self, active: bool) {
+        self.enabled.store(active, Ordering::Relaxed);
+        if active {
+            // A (re)attached assistive technology's state is unknown — it
+            // may have forgotten everything — and flushes publish
+            // incrementally, so answer it with a self-contained full tree.
+            self.republish.store(true, Ordering::Relaxed);
+        } else if let Err(error) = self.commands.send_assistive_focus(None) {
+            // Its cursor left with it, whether or not the adapter said so.
+            tracing::warn!(
+                ?error,
+                "dropping the end of the assistive cursor: the ui_runtime inbox is full or gone"
+            );
+        }
+        // The flag alone changes nothing until a frame runs: wake the loop
+        // and poke this window so the owner-thread reconcile actually happens.
+        (self.wake)();
+        self.redraw.request_redraw();
+    }
+
+    fn action_requested(&self, request: accesskit::ActionRequest) {
+        // The adapter's thread only transports the request: it reaches the
+        // owner as `HostInput::Accessibility` and is decoded there
+        // (ADR-0207 §1).
+        if let Err(error) = self.commands.send_accessibility(request) {
+            tracing::warn!(
+                ?error,
+                "dropping accessibility action: the ui_runtime inbox is full or gone"
+            );
+        }
+    }
+
+    fn assistive_focus_changed(&self, node: Option<accesskit::NodeId>) {
+        // Transported like an action, so the two apply in the order the
+        // platform reported them.
+        if let Err(error) = self.commands.send_assistive_focus(node) {
+            tracing::warn!(
+                ?error,
+                "dropping an assistive cursor move: the ui_runtime inbox is full or gone"
+            );
+        }
+    }
+}
+
 impl PresentationState {
     /// Wire this window's platform accessibility bridge, when one exists,
     /// into all three directions of the semantics seam:
@@ -627,7 +688,7 @@ impl PresentationState {
     ///   toggles this presentation's [`SemanticsHost`] flag and wakes the
     ///   loop; the frame pump's reconcile (`UiRuntime::draw_frame_entered`)
     ///   then drives `PipelineOwner::set_semantics_enabled`, so tree
-    ///   assembly starts and stops on the OWNER thread — the listener runs
+    ///   assembly starts and stops on the OWNER thread — the handler runs
     ///   on the adapter's own thread and touches only `Send + Sync` state.
     /// - **In** — action requests marshal through the UI runtime inbox as
     ///   [`HostInput::Accessibility`](crate::HostInput::Accessibility) stamped
@@ -648,10 +709,20 @@ impl PresentationState {
         semantics: &SemanticsHost,
         wake: &Arc<dyn Fn() + Send + Sync>,
         command_sender: super::ui_runtime::UiCommandSender,
-    ) {
-        let Some(bridge) = bridge else {
-            return;
+    ) -> Option<flui_semantics::platform::AccessibilityCapabilities> {
+        let bridge = bridge?;
+
+        let handler = PresentationAccessibilityHandler {
+            enabled: semantics.platform_semantics_enabled_handle(),
+            republish: semantics.full_republish_handle(),
+            wake: Arc::clone(wake),
+            redraw: window.redraw_requester(),
+            commands: command_sender,
         };
+        let attachment = bridge
+            .attach(Arc::new(handler))
+            .expect("BUG: a presentation is the only accessibility handler attached to its window");
+        let capabilities = attachment.capabilities();
 
         let publish_bridge = Arc::downgrade(bridge);
         pipeline.with_mut(|owner| {
@@ -664,7 +735,7 @@ impl PresentationState {
             ));
             // A bridge with a native notice of a new screen is told each route
             // change; any other leaves the owner to announce it (ADR-0204 §5).
-            let sink = (bridge.route_change_support()
+            let sink = (capabilities.route_changes()
                 == flui_semantics::platform::RouteChangeSupport::Native)
                 .then(|| {
                     let bridge = Arc::downgrade(bridge);
@@ -677,61 +748,12 @@ impl PresentationState {
             owner.set_semantics_route_change_sink(sink);
         });
 
-        let enabled_flag = semantics.platform_semantics_enabled_handle();
-        let republish_flag = semantics.full_republish_handle();
-        let wake = Arc::clone(wake);
-        let awaken_window = window.redraw_requester();
-        let detached = command_sender.clone();
-        bridge.set_activation_listener(Arc::new(move |active| {
-            enabled_flag.store(active, Ordering::Relaxed);
-            if active {
-                // A (re)attached assistive technology's state is unknown —
-                // it may have forgotten everything — and flushes publish
-                // incrementally, so it must be answered with a
-                // self-contained full tree, not the next diff.
-                republish_flag.store(true, Ordering::Relaxed);
-            } else if let Err(error) = detached.send_assistive_focus(None) {
-                // Its cursor left with it, whether or not the adapter said so.
-                tracing::warn!(
-                    ?error,
-                    "dropping the end of the assistive cursor: the ui_runtime inbox is full or gone"
-                );
-            }
-            // The flag alone changes nothing until a frame runs: wake the
-            // loop and poke this window so the reconcile actually happens.
-            // The adapter calls from its own thread, so the window is asked
-            // through its requester (ADR-0254 §5).
-            wake();
-            awaken_window.request_redraw();
-        }));
         // Assistive technology may have attached before this window existed
-        // — the transition the listener waits for has already happened.
-        if bridge.is_active() {
+        // — the transition the handler waits for has already happened.
+        if attachment.is_active() {
             semantics.set_platform_semantics_enabled(true);
         }
-
-        let cursor = command_sender.clone();
-        bridge.set_assistive_focus_listener(Arc::new(move |node| {
-            // Transported like an action, so the two apply in the order the
-            // platform reported them.
-            if let Err(error) = cursor.send_assistive_focus(node) {
-                tracing::warn!(
-                    ?error,
-                    "dropping an assistive cursor move: the ui_runtime inbox is full or gone"
-                );
-            }
-        }));
-        bridge.set_action_listener(Arc::new(move |request| {
-            // The adapter's thread only transports the request: it reaches
-            // the owner as `HostInput::Accessibility` and is decoded there
-            // (ADR-0207 §1).
-            if let Err(error) = command_sender.send_accessibility(request) {
-                tracing::warn!(
-                    ?error,
-                    "dropping accessibility action: the ui_runtime inbox is full or gone"
-                );
-            }
-        }));
+        Some(capabilities)
     }
 
     /// Assemble the gesture arena, wiring its mouse-tracker cursor callback
@@ -885,11 +907,13 @@ impl PresentationState {
             presentation.capabilities =
                 Some(Rc::new(crate::capability::PresentationCapabilities {
                     registry: capabilities.capabilities,
+                    executor: capabilities.executor,
                     completions: capabilities.completions,
                     locals: capabilities.locals,
                     window: Rc::downgrade(&window),
                 }));
             presentation.close_guard = Some(close_guard.guard());
+            presentation.url_owner = Some(flui_view::UrlOwnerSlot::default());
             // Paired here, the one place holding both halves: the ui_runtime's
             // dispatch ticket (identity) and THIS presentation's pipeline
             // (the tree). A ui_runtime may host several presentations, each with
@@ -1011,16 +1035,7 @@ impl PresentationState {
             semantics_flag.store(enabled, Ordering::Relaxed);
         }));
 
-        // Whether this window's adapter says where the assistive technology's
-        // cursor is: a widget that acts on it asks before relying on it.
-        let assistive_focus = accessibility.as_ref().map_or(
-            flui_semantics::AssistiveFocusSupport::Unreported,
-            |bridge| bridge.assistive_focus_support(),
-        );
-        widgets.with_build_owner_mut(|owner| {
-            owner.capabilities_mut().assistive_focus = assistive_focus;
-        });
-        Self::wire_platform_accessibility(
+        let accessibility_capabilities = Self::wire_platform_accessibility(
             &window,
             accessibility.as_ref(),
             &pipeline,
@@ -1028,6 +1043,15 @@ impl PresentationState {
             &capabilities.wake,
             capabilities.command_sender,
         );
+        // Whether this window's adapter says where the assistive technology's
+        // cursor is: a widget that acts on it asks before relying on it.
+        let assistive_focus = accessibility_capabilities.map_or(
+            flui_semantics::AssistiveFocusSupport::Unreported,
+            flui_semantics::platform::AccessibilityCapabilities::assistive_focus,
+        );
+        widgets.with_build_owner_mut(|owner| {
+            owner.capabilities_mut().assistive_focus = assistive_focus;
+        });
 
         let snapshot = window.state();
         let state = Self {
@@ -2397,8 +2421,7 @@ impl PresentationState {
             failure.invoke(|| flui_interaction::__runtime::retire_dispatch(dispatch, mode));
         }
         if let Some(bridge) = &bridge {
-            failure.invoke(|| bridge.set_activation_listener(Arc::new(|_| {})));
-            failure.invoke(|| bridge.set_action_listener(Arc::new(|_| {})));
+            failure.invoke(|| bridge.detach_handler());
         }
         if self.pipeline.is_free() {
             failure.invoke(|| {

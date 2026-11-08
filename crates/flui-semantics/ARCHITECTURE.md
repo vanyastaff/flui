@@ -39,10 +39,12 @@ callbacks only until their owner retires.
 
 [ADR-0223](../../docs/adr/ADR-0223-authored-semantics-regions.md) distinguishes
 render-boundary origins from allocated region origins. `SemanticsNode` encodes
-that choice as one private enum. A presentation-owned opaque source reserves
-synthetic IDs below nonzero render generations; it never rewinds or reissues
-released values. `synthetic_identity_exhaustion_never_wraps_or_partially_reserves`
-pins the terminal boundary using a private seam. Region actions use the same
+that choice as one private enum. A presentation-owned source recycles synthetic
+slots through `GenSlots`; the published top bit separates them from render IDs,
+and every reuse carries a new generation. `released_slots_advance_and_stale_releases_do_nothing`,
+`a_failed_batch_does_not_consume_a_recycled_slot` and
+`synthetic_identity_exhaustion_never_wraps_or_partially_reserves` pin reuse and
+terminal refusal. Region actions use the same
 rooted-node and delivered-offer validation as render boundaries.
 
 ### Scroll ranges retain their actual axis
@@ -476,27 +478,36 @@ delivery would be lost to an adapter that panicked.
 
 ### The screen reader's cursor is reported in, never published
 
-**Rule.** An adapter whose `assistive_focus_support()` is `Reported` calls the listener it was
-given with the node the assistive technology's cursor moved to, or `None` when it left the tree.
-The presentation queues the move in its owner inbox, and the drain hands it to
-`PipelineOwner::move_assistive_focus`. The pipeline keeps one `AssistiveFocus` across the
-semantics owners it makes: the node and the handlers it last told `true`. A move walks the new
-node's ancestors through `SemanticsOwner::assistive_focus_chain`, tells the handlers no longer on
-the chain `false` and then the new ones `true`, each once, after the pipeline borrow is
-released. A node the owner no longer holds, or no owner at all, leaves every subtree, so each
-`true` is followed by a `false`. Handlers are compared by `Rc` identity: `Semantics` keeps one
-handler per mount, so a rebuild does not count as leaving. Deactivating the adapter moves the
-cursor off the tree. iOS reports the cursor through the hook FLUI adds to `accesskit_ios`
-(`third_party/README.md`); the other native adapters say `Unreported` (gap 36). The headless
-test host reports it and moves it with `move_assistive_focus`.
+**Rule.** An adapter whose attachment capabilities return `AssistiveFocusSupport::Reported` from
+`assistive_focus()` calls `AccessibilityHandler::assistive_focus_changed` with the node the
+assistive technology's cursor moved to, or `None` when it left the tree. The presentation queues
+the move in its owner inbox, and the drain hands it to `PipelineOwner::move_assistive_focus`. The
+pipeline keeps one `AssistiveFocus` across the semantics owners it makes: the node and the handlers
+it last told `true`. A move walks the new node's ancestors through
+`SemanticsOwner::assistive_focus_chain`, tells the handlers no longer on the chain `false` and then
+the new ones `true`, each once, after the pipeline borrow is released. A node the owner no longer
+holds, or no owner at all, leaves every subtree, so each `true` is followed by a `false`. Handlers
+are compared by `Rc` identity: `Semantics` keeps one handler per mount, so a rebuild does not count
+as leaving. Deactivating the adapter moves the cursor off the tree. Android and iOS report the
+cursor through the hooks FLUI adds to their AccessKit adapters (`third_party/README.md`); the other
+native adapters say `Unreported` (gap 36). The headless test host reports it and moves it with
+`move_assistive_focus`.
+
+`PlatformAccessibility::attach` registers one `AccessibilityHandler` and returns the attachment
+snapshot containing its initial activation state and capabilities. `assistive_focus_changed` is a
+required handler method beside `activation_changed` and `action_requested`, so no separate
+registration can be omitted. An adapter whose snapshot says `Unreported` makes no assistive-focus
+calls. `detach_handler` withdraws the whole handler; a later presentation attaches a new one.
 
 **Why.** Input focus is the application's; the screen reader's cursor is the platform's and
 moves without it, so it is never written into the tree. Keeping the told handlers on the
 pipeline, not on the owner, means turning accessibility off and on still tells a subtree it was
-left.
+left. One attachment keeps activation, capabilities and event delivery in agreement from the
+start, with no registration gap.
 
 **Test.** `the_cursor_enters_and_leaves_subtrees`, `every_entered_subtree_hears_it_is_left`,
 `a_panicking_handler_does_not_silence_the_others` in `tests/assistive_focus.rs`;
+`an_accessibility_handler_cannot_silently_drop_assistive_focus` in `tests/platform_contract.rs`;
 `the_assistive_cursor_entering_and_leaving_a_subtree_reaches_its_handler` and
 `the_screen_reader_entering_the_carousel_pauses_autoplay` in `crates/flui-widgets/tests`;
 `each_native_adapter_says_whether_it_reports_the_assistive_cursor` and
@@ -509,33 +520,37 @@ lays out a field's text declares it as a `TextContent`: `TextRun`s, each one str
 in one direction of at most 256 AccessKit characters (`u8` byte lengths on `char` boundaries),
 covering the value from its first byte, on lines that never go back, and a `TextRunSelection` in
 `(run, character)` positions. `TextRun::try_new` and `TextContent::try_new` check that model. The
-pipeline moves the runs' geometry into the window's space and gives each run a synthetic
-identity keyed by its whole identity: the node, its place, its start and its text. An unchanged
-run keeps its identity, a changed one takes a new one, and a rebuilt field forgets the runs it
-no longer has. A text field publishes its runs as `TextRun` children after its own, linked
-`next_on_line`/`previous_on_line` within a line, and its selection as `text_selection`; other
-roles publish none. Content without identities, as when the identity space is exhausted, is
-withheld whole, runs and selection together, and reported as `TextRunsWithheld`; the value
-still reads. A platform `SetTextSelection` names run positions, so the owner decodes it
-(`SemanticsOwner::semantics_action_request_for`, `PipelineOwner::decode_semantics_action`):
-both ends must lie in the target field's current runs, else `ActionDecodeError::InvalidTextPosition`,
-and the handler receives a `TextSelection` in bytes of the value. A request on a run goes to its
-field. An agent reads the value, not the runs. `RenderEditable` builds the runs from
-`TextPainter::line_layouts`, cutting a cluster longer than 255 bytes into pieces and a run at 256
-characters, with the word starts the caret steps between (`text_boundaries::word_starts`);
-`EditableText` takes a selection or a replacement through its keyboard edit path, on the source
-behind its mask.
+pipeline moves the runs' geometry into the window's space and keys each synthetic identity by
+field and ordinal. Text, starting byte and geometry are payload, so same-count edits keep all ids
+and need no allocator slot; a removed ordinal releases its slot, which returns only under a new
+generation. A rebuilt field forgets the runs it no longer has. A text field publishes its runs as
+`TextRun` children after its own, linked `next_on_line`/`previous_on_line` within a line, and its
+selection as `text_selection`; other roles publish none. Content without identities, as when a
+new ordinal has no available slot, is withheld whole, runs and selection together, and reported
+as `TextRunsWithheld`; the value still reads. A platform `SetTextSelection` names run positions,
+so the owner decodes it (`SemanticsOwner::semantics_action_request_for`,
+`PipelineOwner::decode_semantics_action`): both ends must lie in the target field's current runs,
+and every run's text and UTF-8 character lengths must match the last delivered snapshot. A
+mismatch is `ActionDecodeError::InvalidTextPosition`; successful delivery admits the stable ids
+under their new coordinates. The handler receives a `TextSelection` in bytes of the value. A
+request on a run goes to its field. An agent reads the value, not the runs. `RenderEditable`
+builds the runs from `TextPainter::line_layouts`, cutting a cluster longer than 255 bytes into
+pieces and a run at 256 characters, with the word starts the caret steps between
+(`text_boundaries::word_starts`); `EditableText` takes a selection or a replacement through its
+keyboard edit path, on the source behind its mask.
 
 **Why.** AccessKit reads text only through `TextRun` children, and a `TextPosition` is a bare
-node id: a reissued identity would point an old selection at other text. Separate types for run
-positions and editor bytes make a mix-up a type error.
+node id. Stable ordinal identities keep ordinary edits incremental and bound slot consumption;
+the delivered-text barrier keeps an outstanding position from naming bytes the adapter has not
+seen. Separate types for run positions and editor bytes make a mix-up a type error.
 
 **Test.** `a_field_reads_by_character_word_and_line`,
 `a_direction_change_inside_a_line_reads_as_one_line`,
 `a_selection_is_read_only_from_the_fields_own_runs`,
 `runs_without_identities_are_withheld_and_reported`,
-`a_run_is_checked_against_accesskits_model` in `tests/text_runs.rs`;
-`a_fields_runs_keep_their_identities_until_their_text_changes` in
+`a_run_is_checked_against_accesskits_model`, `text_runs_follow_edits_incrementally` and
+`text_positions_wait_for_their_text_to_be_delivered` in `tests/text_runs.rs`;
+`a_fields_runs_keep_their_identities_through_text_edits` in
 `crates/flui-widgets/tests/semantics.rs`; for `EditableText`, `a_screen_reader_moves_by_word_where_the_caret_steps`,
 `a_screen_reader_types_into_an_empty_field_and_selects_in_it`, `a_long_cluster_and_a_long_line_read_whole` and
 `a_password_field_publishes_only_its_mask` in `crates/flui-widgets/tests/editable_text.rs`.

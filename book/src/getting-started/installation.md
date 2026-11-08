@@ -59,7 +59,9 @@ must remain available afterward — the generated `flui` dependency points at th
 absolute path. `flui` is the application's only framework dependency; UI code starts with
 `use flui::prelude::*;`. No design system is on by default: to use `flui::material` or
 `flui::cupertino`, add `features = ["material"]` (or `"cupertino"`) to the `flui` dependency in
-the generated `Cargo.toml`.
+the generated `Cargo.toml`. With Material enabled, optionally add
+`use flui::material::prelude::*;` beside `use flui::prelude::*;` for its package-owned glob;
+enabling the feature does not change the base prelude.
 
 Add `--hot-reload` to `flui create` to generate the host/worker/types workspace used by the
 desktop reload runner. That workspace cannot run on Android or in a browser; use the ordinary

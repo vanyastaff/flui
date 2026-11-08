@@ -211,6 +211,24 @@ fn driving_the_double_out_of_order_is_an_error() {
     assert!(!desktop.dnd.is_active());
 }
 
+/// A direct transport caller gets the same final byte-ceiling enforcement as
+/// a caller behind `DragView`.
+fn a_direct_request_refuses_an_oversized_delivery() {
+    let desktop = desktop(Some(COPY));
+    desktop
+        .dnd
+        .start_foreign(text("longer than ten bytes"), COPY)
+        .expect("no session runs yet");
+    desktop.hover();
+    flui_native::testing::drag::oversized_delivery(
+        desktop.transfer.as_ref(),
+        desktop.offer(),
+        RepresentationIndex(0),
+        TransferLimits::default().with_max_bytes(10),
+        resolved,
+    );
+}
+
 /// A provider that panics fails the request it was serving, as a native
 /// source fails it, and still serves the next one.
 fn a_provider_that_panics_fails_its_request_and_serves_the_next() {
@@ -288,6 +306,10 @@ fn headless_drag_contracts() {
             (
                 "driving_the_double_out_of_order_is_an_error",
                 driving_the_double_out_of_order_is_an_error,
+            ),
+            (
+                "a_direct_request_refuses_an_oversized_delivery",
+                a_direct_request_refuses_an_oversized_delivery,
             ),
             (
                 "a_provider_that_panics_fails_its_request_and_serves_the_next",

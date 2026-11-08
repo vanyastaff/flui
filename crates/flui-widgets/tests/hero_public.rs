@@ -141,7 +141,7 @@ pub(crate) fn replacing_the_hero_observer_inside_its_builder_cancels_the_flight(
                         Hero::new(
                             ValueKey::new("shared"),
                             GestureDetector::new()
-                                .behavior(flui_widgets::HitTestBehavior::Opaque)
+                                .behavior(flui_interaction::HitTestBehavior::Opaque)
                                 .on_tap(move |_| taps.set(taps.get() + 1))
                                 .child(SizedBox::new(60.0, 45.0)),
                         )
@@ -235,7 +235,7 @@ pub(crate) fn a_failed_hero_builder_restores_its_child_and_allows_a_fresh_flight
                         Hero::new(
                             ValueKey::new("shared"),
                             GestureDetector::new()
-                                .behavior(flui_widgets::HitTestBehavior::Opaque)
+                                .behavior(flui_interaction::HitTestBehavior::Opaque)
                                 .on_tap(move |_| taps.set(taps.get() + 1))
                                 .child(SizedBox::new(60.0, 45.0)),
                         )

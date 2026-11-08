@@ -20,6 +20,7 @@ fn cargo_toml(name: &str, source: &DependencySource) -> String {
     let version = env!("CARGO_PKG_VERSION");
 
     let deps = format!("flui = {}", source.dependency("flui", &[]));
+    let android_deps = format!("flui = {}", source.dependency("flui", &["native"]));
     let mode_comment = if matches!(source, DependencySource::Local(_)) {
         " (local development)"
     } else {
@@ -44,6 +45,9 @@ rust-version = "1.99"
 [dependencies]
 {deps}
 
+[target.'cfg(target_os = "android")'.dependencies]
+{android_deps}
+
 [profile.release]
 opt-level = 3
 lto = "thin"
@@ -60,12 +64,14 @@ const LIB: &str = r#"//! The application, and the entry points the platforms cal
 //! a `cdylib` (`flui build android`).
 
 use flui::prelude::*;
+#[cfg(target_os = "android")]
+use flui::native::android::{AndroidApp, run_app_android};
 
 #[cfg(target_os = "android")]
 #[unsafe(no_mangle)]
-fn android_main(app: flui::android_activity::AndroidApp) {
+fn android_main(app: AndroidApp) {
     // `run_app_android` logs why it could not start.
-    let _started = flui::run_app_android(app, HelloView, flui::AppLaunch::new());
+    let _started = run_app_android(app, HelloView, flui::AppLaunch::new());
 }
 
 #[derive(Clone, StatelessView)]

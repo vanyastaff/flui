@@ -18,6 +18,7 @@ use super::exec::{Cmd, Runner};
 /// facade under the same selections.
 pub(crate) const COMBOS: [&str; 11] = [
     "--no-default-features",
+    "--no-default-features --features assets",
     "--no-default-features --features material",
     "--no-default-features --features cupertino",
     "--no-default-features --features material,cupertino",

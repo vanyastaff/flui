@@ -19,7 +19,7 @@ use crate::DecoratedBox;
 /// The colors and widths of a [`FocusRing`]: two bands drawn inside the
 /// child's bounds, `outer` along the edge and `inner` just within it. A
 /// focused link draws the same bands just outside its glyphs.
-pub use flui_objects::FocusRingStyle;
+use flui_objects::FocusRingStyle;
 
 /// A uniform `width` border in `color`, or no border for a zero width.
 fn ring_band(color: Color, width: f64) -> BoxDecoration<f64> {

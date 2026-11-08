@@ -109,6 +109,8 @@ mod agent_act;
 mod agent_input;
 #[path = "contracts/announce.rs"]
 mod announce;
+#[path = "contracts/capability_executor.rs"]
+mod capability_executor;
 #[path = "contracts/device_loss.rs"]
 mod device_loss;
 #[path = "contracts/display_timing.rs"]
@@ -117,6 +119,8 @@ mod display_timing;
 mod frame_rate_demand;
 #[path = "contracts/input_tap.rs"]
 mod input_tap;
+#[path = "contracts/navigation.rs"]
+mod navigation;
 #[path = "contracts/numeric_text_answers.rs"]
 mod numeric_text_answers;
 #[path = "contracts/owner_close.rs"]

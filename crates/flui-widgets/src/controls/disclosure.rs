@@ -12,6 +12,7 @@ use flui_painting::typography::TextDirection;
 use flui_painting::{Canvas, Paint};
 use flui_rendering::delegates::CustomPainter;
 use flui_rendering::hit_testing::HitTestBehavior;
+use flui_rendering::semantics::{SemanticsAnchor, SemanticsRole};
 use flui_view::prelude::*;
 use flui_view::seq::ViewSeq;
 use flui_view::{BoxedView, RebuildHandle, RebuildReason, WriterSource};
@@ -21,7 +22,7 @@ use crate::support::{ValueCallback, value_callback};
 use crate::{
     Action, ActionOutcome, Actions, ActivateIntent, ButtonActivateIntent, ClipRect, Column,
     CustomPaint, Directionality, Flexible, Focus, GestureDetector, Intent, LayoutBuilder,
-    MergeSemantics, Row, Semantics, SemanticsAnchor, SemanticsRole,
+    MergeSemantics, Row, Semantics,
 };
 
 /// The application-owned state of a [`Disclosure`].
@@ -371,7 +372,7 @@ impl ViewState<Disclosure> for DisclosureState {
             };
             let expanded = snapshot.state == ExpansionState::Expanded;
             let mut semantics = Semantics::new()
-                .role(crate::SemanticsRole::Button)
+                .role(SemanticsRole::Button)
                 .enabled(enabled)
                 .expanded(expanded)
                 .anchor(header_anchor.clone())

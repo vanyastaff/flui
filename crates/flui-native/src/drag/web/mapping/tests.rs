@@ -120,6 +120,22 @@ fn a_hover_offers_the_types_flui_announces_then_the_files() {
     assert_eq!(format_of("Files"), None);
 }
 
+fn string_types_and_files_share_the_intake_budget() {
+    let types = std::iter::repeat_n(
+        "text/plain",
+        crate::transfer::intake::Intake::DEFAULT.max_types,
+    );
+    let offer = offered(types, ["image/png"]);
+    assert_eq!(
+        offer
+            .iter()
+            .map(|(source, _)| source)
+            .collect::<Vec<&DomSource>>(),
+        [&DomSource::Data("text/plain".to_owned())],
+        "duplicates consume the budget before the file is reached"
+    );
+}
+
 fn payloads_travel_as_the_strings_the_browser_stores() {
     let list = "# comment\r\nhttps://a.example/\r\n\r\nfile:///tmp/x\r\n";
     let uris = payload_of(&TransferFormat::UriList, list.to_owned());
@@ -246,6 +262,10 @@ fn html_drag_drop_table() {
             (
                 "a_hover_offers_the_types_flui_announces_then_the_files",
                 a_hover_offers_the_types_flui_announces_then_the_files,
+            ),
+            (
+                "string_types_and_files_share_the_intake_budget",
+                string_types_and_files_share_the_intake_budget,
             ),
             (
                 "payloads_travel_as_the_strings_the_browser_stores",

@@ -3,30 +3,24 @@
 //! reads their facts come from, so every host's tests run them.
 //!
 //! Each absence is the platform's, the device's or the host's
-//! ([`CapabilityAbsence`]): a feature the OS gained in a version above the
+//! ([`UnsupportedReason`]): a feature the OS gained in a version above the
 //! floor is gated ([`Since`](crate::version::gate::Since)) and answers
 //! `NotOnThisDevice` below it, and `NotYetOnThisHost` from it on while the
 //! host does not drive it.
 //!
 //! The AppKit window reports when its frames reached the screen: its view is
 //! backed by a `CAMetalLayer` whose drawables tell
-//! (`owner::apple::metal_layer`), from macOS 10.15.4, below the floor. The
-//! UIKit and Activity windows do not yet ([`PRESENTATION`]).
-
-/// Why a UIKit or Activity window reports no presentation, though its
-/// platform tells when a frame reached the screen. On iOS that is the
-/// drawable's `addPresentedHandler`, which the view's own `CAMetalLayer`
-/// would hand out as the AppKit view's does; with such a layer as the view's
-/// layer the iOS Simulator showed nothing at all. On Android the presenting
-/// swap chain's `VK_GOOGLE_display_timing` is wgpu's to read and it reads
-/// none; the choreographer's frame timelines name when a frame is due on
-/// screen, which is not that it was.
-#[cfg(any(target_os = "ios", target_os = "android", test))]
-pub(crate) const PRESENTATION: CapabilityAbsence = CapabilityAbsence::NotYetOnThisHost;
+//! (`owner::apple::metal_layer`), from macOS 10.15.4, below the floor. UIKit
+//! and Activity windows do not yet. On iOS the drawable's
+//! `addPresentedHandler` would need the view's own `CAMetalLayer`; with such
+//! a layer the iOS Simulator showed nothing at all. On Android the presenting
+//! swap chain's `VK_GOOGLE_display_timing` is wgpu's to read and it reads
+//! none; the choreographer's frame timelines name when a frame is due on
+//! screen, which is not that it was.
 
 #[cfg(any(target_os = "ios", target_os = "android", test))]
 use flui_platform::Availability;
-use flui_platform::{CapabilityAbsence, WindowCapabilities, WindowCommand, WindowMaterial};
+use flui_platform::{UnsupportedReason, WindowCapabilities, WindowCommand, WindowMaterial};
 
 #[cfg(any(target_os = "ios", target_os = "macos", test))]
 use crate::version::gate::Gate;
@@ -54,8 +48,8 @@ const MATERIAL: WindowCommand = WindowCommand::SetMaterial(WindowMaterial::Opaqu
 #[cfg(any(target_os = "ios", test))]
 pub(crate) const fn scene_capabilities() -> WindowCapabilities {
     let mut capabilities = WindowCapabilities::NONE
-        .unavailable(&MATERIAL, CapabilityAbsence::NotYetOnThisHost)
-        .without_presentation_feedback(PRESENTATION);
+        .unavailable_not_yet_on_this_host(&MATERIAL)
+        .without_presentation_feedback_not_yet_on_this_host();
     capabilities.reports_keyboard_inset = Availability::Native;
     capabilities.closes = Availability::Native;
     capabilities.frame_rate_hint = Availability::Native;
@@ -79,10 +73,10 @@ impl Gate for PointerInteraction {
 /// shows a pointer whose style a view chooses, which this host does not set
 /// yet; an iPhone shows none, nor does an iPad below 13.4.
 #[cfg(any(target_os = "ios", test))]
-pub(crate) fn pointer_absence(version: AppleVersion, shows_a_pointer: bool) -> CapabilityAbsence {
+pub(crate) fn pointer_absence(version: AppleVersion, shows_a_pointer: bool) -> UnsupportedReason {
     match version.since::<PointerInteraction>() {
-        Some(_) if shows_a_pointer => CapabilityAbsence::NotYetOnThisHost,
-        Some(_) | None => CapabilityAbsence::NotOnThisDevice,
+        Some(_) if shows_a_pointer => UnsupportedReason::NotYetOnThisHost,
+        Some(_) | None => UnsupportedReason::NotOnThisDevice,
     }
 }
 
@@ -121,7 +115,7 @@ pub(crate) const fn appkit_window_capabilities(owner_is_main: bool) -> WindowCap
     if owner_is_main {
         capabilities.material = Native;
     } else {
-        capabilities = capabilities.unavailable(&MATERIAL, CapabilityAbsence::NotYetOnThisHost);
+        capabilities = capabilities.unavailable_not_yet_on_this_host(&MATERIAL);
     }
     capabilities
 }
@@ -144,10 +138,10 @@ impl Gate for ViewDisplayLink {
 /// host paces its frames without it. winit's macOS backend carries none either, and
 /// answers the same.
 #[cfg(any(target_os = "macos", test))]
-pub(crate) fn frame_rate_absence(version: MacOSVersion) -> CapabilityAbsence {
+pub(crate) fn frame_rate_absence(version: MacOSVersion) -> UnsupportedReason {
     match version.since::<ViewDisplayLink>() {
-        Some(_) => CapabilityAbsence::NotYetOnThisHost,
-        None => CapabilityAbsence::NotOnThisDevice,
+        Some(_) => UnsupportedReason::NotYetOnThisHost,
+        None => UnsupportedReason::NotOnThisDevice,
     }
 }
 
@@ -170,48 +164,38 @@ pub(crate) struct ActivityFacts {
 
 /// What an Activity's window honours: no command, as the system owns the
 /// surface and the Activity's lifetime, and a refresh-rate request where the
-/// system takes one. The material is missing for the reason
-/// [`material_absence`] gives. The window reports the keyboard's occlusion,
-/// and the system gesture regions from API 29.
+/// system takes one. From Android 12 (API 31) the system blurs behind a window
+/// (`Window.setBackgroundBlurRadius`) where the device blurs across windows,
+/// which this host does not ask for yet; below API 31, or where cross-window
+/// blur is off, this device has none. The window reports the keyboard's
+/// occlusion, and the system gesture regions from API 29.
 #[cfg(any(target_os = "android", test))]
 pub(crate) fn activity_capabilities(facts: ActivityFacts) -> WindowCapabilities {
-    let mut capabilities = WindowCapabilities::NONE
-        .unavailable(
-            &MATERIAL,
-            material_absence(facts.api, facts.cross_window_blur),
-        )
-        .without_presentation_feedback(PRESENTATION);
+    let mut capabilities =
+        WindowCapabilities::NONE.without_presentation_feedback_not_yet_on_this_host();
+    capabilities = if facts.api.since::<BackgroundBlur>().is_some() && facts.cross_window_blur {
+        capabilities.unavailable_not_yet_on_this_host(&MATERIAL)
+    } else {
+        capabilities.unavailable_on_this_device(&MATERIAL)
+    };
     capabilities.reports_keyboard_inset = Availability::Native;
     if facts.api.since::<SystemGestureInsets>().is_some() {
         capabilities.reports_system_gestures = Availability::Native;
     } else {
-        capabilities = capabilities.without_system_gestures(CapabilityAbsence::NotOnThisDevice);
+        capabilities = capabilities.without_system_gestures_on_this_device();
     }
     capabilities.frame_rate_hint = facts.frame_rate_hint;
     capabilities
-}
-
-/// Why an Activity's window draws no material. From Android 12 (API 31) the
-/// system blurs behind a window (`Window.setBackgroundBlurRadius`) where the
-/// device blurs across windows, which this host does not ask for yet; below
-/// API 31, or where cross-window blur is off, this device has none.
-#[cfg(any(target_os = "android", test))]
-pub(crate) fn material_absence(api: AndroidApi, cross_window_blur: bool) -> CapabilityAbsence {
-    if api.since::<BackgroundBlur>().is_some() && cross_window_blur {
-        CapabilityAbsence::NotYetOnThisHost
-    } else {
-        CapabilityAbsence::NotOnThisDevice
-    }
 }
 
 /// Why an Activity's window does not set the pointer's icon. From API 24 a
 /// view shows a `PointerIcon` for a mouse or stylus, which this host does not
 /// set yet; below it the system draws its own pointer.
 #[cfg(any(target_os = "android", test))]
-pub(crate) fn pointer_icon_absence(api: AndroidApi) -> CapabilityAbsence {
+pub(crate) fn pointer_icon_absence(api: AndroidApi) -> UnsupportedReason {
     match api.since::<PointerIcons>() {
-        Some(_) => CapabilityAbsence::NotYetOnThisHost,
-        None => CapabilityAbsence::NotOnThisDevice,
+        Some(_) => UnsupportedReason::NotYetOnThisHost,
+        None => UnsupportedReason::NotOnThisDevice,
     }
 }
 
@@ -289,7 +273,7 @@ pub(crate) fn activity_color_mode(
 
 #[cfg(test)]
 mod tests {
-    use flui_platform::{Availability, CapabilityAbsence, WindowCapabilities};
+    use flui_platform::{Availability, UnsupportedReason, WindowCapabilities};
 
     use super::{
         ActivityFacts, AppleVersion, MATERIAL, MacOSVersion, PointerInteraction,
@@ -302,45 +286,39 @@ mod tests {
 
     /// How a window's capabilities refuse its material; `None` where it draws
     /// one.
-    fn material(capabilities: &WindowCapabilities) -> Option<CapabilityAbsence> {
-        (capabilities.availability(&MATERIAL) == Availability::Unavailable)
-            .then(|| capabilities.refusal(&MATERIAL))
+    fn material(capabilities: &WindowCapabilities) -> Option<UnsupportedReason> {
+        capabilities
+            .command_capability(&MATERIAL)
+            .err()
+            .map(|absent| absent.reason)
     }
 
     /// How a window's capabilities refuse a title bar of the application's;
     /// `None` where it takes one.
-    fn app_title_bar(capabilities: &WindowCapabilities) -> Option<CapabilityAbsence> {
+    fn app_title_bar(capabilities: &WindowCapabilities) -> Option<UnsupportedReason> {
         let command = flui_platform::WindowCommand::SetFrame(
             flui_platform::WindowFrame::AppTitleBar(flui_platform::AppTitleBar::new()),
         );
-        (capabilities.availability(&command) == Availability::Unavailable)
-            .then(|| capabilities.refusal(&command))
+        capabilities
+            .command_capability(&command)
+            .err()
+            .map(|absent| absent.reason)
     }
 
     /// Why a window's capabilities report no presentation; `None` where they
     /// report one.
-    fn presentation(capabilities: &WindowCapabilities) -> Option<CapabilityAbsence> {
-        use flui_platform::UnsupportedReason;
+    fn presentation(capabilities: &WindowCapabilities) -> Option<UnsupportedReason> {
         capabilities
             .presentation_feedback()
             .err()
-            .map(|absent| match absent.reason {
-                UnsupportedReason::NotYetOnThisHost => CapabilityAbsence::NotYetOnThisHost,
-                UnsupportedReason::NotOnThisDevice => CapabilityAbsence::NotOnThisDevice,
-                _ => CapabilityAbsence::NotOnThisPlatform,
-            })
+            .map(|absent| absent.reason)
     }
 
     /// The reason `answer` gives for a missing report, or `None` when it reports.
     fn report(
         answer: Result<flui_platform::Availability, flui_platform::Unsupported>,
-    ) -> Option<CapabilityAbsence> {
-        use flui_platform::UnsupportedReason;
-        answer.err().map(|absent| match absent.reason {
-            UnsupportedReason::NotYetOnThisHost => CapabilityAbsence::NotYetOnThisHost,
-            UnsupportedReason::NotOnThisDevice => CapabilityAbsence::NotOnThisDevice,
-            _ => CapabilityAbsence::NotOnThisPlatform,
-        })
+    ) -> Option<UnsupportedReason> {
+        answer.err().map(|absent| absent.reason)
     }
 
     fn activity(level: u32, cross_window_blur: bool) -> ActivityFacts {
@@ -355,11 +333,11 @@ mod tests {
     /// `None` where the capability is there.
     #[test]
     fn native_capability_absences() {
-        use CapabilityAbsence::{NotOnThisDevice, NotYetOnThisHost};
+        use UnsupportedReason::{NotOnThisDevice, NotYetOnThisHost};
         let ios = AppleVersion::new;
         let macos = MacOSVersion::new;
         let api = AndroidApi::from_level;
-        let rows: [(&str, Option<CapabilityAbsence>, Option<CapabilityAbsence>); 24] = [
+        let rows: [(&str, Option<UnsupportedReason>, Option<UnsupportedReason>); 24] = [
             (
                 "UIKit material",
                 material(&scene_capabilities()),

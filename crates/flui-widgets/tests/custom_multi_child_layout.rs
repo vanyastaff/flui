@@ -5,11 +5,11 @@ use std::any::Any;
 
 use crate::common::{lay_out, loose, offset, size};
 use flui_foundation::geometry::{Offset, Size};
-use flui_rendering::constraints::BoxConstraints;
-use flui_widgets::{
-    CustomMultiChildLayout, LayoutId, MultiChildLayoutContext, MultiChildLayoutDelegate, SizedBox,
-    row,
+use flui_rendering::{
+    constraints::BoxConstraints,
+    delegates::{MultiChildLayoutContext, MultiChildLayoutDelegate},
 };
+use flui_widgets::{CustomMultiChildLayout, LayoutId, SizedBox, row};
 
 #[derive(Debug)]
 struct TwoSlotDelegate {

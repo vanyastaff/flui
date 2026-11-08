@@ -22,6 +22,16 @@ mod apple;
     test
 ))]
 pub(crate) mod blocking;
+#[cfg(any(
+    target_os = "android",
+    target_os = "windows",
+    target_os = "macos",
+    target_os = "ios",
+    target_arch = "wasm32",
+    ureq_host,
+    test
+))]
+mod head;
 #[cfg(ureq_host)]
 mod ureq_stack;
 #[cfg(target_arch = "wasm32")]

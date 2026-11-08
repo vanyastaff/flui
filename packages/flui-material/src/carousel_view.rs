@@ -11,19 +11,22 @@
 //! | `padding` | `EdgeInsets::all(4.0)` |
 //! | small item | 40–56 dp ([`CarouselLayout::default`]) |
 //!
-//! Each field falls back from the widget to [`ThemeData::carousel_view_theme`] to the token.
+//! Each field falls back from the widget to the [`CarouselViewThemeData`](crate::CarouselViewThemeData)
+//! component entry to the token.
 
 use std::fmt;
 use std::rc::Rc;
 
 use flui_sdk::geometry::{EdgeInsets, Radius};
-use flui_sdk::painting::{BorderRadius, Clip, Color};
+use flui_sdk::painting::paint::Clip;
+use flui_sdk::painting::styling::{BorderRadius, Color};
+use flui_sdk::pipeline::CarouselLayout;
+use flui_sdk::rendering::SemanticsRole;
 use flui_sdk::view::prelude::*;
 use flui_sdk::view::{EventCx, EventOutcome};
 use flui_sdk::widgets::{
     AnimatedBuilder, Carousel, CarouselAutoplay, CarouselController, CarouselItemScope,
-    CarouselLayout, KeylineSnap, Positioned, Semantics, SemanticsRole, Stack, WidgetState,
-    WidgetStateProperty,
+    KeylineSnap, Positioned, Semantics, Stack, WidgetState, WidgetStateProperty,
 };
 
 use crate::event_callback::{ValueCallback, value_callback};
@@ -32,7 +35,6 @@ use crate::material::Material;
 use crate::ripple::StateLayerAlpha;
 use crate::shape::MaterialShape;
 use crate::theme::Theme;
-use crate::theme_data::ThemeData;
 
 /// M3's extra-large corner, the cards' radius.
 const DEFAULT_CORNER_RADIUS: f64 = 28.0;
@@ -223,8 +225,11 @@ struct CardStyle {
     padding: EdgeInsets,
 }
 
-fn resolve_style(theme: &ThemeData, view: &CarouselView) -> CardStyle {
-    let themed = theme.carousel_view_theme.as_ref();
+fn resolve_style(
+    theme: &crate::theme::BaseTheme,
+    themed: Option<&crate::CarouselViewThemeData>,
+    view: &CarouselView,
+) -> CardStyle {
     let on_surface = theme.color_scheme.on_surface;
     CardStyle {
         color: view
@@ -270,7 +275,9 @@ fn resolve_style(theme: &ThemeData, view: &CarouselView) -> CardStyle {
 
 impl StatelessView for CarouselView {
     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
-        let style = resolve_style(&Theme::of(ctx), self);
+        let theme = Theme::required_base_of(ctx);
+        let component = Theme::component_of::<crate::CarouselViewThemeData>(ctx);
+        let style = resolve_style(&theme, component.as_ref(), self);
         let builder = Rc::clone(&self.builder);
         let on_tap = self.on_tap.clone();
         let mut carousel = Carousel::builder(self.count, move |ctx, scope, index| {

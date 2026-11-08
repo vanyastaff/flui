@@ -1,7 +1,7 @@
-# ADR-0204: Synthetic semantics nodes take owner-allocated ids below 2^32; text fields publish runs
+# ADR-0204: Synthetic semantics nodes use tagged generational ids; text fields publish runs
 
 - **Status:** Accepted (2026-10-12)
-- **Superseded-by:** [ADR-0223](ADR-0223-authored-semantics-regions.md), §1 identity authority and authored-region action routing
+- **Superseded-by:** [ADR-0223](ADR-0223-authored-semantics-regions.md), §1 identity authority and authored-region action routing; [ADR-0314](ADR-0314-synthetic-semantics-ids-use-a-tagged-generational-slot.md), §1 id encoding and release policy
 - **Date:** 2026-10-12
 - **Amended by:** [ADR-0214](ADR-0214-selection-area-text-runs.md) (§2: text runs for static text
   inside a `SelectionArea`); amended 2026-10-31 (§5: route changes)
@@ -26,9 +26,9 @@ from the pipeline, the owner decoding run positions); a field that lays out its 
 Two kinds of published nodes have no render object: the runs of a text field's text, which a
 screen reader needs to read by character, word and line and to follow the selection, and the
 nodes that carry announcements, since AccessKit 0.25 has no announcement API. An
-`AccessibilityNodeId` is a packed `RenderId`, `(generation << 32) | index` with
-`generation ≥ 1`, so it uses all 64 bits for render-backed nodes, but no render object ever
-receives a value in `1..2^32`.
+`AccessibilityNodeId` is 64-bit at the adapter boundary. ADR-0314 reserves its top bit for
+synthetic nodes and packs a 31-bit generation and 32-bit slot below it; render-backed nodes keep
+the same layout with a zero domain bit.
 
 AccessKit's text model: the field node holds `text_selection`, whose positions name a
 `TextRun` node and a character index; each run carries its text, per-character UTF-8 lengths
@@ -45,16 +45,20 @@ an index that is never reused).
 
 ## Decision
 
-1. **Id range.** Synthetic nodes take ids in `1..2^32`, allocated by the `SemanticsOwner` that
-   publishes them. A run keeps its id while it is the same run: same owner node, same
-   ordinal, same starting character in the field and same text. Any other run takes the next
-   value, so an edit re-mints the edited run and every later run whose start moved, and an
-   outstanding `TextPosition` into a changed run is refused as stale rather than resolving to
-   other text. A released value is never reissued during the owner's life. When the range is exhausted, the
-   owner refuses permanently: no further synthetic node is published, and it reports
-   `tracing::error!` once, queued with the publication and emitted after the owner releases its
-   borrows (a subscriber is user code and may re-enter). An inbound action addressed to a synthetic id resolves to its owner
-   node through the reverse map; an unknown synthetic id is refused like a stale identity.
+1. **Id range.** Synthetic nodes use tagged generational slots under ADR-0314. The pipeline's
+   presentation-local source allocates them; the top published bit distinguishes them from
+   render-backed nodes. A run's identity is its owning field and ordinal. Text, starting byte and
+   geometry are payload: a same-count edit keeps every run id, including when an insertion moves
+   later runs. Removing an ordinal releases its slot; a later run at that ordinal receives the
+   recycled slot only under a new generation, and a terminal slot closes. When no slot is
+   available, the affected synthetic content is withheld and the owner reports `tracing::error!`
+   once, queued with the publication and emitted after the owner releases its borrows (a
+   subscriber is user code and may re-enter). An inbound action addressed to a synthetic id
+   resolves to its owner node through the reverse map; an unknown or stale synthetic id is refused
+   like a stale identity. An outstanding `TextPosition` is decoded only while the current runs and
+   the last delivered runs have the same text and UTF-8 character lengths. An edit that has not
+   been delivered therefore refuses the old position; successful delivery makes the stable id and
+   its new coordinates current.
 2. **Text runs.** The render object that owns a field's layout fills its `TextContent`: runs
    split at line ends, direction changes and every 256 characters; characters are grapheme
    clusters from `flui-painting::text_boundaries`, the same segmentation the editor's caret
@@ -70,9 +74,10 @@ an index that is never reused).
    `text_selection` in (run, character) positions. Inbound `SetTextSelection`,
    `ReplaceSelectedText` and `SetValue` are translated to the editor's byte offsets and applied
    through the editing path the keyboard uses, with the same validation, change notifications
-   and IME rules (ADR-0090). Both ends must name current runs of the targeted field (owner and
-   generation), or the request is refused before conversion; a position inside a split cluster
-   snaps to the cluster's boundary.
+   and IME rules (ADR-0090). Both selection ends must name current runs of the targeted field
+   (owner and generation), and the text coordinates must agree with the last delivery, or the
+   request is refused before conversion; a position inside a split cluster snaps to the cluster's
+   boundary.
 4. **Announcer.** The owner keeps two synthetic nodes, polite and assertive live regions of role
    `Label`, as the last children of the window root. `SemanticsOwner::announce(message,
    urgency)` writes the message to the matching node's value, which is what every adapter
@@ -111,18 +116,19 @@ an index that is never reused).
 - Run geometry is computed when a field's text or layout changes, not per frame; the cost is
   measured in the semantics assembly benchmark.
 - A screen reader hears a pushed, popped or replaced page and a modal dialog by name, on platforms with a native notice through it and elsewhere as a polite announcement.
-- The id range is a fixed 4 294 967 295 synthetic nodes per owner lifetime; exhaustion is
-  terminal and observable rather than a silent collision.
+- Synthetic slots recycle only under a new generation; per-slot terminal exhaustion is observable
+  rather than a silent collision, and ordinary churn has bounded slot consumption.
 - Published word starts are the editor's word stops: `flui_painting::text_boundaries::word_starts`,
   which the controller steps between for Ctrl+Arrow (`next_word_start`, `previous_word_start`)
   and `RenderEditable` publishes, so a screen reader's word stops match the editor's.
 
 ## Verification
 
-`synthetic_ids_are_stable_never_reissued_and_refuse_at_exhaustion` (owner unit tests, including
-the terminal boundary); `text_runs_follow_edits_incrementally` (including an insertion before
-existing runs and an overlong grapheme cluster) and
-`obscured_fields_publish_only_the_mask` through the owner's public API;
-`published_word_starts_match_editor_word_stops`; `assistive_edits_use_the_keyboard_path` in the
-widget suite; a `TextPattern` fixture in [`cargo xtask device windows-a11y`](https://github.com/vanyastaff/flui/blob/e8a42673ad23a2e88614940a266cd01224dcb25f/tools/xtask/src/device.rs) reading a field by
+`tagged_synthetic_ids_cannot_alias_render_ids`, `released_slots_advance_and_stale_releases_do_nothing`
+and `synthetic_identity_exhaustion_never_wraps_or_partially_reserves` (allocator unit tests,
+including the terminal boundary); `text_runs_follow_edits_incrementally` and
+`text_positions_wait_for_their_text_to_be_delivered` through the owner's public API;
+`a_fields_runs_keep_their_identities_through_text_edits`, `a_long_cluster_and_a_long_line_read_whole`,
+`a_password_field_publishes_only_its_mask`, `a_screen_reader_moves_by_word_where_the_caret_steps`
+and `a_screen_reader_types_into_an_empty_field_and_selects_in_it` in the widget suite; a `TextPattern` fixture in [`cargo xtask device windows-a11y`](https://github.com/vanyastaff/flui/blob/e8a42673ad23a2e88614940a266cd01224dcb25f/tools/xtask/src/device.rs) reading a field by
 character and word and moving the selection; `announcements_reach_the_live_region_value`; `each_change_of_the_innermost_route_is_told_once`, `without_a_sink_a_named_route_is_announced`, `a_failed_sink_or_delivery_loses_no_change_and_speaks_once` and `a_new_adapter_hears_changes_from_the_route_it_was_handed` through the owner's public API; `a_named_page_is_announced_when_pushed_and_when_uncovered` in the widget suite; `a_route_change_is_heard_by_its_name` in `linux_atspi`, a real AT-SPI client hearing a push and a pop; and `each_native_adapter_says_how_a_route_change_is_told`, which pins each adapter's `RouteChangeSupport`.

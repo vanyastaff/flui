@@ -1,62 +1,52 @@
-# flui_assets Documentation
+# flui_assets documentation
 
-## Guides
+The crate owns decoded-image loading and retention, not a generic asset-cache
+framework.
 
-- [User guide](GUIDE.md): registry ownership, typed assets and cache operations.
-- [Architecture](ARCHITECTURE.md): locking, data flow and behavior decisions.
-- [Design patterns](PATTERNS.md): type-state configuration and shared handles.
-- [Cache behavior and performance](PERFORMANCE.md): count capacity, expiration,
-  maintenance and diagnostics.
+- [User guide](GUIDE.md): facade setup, application ownership, file and network
+  loads, budgets, failures and memory pressure.
+- [Architecture](ARCHITECTURE.md): source identity, shared loads, lanes,
+  cancellation, scheduling and synchronization.
+- [Design patterns](PATTERNS.md): the ownership and capability boundaries used
+  by the registry and widgets.
+- [Performance and memory](PERFORMANCE.md): decoded-byte accounting, bounded
+  reads/decodes and measurement guidance.
 
 ## Quick reference
 
 ```rust
-use flui_assets::{AssetRegistryBuilder, FontAsset};
+use flui_assets::{AssetRegistryBuilder, LoadServices};
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let registry = AssetRegistryBuilder::new().with_default_capacity().build();
-    let font = registry.load(FontAsset::file("font.ttf")).await?;
-    println!("Loaded bytes: {}", font.bytes.len());
-    Ok(())
-}
+# async fn load() -> Result<(), flui_assets::AssetError> {
+let registry = AssetRegistryBuilder::new().build();
+let image = registry
+    .load_image("assets/logo.png", LoadServices::new())
+    .await?;
+println!("decoded {}x{}", image.width(), image.height());
+# Ok(())
+# }
 ```
 
-Default caches retain up to 10,240 completed entries per asset type after pending
-maintenance settles, with five-minute lifetime and one-minute idle expiration.
-`CacheCapacity::Entries(NonZeroU64)` selects a positive count;
-`CacheCapacity::Disabled` retains no completed entries. `AssetCacheConfig`
-configures capacity and validated `CacheExpiration` policies. These are entry
-bounds, not decoded-byte budgets.
-
-Ordinary registry loading validates descriptors and shares concurrent cold
-initialization through Moka. Successful results include decoded images and fonts.
-Errors are not cached. Strong handles retain their data after eviction; weak
-handles do not retain data. Both strong and weak asset handles own their keys.
-`AssetKey` owns a nonempty shared string: clones share storage, independently
-constructed equal names compare by contents, and `as_str` borrows from the key.
-Its storage is released when the last owner disappears rather than retained by
-a global interner. Widget bridge methods bypass registry caching and
-feed a synchronous widget image LRU.
-
-A standalone typed `AssetCache` exposes shared operation counters, estimated
-entry count and utilization. `contains` observes presence synchronously without
-refreshing idle expiration. `insert_many` inserts sequentially. Registry typed
-cache lookup is private and no public aggregated registry statistics API exists.
+Build requires no capacity selection. The only completed-image store is the
+registry's byte-budgeted LRU. Concurrent requests for one source share work;
+errors are not cached.
 
 ## Optional features
 
 | Feature | Description |
 |---------|-------------|
-| `images` | Image asset decoding |
-| `network` | HTTP/HTTPS byte loading |
-| `full` | Both stable optional features |
+| `images` | Image decoding, retention, file/network sources and load services |
+| `full` | Every stable feature; currently equivalent to `images` |
+
+Network loading needs `images` plus an HTTP client in `LoadServices`; there is
+no separate `network` feature. Facade applications normally enable `flui/assets`
+instead of selecting these implementation features themselves.
 
 ## Commands
 
 ```bash
-cargo test -p flui-assets --all-features
-cargo doc -p flui-assets --all-features --open
+cargo heli test -p flui-assets --all-features --locked
+cargo heli doc -p flui-assets --all-features --locked
 ```
 
 ## Project information
@@ -64,5 +54,4 @@ cargo doc -p flui-assets --all-features --open
 - [Crate README](../README.md)
 - [FLUI README](../../../README.md)
 - [Contributing](../../../CONTRIBUTING.md)
-- [Apache license](../../../LICENSE-APACHE)
-- [MIT license](../../../LICENSE)
+- [ADR-0317](../../../docs/adr/ADR-0317-the-asset-registry-is-image-only-and-the-facade-opts-into-it.md)

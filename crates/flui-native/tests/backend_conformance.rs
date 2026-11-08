@@ -48,7 +48,7 @@ use flui_native::text::conformance::TextInputV3;
 use flui_native::text::conformance::{
     AndroidMirror, AppKitClient, TsfDocument, WebEditContext, WebTextarea,
 };
-use flui_native::{HeadlessPlatform, HostWindow, MockWindow, OwnerPlatform, Platform as _};
+use flui_native::{HeadlessPlatform, HeadlessWindow, HostWindow, OwnerPlatform, Platform as _};
 use flui_platform::Availability;
 use flui_platform::EventTime;
 use flui_platform::WindowOptions;
@@ -1315,10 +1315,10 @@ impl Headless {
         }
     }
 
-    fn mock(&self) -> &MockWindow {
+    fn mock(&self) -> &HeadlessWindow {
         self.window
             .as_any()
-            .downcast_ref::<MockWindow>()
+            .downcast_ref::<HeadlessWindow>()
             .expect("headless window")
     }
 }

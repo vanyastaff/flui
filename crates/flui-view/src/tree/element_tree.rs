@@ -494,8 +494,8 @@ pub(crate) enum InsertedChild {
     Minted(ElementId),
     /// An existing element was relocated here by a `GlobalKey` retake. It was
     /// already announced (as a `Reparent`), carries user state, and its own
-    /// `update` — user `update_render_object` included — runs inside the
-    /// retake.
+    /// `update` runs inside the retake. Render-object configuration runs later
+    /// in the build drain.
     Retaken(ElementId),
 }
 
@@ -655,7 +655,7 @@ impl ElementTree {
             .peek(slab_index_to_u32(index))
             .unwrap_or_else(|| {
                 panic!(
-                    "ElementTree: slab slot {index} exhausted u32::MAX generations \
+                    "ElementTree: slab slot {index} exhausted its packed generations \
                      (ABA-safety overflow — removal refused)"
                 )
             })
@@ -2248,9 +2248,9 @@ impl ElementTree {
     }
 
     /// [`update`](Self::update)'s fallible core: the element's own `update`
-    /// (`ViewState::did_update_view` / `RenderView::update_render_object`)
-    /// is the containment window, and a caught panic comes back as `Err`
-    /// instead of unwinding through this call. Reading and cloning the new
+    /// (`ViewState::did_update_view` where applicable) is the containment window;
+    /// a caught panic comes back as `Err`. Render-object configuration runs later
+    /// in the build drain. Reading and cloning the new
     /// view's key happens before that literal window, so a key implementation
     /// panic remains an unbounded framework-input failure and user `update`
     /// has not started.

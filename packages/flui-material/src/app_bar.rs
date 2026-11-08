@@ -130,21 +130,21 @@
 //! that. No `leading_width`/`AppBarTheme` override exists yet (named V1
 //! deferral), so `LEADING_WIDTH` is the only width this slot ever takes.
 
-use flui_sdk::painting::Color;
-use flui_sdk::painting::TextStyle;
-use flui_sdk::rendering::BoxConstraints;
+use flui_sdk::painting::styling::Color;
+use flui_sdk::painting::typography::TextStyle;
+use flui_sdk::pipeline::{CrossAxisAlignment, MainAxisAlignment};
+use flui_sdk::rendering::{BoxConstraints, HeadingLevel};
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{
-    Align, Center, Column, ConstrainedBox, CrossAxisAlignment, DefaultTextStyle, Expanded,
-    Flexible, HeadingLevel, IconTheme, IconThemeData, MainAxisAlignment, NavigatorHandle,
-    Positioned, PreferredSizeView, Row, SafeArea, Semantics, SizedBox, Stack,
+    Align, Center, Column, ConstrainedBox, DefaultTextStyle, Expanded, Flexible, IconTheme,
+    IconThemeData, NavigatorHandle, Positioned, PreferredSizeView, Row, SafeArea, Semantics,
+    SizedBox, Stack,
 };
 use flui_sdk::{geometry::Size, painting::Alignment};
 
 use crate::back_button::BackButton;
 use crate::material::Material;
 use crate::theme::Theme;
-use crate::theme_data::ThemeData;
 
 /// The default toolbar height in logical pixels.
 pub const DEFAULT_TOOLBAR_HEIGHT: f64 = 56.0;
@@ -348,18 +348,18 @@ struct ResolvedAppBarStyle {
     /// at large — it styles the title widget specifically, not
     /// `leading`/`actions`.
     ///
-    /// A **verbatim** theme-tier value, not recolored, when
-    /// `app_bar_theme.title_text_style` is set: only the default tier gets
+    /// A **verbatim** theme-tier value, not recolored, when the
+    /// `AppBarThemeData.title_text_style` entry is set: only the default tier gets
     /// recolored to the resolved `foreground_color`, because a theme-supplied
     /// style already carries its own intended color.
     title_style: TextStyle,
 }
 
 /// Resolve `AppBar`'s M3 defaults through the widget → theme → default
-/// cascade: `background_color` falls back to `ThemeData.app_bar_theme`'s own
+/// cascade: `background_color` falls back to the `AppBarThemeData` entry's own
 /// `background_color`, then `ColorScheme.surface`; `foreground_color`
-/// likewise falls back through `app_bar_theme` to `ColorScheme.on_surface`;
-/// `elevation` through `app_bar_theme` to `0.0`. The widget's own value wins
+/// likewise falls back through that entry to `ColorScheme.on_surface`;
+/// `elevation` through that entry to `0.0`. The widget's own value wins
 /// over the theme's, which wins over the M3 default.
 ///
 /// `title_style` and `toolbar_text_style` are deliberately DIFFERENT values
@@ -367,13 +367,12 @@ struct ResolvedAppBarStyle {
 /// own doc comment on why collapsing them back into one shared value would
 /// leak the title's style onto every other toolbar child.
 fn resolve_style(
-    theme: &ThemeData,
+    theme: &crate::theme::BaseTheme,
+    app_bar_theme: Option<&crate::AppBarThemeData>,
     background_color: Option<Color>,
     foreground_color: Option<Color>,
     elevation: Option<f64>,
 ) -> ResolvedAppBarStyle {
-    let app_bar_theme = theme.app_bar_theme.as_ref();
-
     let background_color = background_color
         .or_else(|| app_bar_theme.and_then(|t| t.background_color))
         .unwrap_or(theme.color_scheme.surface);
@@ -456,7 +455,8 @@ fn resolve_leading(
 
 impl StatelessView for AppBar {
     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
-        let theme = Theme::of(ctx);
+        let theme = Theme::required_base_of(ctx);
+        let component = Theme::component_of::<crate::AppBarThemeData>(ctx);
         let ResolvedAppBarStyle {
             background_color,
             foreground_color,
@@ -465,6 +465,7 @@ impl StatelessView for AppBar {
             title_style,
         } = resolve_style(
             &theme,
+            component.as_ref(),
             self.background_color,
             self.foreground_color,
             self.elevation,

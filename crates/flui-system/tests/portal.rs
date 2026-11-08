@@ -4,8 +4,10 @@
 
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
+use std::ffi::OsString;
 use std::io::{BufRead, BufReader};
 use std::os::fd::AsRawFd;
+use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -14,16 +16,21 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use flui_platform::capability::{Abandoned, Completion};
+use flui_platform::WindowId;
+use flui_platform::capability::{Abandoned, Plugin};
 use flui_platform::launch::{ExternalUri, LaunchError, LaunchResult, LauncherCapability};
 use flui_system::dialog::{
-    DialogError, FileDialogCapability, FileFilter, OpenRequest, OpenResult, PickedFile, SaveRequest,
+    DialogError, FileDialogCapability, FileFilter, OpenRequest, OpenResult, PickedFile,
+    SaveRequest, SaveResult,
 };
-use flui_system::testing::PortalOnBus;
-use flui_testing::HeadlessHost;
+use flui_system::testing::{LaunchRequest, PortalOnBus};
 use zbus::message::Header;
 use zbus::{OwnedFd, OwnedObjectPath, OwnedVariant, Variant};
 
+use crate::conformance::{
+    DialogAsk, DialogConformance, LauncherConformance, OpenAsk, SaveAsk, SettlePolicy, pump_until,
+    run_scenarios, settle,
+};
 use crate::{acquire, outcome_slot, turn};
 
 /// A `dbus-daemon` of the test's own.
@@ -373,6 +380,11 @@ impl StandIn {
             &(code, results),
         ))
         .expect("the response is sent");
+        self.script
+            .held
+            .lock()
+            .expect("held")
+            .retain(|(_, held_path)| held_path != path);
     }
 
     /// Leave the bus, as a portal that exits or restarts does.
@@ -400,21 +412,6 @@ impl StandIn {
     }
 }
 
-/// Land `completion`'s outcome, pumping `host` until it settles.
-fn settle<T: 'static>(host: &mut HeadlessHost, completion: Completion<T>) -> Result<T, Abandoned> {
-    let slot = outcome_slot::<Result<T, Abandoned>>();
-    let into = Rc::clone(&slot);
-    completion.on_complete(move |outcome| *into.borrow_mut() = Some(outcome));
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while slot.borrow().is_none() {
-        assert!(Instant::now() < deadline, "the portal answered within 10 s");
-        turn(host);
-        std::thread::sleep(Duration::from_millis(5));
-    }
-    let outcome: Option<Result<T, Abandoned>> = RefCell::take(&slot);
-    outcome.expect("settled")
-}
-
 fn uris(uris: &[&str]) -> Results {
     let uris = uris
         .iter()
@@ -431,6 +428,257 @@ fn scratch_file(name: &str) -> PathBuf {
         std::env::temp_dir().join(format!("flui-system-portal-{}-{name}", std::process::id()));
     std::fs::write(&path, b"x").expect("a scratch file");
     path
+}
+
+struct PortalConformance {
+    portal: StandIn,
+    plugin: PortalOnBus,
+}
+
+impl PortalConformance {
+    fn serve() -> Self {
+        let portal = StandIn::serve();
+        let plugin = portal.plugin();
+        Self { portal, plugin }
+    }
+
+    fn release_oldest(&self, code: u32, results: Results) -> bool {
+        let Some((_, path)) = self.portal.held().into_iter().next() else {
+            return false;
+        };
+        self.portal.release(&path, code, results);
+        true
+    }
+}
+
+fn launch_response(result: LaunchResult) -> (u32, Results) {
+    match result {
+        Ok(()) => (0, Results::new()),
+        Err(LaunchError::Denied) => (1, Results::new()),
+        Err(LaunchError::NoHandler) => (2, Results::new()),
+        Err(other) => panic!("{other:?} is not a portable OpenURI response"),
+    }
+}
+
+fn file_uri(path: &Path) -> String {
+    assert!(path.is_absolute());
+    let mut uri = String::from("file://");
+    for &byte in path.as_os_str().as_bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'/' | b'-' | b'.' | b'_' | b'~' => {
+                uri.push(char::from(byte))
+            }
+            _ => uri.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    uri
+}
+
+fn picked_uris(picks: &[PickedFile]) -> Results {
+    let picks = picks
+        .iter()
+        .map(|picked| file_uri(picked.path()))
+        .collect::<Vec<String>>();
+    let picks = picks.iter().map(String::as_str).collect::<Vec<&str>>();
+    uris(&picks)
+}
+
+fn response_code(code: i32) -> u32 {
+    u32::try_from(code).expect("a nonnegative portal response code")
+}
+
+fn open_response(result: OpenResult) -> (u32, Results) {
+    match result {
+        Ok(None) => (1, Results::new()),
+        Ok(Some(picks)) => (0, picked_uris(&picks)),
+        Err(DialogError::Failed { code }) => (response_code(code), Results::new()),
+        Err(other) => panic!("{other:?} is not a portable FileChooser response"),
+    }
+}
+
+fn save_response(result: SaveResult) -> (u32, Results) {
+    match result {
+        Ok(None) => (1, Results::new()),
+        Ok(Some(picked)) => (0, picked_uris(&[picked])),
+        Err(DialogError::Failed { code }) => (response_code(code), Results::new()),
+        Err(other) => panic!("{other:?} is not a portable FileChooser response"),
+    }
+}
+
+impl LauncherConformance for PortalConformance {
+    fn plugin(&self) -> &dyn Plugin {
+        &self.plugin
+    }
+
+    fn answer_next(&self, result: LaunchResult) {
+        let (code, results) = launch_response(result);
+        self.portal.answer(code, results);
+    }
+
+    fn hold(&self) {
+        self.portal.hold();
+    }
+
+    fn release(&self, result: LaunchResult) -> bool {
+        let (code, results) = launch_response(result);
+        self.release_oldest(code, results)
+    }
+
+    fn requests(&self) -> Vec<LaunchRequest> {
+        self.portal
+            .calls()
+            .into_iter()
+            .map(|call| match call {
+                Call::OpenUri { uri, .. } => {
+                    LaunchRequest::OpenUri(ExternalUri::try_new(uri).expect("the requested URI"))
+                }
+                Call::OpenFile { path, .. } => LaunchRequest::OpenPath(path),
+                Call::OpenDirectory { path, .. } => LaunchRequest::RevealPath(path),
+                Call::Trash { path, .. } => LaunchRequest::TrashPath(path),
+                Call::Open { .. } | Call::Save { .. } => panic!("not a launcher request"),
+            })
+            .collect::<Vec<LaunchRequest>>()
+    }
+
+    fn settle_policy(&self) -> SettlePolicy {
+        SettlePolicy::Eventual
+    }
+}
+
+fn option_string(options: &Results, name: &str) -> Option<String> {
+    options.get(name).map(|value| {
+        String::try_from(value.clone()).unwrap_or_else(|_| panic!("{name} is a string"))
+    })
+}
+
+fn option_bool(options: &Results, name: &str) -> bool {
+    options.get(name).is_some_and(|value| {
+        bool::try_from(value.clone()).unwrap_or_else(|_| panic!("{name} is a boolean"))
+    })
+}
+
+fn option_directory(options: &Results) -> Option<PathBuf> {
+    options.get("current_folder").map(|folder| {
+        let mut bytes = Vec::<u8>::try_from(folder.clone()).expect("current_folder is bytes");
+        assert_eq!(bytes.pop(), Some(0), "the folder is NUL-terminated");
+        PathBuf::from(OsString::from_vec(bytes))
+    })
+}
+
+fn option_filters(options: &Results) -> Vec<FileFilter> {
+    options.get("filters").map_or_else(Vec::new, |filters| {
+        Vec::<(String, Vec<(u32, String)>)>::try_from(filters.clone())
+            .expect("filters are a(sa(us))")
+            .into_iter()
+            .map(|(name, rules)| {
+                rules
+                    .into_iter()
+                    .fold(FileFilter::new(name), |filter, (kind, rule)| match kind {
+                        0 => filter
+                            .with_extension(rule.strip_prefix("*.").expect("an extension glob")),
+                        1 => filter.with_mime_type(rule),
+                        _ => panic!("an unknown filter rule"),
+                    })
+            })
+            .collect::<Vec<FileFilter>>()
+    })
+}
+
+fn normalized_title(title: &str) -> Option<String> {
+    (!title.is_empty()).then(|| title.to_owned())
+}
+
+fn normalized_dialog_requests(portal: &StandIn) -> Vec<DialogAsk> {
+    let options = portal.script.dialog_options.lock().expect("options");
+    let mut options = options.iter();
+    portal
+        .calls()
+        .iter()
+        .filter_map(|call| match call {
+            Call::Open { title, .. } => {
+                let asked = options.next().expect("the open dialog's options");
+                Some(DialogAsk::Open(OpenAsk {
+                    title: normalized_title(title),
+                    directory: option_directory(asked),
+                    filters: option_filters(asked),
+                    accept_label: option_string(asked, "accept_label"),
+                    multiple: option_bool(asked, "multiple"),
+                    folders: option_bool(asked, "directory"),
+                }))
+            }
+            Call::Save { title, .. } => {
+                let asked = options.next().expect("the save dialog's options");
+                Some(DialogAsk::Save(SaveAsk {
+                    title: normalized_title(title),
+                    directory: option_directory(asked),
+                    filters: option_filters(asked),
+                    accept_label: option_string(asked, "accept_label"),
+                    suggested_name: option_string(asked, "current_name"),
+                }))
+            }
+            Call::OpenUri { .. }
+            | Call::OpenFile { .. }
+            | Call::OpenDirectory { .. }
+            | Call::Trash { .. } => None,
+        })
+        .collect::<Vec<DialogAsk>>()
+}
+
+impl DialogConformance for PortalConformance {
+    fn plugin(&self) -> &dyn Plugin {
+        &self.plugin
+    }
+
+    fn answer_next_open(&self, result: OpenResult) {
+        let (code, results) = open_response(result);
+        self.portal.answer(code, results);
+    }
+
+    fn answer_next_save(&self, result: SaveResult) {
+        let (code, results) = save_response(result);
+        self.portal.answer(code, results);
+    }
+
+    fn hold(&self) {
+        self.portal.hold();
+    }
+
+    fn release_open(&self, result: OpenResult) -> bool {
+        let (code, results) = open_response(result);
+        self.release_oldest(code, results)
+    }
+
+    fn release_save(&self, result: SaveResult) -> bool {
+        let (code, results) = save_response(result);
+        self.release_oldest(code, results)
+    }
+
+    fn requests(&self) -> Vec<DialogAsk> {
+        normalized_dialog_requests(&self.portal)
+    }
+
+    fn assert_modal_to(&self, _window: WindowId) {
+        for call in self.portal.calls() {
+            match call {
+                Call::Open { parent, .. } | Call::Save { parent, .. } => {
+                    assert_eq!(parent, "", "a headless window has no portal parent");
+                }
+                Call::OpenUri { .. }
+                | Call::OpenFile { .. }
+                | Call::OpenDirectory { .. }
+                | Call::Trash { .. } => {}
+            }
+        }
+    }
+
+    fn settle_policy(&self) -> SettlePolicy {
+        SettlePolicy::Eventual
+    }
+}
+
+#[test]
+fn portal_system_conformance() {
+    run_scenarios(PortalConformance::serve);
 }
 
 #[test]
@@ -615,7 +863,12 @@ fn without_a_portal_on_the_bus_the_services_are_unavailable() {
     let uri = ExternalUri::try_new("mailto:someone@example.com").expect("a mail URI");
     let answered: Result<LaunchResult, Abandoned> = settle(&mut host, launcher.open_uri(&uri));
     assert!(
-        matches!(answered, Ok(Err(LaunchError::Unavailable(_)))),
+        matches!(
+            answered,
+            Ok(Err(error))
+                if error.unsupported().and_then(|unsupported| unsupported.capability())
+                    == Some("launcher")
+        ),
         "{answered:?}"
     );
 
@@ -626,7 +879,12 @@ fn without_a_portal_on_the_bus_the_services_are_unavailable() {
     let dialogs = dialogs.expect("the dialogs are handed out before the bus is asked");
     let answered = settle(&mut host, dialogs.open(OpenRequest::files()));
     assert!(
-        matches!(answered, Ok(Err(DialogError::Unavailable(_)))),
+        matches!(
+            answered,
+            Ok(Err(error))
+                if error.unsupported().and_then(|unsupported| unsupported.capability())
+                    == Some("file-dialog")
+        ),
         "{answered:?}"
     );
 }
@@ -742,16 +1000,6 @@ fn a_named_pipe_without_a_writer_does_not_stall_the_caller() {
     let _ = std::fs::remove_file(&fifo);
 }
 
-/// Pump `host` until `ready` holds.
-fn pump_until(host: &mut HeadlessHost, what: &str, mut ready: impl FnMut() -> bool) {
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while !ready() {
-        assert!(Instant::now() < deadline, "{what} within 10 s");
-        turn(host);
-        std::thread::sleep(Duration::from_millis(5));
-    }
-}
-
 #[test]
 fn a_response_from_another_client_is_not_heard() {
     let portal = StandIn::serve();
@@ -813,14 +1061,24 @@ fn a_portal_that_leaves_before_answering_ends_the_dialog_and_frees_the_window() 
     pump_until(&mut host, "the dialog ended", || slot.borrow().is_some());
     let ended = slot.borrow_mut().take();
     assert!(
-        matches!(ended, Some(Ok(Err(DialogError::Unavailable(_))))),
+        matches!(
+            ended,
+            Some(Ok(Err(error)))
+                if error.unsupported().and_then(|unsupported| unsupported.capability())
+                    == Some("file-dialog")
+        ),
         "{ended:?}"
     );
 
     // The window is free again: the next dialog is not `Busy`.
     let next = settle(&mut host, dialogs.save(SaveRequest::new()));
     assert!(
-        matches!(next, Ok(Err(DialogError::Unavailable(_)))),
+        matches!(
+            next,
+            Ok(Err(error))
+                if error.unsupported().and_then(|unsupported| unsupported.capability())
+                    == Some("file-dialog")
+        ),
         "{next:?}"
     );
 }

@@ -62,7 +62,8 @@ fn prelude_authored_tree_mounts_through_the_headless_pipeline() {
 #[test]
 fn a_fixed_oval_clip_is_configured_through_the_facade() {
     use flui::geometry::{RRect, Rect};
-    use flui::widgets::{ClipOval, Oval};
+    use flui::widgets::ClipOval;
+    use flui::widgets::prelude::Oval;
     use flui_testing::widgets::{lay_out, tight};
 
     let bounds = Rect::from_ltrb(20.0, 30.0, 80.0, 70.0);

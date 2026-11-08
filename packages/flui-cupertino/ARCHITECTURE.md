@@ -44,6 +44,13 @@ fields, so unrelated window size changes do not rerun their resolution.
 published palette and text roles during live contrast changes. Elevation
 variants remain stored but unresolved; no interface-level source is implemented.
 
+`CupertinoTheme::maybe_of` returns the resolved nearest ancestor theme, or `None` when no ancestor
+exists. `CupertinoTheme::of` has the same resolution and panics on the missing-ancestor case; it
+does not invent a fallback. `CupertinoApp` remains the publisher of the ordinary default, while
+`maybe_brightness_of` retains its separate optional-override and `MediaQuery` behavior.
+`missing_ancestor_is_optional_for_maybe_of_and_panics_for_of` and
+`nearest_ancestor_is_resolved_for_of_and_maybe_of` pin both public lookup paths.
+
 ### Event callbacks borrow the originating dispatch's write context
 
 `CupertinoButton` press/long-press and `CupertinoTabBar` selection handlers

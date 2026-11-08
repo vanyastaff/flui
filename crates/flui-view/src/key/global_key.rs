@@ -7,12 +7,24 @@ use std::{
     fmt,
     hash::{Hash, Hasher},
     marker::PhantomData,
-    sync::atomic::{AtomicU64, Ordering},
+    num::NonZeroU64,
 };
 
-use flui_foundation::{ElementId, ViewKey};
+use flui_foundation::{AtomicIdMint, ElementId, ViewKey};
 
 use crate::view::ElementBase;
+
+/// The unique identity of a [`GlobalKey`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct GlobalKeyId(NonZeroU64);
+
+impl GlobalKeyId {
+    /// The raw value, for diagnostics and hashing only.
+    #[must_use]
+    pub const fn get(self) -> u64 {
+        self.0.get()
+    }
+}
 
 /// A key that provides access to the element from anywhere.
 ///
@@ -47,7 +59,7 @@ use crate::view::ElementBase;
 /// Global keys have overhead compared to local keys because they
 /// maintain a registry. Use sparingly.
 pub struct GlobalKey<T: 'static> {
-    id: u64,
+    id: GlobalKeyId,
     /// `fn() -> T` keeps `GlobalKey<T>` covariant in `T` without
     /// requiring `T: Send + Sync`. The marker is also why the manual
     /// `Clone` impl below sidesteps the `T: Clone` bound a derive
@@ -75,22 +87,16 @@ impl<T: 'static> GlobalKey<T> {
     /// Panics after every nonzero `u64` identity has been issued. Exhaustion
     /// is permanent; catching this panic cannot make an old key available again.
     pub fn new() -> Self {
-        static COUNTER: AtomicU64 = AtomicU64::new(1);
-        Self::new_with_counter(&COUNTER)
+        static IDS: AtomicIdMint<NonZeroU64> = AtomicIdMint::new();
+        Self::new_with_mint(&IDS)
     }
 
-    // Zero is the permanent exhaustion sentinel; MAX itself remains assignable.
-    // The local-counter seam keeps terminal tests away from the shared allocator.
-    fn new_with_counter(counter: &AtomicU64) -> Self {
-        let id = counter
-            .try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
-                if current == 0 {
-                    None
-                } else {
-                    Some(current.wrapping_add(1))
-                }
-            })
-            .expect("GlobalKey counter exhausted: all nonzero u64 identities issued");
+    // The local-mint seam keeps terminal tests away from the shared allocator.
+    fn new_with_mint(mint: &AtomicIdMint<NonZeroU64>) -> Self {
+        let id = GlobalKeyId(
+            mint.next()
+                .expect("BUG: GlobalKey identities exhausted; refusing identity reuse"),
+        );
         Self {
             id,
             _marker: PhantomData,
@@ -99,7 +105,7 @@ impl<T: 'static> GlobalKey<T> {
 
     /// Get the unique ID of this key.
     #[must_use]
-    pub const fn id(&self) -> u64 {
+    pub const fn id(&self) -> GlobalKeyId {
         self.id
     }
 
@@ -253,7 +259,7 @@ impl<T: 'static> ViewKey for GlobalKey<T> {
     }
 
     fn key_hash(&self) -> u64 {
-        self.id
+        self.id.get()
     }
 
     fn clone_key(&self) -> Box<dyn ViewKey> {
@@ -264,7 +270,12 @@ impl<T: 'static> ViewKey for GlobalKey<T> {
     }
 
     fn debug_fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "GlobalKey<{}>({})", std::any::type_name::<T>(), self.id)
+        write!(
+            f,
+            "GlobalKey<{}>({})",
+            std::any::type_name::<T>(),
+            self.id.get()
+        )
     }
 
     fn is_global_key(&self) -> bool {
@@ -275,23 +286,25 @@ impl<T: 'static> ViewKey for GlobalKey<T> {
 #[cfg(test)]
 impl GlobalKey<()> {
     pub(crate) fn exhausted_global_key_counter_never_reissues_an_identity() {
-        let counter = AtomicU64::new(u64::MAX - 1);
-        let penultimate = Self::new_with_counter(&counter);
-        let last = Self::new_with_counter(&counter);
-        assert_eq!(penultimate.id(), u64::MAX - 1);
-        assert_eq!(last.id(), u64::MAX);
+        let mint = AtomicIdMint::starting_after(u64::MAX - 2);
+        let penultimate = Self::new_with_mint(&mint);
+        let last = Self::new_with_mint(&mint);
+        assert_eq!(penultimate.id().get(), u64::MAX - 1);
+        assert_eq!(last.id().get(), u64::MAX);
         assert_ne!(penultimate, last);
         for _ in 0..8 {
-            assert!(
-                std::panic::catch_unwind(|| Self::new_with_counter(&counter)).is_err(),
-                "catching exhaustion must never reissue zero or an earlier identity"
+            let payload = std::panic::catch_unwind(|| Self::new_with_mint(&mint))
+                .expect_err("catching exhaustion must never reissue an identity");
+            assert_eq!(
+                flui_foundation::panic::payload_text(payload.as_ref()),
+                Some("BUG: GlobalKey identities exhausted; refusing identity reuse: IdExhausted")
             );
         }
-        let healthy = AtomicU64::new(1);
-        let first = Self::new_with_counter(&healthy);
-        let second = Self::new_with_counter(&healthy);
-        assert_eq!(first.id(), 1);
-        assert_eq!(second.id(), 2);
+        let healthy = AtomicIdMint::new();
+        let first = Self::new_with_mint(&healthy);
+        let second = Self::new_with_mint(&healthy);
+        assert_eq!(first.id().get(), 1);
+        assert_eq!(second.id().get(), 2);
         assert_ne!(first, second);
         assert_ne!(first, last);
     }

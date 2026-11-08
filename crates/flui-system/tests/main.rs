@@ -2,6 +2,7 @@
 //! headless host.
 
 mod capability;
+mod conformance;
 mod dialogs;
 mod launcher;
 #[cfg(target_os = "linux")]
@@ -14,10 +15,10 @@ use std::time::Duration;
 
 use flui_platform::Unsupported;
 use flui_platform::capability::{Capability, Plugin};
+use flui_sdk::testing::{HeadlessHost, HeadlessWindow};
 use flui_sdk::view::prelude::*;
 use flui_sdk::view::{LifecycleContext, LifecycleContextExt};
 use flui_sdk::widgets::SizedBox;
-use flui_testing::{HeadlessHost, HeadlessWindow};
 
 /// What a widget acquired in `init_state`.
 type Acquired<C> = Rc<RefCell<Option<Result<<C as Capability>::Handle, Unsupported>>>>;

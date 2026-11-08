@@ -6,10 +6,10 @@ use std::rc::Rc;
 use flui_foundation::notifier::{Listenable, ListenerObserver};
 use flui_foundation::{ListenerCallback, Subscription};
 
-use super::path::{RouteParseError, RoutePath};
 use super::routable::Routable;
 use super::router::{RouterEntry, RouterRetiredValues, RouterShared, clone_routes, paths};
-use crate::navigator::RouteId;
+use crate::navigator::{RouteId, RouteResult};
+use flui_view::{RouteParseError, RoutePath};
 
 /// An owned, cloneable capability to drive the nearest
 /// [`Router<R>`](super::Router), acquired with
@@ -80,6 +80,19 @@ impl<R: Routable> RouterHandle<R> {
         self.shared.navigator.pop_until(|id| id == top);
     }
 
+    fn push_inner<T: 'static>(&self, route: R) -> Result<RouteResult<T>, RouterError> {
+        self.mounted()?;
+        let _told = self.shared.announce_on_exit();
+        let page = self.shared.page_route::<T>(&route);
+        let ((), result) = self.shared.navigator.push_page(page, |id| {
+            self.shared
+                .stack
+                .borrow_mut()
+                .push(RouterEntry::new(id, route));
+        });
+        Ok(result)
+    }
+
     /// Push `route` as a new page, with its entrance transition. A value equal
     /// to the current top is pushed again.
     ///
@@ -87,16 +100,17 @@ impl<R: Routable> RouterHandle<R> {
     ///
     /// [`RouterError::Disposed`] once the router has unmounted.
     pub fn push(&self, route: R) -> Result<(), RouterError> {
-        self.mounted()?;
-        let _told = self.shared.announce_on_exit();
-        let page = self.shared.page_route(&route);
-        self.shared.navigator.push_page(page, |id| {
-            self.shared
-                .stack
-                .borrow_mut()
-                .push(RouterEntry::new(id, route));
-        });
-        Ok(())
+        self.push_inner::<()>(route).map(drop)
+    }
+
+    /// Push `route` as a new page and return the result its eventual pop,
+    /// replacement, removal, or final unmount produces.
+    ///
+    /// # Errors
+    ///
+    /// [`RouterError::Disposed`] once the router has unmounted.
+    pub fn push_for_result<T: 'static>(&self, route: R) -> Result<RouteResult<T>, RouterError> {
+        self.push_inner(route)
     }
 
     /// Replace the top page with `route`, running the entrance transition. Popups
@@ -110,7 +124,7 @@ impl<R: Routable> RouterHandle<R> {
         let _told = self.shared.announce_on_exit();
         self.dismiss_popups();
         let target = self.top_page();
-        let page = self.shared.page_route(&route);
+        let page = self.shared.page_route::<()>(&route);
         let retired = self
             .shared
             .navigator
@@ -143,6 +157,33 @@ impl<R: Routable> RouterHandle<R> {
             return Ok(false);
         }
         Ok(self.shared.navigator.pop())
+    }
+
+    /// Pop the top navigator route with a typed result. The result future
+    /// reports [`RouteResultError::TypeMismatch`](crate::RouteResultError::TypeMismatch)
+    /// if `T` is not that route's output type; the pop still commits.
+    ///
+    /// # Errors
+    ///
+    /// [`RouterError::Disposed`] once the router has unmounted.
+    pub fn pop_with<T: 'static>(&self, value: T) -> Result<bool, RouterError> {
+        self.mounted()?;
+        let popup_on_top = self.shared.navigator.current() != Some(self.top_page());
+        if !popup_on_top && self.shared.stack.borrow().len() <= 1 {
+            return Ok(false);
+        }
+        Ok(self.shared.navigator.pop_with(value))
+    }
+
+    /// Ask the top route to handle a pop, honouring its `PopScope` veto and the
+    /// Router's last-page guard. `Ok(false)` means the request bubbles.
+    ///
+    /// # Errors
+    ///
+    /// [`RouterError::Disposed`] once the router has unmounted.
+    pub fn maybe_pop(&self) -> Result<bool, RouterError> {
+        self.mounted()?;
+        Ok(self.shared.navigator.maybe_pop())
     }
 
     /// Navigate to `location`: derive its stack with
@@ -213,9 +254,9 @@ impl<R: Routable> RouterHandle<R> {
             .expect("BUG: the new stack is longer than the shared part");
         let below_pages = added.0[..added.0.len() - 1]
             .iter()
-            .map(|route| self.shared.page_route(route))
+            .map(|route| self.shared.page_route::<()>(route))
             .collect();
-        let top_page = self.shared.page_route(top);
+        let top_page = self.shared.page_route::<()>(top);
 
         let retired = self
             .shared

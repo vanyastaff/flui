@@ -39,9 +39,9 @@ use accesskit::TreeUpdate;
 use parking_lot::Mutex;
 
 use crate::accessibility::bridge::{Action, Activation, BridgeShared, Deactivation};
-use flui_semantics::{
-    platform::AccessibilityActionListener, platform::AccessibilityActivationListener,
-    platform::PlatformAccessibility,
+use flui_semantics::platform::{
+    AccessibilityAlreadyAttached, AccessibilityAttachment, AccessibilityCapabilities,
+    AccessibilityHandler, PlatformAccessibility, RouteChange,
 };
 
 // The state shared between the capability and the three handlers the adapter
@@ -119,7 +119,9 @@ impl Default for UnixAccessibility {
 /// The adapter announces the window on the bus, not on the window: it leaves
 /// the bus when its last handle drops, and nothing of the window needs undoing.
 impl crate::host::WindowAccessibility for UnixAccessibility {
-    fn detach(&self) {}
+    fn detach(&self) {
+        self.shared.detach_handler();
+    }
 
     /// Tell the bus whether the window is the one the window manager or
     /// compositor activated: a screen reader announces the window it moves
@@ -164,24 +166,22 @@ impl PlatformAccessibility for UnixAccessibility {
         self.adapter.lock().publish(update);
     }
 
-    fn is_active(&self) -> bool {
-        self.shared.is_active()
+    fn attach(
+        &self,
+        handler: Arc<dyn AccessibilityHandler>,
+    ) -> Result<AccessibilityAttachment, AccessibilityAlreadyAttached> {
+        self.shared.attach(
+            handler,
+            AccessibilityCapabilities::new(Self::ASSISTIVE_FOCUS, Self::ROUTE_CHANGE),
+        )
     }
 
-    fn set_activation_listener(&self, listener: AccessibilityActivationListener) {
-        self.shared.set_activation_listener(listener);
+    fn detach_handler(&self) {
+        self.shared.detach_handler();
     }
 
-    fn set_action_listener(&self, listener: AccessibilityActionListener) {
-        self.shared.set_action_listener(listener);
-    }
-
-    fn assistive_focus_support(&self) -> flui_semantics::AssistiveFocusSupport {
-        Self::ASSISTIVE_FOCUS
-    }
-
-    fn route_change_support(&self) -> flui_semantics::platform::RouteChangeSupport {
-        Self::ROUTE_CHANGE
+    fn route_changed(&self, change: RouteChange) {
+        drop(change);
     }
 }
 
@@ -232,7 +232,7 @@ mod tests {
 
         let (_, node) = initial.nodes.first().expect("one node");
         assert_eq!(node.label(), Some("Submit"));
-        assert!(accessibility.is_active());
+        assert!(accessibility.shared.is_active());
     }
 
     /// What the bridge told its adapter of the window's focus.
@@ -260,7 +260,21 @@ mod tests {
         assert_eq!(*told.lock(), [true, false]);
     }
 
-    /// The listeners are the composition root's code, run inside AccessKit's
+    struct PanickingHandler;
+
+    impl AccessibilityHandler for PanickingHandler {
+        fn activation_changed(&self, _: bool) {
+            panic!("activation listener");
+        }
+
+        fn action_requested(&self, _: ActionRequest) {
+            panic!("action listener");
+        }
+
+        fn assistive_focus_changed(&self, _: Option<NodeId>) {}
+    }
+
+    /// The handler is the composition root's code, run inside AccessKit's
     /// AT-SPI entry: a panic in one is contained by the handler, which answers
     /// as if no listener ran, and the bridge stays usable. Red-check: call the
     /// listener outside `os_entry`.
@@ -268,8 +282,9 @@ mod tests {
     fn a_panicking_listener_stays_inside_its_handler() {
         let accessibility = UnixAccessibility::new();
         accessibility.publish(tree_update("Submit"));
-        accessibility.set_activation_listener(Arc::new(|_| panic!("activation listener")));
-        accessibility.set_action_listener(Arc::new(|_| panic!("action listener")));
+        accessibility
+            .attach(Arc::new(PanickingHandler))
+            .expect("the first handler attaches");
 
         let contained = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let initial = Activation(Arc::clone(&accessibility.shared)).request_initial_tree();
@@ -286,7 +301,7 @@ mod tests {
         let initial = contained.expect("a listener's panic unwound out of its handler");
         assert!(initial.is_none(), "a failed activation answers no tree");
         assert!(
-            !accessibility.is_active(),
+            !accessibility.shared.is_active(),
             "the deactivation after the failures still reached the bridge"
         );
     }

@@ -31,7 +31,8 @@ use accesskit::{
 use flui_platform::keyboard::KeyState;
 use flui_semantics::AssistiveFocusSupport;
 use flui_semantics::platform::{
-    AccessibilityActionListener, AccessibilityActivationListener, PlatformAccessibility,
+    AccessibilityAlreadyAttached, AccessibilityAttachment, AccessibilityCapabilities,
+    AccessibilityHandler, PlatformAccessibility, RouteChange, RouteChangeSupport,
 };
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::{JsCast, JsValue};
@@ -76,6 +77,10 @@ impl WebAccessibility {
     /// ([gap 36](https://github.com/vanyastaff/flui/blob/main/docs/gaps.md#36-accessibility-bridge-fidelity-properties-and-announcements)).
     pub(crate) const ASSISTIVE_FOCUS: AssistiveFocusSupport = AssistiveFocusSupport::Unreported;
 
+    /// The browser has no notice of a new screen, so a route change is spoken
+    /// as an announcement.
+    pub(crate) const ROUTE_CHANGE: RouteChangeSupport = RouteChangeSupport::Announced;
+
     fn page(&self) -> Option<Rc<Page>> {
         self.page.cloned()
     }
@@ -101,6 +106,7 @@ impl crate::host::Accessibility<CanvasRef> for WebAccessibility {
 impl crate::host::WindowAccessibility for WebAccessibility {
     /// Remove the placeholder or the semantics host and their listeners.
     fn detach(&self) {
+        PlatformAccessibility::detach_handler(self);
         if let Some(page) = self.page.take() {
             page.retire();
         }
@@ -122,20 +128,22 @@ impl PlatformAccessibility for WebAccessibility {
         }
     }
 
-    fn is_active(&self) -> bool {
-        self.shared.is_active()
+    fn attach(
+        &self,
+        handler: Arc<dyn AccessibilityHandler>,
+    ) -> Result<AccessibilityAttachment, AccessibilityAlreadyAttached> {
+        self.shared.attach(
+            handler,
+            AccessibilityCapabilities::new(Self::ASSISTIVE_FOCUS, Self::ROUTE_CHANGE),
+        )
     }
 
-    fn set_activation_listener(&self, listener: AccessibilityActivationListener) {
-        self.shared.set_activation_listener(listener);
+    fn detach_handler(&self) {
+        self.shared.detach_handler();
     }
 
-    fn set_action_listener(&self, listener: AccessibilityActionListener) {
-        self.shared.set_action_listener(listener);
-    }
-
-    fn assistive_focus_support(&self) -> AssistiveFocusSupport {
-        Self::ASSISTIVE_FOCUS
+    fn route_changed(&self, change: RouteChange) {
+        drop(change);
     }
 }
 

@@ -28,15 +28,16 @@ fn address(n: usize) -> PresentationAddress {
 }
 
 /// A window the headless platform opened, with the capabilities given.
-fn headless_window(capabilities: WindowCapabilities) -> Rc<dyn PlatformWindow> {
+fn headless_window(capabilities: &WindowCapabilities) -> Rc<dyn PlatformWindow> {
     headless_host_window(capabilities)
 }
 
 /// The same, as the host hands it out, so a test can reach the headless
 /// window's own controls.
-fn headless_host_window(capabilities: WindowCapabilities) -> Rc<dyn flui_native::HostWindow> {
+fn headless_host_window(capabilities: &WindowCapabilities) -> Rc<dyn flui_native::HostWindow> {
     HeadlessPlatform::new()
-        .with_window_capabilities(capabilities)
+        .with_test_doubles()
+        .with_window_capabilities(*capabilities)
         .open_routed(WindowOptions::default())
         .expect("a headless window opens")
 }
@@ -101,7 +102,7 @@ fn router_for(
 }
 
 fn commands_wait_for_the_next_turn_and_apply_in_order() {
-    let window = headless_window(WindowCapabilities::ALL);
+    let window = headless_window(&WindowCapabilities::ALL);
     let rig = rig(&window, 1);
     let before = window.state();
     rig.handle.set_title("A").expect("accepted");
@@ -124,7 +125,7 @@ fn commands_wait_for_the_next_turn_and_apply_in_order() {
 }
 
 fn a_refused_command_is_never_queued() {
-    let none = headless_window(WindowCapabilities::NONE);
+    let none = headless_window(&WindowCapabilities::NONE);
     let rig_none = rig(&none, 2);
     assert_eq!(
         rig_none.handle.set_title("x"),
@@ -132,7 +133,7 @@ fn a_refused_command_is_never_queued() {
             Unsupported::new(UnsupportedReason::NotOnThisPlatform)
         )))
     );
-    let all = headless_window(WindowCapabilities::ALL);
+    let all = headless_window(&WindowCapabilities::ALL);
     let rig_all = rig(&all, 3);
     assert_eq!(
         rig_all.handle.set_size(Size::new(f64::NAN, 10.0)),
@@ -156,12 +157,12 @@ fn a_refused_command_is_never_queued() {
 /// through the queue at the owner's next turn, and one that draws none
 /// refuses it at the submit.
 fn a_material_goes_through_the_window_queue() {
-    let host = headless_host_window(WindowCapabilities::ALL);
+    let host = headless_host_window(&WindowCapabilities::ALL);
     let window: Rc<dyn PlatformWindow> = host.clone();
     let rig_all = rig(&window, 21);
     let mock = host
         .as_any()
-        .downcast_ref::<flui_native::MockWindow>()
+        .downcast_ref::<flui_native::testing::HeadlessWindow>()
         .expect("headless window");
     rig_all
         .handle
@@ -173,7 +174,7 @@ fn a_material_goes_through_the_window_queue() {
 
     let mut without = WindowCapabilities::ALL;
     without.material = flui_platform::Availability::Unavailable;
-    let none = headless_window(without);
+    let none = headless_window(&without);
     let rig_none = rig(&none, 22);
     assert_eq!(
         rig_none
@@ -191,7 +192,7 @@ fn a_material_goes_through_the_window_queue() {
 /// honours applies, in submission order; what it lost is refused and changes
 /// nothing; neither is applied under the capabilities it was checked against.
 fn a_command_superseded_in_the_queue_is_admitted_again() {
-    let host = headless_host_window(WindowCapabilities::ALL);
+    let host = headless_host_window(&WindowCapabilities::ALL);
     let window: Rc<dyn PlatformWindow> = host.clone();
     let rig = rig(&window, 20);
     rig.handle.set_title("kept").expect("accepted");
@@ -205,7 +206,7 @@ fn a_command_superseded_in_the_queue_is_admitted_again() {
     let mut revised = WindowCapabilities::ALL;
     revised.maximizes = flui_platform::Availability::Unavailable;
     host.as_any()
-        .downcast_ref::<flui_native::MockWindow>()
+        .downcast_ref::<flui_native::testing::HeadlessWindow>()
         .expect("headless window")
         .simulate_capabilities(revised);
     let before = window.state();
@@ -238,7 +239,7 @@ fn a_command_superseded_in_the_queue_is_admitted_again() {
 fn a_refused_close_keeps_the_work_queued_behind_it() {
     let mut cannot_close = WindowCapabilities::ALL;
     cannot_close.closes = flui_platform::Availability::Unavailable;
-    let window = headless_window(cannot_close);
+    let window = headless_window(&cannot_close);
     let rig = rig_with(
         &window,
         21,
@@ -258,8 +259,8 @@ fn a_refused_close_keeps_the_work_queued_behind_it() {
 }
 
 fn the_handles_of_two_windows_do_not_mix() {
-    let first = headless_window(WindowCapabilities::ALL);
-    let second = headless_window(WindowCapabilities::ALL);
+    let first = headless_window(&WindowCapabilities::ALL);
+    let second = headless_window(&WindowCapabilities::ALL);
     let queues = WindowCommandQueues::default();
     let source = |window: &Rc<dyn PlatformWindow>, n| {
         window_source(
@@ -294,7 +295,7 @@ fn the_handles_of_two_windows_do_not_mix() {
 }
 
 fn a_closed_window_answers_closed() {
-    let window = headless_window(WindowCapabilities::ALL);
+    let window = headless_window(&WindowCapabilities::ALL);
     let rig = rig(&window, 6);
     let seen = Rc::new(Cell::new(0));
     let counted = Rc::clone(&seen);
@@ -488,7 +489,7 @@ fn a_panic_while_applying_neither_wedges_the_walk_nor_loses_the_rest() {
 }
 
 fn a_window_closed_between_the_request_and_the_lookup_has_no_handle() {
-    let window = headless_window(WindowCapabilities::ALL);
+    let window = headless_window(&WindowCapabilities::ALL);
     let rig = rig(&window, 14);
     assert!(
         rig.queues.handle_for(address(14)).is_some(),
@@ -522,7 +523,7 @@ fn a_dead_window_takes_its_queued_commands_with_it() {
 }
 
 fn subscribers_hear_a_new_state_in_order_and_what_they_ask_waits() {
-    let host = headless_host_window(WindowCapabilities::ALL);
+    let host = headless_host_window(&WindowCapabilities::ALL);
     let window: Rc<dyn PlatformWindow> = host.clone();
     let rig = rig(&window, 10);
     let log = Rc::new(RefCell::new(Vec::new()));
@@ -539,7 +540,7 @@ fn subscribers_hear_a_new_state_in_order_and_what_they_ask_waits() {
 
     let native = host
         .as_any()
-        .downcast_ref::<flui_native::MockWindow>()
+        .downcast_ref::<flui_native::testing::HeadlessWindow>()
         .expect("headless window");
     native.simulate_move(Point::new(5.0, 6.0));
     rig.source.publish_current();

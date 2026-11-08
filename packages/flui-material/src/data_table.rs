@@ -77,14 +77,14 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use flui_sdk::painting::TextStyle;
-use flui_sdk::painting::{Border, BorderSide, BorderStyle, BoxDecoration, Color};
-use flui_sdk::rendering::BoxConstraints;
+use flui_sdk::painting::styling::{Border, BorderSide, BorderStyle, BoxDecoration, Color};
+use flui_sdk::painting::typography::TextStyle;
+use flui_sdk::pipeline::TableColumnWidth;
+use flui_sdk::rendering::{BoxConstraints, SemanticsRole, TableCellVerticalAlignment};
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{
-    Center, Container, DefaultTextStyle, Padding, Semantics, SemanticsRole, SizedBox, Table,
-    TableCell, TableCellVerticalAlignment, TableColumnWidth, TableRow, WidgetState,
-    WidgetStateProperty, WidgetStates,
+    Center, Container, DefaultTextStyle, Padding, Semantics, SizedBox, Table, TableCell, TableRow,
+    WidgetState, WidgetStateProperty, WidgetStates,
 };
 use flui_sdk::{geometry::EdgeInsets, painting::Alignment};
 
@@ -93,7 +93,6 @@ use crate::color_scheme::ColorScheme;
 use crate::ink_well::InkWell;
 use crate::material::Material;
 use crate::theme::Theme;
-use crate::theme_data::ThemeData;
 
 /// The default heading row height.
 const DEFAULT_HEADING_ROW_HEIGHT: f64 = 56.0;
@@ -494,9 +493,11 @@ struct ResolvedDataTableStyle {
 /// Resolves the M3 `DataTable` defaults through the widget -> theme ->
 /// default cascade, per field: the widget's own value wins over the theme's,
 /// which wins over the constant default.
-fn resolve_style(widget: &DataTable, theme: &ThemeData) -> ResolvedDataTableStyle {
-    let table_theme = theme.data_table_theme.as_ref();
-
+fn resolve_style(
+    widget: &DataTable,
+    theme: &crate::theme::BaseTheme,
+    table_theme: Option<&crate::DataTableThemeData>,
+) -> ResolvedDataTableStyle {
     let horizontal_margin = widget
         .horizontal_margin
         .or_else(|| table_theme.and_then(|t| t.horizontal_margin))
@@ -891,8 +892,9 @@ impl StatelessView for DataTable {
     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
         // No shape check: `DataTable::new` squared the rows up, so the
         // `row.cells[col_index]` below cannot be out of range.
-        let theme = Theme::of(ctx);
-        let style = resolve_style(self, &theme);
+        let theme = Theme::required_base_of(ctx);
+        let component = Theme::component_of::<crate::DataTableThemeData>(ctx);
+        let style = resolve_style(self, &theme, component.as_ref());
 
         let any_row_selectable = self.rows.iter().any(|row| row.on_select_changed.is_some());
         let display_checkbox_column = self.show_checkbox_column && any_row_selectable;

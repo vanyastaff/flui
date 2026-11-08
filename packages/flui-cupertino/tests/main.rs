@@ -133,6 +133,14 @@ fn component_contracts() {
 fn theme_and_color_resolution() {
     common::run_cases(&[
         (
+            "theme::missing ancestor is optional for maybe of and panics for of",
+            theme::missing_ancestor_is_optional_for_maybe_of_and_panics_for_of,
+        ),
+        (
+            "theme::nearest ancestor is resolved for of and maybe of",
+            theme::nearest_ancestor_is_resolved_for_of_and_maybe_of,
+        ),
+        (
             "theme::mounted text roles paint distinct numeric sizing answers",
             theme::mounted_text_roles_paint_distinct_numeric_sizing_answers,
         ),
@@ -159,6 +167,10 @@ fn theme_and_color_resolution() {
         (
             "cupertino_app::publishes the resolved theme to descendants",
             cupertino_app::publishes_the_resolved_theme_to_descendants,
+        ),
+        (
+            "cupertino_app::router mounts pages below the cupertino theme",
+            cupertino_app::router_mounts_pages_below_the_cupertino_theme,
         ),
         (
             "cupertino_app::a live brightness republish re resolves the theme",

@@ -3,9 +3,9 @@ use std::time::Duration;
 
 use flui_foundation::geometry::{Bounds, Point, Size};
 use flui_platform::{
-    CapabilityAbsence, ColorGamut, DisplayColor, DisplayId, DisplayInfo, DisplayKey,
-    DisplayRegistry, DisplaySnapshot, DynamicRange, Headroom, InvalidHeadroom, RefreshPeriod,
-    SurfaceColorSpace, UnsupportedReason, WindowDisplay,
+    ColorGamut, DisplayColor, DisplayId, DisplayInfo, DisplayKey, DisplayRegistry, DisplaySnapshot,
+    DynamicRange, Headroom, InvalidHeadroom, RefreshPeriod, SurfaceColorSpace, Unsupported,
+    UnsupportedReason, WindowDisplay,
 };
 
 fn same_connector_after_replug_keeps_the_id() {
@@ -387,15 +387,20 @@ fn headroom_from_luminance_is_the_peak_over_white() {
 fn display_colour_queries_answer_unsupported_with_the_reason() {
     let registry = DisplayRegistry::new();
     let unread = panel(registry.mint(&DisplayKey::Injected(1)).expect("id"));
+    let unreads = Unsupported::new(UnsupportedReason::NotYetOnThisHost);
     assert_eq!(
-        unread.color_space().map_err(|refused| refused.reason),
-        Err(UnsupportedReason::NotYetOnThisHost),
+        unread.color,
+        Err(unreads),
         "a display whose host did not read its colour says so"
     );
+    assert_eq!(unread.color_space(), Err(unreads));
+    assert_eq!(unread.headroom(), Err(unreads));
 
+    let missing_headroom =
+        Unsupported::named("display.headroom", UnsupportedReason::NotOnThisPlatform);
     let browser = unread.clone().with_color(Ok(DisplayColor::high(
         ColorGamut::DisplayP3,
-        Err(CapabilityAbsence::NotOnThisPlatform),
+        Err(missing_headroom),
     )));
     assert_eq!(
         browser.color_space(),
@@ -405,9 +410,9 @@ fn display_colour_queries_answer_unsupported_with_the_reason() {
         ))
     );
     assert_eq!(
-        browser.headroom().map_err(|refused| refused.reason),
-        Err(UnsupportedReason::NotOnThisPlatform),
-        "a high-range display without a reported peak answers why"
+        browser.headroom(),
+        Err(missing_headroom),
+        "a high-range display returns the whole nested refusal"
     );
 
     let sdr = unread
@@ -422,11 +427,10 @@ fn display_colour_queries_answer_unsupported_with_the_reason() {
     );
     assert_eq!(sdr.headroom(), Ok(Headroom::SDR));
 
-    let absent = unread.with_color(Err(CapabilityAbsence::NotOnThisDevice));
-    assert_eq!(
-        absent.headroom().map_err(|refused| refused.reason),
-        Err(UnsupportedReason::NotOnThisDevice)
-    );
+    let missing_color = Unsupported::named("display.color", UnsupportedReason::NotOnThisDevice);
+    let absent = unread.with_color(Err(missing_color));
+    assert_eq!(absent.color_space(), Err(missing_color));
+    assert_eq!(absent.headroom(), Err(missing_color));
 }
 
 fn a_profile_change_is_a_new_revision() {

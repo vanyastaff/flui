@@ -10,12 +10,6 @@ count = 3
 reason = "a file of the project `flui create` generates, not of this repository"
 
 [[allow]]
-path = "crates/flui-native/ARCHITECTURE.md"
-kind = "path"
-count = 2
-reason = "winit's source layout, cited as market lineage"
-
-[[allow]]
 path = "crates/flui-rendering/ARCHITECTURE.md"
 kind = "path"
 count = 2
@@ -74,12 +68,6 @@ path = "docs/adr/ADR-0086-signal-writes-through-event-context.md"
 kind = "path"
 count = 1
 reason = "the record names a file where it lay when the record was written, and records are not rewritten"
-
-[[allow]]
-path = "docs/adr/ADR-0088-official-packages-sdk-and-facade.md"
-kind = "path"
-count = 2
-reason = "the decision's context names the layout the decision changed"
 
 [[allow]]
 path = "docs/adr/ADR-0089-upstream-types-in-stable-signatures.md"

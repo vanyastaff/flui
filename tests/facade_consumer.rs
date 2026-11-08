@@ -135,6 +135,187 @@ fn compile_consumer(dependencies: toml::Table, source: &str) -> Output {
 }
 
 #[test]
+fn assets_feature_exposes_and_loads_images_through_the_facade() {
+    let Some(root) = checkout_root() else { return };
+    let mut dependencies = toml::Table::new();
+    dependencies.insert("flui".into(), facade_with_features(root, &["assets"]));
+    let mut dev_dependencies = toml::Table::new();
+    dev_dependencies.insert(
+        "flui".into(),
+        facade_with_features(root, &["assets", "testing"]),
+    );
+    let project = consumer_project(
+        dependencies,
+        Some(dev_dependencies),
+        include_str!("fixtures/asset_images.rs"),
+    );
+    std::fs::copy(
+        root.join("crates/flui-widgets/tests/fixtures/tiny.png"),
+        project.path().join("src/tiny.png"),
+    )
+    .expect("copy the image fixture into the external consumer");
+    let output = run_project(&project, "test");
+    let report = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "asset images through the facade:\n{report}\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        report.contains("asset_image_loads_through_facade ... ok"),
+        "the facade asset-image behavior row did not run:\n{report}"
+    );
+
+    let graph = Command::new(env!("CARGO"))
+        .args([
+            "tree",
+            "--offline",
+            "--edges",
+            "normal",
+            "--prefix",
+            "none",
+            "--format",
+            "{p}",
+        ])
+        .current_dir(project.path())
+        .output()
+        .expect("inspect the assets consumer dependency graph");
+    assert!(
+        graph.status.success(),
+        "{}",
+        String::from_utf8_lossy(&graph.stderr)
+    );
+    let graph = String::from_utf8_lossy(&graph.stdout);
+    assert!(
+        graph.lines().any(|line| line.starts_with("flui-assets ")),
+        "the assets feature did not reach flui-assets:\n{graph}"
+    );
+    assert!(
+        !graph.lines().any(|line| line.starts_with("moka ")),
+        "the image-only facade graph retains the removed generic cache:\n{graph}"
+    );
+}
+
+#[test]
+fn assets_module_is_absent_without_its_feature() {
+    let Some(root) = checkout_root() else { return };
+    let mut dependencies = toml::Table::new();
+    dependencies.insert("flui".into(), dependency("flui", root, false));
+    let output = compile_consumer(dependencies, "use flui::assets::AssetRegistry;");
+    let diagnostics = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success(), "flui::assets resolved by default");
+    assert!(diagnostics.contains("E0432"), "{diagnostics}");
+}
+
+#[test]
+fn material_prelude_composes_with_the_facade_prelude() {
+    let Some(root) = checkout_root() else { return };
+    let mut dependencies = toml::Table::new();
+    dependencies.insert("flui".into(), facade_with_features(root, &["material"]));
+    let output = compile_consumer(
+        dependencies,
+        r"
+use flui::material::prelude::*;
+use flui::prelude::*;
+
+pub fn preludes_resolve(
+    _: Text,
+    _: RawTextField,
+    _: TextField,
+    _: RawTextFormField,
+    _: TextFormField,
+    _: Theme,
+    _: ThemeData,
+    _: ElevatedButton,
+) {
+}
+",
+    );
+    assert!(
+        output.status.success(),
+        "Material and facade preludes:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn facade_prelude_is_independent_of_material() {
+    use std::fmt::Write as _;
+
+    const MATERIAL_PRELUDE_TYPES: &[&str] = &[
+        "AlertDialog",
+        "AppBar",
+        "BackButton",
+        "Card",
+        "Checkbox",
+        "Chip",
+        "ColorScheme",
+        "DefaultTabController",
+        "Dialog",
+        "Divider",
+        "Drawer",
+        "ElevatedButton",
+        "FilledButton",
+        "FilterChip",
+        "FloatingActionButton",
+        "IconButton",
+        "InkWell",
+        "ListTile",
+        "Material",
+        "MaterialApp",
+        "NavigationBar",
+        "NavigationDestination",
+        "OutlinedButton",
+        "Radio",
+        "Scaffold",
+        "ScaffoldMessenger",
+        "ScaffoldMessengerHandle",
+        "ScaffoldMessengerScope",
+        "SnackBar",
+        "Switch",
+        "Tab",
+        "TabBar",
+        "TabBarView",
+        "TabController",
+        "TextButton",
+        "TextField",
+        "TextFormField",
+        "TextTheme",
+        "Theme",
+        "ThemeData",
+        "ThemeMode",
+        "VerticalDivider",
+    ];
+
+    let Some(root) = checkout_root() else { return };
+    let mut source = String::from("mod application {\n");
+    for name in MATERIAL_PRELUDE_TYPES {
+        writeln!(source, "    pub struct {name};").expect("BUG: writing to a String cannot fail");
+    }
+    source.push_str(
+        "    pub fn show_dialog() {}\n}\nuse application::*;\nuse flui::prelude::*;\npub fn resolve(\n",
+    );
+    for name in MATERIAL_PRELUDE_TYPES {
+        writeln!(source, "    _: {name},").expect("BUG: writing to a String cannot fail");
+    }
+    source.push_str(") {\n    show_dialog();\n}\n");
+
+    let feature_sets: [&[&str]; 2] = [&[], &["material"]];
+    for features in feature_sets {
+        let mut dependencies = toml::Table::new();
+        dependencies.insert("flui".into(), facade_with_features(root, features));
+        let output = compile_consumer(dependencies, &source);
+        assert!(
+            output.status.success(),
+            "facade prelude with features {features:?}:\n{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
+#[test]
 fn ordinary_facade_graph_excludes_test_support() {
     let Some(root) = checkout_root() else { return };
     for defaults in [false, true] {
@@ -165,13 +346,14 @@ fn ordinary_facade_graph_excludes_test_support() {
             graph.lines().any(|line| line.starts_with("flui v")),
             "{graph}"
         );
-        // The facade turns no design system on by default (ADR-0088 §6): a
-        // consumer that names no feature gets neither catalog.
-        for catalog in ["flui-material ", "flui-cupertino "] {
+        // The facade turns no design system or asset pipeline on by default:
+        // a consumer that names no feature gets neither their modules nor the
+        // removed generic cache implementation.
+        for excluded in ["flui-material ", "flui-cupertino ", "flui-assets ", "moka "] {
             assert!(
-                !graph.lines().any(|line| line.starts_with(catalog)),
+                !graph.lines().any(|line| line.starts_with(excluded)),
                 "`{}` in default={defaults} normal graph:\n{graph}",
-                catalog.trim_end()
+                excluded.trim_end()
             );
         }
         assert!(

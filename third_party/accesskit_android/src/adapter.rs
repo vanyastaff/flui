@@ -18,12 +18,14 @@ use jni::{
     objects::JObject,
     sys::{jfloat, jint},
 };
+use std::sync::Arc;
 
 use crate::{
     action::{PlatformAction, PlatformActionInner},
     event::{QueuedEvent, QueuedEvents, ScrollDimension},
     filters::filter,
     node::{NodeWrapper, add_action},
+    platform_focus::PlatformFocus,
     util::*,
 };
 
@@ -269,9 +271,60 @@ pub struct Adapter {
     state: State,
     accessibility_focus: Option<jint>,
     hover_target: Option<jint>,
+    platform_focus: Option<Arc<PlatformFocus>>,
 }
 
 impl Adapter {
+    /// Create an adapter whose `platform_focus_handler` is told each time
+    /// TalkBack's cursor moves to a node of the tree or leaves it.
+    ///
+    /// The handler runs when [`QueuedEvents::raise`] is called, on the Android
+    /// UI thread and outside every borrow of the adapter. A move made while the
+    /// handler runs is queued and delivered after it returns, in order.
+    /// [`Adapter::default`] installs no handler and raises no such callbacks.
+    pub fn with_platform_focus_handler(
+        platform_focus_handler: impl 'static + crate::PlatformFocusHandler + Send,
+    ) -> Self {
+        Self {
+            platform_focus: Some(PlatformFocus::new(platform_focus_handler)),
+            ..Self::default()
+        }
+    }
+
+    /// Resolve TalkBack's cursor against the current tree. The raw virtual
+    /// view ID remains what Android's node-info calls need; this AccessKit
+    /// location is what the push handler reports.
+    fn resolved_accessibility_focus(&self) -> Option<(NodeId, TreeId)> {
+        let virtual_view_id = self.accessibility_focus?;
+        let State::Active(tree) = &self.state else {
+            return None;
+        };
+        let tree_state = tree.state();
+        let target = if virtual_view_id == HOST_VIEW_ID {
+            tree_state.root_id()
+        } else {
+            self.node_id_map.get_accesskit_id(virtual_view_id)?
+        };
+        tree_state.locate_node(target)
+    }
+
+    fn enqueue_platform_focus_change(
+        &self,
+        events: &mut Vec<QueuedEvent>,
+        previous: Option<(NodeId, TreeId)>,
+        current: Option<(NodeId, TreeId)>,
+    ) {
+        if previous == current {
+            return;
+        }
+        if let Some(handler) = &self.platform_focus {
+            events.push(QueuedEvent::PlatformFocusChanged {
+                handler: Arc::clone(handler),
+                node: current,
+            });
+        }
+    }
+
     /// If and only if the tree has been initialized, call the provided function
     /// and apply the resulting update. Note: If the caller's implementation of
     /// [`ActivationHandler::request_initial_tree`] initially returned `None`,
@@ -288,6 +341,7 @@ impl Adapter {
         &mut self,
         update_factory: impl FnOnce() -> TreeUpdate,
     ) -> Option<QueuedEvents> {
+        let previous_focus = self.resolved_accessibility_focus();
         let mut events = Vec::new();
         match &mut self.state {
             State::Inactive => return None,
@@ -310,29 +364,14 @@ impl Adapter {
                 );
             }
         }
+        let current_focus = self.resolved_accessibility_focus();
+        if current_focus.is_none() {
+            // Do not let removing and later re-adding the same node ID revive
+            // a cursor that TalkBack has not moved again.
+            self.accessibility_focus = None;
+        }
+        self.enqueue_platform_focus_change(&mut events, previous_focus, current_focus);
         (!events.is_empty()).then_some(QueuedEvents(events))
-    }
-
-    /// The node that holds accessibility focus, the cursor of an
-    /// assistive technology such as TalkBack, with the tree it is in.
-    /// Returns `None` when no node holds it, including when the node
-    /// that held it is no longer in the tree.
-    ///
-    /// This is not the tree's focus, which the application owns. The
-    /// assistive technology moves this one through
-    /// `ACTION_ACCESSIBILITY_FOCUS` and `ACTION_CLEAR_ACCESSIBILITY_FOCUS`.
-    pub fn accessibility_focus(&self) -> Option<(NodeId, TreeId)> {
-        let virtual_view_id = self.accessibility_focus?;
-        let State::Active(tree) = &self.state else {
-            return None;
-        };
-        let tree_state = tree.state();
-        let target = if virtual_view_id == HOST_VIEW_ID {
-            tree_state.root_id()
-        } else {
-            self.node_id_map.get_accesskit_id(virtual_view_id)?
-        };
-        tree_state.locate_node(target)
     }
 
     /// Create an `AccessibilityNodeInfo` for the AccessKit node
@@ -524,7 +563,13 @@ impl Adapter {
                 }
             }
             ACTION_ACCESSIBILITY_FOCUS => {
+                let previous_focus = self.resolved_accessibility_focus();
                 self.accessibility_focus = Some(virtual_view_id);
+                self.enqueue_platform_focus_change(
+                    &mut events,
+                    previous_focus,
+                    Some((target_node, target_tree)),
+                );
                 events.push(QueuedEvent::InvalidateHost);
                 events.push(QueuedEvent::Simple {
                     virtual_view_id,
@@ -534,7 +579,9 @@ impl Adapter {
             }
             ACTION_CLEAR_ACCESSIBILITY_FOCUS => {
                 if self.accessibility_focus == Some(virtual_view_id) {
+                    let previous_focus = self.resolved_accessibility_focus();
                     self.accessibility_focus = None;
+                    self.enqueue_platform_focus_change(&mut events, previous_focus, None);
                 }
                 events.push(QueuedEvent::InvalidateHost);
                 events.push(QueuedEvent::Simple {
@@ -924,5 +971,148 @@ impl Adapter {
             _ => return None,
         }
         Some(QueuedEvents(events))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use accesskit::{ActionHandler, ActionRequest};
+    use std::sync::Mutex;
+
+    use super::*;
+
+    const ROOT_ID: NodeId = NodeId(1);
+    const CHILD_ID: NodeId = NodeId(2);
+
+    struct NoAction;
+
+    impl ActionHandler for NoAction {
+        fn do_action(&mut self, _request: ActionRequest) {}
+    }
+
+    type FocusChange = Option<(NodeId, TreeId)>;
+    type FocusLog = Arc<Mutex<Vec<FocusChange>>>;
+
+    struct RecordingFocus(FocusLog);
+
+    impl crate::PlatformFocusHandler for RecordingFocus {
+        fn platform_focus_changed(&mut self, node: Option<(NodeId, TreeId)>) {
+            self.0.lock().unwrap().push(node);
+        }
+    }
+
+    fn update(with_child: bool) -> TreeUpdate {
+        let mut root = Node::new(Role::Window);
+        let mut nodes = Vec::new();
+        if with_child {
+            root.set_children(vec![CHILD_ID]);
+            nodes.push((CHILD_ID, Node::new(Role::Button)));
+        }
+        nodes.push((ROOT_ID, root));
+        TreeUpdate {
+            nodes,
+            tree: Some(TreeInfo::new(ROOT_ID)),
+            tree_id: TreeId::ROOT,
+            focus: ROOT_ID,
+        }
+    }
+
+    fn active_adapter() -> Adapter {
+        Adapter {
+            state: State::Active(Tree::new(update(true), true)),
+            ..Adapter::default()
+        }
+    }
+
+    fn recording_adapter() -> (Adapter, FocusLog) {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let mut adapter = Adapter::with_platform_focus_handler(RecordingFocus(Arc::clone(&seen)));
+        adapter.state = State::Active(Tree::new(update(true), true));
+        (adapter, seen)
+    }
+
+    fn child_java_id(adapter: &mut Adapter) -> jint {
+        let State::Active(tree) = &adapter.state else {
+            panic!("the test adapter is active");
+        };
+        let child = tree
+            .state()
+            .root()
+            .filtered_children(&filter)
+            .next()
+            .expect("the test tree contains its child");
+        adapter.node_id_map.get_or_create_java_id(&child)
+    }
+
+    fn simple_action(adapter: &mut Adapter, virtual_view_id: jint, action: jint) {
+        let action = PlatformAction(PlatformActionInner::Simple { action });
+        let events = adapter
+            .perform_action(&mut NoAction, virtual_view_id, &action)
+            .expect("accessibility focus is a supported action");
+        events.raise_platform_focus();
+    }
+
+    fn apply_update(adapter: &mut Adapter, with_child: bool) {
+        let events = adapter
+            .update_if_active(|| update(with_child))
+            .expect("changing the tree raises a content change");
+        events.raise_platform_focus();
+    }
+
+    #[test]
+    fn focus_actions_and_removals_report_each_actual_transition() {
+        let (mut adapter, seen) = recording_adapter();
+        let virtual_view_id = child_java_id(&mut adapter);
+
+        simple_action(&mut adapter, virtual_view_id, ACTION_ACCESSIBILITY_FOCUS);
+        simple_action(&mut adapter, virtual_view_id, ACTION_ACCESSIBILITY_FOCUS);
+        simple_action(&mut adapter, HOST_VIEW_ID, ACTION_CLEAR_ACCESSIBILITY_FOCUS);
+        simple_action(
+            &mut adapter,
+            virtual_view_id,
+            ACTION_CLEAR_ACCESSIBILITY_FOCUS,
+        );
+        simple_action(&mut adapter, virtual_view_id, ACTION_ACCESSIBILITY_FOCUS);
+        apply_update(&mut adapter, false);
+        assert_eq!(adapter.accessibility_focus, None);
+        apply_update(&mut adapter, true);
+
+        assert_eq!(
+            *seen.lock().unwrap(),
+            [
+                Some((CHILD_ID, TreeId::ROOT)),
+                None,
+                Some((CHILD_ID, TreeId::ROOT)),
+                None,
+            ],
+            "repeated focus, a mismatched clear and re-adding a removed ID are not transitions"
+        );
+    }
+
+    #[test]
+    fn host_focus_reports_the_accesskit_root() {
+        let (mut adapter, seen) = recording_adapter();
+
+        simple_action(&mut adapter, HOST_VIEW_ID, ACTION_ACCESSIBILITY_FOCUS);
+        simple_action(&mut adapter, HOST_VIEW_ID, ACTION_CLEAR_ACCESSIBILITY_FOCUS);
+
+        assert_eq!(
+            *seen.lock().unwrap(),
+            [Some((ROOT_ID, TreeId::ROOT)), None]
+        );
+    }
+
+    #[test]
+    fn removing_the_focused_node_clears_its_platform_id() {
+        let mut adapter = active_adapter();
+        let virtual_view_id = child_java_id(&mut adapter);
+        simple_action(&mut adapter, virtual_view_id, ACTION_ACCESSIBILITY_FOCUS);
+
+        apply_update(&mut adapter, false);
+
+        assert_eq!(
+            adapter.accessibility_focus, None,
+            "a removed node must not regain focus when its ID is added again"
+        );
     }
 }

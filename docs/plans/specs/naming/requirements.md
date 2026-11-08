@@ -130,7 +130,7 @@
 | 67 | `tests/support/` (flui-animation, flui-log, flui-painting, flui-view, desktop-mcp), `tests/public_support/` | 5 + 1 каталог | `support` | По содержимому: `child_process.rs` в `tests/child_process.rs`; painting → `tests/row_runner/`; view → `tests/recovery_fixtures/`; desktop-mcp → `tests/mcp_client/` | нет | 11 |
 | 68 | `tests/common/` (flui-rendering, flui-widgets, flui-material, flui-cupertino) | 4 каталога | `common`. Три из них — «тонкий реэкспорт headless-харнесса» | `tests/harness.rs` (реэкспорт), `tests/row_runner.rs` | нет | 25 |
 | 69 | `flui-assets/tests/network_support.rs`, `examples/support/ai_http.rs`, `flui-view/benches/shared/`, `flui-rendering/benches/helpers.rs` | — | `support`, `shared`, `helpers` | `local_http_server.rs`, `examples/ai_streaming/http.rs`, `benches/mocks/`, `benches/tree_builders.rs` | нет | 3, 1, 2, — |
-| 70 | Пример-пакет `hot-reload-counter-types` в `examples/hot_reload_counter/types/` | — | `types` | `hot-reload-counter-model` | нет | — |
+| 70 | Пакет `<app>-types`, создаваемый `flui create --hot-reload` | `crates/flui-cli/src/templates/hot_reload.rs` | `types` | `<app>-model` | нет | — |
 | 71 | Три копии `child_process.rs` (flui-animation tests, flui-widgets src и tests) | — | Дубль за мешками `support`/`common` | Одна копия в `flui-testing` (вне объёма — дедупликация, отметить) | нет | — |
 
 ### Имена тестов (d)

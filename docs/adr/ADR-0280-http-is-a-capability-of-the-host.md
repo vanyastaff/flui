@@ -64,7 +64,6 @@ lets a test hand every layer the same scripted client.
    #[non_exhaustive] pub enum HttpError {
        InvalidUrl { url }, Connect { detail }, Tls { detail }, Timeout, TooLarge { limit },
        Protocol { detail }, Cancelled, Refused(SpawnError), Host { detail },
-       NotYetOnThisHost { host: HttpHost },
    }
    ```
 
@@ -73,7 +72,10 @@ lets a test hand every layer the same scripted client.
    request runs on a background lane; its answer reaches the owner thread through whatever carried
    the work there. `Method`, `HeaderName`, `HeaderValue`, `Headers` and `StatusCode` are the
    contract's own types. `ResponseBody` reads in chunks and enforces the request's limit for every
-   client.
+   client. Every provider builds a response head through the shared `HeadBuilder`: at most 1024
+   headers, the same `ByteString` decoding where the host exposes one, and `Protocol` on a violation.
+   The blocking exchange and the web exchange also share the declared `Content-Length` preflight;
+   malformed or absent lengths remain subject to the streaming body limit.
 2. **The client drives its requests.** `send`'s future and a body's chunks need no runtime of the
    caller's; dropping either abandons the request.
 3. **Providers.** `flui-app` registers the built-in provider behind its `http` feature (on by
@@ -208,7 +210,8 @@ lets a test hand every layer the same scripted client.
 
 ## More information
 
-Every host now sends through a stack of its own (NSURLSession on Apple, WinHTTP on Windows,
-`HttpURLConnection` on Android, `fetch` on the web, `ureq` on Linux and the BSDs), so no host
-answers `NotYetOnThisHost` today; the variant stays for a host whose provider has not landed.
-OkHttp or Cronet on Android would be a later provider behind the same trait.
+Every host sends through a stack of its own (NSURLSession on Apple, WinHTTP on Windows,
+`HttpURLConnection` on Android, `fetch` on the web, `ureq` on Linux and the BSDs). A build without
+the `http` feature leaves the capability unregistered; `HttpError` describes a failure of an
+existing client, not the absence of a provider. OkHttp or Cronet on Android would be a later
+provider behind the same trait.

@@ -31,10 +31,9 @@ fn bar_at(offset: f64) -> Theme {
         .title(Text::new("FLUI"))
         .expanded_height(200.0)
         .pinned(true)
-        .flexible_space(
-            FlexibleSpaceBar::new()
-                .background(ColoredBox::new(flui_sdk::painting::Color::rgb(10, 20, 30))),
-        );
+        .flexible_space(FlexibleSpaceBar::new().background(ColoredBox::new(
+            flui_sdk::painting::styling::Color::rgb(10, 20, 30),
+        )));
     Theme::new(
         ThemeData::light(),
         MediaQuery::new(

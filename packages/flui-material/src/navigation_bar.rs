@@ -136,16 +136,17 @@ use flui_sdk::animation::{AnimatedValue, AnimatedValueView, Animation, MotionSpe
 use flui_sdk::foundation::Listenable;
 use flui_sdk::geometry::{RRect, Rect, Size};
 use flui_sdk::painting::Alignment;
-use flui_sdk::painting::Color;
-use flui_sdk::painting::TextStyle;
-use flui_sdk::painting::{Canvas, Paint};
+use flui_sdk::painting::styling::Color;
+use flui_sdk::painting::typography::TextStyle;
+use flui_sdk::painting::{Canvas, CustomPainter, Paint};
+use flui_sdk::pipeline::MainAxisAlignment;
+use flui_sdk::rendering::SemanticsRole;
 use flui_sdk::view::environment::VsyncScope;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{
-    Column, CustomPaint, CustomPainter, Expanded, IconTheme, IconThemeData, IndexedStack,
-    MainAxisAlignment, MergeSemantics, MotionBuilder, Padding, Row, SafeArea, Semantics,
-    SemanticsRole, SizedBox, Stack, SymbolEffect, Text, WidgetState, WidgetStateProperty,
-    WidgetStates,
+    Column, CustomPaint, Expanded, IconTheme, IconThemeData, IndexedStack, MergeSemantics,
+    MotionBuilder, Padding, Row, SafeArea, Semantics, SizedBox, Stack, SymbolEffect, Text,
+    WidgetState, WidgetStateProperty, WidgetStates,
 };
 
 use crate::color_scheme::ColorScheme;
@@ -590,9 +591,9 @@ fn build_destination(
 
 impl StatelessView for NavigationBar {
     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
-        let theme = Theme::of(ctx);
-        let colors = theme.color_scheme;
-        let nav_theme = theme.navigation_bar_theme.as_ref();
+        let (colors, text_theme) = Theme::required_color_and_text_of(ctx);
+        let nav_theme = Theme::component_of::<crate::NavigationBarThemeData>(ctx);
+        let nav_theme = nav_theme.as_ref();
 
         let (height, elevation, background_color, indicator_color) =
             resolve_bar_geometry(self, nav_theme, &colors);
@@ -604,7 +605,7 @@ impl StatelessView for NavigationBar {
             .unwrap_or_else(|| WidgetStateProperty::all(None));
         let icon_color_theme = nav_theme.and_then(|t| t.icon_color.as_ref());
         let label_style_theme = nav_theme.and_then(|t| t.label_text_style.as_ref());
-        let label_base = theme.text_theme.label_medium.clone().unwrap_or_default();
+        let label_base = text_theme.label_medium.unwrap_or_default();
 
         let children: Vec<BoxedView> = self
             .destinations

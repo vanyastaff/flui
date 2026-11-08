@@ -74,6 +74,12 @@ pub mod testing;
 #[cfg(feature = "native")]
 pub mod native {
     pub use flui_native::HostWindow;
+    /// Android's system-provided application handle and entry point.
+    #[cfg(target_os = "android")]
+    pub mod android {
+        pub use crate::app::run_app_android;
+        pub use android_activity::AndroidApp;
+    }
     #[cfg(target_os = "macos")]
     pub use flui_native::os::macos;
     #[cfg(windows)]
@@ -149,13 +155,15 @@ pub use app::{
     SamplingFailureOrigin, SamplingStage, SegmentPhase,
 };
 // Multi-window policy knobs (issue #555's embedder-facing seam) — not
-// available on iOS, where `AppRuntime`/`UiRuntime`'s ui_runtime-hosting machinery
-// itself is not compiled (see `runtime::ExitPolicy`'s own doc).
+// available on iOS's platform surface. `AppRuntime` and `UiRuntime` are
+// compiled there; this gate excludes the policy API, whose exit policy iOS
+// does not consult (see `runtime::ExitPolicy`'s own doc).
 #[cfg(not(target_os = "ios"))]
 pub use app::{ExitPolicy, WindowPolicy};
 // Per-window close-request veto (issue #558): the application's answer to
 // "may this window close?", asked per presentation before anything is torn
-// down. Same iOS gate as the policy knobs above, and for the same reason.
+// down. iOS does not expose this close-request API, so it has the same
+// public-surface gate as the policy knobs above.
 #[cfg(not(target_os = "ios"))]
 pub use app::{
     CloseReason, CloseRequest, CloseRequestError, CloseRequestHandler, CloseResponse,
@@ -176,13 +184,6 @@ pub use app::open_secondary_window;
     not(target_arch = "wasm32")
 ))]
 pub use app::open_window;
-// Android-specific entry points
-/// The crate `android_main` receives its `AndroidApp` from; re-exported so
-/// an application's manifest names only `flui`.
-#[cfg(target_os = "android")]
-pub use android_activity;
-#[cfg(target_os = "android")]
-pub use app::run_app_android;
 // Bindings re-exports
 pub use bindings::{
     GestureBinding, PipelineCell, PipelineOwner, RenderingBinding, UpdateScheduler, WidgetsBinding,

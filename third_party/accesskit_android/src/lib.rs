@@ -13,6 +13,8 @@ mod adapter;
 pub use adapter::Adapter;
 mod event;
 pub use event::QueuedEvents;
+mod platform_focus;
+pub use platform_focus::PlatformFocusHandler;
 mod inject;
 pub use inject::InjectingAdapter;
 

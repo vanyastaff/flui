@@ -7,13 +7,21 @@
 //! canonical harness moved to a fresh pointer id per Down
 //! (production-faithful — a platform never recycles an id into a
 //! still-tracked gesture). The harness now lives once in
-//! [`flui_testing::widgets`], so mount ordering, contact identity, and
+//! [`flui_sdk::testing::widgets`], so mount ordering, contact identity, and
 //! virtual-clock policy are shared instead of forked. Note the dispatch
 //! consequences: a contact Move/Up requires a preceding Down, and a
 //! contactless hover is `dispatch_pointer_hover`, not
 //! `dispatch_pointer_move`.
 
-pub use flui_testing::widgets::*;
+use flui_cupertino::{CupertinoTheme, CupertinoThemeData};
+use flui_sdk::view::prelude::IntoView;
+
+pub use flui_sdk::testing::widgets::*;
+
+/// Installs the explicit theme required by standalone Cupertino components.
+pub fn themed(child: impl IntoView) -> CupertinoTheme {
+    CupertinoTheme::new(CupertinoThemeData::default(), child)
+}
 
 /// Runs every `(name, scenario)` row of a table-driven test. Every row runs,
 /// and the failure report names each row that failed.

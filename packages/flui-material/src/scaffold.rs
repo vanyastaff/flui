@@ -146,15 +146,12 @@ use std::any::Any;
 
 use flui_sdk::foundation::ElementId;
 use flui_sdk::geometry::{EdgeInsets, Offset, Size};
-use flui_sdk::painting::Color;
-use flui_sdk::rendering::BoxConstraints;
+use flui_sdk::painting::styling::Color;
+use flui_sdk::rendering::{BoxConstraints, MultiChildLayoutContext, MultiChildLayoutDelegate};
 use flui_sdk::view::environment::MediaQuery;
 use flui_sdk::view::prelude::*;
 use flui_sdk::view::{GlobalKey, RebuildHandle, impl_inherited_view};
-use flui_sdk::widgets::{
-    ConstrainedBox, CustomMultiChildLayout, LayoutId, MultiChildLayoutContext,
-    MultiChildLayoutDelegate, PreferredSizeView,
-};
+use flui_sdk::widgets::{ConstrainedBox, CustomMultiChildLayout, LayoutId, PreferredSizeView};
 
 use crate::drawer::{
     Drawer, DrawerAlignment, DrawerController, DrawerControllerState, DrawerHandle,
@@ -517,8 +514,8 @@ impl ViewState<Scaffold> for ScaffoldState {
     }
 
     fn build(&self, view: &Scaffold, ctx: &dyn BuildContext) -> impl IntoView {
-        let theme = Theme::of(ctx);
-        let background_color = view.background_color.unwrap_or(theme.color_scheme.surface);
+        let colors = Theme::required_color_scheme_of(ctx);
+        let background_color = view.background_color.unwrap_or(colors.surface);
         let media_query = MediaQuery::of(ctx);
 
         self.handle.set_has_drawer(view.drawer.is_some());

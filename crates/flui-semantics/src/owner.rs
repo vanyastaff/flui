@@ -1045,7 +1045,7 @@ impl SemanticsOwner {
     ///
     /// The free function's, and [`ActionDecodeError::InvalidTextPosition`]
     /// when a selection's end is not a position in the target field's current
-    /// runs.
+    /// runs, or the text coordinates differ from the last delivered snapshot.
     ///
     /// [`ActionDecodeError::InvalidTextPosition`]: crate::ActionDecodeError::InvalidTextPosition
     pub fn semantics_action_request_for(
@@ -1078,6 +1078,9 @@ impl SemanticsOwner {
             let (_, field) = self.locate(root, target).ok()?;
             let (content, runs) =
                 crate::accesskit_translation::published_text(field.config().attributes())?;
+            if !self.text_coordinates_match_delivery(content, runs) {
+                return None;
+            }
             let position = |at: &accesskit::TextPosition| {
                 let run = AccessibilityNodeId::from_u64(at.node.0)?;
                 let index = runs.iter().position(|published| *published == run)?;
@@ -1187,6 +1190,9 @@ impl SemanticsOwner {
             }
             let (content, runs) =
                 crate::accesskit_translation::published_text(text.config().attributes())?;
+            if !self.text_coordinates_match_delivery(content, runs) {
+                return None;
+            }
             let index = runs.iter().position(|published| *published == run)?;
             let character = at
                 .character_index
@@ -1200,6 +1206,29 @@ impl SemanticsOwner {
             position(&selection.anchor)?,
             position(&selection.focus)?,
         ))
+    }
+
+    /// Whether the current runs map characters to the same value bytes as the
+    /// last delivery showed. Geometry may move freely; text and UTF-8 character
+    /// lengths may not differ while an outstanding position is decoded. With
+    /// no delivery on record, the current tree alone decides, as for actions.
+    fn text_coordinates_match_delivery(
+        &self,
+        content: &crate::TextContent,
+        runs: &[AccessibilityNodeId],
+    ) -> bool {
+        let Some(published) = self.published.as_ref() else {
+            return true;
+        };
+        content.runs().iter().zip(runs).all(|(run, identity)| {
+            published
+                .nodes
+                .get(&accesskit::NodeId(identity.as_u64()))
+                .is_some_and(|delivered| {
+                    delivered.value() == Some(run.text())
+                        && delivered.character_lengths() == run.character_lengths()
+                })
+        })
     }
 
     /// The field that publishes `run` as one of its text runs.

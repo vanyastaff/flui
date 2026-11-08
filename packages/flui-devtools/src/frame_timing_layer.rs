@@ -43,13 +43,12 @@
 //! pass is not a frame, and attributing its cost to one would be a fabricated
 //! measurement.
 //!
-//! The names are strings on both sides, and strings drift. The unit tests in
-//! this module pin this side only; `tests/frame_profile_end_to_end.rs` drives
-//! a real tree through `drive_frame` and reads the profile back, which is the
-//! only evidence that the framework still emits what this layer expects. The
-//! first version of this layer waited for a `render_frame_entered` span that
-//! nothing ever opened, and its unit tests — which emitted that span
-//! themselves — stayed green while every real profile stayed empty.
+//! Producers and consumers share [`FrameSpan`](flui_sdk::foundation::diagnostics::FrameSpan),
+//! so target/name drift is a typed contract change rather than two tables to keep in sync. The
+//! public foundation test pins every wire pair and round trip. The unit tests here pin capture
+//! behavior; `tests/frame_profile_end_to_end.rs` additionally drives a real tree through
+//! `drive_frame`, reads the profile back and checks the captured typed identities. That proves
+//! the real producers emit the shared contract rather than merely testing hand-written spans.
 //!
 //! # The layer carries its own filter
 //!
@@ -112,9 +111,6 @@ use crate::profiler::{FramePhase, Profiler};
 ///     tracing_subscriber::registry().with(FrameTimingLayer::new(Arc::clone(&profiler)));
 /// tracing::subscriber::set_global_default(subscriber).expect("no subscriber installed yet");
 /// ```
-///
-/// In a FLUI app the registry is the one `flui_log::LogConfig::subscriber`
-/// builds; the crate README shows that composition.
 pub struct FrameTimingLayer {
     inner: CaptureLayer,
 }
@@ -301,13 +297,13 @@ mod tests {
         let frame_that_takes = |period_us: Option<u64>, takes: std::time::Duration| {
             let profiler = profile(|| {
                 let frame = tracing::debug_span!(
-                    target: "flui.frame",
-                    "frame",
-                    period_us = tracing::field::Empty
+                    target: flui_sdk::foundation::diagnostics::FrameSpan::Frame.target(),
+                    flui_sdk::foundation::diagnostics::FrameSpan::Frame.name(),
+                    { flui_sdk::foundation::diagnostics::PERIOD_US } = tracing::field::Empty
                 );
                 let _entered = frame.enter();
                 if let Some(period_us) = period_us {
-                    frame.record("period_us", period_us);
+                    frame.record(flui_sdk::foundation::diagnostics::PERIOD_US, period_us);
                 }
                 std::thread::sleep(takes);
             });

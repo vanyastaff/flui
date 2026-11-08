@@ -50,6 +50,9 @@ flui-protocol = { workspace = true }
 
 # Core dependencies
 parking_lot.workspace = true
+# `RoutePath` percent-encodes each segment it joins and decodes each segment it
+# yields, with FLUI's route-path segment set (ADR-0093 §5).
+percent-encoding = { workspace = true }
 slab.workspace = true
 smallvec.workspace = true
 thiserror.workspace = true
@@ -182,9 +185,9 @@ tier-kind = "internal"
 order = 1
 # Process-global state, checked by `cargo xtask globals` (ADR-0097).
 globals = [
-    { item = "key::global_key::GlobalKey::new::COUNTER", grant = "ADR-0097", class = "counter", reason = "GlobalKey identities, advanced by try_update with a sticky exhaustion sentinel" },
+    { item = "key::global_key::GlobalKey::new::IDS", grant = "ADR-0097", class = "process", reason = "the standalone GlobalKey identity space, which the process has once; AtomicIdMint refuses exhaustion permanently" },
     { item = "owner::global_key_scope::OwnerTag::fresh::NEXT", grant = "ADR-0097", class = "counter", reason = "Owner claim identities, advanced by try_update with a permanent exhaustion sentinel" },
     { item = "reactive::NEXT_GRAPH_ID", grant = "ADR-0097", class = "counter", reason = "Reactive graph identities, advanced by try_update with permanent exhaustion" },
-    { item = "key::registry::REGISTRY_STACK", exit = "ADR-0311", reason = "the owner thread's GlobalKey registry stack, `ManuallyDrop` for a hot-reload cdylib" },
-    { item = "key::registry::TEST_REGISTRY", exit = "ADR-0311", reason = "the fixture registry lane beside the stack, `ManuallyDrop` for a hot-reload cdylib" },
+    { item = "key::registry::REGISTRY_STACK", grant = "ADR-0097", class = "image", reason = "the owner thread's scoped GlobalKey stack, drop-free because its module can instantiate in a hot-reload image" },
+    { item = "key::registry::TEST_REGISTRY", exit = "ADR-0316", reason = "the legacy fixture lane until its tests use production scoped registry activation" },
 ]

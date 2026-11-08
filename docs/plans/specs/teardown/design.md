@@ -53,8 +53,8 @@ Teardown **владеет** общим контрактом закрытия и 
   `AppRuntime::next_wake` (`crates/flui-app/src/app/runtime.rs:1227-1233`) для wake-deadline hook.
   Повтор неудачного кадра темпирует только `FallbackGate` (`frame_pacing.rs:234`), без отката.
 - **Отчёт о сбое.** `FrameFailureKind` (`#[non_exhaustive]`, `crates/flui-runtime/src/frame_failure.rs:238`),
-  `report_frame_failure` (`crates/flui-runtime/src/ui_realm/construct.rs:357`), в фасаде
-  `flui::app::FrameFailureKind`.
+  `report_frame_failure` (`crates/flui-runtime/src/ui_realm/construct.rs:357`), в host API
+  `flui_app::FrameFailureKind`; фасад его не реэкспортирует.
 - **Удержание.** `retain_opaque_payload` (`crates/flui-foundation/src/panic.rs:58`),
   `preserve_first_lifecycle_panic`, `TaskToken::drop` (`crates/flui-scheduler/src/async_driver.rs:300-330`).
 - **Observer.** `BuildOwner::drop` только возвращает claims ключей
@@ -123,7 +123,7 @@ realm в `teardown_platform_realm`, `queued_turns`, `on_quit`, ошибка сб
 ### Close guard и причина закрытия — `flui-view` (D-L4)
 
 ```rust
-// flui-view; фасад: flui::view::…; CloseReason ещё и flui::app::CloseReason (реэкспорт flui-app)
+// flui-view; фасад: flui::view::…; CloseReason ещё и flui_app::CloseReason (реэкспорт flui-app)
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive]
 pub enum CloseReason { User, Program, SessionEnd }
 
@@ -196,7 +196,7 @@ pub trait LifecycleContext: BuildContext { fn flush_registry(&self) -> Option<Fl
 
 | Элемент | Крейт | Фасад | Production-вызов |
 |---|---|---|---|
-| `FrameFailureKind::CallbackPanic { message: PanicText, internal_invariant: bool }`; `Contained`. Должен появиться в снимке поверхности (release R3); `FrameFailureHandler` документируется как обработчик сбоев realm | `flui-runtime` | `flui::app::FrameFailureKind` | per-task catch |
+| `FrameFailureKind::CallbackPanic { message: PanicText, internal_invariant: bool }`; `Contained`. Должен появиться в снимке поверхности (release R3); `FrameFailureHandler` документируется как обработчик сбоев realm | `flui-runtime` | нет; host-only `flui_app::FrameFailureKind` | per-task catch |
 | `UiRealm::report_contained_panic(&self, address: PresentationAddress, payload: &(dyn Any + Send))`. Адрес задачи: для задач уровня realm — первичный адрес слота; для закрытия не единственной presentation — закрываемая (может быть уже закрыта) | `flui-runtime` | нет | per-task catch |
 | `SessionEnd`, `SessionEndAnswer`, `Platform::on_session_end(Box<dyn FnMut(SessionEnd) -> SessionEndAnswer>)` (без `Send`: owner-поток), `HeadlessPlatform::simulate_session_end` (прецедент `simulate_close`) | `flui-platform` | нет, внутреннее для `flui-platform`/`flui-app` | `run_with_platform` |
 

@@ -47,9 +47,12 @@ impl PipelineOwner<Layout> {
     /// result; a rejected measurement propagates before the parent can publish
     /// dependent geometry.
     pub fn run_layout(&mut self) -> crate::error::RenderResult<()> {
-        let _span =
-            tracing::debug_span!(target: "flui.frame", "layout", dirty_nodes = self.scheduler.layout_queue_len(),)
-                .entered();
+        let _span = tracing::debug_span!(
+            target: flui_foundation::diagnostics::FrameSpan::Layout.target(),
+            flui_foundation::diagnostics::FrameSpan::Layout.name(),
+            dirty_nodes = self.scheduler.layout_queue_len(),
+        )
+        .entered();
 
         // Paint owed by the relayout roots is committed as each root finishes
         // and announced by one wake once the batches are back in the scheduler:
@@ -273,8 +276,8 @@ impl PipelineOwner<Layout> {
             };
             // One span per relayout root, not per node: the walk below it is the root's cost.
             let root_span = tracing::trace_span!(
-                target: "flui.frame",
-                "layout_root",
+                target: flui_foundation::diagnostics::FrameSpan::LayoutRoot.target(),
+                flui_foundation::diagnostics::FrameSpan::LayoutRoot.name(),
                 node = dirty_node.id.as_u64(),
             )
             .entered();

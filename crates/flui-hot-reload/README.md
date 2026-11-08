@@ -5,8 +5,9 @@ without restarting the process.
 
 `flui-hot-reload` loads scene plugins (cdylibs) at runtime via a
 `HotReloadDriver`, watches for rebuilds, and swaps the plugin in place while
-the host window and GPU context stay alive. See `examples/desktop_scene/` and
-`examples/hot_reload_counter/` for the host/plugin pair layout.
+the host window and GPU context stay alive. See
+`crates/flui-engine/examples/desktop_scene/` for scene plugins and `flui create --hot-reload`
+for the generated host/worker/types layout.
 
 Part of the [FLUI](https://github.com/vanyastaff/flui) workspace — pre-release,
 consumed by path (not published to crates.io).

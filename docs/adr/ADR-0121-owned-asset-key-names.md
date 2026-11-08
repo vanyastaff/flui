@@ -1,7 +1,8 @@
 # ADR-0121: Asset names have shared ownership
 
-- **Status:** Accepted (2026-10-04)
+- **Status:** Superseded (2026-11-07)
 - **Date:** 2026-10-04
+- **Superseded-by:** [ADR-0317](ADR-0317-the-asset-registry-is-image-only-and-the-facade-opts-into-it.md)
 - **Implements:** ADR-0097's proposed removal of the asset interner
 - **Related:** ADR-0107 (asset sources), ADR-0120 (typed cache retention)
 

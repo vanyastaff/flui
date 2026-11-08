@@ -5,7 +5,9 @@
 - **Related:** [ADR-0041](ADR-0041-workspace-topology-contract.md) and
   [ADR-0081](ADR-0081-workspace-tiers-and-reach-facts.md) (where a `flui-dylib` crate sits),
   [ADR-0088](ADR-0088-official-packages-sdk-and-facade.md) (the facade's feature set),
-  [ADR-0311](ADR-0311-development-reload-is-a-hook-the-application-installs.md) (hot reload),
+  [ADR-0311](ADR-0311-development-reload-is-a-hook-the-application-installs.md) (the reload hook),
+  [ADR-0316](ADR-0316-the-dlopen-worker-host-development-cycle-is-supported.md) (the supported
+  dynamic-image development cycle),
   [ADR-0094](ADR-0094-hot-reload-through-subsecond.md) (the rejected Subsecond record),
   [ADR-0097](ADR-0097-no-process-global-state-gate.md) (process-global state)
 - **Refs:** decision L in the [decision index](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/design/decisions.md); the study, with every
@@ -89,8 +91,8 @@ when all of these hold:
   statically beside it) has been built once and runs;
 - the app-edit gain is re-measured on Windows and Linux on an otherwise idle host and still
   saves at least 30% of the rebuild;
-- a code patcher's spike, when one returns under ADR-0311 §7, has been run once with the feature
-  on.
+- if a code patcher is proposed under ADR-0316's independent-ADR rule, its spike has been run once
+  with the feature on.
 
 ### 3. The shape, if adopted
 
@@ -121,9 +123,10 @@ when all of these hold:
 
 ### 5. Hot reload is not a dynamic-linking concern
 
-Hot reload stays with ADR-0311. The framework dylib is not a reload boundary: it is loaded once
-and never unloaded. Windows keeps MSVC's PDB output (`.cargo/config.toml:19-21`), which
-Subsecond reads there should it return (ADR-0311 §7).
+Hot reload stays with ADR-0311 and ADR-0316. The framework dylib is not a reload boundary: it is
+loaded once and never unloaded. Windows keeps MSVC's PDB output (`.cargo/config.toml:19-21`), which
+a future Subsecond proposal would read; that proposal does not replace the supported cycle by
+default.
 
 ## Consequences
 

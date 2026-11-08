@@ -233,8 +233,18 @@ impl Display for AppId {
 mod tests {
     use super::*;
 
+    fn assert_parity(id: &str) {
+        let cli = AppId::try_new(id);
+        let framework = flui_log::AppId::try_new(id);
+        assert_eq!(cli.is_ok(), framework.is_ok(), "{id:?}");
+        if let (Ok(cli), Ok(framework)) = (cli, framework) {
+            assert_eq!(cli.as_str(), framework.as_str(), "{id:?}");
+        }
+    }
+
     /// The CLI accepts exactly the identifiers the framework does, so what
-    /// `flui.toml` holds is what the application is compiled with.
+    /// `flui.toml` holds is what the application is compiled with. The corpus
+    /// exercises every reserved word and device name in every label position.
     #[test]
     fn the_cli_and_the_framework_accept_the_same_identifiers() {
         let long = format!("com.{}", "a".repeat(251));
@@ -260,11 +270,40 @@ mod tests {
             "com.con.app",
         ];
         for id in cases {
-            assert_eq!(
-                AppId::try_new(id).is_ok(),
-                flui_log::AppId::try_new(id).is_ok(),
-                "{id}"
-            );
+            assert_parity(id);
+        }
+
+        for reserved in JAVA_RESERVED {
+            for id in [
+                format!("{reserved}.example.app"),
+                format!("com.{reserved}.app"),
+                format!("com.example.{reserved}"),
+            ] {
+                assert_parity(&id);
+            }
+        }
+
+        let mut devices = vec![
+            "con".to_owned(),
+            "prn".to_owned(),
+            "aux".to_owned(),
+            "nul".to_owned(),
+        ];
+        for prefix in ["com", "lpt"] {
+            for digit in 0..=9 {
+                devices.push(format!("{prefix}{digit}"));
+            }
+        }
+        for device in devices {
+            for spelling in [device.clone(), device.to_ascii_uppercase()] {
+                for id in [
+                    format!("{spelling}.example"),
+                    format!("com.{spelling}.app"),
+                    format!("com.example.{spelling}"),
+                ] {
+                    assert_parity(&id);
+                }
+            }
         }
     }
 
@@ -307,6 +346,14 @@ mod tests {
         ];
         for (name, expected) in cases {
             assert_eq!(AppId::unconfigured(name).as_str(), expected, "{name}");
+        }
+
+        let long = "x".repeat(300);
+        for name in ["", "!!!", "Пример", "new", long.as_str()] {
+            let id = AppId::unconfigured(name);
+            assert!(id.as_str().len() <= MAX_LEN, "{name:?}");
+            flui_log::AppId::try_new(id.as_str())
+                .expect("an unconfigured identifier must satisfy the framework grammar");
         }
     }
 }

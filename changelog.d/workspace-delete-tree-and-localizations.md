@@ -20,8 +20,6 @@
     `children`, `contains`, `len` and `iter` (`RenderTree` also `depth`), which a caller can walk;
     `LayerTree`'s `ancestors`/`lowest_common_ancestor` and `SemanticsTree`'s ancestry check are
     crate-private.
-  - The facade's `localizations` feature is empty and deprecated; it is removed once nothing
-    names it.
 
 ### Removed
 

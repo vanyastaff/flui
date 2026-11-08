@@ -5,7 +5,7 @@
 //! The tests that drive the headless harness (`flui_testing::widgets`) live
 //! in `tests/`, where the library links once; the harness depends on this
 //! crate, so a unit test under `src/` would link a second copy of it, and its
-//! lookups of this crate's inherited scopes (`MediaQuery`, `FocusRoot`) would
+//! lookups of this crate's inherited scopes (`MediaQuery`) would
 //! silently miss the ones the UI runtime installed from the other copy. Nothing
 //! but review keeps such a test out of `src/`. Some of
 //! them still assert on private state — the navigator's route stack
@@ -234,13 +234,13 @@ pub trait RouteProbe {
     fn transition_handle(&self) -> TransitionHandle;
 }
 
-impl<T: Send + Clone + 'static> RouteProbe for PageRoute<T> {
+impl<T: 'static> RouteProbe for PageRoute<T> {
     fn transition_handle(&self) -> TransitionHandle {
         PageRoute::transition_handle(self)
     }
 }
 
-impl<T: Send + Clone + 'static> RouteProbe for PopupRoute<T> {
+impl<T: 'static> RouteProbe for PopupRoute<T> {
     fn transition_handle(&self) -> TransitionHandle {
         PopupRoute::transition_handle(self)
     }
@@ -252,7 +252,7 @@ pub trait PageRouteProbe {
     fn modal_handle(&self) -> ModalHandle;
 }
 
-impl<T: Send + Clone + 'static> PageRouteProbe for PageRoute<T> {
+impl<T: 'static> PageRouteProbe for PageRoute<T> {
     fn modal_handle(&self) -> ModalHandle {
         PageRoute::modal_handle(self)
     }

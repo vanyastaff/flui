@@ -16,6 +16,7 @@ use flui_sdk::geometry::{EdgeInsets, Size};
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{WidgetState, WidgetStateProperty};
 
+#[cfg(test)]
 use crate::ThemeData;
 use crate::button_style::ButtonStyle;
 use crate::button_style_button::{ButtonStyleButtonCore, PressCallback};
@@ -117,20 +118,16 @@ impl FilledButton {
 
 impl StatelessView for FilledButton {
     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
-        let theme = Theme::of(ctx);
-        let mut core =
-            ButtonStyleButtonCore::new(default_style(&theme, self.variant), self.child.clone())
-                .style(self.style.clone().unwrap_or_default());
-        // Middle cascade tier — see `crate::elevated_button`'s identical
-        // "simplified from `ElevatedButtonTheme.of`" note; the `tonal`
-        // variant shares the same `filled_button_theme` slot as the plain
-        // variant, matching the oracle (one `FilledButtonThemeData` for
-        // both `FilledButton` constructors).
-        if let Some(theme_style) = theme
-            .filled_button_theme
-            .as_ref()
-            .and_then(|t| t.style.clone())
-        {
+        let (colors, text_theme) = Theme::required_color_and_text_of(ctx);
+        let theme_style =
+            Theme::component_of::<crate::FilledButtonThemeData>(ctx).and_then(|theme| theme.style);
+        let mut core = ButtonStyleButtonCore::new(
+            default_style(&colors, &text_theme, self.variant),
+            self.child.clone(),
+        )
+        .style(self.style.clone().unwrap_or_default());
+        // Both variants share the same typed component entry.
+        if let Some(theme_style) = theme_style {
             core = core.theme_style(theme_style);
         }
         if let Some(on_pressed) = self.on_pressed.clone() {
@@ -144,17 +141,19 @@ impl StatelessView for FilledButton {
 /// (`variant: Filled`) / `_FilledTonalButtonDefaultsM3` (`variant: Tonal`)
 /// (`filled_button.dart`, oracle tag `3.44.0`), narrowed to the V1 slots —
 /// see the module docs.
-fn default_style(theme: &ThemeData, variant: FilledButtonVariant) -> ButtonStyle {
-    let colors = theme.color_scheme;
+fn default_style(
+    colors: &crate::ColorScheme,
+    text_theme: &crate::TextTheme,
+    variant: FilledButtonVariant,
+) -> ButtonStyle {
+    let colors = *colors;
     let (background, foreground) = match variant {
         FilledButtonVariant::Filled => (colors.primary, colors.on_primary),
         FilledButtonVariant::Tonal => (colors.secondary_container, colors.on_secondary_container),
     };
 
     ButtonStyle {
-        text_style: Some(WidgetStateProperty::all(
-            theme.text_theme.label_large.clone(),
-        )),
+        text_style: Some(WidgetStateProperty::all(text_theme.label_large.clone())),
         background_color: Some(WidgetStateProperty::resolve_with(move |states| {
             Some(if states.contains_state(WidgetState::Disabled) {
                 colors.on_surface.with_opacity(0.12)
@@ -233,7 +232,11 @@ mod tests {
     #[test]
     fn filled_elevation_disabled_wins_over_hovered() {
         let theme = ThemeData::light();
-        let style = default_style(&theme, FilledButtonVariant::Filled);
+        let style = default_style(
+            &theme.color_scheme,
+            &theme.text_theme,
+            FilledButtonVariant::Filled,
+        );
         let disabled_and_hovered =
             WidgetStates::from(WidgetState::Disabled).with_state(WidgetState::Hovered);
         assert_eq!(

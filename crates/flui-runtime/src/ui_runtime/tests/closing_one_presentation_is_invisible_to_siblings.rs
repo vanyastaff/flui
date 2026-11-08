@@ -119,7 +119,7 @@ impl View for CloseObserver {
 /// Exercise the platform capability the presentation actually calls; the
 /// headless recorder remains the oracle even when disable itself panics.
 struct CloseTextInput {
-    recorder: flui_native::FakeTextInput,
+    recorder: flui_native::testing::FakeTextInput,
     fail_disable: bool,
     reenter_disable: bool,
 }
@@ -568,7 +568,7 @@ impl flui_platform::PlatformWindow for OwnershipWindow {
 }
 
 struct OwnershipBridge {
-    delegate: flui_native::FakeAccessibility,
+    delegate: flui_native::testing::FakeAccessibility,
     external: std::sync::Weak<
         parking_lot::Mutex<Option<Arc<dyn flui_semantics::platform::PlatformAccessibility>>>,
     >,
@@ -581,14 +581,19 @@ impl flui_semantics::platform::PlatformAccessibility for OwnershipBridge {
     fn publish(&self, update: flui_semantics::TreeUpdate) {
         self.delegate.publish(update);
     }
-    fn is_active(&self) -> bool {
-        self.delegate.is_active()
-    }
-    fn set_activation_listener(
+
+    fn attach(
         &self,
-        listener: flui_semantics::platform::AccessibilityActivationListener,
-    ) {
-        self.delegate.set_activation_listener(listener);
+        handler: Arc<dyn flui_semantics::platform::AccessibilityHandler>,
+    ) -> Result<
+        flui_semantics::platform::AccessibilityAttachment,
+        flui_semantics::platform::AccessibilityAlreadyAttached,
+    > {
+        self.delegate.attach(handler)
+    }
+
+    fn detach_handler(&self) {
+        self.delegate.detach_handler();
         if self.armed.load(Ordering::Relaxed) {
             if let Some(external) = self.external.upgrade() {
                 external.lock().take();
@@ -596,12 +601,9 @@ impl flui_semantics::platform::PlatformAccessibility for OwnershipBridge {
             assert!(!self.fail_callback, "bridge withdrawal failure");
         }
     }
-    fn set_action_listener(&self, listener: flui_semantics::platform::AccessibilityActionListener) {
-        self.delegate.set_action_listener(listener);
-    }
 
-    fn assistive_focus_support(&self) -> flui_semantics::AssistiveFocusSupport {
-        flui_semantics::AssistiveFocusSupport::Unreported
+    fn route_changed(&self, change: flui_semantics::platform::RouteChange) {
+        self.delegate.route_changed(change);
     }
 }
 
@@ -634,7 +636,7 @@ fn run_platform_ownership_child(kind: &str) {
         _captures: bundle(&window_drops),
     });
     let bridge = Arc::new(OwnershipBridge {
-        delegate: flui_native::FakeAccessibility::new(),
+        delegate: flui_native::testing::FakeAccessibility::new(),
         external: Arc::downgrade(&external_bridge),
         armed: AtomicBool::new(false),
         fail_callback: fail_bridge || cursor_first,
@@ -1042,7 +1044,7 @@ pub(crate) fn run_presentation_close_child(kind: &str) {
     ));
 
     let platform = Arc::new(CloseTextInput {
-        recorder: flui_native::FakeTextInput::new(),
+        recorder: flui_native::testing::FakeTextInput::new(),
         fail_disable: ime_failure,
         reenter_disable: reentry,
     });

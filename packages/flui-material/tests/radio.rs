@@ -28,7 +28,7 @@ use std::rc::Rc;
 
 use common::{lay_out, tight};
 use flui_material::{Radio, Theme, ThemeData};
-use flui_testing::a11y::Role;
+use flui_sdk::testing::a11y::Role;
 
 /// The radio's full tap target: the minimum interactive dimension.
 const TAP_TARGET: f64 = 48.0;

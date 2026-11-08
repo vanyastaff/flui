@@ -6,10 +6,10 @@ use super::*;
 /// A concrete headless recorder and the same value viewed through the
 /// platform capability supplied to the presentation.
 fn headless_text_input() -> (
-    Arc<flui_native::FakeTextInput>,
+    Arc<flui_native::testing::FakeTextInput>,
     Arc<dyn flui_platform::PlatformTextInput>,
 ) {
-    let fake = Arc::new(flui_native::FakeTextInput::new());
+    let fake = Arc::new(flui_native::testing::FakeTextInput::new());
     let capability: Arc<dyn flui_platform::PlatformTextInput> = fake.clone();
     (fake, capability)
 }

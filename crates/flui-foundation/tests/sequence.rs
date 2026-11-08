@@ -6,6 +6,7 @@ use std::num::NonZeroU64;
 use flui_foundation::{
     AtomicIdMint, FrameCallbackId, IdExhausted, IdMint, InputSequenceId, ListenerId, TaskId,
 };
+use flui_foundation::{AtomicIdMint, IdExhausted, IdMint, InputSequenceId, TaskId};
 
 #[test]
 fn input_sequence_ids_are_never_reused() {
@@ -157,4 +158,29 @@ fn scheduler_and_listener_ids_are_minted_by_the_family() {
     assert_eq!(first.get(), 1);
     assert_eq!(second.get(), 2);
     assert!(first < second);
+}
+
+#[test]
+fn atomic_task_ids_refuse_permanently_after_the_last() {
+    let mint = AtomicIdMint::<TaskId>::starting_after(u64::MAX - 1);
+    let last = mint.next().expect("one id remains");
+    assert_eq!(last.get(), u64::MAX);
+    for _ in 0..3 {
+        assert_eq!(mint.next(), Err(IdExhausted));
+    }
+}
+
+#[test]
+fn concurrent_atomic_exhaustion_admits_only_the_remaining_identity() {
+    let mint = AtomicIdMint::<TaskId>::starting_after(u64::MAX - 1);
+    let admitted = std::thread::scope(|scope| {
+        let workers: Vec<_> = (0..4).map(|_| scope.spawn(|| mint.next())).collect();
+        workers
+            .into_iter()
+            .filter_map(|worker| worker.join().expect("worker returns its admission").ok())
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(admitted.len(), 1);
+    assert_eq!(admitted[0].get(), u64::MAX);
+    assert_eq!(mint.next(), Err(IdExhausted));
 }

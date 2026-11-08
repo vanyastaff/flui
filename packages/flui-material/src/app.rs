@@ -42,8 +42,8 @@
 //! - **`MaterialLocalizations`** — FLUI ships no Material resource set yet;
 //!   when one lands its delegate is appended here. Caller delegates pass
 //!   through to `WidgetsApp` unchanged.
-//! - **`Title`/`color`, named routes/`Router`, restoration, debug overlays**
-//!   — deferred at the `WidgetsApp` layer; see its module docs.
+//! - **`Title`/`color`, restoration, debug overlays** — deferred at the
+//!   `WidgetsApp` layer; see its module docs.
 //!
 //! ## Documented behavior
 //!
@@ -59,15 +59,16 @@ use std::fmt;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use flui_sdk::painting::Color;
-use flui_sdk::painting::{FontWeight, TextStyle};
+use flui_sdk::painting::styling::Color;
+use flui_sdk::painting::typography::{FontWeight, TextStyle};
 use flui_sdk::platform::{Brightness, Locale};
 use flui_sdk::view::BoxedView;
 use flui_sdk::view::environment::MediaQuery;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{
-    AppBuilder, BoxedLocalizationsDelegate, NavigatorHandle, NavigatorObserver, PageTransitions,
-    RefreshIndicatorPhase, RefreshIndicatorStyle, SizedBox, WidgetsApp,
+    AppBuilder, AppForm, BoxedLocalizationsDelegate, NavigatorForm, NavigatorHandle,
+    NavigatorObserver, PageTransitions, RefreshIndicatorPhase, RefreshIndicatorStyle, Routable,
+    Router, RouterForm, SizedBox, WidgetsApp,
 };
 
 use crate::page_transitions::dialog_transition;
@@ -183,25 +184,20 @@ fn resolve_theme(
 /// )?;
 /// ```
 #[derive(Clone, StatelessView)]
-pub struct MaterialApp {
-    home: Option<BoxedView>,
-    navigator: Option<NavigatorHandle>,
-    observers: Vec<Arc<dyn NavigatorObserver>>,
+pub struct MaterialApp<F: AppForm = NavigatorForm> {
+    app: WidgetsApp<F>,
     user_builder: Option<AppBuilder>,
     theme: Option<ThemeData>,
     dark_theme: Option<ThemeData>,
     high_contrast_theme: Option<ThemeData>,
     high_contrast_dark_theme: Option<ThemeData>,
     theme_mode: ThemeMode,
-    locale: Option<Locale>,
-    supported_locales: Vec<Locale>,
-    localizations_delegates: Vec<BoxedLocalizationsDelegate>,
 }
 
-impl fmt::Debug for MaterialApp {
+impl<F: AppForm> fmt::Debug for MaterialApp<F> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("MaterialApp")
-            .field("has_home", &self.home.is_some())
+            .field("app", &self.app)
             .field("has_builder", &self.user_builder.is_some())
             .field("theme_mode", &self.theme_mode)
             .field("has_dark_theme", &self.dark_theme.is_some())
@@ -209,32 +205,12 @@ impl fmt::Debug for MaterialApp {
     }
 }
 
-impl MaterialApp {
-    fn bare() -> Self {
-        Self {
-            home: None,
-            navigator: None,
-            observers: Vec::new(),
-            user_builder: None,
-            theme: None,
-            dark_theme: None,
-            high_contrast_theme: None,
-            high_contrast_dark_theme: None,
-            theme_mode: ThemeMode::System,
-            locale: None,
-            supported_locales: vec![Locale::en_us()],
-            localizations_delegates: Vec::new(),
-        }
-    }
-
+impl MaterialApp<NavigatorForm> {
     /// A Material app whose navigator shows `home` as its root route — see
     /// `WidgetsApp::new` for the seeding contract.
     #[must_use]
     pub fn new(home: impl IntoView) -> Self {
-        Self {
-            home: Some(home.into_view().boxed()),
-            ..Self::bare()
-        }
+        Self::from_widgets_app(WidgetsApp::new(home))
     }
 
     /// A Material app with no navigator: `builder` receives `None` and
@@ -244,9 +220,53 @@ impl MaterialApp {
     pub fn with_builder(
         builder: impl Fn(&dyn BuildContext, Option<BoxedView>) -> BoxedView + 'static,
     ) -> Self {
+        let builder: AppBuilder = Rc::new(builder);
+        let app_builder = Rc::clone(&builder);
+        let mut app = Self::from_widgets_app(WidgetsApp::with_builder(move |ctx, child| {
+            app_builder(ctx, child)
+        }));
+        app.user_builder = Some(builder);
+        app
+    }
+
+    /// Drive the navigator through a caller-owned handle — see
+    /// `WidgetsApp::navigator` for the pre-seeded-handle contract.
+    #[must_use]
+    pub fn navigator(mut self, handle: NavigatorHandle) -> Self {
+        self.app = self.app.navigator(handle);
+        self
+    }
+
+    /// Register `observer` on the navigator at mount; see
+    /// `WidgetsApp::observer`.
+    #[must_use]
+    pub fn observer(mut self, observer: Arc<dyn NavigatorObserver>) -> Self {
+        self.app = self.app.observer(observer);
+        self
+    }
+}
+
+impl MaterialApp<RouterForm> {
+    /// A Material app rooted in `router`, below the Material theme and bands.
+    ///
+    /// The returned router form has no `navigator` or `observer` builder:
+    /// the Router owns the app's only navigator (ADR-0093 §4).
+    #[must_use]
+    pub fn router<R: Routable>(router: Router<R>) -> Self {
+        Self::from_widgets_app(WidgetsApp::router(router))
+    }
+}
+
+impl<F: AppForm> MaterialApp<F> {
+    fn from_widgets_app(app: WidgetsApp<F>) -> Self {
         Self {
-            user_builder: Some(Rc::new(builder)),
-            ..Self::bare()
+            app,
+            user_builder: None,
+            theme: None,
+            dark_theme: None,
+            high_contrast_theme: None,
+            high_contrast_dark_theme: None,
+            theme_mode: ThemeMode::System,
         }
     }
 
@@ -292,22 +312,6 @@ impl MaterialApp {
         self
     }
 
-    /// Drive the navigator through a caller-owned handle — see
-    /// `WidgetsApp::navigator` for the pre-seeded-handle contract.
-    #[must_use]
-    pub fn navigator(mut self, handle: NavigatorHandle) -> Self {
-        self.navigator = Some(handle);
-        self
-    }
-
-    /// Register `observer` on the navigator at mount; see
-    /// `WidgetsApp::observer`.
-    #[must_use]
-    pub fn observer(mut self, observer: Arc<dyn NavigatorObserver>) -> Self {
-        self.observers.push(observer);
-        self
-    }
-
     /// Wrap the routing subtree. Runs **below**
     /// the published [`Theme`](crate::Theme) and [`ScaffoldMessenger`], so `Theme::of`
     /// inside it resolves the theme this app just selected.
@@ -316,7 +320,12 @@ impl MaterialApp {
         mut self,
         builder: impl Fn(&dyn BuildContext, Option<BoxedView>) -> BoxedView + 'static,
     ) -> Self {
-        self.user_builder = Some(Rc::new(builder));
+        let builder: AppBuilder = Rc::new(builder);
+        self.app = self.app.builder({
+            let builder = Rc::clone(&builder);
+            move |ctx, child| builder(ctx, child)
+        });
+        self.user_builder = Some(builder);
         self
     }
 
@@ -324,7 +333,7 @@ impl MaterialApp {
     /// resolved-against-supported contract.
     #[must_use]
     pub fn locale(mut self, locale: Locale) -> Self {
-        self.locale = Some(locale);
+        self.app = self.app.locale(locale);
         self
     }
 
@@ -338,12 +347,7 @@ impl MaterialApp {
     /// resolution reads the first supported locale.
     #[must_use]
     pub fn supported_locales(mut self, locales: Vec<Locale>) -> Self {
-        debug_assert!(
-            !locales.is_empty(),
-            "BUG: supported_locales requires at least one locale \
-             (the oracle asserts supportedLocales.isNotEmpty)"
-        );
-        self.supported_locales = locales;
+        self.app = self.app.supported_locales(locales);
         self
     }
 
@@ -351,12 +355,12 @@ impl MaterialApp {
     /// `WidgetsApp::localizations_delegates` for the ordering contract.
     #[must_use]
     pub fn localizations_delegates(mut self, delegates: Vec<BoxedLocalizationsDelegate>) -> Self {
-        self.localizations_delegates = delegates;
+        self.app = self.app.localizations_delegates(delegates);
         self
     }
 }
 
-impl StatelessView for MaterialApp {
+impl<F: AppForm> StatelessView for MaterialApp<F> {
     fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
         // The Material builder, handed to `WidgetsApp` as its
         // builder: resolves the theme against the ambient MediaQuery *at the
@@ -407,24 +411,10 @@ impl StatelessView for MaterialApp {
             AnimatedTheme::new(resolved, routes).boxed()
         };
 
-        let mut app = match &self.home {
-            Some(home) => WidgetsApp::new(home.clone()).builder(material_builder),
-            None => WidgetsApp::with_builder(material_builder),
-        };
-        app = app
-            .supported_locales(self.supported_locales.clone())
-            .localizations_delegates(self.localizations_delegates.clone())
-            .text_style(error_text_style());
-        if let Some(locale) = &self.locale {
-            app = app.locale(locale.clone());
-        }
-        if let Some(handle) = &self.navigator {
-            app = app.navigator(handle.clone());
-        }
-        for observer in &self.observers {
-            app = app.observer(Arc::clone(observer));
-        }
-        app
+        self.app
+            .clone()
+            .builder(material_builder)
+            .text_style(error_text_style())
     }
 }
 

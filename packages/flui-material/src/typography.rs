@@ -24,7 +24,7 @@
 //! this geometry with.
 
 use flui_sdk::foundation::{TextScaleProfile, TextSizingIntent};
-use flui_sdk::painting::{FontWeight, TextStyle};
+use flui_sdk::painting::typography::{FontWeight, TextStyle};
 
 use crate::text_theme::TextTheme;
 

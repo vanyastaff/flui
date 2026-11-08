@@ -61,14 +61,12 @@ pub use anchored_drag::{
 pub use animated_list::{AnimatedGrid, AnimatedList, SliverAnimatedList, SliverAnimatedListState};
 pub use carousel::{
     Carousel, CarouselAutoplay, CarouselAutoplayError, CarouselController, CarouselItemScope,
-    CarouselLayout, CarouselLayoutError, CarouselLayoutKind, CarouselState, KeylineSnap,
-    MAX_ITEM_EXTENT, MIN_AUTOPLAY_PERIOD,
+    CarouselState, KeylineSnap, MIN_AUTOPLAY_PERIOD,
 };
 pub use collapsing_header::{
     CollapsingHeader, CollapsingHeaderState, HeaderExtents, HeaderExtentsError, HeaderOrder,
 };
 pub use custom_scroll_view::CustomScrollView;
-pub use flui_objects::InvalidSliverCrossAxisExtent;
 pub use focusable_sliver::{FocusableSliver, FocusableSliverParts, IntoFocusableSliver};
 pub use grid_view::GridView;
 pub use interactive_viewer::{
@@ -117,10 +115,5 @@ pub use sliver_persistent_header::SliverPersistentHeader;
 // The trait a header's content author implements; lives beside the element
 // half in flui-view, surfaced here so `use flui_widgets::...` is sufficient.
 pub use flui_view::element::SliverPersistentHeaderDelegate;
-// What a delegate's `stretch_configuration` returns — surfaced with the
-// trait for the same reason.
-pub use flui_objects::{
-    FloatingHeaderSnapConfiguration, OverScrollHeaderStretchConfiguration, StretchTriggerSignal,
-};
 pub use sliver_to_box_adapter::SliverToBoxAdapter;
 pub use viewport::{ShrinkWrappingViewport, Viewport};

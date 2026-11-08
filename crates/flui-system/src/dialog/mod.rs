@@ -47,8 +47,8 @@ pub enum DialogError {
     /// The service the backend shows dialogs through is missing or not
     /// running (no file chooser portal); the reason says whether trying
     /// later may help.
-    #[error("the dialog service is unavailable: {0:?}")]
-    Unavailable(UnsupportedReason),
+    #[error("the dialog service is unavailable: {0}")]
+    Unsupported(#[from] Unsupported),
     /// The window the dialog belonged to closed before it answered.
     #[error("the window closed before the dialog answered")]
     WindowClosed,
@@ -63,6 +63,21 @@ pub enum DialogError {
         /// The operating system's error code.
         code: i32,
     },
+}
+
+impl DialogError {
+    /// What is not here, when that is why the dialog gave no answer.
+    #[must_use]
+    pub const fn unsupported(&self) -> Option<Unsupported> {
+        match self {
+            Self::Unsupported(unsupported) => Some(*unsupported),
+            Self::Busy
+            | Self::InvalidRequest
+            | Self::WindowClosed
+            | Self::NotAFile
+            | Self::Failed { .. } => None,
+        }
+    }
 }
 
 /// What an open dialog answers: the picks, `None` when the user cancelled.

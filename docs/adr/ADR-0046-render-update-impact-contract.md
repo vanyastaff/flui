@@ -2,7 +2,6 @@
 
 - **Status:** Accepted (2026-08-10)
 - **Date:** 2026-08-10
-- **Amended:** 2026-11-03 — the value carries a fifth effect, `COMPOSITED_LAYER_UPDATE` (bit `1 << 4`, no paint bit), applied after paint and refused when paint is requested; the application order has five steps; the non-Active cases of `RenderBehavior::on_update` are stated exactly; and the same value travels through `LocalRenderInvalidationHandle::request_update` ([ADR-0190](ADR-0190-owner-local-render-invalidation.md)). The decision is unchanged: setters return the impact and the owner applies it once.
 - **Issue:** [#534 — Make render-view updates return explicit invalidation impact](https://github.com/vanyastaff/flui/issues/534)
 
 *Render-view updates report the exact rendering phases invalidated by changed
@@ -10,8 +9,8 @@ configuration, and the rendering owner applies that report once.*
 
 ## Context
 
-`RenderBehavior::on_update` currently mutates the retained render object and
-then unconditionally marks it for layout and paint. This defeats the
+Render-view configuration originally mutated the retained render object and
+then unconditionally marked it for layout and paint. This defeated the
 change-detection already present in render-object setters. Custom layout
 delegates compute `should_relayout`, custom painters compute `should_repaint`,
 flow delegates distinguish relayout from repaint, and grid delegates compute
@@ -282,22 +281,18 @@ not manufactured invalidation.
 
 ### 4. `RenderBehavior` validates, mutates, releases the borrow, then applies
 
-`RenderBehavior::on_update` is an Active-element operation. Inspection of the
-current lifecycle paths found no legitimate non-Active invocation: ordinary
-reconciliation updates Active elements, and GlobalKey retake paths activate a
-candidate before calling `update`. Therefore a `RenderId` without a
-`PipelineOwner` is a broken invariant, not evidence of detachment, and panics
-with `BUG: active RenderBehavior must have a PipelineOwner during update`; a
-`PipelineOwner` without a `RenderId` panics with `BUG: RenderBehavior with a
-PipelineOwner must own a RenderId during update`. The one tolerated state is an
-element mounted with neither, a render-less test tree, which minted no render
-object in `on_mount`: the update logs at trace level and does nothing
-(`crates/flui-view/src/element/behavior.rs:1243`). Absence of the corresponding
-node or a concrete render-object type mismatch panics with an `expect("BUG: …")`
-message naming that invariant.
+`RenderBehavior::configure_render_object` is an Active-element build operation. Ordinary
+reconciliation and dependency-driven builds configure Active elements, and GlobalKey retake paths
+activate a candidate before building it. Therefore a `RenderId` without a `PipelineOwner` is a
+broken invariant, not evidence of detachment, and panics with `BUG: active RenderBehavior must have
+a PipelineOwner during build`; a `PipelineOwner` without a `RenderId` panics with `BUG:
+RenderBehavior with a PipelineOwner must own a RenderId during build`. The one tolerated state is an
+element mounted with neither, a render-less test tree, which minted no render object in `on_mount`:
+configuration does nothing. Absence of the corresponding node or a concrete render-object type
+mismatch panics with an `expect("BUG: …")` message naming that invariant.
 
 Across two non-overlapping `PipelineCell::with_mut` transactions,
-`RenderBehavior`:
+`RenderBehavior::configure_render_object`:
 
 1. requires its `PipelineOwner`;
 2. requires its owned `RenderId`;

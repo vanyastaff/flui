@@ -42,16 +42,20 @@ pub(super) enum Class {
     /// Mirrors a resource the process has once: an OS registration, the
     /// system clipboard, a GCD queue, tracing's dispatcher, the start instant.
     Process,
+    /// Owner-thread state instantiated with one dynamically loaded image and
+    /// never shared between UI runtimes.
+    Image,
     /// A warn-once flag or a debug-only record that no behavior reads.
     Diagnostic,
 }
 
 impl Class {
-    const ALL: [(&'static str, Self); 5] = [
+    const ALL: [(&'static str, Self); 6] = [
         ("trampoline", Self::Trampoline),
         ("counter", Self::Counter),
         ("immutable", Self::Immutable),
         ("process", Self::Process),
+        ("image", Self::Image),
         ("diagnostic", Self::Diagnostic),
     ];
 
@@ -310,6 +314,8 @@ pub(super) fn class_problem(class: Class, defs: &[Def]) -> Option<String> {
             })
         }
         Class::Process => None,
+        Class::Image => (def.shape != Shape::ThreadLocal)
+            .then(|| "image-local state is a `thread_local!` entry".to_owned()),
         Class::Diagnostic => {
             let flag = def
                 .ty

@@ -1,4 +1,4 @@
-//! Hot-reload strategy and shared constants.
+//! Shared hot-reload environment and timing constants.
 //!
 //! FLUI uses a **two-layer** dev model:
 //!
@@ -12,51 +12,6 @@
 //! scene plugins) but can also be used independently.
 
 use std::time::Duration;
-
-/// How code changes are applied during development.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum ReloadStrategy {
-    /// In-process dynamic library swap via [`crate::HotReloadDriver`].
-    ///
-    /// The host process stays alive; only the plugin `.so`/`.dll` is reloaded.
-    /// Widget state is **not** preserved (`app_plugin!` performs a hot restart).
-    PluginDylib,
-
-    /// Full process kill + `cargo run` (`flui run` default desktop mode).
-    ///
-    /// Simplest path for apps that are not split into host + `cdylib` plugin.
-    ProcessRestart,
-
-    /// Rebuild and deploy artifact without restarting the host (`flui run --scene`).
-    ///
-    /// The running app picks up the new `.so` via mtime polling in
-    /// [`crate::HotReloadDriver`].
-    BuildAndDeploy,
-
-    /// Host/worker split — rebuild worker `cdylib` only; host applies
-    /// `HotReloadTier::HotReload` (`flui run` with `[hot_reload]` in `flui.toml`).
-    WorkerHost,
-
-    /// No runtime reload (release builds, WASM, CI).
-    None,
-}
-
-impl ReloadStrategy {
-    /// Whether this strategy keeps the host process alive across code changes.
-    #[must_use]
-    pub const fn preserves_process(self) -> bool {
-        matches!(
-            self,
-            Self::PluginDylib | Self::BuildAndDeploy | Self::WorkerHost
-        )
-    }
-
-    /// Whether this strategy can preserve in-memory widget/state across reloads.
-    #[must_use]
-    pub const fn preserves_state(self) -> bool {
-        matches!(self, Self::WorkerHost)
-    }
-}
 
 /// Environment variable names used across the hot-reload stack.
 pub mod env {

@@ -177,9 +177,7 @@ pub(crate) mod native_actions {
         }
 
         fn request(&self, action: Action, id: NodeId, data: Option<ActionData>) {
-            self.ui_runtime
-                .accessibility_action_listener()
-                .expect("platform listener")(ActionRequest {
+            self.ui_runtime.request_accessibility_action(ActionRequest {
                 action,
                 target_tree: TreeId::ROOT,
                 target_node: id,
@@ -397,17 +395,15 @@ pub(crate) mod native_actions {
         );
         fixture.set_text("remounted");
         assert_eq!(controller.text(), "remounted");
-        let listener = fixture
+        fixture
             .ui_runtime
-            .accessibility_action_listener()
-            .expect("platform listener");
+            .request_accessibility_action(ActionRequest {
+                action: Action::SetValue,
+                target_tree: TreeId::ROOT,
+                target_node: current,
+                data: Some(ActionData::Value("closed".into())),
+            });
         drop(fixture);
-        listener(ActionRequest {
-            action: Action::SetValue,
-            target_tree: TreeId::ROOT,
-            target_node: current,
-            data: Some(ActionData::Value("closed".into())),
-        });
         let mut independent = Fixture::new();
         independent.set_text("independent");
         assert_eq!(

@@ -36,7 +36,7 @@
 //! disabled: [`WidgetState::Disabled`] is asserted in the states set, the
 //! `GestureDetector` built has no `on_tap` closure at all (so it never
 //! resolves any gesture and "swallows nothing": its
-//! default [`flui_sdk::widgets::HitTestBehavior::DeferToChild`] lets an
+//! default [`flui_sdk::interaction::HitTestBehavior::DeferToChild`] lets an
 //! unclaimed pointer contact fall through to whatever is behind it), hover
 //! stops updating [`WidgetState::Hovered`] (oracle: `handleMouseEnter`
 //! gates `handleHoverChange` on `enabled`), and focus is not
@@ -90,16 +90,16 @@ use std::time::Duration;
 use flui_sdk::animation::prelude::*;
 use flui_sdk::animation::{MotionPolicy, Vsync};
 use flui_sdk::geometry::Point;
-use flui_sdk::interaction::FocusNode;
-use flui_sdk::painting::Color;
+use flui_sdk::interaction::{ButtonChange, FocusNode, PointerDispatch, PointerEvent};
+use flui_sdk::painting::styling::Color;
 use flui_sdk::view::RebuildHandle;
 use flui_sdk::view::environment::MediaQuery;
 use flui_sdk::view::environment::VsyncScope;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{
-    Actions, ActivateIntent, ButtonActivateIntent, ButtonChange, CallbackAction, CustomPaint,
-    Focus, FocusRing, GestureDetector, Listener, MouseRegion, PointerDispatch, PointerEvent,
-    WidgetState, WidgetStateProperty, WidgetStatesController,
+    Actions, ActivateIntent, ButtonActivateIntent, CallbackAction, CustomPaint, Focus, FocusRing,
+    GestureDetector, Listener, MouseRegion, WidgetState, WidgetStateProperty,
+    WidgetStatesController,
 };
 
 use crate::ripple::{Indication, IndicationPainter, IndicationStyle, RippleScope};

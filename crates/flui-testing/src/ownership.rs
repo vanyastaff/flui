@@ -643,7 +643,7 @@ fn swipe_row() -> BoxedView {
     )
     .expect("BUG: two labelled actions");
     Column::new(vec![SizedBox::new(300.0, 70.0).boxed(), row.boxed()])
-        .main_axis_size(flui_widgets::MainAxisSize::Min)
+        .main_axis_size(flui_objects::MainAxisSize::Min)
         .boxed()
 }
 

@@ -17,7 +17,8 @@ use flui_interaction::drag::{
     DragSession, DragStage, DragStart, DragView, DropReceiver, DropReceiverSlot, MoveOutcome,
     ProcessNonce,
 };
-use flui_native::{HeadlessDragAndDrop, HeadlessPlatform, HostWindow, MockWindow, Platform};
+use flui_native::testing::HeadlessWindow;
+use flui_native::{HeadlessDragAndDrop, HeadlessPlatform, HostWindow, Platform};
 use flui_objects::RenderMetaData;
 use flui_platform::WindowOptions;
 use flui_platform::data_transfer::{
@@ -341,10 +342,10 @@ fn side_by_side(first: &ReceiverAnchor, second: &ReceiverAnchor) -> World {
     world
 }
 
-fn headless(window: &Rc<dyn HostWindow>) -> &MockWindow {
+fn headless(window: &Rc<dyn HostWindow>) -> &HeadlessWindow {
     window
         .as_any()
-        .downcast_ref::<MockWindow>()
+        .downcast_ref::<HeadlessWindow>()
         .expect("a headless window")
 }
 

@@ -22,9 +22,9 @@ use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 /// `flui-devtools` can tell the presentations of one runtime apart.
 pub(super) fn presentation_span(presentation: PresentationId) -> tracing::Span {
     tracing::debug_span!(
-        target: "flui.frame",
-        "presentation",
-        presentation = presentation.as_u64()
+        target: flui_foundation::diagnostics::FrameSpan::Presentation.target(),
+        flui_foundation::diagnostics::FrameSpan::Presentation.name(),
+        { flui_foundation::diagnostics::PRESENTATION } = presentation.as_u64()
     )
 }
 
@@ -297,7 +297,7 @@ impl UiRuntime {
             ) {
                 let tree_revision = presentation.advance_tree_revision();
                 tracing::trace!(
-                    target: "flui.frame",
+                    target: flui_foundation::diagnostics::FrameSpan::Frame.target(),
                     event = "tree_revision_advanced",
                     { flui_foundation::diagnostics::PRESENTATION_ID } =
                         presentation.id().as_u64(),
@@ -698,7 +698,11 @@ impl UiRuntime {
         )]
         let opened = catch_unwind(AssertUnwindSafe(|| {
             let scope = presentation_span(presentation.id()).entered();
-            let commit = tracing::debug_span!(target: "flui.frame", "commit").entered();
+            let commit = tracing::debug_span!(
+                target: flui_foundation::diagnostics::FrameSpan::Commit.target(),
+                flui_foundation::diagnostics::FrameSpan::Commit.name()
+            )
+            .entered();
             (scope, commit)
         }));
         let ((scope_span, commit_span), mut subscriber_panic) = match opened {
@@ -713,7 +717,7 @@ impl UiRuntime {
         )]
         let event = catch_unwind(AssertUnwindSafe(|| {
             tracing::trace!(
-                target: "flui.frame",
+                target: flui_foundation::diagnostics::FrameSpan::Frame.target(),
                 event = "tree_revision_committed",
                 { flui_foundation::diagnostics::PRESENTATION_ID } = presentation.id().as_u64(),
                 tree_revision = committed_revision.as_u64(),
@@ -960,7 +964,11 @@ impl UiRuntime {
             )]
             let span_outcome = catch_unwind(AssertUnwindSafe(|| {
                 let _presentation = presentation_span(producer.id()).entered();
-                let _submit = tracing::debug_span!(target: "flui.frame", "submit").entered();
+                let _submit = tracing::debug_span!(
+                    target: flui_foundation::diagnostics::FrameSpan::Submit.target(),
+                    flui_foundation::diagnostics::FrameSpan::Submit.name()
+                )
+                .entered();
                 submitted = Some(sink.submit(scene));
             }));
             let render_verdict = match (submitted, span_outcome) {
@@ -1362,7 +1370,8 @@ impl UiRuntime {
                 // exact per-presentation catch) gates
                 // [`Self::mark_needs_full_repaint_for`], the same fix #630
                 // already established for the pre-frame device-recovery-success
-                // arm (`runner.rs`'s `render_frame_with_device_recovery`) —
+                // arm (`flui-app`'s
+                // `runner/device_recovery.rs::pump_with_device_recovery`) —
                 // shared rather than duplicated via that one function, since
                 // both are "a retry needs the pipeline to actually have work to
                 // redo, not just a wake"; see that function's own doc for why
@@ -1379,10 +1388,12 @@ impl UiRuntime {
                 // Steady-state cost of a PERMANENTLY failing submit: unlike the
                 // pre-frame device-recovery path, this arm is not gated by
                 // `DeviceRecoveryBackoff` — a surface that keeps failing every
-                // submit now retries every wake, throttled only by
-                // `runner.rs`'s `NO_PRESENT_FALLBACK_PACE` (~62 Hz), running a
-                // full-tree paint each time, indefinitely. Before this fix that
-                // same surface went quiet after one no-op frame. A working
+                // submit now retries every wake, running a full-tree paint each
+                // time, indefinitely. On desktop, the non-blocking `FallbackWake`
+                // in `runner/frame_pacing.rs` defers ticker-only wakes after a
+                // pump that presented nothing, using the current display period
+                // rather than a fixed sleep. Before this fix that same surface
+                // went quiet after one no-op frame. A working
                 // retry that costs CPU forever on a permanently broken surface
                 // is still strictly better than one that silently gives up, but
                 // whether this steady state deserves its own backoff is a
@@ -1433,7 +1444,7 @@ impl UiRuntime {
         // that point (inside `draw_frame_entered`) gets silently clobbered
         // within this SAME callback. On the real desktop path, where the
         // next platform callback's own dirty gate (`wake_action`, in
-        // `runner.rs`) reads `needs_redraw()`/`has_pending_work()` fresh —
+        // `runner/frame_pacing.rs`) reads `needs_redraw()`/`has_pending_work()` fresh —
         // neither of which a bare running controller with no other
         // tree-visible effect keeps true — that clobber is a genuine,
         // silent stall: the controller never receives another tick after
@@ -1619,7 +1630,10 @@ impl UiRuntime {
     }
 
     fn emit_frame_telemetry(presentation: &PresentationState, snapshot: &FrameSnapshot) {
-        if !tracing::enabled!(target: "flui.frame", tracing::Level::TRACE) {
+        if !tracing::enabled!(
+            target: flui_foundation::diagnostics::FrameSpan::Frame.target(),
+            tracing::Level::TRACE
+        ) {
             return;
         }
 
@@ -1635,7 +1649,7 @@ impl UiRuntime {
             .unwrap_or(0);
 
         tracing::trace!(
-            target: "flui.frame",
+            target: flui_foundation::diagnostics::FrameSpan::Frame.target(),
             event = "frame_telemetry",
             ui_runtime_id = snapshot.address.ui_runtime_id.as_u64(),
             presentation = %snapshot.address.presentation_id,

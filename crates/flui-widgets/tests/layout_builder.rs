@@ -18,16 +18,14 @@ use std::sync::Arc;
 use crate::common::{lay_out, loose};
 use flui_foundation::geometry::Size;
 use flui_rendering::constraints::BoxConstraints;
+use flui_rendering::delegates::{MultiChildLayoutContext, MultiChildLayoutDelegate};
 use parking_lot::Mutex;
 
 // Exercise the public prelude import path: if `LayoutBuilder` were not exported
 // from `flui_widgets::prelude`, this file would not compile.
 use flui_view::{BoxedView, ViewExt};
 use flui_widgets::prelude::*;
-use flui_widgets::{
-    ConstrainedBox, CustomMultiChildLayout, LayoutId, MultiChildLayoutContext,
-    MultiChildLayoutDelegate, Padding, SizedBox, row,
-};
+use flui_widgets::{ConstrainedBox, CustomMultiChildLayout, LayoutId, Padding, SizedBox, row};
 
 /// A builder that records the constraints it was handed.
 fn recorder(

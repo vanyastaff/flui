@@ -28,8 +28,9 @@ leak-timeout = "1s"
 # generates. The trybuild suites push every compile_fail case through rustc;
 # the flui-cli template tests (`cli_create::generated_*`) build or test a
 # generated project; `flui::facade_consumer` checks external consumer
-# crates against the facade; `ios_cargo_artifact_fixtures` drives the iOS
-# builder's real `cargo` over 14 generated fixtures. They own the run's wall-clock: in a cold local
+# crates against the facade; `flui-sdk::package_parity` checks an external
+# package against the unpacked SDK archive; `ios_cargo_artifact_fixtures` drives
+# the iOS builder's real `cargo` over 14 generated fixtures. They own the run's wall-clock: in a cold local
 # run of the whole suite 21 of them took 83-305 s each (2026-09-22, e9a5456d, jobs=6),
 # and no other test in the workspace reached 20 s.
 #
@@ -84,7 +85,7 @@ priority = 100
 test-group = 'trybuild'
 
 [[profile.default.overrides]]
-filter = '(binary_id(flui-cli::cli_it) & test(/^cli_create::generated_/)) | binary_id(flui::facade_consumer) | (binary_id(flui-cli::bin/flui) & test(=build::tests::ios_artifacts::ios_cargo_artifact_fixtures))'
+filter = '(binary_id(flui-cli::cli_it) & test(/^cli_create::generated_/)) | binary_id(flui::facade_consumer) | binary_id(flui-sdk::package_parity) | (binary_id(flui-cli::bin/flui) & test(=build::tests::ios_artifacts::ios_cargo_artifact_fixtures))'
 slow-timeout = { period = "300s", terminate-after = 4 }
 priority = 100
 test-group = 'nested-cargo'

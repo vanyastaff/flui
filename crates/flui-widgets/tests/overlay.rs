@@ -22,8 +22,9 @@
 // library carries the same lint expectation; an integration test is a
 // separate crate, so it is repeated here.
 
+use std::cell::RefCell;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use flui_foundation::ElementId;
 use flui_testing::widgets::StateCreations;
@@ -177,6 +178,115 @@ pub(crate) fn overlay_opaque_top_entry_drops_lower_entries_entirely() {
 // ============================================================================
 // ADR-0021 S8 — `Positioned` inside an overlay entry
 // ============================================================================
+
+// ============================================================================
+// ADR-0076 — `Overlay::of` / `Overlay::maybe_of`
+// ============================================================================
+
+#[test]
+fn frame_request_reentry_is_processed_without_deadlocking() {
+    let Some(case) = crate::common::child_process::selected_case() else {
+        crate::common::child_process::run_rows(
+            "overlay::frame_request_reentry_is_processed_without_deadlocking",
+            &["entry", "overlay"],
+        );
+        return;
+    };
+
+    match case.as_str() {
+        "entry" => entry_frame_request_reentry(),
+        "overlay" => overlay_frame_request_reentry(),
+        _ => panic!("unknown overlay re-entry row: {case}"),
+    }
+    crate::common::child_process::pass();
+}
+
+fn entry_frame_request_reentry() {
+    thread_local! {
+        static ENTRY: RefCell<Option<OverlayEntry>> = const { RefCell::new(None) };
+    }
+
+    let calls = Calls::default();
+    let entry = counting_entry(&calls);
+    ENTRY.with(|slot| slot.replace(Some(entry.clone())));
+    let handle = OverlayHandle::new();
+    handle.insert(&entry, &InsertPosition::Top);
+    let mut harness = mount(SizedBox::new(1.0, 1.0));
+    let armed = Arc::new(AtomicBool::new(false));
+    let woke = Arc::new(AtomicBool::new(false));
+    let callback_armed = Arc::clone(&armed);
+    let callback_woke = Arc::clone(&woke);
+    harness.with_build_owner_mut(|owner| {
+        owner.set_on_build_scheduled(move || {
+            if callback_armed.swap(false, Ordering::SeqCst) {
+                callback_woke.store(true, Ordering::SeqCst);
+                ENTRY.with(|slot| {
+                    slot.borrow()
+                        .as_ref()
+                        .expect("entry installed above")
+                        .mark_needs_build();
+                });
+            }
+        });
+    });
+    harness.swap_root(Overlay::new(handle));
+    harness.tick();
+    assert_eq!(calls.get(), 1);
+
+    armed.store(true, Ordering::SeqCst);
+    entry.mark_needs_build();
+    harness.tick();
+
+    assert!(woke.load(Ordering::SeqCst));
+    assert_eq!(calls.get(), 2, "the nested rebuild request is retained");
+}
+
+fn overlay_frame_request_reentry() {
+    thread_local! {
+        static OVERLAY: RefCell<Option<OverlayHandle>> = const { RefCell::new(None) };
+        static NESTED: RefCell<Option<OverlayEntry>> = const { RefCell::new(None) };
+    }
+
+    let outer = counting_entry(&Calls::default());
+    let nested = counting_entry(&Calls::default());
+    let handle = OverlayHandle::new();
+    OVERLAY.with(|slot| slot.replace(Some(handle.clone())));
+    NESTED.with(|slot| slot.replace(Some(nested.clone())));
+    let mut harness = mount(SizedBox::new(1.0, 1.0));
+    let armed = Arc::new(AtomicBool::new(false));
+    let callback_armed = Arc::clone(&armed);
+    harness.with_build_owner_mut(|owner| {
+        owner.set_on_build_scheduled(move || {
+            if callback_armed.swap(false, Ordering::SeqCst) {
+                OVERLAY.with(|overlay| {
+                    NESTED.with(|entry| {
+                        overlay
+                            .borrow()
+                            .as_ref()
+                            .expect("overlay installed above")
+                            .insert(
+                                entry.borrow().as_ref().expect("entry installed above"),
+                                &InsertPosition::Top,
+                            );
+                    });
+                });
+            }
+        });
+    });
+    harness.swap_root(Overlay::new(handle.clone()));
+    harness.tick();
+
+    armed.store(true, Ordering::SeqCst);
+    handle.insert(&outer, &InsertPosition::Top);
+    harness.tick();
+
+    assert!(outer.is_attached() && nested.is_attached());
+    assert_eq!(
+        layer_count(&mut harness),
+        2,
+        "both insertions reach the tree"
+    );
+}
 
 // ============================================================================
 // ADR-0076 — `Overlay::of` / `Overlay::maybe_of`

@@ -7,6 +7,17 @@ use std::sync::Arc;
 use flui_native::host::{Absent, Accessibility, Displays, Window, position};
 use flui_native::{OpenWindowError, PlatformError};
 use flui_platform::{UnsupportedReason, WindowOptions};
+use flui_semantics::platform::AccessibilityHandler;
+
+struct Handler;
+
+impl AccessibilityHandler for Handler {
+    fn activation_changed(&self, _: bool) {}
+
+    fn action_requested(&self, _: accesskit::ActionRequest) {}
+
+    fn assistive_focus_changed(&self, _: Option<accesskit::NodeId>) {}
+}
 
 /// A host with no window position opens none, and says why.
 fn an_absent_window_position_opens_no_window_on_this_platform() {
@@ -41,23 +52,25 @@ fn an_absent_display_position_reads_no_displays_on_this_platform() {
 }
 
 /// A window of a host with no accessibility integration holds a bridge that
-/// is never active and keeps no listener the runtime hands it.
+/// is never active and keeps no handler the runtime hands it.
 fn an_absent_accessibility_position_hands_out_a_bridge_that_is_never_active() {
     let bridge = <Absent<position::Accessibility> as Accessibility<()>>::for_window(&());
-    assert!(!bridge.is_active());
-    let activation: flui_semantics::platform::AccessibilityActivationListener =
-        Arc::new(|_active| {});
-    let action: flui_semantics::platform::AccessibilityActionListener = Arc::new(|_request| {});
-    bridge.set_activation_listener(Arc::clone(&activation));
-    bridge.set_action_listener(Arc::clone(&action));
+    let handler: Arc<dyn AccessibilityHandler> = Arc::new(Handler);
+    let attachment = bridge
+        .attach(Arc::clone(&handler))
+        .expect("an absent bridge accepts an attachment without retaining it");
+    assert!(!attachment.is_active());
     assert_eq!(
-        (Arc::strong_count(&activation), Arc::strong_count(&action)),
-        (1, 1),
-        "the bridge keeps no listener"
+        Arc::strong_count(&handler),
+        1,
+        "the bridge keeps no handler"
     );
     bridge.focus_changed(true);
     bridge.detach();
-    assert!(!bridge.is_active(), "nothing it is told activates it");
+    let attachment = bridge
+        .attach(handler)
+        .expect("an absent bridge remains attachable after teardown");
+    assert!(!attachment.is_active(), "nothing it is told activates it");
 }
 
 #[test]

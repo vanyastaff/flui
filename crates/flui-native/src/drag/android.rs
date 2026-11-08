@@ -4,12 +4,13 @@
 //! over the view mints an offer from its `ClipDescription` when it enters,
 //! answers the view at once on the Java main thread, and queues the
 //! `DragDropEvent`s for the owner. The drop is decided from the feedback the
-//! target cached, and copies the clip's text, HTML and URIs out before the
-//! event returns; a URI's bytes are read through the content resolver when
-//! requested, on a thread of their own. Each taken drop holds its own URI
-//! permissions, keyed by its offer: concluding the drop retires the offer and
-//! gives back those permissions alone, and a refused drop gives them back at
-//! once.
+//! target cached. Before that callback can wake the owner, the view saves the
+//! `ClipData` and its URI grant under the offer's key; only the key and clip
+//! descriptors cross JNI. A request reads one representation from that clip on
+//! a thread of its own, with text, HTML, URI lists and URI bytes all bounded by
+//! the request's UTF-8 byte limit. Concluding or refusing a drop releases its
+//! clip and grant exactly once, and detaching the view releases every drop
+//! still held.
 //!
 //! [`AndroidDragSource`] starts a system drag (`startDragAndDrop`, API 24)
 //! when the runtime escalates one leaving the window. Android takes the whole
@@ -17,12 +18,12 @@
 //! the drag and reports its end, which reaches the request's end hook on the
 //! owner thread.
 //!
-//! What a clip offers, holds and answers is decided in [`clip`], and the
+//! What a clip offers, reads and answers is decided in [`clip`], and the
 //! offers, drops and their conclusions in [`drops`], with no JNI call, so every
 //! host compiles and checks them; the JNI side around them is Android's alone.
 
 /// The decidable half of the backend (ADR-0247, ADR-0211): how a
-/// `DragEvent`'s clip maps to an offer, what a drop answers, what a FLUI drag
+/// `DragEvent`'s clip maps to an offer, what a request reads, what a FLUI drag
 /// puts in its `ClipData`, and how the source learns the end. Plain values,
 /// so every host checks them; the JNI side around them moves them across.
 ///
@@ -33,19 +34,20 @@
 /// the drop is decided from the feedback the target cached for the offer, as
 /// the Win32 and web targets decide theirs. Until the drop the clip's data is
 /// out of reach and only its `ClipDescription` is known, so an offer is minted
-/// from the description's media types; the drop copies the text, HTML and
-/// URIs out, and a URI's bytes are read when requested.
+/// from the description's media types. Taking the drop reads no item; each
+/// request later reads its representation from the saved clip.
 #[forbid(unsafe_code)]
 mod clip {
     use std::sync::Arc;
 
     use flui_platform::data_transfer::{
         Mime, RepresentationDescriptor, TransferActions, TransferError, TransferFormat,
-        TransferPayload,
+        TransferLimits, TransferPayload,
     };
     use flui_platform::drag::{IDENTITY_ESSENCE, OsDragEnd};
 
     use crate::drag::offers::{PathStyle, TransferUri};
+    use crate::transfer::intake::Intake;
 
     /// `View.DRAG_FLAG_GLOBAL`: the drag may leave the source's window.
     pub(super) const DRAG_FLAG_GLOBAL: i32 = 1 << 8;
@@ -55,8 +57,8 @@ mod clip {
     /// `ClipDescription.MIMETYPE_TEXT_INTENT`, which FLUI cannot redeem.
     pub(super) const MIMETYPE_TEXT_INTENT: &str = "text/vnd.android.intent";
 
-    /// Where one announced representation comes from at the drop.
-    #[derive(Debug, Clone, PartialEq, Eq)]
+    /// Where one announced representation comes from when it is requested.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub(super) enum ClipSource {
         /// The items' text, joined.
         Text,
@@ -64,21 +66,87 @@ mod clip {
         Html,
         /// Every item's URI.
         UriList,
-        /// The bytes behind the first URI, read when requested.
+        /// The bytes behind the first URI.
         UriBytes,
         /// FLUI's session identity: its media type says everything.
         Identity,
     }
 
+    impl ClipSource {
+        /// The representation kind in `FluiView.readDrop`'s protocol.
+        #[cfg(target_os = "android")]
+        pub(super) fn code(self) -> i32 {
+            match self {
+                Self::Text => 0,
+                Self::Html => 1,
+                Self::UriList => 2,
+                Self::UriBytes => 3,
+                Self::Identity => 4,
+            }
+        }
+
+        /// Read this representation of a taken clip once, under `limits`.
+        ///
+        /// `read` is not called for the identity, which the descriptor already
+        /// carries. For every other kind it reads the saved `ClipData` under the
+        /// same limits; this method checks the delivered length with `limits`
+        /// again before decoding it. `None` from the view is
+        /// [`TransferError::SourceGone`], whether the representation was absent
+        /// or its source failed.
+        pub(super) fn request(
+            self,
+            descriptor: &RepresentationDescriptor,
+            limits: TransferLimits,
+            read: impl FnOnce(Self, TransferLimits) -> Result<Vec<u8>, TransferError>,
+        ) -> Result<TransferPayload, TransferError> {
+            let identity = || TransferPayload::Custom {
+                mime: match &descriptor.format {
+                    TransferFormat::Custom { mime } => mime.clone(),
+                    _ => Mime::new(IDENTITY_ESSENCE),
+                },
+                bytes: Arc::from(Vec::new()),
+            };
+            if self == Self::Identity {
+                return Ok(identity());
+            }
+            let bytes = read(self, limits)?;
+            let actual = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+            limits.check(actual)?;
+            match self {
+                Self::Text => String::from_utf8(bytes)
+                    .map(TransferPayload::Text)
+                    .map_err(|_| TransferError::Decode {
+                        format: descriptor.format.clone(),
+                    }),
+                Self::Html => String::from_utf8(bytes)
+                    .map(TransferPayload::Html)
+                    .map_err(|_| TransferError::Decode {
+                        format: descriptor.format.clone(),
+                    }),
+                Self::UriList => Ok(TransferPayload::Custom {
+                    mime: Mime::new("text/uri-list"),
+                    bytes: Arc::from(bytes),
+                }),
+                Self::UriBytes => Ok(crate::drag::offers::payload_of_bytes(
+                    &descriptor.format,
+                    bytes,
+                )),
+                Self::Identity => Ok(identity()),
+            }
+        }
+    }
+
     /// The representations a drag of `mime_types` offers, in the description's
     /// order: text, HTML and a URI list as themselves, FLUI's identity with its
     /// parameters (declared length zero), and any other media type as the bytes
-    /// of the clip's URI. Intents, duplicates and names that are not media types
-    /// are not announced.
+    /// of the clip's URI. The common intake policy bounds source entries, name
+    /// lengths and duplicate names before this mapping. Intents and names that
+    /// are not media types are not announced.
     #[must_use]
     pub(super) fn offered<'a>(
         mime_types: impl IntoIterator<Item = &'a str>,
     ) -> Vec<(ClipSource, RepresentationDescriptor)> {
+        let mime_types = Intake::DEFAULT.admit_types(mime_types, |mime| *mime);
         let mut offered: Vec<(ClipSource, RepresentationDescriptor)> = Vec::new();
         for mime in mime_types {
             if mime == MIMETYPE_TEXT_INTENT {
@@ -109,102 +177,26 @@ mod clip {
         offered
     }
 
-    /// What a drop's clip carried, copied out while the drop event ran.
-    #[derive(Debug, Clone, Default, PartialEq, Eq)]
-    pub(super) struct DroppedClip {
-        /// Every item's text, joined; `None` when no item had any.
-        pub(super) text: Option<String>,
-        /// The first item's HTML.
-        pub(super) html: Option<String>,
-        /// Every item's URI.
-        pub(super) uris: Vec<String>,
-    }
-
-    /// One announced representation after the drop.
-    #[derive(Debug, Clone)]
-    pub(super) enum Held {
-        /// Served from memory.
-        Payload(TransferPayload),
-        /// The bytes behind a URI, read when requested.
-        Uri(HeldUri),
-        /// Announced, but the clip did not carry it.
-        Missing,
-    }
-
-    /// A dropped content URI whose bytes are read when requested.
-    #[derive(Debug, Clone, PartialEq, Eq)]
-    pub(super) struct HeldUri {
-        /// The content URI.
-        pub(super) uri: String,
-        /// The format the offer announced for its bytes.
-        pub(super) format: TransferFormat,
-    }
-
-    impl HeldUri {
-        /// The payload the URI's `bytes` resolve as: an image for an image
-        /// offer, as announced, and raw bytes of the type's essence otherwise.
-        #[must_use]
-        pub(super) fn payload(&self, bytes: Vec<u8>) -> TransferPayload {
-            crate::drag::offers::payload_of_bytes(&self.format, bytes)
-        }
-    }
-
-    /// What `FluiView.readUri` answered, under `limit`: its `bytes`, or none
-    /// when it stopped after `read` bytes. A read that stopped past the limit is
-    /// too large, with the bytes it had read as a lower bound of the size; any
-    /// other stop (no stream, an error) means the source is gone.
+    /// What `FluiView.readDrop` answered, under `limits`: its `bytes`, or none
+    /// when the representation was missing, the source failed, or it stopped
+    /// after `read` bytes. `limits` checks a read that stopped past its byte
+    /// ceiling, with the bytes read as a lower bound of the size; any other
+    /// null answer means the source is gone.
     ///
     /// # Errors
     ///
-    /// [`TransferError::TooLarge`] past the limit, [`TransferError::SourceGone`]
+    /// [`TransferError::TooLarge`] past `limits`, [`TransferError::SourceGone`]
     /// otherwise.
-    pub(super) fn uri_bytes(
+    pub(super) fn drop_bytes(
         bytes: Option<Vec<u8>>,
         read: u64,
-        limit: u64,
+        limits: TransferLimits,
     ) -> Result<Vec<u8>, TransferError> {
         let actual = bytes
             .as_ref()
             .map_or(read, |bytes| u64::try_from(bytes.len()).unwrap_or(u64::MAX));
-        if actual > limit {
-            return Err(TransferError::TooLarge { actual, limit });
-        }
+        limits.check(actual)?;
         bytes.ok_or(TransferError::SourceGone)
-    }
-
-    /// What `source` of `descriptor` holds once `clip` dropped.
-    #[must_use]
-    pub(super) fn held(
-        source: &ClipSource,
-        descriptor: &RepresentationDescriptor,
-        clip: &DroppedClip,
-    ) -> Held {
-        match source {
-            ClipSource::Text => clip.text.clone().map_or(Held::Missing, |text| {
-                Held::Payload(TransferPayload::Text(text))
-            }),
-            ClipSource::Html => clip.html.clone().map_or(Held::Missing, |html| {
-                Held::Payload(TransferPayload::Html(html))
-            }),
-            ClipSource::UriList if clip.uris.is_empty() => Held::Missing,
-            ClipSource::UriList => Held::Payload(TransferUri::list_payload(
-                clip.uris.iter().cloned().map(TransferUri::Uri),
-                PathStyle::Posix,
-            )),
-            ClipSource::Identity => Held::Payload(TransferPayload::Custom {
-                mime: match &descriptor.format {
-                    TransferFormat::Custom { mime } => mime.clone(),
-                    _ => Mime::new(IDENTITY_ESSENCE),
-                },
-                bytes: Arc::from(Vec::new()),
-            }),
-            ClipSource::UriBytes => clip.uris.first().map_or(Held::Missing, |uri| {
-                Held::Uri(HeldUri {
-                    uri: uri.clone(),
-                    format: descriptor.format.clone(),
-                })
-            }),
-        }
     }
 
     /// The actions a drag over FLUI permits. Android has no drop effects: a drag
@@ -334,10 +326,10 @@ mod clip {
 
 /// The drags over the view and the drops taken from them, as plain state:
 /// each `DragEvent` the view reports becomes the [`DragDropEvent`]s it queues
-/// and the answer it returns, a drop holds what its clip carried until the
-/// target concludes it, and a request reads what a taken drop holds. Every
-/// host checks it; the JNI side around it reports the events and moves the
-/// clip and the URI permissions across.
+/// and the answer it returns. A taken drop retains only its representations'
+/// lazy sources until the target concludes it; the Java view owns the clip and
+/// its URI grant under the same offer key. Every host checks this state; the
+/// JNI side around it reports events and performs the reads and releases.
 ///
 /// A drop the target has not concluded keeps its offer, so drops overlap: a
 /// new drag may enter, drop and conclude while an earlier drop is still being
@@ -355,7 +347,7 @@ mod drops {
         TransferActions, TransferError,
     };
 
-    use super::clip::{ClipSource, DroppedClip, Held, held, incoming_allowed, offered};
+    use super::clip::{ClipSource, incoming_allowed, offered};
     use crate::drag::offers::OfferTable;
 
     /// `DragEvent.ACTION_DRAG_STARTED`.
@@ -376,8 +368,8 @@ mod drops {
         feedback: HashMap<DataTransferId, DropFeedback>,
         /// Where each representation of a hovering offer comes from at the drop.
         sources: HashMap<DataTransferId, Vec<ClipSource>>,
-        /// What each dropped offer holds, by representation index.
-        held: HashMap<DataTransferId, Vec<Held>>,
+        /// Where each representation of a taken drop is read on request.
+        dropped: HashMap<DataTransferId, Vec<ClipSource>>,
         /// The offer over the view and the actions its drag permits.
         hover: Option<(DataTransferId, TransferActions)>,
         /// The media types of the drag in progress, from `ACTION_DRAG_STARTED`.
@@ -405,7 +397,13 @@ mod drops {
             let _ = self.table.retire(id);
             self.feedback.remove(&id);
             self.sources.remove(&id);
-            self.held.remove(&id);
+            self.dropped.remove(&id);
+        }
+
+        /// The key under which the view saves the hovering offer's clip before
+        /// the drop wakes the owner, or zero when no offer hovers.
+        pub(super) fn hover_key(&self) -> i64 {
+            self.hover.map_or(0, |(id, _)| id.as_u64().cast_signed())
         }
 
         /// The hovering offer leaves the view, if one is over it.
@@ -466,31 +464,40 @@ mod drops {
             true
         }
 
-        /// `ACTION_DROP`: the event the drop queues and the offer it is taken
-        /// as, from the target's cached feedback, or `None` for the offer when
-        /// it is refused; `None` altogether when no offer hovers. A taken drop
-        /// holds what `clip` carried until [`Self::conclude`].
+        /// `ACTION_DROP`: the event the drop queues and whether it was taken,
+        /// from the target's cached feedback. `key` and `descriptors` are the
+        /// offer key and `ClipDescription` the view received; a key for another
+        /// hover changes nothing, and a description that no longer matches the
+        /// offer refuses the drop. No item is read here: the view has already
+        /// saved the clip under `key`, and requests read it until conclusion.
         pub(super) fn take_drop(
             &mut self,
+            key: i64,
             position: (f64, f64),
             local: bool,
-            clip: &DroppedClip,
+            descriptors: &[String],
         ) -> Option<(DragDropEvent, Option<DataTransferId>)> {
             let (id, allowed) = self.hover.take()?;
+            if id.as_u64().cast_signed() != key {
+                self.hover = Some((id, allowed));
+                return None;
+            }
+            let described = offered(descriptors.iter().map(String::as_str));
+            let matches = self.table.get(id).is_some_and(|representations| {
+                representations.len() == described.len()
+                    && representations
+                        .iter()
+                        .zip(&described)
+                        .all(|(known, (_, current))| known.format == current.format)
+            });
             let feedback = self.feedback.get(&id).copied().unwrap_or_default();
-            let Some(action) = feedback.resolve(allowed) else {
+            let action = matches.then(|| feedback.resolve(allowed)).flatten();
+            let Some(action) = action else {
                 self.close(id);
                 return Some((DragDropEvent::Exited { id }, None));
             };
-            let representations = self.table.get(id).map(Arc::clone);
             let sources = self.sources.remove(&id).unwrap_or_default();
-            let values = representations
-                .iter()
-                .flat_map(|representations| representations.iter())
-                .zip(&sources)
-                .map(|(descriptor, source)| held(source, descriptor, clip))
-                .collect();
-            self.held.insert(id, values);
+            self.dropped.insert(id, sources);
             if local && self.own.is_some() {
                 self.local_drop = Some(action);
             }
@@ -504,28 +511,36 @@ mod drops {
             ))
         }
 
-        /// What representation `index` of the dropped offer `id` holds.
+        /// The source and descriptor of representation `index` of dropped `id`.
         ///
         /// # Errors
         ///
         /// [`TransferError::SourceGone`] before the drop, while the clip's data
         /// is out of reach; [`TransferError::StaleOffer`] for a retired offer;
         /// [`TransferError::UnknownRepresentation`] past the offer's.
-        pub(super) fn held(
+        pub(super) fn request(
             &self,
             id: DataTransferId,
             index: RepresentationIndex,
-        ) -> Result<Held, TransferError> {
-            let Some(held) = self.held.get(&id) else {
+        ) -> Result<(ClipSource, RepresentationDescriptor), TransferError> {
+            let Some(sources) = self.dropped.get(&id) else {
                 return Err(if self.sources.contains_key(&id) {
                     TransferError::SourceGone
                 } else {
                     TransferError::StaleOffer(id)
                 });
             };
-            held.get(usize::from(index.0))
+            let source = sources
+                .get(usize::from(index.0))
+                .copied()
+                .ok_or(TransferError::UnknownRepresentation { id, index })?;
+            let descriptor = self
+                .table
+                .get(id)
+                .and_then(|representations| representations.get(usize::from(index.0)))
                 .cloned()
-                .ok_or(TransferError::UnknownRepresentation { id, index })
+                .ok_or(TransferError::UnknownRepresentation { id, index })?;
+            Ok((source, descriptor))
         }
 
         /// The target's answer for the live offer `id`, cached for the drop.
@@ -536,12 +551,13 @@ mod drops {
         }
 
         /// The target is done with the drop of `id`: its offer retires, and
-        /// `true` when it was live, so its URI permissions are released; a
-        /// stale or repeated conclusion releases nothing.
+        /// `true` only for a taken drop, so the view releases its saved clip
+        /// and URI permissions exactly once. A stale, hovering or repeated
+        /// conclusion has no Java clip to release.
         pub(super) fn conclude(&mut self, id: DataTransferId) -> bool {
-            let live = self.table.get(id).is_some();
+            let release = self.dropped.contains_key(&id);
             self.close(id);
-            live
+            release
         }
 
         /// FLUI's own drag started with `allowed`, or ended (`None`).
@@ -593,7 +609,7 @@ use crate::{
     version::gate::android::{AndroidApi, DragSource},
 };
 #[cfg(target_os = "android")]
-use clip::{DroppedClip, Held, clip_parts, source_end, uri_bytes};
+use clip::{ClipSource, clip_parts, drop_bytes, source_end};
 #[cfg(target_os = "android")]
 use drops::{ACTION_DRAG_ENDED, Drops};
 
@@ -644,26 +660,32 @@ impl ViewTransfer for AndroidTransfer {
         answer
     }
 
-    /// `ACTION_DROP`: the [`java_key`] of the offer the drop is taken as,
-    /// 0 when it is refused. A taken drop holds what the clip carried until
-    /// the target concludes it; the view holds the drop's URI permissions
-    /// under the offer's key until then.
+    /// The key of the offer whose clip the view must save before `nativeDrop`
+    /// wakes the owner, or zero when no offer hovers.
+    fn hover_key(&self) -> i64 {
+        self.drops.lock().hover_key()
+    }
+
+    /// `ACTION_DROP` of the clip the view saved under `key`: whether the target
+    /// took it. Only its descriptors cross JNI here; every item stays in Java
+    /// until a request reads it.
     fn drop_clip(
         &self,
         view: &JavaView,
+        key: i64,
         position: (f64, f64),
         local: bool,
-        text: Option<String>,
-        html: Option<String>,
-        uris: Vec<String>,
-    ) -> i64 {
-        let clip = DroppedClip { text, html, uris };
-        let taken = self.drops.lock().take_drop(position, local, &clip);
+        descriptors: &[String],
+    ) -> bool {
+        let taken = self
+            .drops
+            .lock()
+            .take_drop(key, position, local, descriptors);
         let Some((event, taken)) = taken else {
-            return 0;
+            return false;
         };
         view.push_drag(event);
-        taken.map_or(0, java_key)
+        taken.is_some()
     }
 
     fn set_own(&self, allowed: Option<TransferActions>) {
@@ -699,42 +721,34 @@ impl DragTransport for AndroidTransfer {
         representation: RepresentationIndex,
         limits: TransferLimits,
     ) -> TransferRequest {
-        let found = self.drops.lock().held(id, representation);
-        let found = match found {
+        let found = self.drops.lock().request(id, representation);
+        let (source, descriptor) = match found {
             Ok(found) => found,
             Err(error) => return TransferRequest::ready(Err(error)),
         };
-        match found {
-            Held::Payload(payload) => {
-                let actual = payload.byte_len();
-                TransferRequest::ready(if actual > limits.max_bytes {
-                    Err(TransferError::TooLarge {
-                        actual,
-                        limit: limits.max_bytes,
-                    })
-                } else {
-                    Ok(payload)
-                })
-            }
-            Held::Missing => TransferRequest::ready(Err(TransferError::SourceGone)),
-            Held::Uri(held) => {
-                let Some(view) = self.view.upgrade() else {
-                    return TransferRequest::ready(Err(TransferError::SourceGone));
-                };
-                let (request, completer) = TransferRequest::pending();
-                let spawned = std::thread::Builder::new()
-                    .name("flui-drop-read".into())
-                    .spawn(move || {
-                        let result = read_uri(&view, &held.uri, limits.max_bytes)
-                            .map(|bytes| held.payload(bytes));
-                        completer.complete(result);
-                    });
-                if let Err(error) = spawned {
-                    tracing::warn!(target: "flui_native::android", %error, "no thread to read a dropped URI");
-                }
-                request
-            }
+        if source == ClipSource::Identity {
+            return TransferRequest::ready(
+                source.request(&descriptor, limits, |_, _| Err(TransferError::SourceGone)),
+            )
+            .enforce(limits);
         }
+        let Some(view) = self.view.upgrade() else {
+            return TransferRequest::ready(Err(TransferError::SourceGone));
+        };
+        let key = java_key(id);
+        let (request, completer) = TransferRequest::pending();
+        let spawned = std::thread::Builder::new()
+            .name("flui-drop-read".into())
+            .spawn(move || {
+                let result = source.request(&descriptor, limits, |source, limits| {
+                    read_drop(&view, key, source, limits)
+                });
+                completer.complete(result);
+            });
+        if let Err(error) = spawned {
+            tracing::warn!(target: "flui_native::android", %error, "no thread to read a dropped clip");
+        }
+        request.enforce(limits)
     }
 
     fn update_drop_feedback(&self, id: DataTransferId, feedback: DropFeedback) {
@@ -758,32 +772,37 @@ impl DragTransport for AndroidTransfer {
     }
 }
 
-/// The key `FluiView` holds a taken drop's URI permissions under: the
+/// The key `FluiView` holds a taken drop's clip and URI permissions under: the
 /// offer's whole identity, generation included, so a concluded offer never
-/// releases a later one's. Never zero, which the view reads as refused.
+/// releases a later one's. Never zero, which the view reads as no offer.
 #[cfg(target_os = "android")]
 fn java_key(id: DataTransferId) -> i64 {
     id.as_u64().cast_signed()
 }
 
-/// The bytes behind `uri`, read through the view's content resolver on the
-/// calling thread.
+/// One representation of the clip the view saved under `key`, read through its
+/// bounded `readDrop` on the calling thread under `limits`.
 #[cfg(target_os = "android")]
-fn read_uri(view: &JavaView, uri: &str, limit: u64) -> Result<Vec<u8>, TransferError> {
+fn read_drop(
+    view: &JavaView,
+    key: i64,
+    source: ClipSource,
+    limits: TransferLimits,
+) -> Result<Vec<u8>, TransferError> {
     let Some(target) = view.view() else {
         return Err(TransferError::SourceGone);
     };
     let read = view.attached(|env| {
-        let uri = env.new_string(uri)?;
         let count = env.new_long_array(1)?;
         let bytes = env
             .call_method(
                 target.as_ref(),
-                jni_str!("readUri"),
-                jni_sig!("(Ljava/lang/String;J[J)[B"),
+                jni_str!("readDrop"),
+                jni_sig!("(JIJ[J)[B"),
                 &[
-                    JValue::Object(&uri),
-                    JValue::Long(i64::try_from(limit).unwrap_or(i64::MAX)),
+                    JValue::Long(key),
+                    JValue::Int(source.code()),
+                    JValue::Long(i64::try_from(limits.max_bytes).unwrap_or(i64::MAX)),
                     JValue::Object(&count),
                 ],
             )?
@@ -798,7 +817,7 @@ fn read_uri(view: &JavaView, uri: &str, limit: u64) -> Result<Vec<u8>, TransferE
         Ok((Some(env.convert_byte_array(&bytes)?), read))
     });
     match read {
-        Ok((bytes, read)) => uri_bytes(bytes, read, limit),
+        Ok((bytes, read)) => drop_bytes(bytes, read, limits),
         Err(_) => Err(TransferError::SourceGone),
     }
 }

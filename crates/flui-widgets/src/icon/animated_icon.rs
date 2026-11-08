@@ -12,12 +12,14 @@ use flui_painting::Canvas;
 use flui_painting::paint::Paint;
 use flui_painting::styling::Color;
 use flui_painting::typography::TextDirection;
+use flui_rendering::delegates::CustomPainter;
+use flui_rendering::semantics::SemanticsRole;
 use flui_view::prelude::*;
 use flui_view::{CreationSite, ViewExt};
 
 use super::symbol_effect::{ContentKey, SymbolEffectHost};
 use super::{AnimatedIconData, IconTheme, PathEffect, SymbolEffect};
-use crate::{AnimatedBuilder, CustomPaint, CustomPainter, Directionality, Semantics, TickerMode};
+use crate::{AnimatedBuilder, CustomPaint, Directionality, Semantics, TickerMode};
 use flui_view::environment::VsyncScope;
 
 /// An icon whose vector paths move with an animation: a play button that turns into pause,
@@ -248,9 +250,7 @@ impl ViewState<AnimatedIcon> for AnimatedIconState {
         };
         let mut semantics = Semantics::new();
         if let Some(label) = &view.semantic_label {
-            semantics = semantics
-                .label(label.clone())
-                .role(crate::SemanticsRole::Image);
+            semantics = semantics.label(label.clone()).role(SemanticsRole::Image);
         }
         let built = semantics.child(built).boxed();
         match view.effect.as_ref().or(theme.symbol_effect.as_ref()) {

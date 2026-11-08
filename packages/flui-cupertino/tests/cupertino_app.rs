@@ -18,16 +18,40 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
-use common::{lay_out, loose};
+use common::{lay_out, lay_out_animated, loose};
 use flui_cupertino::{
     CupertinoApp, CupertinoColor, CupertinoColors, CupertinoTheme, CupertinoThemeData,
 };
-use flui_sdk::painting::Color;
+use flui_sdk::animation::Vsync;
+use flui_sdk::painting::styling::Color;
 use flui_sdk::platform::Brightness;
-use flui_sdk::view::environment::{MediaQuery, MediaQueryData};
+use flui_sdk::view::environment::{MediaQuery, MediaQueryData, VsyncScope};
 use flui_sdk::view::prelude::*;
 use flui_sdk::view::{BoxedView, RebuildHandle};
-use flui_sdk::widgets::SizedBox;
+use flui_sdk::widgets::{Routable, Router, RouterForm, SizedBox};
+
+#[derive(Routable, Debug, Clone, PartialEq)]
+enum CupertinoRoute {
+    #[route("/")]
+    Home,
+}
+
+pub fn router_mounts_pages_below_the_cupertino_theme() {
+    let (probe, captured) = probe();
+    let router = Router::new(
+        CupertinoRoute::Home,
+        move |_route: &CupertinoRoute, _ctx| probe.clone().boxed(),
+    );
+    let theme = CupertinoThemeData::default().with_primary_color(CupertinoColors::SYSTEM_RED);
+    let app: CupertinoApp<RouterForm> = CupertinoApp::router(router).theme(theme);
+    let vsync = Vsync::new();
+    let _tree = lay_out_animated(VsyncScope::new(vsync.clone(), app), loose(800.0), vsync);
+
+    assert_eq!(
+        observed(&captured).published_primary,
+        CupertinoColor::Static(SYSTEM_RED_LIGHT)
+    );
+}
 
 /// What a descendant of the shell observes: the effective brightness, the
 /// published theme's (already materialized) primary color, and a dynamic

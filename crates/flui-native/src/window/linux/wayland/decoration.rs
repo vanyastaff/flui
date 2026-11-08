@@ -10,8 +10,6 @@
 
 #![forbid(unsafe_code)]
 
-use flui_platform::CapabilityAbsence;
-
 /// `zxdg_toplevel_decoration_v1.mode` values.
 const CLIENT_SIDE: u32 = 1;
 const SERVER_SIDE: u32 = 2;
@@ -91,20 +89,16 @@ impl Decoration {
         app_title_bar && self.draws_own && matches!(self.drawn(), Drawn::Nobody)
     }
 
-    /// Why the window cannot take a title bar of the application's, or
-    /// `None` where it can: it draws the margins of its own frame around
-    /// it, with the subsurfaces and shared memory a frame is drawn with,
-    /// where the compositor leaves the frame to it.
+    /// Whether the window cannot take a title bar of the application's. It
+    /// draws the margins of its own frame around it, with the subsurfaces and
+    /// shared memory a frame is drawn with, where the compositor leaves the
+    /// frame to it.
     #[cfg_attr(
         not(wayland_host),
         allow(dead_code, reason = "read by the Wayland host's window alone")
     )]
-    pub(crate) const fn app_title_bar_absence(self) -> Option<CapabilityAbsence> {
-        if self.draws_own {
-            self.absence()
-        } else {
-            Some(CapabilityAbsence::NotOnThisDevice)
-        }
+    pub(crate) const fn app_title_bar_unavailable(self) -> bool {
+        !self.draws_own || self.frame_unavailable()
     }
 
     /// Whether the window has a frame, whoever draws it.
@@ -112,14 +106,13 @@ impl Decoration {
         !matches!(self.drawn(), Drawn::Nobody)
     }
 
-    /// Why the window's frame cannot be turned on and off, or `None`
-    /// where it can. A compositor that answered a request for no frame
-    /// with one of its own decides the frame itself (sway draws one
-    /// around every tiled window). A window that cannot draw its own
-    /// frame has none where the compositor draws none, and one the
-    /// compositor answered with the other mode is overruled either way.
+    /// Whether the window's frame cannot be turned on and off. A compositor
+    /// that answered a request for no frame with one of its own decides the
+    /// frame itself (sway draws one around every tiled window). A window that
+    /// cannot draw its own frame has none where the compositor draws none, and
+    /// one the compositor answered with the other mode is overruled either way.
     /// Until the compositor answers, the request stands.
-    pub(crate) const fn absence(self) -> Option<CapabilityAbsence> {
+    pub(crate) const fn frame_unavailable(self) -> bool {
         let (answered_with, decided) = match (self.answered, self.told) {
             (true, Some(drawer)) => (Some(drawer), true),
             _ => (None, false),
@@ -129,11 +122,7 @@ impl Decoration {
         } else {
             decided && matches!(answered_with, Some(FrameDrawer::Compositor)) != self.requested
         };
-        if overruled || (!self.offered && !self.draws_own) {
-            Some(CapabilityAbsence::NotOnThisDevice)
-        } else {
-            None
-        }
+        overruled || (!self.offered && !self.draws_own)
     }
 }
 
@@ -148,7 +137,7 @@ mod tests {
     fn a_window_has_the_frame_its_compositor_leaves_it() {
         use Drawn::{Client as Own, Compositor as Theirs, Nobody};
         use FrameDrawer::{Client, Compositor};
-        let overruled = Some(CapabilityAbsence::NotOnThisDevice);
+        let overruled = true;
         let decoration = |offered, requested, told, answered| Decoration {
             offered,
             draws_own: true,
@@ -161,37 +150,37 @@ mod tests {
                 "no xdg-decoration: the window's own",
                 decoration(false, true, None, false),
                 Own,
-                None,
+                false,
             ),
             (
                 "no xdg-decoration, none wanted",
                 decoration(false, false, None, false),
                 Nobody,
-                None,
+                false,
             ),
             (
                 "asked, not answered yet",
                 decoration(true, true, None, false),
                 Nobody,
-                None,
+                false,
             ),
             (
                 "asked and drawn",
                 decoration(true, true, Some(Compositor), true),
                 Theirs,
-                None,
+                false,
             ),
             (
                 "asked, left to the client: the window's own",
                 decoration(true, true, Some(Client), true),
                 Own,
-                None,
+                false,
             ),
             (
                 "turned off",
                 decoration(true, false, Some(Client), true),
                 Nobody,
-                None,
+                false,
             ),
             (
                 "turned off, drawn regardless",
@@ -203,18 +192,18 @@ mod tests {
                 "turned off, the old frame until the answer",
                 decoration(true, false, Some(Compositor), false),
                 Theirs,
-                None,
+                false,
             ),
             (
                 "turned on again, the window's own until the answer",
                 decoration(true, true, Some(Client), false),
                 Own,
-                None,
+                false,
             ),
         ] {
             assert_eq!(decoration.drawn(), drawn, "{case}");
             assert_eq!(decoration.decorated(), drawn != Nobody, "{case}");
-            assert_eq!(decoration.absence(), absence, "{case}");
+            assert_eq!(decoration.frame_unavailable(), absence, "{case}");
         }
         assert_eq!(
             FrameDrawer::from_mode(SERVER_SIDE),
@@ -238,15 +227,15 @@ mod tests {
             told,
             answered,
         };
-        let overruled = Some(CapabilityAbsence::NotOnThisDevice);
+        let overruled = true;
         let bare = none(false, true, None, false);
         assert_eq!(bare.drawn(), Drawn::Nobody);
-        assert_eq!(bare.absence(), overruled);
+        assert_eq!(bare.frame_unavailable(), overruled);
         let left = none(true, true, Some(FrameDrawer::Client), true);
         assert_eq!(left.drawn(), Drawn::Nobody);
-        assert_eq!(left.absence(), overruled);
+        assert_eq!(left.frame_unavailable(), overruled);
         let drawn = none(true, true, Some(FrameDrawer::Compositor), true);
         assert_eq!(drawn.drawn(), Drawn::Compositor);
-        assert_eq!(drawn.absence(), None);
+        assert!(!drawn.frame_unavailable());
     }
 }

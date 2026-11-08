@@ -374,13 +374,18 @@ pub(super) fn build_ui_runtime(
     let preferences =
         APP_RUNTIME.with(|slot| slot.borrow().installed_host.logical().preferences())?;
     let fonts = runtime_font_collection();
+    // Clone the loop-scoped services under a short borrow: runtime construction
+    // and every later provider call must be able to re-enter APP_RUNTIME.
+    let executor: Arc<dyn flui_platform::executor::Executor> =
+        APP_RUNTIME.with(|slot| Arc::clone(slot.borrow_mut().ensure_execution()));
     let mut host = crate::app::ui_runtime::RuntimeHostServices::new(
         wake,
         redraw,
         &fonts,
         flui_scheduler::ClockSource::Platform,
     )
-    .with_capabilities(runtime_capabilities());
+    .with_capabilities(runtime_capabilities())
+    .with_executor(executor);
     if let Some(registry) = APP_RUNTIME.with(|slot| slot.borrow().flush_registry()) {
         host = host.with_flush_registry(registry);
     }
@@ -1238,9 +1243,8 @@ impl flui_native::AppHandler for RunnerHandler {
 
 /// Routes the platform's exit question to this thread's `AppRuntime`, instead
 /// of letting a platform backend decide, alone, whether "every window this
-/// backend tracks just closed" means "exit" — the live-loop wiring `issue
-/// #555`'s `ExitPolicy`/`AppRuntime::should_exit` names as its own
-/// deliberately-deferred follow-up (see `ExitPolicy`'s own doc). Call once,
+/// backend tracks just closed" means "exit" — the live-loop wiring for
+/// `ExitPolicy`/`AppRuntime::should_exit` (see `ExitPolicy`'s own doc). Call once,
 /// immediately after [`install_owner_platform`], from every backend that
 /// wants this: today, that is `run_desktop` only — Android, the web and iOS
 /// never ask the exit policy.

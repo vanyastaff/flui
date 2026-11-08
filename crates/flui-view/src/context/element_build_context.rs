@@ -237,6 +237,7 @@ impl BuildContext for ElementBuildContext {
             super::build_context::sealed::CrateToken::new(),
             type_id,
             crate::view::FieldSet::ALL,
+            crate::view::EntrySet::ALL,
             callback,
         )
     }
@@ -246,14 +247,15 @@ impl BuildContext for ElementBuildContext {
         _token: super::build_context::sealed::CrateToken,
         type_id: TypeId,
         mask: crate::view::FieldSet,
+        entries: crate::view::EntrySet,
         callback: &mut dyn FnMut(&dyn Any),
     ) -> bool {
         // Walk ancestors looking for an Element whose view_type_id
         // matches; the first one is the nearest InheritedView<T>.
         //
-        // Records this element (with the fields it read, #1090) in the
-        // matched InheritedElement's dependent map so a later provider update
-        // whose `changed_fields` intersects that mask schedules us for rebuild.
+        // Records this element's field and entry reads in the matched
+        // InheritedElement's dependent map so a later provider update whose
+        // changes intersect either set schedules us for rebuild.
         let Some(ancestor_id) = self.find_inherited_provider(type_id) else {
             self.owner.write().register_inherited_miss(self.element_id);
             return false;
@@ -301,6 +303,7 @@ impl BuildContext for ElementBuildContext {
             self_id,
             self_depth,
             mask,
+            entries,
         );
         owner.register_inherited_dependency(self_id, ancestor_id);
         drop(owner);
@@ -630,6 +633,9 @@ impl LifecycleContext for ElementBuildContext {
     fn close_guard(&self) -> Option<crate::CloseGuard> {
         self.owner.read().capabilities().close_guard.clone()
     }
+    fn url_owner_slot(&self) -> Option<crate::UrlOwnerSlot> {
+        self.owner.read().capabilities().url_owner.clone()
+    }
     fn flush_registry_in_crate(
         &self,
         _token: super::build_context::sealed::CrateToken,
@@ -678,6 +684,8 @@ pub(crate) struct DependentRecord {
     pub(crate) depth: usize,
     /// The provider fields the dependent read (#1090).
     pub(crate) mask: crate::view::FieldSet,
+    /// The provider's dynamically typed entries the dependent read.
+    pub(crate) entries: crate::view::EntrySet,
     /// Recorded from `init_state` / `did_change_dependencies` rather than
     /// `build`: such reads are kept until unmount (they accumulate),
     /// not re-derived per build (ADR-0074 §5.5). Set by the
@@ -845,6 +853,7 @@ impl BuildContext for BuildCtx<'_> {
             super::build_context::sealed::CrateToken::new(),
             type_id,
             crate::view::FieldSet::ALL,
+            crate::view::EntrySet::ALL,
             callback,
         )
     }
@@ -854,6 +863,7 @@ impl BuildContext for BuildCtx<'_> {
         _token: super::build_context::sealed::CrateToken,
         type_id: TypeId,
         mask: crate::view::FieldSet,
+        entries: crate::view::EntrySet,
         callback: &mut dyn FnMut(&dyn Any),
     ) -> bool {
         let provider_id = self.find_inherited_provider(type_id);
@@ -862,6 +872,7 @@ impl BuildContext for BuildCtx<'_> {
             dependent: self.element_id,
             depth: self.depth,
             mask,
+            entries,
             lifecycle: false,
         });
         let Some(provider_id) = provider_id else {
@@ -1088,6 +1099,9 @@ impl LifecycleContext for BuildCtx<'_> {
     }
     fn close_guard(&self) -> Option<crate::CloseGuard> {
         self.capabilities.presentation.close_guard.clone()
+    }
+    fn url_owner_slot(&self) -> Option<crate::UrlOwnerSlot> {
+        self.capabilities.presentation.url_owner.clone()
     }
     fn flush_registry_in_crate(
         &self,

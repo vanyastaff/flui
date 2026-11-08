@@ -339,6 +339,47 @@ fn a_wheel_frame_is_one_step_in_detents() {
     }
 }
 
+/// A rejected axis value emits no substitute zero, while a finite zero from
+/// the compositor remains an input event.
+#[test]
+fn a_non_finite_axis_value_is_not_a_zero_scroll() {
+    for (source, value, expected) in [
+        (AxisSource::Continuous, f64::NAN, None),
+        (AxisSource::Continuous, f64::INFINITY, None),
+        (
+            AxisSource::Continuous,
+            0.0,
+            Some("s1 scroll p1 Mouse Pixels 0,0 Precise None"),
+        ),
+        (AxisSource::Wheel, f64::NAN, None),
+        (AxisSource::Wheel, f64::NEG_INFINITY, None),
+        (
+            AxisSource::Wheel,
+            0.0,
+            Some("s1 scroll p1 Mouse Pixels 0,0 Notched None"),
+        ),
+    ] {
+        let lines = feed(
+            &mut seated(),
+            &[
+                mouse(PointerWire::Enter {
+                    surface: WINDOW,
+                    x: 5.0,
+                    y: 5.0,
+                }),
+                mouse(PointerWire::Frame),
+                mouse(PointerWire::AxisSource(source)),
+                mouse(PointerWire::Axis {
+                    axis: Axis::Vertical,
+                    value,
+                }),
+                mouse(PointerWire::Frame),
+            ],
+        );
+        assert_eq!(&lines[1..], expected.as_slice(), "{source:?} {value}");
+    }
+}
+
 /// Fingers on a touchpad scroll in phases: the first frame begins, the next
 /// change, and the stop at the lift ends; a leave mid-scroll cancels it.
 #[test]
@@ -361,7 +402,9 @@ fn a_finger_scroll_is_phased_until_its_stop() {
         }),
         mouse(PointerWire::Frame),
     ];
+    wire.extend(fingers(f64::NAN));
     wire.extend(fingers(4.0));
+    wire.extend(fingers(f64::NAN));
     wire.extend(fingers(8.0));
     wire.extend([
         mouse(PointerWire::AxisSource(AxisSource::Finger)),

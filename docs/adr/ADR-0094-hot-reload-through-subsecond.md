@@ -3,11 +3,15 @@
 - **Status:** Rejected (2026-11-04)
 - **Date:** 2026-09-25
 - **Related:** [ADR-0311](ADR-0311-development-reload-is-a-hook-the-application-installs.md) (the
-  development reload hook, accepted on its own, and the condition on which a code patcher returns);
+  development reload hook, accepted independently of this proposal);
+  [ADR-0316](ADR-0316-the-dlopen-worker-host-development-cycle-is-supported.md) (the supported
+  dynamic-image development cycle; any future code patcher needs a new ADR);
+  [ADR-0315](ADR-0315-first-party-packages-remain-train-aligned-facade-features.md) (the facade's
+  standing `hot-reload` feature; the host still names no reload tool);
   [ADR-0108](ADR-0108-plugin-scene-render-callback-safety.md) and
   [ADR-0111](ADR-0111-worker-image-lifetime.md) (the dlopen path's lifetime contracts);
   [ADR-0096](ADR-0096-dev-build-dynamic-linking.md) (dynamic linking, independent of hot reload);
-  [ADR-0097](ADR-0097-no-process-global-state-gate.md) (the globals a code patcher splits)
+  [ADR-0097](ADR-0097-no-process-global-state-gate.md) (the global-state findings the spike informs)
 - **Revised:** 2026-11-04 — rejected. The hook this record proposed was built ahead of Subsecond and
   is now ADR-0311's; the record keeps the Subsecond proposal, the spike that ran it and the reasons
   it is declined.
@@ -30,9 +34,9 @@ costs:
 - **Framework code is shaped around the plugin boundary.** `REGISTRY_STACK` in `flui-view` is
   `ManuallyDrop` because the module can be instantiated in a hot-reload `cdylib`, and a worker
   `cdylib` links its own copy of each framework static it touches.
-- **A core crate named the dev tool.** `flui-app` had an optional dependency on `flui-hot-reload`
-  and the facade still re-exports it behind a feature; ADR-0088 forbids a core crate naming an
-  official package.
+- **The host named the dev tool.** `flui-app` had an optional dependency on `flui-hot-reload`.
+  That edge is gone and ADR-0311 keeps the host on the installed-hook seam. The facade's separate
+  opt-in re-export is standing aggregation under ADR-0315, not a host dependency.
 - **The user pays a project shape for it.** Code that should reload must live in the worker crate,
   and the state it keeps in the host.
 
@@ -101,9 +105,10 @@ lives in `flui-view` and the application installs it explicitly. The poll-driven
 was built and is accepted on its own as ADR-0311; the per-call seam and `RestartRequired` were
 never built.
 
-§2. **No core crate depends on the reload package.** `flui-app`'s feature and edge, and the
-facade's `hot-reload` feature, go when `flui-hot-reload` moves into the official packages.
-ADR-0311 §6 states this rule now.
+§2. **No core crate below the facade depends on the reload package.** `flui-app`'s feature and
+edge go when `flui-hot-reload` moves into the official packages; ADR-0311 §6 states that host
+boundary now. The facade's separate opt-in `hot-reload` feature and re-export remain standing
+aggregation under ADR-0315.
 
 §3. **The package implements the hook on Subsecond**, with `flui run` driving the patch build, a
 derive-generated structural hash over every retained `View` and `ViewState` type to detect a type
@@ -129,20 +134,17 @@ applied on the owner thread, and the spike had run on macOS and Android and agai
 - **§3–§5 are pinned to `dx` 0.7.10** and to criteria nobody is working toward, while fifteen
   manifest exceptions named this `Proposed` record as their exit, an exception with no exit.
 - **The hook does not depend on the tool.** The half that was built is held by tests and the
-  runtime, so it is accepted as its own record (ADR-0311), and the dlopen path's exceptions exit
-  through it.
+  runtime, so it is accepted as its own record (ADR-0311). ADR-0316 supports the dynamic-image
+  development cycle independently; no live manifest exception relies on this rejected proposal.
 
 ## More information
 
-- **Revisit** when a `dx` release keeps RAX in its Windows x64 stub. Subsecond then returns as a new
-  `Proposed` record, which brings the per-call seam and the restart event (ADR-0311 §7), and its
-  spike runs first on Linux, where CI's container can run it, then on Windows, macOS and Android
-  devices. The spike's findings above stand as that record's starting evidence: app-crate statics
-  and thread-locals break, only hook-wrapped calls reach patched code, and patch addresses must be
-  canonicalised.
+- The spike's findings are historical evidence for any future proposal: app-crate statics and
+  thread-locals break, only hook-wrapped calls reach patched code, and patch addresses must be
+  canonicalised. They do not establish a return condition or supersede ADR-0316's supported cycle.
 - Dynamic linking (ADR-0096) and Subsecond are independent; the dynamic linking study found them
   compatible after [dioxus#4174](https://github.com/DioxusLabs/dioxus/pull/4174) but did not test
   the pair on Windows. Windows keeps MSVC's PDBs (`.cargo/config.toml`), which Subsecond reads.
 - `dioxus_devtools::connect` runs its callback on a spawned thread, so the spike's patch
-  application raced the UI thread's jump-table reads; a returning record applies patches on the
+  application raced the UI thread's jump-table reads; any future proposal applies patches on the
   owner thread.

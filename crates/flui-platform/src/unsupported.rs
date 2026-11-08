@@ -8,7 +8,7 @@
 //! [`SubmitError`](crate::SubmitError),
 //! [`CursorError`](crate::CursorError), [`DragError`](crate::drag::DragError),
 //! [`HapticOutcome`](crate::haptics::HapticOutcome),
-//! [`StorageError`](crate::StorageError),
+//! [`LaunchError`](crate::launch::LaunchError), [`StorageError`](crate::StorageError),
 //! [`PreferenceQueryError`](crate::PreferenceQueryError) and
 //! [`TextStoreHostError`](crate::text_store::TextStoreHostError). Each converts
 //! from it and answers [`unsupported`](crate::AdmissionError::unsupported)
@@ -59,56 +59,6 @@ pub enum UnsupportedReason {
     /// It belongs to a window, and that window is not there: never opened,
     /// or already closed.
     NoWindow,
-}
-
-/// Where a capability that is not here is missing: the platform, this device
-/// or this host. These are the reasons a capability that lasts can be absent
-/// for, which a host records against the capability and every refusal of it
-/// answers ([`WindowCapabilities::unavailable`](crate::WindowCapabilities::unavailable)).
-///
-/// None of them is [retryable](Unsupported::is_retryable): a capability is
-/// published as `Unavailable` until the host publishes it again, so a reason
-/// that asks to be tried again ([`UnsupportedReason::Unavailable`]) is not one
-/// a capability can carry, nor are the reasons about a window or a
-/// registration that has gone ([`NoWindow`](UnsupportedReason::NoWindow),
-/// [`NotRegistered`](UnsupportedReason::NotRegistered)).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-#[non_exhaustive]
-pub enum CapabilityAbsence {
-    /// No device of this platform has it
-    /// ([`UnsupportedReason::NotOnThisPlatform`]).
-    #[default]
-    NotOnThisPlatform,
-    /// The platform has it and this device or its operating system build
-    /// lacks it ([`UnsupportedReason::NotOnThisDevice`]).
-    NotOnThisDevice,
-    /// The operating system has it and this host does not implement it yet
-    /// ([`UnsupportedReason::NotYetOnThisHost`]).
-    NotYetOnThisHost,
-}
-
-impl From<CapabilityAbsence> for UnsupportedReason {
-    fn from(absence: CapabilityAbsence) -> Self {
-        absence.reason()
-    }
-}
-
-impl CapabilityAbsence {
-    /// The reason a refusal of the capability answers.
-    #[must_use]
-    pub const fn reason(self) -> UnsupportedReason {
-        match self {
-            Self::NotOnThisPlatform => UnsupportedReason::NotOnThisPlatform,
-            Self::NotOnThisDevice => UnsupportedReason::NotOnThisDevice,
-            Self::NotYetOnThisHost => UnsupportedReason::NotYetOnThisHost,
-        }
-    }
-}
-
-impl From<CapabilityAbsence> for Unsupported {
-    fn from(absence: CapabilityAbsence) -> Self {
-        Self::new(absence.reason())
-    }
 }
 
 impl fmt::Display for UnsupportedReason {

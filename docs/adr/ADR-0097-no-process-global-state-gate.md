@@ -24,8 +24,10 @@
   [ADR-0078](ADR-0078-rules-live-in-types-and-lints.md),
   [ADR-0091](ADR-0091-one-owner-thread-isolated-realms-raster-thread.md),
   [ADR-0092](ADR-0092-per-realm-text-over-parley.md),
-  [ADR-0311](ADR-0311-development-reload-is-a-hook-the-application-installs.md) (the exit of the
-  dlopen path's entries),
+  [ADR-0311](ADR-0311-development-reload-is-a-hook-the-application-installs.md) (the development
+  reload boundary and its internal package-edge exits),
+  [ADR-0316](ADR-0316-the-dlopen-worker-host-development-cycle-is-supported.md) (the supported
+  dynamic-image cycle, its image-local grants and its per-loop registry exits),
   [ADR-0094](ADR-0094-hot-reload-through-subsecond.md) (the rejected Subsecond record)
 - **Refs:** principle P3 and its gate in the [decision index](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/design/decisions.md); the
   [architecture review](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/2026-09-25-architecture-review/report-architecture.ru.md)
@@ -65,11 +67,12 @@ is whatever the scan below produces.
 
 This state costs three things. It breaks isolation: two UI runtimes share one font system and one
 time dilation, and `TIME_DILATION` contradicts ADR-0027 §8 ("Tickers and animation controllers
-belong to their UI runtime's scheduler"). It breaks code patching: a copy of a static in a second
-image, or a reset thread-local, splits whatever lives there — the dlopen worker already needed
-a fix for its own `FONT_SYSTEM` (`docs/hot-reload.md:213`), and the Subsecond spike broke on
-app-crate statics and thread-locals (ADR-0094), so a code patcher that returns (ADR-0311 §7) needs
-globals reduced first. It breaks determinism of tests that run in one process.
+belong to their UI runtime's scheduler"). A copy of a static in a second image, or a reset
+thread-local, can also split state across a dynamic-image or code-patching boundary — the dlopen
+worker already needed a fix for its own `FONT_SYSTEM` (`docs/hot-reload.md:213`), and the Subsecond
+spike broke on app-crate statics and thread-locals (ADR-0094). ADR-0316 supports the dynamic-image
+cycle independently of any future patcher, with image-local state distinguished from process-global
+routing debt. Shared state also breaks determinism of tests that run in one process.
 
 **Nothing guards against a new one.** `docs/runtime-contract.toml` and its checker were
 deleted deliberately in cf46dfe20 (#1283), whose message says those rules "are types and
@@ -101,7 +104,7 @@ the build (`#[cfg(test)]`, `all(test, …)`); `any(test, feature = "…")`, `deb
 every platform cfg are scanned, and the result does not depend on the host. `Atomic*` statics are
 findings like any other: `TIME_DILATION` is configuration, not an identifier.
 
-### 2. Two shapes are exempt; one class is a named exception; everything else is listed
+### 2. Two shapes are exempt; named grant classes cover justified state; everything else is listed
 
 - **Immutable data** is exempt: a non-`mut` `static` (never a thread-local) whose type is a
   primitive, a shared reference to `str` or to immutable data, an array, slice or tuple of
@@ -133,11 +136,9 @@ findings like any other: `TIME_DILATION` is configuration, not an identifier.
   `flui-native`, or a second cell in the host or in one platform, claims it. The secondary-window queues
   beside `APP_RUNTIME` are not trampolines; they fold into it or into a UI runtime.
 - **Everything else** is an allowlist entry with a reason and either an `exit`, the ADR whose
-  change removes it (`FONT_SYSTEM` → ADR-0092;
-  `REQUEST_REBUILD` and `REGISTRY_STACK`'s `ManuallyDrop` form → ADR-0311, with the dlopen path;
-  `TIME_DILATION`
-  → this ADR, as a property of each presentation's frame clock), or a permanent
-  `grant = "ADR-0097"` with a `class` the gate checks:
+  change removes it (`FONT_SYSTEM` → ADR-0092; `REQUEST_REBUILD` and the other per-loop registries
+  → ADR-0316; `TIME_DILATION` → this ADR, as a property of each presentation's frame clock), or a
+  permanent `grant = "ADR-0097"` with a `class` the gate checks:
   - `trampoline` — the one named exception above; it must be a `thread_local!` entry.
   - `counter` — an atomic integer advanced through a reference (a `try_update` helper behind
     `&NAME`, which keeps exhaustion an error); no direct `store`, `swap`, `load`, `fetch_sub`,
@@ -148,6 +149,11 @@ findings like any other: `TIME_DILATION` is configuration, not an identifier.
   - `process` — mirrors a resource the process has once: an OS registration, the system
     clipboard, a GCD queue, tracing's global dispatcher. Nothing structural is checked; the
     reason names the resource.
+  - `image` — thread-local state whose lifetime is one dynamically loaded image/owner thread in it,
+    never shared between UI runtimes; destructor suppression such as `ManuallyDrop` is part of safe
+    image lifetime. The reason names the image and its owner thread. This is not a `process`
+    resource: `REGISTRY_STACK` and the plugin's `__FLUI_APP_STATE` use this class under ADR-0316,
+    while process-global worker registries retain their per-loop exits.
   - `diagnostic` — a `Once` or `AtomicBool` flag, or an item whose cfg is false in every build
     without `debug_assertions` (so not `not(debug_assertions)`, nor
     `any(debug_assertions, …)`), that no behavior reads.

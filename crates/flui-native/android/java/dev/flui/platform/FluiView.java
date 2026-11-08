@@ -36,7 +36,8 @@ import android.view.inputmethod.InputMethodManager;
 
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
-import java.util.HashMap;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * The one view FLUI adds over a NativeActivity's content: the input method's
@@ -60,9 +61,12 @@ public final class FluiView extends View {
     static native boolean nativeDrag(long handle, int action, float x, float y,
             String[] mimeTypes, boolean local, boolean result);
 
-    /** The offer a taken drop holds until FLUI concludes it, or zero when it is refused. */
-    static native long nativeDrop(long handle, float x, float y, boolean local, String text,
-            String html, String[] uris);
+    /** The hovering offer's clip key, or zero when there is no offer. */
+    static native long nativeDropOffer(long handle);
+
+    /** Whether the target took the clip already saved under {@code offer}. */
+    static native boolean nativeDrop(long handle, long offer, float x, float y, boolean local,
+            String[] descriptors);
 
     static native void nativeImeState(long handle, String text, int selectionStart,
             int selectionEnd, int compositionStart, int compositionEnd, int generation);
@@ -130,8 +134,9 @@ public final class FluiView extends View {
     private boolean handwriting;
     /** Whether this view started the drag the system runs now. */
     private boolean dragging;
-    /** The permissions of each taken drop's content URIs, by its offer, until FLUI concludes it. */
-    private final HashMap<Long, Object> dropPermissions = new HashMap<Long, Object>();
+    /** Each taken drop's clip and URI permissions, by offer, until FLUI concludes it. */
+    private final ConcurrentHashMap<Long, HeldDrop> drops =
+            new ConcurrentHashMap<Long, HeldDrop>();
     /** The mirror's state last reported, so an unchanged state is not sent twice. */
     private String reportedText;
     private int reportedSelectionStart = -1;
@@ -249,10 +254,10 @@ public final class FluiView extends View {
         setAccessibilityDelegate(null);
         stopObserving();
         editing = false;
-        for (Object permissions : dropPermissions.values()) {
-            release(permissions);
+        for (HeldDrop drop : drops.values()) {
+            drop.release();
         }
-        dropPermissions.clear();
+        drops.clear();
         inputMethods.restartInput(this);
         ViewGroup parent = (ViewGroup) getParent();
         if (parent != null) {
@@ -541,55 +546,71 @@ public final class FluiView extends View {
         }
     }
 
+    private static final int DROP_TEXT = 0;
+    private static final int DROP_HTML = 1;
+    private static final int DROP_URI_LIST = 2;
+    private static final int DROP_URI_BYTES = 3;
+
     private boolean drop(DragEvent event, boolean local) {
-        ClipData clip = event.getClipData();
-        String text = null;
-        String html = null;
-        String[] uris = new String[0];
-        Object permissions = null;
-        if (clip != null) {
-            StringBuilder plain = new StringBuilder();
-            java.util.ArrayList<String> found = new java.util.ArrayList<String>();
-            for (int index = 0; index < clip.getItemCount(); index++) {
-                ClipData.Item item = clip.getItemAt(index);
-                CharSequence itemText = item.getText();
-                if (itemText != null) {
-                    plain.append(itemText);
-                }
-                if (html == null && item.getHtmlText() != null) {
-                    html = item.getHtmlText();
-                }
-                if (item.getUri() != null) {
-                    found.add(item.getUri().toString());
-                }
-            }
-            if (plain.length() > 0) {
-                text = plain.toString();
-            }
-            uris = found.toArray(new String[0]);
-            // Asked for before the native side answers: once it takes the drop,
-            // FLUI may read a URI before this method returns.
-            if (uris.length > 0 && Build.VERSION.SDK_INT >= 24) {
-                permissions = Api24.permissions(activity, event);
-            }
-        }
-        long offer = nativeDrop(handle, event.getX(), event.getY(), local, text, html, uris);
+        long offer = nativeDropOffer(handle);
         if (offer == 0) {
-            release(permissions);
-        } else if (permissions != null) {
-            dropPermissions.put(offer, permissions);
+            return false;
         }
-        return offer != 0;
+        ClipData clip = event.getClipData();
+        Object permissions = null;
+        // The grant covers every item without inspecting them at drop time.
+        if (clip != null && Build.VERSION.SDK_INT >= 24) {
+            permissions = Api24.permissions(activity, event);
+        }
+        HeldDrop held = new HeldDrop(clip, permissions);
+        // Save before nativeDrop wakes the owner: its first request may run on
+        // another thread before this Java method returns.
+        if (drops.putIfAbsent(offer, held) != null) {
+            held.release();
+            return false;
+        }
+        String[] descriptors = mimeTypes(clip == null ? null : clip.getDescription());
+        boolean taken = nativeDrop(handle, offer, event.getX(), event.getY(), local, descriptors);
+        if (!taken) {
+            releaseDrop(offer);
+        }
+        return taken;
     }
 
-    /** FLUI concluded the drop of {@code offer}: give back the URI permissions it held. */
+    /** FLUI concluded or refused {@code offer}: release its clip and grant once. */
     public void releaseDrop(long offer) {
-        release(dropPermissions.remove(offer));
+        HeldDrop drop = drops.remove(offer);
+        if (drop != null) {
+            drop.release();
+        }
     }
 
     private static void release(Object permissions) {
         if (permissions != null && Build.VERSION.SDK_INT >= 24) {
             Api24.release(permissions);
+        }
+    }
+
+    /** A clip readable by background requests, with an idempotent main-thread release. */
+    private static final class HeldDrop {
+        private ClipData clip;
+        private final Object permissions;
+        private final AtomicBoolean released = new AtomicBoolean();
+
+        HeldDrop(ClipData clip, Object permissions) {
+            this.clip = clip;
+            this.permissions = permissions;
+        }
+
+        ClipData clip() {
+            return released.get() ? null : clip;
+        }
+
+        void release() {
+            if (released.compareAndSet(false, true)) {
+                clip = null;
+                FluiView.release(permissions);
+            }
         }
     }
 
@@ -664,29 +685,107 @@ public final class FluiView extends View {
     }
 
     /**
-     * The bytes behind a content URI of a drop, at most {@code limit} of them;
-     * null when it cannot be read or is larger. {@code read[0]} is how many
-     * bytes it read, past {@code limit} when it stopped there. Called on a
-     * thread of FLUI's.
+     * One representation of the clip saved under {@code offer}, as UTF-8 for
+     * text, HTML and URI lists and as content bytes for a URI. Null means the
+     * representation or its source is gone, or that {@code read[0]} crossed
+     * {@code limit}; the native side distinguishes the last case. Called on a
+     * thread of FLUI's, never while the Java main thread handles the drop.
      */
-    public byte[] readUri(String uri, long limit, long[] read) {
+    public byte[] readDrop(long offer, int source, long limit, long[] read) {
+        HeldDrop drop = drops.get(offer);
+        ClipData clip = drop == null ? null : drop.clip();
+        if (clip == null) {
+            return null;
+        }
+        try {
+            switch (source) {
+                case DROP_TEXT:
+                    return readText(clip, false, limit, read);
+                case DROP_HTML:
+                    return readText(clip, true, limit, read);
+                case DROP_URI_LIST:
+                    return readUriList(clip, limit, read);
+                case DROP_URI_BYTES:
+                    return readUriBytes(clip, limit, read);
+                default:
+                    return null;
+            }
+        } catch (Exception error) {
+            return null;
+        }
+    }
+
+    /** Join item text, or read the first HTML value, without a shared builder. */
+    private static byte[] readText(ClipData clip, boolean html, long limit, long[] read) {
+        BoundedUtf8 out = new BoundedUtf8(limit, read);
+        boolean found = false;
+        for (int index = 0; index < clip.getItemCount(); index++) {
+            ClipData.Item item = clip.getItemAt(index);
+            CharSequence text = html ? item.getHtmlText() : item.getText();
+            if (text != null) {
+                found = true;
+                if (!out.write(text) || html) {
+                    return out.finished() ? out.bytes() : null;
+                }
+            }
+        }
+        return found ? out.bytes() : null;
+    }
+
+    private static byte[] readUriList(ClipData clip, long limit, long[] read) {
+        BoundedUtf8 out = new BoundedUtf8(limit, read);
+        boolean found = false;
+        for (int index = 0; index < clip.getItemCount(); index++) {
+            Uri uri = clip.getItemAt(index).getUri();
+            if (uri != null) {
+                found = true;
+                if (!out.write(uri.toString()) || !out.write("\r\n")) {
+                    return null;
+                }
+            }
+        }
+        return found ? out.bytes() : null;
+    }
+
+    /** Read the first URI to its end, probing at most one byte past the limit. */
+    private byte[] readUriBytes(ClipData clip, long limit, long[] read) {
+        Uri uri = null;
+        for (int index = 0; index < clip.getItemCount(); index++) {
+            uri = clip.getItemAt(index).getUri();
+            if (uri != null) {
+                break;
+            }
+        }
+        if (uri == null) {
+            return null;
+        }
         InputStream stream = null;
         try {
-            stream = activity.getContentResolver().openInputStream(Uri.parse(uri));
+            stream = activity.getContentResolver().openInputStream(uri);
             if (stream == null) {
                 return null;
             }
             ByteArrayOutputStream out = new ByteArrayOutputStream();
             byte[] chunk = new byte[16384];
-            int count;
-            while ((count = stream.read(chunk)) > 0) {
-                read[0] += count;
-                if (read[0] > limit) {
+            while (true) {
+                long remaining = limit - read[0];
+                int wanted = remaining >= chunk.length
+                        ? chunk.length : (int) Math.max(1, remaining + 1);
+                int count = stream.read(chunk, 0, wanted);
+                if (count < 0) {
+                    return out.toByteArray();
+                }
+                if (count == 0) {
                     return null;
                 }
+                if (count > remaining) {
+                    read[0] = count > Long.MAX_VALUE - read[0]
+                            ? Long.MAX_VALUE : read[0] + count;
+                    return null;
+                }
+                read[0] += count;
                 out.write(chunk, 0, count);
             }
-            return out.toByteArray();
         } catch (Exception error) {
             return null;
         } finally {
@@ -697,6 +796,70 @@ public final class FluiView extends View {
                     // Nothing to recover: the bytes were read or the read failed.
                 }
             }
+        }
+    }
+
+    /** UTF-8 output bounded before allocation, including supplementary scalars. */
+    private static final class BoundedUtf8 {
+        private final long limit;
+        private final long[] read;
+        private final ByteArrayOutputStream out = new ByteArrayOutputStream();
+
+        BoundedUtf8(long limit, long[] read) {
+            this.limit = limit;
+            this.read = read;
+        }
+
+        boolean write(CharSequence text) {
+            int index = 0;
+            while (index < text.length()) {
+                char first = text.charAt(index++);
+                int scalar = first;
+                if (Character.isHighSurrogate(first) && index < text.length()
+                        && Character.isLowSurrogate(text.charAt(index))) {
+                    scalar = Character.toCodePoint(first, text.charAt(index++));
+                } else if (Character.isSurrogate(first)) {
+                    scalar = 0xfffd;
+                }
+                if (!writeScalar(scalar)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        private boolean writeScalar(int scalar) {
+            int width = scalar <= 0x7f ? 1 : scalar <= 0x7ff ? 2 : scalar <= 0xffff ? 3 : 4;
+            long total = read[0];
+            if (width > limit - total) {
+                read[0] = width > Long.MAX_VALUE - total ? Long.MAX_VALUE : total + width;
+                return false;
+            }
+            if (scalar <= 0x7f) {
+                out.write(scalar);
+            } else if (scalar <= 0x7ff) {
+                out.write(0xc0 | (scalar >>> 6));
+                out.write(0x80 | (scalar & 0x3f));
+            } else if (scalar <= 0xffff) {
+                out.write(0xe0 | (scalar >>> 12));
+                out.write(0x80 | ((scalar >>> 6) & 0x3f));
+                out.write(0x80 | (scalar & 0x3f));
+            } else {
+                out.write(0xf0 | (scalar >>> 18));
+                out.write(0x80 | ((scalar >>> 12) & 0x3f));
+                out.write(0x80 | ((scalar >>> 6) & 0x3f));
+                out.write(0x80 | (scalar & 0x3f));
+            }
+            read[0] = total + width;
+            return true;
+        }
+
+        boolean finished() {
+            return read[0] <= limit;
+        }
+
+        byte[] bytes() {
+            return out.toByteArray();
         }
     }
 

@@ -1,6 +1,6 @@
 //! The decidable half of the Android backend's drag and drop
 //! (`drag::android::clip`, ADR-0247, ADR-0211): what a `DragEvent`'s clip
-//! offers, what a drop holds and answers, what a FLUI drag puts in its
+//! offers, what a bounded request reads, what a FLUI drag puts in its
 //! `ClipData`, and how its source learns the end. The JNI side runs on a
 //! device.
 
@@ -8,16 +8,21 @@ use std::num::NonZeroU64;
 use std::sync::Arc;
 
 use super::{
-    ClipSource, DRAG_FLAG_GLOBAL, DRAG_FLAG_GLOBAL_URI_READ, DroppedClip, Held, clip_parts, held,
-    incoming_allowed, offered, source_end, uri_bytes,
+    ClipSource, DRAG_FLAG_GLOBAL, DRAG_FLAG_GLOBAL_URI_READ, clip_parts, drop_bytes,
+    incoming_allowed, offered, source_end,
 };
 use flui_foundation::{DragSessionId, UiRuntimeId};
 use flui_platform::data_transfer::{
-    Mime, RepresentationDescriptor, TransferActions, TransferError, TransferFormat, TransferPayload,
+    Mime, RepresentationDescriptor, TransferActions, TransferError, TransferFormat, TransferLimits,
+    TransferPayload,
 };
 use flui_platform::drag::{DragSessionKey, OsDragEnd, ProcessNonce};
 
 use crate::drag::offers::{PathStyle, TransferUri};
+
+fn limits(max_bytes: u64) -> TransferLimits {
+    TransferLimits::default().with_max_bytes(max_bytes)
+}
 
 fn identity() -> RepresentationDescriptor {
     DragSessionKey::new(
@@ -76,87 +81,158 @@ fn a_description_offers_its_media_types() {
     );
 }
 
-/// The drop holds the clip's text, HTML and URIs (as a `text/uri-list`) in
-/// memory, and the bytes of a typed representation as its first URI, read when
-/// requested and resolved as the format it announced: an image as the bytes of
-/// its container, another type as raw bytes of its essence; what the clip did
-/// not carry is missing.
-fn a_drop_holds_what_the_clip_carried() {
+/// The common intake policy bounds source entries and name lengths before
+/// Android maps formats, including an endless stream of duplicate names.
+fn a_description_is_bounded_before_format_mapping() {
+    let unique: Vec<String> = (0..101)
+        .map(|index| format!("application/x-{index}"))
+        .collect();
+    let mut reads = 0;
+    let offer = offered(unique.iter().map(String::as_str).inspect(|_| reads += 1));
+    assert_eq!(reads, 100, "the 101st source descriptor is not read");
+    assert_eq!(offer.len(), 100);
+    assert!(
+        matches!(&offer[99].1.format, TransferFormat::Custom { mime } if mime.as_str() == "application/x-99")
+    );
+
+    let mime_of_len = |len| {
+        const PREFIX: &str = "application/x-";
+        assert!(len >= PREFIX.len());
+        format!("{PREFIX}{}", "a".repeat(len - PREFIX.len()))
+    };
+    let longest = mime_of_len(255);
+    let overlong = mime_of_len(256);
+    let bounded = offered([longest.as_str(), overlong.as_str()]);
+    assert_eq!(bounded.len(), 1, "only the 255-byte name is admitted");
+    assert!(
+        matches!(&bounded[0].1.format, TransferFormat::Custom { mime } if mime.as_str() == longest)
+    );
+    assert!(offered([overlong.as_str()]).is_empty());
+
+    let mut endless_reads = 0;
+    let endless = offered(std::iter::repeat("text/plain").inspect(|_| {
+        endless_reads += 1;
+        assert!(endless_reads <= 100, "an endless input is not bounded");
+    }));
+    assert_eq!(endless_reads, 100);
+    assert_eq!(endless.len(), 1, "duplicates leave one representation");
+    assert_eq!(endless[0].0, ClipSource::Text);
+}
+
+/// Each request reads only its own representation from the saved clip and
+/// decodes it as announced; the identity needs no read at all.
+fn a_request_reads_only_its_representation() {
     let offer = offered([
         "text/plain",
         "text/html",
         "image/png",
         "text/uri-list",
         "application/pdf; q=1",
+        &identity_mime(),
     ]);
-    let clip = DroppedClip {
-        text: Some("hello".to_owned()),
-        html: None,
-        uris: vec![
-            "content://media/1".to_owned(),
-            "content://media/2".to_owned(),
-        ],
+    let read = |source: ClipSource, limits: TransferLimits| {
+        assert_eq!(limits.max_bytes, 1024);
+        let bytes: &[u8] = match source {
+            ClipSource::Text => "A😀é".as_bytes(),
+            ClipSource::Html => b"<b>hello</b>",
+            ClipSource::UriBytes => &[1, 2, 3],
+            ClipSource::UriList => b"content://media/1\r\ncontent://media/2\r\n",
+            ClipSource::Identity => panic!("the identity is already in its descriptor"),
+        };
+        Ok(bytes.to_vec())
     };
-    let holds: Vec<Held> = offer
-        .iter()
-        .map(|(source, descriptor)| held(source, descriptor, &clip))
-        .collect();
-    assert!(matches!(&holds[0], Held::Payload(TransferPayload::Text(text)) if text == "hello"));
-    assert!(matches!(holds[1], Held::Missing), "no HTML");
-    let Held::Uri(image) = &holds[2] else {
-        panic!("the image is read from the clip's URI, not {:?}", holds[2]);
-    };
-    assert_eq!(image.uri, "content://media/1");
-    assert!(
-        matches!(
-            image.payload(vec![1, 2, 3]),
-            TransferPayload::Custom { mime, bytes }
-                if mime.as_str() == "image/png" && *bytes == [1, 2, 3]
-        ),
-        "an image offer resolves as the bytes of the image it announced"
-    );
     assert!(matches!(
-        &holds[3],
-        Held::Payload(TransferPayload::Custom { mime, bytes })
+        offer[0].0.request(&offer[0].1, limits(1024), read),
+        Ok(TransferPayload::Text(text)) if text == "A😀é"
+    ));
+    assert!(matches!(
+        offer[1].0.request(&offer[1].1, limits(1024), read),
+        Ok(TransferPayload::Html(html)) if html == "<b>hello</b>"
+    ));
+    assert!(matches!(
+        offer[2].0.request(&offer[2].1, limits(1024), read),
+        Ok(TransferPayload::Custom { mime, bytes })
+            if mime.as_str() == "image/png" && *bytes == [1, 2, 3]
+    ));
+    assert!(matches!(
+        offer[3].0.request(&offer[3].1, limits(1024), read),
+        Ok(TransferPayload::Custom { mime, bytes })
             if mime.as_str() == "text/uri-list"
-                && **bytes == *b"content://media/1\r\ncontent://media/2\r\n"
+                && *bytes == b"content://media/1\r\ncontent://media/2\r\n"[..]
     ));
-    let Held::Uri(document) = &holds[4] else {
-        panic!(
-            "the document is read from the clip's URI, not {:?}",
-            holds[4]
-        );
-    };
     assert!(matches!(
-        document.payload(vec![4]),
-        TransferPayload::Custom { mime, bytes }
-            if mime.as_str() == "application/pdf" && *bytes == [4]
+        offer[4].0.request(&offer[4].1, limits(1024), read),
+        Ok(TransferPayload::Custom { mime, bytes })
+            if mime.as_str() == "application/pdf" && *bytes == [1, 2, 3]
     ));
+    let identity_reads = std::cell::Cell::new(0);
+    assert!(matches!(
+        offer[5].0.request(&offer[5].1, limits(0), |_, _| {
+            identity_reads.set(identity_reads.get() + 1);
+            Err(TransferError::SourceGone)
+        }),
+        Ok(TransferPayload::Custom { bytes, .. }) if bytes.is_empty()
+    ));
+    assert_eq!(identity_reads.get(), 0);
 }
 
-/// A dropped URI read to its end is its bytes; one the view stopped reading
-/// past the limit is too large, with what it had read, and one it could not
-/// read is gone.
-fn a_dropped_uri_read_reports_how_it_ended() {
-    assert!(matches!(uri_bytes(Some(vec![1, 2]), 2, 4), Ok(bytes) if bytes == [1, 2]));
-    let over = uri_bytes(None, 16_384, 10);
+/// A missing representation is gone, and a read stopped past its byte limit is
+/// too large rather than missing.
+fn a_missing_or_bounded_request_reports_how_it_ended() {
+    let (source, descriptor) = &offered(["text/plain"])[0];
+    assert!(matches!(
+        source.request(descriptor, limits(10), |_, limits| {
+            drop_bytes(None, 0, limits)
+        }),
+        Err(TransferError::SourceGone)
+    ));
+    assert!(matches!(drop_bytes(Some(vec![1, 2]), 2, limits(4)), Ok(bytes) if bytes == [1, 2]));
+    let over = drop_bytes(None, 11, limits(10));
     assert!(
         matches!(
             over,
             Err(TransferError::TooLarge {
-                actual: 16_384,
+                actual: 11,
                 limit: 10
             })
         ),
         "a read stopped past the limit is too large, not gone: {over:?}"
     );
     assert!(matches!(
-        uri_bytes(None, 3, 10),
+        drop_bytes(None, 3, limits(10)),
         Err(TransferError::SourceGone)
     ));
+}
+
+/// The limits count exact UTF-8 bytes, not UTF-16 units, and their boundary is
+/// inclusive even when supplementary and multibyte scalars cross it.
+fn a_request_enforces_the_exact_utf8_byte_limit() {
+    let (source, descriptor) = &offered(["text/plain"])[0];
+    let text = "A😀é";
+    assert_eq!(text.len(), 7);
     assert!(matches!(
-        uri_bytes(None, 0, 10),
-        Err(TransferError::SourceGone)
+        source.request(descriptor, limits(7), |_, _| {
+            Ok(text.as_bytes().to_vec())
+        }),
+        Ok(TransferPayload::Text(found)) if found == text
+    ));
+    assert!(matches!(
+        source.request(descriptor, limits(6), |_, _| {
+            Ok(text.as_bytes().to_vec())
+        }),
+        Err(TransferError::TooLarge {
+            actual: 7,
+            limit: 6
+        })
+    ));
+    assert!(matches!(
+        source.request(descriptor, limits(6), |_, limits| {
+            drop_bytes(None, 7, limits)
+        }),
+        Err(TransferError::TooLarge {
+            actual: 7,
+            limit: 6
+        })
     ));
 }
 
@@ -260,12 +336,20 @@ fn android_drag_mapping() {
                 a_description_offers_its_media_types,
             ),
             (
-                "a_drop_holds_what_the_clip_carried",
-                a_drop_holds_what_the_clip_carried,
+                "a_description_is_bounded_before_format_mapping",
+                a_description_is_bounded_before_format_mapping,
             ),
             (
-                "a_dropped_uri_read_reports_how_it_ended",
-                a_dropped_uri_read_reports_how_it_ended,
+                "a_request_reads_only_its_representation",
+                a_request_reads_only_its_representation,
+            ),
+            (
+                "a_missing_or_bounded_request_reports_how_it_ended",
+                a_missing_or_bounded_request_reports_how_it_ended,
+            ),
+            (
+                "a_request_enforces_the_exact_utf8_byte_limit",
+                a_request_enforces_the_exact_utf8_byte_limit,
             ),
             (
                 "a_foreign_drag_is_a_copy_and_ours_permits_what_it_advertised",

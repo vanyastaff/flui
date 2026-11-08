@@ -17,6 +17,8 @@
     reason = "each import only has to resolve; nothing here is used"
 )]
 mod items {
+    #[cfg(target_os = "android")]
+    use flui::native::android::{AndroidApp as _, run_app_android as _};
     #[cfg(target_os = "macos")]
     use flui::native::macos::{
         AppKitWindow as _, GlassStyle as _, GlassTint as _, LiquidGlass as _, MacOSBackdrop as _,

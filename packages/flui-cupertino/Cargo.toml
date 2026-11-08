@@ -22,16 +22,10 @@ autotests = false
 flui-sdk = { workspace = true }
 tracing = { workspace = true }
 
-# Test harnesses only; the library build never sees them. Tests name the
-# framework through `flui_sdk::` like any package, and these crates only for
-# what the SDK does not carry.
+# The SDK's optional test kit is the only test framework dependency. The normal
+# library build keeps the same SDK without `testing` and never links the driver.
 [dev-dependencies]
-flui-painting = { path = "../../crates/flui-painting", version = "=0.2.0-dev" }
-# The headless harness `tests/common/mod.rs` re-exports
-# (`flui_testing::widgets`), and `a11y::Role`, which the button semantics tests
-# assert against; a dev edge only, so the normal build never links the test
-# driver.
-flui-testing = { workspace = true }
+flui-sdk = { workspace = true, features = ["testing"] }
 
 [lints]
 workspace = true

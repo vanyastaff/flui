@@ -163,7 +163,7 @@ pub struct AppConfig {
     pub input_latency: flui_platform::InputLatency,
 
     /// The development reload driver, if the application installed one with
-    /// [`Self::with_dev_reload`] (ADR-0094 §1).
+    /// [`Self::with_dev_reload`] (ADR-0311).
     ///
     /// `None` (the default): nothing reloads, and no reload tool is in the
     /// application's graph. `Some`: the desktop and iOS runners attach the
@@ -195,10 +195,10 @@ pub struct AppConfig {
     /// Governs when the platform loop exits once every hosted window has
     /// closed. See [`ExitPolicy`]'s own doc for the drain-before-decide
     /// rule; `run_desktop`'s bootstrap installs this into the live platform
-    /// event loop (issue #555's native-lifecycle wiring). Not present on
-    /// iOS: [`ExitPolicy`]/`AppRuntime` are themselves not compiled there
-    /// (`run_ios` never reads any field of this config beyond ignoring it
-    /// entirely — see that function's own doc).
+    /// event loop (issue #555's native-lifecycle wiring). The field is also
+    /// present on iOS and `run_ios` uses this configuration, but iOS never
+    /// consults `exit_policy`; like Android and the web, it installs no
+    /// exit-policy route.
     pub exit_policy: ExitPolicy,
 
     /// Host-injected background executors (issue #557).

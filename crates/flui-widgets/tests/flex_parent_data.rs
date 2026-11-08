@@ -6,9 +6,9 @@
 //! the render tree and drives both child **sizes** and **offsets**.
 
 use crate::common::{lay_out, offset, size, tight};
-use flui_objects::VerticalDirection;
+use flui_objects::{CrossAxisAlignment, VerticalDirection};
 use flui_widgets::row;
-use flui_widgets::{Column, CrossAxisAlignment, Expanded, Row, SizedBox};
+use flui_widgets::{Column, Expanded, Row, SizedBox};
 
 pub(crate) fn vertical_direction_updates_mounted_flex_children() {
     for vertical in [false, true] {

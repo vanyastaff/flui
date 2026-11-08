@@ -73,3 +73,6 @@ mod window_id;
 
 #[path = "launch_key.rs"]
 mod launch_key;
+
+#[path = "locale.rs"]
+mod locale;

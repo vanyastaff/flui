@@ -25,8 +25,8 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 
 use flui_platform::http::{
-    HeaderName, HeaderValue, Headers, HttpAuthority, HttpClient, HttpError, HttpFuture,
-    HttpRequest, HttpResponse, StatusCode,
+    HeaderName, HeaderValue, HttpAuthority, HttpClient, HttpError, HttpFuture, HttpRequest,
+    HttpResponse, StatusCode,
 };
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -39,6 +39,7 @@ use objc2_foundation::{
 };
 
 use super::blocking::{Abort, BlockingClient, Connection, Head, Stack};
+use super::head::HeadBuilder;
 use crate::owner::panic_boundary::{AfterPanic, os_entry};
 
 /// How long a request may wait for its next bytes, in seconds.
@@ -50,9 +51,6 @@ const SUSPEND_AT: usize = 256 * 1024;
 
 /// Body bytes held below which a suspended task is resumed.
 const RESUME_BELOW: usize = 64 * 1024;
-
-/// The most response headers a head may carry.
-const MAX_HEADERS: usize = 1024;
 
 /// An HTTP client over Apple's `NSURLSession` (ADR-0280).
 ///
@@ -452,10 +450,7 @@ fn head(response: &NSURLResponse) -> Result<Head, HttpError> {
         .and_then(StatusCode::try_new)?;
     let fields = response.allHeaderFields();
     let keys = fields.allKeys();
-    if keys.len() > MAX_HEADERS {
-        return Err(protocol(format!("more than {MAX_HEADERS} headers")));
-    }
-    let mut headers = Headers::new();
+    let mut headers = HeadBuilder::new();
     for key in &keys {
         let (Some(name), Some(value)) = (
             key.downcast_ref::<NSString>(),
@@ -467,9 +462,12 @@ fn head(response: &NSURLResponse) -> Result<Head, HttpError> {
         };
         let name = HeaderName::try_new(&name.to_string()).map_err(protocol)?;
         let value = HeaderValue::try_new(value.to_string()).map_err(protocol)?;
-        headers.append(name, value);
+        headers.try_append(name, value)?;
     }
-    Ok(Head { status, headers })
+    Ok(Head {
+        status,
+        headers: headers.finish(),
+    })
 }
 
 /// The [`HttpError`] an `NSError` stands for: by its code in

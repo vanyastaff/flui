@@ -6,13 +6,15 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use flui_platform::http::{
-    BodySource, HeaderName, HeaderValue, Headers, HttpAuthority, HttpClient, HttpError, HttpFuture,
-    HttpRequest, HttpResponse, ResponseBody, StatusCode,
+    BodySource, Headers, HttpAuthority, HttpClient, HttpError, HttpFuture, HttpRequest,
+    HttpResponse, ResponseBody, StatusCode,
 };
 use js_sys::{Array, Promise, Uint8Array};
 use tokio::sync::{mpsc, oneshot};
 use wasm_bindgen::{JsCast, prelude::*};
 use wasm_bindgen_futures::JsFuture;
+
+use super::head::{HeadBuilder, declared_too_large};
 
 /// Body chunks a response holds unread before the page waits for the reader.
 const BODY_CHUNKS_IN_FLIGHT: usize = 4;
@@ -204,11 +206,7 @@ async fn exchange(
             return;
         }
     };
-    let declared = headers
-        .get("content-length")
-        .and_then(HeaderValue::to_str)
-        .and_then(|length| length.trim().parse::<u64>().ok());
-    if declared.is_some_and(|length| length > limit) {
+    if declared_too_large(&headers, limit) {
         let _ = head_tx.send(Err(HttpError::TooLarge { limit }));
         return;
     }
@@ -289,7 +287,7 @@ fn read_head(head: &JsValue) -> Result<(StatusCode, Headers), HttpError> {
         .get(1)
         .dyn_into::<Array>()
         .map_err(|_| protocol("the headers are not an array"))?;
-    let mut headers = Headers::new();
+    let mut headers = HeadBuilder::new();
     for entry in entries.iter() {
         let entry = entry
             .dyn_into::<Array>()
@@ -297,17 +295,9 @@ fn read_head(head: &JsValue) -> Result<(StatusCode, Headers), HttpError> {
         let (Some(name), Some(value)) = (entry.get(0).as_string(), entry.get(1).as_string()) else {
             return Err(protocol("a header is not a pair of strings"));
         };
-        // A `ByteString` holds one byte per character.
-        let value = value
-            .chars()
-            .map(|c| u8::try_from(u32::from(c)))
-            .collect::<Result<Vec<u8>, _>>()
-            .map_err(|_| protocol("a header value is not a byte string"))?;
-        let name = HeaderName::try_new(&name).map_err(protocol)?;
-        let value = HeaderValue::try_new(value).map_err(protocol)?;
-        headers.append(name, value);
+        headers.try_push_byte_string(&name, &value)?;
     }
-    Ok((status, headers))
+    Ok((status, headers.finish()))
 }
 
 fn protocol(error: impl std::fmt::Display) -> HttpError {

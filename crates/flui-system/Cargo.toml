@@ -30,8 +30,7 @@ zruntime = { version = "0.2", default-features = false, features = ["runtime", "
 
 [dev-dependencies]
 flui-platform = { workspace = true, features = ["testing"] }
-flui-sdk = { workspace = true }
-flui-testing = { workspace = true }
+flui-sdk = { workspace = true, features = ["testing"] }
 # Reads the crate's own `[package.metadata.flui.capability]` in a test.
 toml = { workspace = true }
 

@@ -35,9 +35,9 @@ use windows::{
 };
 
 use flui_platform::{
-    AdmittedCommand, ApplyError, CapabilityAbsence, CursorError, PlatformFailure, PlatformWindow,
-    SizeConstraints, Unsupported, UnsupportedReason, WindowCapabilities, WindowCommand,
-    WindowFrame, WindowId, WindowMaterial, WindowMode, WindowOptions, WindowReveal, WindowState,
+    AdmittedCommand, ApplyError, CursorError, PlatformFailure, PlatformWindow, SizeConstraints,
+    Unsupported, UnsupportedReason, WindowCapabilities, WindowCommand, WindowFrame, WindowId,
+    WindowMaterial, WindowMode, WindowOptions, WindowReveal, WindowState,
 };
 
 use flui_platform::os_options::WindowsCornerPreference;
@@ -152,8 +152,7 @@ pub(crate) const fn window_capabilities(
     use flui_platform::Availability::{Emulated, Native};
     // A tablet shows a touch keyboard (`InputPane`), whose occlusion this host
     // does not read yet.
-    let mut capabilities =
-        WindowCapabilities::NONE.without_keyboard_inset(CapabilityAbsence::NotYetOnThisHost);
+    let mut capabilities = WindowCapabilities::NONE.without_keyboard_inset_not_yet_on_this_host();
     capabilities.sets_title = Native;
     capabilities.sets_position = Native;
     capabilities.sets_size = Native;
@@ -177,7 +176,7 @@ pub(crate) const fn window_capabilities(
     // From the frame statistics of the swap chain the renderer presents
     // through, which it hands the surface target before each present.
     capabilities.reports_presentation = Native;
-    super::material::below_the_gate(capabilities, gate)
+    super::material::below_the_gate(&capabilities, gate)
 }
 
 impl WindowsWindow {
@@ -422,7 +421,7 @@ impl WindowsWindow {
             let snapshot = Arc::new(WindowStateCell::new(sample_state(
                 hwnd,
                 &state,
-                OwnerTracking {
+                &OwnerTracking {
                     mode: NativeMode::Normal,
                     restore_style: 0,
                     constraints,

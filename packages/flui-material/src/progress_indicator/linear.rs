@@ -19,10 +19,12 @@ use flui_sdk::animation::{
 };
 use flui_sdk::foundation::Listenable;
 use flui_sdk::geometry::{Rect, Size};
-use flui_sdk::painting::{Canvas, Color, Paint, TextDirection};
+use flui_sdk::painting::styling::Color;
+use flui_sdk::painting::typography::TextDirection;
+use flui_sdk::painting::{Canvas, CustomPainter, Paint};
 use flui_sdk::view::environment::VsyncScope;
 use flui_sdk::view::prelude::*;
-use flui_sdk::widgets::{CustomPaint, CustomPainter, Directionality};
+use flui_sdk::widgets::{CustomPaint, Directionality};
 
 use super::{Fraction, STROKE, moves, paint_linear_track, progress_semantics};
 use crate::theme::Theme;
@@ -199,7 +201,7 @@ impl ViewState<LinearProgressIndicator> for LinearProgressIndicatorState {
     }
 
     fn build(&self, view: &LinearProgressIndicator, ctx: &dyn BuildContext) -> impl IntoView {
-        let colors = Theme::of(ctx).color_scheme;
+        let colors = Theme::required_color_scheme_of(ctx);
         let fraction = view.value.map(|_| self.fraction.get());
         let painter = BarPainter {
             progress: match fraction {

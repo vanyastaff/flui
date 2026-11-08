@@ -104,6 +104,7 @@ pub mod environment;
 mod inspect;
 pub mod key;
 pub mod macros;
+pub mod navigation;
 pub mod owner;
 pub mod persist;
 pub mod reactive;
@@ -203,6 +204,11 @@ pub use context::{
     BuildContext, BuildContextExt, ElementBuildContext, ElementBuildContextBuilder,
     LifecycleContext, LifecycleContextExt,
 };
+// Owner-thread navigation and normalized route locations (ADR-0093 §5)
+pub use navigation::{
+    NavigationIntent, NavigationOp, NavigationRefused, RouteParseError, RoutePath, UrlOwner,
+    UrlOwnerRegistration, UrlOwnerRegistrationError, UrlOwnerSlot,
+};
 // Element types
 pub use element::Lifecycle;
 // Notification system
@@ -250,7 +256,7 @@ pub use reactive::{
 pub use tree::{ElementNode, ElementTree};
 pub use view::{
     AnimatedElement, AnimatedView, BoxedElement, BoxedView, ElementBase, ElementDepth, ElementExt,
-    ErrorView, ErrorViewBuilder, FieldMask, FieldSet, FrameworkError, InheritedData,
+    EntrySet, ErrorView, ErrorViewBuilder, FieldMask, FieldSet, FrameworkError, InheritedData,
     InheritedElement, InheritedView, IntoElement, IntoView, Memo, ParentDataConfig,
     ParentDataElement, ParentDataView, ProxyElement, ProxyView, RenderElement, RenderObjectContext,
     RenderObjectContextError, RenderView, RootRenderElement, RootRenderView, StatefulElement,

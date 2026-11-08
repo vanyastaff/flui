@@ -22,10 +22,11 @@
 //!
 //! So a binding **enqueues a [`RouteCommand`]** onto a queue guarded by its own
 //! mutex, then calls a `wake` closure. `wake` uses `try_lock` on the history: if
-//! it succeeds we are outside a flush and the commands are applied and flushed
-//! at once; if it fails, a flush is in progress on this thread and *that* flush
-//! drains the queue before it returns. The queue is the "is a flush running"
-//! check, expressed as ownership rather than as a flag.
+//! it succeeds, the commands are applied and flushed at once; if it fails, the
+//! wake remains owed. An active flush drains the queue itself. Any other history
+//! owner — notably a synchronous pop query calling a route hook — releases the
+//! history and then makes the owed pump attempt. The obligation survives a panic,
+//! so a failed delivery remains owed instead of stranding an accepted command.
 //!
 //! This preserves both invariants: `RouteHistory` never learns about the
 //! navigator (so the route stack stays pure data), and the

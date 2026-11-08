@@ -42,7 +42,7 @@
 //!        ↑ used by scene_render, Android host, custom runners
 //! ```
 //!
-//! See [`strategy`] for [`ReloadStrategy`] and shared env/timing constants.
+//! See [`strategy`] for shared env/timing constants.
 //!
 //! ## Plugin vs Host
 //!
@@ -103,7 +103,7 @@
 //! ## Installing in a host
 //!
 //! A `flui-app` host does not drive these types itself: it installs a
-//! development reload hook (ADR-0094 §1) on its configuration, and the runner
+//! development reload hook (ADR-0311) on its configuration, and the runner
 //! drives it. With the `host-hook` feature, `WorkerReloadHook` drives the
 //! host/worker split and `ScenePluginHook` lets an Android scene plugin draw
 //! frames; the facade's `hot-reload` feature turns it on.
@@ -213,4 +213,3 @@ pub use dispatch::{
     RebuildHookRegistration, WorkerBuildEnv, register_request_rebuild, request_rebuild,
 };
 pub use engine::{HotReloadOutcome, HotReloadTier};
-pub use strategy::ReloadStrategy;

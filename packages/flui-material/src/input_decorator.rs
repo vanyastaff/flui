@@ -61,14 +61,17 @@ use flui_sdk::foundation::Subscription;
 use flui_sdk::foundation::notifier::Listenable;
 use flui_sdk::geometry::EdgeInsets;
 use flui_sdk::geometry::Radius;
-use flui_sdk::painting::TextStyle;
-use flui_sdk::painting::{Border, BorderRadius, BorderSide, BorderStyle, BoxDecoration, Color};
+use flui_sdk::painting::styling::{
+    Border, BorderRadius, BorderSide, BorderStyle, BoxDecoration, Color,
+};
+use flui_sdk::painting::typography::TextStyle;
+use flui_sdk::pipeline::{CrossAxisAlignment, MainAxisSize};
 use flui_sdk::platform::Brightness;
+use flui_sdk::rendering::LiveSetting;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{
-    Column, CrossAxisAlignment, DecoratedBox, ExcludeSemantics, IgnorePointer, LiveSetting,
-    MainAxisSize, MouseRegion, Padding, Semantics, Text, WidgetState, WidgetStates,
-    WidgetStatesController,
+    Column, DecoratedBox, ExcludeSemantics, IgnorePointer, MouseRegion, Padding, Semantics, Text,
+    WidgetState, WidgetStates, WidgetStatesController,
 };
 
 use crate::color_scheme::ColorScheme;
@@ -460,11 +463,9 @@ impl ViewState<InputDecorator> for InputDecoratorState {
     }
 
     fn build(&self, view: &InputDecorator, ctx: &dyn BuildContext) -> impl IntoView {
-        let theme = Theme::of(ctx);
-        let colors = theme.color_scheme;
-        let text_theme = theme.text_theme.clone();
-        let decoration_theme: InputDecorationThemeData =
-            theme.input_decoration_theme.unwrap_or_default();
+        let (colors, text_theme) = Theme::required_color_and_text_of(ctx);
+        let decoration_theme =
+            Theme::component_of::<InputDecorationThemeData>(ctx).unwrap_or_default();
         let decoration = &view.decoration;
 
         // Widget state set: disabled, focused, hovering (already

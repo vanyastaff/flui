@@ -7,8 +7,9 @@
   the pump, the first failure of a pump authoritative over a later unwind; a
   report made between pumps is raised by the next one. The realm itself stays
   private to the host.
-- **`LaidOut::cursor` and `LaidOut::accessibility_action_listener`**: the
-  window's last cursor and the realm's assistive-technology action listener.
+- **`LaidOut::cursor` and `LaidOut::request_accessibility_action`**: the
+  window's last cursor and assistive-technology action delivery through the
+  runtime's attached handler.
 
 ### Changed
 
@@ -16,7 +17,8 @@
   `harness::mount`, `SignalProbe`); `flui::testing::widgets` names it as
   before. Its frames are the realm's own `UiRealm::pump`, the mount included:
   the tree sits under the realm's root `MediaQuery`, `VsyncScope`,
-  `FocusRoot` and `GestureArenaScope`, post-frame callbacks registered in
+  `FocusTreeRoot` and `GestureArenaScope`, with `app_root`'s standard keyboard
+  policy, post-frame callbacks registered in
   `init_state` run at the end of the mount frame, `mount_with_ime` frames are
   text-store transactions with the realm's commit gate, and a contained frame
   failure is raised after the pump.

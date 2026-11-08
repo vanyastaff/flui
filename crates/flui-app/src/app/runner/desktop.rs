@@ -148,6 +148,7 @@ where
 
     ui_runtime.enter(|ui_runtime| ui_runtime.update_host_lifecycle(host_lifecycle));
     let logical = geometry.logical;
+    let root = flui_widgets::app_root(root);
     let attach = ui_runtime.enter(|ui_runtime| {
         ui_runtime.attach_root_widget_with_size(&root, logical.width, logical.height)
     });

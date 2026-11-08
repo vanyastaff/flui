@@ -15,7 +15,8 @@
 //! - `web`: a parallel ARIA DOM over the canvas, which the browser's own
 //!   accessibility tree reads (ADR-0255 decision 18), with no AccessKit
 //!   adapter under it;
-//! - `headless`: `FakeAccessibility`, which counts what was published while active.
+//! - `headless`: `HeadlessAccessibility`, which drops published trees; the
+//!   native testing kit's explicit double counts publications while active.
 //!
 //! The adapters have no feature: every window of a host that has one hands it
 //! out, and each compiles wherever a host of its operating system does

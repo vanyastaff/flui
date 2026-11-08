@@ -2,7 +2,17 @@
 //! from outside the crate, the way `flui-runtime`, `flui-testing` and
 //! `flui-hot-reload` use it: always compiled, no cargo feature involved.
 
-use std::{cell::Cell, rc::Rc};
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+        mpsc,
+    },
+    thread,
+    time::Duration,
+};
 
 use flui_foundation::ElementId;
 use flui_view::{
@@ -79,4 +89,65 @@ fn terminal_lifecycle_ladder_runs_through_the_seam() {
 
     binding.lifecycle_source().finish_close();
     assert_eq!(handle.snapshot(), Err(LifecycleClosed));
+}
+
+#[test]
+fn a_frame_callback_can_install_its_replacement() {
+    thread_local! {
+        static BINDING: RefCell<Option<WidgetsBinding>> = const { RefCell::new(None) };
+    }
+
+    let (result_tx, result_rx) = mpsc::channel();
+    thread::spawn(move || {
+        BINDING.with(|slot| {
+            slot.replace(Some(WidgetsBinding::new()));
+        });
+        let first_calls = Arc::new(AtomicUsize::new(0));
+        let replacement_calls = Arc::new(AtomicUsize::new(0));
+
+        BINDING.with(|slot| {
+            let binding = slot.borrow();
+            let binding = binding.as_ref().expect("binding installed above");
+            let first_calls = Arc::clone(&first_calls);
+            let replacement_calls = Arc::clone(&replacement_calls);
+            binding.set_on_need_frame(move || {
+                first_calls.fetch_add(1, Ordering::Relaxed);
+                let replacement_calls = Arc::clone(&replacement_calls);
+                BINDING.with(|slot| {
+                    let binding = slot.borrow();
+                    let binding = binding.as_ref().expect("binding outlives its callback");
+                    binding.set_on_need_frame(move || {
+                        replacement_calls.fetch_add(1, Ordering::Relaxed);
+                    });
+                });
+            });
+            binding.handle_build_scheduled();
+            binding.handle_build_scheduled();
+        });
+
+        result_tx
+            .send((
+                first_calls.load(Ordering::Relaxed),
+                replacement_calls.load(Ordering::Relaxed),
+            ))
+            .expect("the test awaits the callback counts");
+    });
+
+    assert_eq!(
+        result_rx.recv_timeout(Duration::from_secs(2)),
+        Ok((1, 1)),
+        "the callback must replace itself without deadlocking"
+    );
+}
+
+#[test]
+fn a_frame_callback_can_capture_owner_local_state() {
+    let binding = WidgetsBinding::new();
+    let calls = Rc::new(Cell::new(0));
+    let callback_calls = Rc::clone(&calls);
+    binding.set_on_need_frame(move || callback_calls.set(callback_calls.get() + 1));
+
+    binding.handle_build_scheduled();
+
+    assert_eq!(calls.get(), 1);
 }

@@ -315,6 +315,32 @@ fn after_a_lost_viewport_the_next_pan_is_measured_from_the_origin() {
     );
 }
 
+fn a_non_finite_touchpad_step_is_dropped_before_its_phase_commits() {
+    let contacts = ContactRegistry::new(clock());
+    let mut assembler = TouchpadAssembler::new(NativeSurface(0));
+    let reading = crate::input::assembly::ScrollReading::fingers(
+        crate::input::assembly::GesturePhase::Began,
+        true,
+    );
+    assert!(
+        assembler
+            .scroll(&contacts, reading, (f64::NAN, 4.0), frame(0, 1.0))
+            .is_none(),
+        "a rejected delta is not a zero scroll"
+    );
+    let accepted = assembler
+        .scroll(&contacts, reading, (0.0, 0.0), frame(1, 1.0))
+        .expect("a native zero delta remains an event");
+    let Some(PointerEvent::Scroll(scroll)) = accepted.as_pointer() else {
+        panic!("a touchpad step is a scroll: {accepted:?}");
+    };
+    assert_eq!(
+        scroll.phase,
+        Some(flui_platform::pointer::ScrollPhase::Began)
+    );
+    assert_eq!((scroll.delta.x(), scroll.delta.y()), (0.0, 0.0));
+}
+
 #[test]
 fn direct_manipulation_contracts() {
     crate::table_test::run_table(
@@ -359,6 +385,10 @@ fn direct_manipulation_contracts() {
             (
                 "after_a_lost_viewport_the_next_pan_is_measured_from_the_origin",
                 after_a_lost_viewport_the_next_pan_is_measured_from_the_origin,
+            ),
+            (
+                "a_non_finite_touchpad_step_is_dropped_before_its_phase_commits",
+                a_non_finite_touchpad_step_is_dropped_before_its_phase_commits,
             ),
         ],
     );

@@ -1690,7 +1690,7 @@ fn reporting_callback_panics(panics: &CallbackPanics) -> AppConfig {
 /// running after each.
 fn tap(
     run: &flui_app::testing::HeadlessRunHandle,
-    window: &flui_native::MockWindow,
+    window: &flui_native::testing::HeadlessWindow,
     at: flui_foundation::geometry::Offset<f64>,
 ) {
     use flui_interaction::events::{PointerKind, make_down_event, make_up_event};
@@ -1713,7 +1713,7 @@ pub(crate) fn a_panicking_tap_handler_reports_once_and_the_next_tap_works() {
     let application = Application::new(move |_| {
         let counted = Rc::clone(&counted);
         flui_widgets::GestureDetector::new()
-            .behavior(flui_widgets::HitTestBehavior::Opaque)
+            .behavior(flui_interaction::HitTestBehavior::Opaque)
             .on_tap(move |_| {
                 counted.set(counted.get() + 1);
                 assert!(counted.get() > 1, "the first tap's handler failed");
@@ -1841,7 +1841,7 @@ pub(crate) fn a_panicking_post_frame_callback_reports_once_and_the_next_frame_bu
 /// last window as the user does and joins the run.
 fn close_after<V, F>(
     application: Application<V, F>,
-    drive: impl FnOnce(&flui_app::testing::HeadlessRunHandle, &flui_native::MockWindow),
+    drive: impl FnOnce(&flui_app::testing::HeadlessRunHandle, &flui_native::testing::HeadlessWindow),
 ) -> flui_app::testing::ExitReport
 where
     V: flui_view::View + Clone + 'static,
@@ -1898,7 +1898,7 @@ fn exit_code_after_a_tap_handler_panic() {
     let panics = CallbackPanics::default();
     let application = Application::new(|_| {
         flui_widgets::GestureDetector::new()
-            .behavior(flui_widgets::HitTestBehavior::Opaque)
+            .behavior(flui_interaction::HitTestBehavior::Opaque)
             .on_tap(|_| fail_the_tap())
             .child(flui_widgets::SizedBox::square(100.0))
     })
@@ -2135,7 +2135,7 @@ impl flui_view::ViewState<NoteView> for NoteViewState {
         };
         let counted = Rc::clone(&self.0.0);
         flui_widgets::GestureDetector::new()
-            .behavior(flui_widgets::HitTestBehavior::Opaque)
+            .behavior(flui_interaction::HitTestBehavior::Opaque)
             .on_tap(move |_| {
                 let rebuild = {
                     let mut shared = counted.borrow_mut();

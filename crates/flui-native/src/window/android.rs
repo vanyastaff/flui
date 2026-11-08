@@ -815,7 +815,7 @@ impl PlatformWindow for AndroidWindow {
 
     /// Not set: the reason [`pointer_icon_absence`] gives at this API level.
     fn set_cursor(&self, _cursor: CursorIcon) -> Result<(), CursorError> {
-        Err(Unsupported::from(pointer_icon_absence(self.api)).into())
+        Err(Unsupported::new(pointer_icon_absence(self.api)).into())
     }
 
     fn haptics(&self) -> Option<Arc<dyn flui_platform::PlatformHaptics>> {
@@ -978,6 +978,15 @@ impl flui_platform::SurfaceTarget for AndroidSurface {
 mod insets {
     //! Capture the system bars, cutout, keyboard and system gesture regions on
     //! the Java view thread.
+    //!
+    //! A reply is accepted only while its window is live and its physical size
+    //! still matches the native window. A stale-size reply earns one retry, not
+    //! an unbounded polling loop. One query may be outstanding, with one
+    //! follow-up remembered because that reply may predate a newer invalidation.
+    //! Resize, configuration change, native-window replacement, `Resume` and
+    //! `onApplyWindowInsets` invalidate the sample. While resumed, the 500 ms
+    //! poll runs only until the view attaches to its window. Accepted values
+    //! are published and their callbacks run after the cache guard is released.
 
     use android_activity::AndroidApp;
     use flui_foundation::geometry::{EdgeInsets, Size};

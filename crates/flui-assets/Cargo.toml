@@ -6,9 +6,9 @@ edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
-description = "High-performance asset management with smart caching, type safety, and async I/O"
+description = "Application-owned decoded-image loading, sharing and byte-budgeted retention"
 repository.workspace = true
-keywords = ["assets", "cache", "async", "game", "ui"]
+keywords = ["assets", "images", "async", "game", "ui"]
 categories = ["asynchronous", "caching", "game-development", "gui"]
 
 # Dev-only files a `cargo package --list` sweep found leaking into the
@@ -29,12 +29,10 @@ flui-painting = { path = "../flui-painting", version = "=0.2.0-dev" }
 # HTTP client a network image is fetched with (ADR-0280).
 flui-platform = { path = "../flui-platform", version = "=0.2.0-dev" }
 
-# Async runtime. "sync" backs the decoded-image load channels and slots
-# (`registry::images`); "rt" backs the typed cache's `tokio::fs` loaders.
-tokio = { workspace = true, features = ["fs", "io-util", "sync", "rt"] }
-
-# High-performance cache
-moka = { workspace = true }
+# "sync" backs decoded-image load channels and slots (`registry::images`);
+# "rt" and "io-util" back the lane and timeout primitives. Files use `std::fs`
+# in bounded chunks, never tokio's filesystem runtime.
+tokio = { workspace = true, features = ["io-util", "sync", "rt"] }
 
 # Sync primitives
 parking_lot = { workspace = true }
@@ -42,7 +40,7 @@ parking_lot = { workspace = true }
 # Error handling
 thiserror = { workspace = true }
 
-# Image loading
+# Bounded image decoding
 image = { workspace = true, optional = true }
 # The registry's byte-budgeted decoded-image LRU (`registry::images`).
 lru = { workspace = true, optional = true }
@@ -60,29 +58,11 @@ flui-platform = { path = "../flui-platform", features = ["testing"] }
 [features]
 default = []
 
-## Core Features
-##
-## Enable specific asset types and loading capabilities:
-
-# Enable image loading (PNG, JPEG, GIF, WebP, etc.)
+# Enable decoded file and network images (PNG, JPEG, GIF, etc.). Network
+# fetching uses the HTTP capability supplied through `LoadServices`.
 images = ["dep:image", "dep:lru"]
 
-## Future Features (Coming Soon)
-##
-## Performance optimizations and development tools:
-
-# File watching for hot-reload during development
-# hot-reload = ["notify"]
-
-# Memory-mapped font loading for reduced memory usage
-# mmap-fonts = ["memmap2"]
-
-# Parallel image/video decoding for faster loading
-# parallel-decode = ["rayon"]
-
-## Convenience Feature Sets
-
-# Enable all stable features (recommended for applications)
+# Enable all stable features.
 full = ["images"]
 
 [lints]
@@ -92,14 +72,8 @@ workspace = true
 name = "assets_it"
 path = "tests/main.rs"
 
-# image's decoder registrations are process-global and cannot be removed.
-[[test]]
-name = "image_hook_reentry"
-path = "tests/image_hook_reentry.rs"
-required-features = ["images"]
-
 # Decoder hooks are process-global, so the decode-scheduling contracts that
-# observe decodes through them run in their own process too.
+# observe decodes through them run in their own process.
 [[test]]
 name = "image_decode_scheduling"
 path = "tests/image_decode_scheduling.rs"

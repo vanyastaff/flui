@@ -2,11 +2,11 @@
 //!
 //! `frame_timing_layer`'s unit tests emit the frame and phase spans
 //! themselves, so they can only prove that the layer maps the right names.
-//! This test drives a real tree through `HeadlessBinding::pump_frame`, which
-//! runs the same `UpdateScheduler::drive_frame` the desktop, Android and web
-//! runners run, and reads the profile back. If the scheduler stops opening
-//! the `frame` span, or the pipeline renames a phase span, this is the test
-//! that fails — the unit tests cannot.
+//! These tests drive real trees through `HeadlessHost`'s `UiRuntime::pump` and
+//! the raw owner's `HeadlessBinding::pump_frame`, both over the scheduler frame
+//! driver, and read the profile and typed capture back. If the scheduler stops
+//! opening the `frame` span, or a pipeline producer loses its shared identity,
+//! these tests fail — the hand-written-span unit tests cannot prove that path.
 #![allow(
     clippy::disallowed_methods,
     reason = "test code catches a panic to assert on it (ADR-0303 §5)"
@@ -17,8 +17,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use flui_devtools::profiler::{FramePhase, FrameStats};
-use flui_devtools::{FrameTimingLayer, Profiler};
+use flui_devtools::{Capture, FrameTimingLayer, Profiler};
 use flui_objects::RenderSizedBox;
+use flui_sdk::foundation::diagnostics::FrameSpan;
+use flui_sdk::view::element::LayoutBuilder;
 use flui_sdk::view::{RenderView, View};
 use flui_testing::{HeadlessBinding, MountOptions, MountOwners};
 use tracing::Dispatch;
@@ -65,37 +67,34 @@ fn a_real_frame_reaches_the_profiler_with_its_phases() {
     // is the documented way to capture under a thread-local subscriber.
     flui_testing::log_capture::disarm_interest_cache();
 
+    let capture = Capture::new();
     let profiler = Arc::new(Profiler::new());
-    let subscriber =
-        tracing_subscriber::registry().with(FrameTimingLayer::new(Arc::clone(&profiler)));
+    let subscriber = tracing_subscriber::registry()
+        .with(FrameTimingLayer::over(&capture, Arc::clone(&profiler)));
 
     tracing::dispatcher::with_default(&Dispatch::new(subscriber), || {
-        let mut binding = HeadlessBinding::new();
-        let mounted =
-            binding.mount_root(&Leaf, MountOwners::fresh(), MountOptions::tight(64.0, 64.0));
-        assert!(mounted.painted, "the bootstrap frame must commit a paint");
-
-        // The bootstrap runs the pipeline directly, outside `drive_frame`, so
-        // it is not a frame: nothing may be attributed to a frame that never
-        // opened. An empty history here is the honest reading.
-        assert!(
-            profiler.frame_history().is_empty(),
-            "the bootstrap is not a frame; got {:?}",
-            profiler.frame_history()
+        // Unlike the raw binding's bootstrap, this mount is a real UiRuntime
+        // frame with presentation, submit and commit work.
+        let root = LayoutBuilder::new(|_, _| Leaf);
+        let mut laid = flui_testing::widgets::lay_out_animated(
+            root,
+            flui_sdk::rendering::BoxConstraints::tight(flui_sdk::geometry::Size::new(64.0, 64.0)),
+            flui_sdk::animation::Vsync::new(),
         );
+        assert!(laid.did_paint_last_frame(), "the mount frame paints");
 
-        // An idle frame: build and layout run (their spans are unconditional),
-        // there is nothing to paint.
-        binding.pump_frame(Duration::from_millis(16));
+        // A demand-only runtime frame: no tree work is dirty, so it must not
+        // invent build, layout or paint spans.
+        laid.pump_for(Duration::from_millis(16));
 
-        // Dirty the root and pump again: this frame paints.
-        binding
-            .pipeline_owner()
-            .expect("mount_root leaves the binding tree-bound")
-            .with_mut(|owner| owner.mark_needs_paint(mounted.render_root));
-        binding.pump_frame(Duration::from_millis(16));
+        // Dirty the root and enable semantics before the painted frame so its
+        // complete real pipeline reaches both consumers of the same capture.
+        laid.enable_semantics();
+        laid.pipeline_owner()
+            .with_mut(|owner| owner.mark_needs_paint(laid.root()));
+        laid.pump_for(Duration::from_millis(16));
         assert!(
-            binding.did_paint_last_frame(),
+            laid.did_paint_last_frame(),
             "marking the root dirty must make the second pump paint"
         );
     });
@@ -103,29 +102,72 @@ fn a_real_frame_reaches_the_profiler_with_its_phases() {
     let history = profiler.frame_history();
     assert_eq!(
         history.len(),
-        2,
-        "one profiled frame per `drive_frame`, and only those; got {history:?}"
+        3,
+        "the mount and two pumps are real runtime frames; got {history:?}"
     );
     for (index, frame) in history.iter().enumerate() {
-        let seen = phases(frame);
-        assert!(
-            seen.contains(&FramePhase::Build),
-            "frame {index}: the pipeline's `build` span must land as Build; saw {seen:?}"
-        );
-        assert!(
-            seen.contains(&FramePhase::Layout),
-            "frame {index}: the pipeline's `layout` span must land as Layout; saw {seen:?}"
-        );
         assert!(
             frame.total_time_ms() > 0.0,
             "frame {index}: a driven frame takes time; got {frame:?}"
         );
     }
-    let painted = phases(&history[1]);
-    assert!(
-        painted.contains(&FramePhase::Paint),
-        "the dirtied frame's `paint` span must land as Paint; saw {painted:?}"
+    for index in [0, 2] {
+        let seen = phases(&history[index]);
+        for phase in [FramePhase::Build, FramePhase::Layout] {
+            assert!(
+                seen.contains(&phase),
+                "frame {index}: real tree work must profile {phase:?}; saw {seen:?}"
+            );
+        }
+    }
+    let painted = phases(&history[2]);
+    for phase in [
+        FramePhase::Paint,
+        FramePhase::Custom("Commit"),
+        FramePhase::Custom("Submit"),
+        FramePhase::Custom("Semantics"),
+    ] {
+        assert!(
+            painted.contains(&phase),
+            "the dirtied frame must profile {phase:?}; saw {painted:?}"
+        );
+    }
+
+    let captured = capture.frames();
+    assert_eq!(
+        captured.len(),
+        3,
+        "capture shares the profiler's three frames"
     );
+    assert!(
+        captured
+            .iter()
+            .all(|frame| frame.span().kind() == FrameSpan::Frame)
+    );
+    let build_count = captured
+        .iter()
+        .flat_map(flui_devtools::CapturedFrame::spans)
+        .filter(|span| span.kind() == FrameSpan::Build)
+        .count();
+    assert!(
+        build_count >= 2,
+        "both the global build and layout-builder service must emit Build; got {build_count}"
+    );
+    let painted = &captured[2];
+    for kind in [
+        FrameSpan::Presentation,
+        FrameSpan::Layout,
+        FrameSpan::Paint,
+        FrameSpan::Semantics,
+        FrameSpan::Commit,
+        FrameSpan::Submit,
+    ] {
+        assert!(
+            painted.spans().iter().any(|span| span.kind() == kind),
+            "the painted capture must contain {kind:?}; got {:?}",
+            painted.spans()
+        );
+    }
 }
 
 #[test]
@@ -1030,23 +1072,31 @@ fn a_real_runtime_frame_is_partitioned_and_exported() {
             .any(|span| span.partition().presentation().is_some()),
         "layout runs inside a presentation's segment: {layouts:?}"
     );
-    // The work a presentation owns outside its pipeline segment is attributed to it too.
-    let presentation_work: Vec<_> = capture
-        .spans()
-        .into_iter()
-        .filter(|span| {
-            matches!(
-                span.phase(),
-                Some(Phase::AnimationTick | Phase::Commit | Phase::Submit)
-            )
-        })
-        .collect();
-    assert!(
-        presentation_work
-            .iter()
-            .all(|span| span.partition().presentation().is_some()),
-        "animation, commit and submit are attributed to their presentation: {presentation_work:?}"
-    );
+    // The work a presentation owns outside its pipeline segment is attributed to it too. Check
+    // each kind separately: an `all` over an accidentally empty mixed vector would prove nothing.
+    for phase in [Phase::AnimationTick, Phase::Commit, Phase::Submit] {
+        let work: Vec<_> = capture
+            .spans()
+            .into_iter()
+            .filter(|span| span.phase() == Some(phase))
+            .collect();
+        assert!(!work.is_empty(), "the real frame must capture {phase:?}");
+        assert!(
+            work.iter()
+                .all(|span| span.partition().presentation().is_some()),
+            "{phase:?} is attributed to its presentation: {work:?}"
+        );
+        let kind = match phase {
+            Phase::AnimationTick => FrameSpan::AnimationTick,
+            Phase::Commit => FrameSpan::Commit,
+            Phase::Submit => FrameSpan::Submit,
+            _ => unreachable!("the loop names every phase"),
+        };
+        assert!(
+            work.iter().all(|span| span.kind() == kind),
+            "{phase:?} retains its typed producer identity: {work:?}"
+        );
+    }
 
     let trace: serde_json::Value =
         serde_json::from_str(&timeline.export_chrome_trace()).expect("the export is JSON");

@@ -117,18 +117,7 @@ impl DragTransport for DragDouble {
         // The last clone of `provider` may be this one, once the target
         // concluded the drop meanwhile: it retires here, outside every lock.
         drop(provider);
-        let result = result.and_then(|payload| {
-            let actual = payload.byte_len();
-            if actual > limits.max_bytes {
-                Err(TransferError::TooLarge {
-                    actual,
-                    limit: limits.max_bytes,
-                })
-            } else {
-                Ok(payload)
-            }
-        });
-        TransferRequest::ready(result)
+        TransferRequest::ready(result).enforce(limits)
     }
 
     fn update_drop_feedback(&self, id: DataTransferId, feedback: DropFeedback) {

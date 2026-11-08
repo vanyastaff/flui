@@ -37,7 +37,6 @@
 
 use std::sync::Arc;
 
-use flui_sdk::hooks::FrameSnapshot;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -104,12 +103,9 @@ fn saturating_micros(duration: Duration) -> u64 {
 
 /// The Chrome-trace "args" object for `event`'s Begin event:
 /// `{"category": ...}` plus every key of `event.args`, IF it is itself a
-/// JSON object (a frame-telemetry event's shape — see
-/// [`Timeline::record_frame_snapshots`]). An event recorded through
+/// JSON object. An event recorded through
 /// [`Timeline::record_event`]/[`Timeline::record_instant`] carries
-/// `args: Value::Null`, which contributes nothing beyond `category` — the
-/// pre-existing behavior every caller of `export_chrome_trace` before this
-/// function existed already relied on.
+/// `args: Value::Null`, which contributes nothing beyond `category`.
 ///
 /// `extra`'s keys are copied in FIRST, `category` LAST: `category` is this
 /// module's own reserved key (`export_chrome_trace`'s Begin event always
@@ -149,11 +145,10 @@ pub struct TimelineEvent {
     pub duration_micros: u128,
     /// Event category
     pub category: EventCategory,
-    /// Extra structured data carried alongside this event — e.g. a
-    /// frame-telemetry event's coalesced input ids and latencies (see
-    /// [`Timeline::record_frame_snapshots`]). `Value::Null` for an event
-    /// recorded through [`Timeline::record_event`]/[`Timeline::record_instant`],
-    /// which carry no extra args of their own.
+    /// Extra structured data carried alongside this event. `Value::Null` for
+    /// an event recorded through
+    /// [`Timeline::record_event`]/[`Timeline::record_instant`], which carry no
+    /// extra args of their own.
     #[serde(default)]
     pub args: serde_json::Value,
     /// Thread ID (for multi-threaded applications)
@@ -461,60 +456,6 @@ impl Timeline {
             runtime: None,
             presentation: None,
         });
-    }
-
-    /// Record every produced-frame [`FrameSnapshot`] in `snapshots` as one
-    /// Chrome-trace-compatible timeline event per frame, each carrying its
-    /// coalesced input ids and (present − arrival) latencies as trace args
-    /// — issue #556's exportable, per-input-attributed frame telemetry.
-    ///
-    /// A presentation's frame clock produces the snapshots. That clock is
-    /// internal to the app host, and no public API hands its snapshots out
-    /// yet; the public source is the follow-up ADR-0088 names for move 4.
-    /// Reuses this module's own [`Self::export_chrome_trace`] serializer;
-    /// no second trace format exists anywhere in this crate.
-    ///
-    /// The event name embeds [`FrameSnapshot::address`], not just
-    /// `frame_id`: a `frame_id` is scoped to the presentation whose clock
-    /// minted it (each starts counting from 1), and a `PresentationId` is
-    /// scoped to the UI runtime that minted it (ADR-0266 §3). Two
-    /// presentations' snapshots recorded into the SAME `Timeline` — a UI
-    /// runtime hosting more than one presentation, or two UI runtimes whose
-    /// first presentations share an id — would otherwise collide in one
-    /// exported trace file. The `ui_runtime` and `presentation` fields are
-    /// ALSO carried in `args` (not just the name) so a consumer can
-    /// filter/group by them without parsing the display string back apart.
-    pub fn record_frame_snapshots(&self, snapshots: &[FrameSnapshot]) {
-        for snapshot in snapshots {
-            let inputs: Vec<serde_json::Value> = snapshot
-                .latencies()
-                .map(|(id, latency)| {
-                    json!({
-                        "input_epoch_id": id.get(),
-                        "latency_us": saturating_micros(latency),
-                    })
-                })
-                .collect();
-            let args = json!({
-                "ui_runtime": snapshot.address.ui_runtime_id.to_string(),
-                "presentation": snapshot.address.presentation_id.to_string(),
-                "frame_id": snapshot.frame_id.to_string(),
-                "present_outcome": format!("{:?}", snapshot.present_outcome),
-                "inputs": inputs,
-            });
-            self.record_completed_event(
-                format!(
-                    "Frame {} [{} {}]",
-                    snapshot.frame_id,
-                    snapshot.address.ui_runtime_id,
-                    snapshot.address.presentation_id
-                ),
-                EventCategory::Frame,
-                snapshot.segment_start,
-                snapshot.segment_span(),
-                args,
-            );
-        }
     }
 
     /// Get all recorded events, oldest first. A timeline [over](Self::over) a capture includes

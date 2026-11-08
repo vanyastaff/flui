@@ -18,13 +18,12 @@ use std::task::{Context, Poll, Waker};
 use std::{rc::Rc, sync::Arc};
 
 use crate::common::{lay_out, loose};
-use flui_foundation::ConnectionState;
 use parking_lot::Mutex;
 
 // Exercise the public prelude import path: if `FutureBuilder` were not exported
 // from `flui_widgets::prelude`, this file would not compile.
 use flui_widgets::prelude::*;
-use flui_widgets::{FutureFactory, SizedBox, SnapshotBuilder};
+use flui_widgets::{AsyncSnapshot, FutureFactory, SizedBox, SnapshotBuilder};
 
 /// Deliberately neither `Clone` nor `Copy` — the public API must not need either.
 #[derive(Debug, PartialEq)]
@@ -34,10 +33,36 @@ struct Payload(i32);
 #[derive(Debug, PartialEq)]
 struct Boom(&'static str);
 
+#[derive(Debug, PartialEq, Clone, Copy)]
+enum SnapshotKind {
+    None,
+    Waiting,
+    Active,
+    Done,
+}
+
+fn snapshot_kind<T, E>(snapshot: &AsyncSnapshot<T, E>) -> SnapshotKind {
+    match snapshot {
+        AsyncSnapshot::None(_) => SnapshotKind::None,
+        AsyncSnapshot::Waiting(_) => SnapshotKind::Waiting,
+        AsyncSnapshot::Active(_) => SnapshotKind::Active,
+        AsyncSnapshot::Done(_) => SnapshotKind::Done,
+    }
+}
+
+fn last_result<T, E>(snapshot: &AsyncSnapshot<T, E>) -> Option<&Result<T, E>> {
+    match snapshot {
+        AsyncSnapshot::None(last) | AsyncSnapshot::Waiting(last) | AsyncSnapshot::Done(last) => {
+            last.as_ref()
+        }
+        AsyncSnapshot::Active(result) => Some(result),
+    }
+}
+
 /// What a build observed, flattened so the test can assert without `Clone`.
 #[derive(Debug, PartialEq, Clone, Copy)]
 struct Seen {
-    state: ConnectionState,
+    state: SnapshotKind,
     data: Option<i32>,
     error: Option<&'static str>,
 }
@@ -104,10 +129,15 @@ impl Completer {
 /// never need `Clone`.
 fn recording_builder(log: Arc<Mutex<Vec<Seen>>>) -> SnapshotBuilder<Payload, Boom> {
     Rc::new(move |_ctx, snapshot| {
+        let result = last_result(snapshot);
         log.lock().push(Seen {
-            state: snapshot.connection_state(),
-            data: snapshot.data().map(|payload| payload.0),
-            error: snapshot.error().map(|boom| boom.0),
+            state: snapshot_kind(snapshot),
+            data: result
+                .and_then(|result| result.as_ref().ok())
+                .map(|payload| payload.0),
+            error: result
+                .and_then(|result| result.as_ref().err())
+                .map(|boom| boom.0),
         });
         SizedBox::new(10.0, 10.0).into_view().boxed()
     })
@@ -119,7 +149,7 @@ fn last(log: &Arc<Mutex<Vec<Seen>>>) -> Seen {
 
 fn done(data: Option<i32>, error: Option<&'static str>) -> Seen {
     Seen {
-        state: ConnectionState::Done,
+        state: SnapshotKind::Done,
         data,
         error,
     }
@@ -151,7 +181,7 @@ pub(crate) fn future_builder_pending_then_error() {
 /// the UI runtime's owner thread, and the owner completes it between frames.
 pub(crate) fn future_builder_accepts_an_owner_local_future() {
     type Shared = Rc<std::cell::Cell<i32>>;
-    type Builds = Rc<std::cell::RefCell<Vec<(ConnectionState, Option<i32>)>>>;
+    type Builds = Rc<std::cell::RefCell<Vec<(SnapshotKind, Option<i32>)>>>;
     let waker: Rc<std::cell::RefCell<Option<Waker>>> = Rc::default();
     let result: Rc<std::cell::RefCell<Option<Shared>>> = Rc::default();
     let factory: FutureFactory<Shared, Boom> = {
@@ -174,8 +204,10 @@ pub(crate) fn future_builder_accepts_an_owner_local_future() {
         let seen = Rc::clone(&seen);
         Rc::new(move |_ctx, snapshot| {
             seen.borrow_mut().push((
-                snapshot.connection_state(),
-                snapshot.data().map(|shared| shared.get()),
+                snapshot_kind(snapshot),
+                last_result(snapshot)
+                    .and_then(|result| result.as_ref().ok())
+                    .map(|shared| shared.get()),
             ));
             SizedBox::new(10.0, 10.0).into_view().boxed()
         })
@@ -185,10 +217,7 @@ pub(crate) fn future_builder_accepts_an_owner_local_future() {
         FutureBuilder::keyed(Some(Rc::<str>::from("owner-local")), factory, builder),
         loose(400.0),
     );
-    assert_eq!(
-        seen.borrow().last(),
-        Some(&(ConnectionState::Waiting, None))
-    );
+    assert_eq!(seen.borrow().last(), Some(&(SnapshotKind::Waiting, None)));
 
     *result.borrow_mut() = Some(Rc::new(std::cell::Cell::new(7)));
     let wake = waker
@@ -198,8 +227,5 @@ pub(crate) fn future_builder_accepts_an_owner_local_future() {
     wake.wake();
     laid.tick();
 
-    assert_eq!(
-        seen.borrow().last(),
-        Some(&(ConnectionState::Done, Some(7)))
-    );
+    assert_eq!(seen.borrow().last(), Some(&(SnapshotKind::Done, Some(7))));
 }

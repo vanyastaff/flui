@@ -7,7 +7,8 @@ use super::*;
 /// A slot's terminal seed: only this injection is private; refusal and reuse
 /// go through the public tree.
 fn terminal_generation(tree: &mut ElementTree, id: ElementId) -> ElementId {
-    tree.generations.seed_generation(id.index(), u32::MAX);
+    tree.generations
+        .seed_generation(id.index(), Generation::LAST.as_u32());
     let generation = tree
         .generations
         .generation(id.index())
@@ -39,7 +40,7 @@ fn exhausted_generation_refuses_removal(mode: u8) {
     // Counter exhaustion is unreachable in a bounded consumer run. Only
     // this injection is private; refusal and reuse go through the public tree.
     tree.generations
-        .seed_generation(candidate.index(), u32::MAX);
+        .seed_generation(candidate.index(), Generation::LAST.as_u32());
     let generation = tree
         .generations
         .generation(candidate.index())
@@ -63,7 +64,7 @@ fn exhausted_generation_refuses_removal(mode: u8) {
         assert!(
             flui_foundation::panic::payload_text(&*failure)
                 .expect("generation failure text")
-                .contains("exhausted u32::MAX generations")
+                .contains("exhausted its packed generations")
         );
         let node = tree.get(candidate).expect("refused occupant stays live");
         assert_eq!(
@@ -128,7 +129,7 @@ fn exhausted_subtree_refuses_before_teardown(target: usize, mode: SubtreeRemoval
         assert!(
             flui_foundation::panic::payload_text(&*failure)
                 .expect("generation refusal")
-                .contains("exhausted u32::MAX generations")
+                .contains("exhausted its packed generations")
         );
         assert_eq!(
             observer.0.load(std::sync::atomic::Ordering::Relaxed),

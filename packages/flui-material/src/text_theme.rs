@@ -1,8 +1,8 @@
 //! [`TextTheme`] — the 15 M3 type-scale roles, and the color overlays
 //! [`ThemeData`](crate::ThemeData) composes them with by default.
 
-use flui_sdk::painting::Color;
-use flui_sdk::painting::TextStyle;
+use flui_sdk::painting::styling::Color;
+use flui_sdk::painting::typography::TextStyle;
 
 /// The 15 Material 3 type-scale roles, each independently overridable.
 ///
@@ -45,9 +45,9 @@ pub struct TextTheme {
 
 /// Merge one role: `base?.merge(patch) ?? patch`.
 ///
-/// `flui_sdk::painting::TextStyle::merge` already implements "each of `other`'s
+/// `flui_sdk::painting::typography::TextStyle::merge` already implements "each of `other`'s
 /// non-`None` fields wins, field-wise, else keep `self`'s".
-/// `flui_sdk::painting::TextStyle` carries no `inherit` flag: FLUI has no
+/// `flui_sdk::painting::typography::TextStyle` carries no `inherit` flag: FLUI has no
 /// build-context-relative "inherit from ambient DefaultTextStyle" concept
 /// baked into `TextStyle` itself, so merging here is a pure, context-free
 /// field combination.

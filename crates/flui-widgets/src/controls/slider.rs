@@ -12,7 +12,9 @@ use flui_interaction::{
 use flui_painting::{Canvas, Paint, styling::Color, typography::TextDirection};
 use flui_platform::keyboard::ImeComposition;
 use flui_rendering::{
-    delegates::CustomPainter, hit_testing::HitTestBehavior, semantics::NumericRange,
+    delegates::CustomPainter,
+    hit_testing::HitTestBehavior,
+    semantics::{NumericRange, TextDirection as SemanticsTextDirection},
 };
 use flui_view::prelude::*;
 use std::{
@@ -325,8 +327,8 @@ impl ViewState<Slider> for SliderState {
             .identifier_if(view.identifier.as_ref())
             .enabled(enabled)
             .text_direction(match direction {
-                TextDirection::Ltr => crate::SemanticsTextDirection::Ltr,
-                TextDirection::Rtl => crate::SemanticsTextDirection::Rtl,
+                TextDirection::Ltr => SemanticsTextDirection::Ltr,
+                TextDirection::Rtl => SemanticsTextDirection::Rtl,
             });
         if enabled {
             let increase = Terminal::new(Rc::clone(&self.live));

@@ -654,6 +654,11 @@ impl TextClient {
     }
 
     /// `unmarkText` — the composition ends, keeping its text.
+    ///
+    /// Clearing an active composition publishes an empty preedit with no cursor
+    /// so IME teardown cannot leave the cancelled composition visible. Without
+    /// an active composition the call is inert and needs no separate
+    /// `hasMarkedText` query.
     pub(crate) fn unmark_text(&self) {
         self.marked.set(false);
         self.edit(|session| {

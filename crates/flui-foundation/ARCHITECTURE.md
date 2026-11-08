@@ -3,7 +3,14 @@
 Design notes for the base crate every other FLUI crate builds on: IDs, geometry,
 listener notification, the signal read contract and the train guard.
 
-## Binding-owned input sequence identities
+## Admission
+
+A public item here needs a production caller or a named follow-up; a rustdoc or
+its own test is not a consumer. A general-purpose foundation primitive belongs
+here only when at least two crates in different tiers use it. A value serving a
+single subsystem lives with that subsystem instead.
+
+## Monotonic identities
 
 `InputSequenceId` is a nonzero, presentation-local identity issued by an
 owner-local `IdMint<InputSequenceId>` (ADR-0207 §4). It is distinct from reusable
@@ -15,6 +22,48 @@ gesture tests cover actual admission and pointer reuse
 supplies the identity contract required by
 [ADR-0209](../../docs/adr/ADR-0209-nested-scroll-connection.md), without making
 process-global state or serialization a second identity issuer.
+
+`FrameCallbackId` uses the same owner-local mint in its scheduler. Listener
+registries use `IdMint<ListenerId>`; clones of `Notifier` share one mint through
+`Rc`, while independent owners keep independent sequences. A `ListenerId` is
+either a minted registration or a typed inert admission result. The inert form
+has no numeric identity and cannot withdraw a callback from another source.
+`TaskId` uses `AtomicIdMint`, which shares the sealed `MintedId` construction and
+permanent-exhaustion contract but permits concurrent standalone task creation.
+These identity types have private numeric constructors. The public sequence
+tests cover repeated refusal and a race for the last identity; neither mint has
+a reset operation.
+
+## The mint family and the ids they issue
+
+`flui_foundation::sequence` is the workspace's only issuer of identities.
+`IdMint` is the owner-local mint; `AtomicIdMint` is its cross-thread twin for
+an id domain more than one thread mints (the scheduler's task and callback
+identities). Both share the sealed `MintedId` contract, whose `MINT_CEILING`
+keeps every raw value convertible to the identity type's own representation,
+and the same refusal rule: an issued id is never issued again, and an
+exhausted mint refuses, typed (`IdExhausted`), forever
+(`the_atomic_mint_issues_the_same_sequence_the_owner_local_mint_does`,
+`an_exhausted_atomic_mint_refuses_permanently`,
+`an_atomic_mint_admits_exactly_one_of_concurrent_requests_for_the_last_identity`,
+`a_pointer_width_bounded_id_refuses_past_its_type_ceiling`,
+`scheduler_and_listener_ids_are_minted_by_the_family`). The counter ids with
+no slab behind them (`ListenerId`, `TaskId`, `FrameCallbackId`) are minted by
+the family; the slab-backed ids stay the slot plus one.
+
+## Slot generations (ADR-0313)
+
+A packed generational key (`ElementId`, `RenderId`, `UiRuntimeId`) names one
+slot with a `generation::Generation`: 1-based, checked, never wrapped, minted
+only by the slot arena's `generation::GenSlots` ledger. A release preflights
+its step with `GenSlots::peek` before user code runs and commits it with
+`GenSlots::commit` after; a caught panic between the two steps nothing. A
+slot whose generation space is exhausted closes at its release and never
+mints again: the signal graph re-lists nothing, the element tree refuses the
+removal with its occupant kept, and the render slab marks the slot `Retired`
+and keeps it off the free list. The render layout lease checks both the
+ledger generation and `Occupied`, because a retired entry retains its last
+generation.
 
 ## The mint family and the ids they issue
 
@@ -125,11 +174,10 @@ checks ordinary and extreme vectors, fallback admission, and the actual
 `Circle::nearest_point` consumer. Endpoint subtraction
 and other vector operations retain their own floating-point range limits. `Offset::normalize`
 delegates to the same `Vec2` policy, including zero and near-zero refusal and
-non-finite components returning zero. Infinite offsets previously produced NaN
-components; that invalid normalized output is deliberately refused. The family
-also checks `Offset::move_towards` taking a finite unit step toward a target with
-an overflowing magnitude. Its subtraction and maximum-distance policies are
-unchanged.
+non-finite components returning zero. Infinite offsets therefore produce zero
+rather than NaN components. The family also checks `Offset::move_towards` taking
+a finite unit step toward a target with an overflowing magnitude. Subtraction
+and maximum-distance limiting retain their own floating-point range limits.
 
 Transform decomposition computes column lengths with `hypot`. It keeps a finite,
 nonzero direct determinant before dividing by the first scale: prematurely
@@ -181,9 +229,9 @@ UI runtime's reactive graph (ADR-0085 §2); the graph itself — slot arena, rea
 the build-time guard — lives in `flui-view`, and so does every type that names a reader.
 
 **What it holds.** The handles (`SignalSlot`, `Signal<T>`, `SignalSender<T>`), the error type
-(`SignalError`, with `Display`/`Error` written by hand because foundation takes no
-`thiserror`), the read-only graph face (`ReadGraph`: `graph_id` and `read_erased`), the
-subscription sink (`ReaderSink::subscribe(slot)`), and what a context hands a read
+(`SignalError`, whose `Display` and `Error` implementations are written explicitly), the
+read-only graph face (`ReadGraph`: `graph_id` and `read_erased`), the subscription sink
+(`ReaderSink::subscribe(slot)`), and what a context hands a read
 (`ReadScope::scope() -> ScopeRef`). `Signal::get`/`with`/`try_*` take any
 `&S where S: ReadScope + ?Sized`; `&S` and `Box<S>` are scopes, so deref shapes keep working.
 
@@ -236,11 +284,10 @@ allows one package per `links` value in a dependency graph, so two releases ("tr
 cannot meet in one build: an application on one train and a package on another resolve to one
 train or fail in the resolver, never later with a type mismatch (ADR-0088 §5).
 
-The guard sits here, not on `flui-sdk`, because this is the crate every train shares: the facade,
-`flui-sdk`, `flui-platform` and every crate above them except `flui-log`, `flui-assets` and
-the `flui-cli` tool have it in their normal dependency closure, while the facade does not depend
-on the SDK. A guard on the SDK alone would not separate an application on one
-`flui` train from a package on another `flui-sdk` train.
+The guard sits here, not on `flui-sdk`, because the facade, SDK and platform/framework
+layers converge on foundation through normal dependencies, while the facade does not depend
+on the SDK. A guard on the SDK alone would not separate an application on one `flui` train
+from a package on another `flui-sdk` train.
 
 Invariants, checked by `cargo xtask workspace`: this crate declares the guard and no other member
 does. `two_trains_refuse_to_resolve` in `tools/xtask` builds two copies of this crate with this
@@ -252,8 +299,8 @@ exists to prevent.
 
 ## Typed inspection (`inspect`)
 
-`inspect` is ADR-0242's description model; it replaced the `Diagnosticable` property builders,
-which the workspace has left. Invariants:
+`inspect` is ADR-0242's typed description model. `Inspect` describes an object's own fields;
+`InspectTree` supplies identity and structure. Invariants:
 
 - **Describing allocates only in the sink.** `Inspect::inspect` writes borrowed `Field`s into
   one `&mut dyn Sink`; `Value` is `Copy` and owns nothing. `inspect_allocation` (its own test
@@ -283,66 +330,45 @@ which the workspace has left. Invariants:
 
 ---
 
-## Diagnostics serialization
+## Inspection, diagnostics and serialization
 
-Diagnostics nodes expose their structured properties and children and their
-human-readable tree formatting. The existing `serde` feature implements value
-serialization through serde, including string escaping. There is no separate
-JSON string exporter: the removed hand-written exporter had no callers and
-could emit unescaped ASCII control characters. Agent transports serialize the
-typed protocol tree rather than this diagnostics representation (ADR-0095).
-
----
-
-## Architecture Decision Summary
-
-| Decision | FLUI |
-|----------|------|
-| Tree hierarchy | `Debug` trait + custom traits |
-| State notification | `Notifier` / `ChangeNotifier` (this crate) |
-| Error handling | `thiserror` + `anyhow` |
-| Identity | `Key` trait + impls |
-| IDs | `Id<T: Marker>` (wgpu-style) |
-| Tree storage | `Slab` with typed IDs |
-| Platform channels | `bytes` crate |
-| Binding system | Trait composition; every binding-shaped value is constructed and owned per `UiRuntime`/`AppRuntime`, never process-global |
+Typed inspection and structured diagnostics are separate surfaces.
+`inspect::snapshot` builds an owned `SnapshotNode` with tree facts, object fields,
+links and children; `inspect::render` and `SnapshotNode`'s `Display` produce its
+human-readable outline. The optional `serde` feature implements serialization for
+foundation value types, including keys, IDs, geometry and text-sizing values. It
+does not define `Serialize` or `Deserialize` for `inspect::Value`, `OwnedValue`
+or `SnapshotNode`. The `diagnostics` module owns the structured `tracing` wire vocabulary, not a
+serializable node tree. `FrameSpan` gives every framework frame, presentation,
+phase and animation span one typed `(target, name)` identity: producers open
+spans through `target()`/`name()`, and consumers recover the same identity with
+`FrameSpan::of`. `FrameSpan::ALL` and the public diagnostics contract test pin
+the complete table, its uniqueness and negative matches. `RUNTIME`,
+`PRESENTATION` and `PERIOD_US` name the frame-partition and display-period
+fields shared by producers and capture; `PRESENTATION_ID` and `REDACTED_VALUE`
+retain their existing correlation and privacy roles. `LayoutRoot` is diagnostic
+detail rather than a profiler phase, so devtools admits its captured subset
+explicitly instead of treating every variant as profile data.
 
 ---
 
 ## Thread safety
 
-`flui-foundation` sits in tier V with no FLUI dependencies; concurrency primitives are minimal and live at well-defined seams.
+`flui-foundation` is tier V and has a normal dependency on `flui-macros` to
+re-export `#[derive(Inspect)]`. Its concurrency primitives live at these seams:
 
-| Site | Primitive | Where | Why |
-|------|-----------|-------|-----|
-| `GlobalKey` ID counter | `AtomicU64` (static) | `key.rs:140, 462` | Monotonic key allocator. `fetch_add` only, no contention pattern. Off any hot path. |
+| Site | Primitive | Where | Rule |
+|------|-----------|-------|------|
+| `Key::new` | `KEY_COUNTER: AtomicU64` | `key.rs` | Process-wide, 1-based key sequence. `try_update` installs a sticky zero exhaustion sentinel instead of wrapping and reissuing keys. |
+| `UniqueKey::new` | `UNIQUE_KEY_COUNTER: AtomicU64` | `key.rs` | Independent sequence with the same sticky-exhaustion rule as `Key::new`. |
+| `event_epoch` | `EVENT_EPOCH: LazyLock<Instant>` | `clock.rs` | Initialized once and fixed for the process, so native input timestamps and `SystemClock::epoch` share an epoch. |
+| `GpuResourceGeneration::mint` | Function-local `NEXT: AtomicU64` | `epoch.rs` | Mints process-wide GPU-resource generations starting at 1 with `fetch_add`. |
+| `ClaimSlot` / `ClaimHandle` | `parking_lot::Mutex` for state and the registered waker; `parking_lot::Condvar` for blocked requesters | `claim_slot.rs` | State transitions are linearized under private locks. Executor and wake code runs after the corresponding lock is released. |
+| `ManualClock::elapsed` | `Arc<parking_lot::Mutex<Duration>>` | `clock.rs` | Clones share one virtual timeline; `advance`, `now` and `elapsed` synchronize through the mutex. |
 | `Notifier::listeners` | `Rc<ListenerStorage>` with `RefCell<HashMap<ListenerId, …>>` | `notifier_generic.rs` | Owner-local membership. Delivery snapshots registration order and releases every borrow before invocation or retirement. `ChangeNotifier` adapts this same storage. |
-| `Notifier::next_id` | `Rc<Cell<usize>>` | `notifier_generic.rs` | Monotonic owner-local identities. Exhaustion refuses permanently before an identity can be reissued. |
+| `Notifier::next_id` | `Rc<IdMint<ListenerId>>` | `notifier_generic.rs` | Clones share monotonic owner-local identities. Exhaustion refuses permanently before an identity can be reissued. |
 
 No `RwLock` in `flui-foundation`. No primitive listed here sits inside `perform_layout` / `paint` / `View::build`.
-
----
-
-## Friction log
-
-Notification state is owner-local. A round owns its snapshot while reentrant
-registration changes live membership; new listeners join the next round.
-The framework's pre-delivery observation hook runs after that snapshot and its
-capture custody are established, with no state borrow held. Disposal and removal
-from the hook silence the remaining selection; additions wait for the next round.
-`animation_observation_contract` exercises this seam through real animation
-profiling subscribers at span creation and entry.
-Framework relays borrow enclosing failure custody rather than create another
-notification path. Worker replies and wakes retain their separate Send edges.
-
----
-
-## Outstanding refactors
-
-Items below are concrete cleanups visible from `flui-foundation` outward. Each is sized for an `/aif-implement` dispatch without out-of-band clarification.
-
-- **`Notifier` re-entrancy semantics — DONE.** Both `ChangeNotifier::notify_listeners` and `Notifier::notify` now document the round-N-vs-round-N+1 behaviour (snapshot-then-fire, mid-notify removals skipped, post-snapshot additions deferred to the next round, `catch_unwind` isolation).
-- **State notification** — `Notifier`/`ChangeNotifier` is the owner-local listener channel (ADR-0178). Runtime-scoped signals retain their separate graph and dependency tracking in `flui-view`; their read contract lives in `read_scope` (ADR-0085).
 
 ---
 
@@ -351,7 +377,22 @@ Items below are concrete cleanups visible from `flui-foundation` outward. Each i
 ### Notification channels retain only the surfaces they serve
 
 `Notifier<T>` lends typed arguments; `ChangeNotifier` adapts it to zero-argument
-listeners. `ValueNotifier<T>` owns its value without a `Clone` requirement on
+listeners. These owner-local channels carry state notification (ADR-0178).
+Runtime-scoped signals retain their separate graph and dependency tracking in
+`flui-view`; their read contract lives in `read_scope` (ADR-0085).
+
+Notification state is owner-local. A round owns a registration-ordered snapshot
+while reentrant registration changes live membership: additions join the next
+round, and removal or disposal silences the remaining selection. The framework's
+pre-delivery observation hook runs after that snapshot and its capture custody
+are established, with no state borrow held. Disposal and removal from the hook
+silence the remaining selection; additions wait for the next round.
+`animation_observation_contract` exercises this seam through real animation
+profiling subscribers at span creation and entry. Framework relays borrow
+enclosing failure custody rather than create another notification path. Worker
+replies and wakes retain their separate Send edges.
+
+`ValueNotifier<T>` owns its value without a `Clone` requirement on
 reading, mutation or extraction. Its derived `Clone` remains available for
 cloneable values, copying the value while sharing the listener channel.
 `into_value` disposes that shared channel before extracting the value.
@@ -362,10 +403,11 @@ value's mutation/extraction sequence and clone compatibility.
 outlive the notifier; this is a drop-check requirement, not a `T: 'static`
 bound.
 
-The separate `ListenerRegistry`/`ListenerSubscription` surface is removed.
-It had no production consumer; its lazy first/last hooks duplicated notification
-ownership and exposed a callback-under-lock transaction. Typed and zero-argument
-notification continue through the channels above.
+Notification ownership stays in `Notifier`/`ChangeNotifier`; there is no separate
+`ListenerRegistry`/`ListenerSubscription` API. Lazy first/last-listener hooks are
+not a second notification path: they would duplicate channel ownership and
+require a callback-under-lock transaction. Typed and zero-argument notification
+use the channels above.
 
 ### Claim slots commit outcomes before delivering borrowed wakes
 

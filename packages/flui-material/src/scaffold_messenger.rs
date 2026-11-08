@@ -1171,12 +1171,12 @@ mod tests {
     }
 
     fn mounted_handle() -> (
-        flui_testing::widgets::harness::Harness,
+        flui_sdk::testing::widgets::harness::Harness,
         ScaffoldMessengerHandle,
     ) {
         let captured = Rc::new(RefCell::new(None));
         let harness =
-            flui_testing::widgets::harness::mount(ScaffoldMessenger::new(CaptureMessenger {
+            flui_sdk::testing::widgets::harness::mount(ScaffoldMessenger::new(CaptureMessenger {
                 captured: Rc::clone(&captured),
             }));
         let handle = captured.borrow().clone().expect("messenger mounted");

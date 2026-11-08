@@ -20,11 +20,10 @@
 use std::sync::Arc;
 
 use flui_sdk::geometry::{EdgeInsets, Size};
-use flui_sdk::painting::{BorderSide, BorderStyle};
+use flui_sdk::painting::styling::{BorderSide, BorderStyle};
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{WidgetState, WidgetStateProperty};
 
-use crate::ThemeData;
 use crate::button_style::ButtonStyle;
 use crate::button_style_button::{ButtonStyleButtonCore, PressCallback};
 use crate::elevated_button::pressed_hovered_overlay;
@@ -100,16 +99,13 @@ impl OutlinedButton {
 
 impl StatelessView for OutlinedButton {
     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
-        let theme = Theme::of(ctx);
-        let mut core = ButtonStyleButtonCore::new(default_style(&theme), self.child.clone())
-            .style(self.style.clone().unwrap_or_default());
-        // Middle cascade tier — see `crate::elevated_button`'s identical
-        // "simplified from `ElevatedButtonTheme.of`" note.
-        if let Some(theme_style) = theme
-            .outlined_button_theme
-            .as_ref()
-            .and_then(|t| t.style.clone())
-        {
+        let (colors, text_theme) = Theme::required_color_and_text_of(ctx);
+        let theme_style = Theme::component_of::<crate::OutlinedButtonThemeData>(ctx)
+            .and_then(|theme| theme.style);
+        let mut core =
+            ButtonStyleButtonCore::new(default_style(&colors, &text_theme), self.child.clone())
+                .style(self.style.clone().unwrap_or_default());
+        if let Some(theme_style) = theme_style {
             core = core.theme_style(theme_style);
         }
         if let Some(on_pressed) = self.on_pressed.clone() {
@@ -122,15 +118,12 @@ impl StatelessView for OutlinedButton {
 /// Verbatim, field-by-field port of `_OutlinedButtonDefaultsM3`
 /// (`outlined_button.dart`, oracle tag `3.44.0`), narrowed to the V1 slots —
 /// see the module docs.
-fn default_style(theme: &ThemeData) -> ButtonStyle {
-    let colors = theme.color_scheme;
-
+fn default_style(colors: &crate::ColorScheme, text_theme: &crate::TextTheme) -> ButtonStyle {
+    let colors = *colors;
     ButtonStyle {
-        text_style: Some(WidgetStateProperty::all(
-            theme.text_theme.label_large.clone(),
-        )),
+        text_style: Some(WidgetStateProperty::all(text_theme.label_large.clone())),
         background_color: Some(WidgetStateProperty::all(Some(
-            flui_sdk::painting::Color::TRANSPARENT,
+            flui_sdk::painting::styling::Color::TRANSPARENT,
         ))),
         foreground_color: Some(WidgetStateProperty::resolve_with(move |states| {
             Some(if states.contains_state(WidgetState::Disabled) {

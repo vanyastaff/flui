@@ -63,8 +63,8 @@ impl PipelineOwner<Compositing> {
             return Ok(());
         }
         let _span = tracing::debug_span!(
-            target: "flui.frame",
-            "compositing",
+            target: flui_foundation::diagnostics::FrameSpan::Compositing.target(),
+            flui_foundation::diagnostics::FrameSpan::Compositing.name(),
             dirty_nodes = self.scheduler.compositing_queue_len(),
         )
         .entered();

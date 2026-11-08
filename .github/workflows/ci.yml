@@ -632,8 +632,8 @@ jobs:
       - name: cargo nextest run (flui-painting serde value contract)
         run: cargo nextest run -p flui-painting --locked --no-fail-fast --features serde --test painting_it -E 'test(=value_contract)'
 
-      # The facade's non-default catalogs and localizations need no run here:
-      # the `test` job's TEST_SCOPE turns `flui/cupertino,flui/localizations` on.
+      # The facade's non-default catalogs need no run here: the `test` job's
+      # TEST_SCOPE turns `flui/material,flui/cupertino,flui/native` on.
 
       # A snapshot assertion in these suites fails with a `.snap.new` beside
       # it; upload them as `test` does, or the diff is only a log tail.

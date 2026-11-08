@@ -10,9 +10,10 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
+use flui_native::testing::HeadlessWindow;
 use flui_native::{
     DisplayChange, DisplaySpec, HeadlessDisplayControls, HeadlessOwnerTurns, HeadlessPlatform,
-    MockWindow, Platform as _,
+    Platform as _,
 };
 use flui_platform::PlatformWindow;
 use flui_platform::{DisplayId, DisplaySnapshot, WindowDisplay};
@@ -37,10 +38,12 @@ struct Rig {
 
 fn boot() -> Rig {
     let clear = OwnerHostClearGuard::arm();
-    let platform = HeadlessPlatform::new().with_displays(vec![
-        DisplaySpec::new("Left", 1920, 1080).with_refresh_period(Duration::from_millis(16)),
-        DisplaySpec::new("Right", 2560, 1440),
-    ]);
+    let platform = HeadlessPlatform::new()
+        .with_test_doubles()
+        .with_displays(vec![
+            DisplaySpec::new("Left", 1920, 1080).with_refresh_period(Duration::from_millis(16)),
+            DisplaySpec::new("Right", 2560, 1440),
+        ]);
     let controls = platform.display_controls();
     let turns = platform.owner_turns();
     let ids = platform
@@ -88,7 +91,7 @@ impl Drop for Rig {
 /// An installed window: its native handle, its presentation, and what the
 /// presentation asked of the window.
 struct Win {
-    native: MockWindow,
+    native: HeadlessWindow,
     /// The platform keeps its windows alive; the headless one does not, so the
     /// test does.
     window: Rc<dyn PlatformWindow>,
@@ -128,7 +131,7 @@ fn install_window(
             .expect("headless windows are ready");
     let native = host_window
         .as_any()
-        .downcast_ref::<MockWindow>()
+        .downcast_ref::<HeadlessWindow>()
         .expect("headless window")
         .clone();
     let window: Rc<dyn PlatformWindow> = host_window;
@@ -497,7 +500,7 @@ fn closed_window_receives_nothing() {
 /// A renderer is set up for the colour profile the accepted snapshot gives
 /// the window's display, and a profile change reaches the next one set up.
 fn a_surface_is_set_up_for_the_colour_of_its_window_s_display() {
-    use flui_platform::{CapabilityAbsence, ColorGamut, DisplayColor, Headroom};
+    use flui_platform::{ColorGamut, DisplayColor, Headroom, Unsupported, UnsupportedReason};
 
     let rig = boot();
     let left = open_window(&rig, Some(LEFT));
@@ -518,7 +521,7 @@ fn a_surface_is_set_up_for_the_colour_of_its_window_s_display() {
     rig.controls
         .simulate_display_change(
             rig.ids[RIGHT],
-            DisplayChange::Color(Err(CapabilityAbsence::NotOnThisDevice)),
+            DisplayChange::Color(Err(Unsupported::new(UnsupportedReason::NotOnThisDevice))),
         )
         .expect("colour gone");
     rig.turns.drive();

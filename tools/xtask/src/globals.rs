@@ -23,7 +23,7 @@
 //! `[package.metadata.flui] globals`, keyed by its item path in the target:
 //! debt names the ADR that removes it (`exit`); a permanent grant names
 //! ADR-0097 and a class (`trampoline`, `counter`, `immutable`, `process`,
-//! `diagnostic`), and the gate checks what it can of each class. A global
+//! `image`, `diagnostic`), and the gate checks what it can of each class. A global
 //! with no entry, an entry with no global (or for an exempt one), a class the
 //! global does not fit, and a second trampoline in the host or in one
 //! platform are findings.
@@ -53,7 +53,7 @@ mod scan;
 
 use crate::source_tree::Disk;
 use allowlist::{Class, Standing};
-use scan::{Def, Shape, Source, Target, Vis};
+use scan::{Def, Origin, Shape, Source, Target, Vis};
 
 /// Arguments for `cargo xtask globals`.
 #[derive(Debug, clap::Args)]
@@ -201,7 +201,7 @@ impl fmt::Display for Exempt {
 /// The exemption every definition of one global shares, if any.
 fn exemption(defs: &[Def]) -> Option<Exempt> {
     let of = |def: &Def| {
-        if def.shape != Shape::Static {
+        if def.origin != Origin::Item || def.shape != Shape::Static {
             return None;
         }
         if def.ty.immutable_data {
@@ -329,7 +329,7 @@ fn check(source: &dyn Source, crates: &[Krate], adrs: &BTreeSet<String>) -> anyh
             let mut cfgs = BTreeSet::new();
             let ambiguous = defs
                 .iter()
-                .filter(|def| def.shape != Shape::Macro)
+                .filter(|def| def.origin != Origin::Macro)
                 .any(|def| !cfgs.insert(def.cfg.as_str()));
             if ambiguous {
                 report.problems.push(problem(

@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use flui_native::{
-    DisplayChange, DisplayChangeError, DisplaySpec, HeadlessPlatform, MockWindow, Platform as _,
+    DisplayChange, DisplayChangeError, DisplaySpec, HeadlessPlatform, HeadlessWindow, Platform as _,
 };
 use flui_platform::WindowOptions;
 
@@ -125,7 +125,7 @@ fn window_move_names_the_new_display_and_hints_once() {
     let window: Rc<dyn flui_native::HostWindow> = window;
     let mock = window
         .as_any()
-        .downcast_ref::<MockWindow>()
+        .downcast_ref::<HeadlessWindow>()
         .expect("headless window")
         .clone();
     assert_eq!(
@@ -162,7 +162,7 @@ fn a_move_to_a_display_the_platform_does_not_hold_is_refused() {
     let window: Rc<dyn flui_native::HostWindow> = window;
     let mock = window
         .as_any()
-        .downcast_ref::<MockWindow>()
+        .downcast_ref::<HeadlessWindow>()
         .expect("headless window")
         .clone();
     let before = window.state().display;
@@ -189,13 +189,13 @@ fn a_move_to_a_display_the_platform_does_not_hold_is_refused() {
 
 fn a_profile_change_reaches_the_snapshot_as_a_new_revision() {
     use flui_platform::{
-        CapabilityAbsence, ColorGamut, DisplayColor, DynamicRange, Headroom, UnsupportedReason,
+        ColorGamut, DisplayColor, DynamicRange, Headroom, Unsupported, UnsupportedReason,
     };
 
     let platform = HeadlessPlatform::new().with_displays(vec![
         DisplaySpec::new("Panel", 1920, 1080),
         DisplaySpec::new("Projector", 1280, 720)
-            .with_color(Err(CapabilityAbsence::NotOnThisDevice)),
+            .with_color(Err(Unsupported::new(UnsupportedReason::NotOnThisDevice))),
     ]);
     let controls = platform.display_controls();
     let before = platform.display_snapshot().expect("snapshot");
@@ -281,7 +281,7 @@ fn headless_displays_contract() {
 #[cfg(windows)]
 #[test]
 fn windows_displays_report_their_colour() {
-    use flui_platform::{CapabilityAbsence, DynamicRange};
+    use flui_platform::{DynamicRange, Unsupported, UnsupportedReason};
 
     let platform = flui_native::WindowsPlatform::try_new().expect("native Windows platform");
     let snapshot = platform.display_snapshot().expect("snapshot");
@@ -298,7 +298,7 @@ fn windows_displays_report_their_colour() {
             }
             Err(absence) => assert_eq!(
                 absence,
-                CapabilityAbsence::NotOnThisDevice,
+                Unsupported::new(UnsupportedReason::NotOnThisDevice),
                 "{}: an output's colour space went unread",
                 display.name
             ),

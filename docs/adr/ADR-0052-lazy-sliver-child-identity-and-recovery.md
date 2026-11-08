@@ -77,9 +77,9 @@ laid out.
    `build_item_or_error` sees only the call that produces the *view*; the
    panic an item can still throw is in its own `View::create_render_object`
    (which `ElementTree::insert` reaches through `RenderBehavior::on_mount`) or
-   `update_render_object` (through `on_update`). Both call sites in
-   `SparseChildren` bound them the same way and substitute the same error view
-   at the same index.
+   `update_render_object` during `RenderBehavior::build_into_views`. The mount
+   boundary and the build drain's lifecycle recovery substitute the same error
+   view at the same index.
 
    Recovery differs by what the failure left behind, which is why
    `ElementTree::insert_reporting_child` reports an `InsertedChild` rather
@@ -91,16 +91,17 @@ laid out.
    `remove_finalized` with the unmount observation suppressed, since
    announcing the removal of a node no observer saw mount would break
    ADR-0040's causal ordering. A **retaken** one differs in every respect: the
-   retake relocates a live element and runs its own `update` (user
-   `update_render_object` with it), so the panic site sits *after* a committed
-   relocation, the element was already announced as a reparent, and it carries
-   a subtree — it goes out through an ordinary `remove_subtree(.., Finalize)`.
-   That mode finalizes the root as well as the descendants, so a broken keyed
-   element cannot wait in the inactive queue to be retaken again. A failed
-   **update** of a resident leaves a live, half-configured render object that
-   `apply_render_update_impact` never marked dirty, so the resident is removed
-   outright rather than kept: a silently stale subtree is the one outcome
-   worse than a visible error.
+   retake relocates a live element and runs its own `update`, so an update
+   panic site sits *after* a committed relocation, the element was already
+   announced as a reparent, and it carries a subtree — it goes out through an
+   ordinary `remove_subtree(.., Finalize)`. That mode finalizes the root as well
+   as the descendants, so a broken keyed element cannot wait in the inactive
+   queue to be retaken again. A failed render configuration during the build
+   drain is different: the drain restores the extracted element to its slot,
+   then replaces the failed resident through its lifecycle recovery. It does
+   not retain a live, half-configured render object whose
+   `apply_render_update_impact` never ran: a silently stale subtree is the one
+   outcome worse than a visible error.
 
    **Improvement over Flutter.** Flutter calls `createRenderObject` and
    `updateRenderObject` bare (`framework.dart` `RenderObjectElement.mount` /

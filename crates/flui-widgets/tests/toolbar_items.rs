@@ -11,13 +11,13 @@ use flui_foundation::geometry::Offset;
 use flui_interaction::focus::FocusNode;
 use flui_painting::Alignment;
 use flui_rendering::hit_testing::HitTestBehavior;
+use flui_rendering::semantics::SemanticsRole;
 use flui_testing::a11y::{A11yTree, Role};
 use flui_testing::replay::PointerScript;
 use flui_view::{BoxedView, ViewExt};
 use flui_widgets::interaction::GestureDetector;
 use flui_widgets::{
-    Align, Focus, Semantics, SemanticsRole, SizedBox, ToolbarItems, ToolbarItemsController,
-    WidgetsApp,
+    Align, Focus, Semantics, SizedBox, ToolbarItems, ToolbarItemsController, WidgetsApp,
 };
 
 use crate::common::{LaidOut, lay_out, tight};

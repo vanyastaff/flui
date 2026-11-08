@@ -4,10 +4,8 @@
 - **Date:** 2026-10-21
 - **Amends:** the render-tree storage entry of `crates/flui-rendering/ARCHITECTURE.md`
   ("Render-tree storage uses a `Slab<RenderNode>`")
-- **Revised:** 2026-11-03 — §1: the slab owns the generations and retires a slot whose
-  generations are exhausted, instead of panicking after the slot was already freed; removal and
-  `clear` take nodes out before any destructor runs, so a panicking one cannot leave a stale id
-  resolving or the owner's bookkeeping undone
+- **Related:** [ADR-0313](ADR-0313-a-generational-slot-never-mints-an-id-twice.md), whose
+  `GenSlots` ledger carries the slot generations this lease resolves
 
 ## Context
 
@@ -30,36 +28,34 @@ parent can hand a clean boundary new constraints.
 
 ## Decision
 
-1. **Own the slot storage.** `RenderTree` keeps nodes in a `NodeSlab`: a `Vec` of slots, each
-   `{ generation: NonZeroU32, in_flight: Cell<bool>, parent: Cell<Option<RenderId>>,
-   state: UnsafeCell<SlotState> }` with
+1. **Own the slot storage.** `RenderTree` keeps nodes in a `NodeSlab`: a `Vec` of slots, a free
+   list and a `flui_foundation::generation::GenSlots` ledger parallel to the slots. Each slot is
+   `{ in_flight: Cell<bool>, parent: Cell<Option<RenderId>>, state: UnsafeCell<SlotState> }` with
    `enum SlotState { Vacant { next_free: Option<u32> }, Occupied(RenderNode), Retired }`. The
-   header fields sit outside the `UnsafeCell`, so they are readable while a node's `&mut` is live. The
-   parent link lives only in the header: `RenderTree::parent` reads it, `set_parent_link` and
+   header fields sit outside the `UnsafeCell`, so they are readable while a node's `&mut` is live.
+   The parent link lives only in the header: `RenderTree::parent` reads it, `set_parent_link` and
    `insert_*_child` write it, and neither `RenderNode` nor `NodeLinks` keeps a copy, so the two
    cannot disagree. Code that holds only a node (the layout walk) asks the lease.
 
-   The slab mints every `RenderId` and empties every slot. A slot's generation is its
-   occupant's, or, while the slot is vacant, the one its next id will carry, so an id matches its
-   slot's generation exactly while its node occupies the slot. Ids carry generations below
-   `NonZeroU32::MAX`. A slot that cannot advance below it takes `MAX` and becomes `Retired`: it
-   holds no node and never returns to the free list, so no id is ever issued twice.
+   The slab mints every `RenderId` and empties every slot. `Generation` is the ledger's checked,
+   1-based value. A fresh slot uses `mint_fresh`; release uses `peek` before mutation and `commit`
+   afterward, so a vacant slot's generation is the one its next id will carry. A release at the
+   last generation has no step: the slot becomes `Retired`, owns no node and never returns to the
+   free list. The ledger keeps that final generation, so resolution checks both generation and
+   `Occupied`; no id is ever issued twice.
 
    Inserting and removing go through `&mut NodeSlab` only, never during a lease. `remove` commits
-   in this order, and nothing after the first write can fail: (a) check that the slot is
-   `Occupied` and compute its next generation; (b) move the node out, leaving
-   `Vacant { next_free: head }` or `Retired`; (c) clear the header, write the generation and,
-   for a vacant slot, link the free-list head; (d) the caller drops the node after its own
-   bookkeeping. `RenderTree::take_subtree` takes a whole subtree out this way, children first,
-   and `PipelineOwner::remove_render_object` drops those nodes only after it has cleared the root
-   and invalidated the former parent; `clear` resets the root and takes every node out before the
-   first drop. A `Drop` that panics therefore runs against a removal that is already complete,
-   with every old id stale, and a caller that catches the panic sees a consistent tree and owner.
-   `insert` pops the free list. A vacant or retired slot owns no `RenderNode`, so nothing is
-   double-dropped and no `MaybeUninit` exists. A stale id fails the generation check before the
-   state is read, and since no id carries a retired slot's generation, that check is all a lease
-   needs; `acquire` checks `Occupied` as a second guard. The `slab` dependency leaves
-   `flui-rendering`.
+   in this order, and nothing after the first write can fail: (a) check `Occupied` and peek the
+   release; (b) move the node out, leaving `Vacant { next_free: head }` or `Retired`; (c) clear the
+   header, commit a release that has a next generation and, for a vacant slot, link the free-list
+   head; (d) the caller drops the node after its own bookkeeping. `RenderTree::take_subtree` takes
+   a whole subtree out this way, children first, and `PipelineOwner::remove_render_object` drops
+   those nodes only after it has cleared the root and invalidated the former parent; `clear`
+   resets the root and takes every node out before the first drop. A `Drop` that panics therefore
+   runs against a removal that is already complete, with every old id stale, and a caller that
+   catches the panic sees a consistent tree and owner. `insert` pops the free list without a second
+   generation step. A vacant or retired slot owns no `RenderNode`, so nothing is double-dropped
+   and no `MaybeUninit` exists. The `slab` dependency leaves `flui-rendering`.
 
 2. **One lease per walk.** `RenderTree::lease(&mut self) -> TreeLease<'_>` takes the slot base
    pointer once (from `Vec::as_mut_ptr`, so every slot pointer has whole-allocation provenance)
@@ -136,15 +132,15 @@ parent can hand a clean boundary new constraints.
 
 ```
  RenderTree
- +-- NodeSlab: Vec<Slot>      base ptr taken ONCE by lease()      id = (index, generation)
-       slot i: +-------------------------------+-------------------------------------+
-               | generation, in_flight, parent | state: UnsafeCell<SlotState>        |
-               +-------------------------------+-------------------------------------+
+ +-- NodeSlab: Vec<Slot> + GenSlots   base ptr taken ONCE by lease()   id = (index, generation)
+       slot i: +-----------------------+-------------------------------------+
+               | in_flight, parent     | state: UnsafeCell<SlotState>        |
+               +-----------------------+-------------------------------------+
                                          Vacant{next_free} | Occupied(RenderNode) | Retired
                   read freely, even       &mut handed out only through
                   while node is leased    NodeGuard, one per slot
 
- generation: occupant's | next id's while Vacant | MAX once Retired (never minted)
+ GenSlots: occupant's generation | next id's while Vacant | final generation once Retired
 
  acquire(parent, child):
    1. generation matches, slot Occupied?  no -> NodeNotFound

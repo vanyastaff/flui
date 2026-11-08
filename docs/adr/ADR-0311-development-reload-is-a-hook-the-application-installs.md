@@ -2,6 +2,11 @@
 
 - **Status:** Accepted (2026-11-04)
 - **Date:** 2026-11-04
+- **Superseded-by:** [ADR-0315](ADR-0315-first-party-packages-remain-train-aligned-facade-features.md)
+  for §6's facade prohibition only (the facade keeps its opt-in `hot-reload` feature and re-export;
+  the host boundary and every hook decision stand);
+  [ADR-0316](ADR-0316-the-dlopen-worker-host-development-cycle-is-supported.md) for §7 only (the
+  dynamic-image development cycle is supported, not a temporary path to a code patcher)
 - **Related:** [ADR-0094](ADR-0094-hot-reload-through-subsecond.md) (the rejected Subsecond
   record this one takes the seam from); [ADR-0108](ADR-0108-plugin-scene-render-callback-safety.md)
   (the scene callback's lifetime contract); [ADR-0111](ADR-0111-worker-image-lifetime.md) (worker
@@ -39,10 +44,10 @@ is rejected, so the seam had no accepted record. What `main` holds:
 | Hosts call different methods: desktop and iOS `attach`, `poll` and `detach`; Android only `scene_frame`; the web none. A worker hook does nothing on Android, a scene hook nothing elsewhere | the trait's module table; `runner/desktop.rs`, `runner/ios.rs`, `runner/main_window.rs`, `runner/android.rs` |
 | `flui-app` has no edge to `flui-hot-reload` under any feature | `FACTS` in `tools/xtask/src/workspace/reach.rs` |
 | `flui-hot-reload` is an official package (`tier-kind = "official"`) still under `crates/`, implementing both hooks behind its `host-hook` feature | `crates/flui-hot-reload/Cargo.toml`, `src/hook.rs` |
-| Fifteen manifest exceptions are debt of the dlopen path: in `flui-hot-reload` four `edge-exceptions`, two `reach-exceptions` and six `globals`; in `flui-view` two `globals` (`REGISTRY_STACK` and `TEST_REGISTRY`, `ManuallyDrop` for a hot-reload `cdylib`); in the facade one `edge-exceptions` entry | the manifests' `[package.metadata.flui]` |
+| The dlopen path has four internal `edge-exceptions` that exit through §6. Its loader reach and image-local state have standing grants under ADR-0316 and ADR-0097; its process-global routing registries and `flui-view`'s legacy `TEST_REGISTRY` retain per-loop exits through ADR-0316. The facade's separate aggregation is standing under ADR-0315 | the manifests' `[package.metadata.flui]` |
 
-What is the contract of the reload seam, independent of the tool behind it, and where do the dlopen
-path's exceptions exit?
+What is the contract of the reload seam, independent of the tool behind it, and which package edges
+still leave through its SDK migration?
 
 ## Decision drivers
 
@@ -103,8 +108,9 @@ pub struct ReloadWake(Arc<dyn Fn() + Send + Sync>);
 Without `Send` the compiler keeps the instance on the thread that built it, and a hook keeps its
 state in `Rc`, `Cell` and `RefCell` instead of locks and atomics. `ReloadWake` stays `Send + Sync`
 because a watcher thread calls it; calling it after its loop has ended does nothing. The trait has
-no per-call seam (`call(entry, data)`) and `ReloadEvent` has no `RestartRequired`: they belong to a
-code patcher and arrive with its record (§7).
+no per-call seam (`call(entry, data)`) and `ReloadEvent` has no `RestartRequired`: if a future code
+patcher needs them, its own ADR introduces them without automatically replacing the supported
+dynamic-image cycle (ADR-0316).
 
 §2. **The application installs a factory; each event loop builds its own instance on its owner
 thread.**
@@ -183,7 +189,7 @@ lent scene is rendered inline (ADR-0305 §10).
 
 A host that does not drive an installed hook never calls its factory and logs once, when its loop
 starts, that the hook is not driven there. A desktop scene plugin runs through the package's own
-driver in the application's frame loop (`examples/scene_render.rs`), not through the host. Widget
+driver in the application's frame loop (`crates/flui-engine/examples/scene_render.rs`), not through the host. Widget
 reload on Android and the web is a shortfall in `docs/gaps.md`, not part of this contract.
 
 §5. **A hook's failure costs hot reload, never the frame.** The factory and every hook method are
@@ -216,32 +222,31 @@ user code:
   and `PipelineOwner`, `Scene`, `LayerTree`, and the smallest further set the worker needs) are
   Evolving items of `flui_sdk::hooks`, which ADR-0088 §4 keeps outside its surface ceiling, each
   pinned in `crates/flui-sdk/tests/surface.rs`. `flui_view::__runtime` stays out of the SDK, as
-  `crates/flui-view/ARCHITECTURE.md` requires. These items leave with the dlopen path (§7).
-- No core crate, no host and not the facade names the package in any form: `flui-app`,
-  `flui-runtime` and `flui` have no edge to it, and the facade's `hot-reload` feature goes with the
-  rule that the facade names no official package (ADR-0088 §6). An application adds the package as
-  a direct dependency, and `flui create --hot-reload` adds it under a feature of the generated
-  application.
-- The package reaches the application only through the hooks of §1 and §3.
+  `crates/flui-view/ARCHITECTURE.md` requires. These hooks serve the supported dynamic-image cycle;
+  their four internal-crate edges leave through this section's SDK and package move, not through a
+  code patcher.
+- No core crate other than the facade names the package in any form: `flui-app` and `flui-runtime`
+  have no edge to it. The facade keeps its optional `hot-reload` feature and `flui::hot_reload`
+  re-export as standing aggregation under ADR-0315 §1–§2. An application enables that feature, and
+  `flui create --hot-reload` enables it in the generated application.
+- The package reaches the host only through the hooks of §1 and §3; facade aggregation does not
+  give `flui-app` a dependency on the package.
 
-§7. **The dlopen path is the package's implementation, and a code patcher is its exit.**
+§7. **The dynamic-image development cycle is supported under ADR-0316.**
 
-- The worker `cdylib` with its host and types crates, the `--scene` plugin and their loaders are how
-  the package implements the hooks today. The framework states no rule about them; ADR-0108 and
-  ADR-0111 hold their lifetime contracts.
-- What the path keeps in the framework is debt whose `exit` is this record: `flui-view`'s
-  `REGISTRY_STACK` and `TEST_REGISTRY` in `ManuallyDrop` form; the package's `globals` entries
-  (`dispatch::REQUEST_REBUILD`, the three statics `app_plugin!` emits,
-  `worker::REGISTRATION_SESSION`, `worker::WORKER_BUILDS`); its `reach-exceptions` for `windows`
-  and `android_log-sys`, which the loader needs. Its four `edge-exceptions` and the facade's edge
-  exit with §6.
-- The dlopen path is deleted when a code patcher implements `DevReloadHook` on Windows, macOS and
-  Linux. Then the worker template, the dlopen driver, the `hot_reload_counter` and
-  `hot_reload_lifecycle_fixture` examples and the entries above go together, and `cargo xtask
-  globals` and `cargo xtask reach` report any that is left as stale. The patcher's record says
-  whether the Android scene plugin, and the entries it needs, stay.
-- A code patcher arrives as its own `Proposed` record, with the per-call seam and the restart event
-  it needs. Subsecond is the candidate, under the condition in "More information".
+- The worker `cdylib` with its host and types crates implements state-preserving development reload
+  on desktop and iOS, and the `--scene` plugin implements the Android scene cycle. These are
+  supported development-only workflows, not temporary scaffolding for a code patcher. The
+  three-crate worker-host shape is the deliberate cost of image isolation. ADR-0108 and ADR-0111
+  hold the lifetime contracts.
+- The loader's `windows` and `android_log-sys` reach entries are standing grants of ADR-0316.
+  Image-local state is a standing ADR-0097 grant of the `image`, `counter` or `immutable` class as
+  ADR-0316 enumerates. `dispatch::REQUEST_REBUILD`, `worker::REGISTRATION_SESSION`,
+  `worker::WORKER_BUILDS` and `flui-view`'s `TEST_REGISTRY` retain `exit = "ADR-0316"` until their
+  per-loop ownership or production scoped activation migrations land. The four internal-crate
+  `edge-exceptions` exit with §6. The facade's separate aggregation edge is standing under ADR-0315.
+- Any future code patcher requires its own ADR. It does not automatically delete these workflows or
+  revoke the standing grants.
 
 ### Consequences
 
@@ -249,15 +254,17 @@ user code:
   thread that built it, and a hook keeps owner-local state without locks.
 - Good, because each hook has one set of calls on every host that accepts it, so a worker hook no
   longer sits silently on Android and a scene hook no longer sits silently on the desktop.
-- Good, because the fifteen exceptions name an accepted record with a stated exit.
+- Good, because the supported cycle's intrinsic loader and image costs have standing grants, while
+  only its per-loop registries and SDK package edges retain explicit exits; the facade's separate
+  aggregation permission needs no exit.
 - Good, because a second owner thread gets an instance of its own from the same configuration.
 - Bad, because `with_dev_reload` breaks its callers: they pass a closure that builds the hook, and
   the Android `--scene` host moves to `with_dev_scene`.
 - Bad, because `cargo xtask send-positions` gains the two factories' `Send` and `Sync` positions
   while losing the hook's `Send` supertrait; they stay because the factory really crosses threads
   inside `AppConfig` (ADR-0136 §3).
-- Bad, because `flui create --hot-reload` stays a three-crate project until a code patcher arrives,
-  and Android and the web have no widget reload.
+- Bad, because `flui create --hot-reload` deliberately retains the three-crate isolation cost, and
+  Android and the web have no state-preserving widget reload.
 - Neutral, because the reload tiers stay `flui_runtime::reload::ReloadTier`, and only `Reassemble`
   has a producer.
 
@@ -272,10 +279,12 @@ user code:
   fails the gate; the factories' positions are listed.
 - **`cargo xtask reach`.** The facts `flui-hot-reload must be absent from flui-app's default graph`
   and `flui-hot-reload must be absent from flui-app's graph with every feature` hold §6 for the
-  host. When the facade's feature goes, its presence fact becomes an absence fact.
+  host. The facade's presence fact remains: its standing `hot-reload` feature and re-export do not
+  become absence facts. The two loader entries hold `grant = "ADR-0316"`.
 - **`cargo xtask workspace`.** It refuses `edge-exceptions` under `packages/`, so the package's move
-  there proves "on `flui-sdk` alone". `cargo xtask globals` and `cargo xtask reach` read §7's entries,
-  each with `exit = "ADR-0311"`, and report each as stale once the dlopen path is gone.
+  there proves "on `flui-sdk` alone". Until then its four internal edges retain
+  `exit = "ADR-0311"`. `cargo xtask globals` keeps the standing image-local grants on
+  `grant = "ADR-0097"` and the four named registry entries on `exit = "ADR-0316"`.
 - **Tests that exist.** The host's `dev_reload_hook_matrix` (`crates/flui-app/src/app/hot_reload/tests.rs`):
   `a_patch_polled_through_the_hook_reassembles_the_ui_runtime`,
   `without_a_hook_the_frame_is_unchanged`, `one_patch_reaches_every_ui_runtime_exactly_once`,
@@ -319,8 +328,8 @@ user code:
 
 ### 3. Delete the dlopen path and run without hot reload
 
-- Good, because it is the cleanest: the fifteen exceptions, the `ManuallyDrop` registry stack and
-  the plugin ABI leave at once.
+- Good, because it is the cleanest: the fourteen dlopen-path exceptions, the `ManuallyDrop`
+  registry stack and the plugin ABI leave at once; the facade's aggregation permission remains.
 - Bad, because it takes away a feature that works (a logic edit reloads with `State` kept, on
   desktop and iOS) for as long as the code patcher's condition lies upstream.
 - Neutral, because it is reversible, as option 2 is.
@@ -328,21 +337,13 @@ user code:
 ### 4. Wait for a code patcher
 
 - Good, because the seam would be settled once, with the per-call routing a patcher needs.
-- Bad, because fifteen exceptions keep naming a record that is not a rule, with no date or condition
-  under the project's control, and the seam the tests hold stays undecided.
+- Bad, because fourteen dlopen-path exceptions keep naming a record that is not a rule, with no
+  date or condition under the project's control, and the seam the tests hold stays undecided.
 
 ## More information
 
-- **Subsecond's condition.** The spike (ADR-0094, "What the spike showed") failed on Windows x64
-  because `dx`'s missing-symbol stub is `movabs rax, imm64; jmp rax`, and RAX carries `__chkstk`'s
-  argument. The stub is unchanged at `DioxusLabs/dioxus@cb27832398e8a3fa30a0fc8d6917c6d8a86fa71a`
-  (tag `v0.8.0-alpha.3`)
-  [packages/cli/src/build/patch.rs:1036-1046](https://github.com/DioxusLabs/dioxus/blob/cb27832398e8a3fa30a0fc8d6917c6d8a86fa71a/packages/cli/src/build/patch.rs#L1036-L1046);
-  the non-Windows x86-64 branch
-  of the same function already uses `jmp [rip+0]` followed by the address (`:1107`), which is the
-  one-line fix. Subsecond returns when a `dx` release keeps RAX on Windows x64, not on a date: then
-  it comes back as a `Proposed` record, and its spike runs first on Linux, where CI's container can
-  run it, then on Windows, macOS and Android devices.
 - **Revisit** this record when ADR-0266 §5 brings a thread per runtime: the factory may then be
   called per runtime instead of per loop.
+- ADR-0094 retains the rejected Subsecond spike and its evidence. It supplies no return condition
+  for this record or for ADR-0316's supported development cycle.
 - The factory shape: `flui_runtime::InputTapFactory` (`crates/flui-runtime/src/input_tap.rs`).

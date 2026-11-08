@@ -41,9 +41,12 @@ deadlock. Instead:
   rebuild). A route can never finalize another. The entrance transition's completion arrives
   on the same queue as `RouteCommand::PushCompleted`, raised by a continuation on the
   `TickerFuture` that `did_push` returns (ADR-0064), not by the route.
-- `wake` `try_lock`s the history: between frames the commands apply and flush at once; during a
-  flush on this thread, that flush drains the queue before returning. The queue is Flutter's
-  `_flushingHistory` deferral expressed as ownership instead of a flag.
+- `wake` `try_lock`s the history: when it is free, the commands apply and flush at once; when
+  it is busy, the wake remains owed. An active flush drains the queue before returning. Every
+  other history owner that can run a route hook releases the history and then makes the owed
+  pump attempt, because a synchronous pop query can hold the lock without a flush running. An
+  `Obligation` restores the wake if that attempt panics and preserves a newer wake raised during
+  it. Accepted commands therefore cannot depend on an unrelated later mutation to be processed.
 - `flush` is a bounded pass loop (apply pending, walk, repeat; `MAX_FLUSH_PASSES`), like the
   layout↔build fixpoint of ADR-0017. The `BUG:` assert on a genuinely recursive flush stays.
 - `RouteHistory` never sees the binding, so it stays pure data.

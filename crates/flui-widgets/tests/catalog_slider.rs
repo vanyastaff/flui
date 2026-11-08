@@ -264,10 +264,7 @@ pub(crate) fn slider_degenerate_geometry_or_span_is_inert() {
         .expect("focus before resize");
     numeric.pump_widget(SizedBox::new(0.0, 32.0).child(standard(&log)));
     let node = semantic_node(&numeric);
-    let listener = numeric
-        .accessibility_action_listener()
-        .expect("platform action listener after resize");
-    listener(request(
+    numeric.request_accessibility_action(request(
         Action::SetValue,
         node,
         Some(ActionData::NumericValue(33.125)),
@@ -344,14 +341,11 @@ pub(crate) fn slider_focus_keys_and_semantic_actions_share_controlled_proposals(
             .is_handled()
     );
     log.borrow_mut().truncate(4);
-    let listener = laid
-        .accessibility_action_listener()
-        .expect("platform action listener");
-    listener(request(Action::Increment, node, None));
+    laid.request_accessibility_action(request(Action::Increment, node, None));
     laid.tick();
-    listener(request(Action::Decrement, node, None));
+    laid.request_accessibility_action(request(Action::Decrement, node, None));
     laid.tick();
-    listener(request(
+    laid.request_accessibility_action(request(
         Action::SetValue,
         node,
         Some(ActionData::NumericValue(33.125)),
@@ -370,7 +364,7 @@ pub(crate) fn slider_focus_keys_and_semantic_actions_share_controlled_proposals(
         Some(ActionData::NumericValue(101.0)),
         Some(ActionData::Value("not numeric".into())),
     ] {
-        listener(request(Action::SetValue, node, data));
+        laid.request_accessibility_action(request(Action::SetValue, node, data));
         laid.tick();
     }
     assert_eq!(

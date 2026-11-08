@@ -34,14 +34,14 @@ use std::time::Duration;
 
 use common::{LaidOut, lay_out, lay_out_animated};
 use flui_material::{NavigationBar, NavigationDestination, Theme, ThemeData};
-use flui_painting::DrawOp;
 use flui_sdk::animation::{MotionOverride, Vsync};
+use flui_sdk::painting::DrawOp;
 use flui_sdk::rendering::BoxConstraints;
+use flui_sdk::testing::a11y::Role;
 use flui_sdk::view::environment::VsyncScope;
 use flui_sdk::view::environment::{MediaQuery, MediaQueryData};
 use flui_sdk::widgets::Icon;
 use flui_sdk::widgets::icon::IconData;
-use flui_testing::a11y::Role;
 
 /// Tight width, loose (`0..height`) height — see the module docs' note on
 /// why a fully-tight root is the wrong shape to mount a `NavigationBar`

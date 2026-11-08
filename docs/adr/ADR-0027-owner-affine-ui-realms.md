@@ -209,7 +209,6 @@ pub struct SceneSnapshot {           // Send; moves by value; never Arc<Scene>
 
 | Work class | Validity check at commit |
 |---|---|
-| Asset / decode | `ResourceGeneration` current on its `GenerationGate` |
 | Snapshot computation (future) | input revision |
 | Raster frame | `FrameEpoch` + `SurfaceGeneration` |
 | Lifetime isolation | channel identity (+ generational `UiRuntimeId`) |

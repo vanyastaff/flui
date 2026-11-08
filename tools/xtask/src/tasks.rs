@@ -311,7 +311,7 @@ const NESTED: &str = "group(nested-cargo) | group(trybuild)";
 /// The packages whose test binaries hold the `nested-cargo` group: the
 /// `binary_id` packages of its filter in .config/nextest.toml, which a test
 /// keeps equal to this list.
-const NESTED_CARGO_PACKAGES: [&str; 2] = ["flui", "flui-cli"];
+const NESTED_CARGO_PACKAGES: [&str; 3] = ["flui", "flui-cli", "flui-sdk"];
 
 /// The `nested-cargo` group alone (CI's `test-nested` job), built from the
 /// packages that hold it. Over [`TEST_SCOPE`] nextest builds and links every
@@ -712,9 +712,10 @@ fn workflow_lint_plan(installed: impl Fn(&str) -> bool) -> Vec<Step> {
 
 /// The nested-cargo tests' build caches, relative to the target directory:
 /// separate target roots that `cargo sweep` cannot see.
-const NESTED_CACHES: [&[&str]; 3] = [
+const NESTED_CACHES: [&[&str]; 4] = [
     &["cli-template-check"],
     &["facade-consumer-check"],
+    &["sdk-package-parity-check"],
     &["tests", "trybuild"],
 ];
 
@@ -1155,8 +1156,9 @@ pub(crate) struct CleanNestedArgs {
 
 /// `cargo xtask clean-nested`: remove the nested-cargo test caches under the target directory.
 ///
-/// `cli-template-check/`, `facade-consumer-check/` and `tests/trybuild/`; the
-/// next full `cargo xtask test` rebuilds them (~9 min cold). A test run using
+/// `cli-template-check/`, `facade-consumer-check/`, `sdk-package-parity-check/`
+/// and `tests/trybuild/`; the next full `cargo xtask test` rebuilds them (~9
+/// min cold). A test run using
 /// them must not overlap it: run as `cargo heli xtask clean-nested`, which the
 /// repository's `.config/heli.toml` makes wait for every build and test heli
 /// runs in this checkout. Run directly, it says so before deleting anything.
@@ -1346,7 +1348,7 @@ mod tests {
                 Stages::NestedGroup(NestedGroup::Native)
             )),
             [format!(
-                "$ cargo nextest run -p flui -p flui-cli --locked --no-fail-fast --lib --bins --tests --features {TEST_FEATURES} -E 'group(nested-cargo)'"
+                "$ cargo nextest run -p flui -p flui-cli -p flui-sdk --locked --no-fail-fast --lib --bins --tests --features {TEST_FEATURES} -E 'group(nested-cargo)'"
             )]
         );
         // CI's Windows job: the host-specific nested group, not trybuild

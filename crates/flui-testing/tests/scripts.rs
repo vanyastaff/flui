@@ -7,8 +7,8 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use flui_foundation::geometry::Offset;
-use flui_interaction::PointerId;
 use flui_interaction::events::PointerEvent;
+use flui_interaction::{HitTestBehavior, PointerId};
 use flui_platform::pointer::DeviceId;
 use flui_platform::{GesturePreferences, SystemPreferences};
 use flui_runtime::HostInput;
@@ -16,7 +16,7 @@ use flui_testing::replay::{
     MouseScript, PenScript, PointerScript, ScriptError, TouchScript, TrackpadScript, VirtualScript,
 };
 use flui_testing::{HeadlessHost, HeadlessWindow};
-use flui_widgets::{GestureDetector, HitTestBehavior, Listener};
+use flui_widgets::{GestureDetector, Listener};
 
 fn at(x: f64, y: f64) -> Offset<f64> {
     Offset::new(x, y)
@@ -324,8 +324,9 @@ fn an_event_between_vsyncs_keeps_its_own_time() {
 /// its frame limit when something never settles.
 #[test]
 fn a_script_finds_its_target_by_role_and_label_and_settles_within_a_limit() {
+    use flui_rendering::semantics::SemanticsRole;
     use flui_view::ViewExt as _;
-    use flui_widgets::{Column, Semantics, SemanticsRole, SizedBox};
+    use flui_widgets::{Column, Semantics, SizedBox};
 
     let mut host = HeadlessHost::new(HeadlessWindow::new(200, 200));
     let window = host.primary_window();

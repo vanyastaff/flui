@@ -1,7 +1,8 @@
 # ADR-0313: A generational slot never mints an id twice
 
-- **Status:** Accepted (2026-11-04)
+- **Status:** Implemented (2026-11-06)
 - **Date:** 2026-11-04
+- **Superseded-by:** [ADR-0314](ADR-0314-synthetic-semantics-ids-use-a-tagged-generational-slot.md), §1 only for the packed generation's upper bound
 - **Related:** [ADR-0207](ADR-0207-host-input-boundary-and-timeline.md) §4 (the counter ids'
   issuance stays `flui_foundation`, the `IdMint` family); [ADR-0209](ADR-0209-nested-scroll-connection.md)
   (the input sequence's id and the mint contract it rests on);
@@ -55,15 +56,17 @@ review-time rule the drivers start from, and option 3 rebuilds two storage types
 path and layout touch everywhere, to carry bookkeeping the ledger can carry without owning the
 storage.
 
-### §1. A generation is a checked, 1-based, non-zero `u32`
+### §1. A generation is a checked, 1-based, non-zero 31-bit value
 
 `flui_foundation::generation::Generation` is the type, minted only by the ledger of
-the next section:
+the next section. ADR-0314 reserves the packed key's top bit for a domain tag, so
+`LAST` is `0x7FFF_FFFF`:
 
 ```rust
 pub struct Generation(NonZeroU32);
 impl Generation {
     pub const FIRST: Self;                          // a fresh slot's first
+    pub const LAST: Self;                           // the packed key's last generation
     pub const fn as_u32(self) -> u32;               // the packed value
     pub const fn as_nonzero(self) -> NonZeroU32;    // the packed-key ctor's form
     pub const fn is_last(self) -> bool;
@@ -71,10 +74,11 @@ impl Generation {
 }
 ```
 
-- `next()` refuses past the last: no generation wraps, so an id an arena minted cannot be minted
-  again (the audit's identity rule, as a type).
-- The bare-`u32` and raw-`NonZeroU32` fields the trees keep today are the replaced forms; they
-  stay nowhere once §3's adoptions land.
+- `next()` refuses past `LAST`: no generation wraps, so an id an arena minted cannot be minted
+  again (the audit's identity rule, as a type). Packed-key construction and raw decoding reject
+  the reserved domain bit.
+- The bare-`u32` and raw-`NonZeroU32` fields the trees kept before this record are the replaced
+  forms; they stay nowhere once §3's adoptions land.
 
 ### §2. The ledger: `GenSlots`, one bookkeeping, one close
 
@@ -109,13 +113,14 @@ Which ledger call each tree uses, and at which point:
 
 | Tree | Step | Close |
 |---|---|---|
-| The reactive signal graph | `mint_recycled` at the free-list claim (the claim's advance, as today) | at release: `peek` is `None`, so the release re-lists nothing |
+| The reactive signal graph | `mint_recycled` at the free-list claim | at release: `peek` is `None`, so the release re-lists nothing |
 | The element tree | `peek` before teardown, `commit` after the removal's own mutation | `peek`'s `None` refuses the removal before any hook, and the occupant stays |
-| The render tree's slab | the ledger behind `RenderId`'s slots | the slab's own `RETIRED` retirement remains; the ledger's adoption lands with #2241 |
+| The render tree's slab | `mint_fresh` on growth; `peek` before vacating and `commit` afterward, so reuse takes the already-advanced generation without another step | `Retired` stays out of the free list; resolution checks `Occupied` as well as the retained final generation |
 
-`Generation::FIRST` (one) replaces the fresh-slot bases: the signal graph's fresh slots carry
-generation 0 today and carry one from this record's date, and every compare against a live id
-checks the ledger.
+`Generation::FIRST` (one) replaces the fresh-slot bases: the signal graph's fresh slots carried
+generation 0 before this record and carry one afterward. Every tree resolves a live id against the
+ledger, and the render layout lease checks `Occupied` too because a retired slot keeps its final
+ledger generation.
 
 ### Consequences
 
@@ -128,8 +133,8 @@ checks the ledger.
   carry the break, not a migration).
 - Bad, because the ledger is one more indirection between the arena's storage and its resolve;
   the compare stays one lookup, and the ledger's `Vec` is as flat as the fields it replaces.
-- Neutral, because exhausting a generation needs 2³² recycles of one slot: the close is a policy
-  the code keeps, not a case a run reaches.
+- Neutral, because exhausting a generation needs `2^31 - 2` recycles of one slot: the close is a
+  policy the code keeps, not a case a practical run reaches.
 
 ### Confirmation
 
@@ -148,10 +153,10 @@ checks the ledger.
   an exhausted removal refuses twice with the occupant live, per removal mode and per subtree
   position, through the public tree, and the parent tree's
   `element_tree_contract_matrix` row `stale_id_after_slot_reuse_resolves_none` still names the
-  release's compare.
-
-An accepted record whose every section is built becomes `Implemented` — the gaps entry below is
-what holds this record at `Accepted`.
+  release's compare. The render tree's `lifecycle_matrix` row
+  `an_exhausted_render_slot_retires_and_its_last_id_never_resolves_again` covers insertion after
+  exhaustion and `clear`; `lease_resolves_no_id_of_a_retired_slot` proves that the retained final
+  generation cannot enter or expose a retired slot.
 
 ## Pros and cons of the options
 
@@ -180,9 +185,9 @@ what holds this record at `Accepted`.
 ## More information
 
 - The state this record replaces is the three shapes in the context table, on main
-  `1bac2457b`, each its own generation ledger; the render slab's shape
-  (`crates/flui-rendering/src/storage/node_slab.rs`) is the one this record's ledger mirrors, and
-  #2241 is where it adopts the ledger formally.
+  `1bac2457b`, each its own generation ledger. The render slab keeps its storage, free list and
+  `Retired` state in `crates/flui-rendering/src/storage/node_slab.rs`, but its generation header
+  and numeric sentinel are gone: `GenSlots` is the single ledger behind every `RenderId`.
 - The audit's identity theme (`x-invariants-07`, theme T11, `D:\flui`-reporting set of
   2026-11-03) called for `Generation` with a checked `next` and a `GenSlots` whose exhausted slot
   leaves circulation; this record is that step's record, with the peek/commit split and the two

@@ -1,9 +1,11 @@
 # Hot-reload plugin boundary
 
-Hot reload is a development-only Rust payload ABI. Host and plugin builds must
-agree on layout through the existing ABI-token handshake and keep the plugin
-image mapped while plugin-backed values remain alive. This is not a stable C
-representation of a scene.
+Hot reload is a development-only Rust payload ABI. The dlopen worker-host cycle on desktop/iOS and
+the Android scene-plugin cycle are supported workflows under
+[ADR-0316](../../docs/adr/ADR-0316-the-dlopen-worker-host-development-cycle-is-supported.md), not
+temporary scaffolding for a code patcher. Host and plugin builds must agree on layout through the
+existing ABI-token handshake and keep the plugin image mapped while plugin-backed values remain
+alive. This is not a stable C representation of a scene.
 
 ## Mapping decisions
 
@@ -98,9 +100,8 @@ so nothing would check that the two images agree on `TextContext`'s layout if
 one were passed.
 
 The cost: a face the host app registers does not reach the plugin's text.
-Carrying the font bytes across the FFI into the plugin's collection is a
-follow-up, unless a code patcher's replacement of the `dlopen` path (ADR-0311 §7) removes the
-boundary first.
+Carrying the font bytes across the FFI into the plugin's collection is a follow-up within the
+supported dynamic-image boundary, not a wait for a code patcher to remove it (ADR-0316).
 
 Pinned by `a_plugin_pipeline_measures_through_the_context_it_is_given`
 (`tests/plugin_pipeline_text.rs`, under `app-plugin`).

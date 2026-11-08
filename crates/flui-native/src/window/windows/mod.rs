@@ -200,15 +200,13 @@ pub(crate) mod material {
     /// [`gate`] has them: below it the material is `Unavailable` on this
     /// device.
     pub(crate) const fn below_the_gate(
-        capabilities: WindowCapabilities,
+        capabilities: &WindowCapabilities,
         gate: &Result<Since<SystemBackdrop>, Unsupported>,
     ) -> WindowCapabilities {
         match gate {
-            Ok(_) => capabilities,
-            Err(_) => capabilities.unavailable(
-                &WindowCommand::SetMaterial(WindowMaterial::Opaque),
-                flui_platform::CapabilityAbsence::NotOnThisDevice,
-            ),
+            Ok(_) => *capabilities,
+            Err(_) => capabilities
+                .unavailable_on_this_device(&WindowCommand::SetMaterial(WindowMaterial::Opaque)),
         }
     }
 
@@ -243,7 +241,7 @@ pub(crate) mod material {
                 (WindowsBuild::from_number(26100), Availability::Native),
             ];
             for (build, wanted) in cases {
-                let capabilities = below_the_gate(WindowCapabilities::ALL, &gate(build));
+                let capabilities = below_the_gate(&WindowCapabilities::ALL, &gate(build));
                 let admission =
                     WindowCommand::SetMaterial(WindowMaterial::System).admit(&capabilities);
                 let answer_holds = match (&admission, wanted) {

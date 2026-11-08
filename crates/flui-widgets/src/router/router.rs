@@ -11,13 +11,13 @@ use std::time::Duration;
 use flui_foundation::notifier::ChangeNotifier;
 use flui_view::element::ElementKind;
 use flui_view::prelude::*;
-use flui_view::{AsyncDriver, BoxedView, BuildContextExt, TaskToken};
+use flui_view::{AsyncDriver, BoxedView, BuildContextExt, RouteParseError, RoutePath, TaskToken};
 
 use crate::navigator::lifecycle::{RetiredValues, Terminal};
 
 use super::handle::{RouterError, RouterHandle};
-use super::path::{RouteParseError, RoutePath};
 use super::routable::Routable;
+use super::scope::RouterScope;
 use crate::navigator::{
     Navigator, NavigatorHandle, NavigatorObserver, PageRoute, RouteAnimation, RouteId,
     RouteTransitionsBuilder,
@@ -26,6 +26,10 @@ use crate::semantics::Semantics;
 
 /// Builds the page for one route value.
 type PageBuilder<R> = Rc<dyn Fn(&R, &dyn BuildContext) -> BoxedView>;
+
+/// Receives a location that no route accepted. Notification only: the
+/// navigation has already been refused and the stack left unchanged.
+type UnknownRouteHandler = Rc<dyn Fn(&RoutePath)>;
 
 /// Navigation state as a value: a stack of `R`, whose top, printed through
 /// [`Routable::to_path`], is the current location.
@@ -41,7 +45,8 @@ type PageBuilder<R> = Rc<dyn Fn(&R, &dyn BuildContext) -> BoxedView>;
 ///
 /// ```
 /// use flui_widgets::prelude::*;
-/// use flui_widgets::{Routable, RouteParseError, RoutePath, Router, Text};
+/// use flui_view::{RouteParseError, RoutePath};
+/// use flui_widgets::{Routable, Router, Text};
 ///
 /// #[derive(Clone, PartialEq)]
 /// enum AppRoute { Home, About }
@@ -72,6 +77,7 @@ pub struct Router<R: Routable> {
     /// The stack the router opens with, bottom to top; never empty.
     initial: Vec<R>,
     page: Terminal<PageBuilder<R>>,
+    on_unknown: Terminal<Option<UnknownRouteHandler>>,
     transitions: Option<RouteTransitionsBuilder>,
     transition_duration: Option<Duration>,
 }
@@ -80,8 +86,9 @@ impl<R: Routable> Drop for Router<R> {
     fn drop(&mut self) {
         let initial = RetiredValues(std::mem::take(&mut self.initial));
         let page = self.page.withdraw();
+        let on_unknown = self.on_unknown.withdraw();
         let transitions = Terminal::new(self.transitions.take());
-        drop((initial, page, transitions));
+        drop((initial, page, on_unknown, transitions));
     }
 }
 
@@ -90,6 +97,7 @@ impl<R: Routable> Clone for Router<R> {
         Self {
             initial: clone_routes(self.initial.iter()),
             page: Terminal::new(Rc::clone(&self.page)),
+            on_unknown: Terminal::new(self.on_unknown.clone()),
             transitions: self.transitions.clone(),
             transition_duration: self.transition_duration,
         }
@@ -129,6 +137,7 @@ impl<R: Routable> Router<R> {
         Self {
             initial: vec![initial],
             page: Terminal::new(Rc::new(page)),
+            on_unknown: Terminal::new(None),
             transitions: None,
             transition_duration: None,
         }
@@ -150,6 +159,7 @@ impl<R: Routable> Router<R> {
         Ok(Self {
             initial,
             page,
+            on_unknown: Terminal::new(None),
             transitions: None,
             transition_duration: None,
         })
@@ -182,9 +192,20 @@ impl<R: Routable> Router<R> {
         Ok(Self {
             initial: stack,
             page,
+            on_unknown: Terminal::new(None),
             transitions: None,
             transition_duration: None,
         })
+    }
+
+    /// Notify when an inbound URL names no route. The callback is
+    /// notification-only: it runs after the navigation was refused, the stack
+    /// stays unchanged, and its return value cannot recover the location.
+    /// Rebuilding the router replaces the callback for later navigations.
+    #[must_use]
+    pub fn on_unknown(mut self, callback: impl Fn(&RoutePath) + 'static) -> Self {
+        self.on_unknown = Terminal::new(Some(Rc::new(callback)));
+        self
     }
 
     /// Wrap each page in its entrance and exit transition — the
@@ -257,9 +278,11 @@ impl<R: Routable> StatefulView for Router<R> {
             navigator: Terminal::new(NavigatorHandle::addressed(type_name::<R>())),
             stack: RefCell::new(Vec::new()),
             page: Terminal::new(Rc::new(RefCell::new(Rc::clone(&self.page)))),
+            on_unknown: Terminal::new(Rc::new(RefCell::new(self.on_unknown.clone()))),
             transitions: Terminal::new(Rc::new(RefCell::new(self.transitions.clone()))),
             transition_duration: Cell::new(self.transition_duration),
             mounted: Cell::new(false),
+            url_navigating: Cell::new(false),
             announcer: StackAnnouncer::default(),
         });
         let observer: Arc<dyn NavigatorObserver> = Arc::new(RouterObserver {
@@ -308,7 +331,7 @@ impl<R: Routable> RouterState<R> {
     /// tail are destroyed normally by the unwind (ADR-0281).
     fn seed_initial_pages(&mut self) {
         for route in std::mem::take(&mut self.initial) {
-            let page = self.shared.page_route(&route);
+            let page = self.shared.page_route::<()>(&route);
             let id = self.shared.navigator.seed_page(page);
             self.shared
                 .stack
@@ -353,7 +376,7 @@ impl<R: Routable> ViewState<Router<R>> for RouterState<R> {
     }
 
     fn build(&self, _view: &Router<R>, _cx: &dyn BuildContext) -> impl IntoView {
-        Navigator::new(self.shared.navigator.clone())
+        RouterScope::new(&self.shared, Navigator::new(self.shared.navigator.clone()))
     }
 
     /// Take the new page builder and transitions, and rebuild every page so a
@@ -363,6 +386,11 @@ impl<R: Routable> ViewState<Router<R>> for RouterState<R> {
     /// initial stack is ignored after mount.
     fn did_update_view(&mut self, _old_view: &Router<R>, new_view: &Router<R>) {
         *self.shared.page.borrow_mut() = Rc::clone(&new_view.page);
+        let previous_unknown = {
+            let mut current = self.shared.on_unknown.borrow_mut();
+            std::mem::replace(&mut *current, new_view.on_unknown.clone())
+        };
+        drop(previous_unknown);
         self.shared
             .transitions
             .borrow_mut()
@@ -422,12 +450,16 @@ pub(super) struct RouterShared<R: Routable> {
     /// Shared with every page's builder, so a new builder reaches pages
     /// already on the stack.
     page: Terminal<Rc<RefCell<PageBuilder<R>>>>,
+    /// The current unknown-location notification, shared with the URL owner.
+    on_unknown: Terminal<Rc<RefCell<Option<UnknownRouteHandler>>>>,
     /// Shared with every page's transitions, as `page` is.
     transitions: Terminal<Rc<RefCell<Option<RouteTransitionsBuilder>>>>,
     /// Read when a page is placed; a page keeps the duration it was placed
     /// with.
     transition_duration: Cell<Option<Duration>>,
     pub(super) mounted: Cell<bool>,
+    /// Set only while an inbound URL navigation is being applied.
+    pub(super) url_navigating: Cell<bool>,
     /// Tells the listeners of every [`RouterHandle`] of stack changes.
     pub(super) announcer: StackAnnouncer,
 }
@@ -453,20 +485,29 @@ impl<R: Routable> Drop for RouterShared<R> {
         let navigator = self.navigator.withdraw();
         let stack = RetiredValues(std::mem::take(self.stack.get_mut()));
         let page = self.page.withdraw();
+        let on_unknown = self.on_unknown.withdraw();
         let transitions = self.transitions.withdraw();
         let delivery = self.announcer.delivery.get_mut().take();
-        drop((navigator, stack, page, transitions, delivery));
+        drop((navigator, stack, page, on_unknown, transitions, delivery));
     }
 }
 
 impl<R: Routable> RouterShared<R> {
+    /// Run the current unknown-location callback outside its slot's borrow.
+    pub(super) fn notify_unknown(&self, path: &RoutePath) {
+        let callback = self.on_unknown.borrow().clone();
+        if let Some(callback) = callback {
+            callback(path);
+        }
+    }
+
     /// The page route for `route`: a [`PageRoute`] named with its path, whose
     /// page scopes a semantics route (and names it, when `route` has a label).
-    pub(super) fn page_route(&self, route: &R) -> PageRoute<()> {
+    pub(super) fn page_route<T: 'static>(&self, route: &R) -> PageRoute<T> {
         let builder = Terminal::new(Rc::clone(&self.page));
         let value = Terminal::new(route.clone());
         let label = route.semantics_label();
-        let mut page = PageRoute::<()>::new(move |cx, _animation, _secondary| {
+        let mut page = PageRoute::<T>::new(move |cx, _animation, _secondary| {
             let page = builder.borrow().clone();
             let mut semantics = Semantics::new()
                 .scopes_route(true)

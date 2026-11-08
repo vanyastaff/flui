@@ -244,6 +244,25 @@ fn examples_may_depend_on_a_restricted_crate() {
     assert_eq!(fixture.findings(), Vec::<String>::new());
 }
 
+fn nested_examples_keep_the_example_contract() {
+    let fixture = Fixture::new();
+    fixture.edit("Cargo.toml", "\"examples/ex\"", "\"crates/b/examples/ex\"");
+    let manifest = std::fs::read_to_string(fixture.root().join("examples/ex/Cargo.toml"))
+        .expect("read root example manifest");
+    fixture.write(
+        "crates/b/examples/ex/Cargo.toml",
+        &manifest.replace("../../crates/b", "../.."),
+    );
+    fixture.write("crates/b/examples/ex/src/main.rs", "fn main() {}\n");
+    fixture.edit(
+        "crates/b/Cargo.toml",
+        "tier = \"High\"",
+        "tier = \"High\"\nallowed-dependents = []",
+    );
+
+    assert_eq!(fixture.findings(), Vec::<String>::new());
+}
+
 fn a_declared_layer_is_an_unknown_flui_key() {
     // the `layer` key is removed (ADR-0081's tier rule took it over)
     let fixture = Fixture::new();
@@ -920,6 +939,10 @@ fn workspace_gate_contract() {
             (
                 "examples_may_depend_on_a_restricted_crate",
                 examples_may_depend_on_a_restricted_crate as fn(),
+            ),
+            (
+                "nested_examples_keep_the_example_contract",
+                nested_examples_keep_the_example_contract as fn(),
             ),
             (
                 "a_declared_layer_is_an_unknown_flui_key",

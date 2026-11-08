@@ -2,7 +2,7 @@
 //! top is the current location (ADR-0093).
 //!
 //! An application declares its locations as a [`Routable`] type — a value per
-//! screen, printed to and parsed from a [`RoutePath`] — and builds a
+//! screen, printed to and parsed from a [`RoutePath`](flui_view::RoutePath) — and builds a
 //! `Router<R>` that places one page per value on a [`Navigator`]. A
 //! descendant acquires a [`RouterHandle`] in `init_state` and drives the stack
 //! with values (`push`, `replace`, `pop`) or with a location (`go`), and reads
@@ -20,10 +20,10 @@
 //! [`Navigator`]: crate::Navigator
 
 mod handle;
-mod path;
 mod routable;
 #[expect(clippy::module_inception)]
 mod router;
+mod scope;
 
 /// The helpers `#[derive(Routable)]` generates calls to: no semver
 /// guarantee, and no other caller.
@@ -34,6 +34,5 @@ pub mod __derive;
 /// `#[route("…")]` pattern per variant (ADR-0093 §1).
 pub use flui_macros::Routable;
 pub use handle::{RouterError, RouterHandle};
-pub use path::{RouteParseError, RoutePath};
 pub use routable::Routable;
 pub use router::{Router, RouterState};

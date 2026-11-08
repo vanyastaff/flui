@@ -1,4 +1,4 @@
-//! The development-reload seam (ADR-0094 §1).
+//! The development-reload seam (ADR-0311).
 //!
 //! A reload tool — `flui-hot-reload`'s dlopen worker and scene plugin today —
 //! implements [`DevReloadHook`]; the application installs the instance on its
@@ -36,9 +36,8 @@
 //! - A hook that panics in any method is dropped and never called again; the
 //!   frame that caught the panic continues without a reload.
 //!
-//! The per-call seam ADR-0094 §1 also describes, which routes each framework
-//! call into user code through a patcher's jump table, and the
-//! `RestartRequired` event arrive with the code patcher that needs them.
+//! A future code patcher requires a new ADR; this module defines neither a
+//! per-call patching seam nor a `RestartRequired` event.
 
 use std::{fmt, sync::Arc};
 

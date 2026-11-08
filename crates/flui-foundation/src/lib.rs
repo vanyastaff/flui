@@ -156,7 +156,6 @@ mod test_cases;
 pub mod affinity;
 // Compile-time child-count markers the render protocol attaches to nodes.
 pub mod arity;
-pub mod async_snapshot;
 // Whether a build is running, for controllers below the signal graph (ADR-0086 §7).
 pub mod build_phase;
 // Generic at-most-once request/reply primitive (ADR-0039 §3): the
@@ -165,8 +164,8 @@ pub mod build_phase;
 pub mod claim_slot;
 pub mod clock;
 pub mod consts;
-// Monotonic generation/version counters for the window-runtime protocol:
-// FrameEpoch, SurfaceGeneration, ResourceGeneration.
+// Monotonic counters for raster submission and surface freshness:
+// FrameEpoch, SurfaceGeneration, GpuResourceGeneration.
 pub mod epoch;
 // The frame-identity group (address/epoch/surface_generation) bundled for
 // the raster boundary — see the module doc for why it exists as its own
@@ -197,7 +196,6 @@ pub mod ticket;
 pub mod panic;
 // A child's position during reconciliation (index plus previous sibling).
 pub mod slot;
-pub mod wasm;
 
 // Shared field-name vocabulary for structured tracing events. Foundation owns
 // the names because every framework crate emits them; *installing* a subscriber
@@ -237,23 +235,19 @@ pub use affinity::OwnerAffinity;
 // Arity markers. Kept out of the prelude: a glob import of `Range` would
 // shadow `std::ops::Range`.
 pub use arity::{Arity, AtLeast, Exact, Leaf, Never, Optional, Range, Single, Variable};
-pub use async_snapshot::{AsyncSnapshot, ConnectionState};
 pub use build_phase::{BuildPhase, BuildPhaseGuard, MutatedDuringBuild};
 // Claim-slot request/reply primitive (ADR-0039 §3)
 pub use claim_slot::{ClaimHandle, ClaimOutcome, ClaimSlot, claim_slot};
 // Monotonic time source (OS / virtual clock) — foundational primitive injected
 // by deadline- and frame-driven subsystems (gesture arena, headless binding).
 pub use clock::{ManualClock, MonotonicClock, SystemClock, event_epoch};
+pub use consts::EPSILON;
 pub use creation_site::CreationSite;
 pub use sequence::{AtomicIdMint, DragSessionId, IdExhausted, IdMint, InputSequenceId, MintedId};
 pub use ticket::{Ticket, TicketSource};
 pub use tree_error::{PathEntry, TREE_CONTEXT_DEPTH, TreeContext, TreeError};
-// Constants
-pub use consts::{DEBUG_MODE, EPSILON, EPSILON_F32, IS_DESKTOP, IS_MOBILE, IS_WEB, RELEASE_MODE};
-// Window-runtime generation/version counters + commit-time freshness gate.
-pub use epoch::{
-    FrameEpoch, GenerationGate, GpuResourceGeneration, ResourceGeneration, SurfaceGeneration,
-};
+// Raster submission and resource-generation counters.
+pub use epoch::{FrameEpoch, GpuResourceGeneration, SurfaceGeneration};
 // The frame-identity group bundled for the raster boundary.
 pub use frame_stamp::FrameStamp;
 pub use id::{
@@ -296,8 +290,6 @@ pub use rebuild_reason::{RebuildReason, RebuildReasons};
 pub use slot::IndexedSlot;
 // Generic typed channel
 pub use notifier_generic::{ArgCallback, Notifier};
-// WASM compatibility
-pub use wasm::WasmNotSendSync;
 
 // ============================================================================
 // PRELUDE
@@ -315,14 +307,9 @@ pub mod prelude {
     pub use crate::{
         // Change notification
         ChangeNotifier,
-        // Constants
-        DEBUG_MODE,
         EPSILON,
         // IDs
         ElementId,
-        IS_DESKTOP,
-        IS_MOBILE,
-        IS_WEB,
         // Generic ID system
         Id,
         Identifier,
@@ -335,7 +322,6 @@ pub mod prelude {
         ListenerId,
         PresentationAddress,
         PresentationId,
-        RELEASE_MODE,
         RenderId,
         SemanticsId,
         TreeId,

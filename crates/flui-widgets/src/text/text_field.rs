@@ -12,19 +12,12 @@
 //!
 //! # Name
 //!
-//! Named `RawTextField`, not `TextField` — `flui::prelude` (the facade)
-//! needs `TextField` to mean exactly one thing, the Material one, whenever
-//! the `material` feature is on, with no shadowing and no feature-dependent
-//! meaning for a name a caller might already be using. Before this rename,
-//! both this type and `flui_material::TextField` were named `TextField`,
-//! and the facade's prelude picked between them by having the Material one
-//! explicitly shadow this one via Rust's explicit-import-over-glob rule —
-//! technically sound, but `TextField`'s meaning then depended on whether the
-//! `material` feature happened to be on, which is a feature-additivity
-//! violation (enabling a Cargo feature is supposed to only ADD symbols, not
-//! change what an existing name resolves to). See `ARCHITECTURE.md`'s
-//! `## Mapping decisions` entry for the record of both the original
-//! shadowing decision and this rename that superseded it.
+//! Named `RawTextField`, not `TextField`, so an application can import the
+//! design-neutral `flui::prelude::*` and `flui::material::prelude::*` together
+//! without ambiguity. Material owns its everyday names in its own prelude;
+//! enabling `material` never changes what a name in the facade's base prelude
+//! resolves to. See `ARCHITECTURE.md`'s `## Mapping decisions` entry and
+//! ADR-0315 §3.
 
 use std::rc::Rc;
 

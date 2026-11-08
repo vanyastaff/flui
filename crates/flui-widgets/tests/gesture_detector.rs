@@ -31,7 +31,7 @@ pub(crate) fn drag_motion_retains_root_units_under_scale_and_rotation() {
         let laid = lay_out(
             Transform::new(matrix).alignment(Alignment::CENTER).child(
                 GestureDetector::new()
-                    .behavior(flui_widgets::HitTestBehavior::Opaque)
+                    .behavior(flui_interaction::HitTestBehavior::Opaque)
                     .drag(
                         DragSlot::pan()
                             .on_update(move |_, details| update_log.borrow_mut().push(details))
@@ -86,7 +86,7 @@ pub(crate) fn binding_admits_distinct_drag_sequences_when_pointer_ids_are_reused
     let observed = admitted.clone();
     let laid = lay_out(
         GestureDetector::new()
-            .behavior(flui_widgets::HitTestBehavior::Opaque)
+            .behavior(flui_interaction::HitTestBehavior::Opaque)
             .drag(
                 DragSlot::pan()
                     .on_start(move |_, details| {
@@ -118,6 +118,7 @@ pub(crate) fn binding_admits_distinct_drag_sequences_when_pointer_ids_are_reused
 
 pub(crate) fn nested_native_scale_loser_recovers_touch_after_winner_terminal() {
     use flui_foundation::geometry::{Offset, Point};
+    use flui_interaction::HitTestBehavior;
     use flui_interaction::events::{
         make_down_event_for_id, make_move_event_for_id, make_up_event_for_id,
     };
@@ -128,7 +129,7 @@ pub(crate) fn nested_native_scale_loser_recovers_touch_after_winner_terminal() {
             PointerKind, PointerPosition,
         },
     };
-    use flui_widgets::{Center, HitTestBehavior, SizedBox};
+    use flui_widgets::{Center, SizedBox};
     use std::{cell::RefCell, rc::Rc};
 
     for terminal in [PanZoomPhase::End, PanZoomPhase::Cancelled] {
@@ -2203,8 +2204,8 @@ pub(crate) fn horizontal_drag_pointer_cancel_after_acceptance_ends_and_does_not_
     assert_eq!(
         *reasons.borrow(),
         [
-            flui_widgets::GestureEndReason::Cancelled,
-            flui_widgets::GestureEndReason::Completed
+            flui_interaction::GestureEndReason::Cancelled,
+            flui_interaction::GestureEndReason::Completed
         ]
     );
 }
@@ -2369,7 +2370,8 @@ pub(crate) mod event_cx {
 }
 
 pub(crate) fn viewer_reports_cancelled_then_completed_interactions() {
-    use flui_widgets::{GestureEndReason, InteractiveViewer};
+    use flui_interaction::GestureEndReason;
+    use flui_widgets::InteractiveViewer;
     use std::cell::RefCell;
     use std::rc::Rc;
     let reasons = Rc::new(RefCell::new(Vec::new()));
@@ -2498,8 +2500,8 @@ pub(crate) fn a_vertical_drag_slot_claims_only_vertical_motion() {
 /// both contacts. A count below two is refused as a value, before any
 /// detector is built, rather than panicking in the parent's `build`.
 pub(crate) fn two_contacts_released_together_fire_on_multi_tap() {
+    use flui_interaction::MultiTapCount;
     use flui_platform::pointer::PointerKind;
-    use flui_widgets::MultiTapCount;
     use std::{cell::RefCell, rc::Rc};
 
     for refused in [0, 1] {
@@ -2633,11 +2635,11 @@ pub(crate) fn a_tap_cancel_only_follows_a_tap_down() {
         let (down, up, tap, cancel) = (entry("down"), entry("up"), entry("tap"), entry("cancel"));
         let mut laid = lay_out(
             GestureDetector::new()
-                .behavior(flui_widgets::HitTestBehavior::Opaque)
+                .behavior(flui_interaction::HitTestBehavior::Opaque)
                 .on_long_press(|_| {})
                 .child(
                     GestureDetector::new()
-                        .behavior(flui_widgets::HitTestBehavior::Opaque)
+                        .behavior(flui_interaction::HitTestBehavior::Opaque)
                         .on_tap_down(move |_, _| down())
                         .on_tap_up(move |_, _| up())
                         .on_tap(move |_| tap())
@@ -2683,14 +2685,14 @@ pub(crate) fn a_rotated_axial_drag_claims_motion_along_its_own_axis() {
     let (inner, outer) = (inner_updates.clone(), outer_updates.clone());
     let laid = lay_out(
         GestureDetector::new()
-            .behavior(flui_widgets::HitTestBehavior::Opaque)
+            .behavior(flui_interaction::HitTestBehavior::Opaque)
             .drag(DragSlot::vertical().on_update(move |_, _| outer.set(outer.get() + 1)))
             .child(
                 Transform::new(Matrix4::rotation_z(std::f64::consts::FRAC_PI_2))
                     .alignment(Alignment::CENTER)
                     .child(
                         GestureDetector::new()
-                            .behavior(flui_widgets::HitTestBehavior::Opaque)
+                            .behavior(flui_interaction::HitTestBehavior::Opaque)
                             .drag(
                                 DragSlot::horizontal()
                                     .on_update(move |_, _| inner.set(inner.get() + 1)),
@@ -2717,9 +2719,9 @@ pub(crate) fn a_rotated_axial_drag_claims_motion_along_its_own_axis() {
 /// reaches the outer one.
 pub(crate) fn a_smart_zoom_reaches_only_the_innermost_detector_under_it() {
     use flui_foundation::geometry::Offset;
-    use flui_interaction::{SmartZoomDetails, SmartZoomSource};
+    use flui_interaction::{HitTestBehavior, SmartZoomDetails, SmartZoomSource};
     use flui_testing::TrackpadScript;
-    use flui_widgets::{HitTestBehavior, Padding, SizedBox};
+    use flui_widgets::{Padding, SizedBox};
     use std::{cell::RefCell, rc::Rc};
 
     for (name, at, inner_hit, outer_hit) in [

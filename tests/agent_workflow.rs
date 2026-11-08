@@ -9,12 +9,8 @@
 //! `flui-widgets`, `flui-rendering`, or any other implementation crate. That
 //! is the point of the test — it is written the way an outside consumer of
 //! the published `flui` crate would have to write it, not the way this
-//! workspace's own internal tests do (compare
-//! `packages/flui-material/tests/elevated_button.rs`, which reaches past
-//! the facade into `flui_rendering`/`flui_interaction` directly, and
-//! drives taps through a widget-testing convenience
-//! (`flui_testing::widgets::lay_out`'s `dispatch_pointer_down`) rather than
-//! the general pointer-replay path this test uses).
+//! workspace's own internal tests do. In particular, interaction goes through
+//! the general pointer-replay path rather than a widget-tree shortcut.
 //!
 //! ## The five steps, and which public API answers each one
 //!
@@ -37,90 +33,54 @@
 //!
 //! ## What step 3 relies on
 //!
-//! The CLI `counter` template's tree (`Center` → `Column` →
-//! `Text`/`Text`/`ElevatedButton`, mirrored below) carries no explicit
-//! `Semantics` node. The label step 3 finds comes from the framework itself:
-//! `flui-material`'s `ButtonStyleButtonCore` publishes a button semantics
-//! node, and `RenderParagraph` publishes its text as that node's label (see
-//! `crates/flui-objects/ARCHITECTURE.md`, "Semantics mapping"). Writing the
-//! first version of this test is what found that neither did — the counter
-//! app was not screen-reader accessible out of the box, and this test had
-//! to wrap the button in an explicit `Semantics` to have anything to query.
-//! It no longer does; the tree below IS the template's.
+//! The included CLI `counter` template's tree (`SafeArea` → `Center` →
+//! `Column` → `Text`/`Text`/`RawButton`) adds no test-only `Semantics` node.
+//! `RawButton` itself publishes a button semantics container, and the child
+//! `RenderParagraph` publishes its text as that node's label (see
+//! `crates/flui-objects/ARCHITECTURE.md`, "Semantics mapping").
 
 use std::time::Duration;
 
 use flui::foundation::inspect::SnapshotNode;
-use flui::geometry::Offset;
+use flui::geometry::{Offset, Size};
 use flui::prelude::*;
+use flui::testing::a11y::Role;
 use flui::testing::rendering::render_snapshot;
 use flui::testing::replay::PointerScript;
 use flui::testing::{HeadlessBinding, MountOptions, MountOwners};
-use flui::view::environment::GestureArenaScope;
-use flui::widgets::column;
+use flui::view::environment::{FocusTreeRoot, GestureArenaScope};
 
-/// The tree `flui create`'s counter template builds: `Center` → `Column` →
-/// prompt `Text` / count `Text` / `ElevatedButton`, driven by a `Signal`
-/// created in `init_state`, as the CLI template does. No
-/// additions: the semantics step 3 queries are the framework's own.
-#[derive(Clone, StatefulView)]
-struct AgentCounter;
-
-struct AgentCounterState {
-    count: Signal<usize>,
+mod counter_app {
+    include!("../crates/flui-cli/src/templates/counter_app.rs");
 }
 
-impl StatefulView for AgentCounter {
-    type State = AgentCounterState;
+use counter_app::CounterApp;
 
-    fn create_state(&self) -> Self::State {
-        AgentCounterState {
-            count: Signal::default(),
-        }
-    }
-}
-
-impl ViewState<AgentCounter> for AgentCounterState {
-    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        self.count = ctx.signal(0);
-    }
-
-    fn build(&self, _view: &AgentCounter, ctx: &dyn BuildContext) -> impl IntoView {
-        let count = self.count;
-
-        Center::new().child(
-            Column::new(column![
-                Text::new("You have pushed the button this many times:"),
-                SizedBox::height(16.0),
-                Text::new(count.get(ctx).to_string()),
-                SizedBox::height(16.0),
-                ElevatedButton::new(Text::new("Increment"))
-                    .on_pressed(move |cx| count.update(cx, |n| *n += 1)),
-            ])
-            .main_axis_alignment(MainAxisAlignment::Center),
-        )
-    }
-}
-
-/// Mounts [`AgentCounter`] through the canonical headless bootstrap, wrapped
-/// exactly as `flui_testing::widgets::lay_out` wraps every widget-tier test
-/// (`GestureArenaScope` for tap routing, `FocusRoot` because a mounted tree
-/// always needs a focus scope, `Theme` because `ElevatedButton` panics
-/// without one — see `flui_material::Theme::of`'s doc comment).
+/// Mounts the real template [`CounterApp`] through the canonical headless
+/// bootstrap. `MediaQuery` supplies the production surface data `SafeArea`
+/// reads, `GestureArenaScope` routes taps, and `FocusTreeRoot` supplies the
+/// focus scope `RawButton` needs.
 ///
 /// Returns the bound `binding`; the caller drives frames and queries it from
 /// there. This is the facade-only equivalent of what `mount_root`'s own doc
 /// example shows, applied to a tree that actually needs presentation scopes.
 fn mount_agent_counter() -> HeadlessBinding {
+    const WIDTH: f64 = 480.0;
+    const HEIGHT: f64 = 320.0;
+
     let mut binding = HeadlessBinding::new();
-    let root = GestureArenaScope::new(
-        binding.arena().clone(),
-        FocusRoot::new(Theme::new(ThemeData::light(), AgentCounter)),
+    let app = MediaQuery::new(
+        MediaQueryData {
+            size: Size::new(WIDTH, HEIGHT),
+            ..MediaQueryData::default()
+        },
+        CounterApp,
     );
+    let root = GestureArenaScope::new(binding.arena().clone(), FocusTreeRoot::new(app));
     let mounted = binding.mount_root(
         &root,
         MountOwners::fresh(),
-        MountOptions::tight(480.0, 320.0),
+        MountOptions::tight(WIDTH, HEIGHT),
     );
     assert!(
         mounted.painted,
@@ -151,31 +111,31 @@ fn paragraph_texts(tree: &SnapshotNode) -> Vec<&str> {
 
 #[test]
 fn agent_can_mount_inspect_drive_and_assert_the_counter() {
-    // --- 1. Mount: the counter UI, through the documented bootstrap. -------
+    // --- 1. Mount: the real template counter, through the documented bootstrap.
     let mut binding = mount_agent_counter();
-    // --- 2. Inspect structure: snapshot the render tree and check a
-    // --- 2. Inspect structure: dump the render-tree diagnostics and check a
-    // known node is really there. `ElevatedButton` composes a Material
-    // surface as a `RenderPhysicalShape` (see
-    // `packages/flui-material/tests/elevated_button.rs`, which asserts the
-    // same node by the same name) — a fact about the framework's own
-    // composition, not something this test invents.
+
+    // --- 2. Inspect structure: the source's three paragraphs are present, and
+    // RawButton has an annotated semantics container in the actual render tree.
     let initial = render_dump(&binding);
-    assert!(
-        initial
-            .iter()
-            .any(|node| node.kind == "RenderPhysicalShape"),
-        "expected a RenderPhysicalShape node (ElevatedButton's Material surface) \
-         in the render tree, got paragraphs {:?}",
-        paragraph_texts(&initial)
+    assert_eq!(
+        paragraph_texts(&initial),
+        vec![
+            "You have pushed the button this many times:",
+            "0",
+            "Increment",
+        ],
+        "the initial render tree must be the real counter template"
     );
     assert!(
-        paragraph_texts(&initial).contains(&"0"),
-        "the counter must render its initial value \"0\"; paragraphs were {:?}",
-        paragraph_texts(&initial)
+        initial.iter().any(|node| {
+            node.kind == "RenderSemanticsAnnotations"
+                && node.get::<bool>("container") == Ok(true)
+                && node.get::<bool>("has_semantics") == Ok(true)
+        }),
+        "expected RawButton's annotated semantics container in the render tree"
     );
 
-    // --- 3. Inspect semantics: find the button by its label. ---------------
+    // --- 3. Inspect semantics: find the enabled button by its label. --------
     // Semantics assembly is opt-in and lazy (see `enable_semantics`'s doc
     // comment) — enable it, then run one more frame so it actually gets
     // built before `a11y_tree` is read.
@@ -188,7 +148,18 @@ fn agent_can_mount_inspect_drive_and_assert_the_counter() {
         .expect("semantics was enabled and a frame ran, so a tree must exist");
     let button = tree
         .find_by_label("Increment")
-        .expect("ElevatedButton publishes a button node labelled by its Text child");
+        .expect("RawButton publishes a button node labelled by its Text child");
+    assert_eq!(
+        button.role(),
+        Role::Button,
+        "RawButton must expose its button role. Tree was:\n{}",
+        tree.describe()
+    );
+    assert!(
+        !button.is_disabled(),
+        "the counter's RawButton has an on_press callback and must be enabled. Tree was:\n{}",
+        tree.describe()
+    );
     let bounds = button
         .bounds()
         .expect("a laid-out node always carries bounds");

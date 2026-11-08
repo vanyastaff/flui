@@ -1126,7 +1126,7 @@ pub struct IOSWindow {
     screen: Arc<parking_lot::Mutex<ScreenIdentity>>,
     id: WindowId,
     /// Why the window does not set the pointer's shape on this device.
-    pointer: flui_platform::CapabilityAbsence,
+    pointer: flui_platform::UnsupportedReason,
     /// The input regions last projected, and the screen edges they reach.
     input_regions: parking_lot::Mutex<(
         crate::input::regions::ProjectedInputRegions,
@@ -1836,7 +1836,7 @@ impl PlatformWindow for IOSWindow {
     /// Not set: an iPhone shows no pointer, and an iPad's pointer style is not
     /// chosen by this host yet (`pointer_absence`).
     fn set_cursor(&self, _cursor: CursorIcon) -> Result<(), CursorError> {
-        Err(flui_platform::Unsupported::from(self.pointer).into())
+        Err(flui_platform::Unsupported::new(self.pointer).into())
     }
 
     fn apply(&self, command: AdmittedCommand) -> Result<(), ApplyError> {

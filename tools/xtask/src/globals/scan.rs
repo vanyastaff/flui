@@ -49,7 +49,8 @@ const PRIMITIVES: [&str; 17] = [
     "isize", "f32", "f64", "str",
 ];
 
-/// How a global is defined.
+/// How a global stores its value, independently of whether source or a macro
+/// emitted the definition.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Shape {
     /// `static NAME: T = …;`
@@ -58,9 +59,15 @@ pub(super) enum Shape {
     StaticMut,
     /// An entry of a `thread_local!` invocation.
     ThreadLocal,
-    /// A `static` found in the tokens of a macro invocation or a
-    /// `macro_rules!` body: FLUI's own macros emit it into whatever crate
-    /// invokes them.
+}
+
+/// Whether the collector read an AST item or the tokens FLUI's own macro emits
+/// into the invoking crate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Origin {
+    /// A statically parsed item.
+    Item,
+    /// A definition in macro tokens.
     Macro,
 }
 
@@ -144,6 +151,7 @@ pub(super) struct Def {
     /// The file, repository-relative.
     pub(super) file: String,
     pub(super) shape: Shape,
+    pub(super) origin: Origin,
     pub(super) vis: Vis,
     pub(super) ty: TypeInfo,
     /// The initializer is `<atomic integer>::new(<integer literal>)`.
@@ -345,12 +353,28 @@ fn thread_local_entries(tokens: TokenStream) -> syn::Result<Vec<Local>> {
 // ---------------------------------------------------------------------------
 // macro tokens
 
-/// Every `static [mut|ref] NAME: <type>` in `tokens` at any depth: `(NAME,
-/// type)`, with `$name` for a `macro_rules!` metavariable and `#name` for a
-/// `quote!` interpolation. `'static` is a lifetime, not an item.
-pub(super) fn macro_statics(tokens: TokenStream) -> Vec<(String, TypeInfo)> {
+/// A global in macro tokens, with the storage shape it will have after
+/// expansion. The outer macro still supplies its item-key segment.
+#[derive(Debug)]
+pub(super) struct MacroStatic {
+    pub(super) name: String,
+    pub(super) shape: Shape,
+    pub(super) ty: TypeInfo,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MacroContext {
+    Ordinary,
+    ThreadLocalBody,
+}
+
+/// Every `static [mut|ref] NAME: <type>` in `tokens` at any depth, with
+/// `$name` for a `macro_rules!` metavariable and `#name` for a `quote!`
+/// interpolation. `'static` is a lifetime, not an item. A qualified
+/// `thread_local!` body gives its top-level entries their real TLS shape.
+pub(super) fn macro_statics(tokens: TokenStream) -> Vec<MacroStatic> {
     let mut found = Vec::new();
-    scan_macro_tokens(tokens, &mut found);
+    scan_macro_tokens(tokens, MacroContext::Ordinary, &mut found);
     found
 }
 
@@ -376,21 +400,45 @@ fn includes_out_dir(tokens: TokenStream) -> bool {
             && name.stream().to_string() == "\"OUT_DIR\"")
 }
 
-fn scan_macro_tokens(tokens: TokenStream, found: &mut Vec<(String, TypeInfo)>) {
+fn scan_macro_tokens(tokens: TokenStream, context: MacroContext, found: &mut Vec<MacroStatic>) {
     let trees: Vec<TokenTree> = tokens.into_iter().collect();
-    for (at, tree) in trees.iter().enumerate() {
-        match tree {
-            TokenTree::Group(group) => scan_macro_tokens(group.stream(), found),
+    let mut at = 0;
+    while at < trees.len() {
+        let qualified_thread_local = matches!(&trees[at], TokenTree::Ident(ident) if ident == "thread_local")
+            && matches!(trees.get(at + 1), Some(TokenTree::Punct(bang)) if bang.as_char() == '!')
+            && matches!(trees.get(at + 2), Some(TokenTree::Group(_)));
+        if qualified_thread_local {
+            let TokenTree::Group(group) = &trees[at + 2] else {
+                unreachable!("BUG: the qualified thread-local match includes its body")
+            };
+            scan_macro_tokens(group.stream(), MacroContext::ThreadLocalBody, found);
+            at += 3;
+            continue;
+        }
+        match &trees[at] {
+            TokenTree::Group(group) => {
+                // A nested group is not a TLS entry, even in a TLS initializer.
+                scan_macro_tokens(group.stream(), MacroContext::Ordinary, found);
+            }
             TokenTree::Ident(ident) if ident == "static" => {
                 let lifetime = at > 0
                     && matches!(&trees[at - 1], TokenTree::Punct(punct)
                         if punct.as_char() == '\'' && punct.spacing() == Spacing::Joint);
                 if lifetime {
+                    at += 1;
                     continue;
                 }
+                let mut shape = match context {
+                    MacroContext::Ordinary => Shape::Static,
+                    MacroContext::ThreadLocalBody => Shape::ThreadLocal,
+                };
                 let mut next = at + 1;
-                if matches!(trees.get(next), Some(TokenTree::Ident(word)) if word == "mut" || word == "ref")
+                if let Some(TokenTree::Ident(word)) = trees.get(next)
+                    && (word == "mut" || word == "ref")
                 {
+                    if word == "mut" {
+                        shape = Shape::StaticMut;
+                    }
                     next += 1;
                 }
                 let name = match trees.get(next) {
@@ -398,17 +446,23 @@ fn scan_macro_tokens(tokens: TokenStream, found: &mut Vec<(String, TypeInfo)>) {
                     // `$name` in `macro_rules!`, `#name` in `quote!`
                     Some(TokenTree::Punct(sigil)) if matches!(sigil.as_char(), '$' | '#') => {
                         next += 1;
-                        match trees.get(next) {
-                            Some(TokenTree::Ident(name)) => format!("{}{name}", sigil.as_char()),
-                            _ => continue,
+                        if let Some(TokenTree::Ident(name)) = trees.get(next) {
+                            format!("{}{name}", sigil.as_char())
+                        } else {
+                            at += 1;
+                            continue;
                         }
                     }
-                    _ => continue,
+                    _ => {
+                        at += 1;
+                        continue;
+                    }
                 };
                 next += 1;
                 let colon = matches!(trees.get(next), Some(TokenTree::Punct(punct))
                     if punct.as_char() == ':' && punct.spacing() == Spacing::Alone);
                 if !colon {
+                    at += 1;
                     continue;
                 }
                 let ty: TokenStream = trees[next + 1..]
@@ -419,11 +473,55 @@ fn scan_macro_tokens(tokens: TokenStream, found: &mut Vec<(String, TypeInfo)>) {
                     })
                     .cloned()
                     .collect();
-                found.push((name, TypeInfo::of_tokens(ty)));
+                found.push(MacroStatic {
+                    name,
+                    shape,
+                    ty: TypeInfo::of_tokens(ty),
+                });
             }
             _ => {}
         }
+        at += 1;
     }
+}
+
+/// Methods a macro body calls directly on one of its generated globals. A
+/// reviewed counter still rejects every non-monotonic operation; macro origin
+/// alone must not make those operations invisible.
+fn macro_methods(tokens: TokenStream, name: &str) -> BTreeSet<String> {
+    fn collect(tokens: TokenStream, name: &str, methods: &mut BTreeSet<String>) {
+        let trees: Vec<TokenTree> = tokens.into_iter().collect();
+        for (at, tree) in trees.iter().enumerate() {
+            if let TokenTree::Group(group) = tree {
+                collect(group.stream(), name, methods);
+            }
+            let receiver = match tree {
+                TokenTree::Ident(ident) if ident == name => Some(1),
+                TokenTree::Punct(sigil)
+                    if matches!(sigil.as_char(), '$' | '#')
+                        && name.starts_with(sigil.as_char())
+                        && matches!(trees.get(at + 1), Some(TokenTree::Ident(ident)) if ident == &name[1..]) =>
+                {
+                    Some(2)
+                }
+                _ => None,
+            };
+            let Some(receiver) = receiver else { continue };
+            let Some(TokenTree::Punct(dot)) = trees.get(at + receiver) else {
+                continue;
+            };
+            if dot.as_char() != '.' {
+                continue;
+            }
+            if let Some(TokenTree::Ident(method)) = trees.get(at + receiver + 1) {
+                methods.insert(method.to_string());
+            }
+        }
+    }
+
+    let mut methods = BTreeSet::new();
+    collect(tokens, name, &mut methods);
+    methods
 }
 
 /// Scans one target.
@@ -441,12 +539,15 @@ pub(super) fn scan_target(source: &dyn Source, target: &Target) -> anyhow::Resul
     let defs = raws
         .into_iter()
         .map(|raw| {
-            let uses = (raw.shape == Shape::Static && raw.ty.atomic_int)
-                .then(|| uses_in_scope(&files, &raw));
+            let uses = raw.uses.clone().or_else(|| {
+                (raw.shape == Shape::Static && raw.ty.atomic_int)
+                    .then(|| uses_in_scope(&files, &raw))
+            });
             Def {
                 file: files[raw.file].rel.clone(),
                 item: raw.item,
                 shape: raw.shape,
+                origin: raw.origin,
                 vis: raw.vis,
                 ty: raw.ty,
                 counter_init: raw.counter_init,
@@ -471,11 +572,15 @@ struct Raw<'ast> {
     name: String,
     file: usize,
     shape: Shape,
+    origin: Origin,
     vis: Vis,
     ty: TypeInfo,
     counter_init: bool,
     cfg: String,
     debug_only: bool,
+    /// Macro-token counter methods, or `None` for an AST item whose scope is
+    /// scanned after the complete module tree has been collected.
+    uses: Option<Uses>,
     /// The body of the innermost enclosing fn, for a static defined in one.
     fn_body: Option<&'ast Block>,
 }
@@ -565,11 +670,13 @@ impl<'ast> Collector<'ast> {
                             name: local.name,
                             file: self.file,
                             shape: Shape::ThreadLocal,
+                            origin: Origin::Item,
                             vis: Vis::Private,
                             ty: local.ty,
                             counter_init: false,
                             cfg,
                             debug_only,
+                            uses: None,
                             fn_body: None,
                         });
                     }
@@ -582,20 +689,28 @@ impl<'ast> Collector<'ast> {
             return;
         }
         let segment = format!("{name}!");
-        for (entry, ty) in macro_statics(tokens.clone()) {
+        for entry in macro_statics(tokens.clone()) {
             self.path.push(segment.clone());
-            let item = self.key(&entry);
+            let item = self.key(&entry.name);
             self.path.pop();
+            let uses = (entry.shape == Shape::Static && entry.ty.atomic_int).then(|| Uses {
+                // Macro definitions are never automatically exempt; the methods
+                // still enforce the reviewed counter class.
+                disallowed: 1,
+                methods: macro_methods(tokens.clone(), &entry.name),
+            });
             self.record(Raw {
                 item,
-                name: entry,
+                name: entry.name,
                 file: self.file,
-                shape: Shape::Macro,
+                shape: entry.shape,
+                origin: Origin::Macro,
                 vis: Vis::Private,
-                ty,
+                ty: entry.ty,
                 counter_init: false,
                 cfg: self.cfgs.join(" & "),
                 debug_only: debug_only(&self.cfgs),
+                uses,
                 fn_body: None,
             });
         }
@@ -706,11 +821,13 @@ impl<'ast> Visit<'ast> for Collector<'ast> {
                 StaticMutability::Mut(_) => Shape::StaticMut,
                 _ => Shape::Static,
             },
+            origin: Origin::Item,
             vis: vis_of(&item.vis),
             ty: TypeInfo::of(&item.ty),
             counter_init: counter_init(&item.expr),
             cfg: self.cfgs.join(" & "),
             debug_only: debug_only(&self.cfgs),
+            uses: None,
             fn_body: self.fns.last().copied(),
         });
         visit::visit_item_static(self, item);

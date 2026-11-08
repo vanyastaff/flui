@@ -1082,7 +1082,7 @@ mod tests {
         };
 
         let text_input: std::sync::Arc<dyn flui_platform::PlatformTextInput> =
-            std::sync::Arc::new(flui_native::FakeTextInput::new());
+            std::sync::Arc::new(flui_native::testing::FakeTextInput::new());
         let mut ui_runtime = UiRuntime::for_test_with_text_input(Some(text_input));
         let id = ui_runtime.presentation_id();
         let gone = ui_runtime.install_second_presentation_for_test();
@@ -1144,7 +1144,7 @@ mod tests {
         }
 
         let text_input: std::sync::Arc<dyn flui_platform::PlatformTextInput> =
-            std::sync::Arc::new(flui_native::FakeTextInput::new());
+            std::sync::Arc::new(flui_native::testing::FakeTextInput::new());
         let mut ui_runtime = UiRuntime::for_test_with_text_input(Some(text_input));
         let id = ui_runtime.presentation_id();
         let _sibling = ui_runtime.install_second_presentation_for_test();

@@ -43,9 +43,9 @@ use accesskit_macos::SubclassingAdapter;
 use parking_lot::Mutex;
 
 use crate::accessibility::bridge::{Action, Activation, BridgeShared};
-use flui_semantics::{
-    platform::AccessibilityActionListener, platform::AccessibilityActivationListener,
-    platform::PlatformAccessibility,
+use flui_semantics::platform::{
+    AccessibilityAlreadyAttached, AccessibilityAttachment, AccessibilityCapabilities,
+    AccessibilityHandler, PlatformAccessibility, RouteChange,
 };
 
 /// NSAccessibility for one window.
@@ -153,6 +153,7 @@ impl crate::host::WindowAccessibility for MacosAccessibility {
     /// view the subclass dereferences on unhook). Every later call through
     /// a still-live capability `Arc` is a no-op. Idempotent.
     fn detach(&self) {
+        PlatformAccessibility::detach_handler(self);
         let adapter = self.adapter.lock().take();
         drop(adapter);
     }
@@ -217,24 +218,22 @@ impl PlatformAccessibility for MacosAccessibility {
         }
     }
 
-    fn is_active(&self) -> bool {
-        self.shared.is_active()
+    fn attach(
+        &self,
+        handler: Arc<dyn AccessibilityHandler>,
+    ) -> Result<AccessibilityAttachment, AccessibilityAlreadyAttached> {
+        self.shared.attach(
+            handler,
+            AccessibilityCapabilities::new(Self::ASSISTIVE_FOCUS, Self::ROUTE_CHANGE),
+        )
     }
 
-    fn set_activation_listener(&self, listener: AccessibilityActivationListener) {
-        self.shared.set_activation_listener(listener);
+    fn detach_handler(&self) {
+        self.shared.detach_handler();
     }
 
-    fn set_action_listener(&self, listener: AccessibilityActionListener) {
-        self.shared.set_action_listener(listener);
-    }
-
-    fn assistive_focus_support(&self) -> flui_semantics::AssistiveFocusSupport {
-        Self::ASSISTIVE_FOCUS
-    }
-
-    fn route_change_support(&self) -> flui_semantics::platform::RouteChangeSupport {
-        Self::ROUTE_CHANGE
+    fn route_changed(&self, change: RouteChange) {
+        drop(change);
     }
 }
 

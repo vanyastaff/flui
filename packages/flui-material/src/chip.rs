@@ -141,20 +141,21 @@
 use std::rc::Rc;
 
 use flui_sdk::painting::Canvas;
-use flui_sdk::painting::TextStyle;
-use flui_sdk::painting::{BorderSide, BorderStyle};
-use flui_sdk::painting::{Paint, Path};
-use flui_sdk::rendering::BoxConstraints;
+use flui_sdk::painting::paint::Path;
+use flui_sdk::painting::styling::{BorderSide, BorderStyle};
+use flui_sdk::painting::typography::TextStyle;
+use flui_sdk::painting::{CustomPainter, Paint};
+use flui_sdk::pipeline::{CrossAxisAlignment, MainAxisSize};
+use flui_sdk::rendering::{BoxConstraints, SemanticsRole, Toggled};
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::icon::IconData;
 use flui_sdk::widgets::{
-    ConstrainedBox, CrossAxisAlignment, CustomPaint, CustomPainter, DefaultTextStyle, Icon,
-    IconTheme, IconThemeData, MainAxisSize, Opacity, Padding, Row, Semantics, SemanticsRole,
-    Toggled, WidgetState, WidgetStates,
+    ConstrainedBox, CustomPaint, DefaultTextStyle, Icon, IconTheme, IconThemeData, Opacity,
+    Padding, Row, Semantics, WidgetState, WidgetStates,
 };
 use flui_sdk::{
     geometry::{EdgeInsets, Point, Size},
-    painting::Color,
+    painting::styling::Color,
 };
 
 use crate::color_scheme::ColorScheme;
@@ -327,7 +328,7 @@ fn chip_default_side(selected: bool, enabled: bool, colors: &ColorScheme) -> Bor
 
 /// The default container shape: an 8dp rounded rectangle.
 fn chip_default_shape() -> MaterialShape {
-    use flui_sdk::painting::BorderRadius;
+    use flui_sdk::painting::styling::BorderRadius;
     MaterialShape::RoundedRect(BorderRadius::all(flui_sdk::geometry::Radius::circular(
         CORNER_RADIUS,
     )))
@@ -469,9 +470,8 @@ impl Chip {
 
 impl StatelessView for Chip {
     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
-        let theme = Theme::of(ctx);
-        let colors = theme.color_scheme;
-        let chip_theme = theme.chip_theme.clone();
+        let (colors, text_theme) = Theme::required_color_and_text_of(ctx);
+        let chip_theme = Theme::component_of::<crate::ChipThemeData>(ctx);
 
         let states = chip_states(false, self.enabled);
 
@@ -479,8 +479,7 @@ impl StatelessView for Chip {
             .as_ref()
             .and_then(|t| t.label_color)
             .unwrap_or_else(|| chip_content_color_default(states, &colors));
-        let label_style = theme
-            .text_theme
+        let label_style = text_theme
             .label_large
             .unwrap_or_default()
             .with_color(label_color);
@@ -740,9 +739,8 @@ fn filter_chip_default_background_color(
 
 impl StatelessView for FilterChip {
     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
-        let theme = Theme::of(ctx);
-        let colors = theme.color_scheme;
-        let chip_theme = theme.chip_theme.clone();
+        let (colors, text_theme) = Theme::required_color_and_text_of(ctx);
+        let chip_theme = Theme::component_of::<crate::ChipThemeData>(ctx);
         let enabled = self.is_enabled();
         let selected = self.selected;
 
@@ -752,8 +750,7 @@ impl StatelessView for FilterChip {
             .as_ref()
             .and_then(|t| t.label_color)
             .unwrap_or_else(|| chip_content_color_default(states, &colors));
-        let label_style = theme
-            .text_theme
+        let label_style = text_theme
             .label_large
             .unwrap_or_default()
             .with_color(label_color);

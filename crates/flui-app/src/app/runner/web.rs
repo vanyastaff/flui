@@ -118,6 +118,7 @@ where
         config.install_error_view_builder(&ui_runtime);
 
         let logical = geometry.logical;
+        let root = flui_widgets::app_root(root);
         let attach = ui_runtime.enter(|ui_runtime| {
             ui_runtime.attach_root_widget_with_size(
                 &root,
@@ -294,9 +295,8 @@ impl WebFrameDriver {
                 // input deadlines without a visual frame. See
                 // `UiRuntime::pump_background` for the latch-first order.
                 //
-                // No `NO_PRESENT_FALLBACK_PACE` sleep here, unlike
-                // desktop/Android: this callback is driven by the
-                // browser's `requestAnimationFrame` loop
+                // No native fallback-pacing deadline here: this callback is
+                // driven by the browser's `requestAnimationFrame` loop
                 // (`start_raf_loop`, `flui-native`'s web backend),
                 // which fires unconditionally once per animation
                 // frame regardless of whether a redraw was

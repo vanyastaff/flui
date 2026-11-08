@@ -1,4 +1,4 @@
-# ADR-0083: One frame transaction lives in `flui-runtime` above `flui-widgets`
+# ADR-0083: One frame transaction lives in `flui-runtime`
 
 - **Status:** Accepted (2026-11-03)
 - **Superseded-by:** [ADR-0182](ADR-0182-complete-owner-execution.md) for scheduler execution
@@ -62,20 +62,18 @@ Tests therefore prove the harness. ADR-0075 records the failure this produces: i
 effects "never ran in the product", because `run_effects` was called only from
 `HeadlessBinding::pump_frame` (ADR-0075, "What the prototype got wrong", item 1).
 
-The runtime cannot move below `flui-widgets`. The UI runtime's composition names widget types:
-`use flui_view::environment::{GestureArenaScope, VsyncScope}; use flui_widgets::FocusRoot;`
-(`crates/flui-runtime/src/ui_runtime/attach.rs`), and `flui-app`'s agent pages and tests import
-the catalog's widgets.
+The runtime's root composition names only presentation-environment views:
+`use flui_view::environment::{FocusTreeRoot, GestureArenaScope, VsyncScope};`
+(`crates/flui-runtime/src/ui_runtime/attach.rs`). The catalog's standard keyboard
+policy is a separate root half, `flui_widgets::app_root`, installed by `flui-app`
+and `HeadlessHost`. Consequently the runtime has no normal dependency on
+`flui-widgets`; the catalog remains a dev-dependency for runtime tests.
 
-The harness also sits in the wrong place for such a move. `flui-widgets` depends on
-`flui-testing` optionally for its `testing` feature (`crates/flui-widgets/Cargo.toml:89`), and
-22 modules under `crates/flui-widgets/src` use `crate::testing`
-(`grep -rln 'crate::testing' crates/flui-widgets/src | grep -v src/testing`), a 2,144-line
-module that `flui-material` and `flui-cupertino` tests also use. If `flui-testing` depends on a
-crate above `flui-widgets`, those in-crate unit tests would compile a second copy of
-`flui-widgets` through the dev cycle; the scopes installed by one copy would not be found by
-`TypeId` lookups in the other. That symptom is a hypothesis: the dev-cycle duplication is
-documented Cargo behaviour, the failure has not been compiled.
+The harness sits above both crates. `flui-testing` owns the widget test kit and
+depends normally on `flui-runtime` and `flui-widgets`, while the runtime and
+catalog may use that kit only through dev-dependencies. Production scope
+publication therefore has one copy and one `TypeId` identity; dev-only cycles do
+not add a production edge or a second root-composition path.
 
 The process-global side is narrower than it looks. One `thread_local! APP_RUNTIME` hosts every
 UI runtime on the loop (`crates/flui-app/src/app/runner/host.rs:25-47`), and its own comment says
@@ -101,8 +99,9 @@ both driving the same core". ADR-0037 §12 forbids an anemic `flui-presentation`
 
 ### 1. `flui-runtime` owns the frame
 
-A new crate, `flui-runtime`, tier K, kind `internal` (ADR-0081), ordered after `flui-widgets` and
-before `flui-testing` and `flui-sdk`. It owns:
+`flui-runtime`, tier K, kind `internal` (ADR-0081), has `order = 4` and sits before
+`flui-testing` and `flui-sdk` in build order. That ordering is not a catalog
+dependency: its normal dependency graph does not reach `flui-widgets`. It owns:
 
 - the UI runtime (`UiRuntime`, its command vocabulary and dispatcher) and each presentation's
   `PresentationState` (moved from `flui-app`);
@@ -280,12 +279,14 @@ the platform backend and the raster owner remain the three owners of ADR-0037 §
 
 ## Alternatives considered
 
-- **`flui-runtime` below `flui-widgets`.** The UI runtime's composition installs widget scopes;
-  placing the runtime lower requires moving those first, or replacing them with trait objects
-  for no second implementation.
+- **Let `flui-runtime` depend on `flui-widgets` for the root keyboard policy.**
+  Every runtime change would then rebuild the catalog and every catalog change
+  would rebuild the runtime, although the frame transaction needs no shortcut or
+  action widget. The host composes `app_root` above the runtime's environment
+  instead.
 - **The runtime inside `flui-view`.** It would pull scheduling, presentations and the command
-  vocabulary into the spine that every widget recompiles against, and still could not name
-  widget scopes.
+  vocabulary into the spine that every widget recompiles against, and still could not own the
+  catalog's keyboard policy without reversing the dependency.
 - **Keep the runtime in `flui-app` and let `flui-testing` depend on `flui-app`.** The test driver
   would link the platform backends, the engine and wgpu; headless tests would stop being
   headless, and ADR-0081's K reach facts could not hold for `flui-testing`.
@@ -297,8 +298,7 @@ the platform backend and the raster owner remain the three owners of ADR-0037 §
 ## Consequences
 
 - The UI runtime-neutral registry, addressed owner-turn FIFO, checkout/restore discipline, deferred
-  UI runtime-map mutations and typed operation application move from
-  `crates/flui-app/src/app/runner/owner_dispatch.rs` and `app/runtime.rs` to `flui-runtime`.
+  UI runtime-map mutations and typed operation application live in `flui-runtime`.
   Native-window routing, surface application and the platform/application tails of an owner
   turn stay in `flui-app`; moving a file wholesale is not the goal. The review targets under
   15k lines for `flui-app`; that is a goal, not a measurement.
@@ -322,24 +322,27 @@ The crate is created first and filled in five moves, each independently mergeabl
 
 | Move | What moves or changes | Waits on |
 |---|---|---|
-| 1. Lanes (done) | `flui-runtime` is created: tier K, `internal`, `order = 4` (after `flui-widgets`; 5 until `flui-localizations` was deleted), layer 6, with no `flui-widgets` edge until the UI runtime core needs one. It holds the presentation lanes that need nothing from the UI runtime core: `epoch` (`TreeRevision`, `FrameCommitState`), `held_input` (`HeldPointerQueue`, `HeldPointerReplay`) and `semantics_host` (`SemanticsHost`). Items with no production caller compile only under `cfg(test)` or the `test-support` feature | — |
+| 1. Lanes (done) | `flui-runtime` is created: tier K, `internal`, `order = 4` (after `flui-widgets`; 5 until `flui-localizations` was deleted), layer 6, with no normal `flui-widgets` edge. Runtime tests may use the catalog through a dev-dependency. It holds the presentation lanes that need nothing from the UI runtime core: `epoch` (`TreeRevision`, `FrameCommitState`), `held_input` (`HeldPointerQueue`, `HeldPointerReplay`) and `semantics_host` (`SemanticsHost`). Items with no production caller compile only under `cfg(test)` or the `test-support` feature | — |
 | 2. Frame sink (done) | `FrameSink` and `SubmitVerdict` (engine-free; they name only `flui_layer::Scene`) move to `flui_runtime::sink`, and `PerformanceStats` to `flui_runtime::performance_stats` (it is fed while the layer tree is built, not at submit); `RasterLane<B>` and `DirectSink` stay in `flui-app` and implement the trait | move 1 |
 | 3. Execution (done) | `ExecutionServices` (ADR-0047) moves to `flui_runtime::execution`; `flui-app` re-exports `ComputeJob`, `DeterministicExecutors`, `HostComputePool`, `HostExecutors`, `HostIoPool`, `IoFuture` and `SpawnError`, so their public paths do not change. `allowed-dependents = ["flui-app"]` on the runtime keeps ADR-0047's invariant true now that the services are `pub`: only a host crate (one of the runtime's `allowed-dependents`) constructs `ExecutionServices`, and no other workspace crate reaches the pools | move 1 |
-| 4. Runtime core (moved; acceptance waits on CI's `cross-typecheck`, `wasm-check` and `wasm-test`) | `ui_runtime` (with `attach`, whose root wrappers are `flui-widgets`'), `presentation`, `presentation_forest`, `lifecycle_state`, `frame_failure`, `media_query_root` (with its window constructor: it names only `PlatformWindow`, and its only callers are `PresentationState`'s constructors), `renderer_binding` (`RenderingBinding`) and the UI runtime's `RuntimeServices`/`next_identity`; the ADR-0048 `catch_unwind` moves unchanged. The UI runtime renders through `UiRuntime::render_frame(&mut impl FrameSink)` and names no engine type: `flui-app`'s `RuntimeRaster` trait keeps the engine-backed entry points (`render_frame_entered` over a `DirectSink`, `render_frame_on_lane`). The UI runtime tests move with a headless sink (`flui_runtime::testing::ScriptedSink`, under `test-support`), and `UiRuntime::enter_for_close` is deleted. Items `flui-app` calls in production are `pub`; items only its tests call are `pub` under `test-support`. Three names the UI runtime used that no runtime edge may carry moved down first: `PlatformAccessibility` to `flui-semantics` (ADR-0082 §2, amended), `REDACTED_VALUE` to `flui_foundation::diagnostics` (only composition roots may depend on `flui-log`), and the hot-reload tier, which the UI runtime now takes as `flui_runtime::reload::ReloadTier` and `flui-app` translates from `flui-hot-reload`'s | `PlatformWindow` in `flui-platform` (ADR-0082 §3, second change), since `PresentationState` and `UiRuntime` name it; moves 2 and 3 |
+| 4. Runtime core (moved; acceptance waits on CI's `cross-typecheck`, `wasm-check` and `wasm-test`) | `ui_runtime` (with `attach`, whose root wrappers come from `flui_view::environment`), `presentation`, `presentation_forest`, `lifecycle_state`, `frame_failure`, `media_query_root` (with its window constructor: it names only `PlatformWindow`, and its only callers are `PresentationState`'s constructors), `renderer_binding` (`RenderingBinding`) and the UI runtime's `RuntimeServices`/`next_identity`; the ADR-0048 `catch_unwind` moves unchanged. The UI runtime renders through `UiRuntime::render_frame(&mut impl FrameSink)` and names no engine type: `flui-app`'s native frame drivers and raster lane keep the engine-backed entry points around `UiRuntime::pump`. The UI runtime tests move with a headless sink (`flui_runtime::testing::ScriptedSink`, under `test-support`), and `UiRuntime::enter_for_close` is deleted. Items `flui-app` calls in production are `pub`; items only its tests call are `pub` under `test-support`. Three names the UI runtime used that no runtime edge may carry moved down first: `PlatformAccessibility` to `flui-semantics` (ADR-0082 §2, amended), `REDACTED_VALUE` to `flui_foundation::diagnostics` (only composition roots may depend on `flui-log`), and the hot-reload tier, which the UI runtime now takes as `flui_runtime::reload::ReloadTier` and `flui-app` translates from `flui-hot-reload`'s | `PlatformWindow` in `flui-platform` (ADR-0082 §3, second change), since `PresentationState` and `UiRuntime` name it; moves 2 and 3 |
 | 5a. Owner FIFO correctness (done; platform-target acceptance waits on CI) | Before extraction, replace the per-UI runtime/rejection dispatch with one host-wide FIFO of addressed owner work. A reentrant dispatch to any UI runtime appends instead of recursing or being lost; execution-time admission drops a target made stale by earlier work; checkout restoration and UI runtime-owning drops remain panic-safe and happen outside live mutable host borrows. `NestedCrossRuntimeDispatchRejected` is gone. This transitional queue retains the pre-existing unbounded drain-until-empty policy and private `RuntimeTask` vocabulary; neither is an extraction contract | move 4 |
 | 5b. Bounded owner batches (done; platform-target acceptance waits on CI) | Bound each continuation callback and request one sequence-stamped later opportunity when work remains. Fresh native roots and carried FIFO entries share the callback budget; a root stays synchronous while budget remains, and excess roots join the FIFO. Terminal close admission fences later work for that exact presentation incarnation. Desktop/iOS use their owner signal, Android uses a non-dirty redraw poke, and web consumes the continuation on the next RAF. Deterministic tests prove a self-enqueueing cross-UI runtime chain yields at every budget boundary and that fresh roots cannot extend a continuation beyond its budget | move 5a |
-| 5c. Closed owner operations | Replace arbitrary `RuntimeTask::Frame`/`Pump` closures with target-typed presentation, UI runtime and registry operations plus explicit pump/background-pump methods. Give lossless transitions, latest-value state and edge-coalesced wakes distinct admission rules. True cross-thread producers use a bounded typed ingress plus a wake capability; the owner-local dispatcher remains `!Send` | move 5b |
-| 5d. Transaction and host extraction (the pump has moved; acceptance of its Android, iOS and wasm sites waits on CI's `cross-typecheck`, `wasm-check` and `wasm-test`) | `UiRuntime::pump` absorbs the runners' `drive_frame_with_lane` calls: every runner's frame wake is its gate, then the pump, then its pacing; the device-recovery wrapper brackets the whole pump; the background arm is `UiRuntime::pump_background`; `flui-app`'s `RuntimeRaster` is test-only. Extract the UI runtime-neutral registry, FIFO, checkout and deferred-mutation machinery as ordinary `flui_runtime::OwnerHost`. `APP_RUNTIME` remains the sole TLS in `flui-app` and contains it beside the `WindowRegistry`, native frame drivers and other host-only state; no platform, engine, application-service or execution-pool owner moves with it. The pump verification tests remain in `flui-runtime`, where the pump lives: they reach its crate-private pipeline. Rollback: revert (no `legacy-frame-driver` feature, see `## Consequences`) | move 5c |
+| 5c. Closed owner operations (done) | Target-typed presentation, UI runtime and registry operations plus explicit pump/background-pump methods replace arbitrary `RuntimeTask::Frame`/`Pump` closures. Lossless transitions, latest-value state and edge-coalesced wakes have distinct admission rules. True cross-thread producers use a bounded typed ingress plus a wake capability; the owner-local dispatcher remains `!Send` | move 5b |
+| 5d. Transaction and host extraction (done; acceptance of the Android, iOS and wasm sites waits on CI's `cross-typecheck`, `wasm-check` and `wasm-test`) | `UiRuntime::pump` is the frame transaction: every runner's frame wake is its gate, then the pump, then its pacing; the device-recovery wrapper brackets the whole pump, and the background arm is `UiRuntime::pump_background`. Native frame drivers and the raster lane stay in `flui-app`. `flui_runtime::OwnerHost` owns the UI runtime-neutral registry, FIFO, checkout and deferred-mutation machinery and applies the typed operations. `APP_RUNTIME` remains the sole TLS in `flui-app` and contains the installed host beside the `WindowRegistry`, native frame drivers and other host-only state; no platform, engine, application-service or execution-pool owner moves with it. The pump verification tests remain in `flui-runtime`, where the pump lives: they reach its crate-private pipeline | move 5c |
 | 6a. Test driver on the pump (done) | `flui-testing` moves above the runtime (`order = 6`, a normal dependent the runtime admits beside `flui-app`) and absorbs `flui_widgets::testing` as `flui_testing::widgets`; `flui-widgets` loses its `testing` feature. A UI runtime takes its clock as a `ClockSource`, so one `ManualClock` drives its frame time, gesture deadlines and produce gate. `HeadlessHost` hosts a `UiRuntime` over a headless window and sink and raises a contained frame failure after the pump, the first one authoritative. The widget harness (`lay_out`, `harness::mount`) runs every frame, the mount included, through `UiRuntime::pump`; the tests that pinned what the old driver lacked (no root `MediaQuery` or `VsyncScope`, no post-frame lanes, no text-input capability) mount on `HeadlessBinding` or assert the UI runtime's behaviour | move 4 |
 | 6b. Substrate suites on the pump | `HeadlessBinding::pump_frame`, `run_pipeline` and `pump_presentation`/`pump_all` are deleted; the raw-owner suites (`flui-view`, animation, scheduler, interaction, `flui-widgets`' `perf` target and its baseline, the facade's `tests/*.rs`) mount under the UI runtime's root scopes, which changes their tree shapes and needs its own review; per-presentation clocks become separate UI runtimes | move 6a |
 
-§2 (sealing the entry points) and the widgets' inline test modules follow move 5d. Move 6 does
+§2 (sealing the entry points) and the widgets' inline test modules remain. Move 6 does
 not wait on 5c or 5d: §4 keeps the test driver off `OwnerHost`, so it needs only the pump.
 
 `cargo xtask reach` (ADR-0081 §2) checks the K-set fact for `flui-runtime` over every root
 build: its tier K forbids `flui-native`, `winit`, `android-activity`, `ndk`, `windows`,
 `objc2-app-kit`, `objc2-ui-kit`, `wgpu`, `flui-engine` and `flui-app`, and no
-`reach-exceptions` entry excuses any of them.
+`reach-exceptions` entry excuses any of them. The crate-local
+`reach-forbid = ["flui-widgets"]` also rejects a normal or transitive production
+path to the catalog. Its dev-dependency for tests is not an exception to that
+production rule.
 
 Two defects the UI runtime core would have carried across are fixed with move 1:
 

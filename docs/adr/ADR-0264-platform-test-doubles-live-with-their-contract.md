@@ -50,9 +50,15 @@ Chosen option: 1.
    ADR-0151 §6 moves to `flui-interaction::text_input`, and `flui-platform` cannot depend on
    `flui-interaction`, so it is `flui_interaction::testing::InMemoryTextStore`, moved with that
    policy. The tests that exercise it with the contract's projection and gate move with it.
-3. The headless host's receivers are its own production types in `flui-native`, unnamed outside
-   it: `HeadlessHaptics` plays every request on the window's actuator and keeps nothing. A test
-   that asserts what played installs the kit's double.
+3. The headless host's receivers are its own production types in `flui-native` and keep no call
+   history: `HeadlessHaptics` plays every request on the window's actuator,
+   `HeadlessTextInput` and `HeadlessSystemChrome` drop their requests, and
+   `HeadlessAccessibility` drops published trees while retaining only its activation state and
+   listener. `HeadlessWindow` keeps current window-system state, not command or input-region
+   histories. A test that asserts deliveries opts its platform into
+   `flui_native::testing`'s doubles explicitly with `HeadlessPlatform::with_test_doubles`;
+   windows opened afterwards record those deliveries. The `testing` feature alone changes no
+   production selection.
 4. `flui-testing` enables the kits it builds on and re-exports their doubles where its own API
    hands them out (`TestHost::haptic_actuator` returns `flui_platform::testing::FakeHaptics`).
 
@@ -74,6 +80,10 @@ in `flui_platform::haptics` would be scanned as production code that a test reac
 `FakeHaptics` compiles only under `flui-platform`'s `testing` feature, so a consumer build that
 names it without the feature fails; `stale_haptic_source_plays_on_the_window_actuator` in
 `crates/flui-native/src/haptics/degradation/tests.rs` pins the headless receiver.
+`production_headless_keeps_current_state_without_recording` and
+`test_doubles_record_exact_histories_when_explicitly_installed` in
+`crates/flui-native/tests/headless_test_doubles.rs` pin the production/opt-in split through the
+public window API.
 
 ## Pros and cons of the options
 

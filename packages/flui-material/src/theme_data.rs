@@ -1,10 +1,16 @@
 //! [`ThemeData`] — the value [`crate::Theme`] publishes to a subtree.
 
+use std::any::{Any, TypeId};
+use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::Debug;
+use std::rc::Rc;
+
 use flui_sdk::geometry::EdgeInsets;
-use flui_sdk::painting::TextStyle;
-use flui_sdk::painting::{BorderRadius, BorderSide, BoxDecoration, Color};
+use flui_sdk::painting::styling::{BorderRadius, BorderSide, BoxDecoration, Color};
+use flui_sdk::painting::typography::TextStyle;
+use flui_sdk::pipeline::FocusRingStyle;
 use flui_sdk::platform::{Brightness, TargetPlatform};
-use flui_sdk::widgets::{FocusRingStyle, SelectionStyle, WidgetStateProperty};
+use flui_sdk::widgets::{SelectionStyle, WidgetStateProperty};
 
 use crate::button_style::ButtonStyle;
 use crate::color_scheme::ColorScheme;
@@ -18,6 +24,64 @@ use crate::typography;
 /// `*ThemeData` color/side slot in this module uses (`fill_color`,
 /// `check_color`, `overlay_color`, and friends).
 type StateColor = WidgetStateProperty<Option<Color>>;
+
+/// A typed component configuration stored in [`ThemeData`].
+///
+/// Component themes interpolate by switching to `other` halfway through an
+/// animation. A component with continuous values can override [`lerp_to`](Self::lerp_to)
+/// while retaining the same typed storage and dependency tracking.
+pub trait ComponentTheme: Clone + Debug + PartialEq + 'static {
+    /// Interpolate this component theme toward `other`.
+    #[must_use]
+    fn lerp_to(&self, other: &Self, t: f64) -> Self {
+        if t < 0.5 { self.clone() } else { other.clone() }
+    }
+}
+
+trait ErasedComponentTheme: Debug {
+    fn as_any(&self) -> &dyn Any;
+    fn content_eq(&self, other: &dyn ErasedComponentTheme) -> bool;
+    fn lerp_to(&self, other: &dyn ErasedComponentTheme, t: f64) -> Rc<dyn ErasedComponentTheme>;
+}
+
+#[derive(Debug)]
+struct TypedComponentTheme<T: ComponentTheme>(T);
+
+impl<T: ComponentTheme> ErasedComponentTheme for TypedComponentTheme<T> {
+    fn as_any(&self) -> &dyn Any {
+        &self.0
+    }
+
+    fn content_eq(&self, other: &dyn ErasedComponentTheme) -> bool {
+        let other = other
+            .as_any()
+            .downcast_ref::<T>()
+            .expect("BUG: component values are compared only under matching TypeId keys");
+        self.0 == *other
+    }
+
+    fn lerp_to(&self, other: &dyn ErasedComponentTheme, t: f64) -> Rc<dyn ErasedComponentTheme> {
+        let other = other
+            .as_any()
+            .downcast_ref::<T>()
+            .expect("BUG: component values are interpolated only under matching TypeId keys");
+        Rc::new(TypedComponentTheme(self.0.lerp_to(other, t)))
+    }
+}
+
+impl PartialEq for dyn ErasedComponentTheme {
+    fn eq(&self, other: &Self) -> bool {
+        self.content_eq(other)
+    }
+}
+
+type ComponentMap = BTreeMap<TypeId, Rc<dyn ErasedComponentTheme>>;
+
+#[derive(Clone, Debug, PartialEq)]
+enum ComponentPatch {
+    Insert(Rc<dyn ErasedComponentTheme>),
+    Remove,
+}
 
 /// The baseline focus ring in `scheme`'s colours: the shape of
 /// [`FocusRingStyle::BUILT_IN`], a 2 px `on_surface` band outside a 1 px
@@ -76,10 +140,9 @@ fn default_text_theme(brightness: Brightness, on_surface: Color) -> TextTheme {
 /// slot's `style` participates in the three-tier cascade.
 ///
 /// **Named reduction**: a subtree could override the style with a
-/// standalone `ElevatedButtonTheme` `InheritedTheme` widget, without
-/// touching the whole [`ThemeData`]; FLUI V1 has no per-widget
-/// `InheritedTheme` wrappers yet, so `ElevatedButton` reads only this
-/// [`ThemeData`] slot via [`Theme::of`](crate::Theme::of).
+/// standalone `ElevatedButtonTheme` `InheritedTheme` widget; FLUI V1 has no
+/// per-widget `InheritedTheme` wrappers yet, so `ElevatedButton` reads this
+/// typed component entry through [`Theme::component_of`](crate::Theme::component_of).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ElevatedButtonThemeData {
     /// Overrides for [`ElevatedButton`](crate::ElevatedButton)'s default
@@ -717,6 +780,35 @@ pub struct DataTableThemeData {
     pub checkbox_horizontal_margin: Option<f64>,
 }
 
+macro_rules! component_themes {
+    ($($theme:ty),+ $(,)?) => {
+        $(impl ComponentTheme for $theme {})+
+    };
+}
+
+component_themes!(
+    ElevatedButtonThemeData,
+    FilledButtonThemeData,
+    OutlinedButtonThemeData,
+    TextButtonThemeData,
+    IconButtonThemeData,
+    AppBarThemeData,
+    CardThemeData,
+    CarouselViewThemeData,
+    DialogThemeData,
+    FabThemeData,
+    InputDecorationThemeData,
+    ListTileThemeData,
+    DividerThemeData,
+    CheckboxThemeData,
+    ChipThemeData,
+    SwitchThemeData,
+    RadioThemeData,
+    NavigationBarThemeData,
+    TabBarThemeData,
+    DataTableThemeData,
+);
+
 /// Which Material design a [`ThemeData`] follows.
 ///
 /// One choice that components read rather than a flag per component, so an app switches
@@ -735,31 +827,24 @@ pub enum MaterialStyle {
 /// Visual-style configuration provided to descendants by a
 /// [`Theme`](crate::Theme) ancestor.
 ///
-/// Two ready-made M3 baselines are available: [`ThemeData::light`] and
-/// [`ThemeData::dark`]. `#[non_exhaustive]`: further component themes (input
-/// decoration and any future widget's own slot) land as additional fields
-/// alongside their owning widgets, not in this theming-foundation unit — see
-/// the crate root docs' scope section.
-///
-/// Implemented subset: [`color_scheme`](Self::color_scheme),
-/// [`text_theme`](Self::text_theme), and the button-family/`AppBar`/`Card`/
-/// `Dialog`/`FloatingActionButton` component-theme slots below (each
-/// narrowed to its owning widget's actually-consumed fields — see that
-/// slot's own doc comment). Deferred: `iconTheme`, `extensions`, `platform`,
-/// `useMaterial3` (this crate is M3-only — there is no M2 mode to switch
-/// away from), and every other widget's component theme (`inputDecorationTheme`
-/// and friends) until that widget lands.
+/// The seven ordinary fields retain static dependency masks. Component
+/// configurations live in typed entries instead: install one with
+/// [`with_component`](Self::with_component), read it with
+/// [`component`](Self::component), and remove it with
+/// [`without_component`](Self::without_component). Entries are local to each
+/// theme value and may use any [`ComponentTheme`] implementation.
 ///
 /// # Example
 ///
 /// ```rust
-/// use flui_material::ThemeData;
+/// use flui_material::{CardThemeData, ThemeData};
 ///
-/// let dark = ThemeData::dark();
-/// assert_eq!(dark.brightness(), dark.color_scheme.brightness);
+/// let theme = ThemeData::dark().with_component(CardThemeData { elevation: Some(2.0), ..Default::default() });
+/// assert_eq!(theme.component::<CardThemeData>().and_then(|card| card.elevation), Some(2.0));
+/// assert_eq!(theme.brightness(), theme.color_scheme.brightness);
 /// ```
 #[non_exhaustive]
-#[derive(Debug, Clone, PartialEq, flui_sdk::view::prelude::InheritedData)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ThemeData {
     /// The Material 3 color roles this theme provides.
     pub color_scheme: ColorScheme,
@@ -780,79 +865,6 @@ pub struct ThemeData {
     /// focused and dim to `on_surface` after a blur.
     pub selection: SelectionStyle,
 
-    /// Overrides [`ElevatedButton`](crate::ElevatedButton)'s default style.
-    /// `None` (the default): no override, `ElevatedButton` uses its own
-    /// M3 token table verbatim.
-    pub elevated_button_theme: Option<ElevatedButtonThemeData>,
-
-    /// Overrides [`FilledButton`](crate::FilledButton)'s default style.
-    pub filled_button_theme: Option<FilledButtonThemeData>,
-
-    /// Overrides [`OutlinedButton`](crate::OutlinedButton)'s default style.
-    pub outlined_button_theme: Option<OutlinedButtonThemeData>,
-
-    /// Overrides [`TextButton`](crate::TextButton)'s default style.
-    pub text_button_theme: Option<TextButtonThemeData>,
-
-    /// Overrides [`IconButton`](crate::IconButton)'s default style.
-    pub icon_button_theme: Option<IconButtonThemeData>,
-
-    /// Overrides [`AppBar`](crate::AppBar)'s M3 token defaults, per field.
-    pub app_bar_theme: Option<AppBarThemeData>,
-
-    /// Overrides [`Card`](crate::Card)'s M3 token defaults, per field.
-    pub card_theme: Option<CardThemeData>,
-
-    /// Overrides [`CarouselView`](crate::CarouselView)'s M3 token defaults, per field.
-    pub carousel_view_theme: Option<CarouselViewThemeData>,
-
-    /// Overrides [`Dialog`](crate::Dialog)/[`AlertDialog`](crate::AlertDialog)'s
-    /// M3 token defaults, per field.
-    pub dialog_theme: Option<DialogThemeData>,
-
-    /// Overrides [`FloatingActionButton`](crate::FloatingActionButton)'s M3
-    /// token defaults, per field.
-    pub floating_action_button_theme: Option<FabThemeData>,
-
-    /// Overrides [`InputDecorator`](crate::input_decorator::InputDecorator)'s
-    /// M3 token defaults, per field.
-    pub input_decoration_theme: Option<InputDecorationThemeData>,
-
-    /// Overrides [`ListTile`](crate::ListTile)'s M3 token defaults, per
-    /// field.
-    pub list_tile_theme: Option<ListTileThemeData>,
-
-    /// Overrides [`Divider`](crate::Divider)/
-    /// [`VerticalDivider`](crate::VerticalDivider)'s M3 token defaults, per
-    /// field.
-    pub divider_theme: Option<DividerThemeData>,
-
-    /// Overrides [`Checkbox`](crate::Checkbox)'s M3 token defaults, per
-    /// field.
-    pub checkbox_theme: Option<CheckboxThemeData>,
-
-    /// Overrides [`Chip`](crate::Chip)/[`FilterChip`](crate::FilterChip)'s
-    /// M3 token defaults, per field.
-    pub chip_theme: Option<ChipThemeData>,
-
-    /// Overrides [`Switch`](crate::Switch)'s M3 token defaults, per field.
-    pub switch_theme: Option<SwitchThemeData>,
-
-    /// Overrides [`Radio`](crate::Radio)'s M3 token defaults, per field.
-    pub radio_theme: Option<RadioThemeData>,
-
-    /// Overrides [`NavigationBar`](crate::NavigationBar)'s M3 token defaults,
-    /// per field.
-    pub navigation_bar_theme: Option<NavigationBarThemeData>,
-
-    /// Overrides [`TabBar`](crate::TabBar)'s M3 secondary token defaults,
-    /// per field.
-    pub tab_bar_theme: Option<TabBarThemeData>,
-
-    /// Overrides [`DataTable`](crate::DataTable)'s M3 token defaults, per
-    /// field.
-    pub data_table_theme: Option<DataTableThemeData>,
-
     /// The platform this theme adapts to: today, which page transition
     /// [`page_transitions_theme`](Self::page_transitions_theme) picks. The
     /// baselines use the platform the app was built for.
@@ -868,81 +880,113 @@ pub struct ThemeData {
     /// [`MaterialApp`](crate::MaterialApp) installs the one for
     /// [`platform`](Self::platform).
     pub page_transitions_theme: PageTransitionsTheme,
+
+    components: ComponentMap,
 }
 
 impl ThemeData {
+    fn baseline(color_scheme: &ColorScheme) -> Self {
+        let text_theme = default_text_theme(color_scheme.brightness, color_scheme.on_surface);
+        Self {
+            text_theme,
+            focus_ring: focus_ring(color_scheme),
+            selection: selection(color_scheme),
+            color_scheme: *color_scheme,
+            platform: TargetPlatform::current(),
+            style: MaterialStyle::default(),
+            page_transitions_theme: PageTransitionsTheme::default(),
+            components: ComponentMap::new(),
+        }
+    }
+
     /// The M3 light baseline: [`ColorScheme::light`] plus its derived
     /// default [`TextTheme`] (see `default_text_theme`, this module, private).
     #[must_use]
     pub fn light() -> Self {
-        let color_scheme = ColorScheme::light();
-        let text_theme = default_text_theme(color_scheme.brightness, color_scheme.on_surface);
-        Self {
-            color_scheme,
-            text_theme,
-            focus_ring: focus_ring(&color_scheme),
-            selection: selection(&color_scheme),
-            elevated_button_theme: None,
-            filled_button_theme: None,
-            outlined_button_theme: None,
-            text_button_theme: None,
-            icon_button_theme: None,
-            app_bar_theme: None,
-            card_theme: None,
-            carousel_view_theme: None,
-            dialog_theme: None,
-            floating_action_button_theme: None,
-            input_decoration_theme: None,
-            list_tile_theme: None,
-            divider_theme: None,
-            checkbox_theme: None,
-            chip_theme: None,
-            switch_theme: None,
-            radio_theme: None,
-            navigation_bar_theme: None,
-            tab_bar_theme: None,
-            data_table_theme: None,
-            style: MaterialStyle::default(),
-            platform: TargetPlatform::current(),
-            page_transitions_theme: PageTransitionsTheme::default(),
-        }
+        Self::baseline(&ColorScheme::light())
     }
 
     /// The M3 dark baseline: [`ColorScheme::dark`] plus its derived default
     /// [`TextTheme`] (see `default_text_theme`, this module, private).
     #[must_use]
     pub fn dark() -> Self {
-        let color_scheme = ColorScheme::dark();
-        let text_theme = default_text_theme(color_scheme.brightness, color_scheme.on_surface);
-        Self {
-            color_scheme,
-            text_theme,
-            focus_ring: focus_ring(&color_scheme),
-            selection: selection(&color_scheme),
-            elevated_button_theme: None,
-            filled_button_theme: None,
-            outlined_button_theme: None,
-            text_button_theme: None,
-            icon_button_theme: None,
-            app_bar_theme: None,
-            card_theme: None,
-            carousel_view_theme: None,
-            dialog_theme: None,
-            floating_action_button_theme: None,
-            input_decoration_theme: None,
-            list_tile_theme: None,
-            divider_theme: None,
-            checkbox_theme: None,
-            chip_theme: None,
-            switch_theme: None,
-            radio_theme: None,
-            navigation_bar_theme: None,
-            tab_bar_theme: None,
-            data_table_theme: None,
-            style: MaterialStyle::default(),
-            platform: TargetPlatform::current(),
-            page_transitions_theme: PageTransitionsTheme::default(),
+        Self::baseline(&ColorScheme::dark())
+    }
+
+    /// Return a theme with `component` inserted or replacing its previous value.
+    #[must_use]
+    pub fn with_component<T: ComponentTheme>(mut self, component: T) -> Self {
+        self.components
+            .insert(TypeId::of::<T>(), Rc::new(TypedComponentTheme(component)));
+        self
+    }
+
+    /// Return a theme without the `T` component entry.
+    #[must_use]
+    pub fn without_component<T: ComponentTheme>(mut self) -> Self {
+        self.components.remove(&TypeId::of::<T>());
+        self
+    }
+
+    /// Borrow the `T` component entry, or `None` when this theme does not contain it.
+    #[must_use]
+    pub fn component<T: ComponentTheme>(&self) -> Option<&T> {
+        self.components.get(&TypeId::of::<T>()).map(|component| {
+            component
+                .as_any()
+                .downcast_ref::<T>()
+                .expect("BUG: a component map entry must match its TypeId key")
+        })
+    }
+
+    pub(crate) fn changed_component_types(&self, old: &Self) -> Vec<TypeId> {
+        self.components
+            .keys()
+            .chain(old.components.keys())
+            .copied()
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .filter(|id| self.components.get(id) != old.components.get(id))
+            .collect()
+    }
+
+    pub(crate) fn lerp_with_base(
+        &self,
+        other: &Self,
+        t: f64,
+        color_scheme: &ColorScheme,
+        text_theme: TextTheme,
+        focus_ring: FocusRingStyle,
+        selection: SelectionStyle,
+    ) -> Self {
+        let mut components = ComponentMap::new();
+        let keys = self
+            .components
+            .keys()
+            .chain(other.components.keys())
+            .copied()
+            .collect::<BTreeSet<_>>();
+        for id in keys {
+            match (self.components.get(&id), other.components.get(&id)) {
+                (Some(from), Some(to)) => {
+                    components.insert(id, from.lerp_to(&**to, t));
+                }
+                (Some(from), None) if t < 0.5 => {
+                    components.insert(id, Rc::clone(from));
+                }
+                (None, Some(to)) if t >= 0.5 => {
+                    components.insert(id, Rc::clone(to));
+                }
+                _ => {}
+            }
         }
+        let mut result = if t < 0.5 { self.clone() } else { other.clone() };
+        result.color_scheme = *color_scheme;
+        result.text_theme = text_theme;
+        result.focus_ring = focus_ring;
+        result.selection = selection;
+        result.components = components;
+        result
     }
 
     /// This theme's brightness, read from [`ColorScheme::brightness`].
@@ -951,34 +995,36 @@ impl ThemeData {
         self.color_scheme.brightness
     }
 
-    /// Return a copy of this theme with the given overrides applied.
+    /// Return a copy of this theme with the given base-field and component patches applied.
     ///
-    /// Build the patch with [`ThemeDataOverrides::default`] and struct-update
-    /// syntax — mirrors [`ColorScheme::copy_with`]'s patch-struct shape, for
-    /// the same reason: `ThemeData` is `#[non_exhaustive]`, and a positional
-    /// `Option<T>`-per-field signature would have to change (breaking every
-    /// caller) each time a component-theme slot is added. A patch struct
-    /// absorbs new fields as `..Default::default()`-compatible additions
-    /// instead.
-    ///
-    /// Narrowed to this crate's implemented subset and shaped as a struct
-    /// (Rust has no optional named parameters).
+    /// An absent component patch leaves that entry unchanged. Use
+    /// [`ThemeDataOverrides::without_component`] for explicit removal and
+    /// [`ThemeDataOverrides::with_component`] for insertion or replacement.
     ///
     /// # Example
     ///
     /// ```rust
-    /// use flui_material::{ThemeData, ThemeDataOverrides};
+    /// use flui_material::{CardThemeData, ThemeData, ThemeDataOverrides};
     ///
     /// let base = ThemeData::light();
-    /// let patched = base.copy_with(ThemeDataOverrides {
-    ///     color_scheme: Some(flui_material::ColorScheme::dark()),
-    ///     ..Default::default()
-    /// });
-    /// assert_eq!(patched.color_scheme, flui_material::ColorScheme::dark());
+    /// let patched = base.copy_with(ThemeDataOverrides::default()
+    ///     .with_component(CardThemeData { elevation: Some(3.0), ..Default::default() }));
+    /// assert_eq!(patched.component::<CardThemeData>().and_then(|card| card.elevation), Some(3.0));
     /// assert_eq!(patched.text_theme, base.text_theme);
     /// ```
     #[must_use]
     pub fn copy_with(&self, overrides: ThemeDataOverrides) -> Self {
+        let mut components = self.components.clone();
+        for (id, patch) in overrides.components {
+            match patch {
+                ComponentPatch::Insert(component) => {
+                    components.insert(id, component);
+                }
+                ComponentPatch::Remove => {
+                    components.remove(&id);
+                }
+            }
+        }
         Self {
             color_scheme: overrides.color_scheme.unwrap_or(self.color_scheme),
             text_theme: overrides
@@ -986,82 +1032,20 @@ impl ThemeData {
                 .unwrap_or_else(|| self.text_theme.clone()),
             focus_ring: overrides.focus_ring.unwrap_or(self.focus_ring),
             selection: overrides.selection.unwrap_or(self.selection),
-            // Each component-theme slot is itself already `Option<_>` on
-            // `ThemeData`, so — unlike `color_scheme`/`text_theme` above —
-            // the override field mirrors that `Option<_>` shape directly
-            // rather than doubling it: `Some(_)` replaces the whole slot,
-            // `None` leaves whatever this theme already had (`Some` or
-            // `None`) unchanged. See `ThemeDataOverrides`'s doc comment.
-            elevated_button_theme: overrides
-                .elevated_button_theme
-                .or_else(|| self.elevated_button_theme.clone()),
-            filled_button_theme: overrides
-                .filled_button_theme
-                .or_else(|| self.filled_button_theme.clone()),
-            outlined_button_theme: overrides
-                .outlined_button_theme
-                .or_else(|| self.outlined_button_theme.clone()),
-            text_button_theme: overrides
-                .text_button_theme
-                .or_else(|| self.text_button_theme.clone()),
-            icon_button_theme: overrides
-                .icon_button_theme
-                .or_else(|| self.icon_button_theme.clone()),
-            app_bar_theme: overrides
-                .app_bar_theme
-                .or_else(|| self.app_bar_theme.clone()),
-            card_theme: overrides.card_theme.or_else(|| self.card_theme.clone()),
-            carousel_view_theme: overrides
-                .carousel_view_theme
-                .or_else(|| self.carousel_view_theme.clone()),
-            dialog_theme: overrides.dialog_theme.or_else(|| self.dialog_theme.clone()),
-            floating_action_button_theme: overrides
-                .floating_action_button_theme
-                .or_else(|| self.floating_action_button_theme.clone()),
-            input_decoration_theme: overrides
-                .input_decoration_theme
-                .or_else(|| self.input_decoration_theme.clone()),
-            list_tile_theme: overrides
-                .list_tile_theme
-                .or_else(|| self.list_tile_theme.clone()),
-            divider_theme: overrides
-                .divider_theme
-                .or_else(|| self.divider_theme.clone()),
-            checkbox_theme: overrides
-                .checkbox_theme
-                .or_else(|| self.checkbox_theme.clone()),
-            chip_theme: overrides.chip_theme.or_else(|| self.chip_theme.clone()),
-            switch_theme: overrides.switch_theme.or_else(|| self.switch_theme.clone()),
-            radio_theme: overrides.radio_theme.or_else(|| self.radio_theme.clone()),
-            navigation_bar_theme: overrides
-                .navigation_bar_theme
-                .or_else(|| self.navigation_bar_theme.clone()),
-            tab_bar_theme: overrides
-                .tab_bar_theme
-                .or_else(|| self.tab_bar_theme.clone()),
-            data_table_theme: overrides
-                .data_table_theme
-                .or_else(|| self.data_table_theme.clone()),
             style: overrides.style.unwrap_or(self.style),
             platform: overrides.platform.unwrap_or(self.platform),
             page_transitions_theme: overrides
                 .page_transitions_theme
                 .unwrap_or_else(|| self.page_transitions_theme.clone()),
+            components,
         }
     }
 }
 
-/// Patch for [`ThemeData::copy_with`] — every field mirrors a [`ThemeData`]
-/// field, `None` meaning "leave unchanged".
+/// Patch for [`ThemeData::copy_with`].
 ///
-/// Deliberately **not** `#[non_exhaustive]` (unlike [`ThemeData`] itself):
-/// `#[non_exhaustive]` blocks external-crate struct-literal construction
-/// even via `..Default::default()` functional update, which is the only way
-/// callers build this patch — see [`ColorSchemeOverrides`](crate::ColorSchemeOverrides)'s
-/// doc comment for the same reasoning. Every future component-theme slot on
-/// [`ThemeData`] gets a matching field here; adding one is still additive
-/// for any caller already writing `..Default::default()`, without needing
-/// the `#[non_exhaustive]` ceremony.
+/// A base field set to `Some` replaces that field; `None` leaves it unchanged.
+/// Component patches are typed and distinguish an absent patch from removal.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ThemeDataOverrides {
     /// Overrides [`ThemeData::color_scheme`].
@@ -1072,56 +1056,80 @@ pub struct ThemeDataOverrides {
     pub focus_ring: Option<FocusRingStyle>,
     /// Overrides [`ThemeData::selection`].
     pub selection: Option<SelectionStyle>,
-    /// Replaces [`ThemeData::elevated_button_theme`] wholesale when `Some`;
-    /// `None` leaves it unchanged (see [`ThemeData::copy_with`]'s doc
-    /// comment on why this mirrors `Option<ElevatedButtonThemeData>`
-    /// directly rather than doubling the `Option`).
-    pub elevated_button_theme: Option<ElevatedButtonThemeData>,
-    /// Replaces [`ThemeData::filled_button_theme`] wholesale when `Some`.
-    pub filled_button_theme: Option<FilledButtonThemeData>,
-    /// Replaces [`ThemeData::outlined_button_theme`] wholesale when `Some`.
-    pub outlined_button_theme: Option<OutlinedButtonThemeData>,
-    /// Replaces [`ThemeData::text_button_theme`] wholesale when `Some`.
-    pub text_button_theme: Option<TextButtonThemeData>,
-    /// Replaces [`ThemeData::icon_button_theme`] wholesale when `Some`.
-    pub icon_button_theme: Option<IconButtonThemeData>,
-    /// Replaces [`ThemeData::app_bar_theme`] wholesale when `Some`.
-    pub app_bar_theme: Option<AppBarThemeData>,
-    /// Replaces [`ThemeData::card_theme`] wholesale when `Some`.
-    pub card_theme: Option<CardThemeData>,
-    /// Replaces [`ThemeData::carousel_view_theme`] wholesale when `Some`.
-    pub carousel_view_theme: Option<CarouselViewThemeData>,
-    /// Replaces [`ThemeData::dialog_theme`] wholesale when `Some`.
-    pub dialog_theme: Option<DialogThemeData>,
-    /// Replaces [`ThemeData::floating_action_button_theme`] wholesale when
-    /// `Some`.
-    pub floating_action_button_theme: Option<FabThemeData>,
-    /// Replaces [`ThemeData::input_decoration_theme`] wholesale when `Some`.
-    pub input_decoration_theme: Option<InputDecorationThemeData>,
-    /// Replaces [`ThemeData::list_tile_theme`] wholesale when `Some`.
-    pub list_tile_theme: Option<ListTileThemeData>,
-    /// Replaces [`ThemeData::divider_theme`] wholesale when `Some`.
-    pub divider_theme: Option<DividerThemeData>,
-    /// Replaces [`ThemeData::checkbox_theme`] wholesale when `Some`.
-    pub checkbox_theme: Option<CheckboxThemeData>,
-    /// Replaces [`ThemeData::chip_theme`] wholesale when `Some`.
-    pub chip_theme: Option<ChipThemeData>,
-    /// Replaces [`ThemeData::switch_theme`] wholesale when `Some`.
-    pub switch_theme: Option<SwitchThemeData>,
-    /// Replaces [`ThemeData::radio_theme`] wholesale when `Some`.
-    pub radio_theme: Option<RadioThemeData>,
-    /// Replaces [`ThemeData::navigation_bar_theme`] wholesale when `Some`.
-    pub navigation_bar_theme: Option<NavigationBarThemeData>,
-    /// Replaces [`ThemeData::tab_bar_theme`] wholesale when `Some`.
-    pub tab_bar_theme: Option<TabBarThemeData>,
-    /// Replaces [`ThemeData::data_table_theme`] wholesale when `Some`.
-    pub data_table_theme: Option<DataTableThemeData>,
     /// Overrides [`ThemeData::style`].
     pub style: Option<MaterialStyle>,
     /// Overrides [`ThemeData::platform`].
     pub platform: Option<TargetPlatform>,
     /// Overrides [`ThemeData::page_transitions_theme`].
     pub page_transitions_theme: Option<PageTransitionsTheme>,
+    components: BTreeMap<TypeId, ComponentPatch>,
+}
+
+impl ThemeDataOverrides {
+    /// Insert or replace the `T` component when the patch is applied.
+    #[must_use]
+    pub fn with_component<T: ComponentTheme>(mut self, component: T) -> Self {
+        self.components.insert(
+            TypeId::of::<T>(),
+            ComponentPatch::Insert(Rc::new(TypedComponentTheme(component))),
+        );
+        self
+    }
+
+    /// Remove the `T` component when the patch is applied.
+    #[must_use]
+    pub fn without_component<T: ComponentTheme>(mut self) -> Self {
+        self.components
+            .insert(TypeId::of::<T>(), ComponentPatch::Remove);
+        self
+    }
+}
+
+impl ThemeData {
+    /// Field mask of `color_scheme` (bit 0).
+    pub const FIELD_COLOR_SCHEME: flui_sdk::view::FieldMask<Self> =
+        flui_sdk::view::FieldMask::bit(0);
+    /// Field mask of `text_theme` (bit 1).
+    pub const FIELD_TEXT_THEME: flui_sdk::view::FieldMask<Self> = flui_sdk::view::FieldMask::bit(1);
+    /// Field mask of `focus_ring` (bit 2).
+    pub const FIELD_FOCUS_RING: flui_sdk::view::FieldMask<Self> = flui_sdk::view::FieldMask::bit(2);
+    /// Field mask of `selection` (bit 3).
+    pub const FIELD_SELECTION: flui_sdk::view::FieldMask<Self> = flui_sdk::view::FieldMask::bit(3);
+    /// Field mask of `platform` (bit 4).
+    pub const FIELD_PLATFORM: flui_sdk::view::FieldMask<Self> = flui_sdk::view::FieldMask::bit(4);
+    /// Field mask of `style` (bit 5).
+    pub const FIELD_STYLE: flui_sdk::view::FieldMask<Self> = flui_sdk::view::FieldMask::bit(5);
+    /// Field mask of `page_transitions_theme` (bit 6).
+    pub const FIELD_PAGE_TRANSITIONS_THEME: flui_sdk::view::FieldMask<Self> =
+        flui_sdk::view::FieldMask::bit(6);
+}
+
+impl flui_sdk::view::InheritedData for ThemeData {
+    fn field_mask_diff(&self, other: &Self) -> flui_sdk::view::FieldMask<Self> {
+        let mut changed = flui_sdk::view::FieldMask::NONE;
+        if self.color_scheme != other.color_scheme {
+            changed = changed.union(Self::FIELD_COLOR_SCHEME);
+        }
+        if self.text_theme != other.text_theme {
+            changed = changed.union(Self::FIELD_TEXT_THEME);
+        }
+        if self.focus_ring != other.focus_ring {
+            changed = changed.union(Self::FIELD_FOCUS_RING);
+        }
+        if self.selection != other.selection {
+            changed = changed.union(Self::FIELD_SELECTION);
+        }
+        if self.platform != other.platform {
+            changed = changed.union(Self::FIELD_PLATFORM);
+        }
+        if self.style != other.style {
+            changed = changed.union(Self::FIELD_STYLE);
+        }
+        if self.page_transitions_theme != other.page_transitions_theme {
+            changed = changed.union(Self::FIELD_PAGE_TRANSITIONS_THEME);
+        }
+        changed
+    }
 }
 
 impl Default for ThemeData {

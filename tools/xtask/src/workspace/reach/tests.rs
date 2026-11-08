@@ -420,30 +420,22 @@ enum AppEdge {
     Normal,
 }
 
-/// The real facts' packages: flui-app's edge to flui-hot-reload, the
-/// facade's `hot-reload` feature bringing it in or not, and the host
-/// enabling its `app-plugin` or not.
-fn hot_reload(app: AppEdge, facade_brings_it: bool, host_enables: bool) -> Fixture {
-    let facade = if facade_brings_it {
-        &["dep:flui-hot-reload"][..]
-    } else {
-        &[]
-    };
-    let host = if host_enables {
-        Dep::normal().features(&["app-plugin"])
-    } else {
-        Dep::normal()
+/// The real facts' packages: flui-app's edge to flui-hot-reload and the
+/// facade's `hot-reload` feature bringing it in and enabling its `app-plugin`
+/// or not.
+fn hot_reload(app: AppEdge, facade_brings_it: bool, facade_enables_app_plugin: bool) -> Fixture {
+    let facade = match (facade_brings_it, facade_enables_app_plugin) {
+        (true, true) => &["dep:flui-hot-reload", "flui-hot-reload/app-plugin"][..],
+        (true, false) => &["dep:flui-hot-reload"][..],
+        (false, _) => &[],
     };
     let fixture = base()
         .member("flui-app", "H", &json!(null))
         .member("flui-hot-reload", "pkg", &json!(null))
-        .example("hot-reload-counter-host")
         .feature("flui-app", "default", &[])
         .feature("flui-hot-reload", "app-plugin", &[])
         .feature("flui", "hot-reload", facade)
-        .dep("flui", "flui-hot-reload", Dep::normal().optional())
-        .dep("hot-reload-counter-host", "flui-app", Dep::normal())
-        .dep("hot-reload-counter-host", "flui-hot-reload", host);
+        .dep("flui", "flui-hot-reload", Dep::normal().optional());
     match app {
         AppEdge::None => fixture,
         AppEdge::Feature => fixture

@@ -161,8 +161,6 @@ use signal::{OwnerSignal, SignalTransport};
 pub struct OwnerPlatform {
     platform: Arc<dyn Platform>,
     hooks: Arc<dyn OwnerHooks>,
-    // Slice 3 shrinks `platform` to `Arc<dyn OwnerOps>`; both fields stay
-    // private regardless.
     _owner_affine: PhantomData<*const ()>,
 }
 
@@ -635,8 +633,8 @@ impl WindowRequest {
 impl WindowRequest {
     /// Run the factory, once, on the owner thread: the window's options and
     /// its handler. The factory is application code: its panic is contained
-    /// here (logged, its payload retained) and the open fails with what it
-    /// said, so a loop draining requests carries on.
+    /// here (logged, its payload destroyed under containment) and the open
+    /// fails with what it said, so a loop draining requests carries on.
     pub(crate) fn build_on_owner(
         self,
     ) -> Result<(WindowOptions, Rc<dyn WindowHandler>), OpenWindowError> {

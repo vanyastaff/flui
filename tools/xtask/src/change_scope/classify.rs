@@ -960,7 +960,7 @@ pub(super) mod tests {
         let s = scope(&["tests/ui/thread_boundary/spawn.rs"]); // a directory under the root package's tests/
         assert_eq!(s.mode, Mode::Packages);
         assert!(s.packages.contains(&"flui".to_owned()));
-        let s = scope(&["examples/web_demo/src/lib.rs"]); // a separate package under examples/
+        let s = scope(&["crates/flui-native/examples/web_demo/src/lib.rs"]); // a separate example package
         assert_eq!(
             (s.mode, s.packages),
             (Mode::Packages, vec!["flui-web-demo".to_owned()])
