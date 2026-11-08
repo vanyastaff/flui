@@ -6,7 +6,7 @@
 - **Superseded-by:** [ADR-0281](ADR-0281-a-destructor-that-panics-during-an-unwind-aborts-as-in-std.md),
   only where a rejected configuration retains unproven callback owners without running their
   destructors: they are destroyed under the containment of the caller's recovery scope;
-  [ADR-0314](ADR-0314-synthetic-semantics-ids-use-a-tagged-generational-slot.md) for the identity-source encoding and release policy.
+  [ADR-0319](ADR-0319-synthetic-semantics-ids-use-a-tagged-generational-slot.md) for the identity-source encoding and release policy.
 - **Related:** [ADR-0206](ADR-0206-typed-semantics-attributes.md)
 
 ## Context
@@ -55,7 +55,7 @@ content. Removed render generations are pruned at the next assembly pass.
 
 The pipeline owns an opaque generational identity source throughout the
 presentation's lifetime, independently of replaceable `SemanticsOwner` values.
-ADR-0314 reserves the published top bit for synthetic identities and shares the
+ADR-0319 reserves the published top bit for synthetic identities and shares the
 `GenSlots` policy. Retiring a key releases its slot; reuse carries a new
 generation, and a terminal slot leaves circulation. Batch reservation is
 all-or-nothing and never wraps. Duplicate keys in one contribution list and

@@ -2,7 +2,7 @@
 
 - **Status:** Implemented (2026-11-06)
 - **Date:** 2026-11-04
-- **Superseded-by:** [ADR-0314](ADR-0314-synthetic-semantics-ids-use-a-tagged-generational-slot.md), §1 only for the packed generation's upper bound
+- **Superseded-by:** [ADR-0319](ADR-0319-synthetic-semantics-ids-use-a-tagged-generational-slot.md), §1 only for the packed generation's upper bound
 - **Related:** [ADR-0207](ADR-0207-host-input-boundary-and-timeline.md) §4 (the counter ids'
   issuance stays `flui_foundation`, the `IdMint` family); [ADR-0209](ADR-0209-nested-scroll-connection.md)
   (the input sequence's id and the mint contract it rests on);
@@ -59,7 +59,7 @@ storage.
 ### §1. A generation is a checked, 1-based, non-zero 31-bit value
 
 `flui_foundation::generation::Generation` is the type, minted only by the ledger of
-the next section. ADR-0314 reserves the packed key's top bit for a domain tag, so
+the next section. ADR-0319 reserves the packed key's top bit for a domain tag, so
 `LAST` is `0x7FFF_FFFF`:
 
 ```rust

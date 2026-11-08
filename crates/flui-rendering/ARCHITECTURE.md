@@ -31,7 +31,7 @@ positions remain canonical render-tree state
 Authored accessible regions cross the render/semantics boundary through the
 normal box/sliver adapters ([ADR-0223](../../docs/adr/ADR-0223-authored-semantics-regions.md)).
 The pipeline retains their presentation-local identity authority across semantics
-owner replacement. Synthetic identities use tagged generational slots (ADR-0314);
+owner replacement. Synthetic identities use tagged generational slots (ADR-0319);
 retiring a region or text-run key releases its slot, and reuse advances the
 generation. A pass stages all graft anchors, validates key scopes and
 reserves complete identity batches before mutating the current arena.

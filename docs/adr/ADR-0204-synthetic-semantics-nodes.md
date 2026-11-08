@@ -1,7 +1,7 @@
 # ADR-0204: Synthetic semantics nodes use tagged generational ids; text fields publish runs
 
 - **Status:** Accepted (2026-10-12)
-- **Superseded-by:** [ADR-0223](ADR-0223-authored-semantics-regions.md), §1 identity authority and authored-region action routing; [ADR-0314](ADR-0314-synthetic-semantics-ids-use-a-tagged-generational-slot.md), §1 id encoding and release policy
+- **Superseded-by:** [ADR-0223](ADR-0223-authored-semantics-regions.md), §1 identity authority and authored-region action routing; [ADR-0319](ADR-0319-synthetic-semantics-ids-use-a-tagged-generational-slot.md), §1 id encoding and release policy
 - **Date:** 2026-10-12
 - **Amended by:** [ADR-0214](ADR-0214-selection-area-text-runs.md) (§2: text runs for static text
   inside a `SelectionArea`); amended 2026-10-31 (§5: route changes)
@@ -26,7 +26,7 @@ from the pipeline, the owner decoding run positions); a field that lays out its 
 Two kinds of published nodes have no render object: the runs of a text field's text, which a
 screen reader needs to read by character, word and line and to follow the selection, and the
 nodes that carry announcements, since AccessKit 0.25 has no announcement API. An
-`AccessibilityNodeId` is 64-bit at the adapter boundary. ADR-0314 reserves its top bit for
+`AccessibilityNodeId` is 64-bit at the adapter boundary. ADR-0319 reserves its top bit for
 synthetic nodes and packs a 31-bit generation and 32-bit slot below it; render-backed nodes keep
 the same layout with a zero domain bit.
 
@@ -45,7 +45,7 @@ an index that is never reused).
 
 ## Decision
 
-1. **Id range.** Synthetic nodes use tagged generational slots under ADR-0314. The pipeline's
+1. **Id range.** Synthetic nodes use tagged generational slots under ADR-0319. The pipeline's
    presentation-local source allocates them; the top published bit distinguishes them from
    render-backed nodes. A run's identity is its owning field and ordinal. Text, starting byte and
    geometry are payload: a same-count edit keeps every run id, including when an insertion moves

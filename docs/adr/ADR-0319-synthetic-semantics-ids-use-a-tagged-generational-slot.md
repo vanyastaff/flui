@@ -1,4 +1,4 @@
-# ADR-0314: Synthetic semantics ids use a tagged generational slot
+# ADR-0319: Synthetic semantics ids use a tagged generational slot
 
 - **Status:** Implemented (2026-11-07)
 - **Date:** 2026-11-07
