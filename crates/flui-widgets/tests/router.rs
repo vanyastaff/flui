@@ -2484,7 +2484,7 @@ pub(crate) fn typed_result_apis_refuse_an_unmounted_router() {
 pub(crate) fn unmount_completes_a_pending_result_without_a_router_edit() {
     let (mut laid, home) = two_screen_app();
     let router = home.handle();
-    let heard = listen(&router);
+    let (heard, _listening) = listen(&router);
     let result = router
         .push_for_result::<u32>(AppRoute::Note { id: 1 })
         .expect("mounted router");
