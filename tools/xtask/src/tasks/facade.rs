@@ -16,7 +16,7 @@ use super::exec::{Cmd, Runner};
 /// deliberate: a missing `required-features` on an example or test is exactly
 /// the wiring these builds exist to catch. `cargo xtask reach` resolves the
 /// facade under the same selections.
-pub(crate) const COMBOS: [&str; 11] = [
+pub(crate) const COMBOS: [&str; 12] = [
     "--no-default-features",
     "--no-default-features --features assets",
     "--no-default-features --features material",

@@ -53,9 +53,9 @@ use flui_sdk::view::prelude::*;
 use flui_sdk::view::{BoxedView, InheritedView, impl_inherited_view};
 use flui_sdk::widgets::{
     Alternative, CompanionLink, CompanionRegistration, CompanionSpec, GestureAlternatives,
-    GestureCommand, Intent, MotionBuilder, PageController, SemanticsAnchor, SingleActivator,
-    ViewportFraction,
+    GestureCommand, Intent, MotionBuilder, PageController, SingleActivator, ViewportFraction,
 };
+use flui_sdk::rendering::SemanticsAnchor;
 
 /// Select the tab after or before the selected one: what a
 /// [`TabBarView`](crate::TabBarView)'s commands perform without a swipe, and

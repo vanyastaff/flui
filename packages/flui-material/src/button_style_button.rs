@@ -74,7 +74,6 @@
 //! keep resolving it fresh.
 
 use flui_sdk::foundation::{Listenable, Subscription};
-use flui_sdk::rendering::BoxConstraints;
 use flui_sdk::painting::styling::Color;
 use flui_sdk::painting::typography::TextStyle;
 use flui_sdk::rendering::{BoxConstraints, SemanticsRole, Toggled};

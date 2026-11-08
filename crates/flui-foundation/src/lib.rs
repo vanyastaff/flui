@@ -196,6 +196,7 @@ pub mod ticket;
 pub mod panic;
 // A child's position during reconciliation (index plus previous sibling).
 pub mod slot;
+pub mod wasm;
 
 // Shared field-name vocabulary for structured tracing events. Foundation owns
 // the names because every framework crate emits them; *installing* a subscriber
@@ -290,6 +291,8 @@ pub use rebuild_reason::{RebuildReason, RebuildReasons};
 pub use slot::IndexedSlot;
 // Generic typed channel
 pub use notifier_generic::{ArgCallback, Notifier};
+// WASM compatibility
+pub use wasm::WasmNotSendSync;
 
 // ============================================================================
 // PRELUDE
