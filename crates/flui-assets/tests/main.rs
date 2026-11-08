@@ -6,6 +6,7 @@
     clippy::disallowed_methods,
     reason = "test code catches a panic to assert on it (ADR-0303 §5)"
 )]
+#[cfg(feature = "images")]
 mod cases;
 
 #[path = "image_asset_integration.rs"]
