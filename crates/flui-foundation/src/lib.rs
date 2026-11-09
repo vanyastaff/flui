@@ -183,9 +183,12 @@ pub mod text_sizing;
 pub use text_sizing::{
     TextScaleProfile, TextSize, TextSizeError, TextSizeRequest, TextSizingIntent,
 };
+// Text flow direction, the one value the paint, semantics and reading-order
+// paths share.
 pub mod id;
 pub mod key;
 pub mod memory;
+mod text_direction;
 // Input sequence identity and its owner-local mint (ADR-0207 §4)
 pub mod sequence;
 // Tickets that match an asynchronous answer to its request (ADR-0287 §5).
@@ -246,6 +249,7 @@ pub use claim_slot::{ClaimHandle, ClaimOutcome, ClaimSlot, claim_slot};
 pub use clock::{ManualClock, MonotonicClock, SystemClock, event_epoch};
 pub use creation_site::CreationSite;
 pub use sequence::{AtomicIdMint, DragSessionId, IdExhausted, IdMint, InputSequenceId, MintedId};
+pub use text_direction::TextDirection;
 pub use ticket::{Ticket, TicketSource};
 pub use tree_error::{PathEntry, TREE_CONTEXT_DEPTH, TreeContext, TreeError};
 // Constants

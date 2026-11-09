@@ -9,15 +9,9 @@ use crate::action::SemanticsAction;
 // TextDirection
 // ============================================================================
 
-/// Text direction for semantics.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum TextDirection {
-    /// Right-to-left text.
-    Rtl,
-    /// Left-to-right text.
-    #[default]
-    Ltr,
-}
+// Text flow direction lives in `flui_foundation::TextDirection`; the
+// semantics path re-exports it so `flui_semantics::TextDirection` keeps working.
+pub use flui_foundation::TextDirection;
 
 // ============================================================================
 // HeadingLevel
