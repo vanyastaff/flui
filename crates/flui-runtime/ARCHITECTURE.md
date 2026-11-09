@@ -293,8 +293,9 @@ host.
   against a pump that skips or reorders the phase it names; `flui-app`'s
   `runner_frame_ordering` scan pins that every runner goes through it.
   Outside this crate the invariant holds by type: the draw step
-  (`render_frame`) is crate-private and the owner-local post-frame handle
-  (`OwnerFrame`) is `testing` only, so a host has no way to
+  (`render_frame`) is crate-private and the accessor to the owner-local frame
+  state (`UiRuntime::owner_frame`, which returns `OwnerFrame`) is `testing` only,
+  so a host has no way to
   draw a frame, or end one, except the pump. Tests of the draw step alone
   reach it through `render_frame_for_test` and `draw_frame`, both under
   `testing`. `trybuild_ui::ui_tests` checks the private draw-step diagnostic
