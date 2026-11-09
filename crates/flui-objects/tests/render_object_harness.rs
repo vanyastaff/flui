@@ -11036,10 +11036,6 @@ fn harness_intrinsic_width_shrink_wrapping_width_oracle() {
     }
 }
 
-// ---- Slice-2 milestone: dry == committed for filling child ----------------
-
-// ---- Slice-1 channel proof ------------------------------------------------
-
 /// Verify that `BoxDryLayoutCtx::child_max_intrinsic_width` (the new intrinsic
 /// dry-intrinsics channel) routes through the real memoized
 /// `intrinsic_query` and returns the same value as a standalone
@@ -11047,8 +11043,8 @@ fn harness_intrinsic_width_shrink_wrapping_width_oracle() {
 ///
 /// This test uses a thin proxy whose `compute_dry_layout` records the
 /// intrinsic it receives so the harness can assert equality.  It is
-/// GREEN after Slice 1 (channel wired) and would be RED before it
-/// (the accessor did not exist).
+/// GREEN once the dry-intrinsics channel is wired and would be RED
+/// before it (the accessor did not exist).
 fn harness_dry_layout_child_intrinsic_channel_matches_standalone_query() {
     use std::sync::{Arc, Mutex};
 

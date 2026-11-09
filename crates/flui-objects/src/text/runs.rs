@@ -10,8 +10,6 @@ use flui_painting::text_boundaries::word_starts;
 use flui_painting::typography::{TextCharacter, TextDirection, TextLineLayout, TextLineRun};
 use flui_rendering::semantics::{MAX_RUN_CHARACTERS, TextRun, TextRunError, TextRunParts};
 
-use crate::text::paragraph::semantics_text_direction;
-
 /// The most bytes one character of a run may hold: AccessKit counts a
 /// character's length in a `u8`, so a longer cluster is published as pieces.
 const MAX_CHARACTER_BYTES: usize = u8::MAX as usize;
@@ -44,7 +42,7 @@ pub(crate) fn text_runs(
                 "",
                 layout.start,
                 line,
-                semantics_text_direction(direction),
+                direction,
                 empty_rect(layout.start, layout),
             ))?);
         }
@@ -105,13 +103,7 @@ fn text_run(
         .map(|piece| piece.right)
         .fold(f64::NEG_INFINITY, f64::max);
     let rect = Rect::from_ltrb(left - scroll_x, top, right - scroll_x, bottom);
-    let mut parts = TextRunParts::new(
-        &text[start..end],
-        start,
-        line,
-        semantics_text_direction(direction),
-        rect,
-    );
+    let mut parts = TextRunParts::new(&text[start..end], start, line, direction, rect);
     for (index, piece) in pieces.iter().enumerate() {
         parts.character_lengths.push(
             u8::try_from(piece.range.len()).expect("BUG: pieces are cut to at most u8::MAX bytes"),

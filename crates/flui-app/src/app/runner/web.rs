@@ -294,16 +294,15 @@ impl WebFrameDriver {
                 // input deadlines without a visual frame. See
                 // `UiRuntime::pump_background` for the latch-first order.
                 //
-                // No `NO_PRESENT_FALLBACK_PACE` sleep here, unlike
-                // desktop/Android: this callback is driven by the
-                // browser's `requestAnimationFrame` loop
+                // No `BackgroundPace` deferral here, unlike Android: this callback
+                // is driven by the browser's `requestAnimationFrame` loop
                 // (`start_raf_loop`, `flui-native`'s web backend),
                 // which fires unconditionally once per animation
                 // frame regardless of whether a redraw was
                 // requested — the browser's own vsync-paced RAF
                 // cadence already bounds this arm's re-wake rate, so
-                // an additional sleep would be redundant. It would
-                // also be unsound here: `wasm32-unknown-unknown` has
+                // an additional deferral would be redundant. A sleep would
+                // be unsound here: `wasm32-unknown-unknown` has
                 // no real OS threads, and blocking the single JS
                 // thread with `std::thread::sleep` would hang the
                 // page rather than pace it.
