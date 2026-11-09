@@ -4,10 +4,10 @@
 use flui_foundation::geometry::{EdgeInsets, Point, Size, WindowMetrics};
 use flui_platform::{
     AdmissionError, AdmittedCommand, AppTitleBar, ApplyError, Availability, CapabilitiesOwner,
-    ControlsOffset, InvalidControlsOffset, KeyboardInset, SizeConstraints, SystemControls,
-    Unsupported, UnsupportedReason, WindowAppearance, WindowCapabilities, WindowCommand,
-    WindowExecutionState, WindowFrame, WindowGeometry, WindowInsets, WindowMaterial, WindowMode,
-    WindowOptions, WindowRevision, WindowRevisionExhausted, WindowState,
+    CapabilityAbsence, ControlsOffset, InvalidControlsOffset, KeyboardInset, SizeConstraints,
+    SystemControls, Unsupported, UnsupportedReason, WindowAppearance, WindowCapabilities,
+    WindowCommand, WindowExecutionState, WindowFrame, WindowGeometry, WindowInsets, WindowMaterial,
+    WindowMode, WindowOptions, WindowRevision, WindowRevisionExhausted, WindowState,
 };
 
 fn size(width: f64, height: f64) -> Size<f64> {
@@ -236,11 +236,11 @@ fn admit_refuses_exactly_when_the_capability_is_unavailable() {
         // admission answers the reason the host marked, not the platform's.
         for (absence, reason) in [
             (
-                UnsupportedReason::NotOnThisDevice,
+                CapabilityAbsence::NOT_ON_THIS_DEVICE,
                 UnsupportedReason::NotOnThisDevice,
             ),
             (
-                UnsupportedReason::NotYetOnThisHost,
+                CapabilityAbsence::NOT_YET_ON_THIS_HOST,
                 UnsupportedReason::NotYetOnThisHost,
             ),
         ] {
@@ -259,8 +259,8 @@ fn admit_refuses_exactly_when_the_capability_is_unavailable() {
             assert_ne!(marked, WindowCapabilities::ALL, "{command:?}");
         }
         assert_ne!(
-            WindowCapabilities::ALL.unavailable(&command, UnsupportedReason::NotOnThisDevice),
-            WindowCapabilities::ALL.unavailable(&command, UnsupportedReason::NotYetOnThisHost),
+            WindowCapabilities::ALL.unavailable(&command, CapabilityAbsence::NOT_ON_THIS_DEVICE),
+            WindowCapabilities::ALL.unavailable(&command, CapabilityAbsence::NOT_YET_ON_THIS_HOST),
             "{command:?}: the absence is part of what the window honours"
         );
     }
@@ -273,7 +273,7 @@ fn admit_refuses_exactly_when_the_capability_is_unavailable() {
 fn an_absence_left_in_an_available_slot_is_no_difference() {
     let material = WindowCommand::SetMaterial(WindowMaterial::System);
     let mut restored =
-        WindowCapabilities::ALL.unavailable(&material, UnsupportedReason::NotYetOnThisHost);
+        WindowCapabilities::ALL.unavailable(&material, CapabilityAbsence::NOT_YET_ON_THIS_HOST);
     restored.material = Availability::Native;
     assert_eq!(restored, WindowCapabilities::ALL);
     assert_eq!(
@@ -303,20 +303,54 @@ fn hash_of(capabilities: &WindowCapabilities) -> u64 {
     BuildHasherDefault::<DefaultHasher>::default().hash_one(capabilities)
 }
 
-/// A capability that lasts is absent for one of three reasons, and none asks
-/// to be tried again: a capability stays `Unavailable` until the host
-/// publishes it again.
+/// A capability carries only a reason no retry changes: converting refuses
+/// every reason that asks to be tried again (and those about a declaration, a
+/// window or a registration), and each one it accepts reads back as itself.
+/// A capability stays `Unavailable` until the host publishes it again.
+///
+/// The list is every [`UnsupportedReason`]; a reason added to the enum fails
+/// to compile in the conversion until it is classed there.
 fn no_absence_is_retryable() {
-    for reason in [
+    let every_reason = [
         UnsupportedReason::NotOnThisPlatform,
         UnsupportedReason::NotOnThisDevice,
         UnsupportedReason::NotYetOnThisHost,
-    ] {
-        assert!(
-            !Unsupported::from(reason).is_retryable(),
-            "{reason:?} asks to be retried"
-        );
+        UnsupportedReason::NotDeclared { what: "a key" },
+        UnsupportedReason::Unavailable,
+        UnsupportedReason::NotRegistered,
+        UnsupportedReason::NoWindow,
+    ];
+    let mut lasting = Vec::new();
+    for reason in every_reason {
+        match CapabilityAbsence::try_from(reason) {
+            Ok(absence) => {
+                assert_eq!(absence.reason(), reason);
+                assert_eq!(UnsupportedReason::from(absence), reason);
+                assert_eq!(Unsupported::from(absence), Unsupported::new(reason));
+                assert!(
+                    !Unsupported::from(absence).is_retryable(),
+                    "{reason:?} asks to be retried"
+                );
+                lasting.push(absence);
+            }
+            Err(refused) => assert_eq!(refused, reason),
+        }
+        if Unsupported::new(reason).is_retryable() {
+            assert_eq!(CapabilityAbsence::try_from(reason), Err(reason));
+        }
     }
+    assert_eq!(
+        lasting,
+        [
+            CapabilityAbsence::NOT_ON_THIS_PLATFORM,
+            CapabilityAbsence::NOT_ON_THIS_DEVICE,
+            CapabilityAbsence::NOT_YET_ON_THIS_HOST,
+        ]
+    );
+    assert_eq!(
+        CapabilityAbsence::default(),
+        CapabilityAbsence::NOT_ON_THIS_PLATFORM
+    );
 }
 
 fn restoring_normal_needs_no_capability() {
@@ -794,15 +828,16 @@ fn the_presentation_report_answers_why_it_is_missing() {
         Err(UnsupportedReason::NotOnThisPlatform),
         "set by hand, the platform's"
     );
-    let host =
-        WindowCapabilities::ALL.without_presentation_feedback(UnsupportedReason::NotYetOnThisHost);
+    let host = WindowCapabilities::ALL
+        .without_presentation_feedback(CapabilityAbsence::NOT_YET_ON_THIS_HOST);
     assert_eq!(
         host.presentation_feedback(),
         Err(Unsupported::new(UnsupportedReason::NotYetOnThisHost))
     );
     assert_ne!(
         host,
-        WindowCapabilities::ALL.without_presentation_feedback(UnsupportedReason::NotOnThisDevice),
+        WindowCapabilities::ALL
+            .without_presentation_feedback(CapabilityAbsence::NOT_ON_THIS_DEVICE),
         "the absence is part of what the window honours"
     );
     let shown = flui_platform::FramePresented::new(flui_platform::EventTime::from_nanos(1));

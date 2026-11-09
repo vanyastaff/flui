@@ -199,10 +199,6 @@ pub(crate) mod material {
     /// `capabilities` as a window on a build that passed or failed the
     /// [`gate`] has them: below it the material is `Unavailable` on this
     /// device.
-    #[expect(
-        clippy::large_types_passed_by_value,
-        reason = "the snapshot grew past 256 bytes when its absence arrays widened from CapabilityAbsence to UnsupportedReason (T10); it is copied rarely, not per frame"
-    )]
     pub(crate) const fn below_the_gate(
         capabilities: WindowCapabilities,
         gate: &Result<Since<SystemBackdrop>, Unsupported>,
@@ -211,7 +207,7 @@ pub(crate) mod material {
             Ok(_) => capabilities,
             Err(_) => capabilities.unavailable(
                 &WindowCommand::SetMaterial(WindowMaterial::Opaque),
-                flui_platform::UnsupportedReason::NotOnThisDevice,
+                flui_platform::CapabilityAbsence::NOT_ON_THIS_DEVICE,
             ),
         }
     }

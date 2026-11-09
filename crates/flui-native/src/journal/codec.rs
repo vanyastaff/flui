@@ -27,13 +27,13 @@ use flui_platform::pointer::{
     ScrollPrecision, ScrollUnit,
 };
 use flui_platform::{
-    AppTitleBar, Availability, CapabilityParts, ColorGamut, ColorParts, ControlsOffset, DisplayId,
-    DisplayInfo, DisplayParts, DynamicRange, GestureParts, Headroom, HourCycle, ImeEvent,
-    InsetCurve, InsetMotion, InvalidPreference, KeyboardInset, Locale, MeasurementSystem,
-    MemoryPressureLevel, MotionPreference, NativeMouseGeometry, NativeTouchGeometry,
-    NumberingSystem, PlatformInput, PreferenceParts, RefreshPeriod, RegionOverride, RegionalParts,
-    SessionEndPhase, SizeConstraints, SystemControls, SystemNotice, SystemPreferences,
-    TextWeightPreference, UnsupportedReason, Weekday, WheelParts, WheelStep, WindowAppearance,
+    AppTitleBar, Availability, CapabilityAbsence, CapabilityParts, ColorGamut, ColorParts,
+    ControlsOffset, DisplayId, DisplayInfo, DisplayParts, DynamicRange, GestureParts, Headroom,
+    HourCycle, ImeEvent, InsetCurve, InsetMotion, InvalidPreference, KeyboardInset, Locale,
+    MeasurementSystem, MemoryPressureLevel, MotionPreference, NativeMouseGeometry,
+    NativeTouchGeometry, NumberingSystem, PlatformInput, PreferenceParts, RefreshPeriod,
+    RegionOverride, RegionalParts, SessionEndPhase, SizeConstraints, SystemControls, SystemNotice,
+    SystemPreferences, TextWeightPreference, Weekday, WheelParts, WheelStep, WindowAppearance,
     WindowExecutionState, WindowFrame, WindowGeometry, WindowInsets, WindowMode, WindowState,
     WindowStateParts,
 };
@@ -2022,20 +2022,22 @@ const fn bounds_from_wire([x, y, width, height]: [i32; 4]) -> Bounds<i32> {
     Bounds::new(Point::new(x, y), Size::new(width, height))
 }
 
-fn absence_to_wire(absence: UnsupportedReason) -> DtoResult<wire::Absence> {
-    Ok(match absence {
-        UnsupportedReason::NotOnThisPlatform => wire::Absence::NotOnThisPlatform,
-        UnsupportedReason::NotOnThisDevice => wire::Absence::NotOnThisDevice,
-        UnsupportedReason::NotYetOnThisHost => wire::Absence::NotYetOnThisHost,
-        _ => return Err(DtoError::Unmirrored("UnsupportedReason")),
-    })
+/// Every absence a capability can carry has a wire name: the match is over
+/// the constants, which name each value the type holds, so a lasting reason
+/// added to [`CapabilityAbsence`] fails to compile here until it is mirrored.
+const fn absence_to_wire(absence: CapabilityAbsence) -> wire::Absence {
+    match absence {
+        CapabilityAbsence::NOT_ON_THIS_PLATFORM => wire::Absence::NotOnThisPlatform,
+        CapabilityAbsence::NOT_ON_THIS_DEVICE => wire::Absence::NotOnThisDevice,
+        CapabilityAbsence::NOT_YET_ON_THIS_HOST => wire::Absence::NotYetOnThisHost,
+    }
 }
 
-fn absence_from_wire(absence: wire::Absence) -> DtoResult<UnsupportedReason> {
+fn absence_from_wire(absence: wire::Absence) -> DtoResult<CapabilityAbsence> {
     Ok(match absence {
-        wire::Absence::NotOnThisPlatform => UnsupportedReason::NotOnThisPlatform,
-        wire::Absence::NotOnThisDevice => UnsupportedReason::NotOnThisDevice,
-        wire::Absence::NotYetOnThisHost => UnsupportedReason::NotYetOnThisHost,
+        wire::Absence::NotOnThisPlatform => CapabilityAbsence::NOT_ON_THIS_PLATFORM,
+        wire::Absence::NotOnThisDevice => CapabilityAbsence::NOT_ON_THIS_DEVICE,
+        wire::Absence::NotYetOnThisHost => CapabilityAbsence::NOT_YET_ON_THIS_HOST,
         other => return Err(unread(other.name())),
     })
 }
@@ -2072,10 +2074,10 @@ fn display_to_wire(display: &RecordedDisplay) -> DtoResult<wire::Display> {
             },
             headroom: match headroom {
                 Ok(headroom) => wire::Headroom::Multiple(headroom.get()),
-                Err(absence) => wire::Headroom::Absent(absence_to_wire(absence)?),
+                Err(absence) => wire::Headroom::Absent(absence_to_wire(absence)),
             },
         }),
-        Err(absence) => wire::DisplayColor::Absent(absence_to_wire(absence)?),
+        Err(absence) => wire::DisplayColor::Absent(absence_to_wire(absence)),
     };
     Ok(wire::Display {
         label: display.label,
@@ -2204,10 +2206,8 @@ fn availability_from_wire(availability: wire::Availability) -> DtoResult<Availab
     })
 }
 
-fn capability_to_wire(
-    honoured: Result<Availability, UnsupportedReason>,
-) -> DtoResult<wire::Capability> {
-    Ok(match honoured {
+const fn capability_to_wire(honoured: Result<Availability, CapabilityAbsence>) -> wire::Capability {
+    match honoured {
         Ok(Availability::Native) => wire::Capability::Native,
         Ok(Availability::Emulated) => wire::Capability::Emulated,
         // `Unavailable` with no absence in force reads as the platform's
@@ -2215,13 +2215,13 @@ fn capability_to_wire(
         Ok(Availability::Unavailable) => {
             wire::Capability::Unavailable(wire::Absence::NotOnThisPlatform)
         }
-        Err(absence) => wire::Capability::Unavailable(absence_to_wire(absence)?),
-    })
+        Err(absence) => wire::Capability::Unavailable(absence_to_wire(absence)),
+    }
 }
 
 fn capability_from_wire(
     capability: wire::Capability,
-) -> DtoResult<Result<Availability, UnsupportedReason>> {
+) -> DtoResult<Result<Availability, CapabilityAbsence>> {
     Ok(match capability {
         wire::Capability::Native => Ok(Availability::Native),
         wire::Capability::Emulated => Ok(Availability::Emulated),
@@ -2232,11 +2232,7 @@ fn capability_from_wire(
 
 /// `capabilities` in the schema, through [`CapabilityParts`]: a capability
 /// added there fails to compile here until it is mirrored.
-#[expect(
-    clippy::large_types_passed_by_value,
-    reason = "the DTO grew past 256 bytes when its absence arrays widened from CapabilityAbsence to UnsupportedReason (T10); a recording snapshot, not per frame"
-)]
-fn capabilities_to_wire(capabilities: CapabilityParts) -> DtoResult<wire::Capabilities> {
+fn capabilities_to_wire(capabilities: CapabilityParts) -> wire::Capabilities {
     let CapabilityParts {
         sets_title,
         sets_position,
@@ -2261,30 +2257,30 @@ fn capabilities_to_wire(capabilities: CapabilityParts) -> DtoResult<wire::Capabi
         places_at_open,
         frame_rate_hint,
     } = capabilities;
-    Ok(wire::Capabilities {
-        sets_title: capability_to_wire(sets_title)?,
-        sets_position: capability_to_wire(sets_position)?,
-        sets_size: capability_to_wire(sets_size)?,
-        sets_constraints: capability_to_wire(sets_constraints)?,
-        sets_resizable: capability_to_wire(sets_resizable)?,
-        sets_frame: capability_to_wire(sets_frame)?,
-        app_title_bar: capability_to_wire(app_title_bar)?,
-        minimizes: capability_to_wire(minimizes)?,
-        maximizes: capability_to_wire(maximizes)?,
-        enters_fullscreen: capability_to_wire(enters_fullscreen)?,
-        hides: capability_to_wire(hides)?,
-        shows: capability_to_wire(shows)?,
-        activates: capability_to_wire(activates)?,
-        closes: capability_to_wire(closes)?,
-        material: capability_to_wire(material)?,
-        reports_presentation: capability_to_wire(reports_presentation)?,
-        reports_keyboard_inset: capability_to_wire(reports_keyboard_inset)?,
-        reports_system_gestures: capability_to_wire(reports_system_gestures)?,
+    wire::Capabilities {
+        sets_title: capability_to_wire(sets_title),
+        sets_position: capability_to_wire(sets_position),
+        sets_size: capability_to_wire(sets_size),
+        sets_constraints: capability_to_wire(sets_constraints),
+        sets_resizable: capability_to_wire(sets_resizable),
+        sets_frame: capability_to_wire(sets_frame),
+        app_title_bar: capability_to_wire(app_title_bar),
+        minimizes: capability_to_wire(minimizes),
+        maximizes: capability_to_wire(maximizes),
+        enters_fullscreen: capability_to_wire(enters_fullscreen),
+        hides: capability_to_wire(hides),
+        shows: capability_to_wire(shows),
+        activates: capability_to_wire(activates),
+        closes: capability_to_wire(closes),
+        material: capability_to_wire(material),
+        reports_presentation: capability_to_wire(reports_presentation),
+        reports_keyboard_inset: capability_to_wire(reports_keyboard_inset),
+        reports_system_gestures: capability_to_wire(reports_system_gestures),
         observes_position: availability_to_wire(observes_position),
         observes_minimized: availability_to_wire(observes_minimized),
         places_at_open: availability_to_wire(places_at_open),
         frame_rate_hint: availability_to_wire(frame_rate_hint),
-    })
+    }
 }
 
 fn capabilities_from_wire(capabilities: wire::Capabilities) -> DtoResult<CapabilityParts> {
@@ -2448,7 +2444,7 @@ fn window_state_to_wire(state: &RecordedWindowState) -> DtoResult<wire::WindowSt
         },
         hovered,
         active,
-        capabilities: capabilities_to_wire(capabilities)?,
+        capabilities: capabilities_to_wire(capabilities),
     })
 }
 

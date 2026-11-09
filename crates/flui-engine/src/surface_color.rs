@@ -624,7 +624,7 @@ mod tests {
 
     #[test]
     fn the_platform_colour_decides_the_display_state_over_the_surface_report() {
-        use flui_platform::{ColorGamut, UnsupportedReason};
+        use flui_platform::{CapabilityAbsence, ColorGamut};
 
         let offered = [
             SDR,
@@ -662,8 +662,10 @@ mod tests {
 
         // High range without a reported peak: the surface's headroom, then
         // the default.
-        let unreported =
-            DisplayColor::high(ColorGamut::Rec2020, Err(UnsupportedReason::NotOnThisDevice));
+        let unreported = DisplayColor::high(
+            ColorGamut::Rec2020,
+            Err(CapabilityAbsence::NOT_ON_THIS_DEVICE),
+        );
         assert_eq!(
             resolve_on(unreported, &offered, &hdr_display(3.0)).headroom(),
             3.0

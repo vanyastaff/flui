@@ -1090,7 +1090,7 @@ pub(crate) mod color_query {
     //! headroom is absent on this platform. A page learns a change of either
     //! answer from its query's `change` event.
 
-    use flui_platform::{ColorGamut, DisplayColor, UnsupportedReason};
+    use flui_platform::{CapabilityAbsence, ColorGamut, DisplayColor};
 
     /// Whether the screen can show high range.
     const HIGH_RANGE: &str = "(dynamic-range: high)";
@@ -1116,7 +1116,7 @@ pub(crate) mod color_query {
             ColorGamut::Srgb
         };
         if matches(HIGH_RANGE) {
-            DisplayColor::high(gamut, Err(UnsupportedReason::NotOnThisPlatform))
+            DisplayColor::high(gamut, Err(CapabilityAbsence::NOT_ON_THIS_PLATFORM))
         } else {
             DisplayColor::standard(gamut)
         }
@@ -1149,7 +1149,7 @@ pub(crate) mod color_query {
                 matching(true, true, true),
                 DisplayColor::high(
                     ColorGamut::Rec2020,
-                    Err(UnsupportedReason::NotOnThisPlatform)
+                    Err(CapabilityAbsence::NOT_ON_THIS_PLATFORM)
                 ),
                 "the widest gamut wins, and the headroom is never readable"
             );
@@ -1221,8 +1221,8 @@ pub(crate) mod source {
 
     use flui_foundation::geometry::{Bounds, Point, Size};
     use flui_platform::{
-        DisplayColor, DisplayId, DisplayInfo, DisplayKey, DisplaySnapshot, RefreshPeriod,
-        UnsupportedReason,
+        CapabilityAbsence, DisplayColor, DisplayId, DisplayInfo, DisplayKey, DisplaySnapshot,
+        RefreshPeriod,
     };
     use parking_lot::Mutex;
     use wasm_bindgen::{JsCast, JsValue};
@@ -1398,11 +1398,11 @@ pub(crate) mod source {
 
         /// The colour of the screen the page is on, by its media queries; absent
         /// on a browser without `matchMedia`.
-        fn page_color(&self, window: &web_sys::Window) -> Result<DisplayColor, UnsupportedReason> {
+        fn page_color(&self, window: &web_sys::Window) -> Result<DisplayColor, CapabilityAbsence> {
             let media = self
                 .features
                 .match_media
-                .ok_or(UnsupportedReason::NotOnThisDevice)?;
+                .ok_or(CapabilityAbsence::NOT_ON_THIS_DEVICE)?;
             Ok(display_color(|query| {
                 media
                     .query(window, query)
@@ -1503,7 +1503,7 @@ pub(crate) mod source {
                         // A page's media queries describe the screen it is on;
                         // the browser says nothing of the others' colour.
                         screen_info(screen, *id, None)
-                            .with_color(Err(UnsupportedReason::NotOnThisPlatform))
+                            .with_color(Err(CapabilityAbsence::NOT_ON_THIS_PLATFORM))
                     }
                 })
                 .collect();

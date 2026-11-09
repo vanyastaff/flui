@@ -23,7 +23,7 @@ this one path (ADR-0151 §9).
   never substitutes 60 Hz; that is a consumer's policy (ADR-0236).
 - **A headroom is finite and at least white; an absent colour says why.** A display's
   colour profile is `DisplayInfo::color`: a `DisplayColor` (`SurfaceColorSpace` and
-  `Headroom`) or the `UnsupportedReason` the platform gives, which `color_space()` and
+  `Headroom`) or the `CapabilityAbsence` the platform gives, which `color_space()` and
   `headroom()` answer as `Unsupported`. `Headroom` refuses a NaN, an infinity, a value
   below 1 and a luminance ratio that overflows; `DisplayColor::standard` fixes the
   headroom of a standard-range display at 1 (`display_colour_table`). A profile change
@@ -146,8 +146,9 @@ this one path (ADR-0151 §9).
   capability is `Unavailable` exactly when admission refuses its command as
   `Unsupported`; a command admitted and then refused by the operating system
   is `ApplyError::Platform`, a failure rather than a missing capability. A
-  command's capability carries where it is missing, a `UnsupportedReason` a
-  host sets with `WindowCapabilities::unavailable(command, absence)`:
+  command's capability carries where it is missing, a `CapabilityAbsence` (an
+  `UnsupportedReason` narrowed to the three lasting reasons below, one byte)
+  a host sets with `WindowCapabilities::unavailable(command, absence)`:
   `NotOnThisDevice` where this device or its OS build lacks what its platform
   has (a version gate that refused), `NotYetOnThisHost` where the OS has it
   and the host does not implement it yet, `NotOnThisPlatform` otherwise. The

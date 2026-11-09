@@ -244,7 +244,7 @@ impl FrameInset {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui_platform::{AppTitleBar, UnsupportedReason, WindowCommand, WindowFrame};
+    use flui_platform::{AppTitleBar, CapabilityAbsence, WindowCommand, WindowFrame};
 
     const DISPLAY: PlacementDisplay = PlacementDisplay {
         origin: Point { x: 1920, y: 0 },
@@ -409,7 +409,7 @@ mod tests {
 
     #[test]
     fn open_plan_modes() {
-        let device = UnsupportedReason::NotOnThisDevice;
+        let device = CapabilityAbsence::NOT_ON_THIS_DEVICE;
         let no_modes = ALL
             .unavailable(&WindowCommand::SetMode(WindowMode::Maximized), device)
             .unavailable(&WindowCommand::SetMode(WindowMode::Fullscreen), device);

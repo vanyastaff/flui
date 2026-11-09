@@ -42,7 +42,7 @@
 //! revision in which that display's colour differs: the profile change is a
 //! display change like a mode switch, ordered by the same revision, so a later
 //! sample never loses to an earlier one. Where the operating system does not
-//! say, the colour is the [`UnsupportedReason`] that says why, and
+//! say, the colour is the [`CapabilityAbsence`] that says why, and
 //! [`DisplayInfo::color_space`] and [`DisplayInfo::headroom`] answer it as
 //! [`Unsupported`]. A headroom is finite and at least `1.0` by construction.
 
@@ -54,7 +54,7 @@ use std::time::Duration;
 use flui_foundation::UniqueKey;
 use flui_foundation::geometry::Bounds;
 
-use crate::unsupported::{Unsupported, UnsupportedReason};
+use crate::unsupported::{CapabilityAbsence, Unsupported};
 
 /// A display's identity within one platform instance.
 ///
@@ -349,13 +349,13 @@ pub struct DisplayInfo {
     /// change of the display's colour profile, published as a new revision
     /// like any other display change. Read it through
     /// [`color_space`](Self::color_space) and [`headroom`](Self::headroom).
-    pub color: Result<DisplayColor, UnsupportedReason>,
+    pub color: Result<DisplayColor, CapabilityAbsence>,
 }
 
 impl DisplayInfo {
     /// A display with its bounds as usable area, an unknown refresh period, not
     /// primary, and a colour the host has not read
-    /// ([`UnsupportedReason::NotYetOnThisHost`]). Refine it with the `with_*`
+    /// ([`CapabilityAbsence::NOT_YET_ON_THIS_HOST`]). Refine it with the `with_*`
     /// methods.
     #[must_use]
     pub fn new(
@@ -373,14 +373,14 @@ impl DisplayInfo {
             refresh_period: None,
             is_primary: false,
             persistent_key: None,
-            color: Err(UnsupportedReason::NotYetOnThisHost),
+            color: Err(CapabilityAbsence::NOT_YET_ON_THIS_HOST),
         }
     }
 
     /// Record the display's colour as the operating system reports it, or why
     /// it reports none.
     #[must_use]
-    pub fn with_color(mut self, color: Result<DisplayColor, UnsupportedReason>) -> Self {
+    pub fn with_color(mut self, color: Result<DisplayColor, CapabilityAbsence>) -> Self {
         self.color = color;
         self
     }
@@ -560,7 +560,7 @@ pub struct DisplayColor {
     pub color_space: SurfaceColorSpace,
     /// The headroom now, or why there is none to read: a high-range display
     /// whose operating system does not report its peak.
-    pub headroom: Result<Headroom, UnsupportedReason>,
+    pub headroom: Result<Headroom, CapabilityAbsence>,
 }
 
 impl DisplayColor {
@@ -576,7 +576,7 @@ impl DisplayColor {
     /// A high-range display in `gamut`, with the headroom its operating system
     /// reports, or why it reports none.
     #[must_use]
-    pub const fn high(gamut: ColorGamut, headroom: Result<Headroom, UnsupportedReason>) -> Self {
+    pub const fn high(gamut: ColorGamut, headroom: Result<Headroom, CapabilityAbsence>) -> Self {
         Self {
             color_space: SurfaceColorSpace::new(gamut, DynamicRange::High),
             headroom,
@@ -837,7 +837,7 @@ pub struct DisplayParts {
     /// [`DisplayInfo::persistent_key`].
     pub persistent_key: Option<String>,
     /// [`DisplayInfo::color`], taken apart.
-    pub color: Result<ColorParts, UnsupportedReason>,
+    pub color: Result<ColorParts, CapabilityAbsence>,
 }
 
 /// The fields of a [`DisplayColor`] and its [`SurfaceColorSpace`], public, for
@@ -849,7 +849,7 @@ pub struct ColorParts {
     /// [`SurfaceColorSpace::dynamic_range`].
     pub dynamic_range: DynamicRange,
     /// [`DisplayColor::headroom`].
-    pub headroom: Result<Headroom, UnsupportedReason>,
+    pub headroom: Result<Headroom, CapabilityAbsence>,
 }
 
 impl DisplayInfo {

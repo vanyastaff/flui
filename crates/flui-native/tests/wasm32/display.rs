@@ -625,7 +625,7 @@ fn has_period(snapshot: &DisplaySnapshot) -> Vec<bool> {
 /// colour, with a headroom the browser never exposes.
 #[wasm_bindgen_test]
 async fn web_colour_follows_the_media_queries() {
-    use flui_platform::{ColorGamut, DisplayColor, UnsupportedReason};
+    use flui_platform::{CapabilityAbsence, ColorGamut, DisplayColor};
 
     install_probe("none");
     let _probe = Probe;
@@ -647,7 +647,7 @@ async fn web_colour_follows_the_media_queries() {
         colour(&after),
         Some(Ok(DisplayColor::high(
             ColorGamut::DisplayP3,
-            Err(UnsupportedReason::NotOnThisPlatform)
+            Err(CapabilityAbsence::NOT_ON_THIS_PLATFORM)
         )))
     );
     running.quit();

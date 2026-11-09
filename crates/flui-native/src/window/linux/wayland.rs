@@ -91,7 +91,7 @@ pub(crate) mod configure {
 
     use flui_foundation::geometry::Size;
     use flui_platform::{
-        Availability, SizeConstraints, UnsupportedReason, WindowCapabilities, WindowCommand,
+        Availability, CapabilityAbsence, SizeConstraints, WindowCapabilities, WindowCommand,
         WindowFrame, WindowMode,
     };
 
@@ -272,31 +272,33 @@ pub(crate) mod configure {
     /// to offer every mode, as the window cannot know which it ignores.
     pub(crate) fn capabilities(
         announced: Option<WmCapabilities>,
-        decoration: Option<UnsupportedReason>,
-        app_title_bar: Option<UnsupportedReason>,
+        decoration: Option<CapabilityAbsence>,
+        app_title_bar: Option<CapabilityAbsence>,
         states: ToplevelStates,
         activation: Activation,
     ) -> WindowCapabilities {
         let mut capabilities = WindowCapabilities::ALL
             // The text-input protocol reports no keyboard geometry, and a
             // desktop compositor keeps no edges for system gestures.
-            .without_keyboard_inset(UnsupportedReason::NotOnThisPlatform)
-            .without_system_gestures(UnsupportedReason::NotOnThisPlatform)
+            .without_keyboard_inset(CapabilityAbsence::NOT_ON_THIS_PLATFORM)
+            .without_system_gestures(CapabilityAbsence::NOT_ON_THIS_PLATFORM)
             .unavailable(
                 &WindowCommand::SetPosition(flui_foundation::geometry::Point::new(0.0, 0.0)),
-                UnsupportedReason::NotOnThisPlatform,
+                CapabilityAbsence::NOT_ON_THIS_PLATFORM,
             )
-            .unavailable(&WindowCommand::Hide, UnsupportedReason::NotOnThisPlatform)
-            .unavailable(&WindowCommand::Show, UnsupportedReason::NotOnThisPlatform)
+            .unavailable(&WindowCommand::Hide, CapabilityAbsence::NOT_ON_THIS_PLATFORM)
+            .unavailable(&WindowCommand::Show, CapabilityAbsence::NOT_ON_THIS_PLATFORM)
             .unavailable(
                 &WindowCommand::SetMaterial(flui_platform::WindowMaterial::System),
-                UnsupportedReason::NotOnThisPlatform,
+                CapabilityAbsence::NOT_ON_THIS_PLATFORM,
             );
         match activation {
             Activation::Offered => capabilities.activates = Availability::Emulated,
             Activation::Missing => {
-                capabilities = capabilities
-                    .unavailable(&WindowCommand::Activate, UnsupportedReason::NotOnThisDevice);
+                capabilities = capabilities.unavailable(
+                    &WindowCommand::Activate,
+                    CapabilityAbsence::NOT_ON_THIS_DEVICE,
+                );
             }
         }
         if let Some(absence) = decoration {
@@ -309,7 +311,7 @@ pub(crate) mod configure {
         if states.tiled_by_compositor() {
             capabilities = capabilities.unavailable(
                 &WindowCommand::SetSize(Size::new(1.0, 1.0)),
-                UnsupportedReason::NotOnThisDevice,
+                CapabilityAbsence::NOT_ON_THIS_DEVICE,
             );
         }
         capabilities.sets_resizable = Availability::Emulated;
@@ -321,19 +323,19 @@ pub(crate) mod configure {
             if !announced.maximize {
                 capabilities = capabilities.unavailable(
                     &WindowCommand::SetMode(WindowMode::Maximized),
-                    UnsupportedReason::NotOnThisDevice,
+                    CapabilityAbsence::NOT_ON_THIS_DEVICE,
                 );
             }
             if !announced.fullscreen {
                 capabilities = capabilities.unavailable(
                     &WindowCommand::SetMode(WindowMode::Fullscreen),
-                    UnsupportedReason::NotOnThisDevice,
+                    CapabilityAbsence::NOT_ON_THIS_DEVICE,
                 );
             }
             if !announced.minimize {
                 capabilities = capabilities.unavailable(
                     &WindowCommand::SetMode(WindowMode::Minimized),
-                    UnsupportedReason::NotOnThisDevice,
+                    CapabilityAbsence::NOT_ON_THIS_DEVICE,
                 );
             }
         }
@@ -631,8 +633,8 @@ pub(crate) mod configure {
             let free = ToplevelStates::default();
             let unannounced = capabilities(
                 None,
-                Some(UnsupportedReason::NotOnThisDevice),
-                Some(UnsupportedReason::NotOnThisDevice),
+                Some(CapabilityAbsence::NOT_ON_THIS_DEVICE),
+                Some(CapabilityAbsence::NOT_ON_THIS_DEVICE),
                 free,
                 Activation::Missing,
             );
@@ -1082,7 +1084,7 @@ pub(crate) mod presented {
 
     use std::time::Duration;
 
-    use flui_platform::{UnsupportedReason, WindowCapabilities};
+    use flui_platform::{CapabilityAbsence, WindowCapabilities};
 
     /// The time a `presented` event carries, from its three words: the
     /// seconds split into high and low halves, and the nanoseconds.
@@ -1098,10 +1100,6 @@ pub(crate) mod presented {
     /// `capabilities` with the presentation report the compositor makes:
     /// where it offers no `wp_presentation`, a window learns nothing of when
     /// its frames are shown.
-    #[expect(
-        clippy::large_types_passed_by_value,
-        reason = "the snapshot grew past 256 bytes when its absence arrays widened from CapabilityAbsence to UnsupportedReason (T10); copied rarely, not per frame"
-    )]
     pub(crate) const fn reported(
         capabilities: WindowCapabilities,
         offered: bool,
@@ -1109,7 +1107,7 @@ pub(crate) mod presented {
         if offered {
             capabilities
         } else {
-            capabilities.without_presentation_feedback(UnsupportedReason::NotOnThisDevice)
+            capabilities.without_presentation_feedback(CapabilityAbsence::NOT_ON_THIS_DEVICE)
         }
     }
 

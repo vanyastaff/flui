@@ -14,7 +14,7 @@ use flui_platform::{
     WindowMode, WindowState,
 };
 use flui_platform::{
-    Availability, EventTime, FramePresented, FrameRequest, UnsupportedReason, WindowCapabilities,
+    Availability, CapabilityAbsence, EventTime, FramePresented, FrameRequest, WindowCapabilities,
     WindowOptions,
 };
 use flui_testing::window_conformance::{self, Readback, WindowFixture};
@@ -65,7 +65,7 @@ impl PlatformWindow for Faulty {
             Fault::DisclaimsPresentation => {
                 state.capabilities = state
                     .capabilities
-                    .without_presentation_feedback(UnsupportedReason::NotOnThisPlatform);
+                    .without_presentation_feedback(CapabilityAbsence::NOT_ON_THIS_PLATFORM);
             }
             _ => {}
         }

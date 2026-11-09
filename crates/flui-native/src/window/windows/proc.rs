@@ -1535,10 +1535,6 @@ fn window_text(hwnd: HWND) -> Option<String> {
 /// the owner context keeps from `WM_SIZE`; everything else is read from `hwnd`.
 /// Win32 reports a minimized window at a parking position, so there the
 /// outer rectangle is the last known size with no position.
-#[expect(
-    clippy::large_types_passed_by_value,
-    reason = "OwnerTracking grew past 256 bytes when its WindowCapabilities field widened from CapabilityAbsence to UnsupportedReason (T10); sampled rarely, not per frame"
-)]
 pub(crate) fn sample_state(
     hwnd: HWND,
     record: &Mutex<WindowRecord>,

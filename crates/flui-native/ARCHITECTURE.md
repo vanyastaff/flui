@@ -577,7 +577,7 @@ trait depends on `flui-platform` instead.
   and potential EDR headroom, Android's wide-gamut, HDR and highest HDR/SDR
   ratio, a Wayland image description, the browser's colour queries), and a
   report that is not a finite multiple of white publishes no headroom. Where
-  the OS reports nothing the colour is the `UnsupportedReason` that says why:
+  the OS reports nothing the colour is the `CapabilityAbsence` that says why:
   X11 `NotYetOnThisHost`, a compositor without `wp_color_management_v1` or a
   device below the API that reports it `NotOnThisDevice`, the browser's
   headroom `NotOnThisPlatform`. The Wayland model numbers each image

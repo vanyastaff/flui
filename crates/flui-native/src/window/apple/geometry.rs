@@ -427,10 +427,6 @@ pub(crate) mod mode {
     /// back from the Dock still reads as miniaturized while it animates, and a
     /// fixed size asked for in the same turn as the return is one for a normal
     /// window.
-    #[expect(
-        clippy::large_types_passed_by_value,
-        reason = "the snapshot grew past 256 bytes when its absence arrays widened from CapabilityAbsence to UnsupportedReason (T10); copied rarely, not per frame"
-    )]
     pub(crate) fn capabilities_of(
         flags: WindowFlags,
         heading: Option<WindowMode>,
