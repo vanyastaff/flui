@@ -141,7 +141,7 @@ pub enum BackgroundError { Refused(SpawnError), Cancelled, Panicked, OwnerRetire
 
 `ExecutionServices` is sequential there (ADR-0047): compute runs inline at the spawn site, on
 the UI thread, so a long job blocks the frame. The answer still settles at the next owner turn.
-A compute lane on Web workers is a gap ([`docs/gaps.md`](../gaps.md) entry 40).
+A compute lane on Web workers is a gap ([No compute lane off the UI thread on the Web](../gaps.md#no-compute-lane-off-the-ui-thread-on-the-web)).
 
 ### Consequences
 

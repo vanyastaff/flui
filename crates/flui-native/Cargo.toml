@@ -543,7 +543,8 @@ objc2-core-haptics = { workspace = true, features = [
 # UIA bridge for Windows, which every Win32 window builds. Version cohort must
 # match the workspace `accesskit` (0.25) -- 0.35 is that cohort -- and its
 # `windows` dependency (0.62) matches the backend's own, so no duplicate
-# windows-rs stack is linked. UI Automation's `ScrollPattern` (gap 36), which
+# windows-rs stack is linked. UI Automation's `ScrollPattern`
+# (docs/gaps.md#accessibility-bridge-fidelity-properties-and-announcements), which
 # the published adapter does not implement, comes from the vendored copy listed
 # in third_party/README.md, by path for the reason given at accesskit_ios.
 [target.'cfg(target_os = "windows")'.dependencies.accesskit_windows]
@@ -560,7 +561,8 @@ version = "0.27.1"
 # window's own view forwards to. Same 0.25 accesskit cohort; it is built on
 # objc2 0.5 beside FLUI's 0.6, and the two meet only through raw pointers.
 # VoiceOver's cursor reaches FLUI through a hook the published adapter does not
-# have yet (gap 36), so the build takes the vendored copy listed in
+# have yet (docs/gaps.md#accessibility-bridge-fidelity-properties-and-announcements),
+# so the build takes the vendored copy listed in
 # third_party/README.md. A path dependency, not a root `[patch]`: a patch binds
 # only this workspace, and an app depending on FLUI by path or git would build
 # the published crate, which lacks the hook.
@@ -568,7 +570,8 @@ version = "0.27.1"
 version = "0.2.2"
 path = "../../third_party/accesskit_ios"
 
-# TalkBack (gap 2 of docs/gaps.md): the low-level adapter, which `FluiView`'s
+# TalkBack (docs/gaps.md#no-accessibility-on-mobile-and-the-web): the low-level
+# adapter, which `FluiView`'s
 # node provider forwards to on the Java main thread. Same 0.25 accesskit
 # cohort. It is built on jni 0.21 beside FLUI's 0.22, and the two meet only
 # through raw pointers (the environment and the view in, the node info out),

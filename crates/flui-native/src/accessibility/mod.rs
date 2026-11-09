@@ -47,10 +47,12 @@ mod tests {
     use flui_semantics::AssistiveFocusSupport;
     use flui_semantics::platform::RouteChangeSupport;
 
+    use crate::testing::gap::GapId;
+
     /// Which adapters report where the screen reader's cursor is. iOS's and
     /// Android's do, through their vendored adapters; elsewhere a scenario that
-    /// needs it fails as gap 36 (`docs/gaps.md`), and this table is where an
-    /// adapter that starts to report it says so.
+    /// needs it fails as [`GapId::AccessibilityBridgeFidelity`], and this table
+    /// is where an adapter that starts to report it says so.
     #[test]
     fn each_native_adapter_says_whether_it_reports_the_assistive_cursor() {
         let adapters: &[(&str, AssistiveFocusSupport, AssistiveFocusSupport)] = &[
@@ -87,8 +89,10 @@ mod tests {
         ];
         for (adapter, support, expected) in adapters {
             assert_eq!(
-                support, expected,
-                "{adapter} changed what it reports of the assistive cursor: update gap 36 in docs/gaps.md and docs/platform-parity.md"
+                support,
+                expected,
+                "{adapter} changed what it reports of the assistive cursor: update {} and docs/platform-parity.md",
+                GapId::AccessibilityBridgeFidelity
             );
         }
     }
@@ -133,8 +137,10 @@ mod tests {
         ];
         for (adapter, support, expected) in adapters {
             assert_eq!(
-                support, expected,
-                "{adapter} changed how it tells a route change: update gap 36 in docs/gaps.md and docs/platform-parity.md"
+                support,
+                expected,
+                "{adapter} changed how it tells a route change: update {} and docs/platform-parity.md",
+                GapId::AccessibilityBridgeFidelity
             );
         }
     }

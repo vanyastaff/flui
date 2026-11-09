@@ -60,7 +60,7 @@ its step with `GenSlots::peek` before user code runs and commits it with
 slot whose generation space is exhausted closes at its release and never
 mints again; the signal graph re-lists nothing there, the element tree
 refuses the removal with the occupant kept. The render slab keeps its
-hand-rolled ledger until #2241 (gaps entry 43).
+hand-rolled ledger until #2241 ([Accepted ADR sections not built yet](../../docs/gaps.md#accepted-adr-sections-not-built-yet)).
 
 ## The geometry values (`geometry`)
 

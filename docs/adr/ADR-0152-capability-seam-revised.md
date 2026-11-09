@@ -556,9 +556,9 @@ shorthand.
 - **A mark that fails drops the write.** On Win32 and AppKit the markers are set before the text,
   in one clipboard session; a marker the system refuses leaves the clipboard empty rather than
   hand the secret to the history. On Android a clip that could not be marked is not set.
-- **Gap 26 is a scenario.** `flui_native::testing::clipboard::a_concealed_write_stays_out_of_history`
+- **Concealed clipboard entries are a scenario.** `flui_native::testing::clipboard::a_concealed_write_stays_out_of_history`
   is the one scenario every host's clipboard runs: the concealed write pastes back whole, and the
-  host's answer is not `Unavailable`. A host that answers `Unavailable` fails it as gap 26, which
+  host's answer is not `Unavailable`. A host that answers `Unavailable` fails it as the gap [Secure text entry and concealed clipboard entries are partial](../gaps.md#secure-text-entry-and-concealed-clipboard-entries-are-partial), which
   its test names with `expect_fail(CONCEALED_WRITES, …)` rather than skipping it; that call fails
   once the host conceals, so the fix closes the gap and the call together.
 

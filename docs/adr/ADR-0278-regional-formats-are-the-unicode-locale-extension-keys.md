@@ -14,7 +14,7 @@ Every desktop and mobile host lets the user set how dates, times and numbers are
 from the language: the first day of the week, a 12- or 24-hour clock, metric or US units, the
 digits, and on Windows, macOS and Android 14 a region whose formats apply under another
 language. `SystemPreferences` carried the preferred languages only, so an app in English on a
-German machine showed a Sunday-first week and a 12-hour clock (`docs/gaps.md` entry 14). Hosts
+German machine showed a Sunday-first week and a 12-hour clock ([System preferences missing or never run](../gaps.md#system-preferences-missing-or-never-run)). Hosts
 spell these settings differently. Windows has `LOCALE_IFIRSTDAYOFWEEK` and a time-format pattern,
 Apple has `NSCalendar.firstWeekday` and the `j` skeleton, Android has `Calendar.getFirstDayOfWeek`,
 `DateFormat.is24HourFormat` and, from API 34, `-u-` keywords on the locale. The Web has
@@ -113,7 +113,7 @@ to. A field a host does not answer stays empty.
   already knows.
 - Good, because delegates keep matching the resolved locale exactly.
 - Bad, because a pattern the user typed (a custom Windows short date) is not carried. It is named
-  in `docs/gaps.md` entry 14.
+  in [System preferences missing or never run](../gaps.md#system-preferences-missing-or-never-run).
 - Bad, because nothing formats dates or numbers yet. The formatter is a later feature that takes
   `apply_to`.
 - Neutral, because a host that reports nothing leaves the formats empty, and a formatter then

@@ -1,43 +1,56 @@
-//! A stable identifier for an entry of `docs/gaps.md`, and the assertion a
-//! host's scenario uses to fail as a known gap (ADR-0243).
+//! The entry of `docs/gaps.md` a host's scenario fails as, and the assertion
+//! that it does (ADR-0243).
 //!
-//! A gap entry renumbers as earlier entries close, so a test that names a gap
-//! by its number drifts and fails for the wrong reason. [`GapId`] names the
-//! entry by its heading instead; the number is a derived fact shown in
-//! messages and proved against the document by
-//! [`gap_slugs_biject_with_the_document`].
+//! An entry is named by its heading's anchor, never by its rank: the rank is
+//! the order of the entries and changes whenever one closes or moves. The test
+//! `every_gap_id_is_a_gaps_entry` holds each [`GapId`]'s slug to a heading of
+//! `docs/gaps.md`.
 
-/// An entry of `docs/gaps.md`: what FLUI has not built on a host yet, which a
-/// scenario fails as there.
-///
-/// The identifier is the entry's heading as a slug, stable across the
-/// renumbering `docs/gaps.md` undergoes. No code constructs a [`GapId`] from a
-/// bare number; [`GapId::number`] is only for messages, and its agreement with
-/// the document is enforced by [`gap_slugs_biject_with_the_document`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[non_exhaustive]
-pub enum GapId {
-    /// Gap 26: secure text entry and concealed clipboard entries are partial.
-    SecureTextEntryAndConcealedClipboard,
-}
+use std::fmt;
 
-impl GapId {
-    /// The entry's number in `docs/gaps.md`, for messages (not an identity).
-    #[must_use]
-    pub const fn number(self) -> u32 {
-        match self {
-            Self::SecureTextEntryAndConcealedClipboard => 26,
+/// Declares [`GapId`], its [`GapId::ALL`] and its [`GapId::slug`] from one
+/// list, so no variant can miss either.
+macro_rules! gap_ids {
+    ($($(#[doc = $doc:literal])* $variant:ident => $slug:literal,)+) => {
+        /// An entry of `docs/gaps.md`: what FLUI has not built on a host yet,
+        /// which a scenario fails as there.
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+        #[non_exhaustive]
+        pub enum GapId {
+            $($(#[doc = $doc])* $variant,)+
         }
-    }
 
-    /// The entry's heading in `docs/gaps.md`, as it reads after `### N. `.
-    #[must_use]
-    pub const fn heading(self) -> &'static str {
-        match self {
-            Self::SecureTextEntryAndConcealedClipboard => {
-                "Secure text entry and concealed clipboard entries are partial"
+        impl GapId {
+            /// Every entry a scenario names.
+            pub const ALL: &'static [Self] = &[$(Self::$variant),+];
+
+            /// The anchor of the entry's heading in `docs/gaps.md`, as GitHub
+            /// renders it.
+            #[must_use]
+            pub const fn slug(self) -> &'static str {
+                match self {
+                    $(Self::$variant => $slug,)+
+                }
             }
         }
+    };
+}
+
+gap_ids! {
+    /// "Secure text entry and concealed clipboard entries are partial": a
+    /// concealed write is an ordinary one, kept by the clipboard's history.
+    SecureTextEntryAndConcealedClipboard =>
+        "secure-text-entry-and-concealed-clipboard-entries-are-partial",
+    /// "Accessibility bridge fidelity (properties and announcements)": an
+    /// adapter does not report the assistive cursor or tell a route change.
+    AccessibilityBridgeFidelity =>
+        "accessibility-bridge-fidelity-properties-and-announcements",
+}
+
+impl fmt::Display for GapId {
+    /// The entry as a path into the repository: `docs/gaps.md#<slug>`.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "docs/gaps.md#{}", self.slug())
     }
 }
 
@@ -51,48 +64,11 @@ impl GapId {
 pub fn expect_fail(gap: GapId, outcome: Result<(), GapId>) {
     match outcome {
         Err(failed) if failed == gap => {
-            eprintln!(
-                "expected failure: gap {} is open on this host",
-                gap.number()
-            );
+            eprintln!("expected failure: {gap} is open on this host");
         }
-        Err(failed) => panic!(
-            "the scenario failed as gap {}, expected gap {}",
-            failed.number(),
-            gap.number()
-        ),
-        Ok(()) => panic!(
-            "gap {} is closed on this host: remove its expect_fail and update docs/gaps.md",
-            gap.number()
-        ),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Every [`GapId`] names exactly one `### N. Title` line of
-    /// `docs/gaps.md`, at the position [`GapId::number`] claims: the slug and
-    /// the number both agree with the document, and neither drifts alone.
-    #[test]
-    fn gap_slugs_biject_with_the_document() {
-        let doc = include_str!("../../../../docs/gaps.md");
-        let headings: Vec<&str> = doc
-            .lines()
-            .filter(|line| line.starts_with("### "))
-            .collect();
-
-        check(GapId::SecureTextEntryAndConcealedClipboard, &headings);
-    }
-
-    fn check(gap: GapId, headings: &[&str]) {
-        let expected = format!("### {}. {}", gap.number(), gap.heading());
-        assert_eq!(
-            headings.get((gap.number() - 1) as usize).copied(),
-            Some(expected.as_str()),
-            "{} should sit at `{expected}` in docs/gaps.md",
-            gap.heading()
-        );
+        Err(failed) => panic!("the scenario failed as {failed}, expected {gap}"),
+        Ok(()) => {
+            panic!("{gap} is closed on this host: remove its expect_fail and update the entry")
+        }
     }
 }

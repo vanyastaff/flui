@@ -135,7 +135,7 @@ against `flui-native`'s at compile time). Every line the app writes reaches `onL
 browser's own remote protocol: `flui run --agent` speaks WebDriver BiDi to Firefox (a channel as
 `onLine`, `send` called through `script.callFunction`) and the DevTools protocol to the Chromium
 family (a binding, `Runtime.callFunctionOn`), neither needing a driver of its own, behind one
-`BrowserLink` of `flui-cli`'s; Safari has neither (`docs/gaps.md` entry 42). The command serves
+`BrowserLink` of `flui-cli`'s; Safari has neither ([The driver agent cannot reach a page in Safari](../gaps.md#the-driver-agent-cannot-reach-a-page-in-safari)). The command serves
 the session's usual local endpoint and carries each connection to the page, so `flui mcp` does
 not change. A connection the service does not accept (one past
 `Limits::max_connections`, or any once it stopped) makes `connect` throw the refusal; a second

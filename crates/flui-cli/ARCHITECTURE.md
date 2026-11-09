@@ -242,7 +242,7 @@ each method's parameter type.
   document, and closes those connections in the page all the same, in case one
   belongs to the next document. `flui mcp` does not change. The WebSocket is
   `tungstenite`'s handshake and framing over a loopback `TcpStream`, no TLS.
-  Safari is refused (`docs/gaps.md` entry 42).
+  Safari is refused ([The driver agent cannot reach a page in Safari](../../docs/gaps.md#the-driver-agent-cannot-reach-a-page-in-safari)).
 - **Serve.** `flui mcp` speaks MCP over stdio (hand-written JSON-RPC: four
   tools, no SDK, so the CLI's graph does not grow) and forwards each call as
   one protocol method, its parameters checked against the method's parameter

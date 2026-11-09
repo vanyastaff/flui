@@ -487,7 +487,7 @@ released. A node the owner no longer holds, or no owner at all, leaves every sub
 `true` is followed by a `false`. Handlers are compared by `Rc` identity: `Semantics` keeps one
 handler per mount, so a rebuild does not count as leaving. Deactivating the adapter moves the
 cursor off the tree. iOS reports the cursor through the hook FLUI adds to `accesskit_ios`
-(`third_party/README.md`); the other native adapters say `Unreported` (gap 36). The headless
+(`third_party/README.md`); the other native adapters say `Unreported` ([Accessibility bridge fidelity](../../docs/gaps.md#accessibility-bridge-fidelity-properties-and-announcements)). The headless
 test host reports it and moves it with `move_assistive_focus`.
 
 **Why.** Input focus is the application's; the screen reader's cursor is the platform's and

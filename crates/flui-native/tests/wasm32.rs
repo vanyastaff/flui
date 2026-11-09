@@ -464,7 +464,7 @@ fn counter_owner() -> (flui_native::OwnerPlatform, Arc<AtomicUsize>) {
 }
 
 /// The web host runs the scenario every host's clipboard runs and fails it as
-/// gap 26: the Clipboard API has no way to keep an entry out of the
+/// [`CONCEALED_WRITES`]: the Clipboard API has no way to keep an entry out of the
 /// clipboard's history, so a concealed write pastes back as an ordinary one
 /// (ADR-0152 §6).
 #[wasm_bindgen_test]

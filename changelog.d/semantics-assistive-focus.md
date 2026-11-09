@@ -4,7 +4,7 @@
   `flui-runtime`, `flui-view`, `flui-widgets`): `Semantics::on_assistive_focus_within` is told
   `true` when VoiceOver's or TalkBack's cursor enters its subtree and `false` when it leaves.
   `PresentationCapabilities::assistive_focus` and `LifecycleContext::assistive_focus_support` say
-  whether the platform reports the cursor; of the native adapters only iOS's does (gap 36).
+  whether the platform reports the cursor; of the native adapters only iOS's does ([Accessibility bridge fidelity](/docs/gaps.md#accessibility-bridge-fidelity-properties-and-announcements)).
   `PlatformAccessibility` gains `assistive_focus_support` and `set_assistive_focus_listener`.
 - **A carousel pauses while a screen reader reads it** (`flui-widgets`): the cursor entering a
   `Carousel` pauses its autoplay, where the platform reports it.

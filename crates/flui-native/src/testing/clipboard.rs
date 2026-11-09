@@ -18,8 +18,8 @@ use flui_platform::{ClipboardRead, ClipboardWrite, Concealment};
 use crate::host::NativeClipboard;
 use crate::testing::gap::GapId;
 
-/// Gap 26: a concealed write is an ordinary one, kept by the clipboard's
-/// history.
+/// The entry a host fails the scenario as: a concealed write is an ordinary
+/// one, kept by the clipboard's history.
 pub const CONCEALED_WRITES: GapId = GapId::SecureTextEntryAndConcealedClipboard;
 
 /// The text the scenario writes concealed.

@@ -10,58 +10,15 @@ the parity document that tracks it. Every entry blocks a ready platform
 (`gh pr list`), and when a gap closes, update this file and the parity document in the same pull
 request.
 
-## At a glance
-
-| # | Gap | Environments | Who it hurts |
-|--:|:--|:--|:--|
-| 1 | [No text input on mobile and the Web](#1-no-text-input-on-mobile-and-the-web) | iOS, Android, Web | Every app with a text field |
-| 2 | [No accessibility on mobile and the Web](#2-no-accessibility-on-mobile-and-the-web) | iOS, Android, Web; desktop | Blind and low-vision users; anyone who must meet accessibility law |
-| 3 | [No system back](#3-no-system-back) | Android, iOS, Web | Every multi-screen mobile or web app |
-| 4 | [Most implemented rows never ran on their environment](#4-most-implemented-rows-never-ran-on-their-environment) | all | Every claim of support |
-| 5 | [Native Linux host (Wayland and X11)](#5-native-linux-host-wayland-and-x11) | Wayland, X11 | Linux users |
-| 6 | [Clipboard is broken on two environments](#6-clipboard-is-broken-on-two-environments) | Android, Web; all for rich | Every app with copy and paste |
-| 7 | [File dialogs, open URL, reveal, trash, message box and share exist on Windows only, or nowhere](#7-file-dialogs-open-url-reveal-trash-message-box-and-share-exist-on-windows-only-or-nowhere) | all | Every document app; any app with a link |
-| 8 | [No native drag and drop](#8-no-native-drag-and-drop) | all | Document, media and file-manager apps |
-| 9 | [Window control has run only on Windows, an X11 test server and the AppKit conformance kit](#9-window-control-has-run-only-on-windows-an-x11-test-server-and-the-appkit-conformance-kit) | desktop | Every desktop app |
-| 10 | [No custom title bar, popups or owned windows](#10-no-custom-title-bar-popups-or-owned-windows) | desktop | Apps with modern chrome; every menu and dropdown |
-| 11 | [No native menus](#11-no-native-menus) | macOS, iPadOS; Windows | Every macOS app |
-| 12 | [Lifecycle holes](#12-lifecycle-holes) | all | Apps that save state or hold resources |
-| 13 | [No deep links, URL schemes, file associations or single instance](#13-no-deep-links-url-schemes-file-associations-or-single-instance) | all | Apps opened from links, files or a second launch |
-| 14 | [System preferences missing or never run](#14-system-preferences-missing-or-never-run) | all | Users who rely on accessibility settings or another locale |
-| 15 | [Pointer and keyboard gaps](#15-pointer-and-keyboard-gaps) | various | Pen, trackpad and iPad users |
-| 16 | [Mobile system UI](#16-mobile-system-ui) | iOS, Android, Web | Every mobile app |
-| 17 | [Desktop shell services](#17-desktop-shell-services) | desktop | Background, messaging and utility apps |
-| 18 | [Text services](#18-text-services) | all | Writing apps; sign-in forms; tablet users |
-| 19 | [No native views inside the UI (web view, map, video)](#19-no-native-views-inside-the-ui-web-view-map-video) | all | Apps that embed a map, browser or player |
-| 20 | [Window looks](#20-window-looks) | desktop; mobile for capture | Apps with a native look; apps showing sensitive data |
-| 21 | [Unaudited rows](#21-unaudited-rows) | desktop, Web | Unknown |
-| 22 | [Version floors and the GPU fallback not run on devices](#22-version-floors-and-the-gpu-fallback-not-run-on-devices) | all | Users on older systems or GPUs without Vulkan or WebGPU |
-| 23 | [No presentation feedback](#23-no-presentation-feedback) | iOS, Android | Every animated app; every latency claim |
-| 24 | [No HDR, wide gamut or colour management](#24-no-hdr-wide-gamut-or-colour-management) | all | Photo, video and design apps; every app on an HDR display |
-| 25 | [Sandbox-aware file access is absent](#25-sandbox-aware-file-access-is-absent) | all desktop and mobile | Every app distributed through a store or Flatpak |
-| 26 | [Secure text entry and concealed clipboard entries are partial](#26-secure-text-entry-and-concealed-clipboard-entries-are-partial) | all | Every sign-in form; password managers |
-| 27 | [Input latency modes and high-rate sampling are partial](#27-input-latency-modes-and-high-rate-sampling-are-partial) | all but Windows and the Web | Drawing, games and anything that tracks a finger or pen |
-| 28 | [Distribution is unaudited](#28-distribution-is-unaudited) | all | Everyone who ships |
-| 29 | [Activation ignores the OS focus rules](#29-activation-ignores-the-os-focus-rules) | Windows, Wayland | Apps brought forward by a link, a second launch or a notification |
-| 30 | [Live resize is unaudited and unscheduled](#30-live-resize-is-unaudited-and-unscheduled) | desktop, Web | Every user who resizes a window by dragging its edge |
-| 31 | [No present-mode, queue-depth, VRR or tearing control](#31-no-present-mode-queue-depth-vrr-or-tearing-control) | desktop, iOS, Android | Games, drawing and latency-sensitive apps |
-| 32 | [Launch handoff on mobile and the Web](#32-launch-handoff-on-mobile-and-the-web) | iOS, Android, Web | Every mobile and web app in its first second |
-| 33 | [Quality-bar partials with no entry](#33-quality-bar-partials-with-no-entry) | all | Everyone who relies on a platform claim; maintainers who cannot replay a failure |
-| 34 | [Power-aware pacing and throttling](#34-power-aware-pacing-and-throttling) | all | Every user on battery or a thermally limited device |
-| 35 | [Locale edge: layout direction, per-app language, system fonts and fallback](#35-locale-edge-layout-direction-per-app-language-system-fonts-and-fallback) | all | Apps in right-to-left or non-Latin languages; users who set a language for one app |
-| 36 | [Accessibility bridge fidelity (properties and announcements)](#36-accessibility-bridge-fidelity-properties-and-announcements) | desktop, iOS, Android, Web | Screen-reader users |
-| 37 | [Add-to-app: no FLUI view inside an existing native app](#37-add-to-app-no-flui-view-inside-an-existing-native-app) | all | Teams adding FLUI to an app they already ship |
-| 38 | [No gamepad, and no D-pad run on a TV](#38-no-gamepad-and-no-d-pad-run-on-a-tv) | all | TV, console-style and Steam Deck users; games |
-| 39 | [No rotary input](#39-no-rotary-input) | Windows, Android; Apple later | Surface Dial and Wear OS users |
-| 40 | [No compute lane off the UI thread on the Web](#40-no-compute-lane-off-the-ui-thread-on-the-web) | Web | Web apps that decode images or lay out large documents |
-| 41 | [Images decode on the UI thread without background lanes](#41-images-decode-on-the-ui-thread-without-background-lanes) | hosts without `BackgroundCapability` | Embedders whose host registers no background lanes |
-| 42 | [The driver agent cannot reach a page in Safari](#42-the-driver-agent-cannot-reach-a-page-in-safari) | Web (Safari) | Agents and tests that drive a FLUI app in Safari |
-| 43 | [Accepted ADR sections not built yet](#43-accepted-adr-sections-not-built-yet) | all | Anyone who reads an accepted ADR as the code's current shape |
-| 44 | [No widget hot reload on Android and the Web](#44-no-widget-hot-reload-on-android-and-the-web) | Android, Web | Developers who iterate on widget code on a phone or in a browser |
+An entry is named by its heading, never by a number: the rank is only the order of the entries, and
+moving an entry changes nothing that refers to it. Documents link the heading's anchor
+(`gaps.md#no-system-back`), and code names an entry with `flui_native::testing::gap::GapId`, whose
+slugs the test `every_gap_id_is_a_gaps_entry` holds to these headings. Renaming a heading renames
+its anchor: update the links and the `GapId` slug in the same pull request.
 
 ## Entries
 
-### 1. No text input on mobile and the Web
+### No text input on mobile and the Web
 
 > **Environments:** iOS, Android, Web · **Who it hurts:** Every app with a text field · **Parity:** [Text input](platform-parity.md#text-input)
 
@@ -76,7 +33,7 @@ request.
 - **Missing everywhere:** client queries (selected range, surrounding text, first rect) for dictation, reconversion and handwriting, and a session that survives a window move, resize, DPI change and focus loss, are rows of their own under [Text input](platform-parity.md#text-input). Other frameworks show the failures: macOS dictation silently drops text when `selectedRange` returns `NSNotFound` ([rust-windowing/winit#4666](https://github.com/rust-windowing/winit/issues/4666), [#3617](https://github.com/rust-windowing/winit/issues/3617)), a Korean input method stops editing inline after the window moves ([DioxusLabs/dioxus#5246](https://github.com/DioxusLabs/dioxus/issues/5246)), and the input-method output of egui carries a position only ([emilk/egui#7941](https://github.com/emilk/egui/issues/7941)).
 - **The IME event order is pinned by rows on every host:** the backend conformance table drives the Linux hosts' `text-input-v3` client (which X11's IBus, Fcitx5 and XIM contexts feed too), TSF's document on Windows, the AppKit and UIKit client, Android's `FluiView` mirror and the Web's `EditContext` and hidden textarea through one composition (a preedit that grows, a picked candidate, a commit, a cancel) and holds the field's text, composing range and caret after each step, each as one edit (`each_input_method_path_holds_the_ime_rows_or_names_its_gap`).
 
-### 2. No accessibility on mobile and the Web
+### No accessibility on mobile and the Web
 
 > **Environments:** iOS, Android, Web; desktop · **Who it hurts:** Blind and low-vision users; anyone who must meet accessibility law · **Parity:** [Accessibility](platform-parity.md#accessibility)
 
@@ -89,7 +46,7 @@ request.
 - The runs read one control, not a Narrator, VoiceOver, Orca or TalkBack session.
 - No locked adapter routes custom actions or `ShowContextMenu`, so gesture alternatives (ADR-0216) keep a control on every path.
 
-### 3. No system back
+### No system back
 
 > **Environments:** Android, iOS, Web · **Who it hurts:** Every multi-screen mobile or web app · **Parity:** [Input](platform-parity.md#input)
 
@@ -97,7 +54,7 @@ request.
 - iOS needs its own edge swipe.
 - The Web needs History or Navigation API routing.
 
-### 4. Most implemented rows never ran on their environment
+### Most implemented rows never ran on their environment
 
 > **Environments:** all · **Who it hurts:** Every claim of support · **Parity:** [Summary](platform-parity.md#summary)
 
@@ -129,28 +86,28 @@ request.
   ([#1840](https://github.com/vanyastaff/flui/issues/1840)).
 - A macOS display whose current mode reports 0 Hz (some built-in panels) has no period and paces at the 60 Hz default, because the `CVDisplayLink` fallback is not written.
 
-### 5. Native Linux host (Wayland and X11)
+### Native Linux host (Wayland and X11)
 
 > **Environments:** Wayland, X11 · **Who it hurts:** Linux users · **Parity:** [Summary](platform-parity.md#summary)
 
 - It replaced the winit fallback: `current_platform` picks the native Wayland or X11 host by the session (ADR-0151 §11), and an application of `flui-app` runs on each under Weston and Xvfb (`native_linux`). winit itself is deleted from the workspace, and `deny.toml` bans it.
-- **X11 has its own host now** (`X11Platform`): one libxcb connection read by a loop on the owner thread, which waits with no timeout but the application's wake deadline; windows that publish what the server and the window manager hold, take every window command, and honour what the window manager supports; the RandR displays, the Settings portal, logind and memory pressure, and an AT-SPI bridge per window. Ran on WSL Ubuntu 24.04 under Xvfb with openbox, 2026-10-27: the window conformance, a mode set before mapping, the window manager's close asked of the handler, a frame asked for on another thread waking an idle loop, the exit with the last window and a wake deadline delivered once. Its input is XInput 2 (pointers, touch, pens, unphased smooth scrolling), XKB (keys, compose, the layout and its changes) and the cursor theme; XTest's pointer, buttons, wheel and keys ran through it on the same server (2026-10-28) and replay from a native recording, while touch, pens and smooth scrolling are checked by the decoder alone, since Xvfb has no such device. Its clipboard owns and reads the `CLIPBOARD` selection on a connection and a thread of its own (ICCCM: `TARGETS`, `TIMESTAMP`, the text forms, `INCR` both ways); two of its clipboards exchanged text, large text included, through Xvfb (2026-10-30). Its primary selection is `PRIMARY` on the same connection: the application's selection is asked for its text at the loop's turn, only when another client reads it, and two of its clipboards exchanged it through Xvfb (2026-10-30). It takes XDND drops on its windows and starts drag sessions from them (entry 8). Its text input serves the focused field to IBus or Fcitx5 over D-Bus, one input context per window: each key of a composing field is asked of the input method and held, the keys behind it waiting in order, and a key the input method leaves unanswered within 200 ms, or the keys of a window losing the focus or closing, go as typed in their original order; commits, preedits and deletions around the caret reach the field's store, and the field's text, caret, purpose and caret rectangle reach the input method. It ran against a stand-in IBus on a private `dbus-daemon` with Xvfb (`text::linux::x11::bus_tests`, 2026-11-02), never with a real IBus or Fcitx5; a key the input method forwards back (`ForwardKeyEvent`) is logged and dropped With no daemon on D-Bus, the host speaks XIM to the server `XMODIFIERS` names, over the X transport: a key forwarded and sent back is typed, one the server keeps is taken, its on-the-spot preedit composes in the field, and a server that goes, or sends what no message reads as, leaves keys typed; it ran against a stand-in XIM server on Xvfb (`text::linux::x11::xim::tests`, 2026-11-02), never with a real XIM server. XIM has no surrounding text, purpose or deletion, and a server offering only the root-window style draws its preedit in its own window. **Still missing on it:** handing the clipboard to a clipboard manager on exit, which comes with the host's later parts; a run on a desktop X server with a touchscreen, a tablet and a touchpad.
+- **X11 has its own host now** (`X11Platform`): one libxcb connection read by a loop on the owner thread, which waits with no timeout but the application's wake deadline; windows that publish what the server and the window manager hold, take every window command, and honour what the window manager supports; the RandR displays, the Settings portal, logind and memory pressure, and an AT-SPI bridge per window. Ran on WSL Ubuntu 24.04 under Xvfb with openbox, 2026-10-27: the window conformance, a mode set before mapping, the window manager's close asked of the handler, a frame asked for on another thread waking an idle loop, the exit with the last window and a wake deadline delivered once. Its input is XInput 2 (pointers, touch, pens, unphased smooth scrolling), XKB (keys, compose, the layout and its changes) and the cursor theme; XTest's pointer, buttons, wheel and keys ran through it on the same server (2026-10-28) and replay from a native recording, while touch, pens and smooth scrolling are checked by the decoder alone, since Xvfb has no such device. Its clipboard owns and reads the `CLIPBOARD` selection on a connection and a thread of its own (ICCCM: `TARGETS`, `TIMESTAMP`, the text forms, `INCR` both ways); two of its clipboards exchanged text, large text included, through Xvfb (2026-10-30). Its primary selection is `PRIMARY` on the same connection: the application's selection is asked for its text at the loop's turn, only when another client reads it, and two of its clipboards exchanged it through Xvfb (2026-10-30). It takes XDND drops on its windows and starts drag sessions from them ([No native drag and drop](#no-native-drag-and-drop)). Its text input serves the focused field to IBus or Fcitx5 over D-Bus, one input context per window: each key of a composing field is asked of the input method and held, the keys behind it waiting in order, and a key the input method leaves unanswered within 200 ms, or the keys of a window losing the focus or closing, go as typed in their original order; commits, preedits and deletions around the caret reach the field's store, and the field's text, caret, purpose and caret rectangle reach the input method. It ran against a stand-in IBus on a private `dbus-daemon` with Xvfb (`text::linux::x11::bus_tests`, 2026-11-02), never with a real IBus or Fcitx5; a key the input method forwards back (`ForwardKeyEvent`) is logged and dropped With no daemon on D-Bus, the host speaks XIM to the server `XMODIFIERS` names, over the X transport: a key forwarded and sent back is typed, one the server keeps is taken, its on-the-spot preedit composes in the field, and a server that goes, or sends what no message reads as, leaves keys typed; it ran against a stand-in XIM server on Xvfb (`text::linux::x11::xim::tests`, 2026-11-02), never with a real XIM server. XIM has no surrounding text, purpose or deletion, and a server offering only the root-window style draws its preedit in its own window. **Still missing on it:** handing the clipboard to a clipboard manager on exit, which comes with the host's later parts; a run on a desktop X server with a touchscreen, a tablet and a touchpad.
 - The X11 host's pen, touch, smooth scrolling, touchpad pinch (XInput 2.4, which Xvfb announces), a grab's cancel mid-press and the device hierarchy (a device unplugged and plugged back in) are tested only synthetically: their XInput 2 events are built by the decoder's tests and the conformance table, never produced by a server, since Xvfb has no touch screen, tablet or touchpad and XTest drives only the core pointer and keyboard. Swipes are not delivered, as on Wayland.
-- The native Wayland host has its foundation (`WaylandPlatform`): the loop, `xdg-shell` windows with the snapshot and commands, displays, preferences, lifecycle and AT-SPI, run against a headless Weston. Its windows ask the compositor for their frame (`xdg-decoration`), draw at a fractional scale (`wp_fractional_scale_v1`), are given no frame while suspended, and are exported for a portal's parent (`xdg-foreign` v2); the AT-SPI bridge follows the compositor's activation. A window moved between two outputs of one scale names the display it moved to, run 2026-10-28 on Weston 13 with two outputs (X11 backend on Xvfb). Weston offers none of `xdg-decoration`, `wp_fractional_scale_v1` and `xdg-foreign`; the three ran on a headless sway 1.9 at scale 1.5, 2026-10-28 (WSL Ubuntu 24.04): sway honoured a floating window's frame request and overruled a tiled one's, the buffer was drawn at 1.5, and a second client imported the export and saw it revoked with the window. A tiled window takes no `SetSize`, as the tiling holds its size. Under sway the window conformance still fails on `SetMode(Maximized)`, which sway (`xdg_wm_base` v2, no `wm_capabilities`) ignores and the window cannot know in advance. Its windows ask to be activated with an `xdg-activation` token, which names the last key, button, touch or keyboard focus the seats report (entry 29). Its seats deliver input: keyboard through XKB (layout, compose and client-side repeat, read through the keyboard the X11 host shares), pointer and wheel, touch, pens (`tablet-v2`), pinches (`pointer-gestures`) and cursors (`cursor-shape`); the cursor, a click, a wheel notch and a key ran from a Weston seat, while touch, pens and pinches have run through their translation tests only, with no device, and no cursor shape has run: Weston 13 has no `cursor-shape`, so the cursor ran from the cursor theme (`XCURSOR_THEME`, `XCURSOR_SIZE`), the fallback for such compositors. A tablet pad's buttons, rings and strips are not read. Where the compositor draws no frame, the window draws its own (entry 10). Its text input serves the focused field to the input method through each seat's `zwp_text_input_v3`: preedit, commit and deletion around the caret reached the field's store and the field's text reached the input method, run 2026-10-31 under sway 1.9 with an input method of the test's own (`wayland_text_input`), never with IBus, Fcitx or a desktop compositor; a compositor without `zwp_text_input_v3` gives its windows no text input and says so in a warning, with no fallback to another input method path. It takes drops on its windows and starts drag sessions from them (entry 8). Missing there: the portal parent reaching a capability crate (the contract's window reference does not carry it yet), and a run under a desktop compositor (GNOME, KDE, Hyprland).
+- The native Wayland host has its foundation (`WaylandPlatform`): the loop, `xdg-shell` windows with the snapshot and commands, displays, preferences, lifecycle and AT-SPI, run against a headless Weston. Its windows ask the compositor for their frame (`xdg-decoration`), draw at a fractional scale (`wp_fractional_scale_v1`), are given no frame while suspended, and are exported for a portal's parent (`xdg-foreign` v2); the AT-SPI bridge follows the compositor's activation. A window moved between two outputs of one scale names the display it moved to, run 2026-10-28 on Weston 13 with two outputs (X11 backend on Xvfb). Weston offers none of `xdg-decoration`, `wp_fractional_scale_v1` and `xdg-foreign`; the three ran on a headless sway 1.9 at scale 1.5, 2026-10-28 (WSL Ubuntu 24.04): sway honoured a floating window's frame request and overruled a tiled one's, the buffer was drawn at 1.5, and a second client imported the export and saw it revoked with the window. A tiled window takes no `SetSize`, as the tiling holds its size. Under sway the window conformance still fails on `SetMode(Maximized)`, which sway (`xdg_wm_base` v2, no `wm_capabilities`) ignores and the window cannot know in advance. Its windows ask to be activated with an `xdg-activation` token, which names the last key, button, touch or keyboard focus the seats report ([Activation ignores the OS focus rules](#activation-ignores-the-os-focus-rules)). Its seats deliver input: keyboard through XKB (layout, compose and client-side repeat, read through the keyboard the X11 host shares), pointer and wheel, touch, pens (`tablet-v2`), pinches (`pointer-gestures`) and cursors (`cursor-shape`); the cursor, a click, a wheel notch and a key ran from a Weston seat, while touch, pens and pinches have run through their translation tests only, with no device, and no cursor shape has run: Weston 13 has no `cursor-shape`, so the cursor ran from the cursor theme (`XCURSOR_THEME`, `XCURSOR_SIZE`), the fallback for such compositors. A tablet pad's buttons, rings and strips are not read. Where the compositor draws no frame, the window draws its own ([No custom title bar, popups or owned windows](#no-custom-title-bar-popups-or-owned-windows)). Its text input serves the focused field to the input method through each seat's `zwp_text_input_v3`: preedit, commit and deletion around the caret reached the field's store and the field's text reached the input method, run 2026-10-31 under sway 1.9 with an input method of the test's own (`wayland_text_input`), never with IBus, Fcitx or a desktop compositor; a compositor without `zwp_text_input_v3` gives its windows no text input and says so in a warning, with no fallback to another input method path. It takes drops on its windows and starts drag sessions from them ([No native drag and drop](#no-native-drag-and-drop)). Missing there: the portal parent reaching a capability crate (the contract's window reference does not carry it yet), and a run under a desktop compositor (GNOME, KDE, Hyprland).
 - A Wayland window opened with `visible: false` cannot be hidden: Wayland has no hide for a toplevel, so it stays unshown only until it draws its first frame, and no command shows or hides it later (`hides`/`shows` are `Unavailable`).
 - Under Hyprland (Omarchy's compositor) the host takes the decoration the compositor chooses through `zxdg_decoration_manager_v1` (no title bar of its own), presents an alpha surface so the compositor's blur applies, and scales through `wp_fractional_scale_v1` and `wp_viewporter`. The native Wayland host does the decoration and the scale (not run under Hyprland); the alpha surface does not exist.
 
-### 6. Clipboard is broken on two environments
+### Clipboard is broken on two environments
 
 > **Environments:** Android, Web; all for rich · **Who it hurts:** Every app with copy and paste · **Parity:** [Clipboard](platform-parity.md#clipboard-and-drag-and-drop)
 
-- No rich formats: the clipboard reads and writes plain text until a widget needs more, and the shape of that read is reserved by ADR-0312 §7 (entry 43).
+- No rich formats: the clipboard reads and writes plain text until a widget needs more, and the shape of that read is reserved by ADR-0312 §7 ([Accepted ADR sections not built yet](#accepted-adr-sections-not-built-yet)).
 - Android reads and writes the system `ClipboardManager` through JNI; type-checked, no device run yet.
 - The native X11 host owns and reads the `CLIPBOARD` selection on a connection of its own, run between two of its clipboards on Xvfb (2026-10-30); what it owns is gone when the application exits, as it hands nothing to a clipboard manager yet.
 - The native Wayland host reads and writes its seats' selection through `wl_data_device`, run between two clients of Weston 13 (2026-10-30), and its primary selection through `zwp_primary_selection_device_manager_v1`, run between two clients of sway 1.9 (2026-10-30); no widget claims or pastes the primary selection yet.
 - The Web reads the system clipboard through `navigator.clipboard` asynchronously, falling back to its own writes where the browser refuses; no browser run yet.
 
-### 7. File dialogs, open URL, reveal, trash, message box and share exist on Windows only, or nowhere
+### File dialogs, open URL, reveal, trash, message box and share exist on Windows only, or nowhere
 
 > **Environments:** all · **Who it hurts:** Every document app; any app with a link · **Parity:** [System services](platform-parity.md#system-services)
 
@@ -158,7 +115,7 @@ request.
 - **Linux** provides both through the XDG desktop portal (`OpenURI`, `Trash`, `FileChooser`) on zbus's own runtime, run against a stand-in portal on a private bus, not on a desktop. A dialog is modal to an X11 window; on Wayland it is not modal until the host exports an `xdg-foreign` handle.
 - **Still missing:** Windows, the Web, Apple and Android answer `Unsupported(NotYetOnThisHost)` through `flui-system`; the core `Platform`'s `open_url` (Windows and Web, nothing calls it) and file dialogs (Windows only, every other host answers "cancelled") go once each host has its provider.
 
-### 8. No native drag and drop
+### No native drag and drop
 
 > **Environments:** all · **Who it hurts:** Document, media and file-manager apps · **Parity:** [Clipboard and drag and drop](platform-parity.md#clipboard-and-drag-and-drop)
 
@@ -173,7 +130,7 @@ request.
 - **Still missing:** `NSDraggingDestination`, and every other native drag source and target.
 - Planned in the [interaction spec](plans/specs/flui-interaction/completeness/tasks.md) (ADR-0211; T28–T31, T35, T37 and the per-OS tickets).
 
-### 9. Window control has run only on Windows, an X11 test server and the AppKit conformance kit
+### Window control has run only on Windows, an X11 test server and the AppKit conformance kit
 
 > **Environments:** desktop · **Who it hurts:** Every desktop app · **Parity:** [Windows](platform-parity.md#windows)
 
@@ -194,7 +151,7 @@ request.
 - **Android cannot close its window:** `WindowCommand::Close` is `Unavailable` there (one native window, which the application does not finish), so a programmatic close answers `CloseRequestError::Refused`.
 - **No close request on the Web and Android:** neither host ever asks a window handler's `close_requested` (a page's unload and an Activity's finish are not requests the application can refuse), so an application's close veto never runs there.
 
-### 10. No custom title bar, popups or owned windows
+### No custom title bar, popups or owned windows
 
 > **Environments:** desktop · **Who it hurts:** Apps with modern chrome; every menu and dropdown · **Parity:** [Windows](platform-parity.md#windows)
 
@@ -204,14 +161,14 @@ request.
 - Menus, tooltips and dropdowns can't leave the window.
 - On Wayland, where the compositor draws no frame (GNOME, Weston) or leaves it to the client, the native host's window draws its own: a title bar with the title and the buttons `wm_capabilities` offers, margins it is resized from, moved and resized through `xdg_toplevel.move`/`resize` with the press's serial, and the compositor's window menu on a secondary press. It ran on Weston 13's desktop shell (X11 backend on Xvfb, XTest, 2026-10-28): the bar read back from the screen, a drag moved and a corner resized the window, the buttons maximized and closed it. **Still missing:** it is the host's own neutral frame, light or dark after the desktop (an application that wants its own title bar asks for `WindowFrame::AppTitleBar`, above); no touch or pen drags it; no shadow is drawn; the window menu, tiled edges and a fractional scale have not run (Weston 13 has no window menu or tiling, sway draws its own frames), nor has GNOME. Its title is shaped over the bundled faces and the host's, read by a scan of its own, which an application's font collection does not share yet.
 
-### 11. No native menus
+### No native menus
 
 > **Environments:** macOS, iPadOS; Windows · **Who it hurts:** Every macOS app · **Parity:** [Menus](platform-parity.md#menus)
 
 - No macOS menu bar (no Quit or Edit menu), so the shortcuts its items carry do nothing: Ctrl-Cmd-F leaves a full-screen window full screen.
 - No native context menus, no Dock menu or jump list.
 
-### 12. Lifecycle holes
+### Lifecycle holes
 
 > **Environments:** all · **Who it hurts:** Apps that save state or hold resources · **Parity:** [App lifecycle](platform-parity.md#app-lifecycle)
 
@@ -220,14 +177,14 @@ request.
 - Sleep, wake and lock reach Windows, macOS and Linux (Linux checked only against a stand-in for logind), and memory pressure Windows, macOS, iOS, Android and Linux.
 - A GPU device whose rebuild keeps failing is given up after about twelve seconds (ADR-0267). On the desktop the application gets it back with `AppHandle::retry_render_device`; Android and iOS have no such entry, so a given-up window there stays blank until the process restarts. No device loss has run on real hardware: the rows use the stand-in renderer.
 
-### 13. No deep links, URL schemes, file associations or single instance
+### No deep links, URL schemes, file associations or single instance
 
 > **Environments:** all · **Who it hurts:** Apps opened from links, files or a second launch · **Parity:** [App lifecycle](platform-parity.md#app-lifecycle)
 
 - No host reports an opened URL or file: the registration that would have heard one is gone, and `opened(urls, files)` joins the application handler with the activation feature.
 - Packaging (app identity) not audited.
 
-### 14. System preferences missing or never run
+### System preferences missing or never run
 
 > **Environments:** all · **Who it hurts:** Users who rely on accessibility settings or another locale · **Parity:** [System preferences](platform-parity.md#system-preferences)
 
@@ -236,9 +193,9 @@ request.
 - Never run: every host reads contrast and the preferred languages, but macOS and iOS are type-checked only, the Web ran on Node rather than in a browser, and Linux ran against a stand-in portal rather than a desktop session.
 - Windows text scale is applied linearly. WinUI scales larger text less by an undocumented curve, so large text grows more than in a WinUI control at the same setting.
 - Gesture presets per platform and pointer kind, accessibility floors, per-display geometry and headless injection landed with the [interaction spec](plans/specs/flui-interaction/completeness/tasks.md) (ADR-0212).
-- Layout direction, per-app language, and system fonts and fallback are separate rows, tracked by [entry 35](#35-locale-edge-layout-direction-per-app-language-system-fonts-and-fallback).
+- Layout direction, per-app language, and system fonts and fallback are separate rows, tracked by [Locale edge: layout direction, per-app language, system fonts and fallback](#locale-edge-layout-direction-per-app-language-system-fonts-and-fallback).
 
-### 15. Pointer and keyboard gaps
+### Pointer and keyboard gaps
 
 > **Environments:** various · **Who it hurts:** Pen, trackpad and iPad users · **Parity:** [Input](platform-parity.md#input)
 
@@ -251,7 +208,7 @@ request.
 - Pointer frames (`PlatformInput::PointerFrame`): only Windows touch and pen report them, read with `GetPointerFrameInfo` and delivered as one frame after `SkipPointerFrameMessages`, and that path has run on synthetic data only: no two-finger touch run on a Windows touch machine yet. The native Wayland host frames the touches each `wl_touch.frame` closes, as one pointer frame per surface (translation tests only, no touchscreen run). Android frames the fingers of one `ACTION_MOVE` (cross-checked in CI, no run on a device), and iOS (a touch set) still reports each contact on its own, as frames of one.
 - Pointer, scroll and pinch work is planned per OS in the [interaction spec](plans/specs/flui-interaction/completeness/tasks.md) (T36 DirectManipulation is implemented and awaits a touchpad run; T40–T44).
 
-### 16. Mobile system UI
+### Mobile system UI
 
 > **Environments:** iOS, Android, Web · **Who it hurts:** Every mobile app · **Parity:** [System UI](platform-parity.md#system-ui)
 
@@ -264,27 +221,27 @@ request.
   - Windows pen haptics ran only on a host with no haptic pen, while Windows touchpad and mouse haptics (`InputHapticsManager`) wait for a `windows` crate that ships it ([interaction spec](plans/specs/flui-interaction/completeness/tasks.md))
 - System gesture exclusion is implemented on Android and iOS; it ran on an Android device, never on iOS.
 
-### 17. Desktop shell services
+### Desktop shell services
 
 > **Environments:** desktop · **Who it hurts:** Background, messaging and utility apps · **Parity:** [System services](platform-parity.md#system-services)
 
 - No tray, notifications, taskbar progress or badge, global shortcuts, launch at login, keep-awake or secure storage.
 
-### 18. Text services
+### Text services
 
 > **Environments:** all · **Who it hurts:** Writing apps; sign-in forms; tablet users · **Parity:** [Text input](platform-parity.md#text-input)
 
 - No spell check, system edit menu, autofill or handwriting.
-- Handwriting, dictation and reconversion also need the text-input client queries and the session that survives a window move, resize, DPI change and focus loss; those rows sit under [Text input](platform-parity.md#text-input) and are tracked with [entry 1](#1-no-text-input-on-mobile-and-the-web).
+- Handwriting, dictation and reconversion also need the text-input client queries and the session that survives a window move, resize, DPI change and focus loss; those rows sit under [Text input](platform-parity.md#text-input) and are tracked with [No text input on mobile and the Web](#no-text-input-on-mobile-and-the-web).
 
-### 19. No native views inside the UI (web view, map, video)
+### No native views inside the UI (web view, map, video)
 
 > **Environments:** all · **Who it hurts:** Apps that embed a map, browser or player · **Parity:** [Windows](platform-parity.md#windows)
 
 - Not in the contract; the design shapes compositing, hit-testing and accessibility.
 - Needs an owner decision.
 
-### 20. Window looks
+### Window looks
 
 > **Environments:** desktop; mobile for capture · **Who it hurts:** Apps with a native look; apps showing sensitive data · **Parity:** [Windows](platform-parity.md#windows)
 
@@ -292,13 +249,13 @@ request.
 - The contract's window material (`WindowCommand::SetMaterial`: `Opaque`, `System`) is drawn on Windows (Mica, build 22621 and later; a Win32 window still opens on it) and on macOS (`NSVisualEffectView`'s window-background material, type-checked only); Linux, Web and mobile report it `Unavailable`. The backdrop material and Liquid Glass of `flui::native::macos` ran on macOS 27 (an M1, 2026-10-27, `an_appkit_backdrop_goes_behind_the_content_and_comes_away`); the contract's material on macOS waits for its Mac run; no window icon on Windows or Linux.
 - What the OS has and the host does not drive answers `NotYetOnThisHost`, not `NotOnThisPlatform`: the material on iOS (`UIVisualEffectView`), on Android from API 31 where the device blurs across windows, and on an AppKit window off the main lane; the macOS frame-rate hint from macOS 14 (`NSView.displayLink`); the pointer's shape on Android from API 24 (`PointerIcon`) and on an iPad from iOS 13.4 (`UIPointerStyle`). Below those versions, on an iPhone, or with the device's cross-window blur off, the answer is `NotOnThisDevice`. Only the rules' table tests ran (on Windows); none of the iOS, Android or macOS paths has run on a device.
 
-### 21. Unaudited rows
+### Unaudited rows
 
 > **Environments:** desktop, Web · **Who it hurts:** Unknown · **Parity:** [Windows](platform-parity.md#windows)
 
 - App identity and packaging, live resize.
 
-### 22. Version floors and the GPU fallback not run on devices
+### Version floors and the GPU fallback not run on devices
 
 > **Environments:** all · **Who it hurts:** Users on older systems or GPUs without Vulkan or WebGPU, who get a failure in the middle of start instead of a clear refusal · **Parity:** [App lifecycle](platform-parity.md#app-lifecycle)
 
@@ -308,7 +265,7 @@ request.
 - Windows links a 1607 API unconditionally; the Linux release glibc is the runner's.
 - The GPU fallback (Vulkan to GLES 3.0, WebGPU to WebGL2, Direct3D 12 to WARP) is compiled and the engine's pixel suites pass on llvmpipe GL; only Linux has run it, and no browser has run WebGL2 or Windows WARP.
 
-### 23. No presentation feedback
+### No presentation feedback
 
 > **Environments:** iOS, Android · **Who it hurts:** Every animated app; every latency claim · **Parity:** [Displays and metrics](platform-parity.md#displays-and-metrics)
 
@@ -319,7 +276,7 @@ request.
 - The Web (a `requestAnimationFrame` timestamp is a frame's start) and X11 (the Present extension reports a completion to the GPU driver's connection) have no presentation time a toolkit can read, and their windows say so.
 - Animations still tick on the vsync instant, never the presentation time (ADR-0257 decision 2); nothing yet attributes a presentation to the produced frame it showed, so the frame telemetry's input-to-present histogram still ends at the submit.
 
-### 24. No HDR, wide gamut or colour management
+### No HDR, wide gamut or colour management
 
 > **Environments:** all · **Who it hurts:** Photo, video and design apps; every app on an HDR display · **Parity:** [Displays and metrics](platform-parity.md#displays-and-metrics)
 
@@ -329,7 +286,7 @@ request.
 - X11 reads no colour (`_ICC_PROFILE` is not parsed). Windows has no broadcast for the SDR white level, so a moved slider is read at the next other display event. Android sets the window's `ColorMode` for the requested surface but does not listen to `Display.registerHdrSdrRatioChangedListener`: the listener needs a Java class in `FluiView`, so a moved HDR/SDR ratio is read only at the next configuration change or resume. The Web reports capability only and no headroom.
 - Sources are still sRGB: images with a profile, video and HDR images enter the working space as sRGB values.
 
-### 25. Sandbox-aware file access is absent
+### Sandbox-aware file access is absent
 
 > **Environments:** all desktop and mobile · **Who it hurts:** Every app distributed through a store or Flatpak · **Parity:** [System services](platform-parity.md#system-services)
 
@@ -337,7 +294,7 @@ request.
 - `data_dirs` and the dialogs assume an unsandboxed process, so an App Store, Flatpak or MSIX build gets paths it cannot open.
 - The manifests are part of the same gap: nothing generates macOS entitlements, Flatpak `finish-args`, Snap interfaces or MSIX capabilities from declared capabilities (the parity row "Sandbox and entitlement manifests generated from declared capabilities"). Tauri's autostart plugin shows the cost: it writes a launcher path that cannot run outside the Flatpak sandbox ([tauri-apps/plugins-workspace#3166](https://github.com/tauri-apps/plugins-workspace/issues/3166)).
 
-### 26. Secure text entry and concealed clipboard entries are partial
+### Secure text entry and concealed clipboard entries are partial
 
 > **Environments:** all · **Who it hurts:** Every sign-in form; password managers · **Parity:** [Text input](platform-parity.md#text-input), [Clipboard and drag and drop](platform-parity.md#clipboard-and-drag-and-drop)
 
@@ -347,7 +304,7 @@ request.
 - No text field writes concealed yet: an obscured `EditableText` copies nothing, and an application that copies a secret calls `ClipboardHandle::write` itself.
 - Platform-edge diagnostics have no redaction check: protected-field text, clipboard payloads and URLs with tokens must never reach the `tracing` targets or the `native-capture` journal, which will carry text and URLs once more event families are recorded (the [OWASP Logging Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Logging_Cheat_Sheet.html) lists them under "Data to exclude").
 
-### 27. Input latency modes and high-rate sampling are partial
+### Input latency modes and high-rate sampling are partial
 
 > **Environments:** all but Windows and the Web · **Who it hurts:** Drawing, games and anything that tracks a finger or pen · **Parity:** [Input](platform-parity.md#input)
 
@@ -357,7 +314,7 @@ request.
 - The Linux and macOS paths are not audited.
 - Timestamp conversion is a hazard of its own: Win32 `GetMessageTime` is 32-bit milliseconds that wrap every 49.7 days, Wayland event times have an undefined base, and Android's event time is uptime milliseconds. Windows pointer ticks are rebased across the wrap (`NativeTime::TickMillis`); the native Wayland host reads a stamp through the same rule only when it lies within a second of `CLOCK_MONOTONIC` and stamps the event on arrival otherwise (Weston's X11 backend stamps on the X server's clock); the X11, Android and Web conversions are not audited.
 
-### 28. Distribution is unaudited
+### Distribution is unaudited
 
 > **Environments:** all · **Who it hurts:** Everyone who ships · **Parity:** [Distribution](platform-parity.md#distribution)
 
@@ -366,20 +323,20 @@ request.
 - The identity that notifications, URL schemes, portals and jump lists need is not checked into the package.
 - Entitlement and sandbox manifests (macOS and iOS entitlements, Flatpak `finish-args`, Snap interfaces, MSIX capabilities, Android permissions) are not generated from declared capabilities; the Android template declares `VIBRATE` itself.
 
-### 29. Activation ignores the OS focus rules
+### Activation ignores the OS focus rules
 
 > **Environments:** Windows, Wayland · **Who it hurts:** Apps brought forward by a link, a second launch or a notification · **Parity:** [App lifecycle](platform-parity.md#app-lifecycle)
 
-- Windows follows the foreground rules: an activation the rules refuse flashes the window's taskbar button and leaves the foreground with the application the user works with, a right handed over (`AllowSetForegroundWindow`) brings it forward (run with two processes, 2026-10-28). Opening a link, file or folder hands the right only to the handler process the shell started, by its id; a handler already running (a browser, Explorer) is handed nothing and comes forward under the OS's own rules, which may leave it behind (the PID hand-over not run against a real handler). No second launch hands the right yet: that comes with single instance, in the activation spec (entry 13).
+- Windows follows the foreground rules: an activation the rules refuse flashes the window's taskbar button and leaves the foreground with the application the user works with, a right handed over (`AllowSetForegroundWindow`) brings it forward (run with two processes, 2026-10-28). Opening a link, file or folder hands the right only to the handler process the shell started, by its id; a handler already running (a browser, Explorer) is handed nothing and comes forward under the OS's own rules, which may leave it behind (the PID hand-over not run against a real handler). No second launch hands the right yet: that comes with single instance, in the activation spec ([No deep links, URL schemes, file associations or single instance](#no-deep-links-url-schemes-file-associations-or-single-instance)).
 - The Win32 snapshot says `focused: true` and `active: true` for a window of a process the user is not working with: they are its thread's focus and activation, not the system's. `WM_ACTIVATEAPP` does not tell them apart (Windows sends it for the thread's own activation of a background process, seen in a two-process run, 2026-10-28), so the fix needs the foreground's changes (`EVENT_SYSTEM_FOREGROUND`) to reach each window, which the host does not watch yet.
 - The native Wayland host asks with an `xdg-activation` token and uses the launcher's `XDG_ACTIVATION_TOKEN` for the first window it holds; a token names the last key, button, touch or keyboard focus its seats report, the serial a compositor weighs before it moves the focus (with no input yet, an activation asks for attention: sway marks the window urgent). CI covers only the refusal: Weston 13, which CI runs, has no `xdg_activation_v1`, so the whole path runs only on sway, locally ([testing](testing.md)).
 - macOS cooperative activation (`NSApplication.yieldActivation(to:)`, macOS 14) is documented by Apple, which also marks `activate(ignoringOtherApps:)` deprecated; neither is audited.
 
-### 30. Live resize is unaudited and unscheduled
+### Live resize is unaudited and unscheduled
 
 > **Environments:** desktop, Web · **Who it hurts:** Every user who resizes a window by dragging its edge · **Parity:** [Windows](platform-parity.md#windows)
 
-- No environment has been audited: the row "Live resize without jitter" is ❔ on Windows, macOS, Wayland, X11 and the Web, and entries 9 and 21 mention it only in passing.
+- No environment has been audited: the row "Live resize without jitter" is ❔ on Windows, macOS, Wayland, X11 and the Web, and [Window control has run only on Windows, an X11 test server and the AppKit conformance kit](#window-control-has-run-only-on-windows-an-x11-test-server-and-the-appkit-conformance-kit) and [Unaudited rows](#unaudited-rows) mention it only in passing.
 - Windows has no `WM_ENTERSIZEMOVE` handling outside the DirectManipulation tests. That message opens a modal loop inside `DefWindowProc` that lasts until the drag ends ([Microsoft Learn](https://learn.microsoft.com/en-us/windows/win32/winmsg/wm-entersizemove)); winit reports that its `ControlFlow` is ignored there and that continuous redraws make a drag choppy ([rust-windowing/winit#3272](https://github.com/rust-windowing/winit/issues/3272), [#4708](https://github.com/rust-windowing/winit/issues/4708)).
 - Metal presents asynchronously to Core Animation transactions unless `CAMetalLayer.presentsWithTransaction` is set ([Apple](https://developer.apple.com/documentation/quartzcore/cametallayer/presentswithtransaction)); Wayland needs an `ack_configure` before the committing frame and frame callbacks to pace the redraw; X11 has `_NET_WM_SYNC_REQUEST`. None of these is audited here.
 - macOS sets `presentsWithTransaction` on the view's layer for each display pass of a live resize and clears it after, so wgpu presents that drawable in the transaction that carries the new window frame; the frame renders inline in `updateLayer`, so the wait wgpu adds holds the main thread only while an edge is dragged. Type-checked, not looked at by eye.
@@ -387,17 +344,17 @@ request.
 - It is among the most-reported defects of comparable frameworks ([emilk/egui#903](https://github.com/emilk/egui/issues/903) is a fast-resize flicker). A reference run should record its trade-off in the row note: Flutter's Windows embedder blocks the platform thread for up to 100 ms for a frame at the new size.
 - Pass criteria: a scripted two-second border drag with every presented frame captured, content size equal to window size in every captured frame, callbacks counted during the modal loop, and the p99 frame time recorded.
 
-### 31. No present-mode, queue-depth, VRR or tearing control
+### No present-mode, queue-depth, VRR or tearing control
 
 > **Environments:** desktop, iOS, Android · **Who it hurts:** Games, drawing and latency-sensitive apps · **Parity:** [Displays and metrics](platform-parity.md#displays-and-metrics)
 
 - The engine always presents with `Fifo` and a frame latency of 2; nothing lets the platform layer or the app choose a present mode, a queue depth, variable-refresh behaviour or tearing.
-- Presentation feedback (entry 23) is read-only and "Refresh rate and frame pacing" covers rates only; control over how frames are presented is the other half.
+- Presentation feedback ([No presentation feedback](#no-presentation-feedback)) is read-only and "Refresh rate and frame pacing" covers rates only; control over how frames are presented is the other half.
 - Windows tearing needs `DXGI_FEATURE_PRESENT_ALLOW_TEARING` and `DXGI_PRESENT_ALLOW_TEARING`, which can only be used with sync interval 0 ([Microsoft Learn](https://learn.microsoft.com/en-us/windows/win32/direct3ddxgi/variable-refresh-rate-displays)); Wayland has `wp_tearing_control_v1`, `fifo-v1` and `commit-timing-v1`.
 - Queue depth costs latency: the default DXGI queue of up to three frames adds about 16–32 ms of input latency in another framework ([libsdl-org/SDL#15656](https://github.com/libsdl-org/SDL/issues/15656)).
 - The Web has nothing to control: `requestAnimationFrame` is its only cadence.
 
-### 32. Launch handoff on mobile and the Web
+### Launch handoff on mobile and the Web
 
 > **Environments:** iOS, Android, Web · **Who it hurts:** Every mobile and web app in its first second · **Parity:** [Windows](platform-parity.md#windows)
 
@@ -406,7 +363,7 @@ request.
 - The parity row "Show without a blank first frame" covers the desktop only, where the window is created hidden and shown after the first presented frame; Electron does the same with a hidden window shown on `ready-to-show` and a `backgroundColor`.
 - A dark-mode user should see the dark splash and the dark first frame, not a white flash between them.
 
-### 33. Quality-bar partials with no entry
+### Quality-bar partials with no entry
 
 > **Environments:** all · **Who it hurts:** Everyone who relies on a platform claim; maintainers who cannot replay a failure · **Parity:** [Quality bar](platform-parity.md#quality-bar)
 
@@ -415,7 +372,7 @@ request.
 - The `native-capture` journal records pointers, system notices, session ends, reopens, input method events, reads of the system preferences and displays, and window snapshots (titles redacted by default), not close requests or closes. An input method that edits the focused text store directly (TSF on Windows, the Android and web mirrors) delivers no event, so its edits are not journaled: the `ime` row family reserves a store-edit payload for them.
 - Not every unsupported cell in the parity tables names its reason, and nothing checks the cells against the code's `Unsupported` reasons.
 
-### 34. Power-aware pacing and throttling
+### Power-aware pacing and throttling
 
 > **Environments:** all · **Who it hurts:** Every user on battery or a thermally limited device · **Parity:** [System preferences](platform-parity.md#system-preferences)
 
@@ -425,20 +382,20 @@ request.
 - iOS asks its display link for the screen's best rate only while a presentation animates or a pointer is down (the runtime's frame-rate demand, as on Android), and leaves a still screen to the system's rate. On a still screen the link pauses: it runs only while a frame is asked for, and a request from any thread resumes it on the main thread (type-checked, no device run). The Web's frame loop stands still the same way once the refresh estimate has its window of frames, and a request resumes it (run in the wasm32 suite on Node, not in a browser).
 - The check forces each state and asserts a delivery within one event-loop turn and a frame-rate or work reduction.
 
-### 35. Locale edge: layout direction, per-app language, system fonts and fallback
+### Locale edge: layout direction, per-app language, system fonts and fallback
 
 > **Environments:** all · **Who it hurts:** Apps in right-to-left or non-Latin languages; users who set a language for one app · **Parity:** [System preferences](platform-parity.md#system-preferences)
 
-- Entry 14 names languages and regional formats only. Layout direction, per-app language, and system fonts and fallback have no reading in the platform layer.
+- [System preferences missing or never run](#system-preferences-missing-or-never-run) names languages and regional formats only. Layout direction, per-app language, and system fonts and fallback have no reading in the platform layer.
 - Android 13 adds per-app language preferences and `setApplicationLocales` ([Android documentation](https://developer.android.com/guide/topics/resources/app-languages)); iOS has a per-app language setting; a right-to-left layout follows from the locale.
 - Text layout resolves fonts through `fontdb` in `flui-painting`. DirectWrite `IDWriteFontFallback`, Android `fonts.xml` and `AFontMatcher` (API 29), CoreText and fontconfig are the platform answers to which font draws a character the requested family lacks. The collection puts such an answer (`SystemFallback`) ahead of FLUI's tables ([ADR-0271](adr/ADR-0271-the-host-feed-asks-the-platform-which-faces-fall-back.md)). DirectWrite gives it on Windows, CoreText on macOS and iOS, fontconfig on Linux and the BSDs, `AFontMatcher` on Android from API 29 and `fonts.xml` below it; Windows, Apple and Android are type-checked, not run. When the first preferred locale changes, the feed's thread asks again and installs the new answer. The order follows the app's first locale only: a paragraph in another language falls back in that order, since the fallback key carries no per-paragraph locale yet.
 - The check is a locale matrix (en-US, ar-EG for right-to-left, ja-JP, hi-IN with its numbering) on every OS: list order, first weekday, 12 or 24 hour clock, per-app override, and CJK and emoji text without missing-glyph boxes.
 
-### 36. Accessibility bridge fidelity (properties and announcements)
+### Accessibility bridge fidelity (properties and announcements)
 
 > **Environments:** desktop, iOS, Android, Web · **Who it hurts:** Screen-reader users: a control announced without its value, hint or state, or a change nobody hears · **Parity:** [Accessibility](platform-parity.md#accessibility)
 
-- Entry 2 is about missing adapters; a bridge that exists can still drop properties or announcements, and the two fail independently of the tree and actions.
+- [No accessibility on mobile and the Web](#no-accessibility-on-mobile-and-the-web) is about missing adapters; a bridge that exists can still drop properties or announcements, and the two fail independently of the tree and actions.
 - Another framework's Linux bridge drops a field's `value` and `hint` ([flutter/flutter#194638](https://github.com/flutter/flutter/issues/194638)) and gives no AT-SPI announcement for live regions, snack bars, alert dialogs or route changes, only for an explicit announcement call ([flutter/flutter#194045](https://github.com/flutter/flutter/issues/194045)).
 - The parity rows "Properties (value, hint, description, state)" and "Announcements and live regions" are ❔ on Windows and macOS, run on X11 against an AT-SPI client (below), and ❌ where there is no adapter at all.
 - Each needs a check with the real assistive technology on each OS that reads role, name, value, hint, state, actions, focus order and announcements; a harness that registers AT-SPI listeners and matches only strings carrying a nonce keeps any other source from producing a hit.
@@ -446,7 +403,7 @@ request.
 - Windows scroll by position is unrun: the vendored `accesskit_windows` ([third_party/README.md](../third_party/README.md)) implements UI Automation's `ScrollPattern` over the position the semantics publishes from the top or left edge and its `SetScrollOffset` (ADR-0273), but it is type-checked only: neither Narrator nor NVDA, nor the adapter's own UI Automation test, has run it on Windows.
 - **Linux, run against a real AT-SPI client:** `flui-native`'s `linux_atspi` starts a session bus and the accessibility bus of its own (at-spi2-core) beside an Xvfb, publishes a window's tree through `accesskit_unix` and reads it back as Orca would: role, name, hint as the description, a field's text through the Text interface (from its runs; a value without runs reaches no AT-SPI interface), a slider's value and range, states and actions; announcements at their urgency, live regions whose own or child's label changes, a status that appears, and focus once the window is active, each matched by a nonce of the run. A route change and a modal dialog appearing are told by name (ADR-0204 §5): heard on X11 as a polite announcement (`a_route_change_is_heard_by_its_name`); on iOS and Android as the platform's notice of a new screen, type-checked, with no VoiceOver or TalkBack run; on Windows, macOS and the Web as an announcement, not run there. No Orca session ran.
 
-### 37. Add-to-app: no FLUI view inside an existing native app
+### Add-to-app: no FLUI view inside an existing native app
 
 > **Environments:** all · **Who it hurts:** Teams adding FLUI to an app they already ship · **Parity:** [Windows](platform-parity.md#windows)
 
@@ -456,7 +413,7 @@ request.
 - The design question is who owns the loop: an embedded view is driven by the app's loop and receives events from the app's window, so the owner thread's one call point for user code ([ADR-0151 §10](adr/ADR-0151-platform-layer-boundary-and-names.md)) has to run inside a foreign callback, and ADR-0151 names an external embedder as the first reason to reopen the crate split.
 - The check is one screen of FLUI inside a foreign app on each OS: keyboard focus moving into and out of the view, IME and the assistive technology reaching it, and the app's own lifecycle pausing and resuming it.
 
-### 38. No gamepad, and no D-pad run on a TV
+### No gamepad, and no D-pad run on a TV
 
 > **Environments:** all · **Who it hurts:** TV, console-style and Steam Deck users; games · **Parity:** [Input](platform-parity.md#input)
 
@@ -465,7 +422,7 @@ request.
 - Without a pointer (Android TV, tvOS, a console) focus navigation is the whole input model: every widget must be reachable by direction with a visible focus ring, which no run has shown.
 - The check is a remote on an Android TV device and a controller on Windows and a Steam Deck: every control of the interaction widgets reached by direction and activated by the centre button, and a controller's sticks and buttons recorded and replayed.
 
-### 39. No rotary input
+### No rotary input
 
 > **Environments:** Windows, Android; Apple later · **Who it hurts:** Surface Dial and Wear OS users · **Parity:** [Input](platform-parity.md#input)
 
@@ -473,7 +430,7 @@ request.
 - Wear OS is a form factor of the Android host, not a column: its lists are expected to scroll by rotary input, so a watch app without it fails review on the first screen.
 - The check is a Surface Dial on Windows and the rotary input of a Wear OS emulator turning a scroll view by detents, recorded and replayed.
 
-### 40. No compute lane off the UI thread on the Web
+### No compute lane off the UI thread on the Web
 
 > **Environments:** Web · **Who it hurts:** Web apps that decode images or lay out large documents · **Parity:** [Quality bar](platform-parity.md#quality-bar)
 
@@ -481,7 +438,7 @@ request.
 - The lane belongs on Web workers: a worker pool that runs a `ComputeJob` needs shared memory (`SharedArrayBuffer`, which needs cross-origin isolation headers) or a job shape that crosses `postMessage` by value.
 - The check is a browser run of a large image decode started through `Background::compute` with the frame clock showing no frame longer than its budget.
 
-### 41. Images decode on the UI thread without background lanes
+### Images decode on the UI thread without background lanes
 
 > **Environments:** hosts without `BackgroundCapability` · **Who it hurts:** Embedders whose host registers no background lanes · **Parity:** [Quality bar](platform-parity.md#quality-bar)
 
@@ -489,7 +446,7 @@ request.
 - Decoded images are not shared between widgets: two `Image::memory` widgets with equal bytes decode twice. A decoded-image cache owned by the UI runtime (never by the process) is the follow-up.
 - The check is a host without the capability decoding a large image with the frame clock showing the cost, and a cache hit test once the runtime cache exists.
 
-### 42. The driver agent cannot reach a page in Safari
+### The driver agent cannot reach a page in Safari
 
 > **Environments:** Web (Safari) · **Who it hurts:** Agents and tests that drive a FLUI app in Safari · **Parity:** none yet (the driver agent has no row)
 
@@ -497,7 +454,7 @@ request.
 - The likely shape is a third dialect of the CLI's `BrowserLink` once `safaridriver` serves WebDriver BiDi, or one over classic WebDriver that polls the page for its lines.
 - The check is `flui run --agent` in Safari on macOS, `flui mcp` reading the app and acting on it, and a reload reconnecting.
 
-### 43. Accepted ADR sections not built yet
+### Accepted ADR sections not built yet
 
 > **Environments:** all · **Who it hurts:** Anyone who reads an accepted ADR as the code's current shape · **Parity:** [Quality bar](platform-parity.md#quality-bar)
 
@@ -516,7 +473,7 @@ request.
 - **ADR-0102 §5 and ADR-0103.** The clip and coverage readbacks (`hard_clip_membership_scales_to_a_full_hd_frame`, `coverage_blend_reads_back_as_specified`) have run on native adapters only, not on a browser or a mobile GPU.
 - **ADR-0142 item 4.** Built: the host contract, the owner's `complete_composition` with the `Abandoned` path, the field's commit on blur, on a pointer-down on it and on a paste, and the runtime's commit on a pointer-down anywhere in the presentation. The commits on an accepted close request, at the end of the session, on undo and on unmount, and the outgoing client's commit when an attach replaces it, land with the widget's composition handling.
 - **ADR-0153 items 3 and 5.** The `cargo-semver-checks` report runs on every pull request and push against its base commit, on `flui-platform` only (`.github/workflows/ci.yml`), not in a train's release against the previous published train, and not on the five `flui-foundation` items the contract names. `cargo xtask workspace`'s `capability` kind rule does not scan a capability crate for `PlatformWindow` or contract paths outside the seam.
-- **ADR-0255.** Of Android, decisions 1, 4, 5 and 7 are built, decision 2's queue with `onTrimMemory` (the other entries come with their consumers) and decision 6's Activity, `hasCode`, `singleTop`, the back flag and `configChanges` (the dex is a declaration of `flui-native`, ADR-0307 version 2; the handshake is `owner::android::java_host`), and the Gradle path of the build table: the crates' sources through `flui.javaSources` and their R8 rules (`dev.flui.**` kept) through `flui.proguardFiles`. The iOS and Web decisions land as separate changes; text input and accessibility on each are entries 1 and 2, and a platform's row in [`platform-parity.md`](platform-parity.md) moves only after a run on that platform.
+- **ADR-0255.** Of Android, decisions 1, 4, 5 and 7 are built, decision 2's queue with `onTrimMemory` (the other entries come with their consumers) and decision 6's Activity, `hasCode`, `singleTop`, the back flag and `configChanges` (the dex is a declaration of `flui-native`, ADR-0307 version 2; the handshake is `owner::android::java_host`), and the Gradle path of the build table: the crates' sources through `flui.javaSources` and their R8 rules (`dev.flui.**` kept) through `flui.proguardFiles`. The iOS and Web decisions land as separate changes; text input and accessibility on each are [No text input on mobile and the Web](#no-text-input-on-mobile-and-the-web) and [No accessibility on mobile and the Web](#no-accessibility-on-mobile-and-the-web), and a platform's row in [`platform-parity.md`](platform-parity.md) moves only after a run on that platform.
 - **ADR-0213.** The recording round trip of `PlatformInput::Capabilities` is not built, and presence changes from the native Win32, AppKit, UIKit, Android and web backends are not either: they report their initial table (the headless, Wayland and X11 backends report changes). Until DirectManipulation lands, Windows reports precise scrolling and trackpad gestures `Unavailable`.
 - **ADR-0215 §5 and §8.** `--keep-text` is the API's `Privacy::KeepText`; the command-line flag arrives with a recording tool. Injection into a real window (§8) is built on Windows only (`cargo xtask device windows-input`): the precision touchpad is journaled but certified only by a hardware recording, and the other OSes are pending.
 - **ADR-0254 §6–§8.** Decisions 6 to 8 are not built; they land as separate changes, in the order of the platform-layer feature's tasks.
@@ -529,7 +486,7 @@ request.
 - **ADR-0312 §7.** `ClipboardFormat`, `ClipboardAsk`, `ClipboardHandle::read` and `ClipboardWrite::with` do not exist; they land with the first widget that reads or writes more than text (a `SelectionArea` copied as HTML, a pasted image), with its headless tests.
 - **ADR-0313 §3.** The render slab keeps its hand-rolled slot generations (`crates/flui-rendering/src/storage/node_slab.rs`, its `RETIRED` sentinel) instead of the ledger; the adoption lands with #2241.
 
-### 44. No widget hot reload on Android and the Web
+### No widget hot reload on Android and the Web
 
 > **Environments:** Android, Web · **Who it hurts:** Developers who iterate on widget code on a phone or in a browser · **Parity:** none yet (hot reload has no row)
 

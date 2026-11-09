@@ -2,7 +2,7 @@
 
 - **Status:** Accepted (2026-11-03)
 - **Date:** 2026-09-28
-- **Revised:** 2026-11-03 — what is not built moves from the Status line and the "Implementation status" section to [`docs/gaps.md` entry 43](../gaps.md#43-accepted-adr-sections-not-built-yet).
+- **Revised:** 2026-11-03 — what is not built moves from the Status line and the "Implementation status" section to [Accepted ADR sections not built yet](../gaps.md#accepted-adr-sections-not-built-yet).
 - **Revised:** 2026-11-03 — containment is half-open for every axis-aligned box (§3, "Containment"),
   and a space is a scalar type, the set of scalars is sealed, and continuous device coordinates
   have their own scalar `DeviceF64` (§5, "Spaces are scalars"). §1's list no longer deletes the
@@ -94,7 +94,7 @@ doc comment names the invariant (§5's `DevicePixelRatio` and `DeviceF64` are tw
 | Type | Fields | Notes |
 |---|---|---|
 | `Point` | `x, y` | a position |
-| `Offset` | `dx, dy` | a displacement; `Point ± Offset = Point`, and there is no `Point + Point`. `Point - Point` yields a `Vec2` until `Vec2` folds into `Offset` ([`docs/gaps.md` entry 43](../gaps.md#43-accepted-adr-sections-not-built-yet)) |
+| `Offset` | `dx, dy` | a displacement; `Point ± Offset = Point`, and there is no `Point + Point`. `Point - Point` yields a `Vec2` until `Vec2` folds into `Offset` ([Accepted ADR sections not built yet](../gaps.md#accepted-adr-sections-not-built-yet)) |
 | `Size` | `width, height` | never a displacement |
 | `Rect` | `min: Point, max: Point` | with `left()`, `top()`, `right()`, `bottom()`, `width()`, `height()` and Flutter's constructors (`from_ltwh`, `from_ltrb`, `from_center`, `from_points`) |
 | `EdgeInsets` | `left, top, right, bottom` | inward; the constructor order stays today's `new(top, right, bottom, left)` and `symmetric(vertical, horizontal)` |
@@ -380,7 +380,7 @@ Each step is one PR that builds and passes the pre-PR checks (AGENTS.md, "Checki
     clock's integer grid).
 
   §3's rectangle semantics, content snapping, layout-time stroke widths and Oklab gradients
-  follow ([`docs/gaps.md` entry 43](../gaps.md#43-accepted-adr-sections-not-built-yet)).
+  follow ([Accepted ADR sections not built yet](../gaps.md#accepted-adr-sections-not-built-yet)).
 - **Memory.** Layout values double in size. Paths in `f64` are about twice their current
   memory, and so is the display list until narrowing moves to record time (§2).
 - **Code size.** The target is about 5–6k lines of value code across foundation and painting,

@@ -687,7 +687,7 @@ It sits in this crate, below the runtime, so the host (`flui-app`) and the tool
 producer (ADR-0311 §7). Its bound is still `Send + 'static` because the instance travels in the
 application's configuration; it is only ever called on the owner thread. ADR-0311 makes it
 `'static` alone, built on the owner thread from a factory, with `scene_frame` in a scene hook of
-its own; `docs/gaps.md` (entry 43) lists that as not built. `scene_frame` lends the scene to a
+its own; [Accepted ADR sections not built yet](../../docs/gaps.md#accepted-adr-sections-not-built-yet) lists that as not built. `scene_frame` lends the scene to a
 callback so a scene built by a plugin image cannot outlive it. Pinned by
 `scene_frame_default_never_calls_render` and by the host's tests in `flui-app`
 (`app/hot_reload/tests.rs`).
