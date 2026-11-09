@@ -155,7 +155,7 @@ pub enum LaunchError {
     /// The service the backend launches through is missing or not running
     /// (no desktop portal, no file manager); the reason says whether trying
     /// later may help.
-    #[error("the launch service is unavailable: {0:?}")]
+    #[error("the launch service is unavailable: {0}")]
     Unavailable(UnsupportedReason),
     /// The system answered with an error the launcher does not name; `code`
     /// is the system's, for diagnostics only.
