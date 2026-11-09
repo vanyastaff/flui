@@ -64,6 +64,7 @@ smallvec = { workspace = true }
 flui-protocol = { workspace = true, optional = true, features = ["serde"] }
 serde = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true, features = ["float_roundtrip"] }
+toml = { workspace = true, optional = true }
 
 # Synchronization
 parking_lot = { workspace = true }
@@ -626,7 +627,7 @@ native-capture = ["dep:flui-protocol", "dep:serde", "dep:serde_json"]
 # native recording codec the tests replay recordings through. Off by
 # default and not part of the release API; this crate's tests turn it on
 # through the dev-dependency on itself.
-testing = ["dep:flui-protocol", "dep:serde", "dep:serde_json"]
+testing = ["dep:flui-protocol", "dep:serde", "dep:serde_json", "dep:toml"]
 
 # The `unexpected_cfgs` check-cfg declaration for objc 0.2's
 # `cfg(feature = "cargo-clippy")` probes lives in build.rs — Cargo forbids
@@ -663,6 +664,7 @@ trybuild = { workspace = true }
 flui-protocol = { workspace = true, features = ["serde"] }
 serde = { workspace = true }
 serde_json = { workspace = true, features = ["float_roundtrip"] }
+toml = { workspace = true }
 
 # Browser API fixtures mutate JS globals and therefore have their own process.
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]

@@ -1,0 +1,68 @@
+# The parity table `docs/platform-parity.md` is rendered from this file
+# (decision 8; the check is a flui-native crate test, ADR-0303 rung 4).
+# Hand-written. Edit a row here, run the flui-native parity test with
+# `FLUI_WRITE_PARITY=1` to restate `docs/platform-parity.md`, and commit both.
+
+# A cell mark and its legend line, rendered as `docs/platform-parity.md`'s
+# first table.
+[legend]
+yes = "Implemented and passed an executed run on that environment; the note names the run"
+partial = "Implemented but never run there, or partial; the note says which"
+missing = "Missing: no code path, a stub, a mock, or a default that pretends to succeed"
+na = "Not applicable: the environment has no such concept"
+unaudited = "Not audited yet"
+
+[[host]]
+id = "windows"
+environment = "Windows"
+runner = "Win32 (native)"
+
+[[host]]
+id = "wayland"
+environment = "Wayland"
+runner = "Wayland (native)"
+
+[[host]]
+id = "headless"
+environment = "Headless"
+runner = "Headless host"
+
+[[section]]
+id = "core"
+name = "Core"
+
+[[section.row]]
+id = "window"
+capability = "Window"
+position = "window"
+note = "A native window with its system frame, shown, moved and resized."
+status = { windows = "yes", wayland = "partial", headless = "yes" }
+evidence = [{ scenario = "window_conformance", date = "2026-10-28", device = "Windows 11" }]
+
+[[section.row]]
+id = "displays"
+capability = "Displays"
+position = "displays"
+note = "Reading the environment's screens, their sizes and their changes."
+status = { windows = "yes", wayland = "partial", headless = "yes" }
+evidence = [{ scenario = "displays", date = "2026-10-18", device = "Windows 11" }]
+
+[[section.row]]
+id = "clipboard"
+capability = "Clipboard"
+position = "clipboard"
+note = "Reading and writing the system clipboard, plain text."
+status = { windows = "partial", wayland = "yes", headless = "yes" }
+evidence = [{ scenario = "clipboard", date = "2026-10-30", device = "Weston 13" }]
+
+[[section]]
+id = "services"
+name = "System services"
+
+[[section.row]]
+id = "launch"
+capability = "Launch"
+position = "launch"
+note = "Opening URLs, files and dialogs through the host's services."
+status = { windows = "yes", wayland = "partial", headless = "na" }
+evidence = [{ scenario = "portal", date = "2026-10-31", device = "stand-in portal" }]

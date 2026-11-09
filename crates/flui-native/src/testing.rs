@@ -11,6 +11,8 @@ pub mod clipboard;
 /// The request-per-thread HTTP client's scripted stack.
 #[cfg(test)]
 pub(crate) mod http;
+/// The parity table rendered from `platform-parity.toml`.
+pub mod parity;
 #[cfg(all(target_os = "linux", feature = "wayland"))]
 pub mod wayland;
 #[cfg(all(target_os = "linux", feature = "x11"))]
