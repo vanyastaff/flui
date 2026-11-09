@@ -30,6 +30,7 @@
 //! but only its element registers here; app code never touches the registry.
 
 use std::{
+    cell::RefCell,
     collections::{HashMap, HashSet},
     rc::Rc,
     sync::atomic::{AtomicUsize, Ordering},
@@ -42,7 +43,6 @@ use flui_objects::BuildDuringLayoutCell;
 #[cfg(any(test, feature = "testing"))]
 use flui_objects::LayoutConstraintsCell;
 use flui_rendering::pipeline::PipelineCell;
-use parking_lot::Mutex;
 
 use super::{BuildOwner, build_owner::BuildScopeTarget};
 use crate::tree::ElementTree;
@@ -194,19 +194,19 @@ pub(crate) struct LayoutBuilderEntry {
 /// [`ElementOwner`]: super::ElementOwner
 #[derive(Debug, Default)]
 pub(crate) struct LayoutBuilderRegistry {
-    entries: Mutex<HashMap<RenderId, LayoutBuilderEntry>>,
+    entries: RefCell<HashMap<RenderId, LayoutBuilderEntry>>,
     len: AtomicUsize,
 }
 
 impl LayoutBuilderRegistry {
     pub(crate) fn insert(&self, render_id: RenderId, entry: LayoutBuilderEntry) {
-        let mut entries = self.entries.lock();
+        let mut entries = self.entries.borrow_mut();
         entries.insert(render_id, entry);
         self.len.store(entries.len(), Ordering::Release);
     }
 
     pub(crate) fn remove(&self, render_id: RenderId) {
-        let mut entries = self.entries.lock();
+        let mut entries = self.entries.borrow_mut();
         entries.remove(&render_id);
         self.len.store(entries.len(), Ordering::Release);
     }
@@ -224,14 +224,14 @@ impl LayoutBuilderRegistry {
         &self,
         f: impl FnOnce(&HashMap<RenderId, LayoutBuilderEntry>) -> R,
     ) -> R {
-        f(&self.entries.lock())
+        f(&self.entries.borrow())
     }
 
     pub(crate) fn with_entries_mut<R>(
         &self,
         f: impl FnOnce(&mut HashMap<RenderId, LayoutBuilderEntry>) -> R,
     ) -> R {
-        let mut entries = self.entries.lock();
+        let mut entries = self.entries.borrow_mut();
         let result = f(&mut entries);
         self.len.store(entries.len(), Ordering::Release);
         result
