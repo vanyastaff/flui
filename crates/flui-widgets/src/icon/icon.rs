@@ -2,14 +2,14 @@
 
 use flui_objects::RenderIcon;
 use flui_painting::styling::Color;
-use flui_painting::typography::{FontVariation, TextDirection, TextStyle};
+use flui_painting::typography::{FontVariation, TextStyle};
 use flui_rendering::protocol::BoxProtocol;
 use flui_view::prelude::StatelessView;
 use flui_view::{BuildContext, CreationSite, IntoView, RenderView, ViewExt, impl_render_view};
 
+use crate::Semantics;
 use crate::icon::symbol_effect::{ContentKey, SymbolEffectHost};
 use crate::icon::{IconData, IconTheme, IconThemeData, SymbolEffect};
-use crate::{Directionality, Semantics, Transform};
 use flui_view::environment::MediaQuery;
 
 /// A graphical icon drawn from a glyph in an icon font, described by an
@@ -37,6 +37,11 @@ use flui_view::environment::MediaQuery;
 ///
 /// # Deferred
 ///
+/// - **`IconData::match_text_direction`** RTL mirroring: needs a `Transform`
+///   composition step not wired into this build path yet.
+/// - **Ambient `Directionality`**: `Icon` does not read
+///   `Directionality::of` yet, so it always renders left-to-right
+///   ([`flui_painting::typography::TextDirection::Ltr`]).
 /// - Font weight, blend mode, and per-call shadow/text-direction
 ///   overrides are not supported yet.
 #[derive(Clone, Debug, StatelessView)]
@@ -195,17 +200,6 @@ impl StatelessView for Icon {
                 .label(label.clone())
                 .role(crate::SemanticsRole::Image);
         }
-        // `IconData::match_text_direction` mirrors the glyph horizontally under
-        // right-to-left text (a "back" arrow): the glyph itself is directionless
-        // (a `RenderIcon` text run), so the flip is a `Transform` composition over
-        // it, about its centre — mirroring paint and hit-testing alike.
-        let icon = if self.data.as_ref().is_some_and(|d| d.match_text_direction)
-            && Directionality::of(ctx) == TextDirection::Rtl
-        {
-            Transform::scale(-1.0, 1.0).child(icon).boxed()
-        } else {
-            icon.boxed()
-        };
         let built = semantics.child(icon).boxed();
         match self.effect.as_ref().or(theme.symbol_effect.as_ref()) {
             Some(effect) => {
