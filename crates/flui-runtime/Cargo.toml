@@ -65,7 +65,6 @@ flui-view = { path = "../flui-view", version = "=0.2.0-dev" }
 flui-rendering = { path = "../flui-rendering", version = "=0.2.0-dev" }
 flui-scheduler = { path = "../flui-scheduler", version = "=0.2.0-dev" }
 flui-animation = { path = "../flui-animation", version = "=0.2.0-dev" }
-flui-widgets = { path = "../flui-widgets", version = "=0.2.0-dev" }
 # The UI runtime's bounded owner inbox.
 crossbeam-channel = { workspace = true }
 parking_lot = { workspace = true }
@@ -91,6 +90,9 @@ wasm-bindgen-futures = { workspace = true }
 [dev-dependencies]
 # `flui_platform::testing::FakeHaptics`, the actuator the preference tests record.
 flui-platform = { workspace = true, features = ["testing"] }
+# The widget catalog, for the tests that drive a presentation through real
+# widgets; the runtime itself names none (T17).
+flui-widgets = { path = "../flui-widgets", version = "=0.2.0-dev" }
 # `flui_interaction::events::make_*_event`, the synthetic pointer events the
 # held-input tests queue.
 flui-interaction = { path = "../flui-interaction", version = "=0.2.0-dev", features = ["testing"] }
@@ -147,6 +149,9 @@ order = 4
 # and `flui-testing`, the host of the headless test loop, whose driver runs the
 # UI runtime's frame (ADR-0083 §4). Dev edges are not restricted.
 allowed-dependents = ["flui-app", "flui-testing"]
+# T17: the UI runtime names no widget catalog; the presentation's root scopes
+# live in `flui-view`, and the tests drive widgets as dev edges.
+reach-forbid = ["flui-widgets"]
 # Process-unique identity only; UI runtime services and registries remain owned.
 globals = [
     { item = "runtime_services::NEXT_INCARNATION", grant = "ADR-0097", class = "counter", reason = "Runtime and presentation generations, advanced by try_update with permanent exhaustion" },

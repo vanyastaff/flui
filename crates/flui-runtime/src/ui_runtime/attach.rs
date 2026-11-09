@@ -4,7 +4,7 @@ use super::UiRuntime;
 #[cfg(any(test, feature = "testing"))]
 use flui_foundation::PresentationId;
 use flui_view::environment::{GestureArenaScope, VsyncScope};
-use flui_widgets::FocusRoot;
+use flui_view::focus_root::FocusRoot;
 
 impl UiRuntime {
     // ========================================================================
