@@ -114,7 +114,7 @@
 //! let config = flui::AppConfig::new().with_dev_reload(WorkerReloadHook::new(worker_path));
 //! ```
 
-// Ship bar (wave 4): every public item is documented; keep it that way.
+// Every public item is documented; keep it that way.
 #![deny(missing_docs)]
 #![warn(rust_2018_idioms, clippy::all, clippy::pedantic)]
 // After the `warn(clippy::all)` above, which would otherwise turn the lint back on in tests.

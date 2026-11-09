@@ -35,15 +35,14 @@
 
 mod clipboard;
 
-#[cfg(any(windows, wayland_host, x11_host))]
+#[cfg(any(wayland_host, x11_host))]
 pub(crate) use clipboard::MAX_TEXT;
-#[cfg(any(
-    target_os = "android",
-    target_os = "macos",
-    target_os = "ios",
-    target_arch = "wasm32"
-))]
-pub(crate) use clipboard::admit_utf16;
+#[cfg(any(target_arch = "wasm32", wayland_host, x11_host))]
+pub(crate) use clipboard::owned_text;
+#[cfg(windows)]
+pub(crate) use clipboard::text_fits;
+pub use clipboard::{MemoryClipboard, NativeClipboard, NativePrimarySelection};
+pub(crate) use clipboard::{SharedClipboard, SyncClipboard};
 #[cfg(any(
     windows,
     target_os = "android",
@@ -53,11 +52,7 @@ pub(crate) use clipboard::admit_utf16;
     wayland_host,
     x11_host,
 ))]
-pub(crate) use clipboard::host_text;
-#[cfg(any(target_arch = "wasm32", wayland_host, x11_host))]
-pub(crate) use clipboard::owned_text;
-pub use clipboard::{MemoryClipboard, NativeClipboard, NativePrimarySelection};
-pub(crate) use clipboard::{SharedClipboard, SyncClipboard};
+pub(crate) use clipboard::{admit_text, host_text};
 
 use std::marker::PhantomData;
 use std::path::{Path, PathBuf};

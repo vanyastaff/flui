@@ -84,33 +84,33 @@ driver = []
 [dependencies]
 flui-platform = { workspace = true }
 # Core FLUI crates
-flui-view = { path = "../flui-view", version = "=0.2.0-dev" }
-flui-rendering = { path = "../flui-rendering", version = "=0.2.0-dev" }
-flui-foundation = { path = "../flui-foundation", version = "=0.2.0-dev" }
+flui-view = { workspace = true }
+flui-rendering = { workspace = true }
+flui-foundation = { workspace = true }
 # Composition-only logging backend. `flui-app` is a composition root, so it is
 # one of the three crates allowed a normal edge here — see `allowed-dependents`
 # in flui-log's manifest. No framework crate may add this dependency.
 flui-log = { workspace = true }
-flui-interaction = { path = "../flui-interaction", version = "=0.2.0-dev" }
-flui-scheduler = { path = "../flui-scheduler", version = "=0.2.0-dev" }
-flui-painting = { path = "../flui-painting", version = "=0.2.0-dev" }
-flui-layer = { path = "../flui-layer", version = "=0.2.0-dev" }
-flui-engine = { path = "../flui-engine", version = "=0.2.0-dev" }
+flui-interaction = { workspace = true }
+flui-scheduler = { workspace = true }
+flui-painting = { workspace = true }
+flui-layer = { workspace = true }
+flui-engine = { workspace = true }
 # `native-capture`: the native journal a debug build serving the driver agent records
 # (ADR-0288 §11). Its code is compiled in debug builds only; a release build links none.
-flui-native = { path = "../flui-native", version = "=0.2.0-dev", features = ["native-capture"] }
+flui-native = { workspace = true, features = ["native-capture"] }
 # Widget catalog: every runner wraps each root it attaches, the main window
 # and each secondary one, in `flui_widgets::app_root`, the catalog's keyboard
 # bindings. The UI runtime installs the presentation scopes itself
 # (`FocusTreeRoot`, `VsyncScope`, `GestureArenaScope` from
 # `flui_view::environment`) and names no widget. The layering allows app →
 # widgets (`docs/architecture.md`).
-flui-widgets = { path = "../flui-widgets", version = "=0.2.0-dev" }
+flui-widgets = { workspace = true }
 # The frame runtime (ADR-0083): the UI runtime core the runners drive, and the
 # per-presentation lanes it owns. `hot-reload` is its `reload::ReloadTier`, the
 # reload an installed development reload hook (ADR-0311 §1) applies to a
 # UI runtime; it names no reload tool.
-flui-runtime = { path = "../flui-runtime", version = "=0.2.0-dev", features = ["hot-reload"] }
+flui-runtime = { workspace = true, features = ["hot-reload"] }
 
 # Utilities
 tracing.workspace = true
@@ -161,7 +161,7 @@ android-activity = { workspace = true }
 # flui-engine's own Linux entry already names `vulkan` and its `gles`
 # fallback; this one keeps `vulkan` named where the app asks for its GPU.
 [target.'cfg(target_os = "linux")'.dependencies]
-flui-engine = { path = "../flui-engine", version = "=0.2.0-dev", features = ["vulkan"] }
+flui-engine = { workspace = true, features = ["vulkan"] }
 
 [dev-dependencies]
 # `log_capture::disarm_interest_cache`, which this crate's tracing-capturing
@@ -181,28 +181,28 @@ serde_json = { workspace = true }
 # `ExecutionServices::with_limits`/`default_pools_started`, the UI runtime's test
 # constructors and the `testing` doubles, which this crate's tests use and
 # which exist only under `testing`.
-flui-runtime = { path = "../flui-runtime", version = "=0.2.0-dev", features = ["testing"] }
+flui-runtime = { workspace = true, features = ["testing"] }
 # `WindowId::try_from_raw`, by which a test names a window it did not open.
 flui-platform = { workspace = true, features = ["testing"] }
 # Enable flui-interaction's `testing` feature in test builds so tests can
 # construct synthetic pointer events via `events::make_*_event`. Feature
 # unification keeps these helpers out of the release `flui-app` binary.
-flui-interaction = { path = "../flui-interaction", version = "=0.2.0-dev", features = ["testing"] }
+flui-interaction = { workspace = true, features = ["testing"] }
 # Enable flui-rendering's `testing` feature in test builds so wiring tests can
 # seed pending child-build requests via `push_pending_child_request_for_test`.
 # Same dev-only feature-unification pattern; helper stays out of release builds.
-flui-rendering = { path = "../flui-rendering", version = "=0.2.0-dev", features = ["testing"] }
+flui-rendering = { workspace = true, features = ["testing"] }
 # Enable flui-view's `testing` feature in test builds so the
 # wiring test can plant a layout-builder registry entry. Same pattern; the
 # `register_layout_builder_for_test` hook stays out of release builds.
-flui-view = { path = "../flui-view", version = "=0.2.0-dev", features = ["testing"] }
+flui-view = { workspace = true, features = ["testing"] }
 # `testing::host_fed`, which the font-collection tests check the app's
 # collection with. Same dev-only feature-unification pattern.
-flui-painting = { path = "../flui-painting", version = "=0.2.0-dev", features = ["testing"] }
+flui-painting = { workspace = true, features = ["testing"] }
 # The concrete render object and the animation controller the runner's
 # device-recovery, frame-pacing and dispatch tests mount; the UI runtime that
 # production code drives names them from `flui-runtime`.
-flui-objects = { path = "../flui-objects", version = "=0.2.0-dev" }
+flui-objects = { workspace = true }
 
 [lints]
 workspace = true

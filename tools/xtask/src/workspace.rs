@@ -67,6 +67,7 @@ use toml::{Table, Value as Toml};
 
 use crate::util;
 
+mod crates_map;
 mod reach;
 mod tiers;
 
@@ -79,6 +80,9 @@ pub(crate) struct WorkspaceArgs {
     /// of the workspace; exit 1 unless it reports exactly those.
     #[arg(long)]
     self_test: bool,
+    /// Regenerate the `docs/crates.md` tier table from the manifests.
+    #[arg(long)]
+    write_crates_map: bool,
 }
 
 /// `cargo xtask workspace`: check tiers, manifests, test reachability and ADR
@@ -89,6 +93,11 @@ pub(crate) fn workspace(args: &WorkspaceArgs) -> anyhow::Result<ExitCode> {
     }
     let root = util::repo_root();
     let metadata = util::metadata(&root)?;
+    if args.write_crates_map {
+        let members = Members::load(&root, &metadata)?;
+        crates_map::write(&root, &members, &metadata.workspace_metadata)?;
+        return Ok(ExitCode::SUCCESS);
+    }
     let (findings, summary) = check(&root, &metadata)?;
     if findings.is_empty() {
         println!("workspace: {summary}");
@@ -116,6 +125,7 @@ fn check(root: &Path, metadata: &Metadata) -> anyhow::Result<(Vec<String>, Strin
     let edges = check_allowed_dependents(&members, &mut findings);
     check_manifests(root, &members, metadata, &mut findings)?;
     check_unique_adr_numbers(root, &mut findings)?;
+    crates_map::check(root, &members, &metadata.workspace_metadata, &mut findings)?;
     Ok((
         findings,
         format!(
