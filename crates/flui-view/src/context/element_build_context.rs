@@ -669,6 +669,7 @@ impl LifecycleContext for ElementBuildContext {
 /// dependent set. Deferring the *write* keeps the build itself read-only
 /// while still recording within the same `build_scope` iteration, before
 /// the next dirty element is processed.
+#[derive(Debug)]
 pub(crate) struct DependentRecord {
     /// The provider read from, or an ancestry-dependent lookup that missed.
     pub(crate) provider: Option<ElementId>,

@@ -4,8 +4,15 @@
 //! They bridge the View/Element system with the Render tree for layout and
 //! painting.
 
+use std::any::TypeId;
+
+use flui_foundation::ElementId;
+
+use crate::context::DependentRecord;
 use crate::reactive::{Reactive, WriterSource};
+use crate::tree::{ElementNode, ElementTree};
 use crate::view::View;
+use crate::{ElementBase, InheritedView};
 
 /// Owner-runtime capabilities available while a [`RenderView`] creates or
 /// updates its render object.
@@ -23,6 +30,18 @@ use crate::view::View;
 pub struct RenderObjectContext<'a> {
     interaction_dispatch: Option<&'a flui_interaction::InteractionDispatchHandle>,
     graph: Option<&'a Reactive>,
+    /// The borrowed tree, present only when the context was minted during a
+    /// `build_scope` rebuild (not at mount or a view swap), so
+    /// [`depend_on`](Self::depend_on) can resolve inherited data.
+    tree: Option<&'a ElementTree>,
+    /// This element, for the inherited lookup's ancestry and the recorded
+    /// dependency.
+    element_id: Option<ElementId>,
+    /// This element's tree depth, for the dependent's dirty-heap ordering.
+    depth: usize,
+    /// The deferred dependent-record sink [`depend_on`](Self::depend_on)
+    /// records into; drained by `build_scope`.
+    dep_sink: Option<&'a parking_lot::Mutex<Vec<DependentRecord>>>,
 }
 
 /// Errors returned by owner-runtime operations exposed through
@@ -49,6 +68,31 @@ impl<'a> RenderObjectContext<'a> {
         Self {
             interaction_dispatch,
             graph,
+            tree: None,
+            element_id: None,
+            depth: 0,
+            dep_sink: None,
+        }
+    }
+
+    /// Construct the context a [`RenderBehavior`](crate::element::RenderBehavior)
+    /// hands `update_render_object` during a `build_scope` rebuild: the borrowed
+    /// tree is available here, so [`depend_on`](Self::depend_on) resolves.
+    pub(crate) const fn for_rebuild(
+        interaction_dispatch: Option<&'a flui_interaction::InteractionDispatchHandle>,
+        graph: Option<&'a Reactive>,
+        tree: &'a ElementTree,
+        element_id: ElementId,
+        depth: usize,
+        dep_sink: &'a parking_lot::Mutex<Vec<DependentRecord>>,
+    ) -> Self {
+        Self {
+            interaction_dispatch,
+            graph,
+            tree: Some(tree),
+            element_id: Some(element_id),
+            depth,
+            dep_sink: Some(dep_sink),
         }
     }
 
@@ -57,6 +101,40 @@ impl<'a> RenderObjectContext<'a> {
     #[must_use]
     pub const fn detached() -> Self {
         Self::new(None, None)
+    }
+
+    /// Read the nearest ancestor [`InheritedView`] of type `I`, registering a
+    /// dependency so this render element re-pushes its configuration when the
+    /// data changes (T09).
+    ///
+    /// Returns `None` when no `I` ancestor is in scope, or when this context was
+    /// not minted during a rebuild (at mount or a view swap the tree is borrowed
+    /// mutably, so no inherited read is possible — the first rebuild resolves
+    /// it).
+    pub fn depend_on<I: InheritedView, R>(&self, f: impl FnOnce(&I) -> R) -> Option<R> {
+        let tree = self.tree?;
+        let element_id = self.element_id?;
+        let provider_id = tree.get(element_id)?.inherited_provider(TypeId::of::<I>());
+        // Buffer the dependent before invoking the callback, mirroring
+        // `BuildContext::depend_on_inherited`: the tree is read-only here, so the
+        // write is deferred to the `build_scope` drain. A missed provider records
+        // the miss, so a later mount reschedules this element.
+        if let Some(sink) = self.dep_sink {
+            sink.lock().push(DependentRecord {
+                provider: provider_id,
+                dependent: element_id,
+                depth: self.depth,
+                mask: crate::view::FieldSet::ALL,
+                lifecycle: false,
+            });
+        }
+        let provider_id = provider_id?;
+        let accessor = tree
+            .get(provider_id)
+            .and_then(ElementNode::element_opt)
+            .and_then(ElementBase::as_inherited)?;
+        let data = accessor.view_as_any().downcast_ref::<I>()?;
+        Some(f(data))
     }
 
     /// The writer source of the owner the render object is mounted under, for
