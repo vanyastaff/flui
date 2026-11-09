@@ -25,7 +25,6 @@
 // ADR-0027: ElementBuildContext's current test/prod seam still takes
 // Arc<RwLock<ElementTree/BuildOwner>>. The owner graph is !Send; do not restore
 // Send + Sync to satisfy clippy. Future UiRuntime/Rc migration should remove this.
-#![expect(clippy::arc_with_non_send_sync)]
 
 use std::sync::Arc;
 
@@ -36,7 +35,8 @@ use flui_view::{
     BuildContext, BuildContextExt, BuildOwner, ElementTree, InheritedElement, IntoView, RenderView,
     StatelessView, View, ViewExt, view::InheritedView,
 };
-use parking_lot::RwLock;
+use std::cell::RefCell;
+use std::rc::Rc;
 
 // ============================================================================
 // Test fixtures: a simple `MyTheme` InheritedView and a leaf dependent View
@@ -136,9 +136,9 @@ impl View for LeafView {
 // Helpers
 // ============================================================================
 
-fn create_tree_and_owner() -> (Arc<RwLock<ElementTree>>, Arc<RwLock<BuildOwner>>) {
-    let tree = Arc::new(RwLock::new(ElementTree::new()));
-    let owner = Arc::new(RwLock::new(BuildOwner::new()));
+fn create_tree_and_owner() -> (Rc<RefCell<ElementTree>>, Rc<RefCell<BuildOwner>>) {
+    let tree = Rc::new(RefCell::new(ElementTree::new()));
+    let owner = Rc::new(RefCell::new(BuildOwner::new()));
     (tree, owner)
 }
 
@@ -161,14 +161,14 @@ pub(crate) fn inherited_update_notifies_dependents() {
     };
 
     let provider_id = tree
-        .write()
-        .mount_root(&provider_v1, &mut owner.write().element_owner_mut());
+        .borrow_mut()
+        .mount_root(&provider_v1, &mut owner.borrow_mut().element_owner_mut());
 
-    let child_id = tree.write().insert(
+    let child_id = tree.borrow_mut().insert(
         &DummyChild,
         provider_id,
         0,
-        &mut owner.write().element_owner_mut(),
+        &mut owner.borrow_mut().element_owner_mut(),
     );
 
     // Record dependency via depend_on
@@ -181,7 +181,7 @@ pub(crate) fn inherited_update_notifies_dependents() {
     // Confirm the dirty list is currently empty (registration alone does
     // not schedule a build).
     assert_eq!(
-        owner.read().dirty_count(),
+        owner.borrow().dirty_count(),
         0,
         "no dirty elements pre-update"
     );
@@ -191,15 +191,15 @@ pub(crate) fn inherited_update_notifies_dependents() {
         theme: MyTheme { color: 0x0000_FF00 },
         child: DummyChild,
     };
-    tree.write().update(
+    tree.borrow_mut().update(
         provider_id,
         &provider_v2,
-        &mut owner.write().element_owner_mut(),
+        &mut owner.borrow_mut().element_owner_mut(),
     );
 
     // The dependent (child_id) should now be marked dirty.
     assert_eq!(
-        owner.read().dirty_count(),
+        owner.borrow().dirty_count(),
         1,
         "dependent should be scheduled for rebuild"
     );
@@ -262,34 +262,34 @@ pub(crate) fn missing_inherited_reads_refresh_lifecycle_and_survive_build_recove
         let (tree, owner) = create_tree_and_owner();
         let changes = std::rc::Rc::new(std::cell::Cell::new(0));
         let fail_build = std::rc::Rc::new(std::cell::Cell::new(false));
-        let root = tree.write().mount_root(
+        let root = tree.borrow_mut().mount_root(
             &Probe {
                 changes: std::rc::Rc::clone(&changes),
                 read_in_build,
                 fail_build: std::rc::Rc::clone(&fail_build),
             },
-            &mut owner.write().element_owner_mut(),
+            &mut owner.borrow_mut().element_owner_mut(),
         );
         owner
-            .write()
+            .borrow_mut()
             .schedule_build_for(root, 0, flui_view::RebuildReason::InitialMount);
-        owner.write().build_scope(&mut tree.write());
+        owner.borrow_mut().build_scope(&mut tree.borrow_mut());
         if failed_rebuild {
             fail_build.set(true);
-            tree.write().update(
+            tree.borrow_mut().update(
                 root,
                 &Probe {
                     changes: std::rc::Rc::clone(&changes),
                     read_in_build,
                     fail_build: std::rc::Rc::clone(&fail_build),
                 },
-                &mut owner.write().element_owner_mut(),
+                &mut owner.borrow_mut().element_owner_mut(),
             );
             owner
-                .write()
+                .borrow_mut()
                 .schedule_build_for(root, 0, flui_view::RebuildReason::ParentUpdate);
-            owner.write().build_scope(&mut tree.write());
-            assert_eq!(owner.write().take_recovered_panics().len(), 1);
+            owner.borrow_mut().build_scope(&mut tree.borrow_mut());
+            assert_eq!(owner.borrow_mut().take_recovered_panics().len(), 1);
         }
         let ctx = ElementBuildContext::for_element(root, tree.clone(), owner.clone())
             .expect("the probe is mounted");
@@ -300,19 +300,19 @@ pub(crate) fn missing_inherited_reads_refresh_lifecycle_and_survive_build_recove
         };
         assert!(found.is_none());
         for cycle in 1..=2 {
-            tree.write()
-                .deactivate(root, &mut owner.write().element_owner_mut());
-            tree.write()
-                .activate(root, &mut owner.write().element_owner_mut());
-            owner.write().build_scope(&mut tree.write());
+            tree.borrow_mut()
+                .deactivate(root, &mut owner.borrow_mut().element_owner_mut());
+            tree.borrow_mut()
+                .activate(root, &mut owner.borrow_mut().element_owner_mut());
+            owner.borrow_mut().build_scope(&mut tree.borrow_mut());
             assert_eq!(
                 changes.get(),
                 if subscribe || read_in_build { cycle } else { 0 },
                 "only dependency reads refresh lifecycle after activation"
             );
         }
-        tree.write()
-            .remove(root, &mut owner.write().element_owner_mut());
+        tree.borrow_mut()
+            .remove(root, &mut owner.borrow_mut().element_owner_mut());
     }
 }
 
@@ -325,14 +325,14 @@ pub(crate) fn unmounted_dependent_is_removed_from_provider_before_next_notificat
     };
 
     let provider_id = tree
-        .write()
-        .mount_root(&provider_v1, &mut owner.write().element_owner_mut());
+        .borrow_mut()
+        .mount_root(&provider_v1, &mut owner.borrow_mut().element_owner_mut());
 
-    let child_id = tree.write().insert(
+    let child_id = tree.borrow_mut().insert(
         &DummyChild,
         provider_id,
         0,
-        &mut owner.write().element_owner_mut(),
+        &mut owner.borrow_mut().element_owner_mut(),
     );
 
     // Register as dependent.
@@ -343,11 +343,11 @@ pub(crate) fn unmounted_dependent_is_removed_from_provider_before_next_notificat
     }
 
     // Remove the dependent from the tree before updating the inherited.
-    tree.write()
-        .remove(child_id, &mut owner.write().element_owner_mut());
+    tree.borrow_mut()
+        .remove(child_id, &mut owner.borrow_mut().element_owner_mut());
 
     {
-        let tree_guard = tree.read();
+        let tree_guard = tree.borrow();
         let provider_node = tree_guard.get(provider_id).expect("provider exists");
         let provider = provider_node
             .element()
@@ -366,14 +366,14 @@ pub(crate) fn unmounted_dependent_is_removed_from_provider_before_next_notificat
         theme: MyTheme { color: 0x0000_FF00 },
         child: DummyChild,
     };
-    tree.write().update(
+    tree.borrow_mut().update(
         provider_id,
         &provider_v2,
-        &mut owner.write().element_owner_mut(),
+        &mut owner.borrow_mut().element_owner_mut(),
     );
 
     assert_eq!(
-        owner.read().dirty_count(),
+        owner.borrow().dirty_count(),
         0,
         "a provider update must not enqueue an already-unmounted dependent",
     );
@@ -762,7 +762,7 @@ pub(crate) fn a_failing_frame_request_while_a_provider_notifies_keeps_its_subtre
     let (tree, owner) = create_tree_and_owner();
     let armed = Arc::new(AtomicBool::new(false));
     let arm = Arc::clone(&armed);
-    owner.write().set_on_build_scheduled(move || {
+    owner.borrow_mut().set_on_build_scheduled(move || {
         assert!(!arm.load(Ordering::SeqCst), "the frame request failed");
     });
     let dependent = Dependent {
@@ -774,22 +774,22 @@ pub(crate) fn a_failing_frame_request_while_a_provider_notifies_keeps_its_subtre
         child: dependent.clone(),
     };
     let root = tree
-        .write()
-        .mount_root(&host(1), &mut owner.write().element_owner_mut());
+        .borrow_mut()
+        .mount_root(&host(1), &mut owner.borrow_mut().element_owner_mut());
     owner
-        .write()
+        .borrow_mut()
         .schedule_build_for(root, 0, flui_view::RebuildReason::InitialMount);
-    owner.write().build_scope(&mut tree.write());
+    owner.borrow_mut().build_scope(&mut tree.borrow_mut());
     assert_eq!(dependent.seen.get(), 1);
 
-    tree.write()
-        .update(root, &host(2), &mut owner.write().element_owner_mut());
+    tree.borrow_mut()
+        .update(root, &host(2), &mut owner.borrow_mut().element_owner_mut());
     owner
-        .write()
+        .borrow_mut()
         .schedule_build_for(root, 0, flui_view::RebuildReason::ParentUpdate);
     armed.store(true, Ordering::SeqCst);
     let pass = catch_unwind(AssertUnwindSafe(|| {
-        owner.write().build_scope(&mut tree.write());
+        owner.borrow_mut().build_scope(&mut tree.borrow_mut());
     }));
     armed.store(false, Ordering::SeqCst);
 
@@ -799,7 +799,7 @@ pub(crate) fn a_failing_frame_request_while_a_provider_notifies_keeps_its_subtre
         Some("the frame request failed")
     );
     assert!(
-        owner.write().take_recovered_panics().is_empty(),
+        owner.borrow_mut().take_recovered_panics().is_empty(),
         "no element was replaced"
     );
     assert_eq!(dependent.mounts.get(), 1, "the dependent kept its state");

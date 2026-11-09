@@ -1,16 +1,15 @@
 //! Test-support build context: an owned, detached BuildContext a test can
-//! construct without running uild_scope (ADR-0243). The production path
+//! construct without running `build_scope` (ADR-0243). The production path
 //! uses the borrowed BuildCtx; this owned form exists only for tests.
 
 use std::{
     any::{Any, TypeId},
     rc::Rc,
-    sync::Arc,
 };
 
 use flui_foundation::{ElementId, RenderId};
 use flui_interaction::FocusManager;
-use parking_lot::RwLock;
+use std::cell::RefCell;
 
 use crate::context::build_context::{BuildContext, LifecycleContext};
 use crate::{
@@ -32,9 +31,8 @@ use crate::{
 ///
 /// # Thread Safety
 ///
-/// The context is owner-local. Its `BuildOwner` contains an `Rc<FocusManager>`,
-/// intentionally making the context `!Send + !Sync` even though tree access is
-/// currently protected by `RwLock`.
+/// The context is owner-local: `Rc<RefCell<…>>` tree and owner, so it is
+/// `!Send + !Sync`.
 ///
 /// `Element` does not implement `BuildContext` directly: a separate struct
 /// avoids borrow checker issues with self-referential borrows during build.
@@ -49,10 +47,10 @@ pub struct ElementBuildContext {
     mounted: bool,
 
     /// Reference to the element tree.
-    tree: Arc<RwLock<ElementTree>>,
+    tree: Rc<RefCell<ElementTree>>,
 
     /// Reference to the build owner.
-    owner: Arc<RwLock<BuildOwner>>,
+    owner: Rc<RefCell<BuildOwner>>,
 
     /// The owner's reactive graph with this element as its reader, captured
     /// at construction so a read's [`ScopeRef`] can borrow it.
@@ -90,10 +88,10 @@ impl ElementBuildContext {
         element_id: ElementId,
         depth: usize,
         mounted: bool,
-        tree: Arc<RwLock<ElementTree>>,
-        owner: Arc<RwLock<BuildOwner>>,
+        tree: Rc<RefCell<ElementTree>>,
+        owner: Rc<RefCell<BuildOwner>>,
     ) -> Self {
-        let reads = ElementReads::new(owner.read().reactive().clone(), element_id);
+        let reads = ElementReads::new(owner.borrow().reactive().clone(), element_id);
         Self {
             element_id,
             depth,
@@ -114,12 +112,12 @@ impl ElementBuildContext {
     #[expect(clippy::needless_pass_by_value)] // Arc is cloned into Self, taking by value is idiomatic
     pub fn for_element(
         element_id: ElementId,
-        tree: Arc<RwLock<ElementTree>>,
-        owner: Arc<RwLock<BuildOwner>>,
+        tree: Rc<RefCell<ElementTree>>,
+        owner: Rc<RefCell<BuildOwner>>,
     ) -> Option<Self> {
-        let tree_guard = tree.read();
+        let tree_guard = tree.borrow();
         let node = tree_guard.get(element_id)?;
-        let reads = ElementReads::new(owner.read().reactive().clone(), element_id);
+        let reads = ElementReads::new(owner.borrow().reactive().clone(), element_id);
 
         Some(Self {
             element_id,
@@ -150,7 +148,7 @@ impl ElementBuildContext {
     /// at mount as an `Arc<HashMap>` shared by refcount down non-provider runs.
     fn find_inherited_provider(&self, type_id: std::any::TypeId) -> Option<ElementId> {
         self.tree
-            .read()
+            .borrow()
             .get(self.element_id)?
             .inherited_provider(type_id)
     }
@@ -177,7 +175,7 @@ impl ElementBuildContext {
         &self,
         mut predicate: impl FnMut(&dyn crate::view::ElementBase) -> std::ops::ControlFlow<R>,
     ) -> Option<R> {
-        let tree = self.tree.read();
+        let tree = self.tree.borrow();
 
         let mut current_id = self.element_id;
         loop {
@@ -258,7 +256,9 @@ impl BuildContext for ElementBuildContext {
         // matched InheritedElement's dependent map so a later provider update
         // whose `changed_fields` intersects that mask schedules us for rebuild.
         let Some(ancestor_id) = self.find_inherited_provider(type_id) else {
-            self.owner.write().register_inherited_miss(self.element_id);
+            self.owner
+                .borrow_mut()
+                .register_inherited_miss(self.element_id);
             return false;
         };
 
@@ -266,8 +266,8 @@ impl BuildContext for ElementBuildContext {
         // order. Both registrations happen before the callback: the
         // provider's forward notification map and the BuildOwner's sparse
         // reverse ownership index cannot diverge if user code panics.
-        let mut owner = self.owner.write();
-        let mut tree = self.tree.write();
+        let mut owner = self.owner.borrow_mut();
+        let mut tree = self.tree.borrow_mut();
 
         let Some(node) = tree.get_mut(ancestor_id) else {
             // Tree shape changed between lookup and write-lock; treat
@@ -325,7 +325,7 @@ impl BuildContext for ElementBuildContext {
             return false;
         };
 
-        let tree = self.tree.read();
+        let tree = self.tree.borrow();
         let Some(node) = tree.get(ancestor_id) else {
             return false;
         };
@@ -338,7 +338,7 @@ impl BuildContext for ElementBuildContext {
     }
 
     fn find_ancestor_element(&self, type_id: TypeId) -> Option<ElementId> {
-        let tree = self.tree.read();
+        let tree = self.tree.borrow();
 
         // Walk up from current element
         let mut current_id = self.element_id;
@@ -433,7 +433,7 @@ impl BuildContext for ElementBuildContext {
         // walk inline but in a `while let` shape that satisfies
         // clippy::while_let_loop while keeping the same semantics.
         {
-            let tree = self.tree.read();
+            let tree = self.tree.borrow();
             let mut next_id: Option<ElementId> = Some(self.element_id);
             while let Some(current_id) = next_id {
                 let Some(node) = tree.get(current_id) else {
@@ -459,7 +459,7 @@ impl BuildContext for ElementBuildContext {
             return false;
         };
 
-        let tree = self.tree.read();
+        let tree = self.tree.borrow();
         let Some(matched_node) = tree.get(matched_id) else {
             return false;
         };
@@ -493,7 +493,7 @@ impl BuildContext for ElementBuildContext {
     }
 
     fn visit_ancestor_elements(&self, visitor: &mut dyn FnMut(ElementId) -> bool) {
-        let tree = self.tree.read();
+        let tree = self.tree.borrow();
 
         let mut current_id = self.element_id;
         while let Some(node) = tree.get(current_id) {
@@ -520,7 +520,7 @@ impl BuildContext for ElementBuildContext {
 
         // E3 (atomic boxΓåÆarena swap): a node's children are its
         // slab-resident `child_ids` list ΓÇö the single element graph.
-        let tree = self.tree.read();
+        let tree = self.tree.borrow();
         if let Some(node) = tree.get(self.element_id) {
             for child_id in node.child_ids() {
                 visitor(*child_id);
@@ -529,7 +529,7 @@ impl BuildContext for ElementBuildContext {
     }
 
     fn mark_needs_build(&self) {
-        let mut owner = self.owner.write();
+        let mut owner = self.owner.borrow_mut();
         owner.schedule_build_for(
             self.element_id,
             self.depth,
@@ -579,7 +579,7 @@ impl LifecycleContext for ElementBuildContext {
         // A real handle: the owner Arc is right here. The read lock is held only
         // to clone the shared inbox + frame-request Arcs out; nothing is held
         // across the returned handle's lifetime.
-        self.owner.read().rebuild_handle(self.element_id)
+        self.owner.borrow().rebuild_handle(self.element_id)
     }
     fn writer_source(&self) -> crate::WriterSource {
         crate::WriterSource::new(self.reads.graph().clone())
@@ -588,73 +588,73 @@ impl LifecycleContext for ElementBuildContext {
         self.reads.graph().build_phase()
     }
     fn async_driver(&self) -> Option<flui_scheduler::AsyncDriver> {
-        self.owner.read().async_driver().cloned()
+        self.owner.borrow().async_driver().cloned()
     }
     fn post_frame_handle(&self) -> Option<flui_scheduler::PostFrameHandle> {
-        self.owner.read().post_frame_handle().cloned()
+        self.owner.borrow().post_frame_handle().cloned()
     }
     fn keep_alive_lease(&self) -> crate::owner::KeepAliveLease {
         self.keep_alive_handle().hold()
     }
     fn on_unmount(&self, hook: Box<dyn FnOnce()>) -> crate::UnmountHook {
-        let hooks = self.owner.read().unmount_hooks.clone();
+        let hooks = self.owner.borrow().unmount_hooks.clone();
         hooks.register(self.element_id, hook)
     }
     fn keep_alive_handle(&self) -> crate::owner::KeepAliveHandle {
-        self.owner.read().keep_alive.handle(self.element_id)
+        self.owner.borrow().keep_alive.handle(self.element_id)
     }
     fn text_input_handle(&self) -> Option<flui_interaction::TextInputHandle> {
-        self.owner.read().capabilities().text_input.clone()
+        self.owner.borrow().capabilities().text_input.clone()
     }
     fn capability_erased(
         &self,
         capability: std::any::TypeId,
         name: &'static str,
     ) -> Result<Box<dyn std::any::Any>, flui_platform::Unsupported> {
-        let source = self.owner.read().capabilities().capabilities.clone();
+        let source = self.owner.borrow().capabilities().capabilities.clone();
         acquire_capability(source.as_deref(), capability, name)
     }
     fn announcer(&self) -> Option<flui_rendering::semantics::Announcer> {
-        self.owner.read().capabilities().announcer.clone()
+        self.owner.borrow().capabilities().announcer.clone()
     }
     fn assistive_focus_support(&self) -> flui_rendering::semantics::AssistiveFocusSupport {
-        self.owner.read().capabilities().assistive_focus
+        self.owner.borrow().capabilities().assistive_focus
     }
     fn haptics(&self) -> Option<flui_interaction::HapticsHandle> {
-        let handle = self.owner.read().capabilities().haptics.clone()?;
+        let handle = self.owner.borrow().capabilities().haptics.clone()?;
         Some(crate::haptics_mode::scoped(self, handle))
     }
     fn drag_and_drop(&self) -> Option<flui_interaction::drag::DragAndDrop> {
-        self.owner.read().capabilities().drag_and_drop.clone()
+        self.owner.borrow().capabilities().drag_and_drop.clone()
     }
     fn texture_registry(&self) -> Option<flui_rendering::layer::TextureRegistry> {
-        self.owner.read().capabilities().textures.clone()
+        self.owner.borrow().capabilities().textures.clone()
     }
     fn close_guard(&self) -> Option<crate::CloseGuard> {
-        self.owner.read().capabilities().close_guard.clone()
+        self.owner.borrow().capabilities().close_guard.clone()
     }
     fn flush_registry_in_crate(
         &self,
         _token: crate::context::build_context::sealed::CrateToken,
     ) -> Option<crate::flush_registry::FlushRegistry> {
-        self.owner.read().flush_registry.clone()
+        self.owner.borrow().flush_registry.clone()
     }
     fn hit_test_handle(&self) -> Option<flui_interaction::HitTestHandle> {
-        self.owner.read().hit_test_handle().cloned()
+        self.owner.borrow().hit_test_handle().cloned()
     }
     fn lifecycle_handle(&self) -> Option<crate::LifecycleHandle> {
-        self.owner.read().lifecycle_handle()
+        self.owner.borrow().lifecycle_handle()
     }
     fn window(&self) -> Option<crate::WindowHandle> {
-        self.owner.read().window_handle()
+        self.owner.borrow().window_handle()
     }
     fn focus_manager(&self) -> Rc<FocusManager> {
-        self.owner.read().focus_manager()
+        self.owner.borrow().focus_manager()
     }
     /// See [`LifecycleContext::pipeline_owner`]. The owner is on this element's own
     /// node ΓÇö no ancestor walk.
     fn pipeline_owner(&self) -> Option<flui_rendering::pipeline::PipelineCell> {
-        let tree = self.tree.read();
+        let tree = self.tree.borrow();
         tree.get(self.element_id)?.element().pipeline_owner()
     }
 }
@@ -664,8 +664,8 @@ impl LifecycleContext for ElementBuildContext {
 /// Builder for creating ElementBuildContext instances.
 #[derive(Debug)]
 pub struct ElementBuildContextBuilder {
-    tree: Option<Arc<RwLock<ElementTree>>>,
-    owner: Option<Arc<RwLock<BuildOwner>>>,
+    tree: Option<Rc<RefCell<ElementTree>>>,
+    owner: Option<Rc<RefCell<BuildOwner>>>,
 }
 
 impl Default for ElementBuildContextBuilder {
@@ -685,14 +685,14 @@ impl ElementBuildContextBuilder {
 
     /// Set the element tree.
     #[must_use]
-    pub fn tree(mut self, tree: Arc<RwLock<ElementTree>>) -> Self {
+    pub fn tree(mut self, tree: Rc<RefCell<ElementTree>>) -> Self {
         self.tree = Some(tree);
         self
     }
 
     /// Set the build owner.
     #[must_use]
-    pub fn owner(mut self, owner: Arc<RwLock<BuildOwner>>) -> Self {
+    pub fn owner(mut self, owner: Rc<RefCell<BuildOwner>>) -> Self {
         self.owner = Some(owner);
         self
     }
@@ -708,9 +708,9 @@ impl ElementBuildContextBuilder {
     /// Create shared tree and owner, returning them along with the builder.
     pub fn with_new_tree_and_owner(
         self,
-    ) -> (Self, Arc<RwLock<ElementTree>>, Arc<RwLock<BuildOwner>>) {
-        let tree = Arc::new(RwLock::new(ElementTree::new()));
-        let owner = Arc::new(RwLock::new(BuildOwner::new()));
+    ) -> (Self, Rc<RefCell<ElementTree>>, Rc<RefCell<BuildOwner>>) {
+        let tree = Rc::new(RefCell::new(ElementTree::new()));
+        let owner = Rc::new(RefCell::new(BuildOwner::new()));
 
         (self.tree(tree.clone()).owner(owner.clone()), tree, owner)
     }

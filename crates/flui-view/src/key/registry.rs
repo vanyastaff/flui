@@ -17,10 +17,10 @@
 //! # Decoupling shape
 //!
 //! The registry handle is a pair of type-erased closures rather than
-//! direct `Arc<RwLock<ElementTree>>` / `Arc<RwLock<BuildOwner>>` field
+//! direct `Rc<RefCell<ElementTree>>` / `Rc<RefCell<BuildOwner>>` field
 //! references. That keeps the framework's storage layout free —
 //! `WidgetsBinding` continues to own its `BuildOwner` and `ElementTree`
-//! inline behind a single `RwLock<WidgetsBindingInner>` — and the
+//! inline — and the
 //! registry captures one binding's owner state. The active handle is selected
 //! by the [`UiRuntime`](../../../flui-runtime/src/ui_runtime/mod.rs) entry scope.
 //!
@@ -41,7 +41,7 @@
 //! nothing. Bindings are `!Send`, so a held lock can only mean re-entry on
 //! the owner thread, never a race with another thread.
 
-use std::{cell::RefCell, collections::HashMap, mem::ManuallyDrop, rc::Rc, sync::Arc};
+use std::{cell::RefCell, collections::HashMap, mem::ManuallyDrop, rc::Rc};
 
 use crate::view::ElementBase;
 use flui_foundation::{ElementId, ViewKey};
@@ -53,10 +53,10 @@ use flui_foundation::{ElementId, ViewKey};
 /// while its owning UI runtime is entered.
 ///
 /// The struct is `Clone` so internal copies stay cheap — both
-/// invariants funnel through the same `Arc`-shared closure pair.
+/// invariants funnel through the same `Rc`-shared closure pair.
 #[derive(Clone)]
 pub(crate) struct GlobalKeyRegistryHandle {
-    inner: Arc<GlobalKeyRegistryInner>,
+    inner: Rc<GlobalKeyRegistryInner>,
 }
 
 /// A registry member could not be read because its owner is inside a frame,
@@ -109,7 +109,7 @@ impl GlobalKeyRegistryHandle {
         V: Fn(ElementId, &mut dyn FnMut(&dyn ElementBase)) -> Result<(), RegistryBusy> + 'static,
     {
         Self {
-            inner: Arc::new(GlobalKeyRegistryInner {
+            inner: Rc::new(GlobalKeyRegistryInner {
                 lookup: Box::new(lookup),
                 visit: Box::new(visit),
             }),
@@ -277,7 +277,7 @@ impl Drop for RegistryActivation {
                 tracing::error!("GlobalKey registry activation stack underflow");
                 return;
             };
-            if !Arc::ptr_eq(&popped.inner, &self.expected.inner) {
+            if !Rc::ptr_eq(&popped.inner, &self.expected.inner) {
                 // Never panic from Drop: a second panic during user-code unwind
                 // aborts the process. Preserve the unexpected top for diagnosis.
                 stack.push(popped);

@@ -15,15 +15,13 @@
 // ADR-0027: ElementBuildContext's current test/prod seam still takes
 // Arc<RwLock<ElementTree/BuildOwner>>. The owner graph is !Send; do not restore
 // Send + Sync to satisfy clippy. Future UiRuntime/Rc migration should remove this.
-#![expect(clippy::arc_with_non_send_sync)]
-
-use std::sync::Arc;
 
 use flui_view::testing::ElementBuildContext;
 use flui_view::{
     BuildContext, BuildContextExt, BuildOwner, ElementTree, IntoView, StatelessView, View, ViewExt,
 };
-use parking_lot::RwLock;
+use std::cell::RefCell;
+use std::rc::Rc;
 
 // ============================================================================
 // Test fixtures
@@ -91,9 +89,9 @@ impl View for LabeledView {
 // Helpers
 // ============================================================================
 
-fn create_tree_and_owner() -> (Arc<RwLock<ElementTree>>, Arc<RwLock<BuildOwner>>) {
-    let tree = Arc::new(RwLock::new(ElementTree::new()));
-    let owner = Arc::new(RwLock::new(BuildOwner::new()));
+fn create_tree_and_owner() -> (Rc<RefCell<ElementTree>>, Rc<RefCell<BuildOwner>>) {
+    let tree = Rc::new(RefCell::new(ElementTree::new()));
+    let owner = Rc::new(RefCell::new(BuildOwner::new()));
     (tree, owner)
 }
 
@@ -108,21 +106,21 @@ pub(crate) fn find_ancestor_view_returns_nearest_match() {
 
     let labeled = LabeledView { value: 42 };
     let labeled_id = tree
-        .write()
-        .mount_root(&labeled, &mut owner.write().element_owner_mut());
+        .borrow_mut()
+        .mount_root(&labeled, &mut owner.borrow_mut().element_owner_mut());
 
-    let spacer_id = tree.write().insert(
+    let spacer_id = tree.borrow_mut().insert(
         &Spacer,
         labeled_id,
         0,
-        &mut owner.write().element_owner_mut(),
+        &mut owner.borrow_mut().element_owner_mut(),
     );
 
-    let child_id = tree.write().insert(
+    let child_id = tree.borrow_mut().insert(
         &DummyChild,
         spacer_id,
         0,
-        &mut owner.write().element_owner_mut(),
+        &mut owner.borrow_mut().element_owner_mut(),
     );
 
     let ctx =
