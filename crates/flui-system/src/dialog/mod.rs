@@ -47,8 +47,8 @@ pub enum DialogError {
     /// The service the backend shows dialogs through is missing or not
     /// running (no file chooser portal); the reason says whether trying
     /// later may help.
-    #[error("the dialog service is unavailable: {0:?}")]
-    Unavailable(UnsupportedReason),
+    #[error("the dialog service is unavailable: {0}")]
+    Unsupported(#[from] Unsupported),
     /// The window the dialog belonged to closed before it answered.
     #[error("the window closed before the dialog answered")]
     WindowClosed,

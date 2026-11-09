@@ -18,7 +18,7 @@ use std::{
 };
 
 use crate::capability::{Capability, Completion, CompletionSource, ProviderContext, Resolver};
-use crate::unsupported::UnsupportedReason;
+use crate::unsupported::Unsupported;
 
 /// The launcher capability: `cx.capability::<LauncherCapability>()` hands out
 /// a [`Launcher`].
@@ -155,8 +155,8 @@ pub enum LaunchError {
     /// The service the backend launches through is missing or not running
     /// (no desktop portal, no file manager); the reason says whether trying
     /// later may help.
-    #[error("the launch service is unavailable: {0:?}")]
-    Unavailable(UnsupportedReason),
+    #[error("the launch service is unavailable: {0}")]
+    Unsupported(#[from] Unsupported),
     /// The system answered with an error the launcher does not name; `code`
     /// is the system's, for diagnostics only.
     #[error("the system failed with code {code}")]
